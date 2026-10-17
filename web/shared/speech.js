@@ -59,10 +59,13 @@ export function emotionTag(emotion) {
 /**
  * @returns {{ kind: 'dialogue'|'narration', text: string }[]} in reading order.
  * @param narration - false drops narration (no narrator voice).
+ * @param max - characters per chunk, or { dialogue, narration } when the two
+ *   voices take different lengths (cloud voices bill per request, so longer).
  * @param tags - put a line's emotion before it as a [tag] (voices that act on
  *   bracket tags, such as Fish; the server drops them for the others).
  */
 export function speechChunks(text, { narration = true, max = 100, tags = false } = {}) {
+  const limit = kind => (typeof max === 'number' ? max : max?.[kind] ?? 100)
   // An options block is not part of the story; voice tags give a line its emotion, then go.
   const source = String(text ?? '').replace(/<small>[\s\S]*?<\/small>/gi, '')
   const runs = []
@@ -88,5 +91,5 @@ export function speechChunks(text, { narration = true, max = 100, tags = false }
     if (previous && previous.kind === run.kind) previous.text += (/[，。！？、；：,.!?…~～]$/.test(previous.text) ? '' : '，') + said
     else merged.push({ kind: run.kind, text: said })
   }
-  return merged.flatMap(run => splitLong(run.text, max).map(piece => ({ kind: run.kind, text: piece.trim() }))).filter(chunk => SPEAKABLE.test(chunk.text))
+  return merged.flatMap(run => splitLong(run.text, limit(run.kind)).map(piece => ({ kind: run.kind, text: piece.trim() }))).filter(chunk => SPEAKABLE.test(chunk.text))
 }

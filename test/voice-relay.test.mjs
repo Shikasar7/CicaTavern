@@ -54,14 +54,14 @@ test('voice relay: the phone reads through the PC tavern with its LAN link', asy
   const phone = await tavern(t)
   assert.equal((await pc.call('/api/media/settings', { method: 'PUT', key: PC_KEY, body: { ttsUrl: bridge.base } })).status, 200)
 
-  // The link from 局域网访问, pasted whole: the key goes to its own file, not the settings.
+  // The link from 手机访问, pasted whole: the key goes to its own file, not the settings.
   const saved = await phone.call('/api/media/settings', { method: 'PUT', body: { ttsUrl: `${pc.base}/#k=${PC_KEY}` } })
   assert.equal(saved.body.media.ttsUrl, pc.base)
   assert.deepEqual(saved.body.voiceKey, { hasKey: true, keyHint: `…${PC_KEY.slice(-4)}` })
   assert.doesNotMatch(JSON.stringify((await phone.call('/api/settings')).body), new RegExp(PC_KEY))
 
-  const voices = await phone.call('/api/media/voices')
-  assert.deepEqual(voices.body, { ok: true, voices: ['jok', '南晚'], cloud: [{ name: 'fish:abc', label: '南晚 · abc', provider: 'Fish', model: 'drama-3', tags: true }], current: 'jok', remote: true })
+  const [voices] = (await phone.call('/api/media/voices')).body.sources
+  assert.deepEqual(voices, { id: 'bridge', label: '本地语音桥接', chunkMax: 100, configured: true, ok: true, voices: ['jok', '南晚'], cloud: [{ name: 'fish:abc', label: '南晚 · abc', provider: 'Fish', model: 'drama-3', tags: true }], current: 'jok', remote: true })
   const wav = await phone.call('/api/tts', { method: 'POST', body: { text: '站住。', voice: '南晚' } })
   assert.equal(wav.body, 'RIFF....WAVE')
   await phone.call('/api/tts', { method: 'POST', body: { text: '站住。', voice: '南晚' } })
@@ -72,8 +72,8 @@ test('voice relay: the phone reads through the PC tavern with its LAN link', asy
 
   // A wrong key is explained; a new address without a key drops the saved one.
   await phone.call('/api/media/settings', { method: 'PUT', body: { ttsUrl: `${pc.base}/#k=wrong-key-000000` } })
-  assert.match((await phone.call('/api/media/voices')).body.error, /局域网访问/)
+  assert.match((await phone.call('/api/media/voices')).body.sources[0].error, /手机访问/)
   const moved = await phone.call('/api/media/settings', { method: 'PUT', body: { ttsUrl: 'http://127.0.0.1:9' } })
   assert.equal(moved.body.voiceKey.hasKey, false)
-  assert.match((await phone.call('/api/media/voices')).body.error, /小雅一键启动/)
+  assert.match((await phone.call('/api/media/voices')).body.sources[0].error, /小雅一键启动/)
 })

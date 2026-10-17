@@ -21,6 +21,7 @@ import { initTemplates } from './template.mjs'
 import { canonicalModel } from './models.mjs'
 import { createLedger } from './usage.mjs'
 import { cleanMedia, createMedia } from './media.mjs'
+import { KEYED as VOICE_KEYED } from './voice/index.mjs'
 import { createPromptLibrary } from './prompts.mjs'
 import { chatPackage, importChatPackage, savePackagePicture } from './transfer.mjs'
 import { createStore, defaultDataRoot, httpError } from './store.mjs'
@@ -45,6 +46,7 @@ const STATIC = {
   '/providers.js': ['providers.js', 'text/javascript; charset=utf-8'],
   '/media.js': ['media.js', 'text/javascript; charset=utf-8'],
   '/history.js': ['history.js', 'text/javascript; charset=utf-8'],
+  '/menu.js': ['menu.js', 'text/javascript; charset=utf-8'],
   '/shared/speech.js': ['shared/speech.js', 'text/javascript; charset=utf-8'],
   '/shared/vars.js': ['shared/vars.js', 'text/javascript; charset=utf-8'],
   '/shared/regex.js': ['shared/regex.js', 'text/javascript; charset=utf-8'],
@@ -134,6 +136,17 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
   const engine = createEngine(store, isolation, ledger, { subscription })
   const media = createMedia(store, { proxy: () => isolation.proxy, askInContext: engine.askInContext, features })
   const prompts = createPromptLibrary(store)
+
+  /** The media settings for the page: secrets only as "set, ends in …". */
+  async function mediaSettingsView(settings) {
+    return {
+      media: settings,
+      workflow: media.describeWorkflow(await media.loadWorkflow()),
+      novelai: await media.naiStatus(),
+      voiceKey: await media.ttsKeyStatus(),
+      voiceKeys: await media.voiceKeys(),
+    }
+  }
 
   // Every open page holds one /api/presence stream. With none open, the idle
   // countdown runs; any request restarts it, and a turn still generating
@@ -297,7 +310,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['POST', /^\/api\/network\/refresh$/, async () => network.apply((await store.getSettings()).proxy)],
 
     // Pictures and voice (media.mjs).
-    ['GET', /^\/api\/media\/settings$/, async () => ({ media: await media.settings(), workflow: media.describeWorkflow(await media.loadWorkflow()), novelai: await media.naiStatus(), voiceKey: await media.ttsKeyStatus() })],
+    ['GET', /^\/api\/media\/settings$/, async () => mediaSettingsView(await media.settings())],
     ['PUT', /^\/api\/media\/settings$/, async (_, body) => {
       const previous = await media.settings()
       // Another tavern's LAN link carries its access key after #k=: the key goes to its own file.
@@ -314,8 +327,13 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       // The NovelAI token goes to its own file; a blank field keeps the saved one.
       if (typeof body.naiToken === 'string' && body.naiToken.trim()) await media.setNaiToken(body.naiToken)
       else if (body.naiClearToken === true) await media.setNaiToken('')
+      // Cloud speech keys (fishKey, minimaxKey) the same way, each in voice-keys.json.
+      for (const id of VOICE_KEYED) {
+        if (typeof body[`${id}Key`] === 'string' && body[`${id}Key`].trim()) await media.setVoiceKey(id, body[`${id}Key`])
+        else if (body[`${id}ClearKey`] === true) await media.setVoiceKey(id, '')
+      }
       await store.saveSettings({ media: next })
-      return { media: next, workflow: media.describeWorkflow(await media.loadWorkflow()), novelai: await media.naiStatus(), voiceKey: await media.ttsKeyStatus() }
+      return mediaSettingsView(next)
     }],
     ['POST', /^\/api\/media\/novelai\/check$/, (_, body) => media.naiCheck(typeof body?.token === 'string' ? body.token.trim() : '')],
     ['PUT', /^\/api\/media\/workflow$/, async (_, body) => ({ workflow: await media.saveWorkflow(body.workflow) })],
@@ -687,9 +705,23 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     }
     if (req.method === 'POST' && url.pathname === '/api/tts') {
       const body = await readBody(req)
-      const wav = await media.speak({ text: body.text, voice: typeof body.voice === 'string' ? body.voice : '', stable: body.stable === true, fresh: body.fresh === true }, cancelOnClose())
-      res.writeHead(200, { 'content-type': 'audio/wav', 'cache-control': 'no-store' })
-      return res.end(wav)
+      const audio = await media.speak({ text: body.text, voice: typeof body.voice === 'string' ? body.voice : '', stable: body.stable === true, fresh: body.fresh === true }, cancelOnClose())
+      res.writeHead(200, { 'content-type': audio.mime, 'cache-control': 'no-store' })
+      return res.end(audio.buffer)
+    }
+    // 试听 in 配图与朗读: the form's unsaved voice settings and typed keys, nothing cached.
+    if (req.method === 'POST' && url.pathname === '/api/media/voices/preview') {
+      const body = await readBody(req)
+      const text = name => (typeof body[name] === 'string' ? body[name] : '')
+      const audio = await media.previewVoice({ voice: text('voice'), source: text('source'), text: text('text'), media: body.media, keys: body.keys }, cancelOnClose())
+      res.writeHead(200, { 'content-type': audio.mime, 'cache-control': 'no-store' })
+      return res.end(audio.buffer)
+    }
+    // 从账户读取音色: the account's voices merged into the form's list, read with the saved or typed key (never sent back).
+    if (req.method === 'POST' && url.pathname === '/api/media/voices/account') {
+      const body = await readBody(req)
+      const source = typeof body.source === 'string' ? body.source : ''
+      return sendJson(res, 200, await media.accountVoices({ source, media: body.media, keys: body.keys }, cancelOnClose()))
     }
     const imageRoute = /^\/api\/chats\/([\w-]+)\/nodes\/([\w-]+)\/(image-prompt|image)$/.exec(url.pathname)
     if (req.method === 'POST' && imageRoute) {

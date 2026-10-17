@@ -442,9 +442,11 @@ test('cast: drafted from the card, cast-format prompt, per-character NovelAI pro
 
 test('voice: voices listed, speech proxied and cached, a dead bridge explained', async t => {
   const { fake, store, media } = await setup(t)
-  assert.deepEqual(await media.voices(), { ok: true, voices: ['jok', '南晚'], cloud: [{ name: 'fish:abc', label: '南晚 · abc', provider: 'Fish Audio · 云端', model: 'drama-3', tags: true }], current: 'jok', remote: false })
+  const [external, ...own] = (await media.voices()).sources
+  assert.deepEqual(external, { id: 'bridge', label: '本地语音桥接', chunkMax: 100, configured: true, ok: true, voices: ['jok', '南晚'], cloud: [{ name: 'fish:abc', label: '南晚 · abc', provider: 'Fish Audio · 云端', model: 'drama-3', tags: true }], current: 'jok', remote: false })
+  assert.deepEqual(own.map(s => [s.id, s.configured]), [['openai', false], ['fish', false], ['minimax', false]])
   const first = await media.speak({ text: '站住。', voice: '南晚', stable: true })
-  assert.equal(first.toString(), 'RIFF....WAVE')
+  assert.deepEqual([first.buffer.toString(), first.mime], ['RIFF....WAVE', 'audio/wav'])
   const call = fake.seen.find(r => r.url === '/api/tts')
   assert.deepEqual(call.json, { text: '站住。', voice: '南晚', stable: true })
   await media.speak({ text: '站住。', voice: '南晚', stable: true })
@@ -487,7 +489,7 @@ test('voice: voices listed, speech proxied and cached, a dead bridge explained',
   assert.equal(ttsCalls(), 7, 'new model: synthesised again')
 
   await store.saveSettings({ media: cleanMedia({ ttsUrl: 'http://127.0.0.1:9' }, (await store.getSettings()).media) })
-  assert.match((await media.voices()).error, /小雅一键启动/)
+  assert.match((await media.voices()).sources[0].error, /小雅一键启动/)
   await assert.rejects(media.speak({ text: '别的话', voice: 'jok' }), /小雅一键启动/)
 })
 

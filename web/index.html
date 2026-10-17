@@ -169,63 +169,68 @@
 
   <dialog id="settings-dialog" class="dialog wide">
     <form method="dialog" id="settings-form">
-      <h2>设置</h2>
-      <p class="muted small">名字、角色设定和文风写进对话开局时的固定前缀，只对之后新开的对话生效；模型、思考、字数和世界书扫描随时生效。</p>
-      <div class="grid">
-        <label>你的名字<input name="personaName"></label>
-        <label>默认模型（新对话和未单独设置的对话）
+      <!-- Pages of the settings menu (web/menu.js; app.js lays out the menu). -->
+      <div data-section="model">
+        <label>默认模型（新对话和没单独选模型的对话用它）
           <span class="select-with-action">
             <select name="model" id="settings-model"></select>
             <button type="button" class="btn small" id="open-providers" title="接入外部 API：DeepSeek、OpenAI、Anthropic、OpenRouter、本机中转…">供应商</button>
           </span>
         </label>
-        <label title="Claude 模型（Anthropic 接口）按这里开关思考。Opus 5.5、Fable 5.1 关不掉思考，选关闭也会思考。">思考
-          <select name="thinking">
-            <option value="off">关闭（最快）</option>
-            <option value="adaptive">自适应</option>
-          </select>
-        </label>
-        <label title="Anthropic 接口发 effort，OpenAI 接口发 reasoning effort（max 按 xhigh 发）。模型或中转不认时自动去掉重发。供应商「额外请求参数」里写了的以那里为准。">努力程度
-          <select name="effort">
-            <option value="low">low</option>
-            <option value="medium">medium</option>
-            <option value="high">high</option>
-            <option value="xhigh">xhigh</option>
-            <option value="max">max（最慢最贵）</option>
-          </select>
-        </label>
-        <label>写作语言<input name="language"></label>
-        <label>每轮回复字数（0 为不限）<input name="replyLength" type="number" min="0" max="8000" step="100"></label>
-        <label>世界书扫描最近几条<input name="scanDepth" type="number" min="1" max="20"></label>
-        <label>同一条目隔几轮可再注入<input name="reinjectAfter" type="number" min="0" max="50"></label>
-        <label>每几轮重发一次完整状态<input name="stateRefreshEvery" type="number" min="0" max="50"></label>
-        <label title="历史里旧的动态设定（变量列表）堆多了会一次性删掉；删的那一轮要重写整段历史的缓存。删得少更省，但上下文长得快些">动态设定清理
-          <select name="dynamicStrip">
-            <option value="rare">少（推荐，约 20 轮一次）</option>
-            <option value="often">勤（约 6～8 轮一次）</option>
-            <option value="off">不清（压缩上下文时才重置）</option>
-          </select>
-        </label>
+        <div class="grid">
+          <label>思考
+            <select name="thinking">
+              <option value="off">关闭（最快）</option>
+              <option value="adaptive">自适应</option>
+            </select>
+            <span class="hint">Claude 模型（Anthropic 接口）按这里开关思考。Opus 5.5、Fable 5.1 关不掉，选关闭也会思考。</span>
+          </label>
+          <label>努力程度
+            <select name="effort">
+              <option value="low">low</option>
+              <option value="medium">medium</option>
+              <option value="high">high</option>
+              <option value="xhigh">xhigh</option>
+              <option value="max">max（最慢最贵）</option>
+            </select>
+            <span class="hint">Anthropic 接口发 effort，OpenAI 接口发 reasoning effort。模型或中转不认时自动去掉重发。</span>
+          </label>
+        </div>
+        <p class="hint">随时生效。顶栏可以给每个对话单独选模型。</p>
       </div>
-      <label>你的角色设定<textarea name="personaDescription" rows="3"></textarea></label>
-      <label>文风与写作要求<textarea name="writingRules" rows="5" placeholder="例如：第三人称限知视角，白描为主，少用形容词堆砌；对白口语化。"></textarea></label>
-      <fieldset class="books" id="book-fieldset">
-        <legend>当前角色卡挂载的世界书</legend>
-        <div id="book-options" class="muted small">先选择一张角色卡</div>
-      </fieldset>
-      <fieldset class="access needs-lan">
-        <legend>手机访问</legend>
-        <label>谁可以打开
-          <select name="listen">
-            <option value="local">仅这台电脑</option>
-            <option value="lan">同一 WiFi 或 Tailscale</option>
-          </select>
-        </label>
-        <p class="muted small">改完要重启服务。不要把端口映射到公网：拿到链接的人能用你的模型额度。出门时在电脑和手机都装 Tailscale，用设置里的 Tailscale 地址打开。手机打不开时，在 Windows 防火墙里允许 Node.js 入站。</p>
-        <div id="access-links" class="access-links muted small"></div>
-      </fieldset>
-      <fieldset class="access" id="network-fieldset">
-        <legend>网络代理</legend>
+      <div data-section="persona">
+        <label>你的名字<input name="personaName"></label>
+        <label>你的角色设定<textarea name="personaDescription" rows="5"></textarea></label>
+        <p class="hint">写进对话开局时的固定前缀，只对之后新开的对话生效。</p>
+      </div>
+      <div data-section="style">
+        <div class="grid">
+          <label>写作语言<input name="language"></label>
+          <label>每轮回复字数（0 为不限）<input name="replyLength" type="number" min="0" max="8000" step="100"></label>
+        </div>
+        <label>文风与写作要求<textarea name="writingRules" rows="6" placeholder="例如：第三人称限知视角，白描为主，少用形容词堆砌；对白口语化。"></textarea></label>
+        <p class="hint">字数随时生效，不影响缓存；语言和文风写进固定前缀，只对之后新开的对话生效。</p>
+      </div>
+      <div data-section="scan">
+        <div class="grid">
+          <label>世界书扫描最近几条<input name="scanDepth" type="number" min="1" max="20"></label>
+          <label>同一条目隔几轮可再注入<input name="reinjectAfter" type="number" min="0" max="50"></label>
+          <label>每几轮重发一次完整状态<input name="stateRefreshEvery" type="number" min="0" max="50"></label>
+          <label>动态设定清理
+            <select name="dynamicStrip">
+              <option value="rare">少（推荐，约 20 轮一次）</option>
+              <option value="often">勤（约 6～8 轮一次）</option>
+              <option value="off">不清（压缩上下文时才重置）</option>
+            </select>
+          </label>
+        </div>
+        <p class="hint">动态设定（变量列表）在历史里堆多了会一次性删掉；删的那一轮要重写整段历史的缓存。删得少更省，但上下文长得快些。</p>
+      </div>
+      <div data-section="books">
+        <div id="book-options" class="book-options muted small">先选择一张角色卡</div>
+        <p class="hint">挂上的世界书和卡里自带的一起生效：常驻条目进固定前缀，关键词条目按最近的对话触发。</p>
+      </div>
+      <div data-section="network">
         <div class="row proxy-row">
           <label>访问海外接口
             <select name="proxyMode">
@@ -236,20 +241,18 @@
           </label>
           <label class="proxy-url">代理地址<input name="proxyUrl" placeholder="http://127.0.0.1:7890" spellcheck="false" autocomplete="off"></label>
         </div>
-        <p class="muted small">「跟随系统代理」读 Windows 的代理设置（Clash、v2rayN 开了「系统代理」时就是它），每分钟更新一次。只支持 HTTP 代理，SOCKS 不行。供应商设成「直连」的（DeepSeek 等国内服务）不走代理。保存后立刻生效。</p>
-        <p class="muted small" id="network-status"></p>
-      </fieldset>
-      <div class="row between">
-        <div class="row">
-          <button type="button" class="btn ghost" id="open-media">配图与朗读</button>
-          <button type="button" class="btn ghost" id="show-prompt">查看当前对话的提示词</button>
-          <button type="button" class="btn ghost desktop-only" id="stop-server" title="关掉在后台运行的酒馆服务。下次从桌面图标或启动脚本打开">停止后台服务</button>
-          <button type="button" class="btn ghost" id="rebuild-prompt" title="按现在的角色卡、设置和预设重新生成这个对话的固定前缀；下一轮会重新写入一次缓存">重建当前对话的前缀</button>
-        </div>
-        <div class="row">
-          <button class="btn" value="cancel">取消</button>
-          <button class="btn primary" value="save" id="save-settings">保存</button>
-        </div>
+        <p class="hint" id="network-status"></p>
+        <p class="hint">「跟随系统代理」读 Windows 的代理设置（Clash、v2rayN 开了「系统代理」时就是它），每分钟更新一次。只支持 HTTP 代理，SOCKS 不行。供应商设成「直连」的（DeepSeek 等国内服务）不走代理。保存后立刻生效。</p>
+      </div>
+      <div data-section="access">
+        <label>谁可以打开
+          <select name="listen">
+            <option value="local">仅这台电脑</option>
+            <option value="lan">同一 WiFi 或 Tailscale</option>
+          </select>
+        </label>
+        <div id="access-links" class="access-links muted small"></div>
+        <p class="hint">改完要重启服务。不要把端口映射到公网：拿到链接的人能用你的模型额度。出门时在电脑和手机都装 Tailscale，用这里的 Tailscale 地址打开。手机打不开时，在 Windows 防火墙里允许 Node.js 入站。</p>
       </div>
     </form>
   </dialog>

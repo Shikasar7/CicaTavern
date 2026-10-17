@@ -369,9 +369,10 @@ dl.usage dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; 
 }
 .dialog input:not([type="checkbox"]):focus, .dialog select:focus, .dialog textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0 14px; }
-.books { border: 1px solid var(--line-soft); border-radius: 12px; margin: 0 0 14px; padding: 10px 14px; }
-.books legend { font-size: 12px; color: var(--muted); padding: 0 4px; }
-.books label { flex-direction: row; align-items: center; color: var(--ink); margin: 4px 0; font-size: 13px; }
+/* 设置 → 挂载的世界书: one checkable row per worldbook. */
+.book-options { display: grid; gap: 6px; margin: 0 0 12px; }
+.dialog .book-options label { flex-direction: row; align-items: center; gap: 10px; margin: 0; padding: 10px 12px; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--raised); color: var(--ink); font-size: 13px; cursor: pointer; transition: border-color .15s, background .15s; }
+.dialog .book-options label:has(input:checked) { border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: var(--accent-soft); }
 .access { border: 1px solid var(--line-soft); border-radius: 12px; margin: 0 0 14px; padding: 10px 14px; }
 .access legend { font-size: 12px; color: var(--muted); padding: 0 4px; }
 .access select { margin-top: 4px; }
@@ -423,13 +424,19 @@ dl.usage dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; 
 .preset-nav-transfer { gap: 6px; padding: 10px 8px 0; }
 .preset-nav-head label { margin: 0; flex-direction: row; color: var(--ink); font-size: 12px; }
 .preset-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; }
-.preset-list li { padding: 9px 12px; border-radius: 12px; cursor: pointer; transition: background .18s; margin-bottom: 2px; }
-.preset-list li:hover { background: color-mix(in srgb, var(--surface) 70%, transparent); }
+/* List rows in the settings windows' manner (menu.js): hover tint, a mark on the open one. */
+.preset-list li { position: relative; padding: 10px 12px 10px 14px; border-radius: 12px; cursor: pointer; transition: background .16s, transform .12s; margin-bottom: 2px; }
+.preset-list li:hover { background: var(--accent-soft); }
+.preset-list li:active { transform: scale(.993); }
 .preset-list li.active { background: var(--surface); box-shadow: var(--shadow-1); }
-.preset-list .item-title { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; white-space: normal; }
+.preset-list li.active::before { content: ""; position: absolute; left: 4px; top: 11px; bottom: 11px; width: 3px; border-radius: 3px; background: var(--accent); }
+.preset-list .item-title { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; white-space: normal; font-size: 14px; font-weight: 600; color: var(--ink); }
+.preset-list .item-sub, .preset-list li > .muted.small { margin-top: 2px; font-size: 12px; color: var(--muted); }
 /* A long preset name wraps; the tags follow it instead of sitting on top of it. */
 .preset-list .item-main { min-width: 0; overflow-wrap: anywhere; }
 .preset-list .tag { font-size: 11px; font-weight: 500; color: var(--accent); background: var(--accent-soft); border-radius: 999px; padding: 0 7px; flex: none; }
+.preset-list .tag.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 13%, transparent); }
+.preset-list .tag.off { color: var(--faint); background: var(--line-soft); }
 .preset-nav-note { padding: 10px 8px 0; margin: 0; color: var(--faint); }
 .preset-main { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .preset-close { position: absolute; top: 14px; right: 14px; }
@@ -614,6 +621,104 @@ button.chip.on { background: var(--accent); border-color: var(--accent); color: 
 .media-group { border: 1px solid var(--line-soft); border-radius: 12px; margin: 0 0 14px; padding: 10px 14px 4px; min-width: 0; }
 .media-group legend { font-size: 12px; color: var(--muted); padding: 0 4px; }
 .media-group > .hint { display: block; margin: -6px 0 10px; }
+/* 朗读: one panel per voice source. */
+.media-group > p.hint { margin: 0 0 10px; }
+
+/* Settings windows (web/menu.js): a menu of panels, each row opening one part
+   on its own page or another window; the title row and the save row stay in
+   place while the middle scrolls. */
+.menu-dialog { padding: 0; overflow: hidden; }
+.menu-form { display: flex; flex-direction: column; max-height: calc(100dvh - 34px); }
+.menu-head { display: flex; align-items: center; gap: 6px; min-height: 64px; padding: 14px 22px 12px; border-bottom: 1px solid var(--line-soft); }
+.menu-titles { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.menu-titles h2 { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.menu-crumb { font-size: 11.5px; color: var(--faint); letter-spacing: .04em; }
+.menu-crumb[hidden], .menu-back[hidden], .menu-dirty[hidden], .menu-home[hidden], .menu-pill[hidden], .menu-entry[hidden] { display: none; }
+.menu-back { margin-left: -8px; width: 36px; height: 36px; display: grid; place-items: center; }
+.menu-back svg, .menu-panel-icon svg, .menu-entry-go svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.menu-back svg { width: 20px; height: 20px; }
+.menu-body { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 18px 22px 8px; }
+.menu-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; padding: 12px 22px; border-top: 1px solid var(--line-soft); background: var(--raised); }
+.menu-foot > .row { flex-wrap: wrap; }
+.menu-foot > .row:last-child { margin-left: auto; }
+.menu-dirty { font-size: 12px; color: var(--lamp); margin-right: 4px; }
+.menu-foot .btn.primary.pending { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+
+/* The menu */
+.menu-home { display: grid; gap: 14px; padding-bottom: 12px; }
+.menu-panel { border: 1px solid var(--line-soft); border-radius: 16px; background: var(--surface); padding: 6px 6px 8px; }
+.menu-panel-head { display: flex; align-items: center; gap: 11px; padding: 8px 10px 10px; }
+.menu-panel-icon { flex: none; width: 34px; height: 34px; border-radius: 11px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
+.menu-panel-icon.lamp, .menu-panel[data-panel="voice"] .menu-panel-icon { background: var(--lamp-soft); color: var(--lamp); }
+.menu-panel-icon svg { width: 19px; height: 19px; }
+.menu-panel-head h3 { flex: 1; margin: 0; font: 600 16.5px/1.3 var(--serif); color: var(--ink); letter-spacing: .03em; }
+.dialog label.menu-switch { flex-direction: row; align-items: center; gap: 8px; margin: 0; font-size: 12px; color: var(--muted); cursor: pointer; user-select: none; }
+
+.menu-entry {
+  display: flex; align-items: center; gap: 10px; width: 100%; padding: 11px 12px; text-align: left;
+  border: 0; border-radius: 12px; background: transparent; color: var(--ink); font: inherit; cursor: pointer;
+  transition: background .16s, transform .12s;
+}
+.menu-entry:hover { background: var(--accent-soft); }
+.menu-entry:active { transform: scale(.993); }
+.menu-entry:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.menu-entry-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.menu-entry-title { display: flex; align-items: center; gap: 8px; font-size: 14.5px; font-weight: 600; }
+.menu-entry.shared .menu-entry-title { font-size: 13.5px; font-weight: 500; color: var(--muted); }
+.menu-tag { font-size: 10.5px; font-weight: 400; color: var(--faint); border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; line-height: 17px; white-space: nowrap; }
+.menu-entry-sub { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.menu-entry-sub:empty { display: none; }
+.menu-entry.shared .menu-entry-sub { color: var(--faint); }
+.menu-pill { flex: none; font-size: 11px; line-height: 20px; padding: 0 9px; border-radius: 999px; color: var(--faint); background: var(--line-soft); }
+.menu-pill.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 13%, transparent); }
+.menu-pill.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
+.menu-entry-go { flex: none; display: grid; color: var(--faint); transition: transform .16s var(--ease), color .16s; }
+.menu-entry-go svg { width: 16px; height: 16px; }
+.menu-entry:hover .menu-entry-go { color: var(--accent); transform: translateX(2px); }
+.menu-entry.action:hover .menu-entry-go { transform: translate(1px, -1px); }
+
+/* Between shared rows and one card's own: whose settings follow. */
+.menu-who { display: flex; align-items: center; gap: 8px; margin: 4px 12px 2px; padding: 10px 0 4px; border-top: 1px dashed var(--line); }
+.menu-who.none { display: block; font-size: 12px; color: var(--faint); padding-bottom: 6px; }
+.menu-who-mark { flex: none; width: 22px; height: 22px; border-radius: 50%; object-fit: cover; object-position: 50% 20%; }
+.menu-who-mark.letter { display: grid; place-items: center; font-size: 11px; background: var(--accent-soft); color: var(--accent); }
+.menu-who-name { font-size: 12.5px; font-weight: 600; color: var(--ink); }
+.menu-who-note { font-size: 11.5px; color: var(--faint); }
+.menu-home-note { margin: 0; text-align: center; font-size: 11.5px; color: var(--faint); }
+
+/* A part on its own page. */
+.menu-pane[hidden] { display: none; }
+.menu-pane > .hint, .menu-pane > p.muted { display: block; margin: 0 0 12px; }
+.menu-pane > .roster > summary { display: none; }
+.menu-home.enter-back, .menu-pane.enter-back { animation: menu-in-back .24s var(--ease); }
+.menu-home.enter-forward, .menu-pane.enter-forward { animation: menu-in-forward .24s var(--ease); }
+@keyframes menu-in-forward { from { opacity: 0; transform: translateX(16px); } }
+@keyframes menu-in-back { from { opacity: 0; transform: translateX(-16px); } }
+
+@media (max-width: 560px) {
+  .menu-head { padding: 12px 14px 10px; min-height: 56px; }
+  .menu-body { padding: 12px 12px 6px; }
+  .menu-foot { padding: 10px 14px; }
+  .menu-panel { border-radius: 14px; }
+  .menu-panel-head { flex-wrap: wrap; }
+  .dialog label.menu-switch { margin-left: auto; }
+}
+/* 朗读来源: the browser, a local voice bridge, cloud services, each under its heading. */
+.voice-group { margin: 0 0 18px; }
+.voice-group-title { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; margin: 0 0 8px; font: 600 14px/1.4 var(--serif); color: var(--ink); letter-spacing: .03em; }
+.voice-group-title span { font: 400 11.5px/1.4 var(--ui); color: var(--faint); letter-spacing: 0; }
+.voice-group > p.hint { margin: 0; padding: 10px 12px; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--raised); color: var(--muted); }
+.voice-source { border: 1px solid var(--line-soft); border-radius: 10px; background: var(--raised); padding: 0 12px; margin: 0 0 8px; min-width: 0; }
+.voice-source[open] { padding-bottom: 4px; }
+.voice-source > summary { cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 0; font-size: 13px; color: var(--ink); }
+.voice-source[open] > summary { margin-bottom: 4px; }
+.voice-source textarea { font: 12.5px/1.6 var(--mono); resize: vertical; }
+.voice-source .select-with-action input { flex: 1; min-width: 0; }
+.source-state { flex: none; font-size: 11.5px; color: var(--faint); }
+.source-state.ok { color: var(--ok); }
+.source-state.warn { color: var(--warn); }
+.voice-actions { margin: -4px 0 10px; }
+.voice-auto { margin-top: 10px !important; }
 .workflow-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
 #image-prompt { width: 100%; font: 13px/1.6 var(--mono); margin-bottom: 14px; resize: vertical; }
 .dialog.image-view { width: min(980px, calc(100vw - 32px)); }
@@ -738,6 +843,9 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
   .preset-layout.show-main { grid-template-rows: auto minmax(0, 1fr); }
   .preset-layout.show-main > .preset-nav { display: none; }
   .preset-layout.show-main > .preset-back { display: inline-flex; justify-self: start; margin: 12px 0 0 12px; }
+  /* Each row opens its item on its own page here: say so, as the settings menus do. */
+  .preset-list li { padding-right: 30px; }
+  .preset-list li::after { content: "›"; position: absolute; right: 12px; top: 50%; transform: translateY(-50%); font-size: 20px; line-height: 1; color: var(--faint); }
   .preset-layout.show-main > .preset-main { display: block; overflow-y: auto; }
   .preset-layout.show-main .prompt-list, .preset-layout.show-main .provider-body { overflow: visible; }
   .preset-layout.show-main .provider-pane { height: auto; }

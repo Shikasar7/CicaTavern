@@ -6,6 +6,7 @@ import { initPresets } from '/presets.js'
 import { initProviders } from '/providers.js'
 import { initMedia } from '/media.js'
 import { initHistory } from '/history.js'
+import { createMenu, MENU_ICONS, whoLine } from '/menu.js'
 
 const $ = id => document.getElementById(id)
 const EMPTY = $('empty')
@@ -1287,6 +1288,7 @@ const saveState = guard(async () => {
 
 // ─── Settings ───────────────────────────────────────────────────────────
 const openSettings = guard(async () => {
+  settingsMenu ??= createMenu({ dialog: $('settings-dialog'), form: $('settings-form'), el, title: '设置' })
   ;[ui.settings, ui.persona, ui.books] = await Promise.all([api('/api/settings'), api('/api/persona'), api('/api/worldbooks')])
   if (!ui.models.length) await loadModels()
   const form = $('settings-form')
@@ -1310,10 +1312,117 @@ const openSettings = guard(async () => {
       ),
     )
   }
-  $('show-prompt').disabled = !ui.chat
-  $('rebuild-prompt').disabled = !ui.chat || ui.generating
+  const [providers, presets] = await Promise.all([api('/api/providers').catch(() => null), api('/api/presets').catch(() => [])])
+  settingsMenu.start()
+  layOutSettings({ form, card, providers: providers?.providers ?? [], presets })
   $('settings-dialog').showModal()
 })
+
+// The settings window as a menu (web/menu.js). Its pages are in index.html;
+// they are taken out of the form once, then placed by every layout.
+let settingsMenu = null
+let settingsPages = null
+
+/** The menu: 模型, 写作, 世界书与状态, 连接, 更多, each row with what it is set to now. */
+function layOutSettings({ form, card, providers, presets }) {
+  settingsPages ??= Object.fromEntries([...form.querySelectorAll('[data-section]')].map(page => [page.dataset.section, page]))
+  const value = name => form.elements[name]?.value ?? ''
+  const modelName = id => {
+    const model = ui.models.find(m => m.id === id)
+    return model ? `${model.group === 'Claude 订阅' ? '' : `${model.group} · `}${model.label}` : ''
+  }
+  const STRIP = { rare: '动态设定少清', often: '动态设定勤清', off: '动态设定不清' }
+  const noChat = () => (ui.chat ? '' : '先打开一个对话')
+  const sections = [
+    {
+      id: 'model', title: '默认模型', pane: settingsPages.model,
+      summary: () => [modelName(value('model')) || '还没选', value('thinking') === 'off' ? '不思考' : '自适应思考', `努力 ${value('effort')}`].join(' · '),
+      status: () => (value('model') ? null : ['warn', '没选模型']),
+    },
+    {
+      id: 'providers', title: '模型供应商', look: 'shared', action: () => providersUi.open(),
+      summary: () => (providers.length ? `${providers.length} 个：${providers.slice(0, 3).map(p => p.name).join('、')}${providers.length > 3 ? '…' : ''}` : '还没添加：接入 DeepSeek、OpenRouter、Anthropic 等'),
+      status: () => (providers.length ? null : ['warn', '先添加一个']),
+    },
+    {
+      id: 'persona', title: '你的角色', pane: settingsPages.persona,
+      summary: () => `${value('personaName').trim() || '你'} · ${value('personaDescription').trim() ? '有角色设定' : '没写角色设定'}`,
+    },
+    {
+      id: 'style', title: '文风与字数', pane: settingsPages.style,
+      summary: () => [value('language').trim() || '简体中文', Number(value('replyLength')) > 0 ? `每轮约 ${value('replyLength')} 字` : '字数不限', value('writingRules').trim() ? '有文风要求' : '没写文风要求'].join(' · '),
+    },
+    {
+      id: 'presets', title: '预设', look: 'shared', action: () => presetsUi.open(),
+      summary: () => {
+        const preferred = presets.find(p => p.id === ui.settings?.presetId)
+        return presets.length ? `${presets.length} 个 · 新对话默认：${preferred?.name ?? '不用预设'}` : '还没导入：导入 SillyTavern 的 Chat Completion 预设'
+      },
+    },
+    {
+      id: 'scan', title: '扫描与状态', look: 'shared', tag: '所有对话', pane: settingsPages.scan,
+      summary: () => `扫描最近 ${value('scanDepth')} 条 · 隔 ${value('reinjectAfter')} 轮再注入 · 每 ${value('stateRefreshEvery')} 轮重发状态 · ${STRIP[value('dynamicStrip')] ?? ''}`,
+    },
+    card && {
+      id: 'books', title: '挂载的世界书', pane: settingsPages.books, crumb: `世界书与状态 · ${card.name}`,
+      summary: () => {
+        if (!ui.books.length) return '还没导入独立世界书'
+        const names = [...form.querySelectorAll('input[name="book"]:checked')].map(input => ui.books.find(b => b.id === input.value)?.name).filter(Boolean)
+        return names.length ? `${names.length} 本：${names.join('、')}` : '没挂独立世界书（卡里自带的照常生效）'
+      },
+    },
+    {
+      id: 'network', title: '网络代理', pane: settingsPages.network,
+      summary: () => {
+        const mode = value('proxyMode')
+        if (mode === 'none') return '不用代理（国内服务直连）'
+        if (mode === 'manual') return `走 ${value('proxyUrl').trim() || '（还没填地址）'}`
+        return ui.network?.mode === 'system' && ui.network.effective ? `跟随系统代理：${ui.network.effective}` : '跟随系统代理'
+      },
+      status: () => (ui.network?.locked ? ['', '启动参数指定'] : value('proxyMode') === 'system' && ui.network?.mode === 'system' && !ui.network.effective ? ['warn', '系统代理没开'] : null),
+    },
+    {
+      id: 'access', title: '手机访问', look: 'shared', pane: settingsPages.access, hidden: () => document.documentElement.dataset.featureLan === 'false',
+      summary: () => {
+        if (value('listen') !== 'lan') return '仅这台电脑'
+        return ui.access?.running === 'lan' ? `同一 WiFi 或 Tailscale · ${ui.access.links?.length ?? 0} 个链接` : '同一 WiFi 或 Tailscale（重启服务后生效）'
+      },
+    },
+    {
+      id: 'media', title: '配图与朗读', action: () => mediaUi.openSettings(),
+      summary: () => '画图方式、朗读来源，每张卡的画风、名册和音色',
+    },
+    {
+      id: 'show-prompt', title: '查看当前对话的提示词', look: 'shared',
+      action: () => (ui.chat ? showPrompt() : toast('先打开一个对话')),
+      summary: () => noChat() || '固定前缀和最近一轮发出去的内容',
+    },
+    {
+      id: 'rebuild-prompt', title: '重建当前对话的前缀', look: 'shared',
+      action: () => (!ui.chat ? toast('先打开一个对话') : ui.generating ? toast('正在生成，先停止') : rebuildPrompt()),
+      summary: () => noChat() || '按现在的卡、设置和预设重写固定前缀，下一轮多写一次缓存',
+    },
+    {
+      id: 'stop-server', title: '停止后台服务', look: 'shared', action: () => stopServer(), hidden: () => document.documentElement.dataset.edition === 'android',
+      summary: () => '电脑和手机上的页面都会断开，下次从桌面图标打开',
+    },
+  ].filter(Boolean)
+  const cardRow = card
+    ? whoLine(el, { cardId: card.hasAvatar ? card.id : '', name: card.name, note: '这张卡挂的' })
+    : el('p', { class: 'menu-who none', text: '选一张角色卡后，可以给它挂独立世界书。' })
+  settingsMenu.mount({
+    panels: [
+      { id: 'model', title: '模型', icon: MENU_ICONS.model, rows: ['model', 'providers'] },
+      { id: 'write', title: '写作', icon: MENU_ICONS.write, rows: ['persona', 'style', 'presets'] },
+      { id: 'books', title: '世界书与状态', icon: MENU_ICONS.book, rows: ['scan', cardRow, 'books'] },
+      { id: 'link', title: '连接', icon: MENU_ICONS.link, rows: ['network', 'access'] },
+      { id: 'more', title: '更多', icon: MENU_ICONS.tools, rows: ['media', 'show-prompt', 'rebuild-prompt', 'stop-server'] },
+    ],
+    sections,
+    note: '名字、角色设定和文风写进对话开局时的固定前缀，只对之后新开的对话生效；模型、思考、字数和世界书扫描随时生效。',
+    save: { text: '保存', onClick: () => saveSettings() },
+  })
+}
 
 const saveSettings = guard(async () => {
   const form = $('settings-form')
@@ -1346,6 +1455,8 @@ const saveSettings = guard(async () => {
   }
   const access = await api('/api/access').catch(() => null)
   renderAccess(access)
+  settingsMenu?.markClean()
+  settingsMenu?.refresh()
   toast(form.listen.value === 'lan' && access?.running !== 'lan' ? '已保存。重启服务后，手机才能连上。' : '设置已保存')
 })
 
@@ -1354,6 +1465,7 @@ const saveSettings = guard(async () => {
  * reports as the mode in force) and what it resolved to.
  */
 function fillProxy(form, saved, network) {
+  ui.network = network
   const mode = saved ?? network?.mode ?? 'none'
   const manual = mode !== 'none' && mode !== 'system'
   form.proxyMode.value = manual ? 'manual' : mode
@@ -1374,6 +1486,7 @@ function fillProxy(form, saved, network) {
 const ACCESS_KINDS = { wifi: '同一 WiFi', wired: '有线局域网', tailscale: 'Tailscale（出门用）', virtual: '虚拟网卡' }
 
 function renderAccess(info) {
+  ui.access = info
   const box = $('access-links')
   if (!box) return
   if (!info) {
@@ -1595,7 +1708,20 @@ function bind() {
       if (event.target.closest('.preset-list li, #provider-add')) layout.classList.add('show-main')
     }, { capture: true })
     layout.querySelector('.preset-back')?.addEventListener('click', () => layout.classList.remove('show-main'))
-    layout.closest('dialog').addEventListener('close', () => layout.classList.remove('show-main'))
+    const dialog = layout.closest('dialog')
+    dialog.addEventListener('close', () => layout.classList.remove('show-main'))
+    // As in the settings windows: from an item, Esc or a click outside goes back to the list.
+    const showingItem = () => layout.classList.contains('show-main') && matchMedia('(max-width: 780px)').matches
+    dialog.addEventListener('cancel', event => {
+      if (!showingItem()) return
+      event.preventDefault()
+      layout.classList.remove('show-main')
+    })
+    dialog.addEventListener('click', event => {
+      if (event.target !== dialog || !showingItem()) return
+      const box = dialog.getBoundingClientRect()
+      if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) layout.classList.remove('show-main')
+    })
   }
   listenForFrameHeights()
   installFrameBridge({
@@ -1646,7 +1772,6 @@ function bind() {
   $('open-usage').addEventListener('click', openUsage)
   $('open-presets').addEventListener('click', () => presetsUi.open())
   $('open-providers').addEventListener('click', () => providersUi.open())
-  $('open-media').addEventListener('click', () => mediaUi.openSettings())
   $('provider-add').addEventListener('click', () => providersUi.add())
   $('provider-import-dsh').addEventListener('click', () => providersUi.importDsh())
   $('provider-export').addEventListener('click', () => providersUi.exportAll())
@@ -1678,17 +1803,11 @@ function bind() {
     for (const b of $('usage-range').querySelectorAll('button')) b.setAttribute('aria-pressed', String(b === button))
     loadUsage()
   })
-  $('settings-form').addEventListener('submit', event => {
-    if (event.submitter?.value === 'save') saveSettings()
-  })
-  $('show-prompt').addEventListener('click', showPrompt)
   $('compact-chat').addEventListener('click', compactNow)
   $('quick-open').addEventListener('click', openQuick)
   $('quick-apply').addEventListener('click', applyQuick)
   $('recap-save').addEventListener('click', saveRecap)
   $('recap-drop').addEventListener('click', dropRecap)
-  $('rebuild-prompt').addEventListener('click', rebuildPrompt)
-  $('stop-server').addEventListener('click', stopServer)
   $('toggle-left').addEventListener('click', () => document.querySelector('.app').classList.toggle('show-left'))
   $('toggle-right').addEventListener('click', () => document.querySelector('.app').classList.toggle('show-right'))
   document.addEventListener('keydown', event => { if (event.key === 'Escape') closeDrawers() })

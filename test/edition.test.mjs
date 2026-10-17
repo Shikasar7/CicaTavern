@@ -64,8 +64,8 @@ test('release: no subscription, no DSH import, no assumed voice bridge; LAN stil
   assert.equal(saved.listen, 'lan', 'phones may still connect to a release build')
 
   // Voice: nothing configured, so the page offers browser voices; the server says why it cannot read.
-  const voices = (await call('/api/media/voices')).body
-  assert.deepEqual([voices.ok, voices.configured, voices.voices.length], [true, false, 0])
+  const voices = (await call('/api/media/voices')).body.sources
+  assert.deepEqual(voices.map(s => [s.id, s.configured, s.voices.length]), [['bridge', false, 0], ['openai', false, 0], ['fish', false, 0], ['minimax', false, 0]])
   assert.equal((await call('/api/media/settings')).body.media.ttsUrl, '')
   const spoken = await call('/api/tts', { method: 'POST', body: { text: '你好' } })
   assert.equal(spoken.status, 400)

@@ -7,17 +7,21 @@
 //   workflow with {{prompt}} / {{negative}} / {{seed}} / {{width}} / {{height}}
 //   / {{reference}} placeholders, or NovelAI's image API (its persistent
 //   token kept server-side in novelai.json, never sent to the page).
-// - Voice: a voice service speaking the xiaoya bridge's protocol (/api/tts →
-//   WAV; the local bridge on this machine's own install, nothing by default
-//   elsewhere), proxied so a phone on the LAN can play it, cached by voice +
-//   text. Browser voices (Web Speech) never reach the server.
-import { createHash, randomInt } from 'node:crypto'
+// - Voice: the sources in voice/: a provider's /audio/speech, Fish Audio and
+//   MiniMax with the user's own key, or a voice service speaking the xiaoya
+//   bridge's protocol (the local bridge on this machine's own install, nothing
+//   by default elsewhere); proxied so a phone on the LAN can play it, cached
+//   by source + model + voice + text. Browser voices (Web Speech) never reach
+//   the server.
+import { randomInt } from 'node:crypto'
 import { copyFile, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { inflateRawSync } from 'node:zlib'
 import path from 'node:path'
 import { complete, fetchBytes, isProviderRef, postJson, providerError, providerRequest, refLabel, resolveRef } from './providers.mjs'
 import { cleanFrame, cleanLora, cleanRoster, cleanStrength, countTags, draftMaterial, flattenFrame, frameFormat, isFramePrompt, isRosterId, leadOf, naiCharacters, parseFrame, parseRosterDraft, rosterBrief, rosterDraftRequest } from './roster.mjs'
 import { httpError, newId } from './store.mjs'
+import { FISH_MODELS } from './voice/cloud.mjs'
+import { KEYED, cleanVoiceKey, cleanVoiceList, createVoices } from './voice/index.mjs'
 
 export const DEFAULT_MEDIA = Object.freeze({
   helperModel: '', // provider ref that writes image prompts; empty = the chat's model when it is a provider
@@ -37,7 +41,15 @@ export const DEFAULT_MEDIA = Object.freeze({
   naiRefStyle: false, // also take the reference picture's drawing style
   naiV5Empty: 'v45', // V5 allowance used up: 'v45' draws with V4.5 (free on Opus), 'anlas' spends Anlas on V5
   naiNegative: 'lowres, artistic error, scan artifacts, worst quality, bad quality, jpeg artifacts, multiple views, very displeasing, too many watermarks, negative space, blank page',
-  ttsUrl: 'http://127.0.0.1:8765',
+  ttsUrl: 'http://127.0.0.1:8765', // external voice service (voice/bridge.mjs)
+  ttsProvider: '', // provider id whose /audio/speech reads (voices openai:<id>:<voice>)
+  ttsModel: 'gpt-4o-mini-tts',
+  ttsVoices: Object.freeze([]), // [{ id, name }]; none listed = the model's usual voices
+  fishModel: 'drama-3',
+  fishVoices: Object.freeze([]), // reference_id + name (voices fish:<id>)
+  minimaxModel: 'speech-2.8-hd',
+  minimaxRegion: 'cn', // 'cn' 国内站 | 'intl' 国际站
+  minimaxVoices: Object.freeze([]), // none listed = MiniMax's system voices
   autoRead: false,
   autoImage: false,
 })
@@ -114,17 +126,36 @@ export function cleanMedia(input, previous = DEFAULT_MEDIA, defaults = DEFAULT_M
   for (const key of ['comfyUrl', 'ttsUrl']) {
     if (typeof source[key] !== 'string') continue
     const url = source[key].trim().replace(/\/+$/, '')
-    if (url && !/^https?:\/\/[^\s/]+(\/\S*)?$/.test(url)) throw httpError(400, `${key === 'comfyUrl' ? 'ComfyUI' : '语音服务'}地址不对`)
+    if (url && !/^https?:\/\/[^\s/]+(\/\S*)?$/.test(url)) throw httpError(400, `${key === 'comfyUrl' ? 'ComfyUI' : '本地语音桥接'}地址不对`)
     value[key] = url || defaults[key]
   }
   if (source.naiV5Empty === 'v45' || source.naiV5Empty === 'anlas') value.naiV5Empty = source.naiV5Empty
+  text('ttsProvider', 40)
+  if (typeof source.ttsModel === 'string') {
+    const model = source.ttsModel.trim()
+    if (model && !/^[\w.:/@+-]{1,120}$/.test(model)) throw httpError(400, '朗读模型名不对（例如 gpt-4o-mini-tts）')
+    value.ttsModel = model || DEFAULT_MEDIA.ttsModel
+  }
+  if (typeof source.fishModel === 'string') {
+    if (!FISH_MODELS.includes(source.fishModel)) throw httpError(400, `Fish 模型只能选 ${FISH_MODELS.join(' / ')}`)
+    value.fishModel = source.fishModel
+  }
+  if (typeof source.minimaxModel === 'string') {
+    if (!/^speech-[\w.-]{1,40}$/.test(source.minimaxModel)) throw httpError(400, 'MiniMax 模型名不对（例如 speech-2.8-hd）')
+    value.minimaxModel = source.minimaxModel
+  }
+  if (source.minimaxRegion === 'cn' || source.minimaxRegion === 'intl') value.minimaxRegion = source.minimaxRegion
+  for (const key of ['ttsVoices', 'fishVoices', 'minimaxVoices']) {
+    if (typeof source[key] === 'string' || Array.isArray(source[key])) value[key] = cleanVoiceList(source[key], { fish: key === 'fishVoices' })
+  }
   for (const key of ['imageReference', 'autoRead', 'autoImage', 'naiReference', 'naiRefStyle']) if (typeof source[key] === 'boolean') value[key] = source[key]
   return value
 }
 
 export function cleanCardMedia(input, previous = DEFAULT_CARD_MEDIA) {
   const value = { ...DEFAULT_CARD_MEDIA, ...previous }
-  for (const key of ['voice', 'narratorVoice']) if (typeof input?.[key] === 'string') value[key] = input[key].trim().slice(0, 80)
+  // openai:<provider id>:<voice> runs long: SiliconFlow's CosyVoice voices carry their model.
+  for (const key of ['voice', 'narratorVoice']) if (typeof input?.[key] === 'string') value[key] = input[key].trim().slice(0, 250)
   if (typeof input?.style === 'string') value.style = input.style.trim().slice(0, 600)
   if (typeof input?.styleNegative === 'string') value.styleNegative = input.styleNegative.trim().slice(0, 600)
   if (typeof input?.lora === 'string') value.lora = cleanLora(input.lora)
@@ -476,21 +507,23 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
  *   function read on every request (the setting can change while running).
  * @param askInContext - engine.askInContext, for prompts written inside the conversation.
  * @param novelai - NovelAI base URLs (tests point them at a fake server).
+ * @param voiceUrls - cloud speech addresses, the same way: { fish, minimax: { cn, intl } }.
  * @param features - the edition's capabilities (edition.mjs); without the
  *   xiaoya bridge assumed, no voice service is configured by default.
  */
-export function createMedia(store, { proxy = null, askInContext = null, novelai = {}, features = null } = {}) {
+export function createMedia(store, { proxy = null, askInContext = null, novelai = {}, voiceUrls = {}, features = null } = {}) {
   const proxyNow = typeof proxy === 'function' ? proxy : () => proxy
   const defaults = mediaDefaults(features)
   // Since 2026-09-21 api.novelai.net refuses third-party tools ("update to the
   // image URL"); generation and the subscription lookup both live on the image host.
   const naiImageUrl = novelai.imageUrl ?? 'https://image.novelai.net'
   const mediaDir = chatId => path.join(store.dirs.root, 'media', chatId)
-  const ttsDir = path.join(store.dirs.root, 'media', 'tts')
 
   async function settings() {
     return cleanMedia((await store.getSettings()).media ?? {}, defaults, defaults)
   }
+
+  const voices = createVoices({ root: store.dirs.root, settings, providers: () => store.getProviders(), proxy: proxyNow, features, urls: voiceUrls })
 
   const workflowFile = path.join(store.dirs.root, 'comfy-workflow.json')
 
@@ -1020,8 +1053,6 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     await Promise.all(wanted.map(file => copyFile(path.join(mediaDir(fromId), file), path.join(mediaDir(toId), file)).catch(() => {})))
   }
 
-  // ─── Voice ──────────────────────────────────────────────────────────
-
   /** LoRA files ComfyUI can load (for the per-card picker); empty when it is not running. */
   async function loras() {
     const media = await settings()
@@ -1033,147 +1064,34 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     }
   }
 
-  // The voice service is the xiaoya bridge, or another Agent Tavern that has one
-  // (the phone edition reading through the PC's tavern on the same Wi-Fi). A
-  // tavern in LAN mode wants its access key: kept in its own file like the
-  // NovelAI token, so /api/settings and the page never carry it.
-  const ttsKeyFile = path.join(store.dirs.root, 'tts-key.json')
-
-  async function ttsKey() {
-    try {
-      return String(JSON.parse(await readFile(ttsKeyFile, 'utf8')).key ?? '')
-    } catch {
-      return ''
-    }
-  }
-
-  /** What the page may know about the key. */
-  async function ttsKeyStatus() {
-    const key = await ttsKey()
-    return { hasKey: Boolean(key), keyHint: key ? `…${key.slice(-4)}` : '' }
-  }
-
-  /** Save a key; '' removes it. */
-  async function setTtsKey(value) {
-    const key = String(value ?? '').trim()
-    if (!key) await rm(ttsKeyFile, { force: true })
-    else {
-      if (!/^[\w-]{8,200}$/.test(key)) throw httpError(400, '访问口令不对：把电脑上酒馆「局域网访问」里的链接整条粘贴过来')
-      await writeFile(ttsKeyFile, JSON.stringify({ key }), 'utf8')
-    }
-    return ttsKeyStatus()
-  }
-
-  async function ttsHeaders() {
-    const key = await ttsKey()
-    return key ? { 'x-agent-tavern': '1', 'x-agent-tavern-key': key } : { 'x-agent-tavern': '1' }
-  }
-
-  const isLocalUrl = url => /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/i.test(url)
-
-  /** Why the voice service did not answer, in words that say what to do. */
-  function voiceTrouble(media, error) {
-    const message = String(error?.message ?? error)
-    const down = /ECONNREFUSED|EHOSTUNREACH|ENETUNREACH|ETIMEDOUT|timeout|aborted/i.test(message)
-    // Only a tavern asks for a key (401 no or wrong key, 403 an address it does not serve).
-    if (/^40[13]\b/.test(message)) return '电脑上的酒馆不让访问：把它「局域网访问」里的链接整条粘贴到「语音服务地址」（链接里带着口令）'
-    if (isLocalUrl(media.ttsUrl)) {
-      if (!down) return `语音服务：${message.replace(/^\d{3} /, '').slice(0, 200)}`
-      return features?.xiaoya === false ? `语音服务（${media.ttsUrl}）没开` : '语音服务没开：先运行「小雅一键启动」（或只启动语音桥接）'
-    }
-    if (down) return `连不上 ${media.ttsUrl}：电脑上的酒馆开着吗？手机和电脑在同一个 Wi-Fi 吗？`
-    return `语音服务（${media.ttsUrl}）：${message.replace(/^\d{3} /, '').slice(0, 200)}`
-  }
-
-  /** The service's voice list: its own voices, plus cloud voices it can call by name (fish:<id>, billed per character). */
-  async function voiceList(media, timeout) {
-    const json = JSON.parse((await fetchBytes(`${media.ttsUrl}/api/persona/list`, { headers: await ttsHeaders(), signal: AbortSignal.timeout(timeout) })).buffer.toString('utf8'))
-    const cloud = (Array.isArray(json.cloud_voices) ? json.cloud_voices : [])
-      .filter(v => typeof v?.name === 'string' && v.name.includes(':'))
-      .map(v => ({ name: v.name, label: String(v.label || v.name), provider: String(v.provider || ''), model: String(v.model || ''), tags: v.tags === true }))
-    return {
-      voices: (json.voices ?? []).map(v => (typeof v === 'string' ? v : v.name)).filter(Boolean),
-      cloud,
-      current: json.current?.voice ?? null,
-      remote: json.via === 'agent-tavern',
-    }
-  }
-
-  async function voices() {
-    const media = await settings()
-    // No voice service set up: the page offers the browser's own voices only.
-    if (!media.ttsUrl) return { ok: true, configured: false, voices: [], cloud: [], current: null }
-    try {
-      return { ok: true, ...(await voiceList(media, 5000)) }
-    } catch (error) {
-      return { ok: false, voices: [], cloud: [], error: voiceTrouble(media, error) }
-    }
-  }
-
-  /** The bridge's voice list in its own shape, so another tavern can use this one as its voice service. */
-  async function personaList() {
-    const info = await voices()
-    if (!info.ok) throw httpError(502, info.error)
-    return { voices: info.voices.map(name => ({ name })), cloud_voices: info.cloud, current: { voice: info.current }, via: 'agent-tavern' }
-  }
-
-  // What synthesis needs to know about the service, asked at most every 10 s:
-  // its current voice (cards that use it: switching it there must not replay
-  // audio cached under the old one) and its cloud voices (their model goes into
-  // the cache key; only some act on [emotion] tags).
-  let serviceInfo = { at: 0, current: '', cloud: new Map() }
-  async function voiceService(media) {
-    if (!media.ttsUrl) return { at: 0, current: '', cloud: new Map() }
-    if (Date.now() - serviceInfo.at < 10_000) return serviceInfo
-    let info = { current: '', cloud: new Map() }
-    try {
-      const list = await voiceList(media, 2000)
-      info = { current: String(list.current ?? ''), cloud: new Map(list.cloud.map(v => [v.name, v])) }
-    } catch {
-      // service not answering: synthesis below reports it
-    }
-    serviceInfo = { at: Date.now(), ...info }
-    return serviceInfo
-  }
-
-  // [emotion] tags speechChunks puts before a line (from 小白X voice tags).
-  const DELIVERY_TAG = /\[[^\]\n]{1,40}\]\s*/g
+  // ─── Voice ──────────────────────────────────────────────────────────
+  // The sources live in voice/; media keeps the settings they read.
 
   /**
-   * One chunk of speech as WAV, from the cache or the bridge. The bridge stops
-   * synthesising when this request is aborted (the client pressed stop).
-   * fresh: synthesise again and replace the cached take (passed on, so a
-   * tavern in between skips its cache too).
+   * One chunk of speech as { buffer, mime }, cached by source + model + voice
+   * + text; fresh synthesises again and replaces the cached take.
    */
-  async function speak({ text, voice, stable, fresh }, signal) {
-    const media = await settings()
-    if (!media.ttsUrl) throw httpError(400, '没有设置语音服务：在「配图与朗读」里给这张卡选一个浏览器音色，或者填一个语音服务地址')
-    const service = await voiceService(media)
-    const cloud = voice ? service.cloud.get(voice) : null
-    // Only voices that act on delivery tags get them; the rest would read them out.
-    const clean = (cloud?.tags ? String(text ?? '') : String(text ?? '').replace(DELIVERY_TAG, '')).trim().slice(0, 500)
-    if (!clean) throw httpError(400, '没有要读的文字')
-    const speaker = voice ? `${voice}${cloud?.model ? `#${cloud.model}` : ''}` : `@${service.current}`
-    const key = createHash('sha256').update(`${speaker}\n${stable ? 1 : 0}\n${clean}`).digest('hex').slice(0, 32)
-    const file = path.join(ttsDir, `${key}.wav`)
-    if (!fresh) {
-      try {
-        return await readFile(file)
-      } catch {
-        // not cached yet
-      }
+  const speak = (request, signal) => voices.speak(request, signal)
+
+  /** The voice settings as the form shows them: its fields over the saved ones, typed keys over the saved keys. */
+  async function voiceDraft(draft, keys) {
+    const typed = {}
+    for (const [id, value] of Object.entries(keys && typeof keys === 'object' ? keys : {})) {
+      if (KEYED.includes(id) && typeof value === 'string' && value.trim()) typed[id] = cleanVoiceKey(value)
     }
-    let result
-    try {
-      result = await postJson(`${media.ttsUrl}/api/tts`, { text: clean, ...(voice ? { voice } : {}), stable: Boolean(stable), ...(fresh ? { fresh: true } : {}) }, { signal, headers: await ttsHeaders() })
-    } catch (error) {
-      if (signal?.aborted) throw error
-      throw httpError(502, voiceTrouble(media, error))
-    }
-    await mkdir(ttsDir, { recursive: true })
-    await writeFile(file, result.buffer)
-    return result.buffer
+    const media = draft && typeof draft === 'object' ? cleanMedia(draft, await settings(), defaults) : await settings()
+    return { media, keys: typed }
   }
 
-  return { defaults, settings, naiStatus, setNaiToken, naiCheck, cardMediaView, saveCardMedia, inheritCardMedia, draftRoster, drawPortrait, readRosterRef, saveRosterRef, removeRosterRef, writeImagePrompt, generateImage, readImage, removeImage, removeChatMedia, copyChatMedia, loras, voices, personaList, ttsKeyStatus, setTtsKey, speak, loadWorkflow, saveWorkflow, describeWorkflow }
+  /** 试听 with the settings as the form shows them. */
+  async function previewVoice({ voice, source, text, media: draft, keys = {} }, signal) {
+    return voices.preview({ voice, source, text, draft: await voiceDraft(draft, keys) }, signal)
+  }
+
+  /** 从账户读取音色 with the form's list and key; nothing is saved. */
+  async function accountVoices({ source, media: draft, keys = {} }, signal) {
+    return voices.accountVoices({ source, draft: await voiceDraft(draft, keys) }, signal)
+  }
+
+  return { defaults, settings, naiStatus, setNaiToken, naiCheck, cardMediaView, saveCardMedia, inheritCardMedia, draftRoster, drawPortrait, readRosterRef, saveRosterRef, removeRosterRef, writeImagePrompt, generateImage, readImage, removeImage, removeChatMedia, copyChatMedia, loras, voices: voices.list, personaList: voices.personaList, ttsKeyStatus: voices.ttsKeyStatus, setTtsKey: voices.setTtsKey, voiceKeys: voices.keyStatus, setVoiceKey: voices.setKey, speak, previewVoice, accountVoices, loadWorkflow, saveWorkflow, describeWorkflow }
 }

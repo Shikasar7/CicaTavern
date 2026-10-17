@@ -110,6 +110,9 @@ function parseJsonField(text, label) {
 /**
  * @param deps - { api, el, toast, guard, saveFile, onChanged() } — onChanged reloads the model lists.
  */
+// How a list tag looks: something to fix, something switched off (style.css .tag.warn / .off).
+const TAG_LOOK = { 缺密钥: 'warn', 已关闭: 'off' }
+
 export function initProviders({ api, el, toast, guard, saveFile, onChanged }) {
   const $ = id => document.getElementById(id)
   // locked: no subscription backend on this server (CicaTavern, the phone app): no subscription entry.
@@ -152,7 +155,7 @@ export function initProviders({ api, el, toast, guard, saveFile, onChanged }) {
   function renderNav() {
     const item = (id, title, tag, sub) =>
       el('li', { class: state.selected === id ? 'active' : '', onclick: () => select(id) }, [
-        el('div', { class: 'item-title' }, [el('span', { text: title }), tag ? el('span', { class: 'tag', text: tag }) : null]),
+        el('div', { class: 'item-title' }, [el('span', { text: title }), tag ? el('span', { class: `tag ${TAG_LOOK[tag] ?? ''}`, text: tag }) : null]),
         sub ? el('div', { class: 'muted small', text: sub }) : null,
       ])
     $('provider-list').replaceChildren(...[
