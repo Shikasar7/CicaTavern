@@ -14,8 +14,8 @@ CicaTavern 的版本记录。格式参考 [Keep a Changelog](https://keepachange
 
 ### 朗读
 
-- 云端音色：在「配图与朗读 → 朗读」里设一次，每张卡就能选。
-  - 供应商朗读：用已经添加的供应商的 OpenAI 兼容 `/audio/speech`（OpenAI、硅基流动 CosyVoice、各种中转，也包括本机的 Kokoro / GPT-SoVITS 封装），地址、密钥和直连 / 代理设置都沿用供应商的。`gpt-4o-mini-tts` 会把回复里的情绪当语气说明。
+- 云端音色：在「配图与朗读 → 朗读来源」里设一次，每张卡就能选。
+  - 供应商的朗读接口：用已经添加的供应商的 OpenAI 兼容 `/audio/speech`（OpenAI、硅基流动 CosyVoice、各种中转，也包括本机的 Kokoro / GPT-SoVITS 封装），地址、密钥和直连 / 代理设置都沿用供应商的。`gpt-4o-mini-tts` 会把回复里的情绪当语气说明。
   - Fish Audio：贴音色页链接或 ID 就能用，回复里的情绪放在台词前当语气标签。
   - MiniMax：国内站（直连）或国际站，没列音色时提供系统音色。
 - Fish Audio 和 MiniMax 各有「从账户读取音色」：把账户里自己克隆或设计的音色并进音色框，已写的名字不改，保存后生效；密钥用已保存的或刚填的，不会传回页面。
