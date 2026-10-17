@@ -82,7 +82,9 @@ await writeFile(
   JSON.stringify({ name: release.appName.toLowerCase(), version: pkg.version, private: true, type: 'module', description: '用自己的模型 API 游玩 SillyTavern 角色卡' }, null, 2) + '\n',
 )
 await writeFile(path.join(out, 'edition.json'), JSON.stringify({ edition: 'release' }) + '\n')
-await cp(path.join(root, 'docs', 'README-release.md'), path.join(out, 'README.md'))
+// The private repository keeps the release README apart from its own; the public tree has it as README.md.
+const releaseReadme = path.join(root, 'docs', 'README-release.md')
+await cp(existsSync(releaseReadme) ? releaseReadme : path.join(root, 'README.md'), path.join(out, 'README.md'))
 await cp(path.join(root, 'CHANGELOG.md'), path.join(out, 'CHANGELOG.md'))
 if (existsSync(path.join(root, 'LICENSE'))) await cp(path.join(root, 'LICENSE'), path.join(out, 'LICENSE'))
 else console.warn('[stage-release] 仓库根目录还没有 LICENSE：发布前选一个许可证')
