@@ -1,0 +1,23 @@
+{
+  "name": "cicatavern",
+  "version": "1.0.0",
+  "private": true,
+  "description": "用自己的模型 API 游玩 SillyTavern 角色卡",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "cicatavern": "bin/start.mjs"
+  },
+  "scripts": {
+    "start": "node bin/start.mjs --open",
+    "test": "node --test test/*.test.mjs",
+    "package": "node scripts/stage-release.mjs --zip"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "quickjs-emscripten": "^0.32.0",
+    "yaml": "^2.9.0"
+  }
+}

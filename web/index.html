@@ -1,0 +1,432 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#eceeea">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>CicaTavern</title>
+  <link rel="icon" href="/favicon.ico" sizes="any">
+  <link rel="icon" href="/icon.png" type="image/png">
+  <link rel="apple-touch-icon" href="/icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600&display=swap">
+  <link rel="stylesheet" href="/style.css">
+  <script>try { const t = localStorage.getItem('theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t } catch {}</script>
+</head>
+<body>
+  <div class="app" id="app">
+    <aside class="pane left" id="left">
+      <header class="brand">
+        <img class="brand-mark" src="/icon.png" alt="" width="38" height="38">
+        <span class="brand-name">CicaTavern</span>
+        <span class="brand-sub">用自己的 API 游玩角色卡</span>
+      </header>
+      <label class="import" title="SillyTavern 角色卡（PNG/JSON）、世界书或预设（JSON），也可以直接把文件拖进窗口">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v10m0 0-4-4m4 4 4-4M4 16h12" /></svg>
+        <span>导入角色卡、世界书或预设</span>
+        <input type="file" id="import-input" accept=".png,.json,image/png,application/json" multiple hidden>
+      </label>
+      <div class="section-title">角色卡</div>
+      <ul class="card-list" id="card-list"></ul>
+      <div class="section-title row">
+        <span>对话</span>
+        <span class="row-actions">
+          <label class="btn small ghost" id="import-story-label" title="导入剧情存档（.json，在这张角色卡下接着写）或对话包（.tavernchat，整段对话连同配图，自动放到同名角色卡下）；可以一次选多个" aria-disabled="true">
+            导入存档<input type="file" id="import-story" accept=".json,.tavernchat,application/json,application/octet-stream" multiple hidden disabled>
+          </label>
+          <button class="btn small" id="new-chat" disabled>新对话</button>
+        </span>
+      </div>
+      <ul class="chat-list" id="chat-list"></ul>
+      <footer class="pane-foot">
+        <button class="foot-btn" id="open-presets">预设</button>
+        <button class="foot-btn" id="open-usage">用量</button>
+        <button class="foot-btn" id="open-settings">设置</button>
+        <button class="foot-btn theme" id="toggle-theme" title="切换主题" aria-label="切换主题"></button>
+      </footer>
+    </aside>
+    <div class="scrim" id="scrim"></div>
+
+    <main class="stage">
+      <div class="topbar">
+        <button class="btn ghost icon only-narrow" id="toggle-left" aria-label="角色卡与对话">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h14" /></svg>
+        </button>
+        <div class="topbar-title" id="chat-title">选择一张角色卡开始</div>
+        <button class="pill" id="chat-preset" title="这个对话用的预设" hidden></button>
+        <button class="pill" id="compact-chat" title="把前面的剧情压缩成一份存档，之后在新的上下文里接着写" hidden>压缩<span class="wide-only">上下文</span></button>
+        <select class="pill model-select" id="chat-model" title="这个对话用的模型（缓存按模型区分，切换后下一轮会重新写入缓存）" hidden></select>
+        <div class="quota" id="quota" hidden></div>
+        <button class="btn ghost icon" id="history-open" title="回看历史（Ctrl+K）" aria-label="回看历史" aria-controls="history" aria-expanded="false" hidden>
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 10a6.5 6.5 0 1 0 1.9-4.6M3.5 3.5v3h3" /><path d="M10 6.5V10l2.5 1.6" /></svg>
+        </button>
+        <button class="btn ghost icon only-mid" id="toggle-right" aria-label="状态面板">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4" width="14" height="12" rx="2" /><path d="M12 4v12" /></svg>
+        </button>
+      </div>
+      <div class="banner" id="auth-banner" hidden></div>
+      <div class="reader">
+        <div class="transcript" id="transcript">
+          <div class="empty" id="empty">
+            <p class="empty-title">导入一张角色卡，然后开一段新对话。</p>
+            <p class="muted">角色卡、预设和常驻世界书只在开局时写入一次，之后每轮只追加新内容，所以缓存命中高、出字快。</p>
+          </div>
+        </div>
+        <div class="rail" id="rail" aria-hidden="true" hidden>
+          <div class="rail-track"><div class="rail-ticks" id="rail-ticks"></div><div class="rail-thumb" id="rail-thumb"></div></div>
+          <div class="rail-bubble" id="rail-bubble" hidden><img alt="" decoding="async" hidden><b></b><span></span></div>
+        </div>
+        <div class="whereabouts" id="whereabouts" hidden>
+          <button type="button" id="where-open" title="回看历史（Ctrl+K）"><span id="where-round"></span><span class="where-total" id="where-total"></span></button>
+          <button type="button" id="where-latest" title="回到最新" aria-label="回到最新">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12m0 0-5-5m5 5 5-5" /></svg>
+          </button>
+        </div>
+        <section class="history" id="history" role="dialog" aria-label="回看历史" hidden>
+          <div class="history-search">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="5.5" /><path d="m13.2 13.2 3.3 3.3" /></svg>
+            <input type="search" id="history-query" placeholder="搜索说过的话，或输入轮数直接跳" autocomplete="off" spellcheck="false" enterkeyhint="go" role="combobox" aria-controls="history-list" aria-expanded="true">
+            <button type="button" class="btn ghost icon" id="history-close" aria-label="关闭">
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15" /></svg>
+            </button>
+          </div>
+          <div class="history-meta">
+            <div class="seg" role="group" aria-label="搜索范围">
+              <button type="button" data-scope="all" aria-pressed="true">全文</button>
+              <button type="button" data-scope="input" aria-pressed="false">只搜我的输入</button>
+            </div>
+            <span class="history-count" id="history-count" aria-live="polite"></span>
+          </div>
+          <div class="history-pages" id="history-pages" hidden></div>
+          <ol class="history-list" id="history-list" role="listbox" aria-label="对话轮次"></ol>
+          <div class="history-foot"><kbd>↑</kbd><kbd>↓</kbd> 选择<kbd>Enter</kbd> 跳过去<kbd>Esc</kbd> 关闭<span class="spacer"></span><kbd>Ctrl</kbd><kbd>K</kbd> 随时打开</div>
+        </section>
+      </div>
+      <form class="composer" id="composer">
+        <div class="player" id="player" role="status" hidden>
+          <span class="player-count" id="player-count"></span>
+          <span class="player-text" id="player-text"></span>
+          <button type="button" class="btn small ghost" id="player-redo" title="这一段丢掉缓存重新合成，接下来读的也都重新合成（合成得不好、换了音色时用）">重新合成</button>
+          <button type="button" class="btn small ghost" id="player-toggle">暂停</button>
+          <button type="button" class="btn small" id="player-stop">停止</button>
+        </div>
+        <div class="branch-note" id="branch-note" hidden></div>
+        <div class="composer-box">
+          <button type="button" class="quick-btn" id="quick-open" title="快捷开关：预设里钉住的条目" aria-label="快捷开关" hidden>
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 6h7m4 0h1M4 14h1m4 0h7" /><circle cx="13" cy="6" r="2" /><circle cx="7" cy="14" r="2" /></svg>
+          </button>
+          <textarea id="input" rows="1" placeholder="写下你的行动、对白，或希望看到的发展" disabled></textarea>
+          <button type="button" class="send stop" id="stop" title="停止生成" aria-label="停止生成" hidden>
+            <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="6" y="6" width="8" height="8" rx="1.5" /></svg>
+          </button>
+          <button type="submit" class="send" id="send" title="发送（Enter）" aria-label="发送" disabled>
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 16V4m0 0-5 5m5-5 5 5" /></svg>
+          </button>
+        </div>
+        <div class="composer-row">
+          <span class="muted small" id="composer-hint">Enter 发送，Shift+Enter 换行</span>
+        </div>
+      </form>
+    </main>
+
+    <aside class="pane right" id="right">
+      <section class="panel">
+        <div class="panel-head">
+          <span>状态</span>
+          <button class="btn small" id="edit-state" disabled>编辑</button>
+        </div>
+        <pre class="state" id="state-view">—</pre>
+        <div class="state-editor" id="state-editor" hidden>
+          <textarea id="state-input" rows="10" spellcheck="false"></textarea>
+          <div class="row end">
+            <button class="btn small" id="cancel-state">取消</button>
+            <button class="btn small primary" id="save-state">保存</button>
+          </div>
+        </div>
+      </section>
+      <section class="panel">
+        <div class="panel-head"><span>上一轮</span></div>
+        <dl class="usage" id="usage"><dt>—</dt></dl>
+      </section>
+      <section class="panel">
+        <div class="panel-head"><span>角色卡</span></div>
+        <div id="card-info" class="card-info muted">—</div>
+      </section>
+    </aside>
+  </div>
+
+  <dialog id="greeting-dialog" class="dialog">
+    <form method="dialog">
+      <h2>选择开场白</h2>
+      <div class="greetings" id="greetings"></div>
+      <div class="row end">
+        <button class="btn" value="cancel">取消</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="settings-dialog" class="dialog wide">
+    <form method="dialog" id="settings-form">
+      <h2>设置</h2>
+      <p class="muted small">名字、角色设定和文风写进对话开局时的固定前缀，只对之后新开的对话生效；模型、思考、字数和世界书扫描随时生效。</p>
+      <div class="grid">
+        <label>你的名字<input name="personaName"></label>
+        <label>默认模型（新对话和未单独设置的对话）
+          <span class="select-with-action">
+            <select name="model" id="settings-model"></select>
+            <button type="button" class="btn small" id="open-providers" title="接入外部 API：DeepSeek、OpenAI、Anthropic、OpenRouter、本机中转…">供应商</button>
+          </span>
+        </label>
+        <label title="Claude 模型（Anthropic 接口）按这里开关思考。Opus 5.5、Fable 5.1 关不掉思考，选关闭也会思考。">思考
+          <select name="thinking">
+            <option value="off">关闭（最快）</option>
+            <option value="adaptive">自适应</option>
+          </select>
+        </label>
+        <label title="Anthropic 接口发 effort，OpenAI 接口发 reasoning effort（max 按 xhigh 发）。模型或中转不认时自动去掉重发。供应商「额外请求参数」里写了的以那里为准。">努力程度
+          <select name="effort">
+            <option value="low">low</option>
+            <option value="medium">medium</option>
+            <option value="high">high</option>
+            <option value="xhigh">xhigh</option>
+            <option value="max">max（最慢最贵）</option>
+          </select>
+        </label>
+        <label>写作语言<input name="language"></label>
+        <label>每轮回复字数（0 为不限）<input name="replyLength" type="number" min="0" max="8000" step="100"></label>
+        <label>世界书扫描最近几条<input name="scanDepth" type="number" min="1" max="20"></label>
+        <label>同一条目隔几轮可再注入<input name="reinjectAfter" type="number" min="0" max="50"></label>
+        <label>每几轮重发一次完整状态<input name="stateRefreshEvery" type="number" min="0" max="50"></label>
+        <label title="历史里旧的动态设定（变量列表）堆多了会一次性删掉；删的那一轮要重写整段历史的缓存。删得少更省，但上下文长得快些">动态设定清理
+          <select name="dynamicStrip">
+            <option value="rare">少（推荐，约 20 轮一次）</option>
+            <option value="often">勤（约 6～8 轮一次）</option>
+            <option value="off">不清（压缩上下文时才重置）</option>
+          </select>
+        </label>
+      </div>
+      <label>你的角色设定<textarea name="personaDescription" rows="3"></textarea></label>
+      <label>文风与写作要求<textarea name="writingRules" rows="5" placeholder="例如：第三人称限知视角，白描为主，少用形容词堆砌；对白口语化。"></textarea></label>
+      <fieldset class="books" id="book-fieldset">
+        <legend>当前角色卡挂载的世界书</legend>
+        <div id="book-options" class="muted small">先选择一张角色卡</div>
+      </fieldset>
+      <fieldset class="access needs-lan">
+        <legend>手机访问</legend>
+        <label>谁可以打开
+          <select name="listen">
+            <option value="local">仅这台电脑</option>
+            <option value="lan">同一 WiFi 或 Tailscale</option>
+          </select>
+        </label>
+        <p class="muted small">改完要重启服务。不要把端口映射到公网：拿到链接的人能用你的模型额度。出门时在电脑和手机都装 Tailscale，用设置里的 Tailscale 地址打开。手机打不开时，在 Windows 防火墙里允许 Node.js 入站。</p>
+        <div id="access-links" class="access-links muted small"></div>
+      </fieldset>
+      <fieldset class="access" id="network-fieldset">
+        <legend>网络代理</legend>
+        <div class="row proxy-row">
+          <label>访问海外接口
+            <select name="proxyMode">
+              <option value="none">不用代理</option>
+              <option value="system">跟随系统代理</option>
+              <option value="manual">指定代理地址</option>
+            </select>
+          </label>
+          <label class="proxy-url">代理地址<input name="proxyUrl" placeholder="http://127.0.0.1:7890" spellcheck="false" autocomplete="off"></label>
+        </div>
+        <p class="muted small">「跟随系统代理」读 Windows 的代理设置（Clash、v2rayN 开了「系统代理」时就是它），每分钟更新一次。只支持 HTTP 代理，SOCKS 不行。供应商设成「直连」的（DeepSeek 等国内服务）不走代理。保存后立刻生效。</p>
+        <p class="muted small" id="network-status"></p>
+      </fieldset>
+      <div class="row between">
+        <div class="row">
+          <button type="button" class="btn ghost" id="open-media">配图与朗读</button>
+          <button type="button" class="btn ghost" id="show-prompt">查看当前对话的提示词</button>
+          <button type="button" class="btn ghost desktop-only" id="stop-server" title="关掉在后台运行的酒馆服务。下次从桌面图标或启动脚本打开">停止后台服务</button>
+          <button type="button" class="btn ghost" id="rebuild-prompt" title="按现在的角色卡、设置和预设重新生成这个对话的固定前缀；下一轮会重新写入一次缓存">重建当前对话的前缀</button>
+        </div>
+        <div class="row">
+          <button class="btn" value="cancel">取消</button>
+          <button class="btn primary" value="save" id="save-settings">保存</button>
+        </div>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="preset-dialog" class="dialog presets">
+    <div class="preset-layout">
+      <nav class="preset-nav">
+        <div class="preset-nav-head">
+          <h2>预设</h2>
+          <label class="btn small" title="导入 SillyTavern 的 Chat Completion 预设 JSON">导入
+            <input type="file" id="preset-import" accept=".json,application/json" multiple hidden>
+          </label>
+        </div>
+        <ul class="preset-list" id="preset-list"></ul>
+        <p class="muted small preset-nav-note">新对话默认用标着「默认」的预设。不用预设时，按内置的叙述规则写。</p>
+      </nav>
+      <button type="button" class="btn small ghost preset-back">‹ 全部预设</button>
+      <section class="preset-main" id="preset-main"></section>
+      <form method="dialog" class="preset-close"><button class="btn ghost icon" aria-label="关闭">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15" /></svg>
+      </button></form>
+    </div>
+  </dialog>
+
+  <dialog id="provider-dialog" class="dialog presets providers">
+    <div class="preset-layout">
+      <nav class="preset-nav">
+        <div class="preset-nav-head">
+          <h2>模型供应商</h2>
+          <span class="row">
+            <button class="btn small ghost needs-dsh" type="button" id="provider-import-dsh" title="从 DSH 桌面版的配置导入地址、接口类型和模型（密钥不导入）">从 DSH 导入</button>
+            <button class="btn small" type="button" id="provider-add">添加</button>
+          </span>
+        </div>
+        <ul class="preset-list" id="provider-list"></ul>
+        <div class="row preset-nav-transfer">
+          <button class="btn small ghost" type="button" id="provider-export" title="把供应商连同 API Key 存成一个文件，用来搬到另一台设备（手机版）。指向本机 127.0.0.1 的不导出">导出（含密钥）</button>
+          <button class="btn small ghost" type="button" id="provider-import" title="导入另一台设备导出的供应商文件">导入</button>
+          <input type="file" id="provider-import-input" accept=".json,application/json" hidden>
+        </div>
+        <p class="muted small preset-nav-note">密钥只存在本机的数据目录里（providers.json），页面上看不到。导出的文件里是明文密钥，导入后删掉。</p>
+      </nav>
+      <button type="button" class="btn small ghost preset-back">‹ 全部供应商</button>
+      <section class="preset-main" id="provider-main"></section>
+      <form method="dialog" class="preset-close"><button class="btn ghost icon" aria-label="关闭">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15" /></svg>
+      </button></form>
+    </div>
+  </dialog>
+
+  <dialog id="media-dialog" class="dialog wide">
+    <form method="dialog" id="media-form"></form>
+  </dialog>
+
+  <dialog id="image-dialog" class="dialog wide">
+    <form method="dialog">
+      <h2>配图</h2>
+      <p class="muted small" id="image-status"></p>
+      <textarea id="image-prompt" rows="7" spellcheck="false" placeholder="画面提示词"></textarea>
+      <div class="row between">
+        <div class="row">
+          <button type="button" class="btn ghost" id="image-settings">配图设置</button>
+          <button type="button" class="btn ghost" id="image-library" title="换成以前画过或存下的提示词">提示词库</button>
+          <button type="button" class="btn ghost" id="image-keep" title="把框里这段存进提示词库，以后给别的段落配图还能用">存进库</button>
+        </div>
+        <div class="row">
+          <button class="btn" value="cancel">取消</button>
+          <button type="button" class="btn" id="image-rewrite">重写</button>
+          <select id="image-model" class="image-model" title="这一张用哪个 NovelAI 模型画" hidden></select>
+          <button type="button" class="btn primary" id="image-draw" disabled>画</button>
+        </div>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="library-dialog" class="dialog wide library">
+    <form method="dialog">
+      <div class="library-head">
+        <h2>提示词库</h2>
+        <p class="muted small" id="library-note"></p>
+      </div>
+      <div class="library-tools">
+        <input type="search" id="library-query" placeholder="搜索提示词、对话名" autocomplete="off" spellcheck="false">
+        <div class="seg" role="group" aria-label="范围">
+          <button type="button" data-scope="card" aria-pressed="true">这张卡</button>
+          <button type="button" data-scope="all" aria-pressed="false">全部卡</button>
+        </div>
+      </div>
+      <ul class="library-list" id="library-list"></ul>
+      <div class="row between">
+        <span class="muted small" id="library-count"></span>
+        <div class="row">
+          <button type="button" class="btn ghost" id="library-export" title="把列出的提示词存成文本文件">导出</button>
+          <button class="btn" value="cancel">关闭</button>
+        </div>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="image-view" class="dialog image-view">
+    <form method="dialog">
+      <img alt="">
+      <p class="image-view-prompt"></p>
+      <div class="row between">
+        <span class="muted small image-view-meta"></span>
+        <button class="btn">关闭</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="prompt-dialog" class="dialog wide">
+    <form method="dialog">
+      <h2>提示词</h2>
+      <h3>固定前缀（system prompt，<span id="prompt-chars"></span> 字）</h3>
+      <pre class="prompt" id="prompt-system"></pre>
+      <h3>最近一轮追加的消息</h3>
+      <pre class="prompt" id="prompt-turn"></pre>
+      <div class="row end"><button class="btn">关闭</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="recap-dialog" class="dialog wide">
+    <form method="dialog" id="recap-form">
+      <h2>剧情存档</h2>
+      <p class="muted small" id="recap-meta"></p>
+      <textarea id="recap-text" rows="18" spellcheck="false"></textarea>
+      <div class="row end">
+        <button class="btn ghost" type="button" id="recap-drop">撤销压缩</button>
+        <button class="btn" type="button" id="recap-export" title="把这份存档、最近几轮原文和变量存成文件，可以在别的对话或别的版本的角色卡里接着写">导出存档</button>
+        <button class="btn" value="cancel">关闭</button>
+        <button class="btn primary" type="button" id="recap-save">保存修改</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="quick-dialog" class="dialog">
+    <form method="dialog">
+      <h2>快捷开关</h2>
+      <p class="muted small" id="quick-hint"></p>
+      <ul class="quick-list" id="quick-list"></ul>
+      <div class="row end">
+        <button class="btn" value="cancel">关闭</button>
+        <button class="btn primary" type="button" id="quick-apply" disabled>应用</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="switch-dialog" class="dialog">
+    <form method="dialog">
+      <h2>换模型前先压缩？</h2>
+      <p class="muted small" id="switch-text"></p>
+      <div class="row end">
+        <button class="btn" value="cancel">取消</button>
+        <button class="btn" value="switch">直接切换</button>
+        <button class="btn primary" value="compact">压缩后切换</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="usage-dialog" class="dialog usage">
+    <form method="dialog">
+      <div class="usage-head">
+        <h2>用量与缓存</h2>
+        <div class="row">
+          <div class="seg" id="usage-range" role="group" aria-label="时间范围">
+            <button type="button" data-days="1">今天</button>
+            <button type="button" data-days="7" aria-pressed="true">7 天</button>
+            <button type="button" data-days="30">30 天</button>
+          </div>
+          <button class="btn">关闭</button>
+        </div>
+      </div>
+      <div id="usage-body"><div class="empty-chart">加载中…</div></div>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" hidden></div>
+  <script src="/app.js" type="module"></script>
+</body>
+</html>
