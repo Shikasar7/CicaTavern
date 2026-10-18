@@ -4,7 +4,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { copyFileSync, existsSync, linkSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { copyFileSync, existsSync, linkSync, readdirSync, readFileSync, realpathSync, rmSync } from 'node:fs'
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import http from 'node:http'
 import net from 'node:net'
@@ -36,10 +36,20 @@ process.on('exit', () => {
   builtLauncher?.then(exe => rmSync(path.dirname(exe), { recursive: true, force: true }), () => {})
 })
 
+/**
+ * A temporary folder in its long spelling: the temp folder can be an 8.3 path
+ * (GitHub's runners: C:\Users\RUNNER~1), and the shell stores shortcut targets long.
+ */
 async function scratch(t, prefix = 'tavern-update-') {
-  const dir = await mkdtemp(path.join(tmpdir(), prefix))
+  const dir = realpathSync.native(await mkdtemp(path.join(tmpdir(), prefix)))
   t.after(() => rm(dir, { recursive: true, force: true, maxRetries: 5 }))
   return dir
+}
+
+/** The 8.3 short form of a folder (the same path where the volume keeps none). */
+function shortForm(dir) {
+  const out = execFileSync(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', `"for %I in ("${dir}") do @echo %~sI"`], { encoding: 'utf8', windowsVerbatimArguments: true })
+  return out.trim() || dir
 }
 
 /** A package folder as stage-release writes it (the parts the updater checks). */
@@ -344,6 +354,30 @@ test('shortcuts through CicaTavern.exe: made, listed, and moved only where the o
   assert.equal(untouched.target, path.join(backup, 'CicaTavern.exe'), 'the -backup folder is another folder')
 })
 
+test('shortcuts move when the old folder is named in its 8.3 short form', { skip: !canBuild }, async t => {
+  const base = await scratch(t)
+  const exe = await launcherExe()
+  const from = path.join(base, 'CicaTavern-1.3.1-win-x64')
+  const to = path.join(base, 'CicaTavern-1.4.0-win-x64')
+  const links = path.join(base, 'links')
+  for (const dir of [from, to, links]) await mkdir(dir)
+  await cp(exe, path.join(from, 'CicaTavern.exe'))
+  // Made through the short form: the shell stores the target long, the start folder and icon as given.
+  const short = shortForm(from)
+  await createShortcut(path.join(short, 'CicaTavern.exe'), { folder: links })
+  assert.deepEqual(await retargetShortcuts(short, to, { exe: path.join(from, 'CicaTavern.exe'), folders: [links] }), [path.join(links, 'CicaTavern.lnk')])
+  const [moved] = await listShortcuts({ exe, folders: [links] })
+  assert.deepEqual([moved.target, moved.dir, moved.icon], [path.join(to, 'CicaTavern.exe'), to, `${path.join(to, 'CicaTavern.exe')},0`])
+})
+
+test('the updater compares install folders in their long spelling', async t => {
+  const base = await scratch(t)
+  const root = await makeInstall(path.join(base, 'CicaTavern-1.4.0-win-x64'), '1.4.0')
+  const updater = createUpdater({ features: featuresOf('release'), root: windows ? shortForm(root) : root, platform: 'win32' })
+  assert.equal((await updater.status()).root, root)
+  assert.deepEqual((await updater.installs()).installs, [], 'the running install is never listed as an old one')
+})
+
 test('old folders: listed beside the running one; never the running one or one holding the data', async t => {
   const base = await scratch(t)
   const current = await makeInstall(path.join(base, 'CicaTavern-1.4.0-win-x64'), '1.4.0')
@@ -568,7 +602,7 @@ function killPidFile(dir) {
  * onShutdown would. A has the real CicaTavern.exe, which moves the shortcut.
  */
 async function runSwitch(t, { broken = false, mode = 'update' } = {}) {
-  const base = await mkdtemp(path.join(tmpdir(), 'tavern-switch-'))
+  const base = realpathSync.native(await mkdtemp(path.join(tmpdir(), 'tavern-switch-')))
   const a = await runnableInstall(path.join(base, packageFolder('1.0.0')), '1.0.0')
   const b = await runnableInstall(path.join(base, packageFolder('1.1.0')), '1.1.0', { broken })
   const data = path.join(base, 'data')

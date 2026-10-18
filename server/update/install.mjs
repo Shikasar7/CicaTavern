@@ -9,13 +9,26 @@
 // Nothing here reads or writes the data folder (%USERPROFILE%\.cicatavern).
 import { execFile } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { extractZip } from './zip.mjs'
 
 export const UPDATE_DIR = 'update'
 const REQUIRED = ['edition.json', 'package.json', path.join('bin', 'launch.mjs'), path.join('bin', 'start.mjs'), path.join('server', 'http.mjs'), path.join('runtime', 'node.exe')]
+
+/**
+ * A folder's one spelling (Windows' long names, not 8.3 forms such as RUNNER~1),
+ * so install folders compare equal however they were reached; as given when it
+ * does not exist.
+ */
+export function canonical(dir) {
+  try {
+    return realpathSync.native(dir)
+  } catch {
+    return path.resolve(dir)
+  }
+}
 
 /** The zip's top folder, which is also the new install's folder name. */
 export const packageFolder = version => `CicaTavern-${version}-win-x64`
@@ -186,6 +199,10 @@ export function otherInstalls(root, bases) {
 
 /** Delete an old package folder; never the running one, never one that holds (or is inside) the data folder. */
 export async function removeInstall(dir, { root, dataRoot }) {
+  // One spelling for all three, or a short-form path could slip past the checks.
+  dir = canonical(dir)
+  root = canonical(root)
+  if (dataRoot) dataRoot = canonical(dataRoot)
   if (!isInstall(dir)) throw Object.assign(new Error('这不是 CicaTavern 的安装文件夹'), { status: 400 })
   if (inside(dir, root) || inside(root, dir)) throw Object.assign(new Error('不能删除正在运行的版本'), { status: 400 })
   if (dataRoot && (inside(dataRoot, dir) || inside(dir, dataRoot))) throw Object.assign(new Error('数据目录在这个文件夹里，不能删除'), { status: 400 })

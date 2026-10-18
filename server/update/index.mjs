@@ -22,7 +22,7 @@ import { fileURLToPath } from 'node:url'
 import { appVersion } from '../edition.mjs'
 import { agentFor } from '../providers.mjs'
 import { compareVersions, FEED, releaseInfo, REPO } from './release.mjs'
-import { checkRuntime, installBase, isInstall, otherInstalls, previousInstall, readJson, removeInstall, stateDir, stageInstall, writeJsonFile } from './install.mjs'
+import { canonical, checkRuntime, installBase, isInstall, otherInstalls, previousInstall, readJson, removeInstall, stateDir, stageInstall, writeJsonFile } from './install.mjs'
 
 const APP_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -95,6 +95,7 @@ export function createUpdater({
   check = checkRuntime,
   spawnSwitch = spawnApply,
 } = {}) {
+  root = canonical(root)
   const kind = features?.updates ?? null
   const allowHttp = /^http:\/\/(127\.0\.0\.1|localhost|\[::1\])[:/]/.test(feed)
   const userAgent = `CicaTavern/${version} (+https://github.com/${repo})`

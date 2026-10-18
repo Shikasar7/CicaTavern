@@ -47,6 +47,28 @@ std::wstring ModulePath() {
   }
 }
 
+/** The path with every 8.3 short name spelled out (RUNNER~1 → runneradmin), or as given. */
+std::wstring LongPath(const std::wstring& path) {
+  DWORD n = GetLongPathNameW(path.c_str(), nullptr, 0);
+  if (n == 0) return path;
+  std::wstring out(n, L'\0');
+  n = GetLongPathNameW(path.c_str(), out.data(), n);
+  if (n == 0 || n >= out.size()) return path;
+  out.resize(n);
+  return out;
+}
+
+/** The path's 8.3 short form where the volume keeps one, or as given. */
+std::wstring ShortPath(const std::wstring& path) {
+  DWORD n = GetShortPathNameW(path.c_str(), nullptr, 0);
+  if (n == 0) return path;
+  std::wstring out(n, L'\0');
+  n = GetShortPathNameW(path.c_str(), out.data(), n);
+  if (n == 0 || n >= out.size()) return path;
+  out.resize(n);
+  return out;
+}
+
 std::wstring ParentOf(const std::wstring& path) {
   size_t cut = path.find_last_of(L"\\/");
   return cut == std::wstring::npos ? path : path.substr(0, cut);
@@ -369,14 +391,26 @@ int CreateShortcut(const std::wstring& exe, const std::wstring& dir, const std::
 
 int RetargetShortcuts(const std::vector<std::wstring>& args) {
   if (args.size() < 3) return Error(L"用法：--retarget-shortcuts <旧文件夹> <新文件夹> [--dir <文件夹>]");
-  std::wstring from = StripSlash(args[1]);
-  std::wstring to = StripSlash(args[2]);
+  std::wstring given = StripSlash(args[1]);
+  std::wstring to = StripSlash(LongPath(args[2]));
+  // The shell keeps a shortcut's target in long form whatever it was given, and
+  // its start folder and icon as given: match the old folder in every spelling.
+  std::vector<std::wstring> froms = {given};
+  for (const std::wstring& form : {StripSlash(LongPath(given)), StripSlash(ShortPath(given))}) {
+    bool seen = false;
+    for (const auto& known : froms) seen = seen || Lower(known) == Lower(form);
+    if (!seen) froms.push_back(form);
+  }
+  auto swapAll = [&](std::wstring value) {
+    for (const auto& from : froms) value = Swap(value, from, to);
+    return value;
+  };
   int changed = 0;
   for (const auto& path : LinksIn(FoldersFrom(args, 3))) {
     Link link;
     Fields fields;
     if (!link.Make() || FAILED(link.file->Load(path.c_str(), STGM_READWRITE)) || !ReadLink(link, path, fields)) continue;
-    Fields next = {Swap(fields.target, from, to), Swap(fields.args, from, to), Swap(fields.dir, from, to), Swap(fields.icon, from, to), fields.iconIndex};
+    Fields next = {swapAll(fields.target), swapAll(fields.args), swapAll(fields.dir), swapAll(fields.icon), fields.iconIndex};
     if (next.target == fields.target && next.args == fields.args && next.dir == fields.dir && next.icon == fields.icon) continue;
     link.shell->SetPath(next.target.c_str());
     link.shell->SetArguments(next.args.c_str());
@@ -408,7 +442,8 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
   std::vector<std::wstring> args;
   for (int i = 1; i < count; ++i) args.emplace_back(argv[i]);
   LocalFree(argv);
-  std::wstring exe = ModulePath();
+  // Long form, so the paths handed on (and stored in shortcuts) are the ones the shell shows.
+  std::wstring exe = LongPath(ModulePath());
   std::wstring dir = ParentOf(exe);
 
   const std::wstring mode = args.empty() ? L"" : args[0];

@@ -17,15 +17,15 @@ import { spawn } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, openSync, readFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import path from 'node:path'
-import { readJson, retargetShortcuts, stateDir, UPDATE_DIR, writeJsonFile } from '../server/update/install.mjs'
+import { canonical, readJson, retargetShortcuts, stateDir, UPDATE_DIR, writeJsonFile } from '../server/update/install.mjs'
 
 const args = process.argv.slice(2)
 const option = name => {
   const index = args.indexOf(`--${name}`)
   return index >= 0 ? args[index + 1] : undefined
 }
-const from = path.resolve(option('from'))
-const to = path.resolve(option('to'))
+const from = canonical(option('from'))
+const to = canonical(option('to'))
 const toVersion = option('version')
 const fromVersion = option('from-version')
 const mode = option('mode') === 'rollback' ? 'rollback' : 'update'
