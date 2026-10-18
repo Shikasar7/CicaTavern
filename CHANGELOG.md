@@ -2,7 +2,7 @@
 
 CicaTavern 的版本记录。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
-## 未发布
+## 1.2.0 - 2026-10-18
 
 ### 创作角色卡
 
@@ -22,7 +22,6 @@ CicaTavern 的版本记录。格式参考 [Keep a Changelog](https://keepachange
 ### 其他
 
 - 回复末尾的行动选项排得更紧凑，选项文字不再随正文首行缩进。
-- 本机自用的版本也改叫 CicaTavern，用同一个图标。
 - README 加了截图和缓存原理图。
 
 ## 1.1.0 - 2026-10-18
