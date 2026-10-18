@@ -107,10 +107,16 @@ jobs:
       - name: Stage and zip
         shell: bash
         run: |
-          out="$RUNNER_TEMP/dist/CicaTavern-${VERSION}-win-x64"
+          set -euo pipefail
+          # Forward slashes: RUNNER_TEMP is D:\a\_temp, and coreutils mark a name with
+          # backslashes by putting one in front of the hash.
+          tmp="${RUNNER_TEMP//\\//}"
+          out="$tmp/dist/CicaTavern-${VERSION}-win-x64"
           node scripts/stage-release.mjs --out "$out" --node "$NODE_DIR/node.exe" --exe "$EXE" --zip
+          sha=$(sha256sum < "$out.zip" | cut -d' ' -f1)
+          if ! [[ "$sha" =~ ^[0-9a-f]{64}$ ]]; then echo "unexpected SHA-256: $sha"; exit 1; fi
           echo "ZIP=$out.zip" >> "$GITHUB_ENV"
-          echo "ZIP_SHA256=$(sha256sum "$out.zip" | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          echo "ZIP_SHA256=$sha" >> "$GITHUB_ENV"
 
       - name: Keep the zip with this run
         uses: actions/upload-artifact@v7
