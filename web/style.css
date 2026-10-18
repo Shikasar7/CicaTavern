@@ -618,11 +618,6 @@ button.chip.on { background: var(--accent); border-color: var(--accent); color: 
 .player-count { font: 12px var(--mono); color: var(--accent); flex: none; }
 .player-text { flex: 1; min-width: 0; font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dialog .hint.warn { color: var(--warn); }
-.media-group { border: 1px solid var(--line-soft); border-radius: 12px; margin: 0 0 14px; padding: 10px 14px 4px; min-width: 0; }
-.media-group legend { font-size: 12px; color: var(--muted); padding: 0 4px; }
-.media-group > .hint { display: block; margin: -6px 0 10px; }
-/* 朗读: one panel per voice source. */
-.media-group > p.hint { margin: 0 0 10px; }
 
 /* Settings windows (web/menu.js): a menu of panels, each row opening one part
    on its own page or another window; the title row and the save row stay in
@@ -718,7 +713,6 @@ button.chip.on { background: var(--accent); border-color: var(--accent); color: 
 .source-state.ok { color: var(--ok); }
 .source-state.warn { color: var(--warn); }
 .voice-actions { margin: -4px 0 10px; }
-.voice-auto { margin-top: 10px !important; }
 .workflow-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
 #image-prompt { width: 100%; font: 13px/1.6 var(--mono); margin-bottom: 14px; resize: vertical; }
 .dialog.image-view { width: min(980px, calc(100vw - 32px)); }
@@ -798,13 +792,9 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .story .choice-text { flex: 1; min-width: 0; }
 .story .choice b { flex: none; min-width: 1.4em; font-variant-numeric: tabular-nums; color: var(--accent); }
 
-/* Android app (android/): no stopping the service, no file downloads. */
-:root[data-edition="android"] .desktop-only { display: none !important; }
-/* What the edition can do (server/edition.mjs), set from /api/status. */
-:root[data-feature-lan="false"] .needs-lan,
-:root[data-feature-dsh-import="false"] .needs-dsh,
-:root[data-feature-subscription="false"] .needs-subscription,
-:root[data-feature-xiaoya="false"] .needs-xiaoya { display: none !important; }
+/* What the edition can do (server/edition.mjs), set from /api/status. Settings
+   rows hide themselves (web/menu.js `hidden`); this covers the rest. */
+:root[data-feature-dsh-import="false"] .needs-dsh { display: none !important; }
 .proxy-row { gap: 12px; flex-wrap: wrap; align-items: flex-end; }
 .proxy-row label { flex: 1 1 200px; }
 .proxy-row .proxy-url[hidden] { display: none; }

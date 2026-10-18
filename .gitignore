@@ -1,2 +1,14 @@
 node_modules/
 dist/
+# Android build output, the downloaded nodejs-mobile and this machine's SDK path (android/README.md)
+android/.gradle/
+android/build/
+android/app/build/
+android/app/.cxx/
+android/app/src/main/assets/
+android/app/src/main/jniLibs/
+android/vendor/
+android/local.properties
+*.apk
+*.jks
+*.keystore

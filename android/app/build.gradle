@@ -1,0 +1,105 @@
+plugins {
+    id 'com.android.application'
+}
+
+// nodejs-mobile's prebuilt libnode.so (android/vendor, see README).
+def nodeMobile = file('../vendor/nodejs-mobile')
+
+// The version is the desktop's (package.json): 1.1.0 → versionName 1.1.0, versionCode 10100.
+def appVersion = new groovy.json.JsonSlurper().parse(file('../../package.json')).version
+def versionParts = appVersion.tokenize('.-')
+def appVersionCode = versionParts[0].toInteger() * 10000 + versionParts[1].toInteger() * 100 + versionParts[2].toInteger()
+
+// Release signing: a properties file kept outside the repository, with storeFile,
+// storePassword, keyAlias and keyPassword. Default ~/.android/cicatavern-release.properties,
+// or -PcicaSigning=<file>. Without it the release APK is signed with the debug key,
+// which is fine for your own phone but cannot update an installed official build.
+def signingFile = file(project.findProperty('cicaSigning') ?: "${System.getProperty('user.home')}/.android/cicatavern-release.properties")
+def signing = new Properties()
+if (signingFile.exists()) signingFile.withInputStream { signing.load(it) }
+
+android {
+    namespace 'app.cicatavern'
+    compileSdk 35
+    buildToolsVersion '35.0.1'
+    ndkVersion '28.1.13356709'
+
+    defaultConfig {
+        applicationId 'app.cicatavern'
+        // MediaStore downloads without storage permissions need Android 10.
+        minSdk 29
+        // 34, not 35: Android 15 forces edge-to-edge on 35, which breaks adjustResize for the keyboard.
+        targetSdk 34
+        versionCode appVersionCode
+        versionName appVersion
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+        externalNativeBuild {
+            cmake {
+                // libnode.so links against libc++_shared.so; this packages it.
+                arguments '-DANDROID_STL=c++_shared', "-DNODE_MOBILE=${nodeMobile.absolutePath.replace('\\', '/')}"
+            }
+        }
+    }
+
+    signingConfigs {
+        if (signing.storeFile) {
+            release {
+                storeFile file(signing.storeFile)
+                storePassword signing.storePassword
+                keyAlias signing.keyAlias
+                keyPassword signing.keyPassword
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            if (signing.storeFile) {
+                signingConfig signingConfigs.release
+            } else {
+                logger.warn("No ${signingFile}: signing the release APK with the debug key.")
+                signingConfig signingConfigs.debug
+            }
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    externalNativeBuild {
+        cmake {
+            path 'src/main/cpp/CMakeLists.txt'
+            version '3.22.1'
+        }
+    }
+
+    sourceSets {
+        main {
+            jniLibs.srcDirs = ["${nodeMobile}/bin"]
+        }
+    }
+
+    packagingOptions {
+        jniLibs {
+            // Compressed in the APK and extracted on install: libnode.so is 60 MB uncompressed.
+            useLegacyPackaging true
+        }
+    }
+
+    // The assets hold node_modules; AAPT's default ignore list would drop some of their files.
+    androidResources {
+        ignoreAssetsPattern '!.svn:!.git:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+    }
+}
+
+// Copy server, web UI and runtime dependencies into assets/nodejs-project.
+tasks.register('stageNode', Exec) {
+    workingDir rootProject.projectDir.parentFile
+    commandLine 'node', 'android/scripts/stage-node.mjs'
+}
+tasks.named('preBuild') { dependsOn 'stageNode' }

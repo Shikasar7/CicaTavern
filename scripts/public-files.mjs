@@ -13,6 +13,7 @@ const PRIVATE = [
   /(^|\/)test\/subscription-[^/]*\.test\.mjs$/,
   /(^|\/)test\/local-paths\.mjs$/,
   /(^|\/)docs\/release-design\.md$/,
+  /(^|\/)docs\/brand\/concepts(\/|$)/,
 ]
 
 /** cp() filter: false for a private path (absolute or relative, either slash). */

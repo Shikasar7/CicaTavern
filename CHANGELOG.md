@@ -2,7 +2,7 @@
 
 CicaTavern 的版本记录。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
-## 未发布
+## 1.1.0 - 2026-10-18
 
 ### 设置界面
 
@@ -27,6 +27,17 @@ CicaTavern 的版本记录。格式参考 [Keep a Changelog](https://keepachange
 - 云端音色每次读得更长（250–300 字一段），请求更少；浏览器朗读每段 150 字以内。
 - 读过的音频按来源、模型、音色和文字缓存，按实际格式存成 `.mp3` 或 `.wav`；换模型会重新合成。
 - 手机借电脑朗读时，也能用电脑上设好的云端音色（密钥留在电脑上）。
+
+### 安卓版
+
+- 新增安卓版 `CicaTavern-1.1.0-android-arm64.apk`，适用于 Android 10 以上的 64 位手机。应用在手机上独立运行，界面和功能与电脑版相同，填自己的 API Key 就能玩。
+- 朗读请用云端音色（Fish Audio、MiniMax、供应商的朗读接口）：应用里一般没有浏览器音色。
+- 安卓版没有「网络代理」「手机访问」「停止后台服务」。需要代理时，用手机上代理应用的 VPN 模式。
+- 源码在仓库的 `android/` 里，构建方法见 `android/README.md`。
+
+### 其他
+
+- 用「Start-CicaTavern.cmd」启动时，控制台每行开头显示 `[CicaTavern]`（原来是 `[agent-tavern]`）。
 
 ## 1.0.0 - 2026-10-18
 

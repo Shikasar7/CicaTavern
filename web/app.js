@@ -1372,7 +1372,7 @@ function layOutSettings({ form, card, providers, presets }) {
       },
     },
     {
-      id: 'network', title: '网络代理', pane: settingsPages.network,
+      id: 'network', title: '网络代理', pane: settingsPages.network, hidden: () => document.documentElement.dataset.featureProxy === 'false',
       summary: () => {
         const mode = value('proxyMode')
         if (mode === 'none') return '不用代理（国内服务直连）'

@@ -141,7 +141,7 @@ export function createMenu({ dialog, form, el, title: menuTitle, edits = countsA
         el('div', { class: 'row' }, [dirtyNote, ...footEnd, el('button', { type: 'button', class: 'btn', text: '关闭', onclick: () => close() }), saveButton]),
       ]),
     )
-    view = { home, panes, back, crumb, title, body, entries, dirtyNote, saveButton }
+    view = { home, panels: panelNodes, panes, back, crumb, title, body, entries, dirtyNote, saveButton }
     setDirty(dirty)
     show(sections.some(s => s.id === current && !s.action) ? current : null)
   }
@@ -177,6 +177,8 @@ export function createMenu({ dialog, form, el, title: menuTitle, edits = countsA
       status.className = `menu-pill ${kind ?? ''}`
       status.textContent = text ?? ''
     }
+    // A panel with every row hidden goes too (the phone app has nothing under 连接).
+    for (const panel of view?.panels ?? []) panel.hidden = [...panel.children].slice(1).every(row => row.hidden)
   }
 
   /** Close; with unsaved changes, ask first. */
