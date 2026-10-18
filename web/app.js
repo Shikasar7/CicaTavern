@@ -17,6 +17,7 @@ let subscriptionPage = null
 
 const ui = {
   cards: [],
+  archiveOpen: false, // the card list's 已归档 section, folded until opened
   books: [],
   chats: [],
   cardId: null,
@@ -305,20 +306,78 @@ function ago(iso) {
 }
 
 // ─── Left pane ──────────────────────────────────────────────────────────
+// ─── Card list: groups and the archive ─────────────────────────────────
+// Cards without a group come first, then each group (folded or open, remembered
+// on this device), then the archive, folded unless asked for.
+const FOLDED_KEY = 'cicatavern.foldedCardGroups'
+const foldedGroups = new Set(
+  (() => {
+    try {
+      return JSON.parse(localStorage.getItem(FOLDED_KEY) || '[]')
+    } catch {
+      return []
+    }
+  })(),
+)
+function saveFolded() {
+  try {
+    localStorage.setItem(FOLDED_KEY, JSON.stringify([...foldedGroups]))
+  } catch {
+    // Private windows: folding lasts for this page only.
+  }
+}
+
+function cardItem(card, nested = false) {
+  return el('li', { class: [card.id === ui.cardId ? 'active' : '', nested ? 'nested' : '', card.archived ? 'archived' : ''].filter(Boolean).join(' '), onclick: () => selectCard(card.id) }, [
+    avatarFor(card),
+    el('div', { class: 'item-main' }, [
+      el('div', { class: 'item-title', text: card.name }),
+      el('div', { class: 'item-sub', text: `${card.greetings} 个开场 · ${card.bookEntries} 条内嵌世界书${card.worldbookIds.length ? ` · 挂载 ${card.worldbookIds.length} 本` : ''}` }),
+    ]),
+    el('button', { type: 'button', class: 'item-del item-edit item-more', title: '分组、归档、删除', 'aria-label': `「${card.name}」：分组、归档、删除`, text: '⋯', onclick: event => { event.stopPropagation(); openCardMenu(card, event.currentTarget) } }),
+  ])
+}
+
+function groupHead(name, cards, folded, { archive = false } = {}) {
+  const holdsCurrent = folded && cards.some(card => card.id === ui.cardId)
+  return el('li', { class: `group-head${archive ? ' archive' : ''}`, role: 'button', tabindex: '0', 'aria-expanded': String(!folded), title: folded ? '展开' : '收起', onclick: () => toggleGroup(name, archive), onkeydown: event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleGroup(name, archive) } } }, [
+    el('span', { class: 'group-chevron', 'aria-hidden': 'true', text: '▸' }),
+    el('span', { class: 'group-name', text: name }),
+    holdsCurrent ? el('span', { class: 'group-current', title: '正在用的角色卡在这一组里' }) : null,
+    el('span', { class: 'group-count', text: String(cards.length) }),
+    archive ? null : el('button', { type: 'button', class: 'item-del item-edit item-more', title: '重命名、解散或整组归档', 'aria-label': `分组「${name}」：重命名、解散或整组归档`, text: '⋯', onclick: event => { event.stopPropagation(); openGroupMenu(name, cards, event.currentTarget) } }),
+  ])
+}
+
+function toggleGroup(name, archive) {
+  if (archive) ui.archiveOpen = !ui.archiveOpen
+  else {
+    foldedGroups.has(name) ? foldedGroups.delete(name) : foldedGroups.add(name)
+    saveFolded()
+  }
+  renderCards()
+}
+
+/** Names of the groups in use, in a stable order. */
+const cardGroups = () => [...new Set(ui.cards.filter(card => card.group).map(card => card.group))].sort((a, b) => a.localeCompare(b, 'zh-CN'))
+
 function renderCards() {
   const list = $('card-list')
-  list.replaceChildren(
-    ...ui.cards.map(card =>
-      el('li', { class: card.id === ui.cardId ? 'active' : '', onclick: () => selectCard(card.id) }, [
-        avatarFor(card),
-        el('div', { class: 'item-main' }, [
-          el('div', { class: 'item-title', text: card.name }),
-          el('div', { class: 'item-sub', text: `${card.greetings} 个开场 · ${card.bookEntries} 条内嵌世界书${card.worldbookIds.length ? ` · 挂载 ${card.worldbookIds.length} 本` : ''}` }),
-        ]),
-        el('button', { class: 'item-del', title: '删除角色卡', text: '✕', onclick: event => { event.stopPropagation(); deleteCard(card) } }),
-      ]),
-    ),
-  )
+  const live = ui.cards.filter(card => !card.archived)
+  const archived = ui.cards.filter(card => card.archived)
+  const items = live.filter(card => !card.group).map(card => cardItem(card))
+  for (const name of cardGroups()) {
+    const cards = live.filter(card => card.group === name)
+    if (!cards.length) continue
+    const folded = foldedGroups.has(name)
+    items.push(groupHead(name, cards, folded))
+    if (!folded) items.push(...cards.map(card => cardItem(card, true)))
+  }
+  if (archived.length) {
+    items.push(groupHead('已归档', archived, !ui.archiveOpen, { archive: true }))
+    if (ui.archiveOpen) items.push(...archived.map(card => cardItem(card, true)))
+  }
+  list.replaceChildren(...items)
   if (ui.cards.length === 0) list.append(el('li', { class: 'muted small', text: '还没有角色卡' }))
   $('new-chat').disabled = !ui.cardId
   $('import-story').disabled = !ui.cardId
@@ -359,6 +418,10 @@ async function refreshChats() {
 const selectCard = guard(async id => {
   ui.cardId = id
   mediaUi.setCard(id)
+  // The chosen card shows in the list, even when it sits in a folded group or the archive.
+  const chosen = ui.cards.find(card => card.id === id)
+  if (chosen?.archived) ui.archiveOpen = true
+  else if (chosen?.group && foldedGroups.delete(chosen.group)) saveFolded()
   renderCards()
   await refreshChats()
   const card = await api(`/api/cards/${id}`)
@@ -374,6 +437,100 @@ const selectCard = guard(async id => {
   else setChat(null)
   document.body.querySelector('.app').classList.remove('show-left')
 })
+
+// ─── A small menu next to a button ─────────────────────────────────────
+// entries: { label, onClick, danger, current, hint } | { header } | '-'
+let openMenu = null
+function closeMenu() {
+  openMenu?.remove()
+  openMenu = null
+}
+function popMenu(anchor, entries) {
+  closeMenu()
+  const menu = el(
+    'div',
+    { class: 'pop-menu', role: 'menu' },
+    entries.map(entry => {
+      if (entry === '-') return el('hr')
+      if (entry.header) return el('div', { class: 'pop-head', text: entry.header })
+      return el('button', { type: 'button', role: 'menuitem', class: [entry.danger ? 'danger' : '', entry.current ? 'current' : ''].filter(Boolean).join(' '), disabled: entry.current, title: entry.hint, onclick: () => { closeMenu(); entry.onClick() } }, [entry.current ? '✓ ' : '', entry.label])
+    }),
+  )
+  document.body.append(menu)
+  const at = anchor.getBoundingClientRect()
+  const left = Math.max(8, Math.min(at.right - menu.offsetWidth, innerWidth - menu.offsetWidth - 8))
+  const below = at.bottom + 4 + menu.offsetHeight <= innerHeight - 8
+  menu.style.left = `${left}px`
+  menu.style.top = `${below ? at.bottom + 4 : Math.max(8, at.top - menu.offsetHeight - 4)}px`
+  openMenu = menu
+  menu.querySelector('button:not(:disabled)')?.focus()
+  menu.addEventListener('keydown', event => {
+    const items = [...menu.querySelectorAll('button:not(:disabled)')]
+    const index = items.indexOf(document.activeElement)
+    if (event.key === 'Escape') {
+      closeMenu()
+      anchor.focus()
+    } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault()
+      items[(index + (event.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length]?.focus()
+    }
+  })
+}
+document.addEventListener('pointerdown', event => {
+  if (openMenu && !openMenu.contains(event.target)) closeMenu()
+}, true)
+addEventListener('resize', closeMenu)
+
+const organizeCard = guard(async (card, change, done) => {
+  await api(`/api/cards/${card.id}/organize`, { method: 'PUT', body: change })
+  await refreshCards()
+  if (done) toast(done)
+})
+
+function askGroupName(title, initial = '') {
+  const name = prompt(title, initial)?.replace(/\s+/g, ' ').trim()
+  return name ? name.slice(0, 30) : ''
+}
+
+function openCardMenu(card, anchor) {
+  const groups = cardGroups()
+  popMenu(anchor, [
+    { header: '移到分组' },
+    ...groups.map(name => ({ label: name, current: card.group === name, onClick: () => organizeCard(card, { group: name }) })),
+    { label: '新分组…', onClick: () => { const name = askGroupName(`把「${card.name}」放进哪个新分组？`); if (name) organizeCard(card, { group: name }) } },
+    card.group ? { label: '移出分组', onClick: () => organizeCard(card, { group: '' }) } : null,
+    '-',
+    card.archived
+      ? { label: '恢复到列表', onClick: () => organizeCard(card, { archived: false }, `「${card.name}」回到列表里了${card.group ? `，在「${card.group}」组` : ''}。`) }
+      : { label: '归档', hint: '从列表里收起来，对话和设置都保留，随时可以恢复', onClick: () => organizeCard(card, { archived: true }, `已归档「${card.name}」：在列表最下面的「已归档」里，随时可以恢复。`) },
+    '-',
+    { label: '删除角色卡…', danger: true, onClick: () => deleteCard(card) },
+  ].filter(Boolean))
+}
+
+const renameGroup = guard(async (from, to, done) => {
+  await api('/api/cards/groups', { method: 'POST', body: { from, to } })
+  if (foldedGroups.delete(from) && to) foldedGroups.add(to)
+  saveFolded()
+  await refreshCards()
+  if (done) toast(done)
+})
+
+const archiveGroup = guard(async (name, cards) => {
+  if (!confirm(`把「${name}」组的 ${cards.length} 张卡全部归档？对话和设置都保留，随时可以恢复。`)) return
+  for (const card of cards) await api(`/api/cards/${card.id}/organize`, { method: 'PUT', body: { archived: true } })
+  await refreshCards()
+  toast(`「${name}」组已归档，在列表最下面的「已归档」里。`)
+})
+
+function openGroupMenu(name, cards, anchor) {
+  popMenu(anchor, [
+    { label: '重命名…', onClick: () => { const to = askGroupName('分组的新名字', name); if (to && to !== name) renameGroup(name, to) } },
+    { label: '解散分组', hint: '分组去掉，卡片回到未分组', onClick: () => { if (confirm(`解散「${name}」？里面的 ${cards.length} 张卡会回到未分组，卡片本身不受影响。`)) renameGroup(name, '', `「${name}」已解散。`) } },
+    '-',
+    { label: '整组归档…', onClick: () => archiveGroup(name, cards) },
+  ])
+}
 
 const deleteCard = guard(async card => {
   if (!confirm(`删除角色卡「${card.name}」？（它的对话记录会保留）`)) return
@@ -1881,7 +2038,9 @@ async function boot() {
   loadModels()
   ui.books = await api('/api/worldbooks').catch(() => [])
   await refreshCards()
-  if (ui.cards[0]) await selectCard(ui.cards[0].id)
+  // Start on the newest card still in the list; archived ones wait until asked for.
+  const first = ui.cards.find(card => !card.archived)
+  if (first) await selectCard(first.id)
   else renderChat()
 }
 

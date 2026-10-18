@@ -1320,3 +1320,27 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
   .hero-img { width: 112px; height: 168px; }
   .forge-actions .forge-count { display: none; }
 }
+
+/* Card list groups and the archive (app.js renderCards), and the small pop-up menu. */
+.card-list li.group-head { gap: 6px; padding: 12px 8px 4px 10px; cursor: pointer; font-size: 12px; font-weight: 600; color: var(--faint); letter-spacing: .02em; border-radius: 8px; }
+.card-list li.group-head:hover { background: none; color: var(--muted); }
+.card-list li.group-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.group-chevron { display: inline-block; font-size: 9px; transition: transform .15s; }
+.group-head[aria-expanded="true"] .group-chevron { transform: rotate(90deg); }
+.group-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.group-count { font-weight: 500; font-variant-numeric: tabular-nums; }
+.group-current { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; }
+.card-list li.group-head .item-more { padding: 0 6px; }
+.card-list li.archive { border-top: 1px dashed var(--line); border-radius: 0; margin-top: 6px; padding-top: 10px; }
+.card-list li.nested { margin-left: 8px; }
+.card-list li.archived .avatar, .card-list li.archived .item-main { opacity: .62; }
+.item-more { font-size: 15px; line-height: 1; letter-spacing: .05em; }
+
+.pop-menu { position: fixed; z-index: 60; min-width: 176px; max-width: 260px; max-height: 70vh; overflow-y: auto; padding: 6px; background: var(--raised); border: 1px solid var(--line-soft); border-radius: 12px; box-shadow: var(--shadow-2); animation: fade .12s ease; }
+.pop-menu button { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 7px 10px; border-radius: 8px; font: inherit; font-size: 13px; color: var(--ink); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pop-menu button:hover:not(:disabled), .pop-menu button:focus-visible { background: var(--accent-soft); outline: none; }
+.pop-menu button.current { color: var(--accent); cursor: default; }
+.pop-menu button.danger { color: var(--bad); }
+.pop-menu button.danger:hover, .pop-menu button.danger:focus-visible { background: color-mix(in srgb, var(--bad) 10%, transparent); }
+.pop-menu .pop-head { font-size: 11.5px; color: var(--faint); padding: 6px 10px 2px; }
+.pop-menu hr { border: 0; border-top: 1px solid var(--line-soft); margin: 4px 2px; }

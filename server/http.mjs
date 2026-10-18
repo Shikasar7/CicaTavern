@@ -10,7 +10,7 @@ import { homedir } from 'node:os'
 import path from 'node:path'
 import YAML from 'yaml'
 import { fileURLToPath } from 'node:url'
-import { backfillEntryPositions, cardSummary, exportCard, greetingsOf, importOwnCard, normalizeCard, parseCardFile, previousVersion, unwrapWorkspace } from './cards.mjs'
+import { backfillEntryPositions, cardSummary, cleanGroup, exportCard, greetingsOf, importOwnCard, normalizeCard, organizeCard, parseCardFile, previousVersion, unwrapWorkspace } from './cards.mjs'
 import { chatSummary, chatView, createChat, selectNode, activePath, rebuildPrompt, restoreFolded, rollbackTo, editCompaction, dropCompaction, exportStory, importStory, forkChat } from './chats.mjs'
 import { editPreset, exportPreset, importOwnPreset, normalizePreset, presetDetail, presetSummary } from './presets.mjs'
 import { appVersion, featuresOf } from './edition.mjs'
@@ -402,13 +402,15 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       const { card, avatar } = readCardUpload(body)
       if (typeof body.replace === 'string' && body.replace) {
         const old = await store.getCard(body.replace)
-        Object.assign(card, { id: old.id, media: old.media, worldbookIds: old.worldbookIds ?? [], hasAvatar: Boolean(avatar) || old.hasAvatar })
+        Object.assign(card, { id: old.id, media: old.media, worldbookIds: old.worldbookIds ?? [], hasAvatar: Boolean(avatar) || old.hasAvatar, group: old.group ?? '', archived: old.archived === true })
         await store.saveCard(card, avatar)
         return { ...cardSummary(card), updated: old.name }
       }
       card.hasAvatar = Boolean(avatar)
-      await store.saveCard(card, avatar)
+      // A new version of a card goes into the same group as the old one.
       const previous = previousVersion(await store.listCards(), card)
+      if (previous?.group) card.group = previous.group
+      await store.saveCard(card, avatar)
       if (previous) {
         await media.inheritCardMedia(previous.id, card.id)
         return { ...cardSummary(card), inherited: previous.name }
@@ -433,6 +435,26 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['DELETE', /^\/api\/cards\/([\w-]+)$/, async ([id]) => {
       await store.deleteCard(id)
       return { ok: true }
+    }],
+    // Groups and the archive: where a card sits in the list. Nothing else about it changes.
+    ['PUT', /^\/api\/cards\/([\w-]+)\/organize$/, async ([id], body) => {
+      const card = organizeCard(await store.getCard(id), { group: body?.group, archived: body?.archived })
+      await store.saveCard(card)
+      return cardSummary(card)
+    }],
+    // Rename a group, or dissolve it (`to` empty): its cards move with it.
+    ['POST', /^\/api\/cards\/groups$/, async (_, body) => {
+      const from = cleanGroup(body?.from)
+      const to = cleanGroup(body?.to)
+      if (!from) throw httpError(400, '要改哪个分组？')
+      let moved = 0
+      for (const card of await store.listCards()) {
+        if ((card.group ?? '') !== from) continue
+        card.group = to
+        await store.saveCard(card)
+        moved++
+      }
+      return { moved }
     }],
     ['PUT', /^\/api\/cards\/([\w-]+)\/worldbooks$/, async ([id], body) => {
       const card = await store.getCard(id)

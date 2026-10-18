@@ -655,7 +655,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
       const png = writeCardPng(Buffer.from(match[2], 'base64'), raw)
       const card = normalizeCard(raw)
       const old = draft.card.savedCardId ? await store.getCard(draft.card.savedCardId).catch(() => null) : null
-      if (old) Object.assign(card, { id: old.id, media: old.media, worldbookIds: old.worldbookIds ?? [], importedAt: old.importedAt })
+      if (old) Object.assign(card, { id: old.id, media: old.media, worldbookIds: old.worldbookIds ?? [], importedAt: old.importedAt, group: old.group ?? '', archived: old.archived === true })
       else card.media = cleanCardMedia({ roster: rosterOf(draft.plan) })
       card.hasAvatar = true
       await store.saveCard(card, png)

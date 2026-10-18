@@ -224,5 +224,24 @@ export function cardSummary(card) {
     regexScripts: Array.isArray(card.regexScripts) ? card.regexScripts.length : Number(card.regexScripts) || 0,
     helperScripts: card.helperScripts ?? 0,
     importedAt: card.importedAt,
+    group: card.group ?? '',
+    archived: card.archived === true,
   }
+}
+
+const GROUP_MAX = 30
+
+/** A group name as the card list keeps it: trimmed, one line, short; '' is no group. */
+export function cleanGroup(value) {
+  return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, GROUP_MAX) : ''
+}
+
+/** Where a card sits in the list: its group and whether it is archived. Returns the changed card. */
+export function organizeCard(card, { group, archived } = {}) {
+  if (group !== undefined) card.group = cleanGroup(group)
+  if (archived !== undefined) {
+    card.archived = archived === true
+    card.archivedAt = card.archived ? new Date().toISOString() : undefined
+  }
+  return card
 }
