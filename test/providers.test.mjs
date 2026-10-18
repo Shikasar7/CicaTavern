@@ -9,7 +9,7 @@ import { activePath, chatView, createChat } from '../server/chats.mjs'
 import { createEngine } from '../server/engine.mjs'
 import { testSubscription } from './support/subscription.mjs'
 import { editPreset, normalizePreset } from '../server/presets.mjs'
-import { exportProviders, importProviders, listRemoteModels, normalizeProvider, providerChoices, providerError, publicProvider, reasoningFields } from '../server/providers.mjs'
+import { complete, exportProviders, importProviders, listRemoteModels, normalizeProvider, providerChoices, providerError, publicProvider, reasoningFields } from '../server/providers.mjs'
 import { createStore } from '../server/store.mjs'
 
 const CARD = {
@@ -298,6 +298,48 @@ test('context window full: retried with the smaller default output cap, then a h
 
   fake.flags.contextLimit = 100
   await assert.rejects(turn('还在吗'), /Context window is full[\s\S]*压缩上下文/)
+})
+
+test('a model whose thinking uses up a short cap: once more with room, and room from then on', async t => {
+  // Thinks for 1000 tokens before every answer, and the cap counts the thinking.
+  const caps = []
+  const server = createServer(async (req, res) => {
+    let body = ''
+    for await (const chunk of req) body += chunk
+    const json = JSON.parse(body)
+    caps.push(json.max_tokens)
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    const send = data => res.write(`data: ${JSON.stringify(data)}\n\n`)
+    if (json.model === 'plain') {
+      send({ model: json.model, choices: [{ delta: { content: 'a girl' }, finish_reason: 'length' }] })
+      return res.end('data: [DONE]\n\n')
+    }
+    send({ model: json.model, choices: [{ delta: { role: 'assistant', reasoning_content: '先想一想画面' } }] })
+    if (json.max_tokens < 1000) send({ model: json.model, choices: [{ delta: {}, finish_reason: 'length' }] })
+    else send({ model: json.model, choices: [{ delta: { content: 'a girl under a paper umbrella' }, finish_reason: 'stop' }] })
+    send({ model: json.model, choices: [], usage: { prompt_tokens: 50, completion_tokens: Math.min(json.max_tokens ?? 4000, 1010), completion_tokens_details: { reasoning_tokens: 1000 } } })
+    res.end('data: [DONE]\n\n')
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => server.close())
+  const provider = normalizeProvider({ name: 'Thinker', api: 'openai-completions', baseURL: `http://127.0.0.1:${server.address().port}/v1`, apiKey: KEY, models: [{ id: 'flash' }] })
+
+  const first = await complete(provider, 'flash', { system: 's', messages: [{ role: 'user', content: '画一张' }], maxTokens: 400 })
+  assert.deepEqual(caps, [400, 16400], 'cut off while thinking, nothing answered: asked again with room')
+  assert.equal(first.text, 'a girl under a paper umbrella')
+  assert.equal(first.truncated, false)
+  assert.equal(first.usage.output, 400 + 1010, 'both calls are counted')
+
+  await complete(provider, 'flash', { system: 's', messages: [{ role: 'user', content: '再画一张' }], maxTokens: 700 })
+  assert.equal(caps.at(-1), 16700, 'the room is given up front from then on')
+  await complete(provider, 'flash', { system: 's', messages: [{ role: 'user', content: '写方案' }], maxTokens: 32000 })
+  assert.equal(caps.at(-1), 32000, 'a long cap already has room')
+
+  // A model that answers straight away and runs out: cut off as before, not asked again.
+  caps.length = 0
+  const cut = await complete(provider, 'plain', { system: 's', messages: [{ role: 'user', content: 'x' }], maxTokens: 50 })
+  assert.deepEqual(caps, [50])
+  assert.equal(cut.truncated, true)
 })
 
 test('rebuilt history as SillyTavern sends it: preset block on the newest message only, regex by real depth', async t => {

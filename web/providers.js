@@ -28,7 +28,7 @@ const TEMPLATES = [
   },
   {
     name: 'DeepSeek', api: 'openai-completions', baseURL: 'https://api.deepseek.com/v1', apiKeyEnv: 'DEEPSEEK_API_KEY', proxy: 'direct',
-    models: [{ id: 'deepseek-v4-flash' }, { id: 'deepseek-v4-pro' }],
+    models: [{ id: 'deepseek-flash' }, { id: 'deepseek-v4-pro' }],
     note: '密钥在 platform.deepseek.com 创建，国内直连。前缀不变时自动命中缓存，很便宜。',
   },
   {

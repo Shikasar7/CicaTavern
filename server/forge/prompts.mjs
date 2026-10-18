@@ -17,6 +17,12 @@ export const PLAIN_WRITING = [
   '玩家角色写作 <user>，不写 {{user}}。',
 ].join('\n')
 
+// Output caps. They only stop a runaway answer, so they leave room for thinking:
+// models that think by default (DeepSeek's flash) count it against the same cap,
+// and an answer cut off before its closing tag can't be read at all.
+export const TALK_TOKENS = 16000
+export const LONG_TOKENS = 32000
+
 // ─── Talking it through ───────────────────────────────────────────────────
 
 const DISCUSS_SYSTEM = `你是一位角色卡共创向导。用户想在 SillyTavern 一类的角色扮演应用里玩一张新角色卡，但往往说不清自己真正想要什么。你陪他把一个模糊的念头聊成清晰的设想：用具体、可感的选择帮他发现自己的偏好，而不是替他做决定。
@@ -26,8 +32,8 @@ const DISCUSS_SYSTEM = `你是一位角色卡共创向导。用户想在 SillyTa
 - 提问的先后：先定舞台（世界）和核心角色是谁，再定 <user> 的身份、和角色的关系、互动方式与玩法，然后是基调、文风和开场，最后才是要不要记录会变化的数值。已经定下的不再问。
 - 每个问题给 3 到 4 个彼此差别明显的选项。每个选项都要具体，并附一句样例：角色可能说的一句话，或一两句小场景，让用户凭感觉挑。样例要像活人说的话。
 - 文风、语气这类难以描述的东西，用 kind 为 taste 的问题：给两到三段同一情境、不同写法的短试写（每段 60 到 120 字），让用户挑喜欢的一段。
-- 用户可能选「你来定」：那就由你挑最合适的一项，在回复里说你选了什么、为什么，并在草图里把它记成 assistant 补的。
-- 不偷偷替用户拿主意。你自己补出来的设想写进草图时标成 assistant；用户亲口说的、选的，标成 user，并尽量保留他的原话。
+- 用户可能选「你来定」：那就由你挑最合适的一项，在回复里说你选了什么、为什么，并在草图里把这一项的 by 写成 "assistant"。
+- 不偷偷替用户拿主意。你自己补出来的设想写进草图时 by 写 "assistant"；用户亲口说的、选的，by 写 "user"，并尽量保留他的原话。谁补的只写在 by 里，value 只写设定本身，不加「谁补的」「随时可改」这类注明，界面会标出来。
 - 草图里 locked 为 true 的项是用户锁定的，不能改动，只能在它的基础上补充。
 - 用大白话交流，不说「世界书」「条目」「MVU」「常驻」这类术语。问状态记录时说成「要不要记录她对你的好感、你的体力这类会变化的数值」。
 - 当核心角色、和 <user> 的关系、舞台、基调都已清楚，readiness 给到 75 以上，并在回复里提一句「可以出方案了，也可以接着细化」。用户可能随时要求出方案，你只管把每一轮聊好。
@@ -102,10 +108,15 @@ export function cleanQuestions(raw) {
   return out
 }
 
+// A note on who wrote an item, which some models add to the value itself:
+// "（assistant 补的版本，随时可改）". The page tags items by `by` already.
+// Not "user": values name the player as <user>, in brackets too.
+const BY_NOTE = /\s*[（(][^（）()]*(?:assistant|向导补|随时可改)[^（）()]*[）)]/gi
+
 /** One sketch item as the page and the model both keep it. */
 function cleanItem(raw) {
   if (!raw || typeof raw !== 'object') return null
-  const value = clip(raw.value, 400)
+  const value = clip(typeof raw.value === 'string' ? raw.value.replace(BY_NOTE, '') : raw.value, 400)
   const label = clip(raw.label, 16)
   const key = clip(raw.key, 24).replace(/[^\w-]/g, '') || label
   if (!key || !label) return null
@@ -178,7 +189,7 @@ export function discussRequest(rounds, brief) {
     messages.push({ role: 'user', content })
     if (!last && round.assistant) messages.push({ role: 'assistant', content: round.assistant.raw })
   })
-  return { system: DISCUSS_SYSTEM, messages, maxTokens: 3000, softCap: true }
+  return { system: DISCUSS_SYSTEM, messages, maxTokens: TALK_TOKENS, softCap: true }
 }
 
 /** A round's answer → { reply, questions, brief }; whatever could be read. */
@@ -265,7 +276,7 @@ export function transcript(rounds) {
 
 export function planRequest(rounds, brief) {
   const content = `<discussion>\n${transcript(rounds)}\n</discussion>\n\n<sketch>\n${JSON.stringify(brief)}\n</sketch>\n\n按上面的讨论和草图写出创作方案。`
-  return { system: PLAN_SYSTEM, messages: [{ role: 'user', content }], maxTokens: 8000, softCap: true }
+  return { system: PLAN_SYSTEM, messages: [{ role: 'user', content }], maxTokens: LONG_TOKENS, softCap: true }
 }
 
 /** Changes to a plan: the current plan and what the user wants different. */
@@ -280,7 +291,7 @@ export function reviseRequest(rounds, plan, { text = '', notes = [] } = {}) {
     `用户对方案的意见：\n${asked.join('\n')}`,
     '按意见改方案：只改意见涉及的部分，其余保持原样。新补出来的设定同样写进 assumptions。输出完整的新方案。',
   ].join('\n\n')
-  return { system: PLAN_SYSTEM, messages: [{ role: 'user', content }], maxTokens: 8000, softCap: true }
+  return { system: PLAN_SYSTEM, messages: [{ role: 'user', content }], maxTokens: LONG_TOKENS, softCap: true }
 }
 
 // ─── Reading a plan back ──────────────────────────────────────────────────

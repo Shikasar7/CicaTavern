@@ -4,7 +4,7 @@
 // as SillyTavern's V3 shape.
 import YAML from 'yaml'
 import { toBookEntry } from './configure.mjs'
-import { PLAIN_WRITING, looseJson, section } from './prompts.mjs'
+import { LONG_TOKENS, PLAIN_WRITING, TALK_TOKENS, looseJson, section } from './prompts.mjs'
 
 const clip = (value, max) => (typeof value === 'string' ? value.trim().slice(0, max) : '')
 
@@ -75,7 +75,7 @@ export function entriesRequest(plan, targets, written) {
     `这次要写下面这些条目：\n${asked}`,
     '每个条目的正文放在 <entry name="条目名"> 和 </entry> 之间，名字和上面一字不差；只写正文，标签外不写别的。',
   ].filter(Boolean).join('\n\n')
-  return { system: WRITE_SYSTEM, messages: [{ role: 'user', content }], maxTokens: 8000, softCap: true }
+  return { system: WRITE_SYSTEM, messages: [{ role: 'user', content }], maxTokens: LONG_TOKENS, softCap: true }
 }
 
 const GREETING_SYSTEM = `你是角色卡的开场白作者。开场白是玩家进入故事读到的第一段正文，它决定玩家想不想开口。
@@ -99,7 +99,7 @@ export function greetingsRequest(plan, targets, written, initial) {
     `这次要写下面这些开场白：\n${asked}`,
     '每段开场白放在 <greeting index="序号"> 和 </greeting> 之间，序号和上面一致；只写正文，标签外不写别的。',
   ].filter(Boolean).join('\n\n')
-  return { system: GREETING_SYSTEM, messages: [{ role: 'user', content }], maxTokens: 6000, softCap: true }
+  return { system: GREETING_SYSTEM, messages: [{ role: 'user', content }], maxTokens: LONG_TOKENS, softCap: true }
 }
 
 // ─── Reading written text back ────────────────────────────────────────────
@@ -192,7 +192,7 @@ export function reviewRequest(card, hits) {
   const blocks = reviewTargets(card).map(t => (t.target.startsWith('开场白') ? `<greeting index="${t.target.slice(3)}">\n${t.text}\n</greeting>` : `<entry name="${t.target}">\n${t.text}\n</entry>`))
   const flagged = hits.length ? `程序先扫出的可疑处（只是候选，你来判断）：\n${hits.slice(0, 40).map(h => `- ${h.target}：${h.label}「${h.excerpt}」`).join('\n')}` : ''
   const content = [blocks.join('\n\n'), flagged].filter(Boolean).join('\n\n')
-  return { system: REVIEW_SYSTEM, messages: [{ role: 'user', content }], maxTokens: 4000, softCap: true }
+  return { system: REVIEW_SYSTEM, messages: [{ role: 'user', content }], maxTokens: TALK_TOKENS, softCap: true }
 }
 
 export function readIssues(text) {
@@ -241,7 +241,7 @@ export function rewriteRequest(plan, card, pieces) {
     '条目放在 <entry name="条目名"> 和 </entry> 之间，开场白放在 <greeting index="序号"> 和 </greeting> 之间，名字和序号与上面一致；标签外不写别的。',
   ].filter(Boolean).join('\n\n')
   const greetingsOnly = pieces.every(p => p.greeting)
-  return { system: greetingsOnly ? GREETING_SYSTEM : `${WRITE_SYSTEM}\n开场白另按开场白的写法：头三行抓人，结尾给 <user> 话头，不替 <user> 说话做决定。`, messages: [{ role: 'user', content }], maxTokens: 8000, softCap: true }
+  return { system: greetingsOnly ? GREETING_SYSTEM : `${WRITE_SYSTEM}\n开场白另按开场白的写法：头三行抓人，结尾给 <user> 话头，不替 <user> 说话做决定。`, messages: [{ role: 'user', content }], maxTokens: LONG_TOKENS, softCap: true }
 }
 
 // ─── State tracking, built in code ────────────────────────────────────────

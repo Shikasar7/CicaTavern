@@ -81,17 +81,18 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
     const tmp = `${file}.${process.pid}.${newId()}.tmp`
     await writeFile(tmp, JSON.stringify(draft, null, 1), 'utf8')
     // Windows refuses to replace a file another request is reading at that moment
-    // (the page polls the draft while a job saves it): try again shortly.
+    // (the page polls the draft while a job saves it), and a virus scanner can
+    // hold a fresh file for a while: try again for up to about 2.5 seconds.
     for (let attempt = 0; ; attempt++) {
       try {
         await rename(tmp, file)
         return draft
       } catch (error) {
-        if (attempt >= 8 || !['EPERM', 'EACCES', 'EBUSY'].includes(error.code)) {
+        if (attempt >= 15 || !['EPERM', 'EACCES', 'EBUSY'].includes(error.code)) {
           await rm(tmp, { force: true })
           throw error
         }
-        await new Promise(resolve => setTimeout(resolve, 15 * (attempt + 1)))
+        await new Promise(resolve => setTimeout(resolve, Math.min(25 * (attempt + 1), 250)))
       }
     }
   }

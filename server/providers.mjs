@@ -496,7 +496,7 @@ function parseJson(text) {
 }
 
 // ─── Protocols ──────────────────────────────────────────────────────────
-// Each returns { text, usage: { input, cacheRead, cacheWrite, output }, model, stopReason }.
+// Each returns { text, usage: { input, cacheRead, cacheWrite, output }, model, stopReason, reasoned }.
 // `input` counts uncached prompt tokens only, as in the SDK usage.
 
 function openaiUsage(usage) {
@@ -506,16 +506,22 @@ function openaiUsage(usage) {
   return { input: Math.max(0, prompt - cached), cacheRead: cached, cacheWrite: 0, output: usage.completion_tokens ?? usage.output_tokens ?? 0 }
 }
 
+// `reasoned`: the model thought before answering (its thinking is not part of `text`).
+const thoughtTokens = usage => (usage?.completion_tokens_details ?? usage?.output_tokens_details)?.reasoning_tokens > 0
+
 async function openaiCompletions(provider, request, res) {
   let text = ''
   let usage = null
   let model = null
   let stopReason = null
+  let reasoned = false
   if (!/event-stream/.test(res.headers['content-type'] ?? '')) {
     const json = parseJson(await readText(res, 8 * 1024 * 1024)) ?? {}
-    text = json.choices?.[0]?.message?.content ?? ''
+    const message = json.choices?.[0]?.message
+    text = message?.content ?? ''
     if (text) request.onDelta?.(text)
-    return { text, usage: openaiUsage(json.usage), model: json.model ?? null, stopReason: json.choices?.[0]?.finish_reason ?? null }
+    reasoned = Boolean(message?.reasoning_content || message?.reasoning) || thoughtTokens(json.usage)
+    return { text, usage: openaiUsage(json.usage), model: json.model ?? null, stopReason: json.choices?.[0]?.finish_reason ?? null, reasoned }
   }
   for await (const { data } of sse(res)) {
     if (data === '[DONE]') break
@@ -524,7 +530,9 @@ async function openaiCompletions(provider, request, res) {
     if (json.error) throw new Error(errorMessage(JSON.stringify(json)))
     model ??= json.model ?? null
     if (json.usage) usage = openaiUsage(json.usage)
+    if (thoughtTokens(json.usage)) reasoned = true
     const choice = json.choices?.[0]
+    if (choice?.delta?.reasoning_content || choice?.delta?.reasoning) reasoned = true
     const delta = choice?.delta?.content
     if (typeof delta === 'string' && delta) {
       text += delta
@@ -532,7 +540,7 @@ async function openaiCompletions(provider, request, res) {
     }
     if (choice?.finish_reason) stopReason = choice.finish_reason
   }
-  return { text, usage, model, stopReason }
+  return { text, usage, model, stopReason, reasoned }
 }
 
 async function openaiResponses(provider, request, res) {
@@ -540,11 +548,13 @@ async function openaiResponses(provider, request, res) {
   let usage = null
   let model = null
   let stopReason = null
+  let reasoned = false
   if (!/event-stream/.test(res.headers['content-type'] ?? '')) {
     const json = parseJson(await readText(res, 8 * 1024 * 1024)) ?? {}
     text = (json.output ?? []).flatMap(item => item.content ?? []).filter(c => c.type === 'output_text').map(c => c.text).join('')
     if (text) request.onDelta?.(text)
-    return { text, usage: openaiUsage(json.usage), model: json.model ?? null, stopReason: json.status ?? null }
+    reasoned = (json.output ?? []).some(item => item.type === 'reasoning') || thoughtTokens(json.usage)
+    return { text, usage: openaiUsage(json.usage), model: json.model ?? null, stopReason: json.status ?? null, reasoned }
   }
   for await (const { data } of sse(res)) {
     const json = parseJson(data)
@@ -556,13 +566,16 @@ async function openaiResponses(provider, request, res) {
       usage = openaiUsage(json.response?.usage)
       model = json.response?.model ?? model
       stopReason = json.response?.incomplete_details?.reason ?? json.response?.status ?? null
+      if (thoughtTokens(json.response?.usage)) reasoned = true
     } else if (json.type === 'response.failed' || json.type === 'error') {
       throw new Error(json.response?.error?.message ?? json.message ?? json.error?.message ?? '生成失败')
     } else if (json.type === 'response.created') {
       model = json.response?.model ?? model
+    } else if (/^response\.reasoning/.test(json.type ?? '') || json.item?.type === 'reasoning') {
+      reasoned = true
     }
   }
-  return { text, usage, model, stopReason }
+  return { text, usage, model, stopReason, reasoned }
 }
 
 async function anthropicMessages(provider, request, res) {
@@ -571,6 +584,7 @@ async function anthropicMessages(provider, request, res) {
   let seenUsage = false
   let model = null
   let stopReason = null
+  let reasoned = false
   const takeUsage = u => {
     if (!u) return
     seenUsage = true
@@ -584,7 +598,8 @@ async function anthropicMessages(provider, request, res) {
     text = (json.content ?? []).filter(b => b.type === 'text').map(b => b.text).join('')
     if (text) request.onDelta?.(text)
     takeUsage(json.usage)
-    return { text, usage: seenUsage ? usage : null, model: json.model ?? null, stopReason: json.stop_reason ?? null }
+    reasoned = (json.content ?? []).some(b => /thinking/.test(b.type ?? ''))
+    return { text, usage: seenUsage ? usage : null, model: json.model ?? null, stopReason: json.stop_reason ?? null, reasoned }
   }
   for await (const { data } of sse(res)) {
     const json = parseJson(data)
@@ -595,6 +610,8 @@ async function anthropicMessages(provider, request, res) {
     } else if (json.type === 'content_block_delta' && json.delta?.type === 'text_delta') {
       text += json.delta.text
       request.onDelta?.(json.delta.text)
+    } else if (json.type === 'content_block_start' && /thinking/.test(json.content_block?.type ?? '')) {
+      reasoned = true
     } else if (json.type === 'message_delta') {
       takeUsage(json.usage)
       stopReason = json.delta?.stop_reason ?? stopReason
@@ -602,7 +619,7 @@ async function anthropicMessages(provider, request, res) {
       throw new Error(json.error?.message ?? '生成失败')
     }
   }
-  return { text, usage: seenUsage ? usage : null, model, stopReason }
+  return { text, usage: seenUsage ? usage : null, model, stopReason, reasoned }
 }
 
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
@@ -713,36 +730,58 @@ export async function complete(provider, modelId, request, { proxy = null } = {}
   }
   const pair = `${provider.id}/${modelId}`
   const reasoning = !NO_REASONING.has(pair) && request.reasoning && Object.keys(reasoningFields(provider.api, modelId, request.reasoning)).length > 0
-  const post = (options, req = request) =>
-    send(protocol.path(provider.baseURL), {
-      method: 'POST',
-      headers: headersFor(provider, { accept: 'text/event-stream' }),
-      body: requestBody(provider, modelId, req, { withReasoning: reasoning, ...options }),
-      signal: request.signal,
-      proxy: provider.proxy === 'direct' ? null : proxy,
-    })
-  let res = await post()
-  try {
-    await failIfBad(res)
-  } catch (error) {
-    if (request.signal?.aborted || error.providerStatus !== 400) throw error
-    // A relay that does not know the 1-hour cache field: send the default lifetime instead.
-    const ttlRejected = provider.api === 'anthropic-messages' && provider.cacheTtl === '1h' && /ttl|cache_control|extra inputs/i.test(error.message)
-    // A preset's output length above what the model allows: fall back to the provider's own.
-    // The output limit counts against the context window too: a long history plus a big cap
-    // can overflow where the provider's own smaller default fits.
-    const full = CONTEXT_FULL.test(error.message)
-    const capRejected = request.softCap && (full || /max_?(output_|completion_)?tokens|maximum.*tokens|output.*limit/i.test(error.message))
-    // A model or relay that takes no thinking / effort fields: leave them out, now and later.
-    const reasoningRejected = reasoning && REASONING_REFUSED.test(error.message)
-    if (!ttlRejected && !capRejected && !reasoningRejected) throw contextHint(error)
-    if (reasoningRejected) NO_REASONING.add(pair)
-    res = await post({ ...(ttlRejected ? { ttl: '5m' } : {}), ...(reasoningRejected ? { withReasoning: false } : {}) }, capRejected ? { ...request, maxTokens: undefined } : request)
-    await failIfBad(res).catch(retryError => { throw contextHint(retryError) })
+  const short = request.maxTokens > 0 && request.maxTokens < THINKING_ROOM
+  const attempt = async () => {
+    // Room to think on top of a short cap, given up like a preset's length if the model refuses it.
+    const req = short && THINKERS.has(pair) ? { ...request, maxTokens: request.maxTokens + THINKING_ROOM, softCap: true } : request
+    const post = (options, body = req) =>
+      send(protocol.path(provider.baseURL), {
+        method: 'POST',
+        headers: headersFor(provider, { accept: 'text/event-stream' }),
+        body: requestBody(provider, modelId, body, { withReasoning: reasoning, ...options }),
+        signal: request.signal,
+        proxy: provider.proxy === 'direct' ? null : proxy,
+      })
+    let res = await post()
+    try {
+      await failIfBad(res)
+    } catch (error) {
+      if (request.signal?.aborted || error.providerStatus !== 400) throw error
+      // A relay that does not know the 1-hour cache field: send the default lifetime instead.
+      const ttlRejected = provider.api === 'anthropic-messages' && provider.cacheTtl === '1h' && /ttl|cache_control|extra inputs/i.test(error.message)
+      // A preset's output length above what the model allows: fall back to the provider's own.
+      // The output limit counts against the context window too: a long history plus a big cap
+      // can overflow where the provider's own smaller default fits.
+      const full = CONTEXT_FULL.test(error.message)
+      const capRejected = req.softCap && (full || /max_?(output_|completion_)?tokens|maximum.*tokens|output.*limit/i.test(error.message))
+      // A model or relay that takes no thinking / effort fields: leave them out, now and later.
+      const reasoningRejected = reasoning && REASONING_REFUSED.test(error.message)
+      if (!ttlRejected && !capRejected && !reasoningRejected) throw contextHint(error)
+      if (reasoningRejected) NO_REASONING.add(pair)
+      res = await post({ ...(ttlRejected ? { ttl: '5m' } : {}), ...(reasoningRejected ? { withReasoning: false } : {}) }, capRejected ? { ...req, maxTokens: undefined } : req)
+      await failIfBad(res).catch(retryError => { throw contextHint(retryError) })
+    }
+    const result = await protocol.read(provider, request, res)
+    return { ...result, truncated: TRUNCATED.test(String(result.stopReason ?? '')) }
   }
-  const result = await protocol.read(provider, request, res)
-  return { ...result, truncated: TRUNCATED.test(String(result.stopReason ?? '')) }
+  const first = await attempt()
+  if (!short || THINKERS.has(pair) || !first.truncated || !first.reasoned) return first
+  // Its thinking used up a short cap: room for it from now on, and once more
+  // now when nothing of the answer came (a started one is already on screen).
+  THINKERS.add(pair)
+  if (first.text.trim() || request.signal?.aborted) return first
+  const second = await attempt()
+  return { ...second, usage: addUsage(first.usage, second.usage) }
 }
+
+// Models that think before answering count the thinking against the output cap
+// (DeepSeek's flash thinks by default), so a short cap can run out before the
+// answer starts. A pair seen doing that gets this much more on short caps.
+const THINKERS = new Set()
+const THINKING_ROOM = 16000
+
+/** Two calls' tokens as one. */
+const addUsage = (a, b) => (a && b ? Object.fromEntries(Object.keys(b).map(key => [key, (a[key] ?? 0) + (b[key] ?? 0)])) : b ?? a)
 
 // A request longer than the model's context window, as providers word it.
 export const CONTEXT_FULL = /context (window|length)|prompt is too long|too many tokens|maximum context|exceeds? the (model's )?(context|maximum)/i

@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { configureEntries } from '../server/forge/configure.mjs'
 import { createForge } from '../server/forge/index.mjs'
-import { cleanQuestions, discussRequest, mergeBrief, normalizePlan, partialReply, readDiscussion, readPlan } from '../server/forge/prompts.mjs'
+import { cleanQuestions, discussRequest, mergeBrief, normalizePlan, partialReply, planRequest, readDiscussion, readPlan } from '../server/forge/prompts.mjs'
 import { normalizeProvider } from '../server/providers.mjs'
 import { createStore } from '../server/store.mjs'
 
@@ -120,6 +120,13 @@ test('the sketch keeps what the user locked and what the model left out', () => 
   assert.deepEqual(after.items.map(i => [i.key, i.value, i.locked]), [['tone', '安静', true], ['lead', '林小雨', false], ['stage', '便利店', false]])
   assert.equal(after.readiness, 80)
   assert.equal(after.title, '雨宿')
+
+  // Who wrote an item is the page's tag, not part of the value; <user> in brackets stays.
+  const noted = mergeBrief({ items: [
+    { key: 'hairpin', label: '木簪缺角的来历', value: '她捡起来别回去，只说不用你赔（assistant 补的版本，随时可改）', by: 'assistant' },
+    { key: 'bond', label: '你们的关系', value: '同一批上山（<user> 比她晚三个月）', by: 'user' },
+  ] })
+  assert.deepEqual(noted.items.map(i => i.value), ['她捡起来别回去，只说不用你赔', '同一批上山（<user> 比她晚三个月）'])
 })
 
 test('entries are configured by rule: one core character', () => {
@@ -251,6 +258,9 @@ test('the plan request carries the talk; a cut-off plan reads as nothing', () =>
   const request = discussRequest(rounds, { title: '', readiness: 0, items: [], open: [] })
   assert.equal(request.messages.length, 3)
   assert.match(request.messages[2].content, /她是谁 → 雨女/)
+  // Room for a model that thinks first: it counts against the same cap.
+  assert.ok(request.maxTokens >= 16000)
+  assert.ok(planRequest(rounds, { title: '', readiness: 0, items: [], open: [] }).maxTokens >= 32000)
   assert.equal(readPlan('<plan>{"name": "x", "characters": []}'), null)
   assert.equal(readPlan('不是方案'), null)
 })
