@@ -491,8 +491,8 @@ dl.usage dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; 
 .prow.marker { display: flex; align-items: center; gap: 12px; padding: 6px 10px; color: var(--faint); font-size: 12px; }
 .prow.marker:hover { background: none; }
 .prow.marker::before, .prow.marker::after { content: ""; height: 1px; flex: 1; background: var(--line-soft); }
-.prow.marker.history { color: var(--accent); font-weight: 600; padding: 14px 10px; }
-.prow.marker.history::before, .prow.marker.history::after { background: color-mix(in srgb, var(--accent) 40%, transparent); }
+.prow.marker.chatlog { color: var(--accent); font-weight: 600; padding: 14px 10px; }
+.prow.marker.chatlog::before, .prow.marker.chatlog::after { background: color-mix(in srgb, var(--accent) 40%, transparent); }
 .prow.marker.off { text-decoration: line-through; }
 
 /* ─── Narrow screens: panes become drawers ───────────────────────── */

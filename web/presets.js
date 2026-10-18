@@ -205,7 +205,8 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
   }
 
   function promptRow(p) {
-    if (p.id === 'chatHistory') return el('li', { class: 'prow marker history', 'data-id': p.id, text: '聊天记录' })
+    // Not "history": that class is the chat's 回看历史 panel, positioned over the top-right corner.
+    if (p.id === 'chatHistory') return el('li', { class: 'prow marker chatlog', 'data-id': p.id, text: '聊天记录' })
     let row = null
     const toggle = el('input', { type: 'checkbox', class: 'switch', checked: p.enabled, 'aria-label': `启用「${p.name}」` })
     toggle.addEventListener('change', guard(async () => {
