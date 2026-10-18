@@ -28,6 +28,10 @@
         <span>导入角色卡、世界书或预设</span>
         <input type="file" id="import-input" accept=".png,.json,image/png,application/json" multiple hidden>
       </label>
+      <button class="import forge-open" id="forge-open" type="button" title="和创作向导聊一聊，把一个模糊的想法慢慢聊成一张完整的角色卡">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 16c3.5-.6 6.3-2.4 8.4-5.4L16 5l-1-1-5.6 3.6C6.4 9.7 4.6 12.5 4 16Z" /><path d="M8.5 11.5 4 16" /></svg>
+        <span>创作角色卡</span>
+      </button>
       <div class="section-title">角色卡</div>
       <ul class="card-list" id="card-list"></ul>
       <div class="section-title row">
@@ -306,6 +310,9 @@
   <dialog id="media-dialog" class="dialog wide">
     <form method="dialog" id="media-form"></form>
   </dialog>
+
+  <!-- 创作角色卡 (forge.js): filled in by script. -->
+  <dialog id="forge-dialog" class="dialog forge-dialog" aria-label="创作角色卡"></dialog>
 
   <dialog id="image-dialog" class="dialog wide">
     <form method="dialog">

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Put the app's shortcut ("Agent 酒馆", or "CicaTavern" in the release) on the desktop (Windows). It runs bin\launch.vbs,
+// Put the app's shortcut ("CicaTavern") on the desktop (Windows). It runs bin\launch.vbs,
 // which starts the server without a console window and opens the app window.
 //   node bin/install-shortcut.mjs [--start-menu]
 import { execFileSync } from 'node:child_process'
@@ -24,8 +24,8 @@ $s = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk)
 $s.TargetPath = [IO.Path]::Combine($env:SystemRoot, 'System32', 'wscript.exe')
 $s.Arguments = '"' + ${ps(path.join(root, 'bin', 'launch.vbs'))} + '" "' + ${ps(process.execPath)} + '"'
 $s.WorkingDirectory = ${ps(root)}
-$s.IconLocation = ${ps(path.join(root, 'web', `${edition.icon}.ico`))} + ',0'
-$s.Description = ${ps(edition.subscription ? '用 Claude 订阅游玩角色卡' : '用自己的模型 API 游玩角色卡')}
+$s.IconLocation = ${ps(path.join(root, 'web', 'icon.ico'))} + ',0'
+$s.Description = ${ps(edition.subscription ? 'CicaTavern 个人版：可用 Claude 订阅游玩角色卡' : '用自己的模型 API 游玩角色卡')}
 $s.Save()
 Write-Output $lnk
 `

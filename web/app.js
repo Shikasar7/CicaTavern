@@ -7,6 +7,7 @@ import { initProviders } from '/providers.js'
 import { initMedia } from '/media.js'
 import { initHistory } from '/history.js'
 import { createMenu, MENU_ICONS, whoLine } from '/menu.js'
+import { initForge } from '/forge.js'
 
 const $ = id => document.getElementById(id)
 const EMPTY = $('empty')
@@ -256,7 +257,10 @@ function renderStory(text) {
         }
       }
       if (carry && lines.length) lines[lines.length - 1] += carry
-      return lines.length ? `<p>${lines.join('<br>')}</p>` : ''
+      // Option buttons are blocks already: a line break next to one only adds an empty line.
+      const isChoice = line => line.trimStart().startsWith('<button type="button" class="choice"')
+      const body = lines.reduce((out, line, i) => (i === 0 ? line : out + (isChoice(lines[i - 1]) || isChoice(line) ? '' : '<br>') + line), '')
+      return lines.length ? `<p>${body}</p>` : ''
     })
     .join('')
 }
@@ -275,8 +279,12 @@ function el(tag, attrs = {}, children = []) {
   return node
 }
 
+// Cards whose picture changed in this page (创作角色卡 saving again): their URL skips the cached one.
+const avatarVersions = new Map()
+
 function avatarFor(card) {
-  if (card?.hasAvatar) return el('img', { class: 'avatar', src: `/api/cards/${card.id}/avatar`, alt: '' })
+  const version = avatarVersions.get(card?.id)
+  if (card?.hasAvatar) return el('img', { class: 'avatar', src: `/api/cards/${card.id}/avatar${version ? `?v=${version}` : ''}`, alt: '' })
   return el('span', { class: 'avatar', text: (card?.name ?? '?').slice(0, 1) })
 }
 
@@ -1571,6 +1579,25 @@ const mediaUi = initMedia({
 
 const historyUi = initHistory({ el, getChat: () => ui.chat })
 
+const forgeUi = initForge({
+  api,
+  el,
+  toast,
+  guard,
+  openProviders: () => providersUi.open(),
+  async onCardSaved(id) {
+    avatarVersions.set(id, Date.now())
+    ui.cardDetails.delete(id)
+    await refreshCards()
+    await selectCard(id)
+  },
+  async startChatWith(id) {
+    await refreshCards()
+    await selectCard(id)
+    await newChat()
+  },
+})
+
 const providersUi = initProviders({
   api,
   el,
@@ -1771,6 +1798,7 @@ function bind() {
   $('open-settings').addEventListener('click', openSettings)
   $('open-usage').addEventListener('click', openUsage)
   $('open-presets').addEventListener('click', () => presetsUi.open())
+  $('forge-open').addEventListener('click', () => forgeUi.open())
   $('open-providers').addEventListener('click', () => providersUi.open())
   $('provider-add').addEventListener('click', () => providersUi.add())
   $('provider-import-dsh').addEventListener('click', () => providersUi.importDsh())
@@ -1839,7 +1867,7 @@ async function boot() {
   }
   if (ui.features.subscription) {
     subscriptionPage = await import('/subscription.js').catch(() => null)
-    document.querySelector('.brand-sub').textContent = '用 Claude 订阅游玩角色卡'
+    document.querySelector('.brand-sub').textContent = '个人版 · 可用 Claude 订阅'
   }
   const appName = ui.features.appName ?? 'CicaTavern'
   document.querySelector('.brand-name').textContent = appName

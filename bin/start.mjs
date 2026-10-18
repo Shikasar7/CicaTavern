@@ -15,7 +15,7 @@ const option = name => {
   return index >= 0 ? args[index + 1] : undefined
 }
 const edition = featuresOf(option('edition') ?? packagedEdition())
-// Console lines start with the app's name: [CicaTavern] or [Agent 酒馆].
+// Console lines start with the app's name: [CicaTavern].
 const tag = `[${edition.appName}]`
 const port = Number(option('port') ?? process.env.AGENT_TAVERN_PORT ?? edition.port)
 const listen = option('listen')

@@ -71,6 +71,8 @@ await cp(path.join(root, 'server'), path.join(out, 'server'), { recursive: true,
 await cp(path.join(root, 'web'), path.join(out, 'web'), { recursive: true, filter: publicFile })
 // The README's banner.
 await cp(path.join(root, 'docs', 'brand', 'banner.jpg'), path.join(out, 'docs', 'brand', 'banner.jpg'))
+// The README's pictures.
+if (existsSync(path.join(root, 'docs', 'screenshots'))) await cp(path.join(root, 'docs', 'screenshots'), path.join(out, 'docs', 'screenshots'), { recursive: true })
 await cp(path.join(root, 'examples'), path.join(out, 'examples'), { recursive: true })
 for (const file of BIN) await cp(path.join(root, 'bin', file), path.join(out, 'bin', file))
 await writeFile(path.join(out, 'bin', 'launch.vbs'), await releaseLaunchVbs(root))

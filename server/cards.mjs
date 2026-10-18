@@ -39,6 +39,53 @@ export function readPngText(buffer) {
   return texts
 }
 
+// CRC-32 as PNG chunks use it (no zlib.crc32 on the phone's Node 18).
+const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
+  let c = n
+  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
+  return c >>> 0
+})
+function crc32(bytes) {
+  let c = 0xffffffff
+  for (const byte of bytes) c = CRC_TABLE[(c ^ byte) & 0xff] ^ (c >>> 8)
+  return (c ^ 0xffffffff) >>> 0
+}
+
+function chunk(type, data) {
+  const head = Buffer.alloc(8)
+  head.writeUInt32BE(data.length, 0)
+  head.write(type, 4, 'latin1')
+  const crc = Buffer.alloc(4)
+  crc.writeUInt32BE(crc32(Buffer.concat([head.subarray(4), data])), 0)
+  return Buffer.concat([head, data, crc])
+}
+
+/**
+ * A PNG carrying a card the way SillyTavern writes one: base64 JSON in tEXt
+ * chunks "chara" (V2, for older readers) and "ccv3" (V3), before IEND. Card
+ * chunks already in the picture are replaced.
+ */
+export function writeCardPng(png, card) {
+  if (png.length < 8 || !png.subarray(0, 8).equals(PNG_SIGNATURE)) throw httpError(400, '头像不是 PNG')
+  const kept = [png.subarray(0, 8)]
+  let offset = 8
+  while (offset + 12 <= png.length) {
+    const length = png.readUInt32BE(offset)
+    const type = png.toString('latin1', offset + 4, offset + 8)
+    const whole = png.subarray(offset, offset + 12 + length)
+    offset += 12 + length
+    if (type === 'IEND') break
+    if (type === 'tEXt' || type === 'iTXt') {
+      const keyword = whole.toString('latin1', 8, 8 + Math.max(0, whole.indexOf(0, 8) - 8)).toLowerCase()
+      if (keyword === 'chara' || keyword === 'ccv3') continue
+    }
+    kept.push(whole)
+  }
+  const text = (keyword, value) => chunk('tEXt', Buffer.concat([Buffer.from(keyword, 'latin1'), Buffer.from([0]), Buffer.from(Buffer.from(JSON.stringify(value), 'utf8').toString('base64'), 'latin1')]))
+  const v2 = { ...card, spec: 'chara_card_v2', spec_version: '2.0' }
+  return Buffer.concat([...kept, text('chara', v2), text('ccv3', card), chunk('IEND', Buffer.alloc(0))])
+}
+
 function decodeCardPayload(text) {
   const trimmed = text.trim()
   const json = trimmed.startsWith('{') ? trimmed : Buffer.from(trimmed, 'base64').toString('utf8')

@@ -40,7 +40,9 @@ test('editions: capabilities by name, unknown names are the personal install', (
   assert.equal(featuresOf('android').lan, false)
   // The phone's Node 18 has no http.Agent proxyEnv, so it has no 网络代理 setting.
   assert.deepEqual(['personal', 'release', 'android'].map(e => featuresOf(e).proxy), [true, true, false])
-  assert.deepEqual([featuresOf('android').appName, featuresOf('android').icon], ['CicaTavern', 'icon'])
+  // Every edition is CicaTavern; this machine's own install keeps its data folder and port.
+  assert.deepEqual(['personal', 'release', 'android'].map(e => featuresOf(e).appName), ['CicaTavern', 'CicaTavern', 'CicaTavern'])
+  assert.deepEqual([featuresOf('personal').dataDir, featuresOf('personal').port], ['.agent-tavern', 8791])
   assert.equal(featuresOf('release').defaultProxy, 'none')
   assert.equal(featuresOf('personal').defaultProxy, 'http://127.0.0.1:7897')
   assert.deepEqual([featuresOf("release").appName, featuresOf("release").dataDir, featuresOf("release").port], ["CicaTavern", ".cicatavern", 8790])

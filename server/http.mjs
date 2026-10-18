@@ -23,6 +23,7 @@ import { createLedger } from './usage.mjs'
 import { cleanMedia, createMedia } from './media.mjs'
 import { KEYED as VOICE_KEYED } from './voice/index.mjs'
 import { createPromptLibrary } from './prompts.mjs'
+import { createForge } from './forge/index.mjs'
 import { chatPackage, importChatPackage, savePackagePicture } from './transfer.mjs'
 import { createStore, defaultDataRoot, httpError } from './store.mjs'
 import { normalizeBook } from './worldbook.mjs'
@@ -47,6 +48,7 @@ const STATIC = {
   '/media.js': ['media.js', 'text/javascript; charset=utf-8'],
   '/history.js': ['history.js', 'text/javascript; charset=utf-8'],
   '/menu.js': ['menu.js', 'text/javascript; charset=utf-8'],
+  '/forge.js': ['forge.js', 'text/javascript; charset=utf-8'],
   '/shared/speech.js': ['shared/speech.js', 'text/javascript; charset=utf-8'],
   '/shared/vars.js': ['shared/vars.js', 'text/javascript; charset=utf-8'],
   '/shared/regex.js': ['shared/regex.js', 'text/javascript; charset=utf-8'],
@@ -136,6 +138,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
   const engine = createEngine(store, isolation, ledger, { subscription })
   const media = createMedia(store, { proxy: () => isolation.proxy, askInContext: engine.askInContext, features })
   const prompts = createPromptLibrary(store)
+  const forge = createForge(store, { proxyNow: () => isolation.proxy, ledger, draw: (input, signal) => media.drawCardArt(input, signal) })
 
   /** The media settings for the page: secrets only as "set, ends in …". */
   async function mediaSettingsView(settings) {
@@ -158,7 +161,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     if (!idleExitMs || !onShutdown || presence.size) return
     idleTimer = setTimeout(() => {
       if (presence.size) return
-      if (engine.busy()) return armIdle()
+      if (engine.busy() || forge.busy()) return armIdle()
       onShutdown()
     }, idleExitMs)
     idleTimer.unref?.()
@@ -362,6 +365,25 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['POST', /^\/api\/prompts$/, (_, body) => prompts.saveManual(body ?? {})],
     ['PUT', /^\/api\/prompts\/([\w-]+)$/, ([id], body) => prompts.update(id, body ?? {})],
     ['DELETE', /^\/api\/prompts\/([\w-]+)$/, ([id]) => prompts.remove(id)],
+    // Creating a card by talking it through (forge/): the model calls run in the
+    // background; the page polls GET /api/forge/:id while one is going.
+    ['GET', /^\/api\/forge$/, () => forge.list()],
+    ['POST', /^\/api\/forge$/, (_, body) => forge.create(body ?? {})],
+    ['GET', /^\/api\/forge\/([\w-]+)$/, ([id]) => forge.get(id)],
+    ['PUT', /^\/api\/forge\/([\w-]+)$/, ([id], body) => forge.update(id, body ?? {})],
+    ['DELETE', /^\/api\/forge\/([\w-]+)$/, ([id]) => forge.remove(id)],
+    ['POST', /^\/api\/forge\/([\w-]+)\/say$/, ([id], body) => forge.say(id, body ?? {})],
+    ['POST', /^\/api\/forge\/([\w-]+)\/retry$/, ([id]) => forge.retry(id)],
+    ['POST', /^\/api\/forge\/([\w-]+)\/undo$/, ([id]) => forge.undo(id)],
+    ['POST', /^\/api\/forge\/([\w-]+)\/plan$/, ([id]) => forge.plan(id)],
+    ['POST', /^\/api\/forge\/([\w-]+)\/revise$/, ([id], body) => forge.revise(id, body ?? {})],
+    ['POST', /^\/api\/forge\/([\w-]+)\/write$/, ([id], body) => forge.write(id, body ?? {})],
+    ['POST', /^\/api\/forge\/([\w-]+)\/rewrite$/, ([id], body) => forge.rewrite(id, body ?? {})],
+    ['PUT', /^\/api\/forge\/([\w-]+)\/card$/, ([id], body) => forge.editCard(id, body ?? {})],
+    ['POST', /^\/api\/forge\/([\w-]+)\/avatar$/, ([id], body) => forge.drawAvatar(id, body ?? {})],
+    ['PUT', /^\/api\/forge\/([\w-]+)\/avatar$/, ([id], body) => forge.uploadAvatar(id, body ?? {})],
+    ['POST', /^\/api\/forge\/([\w-]+)\/save$/, ([id], body) => forge.saveCard(id, body ?? {})],
+    ['POST', /^\/api\/forge\/([\w-]+)\/stop$/, ([id]) => forge.stop(id)],
     ['GET', /^\/api\/access$/, async () => accessView()],
     ['GET', /^\/api\/persona$/, () => store.getPersona()],
     ['PUT', /^\/api\/persona$/, (_, body) => store.savePersona(body)],
@@ -629,9 +651,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       return res.end(await readFile(subscription.pageFile))
     }
     if (req.method === 'GET' && STATIC[url.pathname]) {
-      let [file, type] = STATIC[url.pathname]
-      // Each edition has its own icon (icon.* is CicaTavern's).
-      if (file.startsWith('icon.')) file = file.replace(/^icon/, features.icon)
+      const [file, type] = STATIC[url.pathname]
       res.writeHead(200, { 'content-type': type, 'cache-control': 'no-cache' })
       return res.end(await readFile(path.join(WEB_ROOT, file)))
     }
@@ -643,6 +663,18 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
         return res.end(data)
       } catch {
         return sendJson(res, 404, { error: '没有头像' })
+      }
+    }
+
+    // The avatar of a card being created (创作角色卡).
+    const forgeAvatar = /^\/api\/forge\/([\w-]+)\/avatar$/.exec(url.pathname)
+    if (req.method === 'GET' && forgeAvatar) {
+      try {
+        const { buffer, type } = await forge.readAvatar(forgeAvatar[1])
+        res.writeHead(200, { 'content-type': type, 'cache-control': 'no-store' })
+        return res.end(buffer)
+      } catch (error) {
+        return sendJson(res, error.status ?? 404, { error: error.message })
       }
     }
 

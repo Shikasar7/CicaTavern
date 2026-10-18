@@ -682,7 +682,8 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
   async function comfyImage(media, prompt, cardId, signal, cast = null) {
     const imported = await loadWorkflow()
     if (!imported) throw httpError(400, '还没导入 ComfyUI 工作流：在「配图与朗读」里导入「导出（API）」的 JSON')
-    const cardMedia = cleanCardMedia((await store.getCard(cardId)).media)
+    // No card yet (a card being created): no card LoRA.
+    const cardMedia = cardId ? cleanCardMedia((await store.getCard(cardId)).media) : DEFAULT_CARD_MEDIA
     // Several LoRAs in one picture bleed into each other: a named cast uses only a lone member's own.
     const owner = cast ? (cast.solo?.lora ? cast.solo : null) : cardMedia.lora ? cardMedia : null
     const workflow = owner ? withLora(imported, { name: owner.lora, strength: owner.loraStrength }) : imported
@@ -1031,6 +1032,21 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     return { image: `data:image/${type};base64,${buffer.toString('base64')}`, backend }
   }
 
+  /**
+   * A picture of one character for a card that does not exist yet (创作角色卡):
+   * looks and outfit as a cast member, the scene as given (else a plain upper
+   * body). No references, no card LoRA. Returns { buffer, backend }.
+   */
+  async function drawCardArt(input, signal) {
+    const [entry] = cleanRoster([{ name: input?.name || '角色', kind: input?.kind, looks: input?.looks, outfit: input?.outfit }])
+    if (!entry?.looks) throw httpError(400, '还没有这个角色的长相描述')
+    const media = await settings()
+    const scene = typeof input.scene === 'string' && input.scene.trim() ? input.scene.trim().slice(0, 400) : PORTRAIT_SCENE
+    const cast = { scene, characters: [{ entry, action: [entry.outfit, 'looking at viewer'].filter(Boolean).join(', '), position: '' }], solo: entry, lead: entry }
+    const plain = { ...media, imageShape: 'portrait', naiReference: false, imageReference: false, naiNegative: [media.naiNegative, 'nsfw, multiple views, text'].filter(Boolean).join(', ') }
+    return render(plain, null, cast, cast, '', signal)
+  }
+
   async function readImage(chatId, file) {
     if (!FILE.test(file)) throw httpError(400, '文件名不对')
     return readFile(path.join(mediaDir(chatId), file))
@@ -1093,5 +1109,5 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     return voices.accountVoices({ source, draft: await voiceDraft(draft, keys) }, signal)
   }
 
-  return { defaults, settings, naiStatus, setNaiToken, naiCheck, cardMediaView, saveCardMedia, inheritCardMedia, draftRoster, drawPortrait, readRosterRef, saveRosterRef, removeRosterRef, writeImagePrompt, generateImage, readImage, removeImage, removeChatMedia, copyChatMedia, loras, voices: voices.list, personaList: voices.personaList, ttsKeyStatus: voices.ttsKeyStatus, setTtsKey: voices.setTtsKey, voiceKeys: voices.keyStatus, setVoiceKey: voices.setKey, speak, previewVoice, accountVoices, loadWorkflow, saveWorkflow, describeWorkflow }
+  return { defaults, settings, naiStatus, setNaiToken, naiCheck, cardMediaView, saveCardMedia, inheritCardMedia, draftRoster, drawPortrait, drawCardArt, readRosterRef, saveRosterRef, removeRosterRef, writeImagePrompt, generateImage, readImage, removeImage, removeChatMedia, copyChatMedia, loras, voices: voices.list, personaList: voices.personaList, ttsKeyStatus: voices.ttsKeyStatus, setTtsKey: voices.setTtsKey, voiceKeys: voices.keyStatus, setVoiceKey: voices.setKey, speak, previewVoice, accountVoices, loadWorkflow, saveWorkflow, describeWorkflow }
 }
