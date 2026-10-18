@@ -11,9 +11,13 @@ import http from 'node:http'
 import https from 'node:https'
 import { modelInfo } from './models.mjs'
 import { httpError } from './store.mjs'
+import { msg } from './i18n.mjs'
 
+// A getter: the label is in the language of the page that asks.
 export const APIS = {
-  'openai-completions': 'OpenAI 兼容（Chat Completions）',
+  get 'openai-completions'() {
+    return msg`OpenAI 兼容（Chat Completions）`
+  },
   'openai-responses': 'OpenAI Responses',
   'anthropic-messages': 'Anthropic Messages',
 }
@@ -69,10 +73,10 @@ function cleanBaseUrl(value) {
   try {
     url = new URL(text)
   } catch {
-    throw httpError(400, 'Base URL 不是有效的地址')
+    throw httpError(400, msg`Base URL 不是有效的地址`)
   }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw httpError(400, 'Base URL 只能是 http 或 https')
-  if (url.username || url.password) throw httpError(400, 'Base URL 里不要带账号密码，密钥填在 API Key 里')
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw httpError(400, msg`Base URL 只能是 http 或 https`)
+  if (url.username || url.password) throw httpError(400, msg`Base URL 里不要带账号密码，密钥填在 API Key 里`)
   return text
 }
 
@@ -98,7 +102,7 @@ function cleanHeaders(value) {
   if (!isObject(value)) return {}
   const headers = {}
   for (const [key, raw] of Object.entries(value)) {
-    if (!HEADER_NAME.test(key)) throw httpError(400, `请求头名称不合法：${key}`)
+    if (!HEADER_NAME.test(key)) throw httpError(400, msg`请求头名称不合法：${key}`)
     headers[key] = String(raw)
   }
   return headers
@@ -109,21 +113,21 @@ function cleanHeaders(value) {
  * key (the form never receives it); `clearKey` removes it.
  */
 export function normalizeProvider(input, previous = null, taken = new Set()) {
-  if (!isObject(input)) throw httpError(400, '供应商配置必须是对象')
+  if (!isObject(input)) throw httpError(400, msg`供应商配置必须是对象`)
   const name = String(input.name ?? '').trim().slice(0, 40)
-  if (!name) throw httpError(400, '请填写供应商名称')
+  if (!name) throw httpError(400, msg`请填写供应商名称`)
   const api = String(input.api ?? '')
-  if (!APIS[api]) throw httpError(400, '不支持的接口类型')
+  if (!APIS[api]) throw httpError(400, msg`不支持的接口类型`)
   const typedKey = typeof input.apiKey === 'string' ? input.apiKey.trim() : ''
-  if (/\s/.test(typedKey)) throw httpError(400, 'API Key 里不能有空格或换行')
+  if (/\s/.test(typedKey)) throw httpError(400, msg`API Key 里不能有空格或换行`)
   const apiKeyEnv = String(input.apiKeyEnv ?? '').trim()
-  if (apiKeyEnv && !ENV_NAME.test(apiKeyEnv)) throw httpError(400, '环境变量名只能用字母、数字和下划线')
+  if (apiKeyEnv && !ENV_NAME.test(apiKeyEnv)) throw httpError(400, msg`环境变量名只能用字母、数字和下划线`)
   const temperature = input.temperature === '' || input.temperature == null ? null : Number(input.temperature)
-  if (temperature !== null && !(temperature >= 0 && temperature <= 2)) throw httpError(400, '温度要在 0 到 2 之间')
+  if (temperature !== null && !(temperature >= 0 && temperature <= 2)) throw httpError(400, msg`温度要在 0 到 2 之间`)
   const extraBody = input.extraBody == null || input.extraBody === '' ? null : input.extraBody
-  if (extraBody !== null && !isObject(extraBody)) throw httpError(400, '额外请求参数必须是 JSON 对象')
+  if (extraBody !== null && !isObject(extraBody)) throw httpError(400, msg`额外请求参数必须是 JSON 对象`)
   const models = cleanModels(input.models)
-  if (!models.length) throw httpError(400, '至少填一个模型 ID')
+  if (!models.length) throw httpError(400, msg`至少填一个模型 ID`)
   const baseURL = cleanBaseUrl(input.baseURL)
   return {
     id: previous?.id ?? uniqueId(slug(input.id) || slug(name) || hostSlug(baseURL) || 'provider', taken),
@@ -169,19 +173,19 @@ function findProviderMap(node) {
 /** Provider drafts (no keys) from a parsed DSH config; unsupported protocols are reported, not dropped silently. */
 export function providersFromDsh(doc) {
   const map = findProviderMap(doc)
-  if (!map) throw httpError(400, '没在 DSH 配置里找到模型供应商（providers）')
+  if (!map) throw httpError(400, msg`没在 DSH 配置里找到模型供应商（providers）`)
   const drafts = []
   const skipped = []
   for (const [id, config] of Object.entries(map)) {
     if (!isObject(config) || !APIS[config.api]) {
-      skipped.push(`${id}（接口类型 ${config?.api ?? '未知'} 不支持）`)
+      skipped.push(msg`${id}（接口类型 ${config?.api ?? msg`未知`} 不支持）`)
       continue
     }
     const models = (Array.isArray(config.models) ? config.models : [])
       .map(m => (typeof m === 'string' ? { id: m } : { id: m?.id, label: m?.name && m.name !== m.id ? m.name : undefined }))
       .filter(m => m.id && !NOT_CHAT.test(m.id))
     if (!models.length) {
-      skipped.push(`${id}（没有对话模型）`)
+      skipped.push(msg`${id}（没有对话模型）`)
       continue
     }
     let host = ''
@@ -262,7 +266,7 @@ export function exportProviders(providers, defaultModel) {
  */
 export function importProviders(saved, archive) {
   if (!isObject(archive) || archive.format !== PROVIDERS_FORMAT || !Array.isArray(archive.providers)) {
-    throw httpError(400, '这不是酒馆导出的供应商文件')
+    throw httpError(400, msg`这不是酒馆导出的供应商文件`)
   }
   const list = [...saved]
   const added = []
@@ -280,7 +284,7 @@ export function importProviders(saved, archive) {
         added.push(provider.name)
       }
     } catch (error) {
-      failed.push(`${String(input?.name ?? '未命名')}：${error.message}`)
+      failed.push(msg`${String(input?.name ?? msg`未命名`)}：${error.message}`)
     }
   }
   const defaultModel = isProviderRef(archive.defaultModel) && list.some(p => archive.defaultModel.startsWith(`${p.id}/`)) ? archive.defaultModel : ''
@@ -322,7 +326,7 @@ export function resolveRef(ref, providers) {
   const providerId = ref.slice(0, cut)
   const modelId = ref.slice(cut + 1)
   const provider = providers.find(p => p.id === providerId)
-  if (!provider) throw httpError(400, `供应商「${providerId}」已经删除，换一个模型再试`)
+  if (!provider) throw httpError(400, msg`供应商「${providerId}」已经删除，换一个模型再试`)
   return { provider, modelId, ref }
 }
 
@@ -423,7 +427,7 @@ function sendPayload(lib, url, { method, headers, payload, signal, proxy }) {
       res.on('close', () => signal?.removeEventListener('abort', onAbort))
       resolve(res)
     })
-    req.on('timeout', () => req.destroy(new Error('请求超时')))
+    req.on('timeout', () => req.destroy(new Error(msg`请求超时`)))
     req.on('error', error => {
       signal?.removeEventListener('abort', onAbort)
       reject(error)
@@ -568,7 +572,7 @@ async function openaiResponses(provider, request, res) {
       stopReason = json.response?.incomplete_details?.reason ?? json.response?.status ?? null
       if (thoughtTokens(json.response?.usage)) reasoned = true
     } else if (json.type === 'response.failed' || json.type === 'error') {
-      throw new Error(json.response?.error?.message ?? json.message ?? json.error?.message ?? '生成失败')
+      throw new Error(json.response?.error?.message ?? json.message ?? json.error?.message ?? msg`生成失败`)
     } else if (json.type === 'response.created') {
       model = json.response?.model ?? model
     } else if (/^response\.reasoning/.test(json.type ?? '') || json.item?.type === 'reasoning') {
@@ -616,7 +620,7 @@ async function anthropicMessages(provider, request, res) {
       takeUsage(json.usage)
       stopReason = json.delta?.stop_reason ?? stopReason
     } else if (json.type === 'error') {
-      throw new Error(json.error?.message ?? '生成失败')
+      throw new Error(json.error?.message ?? msg`生成失败`)
     }
   }
   return { text, usage: seenUsage ? usage : null, model, stopReason, reasoned }
@@ -723,10 +727,10 @@ const PROTOCOL = {
  */
 export async function complete(provider, modelId, request, { proxy = null } = {}) {
   const protocol = PROTOCOL[provider.api]
-  if (!protocol) throw new Error(`不支持的接口类型：${provider.api}`)
+  if (!protocol) throw new Error(msg`不支持的接口类型：${provider.api}`)
   if (!apiKeyOf(provider) && !Object.keys(provider.headers ?? {}).length) {
     const local = isLoopbackHost(new URL(provider.baseURL).hostname)
-    if (!local) throw httpError(400, `供应商「${provider.name}」还没有填 API Key`)
+    if (!local) throw httpError(400, msg`供应商「${provider.name}」还没有填 API Key`)
   }
   const pair = `${provider.id}/${modelId}`
   const reasoning = !NO_REASONING.has(pair) && request.reasoning && Object.keys(reasoningFields(provider.api, modelId, request.reasoning)).length > 0
@@ -788,7 +792,7 @@ export const CONTEXT_FULL = /context (window|length)|prompt is too long|too many
 
 /** Say what to do when the conversation no longer fits. */
 function contextHint(error) {
-  if (CONTEXT_FULL.test(error.message)) error.message += '（这段对话太长，超出了模型一次能读的上下文。点顶栏「压缩上下文」把前面的剧情压成存档，再接着写。）'
+  if (CONTEXT_FULL.test(error.message)) error.message += msg`（这段对话太长，超出了模型一次能读的上下文。点顶栏「压缩上下文」把前面的剧情压成存档，再接着写。）`
   return error
 }
 
@@ -800,7 +804,7 @@ async function readBuffer(res, limit = 64 * 1024 * 1024) {
   let size = 0
   for await (const chunk of res) {
     size += chunk.length
-    if (size > limit) throw new Error('响应太大')
+    if (size > limit) throw new Error(msg`响应太大`)
     chunks.push(chunk)
   }
   return Buffer.concat(chunks)
@@ -856,13 +860,13 @@ export async function listRemoteModels(provider, { proxy = null, signal } = {}) 
 export function providerError(provider, error) {
   const text = String(error?.message ?? error ?? '')
   const status = error?.providerStatus
-  const name = provider?.name ?? '供应商'
-  if (status === 401 || status === 403) return `${name} 拒绝了请求：API Key 无效或没有权限。（${text.slice(0, 160)}）`
-  if (status === 404) return `${name} 返回 404：检查 Base URL 和接口类型，或者模型 ID 是否写对。（${text.slice(0, 160)}）`
-  if (status === 429) return `${name} 限流或额度用完了，稍后再试。（${text.slice(0, 160)}）`
-  if (status >= 500) return `${name} 服务出错，稍后重试。（${text.slice(0, 160)}）`
-  if (/ECONNREFUSED|ENOTFOUND|ETIMEDOUT|ECONNRESET|socket hang up|请求超时/i.test(text)) {
-    return `连不上 ${name}：检查 Base URL、网络和代理设置。（${text.slice(0, 160)}）`
+  const name = provider?.name ?? msg`供应商`
+  if (status === 401 || status === 403) return msg`${name} 拒绝了请求：API Key 无效或没有权限。（${text.slice(0, 160)}）`
+  if (status === 404) return msg`${name} 返回 404：检查 Base URL 和接口类型，或者模型 ID 是否写对。（${text.slice(0, 160)}）`
+  if (status === 429) return msg`${name} 限流或额度用完了，稍后再试。（${text.slice(0, 160)}）`
+  if (status >= 500) return msg`${name} 服务出错，稍后重试。（${text.slice(0, 160)}）`
+  if (/ECONNREFUSED|ENOTFOUND|ETIMEDOUT|ECONNRESET|socket hang up|请求超时|Request timed out/i.test(text)) {
+    return msg`连不上 ${name}：检查 Base URL、网络和代理设置。（${text.slice(0, 160)}）`
   }
-  return `${name}：${text.slice(0, 240)}`
+  return msg`${name}：${text.slice(0, 240)}`
 }

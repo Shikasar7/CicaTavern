@@ -4,6 +4,7 @@
 import { access, appendFile, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { estimateCost, modelInfo } from './models.mjs'
+import { msg } from './i18n.mjs'
 
 const DAY = 24 * 60 * 60 * 1000
 
@@ -118,7 +119,7 @@ export function createLedger(store) {
         if (date === today) add(todayTotals, t)
         if (!daily.has(date)) daily.set(date, { date, ...empty() })
         add(daily.get(date), t)
-        const model = t.model ?? '未知'
+        const model = t.model ?? msg`未知`
         if (!byModel.has(model)) byModel.set(model, { model, label: modelInfo(model)?.label ?? model, ...empty() })
         add(byModel.get(model), t)
         if (!byChat.has(t.chatId)) byChat.set(t.chatId, { chatId: t.chatId, title: titles.get(t.chatId) ?? t.chatTitle ?? t.chatId, deleted: !titles.has(t.chatId), ...empty() })

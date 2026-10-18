@@ -2,30 +2,31 @@
 // Prompts marked 前缀 are rendered into a chat's frozen system prompt when it
 // starts (or when the preset is applied to it again); 每轮 prompts are rendered
 // into every turn, so toggling those takes effect on the next message.
+import { t } from '/i18n.js'
 
 // What each placement of the prompts after the chat history means for the player.
 const POST_MODE_NOTES = {
-  prefix: '按原顺序放进固定前缀的末尾，每轮附一句提醒；只有骰子、引用玩家输入这类每轮变化的段落随消息发送。缓存最省，但离回复远，选项、状态这类正文后的块容易被漏掉。',
-  latest: '和 SillyTavern 一样：每轮跟在最新一条消息后面，之前几轮的不再重发。选项、格式要求最不容易被漏；每轮多写一条玩家消息的缓存，很便宜。只对自定义供应商生效，Claude 订阅下同「每轮都留」。改了之后下一轮会重写一次缓存。历史会变，要在历史里多打一个缓存点：一些低价 Claude 中转处理不好，会多算 token、缓存时有时无，用这类中转时选「每轮都留」。',
-  turn: '全部每轮随玩家消息发送，发过的留在历史里，每轮都会让上下文变长。历史不变，只在最新一条上打缓存点，各家中转都能稳定命中。',
+  prefix: t`按原顺序放进固定前缀的末尾，每轮附一句提醒；只有骰子、引用玩家输入这类每轮变化的段落随消息发送。缓存最省，但离回复远，选项、状态这类正文后的块容易被漏掉。`,
+  latest: t`和 SillyTavern 一样：每轮跟在最新一条消息后面，之前几轮的不再重发。选项、格式要求最不容易被漏；每轮多写一条玩家消息的缓存，很便宜。只对自定义供应商生效，Claude 订阅下同「每轮都留」。改了之后下一轮会重写一次缓存。历史会变，要在历史里多打一个缓存点：一些低价 Claude 中转处理不好，会多算 token、缓存时有时无，用这类中转时选「每轮都留」。`,
+  turn: t`全部每轮随玩家消息发送，发过的留在历史里，每轮都会让上下文变长。历史不变，只在最新一条上打缓存点，各家中转都能稳定命中。`,
 }
 
 const MARKER_LABEL = {
-  chatHistory: '聊天记录',
-  charDescription: '角色描述',
-  charPersonality: '角色性格',
-  scenario: '场景',
-  personaDescription: '你的角色设定',
-  worldInfoBefore: '世界书（角色之前）',
-  worldInfoAfter: '世界书（角色之后）',
-  dialogueExamples: '对话示例',
+  chatHistory: t`聊天记录`,
+  charDescription: t`角色描述`,
+  charPersonality: t`角色性格`,
+  scenario: t`场景`,
+  personaDescription: t`你的角色设定`,
+  worldInfoBefore: t`世界书（角色之前）`,
+  worldInfoAfter: t`世界书（角色之后）`,
+  dialogueExamples: t`对话示例`,
 }
-const ROLE_LABEL = { user: '用户', assistant: 'AI' }
-const ROLE_OPTIONS = [['system', '系统'], ['user', '用户'], ['assistant', 'AI 助手']]
+const ROLE_LABEL = { user: t`用户`, assistant: 'AI' }
+const ROLE_OPTIONS = [['system', t`系统`], ['user', t`用户`], ['assistant', t`AI 助手`]]
 const PLACEMENT = {
-  prefix: ['前缀', '写进对话开局时的固定前缀：缓存友好，改动后要对当前对话点「应用」才生效'],
-  turn: ['每轮', '每轮随玩家消息发送（含每轮变化的宏，如 {{lastUserMessage}}、骰子）：改动下一轮就生效。发过的会留在历史里'],
-  split: ['部分每轮', '含每轮变化的宏的段落随玩家消息发送，其余段落写进固定前缀'],
+  prefix: [t`前缀`, t`写进对话开局时的固定前缀：缓存友好，改动后要对当前对话点「应用」才生效`],
+  turn: [t`每轮`, t`每轮随玩家消息发送（含每轮变化的宏，如 {{lastUserMessage}}、骰子）：改动下一轮就生效。发过的会留在历史里`],
+  split: [t`部分每轮`, t`含每轮变化的宏的段落随玩家消息发送，其余段落写进固定前缀`],
 }
 
 /**
@@ -71,16 +72,16 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
     const chat = getChat()
     const item = (id, name, sub) => {
       const tags = []
-      if (state.defaultId === id) tags.push(el('span', { class: 'tag', text: '默认' }))
-      if (chat && (chat.presetId ?? '') === id) tags.push(el('span', { class: 'tag', text: '当前对话' }))
+      if (state.defaultId === id) tags.push(el('span', { class: 'tag', text: t`默认` }))
+      if (chat && (chat.presetId ?? '') === id) tags.push(el('span', { class: 'tag', text: t`当前对话` }))
       return el('li', { class: state.selected === id ? 'active' : '', onclick: () => guard(select)(id) }, [
         el('div', { class: 'item-title' }, [el('span', { class: 'item-main', text: name }), ...tags]),
         el('div', { class: 'item-sub', text: sub }),
       ])
     }
     $('preset-list').replaceChildren(
-      item('', '不用预设', '内置的叙述规则'),
-      ...state.list.map(p => item(p.id, p.name, `启用 ${p.enabled}/${p.prompts} 条${p.regexScripts ? `　正则 ${p.regexScripts}` : ''}`)),
+      item('', t`不用预设`, t`内置的叙述规则`),
+      ...state.list.map(p => item(p.id, p.name, t`启用 ${p.enabled}/${p.prompts} 条${p.regexScripts ? t`　正则 ${p.regexScripts}` : ''}`)),
     )
   }
 
@@ -95,19 +96,19 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
     const stale = inChat && id && state.stale.has(id)
 
     const actions = el('div', { class: 'preset-actions' }, [
-      el('button', { class: 'btn small', type: 'button', disabled: isDefault, text: isDefault ? '已是新对话默认' : '设为新对话默认', onclick: guard(setDefault) }),
+      el('button', { class: 'btn small', type: 'button', disabled: isDefault, text: isDefault ? t`已是新对话默认` : t`设为新对话默认`, onclick: guard(setDefault) }),
       chat ? el('button', {
         class: `btn small${stale ? ' primary' : ''}`, type: 'button', disabled: (inChat && !stale) || isGenerating(),
-        text: inChat && !stale ? '当前对话正在用' : '用于当前对话', onclick: guard(applyToChat),
+        text: inChat && !stale ? t`当前对话正在用` : t`用于当前对话`, onclick: guard(applyToChat),
       }) : null,
-      detail ? el('button', { class: 'btn small', type: 'button', text: '导出', title: '连同在这里做的修改存成文件，用来搬到另一台设备（手机版）', onclick: guard(exportPreset) }) : null,
-      detail ? el('button', { class: 'btn small danger', type: 'button', text: '删除', onclick: guard(remove) }) : null,
+      detail ? el('button', { class: 'btn small', type: 'button', text: t`导出`, title: t`连同在这里做的修改存成文件，用来搬到另一台设备（手机版）`, onclick: guard(exportPreset) }) : null,
+      detail ? el('button', { class: 'btn small danger', type: 'button', text: t`删除`, onclick: guard(remove) }) : null,
     ])
 
     if (!detail) {
       return [el('header', { class: 'preset-head' }, [
-        el('h3', { class: 'preset-title', text: '不用预设' }),
-        el('div', { class: 'preset-meta', text: '按内置规则叙述：只写正文、不替玩家行动、设定资料只作参考。你在设置里写的文风要求照常生效。' }),
+        el('h3', { class: 'preset-title', text: t`不用预设` }),
+        el('div', { class: 'preset-meta', text: t`按内置规则叙述：只写正文、不替玩家行动、设定资料只作参考。你在设置里写的文风要求照常生效。` }),
         actions,
       ])]
     }
@@ -115,24 +116,24 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
     const prefixChars = sumChars(detail, 'prefix')
     const turnChars = sumChars(detail, 'turn')
     const ignored = [
-      detail.params?.temperature != null ? `温度 ${detail.params.temperature}` : '',
-      detail.params?.maxTokens ? `最大输出 ${detail.params.maxTokens}` : '',
+      detail.params?.temperature != null ? t`温度 ${detail.params.temperature}` : '',
+      detail.params?.maxTokens ? t`最大输出 ${detail.params.maxTokens}` : '',
     ].filter(Boolean)
     const meta = [
-      `启用 ${detail.enabled}/${detail.prompts.filter(p => !p.marker).length} 条：前缀约 ${prefixChars.toLocaleString()} 字，每轮约 ${turnChars.toLocaleString()} 字`,
-      detail.regexScripts ? `${detail.regexScripts} 条正则随预设生效` : '',
-      detail.helperScripts ? `${detail.helperScripts} 个酒馆助手脚本不执行（悬浮球之类的开关面板，可以把条目点「快捷」放到输入框旁）` : '',
-      ignored.length ? `${ignored.join('、')} 不使用（用模型自己的默认值；供应商的最大输出在供应商设置里填）` : '',
+      t`启用 ${detail.enabled}/${detail.prompts.filter(p => !p.marker).length} 条：前缀约 ${prefixChars.toLocaleString()} 字，每轮约 ${turnChars.toLocaleString()} 字`,
+      detail.regexScripts ? t`${detail.regexScripts} 条正则随预设生效` : '',
+      detail.helperScripts ? t`${detail.helperScripts} 个酒馆助手脚本不执行（悬浮球之类的开关面板，可以把条目点「快捷」放到输入框旁）` : '',
+      ignored.length ? t`${ignored.join(t`、`)} 不使用（用模型自己的默认值；供应商的最大输出在供应商设置里填）` : '',
     ].filter(Boolean)
     return [
       el('header', { class: 'preset-head' }, [
         el('h3', { class: 'preset-title', text: detail.name }),
-        el('div', { class: 'preset-meta', text: meta.join('。') + '。' }),
+        el('div', { class: 'preset-meta', text: meta.join(t`。`) + t`。` }),
         actions,
       ]),
       stale ? el('div', { class: 'preset-apply' }, [
-        el('span', { text: '当前对话的固定前缀还是改动前的版本。应用后，下一轮会重新写入一次缓存。' }),
-        el('button', { class: 'btn small primary', type: 'button', disabled: isGenerating(), text: '应用到当前对话', onclick: guard(applyToChat) }),
+        el('span', { text: t`当前对话的固定前缀还是改动前的版本。应用后，下一轮会重新写入一次缓存。` }),
+        el('button', { class: 'btn small primary', type: 'button', disabled: isGenerating(), text: t`应用到当前对话`, onclick: guard(applyToChat) }),
       ]) : null,
     ]
   }
@@ -143,25 +144,25 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
     const head = el('div', { id: 'preset-headwrap' }, headParts())
     if (!detail) {
       main.replaceChildren(head, state.list.length ? null : el('div', { class: 'preset-empty' }, [
-        el('p', { text: '还没有导入预设。' }),
-        el('p', { class: 'small', text: '在 SillyTavern 的「AI 响应配置」里导出预设 JSON，或直接用 SillyTavern/data/default-user/OpenAI Settings 里的文件，点左上角「导入」或拖进窗口。' }),
+        el('p', { text: t`还没有导入预设。` }),
+        el('p', { class: 'small', text: t`在 SillyTavern 的「AI 响应配置」里导出预设 JSON，或直接用 SillyTavern/data/default-user/OpenAI Settings 里的文件，点左上角「导入」或拖进窗口。` }),
       ]))
       return
     }
-    const search = el('input', { type: 'search', placeholder: '搜索条目名称或内容', value: state.query })
+    const search = el('input', { type: 'search', placeholder: t`搜索条目名称或内容`, value: state.query })
     search.addEventListener('input', () => { state.query = search.value.trim().toLowerCase(); filterRows() })
-    const mode = el('div', { class: 'seg', role: 'group', 'aria-label': '聊天记录之后的条目' }, [
-      modeButton('prefix', '放进前缀'),
-      modeButton('latest', '同酒馆'),
-      modeButton('turn', '每轮都留'),
+    const mode = el('div', { class: 'seg', role: 'group', 'aria-label': t`聊天记录之后的条目` }, [
+      modeButton('prefix', t`放进前缀`),
+      modeButton('latest', t`同酒馆`),
+      modeButton('turn', t`每轮都留`),
     ])
 
     main.replaceChildren(
       head,
       el('div', { class: 'preset-tools' }, [
         search,
-        el('button', { type: 'button', class: 'btn small', text: '＋ 新增条目', onclick: guard(addPrompt) }),
-        el('span', { class: 'seg-label', text: '聊天记录之后的条目' }),
+        el('button', { type: 'button', class: 'btn small', text: t`＋ 新增条目`, onclick: guard(addPrompt) }),
+        el('span', { class: 'seg-label', text: t`聊天记录之后的条目` }),
         mode,
         el('p', { class: 'seg-note', text: POST_MODE_NOTES[detail.postMode] ?? POST_MODE_NOTES.prefix }),
       ]),
@@ -191,8 +192,8 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
   /** Pin an entry to the quick-switch panel beside the chat input. */
   function pinButton(p) {
     const pinned = () => (state.detail.quick ?? []).includes(p.id)
-    const button = el('button', { type: 'button', class: `pin${pinned() ? ' on' : ''}`, text: '快捷' })
-    const label = () => button.setAttribute('title', pinned() ? '已放进输入框旁的快捷开关，点击取消' : '放进输入框旁的快捷开关，聊天时一键开关')
+    const button = el('button', { type: 'button', class: `pin${pinned() ? ' on' : ''}`, text: t`快捷` })
+    const label = () => button.setAttribute('title', pinned() ? t`已放进输入框旁的快捷开关，点击取消` : t`放进输入框旁的快捷开关，聊天时一键开关`)
     label()
     button.addEventListener('click', guard(async () => {
       const quick = pinned() ? state.detail.quick.filter(id => id !== p.id) : [...(state.detail.quick ?? []), p.id]
@@ -206,9 +207,9 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
 
   function promptRow(p) {
     // Not "history": that class is the chat's 回看历史 panel, positioned over the top-right corner.
-    if (p.id === 'chatHistory') return el('li', { class: 'prow marker chatlog', 'data-id': p.id, text: '聊天记录' })
+    if (p.id === 'chatHistory') return el('li', { class: 'prow marker chatlog', 'data-id': p.id, text: t`聊天记录` })
     let row = null
-    const toggle = el('input', { type: 'checkbox', class: 'switch', checked: p.enabled, 'aria-label': `启用「${p.name}」` })
+    const toggle = el('input', { type: 'checkbox', class: 'switch', checked: p.enabled, 'aria-label': t`启用「${p.name}」` })
     toggle.addEventListener('change', guard(async () => {
       const enabled = toggle.checked
       row.classList.toggle('off', !enabled)
@@ -228,23 +229,23 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
         el('div', { class: 'prow-line' }, [
           toggle,
           el('span', { class: 'prow-name', text: MARKER_LABEL[p.id] ?? p.name }),
-          el('span', { class: 'badge role', text: '角色卡数据' }),
+          el('span', { class: 'badge role', text: t`角色卡数据` }),
         ]),
       ])
       return row
     }
     const [label, tip] = PLACEMENT[p.placement] ?? PLACEMENT.prefix
-    const name = el('button', { type: 'button', class: 'prow-name', text: p.name, title: '展开编辑', 'aria-expanded': String(state.open.has(p.id)) })
-    const pencil = el('button', { type: 'button', class: 'prow-edit', title: '编辑名称、角色、位置和内容', 'aria-label': `编辑「${p.name}」`, text: '✎' })
+    const name = el('button', { type: 'button', class: 'prow-name', text: p.name, title: t`展开编辑`, 'aria-expanded': String(state.open.has(p.id)) })
+    const pencil = el('button', { type: 'button', class: 'prow-edit', title: t`编辑名称、角色、位置和内容`, 'aria-label': t`编辑「${p.name}」`, text: '✎' })
     const more = el('div', { class: 'prow-more' }, el('div'))
     row = el('li', { class: `prow${p.enabled ? '' : ' off'}${state.open.has(p.id) ? ' open' : ''}`, 'data-id': p.id }, [
       el('div', { class: 'prow-line' }, [
         toggle,
         name,
         ROLE_LABEL[p.role] ? el('span', { class: 'badge role', text: ROLE_LABEL[p.role] }) : null,
-        p.absolute ? el('span', { class: 'badge role', title: '聊天中，按深度排序', text: `@${p.depth}` }) : null,
+        p.absolute ? el('span', { class: 'badge role', title: t`聊天中，按深度排序`, text: `@${p.depth}` }) : null,
         el('span', { class: `badge place ${p.placement}`, title: tip, text: label }),
-        el('span', { class: 'prow-size', text: `${p.content.length.toLocaleString()} 字` }),
+        el('span', { class: 'prow-size', text: t`${p.content.length.toLocaleString()} 字` }),
         pinButton(p),
         pencil,
       ]),
@@ -273,14 +274,14 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
   function fillEditor(more, p) {
     const holder = more.firstChild
     if (holder.firstChild) return
-    const title = el('input', { value: p.name, maxlength: '80', 'aria-label': '名称' })
-    const role = el('select', { 'aria-label': '角色' }, ROLE_OPTIONS.map(([value, text]) => el('option', { value, text, selected: p.role === value })))
-    const position = el('select', { 'aria-label': '位置' }, [
-      el('option', { value: 'relative', text: '相对', selected: !p.absolute }),
-      el('option', { value: 'absolute', text: '聊天中 @深度', selected: p.absolute }),
+    const title = el('input', { value: p.name, maxlength: '80', 'aria-label': t`名称` })
+    const role = el('select', { 'aria-label': t`角色` }, ROLE_OPTIONS.map(([value, text]) => el('option', { value, text, selected: p.role === value })))
+    const position = el('select', { 'aria-label': t`位置` }, [
+      el('option', { value: 'relative', text: t`相对`, selected: !p.absolute }),
+      el('option', { value: 'absolute', text: t`聊天中 @深度`, selected: p.absolute }),
     ])
-    const depth = el('input', { type: 'number', min: '0', max: '999', step: '1', value: String(p.depth), 'aria-label': '深度' })
-    const depthField = editorField('深度', depth)
+    const depth = el('input', { type: 'number', min: '0', max: '999', step: '1', value: String(p.depth), 'aria-label': t`深度` })
+    const depthField = editorField(t`深度`, depth)
     depthField.hidden = !p.absolute
     const area = el('textarea', { spellcheck: 'false' })
     area.value = p.content
@@ -301,26 +302,26 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
       p.content = area.value
       if (p.placement !== 'turn') markStale()
       const size = more.parentElement.querySelector('.prow-size')
-      if (size) size.textContent = `${p.content.length.toLocaleString()} 字`
+      if (size) size.textContent = t`${p.content.length.toLocaleString()} 字`
       renderHead()
-      toast('已保存这条内容')
+      toast(t`已保存这条内容`)
     }))
 
     const index = state.detail.prompts.findIndex(x => x.id === p.id)
     holder.append(
       el('div', { class: 'prompt-editor' }, [
         el('div', { class: 'prompt-fields' }, [
-          editorField('名称', title),
-          editorField('角色', role),
-          editorField('位置', position),
+          editorField(t`名称`, title),
+          editorField(t`角色`, role),
+          editorField(t`位置`, position),
           depthField,
         ]),
-        el('p', { class: 'prompt-note', text: '发给模型的是合并后的文本：角色只是标记（对照 SillyTavern 用），不会拆成单独的用户 / AI 消息。「聊天中」的条目排进聊天记录之后的规则，深度大的在前；聊天记录之前的条目，位置和深度不起作用。' }),
+        el('p', { class: 'prompt-note', text: t`发给模型的是合并后的文本：角色只是标记（对照 SillyTavern 用），不会拆成单独的用户 / AI 消息。「聊天中」的条目排进聊天记录之后的规则，深度大的在前；聊天记录之前的条目，位置和深度不起作用。` }),
         area,
         el('div', { class: 'prompt-actions' }, [
-          el('button', { type: 'button', class: 'btn small ghost', text: '↑ 上移', disabled: index <= 0, onclick: guard(() => move(p.id, -1)) }),
-          el('button', { type: 'button', class: 'btn small ghost', text: '↓ 下移', disabled: index >= state.detail.prompts.length - 1, onclick: guard(() => move(p.id, 1)) }),
-          el('button', { type: 'button', class: 'btn small danger', text: '删除条目', onclick: guard(() => removePrompt(p)) }),
+          el('button', { type: 'button', class: 'btn small ghost', text: t`↑ 上移`, disabled: index <= 0, onclick: guard(() => move(p.id, -1)) }),
+          el('button', { type: 'button', class: 'btn small ghost', text: t`↓ 下移`, disabled: index >= state.detail.prompts.length - 1, onclick: guard(() => move(p.id, 1)) }),
+          el('button', { type: 'button', class: 'btn small danger', text: t`删除条目`, onclick: guard(() => removePrompt(p)) }),
         ]),
       ]),
     )
@@ -342,7 +343,7 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
 
   async function addPrompt() {
     const before = new Set(state.detail.prompts.map(p => p.id))
-    await restructure({ add: { name: '新条目', role: 'system', content: '' } })
+    await restructure({ add: { name: t`新条目`, role: 'system', content: '' } })
     const added = state.detail.prompts.find(p => !before.has(p.id))
     if (!added) return
     state.open.add(added.id)
@@ -363,10 +364,10 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
   }
 
   async function removePrompt(p) {
-    if (!confirm(`删除条目「${p.name}」？`)) return
+    if (!confirm(t`删除条目「${p.name}」？`)) return
     state.open.delete(p.id)
     await restructure({ remove: [p.id] })
-    toast(`已删除「${p.name}」`)
+    toast(t`已删除「${p.name}」`)
   }
 
   function filterRows() {
@@ -425,7 +426,7 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
     state.defaultId = state.selected || ''
     renderNav()
     renderMain()
-    toast(state.selected ? `新对话默认使用「${state.detail.name}」` : '新对话默认不用预设')
+    toast(state.selected ? t`新对话默认使用「${state.detail.name}」` : t`新对话默认不用预设`)
   }
 
   async function applyToChat() {
@@ -436,16 +437,16 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
     onChatChanged(view)
     renderNav()
     renderMain()
-    toast(`这个对话改用${view.presetName ? `「${view.presetName}」` : '内置规则'}。下一轮会重新写入一次缓存。`)
+    toast(t`这个对话改用${view.presetName ? t`「${view.presetName}」` : t`内置规则`}。下一轮会重新写入一次缓存。`)
   }
 
   async function exportPreset() {
     const archive = await api(`/api/presets/${state.selected}/export`)
-    saveFile(`预设-${archive.preset.name}.json`, JSON.stringify(archive), '预设已导出：在另一台设备的「预设」里点「导入」选这个文件')
+    saveFile(t`预设-${archive.preset.name}.json`, JSON.stringify(archive), t`预设已导出：在另一台设备的「预设」里点「导入」选这个文件`)
   }
 
   async function remove() {
-    if (!confirm(`删除预设「${state.detail.name}」？用它的对话会改回内置规则（下次应用时）。`)) return
+    if (!confirm(t`删除预设「${state.detail.name}」？用它的对话会改回内置规则（下次应用时）。`)) return
     await api(`/api/presets/${state.selected}`, { method: 'DELETE' })
     onPresetEdited?.(state.selected)
     const [list, settings] = await Promise.all([api('/api/presets'), api('/api/settings')])
@@ -470,7 +471,7 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
     if (!last) return
     await refreshList()
     await select(last.id)
-    toast(`已导入预设「${last.name}」`)
+    toast(t`已导入预设「${last.name}」`)
   }))
 
   return { open: guard(open) }

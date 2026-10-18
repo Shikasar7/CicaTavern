@@ -9,6 +9,7 @@
 import { copyFile, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { httpError, newId } from './store.mjs'
+import { msg } from './i18n.mjs'
 
 const FILE = /^[\w-]{1,64}\.(png|jpg|jpeg|webp)$/
 const MAX_PROMPT = 8000
@@ -117,9 +118,9 @@ export function createPromptLibrary(store) {
     /** Saved by hand from the dialog (an edited or unused prompt). */
     async saveManual({ cardId, prompt, title = '' }) {
       const text = String(prompt ?? '').trim().slice(0, MAX_PROMPT)
-      if (!text) throw httpError(400, '提示词是空的')
+      if (!text) throw httpError(400, msg`提示词是空的`)
       const card = await store.getCard(String(cardId ?? '')).catch(() => null)
-      if (!card) throw httpError(404, '角色卡不存在')
+      if (!card) throw httpError(404, msg`角色卡不存在`)
       return change(library => {
         const existing = library.entries.find(e => e.cardId === card.id && e.prompt === text)
         if (existing) {
@@ -136,10 +137,10 @@ export function createPromptLibrary(store) {
     async update(id, { prompt, title, starred }) {
       return change(library => {
         const entry = library.entries.find(e => e.id === id)
-        if (!entry) throw httpError(404, '提示词不存在')
+        if (!entry) throw httpError(404, msg`提示词不存在`)
         if (typeof prompt === 'string') {
           const text = prompt.trim().slice(0, MAX_PROMPT)
-          if (!text) throw httpError(400, '提示词是空的')
+          if (!text) throw httpError(400, msg`提示词是空的`)
           entry.prompt = text
         }
         if (typeof title === 'string') entry.title = title.trim().slice(0, MAX_TITLE)
@@ -164,7 +165,7 @@ export function createPromptLibrary(store) {
       const entry = entries.find(e => e.id === id)
       if (entry?.own && FILE.test(entry.own)) return readFile(path.join(ownDir, entry.own))
       if (entry?.file && FILE.test(entry.file) && entry.chatId) return readFile(path.join(mediaDir(entry.chatId), entry.file))
-      throw httpError(404, '没有图')
+      throw httpError(404, msg`没有图`)
     },
 
     /** Before a chat's pictures are deleted: keep the ones the library shows. */
@@ -184,7 +185,7 @@ export function createPromptLibrary(store) {
               // the picture was already gone
             }
           }
-          entry.chatTitle = entry.chatTitle ? `${entry.chatTitle}（已删除）` : '（已删除的对话）'
+          entry.chatTitle = entry.chatTitle ? msg`${entry.chatTitle}（已删除）` : msg`（已删除的对话）`
           entry.chatId = null
           entry.nodeId = null
           entry.file = null

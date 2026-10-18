@@ -4,6 +4,7 @@
 // page, a click outside the window or Esc goes back to the menu; on the menu
 // Esc closes, asking first when something typed is not saved. Everything stays
 // in one form, so one 保存 saves every part.
+import { t } from '/i18n.js'
 
 // Line icons in the app's stroke style (style.css draws them).
 export const MENU_ICONS = {
@@ -27,13 +28,13 @@ const countsAsEdit = target => Boolean(target?.name) && target.type !== 'file' &
  * first letter), its name and a note.
  */
 export function whoLine(el, { cardId, name, note }) {
-  const letter = el('span', { class: 'menu-who-mark letter', text: (name || '卡').slice(0, 1) })
+  const letter = el('span', { class: 'menu-who-mark letter', text: (name || t`卡`).slice(0, 1) })
   let mark = letter
   if (cardId) {
     mark = el('img', { class: 'menu-who-mark', src: `/api/cards/${cardId}/avatar`, alt: '' })
     mark.addEventListener('error', () => mark.replaceWith(letter), { once: true })
   }
-  return el('div', { class: 'menu-who' }, [mark, el('span', { class: 'menu-who-name', text: name || '这张卡' }), el('span', { class: 'menu-who-note', text: note })])
+  return el('div', { class: 'menu-who' }, [mark, el('span', { class: 'menu-who-name', text: name || t`这张卡` }), el('span', { class: 'menu-who-note', text: note })])
 }
 
 /**
@@ -127,18 +128,18 @@ export function createMenu({ dialog, form, el, title: menuTitle, edits = countsA
         pane.hidden = true
         return pane
       })
-    const back = el('button', { type: 'button', class: 'btn ghost icon menu-back', 'aria-label': '回到菜单', title: '回到菜单（也可以点窗口外面，或按 Esc）', html: ICON_BACK, onclick: () => show(null, 'back') })
+    const back = el('button', { type: 'button', class: 'btn ghost icon menu-back', 'aria-label': t`回到菜单`, title: t`回到菜单（也可以点窗口外面，或按 Esc）`, html: ICON_BACK, onclick: () => show(null, 'back') })
     const crumb = el('span', { class: 'menu-crumb', hidden: true })
     const title = el('h2', { text: menuTitle })
     const body = el('div', { class: 'menu-body' }, [home, ...panes])
-    const dirtyNote = el('span', { class: 'menu-dirty', hidden: true, text: '有改动还没保存' })
-    const saveButton = save ? el('button', { type: 'button', class: 'btn primary', text: save.text ?? '保存', onclick: save.onClick }) : null
+    const dirtyNote = el('span', { class: 'menu-dirty', hidden: true, text: t`有改动还没保存` })
+    const saveButton = save ? el('button', { type: 'button', class: 'btn primary', text: save.text ?? t`保存`, onclick: save.onClick }) : null
     form.replaceChildren(
       el('div', { class: 'menu-head' }, [back, el('div', { class: 'menu-titles' }, [crumb, title])]),
       body,
       el('div', { class: 'menu-foot' }, [
         el('div', { class: 'row' }, footStart),
-        el('div', { class: 'row' }, [dirtyNote, ...footEnd, el('button', { type: 'button', class: 'btn', text: '关闭', onclick: () => close() }), saveButton]),
+        el('div', { class: 'row' }, [dirtyNote, ...footEnd, el('button', { type: 'button', class: 'btn', text: t`关闭`, onclick: () => close() }), saveButton]),
       ]),
     )
     view = { home, panels: panelNodes, panes, back, crumb, title, body, entries, dirtyNote, saveButton }
@@ -183,7 +184,7 @@ export function createMenu({ dialog, form, el, title: menuTitle, edits = countsA
 
   /** Close; with unsaved changes, ask first. */
   function close() {
-    if (dirty && !confirm('有改动还没保存，关掉就不要了？')) return false
+    if (dirty && !confirm(t`有改动还没保存，关掉就不要了？`)) return false
     setDirty(false)
     dialog.close()
     return true

@@ -7,6 +7,7 @@
 // kind of audio came back, and a WAV header for raw PCM.
 import { fetchBytes, postJson } from '../providers.mjs'
 import { httpError } from '../store.mjs'
+import { msg } from '../i18n.mjs'
 
 export const FISH_URL = 'https://api.fish.audio'
 // 国内站 / 国际站: a key works on the site it was made on only.
@@ -18,16 +19,17 @@ export const FISH_MODELS = ['drama-3', 's2.1-pro', 's2.1-pro-free', 's2-pro']
 export const FISH_FREE_MODEL = 's2.1-pro-free'
 export const MINIMAX_MODELS = ['speech-2.8-hd', 'speech-2.8-turbo', 'speech-2.6-hd']
 // MiniMax's system voices, offered while no voice of the account is listed.
+// Names are getters: in the language of the page that asks (server/i18n.mjs).
 export const MINIMAX_VOICES = Object.freeze([
-  ['female-shaonv', '少女'],
-  ['female-yujie', '御姐'],
-  ['female-chengshu', '成熟女性'],
-  ['female-tianmei', '甜美女性'],
-  ['male-qn-qingse', '青涩青年'],
-  ['male-qn-jingying', '精英青年'],
-  ['male-qn-badao', '霸道青年'],
-  ['male-qn-daxuesheng', '青年大学生'],
-].map(([id, name]) => Object.freeze({ id, name })))
+  ['female-shaonv', () => msg`少女`],
+  ['female-yujie', () => msg`御姐`],
+  ['female-chengshu', () => msg`成熟女性`],
+  ['female-tianmei', () => msg`甜美女性`],
+  ['male-qn-qingse', () => msg`青涩青年`],
+  ['male-qn-jingying', () => msg`精英青年`],
+  ['male-qn-badao', () => msg`霸道青年`],
+  ['male-qn-daxuesheng', () => msg`青年大学生`],
+].map(([id, name]) => Object.freeze({ id, get name() { return name() } })))
 
 export const CLOUD = Object.freeze({
   fish: { label: 'Fish Audio', emotion: 'tags', chunkMax: 250 },
@@ -42,10 +44,10 @@ const minimaxBase = (region, urls) => urls.minimax?.[region] ?? MINIMAX_URLS[reg
  *   services' addresses (tests point them at a fake server).
  */
 export function requestSpec({ service, key, model, voice, region = 'cn', urls = {} }, text) {
-  if (!key) throw httpError(400, `${CLOUD[service]?.label ?? service} 还没填密钥：在「配图与朗读 → 朗读」里填`)
-  if (!voice || !model) throw httpError(400, '还没选模型或音色')
+  if (!key) throw httpError(400, msg`${CLOUD[service]?.label ?? service} 还没填密钥：在「配图与朗读 → 朗读」里填`)
+  if (!voice || !model) throw httpError(400, msg`还没选模型或音色`)
   if (service === 'fish') {
-    if (!FISH_MODELS.includes(model)) throw httpError(400, `Fish 不认模型 ${model}：只能选 ${FISH_MODELS.join(' / ')}`)
+    if (!FISH_MODELS.includes(model)) throw httpError(400, msg`Fish 不认模型 ${model}：只能选 ${FISH_MODELS.join(' / ')}`)
     return {
       url: `${urls.fish ?? FISH_URL}/v1/tts`,
       headers: { authorization: `Bearer ${key}`, model },
@@ -68,29 +70,29 @@ export function requestSpec({ service, key, model, voice, region = 'cn', urls = 
       },
     }
   }
-  throw httpError(400, `不认识的语音服务：${service}`)
+  throw httpError(400, msg`不认识的语音服务：${service}`)
 }
 
-const MINIMAX_CODES = {
-  1002: '限流，稍后再试',
-  1004: '密钥不对，或者和站点（国内站 / 国际站）不一致',
-  1008: '余额不足',
-  1039: '限流，稍后再试',
-  2013: '参数不对：检查模型和音色 ID',
-}
+const minimaxCodes = () => ({
+  1002: msg`限流，稍后再试`,
+  1004: msg`密钥不对，或者和站点（国内站 / 国际站）不一致`,
+  1008: msg`余额不足`,
+  1039: msg`限流，稍后再试`,
+  2013: msg`参数不对：检查模型和音色 ID`,
+})
 
 function parseReply(buffer, label) {
   try {
     return JSON.parse(buffer.toString('utf8'))
   } catch {
-    throw new Error(`${label} 返回的不是 JSON`)
+    throw new Error(msg`${label} 返回的不是 JSON`)
   }
 }
 
 /** MiniMax answers 200 with a status of its own, which may be an error. */
 function checkMinimax(json) {
   const status = json?.base_resp ?? {}
-  if (status.status_code) throw new Error(`MiniMax 错误 ${status.status_code}：${MINIMAX_CODES[status.status_code] ?? String(status.status_msg ?? '').slice(0, 120)}`)
+  if (status.status_code) throw new Error(msg`MiniMax 错误 ${status.status_code}：${minimaxCodes()[status.status_code] ?? String(status.status_msg ?? '').slice(0, 120)}`)
 }
 
 /** The audio in a service's answer. MiniMax sends JSON with the audio as hex, and a status that may be an error. */
@@ -99,7 +101,7 @@ export function unpack(service, payload) {
   const json = parseReply(payload, 'MiniMax')
   checkMinimax(json)
   const hex = json?.data?.audio
-  if (typeof hex !== 'string' || !hex || hex.length % 2 || !/^[0-9a-f]+$/i.test(hex)) throw new Error('MiniMax 没有返回音频：检查音色 ID 和额度')
+  if (typeof hex !== 'string' || !hex || hex.length % 2 || !/^[0-9a-f]+$/i.test(hex)) throw new Error(msg`MiniMax 没有返回音频：检查音色 ID 和额度`)
   return Buffer.from(hex, 'hex')
 }
 
@@ -116,10 +118,10 @@ const routeOf = (service, region, proxy) => (proxy ? 'proxy' : service === 'mini
 
 /** Where to look when a service cannot be reached. proxyMenu: this app has 设置 → 网络代理 (the phone does not). */
 function reachHint(route, proxyMenu = true) {
-  if (route === 'proxy') return '检查网络，以及「设置 → 网络代理」里的代理是否在运行。'
-  if (route === 'home') return '检查网络。'
-  if (route === 'direct' && proxyMenu) return '现在没走代理：要开代理才能上这个网站的话，去「设置 → 网络代理」选「跟随系统代理」或填代理地址。'
-  return '检查网络和代理设置。'
+  if (route === 'proxy') return msg`检查网络，以及「设置 → 网络代理」里的代理是否在运行。`
+  if (route === 'home') return msg`检查网络。`
+  if (route === 'direct' && proxyMenu) return msg`现在没走代理：要开代理才能上这个网站的话，去「设置 → 网络代理」选「跟随系统代理」或填代理地址。`
+  return msg`检查网络和代理设置。`
 }
 
 /**
@@ -151,8 +153,8 @@ async function bounded(ms, signal, run) {
  */
 export async function listAccountVoices({ service, key, region = 'cn', urls = {} }, { proxy = null, signal, timeoutMs = TIMEOUTS.list, proxyMenu = true } = {}) {
   const label = CLOUD[service]?.label
-  if (!label) throw httpError(400, `不认识的语音服务：${service}`)
-  if (!key) throw httpError(400, `${label} 还没填密钥：在「配图与朗读 → 朗读」里填`)
+  if (!label) throw httpError(400, msg`不认识的语音服务：${service}`)
+  if (!key) throw httpError(400, msg`${label} 还没填密钥：在「配图与朗读 → 朗读」里填`)
   const found = []
   const list = async bound => {
     const options = { headers: { authorization: `Bearer ${key}` }, proxy, signal: bound }
@@ -163,7 +165,7 @@ export async function listAccountVoices({ service, key, region = 'cn', urls = {}
         const items = Array.isArray(json?.items) ? json.items : []
         for (const model of items) {
           if (!model?._id) continue
-          const unready = (model.state ?? 'trained') === 'trained' ? '' : '（未训练完）'
+          const unready = (model.state ?? 'trained') === 'trained' ? '' : msg`（未训练完）`
           found.push({ id: String(model._id), name: `${String(model.title ?? '').trim().slice(0, 30)}${unready}` })
         }
         if (items.length < FISH_PAGE || json.has_more === false) break
@@ -173,9 +175,9 @@ export async function listAccountVoices({ service, key, region = 'cn', urls = {}
     const { buffer } = await postJson(`${minimaxBase(region, urls)}/v1/get_voice`, { voice_type: 'all' }, options)
     const json = parseReply(buffer, label)
     checkMinimax(json)
-    for (const [group, kind] of [['voice_cloning', '复刻'], ['voice_generation', '设计']]) {
+    for (const [group, kind] of [['voice_cloning', msg`复刻`], ['voice_generation', msg`设计`]]) {
       for (const voice of Array.isArray(json[group]) ? json[group] : []) {
-        if (voice?.voice_id) found.push({ id: String(voice.voice_id), name: voice.voice_name ? `${String(voice.voice_name).trim().slice(0, 30)}（${kind}）` : kind })
+        if (voice?.voice_id) found.push({ id: String(voice.voice_id), name: voice.voice_name ? msg`${String(voice.voice_name).trim().slice(0, 30)}（${kind}）` : kind })
       }
     }
   }
@@ -188,7 +190,7 @@ export async function listAccountVoices({ service, key, region = 'cn', urls = {}
   return found
 }
 
-const STATUS_TEXT = { 400: '请求参数或音色不匹配', 401: '密钥无效或已过期', 402: '额度不足', 403: '没有权限', 404: '模型或音色不存在', 429: '限流或额度不足' }
+const statusText = () => ({ 400: msg`请求参数或音色不匹配`, 401: msg`密钥无效或已过期`, 402: msg`额度不足`, 403: msg`没有权限`, 404: msg`模型或音色不存在`, 429: msg`限流或额度不足` })
 // Node's codes and messages for a connection that failed; a reset during the TLS handshake says only the latter.
 const UNREACHABLE = /ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNRESET|EHOSTUNREACH|ENETUNREACH|socket hang up|secure TLS connection|请求超时/i
 
@@ -199,11 +201,11 @@ const UNREACHABLE = /ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNRESET|EHOST
 export function cloudError(label, error, key, { route = '', proxyMenu = true } = {}) {
   const status = error?.providerStatus
   const raw = String(error?.message ?? error)
-  const text = (key ? raw.split(key).join('[密钥已隐藏]') : raw).replace(/^\d{3} /, '').slice(0, 160)
-  if (error?.timedOut) return `连不上 ${label}：等了 ${Math.ceil(error.timedOut / 1000)} 秒没有回应。${reachHint(route, proxyMenu)}`
-  if (status) return `${label} HTTP ${status}：${STATUS_TEXT[status] ?? '服务暂时异常'}${text ? `（${text}）` : ''}`
-  if (UNREACHABLE.test(`${error?.code ?? ''} ${raw}`)) return `连不上 ${label}：${reachHint(route, proxyMenu)}`
-  return `${label}：${text}`
+  const text = (key ? raw.split(key).join(msg`[密钥已隐藏]`) : raw).replace(/^\d{3} /, '').slice(0, 160)
+  if (error?.timedOut) return msg`连不上 ${label}：等了 ${Math.ceil(error.timedOut / 1000)} 秒没有回应。${reachHint(route, proxyMenu)}`
+  if (status) return msg`${label} HTTP ${status}：${statusText()[status] ?? msg`服务暂时异常`}${text ? msg`（${text}）` : ''}`
+  if (UNREACHABLE.test(`${error?.code ?? ''} ${raw}`)) return msg`连不上 ${label}：${reachHint(route, proxyMenu)}`
+  return msg`${label}：${text}`
 }
 
 /** cloudError as the error to throw: 504 when the service never answered, else 502. */
@@ -255,7 +257,7 @@ const PCM_TYPE = /^audio\/(pcm|l16|x-pcm|raw)\b/i
  * @param fallback - the type when nothing says (a voice service that answers WAV by protocol).
  */
 export function audioOf(buffer, { contentType = '', pcmRate = 0, fallback = '' } = {}) {
-  if (!buffer?.length) throw new Error('返回的音频是空的')
+  if (!buffer?.length) throw new Error(msg`返回的音频是空的`)
   const sniffed = audioType(buffer)
   const declared = String(contentType)
   if (!sniffed && (PCM_TYPE.test(declared) || pcmRate)) {
@@ -267,7 +269,7 @@ export function audioOf(buffer, { contentType = '', pcmRate = 0, fallback = '' }
   if (!mime) {
     // A JSON error with a 200 status is the usual reason.
     const text = buffer.subarray(0, 200).toString('utf8')
-    throw new Error(/^\s*[{[]/.test(text) ? `返回的不是音频：${text.replace(/\s+/g, ' ').slice(0, 160)}` : '返回的不是认得的音频格式')
+    throw new Error(/^\s*[{[]/.test(text) ? msg`返回的不是音频：${text.replace(/\s+/g, ' ').slice(0, 160)}` : msg`返回的不是认得的音频格式`)
   }
   return { buffer, mime }
 }
@@ -314,7 +316,7 @@ export function createCloudSource(service, { urls = {}, proxyMenu = true, timeou
       } catch (error) {
         if (signal?.aborted) throw error
         if (service === 'fish' && error?.providerStatus === 402 && model !== FISH_FREE_MODEL) {
-          throw httpError(502, `Fish Audio 余额不足（HTTP 402）：${model} 按用量计费。去 fish.audio 充值，或在「配图与朗读 → 朗读来源 → Fish Audio」把模型换成 ${FISH_FREE_MODEL}（免费）。`)
+          throw httpError(502, msg`Fish Audio 余额不足（HTTP 402）：${model} 按用量计费。去 fish.audio 充值，或在「配图与朗读 → 朗读来源 → Fish Audio」把模型换成 ${FISH_FREE_MODEL}（免费）。`)
         }
         throw cloudFailure(label, error, key, { route: routeOf(service, region, through), proxyMenu })
       }

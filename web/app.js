@@ -10,6 +10,8 @@ import { createMenu, MENU_ICONS, whoLine } from '/menu.js'
 import { initForge } from '/forge.js'
 import { initUpdate } from '/update.js'
 import { connectionList, showPrivacyNotice } from '/privacy.js'
+import { lang, locale, t, zh } from '/i18n.js'
+import { pickLanguage } from '/shared/i18n.js'
 
 const $ = id => document.getElementById(id)
 const EMPTY = $('empty')
@@ -47,14 +49,14 @@ const labelOf = id => ui.models.find(m => id && (m.id === id || String(id).start
 const MANAGE_PROVIDERS = '__providers'
 
 function modelOption(m, selected) {
-  return el('option', { value: m.id, selected: selected === m.id, title: m.note || undefined, text: m.extraCredits ? `${m.label}（需额外用量额度）` : m.label })
+  return el('option', { value: m.id, selected: selected === m.id, title: m.note || undefined, text: m.extraCredits ? t`${m.label}（需额外用量额度）` : m.label })
 }
 
 /** Options grouped by source (one group per provider). */
 function modelOptions(selected) {
   const groups = new Map()
   for (const m of ui.models) {
-    const group = m.group ?? '其他'
+    const group = m.group ?? t`其他`
     if (!groups.has(group)) groups.set(group, [])
     groups.get(group).push(modelOption(m, selected))
   }
@@ -79,11 +81,11 @@ function renderModelSelect() {
   if (select.hidden) return
   const known = ui.models.some(m => m.id === ui.defaultModel)
   select.replaceChildren(...[
-    el('option', { value: '', selected: !chat.model, text: known ? `默认（${labelOf(ui.defaultModel)}）` : '默认（未选，去设置里选一个）' }),
+    el('option', { value: '', selected: !chat.model, text: known ? t`默认（${labelOf(ui.defaultModel)}）` : t`默认（未选，去设置里选一个）` }),
     ...modelOptions(chat.model),
     // A chat model that is gone (provider deleted, subscription off) still shows as selected.
-    chat.model && !ui.models.some(m => m.id === chat.model) ? el('option', { value: chat.model, selected: true, text: `${chat.model}（不可用）` }) : null,
-    el('option', { value: MANAGE_PROVIDERS, text: '管理模型供应商…' }),
+    chat.model && !ui.models.some(m => m.id === chat.model) ? el('option', { value: chat.model, selected: true, text: t`${chat.model}（不可用）` }) : null,
+    el('option', { value: MANAGE_PROVIDERS, text: t`管理模型供应商…` }),
   ].filter(Boolean))
   select.disabled = ui.generating
 }
@@ -111,7 +113,7 @@ const changeChatModel = guard(async () => {
   const view = await api(`/api/chats/${ui.chat.id}`, { method: 'PUT', body: { model } })
   ui.chat = { ...ui.chat, model: view.model }
   renderModelSelect()
-  toast(`这个对话改用 ${labelOf(view.model || ui.defaultModel)}。缓存按模型区分，下一轮会重新写入一次缓存。`)
+  toast(t`这个对话改用 ${labelOf(view.model || ui.defaultModel)}。缓存按模型区分，下一轮会重新写入一次缓存。`)
 })
 
 // ─── Usage dashboard ────────────────────────────────────────────────────
@@ -135,7 +137,7 @@ async function api(path, { method = 'GET', body } = {}) {
     body: body === undefined ? undefined : JSON.stringify(body),
   })
   const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw Object.assign(new Error(data.error || `请求失败（${res.status}）`), { status: res.status })
+  if (!res.ok) throw Object.assign(new Error(data.error || t`请求失败（${res.status}）`), { status: res.status })
   return data
 }
 
@@ -148,7 +150,7 @@ async function stream(path, body, onEvent) {
   })
   if (!res.ok || !res.body) {
     const data = await res.json().catch(() => ({}))
-    throw new Error(data.error || `请求失败（${res.status}）`)
+    throw new Error(data.error || t`请求失败（${res.status}）`)
   }
   const reader = res.body.pipeThrough(new TextDecoderStream()).getReader()
   let buffer = ''
@@ -224,8 +226,8 @@ function renderStory(text) {
     .replace(VOICE_TAG, '')
     .replace(/<\/?small>/gi, '')
     .replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, '')
-    .replace(FOLD_BLOCK, (_, tag, body) => fold('思考过程', body))
-    .replace(FOLD_OPEN, (_, tag, body) => fold('思考中…', body))
+    .replace(FOLD_BLOCK, (_, tag, body) => fold(t`思考过程`, body))
+    .replace(FOLD_OPEN, (_, tag, body) => fold(t`思考中…`, body))
   let html = ''
   let last = 0
   for (const match of source.matchAll(STORY_TAG)) {
@@ -291,20 +293,20 @@ function avatarFor(card) {
   return el('span', { class: 'avatar', text: (card?.name ?? '?').slice(0, 1) })
 }
 
-const fmt = n => (n ?? 0).toLocaleString('zh-CN')
+const fmt = n => (n ?? 0).toLocaleString(locale)
 
 /** "刚刚", "12 分钟前", "昨天", "3 天前", then the date. */
 function ago(iso) {
   const ms = Date.now() - new Date(iso).getTime()
   const min = Math.floor(ms / 60000)
-  if (min < 1) return '刚刚'
-  if (min < 60) return `${min} 分钟前`
+  if (min < 1) return t`刚刚`
+  if (min < 60) return t`${min} 分钟前`
   const hours = Math.floor(min / 60)
-  if (hours < 24) return `${hours} 小时前`
+  if (hours < 24) return t`${hours} 小时前`
   const days = Math.floor(hours / 24)
-  if (days === 1) return '昨天'
-  if (days < 7) return `${days} 天前`
-  return new Date(iso).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
+  if (days === 1) return t`昨天`
+  if (days < 7) return t`${days} 天前`
+  return new Date(iso).toLocaleDateString(locale, { month: 'numeric', day: 'numeric' })
 }
 
 // ─── Left pane ──────────────────────────────────────────────────────────
@@ -334,20 +336,20 @@ function cardItem(card, nested = false) {
     avatarFor(card),
     el('div', { class: 'item-main' }, [
       el('div', { class: 'item-title', text: card.name }),
-      el('div', { class: 'item-sub', text: `${card.greetings} 个开场 · ${card.bookEntries} 条内嵌世界书${card.worldbookIds.length ? ` · 挂载 ${card.worldbookIds.length} 本` : ''}` }),
+      el('div', { class: 'item-sub', text: t`${card.greetings} 个开场 · ${card.bookEntries} 条内嵌世界书${card.worldbookIds.length ? t` · 挂载 ${card.worldbookIds.length} 本` : ''}` }),
     ]),
-    el('button', { type: 'button', class: 'item-del item-edit item-more', title: '分组、归档、删除', 'aria-label': `「${card.name}」：分组、归档、删除`, text: '⋯', onclick: event => { event.stopPropagation(); openCardMenu(card, event.currentTarget) } }),
+    el('button', { type: 'button', class: 'item-del item-edit item-more', title: t`分组、归档、删除`, 'aria-label': t`「${card.name}」：分组、归档、删除`, text: '⋯', onclick: event => { event.stopPropagation(); openCardMenu(card, event.currentTarget) } }),
   ])
 }
 
 function groupHead(name, cards, folded, { archive = false } = {}) {
   const holdsCurrent = folded && cards.some(card => card.id === ui.cardId)
-  return el('li', { class: `group-head${archive ? ' archive' : ''}`, role: 'button', tabindex: '0', 'aria-expanded': String(!folded), title: folded ? '展开' : '收起', onclick: () => toggleGroup(name, archive), onkeydown: event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleGroup(name, archive) } } }, [
+  return el('li', { class: `group-head${archive ? ' archive' : ''}`, role: 'button', tabindex: '0', 'aria-expanded': String(!folded), title: folded ? t`展开` : t`收起`, onclick: () => toggleGroup(name, archive), onkeydown: event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleGroup(name, archive) } } }, [
     el('span', { class: 'group-chevron', 'aria-hidden': 'true', text: '▸' }),
     el('span', { class: 'group-name', text: name }),
-    holdsCurrent ? el('span', { class: 'group-current', title: '正在用的角色卡在这一组里' }) : null,
+    holdsCurrent ? el('span', { class: 'group-current', title: t`正在用的角色卡在这一组里` }) : null,
     el('span', { class: 'group-count', text: String(cards.length) }),
-    archive ? null : el('button', { type: 'button', class: 'item-del item-edit item-more', title: '重命名、解散或整组归档', 'aria-label': `分组「${name}」：重命名、解散或整组归档`, text: '⋯', onclick: event => { event.stopPropagation(); openGroupMenu(name, cards, event.currentTarget) } }),
+    archive ? null : el('button', { type: 'button', class: 'item-del item-edit item-more', title: t`重命名、解散或整组归档`, 'aria-label': t`分组「${name}」：重命名、解散或整组归档`, text: '⋯', onclick: event => { event.stopPropagation(); openGroupMenu(name, cards, event.currentTarget) } }),
   ])
 }
 
@@ -376,11 +378,11 @@ function renderCards() {
     if (!folded) items.push(...cards.map(card => cardItem(card, true)))
   }
   if (archived.length) {
-    items.push(groupHead('已归档', archived, !ui.archiveOpen, { archive: true }))
+    items.push(groupHead(t`已归档`, archived, !ui.archiveOpen, { archive: true }))
     if (ui.archiveOpen) items.push(...archived.map(card => cardItem(card, true)))
   }
   list.replaceChildren(...items)
-  if (ui.cards.length === 0) list.append(el('li', { class: 'muted small', text: '还没有角色卡' }))
+  if (ui.cards.length === 0) list.append(el('li', { class: 'muted small', text: t`还没有角色卡` }))
   $('new-chat').disabled = !ui.cardId
   $('import-story').disabled = !ui.cardId
   $('import-story-label').setAttribute('aria-disabled', String(!ui.cardId))
@@ -392,18 +394,18 @@ function renderChats() {
     ...ui.chats.map(chat =>
       el('li', { class: chat.id === ui.chat?.id ? 'active' : '', onclick: () => openChat(chat.id) }, [
         el('div', { class: 'item-main' }, [
-          el('div', { class: 'item-title' }, [chat.title, ui.busy.has(chat.id) ? el('span', { class: 'busy-dot', title: '正在生成' }) : null]),
-          el('div', { class: 'item-sub', text: `${ago(chat.updatedAt)}　${chat.turns} 轮　${chat.preview}` }),
+          el('div', { class: 'item-title' }, [chat.title, ui.busy.has(chat.id) ? el('span', { class: 'busy-dot', title: t`正在生成` }) : null]),
+          el('div', { class: 'item-sub', text: t`${ago(chat.updatedAt)}　${chat.turns} 轮　${chat.preview}` }),
         ]),
         document.documentElement.dataset.edition === 'android'
           ? null
-          : el('a', { class: 'item-del item-edit', title: '打包整段对话（每一轮、每个分支和配图），在另一台设备上用「导入存档」导入', text: '⇩', href: `/api/chats/${chat.id}/package`, download: '', onclick: event => event.stopPropagation() }),
-        el('button', { class: 'item-del item-edit', title: '重命名', text: '✎', onclick: event => { event.stopPropagation(); renameChat(chat) } }),
-        el('button', { class: 'item-del', title: '删除对话', text: '✕', onclick: event => { event.stopPropagation(); deleteChat(chat) } }),
+          : el('a', { class: 'item-del item-edit', title: t`打包整段对话（每一轮、每个分支和配图），在另一台设备上用「导入存档」导入`, text: '⇩', href: `/api/chats/${chat.id}/package`, download: '', onclick: event => event.stopPropagation() }),
+        el('button', { class: 'item-del item-edit', title: t`重命名`, text: '✎', onclick: event => { event.stopPropagation(); renameChat(chat) } }),
+        el('button', { class: 'item-del', title: t`删除对话`, text: '✕', onclick: event => { event.stopPropagation(); deleteChat(chat) } }),
       ]),
     ),
   )
-  if (ui.cardId && ui.chats.length === 0) list.append(el('li', { class: 'muted small', text: '还没有对话，点「新对话」' }))
+  if (ui.cardId && ui.chats.length === 0) list.append(el('li', { class: 'muted small', text: t`还没有对话，点「新对话」` }))
 }
 
 async function refreshCards() {
@@ -429,11 +431,11 @@ const selectCard = guard(async id => {
   const card = await api(`/api/cards/${id}`)
   ui.cardDetails.set(id, card)
   $('card-info').textContent = [
-    card.creator && `作者：${card.creator}`,
-    card.tags?.length && `标签：${card.tags.join('、')}`,
+    card.creator && t`作者：${card.creator}`,
+    card.tags?.length && t`标签：${card.tags.join(t`、`)}`,
     card.creatorNotes,
-    card.regexScripts ? `正则脚本 ${card.regexScripts} 条（显示与发送规则已生效）` : '',
-    card.helperScripts ? `酒馆助手脚本 ${card.helperScripts} 个（不执行；MVU 变量更新已内置）` : '',
+    card.regexScripts ? t`正则脚本 ${card.regexScripts} 条（显示与发送规则已生效）` : '',
+    card.helperScripts ? t`酒馆助手脚本 ${card.helperScripts} 个（不执行；MVU 变量更新已内置）` : '',
   ].filter(Boolean).join('\n\n') || '—'
   if (ui.chats[0]) await openChat(ui.chats[0].id)
   else setChat(null)
@@ -497,16 +499,16 @@ function askGroupName(title, initial = '') {
 function openCardMenu(card, anchor) {
   const groups = cardGroups()
   popMenu(anchor, [
-    { header: '移到分组' },
+    { header: t`移到分组` },
     ...groups.map(name => ({ label: name, current: card.group === name, onClick: () => organizeCard(card, { group: name }) })),
-    { label: '新分组…', onClick: () => { const name = askGroupName(`把「${card.name}」放进哪个新分组？`); if (name) organizeCard(card, { group: name }) } },
-    card.group ? { label: '移出分组', onClick: () => organizeCard(card, { group: '' }) } : null,
+    { label: t`新分组…`, onClick: () => { const name = askGroupName(t`把「${card.name}」放进哪个新分组？`); if (name) organizeCard(card, { group: name }) } },
+    card.group ? { label: t`移出分组`, onClick: () => organizeCard(card, { group: '' }) } : null,
     '-',
     card.archived
-      ? { label: '恢复到列表', onClick: () => organizeCard(card, { archived: false }, `「${card.name}」回到列表里了${card.group ? `，在「${card.group}」组` : ''}。`) }
-      : { label: '归档', hint: '从列表里收起来，对话和设置都保留，随时可以恢复', onClick: () => organizeCard(card, { archived: true }, `已归档「${card.name}」：在列表最下面的「已归档」里，随时可以恢复。`) },
+      ? { label: t`恢复到列表`, onClick: () => organizeCard(card, { archived: false }, t`「${card.name}」回到列表里了${card.group ? t`，在「${card.group}」组` : ''}。`) }
+      : { label: t`归档`, hint: t`从列表里收起来，对话和设置都保留，随时可以恢复`, onClick: () => organizeCard(card, { archived: true }, t`已归档「${card.name}」：在列表最下面的「已归档」里，随时可以恢复。`) },
     '-',
-    { label: '删除角色卡…', danger: true, onClick: () => deleteCard(card) },
+    { label: t`删除角色卡…`, danger: true, onClick: () => deleteCard(card) },
   ].filter(Boolean))
 }
 
@@ -519,23 +521,23 @@ const renameGroup = guard(async (from, to, done) => {
 })
 
 const archiveGroup = guard(async (name, cards) => {
-  if (!confirm(`把「${name}」组的 ${cards.length} 张卡全部归档？对话和设置都保留，随时可以恢复。`)) return
+  if (!confirm(t`把「${name}」组的 ${cards.length} 张卡全部归档？对话和设置都保留，随时可以恢复。`)) return
   for (const card of cards) await api(`/api/cards/${card.id}/organize`, { method: 'PUT', body: { archived: true } })
   await refreshCards()
-  toast(`「${name}」组已归档，在列表最下面的「已归档」里。`)
+  toast(t`「${name}」组已归档，在列表最下面的「已归档」里。`)
 })
 
 function openGroupMenu(name, cards, anchor) {
   popMenu(anchor, [
-    { label: '重命名…', onClick: () => { const to = askGroupName('分组的新名字', name); if (to && to !== name) renameGroup(name, to) } },
-    { label: '解散分组', hint: '分组去掉，卡片回到未分组', onClick: () => { if (confirm(`解散「${name}」？里面的 ${cards.length} 张卡会回到未分组，卡片本身不受影响。`)) renameGroup(name, '', `「${name}」已解散。`) } },
+    { label: t`重命名…`, onClick: () => { const to = askGroupName(t`分组的新名字`, name); if (to && to !== name) renameGroup(name, to) } },
+    { label: t`解散分组`, hint: t`分组去掉，卡片回到未分组`, onClick: () => { if (confirm(t`解散「${name}」？里面的 ${cards.length} 张卡会回到未分组，卡片本身不受影响。`)) renameGroup(name, '', t`「${name}」已解散。`) } },
     '-',
-    { label: '整组归档…', onClick: () => archiveGroup(name, cards) },
+    { label: t`整组归档…`, onClick: () => archiveGroup(name, cards) },
   ])
 }
 
 const deleteCard = guard(async card => {
-  if (!confirm(`删除角色卡「${card.name}」？（它的对话记录会保留）`)) return
+  if (!confirm(t`删除角色卡「${card.name}」？（它的对话记录会保留）`)) return
   await api(`/api/cards/${card.id}`, { method: 'DELETE' })
   if (ui.cardId === card.id) { ui.cardId = null; setChat(null) }
   await refreshCards()
@@ -543,7 +545,7 @@ const deleteCard = guard(async card => {
 })
 
 const renameChat = guard(async chat => {
-  const title = prompt('对话的新名字', chat.title)?.trim()
+  const title = prompt(t`对话的新名字`, chat.title)?.trim()
   if (!title || title === chat.title) return
   const saved = await api(`/api/chats/${chat.id}`, { method: 'PUT', body: { title } })
   if (ui.chat?.id === chat.id) ui.chat = { ...ui.chat, title: saved.title }
@@ -552,7 +554,7 @@ const renameChat = guard(async chat => {
 })
 
 const deleteChat = guard(async chat => {
-  if (!confirm(`删除对话「${chat.title}」？`)) return
+  if (!confirm(t`删除对话「${chat.title}」？`)) return
   await api(`/api/chats/${chat.id}`, { method: 'DELETE' })
   if (ui.chat?.id === chat.id) setChat(null)
   await refreshChats()
@@ -594,30 +596,31 @@ const importFiles = guard(async files => {
     const json = await jsonOf(file)
     if (json?.format === STORY_FORMAT) {
       // Opens the new chat itself.
-      done.push(await importStory(json))
+      const line = await importStory(json)
+      if (line) done.push(line)
       continue
     }
     // A SillyTavern preset, or one exported from this app (agent-tavern-preset).
     if (Array.isArray(json?.prompts) || Array.isArray(json?.preset?.prompts)) {
       const preset = await api('/api/presets/import', { method: 'POST', body: { filename: file.name, data } })
-      done.push(`预设「${preset.name}」${preset.prompts} 条`)
+      done.push(t`预设「${preset.name}」${preset.prompts} 条`)
       presets++
       continue
     }
     if (json && typeof json.findRegex === 'string') {
-      done.push(`「${file.name}」是单独的正则脚本，暂不支持导入（预设和角色卡里带的正则会自动生效）`)
+      done.push(t`「${file.name}」是单独的正则脚本，暂不支持导入（预设和角色卡里带的正则会自动生效）`)
       continue
     }
     if (looksLikeWorldbook(json)) {
       const book = await api('/api/worldbooks/import', { method: 'POST', body: { filename: file.name, data } })
-      done.push(`世界书「${book.name}」${book.entries} 条`)
+      done.push(t`世界书「${book.name}」${book.entries} 条`)
       reselect = true
     } else {
       // A newer version of a card already here: update that one in place, or keep both.
       const { previous } = await api('/api/cards/inspect', { method: 'POST', body: { filename: file.name, data } })
-      const replace = previous && confirm(`已经有「${previous.name}」。\n\n确定：更新这张卡（对话、配图与朗读设置、角色名册和人设图都保留）\n取消：另存为一张新卡（也会带上它的配图设置和人设图）`) ? previous.id : ''
+      const replace = previous && confirm(t`已经有「${previous.name}」。\n\n确定：更新这张卡（对话、配图与朗读设置、角色名册和人设图都保留）\n取消：另存为一张新卡（也会带上它的配图设置和人设图）`) ? previous.id : ''
       const card = await api('/api/cards/import', { method: 'POST', body: { filename: file.name, data, ...(replace ? { replace } : {}) } })
-      done.push(card.updated ? `角色卡「${card.updated}」更新为「${card.name}」` : `角色卡「${card.name}」${card.inherited ? `（沿用了「${card.inherited}」的配图设置和人设图）` : ''}`)
+      done.push(card.updated ? t`角色卡「${card.updated}」更新为「${card.name}」` : t`角色卡「${card.name}」${card.inherited ? t`（沿用了「${card.inherited}」的配图设置和人设图）` : ''}`)
       ui.cardId = card.id
       reselect = true
     }
@@ -625,7 +628,7 @@ const importFiles = guard(async files => {
   ui.books = await api('/api/worldbooks')
   await refreshCards()
   if (ui.cardId && reselect) await selectCard(ui.cardId)
-  toast(`已导入：${done.join('，')}`, 6000)
+  toast(t`已导入：${done.join(t`，`)}`, 6000)
   if (presets) presetsUi.open()
 })
 
@@ -656,7 +659,7 @@ const newChat = guard(async () => {
   const box = $('greetings')
   box.replaceChildren(
     ...texts.map((text, index) =>
-      el('button', { class: 'greeting', type: 'button', text: text.slice(0, 400) || '（空开场）', onclick: () => { $('greeting-dialog').close(); startChat(index) } }),
+      el('button', { class: 'greeting', type: 'button', text: text.slice(0, 400) || t`（空开场）`, onclick: () => { $('greeting-dialog').close(); startChat(index) } }),
     ),
   )
   $('greeting-dialog').showModal()
@@ -700,7 +703,7 @@ function messageBody(text, frameContext = null) {
     else if (part.kind === 'code') body.append(el('pre', { class: 'code' }, el('code', { text: part.body })))
     else body.append(el('div', { class: 'story', html: renderStory(part.body.trim()) }))
   }
-  if (!body.childNodes.length) body.append(el('div', { class: 'story muted', text: '（空）' }))
+  if (!body.childNodes.length) body.append(el('div', { class: 'story muted', text: t`（空）` }))
   return body
 }
 
@@ -713,15 +716,15 @@ function renderChat() {
   $('send').hidden = ui.generating
   $('edit-state').disabled = !chat || ui.generating
   const heading = $('chat-title')
-  heading.textContent = chat ? chat.title : ui.cardId ? '点「新对话」开始' : '选择一张角色卡开始'
+  heading.textContent = chat ? chat.title : ui.cardId ? t`点「新对话」开始` : t`选择一张角色卡开始`
   heading.classList.toggle('renamable', Boolean(chat))
-  heading.title = chat ? '点击重命名' : ''
+  heading.title = chat ? t`点击重命名` : ''
   renderModelSelect()
   renderQuickButton()
   const presetPill = $('chat-preset')
   presetPill.hidden = !chat
   if (chat) {
-    presetPill.textContent = chat.presetName ? `预设：${chat.presetName}` : '不用预设'
+    presetPill.textContent = chat.presetName ? t`预设：${chat.presetName}` : t`不用预设`
     presetPill.classList.toggle('unset', !chat.presetName)
     presetPill.disabled = ui.generating
   }
@@ -730,8 +733,8 @@ function renderChat() {
   if (chat) {
     compact.disabled = ui.generating || !chat.compactable
     compact.title = chat.compactable
-      ? `把前面的剧情压缩成一份存档（上次压缩后新增 ${chat.compactable} 轮），之后在新的上下文里接着写`
-      : '上次压缩之后还不到 2 轮新剧情，不用压缩'
+      ? t`把前面的剧情压缩成一份存档（上次压缩后新增 ${chat.compactable} 轮），之后在新的上下文里接着写`
+      : t`上次压缩之后还不到 2 轮新剧情，不用压缩`
   }
   if (!chat) {
     box.replaceChildren(EMPTY)
@@ -743,8 +746,8 @@ function renderChat() {
   if (chat.folded > 0) {
     nodes.push(
       el('div', { class: 'folded-note' }, [
-        el('span', { text: `已回滚，后面 ${chat.folded} 轮收起了。接着写就从这里开新分支，原来的可以在下一条消息的 ‹ › 里切回。` }),
-        el('button', { type: 'button', class: 'btn small', text: '恢复', disabled: ui.generating, onclick: () => restoreFolded() }),
+        el('span', { text: t`已回滚，后面 ${chat.folded} 轮收起了。接着写就从这里开新分支，原来的可以在下一条消息的 ‹ › 里切回。` }),
+        el('button', { type: 'button', class: 'btn small', text: t`恢复`, disabled: ui.generating, onclick: () => restoreFolded() }),
       ]),
     )
   }
@@ -775,7 +778,7 @@ function liveNodes(chat, { animate = false } = {}) {
 /** Opened a chat the server is still writing (started from an earlier page): wait for it. */
 function followServerTurn(view) {
   if (!view.running || ui.busy.has(view.id)) return
-  ui.busy.set(view.id, { kind: 'server', text: '', note: '正在生成（之前的页面发起的，写完会自动显示）' })
+  ui.busy.set(view.id, { kind: 'server', text: '', note: t`正在生成（之前的页面发起的，写完会自动显示）` })
   const poll = async () => {
     const fresh = await api(`/api/chats/${view.id}`).catch(() => null)
     if (fresh?.running) return setTimeout(poll, 2000)
@@ -797,49 +800,50 @@ function speakerFace(chat, role) {
 
 function renderNode(chat, node, isLastAssistant, depth = 0) {
   const isUser = node.role === 'user'
-  const name = isUser ? chat.names.user : chat.names.char
+  // The default persona name is the Chinese 你 (for the model); an English page says You.
+  const name = isUser ? (chat.names.user === zh`你` ? t`你` : chat.names.user) : chat.names.char
   const tools = []
   if (node.siblingCount > 1) {
     tools.push(
-      el('button', { title: '上一个版本', text: '‹', disabled: node.siblingIndex === 0 || ui.generating, onclick: () => selectNode(node.siblingIds[node.siblingIndex - 1]) }),
+      el('button', { title: t`上一个版本`, text: '‹', disabled: node.siblingIndex === 0 || ui.generating, onclick: () => selectNode(node.siblingIds[node.siblingIndex - 1]) }),
       el('span', { class: 'swipe', text: `${node.siblingIndex + 1}/${node.siblingCount}` }),
-      el('button', { title: '下一个版本', text: '›', disabled: node.siblingIndex === node.siblingCount - 1 || ui.generating, onclick: () => selectNode(node.siblingIds[node.siblingIndex + 1]) }),
+      el('button', { title: t`下一个版本`, text: '›', disabled: node.siblingIndex === node.siblingCount - 1 || ui.generating, onclick: () => selectNode(node.siblingIds[node.siblingIndex + 1]) }),
     )
   }
   if (node.id !== 'root' && node.id !== 'pending-user' && !node.compaction) {
-    tools.push(el('button', { text: '修改', title: '直接改这条消息的原文，模型之后看到的也是改过的；不重新生成', disabled: ui.generating, onclick: event => openEditor(chat, node, event.currentTarget.closest('.msg')) }))
+    tools.push(el('button', { text: t`修改`, title: t`直接改这条消息的原文，模型之后看到的也是改过的；不重新生成`, disabled: ui.generating, onclick: event => openEditor(chat, node, event.currentTarget.closest('.msg')) }))
   }
   if (!isUser && node.id !== 'root' && isLastAssistant) {
-    tools.push(el('button', { text: '重新生成', disabled: ui.generating, onclick: () => regenerate(node.parent) }))
+    tools.push(el('button', { text: t`重新生成`, disabled: ui.generating, onclick: () => regenerate(node.parent) }))
   }
   if (!isUser && isLastAssistant && (node.id !== 'root' || node.compaction)) {
-    tools.push(el('button', { text: '导出存档', title: '把剧情存档、最近几轮原文和变量存成文件，可以在新对话或新版本的角色卡里接着写', disabled: ui.generating, onclick: () => exportStory(node) }))
+    tools.push(el('button', { text: t`导出存档`, title: t`把剧情存档、最近几轮原文和变量存成文件，可以在新对话或新版本的角色卡里接着写`, disabled: ui.generating, onclick: () => exportStory(node) }))
   }
   if (!isUser && (node.id !== 'root' || node.compaction)) {
-    tools.push(el('button', { text: '分支到新对话', title: '开一个新对话，只带上到这一条为止的剧情（之后的对话和其他版本都不带），原对话不变', disabled: ui.generating, onclick: () => forkChat(node.id) }))
+    tools.push(el('button', { text: t`分支到新对话`, title: t`开一个新对话，只带上到这一条为止的剧情（之后的对话和其他版本都不带），原对话不变`, disabled: ui.generating, onclick: () => forkChat(node.id) }))
   }
   if (!isUser && !isLastAssistant) {
-    tools.push(el('button', { text: '回滚到这里', title: '收起之后的对话，状态也回到这一轮；随时可以恢复', disabled: ui.generating, onclick: () => rollbackTo(node.id) }))
-    tools.push(el('button', { text: '从这里分支', disabled: ui.generating, onclick: () => branchFrom(node.id, `从「${node.text.slice(0, 16)}…」之后分支`) }))
+    tools.push(el('button', { text: t`回滚到这里`, title: t`收起之后的对话，状态也回到这一轮；随时可以恢复`, disabled: ui.generating, onclick: () => rollbackTo(node.id) }))
+    tools.push(el('button', { text: t`从这里分支`, disabled: ui.generating, onclick: () => branchFrom(node.id, t`从「${node.text.slice(0, 16)}…」之后分支`) }))
   }
   if (isUser) {
-    tools.push(el('button', { text: '编辑重发', disabled: ui.generating, onclick: () => { $('input').value = node.text; branchFrom(node.parent, '编辑重发：将作为这一轮的新版本') } }))
-    if (node.injected?.length) tools.push(el('span', { class: 'chips' }, node.injected.map(t => el('span', { class: 'chip', title: '本轮注入的世界书', text: `📖 ${t}` }))))
+    tools.push(el('button', { text: t`编辑重发`, disabled: ui.generating, onclick: () => { $('input').value = node.text; branchFrom(node.parent, t`编辑重发：将作为这一轮的新版本`) } }))
+    if (node.injected?.length) tools.push(el('span', { class: 'chips' }, node.injected.map(name => el('span', { class: 'chip', title: t`本轮注入的世界书`, text: `📖 ${name}` }))))
   }
   if (!isUser && node.id !== 'pending-user') tools.push(mediaUi.toolsFor(node))
   if (!isUser && node.stateChanges?.length) {
     const changes = node.stateChanges
-    const text = changes.length <= 3 ? `状态：${changes.join('、')}` : `状态更新 ${changes.length} 项`
+    const text = changes.length <= 3 ? t`状态：${changes.join(t`、`)}` : t`状态更新 ${changes.length} 项`
     tools.push(el('span', { class: 'chip', title: changes.join('\n'), text }))
   }
   if (!isUser && node.historyTrim?.removedChars > 0) {
-    tools.push(el('span', { class: 'chip', title: '按角色卡的「仅发送」正则，这条回复在之后的上下文里去掉了这些内容（比如变量更新块），显示不受影响', text: `上下文精简 ${fmt(node.historyTrim.removedChars)} 字` }))
+    tools.push(el('span', { class: 'chip', title: t`按角色卡的「仅发送」正则，这条回复在之后的上下文里去掉了这些内容（比如变量更新块），显示不受影响`, text: t`上下文精简 ${fmt(node.historyTrim.removedChars)} 字` }))
   }
   if (!isUser && node.truncated) {
-    tools.push(el('span', { class: 'chip warn', title: '模型写到了单次输出的上限，回复后半段（常见的是变量更新、行动选项这些放在最后的块）没写出来。上限取预设的「最大回复长度」；供应商设置里填了「最大输出」时以那个为准。可以重新生成，或调大上限。', text: '⚠ 写到输出上限，被截断' }))
+    tools.push(el('span', { class: 'chip warn', title: t`模型写到了单次输出的上限，回复后半段（常见的是变量更新、行动选项这些放在最后的块）没写出来。上限取预设的「最大回复长度」；供应商设置里填了「最大输出」时以那个为准。可以重新生成，或调大上限。`, text: t`⚠ 写到输出上限，被截断` }))
   }
-  if (node.edited) tools.push(el('span', { class: 'chip', title: `${new Date(node.edited.at).toLocaleString('zh-CN')} 改过${node.edited.count > 1 ? ` ${node.edited.count} 次` : ''}`, text: '已修改' }))
-  if (isUser && node.templateErrors?.length) tools.push(el('span', { class: 'chip warn', title: node.templateErrors.join('\n'), text: `⚠ ${node.templateErrors.length} 条 EJS 模板出错` }))
+  if (node.edited) tools.push(el('span', { class: 'chip', title: t`${new Date(node.edited.at).toLocaleString(locale)} 改过${node.edited.count > 1 ? t` ${node.edited.count} 次` : ''}`, text: t`已修改` }))
+  if (isUser && node.templateErrors?.length) tools.push(el('span', { class: 'chip warn', title: node.templateErrors.join('\n'), text: t`⚠ ${node.templateErrors.length} 条 EJS 模板出错` }))
   const scripts = scriptsFor(chat)
   const shown = displayOf(node, { scripts, names: chat.names, depth, withStatus: isLastAssistant && usesStatusPlaceholder(scripts) })
   const imported = node.compaction?.imported
@@ -847,14 +851,14 @@ function renderNode(chat, node, isLastAssistant, depth = 0) {
     ? el('div', { class: 'compaction-note' }, [
         el('span', {
           text: imported
-            ? `从剧情存档接着写：「${imported.title || imported.card || '导入的故事'}」前 ${node.compaction.turns} 轮 → ${fmt(node.compaction.chars)} 字存档，上面是存档里的最后一轮。`
-            : `已压缩上下文：前 ${node.compaction.turns} 轮 → ${fmt(node.compaction.chars)} 字剧情存档，之后在新的上下文里接着写。`,
+            ? t`从剧情存档接着写：「${imported.title || imported.card || t`导入的故事`}」前 ${node.compaction.turns} 轮 → ${fmt(node.compaction.chars)} 字存档，上面是存档里的最后一轮。`
+            : t`已压缩上下文：前 ${node.compaction.turns} 轮 → ${fmt(node.compaction.chars)} 字剧情存档，之后在新的上下文里接着写。`,
         }),
-        el('button', { type: 'button', class: 'btn small', text: node.compaction.editable ? '查看 / 修改' : '查看', onclick: () => openRecap(node) }),
+        el('button', { type: 'button', class: 'btn small', text: node.compaction.editable ? t`查看 / 修改` : t`查看`, onclick: () => openRecap(node) }),
       ])
     : null
   return el('article', { class: `msg ${isUser ? 'user' : 'assistant'}${isLastAssistant ? ' latest' : ''}`, 'data-id': node.id }, [
-    el('div', { class: 'msg-head' }, [speakerFace(chat, node.role), el('span', { class: 'name', text: name }), node.id === 'root' ? el('span', { text: imported ? '存档' : '开场' }) : null]),
+    el('div', { class: 'msg-head' }, [speakerFace(chat, node.role), el('span', { class: 'name', text: name }), node.id === 'root' ? el('span', { text: imported ? t`存档` : t`开场` }) : null]),
     messageBody(shown, frameContextFor(chat, node)),
     isUser ? null : mediaUi.gallery(chat, node),
     tools.length ? el('div', { class: 'msg-tools' }, tools) : null,
@@ -887,7 +891,7 @@ function openEditor(chat, node, article) {
   const original = node.raw ?? node.text
   const body = article.querySelector('.msg-body')
   const tools = article.querySelector('.msg-tools')
-  const area = el('textarea', { class: 'edit-text', spellcheck: 'false', 'aria-label': '消息原文' })
+  const area = el('textarea', { class: 'edit-text', spellcheck: 'false', 'aria-label': t`消息原文` })
   area.value = original
   const fit = () => {
     area.style.height = 'auto'
@@ -897,16 +901,16 @@ function openEditor(chat, node, article) {
   const blocks = el('div', { class: 'edit-blocks' })
   const refresh = () => {
     const now = area.value.length
-    count.textContent = now === original.length ? `${fmt(now)} 字` : `${fmt(original.length)} → ${fmt(now)} 字`
+    count.textContent = now === original.length ? t`${fmt(now)} 字` : t`${fmt(original.length)} → ${fmt(now)} 字`
     const found = tagBlocks(area.value)
     blocks.hidden = !found.length
     blocks.replaceChildren(
-      el('span', { class: 'edit-blocks-label', text: '整块删掉' }),
+      el('span', { class: 'edit-blocks-label', text: t`整块删掉` }),
       ...found.map(([tag, size]) =>
         el('button', {
           type: 'button',
           class: 'edit-block',
-          title: `删掉所有 <${tag}>…</${tag}>`,
+          title: t`删掉所有 <${tag}>…</${tag}>`,
           onclick: () => {
             area.focus()
             area.select()
@@ -916,7 +920,7 @@ function openEditor(chat, node, article) {
             refresh()
             fit()
           },
-        }, [el('code', { text: tag }), el('span', { text: `${fmt(size)} 字` })]),
+        }, [el('code', { text: tag }), el('span', { text: t`${fmt(size)} 字` })]),
       ),
     )
   }
@@ -940,25 +944,25 @@ function openEditor(chat, node, article) {
       box.querySelector(`[data-id="${node.id}"]`)?.classList.add('swap')
       toast(
         outcome.behindCompaction
-          ? '已修改。这条在剧情存档之前，模型现在读的是存档，所以只改了显示'
+          ? t`已修改。这条在剧情存档之前，模型现在读的是存档，所以只改了显示`
           : outcome.missed && subscriptionPage
             ? subscriptionPage.EDIT_MISSED
-            : '已修改。之后每轮按改过的内容发送，下一轮从这条起重新写一次缓存',
+            : t`已修改。之后每轮按改过的内容发送，下一轮从这条起重新写一次缓存`,
         6000,
       )
     } finally {
       saveButton.disabled = false
     }
   })
-  const saveButton = el('button', { type: 'button', class: 'btn small primary', text: '保存', onclick: save })
+  const saveButton = el('button', { type: 'button', class: 'btn small primary', text: t`保存`, onclick: save })
   const editor = el('div', { class: 'msg-editor' }, [
     blocks,
     area,
     el('div', { class: 'edit-foot' }, [
-      el('span', { class: 'edit-note', text: node.role === 'user' ? '改的是你这条输入；模型之后看到的也是改过的。' : '这是发给模型的原文，隐藏的状态块也在里面。删掉的内容之后不会再进上下文，已经算好的变量不变。' }),
+      el('span', { class: 'edit-note', text: node.role === 'user' ? t`改的是你这条输入；模型之后看到的也是改过的。` : t`这是发给模型的原文，隐藏的状态块也在里面。删掉的内容之后不会再进上下文，已经算好的变量不变。` }),
       count,
       el('span', { class: 'edit-actions' }, [
-        el('button', { type: 'button', class: 'btn small ghost', text: '取消', onclick: close }),
+        el('button', { type: 'button', class: 'btn small ghost', text: t`取消`, onclick: close }),
         saveButton,
       ]),
     ]),
@@ -1016,8 +1020,8 @@ let lastFrameSend = 0
 
 /** A card asked to send what is in the input box: once per few seconds, never mid-generation. */
 async function frameSend() {
-  if (!ui.chat || ui.generating) throw new Error('正在生成，稍后再试')
-  if (Date.now() - lastFrameSend < 3000) throw new Error('发送太频繁')
+  if (!ui.chat || ui.generating) throw new Error(t`正在生成，稍后再试`)
+  if (Date.now() - lastFrameSend < 3000) throw new Error(t`发送太频繁`)
   lastFrameSend = Date.now()
   await send()
 }
@@ -1035,7 +1039,7 @@ async function runFrameSlash(command) {
       await frameSend()
     } else if (step.name === 'echo') toast(step.text)
     else if (step.name === 'pass') output = step.text
-    else toast(`界面里的命令 /${step.name} 在这里不支持`)
+    else toast(t`界面里的命令 /${step.name} 在这里不支持`)
   }
   // `/send` without `/trigger` adds a message in SillyTavern; here it waits in the input box.
   if (staged !== null) setDraft(staged)
@@ -1052,7 +1056,7 @@ function renderBranchNote() {
   const note = $('branch-note')
   if (!ui.branchFrom) { note.hidden = true; return }
   note.hidden = false
-  note.replaceChildren(el('span', { text: ui.branchFrom.label }), el('button', { type: 'button', text: '取消', onclick: () => { ui.branchFrom = null; renderBranchNote() } }))
+  note.replaceChildren(el('span', { text: ui.branchFrom.label }), el('button', { type: 'button', text: t`取消`, onclick: () => { ui.branchFrom = null; renderBranchNote() } }))
 }
 
 const selectNode = guard(async nodeId => {
@@ -1067,19 +1071,19 @@ const selectNode = guard(async nodeId => {
 const rollbackTo = guard(async nodeId => {
   ui.branchFrom = null
   setChat(await api(`/api/chats/${ui.chat.id}/rollback`, { method: 'POST', body: { nodeId } }))
-  toast(`已回滚，收起了 ${ui.chat.folded} 轮`)
+  toast(t`已回滚，收起了 ${ui.chat.folded} 轮`)
 })
 
 const forkChat = guard(async nodeId => {
   const chat = await api(`/api/chats/${ui.chat.id}/fork`, { method: 'POST', body: { nodeId } })
   await refreshChats()
   setChat(chat)
-  toast(`已分支到新对话「${chat.title}」，原对话没动`, 5000)
+  toast(t`已分支到新对话「${chat.title}」，原对话没动`, 5000)
 })
 
 const restoreFolded = guard(async () => {
   setChat(await api(`/api/chats/${ui.chat.id}/restore`, { method: 'POST', body: {} }))
-  toast('已恢复')
+  toast(t`已恢复`)
 })
 
 // ─── Context compaction (server/recap.mjs) ──────────────────────────────
@@ -1090,8 +1094,8 @@ const SUGGEST_COMPACT = 6
 function askSwitch(turns) {
   const dialog = $('switch-dialog')
   $('switch-text').textContent =
-    `缓存按模型区分，换模型后下一轮要把整段历史重新写一遍缓存。先把前面的剧情（上次压缩后新增 ${turns} 轮）压缩成存档，新模型只需读存档和最近两轮原文。` +
-    '存档由现在这个模型来写，它的缓存还在，大约花一轮的额度。'
+    t`缓存按模型区分，换模型后下一轮要把整段历史重新写一遍缓存。先把前面的剧情（上次压缩后新增 ${turns} 轮）压缩成存档，新模型只需读存档和最近两轮原文。` +
+    t`存档由现在这个模型来写，它的缓存还在，大约花一轮的额度。`
   dialog.showModal()
   // Buttons answer on click (a hidden window may hold back the `close` event); Esc or any other close means cancel.
   return new Promise(resolve => {
@@ -1118,20 +1122,20 @@ async function runCompaction() {
   ui.busy.set(chatId, { kind: 'compact' })
   renderChat()
   renderChats()
-  toast('正在写剧情存档，长对话大约要半分钟到一分钟……', 180000)
+  toast(t`正在写剧情存档，长对话大约要半分钟到一分钟……`, 180000)
   try {
     const view = await api(`/api/chats/${chatId}/compact`, { method: 'POST', body: {} })
     ui.busy.delete(chatId)
     const info = view.path.at(-1).compaction
     if (ui.chat?.id === chatId) {
       setChat(view)
-      toast(`已压缩：前 ${info.turns} 轮 → ${fmt(info.chars)} 字剧情存档。下一轮在新的上下文里接着写。`, 6000)
+      toast(t`已压缩：前 ${info.turns} 轮 → ${fmt(info.chars)} 字剧情存档。下一轮在新的上下文里接着写。`, 6000)
     } else {
-      toast(`「${title}」已压缩：前 ${info.turns} 轮 → ${fmt(info.chars)} 字剧情存档。`, 6000)
+      toast(t`「${title}」已压缩：前 ${info.turns} 轮 → ${fmt(info.chars)} 字剧情存档。`, 6000)
     }
     return true
   } catch (error) {
-    toast(error.status === 499 ? '已停止压缩，什么都没改' : error.message, 8000)
+    toast(error.status === 499 ? t`已停止压缩，什么都没改` : error.message, 8000)
     return false
   } finally {
     ui.busy.delete(chatId)
@@ -1143,9 +1147,9 @@ async function runCompaction() {
 const compactNow = guard(async () => {
   const model = ui.chat.path.at(-1).model
   const ask =
-    '把前面的剧情压缩成一份存档？\n\n' +
-    `会调用一次模型写存档（由写这段剧情的 ${labelOf(model || ui.chat.model || ui.defaultModel)} 来写，大约花一轮的额度）。` +
-    '之后的对话在新的上下文里接着写。之前的内容不会删除，随时可以回滚到压缩之前。'
+    t`把前面的剧情压缩成一份存档？\n\n` +
+    t`会调用一次模型写存档（由写这段剧情的 ${labelOf(model || ui.chat.model || ui.defaultModel)} 来写，大约花一轮的额度）。` +
+    t`之后的对话在新的上下文里接着写。之前的内容不会删除，随时可以回滚到压缩之前。`
   if (confirm(ask)) await runCompaction()
 })
 
@@ -1157,25 +1161,25 @@ function openRecap(node) {
   $('recap-save').hidden = !info.editable
   $('recap-drop').hidden = !info.editable || Boolean(info.imported)
   const source = info.imported
-    ? `从「${info.imported.title || info.imported.card || '剧情存档'}」导入，${info.model ? `${labelOf(info.model)} 写的，` : ''}`
-    : `${labelOf(info.model)} 写的，`
+    ? t`从「${info.imported.title || info.imported.card || t`剧情存档`}」导入，${info.model ? t`${labelOf(info.model)} 写的，` : ''}`
+    : t`${labelOf(info.model)} 写的，`
   $('recap-meta').textContent =
-    `${source}覆盖前 ${info.turns} 轮，${fmt(info.chars)} 字。` +
-    (info.editable ? '还没接着写，可以直接修改，下一轮会带上改过的版本。' : '之后已经接着写了，这份存档只能查看；想换一份，可以回滚到这里再压缩。')
+    t`${source}覆盖前 ${info.turns} 轮，${fmt(info.chars)} 字。` +
+    (info.editable ? t`还没接着写，可以直接修改，下一轮会带上改过的版本。` : t`之后已经接着写了，这份存档只能查看；想换一份，可以回滚到这里再压缩。`)
   $('recap-dialog').showModal()
 }
 
 const saveRecap = guard(async () => {
   setChat(await api(`/api/chats/${ui.chat.id}/compaction`, { method: 'PUT', body: { nodeId: ui.recapNode, summary: $('recap-text').value } }))
   $('recap-dialog').close()
-  toast('存档已保存')
+  toast(t`存档已保存`)
 })
 
 const dropRecap = guard(async () => {
-  if (!confirm('撤销这次压缩？下一轮会照常接着原来的上下文写。')) return
+  if (!confirm(t`撤销这次压缩？下一轮会照常接着原来的上下文写。`)) return
   setChat(await api(`/api/chats/${ui.chat.id}/compaction?nodeId=${encodeURIComponent(ui.recapNode)}`, { method: 'DELETE' }))
   $('recap-dialog').close()
-  toast('已撤销压缩')
+  toast(t`已撤销压缩`)
 })
 
 // ─── Story archive: export / import (server/chats.mjs exportStory) ──────
@@ -1188,7 +1192,7 @@ function saveFile(name, text, message = '') {
   // The Android WebView ignores <a download>; the app saves to Downloads itself.
   if (window.AgentTavernAndroid?.saveFile) {
     const ok = window.AgentTavernAndroid.saveFile(filename, text)
-    toast(ok ? `已保存到「下载」文件夹。${message}` : '保存失败', 9000)
+    toast(ok ? t`已保存到「下载」文件夹。${message}` : t`保存失败`, 9000)
     return
   }
   const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }))
@@ -1202,8 +1206,8 @@ function saveFile(name, text, message = '') {
 
 async function downloadStory(nodeId) {
   const archive = await api(`/api/chats/${ui.chat.id}/archive?nodeId=${encodeURIComponent(nodeId)}`)
-  saveFile(`${archive.title} 剧情存档.json`, JSON.stringify(archive, null, 2),
-    `已导出：前 ${archive.turns} 轮的剧情存档、最近 ${archive.recent.filter(m => m.role === 'user').length} 轮原文和变量。在角色卡下点「导入存档」就能接着写。`)
+  saveFile(t`${archive.title} 剧情存档.json`, JSON.stringify(archive, null, 2),
+    t`已导出：前 ${archive.turns} 轮的剧情存档、最近 ${archive.recent.filter(m => m.role === 'user').length} 轮原文和变量。在角色卡下点「导入存档」就能接着写。`)
 }
 
 /**
@@ -1214,14 +1218,14 @@ const exportStory = guard(async node => {
   const chat = ui.chat
   if (!node.compaction && chat.compactable) {
     const ask =
-      `导出前要先把剧情压缩成存档（上次压缩后新增 ${chat.compactable} 轮）。\n\n` +
-      `会调用一次模型写存档（${labelOf(node.model || chat.model || ui.defaultModel)}，大约花一轮的额度），之后的对话也会接着这份存档写。继续？`
+      t`导出前要先把剧情压缩成存档（上次压缩后新增 ${chat.compactable} 轮）。\n\n` +
+      t`会调用一次模型写存档（${labelOf(node.model || chat.model || ui.defaultModel)}，大约花一轮的额度），之后的对话也会接着这份存档写。继续？`
     if (!confirm(ask)) return
     if (!(await runCompaction())) return
     return downloadStory(ui.chat.path.at(-1).id)
   }
   const index = chat.path.findIndex(n => n.id === node.id)
-  if (!chat.path.slice(0, index + 1).some(n => n.compaction)) throw new Error('剧情还不到 2 轮，先多写几轮再导出')
+  if (!chat.path.slice(0, index + 1).some(n => n.compaction)) throw new Error(t`剧情还不到 2 轮，先多写几轮再导出`)
   await downloadStory(node.id)
 })
 
@@ -1231,15 +1235,15 @@ const exportRecap = guard(async () => {
 
 /** Start a chat for the selected card from an archive. Returns a line for the import toast. */
 async function importStory(archive) {
-  if (!ui.cardId) throw new Error('先在左边选一张角色卡，存档会导入成它的新对话')
+  if (!ui.cardId) throw new Error(t`先在左边选一张角色卡，存档会导入成它的新对话`)
   const card = ui.cards.find(c => c.id === ui.cardId)
-  if (archive.card && card && archive.card !== card.name && !confirm(`这份存档来自「${archive.card}」，要导入到「${card.name}」下接着写吗？`)) {
-    return '存档没有导入'
+  if (archive.card && card && archive.card !== card.name && !confirm(t`这份存档来自「${archive.card}」，要导入到「${card.name}」下接着写吗？`)) {
+    return null
   }
   const chat = await api('/api/chats/import', { method: 'POST', body: { cardId: ui.cardId, archive } })
   await refreshChats()
   setChat(chat)
-  return `剧情存档「${archive.title || archive.card}」（${archive.turns} 轮）`
+  return t`剧情存档「${archive.title || archive.card}」（${archive.turns} 轮）`
 }
 
 const PACKAGE_MAGIC = 'AGENT-TAVERN-CHAT 1\n'
@@ -1250,7 +1254,7 @@ const PACKAGE_MAGIC = 'AGENT-TAVERN-CHAT 1\n'
  */
 async function importPackageFile(file) {
   const head = await file.slice(0, 64).text()
-  if (!head.startsWith(PACKAGE_MAGIC)) throw new Error(`「${file.name}」不是酒馆的对话包`)
+  if (!head.startsWith(PACKAGE_MAGIC)) throw new Error(t`「${file.name}」不是酒馆的对话包`)
   const line = head.slice(PACKAGE_MAGIC.length, head.indexOf('\n', PACKAGE_MAGIC.length))
   const start = new TextEncoder().encode(`${PACKAGE_MAGIC}${line}\n`).length
   const end = start + Number(line)
@@ -1259,7 +1263,7 @@ async function importPackageFile(file) {
   const result = await api('/api/chats/import-package', { method: 'POST', body: { cardId: ui.cardId, header: rest } })
   let failed = 0
   for (const [index, picture] of media.entries()) {
-    toast(`「${result.chat.title}」：上传配图 ${index + 1}/${media.length}`, 2000)
+    toast(t`「${result.chat.title}」：上传配图 ${index + 1}/${media.length}`, 2000)
     const res = await fetch(`/api/chats/${result.chat.id}/media/${picture.file}`, {
       method: 'PUT',
       headers: { 'x-agent-tavern': '1', 'content-type': 'application/octet-stream' },
@@ -1284,15 +1288,15 @@ async function importPackages(files) {
   if (ui.cardId !== last.cardId) await selectCard(last.cardId)
   await refreshChats()
   openChat(last.chat.id)
-  const notes = done.map(d => `「${d.chat.title}」→ ${d.cardName}${d.pictures ? `，配图 ${d.pictures - d.failed}/${d.pictures}` : ''}${d.missingPreset ? `，没有预设「${d.missingPreset}」，先导入它再到预设里选上` : ''}`)
-  toast(`已导入 ${done.length} 段对话：${notes.join('；')}`, 10000)
+  const notes = done.map(d => t`「${d.chat.title}」→ ${d.cardName}${d.pictures ? t`，配图 ${d.pictures - d.failed}/${d.pictures}` : ''}${d.missingPreset ? t`，没有预设「${d.missingPreset}」，先导入它再到预设里选上` : ''}`)
+  toast(t`已导入 ${done.length} 段对话：${notes.join(t`；`)}`, 10000)
 }
 
 const importStoryFile = guard(async file => {
   const json = await jsonOf(file)
-  if (json?.format !== STORY_FORMAT) throw new Error('这不是酒馆导出的剧情存档')
+  if (json?.format !== STORY_FORMAT) throw new Error(t`这不是酒馆导出的剧情存档`)
   const line = await importStory(json)
-  toast(line === '存档没有导入' ? line : `已导入${line}。下一轮在新的上下文里接着写。`, 6000)
+  toast(line === null ? t`存档没有导入` : t`已导入${line}。下一轮在新的上下文里接着写。`, 6000)
 })
 
 function tipId() {
@@ -1325,10 +1329,10 @@ async function generate(endpoint, body, echoUserText) {
   try {
     await stream(`/api/chats/${chatId}/${endpoint}`, body, event => {
       if (event.type === 'start') {
-        job.note = event.newSession ? '接着存档续写' : event.api ? `${event.api} 续写` : event.fork ? '分支续写' : '续写'
+        job.note = event.newSession ? t`接着存档续写` : event.api ? t`${event.api} 续写` : event.fork ? t`分支续写` : t`续写`
         const note = live()?.querySelector('.live-note')
         if (note) note.textContent = job.note
-        if (event.compacted?.removedChars && viewing()) toast(`已清掉历史里堆积的变量列表（${fmt(event.compacted.removedChars)} 字）。这一轮会重写对话历史的缓存，固定前缀还在。`)
+        if (event.compacted?.removedChars && viewing()) toast(t`已清掉历史里堆积的变量列表（${fmt(event.compacted.removedChars)} 字）。这一轮会重写对话历史的缓存，固定前缀还在。`)
       } else if (event.type === 'delta') {
         job.text += event.text
         const target = live()?.querySelector('.msg-body')
@@ -1356,14 +1360,14 @@ async function generate(endpoint, body, echoUserText) {
       setChat(finished)
       mediaUi.afterTurn(finishedNode)
     } else {
-      toast(`「${title}」这一轮写好了`, 5000)
+      toast(t`「${title}」这一轮写好了`, 5000)
     }
     await refreshChats()
     return true
   }
   if (viewing()) renderChat()
   renderChats()
-  if (failure && failure.status !== 499) toast(viewing() ? failure.message : `「${title}」：${failure.message}`, 8000)
+  if (failure && failure.status !== 499) toast(viewing() ? failure.message : t`「${title}」：${failure.message}`, 8000)
   return false
 }
 
@@ -1393,7 +1397,7 @@ const stop = guard(async () => {
 function renderSide() {
   const chat = ui.chat
   const state = chat?.state ?? {}
-  $('state-view').textContent = chat ? (Object.keys(state).length ? JSON.stringify(state, null, 2) : '（这张卡没有状态变量）') : '—'
+  $('state-view').textContent = chat ? (Object.keys(state).length ? JSON.stringify(state, null, 2) : t`（这张卡没有状态变量）`) : '—'
   $('state-editor').hidden = true
   $('state-view').hidden = false
   const last = chat ? [...chat.path].reverse().find(n => n.role === 'assistant' && n.usage) : null
@@ -1406,15 +1410,15 @@ function renderSide() {
   const prompt = u.input + u.cacheRead + u.cacheWrite
   const hit = prompt ? Math.round((u.cacheRead / prompt) * 100) : 0
   const rows = [
-    ['缓存命中', el('span', { class: `hit ${hit >= 80 ? 'good' : 'mid'}`, text: `${hit}%` })],
-    ['缓存读取', fmt(u.cacheRead)],
-    ['缓存写入', fmt(u.cacheWrite)],
-    ['未缓存输入', fmt(u.input)],
-    ['输出', fmt(u.output)],
-    ['首字', last.timing?.firstTokenMs ? `${(last.timing.firstTokenMs / 1000).toFixed(1)} 秒` : '—'],
-    ['总耗时', last.timing ? `${(last.timing.totalMs / 1000).toFixed(1)} 秒` : '—'],
-    ['方式', last.timing?.api ? 'API（按对话记录重发）' : last.timing?.forked ? '分支（fork）' : '续接（resume）'],
-    ['模型', last.model ? labelOf(last.model) : '—'],
+    [t`缓存命中`, el('span', { class: `hit ${hit >= 80 ? 'good' : 'mid'}`, text: `${hit}%` })],
+    [t`缓存读取`, fmt(u.cacheRead)],
+    [t`缓存写入`, fmt(u.cacheWrite)],
+    [t`未缓存输入`, fmt(u.input)],
+    [t`输出`, fmt(u.output)],
+    [t`首字`, last.timing?.firstTokenMs ? t`${(last.timing.firstTokenMs / 1000).toFixed(1)} 秒` : '—'],
+    [t`总耗时`, last.timing ? t`${(last.timing.totalMs / 1000).toFixed(1)} 秒` : '—'],
+    [t`方式`, last.timing?.api ? t`API（按对话记录重发）` : last.timing?.forked ? t`分支（fork）` : t`续接（resume）`],
+    [t`模型`, last.model ? labelOf(last.model) : '—'],
   ]
   // A relay that moves the same model to another upstream answers with another name, and that
   // upstream has none of the cache: say so, or a cache miss looks like the tavern's fault.
@@ -1422,9 +1426,9 @@ function renderSide() {
     const provider = ref => String(ref ?? '').split('/')[0]
     const before = chat.path.slice(0, chat.path.indexOf(last)).reverse().find(n => n.role === 'assistant' && n.served && provider(n.model) === provider(last.model))
     const switched = before && before.served !== last.served
-    rows.push(['返回的模型', el('span', { class: switched ? 'hit mid' : '', text: last.served })])
+    rows.push([t`返回的模型`, el('span', { class: switched ? 'hit mid' : '', text: last.served })])
     if (switched && hit < 80) {
-      rows.push(['提示', `供应商这轮换了上游（${before.served} → ${last.served}），缓存在新上游上没有，这不是酒馆的历史变了。中转一直这样的话，可以在供应商设置里换一个分组 / 线路，或问问中转方。`])
+      rows.push([t`提示`, t`供应商这轮换了上游（${before.served} → ${last.served}），缓存在新上游上没有，这不是酒馆的历史变了。中转一直这样的话，可以在供应商设置里换一个分组 / 线路，或问问中转方。`])
     }
   }
   dl.replaceChildren(...rows.flatMap(([k, v]) => [el('dt', { text: k }), el('dd', {}, typeof v === 'string' ? document.createTextNode(v) : v)]))
@@ -1447,15 +1451,15 @@ const saveState = guard(async () => {
   try {
     state = JSON.parse($('state-input').value || '{}')
   } catch {
-    throw new Error('状态不是合法的 JSON')
+    throw new Error(t`状态不是合法的 JSON`)
   }
   setChat(await api(`/api/chats/${ui.chat.id}/state`, { method: 'PUT', body: { state } }))
-  toast('已保存，下一轮会把完整状态发给模型')
+  toast(t`已保存，下一轮会把完整状态发给模型`)
 })
 
 // ─── Settings ───────────────────────────────────────────────────────────
 const openSettings = guard(async () => {
-  settingsMenu ??= createMenu({ dialog: $('settings-dialog'), form: $('settings-form'), el, title: '设置' })
+  settingsMenu ??= createMenu({ dialog: $('settings-dialog'), form: $('settings-form'), el, title: t`设置` })
   ;[ui.settings, ui.persona, ui.books] = await Promise.all([api('/api/settings'), api('/api/persona'), api('/api/worldbooks')])
   if (!ui.models.length) await loadModels()
   const form = $('settings-form')
@@ -1465,22 +1469,25 @@ const openSettings = guard(async () => {
   for (const key of ['model', 'thinking', 'effort', 'language', 'scanDepth', 'reinjectAfter', 'stateRefreshEvery', 'dynamicStrip', 'replyLength', 'writingRules', 'listen']) {
     form[key].value = ui.settings[key] ?? (key === 'listen' ? 'local' : '')
   }
+  showDefaultAsHint(form.personaName, zh`你`, t`你`)
+  showDefaultAsHint(form.language, zh`简体中文`, t`简体中文`)
   renderAccess(await api('/api/access').catch(() => null))
   fillProxy(form, ui.settings.proxy, await api('/api/network').catch(() => null))
   form.webFonts.checked = ui.settings.webFonts !== false
   form.cdnLibraries.checked = ui.settings.cdnLibraries !== false
+  fillInterfaceLanguage(form)
   $('privacy-list').replaceChildren(connectionList(el, { updates: Boolean(ui.features?.updates) }))
   if (!ui.models.some(m => m.id === form.model.value)) form.model.value = ui.defaultModel ?? ui.models[0]?.id ?? ''
   const card = ui.cards.find(c => c.id === ui.cardId)
   const options = $('book-options')
-  if (!card) options.replaceChildren(document.createTextNode('先选择一张角色卡'))
+  if (!card) options.replaceChildren(document.createTextNode(t`先选择一张角色卡`))
   else {
     options.replaceChildren(
       cardBookLine(card),
       ...(ui.books.length
         ? ui.books.map(book =>
-          el('label', {}, [el('input', { type: 'checkbox', name: 'book', value: book.id, checked: card.worldbookIds.includes(book.id) }), `${book.name}（${book.entries} 条）`]))
-        : [el('p', { class: 'book-none', text: '还没有导入独立世界书。想给这张卡多挂一本，先用「导入角色卡、世界书或预设」导入世界书 JSON。' })]),
+          el('label', {}, [el('input', { type: 'checkbox', name: 'book', value: book.id, checked: card.worldbookIds.includes(book.id) }), t`${book.name}（${book.entries} 条）`]))
+        : [el('p', { class: 'book-none', text: t`还没有导入独立世界书。想给这张卡多挂一本，先用「导入角色卡、世界书或预设」导入世界书 JSON。` })]),
     )
   }
   const [providers, presets] = await Promise.all([api('/api/providers').catch(() => null), api('/api/presets').catch(() => []), updateUi.load()])
@@ -1491,16 +1498,16 @@ const openSettings = guard(async () => {
 
 /** 设置 → 挂载的世界书: the card's own book, which always applies, so it is a line and not a checkbox. */
 function cardBookLine(card) {
-  if (!card.bookEntries) return el('div', { class: 'card-book none', text: '这张卡没有自带世界书' })
+  if (!card.bookEntries) return el('div', { class: 'card-book none', text: t`这张卡没有自带世界书` })
   return el('div', { class: 'card-book' }, [
-    el('span', { text: `卡里自带：${cardBookCount(card)}` }),
-    el('span', { class: 'card-book-on', text: '始终生效' }),
+    el('span', { text: t`卡里自带：${cardBookCount(card)}` }),
+    el('span', { class: 'card-book-on', text: t`始终生效` }),
   ])
 }
 
 /** "42 条（启用 41，其中常驻 24）"; just the total from a server that does not count the rest yet. */
 function cardBookCount(card) {
-  return card.bookEnabled == null ? `${card.bookEntries} 条` : `${card.bookEntries} 条（启用 ${card.bookEnabled}，其中常驻 ${card.bookConstant}）`
+  return card.bookEnabled == null ? t`${card.bookEntries} 条` : t`${card.bookEntries} 条（启用 ${card.bookEnabled}，其中常驻 ${card.bookConstant}）`
 }
 
 // The settings window as a menu (web/menu.js). Its pages are in index.html;
@@ -1514,115 +1521,119 @@ function layOutSettings({ form, card, providers, presets }) {
   const value = name => form.elements[name]?.value ?? ''
   const modelName = id => {
     const model = ui.models.find(m => m.id === id)
-    return model ? `${model.group === 'Claude 订阅' ? '' : `${model.group} · `}${model.label}` : ''
+    return model ? `${model.subscription ? '' : `${model.group} · `}${model.label}` : ''
   }
-  const STRIP = { rare: '动态设定少清', often: '动态设定勤清', off: '动态设定不清' }
-  const noChat = () => (ui.chat ? '' : '先打开一个对话')
+  const STRIP = { rare: t`动态设定少清`, often: t`动态设定勤清`, off: t`动态设定不清` }
+  const noChat = () => (ui.chat ? '' : t`先打开一个对话`)
   const sections = [
     {
-      id: 'model', title: '默认模型', pane: settingsPages.model,
-      summary: () => [modelName(value('model')) || '还没选', value('thinking') === 'off' ? '不思考' : '自适应思考', `努力 ${value('effort')}`].join(' · '),
-      status: () => (value('model') ? null : ['warn', '没选模型']),
+      id: 'model', title: t`默认模型`, pane: settingsPages.model,
+      summary: () => [modelName(value('model')) || t`还没选`, value('thinking') === 'off' ? t`不思考` : t`自适应思考`, t`努力 ${value('effort')}`].join(' · '),
+      status: () => (value('model') ? null : ['warn', t`没选模型`]),
     },
     {
-      id: 'providers', title: '模型供应商', look: 'shared', action: () => providersUi.open(),
-      summary: () => (providers.length ? `${providers.length} 个：${providers.slice(0, 3).map(p => p.name).join('、')}${providers.length > 3 ? '…' : ''}` : '还没添加：接入 DeepSeek、OpenRouter、Anthropic 等'),
-      status: () => (providers.length ? null : ['warn', '先添加一个']),
+      id: 'providers', title: t`模型供应商`, look: 'shared', action: () => providersUi.open(),
+      summary: () => (providers.length ? t`${providers.length} 个：${providers.slice(0, 3).map(p => p.name).join(t`、`)}${providers.length > 3 ? '…' : ''}` : t`还没添加：接入 DeepSeek、OpenRouter、Anthropic 等`),
+      status: () => (providers.length ? null : ['warn', t`先添加一个`]),
     },
     {
-      id: 'persona', title: '你的角色', pane: settingsPages.persona,
-      summary: () => `${value('personaName').trim() || '你'} · ${value('personaDescription').trim() ? '有角色设定' : '没写角色设定'}`,
+      id: 'persona', title: t`你的角色`, pane: settingsPages.persona,
+      summary: () => `${value('personaName').trim() || t`你`} · ${value('personaDescription').trim() ? t`有角色设定` : t`没写角色设定`}`,
     },
     {
-      id: 'style', title: '文风与字数', pane: settingsPages.style,
-      summary: () => [value('language').trim() || '简体中文', Number(value('replyLength')) > 0 ? `每轮约 ${value('replyLength')} 字` : '字数不限', value('writingRules').trim() ? '有文风要求' : '没写文风要求'].join(' · '),
+      id: 'style', title: t`文风与字数`, pane: settingsPages.style,
+      summary: () => [value('language').trim() || t`简体中文`, Number(value('replyLength')) > 0 ? t`每轮约 ${value('replyLength')} 字` : t`字数不限`, value('writingRules').trim() ? t`有文风要求` : t`没写文风要求`].join(' · '),
     },
     {
-      id: 'presets', title: '预设', look: 'shared', action: () => presetsUi.open(),
+      id: 'presets', title: t`预设`, look: 'shared', action: () => presetsUi.open(),
       summary: () => {
         const preferred = presets.find(p => p.id === ui.settings?.presetId)
-        return presets.length ? `${presets.length} 个 · 新对话默认：${preferred?.name ?? '不用预设'}` : '还没导入：导入 SillyTavern 的 Chat Completion 预设'
+        return presets.length ? t`${presets.length} 个 · 新对话默认：${preferred?.name ?? t`不用预设`}` : t`还没导入：导入 SillyTavern 的 Chat Completion 预设`
       },
     },
     {
-      id: 'scan', title: '扫描与状态', look: 'shared', tag: '所有对话', pane: settingsPages.scan,
-      summary: () => `扫描最近 ${value('scanDepth')} 条 · 隔 ${value('reinjectAfter')} 轮再注入 · 每 ${value('stateRefreshEvery')} 轮重发状态 · ${STRIP[value('dynamicStrip')] ?? ''}`,
+      id: 'scan', title: t`扫描与状态`, look: 'shared', tag: t`所有对话`, pane: settingsPages.scan,
+      summary: () => t`扫描最近 ${value('scanDepth')} 条 · 隔 ${value('reinjectAfter')} 轮再注入 · 每 ${value('stateRefreshEvery')} 轮重发状态 · ${STRIP[value('dynamicStrip')] ?? ''}`,
     },
     // Without a card the row hides but the page stays mounted: a page left out of
     // the layout leaves the document, and openSettings fills #book-options by id.
     {
-      id: 'books', title: '挂载的世界书', pane: settingsPages.books, crumb: card ? `世界书与状态 · ${card.name}` : undefined, hidden: () => !card,
+      id: 'books', title: t`挂载的世界书`, pane: settingsPages.books, crumb: card ? t`世界书与状态 · ${card.name}` : undefined, hidden: () => !card,
       summary: () => {
         if (!card) return ''
-        const own = card.bookEntries ? `卡里自带 ${card.bookEntries} 条` : '卡里没带世界书'
+        const own = card.bookEntries ? t`卡里自带 ${card.bookEntries} 条` : t`卡里没带世界书`
         const names = [...form.querySelectorAll('input[name="book"]:checked')].map(input => ui.books.find(b => b.id === input.value)?.name).filter(Boolean)
-        const mounted = !ui.books.length ? '还没导入独立世界书' : names.length ? `挂了 ${names.length} 本：${names.join('、')}` : '没挂独立世界书'
+        const mounted = !ui.books.length ? t`还没导入独立世界书` : names.length ? t`挂了 ${names.length} 本：${names.join(t`、`)}` : t`没挂独立世界书`
         return `${own} · ${mounted}`
       },
     },
     {
-      id: 'network', title: '网络代理', pane: settingsPages.network, hidden: () => document.documentElement.dataset.featureProxy === 'false',
+      id: 'network', title: t`网络代理`, pane: settingsPages.network, hidden: () => document.documentElement.dataset.featureProxy === 'false',
       summary: () => {
         const mode = value('proxyMode')
-        if (mode === 'none') return '不用代理（国内服务直连）'
-        if (mode === 'manual') return `走 ${value('proxyUrl').trim() || '（还没填地址）'}`
-        return ui.network?.mode === 'system' && ui.network.effective ? `跟随系统代理：${ui.network.effective}` : '跟随系统代理'
+        if (mode === 'none') return t`不用代理（国内服务直连）`
+        if (mode === 'manual') return t`走 ${value('proxyUrl').trim() || t`（还没填地址）`}`
+        return ui.network?.mode === 'system' && ui.network.effective ? t`跟随系统代理：${ui.network.effective}` : t`跟随系统代理`
       },
-      status: () => (ui.network?.locked ? ['', '启动参数指定'] : value('proxyMode') === 'system' && ui.network?.mode === 'system' && !ui.network.effective ? ['warn', '系统代理没开'] : null),
+      status: () => (ui.network?.locked ? ['', t`启动参数指定`] : value('proxyMode') === 'system' && ui.network?.mode === 'system' && !ui.network.effective ? ['warn', t`系统代理没开`] : null),
     },
     {
-      id: 'access', title: '手机访问', look: 'shared', pane: settingsPages.access, hidden: () => document.documentElement.dataset.featureLan === 'false',
+      id: 'access', title: t`手机访问`, look: 'shared', pane: settingsPages.access, hidden: () => document.documentElement.dataset.featureLan === 'false',
       summary: () => {
-        if (value('listen') !== 'lan') return '仅这台电脑'
-        return ui.access?.running === 'lan' ? `同一 WiFi 或 Tailscale · ${ui.access.links?.length ?? 0} 个链接` : '同一 WiFi 或 Tailscale（重启服务后生效）'
+        if (value('listen') !== 'lan') return t`仅这台电脑`
+        return ui.access?.running === 'lan' ? t`同一 WiFi 或 Tailscale · ${ui.access.links?.length ?? 0} 个链接` : t`同一 WiFi 或 Tailscale（重启服务后生效）`
       },
     },
     {
-      id: 'media', title: '配图与朗读', action: () => mediaUi.openSettings(),
-      summary: () => '画图方式、朗读来源，每张卡的画风、名册和音色',
+      id: 'media', title: t`配图与朗读`, action: () => mediaUi.openSettings(),
+      summary: () => t`画图方式、朗读来源，每张卡的画风、名册和音色`,
     },
     {
-      id: 'update', title: '更新', look: 'shared', pane: settingsPages.update, hidden: () => !updateUi.enabled(),
+      id: 'update', title: t`更新`, look: 'shared', pane: settingsPages.update, hidden: () => !updateUi.enabled(),
       summary: () => updateUi.summary(),
       status: () => updateUi.status(),
     },
     {
-      id: 'privacy', title: '隐私与网络', look: 'shared', pane: settingsPages.privacy,
-      summary: () => `不用配置也会连：${[form.webFonts.checked && '网络字体', form.cdnLibraries.checked && '酒馆助手脚本库'].filter(Boolean).join('、') || '都关了'}`,
+      id: 'interface', title: t`界面语言`, look: 'shared', pane: settingsPages.interface,
+      summary: () => `${form.uiLanguage.selectedOptions[0]?.text ?? ''} · ${OTHER_LANGUAGE_NAME}`,
     },
     {
-      id: 'shortcut', title: '桌面快捷方式', look: 'shared', action: () => makeShortcut(), hidden: () => !ui.launcher,
-      summary: () => '在桌面放一个 CicaTavern 图标，指向这个文件夹里的 CicaTavern.exe',
+      id: 'privacy', title: t`隐私与网络`, look: 'shared', pane: settingsPages.privacy,
+      summary: () => t`不用配置也会连：${[form.webFonts.checked && t`网络字体`, form.cdnLibraries.checked && t`酒馆助手脚本库`].filter(Boolean).join(t`、`) || t`都关了`}`,
     },
     {
-      id: 'show-prompt', title: '查看当前对话的提示词', look: 'shared',
-      action: () => (ui.chat ? showPrompt() : toast('先打开一个对话')),
-      summary: () => noChat() || '固定前缀和最近一轮发出去的内容',
+      id: 'shortcut', title: t`桌面快捷方式`, look: 'shared', action: () => makeShortcut(), hidden: () => !ui.launcher,
+      summary: () => t`在桌面放一个 CicaTavern 图标，指向这个文件夹里的 CicaTavern.exe`,
     },
     {
-      id: 'rebuild-prompt', title: '重建当前对话的前缀', look: 'shared',
-      action: () => (!ui.chat ? toast('先打开一个对话') : ui.generating ? toast('正在生成，先停止') : rebuildPrompt()),
-      summary: () => noChat() || '按现在的卡、设置和预设重写固定前缀，下一轮多写一次缓存',
+      id: 'show-prompt', title: t`查看当前对话的提示词`, look: 'shared',
+      action: () => (ui.chat ? showPrompt() : toast(t`先打开一个对话`)),
+      summary: () => noChat() || t`固定前缀和最近一轮发出去的内容`,
     },
     {
-      id: 'stop-server', title: '停止后台服务', look: 'shared', action: () => stopServer(), hidden: () => document.documentElement.dataset.edition === 'android',
-      summary: () => '电脑和手机上的页面都会断开，下次从桌面图标打开',
+      id: 'rebuild-prompt', title: t`重建当前对话的前缀`, look: 'shared',
+      action: () => (!ui.chat ? toast(t`先打开一个对话`) : ui.generating ? toast(t`正在生成，先停止`) : rebuildPrompt()),
+      summary: () => noChat() || t`按现在的卡、设置和预设重写固定前缀，下一轮多写一次缓存`,
+    },
+    {
+      id: 'stop-server', title: t`停止后台服务`, look: 'shared', action: () => stopServer(), hidden: () => document.documentElement.dataset.edition === 'android',
+      summary: () => t`电脑和手机上的页面都会断开，下次从桌面图标打开`,
     },
   ].filter(Boolean)
   const cardRow = card
-    ? whoLine(el, { cardId: card.hasAvatar ? card.id : '', name: card.name, note: '这张卡挂的' })
-    : el('p', { class: 'menu-who none', text: '选一张角色卡后，可以给它挂独立世界书。' })
+    ? whoLine(el, { cardId: card.hasAvatar ? card.id : '', name: card.name, note: t`这张卡挂的` })
+    : el('p', { class: 'menu-who none', text: t`选一张角色卡后，可以给它挂独立世界书。` })
   settingsMenu.mount({
     panels: [
-      { id: 'model', title: '模型', icon: MENU_ICONS.model, rows: ['model', 'providers'] },
-      { id: 'write', title: '写作', icon: MENU_ICONS.write, rows: ['persona', 'style', 'presets'] },
-      { id: 'books', title: '世界书与状态', icon: MENU_ICONS.book, rows: ['scan', cardRow, 'books'] },
-      { id: 'link', title: '连接', icon: MENU_ICONS.link, rows: ['network', 'access'] },
-      { id: 'more', title: '更多', icon: MENU_ICONS.tools, rows: ['media', 'update', 'privacy', 'shortcut', 'show-prompt', 'rebuild-prompt', 'stop-server'] },
+      { id: 'model', title: t`模型`, icon: MENU_ICONS.model, rows: ['model', 'providers'] },
+      { id: 'write', title: t`写作`, icon: MENU_ICONS.write, rows: ['persona', 'style', 'presets'] },
+      { id: 'books', title: t`世界书与状态`, icon: MENU_ICONS.book, rows: ['scan', cardRow, 'books'] },
+      { id: 'link', title: t`连接`, icon: MENU_ICONS.link, rows: ['network', 'access'] },
+      { id: 'more', title: t`更多`, icon: MENU_ICONS.tools, rows: ['interface', 'media', 'update', 'privacy', 'shortcut', 'show-prompt', 'rebuild-prompt', 'stop-server'] },
     ],
     sections,
-    note: '名字、角色设定和文风写进对话开局时的固定前缀，只对之后新开的对话生效；模型、思考、字数和世界书扫描随时生效。',
-    save: { text: '保存', onClick: () => saveSettings() },
+    note: t`名字、角色设定和文风写进对话开局时的固定前缀，只对之后新开的对话生效；模型、思考、字数和世界书扫描随时生效。`,
+    save: { text: t`保存`, onClick: () => saveSettings() },
   })
 }
 
@@ -1630,14 +1641,14 @@ const saveSettings = guard(async () => {
   const form = $('settings-form')
   const num = name => Number(form[name].value) || 0
   ;[, ui.settings] = await Promise.all([
-    api('/api/persona', { method: 'PUT', body: { name: form.personaName.value.trim() || '你', description: form.personaDescription.value } }),
+    api('/api/persona', { method: 'PUT', body: { name: form.personaName.value.trim() || zh`你`, description: form.personaDescription.value } }),
     api('/api/settings', {
       method: 'PUT',
       body: {
         model: form.model.value,
         thinking: form.thinking.value,
         effort: form.effort.value,
-        language: form.language.value.trim() || '简体中文',
+        language: form.language.value.trim() || zh`简体中文`,
         writingRules: form.writingRules.value,
         scanDepth: Math.max(1, num('scanDepth')),
         reinjectAfter: num('reinjectAfter'),
@@ -1647,6 +1658,7 @@ const saveSettings = guard(async () => {
         listen: form.listen.value === 'lan' ? 'lan' : 'local',
         webFonts: form.webFonts.checked,
         cdnLibraries: form.cdnLibraries.checked,
+        uiLanguage: form.uiLanguage.value,
         ...(form.proxyMode.disabled ? {} : { proxy: form.proxyMode.value === 'manual' ? form.proxyUrl.value.trim() : form.proxyMode.value }),
       },
     }),
@@ -1661,9 +1673,40 @@ const saveSettings = guard(async () => {
   const access = await api('/api/access').catch(() => null)
   renderAccess(access)
   settingsMenu?.markClean()
+  // Another interface language: the page comes back in it (index.html is translated when sent).
+  if (pickLanguage(ui.settings.uiLanguage, navigator.languages ?? []) !== lang) {
+    location.reload()
+    return
+  }
   settingsMenu?.refresh()
-  toast(form.listen.value === 'lan' && access?.running !== 'lan' ? '已保存。重启服务后，手机才能连上。' : '设置已保存')
+  toast(form.listen.value === 'lan' && access?.running !== 'lan' ? t`已保存。重启服务后，手机才能连上。` : t`设置已保存`)
 })
+
+/**
+ * The persona's name and the writing language default to Chinese words, which
+ * are for the model. On an English page such a field shows empty with the
+ * English as its hint; saving it empty keeps the default.
+ */
+function showDefaultAsHint(input, value, shown) {
+  if (lang === 'zh') return
+  input.placeholder = shown
+  if (input.value === value) input.value = ''
+}
+
+// 设置 → 更多 → 界面语言. The setting's name also in the other language, so a page
+// in a language you cannot read still shows where to change it.
+const OTHER_LANGUAGE_NAME = lang === 'en' ? zh`界面语言` : 'Interface language'
+
+function fillInterfaceLanguage(form) {
+  const system = pickLanguage('', navigator.languages ?? []) === 'en' ? 'English' : t`简体中文`
+  form.uiLanguage.replaceChildren(
+    el('option', { value: 'auto', text: t`跟随系统（${system}）` }),
+    el('option', { value: 'zh', lang: 'zh-CN', text: zh`简体中文` }),
+    el('option', { value: 'en', lang: 'en', text: 'English' }),
+  )
+  form.uiLanguage.value = ui.settings.uiLanguage ?? 'auto'
+  $('ui-language-other').textContent = ` · ${OTHER_LANGUAGE_NAME}`
+}
 
 /**
  * 网络代理: the saved choice (null = the edition's default, which /api/network
@@ -1683,12 +1726,12 @@ function fillProxy(form, saved, network) {
   form.proxyUrl.disabled = locked
   const status = $('network-status')
   if (!network) return (status.textContent = '')
-  const now = network.effective ? `现在走 ${network.effective}` : '现在不走代理'
-  const via = network.mode === 'system' ? (network.source === 'windows' ? '（Windows 系统代理）' : network.source === 'env' ? '（环境变量 HTTPS_PROXY）' : '：系统代理没开') : ''
-  status.textContent = locked ? `${now}。启动时用 --proxy 或 AGENT_TAVERN_PROXY 指定了代理，这里改不了。` : `${now}${via}。`
+  const now = network.effective ? t`现在走 ${network.effective}` : t`现在不走代理`
+  const via = network.mode === 'system' ? (network.source === 'windows' ? t`（Windows 系统代理）` : network.source === 'env' ? t`（环境变量 HTTPS_PROXY）` : t`：系统代理没开`) : ''
+  status.textContent = locked ? t`${now}。启动时用 --proxy 或 AGENT_TAVERN_PROXY 指定了代理，这里改不了。` : t`${now}${via}。`
 }
 
-const ACCESS_KINDS = { wifi: '同一 WiFi', wired: '有线局域网', tailscale: 'Tailscale（出门用）', virtual: '虚拟网卡' }
+const ACCESS_KINDS = { wifi: t`同一 WiFi`, wired: t`有线局域网`, tailscale: t`Tailscale（出门用）`, virtual: t`虚拟网卡` }
 
 function renderAccess(info) {
   ui.access = info
@@ -1699,12 +1742,12 @@ function renderAccess(info) {
     return
   }
   if (info.running !== 'lan') {
-    box.textContent = info.saved === 'lan' ? '已设为局域网。重启服务后，这里会出现手机链接。' : '现在只能在这台电脑上打开。'
+    box.textContent = info.saved === 'lan' ? t`已设为局域网。重启服务后，这里会出现手机链接。` : t`现在只能在这台电脑上打开。`
     return
   }
   const links = info.links ?? []
   if (!links.length) {
-    box.textContent = '没有找到局域网地址。'
+    box.textContent = t`没有找到局域网地址。`
     return
   }
   const row = link =>
@@ -1714,8 +1757,8 @@ function renderAccess(info) {
       el('button', {
         type: 'button',
         class: 'btn small',
-        text: '复制',
-        onclick: () => navigator.clipboard.writeText(link.url).then(() => toast('已复制'), () => toast('复制失败，请长按链接选择')),
+        text: t`复制`,
+        onclick: () => navigator.clipboard.writeText(link.url).then(() => toast(t`已复制`), () => toast(t`复制失败，请长按链接选择`)),
       }),
     ])
   const main = links.filter(link => link.primary)
@@ -1725,16 +1768,16 @@ function renderAccess(info) {
   box.replaceChildren(
     ...main.map(row),
     ...(rest.length
-      ? [el('details', { class: 'access-more' }, [el('summary', { text: `其他地址（${rest.length}），手机一般用不上` }), ...rest.map(row)])]
+      ? [el('details', { class: 'access-more' }, [el('summary', { text: t`其他地址（${rest.length}），手机一般用不上` }), ...rest.map(row)])]
       : []),
   )
 }
 
 const rebuildPrompt = guard(async () => {
   if (!ui.chat) return
-  if (!confirm('按现在的角色卡、设置和预设重新生成这个对话的固定前缀？历史不变；下一轮会重新写入一次缓存（大卡约占一轮的额度）。')) return
+  if (!confirm(t`按现在的角色卡、设置和预设重新生成这个对话的固定前缀？历史不变；下一轮会重新写入一次缓存（大卡约占一轮的额度）。`)) return
   setChat(await api(`/api/chats/${ui.chat.id}/preset`, { method: 'POST', body: {} }))
-  toast('已重建固定前缀，下一轮生效')
+  toast(t`已重建固定前缀，下一轮生效`)
 })
 
 // Tells the server a page is open. The desktop launcher's server exits about a
@@ -1748,23 +1791,23 @@ function holdPresence() {
 // CicaTavern.exe makes the shortcut itself (IShellLink); the server only asks it to.
 const makeShortcut = guard(async () => {
   const { file } = await api('/api/shortcut', { method: 'POST', body: {} })
-  toast(`已创建：${file}`, 6000)
+  toast(t`已创建：${file}`, 6000)
 })
 
 const stopServer = guard(async () => {
-  if (ui.generating) throw new Error('正在生成，先停止')
-  if (!confirm('停止后台服务？这个窗口和手机上的页面都会断开，下次从桌面图标打开。')) return
+  if (ui.generating) throw new Error(t`正在生成，先停止`)
+  if (!confirm(t`停止后台服务？这个窗口和手机上的页面都会断开，下次从桌面图标打开。`)) return
   await api('/api/shutdown', { method: 'POST', body: {} })
   presence?.close()
   $('settings-dialog').close()
-  toast('服务已停止，可以关掉这个窗口了')
+  toast(t`服务已停止，可以关掉这个窗口了`)
 })
 
 const showPrompt = guard(async () => {
   const data = await api(`/api/chats/${ui.chat.id}/prompt`)
   $('prompt-system').textContent = data.systemPrompt
   $('prompt-chars').textContent = fmt(data.systemPrompt.length)
-  $('prompt-turn').textContent = data.lastTurnPrompt || '（还没有发送过）'
+  $('prompt-turn').textContent = data.lastTurnPrompt || t`（还没有发送过）`
   $('prompt-dialog').showModal()
 })
 
@@ -1855,10 +1898,10 @@ function openQuick() {
   const update = () => {
     $('quick-apply').disabled = !changed.size
     $('quick-hint').textContent = !changed.size
-      ? '在「预设」里点条目右边的「快捷」，可以把它放到这里。改动会存进预设，并用到这个对话。'
+      ? t`在「预设」里点条目右边的「快捷」，可以把它放到这里。改动会存进预设，并用到这个对话。`
       : needsRebuild(entries, [...changed.keys()])
-        ? '应用后会重建这个对话的固定前缀，下一轮重写一次缓存。'
-        : '这些条目每轮单独发送，应用后下一轮就生效，不影响缓存。'
+        ? t`应用后会重建这个对话的固定前缀，下一轮重写一次缓存。`
+        : t`这些条目每轮单独发送，应用后下一轮就生效，不影响缓存。`
   }
   $('quick-list').replaceChildren(
     ...entries.map(p => {
@@ -1889,7 +1932,7 @@ const applyQuick = guard(async () => {
   await loadPresetDetail(presetId)
   renderQuickButton()
   $('quick-dialog').close()
-  toast(rebuild ? '已应用。下一轮会重写一次缓存。' : '已应用，下一轮生效。')
+  toast(rebuild ? t`已应用。下一轮会重写一次缓存。` : t`已应用，下一轮生效。`)
 })
 
 // ─── Small interactions ─────────────────────────────────────────────────
@@ -1901,14 +1944,14 @@ function fitInput() {
 }
 
 const THEMES = ['auto', 'light', 'dark']
-const THEME_LABEL = { auto: '自动', light: '浅色', dark: '深色' }
+const THEME_LABEL = { auto: t`自动`, light: t`浅色`, dark: t`深色` }
 function currentTheme() {
   return document.documentElement.dataset.theme || 'auto'
 }
 function renderThemeButton() {
   const theme = currentTheme()
   $('toggle-theme').textContent = THEME_LABEL[theme]
-  $('toggle-theme').title = `主题：${THEME_LABEL[theme]}（点击切换）`
+  $('toggle-theme').title = t`主题：${THEME_LABEL[theme]}（点击切换）`
 }
 function cycleTheme() {
   const next = THEMES[(THEMES.indexOf(currentTheme()) + 1) % THEMES.length]
@@ -1931,7 +1974,7 @@ async function checkAuth() {
 
 function bind() {
   // On a phone the full placeholder wraps under the one-line box.
-  if (matchMedia('(max-width: 560px)').matches) $('input').placeholder = '写下行动、对白或想看的发展'
+  if (matchMedia('(max-width: 560px)').matches) $('input').placeholder = t`写下行动、对白或想看的发展`
   // Phones show a list dialog's list and its selected item one at a time (style.css .show-main).
   for (const layout of document.querySelectorAll('.preset-layout')) {
     // Capture phase: the provider list re-renders inside the item's own click
@@ -1973,7 +2016,7 @@ function bind() {
     const choice = event.target.closest('.choice')
     if (!choice) return
     setDraft(choice.dataset.choice)
-    toast('已填进输入框，可以改一改再发送')
+    toast(t`已填进输入框，可以改一改再发送`)
   })
   $('new-chat').addEventListener('click', newChat)
   $('import-story').addEventListener('change', event => {
@@ -2092,7 +2135,7 @@ async function boot() {
   allowLibraries(ui.settings?.cdnLibraries !== false)
   if (ui.features.subscription) {
     subscriptionPage = await import('/subscription.js').catch(() => null)
-    document.querySelector('.brand-sub').textContent = '个人版 · 可用 Claude 订阅'
+    document.querySelector('.brand-sub').textContent = t`个人版 · 可用 Claude 订阅`
   }
   const appName = ui.features.appName ?? 'CicaTavern'
   document.querySelector('.brand-name').textContent = appName

@@ -623,6 +623,9 @@ button.chip.on { background: var(--accent); border-color: var(--accent); color: 
 .player-count { font: 12px var(--mono); color: var(--accent); flex: none; }
 .player-text { flex: 1; min-width: 0; font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dialog .hint.warn { color: var(--warn); }
+.dialog .other-lang { color: var(--faint); }
+/* English: a word next to its neighbour needs the space Chinese does without (a flex pill drops a leading one). */
+:lang(en) .pill .wide-only { margin-inline-start: 0.3em; }
 
 /* Settings windows (web/menu.js): a menu of panels, each row opening one part
    on its own page or another window; the title row and the save row stay in
@@ -645,7 +648,7 @@ button.chip.on { background: var(--accent); border-color: var(--accent); color: 
 .menu-foot .btn.primary.pending { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
 
 /* The menu */
-.menu-home { display: grid; gap: 14px; padding-bottom: 12px; }
+.menu-home { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; padding-bottom: 12px; }
 .menu-panel { border: 1px solid var(--line-soft); border-radius: 16px; background: var(--surface); padding: 6px 6px 8px; }
 .menu-panel-head { display: flex; align-items: center; gap: 11px; padding: 8px 10px 10px; }
 .menu-panel-icon { flex: none; width: 34px; height: 34px; border-radius: 11px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
@@ -1201,6 +1204,8 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .forge-lead { color: var(--muted); font-size: 13.5px; line-height: 1.75; margin: 0 0 14px; }
 .dialog .forge-idea { width: 100%; font: 16px/1.75 var(--serif); padding: 12px 14px; border-radius: 14px; resize: vertical; }
 .forge-ideas { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 18px; }
+/* An idea is a sentence: in English it can be wider than a phone. */
+.forge-ideas button.chip { white-space: normal; text-align: left; max-width: 100%; }
 .forge-start { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .forge-h { margin: 32px 0 6px; font-size: 12px; color: var(--faint); font-weight: 600; }
 .forge-drafts { list-style: none; margin: 0; padding: 0; }

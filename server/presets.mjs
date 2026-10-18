@@ -14,6 +14,7 @@
 import { normalizeScripts } from '../web/shared/regex.js'
 import { httpError, newId } from './store.mjs'
 import { replaceMacros } from './prompt.mjs'
+import { msg } from './i18n.mjs'
 
 export const MARKERS = new Set([
   'chatHistory', 'dialogueExamples', 'worldInfoBefore', 'worldInfoAfter',
@@ -39,7 +40,7 @@ export function importOwnPreset(json) {
   const preset = json.preset
   const valid = preset && typeof preset.name === 'string' && Array.isArray(preset.prompts) &&
     preset.prompts.every(p => p && typeof p.id === 'string' && typeof p.content === 'string')
-  if (!valid) throw httpError(400, '预设文件不完整')
+  if (!valid) throw httpError(400, msg`预设文件不完整`)
   return { ...preset, id: newId(), importedAt: new Date().toISOString() }
 }
 
@@ -50,7 +51,7 @@ function countHelperScripts(value) {
 }
 
 export function normalizePreset(json, fallbackName = '预设') {
-  if (!isPresetJson(json)) throw httpError(400, '这不是 SillyTavern 预设（没有 prompts）')
+  if (!isPresetJson(json)) throw httpError(400, msg`这不是 SillyTavern 预设（没有 prompts）`)
   const byId = new Map(json.prompts.filter(p => p && typeof p.identifier === 'string').map(p => [p.identifier, p]))
   const orders = (Array.isArray(json.prompt_order) ? json.prompt_order : []).filter(o => Array.isArray(o?.order) && o.order.length)
   // 100001 is the order SillyTavern edits for every character; older files only have 100000.
@@ -245,7 +246,7 @@ export function editPreset(preset, patch) {
     const ids = preset.prompts.map(p => p.id)
     const order = patch.order.map(String)
     if (order.length !== ids.length || new Set(order).size !== ids.length || !order.every(id => ids.includes(id))) {
-      throw httpError(409, '条目列表已经变了，刷新后再排')
+      throw httpError(409, msg`条目列表已经变了，刷新后再排`)
     }
     const byId = new Map(preset.prompts.map(p => [p.id, p]))
     preset.prompts = order.map(id => byId.get(id))

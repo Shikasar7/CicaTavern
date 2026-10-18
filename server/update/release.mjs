@@ -1,5 +1,6 @@
 // The latest release on GitHub, in the shape the updater uses. Pure functions:
 // the network is in index.mjs.
+import { msg } from '../i18n.mjs'
 export const REPO = 'Shikasar7/CicaTavern'
 export const FEED = `https://api.github.com/repos/${REPO}`
 
@@ -59,9 +60,9 @@ export function notesHash(body, fileName) {
 export function expectedHash(asset, body) {
   const github = digestHash(asset)
   const notes = notesHash(body, asset.name)
-  if (github && notes && github !== notes) return { error: '发布页上写的 SHA-256 和 GitHub 算的对不上，不能自动更新。到发布页确认后手动下载。' }
+  if (github && notes && github !== notes) return { error: msg`发布页上写的 SHA-256 和 GitHub 算的对不上，不能自动更新。到发布页确认后手动下载。` }
   const sha256 = github ?? notes
-  if (!sha256) return { error: '这个版本没有公布 SHA-256，不能自动更新。到发布页手动下载。' }
+  if (!sha256) return { error: msg`这个版本没有公布 SHA-256，不能自动更新。到发布页手动下载。` }
   return { sha256, from: [github && 'github', notes && 'notes'].filter(Boolean) }
 }
 
@@ -91,7 +92,7 @@ export function trustedDownload(href, { repo = REPO, feed = FEED } = {}) {
  */
 export function releaseInfo(json, { repo = REPO, feed = FEED } = {}) {
   const version = parseVersion(json?.tag_name)
-  if (!version) throw new Error(`最新发布的标签不是版本号：${String(json?.tag_name ?? '（没有）').slice(0, 40)}`)
+  if (!version) throw new Error(msg`最新发布的标签不是版本号：${String(json?.tag_name ?? msg`（没有）`).slice(0, 40)}`)
   const assets = {}
   for (const asset of Array.isArray(json.assets) ? json.assets : []) {
     const kind = assetKind(String(asset?.name ?? ''))

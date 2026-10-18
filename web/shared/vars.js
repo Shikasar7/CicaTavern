@@ -41,7 +41,7 @@ export function formatValue(value, indent = '') {
   if (v === undefined || v === null) return ''
   if (typeof v !== 'object') return String(v)
   if (Array.isArray(v)) {
-    if (v.every(x => x === null || typeof x !== 'object')) return v.map(x => String(x)).join('、')
+    if (v.every(x => x === null || typeof x !== 'object')) return v.map(x => String(x)).join('、') // i18n-ignore: state values, also sent to the model
     return v.map(x => `${indent}- ${formatValue(x, `${indent}  `).trimStart()}`).join('\n')
   }
   return Object.entries(v)

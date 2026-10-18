@@ -1,12 +1,13 @@
 // Usage dashboard: stat tiles, per-turn prompt composition (stacked columns),
 // cache hit rate and subscription quota over time (lines), per-model and
 // per-chat tables. Hand-written SVG, one y-axis per chart, hover on every mark.
+import { locale, t } from '/i18n.js'
 
 const SVG = 'http://www.w3.org/2000/svg'
 const SERIES = {
-  cacheRead: { label: '缓存读取', color: 'var(--series-1)' },
-  cacheWrite: { label: '缓存写入', color: 'var(--series-2)' },
-  input: { label: '未缓存输入', color: 'var(--series-3)' },
+  cacheRead: { label: t`缓存读取`, color: 'var(--series-1)' },
+  cacheWrite: { label: t`缓存写入`, color: 'var(--series-2)' },
+  input: { label: t`未缓存输入`, color: 'var(--series-3)' },
 }
 
 // ─── helpers ────────────────────────────────────────────────────────────
@@ -34,13 +35,13 @@ export function compact(n) {
   const v = Number(n) || 0
   if (Math.abs(v) >= 1e6) return `${(v / 1e6).toFixed(v >= 1e7 ? 0 : 1)}M`
   if (Math.abs(v) >= 1e4) return `${(v / 1e3).toFixed(v >= 1e5 ? 0 : 1)}K`
-  return v.toLocaleString('zh-CN')
+  return v.toLocaleString(locale)
 }
-const full = n => (Number(n) || 0).toLocaleString('zh-CN')
+const full = n => (Number(n) || 0).toLocaleString(locale)
 const pct = v => (v === null || v === undefined ? '—' : `${Math.round(v * 100)}%`)
 const money = v => (v >= 1 ? `$${v.toFixed(2)}` : `$${(v ?? 0).toFixed(3)}`)
-const clock = ms => new Date(ms).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-const stamp = ms => new Date(ms).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+const clock = ms => new Date(ms).toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' })
+const stamp = ms => new Date(ms).toLocaleString(locale, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 
 /** Clean axis maximum and ticks: 1/2/5 × 10^k steps. */
 function niceTicks(max, count = 4) {
@@ -86,20 +87,20 @@ const tipRow = (label, value, color) => h('div', { class: 'row' }, [h('span', {}
 // ─── charts ─────────────────────────────────────────────────────────────
 function stackedTurns(turns) {
   const card = h('div', { class: 'chart-card' }, [
-    h('div', { class: 'chart-title', text: '每轮输入构成' }),
-    h('div', { class: 'chart-sub', text: `最近 ${turns.length} 轮。缓存读取越多，这一轮越快、越省额度。` }),
+    h('div', { class: 'chart-title', text: t`每轮输入构成` }),
+    h('div', { class: 'chart-sub', text: t`最近 ${turns.length} 轮。缓存读取越多，这一轮越快、越省额度。` }),
     h('div', { class: 'legend' }, Object.values(SERIES).map(sr => h('span', {}, [h('i', { style: `background:${sr.color}` }), sr.label]))),
   ])
   if (!turns.length) {
-    card.append(h('div', { class: 'empty-chart', text: '这个时间段还没有生成记录' }))
+    card.append(h('div', { class: 'empty-chart', text: t`这个时间段还没有生成记录` }))
     return card
   }
   const W = 960, H = 220, L = 52, R = 10, T = 8, B = 24
   const plotW = W - L - R, plotH = H - T - B
-  const totals = turns.map(t => t.cacheRead + t.cacheWrite + t.input)
+  const totals = turns.map(turn => turn.cacheRead + turn.cacheWrite + turn.input)
   const { max, ticks } = niceTicks(Math.max(...totals))
   const y = v => T + plotH - (v / max) * plotH
-  const svg = s('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': '每轮输入 token 构成的堆叠柱状图' })
+  const svg = s('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': t`每轮输入 token 构成的堆叠柱状图` })
   for (const tick of ticks) {
     svg.append(s('line', { class: tick === 0 ? 'baseline' : 'gridline', x1: L, x2: W - R, y1: y(tick), y2: y(tick) }))
     const label = s('text', { x: L - 6, y: y(tick) + 4, 'text-anchor': 'end' })
@@ -110,12 +111,12 @@ function stackedTurns(turns) {
   const barW = Math.max(3, Math.min(24, band * 0.62))
   const tip = tooltip(card)
   const labelEvery = Math.max(1, Math.ceil(turns.length / 8))
-  turns.forEach((t, i) => {
+  turns.forEach((turn, i) => {
     const x = L + i * band + (band - barW) / 2
     let base = 0
-    const parts = ['cacheRead', 'cacheWrite', 'input'].filter(k => t[k] > 0)
+    const parts = ['cacheRead', 'cacheWrite', 'input'].filter(k => turn[k] > 0)
     parts.forEach((key, index) => {
-      const top = base + t[key]
+      const top = base + turn[key]
       const yTop = y(top)
       // 2px surface gap between stacked segments: trim the segment's lower edge.
       const gap = index > 0 ? 2 : 0
@@ -125,21 +126,21 @@ function stackedTurns(turns) {
     })
     if (i % labelEvery === 0 || i === turns.length - 1) {
       const label = s('text', { x: x + barW / 2, y: H - 6, 'text-anchor': 'middle' })
-      label.textContent = clock(t.at)
+      label.textContent = clock(turn.at)
       svg.append(label)
     }
     const hit = s('rect', { class: 'hit', x: L + i * band, y: T, width: band, height: plotH })
     hit.addEventListener('mousemove', event =>
       tip.show([
-        h('div', { text: `${stamp(t.at)} · ${t.chatTitle ?? ''}`.slice(0, 60) }),
-        h('div', { class: 'row', style: 'color:var(--muted)' }, [h('span', { text: t.modelLabel ?? t.model ?? '' }), h('span', { text: t.forked ? '分支' : '续接' })]),
-        tipRow('缓存读取', full(t.cacheRead), SERIES.cacheRead.color),
-        tipRow('缓存写入', full(t.cacheWrite), SERIES.cacheWrite.color),
-        tipRow('未缓存输入', full(t.input), SERIES.input.color),
-        tipRow('输出', full(t.output)),
-        tipRow('缓存命中', pct(t.hit)),
-        tipRow('首字', t.firstTokenMs ? `${(t.firstTokenMs / 1000).toFixed(1)} 秒` : '—'),
-        tipRow('等价成本', money(t.cost)),
+        h('div', { text: `${stamp(turn.at)} · ${turn.chatTitle ?? ''}`.slice(0, 60) }),
+        h('div', { class: 'row', style: 'color:var(--muted)' }, [h('span', { text: turn.modelLabel ?? turn.model ?? '' }), h('span', { text: turn.forked ? t`分支` : t`续接` })]),
+        tipRow(t`缓存读取`, full(turn.cacheRead), SERIES.cacheRead.color),
+        tipRow(t`缓存写入`, full(turn.cacheWrite), SERIES.cacheWrite.color),
+        tipRow(t`未缓存输入`, full(turn.input), SERIES.input.color),
+        tipRow(t`输出`, full(turn.output)),
+        tipRow(t`缓存命中`, pct(turn.hit)),
+        tipRow(t`首字`, turn.firstTokenMs ? t`${(turn.firstTokenMs / 1000).toFixed(1)} 秒` : '—'),
+        tipRow(t`等价成本`, money(turn.cost)),
       ], event.clientX, event.clientY),
     )
     hit.addEventListener('mouseleave', () => tip.hide())
@@ -159,7 +160,7 @@ function percentLines({ title, sub, series, xLabel, ariaLabel }) {
   const card = h('div', { class: 'chart-card' }, [h('div', { class: 'chart-title', text: title }), h('div', { class: 'chart-sub', text: sub })])
   if (visible.length > 1) card.append(h('div', { class: 'legend' }, visible.map(sr => h('span', {}, [h('i', { class: 'line', style: `background:${sr.color}` }), sr.label]))))
   if (!visible.length) {
-    card.append(h('div', { class: 'empty-chart', text: '这个时间段还没有数据' }))
+    card.append(h('div', { class: 'empty-chart', text: t`这个时间段还没有数据` }))
     return card
   }
   const W = 960, H = 180, L = 52, R = visible.length > 1 ? 70 : 16, T = 10, B = 24
@@ -232,15 +233,15 @@ function table(headers, rows) {
   ])
 }
 
-const SUM_HEADERS = ['轮数', '未缓存输入', '缓存读取', '缓存写入', '输出', '命中率', '等价成本']
+const SUM_HEADERS = [t`轮数`, t`未缓存输入`, t`缓存读取`, t`缓存写入`, t`输出`, t`命中率`, t`等价成本`]
 const sumCells = r => [r.turns, compact(r.input), compact(r.cacheRead), compact(r.cacheWrite), compact(r.output), pct(r.hit), money(r.cost)]
 
 function turnTable(turns) {
   return h('details', { class: 'turn-table' }, [
-    h('summary', { text: '查看每轮数据表' }),
-    table(['时间', '对话', '模型', '缓存读取', '缓存写入', '未缓存输入', '输出', '命中率', '首字'], [...turns].reverse().map(t => [
-      stamp(t.at), (t.chatTitle ?? '').slice(0, 24), t.modelLabel ?? t.model ?? '', full(t.cacheRead), full(t.cacheWrite), full(t.input), full(t.output), pct(t.hit),
-      t.firstTokenMs ? `${(t.firstTokenMs / 1000).toFixed(1)}s` : '—',
+    h('summary', { text: t`查看每轮数据表` }),
+    table([t`时间`, t`对话`, t`模型`, t`缓存读取`, t`缓存写入`, t`未缓存输入`, t`输出`, t`命中率`, t`首字`], [...turns].reverse().map(turn => [
+      stamp(turn.at), (turn.chatTitle ?? '').slice(0, 24), turn.modelLabel ?? turn.model ?? '', full(turn.cacheRead), full(turn.cacheWrite), full(turn.input), full(turn.output), pct(turn.hit),
+      turn.firstTokenMs ? `${(turn.firstTokenMs / 1000).toFixed(1)}s` : '—',
     ])),
   ])
 }
@@ -255,9 +256,9 @@ function tile(label, value, sub, meter) {
 }
 
 function quotaTile(label, value, resetsAt) {
-  if (typeof value !== 'number') return tile(label, '—', '生成一轮后更新')
-  const status = value >= 0.9 ? '⛔ 接近上限' : value >= 0.7 ? '⚠ 偏高' : ''
-  const reset = resetsAt ? `${new Date(resetsAt * (resetsAt < 1e12 ? 1000 : 1)).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })} 重置` : ''
+  if (typeof value !== 'number') return tile(label, '—', t`生成一轮后更新`)
+  const status = value >= 0.9 ? t`⛔ 接近上限` : value >= 0.7 ? t`⚠ 偏高` : ''
+  const reset = resetsAt ? t`${new Date(resetsAt * (resetsAt < 1e12 ? 1000 : 1)).toLocaleString(locale, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })} 重置` : ''
   return tile(label, pct(value), [status, reset].filter(Boolean).join(' · '), value)
 }
 
@@ -269,7 +270,7 @@ function quotaTile(label, value, resetsAt) {
  */
 /** @param subscription - false in the Android app: no quota tiles or quota chart. */
 export function renderUsage(root, data, rateLimit, labelOf, { subscription = true } = {}) {
-  const turns = data.turns.map(t => ({ ...t, modelLabel: labelOf(t.model) }))
+  const turns = data.turns.map(turn => ({ ...turn, modelLabel: labelOf(turn.model) }))
   const today = data.today
   const windows = rateLimit?.unifiedWindows ?? {}
   const five = windows.five_hour?.utilization ?? data.latestRate?.five
@@ -278,35 +279,35 @@ export function renderUsage(root, data, rateLimit, labelOf, { subscription = tru
   // filter: sections left out (null) must not become the text "null".
   root.replaceChildren(...[
     h('div', { class: 'tiles' }, [
-      tile('今日 token', compact(today.input + today.cacheRead + today.cacheWrite + today.output), `${today.turns} 轮 · 输出 ${compact(today.output)}`),
-      tile('今日缓存命中率', pct(today.hit), `缓存读取 ${compact(today.cacheRead)}`),
-      tile('今日等价成本', money(today.cost), subscription ? '按 API 单价估算，订阅不按此计费' : '按 Anthropic API 公开单价估算，实际以供应商账单为准'),
-      tile(`首字中位数（${data.days} 天）`, period.medianFirstTokenMs ? `${(period.medianFirstTokenMs / 1000).toFixed(1)} 秒` : '—', `${period.turns} 轮 · 命中 ${pct(period.hit)}`),
-      subscription ? quotaTile('5 小时额度', five, windows.five_hour?.resetsAt) : null,
-      subscription ? quotaTile('7 天额度', seven, windows.seven_day?.resetsAt) : null,
+      tile(t`今日 token`, compact(today.input + today.cacheRead + today.cacheWrite + today.output), t`${today.turns} 轮 · 输出 ${compact(today.output)}`),
+      tile(t`今日缓存命中率`, pct(today.hit), t`缓存读取 ${compact(today.cacheRead)}`),
+      tile(t`今日等价成本`, money(today.cost), subscription ? t`按 API 单价估算，订阅不按此计费` : t`按 Anthropic API 公开单价估算，实际以供应商账单为准`),
+      tile(t`首字中位数（${data.days} 天）`, period.medianFirstTokenMs ? t`${(period.medianFirstTokenMs / 1000).toFixed(1)} 秒` : '—', t`${period.turns} 轮 · 命中 ${pct(period.hit)}`),
+      subscription ? quotaTile(t`5 小时额度`, five, windows.five_hour?.resetsAt) : null,
+      subscription ? quotaTile(t`7 天额度`, seven, windows.seven_day?.resetsAt) : null,
     ]),
     stackedTurns(turns),
     percentLines({
-      title: '缓存命中率',
-      sub: '每轮的缓存读取占输入的比例。换模型、改前缀或隔太久（缓存过期）会让它掉下来。',
-      series: [{ key: 'hit', label: '命中率', color: 'var(--series-1)', points: turns.filter(t => t.hit !== null).map((t, i) => ({ x: i, y: t.hit, at: t.at })) }],
+      title: t`缓存命中率`,
+      sub: t`每轮的缓存读取占输入的比例。换模型、改前缀或隔太久（缓存过期）会让它掉下来。`,
+      series: [{ key: 'hit', label: t`命中率`, color: 'var(--series-1)', points: turns.filter(turn => turn.hit !== null).map((turn, i) => ({ x: i, y: turn.hit, at: turn.at })) }],
       xLabel: (i, long) => (turns[Math.round(i)] ? (long ? stamp(turns[Math.round(i)].at) : clock(turns[Math.round(i)].at)) : ''),
-      ariaLabel: '每轮缓存命中率折线图',
+      ariaLabel: t`每轮缓存命中率折线图`,
     }),
     !subscription ? null : percentLines({
-      title: '订阅额度使用率',
-      sub: '来自 Claude 订阅的额度事件；每次生成后记录一次。',
+      title: t`订阅额度使用率`,
+      sub: t`来自 Claude 订阅的额度事件；每次生成后记录一次。`,
       series: [
-        { key: 'five', label: '5 小时', color: 'var(--series-1)', points: data.rate.filter(r => typeof r.five === 'number').map(r => ({ x: r.at, y: r.five })) },
-        { key: 'seven', label: '7 天', color: 'var(--series-2)', points: data.rate.filter(r => typeof r.seven === 'number').map(r => ({ x: r.at, y: r.seven })) },
+        { key: 'five', label: t`5 小时`, color: 'var(--series-1)', points: data.rate.filter(r => typeof r.five === 'number').map(r => ({ x: r.at, y: r.five })) },
+        { key: 'seven', label: t`7 天`, color: 'var(--series-2)', points: data.rate.filter(r => typeof r.seven === 'number').map(r => ({ x: r.at, y: r.seven })) },
       ],
-      xLabel: (t, long) => (long ? stamp(t) : new Date(t).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit' })),
-      ariaLabel: '订阅额度使用率随时间变化的折线图',
+      xLabel: (at, long) => (long ? stamp(at) : new Date(at).toLocaleString(locale, { month: 'numeric', day: 'numeric', hour: '2-digit' })),
+      ariaLabel: t`订阅额度使用率随时间变化的折线图`,
     }),
     h('div', { class: 'usage-tables' }, [
-      h('div', { class: 'chart-card' }, [h('div', { class: 'chart-title', text: '按模型' }), table(['模型', ...SUM_HEADERS], data.byModel.map(r => [labelOf(r.model), ...sumCells(r)]))]),
-      h('div', { class: 'chart-card' }, [h('div', { class: 'chart-title', text: '按对话（等价成本前 12）' }), table(['对话', ...SUM_HEADERS], data.byChat.map(r => [`${r.title}${r.deleted ? '（已删除）' : ''}`, ...sumCells(r)]))]),
+      h('div', { class: 'chart-card' }, [h('div', { class: 'chart-title', text: t`按模型` }), table([t`模型`, ...SUM_HEADERS], data.byModel.map(r => [labelOf(r.model), ...sumCells(r)]))]),
+      h('div', { class: 'chart-card' }, [h('div', { class: 'chart-title', text: t`按对话（等价成本前 12）` }), table([t`对话`, ...SUM_HEADERS], data.byChat.map(r => [`${r.title}${r.deleted ? t`（已删除）` : ''}`, ...sumCells(r)]))]),
     ]),
-    h('div', { class: 'usage-note', text: `等价成本按 Anthropic API 公开单价估算（缓存写入按 5 分钟 / 1 小时两档计价），仅用于比较${subscription ? '；订阅额度的实际消耗以上面的额度使用率为准' : ''}。` }),
+    h('div', { class: 'usage-note', text: t`等价成本按 Anthropic API 公开单价估算（缓存写入按 5 分钟 / 1 小时两档计价），仅用于比较${subscription ? t`；订阅额度的实际消耗以上面的额度使用率为准` : ''}。` }),
   ].filter(Boolean))
 }

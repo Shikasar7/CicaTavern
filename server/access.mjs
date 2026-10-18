@@ -4,6 +4,7 @@
 // client must present the access token, in the cookie set by the login page.
 import { timingSafeEqual } from 'node:crypto'
 import { hostname, networkInterfaces } from 'node:os'
+import { currentLanguage, msg } from './i18n.mjs'
 
 export function isLoopback(address) {
   const ip = String(address ?? '').replace(/^::ffff:/, '')
@@ -99,8 +100,9 @@ export function accessCookie(token) {
 /** Gate page for a phone that does not have the cookie yet. No external requests. */
 /** @param appName - the edition's name (edition.mjs). */
 export function loginPage(appName = 'CicaTavern') {
+  const token = msg`口令`
   return `<!doctype html>
-<html lang="zh-CN">
+<html lang="${currentLanguage() === 'en' ? 'en' : 'zh-CN'}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -121,10 +123,10 @@ export function loginPage(appName = 'CicaTavern') {
 <body>
   <main>
     <h1>${appName}</h1>
-    <p>用电脑上设置里给出的链接打开，或把链接末尾的口令粘贴到这里。</p>
+    <p>${msg`用电脑上设置里给出的链接打开，或把链接末尾的口令粘贴到这里。`}</p>
     <form id="gate">
-      <input name="token" autocomplete="off" placeholder="口令" aria-label="口令">
-      <button type="submit">进入</button>
+      <input name="token" autocomplete="off" placeholder="${token}" aria-label="${token}">
+      <button type="submit">${msg`进入`}</button>
       <p class="err" id="err"></p>
     </form>
   </main>
@@ -141,7 +143,7 @@ export function loginPage(appName = 'CicaTavern') {
         headers: { 'content-type': 'application/json', 'x-agent-tavern': '1' },
         body: JSON.stringify({ token: form.token.value.trim() }),
       })
-      if (!res.ok) { err.textContent = '口令不对'; return }
+      if (!res.ok) { err.textContent = ${JSON.stringify(msg`口令不对`)}; return }
       location.replace(location.pathname)
     })
     if (fromHash) (form.requestSubmit ? form.requestSubmit() : form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true })))

@@ -8,6 +8,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { isProviderRef } from './providers.mjs'
 import { httpError, newId } from './store.mjs'
+import { msg } from './i18n.mjs'
 
 export const PACKAGE_MAGIC = 'AGENT-TAVERN-CHAT 1\n'
 export const PACKAGE_FORMAT = 'agent-tavern-chat'
@@ -50,10 +51,10 @@ export async function chatPackage(store, chatId) {
  */
 export async function importChatPackage(store, { header, cardId = '' }) {
   const source = header?.chat
-  if (header?.format !== PACKAGE_FORMAT || !source || typeof source !== 'object' || !source.nodes?.root) throw httpError(400, '这不是酒馆的对话包')
+  if (header?.format !== PACKAGE_FORMAT || !source || typeof source !== 'object' || !source.nodes?.root) throw httpError(400, msg`这不是酒馆的对话包`)
   const cards = await store.listCards()
   const card = cards.find(c => c.name === header.cardName) ?? cards.find(c => c.id === cardId)
-  if (!card) throw httpError(404, `这台设备上没有角色卡「${header.cardName}」，先导入它`)
+  if (!card) throw httpError(404, msg`这台设备上没有角色卡「${header.cardName}」，先导入它`)
   const presets = await store.listPresets().catch(() => [])
   const preset = presets.find(p => p.id === source.presetId) ?? presets.find(p => source.presetName && p.name === source.presetName)
   const providers = await store.getProviders()
@@ -76,9 +77,9 @@ export async function importChatPackage(store, { header, cardId = '' }) {
 
 /** One picture of an imported chat; only files its replies refer to are accepted. */
 export async function savePackagePicture(store, chatId, file, buffer) {
-  if (!FILE.test(file)) throw httpError(400, '文件名不对')
+  if (!FILE.test(file)) throw httpError(400, msg`文件名不对`)
   const chat = await store.getChat(chatId)
-  if (!picturesOf(chat).includes(file)) throw httpError(400, '这个对话里没有这张图')
+  if (!picturesOf(chat).includes(file)) throw httpError(400, msg`这个对话里没有这张图`)
   await mkdir(mediaDir(store, chatId), { recursive: true })
   await writeFile(path.join(mediaDir(store, chatId), file), buffer)
   return { ok: true }

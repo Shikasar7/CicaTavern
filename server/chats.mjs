@@ -8,6 +8,7 @@ import { initialState } from './worldbook.mjs'
 import { applyStateUpdates, displayText } from './state.mjs'
 import { httpError, newId } from './store.mjs'
 import { MIN_TURNS, RECENT_TURNS, STORY_FORMAT, storyPath, storyTurns, turnsSinceCompaction } from './recap.mjs'
+import { msg } from './i18n.mjs'
 
 export async function booksForCard(store, card) {
   const books = card.book ? [{ ...card.book, id: `card-${card.id}` }] : []
@@ -150,9 +151,9 @@ export function exportStory(chat, nodeId) {
   const lastAssistant = [...activePath(chat)].reverse().find(node => node.role === 'assistant')
   const path = pathTo(chat, nodeId || lastAssistant.id)
   const tip = path.at(-1)
-  if (tip.role !== 'assistant') throw httpError(400, '只能从一条叙述导出')
+  if (tip.role !== 'assistant') throw httpError(400, msg`只能从一条叙述导出`)
   const at = path.findLastIndex(node => node.compaction)
-  if (at < 0) throw httpError(400, '还没有剧情存档：先压缩一次再导出')
+  if (at < 0) throw httpError(400, msg`还没有剧情存档：先压缩一次再导出`)
   const since = path.slice(at + 1).filter(node => node.role === 'user').length
   const tail = storyPath(path).slice(1).slice(-Math.max(RECENT_TURNS, since) * 2)
   if (tail[0]?.role === 'assistant') tail.shift()
@@ -175,20 +176,20 @@ export function exportStory(chat, nodeId) {
 
 /** Validate an uploaded archive; throws a readable error. */
 export function readStory(archive) {
-  if (!isPlainObject(archive) || archive.format !== STORY_FORMAT) throw httpError(400, '这不是酒馆的剧情存档')
+  if (!isPlainObject(archive) || archive.format !== STORY_FORMAT) throw httpError(400, msg`这不是酒馆的剧情存档`)
   const summary = typeof archive.summary === 'string' ? archive.summary.trim() : ''
-  if (!summary) throw httpError(400, '存档里没有剧情摘要')
+  if (!summary) throw httpError(400, msg`存档里没有剧情摘要`)
   const recent = (Array.isArray(archive.recent) ? archive.recent : [])
     .filter(item => isPlainObject(item) && (item.role === 'user' || item.role === 'assistant') && typeof item.text === 'string')
     .map(({ role, text }) => ({ role, text }))
-  if (recent.at(-1)?.role !== 'assistant') throw httpError(400, '存档里缺少最后一轮叙述')
+  if (recent.at(-1)?.role !== 'assistant') throw httpError(400, msg`存档里缺少最后一轮叙述`)
   return {
     summary,
     recent,
     state: isPlainObject(archive.state) ? archive.state : {},
     turns: Math.max(0, Number(archive.turns) || 0),
     model: typeof archive.model === 'string' ? archive.model : null,
-    title: typeof archive.title === 'string' ? archive.title.replace(/（导入）$/, '').slice(0, 60) : '',
+    title: typeof archive.title === 'string' ? archive.title.replace(/(（导入）| \(imported\))$/, '').slice(0, 60) : '',
     card: typeof archive.card === 'string' ? archive.card : '',
     exportedAt: typeof archive.exportedAt === 'string' ? archive.exportedAt : null,
   }
@@ -204,7 +205,7 @@ export async function importStory(store, cardId, archive) {
   return startChat(store, cardId, ({ card, state }) => ({
     text: story.recent.at(-1).text,
     state: mergeState(state, story.state),
-    title: `${story.title || card.name}（导入）`,
+    title: msg`${story.title || card.name}（导入）`,
     compaction: {
       summary: story.summary,
       turns: story.turns,
@@ -226,7 +227,7 @@ export async function importStory(store, cardId, archive) {
  */
 export function forkChat(chat, nodeId) {
   const tip = chat.nodes[nodeId]
-  if (!tip || tip.role !== 'assistant') throw httpError(400, '只能从一条叙述分出新对话')
+  if (!tip || tip.role !== 'assistant') throw httpError(400, msg`只能从一条叙述分出新对话`)
   const now = new Date().toISOString()
   const nodes = {}
   const path = pathTo(chat, nodeId)
@@ -240,7 +241,7 @@ export function forkChat(chat, nodeId) {
   return {
     ...structuredClone(chat),
     id: newId(),
-    title: `${chat.title.replace(/（分支[^）]*）$/, '')}（分支·第 ${turns} 轮）`,
+    title: msg`${chat.title.replace(/(（分支[^）]*）| \(branch[^)]*\))$/, '')}（分支·第 ${turns} 轮）`,
     createdAt: now,
     updatedAt: now,
     tips: {},
@@ -293,9 +294,9 @@ export function foldedTurns(chat) {
 /** Roll the visible chat back to assistant `id`; later turns stay as a folded branch. */
 export function rollbackTo(chat, id) {
   const node = chat.nodes[id]
-  if (!node || node.role !== 'assistant') throw httpError(400, '只能回滚到一条叙述')
+  if (!node || node.role !== 'assistant') throw httpError(400, msg`只能回滚到一条叙述`)
   selectNode(chat, id)
-  if (!childrenOf(chat, id).length) throw httpError(400, '这已经是最后一轮')
+  if (!childrenOf(chat, id).length) throw httpError(400, msg`这已经是最后一轮`)
   node.cut = true
 }
 
@@ -308,7 +309,7 @@ export function restoreFolded(chat) {
 export function pathTo(chat, id) {
   const path = []
   let node = chat.nodes[id]
-  if (!node) throw httpError(404, '节点不存在')
+  if (!node) throw httpError(404, msg`节点不存在`)
   while (node) {
     path.unshift(node)
     node = node.parent ? chat.nodes[node.parent] : null
@@ -333,20 +334,20 @@ function compactionView(chat, node) {
 
 function editableCompaction(chat, id) {
   const node = chat.nodes[id]
-  if (!node?.compaction) throw httpError(404, '这里没有压缩记录')
-  if (childrenOf(chat, id).length) throw httpError(409, '压缩之后已经接着写了，摘要不能再改；可以回滚到更早的地方重新压缩')
+  if (!node?.compaction) throw httpError(404, msg`这里没有压缩记录`)
+  if (childrenOf(chat, id).length) throw httpError(409, msg`压缩之后已经接着写了，摘要不能再改；可以回滚到更早的地方重新压缩`)
   return node
 }
 
 export function editCompaction(chat, id, summary) {
   const text = String(summary ?? '').trim()
-  if (!text) throw httpError(400, '摘要不能为空')
+  if (!text) throw httpError(400, msg`摘要不能为空`)
   editableCompaction(chat, id).compaction.summary = text
 }
 
 export function dropCompaction(chat, id) {
   const node = editableCompaction(chat, id)
-  if (node.compaction.imported) throw httpError(400, '这是导入的存档，没有原来的上下文可接，不能撤销')
+  if (node.compaction.imported) throw httpError(400, msg`这是导入的存档，没有原来的上下文可接，不能撤销`)
   delete node.compaction
 }
 
@@ -359,12 +360,12 @@ export function dropCompaction(chat, id) {
  */
 export function editMessage(chat, id, text) {
   const next = String(text ?? '').replace(/\r\n/g, '\n').trim()
-  if (!next) throw httpError(400, '内容不能为空；整轮不要了可以用「回滚到这里」')
+  if (!next) throw httpError(400, msg`内容不能为空；整轮不要了可以用「回滚到这里」`)
   const path = activePath(chat)
   const index = path.findIndex(n => n.id === id)
-  if (index < 0) throw httpError(404, '这条消息不在当前对话里')
+  if (index < 0) throw httpError(404, msg`这条消息不在当前对话里`)
   const node = path[index]
-  if (node.id === 'root' || node.compaction) throw httpError(400, '开场和剧情存档不能在这里改；存档用「查看 / 修改」')
+  if (node.id === 'root' || node.compaction) throw httpError(400, msg`开场和剧情存档不能在这里改；存档用「查看 / 修改」`)
   const before = node.text
   const beforePrompt = node.prompt
   if (next === before) return { node, before, beforePrompt, unchanged: true }

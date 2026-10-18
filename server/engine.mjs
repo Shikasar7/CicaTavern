@@ -16,6 +16,7 @@ import { accumulatedDynamic, compactThreshold, dynamicMemory, planDynamic, strip
 import { complete, CONTEXT_FULL, isProviderRef, providerError, resolveRef } from './providers.mjs'
 import { canonicalModel } from './models.mjs'
 import { extractSummary, MIN_TURNS, recapBlock, recentExchanges, storyPath, storyTurns, summaryInstruction, turnsSinceCompaction } from './recap.mjs'
+import { msg } from './i18n.mjs'
 
 // The preset's per-turn block in a turn's message (buildTurnPrompt).
 const PRESET_BLOCK = /\n*<预设指令>\n[\s\S]*?\n<\/预设指令>/
@@ -29,7 +30,7 @@ function friendlyError(message, subscription) {
   const text = String(message ?? '')
   const said = subscription?.friendlyError(text) ?? text
   if (said !== text) return said
-  if (/overloaded|529/i.test(text)) return `模型繁忙，稍后重试。（${text.slice(0, 160)}）`
+  if (/overloaded|529/i.test(text)) return msg`模型繁忙，稍后重试。（${text.slice(0, 160)}）`
   return text
 }
 
@@ -141,8 +142,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       const { provider, modelId } = resolveRef(ref, await store.getProviders())
       return { api: true, provider, modelId, model: ref }
     }
-    if (!subscription) throw httpError(400, '还没有选模型：在顶栏或设置里选一个供应商的模型')
-    if (settings.subscription === 'off') throw httpError(400, '已关闭 Claude 订阅：在顶栏或设置里选一个供应商的模型')
+    if (!subscription) throw httpError(400, msg`还没有选模型：在顶栏或设置里选一个供应商的模型`)
+    if (settings.subscription === 'off') throw httpError(400, msg`已关闭 Claude 订阅：在顶栏或设置里选一个供应商的模型`)
     return subscription.target(ref)
   }
 
@@ -224,7 +225,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     const plain = history.map(({ role, content }) => ({ role, content }))
     const older = await summarizeInParts(target, chat, plain.slice(0, cut), signal, carry, depth + 1)
     const archive = extractSummary(older.reply)
-    if (archive.length < 200) throw httpError(502, '前半段的剧情存档没有写完整，这次没有压缩，可以再试一次')
+    if (archive.length < 200) throw httpError(502, msg`前半段的剧情存档没有写完整，这次没有压缩，可以再试一次`)
     const newer = await summarizeInParts(target, chat, plain.slice(cut), signal, archive, depth + 1)
     const tokens = Object.fromEntries(Object.entries(newer.tokens).map(([key, value]) => [key, typeof value === 'number' ? value + (older.tokens[key] ?? 0) : value]))
     return { ...newer, tokens }
@@ -240,7 +241,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       if (signal.aborted || error.status) throw error
       throw httpError(502, providerError(target.provider, error))
     }
-    if (!result.text.trim()) throw httpError(502, `${target.provider.name} 没有返回正文${result.stopReason ? `（${result.stopReason}）` : ''}`)
+    if (!result.text.trim()) throw httpError(502, msg`${target.provider.name} 没有返回正文${result.stopReason ? msg`（${result.stopReason}）` : ''}`)
     const u = result.usage ?? {}
     const tokens = { input: u.input ?? 0, cacheRead: u.cacheRead ?? 0, cacheWrite: u.cacheWrite ?? 0, cacheWrite1h: 0, cacheWrite5m: u.cacheWrite ?? 0, output: u.output ?? 0, costUsd: null }
     const api = { provider: target.provider.id, model: result.model ?? target.modelId, ...(result.truncated ? { truncated: true } : {}) }
@@ -264,7 +265,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
    * @param userNodeId - reuse an existing user node (regenerate) instead of creating one.
    */
   async function runTurn(chatId, { parentId, input, userNodeId }, emit) {
-    if (running.has(chatId)) throw httpError(409, '这个对话正在生成')
+    if (running.has(chatId)) throw httpError(409, msg`这个对话正在生成`)
     const abortController = new AbortController()
     running.set(chatId, abortController)
     // A failed turn on a subscription session resumed in place: the backend forgets its tip.
@@ -272,11 +273,11 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     try {
       const chat = await store.getChat(chatId)
       let userNode = userNodeId ? chat.nodes[userNodeId] : null
-      if (userNodeId && (!userNode || userNode.role !== 'user')) throw httpError(404, '要重新生成的回合不存在')
+      if (userNodeId && (!userNode || userNode.role !== 'user')) throw httpError(404, msg`要重新生成的回合不存在`)
       const parent = chat.nodes[userNode ? userNode.parent : parentId]
-      if (!parent || parent.role !== 'assistant') throw httpError(400, '只能在一条叙述之后继续')
+      if (!parent || parent.role !== 'assistant') throw httpError(400, msg`只能在一条叙述之后继续`)
       const text = userNode ? userNode.text : String(input ?? '').trim()
-      if (!text) throw httpError(400, '输入不能为空')
+      if (!text) throw httpError(400, msg`输入不能为空`)
 
       // Regenerating reuses the recorded prompt verbatim, so the fork's prefix
       // (and its worldbook injections) matches the original attempt exactly.
@@ -331,10 +332,10 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         outcome = await generateApi(target, { system: chat.systemPrompt, messages: [...history, { role: 'user', content: prepared.prompt }], ...cap }, abortController.signal, onText)
       } else {
         outcome = await subscription.generate(prepared.prompt, run, { onText, onRate: info => emit({ type: 'rate_limit', info }) })
-        if (!outcome.sdk) throw httpError(502, '模型没有返回正文')
+        if (!outcome.sdk) throw httpError(502, msg`模型没有返回正文`)
       }
       const reply = outcome.reply
-      if (!reply.trim()) throw httpError(502, '模型没有返回正文')
+      if (!reply.trim()) throw httpError(502, msg`模型没有返回正文`)
 
       // Re-read: another request may have changed selection meanwhile (not the tree).
       const fresh = await store.getChat(chatId)
@@ -383,7 +384,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       return { chat: fresh, nodeId: node.id }
     } catch (error) {
       if (resumedInPlace) await subscription.forgetTip(chatId, resumedInPlace)
-      if (abortController.signal.aborted) throw httpError(499, '已停止生成')
+      if (abortController.signal.aborted) throw httpError(499, msg`已停止生成`)
       if (!error.status) error.message = friendlyError(error.message, subscription)
       throw error
     } finally {
@@ -403,7 +404,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     }
     if (tip.sdk && subscription && settings.subscription !== 'off') return subscription.target(tip.model || modelFor(chat, settings))
     const current = await targetFor(modelFor(chat, settings), settings)
-    if (!current.api && !tip.sdk) throw httpError(400, '这段剧情是用自定义供应商写的，订阅模型读不到它的上下文：选一个供应商的模型再压缩')
+    if (!current.api && !tip.sdk) throw httpError(400, msg`这段剧情是用自定义供应商写的，订阅模型读不到它的上下文：选一个供应商的模型再压缩`)
     return current
   }
 
@@ -414,15 +415,15 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
    * history is read from cache; the next turn from the tip starts afresh.
    */
   async function compactChat(chatId) {
-    if (running.has(chatId)) throw httpError(409, '这个对话正在生成')
+    if (running.has(chatId)) throw httpError(409, msg`这个对话正在生成`)
     const abortController = new AbortController()
     running.set(chatId, abortController)
     try {
       const chat = await store.getChat(chatId)
       const path = activePath(chat)
       const tip = path.at(-1)
-      if (tip.role !== 'assistant' || (!tip.sdk && !tip.api)) throw httpError(400, '还没有可以压缩的剧情')
-      if (turnsSinceCompaction(path) < MIN_TURNS) throw httpError(400, `上次压缩之后不到 ${MIN_TURNS} 轮，不用再压缩`)
+      if (tip.role !== 'assistant' || (!tip.sdk && !tip.api)) throw httpError(400, msg`还没有可以压缩的剧情`)
+      if (turnsSinceCompaction(path) < MIN_TURNS) throw httpError(400, msg`上次压缩之后不到 ${MIN_TURNS} 轮，不用再压缩`)
       const settings = await store.getSettings()
       const target = await compactionTarget(chat, tip, settings)
       const started = Date.now()
@@ -433,7 +434,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         used = await subscription.compact({ chat, tip, settings, abortController, model: target.model })
       }
       const summary = extractSummary(used.reply)
-      if (summary.length < 200) throw httpError(502, '模型没有写出完整的剧情存档，这次没有压缩，可以再试一次')
+      if (summary.length < 200) throw httpError(502, msg`模型没有写出完整的剧情存档，这次没有压缩，可以再试一次`)
       const now = new Date().toISOString()
       const fresh = await store.getChat(chatId)
       fresh.nodes[tip.id].compaction = { summary, turns: storyTurns(path), model: used.model, usage: used.tokens, at: now }
@@ -442,7 +443,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       await ledger?.recordTurn(fresh, record).catch(() => {})
       return fresh
     } catch (error) {
-      if (abortController.signal.aborted) throw httpError(499, '已停止压缩')
+      if (abortController.signal.aborted) throw httpError(499, msg`已停止压缩`)
       if (!error.status) error.message = friendlyError(error.message, subscription)
       throw error
     } finally {
@@ -462,7 +463,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
   async function askInContext(chatId, nodeId, instruction, { maxTokens, signal } = {}) {
     const chat = await store.getChat(chatId)
     const node = chat.nodes[nodeId]
-    if (!node || node.role !== 'assistant') throw httpError(404, '这条叙述不存在')
+    if (!node || node.role !== 'assistant') throw httpError(404, msg`这条叙述不存在`)
     const settings = await store.getSettings()
     const providers = await store.getProviders()
     const usable = ref => isProviderRef(ref) && providers.some(p => p.id === ref.slice(0, ref.indexOf('/')))
@@ -484,7 +485,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
    * @returns { chat, unchanged?, behindCompaction?, sessions?, missed? }
    */
   async function editMessage(chatId, nodeId, text) {
-    if (running.has(chatId)) throw httpError(409, '正在生成，先停止')
+    if (running.has(chatId)) throw httpError(409, msg`正在生成，先停止`)
     const chat = await store.getChat(chatId)
     const edit = editChatMessage(chat, nodeId, text)
     if (edit.unchanged) return { chat, unchanged: true }
@@ -499,7 +500,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
   async function previewTurn(chatId, { parentId, input }) {
     const chat = await store.getChat(chatId)
     const parent = chat.nodes[parentId]
-    if (!parent || parent.role !== 'assistant') throw httpError(400, '只能在一条叙述之后继续')
+    if (!parent || parent.role !== 'assistant') throw httpError(400, msg`只能在一条叙述之后继续`)
     let prepared = await preparePrompt(chat, parent, String(input ?? ''))
     const api = isProviderRef(modelFor(chat, prepared.settings))
     const inPlace = subscription?.inPlace(chat, parent) ?? false

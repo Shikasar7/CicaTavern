@@ -131,12 +131,12 @@ function shimMain(ctx) {
       const { resolve, reject } = pending.get(data.id)
       pending.delete(data.id)
       if (data.ok) resolve(data.value)
-      else reject(new Error(data.error || '失败'))
+      else reject(new Error(data.error || '失败')) // i18n-ignore: for the card's scripts, inside its frame
     }
   })
   const unsupported = name => (..._args) => {
-    console.warn(`[酒馆] ${name} 在这里不可用`)
-    return Promise.reject(new Error(`酒馆不支持 ${name}`))
+    console.warn(`[酒馆] ${name} 在这里不可用`) // i18n-ignore: for the card's scripts, inside its frame
+    return Promise.reject(new Error(`酒馆不支持 ${name}`)) // i18n-ignore: for the card's scripts, inside its frame
   }
 
   // ── Storage: opaque-origin frames throw on localStorage / cookies ──
@@ -243,7 +243,7 @@ function shimMain(ctx) {
     const type = (option && option.type) || 'chat'
     if (type === 'message') {
       const id = messageIdOf(option.message_id)
-      if (id < 0 || id > ctx.lastId) throw new Error(`楼层 ${option.message_id} 不存在`)
+      if (id < 0 || id > ctx.lastId) throw new Error(`楼层 ${option.message_id} 不存在`) // i18n-ignore: for the card's scripts, inside its frame
       if (!messageVars.has(id)) messageVars.set(id, {})
       return messageVars.get(id)
     }
@@ -522,7 +522,7 @@ export function installFrameBridge(handlers) {
     const reply = (ok, value) => data.id && event.source.postMessage({ agentTavernReply: id, id: data.id, ok, value: ok ? value : undefined, error: ok ? undefined : String(value) }, '*')
     const args = data.args ?? {}
     try {
-      if (data.op === 'toast') handlers.toast(args.level, [args.title, args.text].filter(Boolean).join('：'))
+      if (data.op === 'toast') handlers.toast(args.level, [args.title, args.text].filter(Boolean).join('：')) // i18n-ignore: a card script's own toast
       else if (data.op === 'input') handlers.input(String(args.text ?? ''))
       else if (data.op === 'send') await handlers.send()
       else if (data.op === 'slash') reply(true, await handlers.slash(String(args.command ?? '')))

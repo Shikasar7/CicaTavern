@@ -18,6 +18,7 @@ import { httpError } from '../store.mjs'
 import { createBridge } from './bridge.mjs'
 import { AUDIO_EXT, audioOf, createCloudSource } from './cloud.mjs'
 import { createOpenaiSource, instructionsFor } from './openai.mjs'
+import { msg } from '../i18n.mjs'
 
 // Services whose key the tavern keeps (voice-keys.json); a provider's key stays in providers.json.
 export const KEYED = ['fish', 'minimax']
@@ -51,7 +52,7 @@ function parseVoice(item, fish) {
   } else {
     ;[, id, text] = /^(\S+)\s*(.*)$/s.exec(text)
   }
-  if (!VOICE_ID.test(id)) throw httpError(400, `音色 ID「${id.slice(0, 60)}」不对：每行写一个音色，ID 在前，后面可以空一格写名字`)
+  if (!VOICE_ID.test(id)) throw httpError(400, msg`音色 ID「${id.slice(0, 60)}」不对：每行写一个音色，ID 在前，后面可以空一格写名字`)
   return { id, name: text.replace(/^[\s·|:：\-–—]+|[\s·|]+$/g, '').slice(0, 40) }
 }
 
@@ -77,7 +78,7 @@ export function cleanVoiceList(input, { fish = false } = {}) {
 /** A pasted key: printable, no spaces; a leading "Bearer " is dropped. */
 export function cleanVoiceKey(value) {
   const key = String(value ?? '').trim().replace(/^Bearer\s+/i, '')
-  if (!/^[!-~]{8,4000}$/.test(key)) throw httpError(400, '密钥格式不对：只粘贴密钥本身，不要带空格或换行')
+  if (!/^[!-~]{8,4000}$/.test(key)) throw httpError(400, msg`密钥格式不对：只粘贴密钥本身，不要带空格或换行`)
   return key
 }
 
@@ -116,7 +117,7 @@ export function createVoices({ root, settings, providers, proxy = () => null, fe
 
   /** Save a pasted key; '' removes it. */
   async function setKey(id, value) {
-    if (!KEYED.includes(id)) throw httpError(400, `不认识的语音服务：${id}`)
+    if (!KEYED.includes(id)) throw httpError(400, msg`不认识的语音服务：${id}`)
     const keys = await readKeys()
     if (value === '') delete keys[id]
     else keys[id] = cleanVoiceKey(value)
@@ -137,13 +138,13 @@ export function createVoices({ root, settings, providers, proxy = () => null, fe
    */
   async function route(ref, ctx) {
     const value = String(ref ?? '').trim()
-    if (value.startsWith('browser:')) throw httpError(400, '浏览器音色在页面里朗读，不经过服务端')
+    if (value.startsWith('browser:')) throw httpError(400, msg`浏览器音色在页面里朗读，不经过服务端`)
     const viaBridge = async name => ({ source: bridge, ...(await bridge.target(name, ctx.media)) })
     const hasBridge = bridge.configured(ctx)
     // The service's own names first, prefixes and all (the xiaoya bridge's fish:<id>).
     if (hasBridge && (!value || (await bridge.voiceService(ctx.media)).names.has(value))) return viaBridge(value)
     if (value.startsWith('bridge:')) {
-      if (!hasBridge) throw httpError(400, '这个音色属于本地语音桥接，还没填桥接地址')
+      if (!hasBridge) throw httpError(400, msg`这个音色属于本地语音桥接，还没填桥接地址`)
       return viaBridge(value.slice('bridge:'.length))
     }
     const cut = value.indexOf(':')
@@ -155,8 +156,8 @@ export function createVoices({ root, settings, providers, proxy = () => null, fe
       return { source, ...target, emotion: source.emotion(ctx.media), speaker: `${source.id}|${model}|${value.slice(cut + 1)}` }
     }
     if (hasBridge) return viaBridge(value)
-    if (!value) throw httpError(400, '这张卡没选音色，也没有本地语音桥接：在「配图与朗读」里给它选一个浏览器音色或云端音色')
-    throw httpError(400, `认不出音色「${value}」：在「配图与朗读」里给这张卡重新选音色`)
+    if (!value) throw httpError(400, msg`这张卡没选音色，也没有本地语音桥接：在「配图与朗读」里给它选一个浏览器音色或云端音色`)
+    throw httpError(400, msg`认不出音色「${value}」：在「配图与朗读」里给这张卡重新选音色`)
   }
 
   /** One piece of speech, not cached. */
@@ -167,7 +168,7 @@ export function createVoices({ root, settings, providers, proxy = () => null, fe
     try {
       return audioOf(result.buffer, { contentType: result.contentType, fallback: 'audio/wav' })
     } catch (error) {
-      throw httpError(502, `本地语音桥接：${error.message}`)
+      throw httpError(502, msg`本地语音桥接：${error.message}`)
     }
   }
 
@@ -201,7 +202,7 @@ export function createVoices({ root, settings, providers, proxy = () => null, fe
     const ctx = await context()
     const target = await route(voice, ctx)
     const prepared = prepareText(text, target.emotion)
-    if (!prepared.text) throw httpError(400, '没有要读的文字')
+    if (!prepared.text) throw httpError(400, msg`没有要读的文字`)
     // Only the bridge has a steady mode.
     const steady = target.source === bridge && stable ? 1 : 0
     const key = createHash('sha256')
@@ -229,9 +230,9 @@ export function createVoices({ root, settings, providers, proxy = () => null, fe
    */
   function noVoiceTrouble(error, ctx) {
     // Up to two voices from each source that is set up.
-    const ready = sources.filter(source => source.configured(ctx)).flatMap(source => source.list(ctx).slice(0, 2).map(v => `${source.label}「${v.label.split(' · ')[0]}」`))
-    const pick = ready.length ? `给这张卡选一个音色（可用：${ready.join('、')}）` : '给这张卡选一个音色'
-    return `这张卡还没选对白音色，默认用本地语音桥接当前的音色，可是${error.message.replace(/[。.]$/, '')}。在「配图与朗读」里${pick}，就不用本地语音桥接了。`
+    const ready = sources.filter(source => source.configured(ctx)).flatMap(source => source.list(ctx).slice(0, 2).map(v => msg`${source.label}「${v.label.split(' · ')[0]}」`))
+    const pick = ready.length ? msg`给这张卡选一个音色（可用：${ready.join(msg`、`)}）` : msg`给这张卡选一个音色`
+    return msg`这张卡还没选对白音色，默认用本地语音桥接当前的音色，可是${error.message.replace(/[。.]$/, '')}。在「配图与朗读」里${pick}，就不用本地语音桥接了。`
   }
 
   /**
@@ -244,10 +245,10 @@ export function createVoices({ root, settings, providers, proxy = () => null, fe
     let ref = String(voice ?? '')
     if (!ref && sourceId) {
       const source = byId.get(sourceId)
-      if (!source) throw httpError(400, `不认识的语音来源：${sourceId}`)
-      if (!source.configured(ctx)) throw httpError(400, source.id === 'openai' ? '先选一个供应商并填模型' : `${source.label} 还没填密钥`)
+      if (!source) throw httpError(400, msg`不认识的语音来源：${sourceId}`)
+      if (!source.configured(ctx)) throw httpError(400, source.id === 'openai' ? msg`先选一个供应商并填模型` : msg`${source.label} 还没填密钥`)
       ref = source.list(ctx)[0]?.ref ?? ''
-      if (!ref) throw httpError(400, `${source.label} 还没列音色：在音色框里至少写一个`)
+      if (!ref) throw httpError(400, msg`${source.label} 还没列音色：在音色框里至少写一个`)
     }
     const target = await route(ref, ctx)
     const prepared = prepareText(String(text ?? '').trim() || PREVIEW_TEXT, target.emotion)
@@ -263,10 +264,10 @@ export function createVoices({ root, settings, providers, proxy = () => null, fe
    */
   async function accountVoices({ source: sourceId, draft }, signal) {
     const source = byId.get(sourceId)
-    if (!source) throw httpError(400, `不认识的语音来源：${String(sourceId).slice(0, 40)}`)
-    if (!source.account) throw httpError(400, `${source.label} 没有账户音色可读`)
+    if (!source) throw httpError(400, msg`不认识的语音来源：${String(sourceId).slice(0, 40)}`)
+    if (!source.account) throw httpError(400, msg`${source.label} 没有账户音色可读`)
     const ctx = await context(draft)
-    if (!source.configured(ctx)) throw httpError(400, `${source.label} 还没填密钥`)
+    if (!source.configured(ctx)) throw httpError(400, msg`${source.label} 还没填密钥`)
     const account = new Map()
     for (const voice of await source.account({ ...ctx, signal })) {
       if (VOICE_ID.test(voice.id) && !account.has(voice.id)) account.set(voice.id, voice.name)

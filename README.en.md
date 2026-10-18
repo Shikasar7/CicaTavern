@@ -14,7 +14,7 @@
 
 Unzip and run on Windows; there is an Android app too. Everything stays on your own device.
 
-> The app's interface is in Simplified Chinese for now. Menu names below are given in Chinese with a translation, so you can find them.
+> The interface comes in English and Simplified Chinese (since 1.5.0). It follows your system language; to switch, open Settings → More → 界面语言 · Interface language. Menu names below are given in Chinese with an English gloss, which may be worded a little differently from the English interface.
 
 <p align="center"><img src="docs/screenshots/chat.jpg" alt="The chat screen: story text, clickable action choices, a generated illustration, and on the right the state variables and this turn's cache hit" width="880"></p>
 <p align="center"><sub>Example screenshot: this card was made with the card creator, and the illustration was drawn from the story by an image API.</sub></p>

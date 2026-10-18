@@ -4,7 +4,8 @@
 // as SillyTavern's V3 shape.
 import YAML from 'yaml'
 import { toBookEntry } from './configure.mjs'
-import { LONG_TOKENS, PLAIN_WRITING, TALK_TOKENS, looseJson, section } from './prompts.mjs'
+import { DEFAULT_LANGUAGE, LONG_TOKENS, TALK_TOKENS, englishCard, looseJson, plainWriting, planLanguage, section } from './prompts.mjs'
+import { msg } from '../i18n.mjs'
 
 const clip = (value, max) => (typeof value === 'string' ? value.trim().slice(0, max) : '')
 
@@ -42,12 +43,13 @@ const FORMATS = {
 
 const formatOf = entry => FORMATS[`${entry.type}.${entry.rephrase ? 'rephrase' : entry.part}`] ?? FORMATS[entry.type] ?? ''
 
-const WRITE_SYSTEM = `你是角色卡写手，按创作方案写 SillyTavern 世界书的条目。条目是写给模型看的设定，不是写给人看的小说：
-- 用 YAML 风格的中文：键值对和列表，缩进两个空格，不写成散文段落。
+// The prompts are in Chinese; what they ask for is written in the plan's language (写作语言).
+const writeSystem = language => `你是角色卡写手，按创作方案写 SillyTavern 世界书的条目。条目是写给模型看的设定，不是写给人看的小说：
+- 用 YAML 风格${language === DEFAULT_LANGUAGE ? '的中文' : ''}：键值对和列表，缩进两个空格，不写成散文段落。
 - 只写模型不知道、或者会弄错的东西；常识不写，主观评价不写。
 - 每条只装一类信息，独立可读：不提别的条目（不写「详见」「见上文」），不写给作者看的话（「写作要点」「本卡」「戏剧作用」）。
 - 方案里的名字、设定一律照用，不新造专有名词；用户的原话（verbatim）原样保留。
-${PLAIN_WRITING}`
+${plainWriting(language)}`
 
 const SAMPLE_PLAN = plan => {
   const { entries, warnings, ...rest } = plan
@@ -75,10 +77,10 @@ export function entriesRequest(plan, targets, written) {
     `这次要写下面这些条目：\n${asked}`,
     '每个条目的正文放在 <entry name="条目名"> 和 </entry> 之间，名字和上面一字不差；只写正文，标签外不写别的。',
   ].filter(Boolean).join('\n\n')
-  return { system: WRITE_SYSTEM, messages: [{ role: 'user', content }], maxTokens: LONG_TOKENS, softCap: true }
+  return { system: writeSystem(planLanguage(plan)), messages: [{ role: 'user', content }], maxTokens: LONG_TOKENS, softCap: true }
 }
 
-const GREETING_SYSTEM = `你是角色卡的开场白作者。开场白是玩家进入故事读到的第一段正文，它决定玩家想不想开口。
+const greetingSystem = language => `你是角色卡的开场白作者。开场白是玩家进入故事读到的第一段正文，它决定玩家想不想开口。
 - 头三行就要有抓人的东西：悬念、反常的细节、情绪的拉扯，或者一个悬而未决的问题；不要平淡地交代天气和环境。
 - 让玩家知道 <user> 是谁、为什么在这里。
 - 角色靠动作、物件、对白出场，不写人物介绍式的罗列。
@@ -88,7 +90,7 @@ const GREETING_SYSTEM = `你是角色卡的开场白作者。开场白是玩家�
 - 节奏：连着三句一样长就打破它；相邻两段不要用同一种方式收尾。
 - 按方案的文风写（视角、语言、氛围）；叙述里的时间、地点、关系、数值与初始状态一致。
 - 玩家写作 <user>。
-${PLAIN_WRITING}`
+${plainWriting(language)}`
 
 export function greetingsRequest(plan, targets, written, initial) {
   const asked = targets.map(g => `- 开场 ${g.index + 1}「${g.title}」：${[g.scene, g.situation].filter(Boolean).join('；')}。${g.length} 字。`).join('\n')
@@ -99,7 +101,7 @@ export function greetingsRequest(plan, targets, written, initial) {
     `这次要写下面这些开场白：\n${asked}`,
     '每段开场白放在 <greeting index="序号"> 和 </greeting> 之间，序号和上面一致；只写正文，标签外不写别的。',
   ].filter(Boolean).join('\n\n')
-  return { system: GREETING_SYSTEM, messages: [{ role: 'user', content }], maxTokens: LONG_TOKENS, softCap: true }
+  return { system: greetingSystem(planLanguage(plan)), messages: [{ role: 'user', content }], maxTokens: LONG_TOKENS, softCap: true }
 }
 
 // ─── Reading written text back ────────────────────────────────────────────
@@ -188,11 +190,13 @@ const REVIEW_SYSTEM = `你是角色卡的审稿人，眼光严格，宁可多挑
 </issues>
 original 必须能在原文里原样找到，尽量短；最多 30 条。`
 
-export function reviewRequest(card, hits) {
+/** @param language - the plan's (planLanguage). */
+export function reviewRequest(card, hits, language = DEFAULT_LANGUAGE) {
   const blocks = reviewTargets(card).map(t => (t.target.startsWith('开场白') ? `<greeting index="${t.target.slice(3)}">\n${t.text}\n</greeting>` : `<entry name="${t.target}">\n${t.text}\n</entry>`))
   const flagged = hits.length ? `程序先扫出的可疑处（只是候选，你来判断）：\n${hits.slice(0, 40).map(h => `- ${h.target}：${h.label}「${h.excerpt}」`).join('\n')}` : ''
   const content = [blocks.join('\n\n'), flagged].filter(Boolean).join('\n\n')
-  return { system: REVIEW_SYSTEM, messages: [{ role: 'user', content }], maxTokens: TALK_TOKENS, softCap: true }
+  const system = language === DEFAULT_LANGUAGE ? REVIEW_SYSTEM : `${REVIEW_SYSTEM}\n这些条目和开场白是用${language}写的：按${language}的写法挑这些毛病，suggestion 也用${language}写。`
+  return { system, messages: [{ role: 'user', content }], maxTokens: TALK_TOKENS, softCap: true }
 }
 
 export function readIssues(text) {
@@ -241,7 +245,8 @@ export function rewriteRequest(plan, card, pieces) {
     '条目放在 <entry name="条目名"> 和 </entry> 之间，开场白放在 <greeting index="序号"> 和 </greeting> 之间，名字和序号与上面一致；标签外不写别的。',
   ].filter(Boolean).join('\n\n')
   const greetingsOnly = pieces.every(p => p.greeting)
-  return { system: greetingsOnly ? GREETING_SYSTEM : `${WRITE_SYSTEM}\n开场白另按开场白的写法：头三行抓人，结尾给 <user> 话头，不替 <user> 说话做决定。`, messages: [{ role: 'user', content }], maxTokens: LONG_TOKENS, softCap: true }
+  const language = planLanguage(plan)
+  return { system: greetingsOnly ? greetingSystem(language) : `${writeSystem(language)}\n开场白另按开场白的写法：头三行抓人，结尾给 <user> 话头，不替 <user> 说话做决定。`, messages: [{ role: 'user', content }], maxTokens: LONG_TOKENS, softCap: true }
 }
 
 // ─── State tracking, built in code ────────────────────────────────────────
@@ -270,35 +275,64 @@ export const initialState = plan => nested(plan.tracking.variables, typedValue)
 
 const VARIABLES_ENTRY = '<status_current_variable>\n{{format_message_variable::stat_data}}\n</status_current_variable>'
 
+// The card's own text for its state entries and scripts, in Chinese or English (the plan's language).
+const STATE_WORDS = {
+  zh: {
+    formatLead: '每次回复的最后，写出这一轮变量的变化，格式如下：',
+    formatRules: [
+      '- 只用三种操作：replace 改已有的值；add 给对象加新键、给数组加新项；remove 删除。',
+      '- JSONPatch 里必须是合法的 JSON 数组；这一轮没有变化就写 []。',
+      '- 数值按「怎么变」的规则小步变化，只有剧情出现重大转折时才大幅变化。',
+    ],
+    rulesKey: '变量更新规则', anyChange: '按剧情更新',
+    hideFromModel: '对模型隐藏变量更新', hideFromPlayer: '对玩家隐藏变量更新',
+    with: '与<user>：', colon: '：', separator: '；',
+    creator: '由 CicaTavern「创作角色卡」生成。',
+  },
+  en: {
+    formatLead: 'At the end of every reply, write how the variables changed this turn, like this:',
+    formatRules: [
+      '- Use only three operations: replace changes an existing value; add adds a key to an object or an item to an array; remove deletes.',
+      '- The JSONPatch must be a valid JSON array; with no change this turn, write [].',
+      '- Numbers move in small steps by their check; only a major turn in the story moves them far.',
+    ],
+    rulesKey: 'Variable update rules', anyChange: 'changes with the story',
+    hideFromModel: 'Hide variable updates from the model', hideFromPlayer: 'Hide variable updates from the player',
+    with: 'with <user>: ', colon: ': ', separator: '; ',
+    creator: "Made with CicaTavern's card creator.",
+  },
+}
+const stateWords = plan => STATE_WORDS[englishCard(planLanguage(plan)) ? 'en' : 'zh']
+
 function formatEntry(plan) {
+  const words = stateWords(plan)
   const example = plan.tracking.variables.find(v => v.type === 'number') ?? plan.tracking.variables[0]
   const path = `/${example.path.split('.').join('/')}`
   const value = example.type === 'number' ? typedValue(example) + 2 : JSON.stringify(typedValue(example))
   return [
     '<update_variable_rules>',
-    '每次回复的最后，写出这一轮变量的变化，格式如下：',
+    words.formatLead,
     '<UpdateVariable>',
     '<Analysis>(in English, no more than 80 words) go through each variable by its check, based only on this reply; for numbers write old + change = new</Analysis>',
     '<JSONPatch>',
     `[{ "op": "replace", "path": "${path}", "value": ${value} }]`,
     '</JSONPatch>',
     '</UpdateVariable>',
-    '- 只用三种操作：replace 改已有的值；add 给对象加新键、给数组加新项；remove 删除。',
-    '- JSONPatch 里必须是合法的 JSON 数组；这一轮没有变化就写 []。',
-    '- 数值按「怎么变」的规则小步变化，只有剧情出现重大转折时才大幅变化。',
+    ...words.formatRules,
     '</update_variable_rules>',
   ].join('\n')
 }
 
 function rulesEntry(plan) {
+  const words = stateWords(plan)
   const rule = variable => {
     const out = {}
     if (variable.type !== 'string') out.type = variable.type
     if (variable.range) out.range = variable.range
     if (variable.check) out.check = [variable.check]
-    return Object.keys(out).length ? out : '按剧情更新'
+    return Object.keys(out).length ? out : words.anyChange
   }
-  return YAML.stringify({ 变量更新规则: nested(plan.tracking.variables, rule) }, { lineWidth: 0 }).trim()
+  return YAML.stringify({ [words.rulesKey]: nested(plan.tracking.variables, rule) }, { lineWidth: 0 }).trim()
 }
 
 /** The four state entries' text, filled in when writing starts. */
@@ -318,16 +352,16 @@ const WORLD_TYPES = new Set(['世界观', '扮演准则', '时间线', '地理']
 export function writeSteps(plan, card) {
   const steps = []
   const world = card.entries.filter(e => WORLD_TYPES.has(e.type))
-  if (world.length) steps.push({ id: 'world', label: '世界观、规则和地点', names: world.map(e => e.name) })
+  if (world.length) steps.push({ id: 'world', label: msg`世界观、规则和地点`, names: world.map(e => e.name) })
   for (const c of plan.characters.filter(c => c.kind === 'core')) {
     const own = card.entries.filter(e => e.type === '角色' && e.owner === c.name)
-    if (own.length) steps.push({ id: `character:${c.name}`, label: `${c.name}的档案与性格`, names: own.map(e => e.name) })
+    if (own.length) steps.push({ id: `character:${c.name}`, label: msg`${c.name}的档案与性格`, names: own.map(e => e.name) })
   }
   const rest = card.entries.filter(e => e.type === 'NPC' || e.part === 'catalog')
-  if (rest.length) steps.push({ id: 'cast', label: '配角', names: rest.map(e => e.name) })
-  steps.push({ id: 'greetings', label: '开场白', greetings: true })
-  steps.push({ id: 'review', label: '检查套话和前后矛盾' })
-  steps.push({ id: 'fix', label: '按检查结果修改' })
+  if (rest.length) steps.push({ id: 'cast', label: msg`配角`, names: rest.map(e => e.name) })
+  steps.push({ id: 'greetings', label: msg`开场白`, greetings: true })
+  steps.push({ id: 'review', label: msg`检查套话和前后矛盾` })
+  steps.push({ id: 'fix', label: msg`按检查结果修改` })
   return steps
 }
 
@@ -346,7 +380,8 @@ export function newCard(plan) {
     entries: plan.entries.map(entry => ({ ...entry, content: entry.type === '状态' ? stateContent(entry, plan) : '' })),
     greetings: plan.greetings.map(g => ({ title: g.title, text: '' })),
     description: describe(plan),
-    creatorNotes: [plan.summary, '由 CicaTavern「创作角色卡」生成。'].filter(Boolean).join('\n\n'),
+    // Part of the card, so in the card's language.
+    creatorNotes: [plan.summary, stateWords(plan).creator].filter(Boolean).join('\n\n'),
     checks: [],
     reviewed: false,
     fixed: false,
@@ -358,11 +393,12 @@ export function newCard(plan) {
 
 /** A short card description for the character definition: who is who, three lines at most. */
 function describe(plan) {
+  const words = stateWords(plan)
   const lines = plan.characters
     .filter(c => c.kind === 'core')
     .slice(0, 2)
-    .map(c => `${c.name}：${[c.identity, c.relationship && `与<user>：${c.relationship}`].filter(Boolean).join('；')}`)
-  if (plan.user_role.identity) lines.push(`<user>：${plan.user_role.identity}`)
+    .map(c => `${c.name}${words.colon}${[c.identity, c.relationship && `${words.with}${c.relationship}`].filter(Boolean).join(words.separator)}`)
+  if (plan.user_role.identity) lines.push(`<user>${words.colon}${plan.user_role.identity}`)
   return lines.slice(0, 3).join('\n')
 }
 
@@ -415,7 +451,7 @@ export function cardJson(plan, card) {
       fav: false,
       world: plan.name,
       depth_prompt: { prompt: '', depth: 4, role: 'system' },
-      regex_scripts: plan.tracking.enabled ? [regexScript('对模型隐藏变量更新', { promptOnly: true }), regexScript('对玩家隐藏变量更新', { markdownOnly: true })] : [],
+      regex_scripts: plan.tracking.enabled ? [regexScript(stateWords(plan).hideFromModel, { promptOnly: true }), regexScript(stateWords(plan).hideFromPlayer, { markdownOnly: true })] : [],
     },
     character_book: { name: plan.name, entries },
   }

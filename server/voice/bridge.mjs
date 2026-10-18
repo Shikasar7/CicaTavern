@@ -8,6 +8,7 @@ import { readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fetchBytes, postJson } from '../providers.mjs'
 import { httpError } from '../store.mjs'
+import { msg } from '../i18n.mjs'
 
 /**
  * @param root - the data folder (tts-key.json).
@@ -37,7 +38,7 @@ export function createBridge({ root, features = null }) {
     const key = String(value ?? '').trim()
     if (!key) await rm(ttsKeyFile, { force: true })
     else {
-      if (!/^[\w-]{8,200}$/.test(key)) throw httpError(400, '访问口令不对：把电脑上酒馆「局域网访问」里的链接整条粘贴过来')
+      if (!/^[\w-]{8,200}$/.test(key)) throw httpError(400, msg`访问口令不对：把电脑上酒馆「局域网访问」里的链接整条粘贴过来`)
       await writeFile(ttsKeyFile, JSON.stringify({ key }), 'utf8')
     }
     return ttsKeyStatus()
@@ -55,13 +56,13 @@ export function createBridge({ root, features = null }) {
     const message = String(error?.message ?? error)
     const down = /ECONNREFUSED|EHOSTUNREACH|ENETUNREACH|ETIMEDOUT|timeout|aborted/i.test(message)
     // Only a tavern asks for a key (401 no or wrong key, 403 an address it does not serve).
-    if (/^40[13]\b/.test(message)) return '电脑上的酒馆不让访问：把它「手机访问」里的链接整条粘贴到「桥接地址」（链接里带着口令）'
+    if (/^40[13]\b/.test(message)) return msg`电脑上的酒馆不让访问：把它「手机访问」里的链接整条粘贴到「桥接地址」（链接里带着口令）`
     if (isLocalUrl(media.ttsUrl)) {
-      if (!down) return `本地语音桥接：${message.replace(/^\d{3} /, '').slice(0, 200)}`
-      return features?.xiaoya === false ? `本地语音桥接（${media.ttsUrl}）没开` : '本地语音桥接（小雅）没开：先运行「小雅一键启动」（或只启动语音桥接）'
+      if (!down) return msg`本地语音桥接：${message.replace(/^\d{3} /, '').slice(0, 200)}`
+      return features?.xiaoya === false ? msg`本地语音桥接（${media.ttsUrl}）没开` : msg`本地语音桥接（小雅）没开：先运行「小雅一键启动」（或只启动语音桥接）`
     }
-    if (down) return `连不上 ${media.ttsUrl}：电脑上的酒馆开着吗？手机和电脑在同一个 Wi-Fi 吗？`
-    return `本地语音桥接（${media.ttsUrl}）：${message.replace(/^\d{3} /, '').slice(0, 200)}`
+    if (down) return msg`连不上 ${media.ttsUrl}：电脑上的酒馆开着吗？手机和电脑在同一个 Wi-Fi 吗？`
+    return msg`本地语音桥接（${media.ttsUrl}）：${message.replace(/^\d{3} /, '').slice(0, 200)}`
   }
 
   /**
@@ -111,7 +112,10 @@ export function createBridge({ root, features = null }) {
 
   return {
     id: 'bridge',
-    label: '本地语音桥接',
+    // A getter: in the language of the page that asks (server/i18n.mjs).
+    get label() {
+      return msg`本地语音桥接`
+    },
     // Tuned for the xiaoya bridge's Qwen3 voices: each call starts its own intonation.
     chunkMax: 100,
     ttsKeyStatus,

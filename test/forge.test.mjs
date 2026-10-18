@@ -6,7 +6,9 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { configureEntries } from '../server/forge/configure.mjs'
 import { createForge } from '../server/forge/index.mjs'
-import { cleanQuestions, discussRequest, mergeBrief, normalizePlan, partialReply, planRequest, readDiscussion, readPlan } from '../server/forge/prompts.mjs'
+import { cleanQuestions, discussRequest, emptyBrief, forgeLanguages, mergeBrief, normalizePlan, partialReply, planRequest, readDiscussion, readPlan } from '../server/forge/prompts.mjs'
+import { cardJson, entriesRequest, newCard, reviewRequest } from '../server/forge/write.mjs'
+import { withLanguage } from '../server/i18n.mjs'
 import { normalizeProvider } from '../server/providers.mjs'
 import { createStore } from '../server/store.mjs'
 
@@ -263,4 +265,64 @@ test('the plan request carries the talk; a cut-off plan reads as nothing', () =>
   assert.ok(planRequest(rounds, { title: '', readiness: 0, items: [], open: [] }).maxTokens >= 32000)
   assert.equal(readPlan('<plan>{"name": "x", "characters": []}'), null)
   assert.equal(readPlan('不是方案'), null)
+})
+
+test('the guide talks in the page\'s language; samples, plan and card are in 写作语言', async t => {
+  const { forge, fake, store } = await setup(t)
+  const systemOf = request => request.messages[0].content
+
+  // An English page, stories in Chinese: the guide's own words in English, its samples in Chinese.
+  const started = await withLanguage('en', () => forge.create({ text: 'a quiet girl in a convenience store on a rainy night' }))
+  let draft = await settled(forge, started.id)
+  let system = systemOf(fake.seen.at(-1))
+  assert.match(system, /对用户说的话用English写：<reply>/)
+  assert.match(system, /选项的 sample 和 taste 的试写是这张卡正文的样子，用简体中文写/)
+  assert.doesNotMatch(system, /全文简体中文/)
+
+  // 写作语言 English: the plan, and the names the code gives entries, are English.
+  await store.saveSettings({ language: 'English' })
+  await withLanguage('en', () => forge.plan(draft.id))
+  draft = await settled(forge, draft.id)
+  assert.match(systemOf(fake.seen.at(-1)), /全文English。不用破折号。/)
+  assert.equal(draft.plan.language, 'English')
+  const names = draft.plan.entries.map(e => e.name)
+  assert.ok(names.includes('World') && names.includes('林小雨_Profile') && names.includes('[InitVar] do not open'), names.join(', '))
+
+  // A revision stays in the plan's language even when the setting has changed since.
+  await store.saveSettings({ language: '简体中文' })
+  await withLanguage('en', () => forge.revise(draft.id, { text: 'fewer side characters' }))
+  draft = await settled(forge, draft.id)
+  assert.match(systemOf(fake.seen.at(-1)), /全文English。/)
+  assert.equal(draft.plan.language, 'English')
+})
+
+test('a Chinese page writing Chinese asks exactly as before; an English card gets its own words in English', () => {
+  const rounds = [{ user: { text: '想要雨夜的卡', picks: [] }, assistant: null }]
+  const chinese = discussRequest(rounds, emptyBrief(), forgeLanguages('zh', ''))
+  assert.match(chinese.system, /全文简体中文。不用破折号。/)
+  assert.doesNotMatch(chinese.system, /对用户说的话用/)
+  assert.equal(discussRequest(rounds, emptyBrief()).system, chinese.system, 'no languages: Chinese')
+  assert.deepEqual(forgeLanguages('en', '  English '), { reply: 'English', card: 'English' })
+
+  const zhPlan = normalizePlan(PLAN)
+  assert.equal(zhPlan.language, '简体中文')
+  assert.ok(zhPlan.entries.some(e => e.name === '林小雨_基础信息'))
+  assert.match(entriesRequest(zhPlan, zhPlan.entries.slice(0, 1), []).system, /用 YAML 风格的中文/)
+  assert.match(newCard(zhPlan).creatorNotes, /由 CicaTavern「创作角色卡」生成。/)
+  assert.equal(reviewRequest(newCard(zhPlan), []).system.includes('用简体中文写'), false)
+
+  const enPlan = normalizePlan(PLAN, { language: 'English' })
+  const request = entriesRequest(enPlan, enPlan.entries.slice(0, 1), [])
+  assert.match(request.system, /用 YAML 风格：/)
+  assert.match(request.system, /全文English。/)
+  const card = newCard(enPlan)
+  assert.match(card.creatorNotes, /Made with CicaTavern's card creator\./)
+  assert.match(card.description, /^林小雨: .*with <user>: /m)
+  assert.match(card.entries.find(e => e.part === 'rules').content, /^Variable update rules:/)
+  assert.match(reviewRequest(card, [], 'English').system, /suggestion 也用English写/)
+  const json = cardJson(enPlan, card)
+  assert.deepEqual(json.data.extensions.regex_scripts.map(s => s.scriptName), ['Hide variable updates from the model', 'Hide variable updates from the player'])
+  // Plans from before the language was kept are Chinese.
+  const { language, ...old } = zhPlan
+  assert.match(entriesRequest(old, old.entries.slice(0, 1), []).system, /全文简体中文/)
 })

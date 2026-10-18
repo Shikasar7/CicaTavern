@@ -23,6 +23,7 @@ import { appVersion } from '../edition.mjs'
 import { agentFor } from '../providers.mjs'
 import { compareVersions, FEED, releaseInfo, REPO } from './release.mjs'
 import { canonical, checkRuntime, installBase, isInstall, otherInstalls, previousInstall, readJson, removeInstall, stateDir, stageInstall, writeJsonFile } from './install.mjs'
+import { localize, msg } from '../i18n.mjs'
 
 const APP_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -37,17 +38,17 @@ function failure(status, message) {
 function get(href, { proxy, signal, headers, allowHttp }, hops = 0) {
   return new Promise((resolve, reject) => {
     const url = new URL(href)
-    if (url.protocol !== 'https:' && !(allowHttp && url.protocol === 'http:')) return reject(new Error(`不安全的下载地址：${url.origin}`))
+    if (url.protocol !== 'https:' && !(allowHttp && url.protocol === 'http:')) return reject(new Error(msg`不安全的下载地址：${url.origin}`))
     const lib = url.protocol === 'https:' ? https : http
     const req = lib.get(url, { agent: agentFor(url, proxy), headers, signal, timeout: IDLE_TIMEOUT_MS }, res => {
       if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
         res.resume()
-        if (hops >= 5) return reject(new Error('重定向太多次'))
+        if (hops >= 5) return reject(new Error(msg`重定向太多次`))
         return resolve(get(new URL(res.headers.location, url).href, { proxy, signal, headers: { 'user-agent': headers['user-agent'] }, allowHttp }, hops + 1))
       }
       resolve(res)
     })
-    req.on('timeout', () => req.destroy(new Error('网络超时')))
+    req.on('timeout', () => req.destroy(new Error(msg`网络超时`)))
     req.on('error', reject)
   })
 }
@@ -56,17 +57,17 @@ async function readText(res) {
   let text = ''
   for await (const chunk of res) {
     text += chunk
-    if (text.length > 2_000_000) throw new Error('回复太长')
+    if (text.length > 2_000_000) throw new Error(msg`回复太长`)
   }
   return text
 }
 
 /** A network error in words: what to try. */
 function networkTrouble(error) {
-  if (error?.name === 'AbortError') return '已取消'
+  if (error?.name === 'AbortError') return msg`已取消`
   const code = error?.code ?? error?.cause?.code
   const what = code ? `${code}` : String(error?.message ?? error).slice(0, 120)
-  return `连不上 GitHub（${what}）。在国内通常要在 设置 → 网络代理 里设代理。`
+  return msg`连不上 GitHub（${what}）。在国内通常要在 设置 → 网络代理 里设代理。`
 }
 
 /**
@@ -101,9 +102,9 @@ export function createUpdater({
   const userAgent = `CicaTavern/${version} (+https://github.com/${repo})`
   // Why this copy cannot install by itself, or null.
   const notInstallable = () => {
-    if (kind !== 'zip') return kind === 'apk' ? null : '这个版本不用应用内更新'
-    if (platform !== 'win32') return '应用内更新只支持 Windows 发布包'
-    if (!isInstall(root)) return '这份 CicaTavern 不是从发布包运行的（比如从源码运行），用 git pull 或到发布页下载更新'
+    if (kind !== 'zip') return kind === 'apk' ? null : msg`这个版本不用应用内更新`
+    if (platform !== 'win32') return msg`应用内更新只支持 Windows 发布包`
+    if (!isInstall(root)) return msg`这份 CicaTavern 不是从发布包运行的（比如从源码运行），用 git pull 或到发布页下载更新`
     return null
   }
   let dir = null // the state folder, found on first use
@@ -177,17 +178,17 @@ export function createUpdater({
         headers: { accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28', 'user-agent': userAgent },
       })
     } catch (error) {
-      throw failure(502, signal.aborted ? '连 GitHub 超时。在国内通常要在 设置 → 网络代理 里设代理。' : networkTrouble(error))
+      throw failure(502, signal.aborted ? msg`连 GitHub 超时。在国内通常要在 设置 → 网络代理 里设代理。` : networkTrouble(error))
     }
     const text = await readText(res)
-    if (res.statusCode === 404) throw failure(502, '还没有发布任何版本')
-    if (res.statusCode === 403 || res.statusCode === 429) throw failure(502, 'GitHub 暂时限制了查询次数，过一会儿再试')
-    if (res.statusCode !== 200) throw failure(502, `GitHub 回复 ${res.statusCode}`)
+    if (res.statusCode === 404) throw failure(502, msg`还没有发布任何版本`)
+    if (res.statusCode === 403 || res.statusCode === 429) throw failure(502, msg`GitHub 暂时限制了查询次数，过一会儿再试`)
+    if (res.statusCode !== 200) throw failure(502, msg`GitHub 回复 ${res.statusCode}`)
     let json
     try {
       json = JSON.parse(text)
     } catch {
-      throw failure(502, 'GitHub 的回复读不懂')
+      throw failure(502, msg`GitHub 的回复读不懂`)
     }
     return releaseInfo(json, { repo, feed })
   }
@@ -204,7 +205,7 @@ export function createUpdater({
         await save({ latest, checkedAt: now(), error: null })
       } catch (error) {
         // A failed daily check also waits a day; 检查更新 says why.
-        await save({ checkedAt: now(), error: error.message })
+        await save({ checkedAt: now(), error: localize(error.message) })
         if (force) throw error
       } finally {
         checking = null
@@ -215,7 +216,7 @@ export function createUpdater({
   }
 
   async function setAutoCheck(on) {
-    if (!kind) throw failure(404, '这个版本不用应用内更新')
+    if (!kind) throw failure(404, msg`这个版本不用应用内更新`)
     await save({ autoCheck: Boolean(on) })
     return status()
   }
@@ -223,14 +224,14 @@ export function createUpdater({
   /** Download, verify and unpack the latest Windows package; runs on after the request returns. */
   async function download() {
     const reason = notInstallable()
-    if (kind !== 'zip' || reason) throw failure(400, reason ?? '这个版本不能在应用里安装更新')
+    if (kind !== 'zip' || reason) throw failure(400, reason ?? msg`这个版本不能在应用里安装更新`)
     if (['downloading', 'verifying', 'unpacking', 'restarting'].includes(job.step)) return status()
     const state = await load()
     const latest = state.latest
-    if (!latest || compareVersions(latest.version, version) <= 0) throw failure(400, '没有更新的版本')
+    if (!latest || compareVersions(latest.version, version) <= 0) throw failure(400, msg`没有更新的版本`)
     if (staged(state)?.version === latest.version) return status()
     const asset = latest.assets?.zip
-    if (!asset) throw failure(400, '这个版本没有 Windows 安装包')
+    if (!asset) throw failure(400, msg`这个版本没有 Windows 安装包`)
     if (!asset.sha256) throw failure(400, asset.hashError)
     controller = new AbortController()
     job = { step: 'downloading', version: latest.version, received: 0, total: asset.size }
@@ -244,11 +245,11 @@ export function createUpdater({
     const zipFile = path.join(folder, asset.name)
     try {
       const res = await get(asset.url, { proxy: proxy(), signal, allowHttp, headers: { accept: 'application/octet-stream', 'user-agent': userAgent } }).catch(error => {
-        throw signal.aborted ? Object.assign(new Error('已取消'), { name: 'AbortError' }) : new Error(networkTrouble(error))
+        throw signal.aborted ? Object.assign(new Error(msg`已取消`), { name: 'AbortError' }) : new Error(networkTrouble(error))
       })
       if (res.statusCode !== 200) {
         res.resume()
-        throw new Error(`下载失败：GitHub 回复 ${res.statusCode}`)
+        throw new Error(msg`下载失败：GitHub 回复 ${res.statusCode}`)
       }
       job.total = Number(res.headers['content-length']) || asset.size
       const hash = createHash('sha256')
@@ -259,11 +260,11 @@ export function createUpdater({
           job.received += chunk.length
         })
         res.on('error', reject)
-        res.on('aborted', () => reject(new Error('下载中断了')))
+        res.on('aborted', () => reject(new Error(msg`下载中断了`)))
         out.on('error', reject)
         out.on('finish', resolve)
         res.pipe(out)
-        signal.addEventListener('abort', () => reject(Object.assign(new Error('已取消'), { name: 'AbortError' })), { once: true })
+        signal.addEventListener('abort', () => reject(Object.assign(new Error(msg`已取消`), { name: 'AbortError' })), { once: true })
       }).catch(error => {
         res.destroy()
         out.destroy()
@@ -271,8 +272,8 @@ export function createUpdater({
       })
       job.step = 'verifying'
       const sha256 = hash.digest('hex')
-      if (asset.size && job.received !== asset.size) throw new Error(`下载不完整（${job.received} / ${asset.size} 字节），再试一次`)
-      if (sha256 !== asset.sha256) throw new Error(`SHA-256 对不上，已丢弃下载的文件。应为 ${asset.sha256}，实际 ${sha256}`)
+      if (asset.size && job.received !== asset.size) throw new Error(msg`下载不完整（${job.received} / ${asset.size} 字节），再试一次`)
+      if (sha256 !== asset.sha256) throw new Error(msg`SHA-256 对不上，已丢弃下载的文件。应为 ${asset.sha256}，实际 ${sha256}`)
       await rename(part, zipFile)
       job.step = 'unpacking'
       const base = await installBase(root, env)
@@ -280,7 +281,7 @@ export function createUpdater({
       await save({ staged: { version: latest.version, path: folderPath, sha256 } })
       job = { step: 'ready', version: latest.version }
     } catch (error) {
-      job = { step: 'error', version: latest.version, error: error.name === 'AbortError' ? '已取消下载' : error.message }
+      job = { step: 'error', version: latest.version, error: error.name === 'AbortError' ? msg`已取消下载` : localize(error.message) }
     } finally {
       controller = null
       await rm(part, { force: true }).catch(() => {})
@@ -295,8 +296,8 @@ export function createUpdater({
 
   /** Hand over to bin/update-apply.mjs: it stops this server and starts `target`, or this one again on failure. */
   async function switchTo(target, mode) {
-    if (busy()) throw failure(409, '正在生成，等它写完再重启')
-    if (!onShutdown) throw failure(400, '这个服务不能从页面重启：关掉控制台窗口，再从桌面图标打开')
+    if (busy()) throw failure(409, msg`正在生成，等它写完再重启`)
+    if (!onShutdown) throw failure(400, msg`这个服务不能从页面重启：关掉控制台窗口，再从桌面图标打开`)
     const from = { path: root, version }
     const folder = await stateFolder()
     await rm(path.join(folder, 'result.json'), { force: true })
@@ -304,7 +305,7 @@ export function createUpdater({
     try {
       await spawnSwitch({ root, from, to: target, mode, relaunch: relaunch(), stateDir: folder, pid: process.pid })
     } catch (error) {
-      job = { step: 'error', error: `重启没能开始：${error.message}` }
+      job = { step: 'error', error: msg`重启没能开始：${error.message}` }
       throw failure(500, job.error)
     }
     setTimeout(onShutdown, 300).unref?.()
@@ -313,16 +314,16 @@ export function createUpdater({
 
   async function apply() {
     const reason = notInstallable()
-    if (kind !== 'zip' || reason) throw failure(400, reason ?? '这个版本不能在应用里安装更新')
+    if (kind !== 'zip' || reason) throw failure(400, reason ?? msg`这个版本不能在应用里安装更新`)
     const ready = staged(await load())
-    if (!ready) throw failure(400, '还没下载好新版本')
+    if (!ready) throw failure(400, msg`还没下载好新版本`)
     return switchTo(ready, 'update')
   }
 
   async function rollback() {
-    if (kind !== 'zip' || notInstallable()) throw failure(400, '这个版本不能在应用里切换版本')
+    if (kind !== 'zip' || notInstallable()) throw failure(400, msg`这个版本不能在应用里切换版本`)
     const previous = await previousInstall(root)
-    if (!previous) throw failure(400, '上一版的文件夹已经不在了')
+    if (!previous) throw failure(400, msg`上一版的文件夹已经不在了`)
     return switchTo(previous, 'rollback')
   }
 
@@ -339,8 +340,8 @@ export function createUpdater({
   async function remove(target) {
     const { installs: list } = await installs()
     const item = list.find(i => path.resolve(i.path) === path.resolve(String(target ?? '')))
-    if (!item) throw failure(404, '没有这个旧版本文件夹')
-    if (['downloading', 'verifying', 'unpacking', 'restarting'].includes(job.step)) throw failure(409, '正在更新，等一会儿再删')
+    if (!item) throw failure(404, msg`没有这个旧版本文件夹`)
+    if (['downloading', 'verifying', 'unpacking', 'restarting'].includes(job.step)) throw failure(409, msg`正在更新，等一会儿再删`)
     await removeInstall(item.path, { root, dataRoot })
     if (item.staged) {
       await save({ staged: null })
@@ -366,7 +367,7 @@ export function createUpdater({
 /** Start bin/update-apply.mjs from this install, detached, so it outlives this server. */
 export function spawnApply({ root, from, to, mode, relaunch, stateDir: folder, pid }) {
   const script = path.join(root, 'bin', 'update-apply.mjs')
-  if (!existsSync(script)) return Promise.reject(new Error('缺少 bin/update-apply.mjs'))
+  if (!existsSync(script)) return Promise.reject(new Error(msg`缺少 bin/update-apply.mjs`))
   const args = [script, '--from', from.path, '--to', to.path, '--version', to.version, '--from-version', from.version, '--mode', mode, '--pid', String(pid), '--state', folder]
   for (const [key, value] of Object.entries(relaunch)) {
     if (value !== undefined && value !== null && value !== '') args.push(`--relaunch-${key}`, String(value))

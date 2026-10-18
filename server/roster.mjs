@@ -7,6 +7,7 @@
 // after picture and several people in one frame do not swap features.
 import { randomBytes } from 'node:crypto'
 import { httpError } from './store.mjs'
+import { msg } from './i18n.mjs'
 
 export const ROSTER_MAX = 24
 const KINDS = ['girl', 'boy', 'other']
@@ -19,7 +20,7 @@ const text = (value, max) => (typeof value === 'string' ? value.trim().slice(0, 
 /** A LoRA file name from ComfyUI's loras folder, or ''. */
 export function cleanLora(value) {
   const lora = text(value, 200)
-  if (lora && (!/\.(safetensors|pt|ckpt)$/i.test(lora) || /(^|[\\/])\.\.([\\/]|$)/.test(lora))) throw httpError(400, 'LoRA 要填 ComfyUI loras 文件夹里的文件名（.safetensors）')
+  if (lora && (!/\.(safetensors|pt|ckpt)$/i.test(lora) || /(^|[\\/])\.\.([\\/]|$)/.test(lora))) throw httpError(400, msg`LoRA 要填 ComfyUI loras 文件夹里的文件名（.safetensors）`)
   return lora
 }
 

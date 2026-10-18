@@ -52,7 +52,7 @@ export function displayOf(node, { scripts, names, depth, withStatus }) {
   // The status bar always goes after the story: models often write the placeholder first,
   // or before their variable-update block.
   if (withStatus || PLACEHOLDER.test(text)) text = `${text.replace(/<StatusPlaceHolderImpl\s*\/>/gi, '').trimEnd()}\n\n<StatusPlaceHolderImpl/>`
-  const macros = t => nameMacros(replaceVariableMacros(t, node.state), names)
+  const macros = text => nameMacros(replaceVariableMacros(text, node.state), names)
   if (scripts.length) {
     const placement = node.role === 'user' ? PLACEMENT.USER_INPUT : PLACEMENT.AI_OUTPUT
     text = applyScripts(text, scripts, { placement, target: 'display', depth, macros })

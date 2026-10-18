@@ -1,6 +1,7 @@
 // Looking back through a long chat: a round label on each of your messages,
 // a scrub rail beside the transcript, a "where am I" pill, and a panel to
 // search past rounds or jump straight to one by number.
+import { t } from '/i18n.js'
 
 const $ = id => document.getElementById(id)
 const LONG_JUMP = 6 // viewports; farther than this jumps instead of gliding
@@ -63,7 +64,7 @@ export function initHistory({ el, getChat }) {
       if (node.role === 'user') {
         rounds.push({ n: 0, input: bodyText(article) || flat(node.text), reply: '', nodes: [article], top: 0 })
       } else if (!rounds.length) {
-        rounds.push({ n: 0, input: '', reply: bodyText(article), nodes: [article], top: 0, opening: node.compaction ? '存档' : '开场' })
+        rounds.push({ n: 0, input: '', reply: bodyText(article), nodes: [article], top: 0, opening: node.compaction ? t`存档` : t`开场` })
       } else {
         const round = rounds.at(-1)
         round.reply ||= bodyText(article)
@@ -82,7 +83,7 @@ export function initHistory({ el, getChat }) {
   }
 
   function label(round) {
-    return round.n === 0 ? round.opening : `第 ${round.n} 轮`
+    return round.n === 0 ? round.opening : t`第 ${round.n} 轮`
   }
 
   /** A quiet "第 n 轮" at the right of each of your messages, including the one being sent. */
@@ -98,7 +99,7 @@ export function initHistory({ el, getChat }) {
   function addTag(article, n) {
     const head = article.querySelector('.msg-head')
     if (!head || head.querySelector('.round-tag')) return
-    head.append(el('span', { class: 'round-tag', text: `第 ${n} 轮` }))
+    head.append(el('span', { class: 'round-tag', text: t`第 ${n} 轮` }))
   }
 
   const last = () => state.rounds.at(-1)?.n ?? 0
@@ -187,7 +188,7 @@ export function initHistory({ el, getChat }) {
       void where.offsetWidth
       where.classList.add('enter')
     } else if (!show) where.hidden = true
-    $('where-round').textContent = state.current === 0 ? (state.rounds[0]?.opening ?? '开场') : `第 ${state.current} 轮`
+    $('where-round').textContent = state.current === 0 ? (state.rounds[0]?.opening ?? t`开场`) : t`第 ${state.current} 轮`
     $('where-total').textContent = `/ ${last()}`
   }
 
@@ -360,7 +361,7 @@ export function initHistory({ el, getChat }) {
     let source = text
     if (around && terms.length) {
       const lower = source.toLowerCase()
-      const first = Math.min(...terms.map(t => lower.indexOf(t)).filter(i => i >= 0))
+      const first = Math.min(...terms.map(term => lower.indexOf(term)).filter(i => i >= 0))
       if (Number.isFinite(first) && first > around) source = `…${source.slice(first - around)}`
     }
     if (!terms.length) return [document.createTextNode(source)]
@@ -394,10 +395,10 @@ export function initHistory({ el, getChat }) {
     state.shown = rows
 
     count.textContent = !terms.length
-      ? `共 ${last()} 轮`
+      ? t`共 ${last()} 轮`
       : number !== null && rows[0]?.jump
-        ? `回车跳到第 ${number} 轮`
-        : hits.length ? `${hits.length} 轮提到` : '没有找到，换个词试试'
+        ? t`回车跳到第 ${number} 轮`
+        : hits.length ? t`${hits.length} 轮提到` : t`没有找到，换个词试试`
 
     const hitSet = new Set(hits.map(r => r.n))
     for (const tick of ticks.children) tick.classList.toggle('hit', terms.length > 0 && hitSet.has(Number(tick.dataset.n)))
@@ -406,7 +407,7 @@ export function initHistory({ el, getChat }) {
       ...rows.map((row, index) => {
         const { round } = row
         const showInput = round.n !== 0
-        const replyHit = terms.length && !terms.every(t => round.input.toLowerCase().includes(t))
+        const replyHit = terms.length && !terms.every(term => round.input.toLowerCase().includes(term))
         const images = imagesOf(round)
         return el('li', {
           class: `hrow${round.n === state.current ? ' here' : ''}${row.jump ? ' jump' : ''}${images.length ? ' has-thumb' : ''}`,
@@ -417,12 +418,12 @@ export function initHistory({ el, getChat }) {
         }, [
           el('span', { class: `hrow-n${round.n === 0 ? ' word' : ''}`, text: round.n === 0 ? round.opening : String(round.n) }),
           el('div', { class: 'hrow-text' }, [
-            row.jump ? el('p', { class: 'hrow-kicker', text: `跳到第 ${round.n} 轮` }) : null,
-            showInput ? el('p', { class: 'hrow-in' }, marked(round.input || '（空）', terms)) : null,
-            el('p', { class: `hrow-out${replyHit || !showInput ? ' open' : ''}` }, marked(round.reply || '（还没有回复）', state.scope === 'all' ? terms : [], { around: replyHit ? 18 : 0 })),
+            row.jump ? el('p', { class: 'hrow-kicker', text: t`跳到第 ${round.n} 轮` }) : null,
+            showInput ? el('p', { class: 'hrow-in' }, marked(round.input || t`（空）`, terms)) : null,
+            el('p', { class: `hrow-out${replyHit || !showInput ? ' open' : ''}` }, marked(round.reply || t`（还没有回复）`, state.scope === 'all' ? terms : [], { around: replyHit ? 18 : 0 })),
           ]),
           images.length
-            ? el('span', { class: 'hrow-thumb', title: images.length > 1 ? `这一轮配了 ${images.length} 张图` : '这一轮配的图' }, [
+            ? el('span', { class: 'hrow-thumb', title: images.length > 1 ? t`这一轮配了 ${images.length} 张图` : t`这一轮配的图` }, [
                 el('img', { src: images[0].getAttribute('src'), alt: '', loading: 'lazy', decoding: 'async' }),
                 images.length > 1 ? el('b', { text: `${images.length}` }) : null,
               ])

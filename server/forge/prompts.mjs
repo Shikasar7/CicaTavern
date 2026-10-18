@@ -4,18 +4,49 @@
 // say out loud what was assumed, keep the lore terse and concrete), written
 // here in this app's own words.
 import { configureEntries } from './configure.mjs'
+import { msg } from '../i18n.mjs'
+
+// ─── Languages ────────────────────────────────────────────────────────────
+// The guide talks to the user in the page's language (界面语言). What goes into
+// the card is in the language its stories are written in (设置 → 写作语言): the
+// sample passages, the plan, every entry and greeting. The plan keeps that
+// language, so a draft is written in one language to the end.
+
+export const DEFAULT_LANGUAGE = '简体中文'
+
+/** The languages of one job: reply = the page's (zh | en), card = 写作语言. */
+export const forgeLanguages = (uiLanguage, writing) => ({
+  reply: uiLanguage === 'en' ? 'English' : DEFAULT_LANGUAGE,
+  card: String(writing ?? '').trim() || DEFAULT_LANGUAGE,
+})
+
+/** A card in English gets English names for the parts the code names itself. */
+export const englishCard = language => /^(en\b|english|英文|英语)/i.test(String(language ?? '').trim())
 
 // ─── Shared writing rules ─────────────────────────────────────────────────
 // Kinds of wording to avoid, named by kind only: listing the phrases themselves
 // in a prompt tends to put them into the answer. The checker has the list.
-export const PLAIN_WRITING = [
-  '全文简体中文。不用破折号。',
+const WRITING_RULES = [
   '名称一律具体：地名、学校、组织、店名都要有名字，不写「某城市」「某学校」「那个地方」。',
   '写具体的画面和行为，不贴性格标签，不写空泛的赞美或评价。',
   '不用套话：陈旧比喻、「仿佛/似乎」一类的模糊词、细小表情的固定写法、「带着……的语气」一类的声线描写、夸张的情绪词。',
   '一句一个意思，说完就停，不做同义反复。',
   '玩家角色写作 <user>，不写 {{user}}。',
-].join('\n')
+]
+
+/** The writing rules, everything in one language (the card's). */
+export const plainWriting = (language = DEFAULT_LANGUAGE) => [`全文${language}。不用破折号。`, ...WRITING_RULES].join('\n')
+
+/** The same for the guide, whose talk can be in another language than the card. */
+function talkWriting({ reply = DEFAULT_LANGUAGE, card = DEFAULT_LANGUAGE } = {}) {
+  if (reply === card) return plainWriting(card)
+  return [
+    `对用户说的话用${reply}写：<reply>，问题的 title 和 why，选项的 label 和 detail，草图的 title、label、value 和 open。`,
+    `选项的 sample 和 taste 的试写是这张卡正文的样子，用${card}写。`,
+    '不用破折号。',
+    ...WRITING_RULES,
+  ].join('\n')
+}
 
 // Output caps. They only stop a runaway answer, so they leave room for thinking:
 // models that think by default (DeepSeek's flash) count it against the same cap,
@@ -25,7 +56,7 @@ export const LONG_TOKENS = 32000
 
 // ─── Talking it through ───────────────────────────────────────────────────
 
-const DISCUSS_SYSTEM = `你是一位角色卡共创向导。用户想在 SillyTavern 一类的角色扮演应用里玩一张新角色卡，但往往说不清自己真正想要什么。你陪他把一个模糊的念头聊成清晰的设想：用具体、可感的选择帮他发现自己的偏好，而不是替他做决定。
+const discussSystem = languages => `你是一位角色卡共创向导。用户想在 SillyTavern 一类的角色扮演应用里玩一张新角色卡，但往往说不清自己真正想要什么。你陪他把一个模糊的念头聊成清晰的设想：用具体、可感的选择帮他发现自己的偏好，而不是替他做决定。
 
 做法：
 - 每轮先用一两句话说出你此刻理解的样子，要具体、有画面；再提 2 到 3 个此刻最影响全局的问题，不要一次问很多。
@@ -38,7 +69,7 @@ const DISCUSS_SYSTEM = `你是一位角色卡共创向导。用户想在 SillyTa
 - 用大白话交流，不说「世界书」「条目」「MVU」「常驻」这类术语。问状态记录时说成「要不要记录她对你的好感、你的体力这类会变化的数值」。
 - 当核心角色、和 <user> 的关系、舞台、基调都已清楚，readiness 给到 75 以上，并在回复里提一句「可以出方案了，也可以接着细化」。用户可能随时要求出方案，你只管把每一轮聊好。
 
-${PLAIN_WRITING}
+${talkWriting(languages)}
 
 回答严格分成下面三段，标签之外不写任何东西：
 <reply>
@@ -179,8 +210,8 @@ export function userTurnText(user, { first = false } = {}) {
   return lines.join('\n')
 }
 
-/** The request for the next round of talk. */
-export function discussRequest(rounds, brief) {
+/** The request for the next round of talk; languages from forgeLanguages. */
+export function discussRequest(rounds, brief, languages) {
   const messages = []
   rounds.forEach((round, i) => {
     let content = userTurnText(round.user, { first: i === 0 })
@@ -189,7 +220,7 @@ export function discussRequest(rounds, brief) {
     messages.push({ role: 'user', content })
     if (!last && round.assistant) messages.push({ role: 'assistant', content: round.assistant.raw })
   })
-  return { system: DISCUSS_SYSTEM, messages, maxTokens: TALK_TOKENS, softCap: true }
+  return { system: discussSystem(languages), messages, maxTokens: TALK_TOKENS, softCap: true }
 }
 
 /** A round's answer → { reply, questions, brief }; whatever could be read. */
@@ -244,7 +275,7 @@ const PLAN_SCHEMA = `{
   "verbatim": ["用户原话里应当原样保留的句子"]
 }`
 
-const PLAN_SYSTEM = `你是角色卡策划。根据你和用户的讨论，写出一张 SillyTavern 角色卡的创作方案，之后会按方案逐项写出角色设定、世界书和开场白。
+const planSystem = language => `你是角色卡策划。根据你和用户的讨论，写出一张 SillyTavern 角色卡的创作方案，之后会按方案逐项写出角色设定、世界书和开场白。
 
 要求：
 - 讨论里定下的一切都要体现在方案里；用户的原话放进 verbatim，并在相关字段里原样使用。
@@ -256,7 +287,7 @@ const PLAN_SYSTEM = `你是角色卡策划。根据你和用户的讨论，写�
 - 开场白默认 2 个，场景各不相同，每个都要有悬念或张力，并让 <user> 一开口就有话可接。
 - 所有专有名词在这里一次定好，之后不再新造。
 
-${PLAIN_WRITING}
+${plainWriting(language)}
 
 只输出一段 <plan> 包着的 JSON，结构如下：
 <plan>
@@ -274,12 +305,13 @@ export function transcript(rounds) {
     .join('\n\n')
 }
 
-export function planRequest(rounds, brief) {
+/** The plan, in the card's language (languages from forgeLanguages). */
+export function planRequest(rounds, brief, { card = DEFAULT_LANGUAGE } = {}) {
   const content = `<discussion>\n${transcript(rounds)}\n</discussion>\n\n<sketch>\n${JSON.stringify(brief)}\n</sketch>\n\n按上面的讨论和草图写出创作方案。`
-  return { system: PLAN_SYSTEM, messages: [{ role: 'user', content }], maxTokens: LONG_TOKENS, softCap: true }
+  return { system: planSystem(card), messages: [{ role: 'user', content }], maxTokens: LONG_TOKENS, softCap: true }
 }
 
-/** Changes to a plan: the current plan and what the user wants different. */
+/** Changes to a plan: the current plan and what the user wants different, in the plan's language. */
 export function reviseRequest(rounds, plan, { text = '', notes = [] } = {}) {
   const asked = [
     ...notes.filter(n => n.text).map(n => `- 关于「${n.section}」：${n.text}`),
@@ -291,7 +323,7 @@ export function reviseRequest(rounds, plan, { text = '', notes = [] } = {}) {
     `用户对方案的意见：\n${asked.join('\n')}`,
     '按意见改方案：只改意见涉及的部分，其余保持原样。新补出来的设定同样写进 assumptions。输出完整的新方案。',
   ].join('\n\n')
-  return { system: PLAN_SYSTEM, messages: [{ role: 'user', content }], maxTokens: LONG_TOKENS, softCap: true }
+  return { system: planSystem(planLanguage(plan)), messages: [{ role: 'user', content }], maxTokens: LONG_TOKENS, softCap: true }
 }
 
 // ─── Reading a plan back ──────────────────────────────────────────────────
@@ -301,14 +333,58 @@ const list = (value, max, size) => (Array.isArray(value) ? value : typeof value 
 // Keywords: no single characters (they match everywhere), no duplicates.
 const keywordsOf = (...names) => [...new Set(names.flat().map(n => clip(n, 24)).filter(n => n.length >= 2))]
 
-/** A plan as the app keeps it, without the parts the app derives. */
+/** A plan as the model wrote it, without the parts the app derives or keeps. */
 function rawPlan(plan) {
-  const { entries, warnings, ...rest } = plan ?? {}
+  const { entries, warnings, language, ...rest } = plan ?? {}
   return rest
 }
 
-export function normalizePlan(raw) {
+/** The language a plan (and so its card) is written in. Plans from before it was kept are Chinese. */
+export const planLanguage = plan => plan?.language || DEFAULT_LANGUAGE
+
+// What the code itself names in a card, for a card in Chinese or in English.
+const OWN_WORDS = {
+  zh: {
+    world: '世界设定', worldPurpose: overview => `舞台的框架和与常识不同的规则：${overview}`,
+    rules: '扮演准则', rulesPurpose: '怎么演：互动规则、文风要点',
+    history: '往事',
+    catalog: '角色速览', catalogPurpose: '谁是谁：每人的姓名、性别、年龄、身份',
+    basic: name => `${name}_基础信息`, basicPurpose: name => `${name}的档案：身份、外貌、背景、与 <user> 的关系`,
+    palette: name => `${name}_性格调色盘`,
+    palettePurpose: (name, base, main) => `${name}的性格：底色${base ? `「${base}」` : ''}，主色调${main.map(m => `「${m}」`).join('')}，每一面落到具体场景和行为`,
+    facets: name => `${name}_三面性`, facetsPurpose: name => `${name}在不同处境下的几副面孔：触发、状态、语料、身体习惯`,
+    rephrase: name => `${name}_二次解释`, rephrasePurpose: name => `纠正对${name}的刻板理解：每种性格真正的意思、何时出现、何时不出现`,
+    initvar: '[InitVar]请勿打开', initvarPurpose: '变量的初始值（不发给模型，开局时读入）',
+    variables: '变量列表', variablesPurpose: '每轮把当前变量交给模型',
+    updateRules: '[mvu_update]变量更新规则', updateRulesPurpose: '每个变量什么时候、怎么变',
+    updateFormat: '[mvu_update]变量输出格式', updateFormatPurpose: '让模型在回复末尾写出变量更新',
+    perspective: '第三人称', greeting: n => `开场 ${n}`, separator: '；',
+  },
+  en: {
+    world: 'World', worldPurpose: overview => `the stage and the rules that differ from common sense: ${overview}`,
+    rules: 'Roleplay rules', rulesPurpose: 'how to play it: interaction rules, style points',
+    history: 'Backstory',
+    catalog: 'Cast overview', catalogPurpose: 'who is who: each one\'s name, gender, age, role',
+    basic: name => `${name}_Profile`, basicPurpose: name => `${name}'s profile: identity, looks, background, relationship with <user>`,
+    palette: name => `${name}_Personality`,
+    palettePurpose: (name, base, main) => `${name}'s personality: base${base ? ` "${base}"` : ''}, main tones${main.map(m => ` "${m}"`).join('')}, each shown in concrete scenes and behavior`,
+    facets: name => `${name}_Facets`, facetsPurpose: name => `${name}'s faces in different situations: trigger, state, lines, physical habits`,
+    rephrase: name => `${name}_Clarifications`, rephrasePurpose: name => `correct stock readings of ${name}: what each trait really means, when it shows and when it doesn't`,
+    initvar: '[InitVar] do not open', initvarPurpose: 'the variables\' starting values (not sent to the model; read when a chat starts)',
+    variables: 'Variables', variablesPurpose: 'gives the model the current variables every turn',
+    updateRules: '[mvu_update] Variable update rules', updateRulesPurpose: 'when and how each variable changes',
+    updateFormat: '[mvu_update] Variable output format', updateFormatPurpose: 'has the model write the variable updates at the end of its reply',
+    perspective: 'Third person', greeting: n => `Greeting ${n}`, separator: '; ',
+  },
+}
+
+/** The card's own words for a plan's language. */
+export const ownWords = language => OWN_WORDS[englishCard(language) ? 'en' : 'zh']
+
+/** @param language - 写作语言 when the plan was made (forgeLanguages().card). */
+export function normalizePlan(raw, { language = DEFAULT_LANGUAGE } = {}) {
   if (!raw || typeof raw !== 'object') return null
+  const words = ownWords(language)
   const world = raw.world && typeof raw.world === 'object' ? raw.world : {}
   const characters = (Array.isArray(raw.characters) ? raw.characters : [])
     .filter(c => c && typeof c === 'object' && clip(c.name, 24))
@@ -354,7 +430,7 @@ export function normalizePlan(raw) {
     summary: clip(raw.summary, 400),
     user_role: { identity: clip(raw.user_role?.identity, 300), constraints: list(raw.user_role?.constraints, 6, 120) },
     world: {
-      kind: world.kind === '真实' ? '真实' : '架空',
+      kind: /^(真实|real)/i.test(String(world.kind ?? '').trim()) ? '真实' : '架空',
       overview: clip(world.overview, 800),
       rules: list(world.rules, 12, 200),
       places: (Array.isArray(world.places) ? world.places : [])
@@ -372,7 +448,7 @@ export function normalizePlan(raw) {
     },
     characters,
     style: {
-      perspective: clip(raw.style?.perspective, 20) || '第三人称',
+      perspective: clip(raw.style?.perspective, 20) || words.perspective,
       tone: clip(raw.style?.tone, 80),
       mood: clip(raw.style?.mood, 80),
       reference: clip(raw.style?.reference, 120),
@@ -383,20 +459,21 @@ export function normalizePlan(raw) {
     greetings: (Array.isArray(raw.greetings) ? raw.greetings : [])
       .filter(g => g && typeof g === 'object')
       .slice(0, 4)
-      .map((g, i) => ({ title: clip(g.title, 30) || `开场 ${i + 1}`, scene: clip(g.scene, 200), situation: clip(g.situation, 400), length: clip(g.length, 20) || '500~700' })),
+      .map((g, i) => ({ title: clip(g.title, 30) || words.greeting(i + 1), scene: clip(g.scene, 200), situation: clip(g.situation, 400), length: clip(g.length, 20) || '500~700' })),
     avatar: { character: clip(raw.avatar?.character, 24) || characters[0].name, description: clip(raw.avatar?.description, 400), tags: clip(raw.avatar?.tags, 400) },
     assumptions: list(raw.assumptions, 20, 200),
     verbatim: list(raw.verbatim, 12, 300),
   }
-  if (!plan.greetings.length) plan.greetings.push({ title: '开场 1', scene: '', situation: '', length: '500~700' })
+  if (!plan.greetings.length) plan.greetings.push({ title: words.greeting(1), scene: '', situation: '', length: '500~700' })
+  plan.language = language
   plan.entries = planEntries(plan)
   plan.warnings = planWarnings(plan)
   return plan
 }
 
 /** A plan's answer → the plan, or null when nothing usable came back. */
-export function readPlan(text) {
-  return normalizePlan(looseJson(section(text, 'plan') || text))
+export function readPlan(text, { language = DEFAULT_LANGUAGE } = {}) {
+  return normalizePlan(looseJson(section(text, 'plan') || text), { language })
 }
 
 /**
@@ -405,12 +482,13 @@ export function readPlan(text) {
  */
 export function planEntries(plan) {
   const entries = []
+  const words = ownWords(planLanguage(plan))
   const add = entry => entries.push({ keywords: [], rephrase: false, ...entry })
   const core = plan.characters.filter(c => c.kind === 'core')
   const npcs = plan.characters.filter(c => c.kind === 'npc')
-  add({ name: '世界设定', type: '世界观', part: '', purpose: `舞台的框架和与常识不同的规则：${plan.world.overview.slice(0, 60)}` })
-  if (plan.play_rules.length || plan.style.special.length) add({ name: '扮演准则', type: '扮演准则', part: '', purpose: '怎么演：互动规则、文风要点' })
-  if (plan.world.history.length) add({ name: '往事', type: '时间线', part: 'history', purpose: plan.world.history.map(h => h.event).join('；').slice(0, 80) })
+  add({ name: words.world, type: '世界观', part: '', purpose: words.worldPurpose(plan.world.overview.slice(0, 60)) })
+  if (plan.play_rules.length || plan.style.special.length) add({ name: words.rules, type: '扮演准则', part: '', purpose: words.rulesPurpose })
+  if (plan.world.history.length) add({ name: words.history, type: '时间线', part: 'history', purpose: plan.world.history.map(h => h.event).join(words.separator).slice(0, 80) })
   // A single place is part of the world; several get one entry each.
   if (plan.world.places.length >= 2) {
     for (const place of plan.world.places) add({ name: place.name, type: '地理', part: 'region', keywords: keywordsOf(place.name, place.aliases), purpose: place.description.slice(0, 80) })
@@ -418,21 +496,21 @@ export function planEntries(plan) {
   if (plan.world.factions.length >= 2) {
     for (const faction of plan.world.factions) add({ name: faction.name, type: '地理', part: 'faction', keywords: keywordsOf(faction.name), purpose: faction.description.slice(0, 80) })
   }
-  if (plan.characters.length >= 5) add({ name: '角色速览', type: '角色', part: 'catalog', purpose: '谁是谁：每人的姓名、性别、年龄、身份' })
+  if (plan.characters.length >= 5) add({ name: words.catalog, type: '角色', part: 'catalog', purpose: words.catalogPurpose })
   for (const c of core) {
     const keywords = keywordsOf(c.name, c.aliases)
     const owner = c.name
-    add({ name: `${c.name}_基础信息`, owner, type: '角色', part: 'basic', keywords, purpose: `${c.name}的档案：身份、外貌、背景、与 <user> 的关系` })
-    add({ name: `${c.name}_性格调色盘`, owner, type: '角色', part: 'personality', keywords, purpose: `${c.name}的性格：底色${c.personality.base ? `「${c.personality.base}」` : ''}，主色调${c.personality.main.map(m => `「${m}」`).join('')}，每一面落到具体场景和行为` })
-    if (c.facets) add({ name: `${c.name}_三面性`, owner, type: '角色', part: 'facets', keywords, purpose: `${c.name}在不同处境下的几副面孔：触发、状态、语料、身体习惯` })
-    add({ name: `${c.name}_二次解释`, owner, type: '角色', part: 'personality', rephrase: true, keywords, purpose: `纠正对${c.name}的刻板理解：每种性格真正的意思、何时出现、何时不出现` })
+    add({ name: words.basic(c.name), owner, type: '角色', part: 'basic', keywords, purpose: words.basicPurpose(c.name) })
+    add({ name: words.palette(c.name), owner, type: '角色', part: 'personality', keywords, purpose: words.palettePurpose(c.name, c.personality.base, c.personality.main) })
+    if (c.facets) add({ name: words.facets(c.name), owner, type: '角色', part: 'facets', keywords, purpose: words.facetsPurpose(c.name) })
+    add({ name: words.rephrase(c.name), owner, type: '角色', part: 'personality', rephrase: true, keywords, purpose: words.rephrasePurpose(c.name) })
   }
   for (const c of npcs) add({ name: c.name, owner: c.name, type: 'NPC', part: '', keywords: keywordsOf(c.name, c.aliases), purpose: c.role || c.identity })
   if (plan.tracking.enabled) {
-    add({ name: '[InitVar]请勿打开', type: '状态', part: 'initvar', purpose: '变量的初始值（不发给模型，开局时读入）' })
-    add({ name: '变量列表', type: '状态', part: 'variables', purpose: '每轮把当前变量交给模型' })
-    add({ name: '[mvu_update]变量更新规则', type: '状态', part: 'rules', purpose: '每个变量什么时候、怎么变' })
-    add({ name: '[mvu_update]变量输出格式', type: '状态', part: 'format', purpose: '让模型在回复末尾写出变量更新' })
+    add({ name: words.initvar, type: '状态', part: 'initvar', purpose: words.initvarPurpose })
+    add({ name: words.variables, type: '状态', part: 'variables', purpose: words.variablesPurpose })
+    add({ name: words.updateRules, type: '状态', part: 'rules', purpose: words.updateRulesPurpose })
+    add({ name: words.updateFormat, type: '状态', part: 'format', purpose: words.updateFormatPurpose })
   }
   return configureEntries(entries)
 }
@@ -442,11 +520,12 @@ export function planWarnings(plan) {
   const warnings = []
   const names = [plan.name, ...plan.characters.map(c => c.name), ...plan.world.places.map(p => p.name), ...plan.world.factions.map(f => f.name)]
   const vague = names.filter(n => PLACEHOLDER.test(n))
-  if (vague.length) warnings.push(`这些名字还不够具体：${vague.join('、')}`)
+  // For the user to read: in the page's language.
+  if (vague.length) warnings.push(msg`这些名字还不够具体：${vague.join(msg`、`)}`)
   for (const c of plan.characters.filter(c => c.kind === 'core')) {
-    if (!c.personality.base && !c.personality.main.length) warnings.push(`${c.name}的性格还空着`)
-    if (!c.relationship) warnings.push(`${c.name}和 <user> 的关系还空着`)
+    if (!c.personality.base && !c.personality.main.length) warnings.push(msg`${c.name}的性格还空着`)
+    if (!c.relationship) warnings.push(msg`${c.name}和 <user> 的关系还空着`)
   }
-  if (!plan.user_role.identity) warnings.push('<user> 的身份还没定')
+  if (!plan.user_role.identity) warnings.push(msg`<user> 的身份还没定`)
   return warnings
 }

@@ -22,6 +22,7 @@ import { cleanFrame, cleanLora, cleanRoster, cleanStrength, countTags, draftMate
 import { httpError, newId } from './store.mjs'
 import { FISH_MODELS } from './voice/cloud.mjs'
 import { KEYED, cleanVoiceKey, cleanVoiceList, createVoices } from './voice/index.mjs'
+import { msg } from './i18n.mjs'
 
 export const DEFAULT_MEDIA = Object.freeze({
   helperModel: '', // provider ref that writes image prompts; empty = the chat's model when it is a provider
@@ -106,7 +107,7 @@ export function cleanMedia(input, previous = DEFAULT_MEDIA, defaults = DEFAULT_M
   if (['openai', 'comfy', 'novelai'].includes(source.imageBackend)) value.imageBackend = source.imageBackend
   if (typeof source.naiModel === 'string') {
     const model = source.naiModel.trim()
-    if (!/^nai-diffusion-[a-z0-9-]{1,40}$/.test(model)) throw httpError(400, 'NovelAI 模型名不对（例如 nai-diffusion-5-full）')
+    if (!/^nai-diffusion-[a-z0-9-]{1,40}$/.test(model)) throw httpError(400, msg`NovelAI 模型名不对（例如 nai-diffusion-5-full）`)
     value.naiModel = model
   }
   if (typeof source.naiRefFidelity === 'number' || typeof source.naiRefFidelity === 'string') {
@@ -126,22 +127,22 @@ export function cleanMedia(input, previous = DEFAULT_MEDIA, defaults = DEFAULT_M
   for (const key of ['comfyUrl', 'ttsUrl']) {
     if (typeof source[key] !== 'string') continue
     const url = source[key].trim().replace(/\/+$/, '')
-    if (url && !/^https?:\/\/[^\s/]+(\/\S*)?$/.test(url)) throw httpError(400, `${key === 'comfyUrl' ? 'ComfyUI' : '本地语音桥接'}地址不对`)
+    if (url && !/^https?:\/\/[^\s/]+(\/\S*)?$/.test(url)) throw httpError(400, msg`${key === 'comfyUrl' ? 'ComfyUI' : msg`本地语音桥接`}地址不对`)
     value[key] = url || defaults[key]
   }
   if (source.naiV5Empty === 'v45' || source.naiV5Empty === 'anlas') value.naiV5Empty = source.naiV5Empty
   text('ttsProvider', 40)
   if (typeof source.ttsModel === 'string') {
     const model = source.ttsModel.trim()
-    if (model && !/^[\w.:/@+-]{1,120}$/.test(model)) throw httpError(400, '朗读模型名不对（例如 gpt-4o-mini-tts）')
+    if (model && !/^[\w.:/@+-]{1,120}$/.test(model)) throw httpError(400, msg`朗读模型名不对（例如 gpt-4o-mini-tts）`)
     value.ttsModel = model || DEFAULT_MEDIA.ttsModel
   }
   if (typeof source.fishModel === 'string') {
-    if (!FISH_MODELS.includes(source.fishModel)) throw httpError(400, `Fish 模型只能选 ${FISH_MODELS.join(' / ')}`)
+    if (!FISH_MODELS.includes(source.fishModel)) throw httpError(400, msg`Fish 模型只能选 ${FISH_MODELS.join(' / ')}`)
     value.fishModel = source.fishModel
   }
   if (typeof source.minimaxModel === 'string') {
-    if (!/^speech-[\w.-]{1,40}$/.test(source.minimaxModel)) throw httpError(400, 'MiniMax 模型名不对（例如 speech-2.8-hd）')
+    if (!/^speech-[\w.-]{1,40}$/.test(source.minimaxModel)) throw httpError(400, msg`MiniMax 模型名不对（例如 speech-2.8-hd）`)
     value.minimaxModel = source.minimaxModel
   }
   if (source.minimaxRegion === 'cn' || source.minimaxRegion === 'intl') value.minimaxRegion = source.minimaxRegion
@@ -172,7 +173,7 @@ export function cleanCardMedia(input, previous = DEFAULT_CARD_MEDIA) {
  */
 export function withLora(workflow, { name, strength = 0.8 }) {
   const loaderId = Object.keys(workflow).find(id => workflow[id]?.class_type === 'CheckpointLoaderSimple' || typeof workflow[id]?.inputs?.ckpt_name === 'string')
-  if (!loaderId) throw httpError(400, '工作流里没有 Load Checkpoint 节点，加不了 LoRA')
+  if (!loaderId) throw httpError(400, msg`工作流里没有 Load Checkpoint 节点，加不了 LoRA`)
   const loraId = String(Math.max(0, ...Object.keys(workflow).map(Number).filter(Number.isFinite)) + 1)
   const out = {}
   for (const [id, node] of Object.entries(workflow)) {
@@ -326,7 +327,7 @@ function imageError(provider, error) {
   const text = String(error?.message ?? '')
   // grok2api relays a Grok Web refusal as 503 "Grok Web 媒体上游返回 403"; others say policy/moderation.
   if (/上游返回 403|content[ _-]?policy|moderation|safety system|nsfw|flagged/i.test(text)) {
-    return `${provider.name} 拒绝画这张：多半是提示词或参考图没过它的内容审核。改掉敏感的描述再画，或者在「配图与朗读」里关掉参考图试试。（${text.slice(0, 160)}）`
+    return msg`${provider.name} 拒绝画这张：多半是提示词或参考图没过它的内容审核。改掉敏感的描述再画，或者在「配图与朗读」里关掉参考图试试。（${text.slice(0, 160)}）`
   }
   return providerError(provider, error)
 }
@@ -350,10 +351,10 @@ export function fillWorkflow(workflow, values) {
 }
 
 export function checkWorkflow(json) {
-  if (!json || typeof json !== 'object' || Array.isArray(json)) throw httpError(400, '工作流必须是 ComfyUI「导出（API）」的 JSON')
+  if (!json || typeof json !== 'object' || Array.isArray(json)) throw httpError(400, msg`工作流必须是 ComfyUI「导出（API）」的 JSON`)
   const nodes = Object.values(json)
-  if (!nodes.length || !nodes.every(n => n && typeof n === 'object' && n.class_type)) throw httpError(400, '这不是 API 格式的工作流：在 ComfyUI 里用「导出（API）」')
-  if (!JSON.stringify(json).includes('{{prompt}}')) throw httpError(400, '工作流里没有 {{prompt}} 占位符：把正向提示词节点的文本改成 {{prompt}}')
+  if (!nodes.length || !nodes.every(n => n && typeof n === 'object' && n.class_type)) throw httpError(400, msg`这不是 API 格式的工作流：在 ComfyUI 里用「导出（API）」`)
+  if (!JSON.stringify(json).includes('{{prompt}}')) throw httpError(400, msg`工作流里没有 {{prompt}} 占位符：把正向提示词节点的文本改成 {{prompt}}`)
   return json
 }
 
@@ -422,7 +423,7 @@ const V5_LOW = 10 // percent of the V5 allowance at which pictures get a note
 
 /** "2.2 小时" / "40 分钟". */
 function waitText(minutes) {
-  return minutes >= 60 ? `${Math.round(minutes / 6) / 10} 小时` : `${Math.max(1, Math.round(minutes))} 分钟`
+  return minutes >= 60 ? msg`${Math.round(minutes / 6) / 10} 小时` : msg`${Math.max(1, Math.round(minutes))} 分钟`
 }
 
 /**
@@ -432,7 +433,7 @@ function waitText(minutes) {
 export function naiAccount(json) {
   const steps = json?.trainingStepsLeft ?? {}
   const anlas = (Number(steps.fixedTrainingStepsLeft) || 0) + (Number(steps.purchasedTrainingSteps) || 0)
-  const tier = ['免费', 'Tablet', 'Scroll', 'Opus'][json?.tier] ?? `tier ${json?.tier}`
+  const tier = [msg`免费`, 'Tablet', 'Scroll', 'Opus'][json?.tier] ?? `tier ${json?.tier}`
   const usage = json?.usage
   const v5 = usage && Number.isFinite(Number(usage.percent))
     ? (() => {
@@ -457,9 +458,9 @@ const PNG_SIGNATURE = Buffer.from('89504e470d0a1a0a', 'hex')
 export function unzipFirst(buffer) {
   if (buffer.subarray(0, 8).equals(PNG_SIGNATURE) || (buffer[0] === 0xff && buffer[1] === 0xd8)) return buffer
   const end = buffer.lastIndexOf(Buffer.from('504b0506', 'hex'))
-  if (buffer.length < 30 || buffer.readUInt32LE(0) !== 0x04034b50 || end < 0) throw new Error('返回的既不是图片也不是 zip')
+  if (buffer.length < 30 || buffer.readUInt32LE(0) !== 0x04034b50 || end < 0) throw new Error(msg`返回的既不是图片也不是 zip`)
   const entry = buffer.readUInt32LE(end + 16)
-  if (buffer.readUInt32LE(entry) !== 0x02014b50) throw new Error('zip 目录损坏')
+  if (buffer.readUInt32LE(entry) !== 0x02014b50) throw new Error(msg`zip 目录损坏`)
   const method = buffer.readUInt16LE(entry + 10)
   const size = buffer.readUInt32LE(entry + 20)
   const local = buffer.readUInt32LE(entry + 42)
@@ -467,13 +468,13 @@ export function unzipFirst(buffer) {
   const data = buffer.subarray(start, start + size)
   if (method === 0) return Buffer.from(data)
   if (method === 8) return inflateRawSync(data)
-  throw new Error(`zip 压缩方式 ${method} 不认识`)
+  throw new Error(msg`zip 压缩方式 ${method} 不认识`)
 }
 
 /** A pasted persistent token (pst-…): printable, no spaces. */
 export function cleanNaiToken(value) {
   const token = String(value ?? '').trim().replace(/^Bearer\s+/i, '')
-  if (!/^[!-~]{16,1000}$/.test(token)) throw httpError(400, 'NovelAI 令牌格式不对：在 NovelAI 网页「设置 → Account → Get Persistent API Token」复制（pst- 开头）')
+  if (!/^[!-~]{16,1000}$/.test(token)) throw httpError(400, msg`NovelAI 令牌格式不对：在 NovelAI 网页「设置 → Account → Get Persistent API Token」复制（pst- 开头）`)
   return token
 }
 
@@ -553,7 +554,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
   async function helperTarget(chat, media) {
     const fallback = (await store.getSettings()).model
     const ref = media.helperModel || (isProviderRef(chat.model) ? chat.model : '') || (isProviderRef(fallback) ? fallback : '')
-    if (!ref) throw httpError(400, '还没选写画面提示词的辅助模型：在「配图与朗读」里选一个供应商的模型')
+    if (!ref) throw httpError(400, msg`还没选写画面提示词的辅助模型：在「配图与朗读」里选一个供应商的模型`)
     return resolveRef(ref, await store.getProviders())
   }
 
@@ -571,7 +572,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
       const answer = await askInContext(chat.id, node.id, instruction, { maxTokens: roster.length ? CAST_MAX_TOKENS : PROMPT_MAX_TOKENS, signal })
       if (answer) {
         const prompt = clean(answer.text)
-        if (!prompt) throw httpError(502, '对话模型没有写出提示词，可以「重写」，或改用辅助模型')
+        if (!prompt) throw httpError(502, msg`对话模型没有写出提示词，可以「重写」，或改用辅助模型`)
         const u = answer.usage
         const total = u.input + u.cacheRead + u.cacheWrite
         return {
@@ -581,7 +582,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
           inContext: true,
         }
       }
-      note = '这段剧情是 Claude 订阅写的，借不了它的上下文，这次用辅助模型写。'
+      note = msg`这段剧情是 Claude 订阅写的，借不了它的上下文，这次用辅助模型写。`
     }
     const { provider, modelId } = await helperTarget(chat, media)
     const request = imagePromptRequest({ card, names: chat.names, reply, input, state: node.state, style: cardMedia.style, promptStyle: media.promptStyle, roster })
@@ -593,7 +594,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
       throw httpError(502, providerError(provider, error))
     }
     const prompt = clean(result.text)
-    if (!prompt) throw httpError(502, `${provider.name} · ${modelId} 没有写出提示词${result.stopReason ? `（${result.stopReason}）` : ''}：推理型模型可能把输出额度花在了思考上，辅助模型换个不带推理的快模型`)
+    if (!prompt) throw httpError(502, msg`${provider.name} · ${modelId} 没有写出提示词${result.stopReason ? msg`（${result.stopReason}）` : ''}：推理型模型可能把输出额度花在了思考上，辅助模型换个不带推理的快模型`)
     return { prompt: withStyle(prompt, cardMedia.style, media.promptStyle), model: `${provider.name} · ${modelId}`, note }
   }
 
@@ -608,9 +609,9 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
   async function openaiImage(media, prompt, cardId, signal, cast = null) {
     const providers = await store.getProviders()
     const provider = providers.find(p => p.id === media.imageProvider)
-    if (!provider) throw httpError(400, '还没选生图的供应商：在「配图与朗读」里选')
-    if (provider.api === 'anthropic-messages') throw httpError(400, `${provider.name} 是 Anthropic 接口，没有生图接口`)
-    if (!media.imageModel) throw httpError(400, '还没填生图模型')
+    if (!provider) throw httpError(400, msg`还没选生图的供应商：在「配图与朗读」里选`)
+    if (provider.api === 'anthropic-messages') throw httpError(400, msg`${provider.name} 是 Anthropic 接口，没有生图接口`)
+    if (!media.imageModel) throw httpError(400, msg`还没填生图模型`)
     const reference = media.imageReference ? (cast?.lead && (await rosterRef(cardId, cast.lead.id))) || (await avatarOf(cardId)) : null
     const size = imageSize('openai', media.imageShape)
     const generate = () =>
@@ -631,7 +632,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
           // answers 404 "模型不存在"); draw without the reference instead of failing.
           if (signal?.aborted || ![400, 404, 422].includes(error.providerStatus)) throw error
           response = await generate()
-          note = `${editModel} 用不了参考图（${String(error.message).slice(0, 80)}），这张没带参考图。可以在「配图与朗读」里给参考图单独选一个能改图的模型（grok2api 的 Web 账号是 grok-imagine-image-edit）。`
+          note = msg`${editModel} 用不了参考图（${String(error.message).slice(0, 80)}），这张没带参考图。可以在「配图与朗读」里给参考图单独选一个能改图的模型（grok2api 的 Web 账号是 grok-imagine-image-edit）。`
         }
       } else {
         response = await generate()
@@ -644,7 +645,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     try {
       json = JSON.parse(response.buffer.toString('utf8'))
     } catch {
-      throw httpError(502, `${provider.name} 返回的不是图片结果`)
+      throw httpError(502, msg`${provider.name} 返回的不是图片结果`)
     }
     const item = json.data?.[0]
     if (item?.b64_json) return { buffer: Buffer.from(item.b64_json, 'base64'), note }
@@ -652,7 +653,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
       const url = new URL(item.url, provider.baseURL).href
       return { buffer: (await fetchBytes(url, { signal, proxy: provider.proxy === 'direct' ? null : proxyNow() })).buffer, note }
     }
-    throw httpError(502, `${provider.name} 没有返回图片${json.error?.message ? `：${json.error.message}` : ''}`)
+    throw httpError(502, msg`${provider.name} 没有返回图片${json.error?.message ? msg`：${json.error.message}` : ''}`)
   }
 
   /**
@@ -681,7 +682,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
 
   async function comfyImage(media, prompt, cardId, signal, cast = null) {
     const imported = await loadWorkflow()
-    if (!imported) throw httpError(400, '还没导入 ComfyUI 工作流：在「配图与朗读」里导入「导出（API）」的 JSON')
+    if (!imported) throw httpError(400, msg`还没导入 ComfyUI 工作流：在「配图与朗读」里导入「导出（API）」的 JSON`)
     // No card yet (a card being created): no card LoRA.
     const cardMedia = cardId ? cleanCardMedia((await store.getCard(cardId)).media) : DEFAULT_CARD_MEDIA
     // Several LoRAs in one picture bleed into each other: a named cast uses only a lone member's own.
@@ -694,7 +695,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     const needsReference = JSON.stringify(workflow).includes('{{reference}}')
     if (needsReference) {
       const avatar = (cast?.lead && (await rosterRef(cardId, cast.lead.id))) || (await avatarOf(cardId))
-      if (!avatar) throw httpError(400, '工作流要参考图（{{reference}}），这张卡没有头像')
+      if (!avatar) throw httpError(400, msg`工作流要参考图（{{reference}}），这张卡没有头像`)
       const upload = await postMultipart(`${base}/upload/image`, multipart({ image: { buffer: avatar, filename: `tavern-${cardId}.png`, type: 'image/png' }, overwrite: 'true' }), signal)
       reference = JSON.parse(upload.toString('utf8')).name
     }
@@ -707,7 +708,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
       throw httpError(502, comfyError(error))
     }
     const id = queued.prompt_id
-    if (!id) throw httpError(502, `ComfyUI 没接受这个工作流：${JSON.stringify(queued.node_errors ?? queued.error ?? queued).slice(0, 200)}`)
+    if (!id) throw httpError(502, msg`ComfyUI 没接受这个工作流：${JSON.stringify(queued.node_errors ?? queued.error ?? queued).slice(0, 200)}`)
     const deadline = Date.now() + 10 * 60 * 1000
     while (Date.now() < deadline) {
       if (signal?.aborted) throw new Error('aborted')
@@ -715,15 +716,15 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
       const history = JSON.parse((await fetchBytes(`${base}/history/${id}`, { signal })).buffer.toString('utf8'))
       const entry = history[id]
       if (!entry) continue
-      if (entry.status?.status_str === 'error') throw httpError(502, 'ComfyUI 执行出错，去 ComfyUI 界面看看是哪个节点')
+      if (entry.status?.status_str === 'error') throw httpError(502, msg`ComfyUI 执行出错，去 ComfyUI 界面看看是哪个节点`)
       const image = Object.values(entry.outputs ?? {}).flatMap(out => out.images ?? []).find(img => img.type === 'output') ?? Object.values(entry.outputs ?? {}).flatMap(out => out.images ?? [])[0]
       if (image) {
         const query = new URLSearchParams({ filename: image.filename, subfolder: image.subfolder ?? '', type: image.type ?? 'output' })
         return (await fetchBytes(`${base}/view?${query}`, { signal })).buffer
       }
-      if (entry.status?.completed) throw httpError(502, 'ComfyUI 跑完了，但工作流没有输出图片（要有 SaveImage 或 PreviewImage 节点）')
+      if (entry.status?.completed) throw httpError(502, msg`ComfyUI 跑完了，但工作流没有输出图片（要有 SaveImage 或 PreviewImage 节点）`)
     }
-    throw httpError(504, 'ComfyUI 十分钟还没出图')
+    throw httpError(504, msg`ComfyUI 十分钟还没出图`)
   }
 
   async function postMultipart(url, form, signal) {
@@ -741,8 +742,8 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
 
   function comfyError(error) {
     const text = String(error?.message ?? error)
-    if (/ECONNREFUSED/.test(text)) return '连不上 ComfyUI：先打开 ComfyUI，再确认地址（默认 http://127.0.0.1:8188）'
-    return `ComfyUI：${text.slice(0, 200)}`
+    if (/ECONNREFUSED/.test(text)) return msg`连不上 ComfyUI：先打开 ComfyUI，再确认地址（默认 http://127.0.0.1:8188）`
+    return msg`ComfyUI：${text.slice(0, 200)}`
   }
 
   // The persistent token lives in its own file, so /api/settings never carries it.
@@ -774,10 +775,10 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
   function naiError(error, model) {
     const status = error?.providerStatus
     const text = String(error?.message ?? error).slice(0, 200)
-    if (status === 401) return `NovelAI 不认这个令牌：在 NovelAI 网页重新生成持久令牌，再到「配图与朗读」里粘贴。（${text}）`
-    if (status === 402) return `NovelAI 要求付费：订阅没生效，或者这张超出了 Opus 的免费范围而 Anlas 不够。（${text}）`
-    if (status === 429) return 'NovelAI 一个账号同时只画一张，上一张还没画完，稍等再画。'
-    if ((status === 400 || status === 404 || status >= 500) && /model/i.test(text)) return `NovelAI 不认模型 ${model}：在「配图与朗读」里换成 V4.5 试试。（${text}）`
+    if (status === 401) return msg`NovelAI 不认这个令牌：在 NovelAI 网页重新生成持久令牌，再到「配图与朗读」里粘贴。（${text}）`
+    if (status === 402) return msg`NovelAI 要求付费：订阅没生效，或者这张超出了 Opus 的免费范围而 Anlas 不够。（${text}）`
+    if (status === 429) return msg`NovelAI 一个账号同时只画一张，上一张还没画完，稍等再画。`
+    if ((status === 400 || status === 404 || status >= 500) && /model/i.test(text)) return msg`NovelAI 不认模型 ${model}：在「配图与朗读」里换成 V4.5 试试。（${text}）`
     return providerError({ name: 'NovelAI' }, error)
   }
 
@@ -789,7 +790,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
   /** Subscription tier, Anlas and the V5 allowance, to check a token without drawing anything. */
   async function naiCheck(typed) {
     const token = typed ? cleanNaiToken(typed) : await naiToken()
-    if (!token) throw httpError(400, '还没填 NovelAI 令牌')
+    if (!token) throw httpError(400, msg`还没填 NovelAI 令牌`)
     try {
       return await naiSubscription(token)
     } catch (error) {
@@ -808,19 +809,19 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     const account = await naiSubscription(token, 8000).catch(() => null)
     const v5 = account?.v5
     if (!v5) return { model, note: '' }
-    const next = v5.nextPercentMinutes ? `，${waitText(v5.nextPercentMinutes)}后回 1%` : ''
+    const next = v5.nextPercentMinutes ? msg`，${waitText(v5.nextPercentMinutes)}后回 1%` : ''
     if (v5.empty) {
-      if (media.naiV5Empty === 'anlas' && account.anlas > 0) return { model, note: `V5 额度用完了${next}，这张扣 Anlas 画（还剩 ${account.anlas}）。` }
-      const why = media.naiV5Empty === 'anlas' ? '，Anlas 也没了' : ''
-      return { model: referenceModel(model), note: `V5 额度用完了${next}${why}，这张改用 V4.5 画（Opus 不扣 Anlas）。` }
+      if (media.naiV5Empty === 'anlas' && account.anlas > 0) return { model, note: msg`V5 额度用完了${next}，这张扣 Anlas 画（还剩 ${account.anlas}）。` }
+      const why = media.naiV5Empty === 'anlas' ? msg`，Anlas 也没了` : ''
+      return { model: referenceModel(model), note: msg`V5 额度用完了${next}${why}，这张改用 V4.5 画（Opus 不扣 Anlas）。` }
     }
-    if (v5.percent <= V5_LOW) return { model, note: `V5 额度只剩 ${v5.percent}%${next}。用完后${media.naiV5Empty === 'anlas' ? '扣 Anlas 画' : '自动改用 V4.5'}。` }
+    if (v5.percent <= V5_LOW) return { model, note: msg`V5 额度只剩 ${v5.percent}%${next}。用完后${media.naiV5Empty === 'anlas' ? msg`扣 Anlas 画` : msg`自动改用 V4.5`}。` }
     return { model, note: '' }
   }
 
   async function naiImage(media, prompt, signal, cast = null, cardId = '') {
     const token = await naiToken()
-    if (!token) throw httpError(400, '还没填 NovelAI 令牌：在「配图与朗读」里把画图用改成 NovelAI，粘贴持久令牌')
+    if (!token) throw httpError(400, msg`还没填 NovelAI 令牌：在「配图与朗读」里把画图用改成 NovelAI，粘贴持久令牌`)
     const [width, height] = imageSize('novelai', media.imageShape).split('x').map(Number)
     // The card's look first on every picture, weighted up ({{ }}) so a long scene doesn't drown it;
     // taken out of the prompt where it was written in, so it isn't there twice.
@@ -845,7 +846,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     let note = plan.note
     for (let attempt = 0; ; attempt++) {
       const body = naiRequest({ model, prompt: positive, negative, width, height, seed, characters, reference })
-      const label = `NovelAI · ${model}${reference ? ` · 人设图：${cast.lead.name}` : ''}`
+      const label = `NovelAI · ${model}${reference ? msg` · 人设图：${cast.lead.name}` : ''}`
       try {
         const { buffer } = await providerRequest(naiProvider(naiImageUrl, token), '/ai/generate-image', { body, signal, proxy: proxyNow() })
         return { buffer: unzipFirst(buffer), label, note }
@@ -858,7 +859,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
         }
         // A reference picture costs Anlas even on Opus: without any, draw it plain rather than not at all.
         if (error.providerStatus === 402 && reference) {
-          note = `NovelAI 的 Anlas 不够（带人设图每张 5 Anlas），这张没带「${cast.lead.name}」的人设图。`
+          note = msg`NovelAI 的 Anlas 不够（带人设图每张 5 Anlas），这张没带「${cast.lead.name}」的人设图。`
           reference = null
           model = media.naiModel
           await sleep(4000)
@@ -866,12 +867,12 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
         }
         // V5 past its allowance with no Anlas left (or the lookup missed it): V4.5 is free on Opus.
         if (error.providerStatus === 402 && isV5(model)) {
-          note = 'V5 额度用完、Anlas 也不够，这张改用 V4.5 画。'
+          note = msg`V5 额度用完、Anlas 也不够，这张改用 V4.5 画。`
           model = referenceModel(model)
           await sleep(4000)
           continue
         }
-        throw httpError(502, error.providerStatus ? naiError(error, model) : `NovelAI：${String(error.message).slice(0, 200)}`)
+        throw httpError(502, error.providerStatus ? naiError(error, model) : msg`NovelAI：${String(error.message).slice(0, 200)}`)
       }
     }
   }
@@ -881,7 +882,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
 
   const rosterDir = cardId => path.join(path.dirname(store.avatarPath(cardId)), 'roster')
   function refFile(cardId, entryId) {
-    if (!isRosterId(entryId)) throw httpError(400, '角色编号不对')
+    if (!isRosterId(entryId)) throw httpError(400, msg`角色编号不对`)
     return path.join(rosterDir(cardId), `${entryId}.png`)
   }
 
@@ -895,7 +896,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
 
   async function readRosterRef(cardId, entryId) {
     const data = await rosterRef(cardId, entryId)
-    if (!data) throw httpError(404, '这个角色还没有人设图')
+    if (!data) throw httpError(404, msg`这个角色还没有人设图`)
     return data
   }
 
@@ -903,9 +904,9 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
   async function saveRosterRef(cardId, entryId, dataUrl) {
     await store.getCard(cardId)
     const match = /^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/=]+)$/.exec(String(dataUrl ?? ''))
-    if (!match) throw httpError(400, '人设图要是 PNG、JPG 或 WebP')
+    if (!match) throw httpError(400, msg`人设图要是 PNG、JPG 或 WebP`)
     const buffer = Buffer.from(match[2], 'base64')
-    if (buffer.length > 15 * 1024 * 1024) throw httpError(400, '人设图太大（最多 15MB）')
+    if (buffer.length > 15 * 1024 * 1024) throw httpError(400, msg`人设图太大（最多 15MB）`)
     await mkdir(rosterDir(cardId), { recursive: true })
     await writeFile(refFile(cardId, entryId), buffer)
     return { ref: true }
@@ -969,7 +970,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
       throw httpError(502, providerError(provider, error))
     }
     const roster = parseRosterDraft(result.text)
-    if (!roster.length) throw httpError(502, `${provider.name} · ${modelId} 没有列出角色${result.stopReason ? `（${result.stopReason}）` : ''}，可以再试一次，或者手动添加`)
+    if (!roster.length) throw httpError(502, msg`${provider.name} · ${modelId} 没有列出角色${result.stopReason ? msg`（${result.stopReason}）` : ''}，可以再试一次，或者手动添加`)
     // The card LoRA most likely belongs to the character the card is named after.
     const current = cleanCardMedia(card.media)
     if (current.lora) {
@@ -984,13 +985,13 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
   async function settingsFor(model) {
     const media = await settings()
     if (!model) return media
-    if (!/^nai-diffusion-[a-z0-9-]{1,40}$/.test(String(model))) throw httpError(400, 'NovelAI 模型名不对')
+    if (!/^nai-diffusion-[a-z0-9-]{1,40}$/.test(String(model))) throw httpError(400, msg`NovelAI 模型名不对`)
     return { ...media, naiModel: model, naiModelPicked: true }
   }
 
   async function generateImage(chat, nodeId, prompt, signal, { model = '' } = {}) {
     const text = String(prompt ?? '').trim()
-    if (!text) throw httpError(400, '提示词是空的')
+    if (!text) throw httpError(400, msg`提示词是空的`)
     const media = await settingsFor(model)
     const { roster } = cleanCardMedia((await store.getCard(chat.cardId)).media)
     const frame = roster.length && isFramePrompt(text) ? parseFrame(text, roster, chat.names?.user) : null
@@ -1023,7 +1024,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
   async function drawPortrait(cardId, input, signal, { model = '' } = {}) {
     await store.getCard(cardId)
     const [entry] = cleanRoster([input])
-    if (!entry?.looks) throw httpError(400, '先写这个角色的长相，再画人设图')
+    if (!entry?.looks) throw httpError(400, msg`先写这个角色的长相，再画人设图`)
     const media = await settingsFor(model)
     const cast = { scene: PORTRAIT_SCENE, characters: [{ entry, action: [entry.outfit, 'standing'].filter(Boolean).join(', '), position: '' }], solo: entry, lead: entry }
     const plain = { ...media, imageShape: 'portrait', naiReference: false, imageReference: false, naiNegative: [media.naiNegative, 'nsfw, multiple views, text'].filter(Boolean).join(', ') }
@@ -1039,7 +1040,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
    */
   async function drawCardArt(input, signal) {
     const [entry] = cleanRoster([{ name: input?.name || '角色', kind: input?.kind, looks: input?.looks, outfit: input?.outfit }])
-    if (!entry?.looks) throw httpError(400, '还没有这个角色的长相描述')
+    if (!entry?.looks) throw httpError(400, msg`还没有这个角色的长相描述`)
     const media = await settings()
     const scene = typeof input.scene === 'string' && input.scene.trim() ? input.scene.trim().slice(0, 400) : PORTRAIT_SCENE
     const cast = { scene, characters: [{ entry, action: [entry.outfit, 'looking at viewer'].filter(Boolean).join(', '), position: '' }], solo: entry, lead: entry }
@@ -1048,12 +1049,12 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
   }
 
   async function readImage(chatId, file) {
-    if (!FILE.test(file)) throw httpError(400, '文件名不对')
+    if (!FILE.test(file)) throw httpError(400, msg`文件名不对`)
     return readFile(path.join(mediaDir(chatId), file))
   }
 
   async function removeImage(chatId, file) {
-    if (!FILE.test(file)) throw httpError(400, '文件名不对')
+    if (!FILE.test(file)) throw httpError(400, msg`文件名不对`)
     await rm(path.join(mediaDir(chatId), file), { force: true })
   }
 

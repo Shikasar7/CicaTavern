@@ -3,15 +3,16 @@
 // Nothing here changes what the model sees.
 import { speechChunks } from '/shared/speech.js'
 import { createMenu, MENU_ICONS, whoLine } from '/menu.js'
+import { locale, t, zh } from '/i18n.js'
 
-const SHAPES = [['square', '方图'], ['portrait', '竖图'], ['landscape', '横图']]
-const IMAGE_BACKEND_TEXT = { openai: '图片接口', comfy: 'ComfyUI', novelai: 'NovelAI' }
+const SHAPES = [['square', t`方图`], ['portrait', t`竖图`], ['landscape', t`横图`]]
+const IMAGE_BACKEND_TEXT = { openai: t`图片接口`, comfy: 'ComfyUI', novelai: 'NovelAI' }
 // A voice service on this machine or the LAN (小雅, or the tavern on a PC):
 // local TTS models, as against the cloud services.
-const BRIDGE_NAME = '本地语音桥接'
+const BRIDGE_NAME = t`本地语音桥接`
 const NAI_MODELS = [
-  ['nai-diffusion-5-full', 'V5 Full（能画成人内容）'],
-  ['nai-diffusion-5-curated', 'V5 Curated（筛过的数据，不出成人内容）'],
+  ['nai-diffusion-5-full', t`V5 Full（能画成人内容）`],
+  ['nai-diffusion-5-curated', t`V5 Curated（筛过的数据，不出成人内容）`],
   ['nai-diffusion-4-5-full', 'V4.5 Full'],
   ['nai-diffusion-4-5-curated', 'V4.5 Curated'],
 ]
@@ -30,9 +31,10 @@ speech?.getVoices()
 const VOICE_SOURCES = ['openai', 'fish', 'minimax']
 const VOICE_FIELDS = ['ttsProvider', 'ttsModel', 'ttsVoices', 'fishModel', 'fishVoices', 'minimaxModel', 'minimaxRegion', 'minimaxVoices']
 const TTS_MODELS = ['gpt-4o-mini-tts', 'tts-1', 'tts-1-hd', 'FunAudioLLM/CosyVoice2-0.5B']
-const FISH_MODELS = [['drama-3', 'drama-3（情绪最足，按用量计费）'], ['s2.1-pro', 's2.1-pro'], ['s2.1-pro-free', 's2.1-pro-free（免费，合理使用）'], ['s2-pro', 's2-pro']]
+const FISH_MODELS = [['drama-3', t`drama-3（情绪最足，按用量计费）`], ['s2.1-pro', 's2.1-pro'], ['s2.1-pro-free', t`s2.1-pro-free（免费，合理使用）`], ['s2-pro', 's2-pro']]
 const MINIMAX_MODELS = ['speech-2.8-hd', 'speech-2.8-turbo', 'speech-2.6-hd']
-const PREVIEW_LINE = '你好呀，很高兴见到你。今天想听我讲点什么呢？'
+// Read in the story's language, which the voices are for.
+const PREVIEW_LINE = zh`你好呀，很高兴见到你。今天想听我讲点什么呢？`
 // Characters per chunk: the bridge's Qwen3 voices keep their intonation over ~100;
 // cloud voices bill per request, so longer; Chrome stops a long utterance after ~15 s.
 const CHUNK_MAX = { bridge: 100, browser: 150, openai: 250, fish: 250, minimax: 300 }
@@ -62,7 +64,7 @@ function browserVoice(ref) {
 export function initMedia({ api, el, toast, guard, getChat, getModels, openProviders, saveFile }) {
   const $ = id => document.getElementById(id)
   // The settings window (配图与朗读) as a menu of parts (web/menu.js).
-  const settingsMenu = createMenu({ dialog: $('media-dialog'), form: $('media-form'), el, title: '配图与朗读' })
+  const settingsMenu = createMenu({ dialog: $('media-dialog'), form: $('media-form'), el, title: t`配图与朗读` })
   const state = {
     settings: null,
     cardId: null,
@@ -116,11 +118,11 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
   function toolsFor(node) {
     const reading = player.nodeId === node.id
     const job = state.jobs.get(node.id)
-    const label = job?.stage === 'prompt' ? '写提示词…' : job ? '配图中…' : '配图'
+    const label = job?.stage === 'prompt' ? t`写提示词…` : job ? t`配图中…` : t`配图`
     return [
-      el('button', { text: label, disabled: Boolean(job), title: '辅助模型在后台描述这一幕，写好了弹出来让你确认，再交给生图模型', onclick: () => writePrompt(node) }),
-      el('button', { text: '提示词库', disabled: Boolean(job), title: '用以前画过或存下的提示词给这段配图，可以先改再画', onclick: () => openLibrary({ node, chatId: getChat()?.id }) }),
-      el('button', { class: reading ? 'on' : '', text: reading ? '停止朗读' : '朗读', title: '对白用角色音色，旁白用旁白音色。只想听某一句：直接点那句对白', onclick: () => (reading ? player.stop() : readNode(node)) }),
+      el('button', { text: label, disabled: Boolean(job), title: t`辅助模型在后台描述这一幕，写好了弹出来让你确认，再交给生图模型`, onclick: () => writePrompt(node) }),
+      el('button', { text: t`提示词库`, disabled: Boolean(job), title: t`用以前画过或存下的提示词给这段配图，可以先改再画`, onclick: () => openLibrary({ node, chatId: getChat()?.id }) }),
+      el('button', { class: reading ? 'on' : '', text: reading ? t`停止朗读` : t`朗读`, title: t`对白用角色音色，旁白用旁白音色。只想听某一句：直接点那句对白`, onclick: () => (reading ? player.stop() : readNode(node)) }),
     ]
   }
 
@@ -150,9 +152,9 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         return el('figure', { class: 'reply-image' }, [
           img,
           el('figcaption', {}, [
-            el('button', { type: 'button', text: '重画', title: '同一段提示词再画一张（NovelAI 可以先选模型）', disabled: Boolean(job), onclick: event => withModel(event.currentTarget, model => draw(node, image.prompt, chat.id, model)) }),
-            el('button', { type: 'button', text: '改提示词', disabled: Boolean(job), onclick: () => openImageDialog(node, image.prompt, { chatId: chat.id, note: '这张图的提示词，改完点「画」。' }) }),
-            el('button', { type: 'button', text: '删除', onclick: () => removeImage(node, image) }),
+            el('button', { type: 'button', text: t`重画`, title: t`同一段提示词再画一张（NovelAI 可以先选模型）`, disabled: Boolean(job), onclick: event => withModel(event.currentTarget, model => draw(node, image.prompt, chat.id, model)) }),
+            el('button', { type: 'button', text: t`改提示词`, disabled: Boolean(job), onclick: () => openImageDialog(node, image.prompt, { chatId: chat.id, note: t`这张图的提示词，改完点「画」。` }) }),
+            el('button', { type: 'button', text: t`删除`, onclick: () => removeImage(node, image) }),
           ]),
         ])
       }),
@@ -171,7 +173,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     return media.imageModel
   }
 
-  const elapsed = started => `${Math.max(0, Math.round((Date.now() - started) / 1000))} 秒`
+  const elapsed = started => t`${Math.max(0, Math.round((Date.now() - started) / 1000))} 秒`
 
   /** A blurred frame the size of the picture to come, with what is happening and for how long. */
   function pendingFigure(job) {
@@ -181,14 +183,14 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         el('div', { class: 'pending-mist' }),
         el('div', { class: 'pending-label', role: 'status' }, [
           el('span', { class: 'pending-dot' }),
-          el('strong', { text: drawing ? '正在画' : '正在构思画面' }),
+          el('strong', { text: drawing ? t`正在画` : t`正在构思画面` }),
           el('span', { class: 'pending-meta' }, [
-            drawing ? (job.backend ? `${job.backend} · ` : '') : '写提示词 · ',
+            drawing ? (job.backend ? `${job.backend} · ` : '') : t`写提示词 · `,
             el('span', { class: 'pending-time', 'data-started': String(job.started), text: elapsed(job.started) }),
           ]),
         ]),
       ]),
-      el('figcaption', {}, [el('button', { type: 'button', text: '取消', onclick: () => job.controller.abort() })]),
+      el('figcaption', {}, [el('button', { type: 'button', text: t`取消`, onclick: () => job.controller.abort() })]),
     ])
   }
 
@@ -201,12 +203,12 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     const drawing = failure.stage === 'draw'
     return el('figure', { class: 'reply-image failed', role: 'alert' }, [
       el('div', { class: 'failed-art' }, [
-        el('strong', { text: drawing ? '没画出来' : '画面提示词没写出来' }),
+        el('strong', { text: drawing ? t`没画出来` : t`画面提示词没写出来` }),
         el('p', { text: failure.message }),
         el('div', { class: 'failed-actions' }, [
-          el('button', { type: 'button', class: 'btn small', text: '重试', onclick: () => (drawing ? draw(node, failure.prompt, failure.chatId) : writePrompt(node)) }),
-          drawing ? el('button', { type: 'button', class: 'btn small ghost', text: '改提示词', onclick: () => openImageDialog(node, failure.prompt, { chatId: failure.chatId, note: `没画出来：${failure.message}`, error: true }) }) : null,
-          el('button', { type: 'button', class: 'btn small ghost', text: '关掉', onclick: dismiss }),
+          el('button', { type: 'button', class: 'btn small', text: t`重试`, onclick: () => (drawing ? draw(node, failure.prompt, failure.chatId) : writePrompt(node)) }),
+          drawing ? el('button', { type: 'button', class: 'btn small ghost', text: t`改提示词`, onclick: () => openImageDialog(node, failure.prompt, { chatId: failure.chatId, note: t`没画出来：${failure.message}`, error: true }) }) : null,
+          el('button', { type: 'button', class: 'btn small ghost', text: t`关掉`, onclick: dismiss }),
         ]),
       ]),
     ])
@@ -248,7 +250,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       signal,
     })
     const data = await res.json().catch(() => ({}))
-    if (!res.ok) throw new Error(data.error || `请求失败（${res.status}）`)
+    if (!res.ok) throw new Error(data.error || t`请求失败（${res.status}）`)
     return data
   }
 
@@ -288,8 +290,8 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     const data = await runJob(node, chatId, 'prompt', signal => postJson(`/api/chats/${chatId}/nodes/${node.id}/image-prompt`, { reply }, signal), { reveal: !auto })
     if (!data) return
     if (auto) return draw(node, data.prompt, chatId)
-    const how = data.inContext ? `${data.model} 接着对话写的${data.cache !== null ? `（缓存命中 ${data.cache}%）` : ''}` : `${data.model} 写的`
-    whenNoDialog(() => openImageDialog(node, data.prompt, { chatId, note: `${data.note ? `${data.note}` : ''}${how}，可以改，也可以「重写」。` }))
+    const how = data.inContext ? t`${data.model} 接着对话写的${data.cache !== null ? t`（缓存命中 ${data.cache}%）` : ''}` : t`${data.model} 写的`
+    whenNoDialog(() => openImageDialog(node, data.prompt, { chatId, note: t`${data.note ? `${data.note}` : ''}${how}，可以改，也可以「重写」。` }))
   }
 
   async function draw(node, prompt, chatId = getChat()?.id, model = '') {
@@ -313,7 +315,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
   }
 
   const removeImage = guard(async (node, image) => {
-    if (!confirm('删除这张图？')) return
+    if (!confirm(t`删除这张图？`)) return
     const chat = getChat()
     adopt(await api(`/api/chats/${chat.id}/nodes/${node.id}/image?file=${encodeURIComponent(image.file)}`, { method: 'DELETE' }), node.id)
     refreshNode(node.id)
@@ -339,7 +341,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
   function modelChoices() {
     const current = state.settings?.naiModel
     const name = NAI_MODELS.find(([value]) => value === current)?.[1] ?? current
-    return [['', `默认：${name}`], ...NAI_MODELS.filter(([value]) => value !== current)]
+    return [['', t`默认：${name}`], ...NAI_MODELS.filter(([value]) => value !== current)]
   }
 
   /**
@@ -404,7 +406,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       const text = box.value.trim()
       if (!text) return
       await api('/api/prompts', { method: 'POST', body: { cardId: getChat()?.cardId, prompt: text } })
-      toast('已存进提示词库（收藏在最前面）')
+      toast(t`已存进提示词库（收藏在最前面）`)
     })
     $('image-rewrite').onclick = () => {
       dialog.close()
@@ -428,8 +430,8 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     if (!getChat()) return
     library.entries = await api('/api/prompts')
     $('library-note').textContent = library.target
-      ? '选一条给这段剧情配图：会先放进配图框，可以改了再画。'
-      : '画过的图都会把提示词留在这里，删了对话也还在。'
+      ? t`选一条给这段剧情配图：会先放进配图框，可以改了再画。`
+      : t`画过的图都会把提示词留在这里，删了对话也还在。`
     $('library-query').value = ''
     renderLibrary()
     $('library-dialog').showModal()
@@ -449,32 +451,32 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
   function renderLibrary() {
     const shown = libraryShown()
     const total = library.entries.filter(e => library.scope === 'all' || e.cardId === getChat()?.cardId).length
-    $('library-count').textContent = shown.length === total ? `${total} 条` : `${shown.length} / ${total} 条`
+    $('library-count').textContent = shown.length === total ? t`${total} 条` : t`${shown.length} / ${total} 条`
     for (const b of document.querySelectorAll('#library-dialog .seg button')) b.setAttribute('aria-pressed', String(b.dataset.scope === library.scope))
     const list = $('library-list')
     if (!shown.length) {
-      list.replaceChildren(el('li', { class: 'library-empty', text: total ? '没有找到，换个词试试' : '还没有提示词。给剧情配过图之后，提示词会自动留在这里。' }))
+      list.replaceChildren(el('li', { class: 'library-empty', text: total ? t`没有找到，换个词试试` : t`还没有提示词。给剧情配过图之后，提示词会自动留在这里。` }))
       return
     }
     list.replaceChildren(...shown.map(entry => libraryRow(entry)))
   }
 
   function libraryRow(entry) {
-    const when = entry.at ? new Date(entry.at).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' }) : ''
+    const when = entry.at ? new Date(entry.at).toLocaleDateString(locale, { month: 'numeric', day: 'numeric' }) : ''
     const meta = [
       library.scope === 'all' ? entry.cardName : '',
       entry.chatTitle,
       when,
-      entry.drawn > 1 ? `画过 ${entry.drawn} 次` : entry.drawn === 0 ? '手动存的' : '',
+      entry.drawn > 1 ? t`画过 ${entry.drawn} 次` : entry.drawn === 0 ? t`手动存的` : '',
     ].filter(Boolean)
-    const text = el('p', { class: 'library-prompt', text: entry.prompt, title: '点开看全文' })
+    const text = el('p', { class: 'library-prompt', text: entry.prompt, title: t`点开看全文` })
     text.addEventListener('click', () => text.classList.toggle('open'))
     const star = el('button', {
       type: 'button',
       class: `library-star${entry.starred ? ' on' : ''}`,
       'aria-pressed': String(entry.starred),
-      'aria-label': '收藏',
-      title: entry.starred ? '取消收藏' : '收藏（排在最前面）',
+      'aria-label': t`收藏`,
+      title: entry.starred ? t`取消收藏` : t`收藏（排在最前面）`,
       text: entry.starred ? '★' : '☆',
       onclick: guard(async () => {
         Object.assign(entry, await api(`/api/prompts/${entry.id}`, { method: 'PUT', body: { starred: !entry.starred } }))
@@ -484,23 +486,23 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     return el('li', { class: 'library-row' }, [
       entry.hasImage
         ? el('img', { class: 'library-thumb', src: `/api/prompts/${entry.id}/image`, alt: '', loading: 'lazy', decoding: 'async' })
-        : el('span', { class: 'library-thumb none', 'aria-hidden': 'true', text: '无图' }),
+        : el('span', { class: 'library-thumb none', 'aria-hidden': 'true', text: t`无图` }),
       el('div', { class: 'library-main' }, [
         text,
-        el('p', { class: 'library-meta', text: meta.join('　') }),
+        el('p', { class: 'library-meta', text: meta.join(t`　`) }),
       ]),
       el('div', { class: 'library-actions' }, [
         star,
         library.target
-          ? el('button', { type: 'button', class: 'btn small primary', text: '用这条', onclick: () => useEntry(entry) })
-          : el('button', { type: 'button', class: 'btn small', text: '复制', onclick: () => copyEntry(entry) }),
+          ? el('button', { type: 'button', class: 'btn small primary', text: t`用这条`, onclick: () => useEntry(entry) })
+          : el('button', { type: 'button', class: 'btn small', text: t`复制`, onclick: () => copyEntry(entry) }),
         el('button', {
           type: 'button',
           class: 'btn small ghost danger',
-          text: '删除',
-          title: '从提示词库删掉（对话里的图不受影响）',
+          text: t`删除`,
+          title: t`从提示词库删掉（对话里的图不受影响）`,
           onclick: guard(async () => {
-            if (!confirm('从提示词库删掉这条？对话里的图不受影响。')) return
+            if (!confirm(t`从提示词库删掉这条？对话里的图不受影响。`)) return
             await api(`/api/prompts/${entry.id}`, { method: 'DELETE' })
             library.entries = library.entries.filter(e => e.id !== entry.id)
             renderLibrary()
@@ -513,15 +515,15 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
   function useEntry(entry) {
     const { node, chatId } = library.target
     $('library-dialog').close()
-    openImageDialog(node, entry.prompt, { chatId, note: `来自提示词库${entry.chatTitle ? `（${entry.chatTitle}）` : ''}，可以改了再画。` })
+    openImageDialog(node, entry.prompt, { chatId, note: t`来自提示词库${entry.chatTitle ? t`（${entry.chatTitle}）` : ''}，可以改了再画。` })
   }
 
   async function copyEntry(entry) {
     try {
       await navigator.clipboard.writeText(entry.prompt)
-      toast('已复制')
+      toast(t`已复制`)
     } catch {
-      toast('复制不了，点开全文手动选中复制')
+      toast(t`复制不了，点开全文手动选中复制`)
     }
   }
 
@@ -534,10 +536,10 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
   })
   $('library-export').addEventListener('click', () => {
     const shown = libraryShown()
-    if (!shown.length) return toast('没有可导出的提示词')
-    const text = shown.map(e => `## ${e.title || e.chatTitle || e.cardName}${e.at ? `（${new Date(e.at).toLocaleString('zh-CN')}）` : ''}\n${e.prompt}`).join('\n\n')
-    const name = library.scope === 'card' ? shown[0].cardName : '全部'
-    saveFile(`提示词库-${name}.txt`, `${text}\n`, `导出了 ${shown.length} 条`)
+    if (!shown.length) return toast(t`没有可导出的提示词`)
+    const text = shown.map(e => `## ${e.title || e.chatTitle || e.cardName}${e.at ? t`（${new Date(e.at).toLocaleString(locale)}）` : ''}\n${e.prompt}`).join('\n\n')
+    const name = library.scope === 'card' ? shown[0].cardName : t`全部`
+    saveFile(t`提示词库-${name}.txt`, `${text}\n`, t`导出了 ${shown.length} 条`)
   })
 
   // ─── Voice ────────────────────────────────────────────────────────────
@@ -596,7 +598,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
           body: JSON.stringify({ text: chunk.text, voice: chunk.voice, stable: chunk.stable, fresh: this.fresh }),
           signal: this.controller.signal,
         }).then(async res => {
-          if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `朗读失败（${res.status}）`)
+          if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || t`朗读失败（${res.status}）`)
           return URL.createObjectURL(await res.blob())
         })
         promise.catch(() => {})
@@ -632,7 +634,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       }
       this.render(false)
       if (!this.paused) this.audio.play().catch(error => {
-        toast(`浏览器没让播放：${error.message}`)
+        toast(t`浏览器没让播放：${error.message}`)
         this.stop()
       })
     },
@@ -641,7 +643,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     speakHere(i, signal) {
       this.mode = 'browser'
       if (!speech) {
-        toast('这个浏览器不能朗读：换 Edge 或 Chrome 打开，或者在「配图与朗读 → 朗读来源」里设一个本地语音桥接或云端服务', 8000)
+        toast(t`这个浏览器不能朗读：换 Edge 或 Chrome 打开，或者在「配图与朗读 → 朗读来源」里设一个本地语音桥接或云端服务`, 8000)
         return this.stop()
       }
       const chunk = this.queue[i]
@@ -660,7 +662,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       }
       utterance.onerror = event => {
         if (this.utterance !== utterance || event.error === 'interrupted' || event.error === 'canceled') return
-        toast(`浏览器朗读出错：${event.error}`)
+        toast(t`浏览器朗读出错：${event.error}`)
         this.stop()
       }
       this.utterance = utterance
@@ -734,11 +736,11 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       }
       bar.hidden = false
       const chunk = this.queue[this.index]
-      $('player-toggle').textContent = this.paused ? '继续' : '暂停'
+      $('player-toggle').textContent = this.paused ? t`继续` : t`暂停`
       $('player-toggle').disabled = loading
       $('player-redo').disabled = loading
       $('player-count').textContent = `${Math.min(this.index + 1, this.queue.length)}/${this.queue.length}`
-      $('player-text').textContent = loading ? '合成中…' : chunk ? `${chunk.kind === 'dialogue' ? '对白' : '旁白'}：${chunk.text}` : ''
+      $('player-text').textContent = loading ? t`合成中…` : chunk ? t`${chunk.kind === 'dialogue' ? t`对白` : t`旁白`}：${chunk.text}` : ''
     },
   }
 
@@ -746,10 +748,10 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     const { voice, narratorVoice } = state.cardMedia
     // Emotions go before their lines as [tags]; the server keeps them only for voices that act on them (Fish).
     const chunks = speechChunks(shownText(node), { narration: Boolean(narratorVoice), tags: true, max: { dialogue: chunkMaxFor(voice), narration: chunkMaxFor(narratorVoice) } })
-    if (!chunks.length) return toast('这一段没有能读的文字')
+    if (!chunks.length) return toast(t`这一段没有能读的文字`)
     if (!narratorVoice && !state.warnedNarrator) {
       state.warnedNarrator = true
-      toast('旁白还没选音色，这次只读对白。在「配图与朗读」里给这张卡选旁白音色。', 6000)
+      toast(t`旁白还没选音色，这次只读对白。在「配图与朗读」里给这张卡选旁白音色。`, 6000)
     }
     player.start(node.id, chunks.map(chunk => ({
       ...chunk,
@@ -765,7 +767,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     if (!nodeId) return
     if (player.line === span) return player.stop()
     const chunks = speechChunks(span.innerText + voiceTagFor(span), { narration: false, tags: true, max: chunkMaxFor(state.cardMedia.voice) })
-    if (!chunks.length) return toast('这句没有能读的文字')
+    if (!chunks.length) return toast(t`这句没有能读的文字`)
     player.start(nodeId, chunks.map(chunk => ({ ...chunk, voice: state.cardMedia.voice, stable: false })), span)
   }
 
@@ -814,28 +816,28 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
 
     // Pictures
     const backend = el('select', { name: 'imageBackend' }, [
-      option('openai', 'OpenAI 兼容图片接口（grok2api 等）', media.imageBackend),
-      option('comfy', 'ComfyUI 工作流', media.imageBackend),
+      option('openai', t`OpenAI 兼容图片接口（grok2api 等）`, media.imageBackend),
+      option('comfy', t`ComfyUI 工作流`, media.imageBackend),
       option('novelai', 'NovelAI', media.imageBackend),
     ])
     const imageProviders = providers.filter(p => p.api !== 'anthropic-messages')
-    const provider = el('select', { name: 'imageProvider' }, [option('', imageProviders.length ? '选一个供应商' : '先在「供应商」里添加', media.imageProvider), ...imageProviders.map(p => option(p.id, p.name, media.imageProvider))])
+    const provider = el('select', { name: 'imageProvider' }, [option('', imageProviders.length ? t`选一个供应商` : t`先在「供应商」里添加`, media.imageProvider), ...imageProviders.map(p => option(p.id, p.name, media.imageProvider))])
     const modelList = el('datalist', { id: 'image-models' })
-    const model = el('input', { name: 'imageModel', value: media.imageModel, list: 'image-models', placeholder: '例如 grok-imagine-image-2.0', spellcheck: 'false' })
-    const fetchModels = el('button', { type: 'button', class: 'btn small', text: '获取' })
+    const model = el('input', { name: 'imageModel', value: media.imageModel, list: 'image-models', placeholder: t`例如 grok-imagine-image-2.0`, spellcheck: 'false' })
+    const fetchModels = el('button', { type: 'button', class: 'btn small', text: t`获取` })
     fetchModels.onclick = guard(async () => {
-      if (!provider.value) throw new Error('先选供应商')
+      if (!provider.value) throw new Error(t`先选供应商`)
       const { models } = await api('/api/providers/models', { method: 'POST', body: { id: provider.value } })
       const images = models.filter(id => IMAGE_MODEL.test(id))
       modelList.replaceChildren(...(images.length ? images : models).map(id => el('option', { value: id })))
-      toast(images.length ? `找到 ${images.length} 个生图模型，点输入框选` : `没认出生图模型，列出了全部 ${models.length} 个`)
+      toast(images.length ? t`找到 ${images.length} 个生图模型，点输入框选` : t`没认出生图模型，列出了全部 ${models.length} 个`)
       model.focus()
     })
     const size = el('select', { name: 'imageShape' }, SHAPES.map(([value, text]) => option(value, text, media.imageShape)))
     const reference = el('input', { type: 'checkbox', name: 'imageReference', checked: media.imageReference })
-    const editModel = el('input', { name: 'imageEditModel', value: media.imageEditModel, list: 'image-models', placeholder: '同上（和生图模型一样）', spellcheck: 'false' })
+    const editModel = el('input', { name: 'imageEditModel', value: media.imageEditModel, list: 'image-models', placeholder: t`同上（和生图模型一样）`, spellcheck: 'false' })
     const comfyUrl = el('input', { name: 'comfyUrl', value: media.comfyUrl, spellcheck: 'false' })
-    const workflowInfo = el('span', { class: 'hint', text: workflowText(workflow) })
+    const workflowInfo = el('span', { class: 'hint', text: workflowText(workflow), 'data-imported': workflow ? '1' : undefined })
     const workflowInput = el('input', { type: 'file', accept: '.json,application/json', hidden: true })
     workflowInput.onchange = guard(async () => {
       const file = workflowInput.files[0]
@@ -845,42 +847,43 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       try {
         json = JSON.parse(await file.text())
       } catch {
-        throw new Error('工作流文件不是 JSON')
+        throw new Error(t`工作流文件不是 JSON`)
       }
       const { workflow: info } = await api('/api/media/workflow', { method: 'PUT', body: { workflow: json } })
       workflowInfo.textContent = workflowText(info)
-      toast('工作流已导入')
+      workflowInfo.dataset.imported = info ? '1' : ''
+      toast(t`工作流已导入`)
     })
     const helperChoices = getModels().filter(m => m.id.includes('/'))
     const helper = el('select', { name: 'helperModel' }, [
-      option('', '跟随对话的模型（要是供应商的模型）', media.helperModel),
+      option('', t`跟随对话的模型（要是供应商的模型）`, media.helperModel),
       ...helperChoices.map(m => option(m.id, `${m.group} · ${m.label}`, media.helperModel)),
     ])
     const promptSource = el('select', { name: 'promptSource' }, [
-      option('helper', '辅助模型单独写（快、便宜）', media.promptSource),
-      option('chat', '接着对话写（同一个模型，命中缓存，更贴合剧情）', media.promptSource),
+      option('helper', t`辅助模型单独写（快、便宜）`, media.promptSource),
+      option('chat', t`接着对话写（同一个模型，命中缓存，更贴合剧情）`, media.promptSource),
     ])
-    const promptStyle = el('select', { name: 'promptStyle' }, [option('natural', '自然语言（grok、gpt-image、Flux、NovelAI V5）', media.promptStyle), option('tags', '标签（SD / SDXL 工作流、NovelAI）', media.promptStyle)])
+    const promptStyle = el('select', { name: 'promptStyle' }, [option('natural', t`自然语言（grok、gpt-image、Flux、NovelAI V5）`, media.promptStyle), option('tags', t`标签（SD / SDXL 工作流、NovelAI）`, media.promptStyle)])
     const autoImage = el('input', { type: 'checkbox', name: 'autoImage', checked: media.autoImage })
 
     const openaiBox = el('div', { class: 'grid' }, [
-      field('供应商', provider),
-      el('label', {}, ['生图模型', el('span', { class: 'select-with-action' }, [model, fetchModels]), modelList]),
+      field(t`供应商`, provider),
+      el('label', {}, [t`生图模型`, el('span', { class: 'select-with-action' }, [model, fetchModels]), modelList]),
     ])
     const comfyBox = el('div', {}, [
-      field('ComfyUI 地址', comfyUrl),
+      field(t`ComfyUI 地址`, comfyUrl),
       el('div', { class: 'workflow-row' }, [
-        el('button', { type: 'button', class: 'btn small', text: '导入工作流', onclick: () => workflowInput.click() }),
+        el('button', { type: 'button', class: 'btn small', text: t`导入工作流`, onclick: () => workflowInput.click() }),
         workflowInput,
         workflowInfo,
       ]),
-      el('p', { class: 'hint', text: '在 ComfyUI 里把正向提示词写成 {{prompt}}，种子、宽、高写成 {{seed}} {{width}} {{height}}，要参考图就在 LoadImage 里写 {{reference}}（会上传这张卡的头像），然后「导出（API）」。' }),
+      el('p', { class: 'hint', text: t`在 ComfyUI 里把正向提示词写成 {{prompt}}，种子、宽、高写成 {{seed}} {{width}} {{height}}，要参考图就在 LoadImage 里写 {{reference}}（会上传这张卡的头像），然后「导出（API）」。` }),
     ])
     const naiTokenHint = el('span', { class: 'hint nai-token-hint' })
     const showNaiToken = info => naiTokenText(naiTokenHint, info)
     showNaiToken(novelai)
-    const naiToken = el('input', { name: 'naiToken', type: 'password', autocomplete: 'off', spellcheck: 'false', placeholder: novelai?.hasToken ? '留空不改' : 'pst-…' })
-    const checkNai = el('button', { type: 'button', class: 'btn small', text: '检查' })
+    const naiToken = el('input', { name: 'naiToken', type: 'password', autocomplete: 'off', spellcheck: 'false', placeholder: novelai?.hasToken ? t`留空不改` : 'pst-…' })
+    const checkNai = el('button', { type: 'button', class: 'btn small', text: t`检查` })
     const naiAllowance = el('span', { class: 'hint nai-allowance' })
     const showAllowance = info => {
       const text = naiAccountText(info)
@@ -897,38 +900,38 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     const readAllowance = () => {
       if (allowanceRead || !novelai?.hasToken || naiBox.hidden) return
       allowanceRead = true
-      naiAllowance.textContent = '正在查 V5 额度…'
-      api('/api/media/novelai/check', { method: 'POST', body: { token: '' } }).then(showAllowance, error => { naiAllowance.textContent = `查不到额度：${error.message}` })
+      naiAllowance.textContent = t`正在查 V5 额度…`
+      api('/api/media/novelai/check', { method: 'POST', body: { token: '' } }).then(showAllowance, error => { naiAllowance.textContent = t`查不到额度：${error.message}` })
     }
-    const clearNai = el('button', { type: 'button', class: 'btn small ghost', text: '删除令牌' })
+    const clearNai = el('button', { type: 'button', class: 'btn small ghost', text: t`删除令牌` })
     clearNai.onclick = guard(async () => {
       const { novelai: info } = await api('/api/media/settings', { method: 'PUT', body: { naiClearToken: true } })
       showNaiToken(info)
-      toast('已删除 NovelAI 令牌')
+      toast(t`已删除 NovelAI 令牌`)
     })
     const naiModel = el('select', { name: 'naiModel' }, [
       ...NAI_MODELS.map(([value, text]) => option(value, text, media.naiModel)),
       NAI_MODELS.some(([value]) => value === media.naiModel) ? null : option(media.naiModel, media.naiModel, media.naiModel),
     ].filter(Boolean))
     const naiBox = el('div', {}, [
-      el('label', {}, ['NovelAI 持久令牌', el('span', { class: 'select-with-action' }, [naiToken, checkNai, clearNai]), naiTokenHint]),
-      el('p', { class: 'hint', text: '在 NovelAI 网页点左下角齿轮 →「Account」→「Get Persistent API Token」，复制后粘贴到这里再保存。「检查」只查订阅、V5 额度和 Anlas，不画图。' }),
-      el('label', {}, ['模型', naiModel, naiAllowance]),
-      field('V5 额度用完时', el('select', { name: 'naiV5Empty' }, [
-        option('v45', '改用 V4.5 画（Opus 不扣 Anlas）', media.naiV5Empty ?? 'v45'),
-        option('anlas', '继续用 V5，扣 Anlas', media.naiV5Empty ?? 'v45'),
-      ]), 'Opus 的 V5 有一份额度，每小时回一点，用完后 NovelAI 改扣 Anlas。每次画 V5 前先查一下：剩 10% 以下时图下面会提醒，用完时按这里处理。'),
+      el('label', {}, [t`NovelAI 持久令牌`, el('span', { class: 'select-with-action' }, [naiToken, checkNai, clearNai]), naiTokenHint]),
+      el('p', { class: 'hint', text: t`在 NovelAI 网页点左下角齿轮 →「Account」→「Get Persistent API Token」，复制后粘贴到这里再保存。「检查」只查订阅、V5 额度和 Anlas，不画图。` }),
+      el('label', {}, [t`模型`, naiModel, naiAllowance]),
+      field(t`V5 额度用完时`, el('select', { name: 'naiV5Empty' }, [
+        option('v45', t`改用 V4.5 画（Opus 不扣 Anlas）`, media.naiV5Empty ?? 'v45'),
+        option('anlas', t`继续用 V5，扣 Anlas`, media.naiV5Empty ?? 'v45'),
+      ]), t`Opus 的 V5 有一份额度，每小时回一点，用完后 NovelAI 改扣 Anlas。每次画 V5 前先查一下：剩 10% 以下时图下面会提醒，用完时按这里处理。`),
       el('label', { class: 'check-row' }, [
         el('input', { type: 'checkbox', name: 'naiReference', checked: media.naiReference }),
-        el('span', { text: '画面里只有一个名册角色（或者除了主角只有一个）、而且她有人设图时，照人设图画（自动改用 V4.5，每张多扣 5 Anlas，不够时这张不带；V5 还不支持人设图）' }),
+        el('span', { text: t`画面里只有一个名册角色（或者除了主角只有一个）、而且她有人设图时，照人设图画（自动改用 V4.5，每张多扣 5 Anlas，不够时这张不带；V5 还不支持人设图）` }),
       ]),
       el('div', { class: 'grid' }, [
-        field('人设图还原度', el('input', { name: 'naiRefFidelity', type: 'range', min: '0', max: '1', step: '0.05', value: String(media.naiRefFidelity) }), '越高越像人设图，越低越听提示词'),
-        el('label', { class: 'check-row' }, [el('input', { type: 'checkbox', name: 'naiRefStyle', checked: media.naiRefStyle }), el('span', { text: '连画风一起参考' })]),
+        field(t`人设图还原度`, el('input', { name: 'naiRefFidelity', type: 'range', min: '0', max: '1', step: '0.05', value: String(media.naiRefFidelity) }), t`越高越像人设图，越低越听提示词`),
+        el('label', { class: 'check-row' }, [el('input', { type: 'checkbox', name: 'naiRefStyle', checked: media.naiRefStyle }), el('span', { text: t`连画风一起参考` })]),
       ]),
-      field('质量词（加在每张提示词后面）', el('input', { name: 'naiQuality', value: media.naiQuality, spellcheck: 'false' })),
-      field('负面提示词', el('textarea', { name: 'naiNegative', rows: 3, spellcheck: 'false', text: media.naiNegative })),
-      el('p', { class: 'hint', text: '尺寸和步数都在 Opus 的免费范围内（不超过 1024×1024 像素、23 步）：V4.5 不限量，V5 用上面那份额度，都不扣 Anlas。走「设置」里的代理。' }),
+      field(t`质量词（加在每张提示词后面）`, el('input', { name: 'naiQuality', value: media.naiQuality, spellcheck: 'false' })),
+      field(t`负面提示词`, el('textarea', { name: 'naiNegative', rows: 3, spellcheck: 'false', text: media.naiNegative })),
+      el('p', { class: 'hint', text: t`尺寸和步数都在 Opus 的免费范围内（不超过 1024×1024 像素、23 步）：V4.5 不限量，V5 用上面那份额度，都不扣 Anlas。走「设置」里的代理。` }),
     ])
     const syncBackend = () => {
       openaiBox.hidden = backend.value !== 'openai'
@@ -939,8 +942,8 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     }
     backend.onchange = syncBackend
     const referenceRow = el('div', {}, [
-      el('label', { class: 'check-row' }, [reference, el('span', { text: '用这张卡的头像当参考图（走 /images/edits，长相更稳定）' })]),
-      field('参考图用的模型', editModel, '有的网关生图和改图是两个模型：grok2api 只有 Web 账号时，2.0 只能生图，改图要用 grok-imagine-image-edit。改图失败时这张会自动不带参考图再画。'),
+      el('label', { class: 'check-row' }, [reference, el('span', { text: t`用这张卡的头像当参考图（走 /images/edits，长相更稳定）` })]),
+      field(t`参考图用的模型`, editModel, t`有的网关生图和改图是两个模型：grok2api 只有 Web 账号时，2.0 只能生图，改图要用 grok-imagine-image-edit。改图失败时这张会自动不带参考图再画。`),
     ])
     const syncReference = () => { editModel.closest('label').hidden = !reference.checked }
     reference.onchange = syncReference
@@ -956,32 +959,32 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     const service = Boolean(media.ttsUrl)
     const voices = external.voices ?? []
     const chinese = browserVoices.filter(v => /^zh/i.test(v.lang))
-    const ttsUrl = el('input', { name: 'ttsUrl', value: media.ttsUrl, spellcheck: 'false', placeholder: xiaoya ? '' : '不用就留空' })
+    const ttsUrl = el('input', { name: 'ttsUrl', value: media.ttsUrl, spellcheck: 'false', placeholder: xiaoya ? '' : t`不用就留空` })
     const ttsStatus = el('span', {
       class: external.ok ? 'hint' : 'hint warn',
       hidden: !service,
-      text: external.ok ? `已连上${external.remote ? '（经电脑上的酒馆）' : ''}，${voices.length + (external.cloud?.length ?? 0)} 个音色` : external.error,
+      text: external.ok ? t`已连上${external.remote ? t`（经电脑上的酒馆）` : ''}，${voices.length + (external.cloud?.length ?? 0)} 个音色` : external.error,
     })
     const ttsKeyHint = el('span', { class: 'hint tts-key-hint' })
     voiceKeyText(ttsKeyHint, voiceKey)
     const autoRead = el('input', { type: 'checkbox', name: 'autoRead', checked: media.autoRead })
     // The bridge's own model voices, cloud voices it relays by name, this tavern's own cloud services, then this device's browser voices.
     const cloud = external.cloud ?? []
-    const browserLabel = v => `${v.name.replace(/^Microsoft /, '')}${v.localService ? '' : '（在线）'}`
+    const browserLabel = v => `${v.name.replace(/^Microsoft /, '')}${v.localService ? '' : t`（在线）`}`
     const ownGroup = id => {
       const source = sources[id]
       if (!source?.voices?.length) return null
       const provider = id === 'openai' ? providers.find(p => p.id === media.ttsProvider)?.name ?? '' : ''
-      return [`云端服务 · ${provider || source.label} · ${source.model}（按字数计费）`, source.voices.map(v => [v.ref, v.label])]
+      return [t`云端服务 · ${provider || source.label} · ${source.model}（按字数计费）`, source.voices.map(v => [v.ref, v.label])]
     }
     const groups = [
-      voices.length ? [`${BRIDGE_NAME} · 本地模型音色`, voices.map(v => [v, v])] : null,
-      cloud.length ? [`${BRIDGE_NAME} · 经它转发的云端音色（按字数计费）`, cloud.map(v => [v.name, `${v.label}（${v.provider.replace(/ · 云端$/, '')} · ${v.model}）`])] : null,
+      voices.length ? [t`${BRIDGE_NAME} · 本地模型音色`, voices.map(v => [v, v])] : null,
+      cloud.length ? [t`${BRIDGE_NAME} · 经它转发的云端音色（按字数计费）`, cloud.map(v => [v.name, t`${v.label}（${v.provider.replace(/ · 云端$/, '')} · ${v.model}）`])] : null,
       ...VOICE_SOURCES.map(ownGroup),
-      chinese.length ? ['浏览器 · 这台设备自带的音色（免费）', chinese.map(v => [`${BROWSER}${v.name}`, browserLabel(v)])] : null,
+      chinese.length ? [t`浏览器 · 这台设备自带的音色（免费）`, chinese.map(v => [`${BROWSER}${v.name}`, browserLabel(v)])] : null,
     ].filter(Boolean)
     const known = new Set(groups.flatMap(([, list]) => list.map(([value]) => value)))
-    const missing = value => (value.startsWith(BROWSER) ? `${value.slice(BROWSER.length)}（这台设备没有，用默认中文音色）` : `${value}（现在没有）`)
+    const missing = value => (value.startsWith(BROWSER) ? t`${value.slice(BROWSER.length)}（这台设备没有，用默认中文音色）` : t`${value}（现在没有）`)
     const voiceSelect = (name, value, empty) =>
       el('select', { name }, [
         option('', empty, value),
@@ -993,43 +996,43 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     // A voice picker with its own 试听.
     const voicePicker = (name, value, empty) => {
       const select = voiceSelect(name, value, empty)
-      const listen = el('button', { type: 'button', class: 'btn small', text: '试听', title: '用这个音色读一句示例（没保存的设置也算）' })
+      const listen = el('button', { type: 'button', class: 'btn small', text: t`试听`, title: t`用这个音色读一句示例（没保存的设置也算）` })
       listen.onclick = () => previewVoice(listen, { voice: select.value, form, silent: name === 'narratorVoice' })
       return el('span', { class: 'select-with-action' }, [select, listen])
     }
-    const dialogueDefault = service ? `${BRIDGE_NAME}当前的音色${external.current ? `（${external.current}）` : ''}` : '浏览器默认中文音色'
+    const dialogueDefault = service ? t`${BRIDGE_NAME}当前的音色${external.current ? t`（${external.current}）` : ''}` : t`浏览器默认中文音色`
     const anyCloud = cloud.length || VOICE_SOURCES.some(id => sources[id]?.voices?.length)
     const narratorHint = anyCloud
       ? xiaoya && cloud.length
-        ? '经小雅转发的云端音色用小雅「云端 API 设置」里的密钥和模型。云端音色都按字数计费，旁白字多，用本地模型或浏览器音色更省'
-        : '云端音色按字数计费；旁白字多，用本地模型或浏览器音色更省'
-      : chinese.length ? '浏览器音色是这台设备自带的，免费；换一台设备可能没有同一个，会改用它的默认中文音色。' : undefined
+        ? t`经小雅转发的云端音色用小雅「云端 API 设置」里的密钥和模型。云端音色都按字数计费，旁白字多，用本地模型或浏览器音色更省`
+        : t`云端音色按字数计费；旁白字多，用本地模型或浏览器音色更省`
+      : chinese.length ? t`浏览器音色是这台设备自带的，免费；换一台设备可能没有同一个，会改用它的默认中文音色。` : undefined
     const tagHint = cloud.some(v => v.tags) || sources.fish?.voices?.length || sources.openai?.emotion === 'instruction'
-      ? '回复里 [voice:情绪:台词] 的情绪：Fish 放在台词前当语气标签，gpt-4o-mini-tts 当语气说明，其余音色不读'
+      ? t`回复里 [voice:情绪:台词] 的情绪：Fish 放在台词前当语气标签，gpt-4o-mini-tts 当语气说明，其余音色不读`
       : undefined
     const ttsHint = xiaoya
-      ? '本机填小雅的地址（http://127.0.0.1:8765），用它跑的本地 TTS 模型，或它转发的云端音色。手机上没有小雅：把电脑上酒馆「设置 → 手机访问」里的链接整条粘贴进来，同一个 Wi-Fi 下借电脑朗读（电脑上的云端密钥留在电脑上）。'
-      : '本机或局域网里跑 TTS 模型的服务（兼容 POST /api/tts 和 GET /api/persona/list）。也可以把另一台电脑上酒馆「设置 → 手机访问」里的链接整条粘贴进来，借那台电脑设好的音色（密钥留在那台电脑上）。'
+      ? t`本机填小雅的地址（http://127.0.0.1:8765），用它跑的本地 TTS 模型，或它转发的云端音色。手机上没有小雅：把电脑上酒馆「设置 → 手机访问」里的链接整条粘贴进来，同一个 Wi-Fi 下借电脑朗读（电脑上的云端密钥留在电脑上）。`
+      : t`本机或局域网里跑 TTS 模型的服务（兼容 POST /api/tts 和 GET /api/persona/list）。也可以把另一台电脑上酒馆「设置 → 手机访问」里的链接整条粘贴进来，借那台电脑设好的音色（密钥留在那台电脑上）。`
     const sourceBoxes = voiceSourceBoxes({ media, voiceKeys, providers, sources, form })
     const externalBox = el('details', { class: 'voice-source', open: xiaoya || service }, [
-      el('summary', {}, [el('span', { text: xiaoya ? `${BRIDGE_NAME}（小雅 / 电脑上的酒馆）` : `${BRIDGE_NAME}（高级）` }), sourceState(service ? (external.ok ? 'ok' : 'warn') : 'off', service ? (external.ok ? '已连上' : '连不上') : '没填')]),
-      field('桥接地址', ttsUrl, ttsHint),
+      el('summary', {}, [el('span', { text: xiaoya ? t`${BRIDGE_NAME}（小雅 / 电脑上的酒馆）` : t`${BRIDGE_NAME}（高级）` }), sourceState(service ? (external.ok ? 'ok' : 'warn') : 'off', service ? (external.ok ? t`已连上` : t`连不上`) : t`没填`)]),
+      field(t`桥接地址`, ttsUrl, ttsHint),
       ttsStatus,
       ttsKeyHint,
     ])
     const browserLine = el('p', {
       class: 'hint',
       text: speech
-        ? `免费、不用设置：这台设备有 ${chinese.length} 个中文音色（Edge 的「Xiaoxiao Online (Natural)」这类在线音色效果最好）。`
-        : '这个浏览器不能朗读：设一个本地语音桥接或云端服务，或者换 Edge / Chrome 打开。',
+        ? t`免费、不用设置：这台设备有 ${chinese.length} 个中文音色（Edge 的「Xiaoxiao Online (Natural)」这类在线音色效果最好）。`
+        : t`这个浏览器不能朗读：设一个本地语音桥接或云端服务，或者换 Edge / Chrome 打开。`,
     })
     // The 朗读来源 page: the three kinds, nearest first.
     const sourceGroup = (title, note, boxes) =>
       el('section', { class: 'voice-group' }, [el('h4', { class: 'voice-group-title' }, [title, el('span', { text: note })]), ...boxes])
     const voiceSourceSections = [
-      sourceGroup('浏览器', '这台设备自带，免费', [browserLine]),
-      sourceGroup(BRIDGE_NAME, '本机或局域网里的 TTS 模型，不经过云端', [externalBox]),
-      sourceGroup('云端服务', '要密钥，按字数计费', sourceBoxes),
+      sourceGroup(t`浏览器`, t`这台设备自带，免费`, [browserLine]),
+      sourceGroup(BRIDGE_NAME, t`本机或局域网里的 TTS 模型，不经过云端`, [externalBox]),
+      sourceGroup(t`云端服务`, t`要密钥，按字数计费`, sourceBoxes),
     ]
 
     // The dialog as a menu (web/menu.js): 配图 and 朗读, each with what every card
@@ -1040,116 +1043,116 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     const voiceName = (value, empty) => (value ? voiceText.get(value) ?? value.replace(BROWSER, '') : empty)
     const roster = card ? rosterEditor(card, loraInfo, getChat()?.names?.user ?? '') : null
     if (roster) roster.open = true
-    const shared = (feature, rest) => ({ look: 'shared', tag: '所有卡通用', crumb: `${feature} · 所有卡通用`, ...rest })
-    const own = (feature, rest) => ({ look: 'own', crumb: `${feature} · ${charName || '这张卡'}`, ...rest })
+    const shared = (feature, rest) => ({ look: 'shared', tag: t`所有卡通用`, crumb: t`${feature} · 所有卡通用`, ...rest })
+    const own = (feature, rest) => ({ look: 'own', crumb: `${feature} · ${charName || t`这张卡`}`, ...rest })
     const sections = [
-      shared('配图', {
+      shared(t`配图`, {
         id: 'image',
-        title: '画图方式',
-        summary: () => [IMAGE_BACKEND_TEXT[backend.value], backend.value === 'novelai' ? naiModel.selectedOptions[0]?.text.split('（')[0] : backend.value === 'openai' ? model.value : '', SHAPES.find(([value]) => value === size.value)?.[1]].filter(Boolean).join(' · '),
+        title: t`画图方式`,
+        summary: () => [IMAGE_BACKEND_TEXT[backend.value], backend.value === 'novelai' ? naiModel.selectedOptions[0]?.text.split(t`（`)[0] : backend.value === 'openai' ? model.value : '', SHAPES.find(([value]) => value === size.value)?.[1]].filter(Boolean).join(' · '),
         status: () => {
-          if (backend.value === 'openai' && !provider.value) return ['warn', '没选供应商']
-          if (backend.value === 'novelai' && !novelai?.hasToken && !naiToken.value.trim()) return ['warn', '没填令牌']
-          if (backend.value === 'comfy' && !workflowInfo.textContent.startsWith('已导入')) return ['warn', '没导入工作流']
+          if (backend.value === 'openai' && !provider.value) return ['warn', t`没选供应商`]
+          if (backend.value === 'novelai' && !novelai?.hasToken && !naiToken.value.trim()) return ['warn', t`没填令牌`]
+          if (backend.value === 'comfy' && !workflowInfo.dataset.imported) return ['warn', t`没导入工作流`]
           return null
         },
         body: [
-          el('div', { class: 'grid' }, [field('画图用', backend), field('画幅', size, '图片接口：1024×1024 / 1024×1536 / 1536×1024；ComfyUI 和 NovelAI：1024×1024 / 832×1216 / 1216×832')]),
+          el('div', { class: 'grid' }, [field(t`画图用`, backend), field(t`画幅`, size, t`图片接口：1024×1024 / 1024×1536 / 1536×1024；ComfyUI 和 NovelAI：1024×1024 / 832×1216 / 1216×832`)]),
           openaiBox,
           referenceRow,
           comfyBox,
           naiBox,
-          field('画面提示词怎么写', promptSource, '「接着对话写」把固定前缀和这段对话原样发给写这段剧情的模型，再追加一句要提示词：几乎全部命中缓存，人物现在穿什么、在哪都对得上，但用的是对话模型的价格和速度。订阅模型写的剧情借不了，会自动改用辅助模型。'),
+          field(t`画面提示词怎么写`, promptSource, t`「接着对话写」把固定前缀和这段对话原样发给写这段剧情的模型，再追加一句要提示词：几乎全部命中缓存，人物现在穿什么、在哪都对得上，但用的是对话模型的价格和速度。订阅模型写的剧情借不了，会自动改用辅助模型。`),
           el('div', { class: 'grid' }, [
-            field('辅助模型', helper, helperChoices.length ? '' : '还没有供应商的模型'),
-            field('提示词写法', promptStyle),
+            field(t`辅助模型`, helper, helperChoices.length ? '' : t`还没有供应商的模型`),
+            field(t`提示词写法`, promptStyle),
           ]),
         ],
       }),
-      card && own('配图', {
+      card && own(t`配图`, {
         id: 'card-style',
-        title: '画风与 LoRA',
+        title: t`画风与 LoRA`,
         summary: () => {
           const style = form.elements.style?.value.trim() ?? ''
           const lora = form.elements.lora?.value ?? ''
-          return [style ? `画风：${style.length > 28 ? `${style.slice(0, 28)}…` : style}` : '还没写画风', lora ? `LoRA：${lora}` : ''].filter(Boolean).join(' · ')
+          return [style ? t`画风：${style.length > 28 ? `${style.slice(0, 28)}…` : style}` : t`还没写画风`, lora ? t`LoRA：${lora}` : ''].filter(Boolean).join(' · ')
         },
         body: [
-          field('画风（写进画面提示词；NovelAI 每张都加，人设图也是）', el('textarea', { name: 'style', rows: 2, text: card.style ?? '', placeholder: '例如 anime style, delicate lineart, soft cel shading, soft lighting' })),
-          field('画风负面（只用于 NovelAI，加在负面提示词后面）', el('input', { name: 'styleNegative', value: card.styleNegative ?? '', placeholder: '例如 realistic, 3d, chibi' })),
+          field(t`画风（写进画面提示词；NovelAI 每张都加，人设图也是）`, el('textarea', { name: 'style', rows: 2, text: card.style ?? '', placeholder: t`例如 anime style, delicate lineart, soft cel shading, soft lighting` })),
+          field(t`画风负面（只用于 NovelAI，加在负面提示词后面）`, el('input', { name: 'styleNegative', value: card.styleNegative ?? '', placeholder: t`例如 realistic, 3d, chibi` })),
           field(
-            '整卡 LoRA（只用于 ComfyUI；名册认出人物时改用她自己的）',
+            t`整卡 LoRA（只用于 ComfyUI；名册认出人物时改用她自己的）`,
             el('select', { name: 'lora' }, [
-              option('', '不用', card.lora),
+              option('', t`不用`, card.lora),
               ...loraInfo.loras.map(name => option(name, name, card.lora)),
-              card.lora && !loraInfo.loras.includes(card.lora) ? option(card.lora, `${card.lora}（ComfyUI 里现在没有）`, card.lora) : null,
+              card.lora && !loraInfo.loras.includes(card.lora) ? option(card.lora, t`${card.lora}（ComfyUI 里现在没有）`, card.lora) : null,
             ].filter(Boolean)),
-            loraInfo.ok ? '画这张卡时自动在工作流的 Load Checkpoint 后面接上它，并把触发词放在提示词最前面。' : 'ComfyUI 没开，列不出 LoRA 文件；开着 ComfyUI 再打开这里。',
+            loraInfo.ok ? t`画这张卡时自动在工作流的 Load Checkpoint 后面接上它，并把触发词放在提示词最前面。` : t`ComfyUI 没开，列不出 LoRA 文件；开着 ComfyUI 再打开这里。`,
           ),
           el('div', { class: 'grid' }, [
-            field('触发词', el('input', { name: 'loraTrigger', value: card.loraTrigger, placeholder: '例如 linxue', spellcheck: 'false' })),
-            field('强度', el('input', { name: 'loraStrength', type: 'number', min: '0', max: '2', step: '0.05', value: String(card.loraStrength) })),
+            field(t`触发词`, el('input', { name: 'loraTrigger', value: card.loraTrigger, placeholder: t`例如 linxue`, spellcheck: 'false' })),
+            field(t`强度`, el('input', { name: 'loraStrength', type: 'number', min: '0', max: '2', step: '0.05', value: String(card.loraStrength) })),
           ]),
         ],
       }),
-      card && own('配图', {
+      card && own(t`配图`, {
         id: 'roster',
-        title: '角色名册',
+        title: t`角色名册`,
         summary: () => {
           const names = [...form.querySelectorAll('.roster-entry [data-field="name"]')].map(input => input.value.trim()).filter(Boolean)
-          if (!names.length) return '还没建：多角色卡画图时，每个人的长相固定、不串脸'
-          return `${names.length} 人：${names.slice(0, 4).join('、')}${names.length > 4 ? '…' : ''}`
+          if (!names.length) return t`还没建：多角色卡画图时，每个人的长相固定、不串脸`
+          return t`${names.length} 人：${names.slice(0, 4).join(t`、`)}${names.length > 4 ? '…' : ''}`
         },
         body: [roster],
       }),
-      shared('朗读', {
+      shared(t`朗读`, {
         id: 'voice',
-        title: '朗读来源',
+        title: t`朗读来源`,
         summary: () => {
           const parts = []
-          if (form.elements.ttsUrl?.value.trim() && external.ok) parts.push(`${BRIDGE_NAME} ${voices.length + cloud.length} 个音色`)
-          for (const id of VOICE_SOURCES) if (sources[id]?.configured) parts.push(`${sources[id].label} ${sources[id].voices.length} 个音色`)
-          if (speech) parts.push(`浏览器 ${chinese.length} 个音色`)
-          return parts.join(' · ') || '还没有能用的音色'
+          if (form.elements.ttsUrl?.value.trim() && external.ok) parts.push(t`${BRIDGE_NAME} ${voices.length + cloud.length} 个音色`)
+          for (const id of VOICE_SOURCES) if (sources[id]?.configured) parts.push(t`${sources[id].label} ${sources[id].voices.length} 个音色`)
+          if (speech) parts.push(t`浏览器 ${chinese.length} 个音色`)
+          return parts.join(' · ') || t`还没有能用的音色`
         },
-        status: () => (form.elements.ttsUrl?.value.trim() && !external.ok ? ['warn', `${BRIDGE_NAME}没开`] : null),
+        status: () => (form.elements.ttsUrl?.value.trim() && !external.ok ? ['warn', t`${BRIDGE_NAME}没开`] : null),
         body: voiceSourceSections,
       }),
-      card && own('朗读', {
+      card && own(t`朗读`, {
         id: 'card-voice',
-        title: '音色',
-        summary: () => `对白：${voiceName(form.elements.voice?.value, dialogueDefault)} · 旁白：${voiceName(form.elements.narratorVoice?.value, '不读')}`,
+        title: t`音色`,
+        summary: () => t`对白：${voiceName(form.elements.voice?.value, dialogueDefault)} · 旁白：${voiceName(form.elements.narratorVoice?.value, t`不读`)}`,
         status: () => {
           const voice = form.elements.voice?.value ?? ''
           // A card without a voice reads with the local bridge's current one.
-          if (!voice && service && !external.ok) return ['warn', `默认走${BRIDGE_NAME}，没开`]
-          if (voice && !known.has(voice)) return ['warn', '音色不在了']
+          if (!voice && service && !external.ok) return ['warn', t`默认走${BRIDGE_NAME}，没开`]
+          if (voice && !known.has(voice)) return ['warn', t`音色不在了`]
           return null
         },
         body: [
           el('div', { class: 'grid' }, [
-            field('对白音色', voicePicker('voice', card.voice, dialogueDefault), tagHint),
-            field('旁白音色', voicePicker('narratorVoice', card.narratorVoice, '不读旁白'), narratorHint),
+            field(t`对白音色`, voicePicker('voice', card.voice, dialogueDefault), tagHint),
+            field(t`旁白音色`, voicePicker('narratorVoice', card.narratorVoice, t`不读旁白`), narratorHint),
           ]),
-          el('p', { class: 'hint', text: `没选对白音色时，用${service ? `${BRIDGE_NAME}当前的音色` : '浏览器默认的中文音色'}读。选了哪个来源的音色，就只用那个来源，别的来源开没开都不影响。` }),
+          el('p', { class: 'hint', text: t`没选对白音色时，用${service ? t`${BRIDGE_NAME}当前的音色` : t`浏览器默认的中文音色`}读。选了哪个来源的音色，就只用那个来源，别的来源开没开都不影响。` }),
         ],
       }),
     ].filter(Boolean)
 
-    const who = () => (card ? whoLine(el, { cardId: state.cardId, name: charName, note: '这张卡自己的' }) : el('p', { class: 'menu-who none', text: '选一张角色卡后，这里可以给它单独设置。' }))
+    const who = () => (card ? whoLine(el, { cardId: state.cardId, name: charName, note: t`这张卡自己的` }) : el('p', { class: 'menu-who none', text: t`选一张角色卡后，这里可以给它单独设置。` }))
     const switchRow = (input, text, hint) => {
       input.classList.add('switch')
       return el('label', { class: 'menu-switch', title: hint }, [el('span', { text }), input])
     }
     settingsMenu.mount({
       panels: [
-        { id: 'image', title: '配图', icon: MENU_ICONS.picture, aside: switchRow(autoImage, '新回复自动配图', '每轮多一次辅助模型调用和一次生图'), rows: ['image', who(), 'card-style', 'roster'] },
-        { id: 'voice', title: '朗读', icon: MENU_ICONS.voice, aside: switchRow(autoRead, '新回复自动朗读'), rows: ['voice', who(), 'card-voice'] },
+        { id: 'image', title: t`配图`, icon: MENU_ICONS.picture, aside: switchRow(autoImage, t`新回复自动配图`, t`每轮多一次辅助模型调用和一次生图`), rows: ['image', who(), 'card-style', 'roster'] },
+        { id: 'voice', title: t`朗读`, icon: MENU_ICONS.voice, aside: switchRow(autoRead, t`新回复自动朗读`), rows: ['voice', who(), 'card-voice'] },
       ],
       sections,
-      note: '配图和朗读都是点了才做，不进模型的上下文，也不影响缓存。',
-      footStart: [el('button', { type: 'button', class: 'btn ghost', text: '管理供应商', onclick: () => openProviders() })],
-      save: { text: '保存', onClick: () => save(form, Boolean(card)) },
+      note: t`配图和朗读都是点了才做，不进模型的上下文，也不影响缓存。`,
+      footStart: [el('button', { type: 'button', class: 'btn ghost', text: t`管理供应商`, onclick: () => openProviders() })],
+      save: { text: t`保存`, onClick: () => save(form, Boolean(card)) },
     })
     syncBackend()
     syncReference()
@@ -1160,7 +1163,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
   // picture each, one entry may be the player. Saved with the card settings;
   // reference pictures upload at once.
 
-  const KIND_TEXT = [['girl', '女'], ['boy', '男'], ['other', '其他']]
+  const KIND_TEXT = [['girl', t`女`], ['boy', t`男`], ['other', t`其他`]]
   const newEntryId = () => Array.from(crypto.getRandomValues(new Uint8Array(5)), b => b.toString(16).padStart(2, '0')).join('')
   const refUrl = (cardId, id) => `/api/cards/${cardId}/roster/${id}/ref?v=${Date.now()}`
 
@@ -1212,27 +1215,27 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     const status = el('span', { class: 'hint' })
     const box = el('details', { class: 'roster', open: card.roster.length > 0 }, [
       summary,
-      el('p', { class: 'hint', text: '名册里的人，长相按这里写的固定 tag 画，辅助模型只写谁在画面里、穿什么、在做什么。多人同框时每人单独成段，不会串。外貌和衣着用英文 tag。' }),
+      el('p', { class: 'hint', text: t`名册里的人，长相按这里写的固定 tag 画，辅助模型只写谁在画面里、穿什么、在做什么。多人同框时每人单独成段，不会串。外貌和衣着用英文 tag。` }),
       list,
     ])
     const option = (value, text, selected) => el('option', { value, text, selected: value === selected })
 
     function entryBox(entry) {
-      const thumb = el('div', { class: 'roster-thumb', title: '点击放大' }, entry.ref ? [el('img', { src: refUrl(cardId, entry.id), alt: '' })] : [el('span', { text: '没有人设图' })])
+      const thumb = el('div', { class: 'roster-thumb', title: t`点击放大` }, entry.ref ? [el('img', { src: refUrl(cardId, entry.id), alt: '' })] : [el('span', { text: t`没有人设图` })])
       thumb.onclick = () => {
         const img = thumb.querySelector('img')
         if (!img) return
         const current = readEntry(node)
-        viewPicture(img.src, `${current.name}：${current.looks}${current.outfit ? `；${current.outfit}` : ''}`, '人设图')
+        viewPicture(img.src, t`${current.name}：${current.looks}${current.outfit ? t`；${current.outfit}` : ''}`, t`人设图`)
       }
       const node = el('fieldset', { class: 'roster-entry', 'data-id': entry.id, 'data-ref': entry.ref ? '1' : '' })
       const setRef = has => {
         node.dataset.ref = has ? '1' : ''
-        thumb.replaceChildren(has ? el('img', { src: refUrl(cardId, entry.id), alt: '' }) : el('span', { text: '没有人设图' }))
+        thumb.replaceChildren(has ? el('img', { src: refUrl(cardId, entry.id), alt: '' }) : el('span', { text: t`没有人设图` }))
         removeRef.hidden = !has
       }
       const upload = guard(async blob => {
-        thumb.replaceChildren(el('span', { text: '处理中…' }))
+        thumb.replaceChildren(el('span', { text: t`处理中…` }))
         try {
           await api(`/api/cards/${cardId}/roster/${entry.id}/ref`, { method: 'PUT', body: { image: await padForReference(blob) } })
         } catch (error) {
@@ -1240,7 +1243,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
           throw error
         }
         setRef(true)
-        toast('人设图已上传，保存后生效')
+        toast(t`人设图已上传，保存后生效`)
       })
       const file = el('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp', hidden: true })
       file.onchange = () => {
@@ -1250,15 +1253,15 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       }
       const fromAvatar = guard(async () => {
         const res = await fetch(`/api/cards/${cardId}/avatar`)
-        if (!res.ok) throw new Error('这张卡没有头像')
+        if (!res.ok) throw new Error(t`这张卡没有头像`)
         await upload(await res.blob())
       })
-      const portrait = el('button', { type: 'button', class: 'btn small ghost', text: '画一张', title: '用现在的生图后端，按长相和平时衣着画一张半身像当人设图（NovelAI 在 Opus 免费范围内）' })
+      const portrait = el('button', { type: 'button', class: 'btn small ghost', text: t`画一张`, title: t`用现在的生图后端，按长相和平时衣着画一张半身像当人设图（NovelAI 在 Opus 免费范围内）` })
       portrait.onclick = event => withModel(event.currentTarget, model => drawPortrait(model))
       const drawPortrait = guard(async model => {
         const current = readEntry(node)
         portrait.disabled = true
-        thumb.replaceChildren(el('span', { text: '正在画…' }))
+        thumb.replaceChildren(el('span', { text: t`正在画…` }))
         try {
           const { image } = await api(`/api/cards/${cardId}/roster/portrait`, { method: 'POST', body: { entry: current, ...(model ? { model } : {}) } })
           await upload(await (await fetch(image)).blob())
@@ -1269,7 +1272,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
           portrait.disabled = false
         }
       })
-      const removeRef = el('button', { type: 'button', class: 'btn small ghost', text: '删人设图', hidden: !entry.ref })
+      const removeRef = el('button', { type: 'button', class: 'btn small ghost', text: t`删人设图`, hidden: !entry.ref })
       removeRef.onclick = guard(async () => {
         await api(`/api/cards/${cardId}/roster/${entry.id}/ref`, { method: 'DELETE' })
         setRef(false)
@@ -1280,7 +1283,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         if (player.checked) for (const other of list.querySelectorAll('[data-field="player"]')) if (other !== player) other.checked = false
         syncSummary()
       }
-      const name = el('input', { 'data-field': 'name', value: entry.name, placeholder: entry.player ? '主角' : '名字', maxlength: '40' })
+      const name = el('input', { 'data-field': 'name', value: entry.name, placeholder: entry.player ? t`主角` : t`名字`, maxlength: '40' })
       name.oninput = syncSummary
       const loras = loraInfo.loras ?? []
       node.append(
@@ -1290,32 +1293,32 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
             el('div', { class: 'roster-row' }, [
               name,
               el('select', { 'data-field': 'kind' }, KIND_TEXT.map(([value, text]) => option(value, text, entry.kind))),
-              el('label', { class: 'check-row', title: `玩家扮演的角色；剧情里叫「${userName || '玩家'}」时也认得` }, [player, el('span', { text: '主角' })]),
-              el('button', { type: 'button', class: 'btn small ghost danger', text: '移除', onclick: () => { node.remove(); syncSummary() } }),
+              el('label', { class: 'check-row', title: t`玩家扮演的角色；剧情里叫「${userName || t`玩家`}」时也认得` }, [player, el('span', { text: t`主角` })]),
+              el('button', { type: 'button', class: 'btn small ghost danger', text: t`移除`, onclick: () => { node.remove(); syncSummary() } }),
             ]),
-            el('input', { 'data-field': 'aliases', value: entry.aliases, placeholder: '别称，用逗号分开（例如 念念, 小师妹）' }),
+            el('input', { 'data-field': 'aliases', value: entry.aliases, placeholder: t`别称，用逗号分开（例如 念念, 小师妹）` }),
             el('div', { class: 'roster-row' }, [
-              el('button', { type: 'button', class: 'btn small', text: '上传人设图', onclick: () => file.click() }),
-              el('button', { type: 'button', class: 'btn small ghost', text: '用卡头像', onclick: fromAvatar }),
+              el('button', { type: 'button', class: 'btn small', text: t`上传人设图`, onclick: () => file.click() }),
+              el('button', { type: 'button', class: 'btn small ghost', text: t`用卡头像`, onclick: fromAvatar }),
               portrait,
               removeRef,
               file,
             ]),
           ]),
         ]),
-        el('label', {}, ['长相（固定不变的：发型发色、眼睛、身形、记号）', el('textarea', { 'data-field': 'looks', rows: 2, spellcheck: 'false', placeholder: 'black hair, hair bun, white ribbon, dark eyes, dimples, petite', text: entry.looks })]),
-        el('label', {}, ['平时的衣着（辅助模型据此写当下穿什么）', el('input', { 'data-field': 'outfit', value: entry.outfit, spellcheck: 'false', placeholder: 'white and pale blue wudang robe, wide sleeves' })]),
+        el('label', {}, [t`长相（固定不变的：发型发色、眼睛、身形、记号）`, el('textarea', { 'data-field': 'looks', rows: 2, spellcheck: 'false', placeholder: 'black hair, hair bun, white ribbon, dark eyes, dimples, petite', text: entry.looks })]),
+        el('label', {}, [t`平时的衣着（辅助模型据此写当下穿什么）`, el('input', { 'data-field': 'outfit', value: entry.outfit, spellcheck: 'false', placeholder: 'white and pale blue wudang robe, wide sleeves' })]),
         el('div', { class: 'grid three' }, [
           el('label', {}, [
-            'LoRA（ComfyUI，单人画面用）',
+            t`LoRA（ComfyUI，单人画面用）`,
             el('select', { 'data-field': 'lora' }, [
-              option('', '不用', entry.lora),
+              option('', t`不用`, entry.lora),
               ...loras.map(n => option(n, n, entry.lora)),
-              entry.lora && !loras.includes(entry.lora) ? option(entry.lora, `${entry.lora}（现在没有）`, entry.lora) : null,
+              entry.lora && !loras.includes(entry.lora) ? option(entry.lora, t`${entry.lora}（现在没有）`, entry.lora) : null,
             ].filter(Boolean)),
           ]),
-          el('label', {}, ['触发词', el('input', { 'data-field': 'loraTrigger', value: entry.loraTrigger, spellcheck: 'false' })]),
-          el('label', {}, ['强度', el('input', { 'data-field': 'loraStrength', type: 'number', min: '0', max: '2', step: '0.05', value: String(entry.loraStrength ?? 0.8) })]),
+          el('label', {}, [t`触发词`, el('input', { 'data-field': 'loraTrigger', value: entry.loraTrigger, spellcheck: 'false' })]),
+          el('label', {}, [t`强度`, el('input', { 'data-field': 'loraStrength', type: 'number', min: '0', max: '2', step: '0.05', value: String(entry.loraStrength ?? 0.8) })]),
         ]),
       )
       return node
@@ -1324,7 +1327,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     function syncSummary() {
       const entries = list.querySelectorAll('.roster-entry')
       const hasPlayer = [...list.querySelectorAll('[data-field="player"]')].some(input => input.checked)
-      summary.textContent = `角色名册（${entries.length} 人${entries.length && !hasPlayer ? '，还没有主角' : ''}）`
+      summary.textContent = t`角色名册（${entries.length} 人${entries.length && !hasPlayer ? t`，还没有主角` : ''}）`
     }
 
     const blank = extra => ({ id: newEntryId(), name: '', aliases: '', kind: 'girl', player: false, looks: '', outfit: '', lora: '', loraTrigger: '', loraStrength: 0.8, ref: false, ...extra })
@@ -1334,7 +1337,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     }
     const draft = guard(async () => {
       draftButton.disabled = true
-      status.textContent = '辅助模型在读卡和世界书，可能要一两分钟…'
+      status.textContent = t`辅助模型在读卡和世界书，可能要一两分钟…`
       try {
         const { roster, model } = await api(`/api/cards/${cardId}/roster/draft`, { method: 'POST', body: {} })
         const have = new Set(collectRoster($('media-form')).map(e => e.name.trim()))
@@ -1342,7 +1345,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         const fresh = roster.filter(e => !have.has(e.name.trim())).map(e => ({ ...e, player: e.player && !hasPlayer, ref: false }))
         fresh.forEach(add)
         box.open = true
-        status.textContent = fresh.length ? `${model} 起草了 ${fresh.length} 个角色，看过、改好再保存。` : `${model} 列出的角色名册里都有了。`
+        status.textContent = fresh.length ? t`${model} 起草了 ${fresh.length} 个角色，看过、改好再保存。` : t`${model} 列出的角色名册里都有了。`
       } catch (error) {
         status.textContent = ''
         throw error
@@ -1350,11 +1353,11 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         draftButton.disabled = false
       }
     })
-    const draftButton = el('button', { type: 'button', class: 'btn small', text: '让辅助模型起草', title: '读这张卡的描述和世界书，列出主要角色和主角的长相、衣着', onclick: draft })
+    const draftButton = el('button', { type: 'button', class: 'btn small', text: t`让辅助模型起草`, title: t`读这张卡的描述和世界书，列出主要角色和主角的长相、衣着`, onclick: draft })
     box.append(
       el('div', { class: 'roster-actions' }, [
-        el('button', { type: 'button', class: 'btn small', text: '添加角色', onclick: () => add(blank()) }),
-        el('button', { type: 'button', class: 'btn small', text: '添加主角', onclick: () => add(blank({ player: !collectRoster($('media-form')).some(e => e.player), name: '主角', kind: 'boy' })) }),
+        el('button', { type: 'button', class: 'btn small', text: t`添加角色`, onclick: () => add(blank()) }),
+        el('button', { type: 'button', class: 'btn small', text: t`添加主角`, onclick: () => add(blank({ player: !collectRoster($('media-form')).some(e => e.player), name: t`主角`, kind: 'boy' })) }),
         draftButton,
         status,
       ]),
@@ -1367,18 +1370,18 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
 /** "Opus · V5 额度 53%（2.2 小时后回 1%）· 0 Anlas · 10月22日续期". */
   function naiAccountText(info) {
     if (!info) return ''
-    const parts = [`${info.tier}${info.active ? '' : '（已过期）'}`]
+    const parts = [`${info.tier}${info.active ? '' : t`（已过期）`}`]
     if (info.v5) {
       const v5 = info.v5
-      const next = v5.nextPercentMinutes ? `，${v5.nextPercentMinutes >= 60 ? `${Math.round(v5.nextPercentMinutes / 6) / 10} 小时` : `${v5.nextPercentMinutes} 分钟`}后回 1%` : ''
-      parts.push(v5.empty ? `V5 额度用完了${next}` : `V5 额度 ${v5.percent}%${v5.purchasedPercent ? ` + 买的 ${v5.purchasedPercent}%` : ''}${next}`)
+      const next = v5.nextPercentMinutes ? t`，${v5.nextPercentMinutes >= 60 ? t`${Math.round(v5.nextPercentMinutes / 6) / 10} 小时` : t`${v5.nextPercentMinutes} 分钟`}后回 1%` : ''
+      parts.push(v5.empty ? t`V5 额度用完了${next}` : t`V5 额度 ${v5.percent}%${v5.purchasedPercent ? t` + 买的 ${v5.purchasedPercent}%` : ''}${next}`)
     }
     parts.push(`${info.anlas} Anlas`)
     if (info.renewsAt) {
       const at = new Date(info.renewsAt)
-      parts.push(`${at.getMonth() + 1}月${at.getDate()}日 ${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')} 续期（Anlas 补满）`)
+      parts.push(t`${at.getMonth() + 1}月${at.getDate()}日 ${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')} 续期（Anlas 补满）`)
     }
-    if (info.tier !== 'Opus') parts.push('不是 Opus，每张都扣 Anlas')
+    if (info.tier !== 'Opus') parts.push(t`不是 Opus，每张都扣 Anlas`)
     return parts.join(' · ')
   }
 
@@ -1398,15 +1401,15 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
    * @param onChange - called with the saved key's status, to update the source's badge.
    */
   function keyField(id, label, status, placeholder, onChange = () => {}) {
-    const input = el('input', { name: `${id}Key`, type: 'password', autocomplete: 'off', spellcheck: 'false', placeholder: status?.hasKey ? '留空不改' : placeholder })
+    const input = el('input', { name: `${id}Key`, type: 'password', autocomplete: 'off', spellcheck: 'false', placeholder: status?.hasKey ? t`留空不改` : placeholder })
     const hint = el('span', { class: 'hint' })
-    const clear = el('button', { type: 'button', class: 'btn small ghost', text: '删除密钥' })
+    const clear = el('button', { type: 'button', class: 'btn small ghost', text: t`删除密钥` })
     let saved = status
     const show = info => {
       saved = info
       hint.classList.toggle('warn', !info?.hasKey)
-      hint.textContent = info?.hasKey ? `已保存（${info.keyHint}）。只存在本机服务端，留空就不改。` : '还没填密钥'
-      input.placeholder = info?.hasKey ? '留空不改' : placeholder
+      hint.textContent = info?.hasKey ? t`已保存（${info.keyHint}）。只存在本机服务端，留空就不改。` : t`还没填密钥`
+      input.placeholder = info?.hasKey ? t`留空不改` : placeholder
       clear.hidden = !info?.hasKey
       onChange(info)
     }
@@ -1416,11 +1419,11 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       const key = input.value.trim()
       if (!key) return show(saved)
       hint.classList.remove('warn')
-      hint.textContent = '保存中…'
+      hint.textContent = t`保存中…`
       try {
         show(await store({ [`${id}Key`]: key }))
         input.value = ''
-        toast('密钥已保存')
+        toast(t`密钥已保存`)
       } catch (error) {
         show(saved)
         throw error
@@ -1436,11 +1439,11 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     input.addEventListener('input', () => {
       if (!input.value.trim()) return show(saved)
       hint.classList.add('warn')
-      hint.textContent = '离开这一栏或按回车就保存'
+      hint.textContent = t`离开这一栏或按回车就保存`
     })
     clear.onclick = guard(async () => {
       show(await store({ [`${id}ClearKey`]: true }))
-      toast('已删除密钥')
+      toast(t`已删除密钥`)
     })
     return el('label', {}, [label, el('span', { class: 'select-with-action' }, [input, clear]), hint])
   }
@@ -1449,41 +1452,41 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     const option = (value, text, selected) => el('option', { value, text, selected: value === selected })
     const field = (label, control, hint) => el('label', {}, [label, control, hint ? el('span', { class: 'hint', text: hint }) : null])
     const listen = source => {
-      const button = el('button', { type: 'button', class: 'btn small', text: '试听', title: '用这一栏现在填的设置读一句示例（不用先保存）' })
+      const button = el('button', { type: 'button', class: 'btn small', text: t`试听`, title: t`用这一栏现在填的设置读一句示例（不用先保存）` })
       button.onclick = () => previewVoice(button, { source, form })
       return button
     }
     // The account's own voices join the list below the ones written; their names stay.
     const fromAccount = source => {
-      const button = el('button', { type: 'button', class: 'btn small', text: '从账户读取音色', title: '把账户里自己克隆或设计的音色加进音色框（已写的名字不改），保存后生效' })
+      const button = el('button', { type: 'button', class: 'btn small', text: t`从账户读取音色`, title: t`把账户里自己克隆或设计的音色加进音色框（已写的名字不改），保存后生效` })
       button.onclick = guard(async () => {
         button.disabled = true
-        button.textContent = '读取中…'
+        button.textContent = t`读取中…`
         try {
           const { voices, found, added, changed, full } = await api('/api/media/voices/account', { method: 'POST', body: { source, ...voiceDraft(form) } })
           if (changed) form.elements[`${source}Voices`].value = voiceListText(voices)
-          if (!found) toast('账户里还没有自己克隆或设计的音色', 6000)
-          else if (added) toast(`账户里有 ${found} 个音色，新加了 ${added} 个${full ? '（最多列 100 个，多的没加）' : ''}，保存后生效`, 6000)
-          else if (full) toast('音色框已满 100 个，账户里的音色加不进去：先删掉不用的', 6000)
-          else toast(`账户里的 ${found} 个音色都已在列表里${changed ? '，补上了名字，保存后生效' : ''}`, 6000)
+          if (!found) toast(t`账户里还没有自己克隆或设计的音色`, 6000)
+          else if (added) toast(t`账户里有 ${found} 个音色，新加了 ${added} 个${full ? t`（最多列 100 个，多的没加）` : ''}，保存后生效`, 6000)
+          else if (full) toast(t`音色框已满 100 个，账户里的音色加不进去：先删掉不用的`, 6000)
+          else toast(t`账户里的 ${found} 个音色都已在列表里${changed ? t`，补上了名字，保存后生效` : ''}`, 6000)
         } finally {
           button.disabled = false
-          button.textContent = '从账户读取音色'
+          button.textContent = t`从账户读取音色`
         }
       })
       return button
     }
     const state = id => {
       const source = sources[id]
-      return source?.configured ? sourceState('ok', `${source.voices.length} 个音色`) : sourceState('off', '没设置')
+      return source?.configured ? sourceState('ok', t`${source.voices.length} 个音色`) : sourceState('off', t`没设置`)
     }
     // A keyed source's badge follows its key as it is saved or removed.
     const keyBadge = id => {
-      const badge = sourceState('off', '没设置')
+      const badge = sourceState('off', t`没设置`)
       const update = info => {
         const count = sources[id]?.voices?.length ?? 0
         badge.className = `source-state ${info?.hasKey ? 'ok' : 'off'}`
-        badge.textContent = info?.hasKey ? (count ? `${count} 个音色` : '密钥已保存') : '没设置'
+        badge.textContent = info?.hasKey ? (count ? t`${count} 个音色` : t`密钥已保存`) : t`没设置`
       }
       return { badge, update }
     }
@@ -1492,38 +1495,38 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
 
     const speakers = providers.filter(p => p.api !== 'anthropic-messages')
     const openai = el('details', { class: 'voice-source', open: Boolean(media.ttsProvider) }, [
-      el('summary', {}, [el('span', { text: '供应商的朗读接口（OpenAI 兼容 /audio/speech）' }), state('openai')]),
+      el('summary', {}, [el('span', { text: t`供应商的朗读接口（OpenAI 兼容 /audio/speech）` }), state('openai')]),
       el('div', { class: 'grid' }, [
-        field('供应商', el('select', { name: 'ttsProvider' }, [option('', speakers.length ? '不用' : '先在「供应商」里添加', media.ttsProvider), ...speakers.map(p => option(p.id, p.name, media.ttsProvider))])),
-        field('模型', el('input', { name: 'ttsModel', value: media.ttsModel, list: 'tts-models', spellcheck: 'false', placeholder: 'gpt-4o-mini-tts' })),
+        field(t`供应商`, el('select', { name: 'ttsProvider' }, [option('', speakers.length ? t`不用` : t`先在「供应商」里添加`, media.ttsProvider), ...speakers.map(p => option(p.id, p.name, media.ttsProvider))])),
+        field(t`模型`, el('input', { name: 'ttsModel', value: media.ttsModel, list: 'tts-models', spellcheck: 'false', placeholder: 'gpt-4o-mini-tts' })),
       ]),
       el('datalist', { id: 'tts-models' }, TTS_MODELS.map(id => el('option', { value: id }))),
-      field('音色（每行一个：ID，后面可以空一格写名字）', el('textarea', { name: 'ttsVoices', rows: 3, spellcheck: 'false', placeholder: 'coral 温柔\nnova', text: voiceListText(media.ttsVoices) }),
-        '留空就用模型常见的音色：OpenAI 的 alloy、coral、nova…；硅基流动 FunAudioLLM/CosyVoice2-0.5B 的 8 个预置音色。用供应商自己的地址、密钥和代理设置；gpt-4o-mini-tts 会把回复里的情绪当语气说明。'),
+      field(t`音色（每行一个：ID，后面可以空一格写名字）`, el('textarea', { name: 'ttsVoices', rows: 3, spellcheck: 'false', placeholder: t`coral 温柔\nnova`, text: voiceListText(media.ttsVoices) }),
+        t`留空就用模型常见的音色：OpenAI 的 alloy、coral、nova…；硅基流动 FunAudioLLM/CosyVoice2-0.5B 的 8 个预置音色。用供应商自己的地址、密钥和代理设置；gpt-4o-mini-tts 会把回复里的情绪当语气说明。`),
       el('div', { class: 'row voice-actions' }, [listen('openai')]),
     ])
 
     const fish = el('details', { class: 'voice-source', open: Boolean(voiceKeys.fish?.hasKey) }, [
       el('summary', {}, [el('span', { text: 'Fish Audio' }), fishBadge.badge]),
-      keyField('fish', 'API Key', voiceKeys.fish, 'fish.audio → API Keys 里创建', fishBadge.update),
-      field('模型', el('select', { name: 'fishModel' }, FISH_MODELS.map(([value, text]) => option(value, text, media.fishModel)))),
-      field('音色（每行一个：音色页链接或 32 位 ID，后面可以空一格写名字）', el('textarea', { name: 'fishVoices', rows: 3, spellcheck: 'false', placeholder: 'https://fish.audio/m/0123456789abcdef0123456789abcdef 南晚', text: voiceListText(media.fishVoices) }),
-        '自己克隆的音色点「从账户读取音色」；别人的音色在 fish.audio 打开，复制地址栏的链接粘贴进来。回复里的情绪放在台词前当语气标签。除 s2.1-pro-free 外按字数计费，账户没余额时换成它；走「设置」里的代理。'),
+      keyField('fish', 'API Key', voiceKeys.fish, t`fish.audio → API Keys 里创建`, fishBadge.update),
+      field(t`模型`, el('select', { name: 'fishModel' }, FISH_MODELS.map(([value, text]) => option(value, text, media.fishModel)))),
+      field(t`音色（每行一个：音色页链接或 32 位 ID，后面可以空一格写名字）`, el('textarea', { name: 'fishVoices', rows: 3, spellcheck: 'false', placeholder: t`https://fish.audio/m/0123456789abcdef0123456789abcdef 南晚`, text: voiceListText(media.fishVoices) }),
+        t`自己克隆的音色点「从账户读取音色」；别人的音色在 fish.audio 打开，复制地址栏的链接粘贴进来。回复里的情绪放在台词前当语气标签。除 s2.1-pro-free 外按字数计费，账户没余额时换成它；走「设置」里的代理。`),
       el('div', { class: 'row voice-actions' }, [listen('fish'), fromAccount('fish')]),
     ])
 
     const minimax = el('details', { class: 'voice-source', open: Boolean(voiceKeys.minimax?.hasKey) }, [
       el('summary', {}, [el('span', { text: 'MiniMax' }), minimaxBadge.badge]),
-      keyField('minimax', 'API Key', voiceKeys.minimax, '开放平台 → 接口密钥', minimaxBadge.update),
+      keyField('minimax', 'API Key', voiceKeys.minimax, t`开放平台 → 接口密钥`, minimaxBadge.update),
       el('div', { class: 'grid' }, [
-        field('站点', el('select', { name: 'minimaxRegion' }, [option('cn', '国内站（api.minimaxi.com，直连）', media.minimaxRegion), option('intl', '国际站（api.minimax.io，走代理）', media.minimaxRegion)]), '密钥只在创建它的站点能用'),
-        field('模型', el('select', { name: 'minimaxModel' }, [
+        field(t`站点`, el('select', { name: 'minimaxRegion' }, [option('cn', t`国内站（api.minimaxi.com，直连）`, media.minimaxRegion), option('intl', t`国际站（api.minimax.io，走代理）`, media.minimaxRegion)]), t`密钥只在创建它的站点能用`),
+        field(t`模型`, el('select', { name: 'minimaxModel' }, [
           ...MINIMAX_MODELS.map(id => option(id, id, media.minimaxModel)),
           MINIMAX_MODELS.includes(media.minimaxModel) ? null : option(media.minimaxModel, media.minimaxModel, media.minimaxModel),
         ].filter(Boolean))),
       ]),
-      field('音色（每行一个：voice_id，后面可以空一格写名字）', el('textarea', { name: 'minimaxVoices', rows: 3, spellcheck: 'false', placeholder: '留空用系统音色（少女、御姐、精英青年…）', text: voiceListText(media.minimaxVoices) }),
-        '复刻或设计的音色点「从账户读取音色」，或者把 voice_id 写在这里。按字数计费。'),
+      field(t`音色（每行一个：voice_id，后面可以空一格写名字）`, el('textarea', { name: 'minimaxVoices', rows: 3, spellcheck: 'false', placeholder: t`留空用系统音色（少女、御姐、精英青年…）`, text: voiceListText(media.minimaxVoices) }),
+        t`复刻或设计的音色点「从账户读取音色」，或者把 voice_id 写在这里。按字数计费。`),
       el('div', { class: 'row voice-actions' }, [listen('minimax'), fromAccount('minimax')]),
     ])
     return [openai, fish, minimax]
@@ -1555,9 +1558,9 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     stopPreview()
     const draft = voiceDraft(form)
     const hereVoice = voice.startsWith(BROWSER) || (!voice && !source && !form.elements.ttsUrl?.value.trim())
-    if (!voice && !source && silent) throw new Error('旁白没选音色：不读旁白')
+    if (!voice && !source && silent) throw new Error(t`旁白没选音色：不读旁白`)
     if (hereVoice) {
-      if (!speech) throw new Error('这个浏览器不能朗读')
+      if (!speech) throw new Error(t`这个浏览器不能朗读`)
       await loadBrowserVoices()
       const utterance = new SpeechSynthesisUtterance(PREVIEW_LINE)
       const picked = browserVoice(voice)
@@ -1569,14 +1572,14 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     }
     const label = button.textContent
     button.disabled = true
-    button.textContent = '合成中…'
+    button.textContent = t`合成中…`
     try {
       const res = await fetch('/api/media/voices/preview', {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-agent-tavern': '1' },
         body: JSON.stringify({ voice, source, text: PREVIEW_LINE, ...draft }),
       })
-      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `试听失败（${res.status}）`)
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || t`试听失败（${res.status}）`)
       const url = URL.createObjectURL(await res.blob())
       const audio = new Audio(url)
       previewing = { audio, url }
@@ -1592,17 +1595,17 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
 
   function voiceKeyText(hint, info) {
     hint.hidden = !info?.hasKey
-    hint.textContent = info?.hasKey ? `已保存电脑上酒馆的访问口令（${info.keyHint}），只存在本机服务端；换地址时一起清掉。` : ''
+    hint.textContent = info?.hasKey ? t`已保存电脑上酒馆的访问口令（${info.keyHint}），只存在本机服务端；换地址时一起清掉。` : ''
   }
 
   function naiTokenText(hint, info) {
     hint.classList.toggle('warn', !info?.hasToken)
-    hint.textContent = info?.hasToken ? `已保存（${info.tokenHint}）。只存在本机服务端，留空就不改。` : '还没填令牌'
+    hint.textContent = info?.hasToken ? t`已保存（${info.tokenHint}）。只存在本机服务端，留空就不改。` : t`还没填令牌`
   }
 
   function workflowText(info) {
-    if (!info) return '还没导入工作流'
-    return `已导入：${info.nodes} 个节点，占位符 ${info.placeholders.map(p => `{{${p}}}`).join(' ')}`
+    if (!info) return t`还没导入工作流`
+    return t`已导入：${info.nodes} 个节点，占位符 ${info.placeholders.map(p => `{{${p}}}`).join(' ')}`
   }
 
   const save = guard(async (form, hasCard) => {
@@ -1648,7 +1651,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     if (keyHint) voiceKeyText(keyHint, voiceKey)
     if (form.elements.ttsUrl) form.elements.ttsUrl.value = media.ttsUrl
     if (form.elements.naiToken) form.elements.naiToken.value = ''
-    if (novelai?.hasToken && form.elements.naiToken) form.elements.naiToken.placeholder = '留空不改'
+    if (novelai?.hasToken && form.elements.naiToken) form.elements.naiToken.placeholder = t`留空不改`
     const hint = form.querySelector('.nai-token-hint')
     if (hint) naiTokenText(hint, novelai)
     if (hasCard && state.cardId) {
@@ -1658,7 +1661,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       })
     }
     settingsMenu.markClean()
-    toast('已保存')
+    toast(t`已保存`)
     // A new voice service or source has its own voices: show them.
     if (media.ttsUrl !== before || pastedKey || voiceSettings(media) !== voicesBefore || Object.keys(keys).length) openSettings()
   })

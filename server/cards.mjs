@@ -5,12 +5,13 @@ import { inflateSync } from 'node:zlib'
 import { normalizeBook } from './worldbook.mjs'
 import { httpError, newId } from './store.mjs'
 import { normalizeScripts } from '../web/shared/regex.js'
+import { msg } from './i18n.mjs'
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 
 /** Read every text chunk of a PNG into { keyword: text }. */
 export function readPngText(buffer) {
-  if (buffer.length < 8 || !buffer.subarray(0, 8).equals(PNG_SIGNATURE)) throw httpError(400, '不是 PNG 文件')
+  if (buffer.length < 8 || !buffer.subarray(0, 8).equals(PNG_SIGNATURE)) throw httpError(400, msg`不是 PNG 文件`)
   const texts = {}
   let offset = 8
   while (offset + 8 <= buffer.length) {
@@ -66,7 +67,7 @@ function chunk(type, data) {
  * chunks already in the picture are replaced.
  */
 export function writeCardPng(png, card) {
-  if (png.length < 8 || !png.subarray(0, 8).equals(PNG_SIGNATURE)) throw httpError(400, '头像不是 PNG')
+  if (png.length < 8 || !png.subarray(0, 8).equals(PNG_SIGNATURE)) throw httpError(400, msg`头像不是 PNG`)
   const kept = [png.subarray(0, 8)]
   let offset = 8
   while (offset + 12 <= png.length) {
@@ -113,7 +114,7 @@ export function exportCard(card, avatar = null) {
 export function importOwnCard(json) {
   if (json?.format !== CARD_FORMAT) return null
   const card = json.card
-  if (!card || typeof card !== 'object' || typeof card.name !== 'string' || !card.name.trim()) throw httpError(400, '角色卡文件不完整')
+  if (!card || typeof card !== 'object' || typeof card.name !== 'string' || !card.name.trim()) throw httpError(400, msg`角色卡文件不完整`)
   const { media, ...rest } = card
   const avatar = typeof json.avatar === 'string' && json.avatar ? Buffer.from(json.avatar, 'base64') : null
   return { card: { ...rest, id: newId(), worldbookIds: [], hasAvatar: Boolean(avatar), importedAt: new Date().toISOString() }, avatar }
@@ -124,13 +125,13 @@ export function parseCardFile(filename, buffer) {
   if (/\.png$/i.test(filename) || buffer.subarray(0, 8).equals(PNG_SIGNATURE)) {
     const texts = readPngText(buffer)
     const payload = texts.ccv3 ?? texts.chara
-    if (!payload) throw httpError(400, '这张 PNG 里没有角色卡数据')
+    if (!payload) throw httpError(400, msg`这张 PNG 里没有角色卡数据`)
     return { raw: decodeCardPayload(payload), avatar: buffer }
   }
   try {
     return { raw: unwrapWorkspace(JSON.parse(buffer.toString('utf8').replace(/^﻿/, ''))), avatar: null }
   } catch {
-    throw httpError(400, '无法解析角色卡 JSON')
+    throw httpError(400, msg`无法解析角色卡 JSON`)
   }
 }
 
@@ -139,7 +140,7 @@ const str = value => (typeof value === 'string' ? value : '')
 /** Flatten V1/V2/V3 into the fields the prompt builder uses. */
 export function normalizeCard(raw) {
   const data = raw && typeof raw.data === 'object' && raw.data !== null ? raw.data : raw
-  if (!data || typeof data !== 'object' || !str(data.name)) throw httpError(400, '角色卡缺少 name 字段')
+  if (!data || typeof data !== 'object' || !str(data.name)) throw httpError(400, msg`角色卡缺少 name 字段`)
   const extensions = data.extensions && typeof data.extensions === 'object' ? data.extensions : {}
   const book = data.character_book ? normalizeBook(data.character_book, `${data.name} 内嵌世界书`) : null
   return {

@@ -52,7 +52,7 @@ const NO_EMOTION = /^(|无|默认|普通|正常|none|normal|default|neutral)$/i
 
 /** The emotion of a 小白X voice tag as a delivery tag ([害羞地小声]), or '' when it says nothing. */
 export function emotionTag(emotion) {
-  const clean = String(emotion ?? '').replace(/[[\]【】\n]/g, '').replace(/[，,]/g, '、').trim().slice(0, 40)
+  const clean = String(emotion ?? '').replace(/[[\]【】\n]/g, '').replace(/[，,]/g, '、').trim().slice(0, 40) // i18n-ignore: story text read aloud
   return NO_EMOTION.test(clean) ? '' : `[${clean}] `
 }
 
@@ -88,7 +88,7 @@ export function speechChunks(text, { narration = true, max = 100, tags = false }
     if (!SPEAKABLE.test(clean)) continue
     const said = (run.tag ?? '') + clean
     const previous = merged.at(-1)
-    if (previous && previous.kind === run.kind) previous.text += (/[，。！？、；：,.!?…~～]$/.test(previous.text) ? '' : '，') + said
+    if (previous && previous.kind === run.kind) previous.text += (/[，。！？、；：,.!?…~～]$/.test(previous.text) ? '' : '，') + said // i18n-ignore: story text read aloud
     else merged.push({ kind: run.kind, text: said })
   }
   return merged.flatMap(run => splitLong(run.text, limit(run.kind)).map(piece => ({ kind: run.kind, text: piece.trim() }))).filter(chunk => SPEAKABLE.test(chunk.text))

@@ -4,6 +4,7 @@ import YAML from 'yaml'
 import { httpError, newId } from './store.mjs'
 import { hasTemplate, splitDecorators } from './template.mjs'
 import { hasVariableMacros } from '../web/shared/vars.js'
+import { msg } from './i18n.mjs'
 
 // SillyTavern selectiveLogic values.
 const AND_ANY = 0
@@ -45,13 +46,13 @@ function normalizeEntry(raw, index) {
 }
 
 export function normalizeBook(input, fallbackName = '世界书') {
-  if (!input || typeof input !== 'object') throw httpError(400, '世界书格式无效')
+  if (!input || typeof input !== 'object') throw httpError(400, msg`世界书格式无效`)
   const rawEntries = Array.isArray(input.entries)
     ? input.entries
     : input.entries && typeof input.entries === 'object'
       ? Object.values(input.entries)
       : null
-  if (!rawEntries) throw httpError(400, '世界书里没有 entries')
+  if (!rawEntries) throw httpError(400, msg`世界书里没有 entries`)
   return {
     id: newId(),
     name: str(input.name).trim() || fallbackName,

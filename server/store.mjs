@@ -65,7 +65,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   model: 'sonnet',
   effort: 'low',
   thinking: 'off',
-  language: '简体中文',
+  language: '简体中文', // the language the model writes the story in
+  uiLanguage: 'auto', // the page's own language (界面语言): 'zh' | 'en' | 'auto' = the browser's (server/i18n.mjs)
   writingRules: '',
   scanDepth: 4,
   reinjectAfter: 6,
@@ -130,6 +131,7 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
       if (next.subscription !== 'off') next.subscription = 'on'
       next.proxy = cleanProxySetting(next.proxy)
       if (!['often', 'rare', 'off'].includes(next.dynamicStrip)) next.dynamicStrip = 'rare'
+      if (!['auto', 'zh', 'en'].includes(next.uiLanguage)) next.uiLanguage = 'auto'
       next.webFonts = next.webFonts !== false
       next.cdnLibraries = next.cdnLibraries !== false
       next.privacyNotice = Math.max(0, Math.floor(Number(next.privacyNotice) || 0))

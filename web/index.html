@@ -264,6 +264,13 @@
         <label class="check-row"><input type="checkbox" name="cdnLibraries"> 加载酒馆助手脚本库（jsDelivr 等）</label>
         <p class="hint">自动检查更新的开关在「更新」里。字体的改动下次打开时生效。</p>
       </div>
+      <!-- The page's own language; app.js fills the choices and the name in the other language. -->
+      <div data-section="interface">
+        <label><span>界面语言<span class="other-lang" id="ui-language-other"></span></span>
+          <select name="uiLanguage" id="ui-language"></select>
+        </label>
+        <p class="hint">菜单、按钮和提示用的语言，保存后页面刷新一次。故事用什么语言写，在「文风与字数」的「写作语言」里改。</p>
+      </div>
       <!-- Filled by web/update.js. -->
       <div data-section="update" class="upd-page">
         <p class="hint">正在读取…</p>

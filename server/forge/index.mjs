@@ -20,8 +20,9 @@ import { cardSummary, normalizeCard, writeCardPng } from '../cards.mjs'
 import { cleanCardMedia } from '../media.mjs'
 import { complete, isProviderRef, providerError, refLabel, resolveRef } from '../providers.mjs'
 import { httpError, newId } from '../store.mjs'
-import { discussRequest, editBrief, emptyBrief, partialReply, planRequest, readDiscussion, readPlan, reviseRequest } from './prompts.mjs'
+import { discussRequest, editBrief, emptyBrief, forgeLanguages, partialReply, planLanguage, planRequest, readDiscussion, readPlan, reviseRequest } from './prompts.mjs'
 import { applyIssues, cardJson, entriesRequest, greetingsRequest, initialState, lintCard, matchWritten, newCard, readIssues, readTagged, reviewRequest, rewriteRequest, stepDone, writeSteps } from './write.mjs'
+import { currentLanguage, msg } from '../i18n.mjs'
 
 const ID = /^[a-zA-Z0-9_-]{1,64}$/
 const STAGES = ['discuss', 'plan', 'write', 'polish']
@@ -51,7 +52,7 @@ function imageType(buffer) {
 export function createForge(store, { proxyNow = () => null, ledger = null, draw = null } = {}) {
   const dir = path.join(store.dirs.root, 'forge')
   const fileOf = id => {
-    if (!ID.test(String(id))) throw httpError(400, '无效的 ID')
+    if (!ID.test(String(id))) throw httpError(400, msg`无效的 ID`)
     return path.join(dir, `${id}.json`)
   }
   const avatarFile = id => fileOf(id).replace(/\.json$/, '.avatar')
@@ -63,12 +64,12 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
     try {
       draft = JSON.parse(await readFile(fileOf(id), 'utf8'))
     } catch (error) {
-      if (error.code === 'ENOENT') throw httpError(404, '这张草稿不存在了')
+      if (error.code === 'ENOENT') throw httpError(404, msg`这张草稿不存在了`)
       throw error
     }
     // A job recorded on disk but not running here: the server stopped in the middle of it.
     if (draft.job && !jobs.has(id)) {
-      draft.error = { kind: draft.job.kind, message: '上次还没写完服务就停了，再试一次。' }
+      draft.error = { kind: draft.job.kind, message: msg`上次还没写完服务就停了，再试一次。` }
       draft.job = null
     }
     return draft
@@ -132,7 +133,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
     const card = draft.card
     return {
       id: draft.id,
-      title: draft.plan?.name || draft.brief.title || draft.rounds[0]?.user.text.slice(0, 20) || '未命名',
+      title: draft.plan?.name || draft.brief.title || draft.rounds[0]?.user.text.slice(0, 20) || msg`未命名`,
       stage: draft.stage,
       model: draft.model,
       createdAt: draft.createdAt,
@@ -172,7 +173,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
   /** The provider model the draft talks to: its own pick, else the default model. */
   async function target(draft) {
     const ref = draft.model || (await store.getSettings()).model
-    if (!isProviderRef(ref)) throw httpError(400, '先选一个模型：在「模型供应商」里添加供应商，再在这里或设置里选一个模型')
+    if (!isProviderRef(ref)) throw httpError(400, msg`先选一个模型：在「模型供应商」里添加供应商，再在这里或设置里选一个模型`)
     return { ...resolveRef(ref, await store.getProviders()), ref }
   }
 
@@ -181,13 +182,15 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
    *   ctx.call(request): one model call (streamed into the job's progress, counted in usage);
    *   ctx.update(fn): change the draft on disk;
    *   ctx.step(id): which step it is at, for the page;
-   *   ctx.signal, ctx.label (the model's name).
+   *   ctx.signal, ctx.label (the model's name);
+   *   ctx.languages: the guide's (the page's) and the card's (写作语言), see prompts.mjs.
    * A failure lands on the draft as its error, for the page to show.
    */
   async function run(draft, kind, work, { model = true } = {}) {
-    if (jobs.has(draft.id)) throw httpError(409, '上一步还在进行，等它写完或先停下')
+    if (jobs.has(draft.id)) throw httpError(409, msg`上一步还在进行，等它写完或先停下`)
     const chosen = model ? await target(draft) : null
     const label = chosen ? (refLabel(chosen.ref, await store.getProviders()) ?? chosen.ref) : ''
+    const languages = forgeLanguages(currentLanguage(), (await store.getSettings()).language)
     const job = { kind, step: null, controller: new AbortController(), partial: '', startedAt: new Date().toISOString() }
     jobs.set(draft.id, job)
     draft.job = { kind, startedAt: job.startedAt }
@@ -195,6 +198,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
     await serial(draft.id, () => save(draft))
     const ctx = {
       label,
+      languages,
       signal: job.controller.signal,
       step: id => {
         job.step = id
@@ -227,7 +231,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
       try {
         await work(ctx)
       } catch (error) {
-        failure = job.controller.signal.aborted ? '已经停下了。' : error.message
+        failure = job.controller.signal.aborted ? msg`已经停下了。` : error.message
       }
       // The job counts as running until its end is on disk: a draft read in
       // between would otherwise look like one cut off by a restart.
@@ -248,29 +252,30 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
   async function record(id, result, ref) {
     if (!ledger || !result?.usage) return
     const draft = await load(id)
-    const chat = { id: `forge-${id}`, title: `创作：${draft.plan?.name || draft.brief.title || '未命名'}`, cardId: null }
+    const chat = { id: `forge-${id}`, title: msg`创作：${draft.plan?.name || draft.brief.title || msg`未命名`}`, cardId: null }
     await ledger.recordTurn(chat, { model: ref, usage: result.usage, createdAt: new Date().toISOString() })
   }
 
-  const cutNote = result => (result.truncated ? '（写到输出上限被截断了）' : result.stopReason && !/stop|end/i.test(result.stopReason) ? `（${result.stopReason}）` : '')
+  const cutNote = result => (result.truncated ? msg`（写到输出上限被截断了）` : result.stopReason && !/stop|end/i.test(result.stopReason) ? msg`（${result.stopReason}）` : '')
 
   // ─── Talk and plan ──────────────────────────────────────────────────────
 
   async function discussWork(ctx, draft) {
-    const result = await ctx.call(discussRequest(draft.rounds, draft.brief))
+    const result = await ctx.call(discussRequest(draft.rounds, draft.brief, ctx.languages))
     await ctx.update(fresh => {
       const read = readDiscussion(result.text, fresh.brief)
-      if (!read.reply && !read.questions.length) throw new Error(`${ctx.label} 这次没有回出能读的内容${cutNote(result)}，再试一次，或者换个模型`)
+      if (!read.reply && !read.questions.length) throw new Error(msg`${ctx.label} 这次没有回出能读的内容${cutNote(result)}，再试一次，或者换个模型`)
       fresh.rounds.at(-1).assistant = { raw: result.text, reply: read.reply, questions: read.questions, model: ctx.label, at: new Date().toISOString(), unreadable: !read.readable }
       fresh.brief = read.brief
     })
   }
 
-  async function planWork(ctx, request) {
+  /** @param language - the card's: 写作语言 for a new plan, the plan's own when revising. */
+  async function planWork(ctx, request, language) {
     const result = await ctx.call(request)
     await ctx.update(fresh => {
-      const plan = readPlan(result.text)
-      if (!plan) throw new Error(`${ctx.label} 写的方案读不出来${cutNote(result)}，再试一次，或者换个模型`)
+      const plan = readPlan(result.text, { language })
+      if (!plan) throw new Error(msg`${ctx.label} 写的方案读不出来${cutNote(result)}，再试一次，或者换个模型`)
       fresh.plan = plan
       fresh.planModel = ctx.label
       fresh.planPending = null
@@ -312,7 +317,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
       ctx.step(step.id)
       const attempt = (tries.get(step.id) ?? 0) + 1
       tries.set(step.id, attempt)
-      if (attempt > STEP_TRIES) throw new Error(`「${step.label}」写了 ${STEP_TRIES} 次都没按格式写全，再试一次，或者换个模型`)
+      if (attempt > STEP_TRIES) throw new Error(msg`「${step.label}」写了 ${STEP_TRIES} 次都没按格式写全，再试一次，或者换个模型`)
       if (step.names) await writeEntries(ctx, plan, card, step)
       else if (step.greetings) await writeGreetings(ctx, plan, card)
       else if (step.id === 'review') await review(ctx, plan, card)
@@ -325,7 +330,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
     const written = card.entries.filter(e => e.content && e.type !== '状态')
     const result = await ctx.call(entriesRequest(plan, targets, written))
     const found = matchWritten(readTagged(result.text, 'entry'), targets.map(t => t.name))
-    if (!found.size) throw new Error(`${ctx.label} 没有按格式写出「${step.label}」${cutNote(result)}，再试一次，或者换个模型`)
+    if (!found.size) throw new Error(msg`${ctx.label} 没有按格式写出「${step.label}」${cutNote(result)}，再试一次，或者换个模型`)
     await ctx.update(fresh => {
       for (const [name, text] of found) fresh.card.entries.find(e => e.name === name).content = text.slice(0, MAX_PIECE)
     })
@@ -339,14 +344,14 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
     const blocks = readTagged(result.text, 'greeting', 'index')
     const lone = targets.length === 1 && blocks.size === 1 ? [...blocks.values()][0] : null
     const found = targets.map(g => [g.index, blocks.get(String(g.index + 1)) ?? lone]).filter(([, text]) => text)
-    if (!found.length) throw new Error(`${ctx.label} 没有按格式写出开场白${cutNote(result)}，再试一次，或者换个模型`)
+    if (!found.length) throw new Error(msg`${ctx.label} 没有按格式写出开场白${cutNote(result)}，再试一次，或者换个模型`)
     await ctx.update(fresh => {
       for (const [index, text] of found) fresh.card.greetings[index].text = text.slice(0, MAX_PIECE)
     })
   }
 
   async function review(ctx, plan, card) {
-    const result = await ctx.call(reviewRequest(card, lintCard(card, plan.verbatim)))
+    const result = await ctx.call(reviewRequest(card, lintCard(card, plan.verbatim), planLanguage(plan)))
     const issues = readIssues(result.text)
     await ctx.update(fresh => {
       const left = applyIssues(fresh.card, issues)
@@ -417,7 +422,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
 
   async function requireCard(id) {
     const draft = await load(id)
-    if (!draft.card) throw httpError(409, '还没有写出这张卡')
+    if (!draft.card) throw httpError(409, msg`还没有写出这张卡`)
     return draft
   }
 
@@ -429,13 +434,13 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
 
   async function startRewrite(draft, target, note) {
     const pieces = piecesOf(draft.card, { [target]: [{ type: '', original: '', suggestion: note }] }).map(p => ({ ...p, issues: null, note }))
-    if (!pieces.length) throw httpError(400, '找不到要改的那一段，或者它还是空的')
+    if (!pieces.length) throw httpError(400, msg`找不到要改的那一段，或者它还是空的`)
     draft.lastRewrite = { target, note }
     await run(draft, 'rewrite', async ctx => {
       ctx.step(target)
       const result = await ctx.call(rewriteRequest(draft.plan, draft.card, pieces))
       await ctx.update(fresh => {
-        if (!applyPieces(fresh.card, pieces, result.text)) throw new Error(`${ctx.label} 没有按格式写出改好的内容${cutNote(result)}，再试一次`)
+        if (!applyPieces(fresh.card, pieces, result.text)) throw new Error(msg`${ctx.label} 没有按格式写出改好的内容${cutNote(result)}，再试一次`)
         fresh.card.checks = lintCard(fresh.card, fresh.plan.verbatim)
         fresh.lastRewrite = null
       })
@@ -444,7 +449,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
   }
 
   async function startAvatar(draft, description) {
-    if (!draw) throw httpError(400, '这里画不了图，上传一张吧')
+    if (!draw) throw httpError(400, msg`这里画不了图，上传一张吧`)
     const subject = avatarSubject(draft.plan, description)
     draft.lastAvatar = { description: clip(description, 400) }
     await run(
@@ -490,7 +495,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
     /** A new draft from the first idea; the first round starts right away. */
     async create({ text, model } = {}) {
       const idea = clip(text, MAX_TEXT)
-      if (!idea) throw httpError(400, '先说说你想要一张什么样的卡，一句话也行')
+      if (!idea) throw httpError(400, msg`先说说你想要一张什么样的卡，一句话也行`)
       const now = new Date().toISOString()
       const draft = { id: newId(), createdAt: now, updatedAt: now, stage: 'discuss', model: clip(model, 200), rounds: [{ user: { text: idea, picks: [], at: now }, assistant: null }], brief: emptyBrief(), plan: null, card: null, job: null, error: null }
       await save(draft)
@@ -502,10 +507,10 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
     async say(id, { text, picks } = {}) {
       const draft = await load(id)
       const last = draft.rounds.at(-1)
-      if (!last?.assistant) throw httpError(409, '上一轮还没有回复，等它写完，或者点「重试」')
-      if (draft.rounds.length >= MAX_ROUNDS) throw httpError(400, '已经聊了很多轮了，先出方案吧')
+      if (!last?.assistant) throw httpError(409, msg`上一轮还没有回复，等它写完，或者点「重试」`)
+      if (draft.rounds.length >= MAX_ROUNDS) throw httpError(400, msg`已经聊了很多轮了，先出方案吧`)
       const user = { text: clip(text, MAX_TEXT), picks: cleanPicks(picks, last.assistant.questions), at: new Date().toISOString() }
-      if (!user.text && !user.picks.length) throw httpError(400, '先选一个，或者说说你的想法')
+      if (!user.text && !user.picks.length) throw httpError(400, msg`先选一个，或者说说你的想法`)
       draft.rounds.push({ user, assistant: null })
       draft.stage = 'discuss'
       await run(draft, 'discuss', ctx => discussWork(ctx, draft))
@@ -528,9 +533,9 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
 
     /** Take back the last exchange: the user's answer and the reply to it. */
     async undo(id) {
-      if (jobs.has(id)) throw httpError(409, '正在写，先停下再撤回')
+      if (jobs.has(id)) throw httpError(409, msg`正在写，先停下再撤回`)
       const draft = await mutate(id, draft => {
-        if (draft.rounds.length < 2) throw httpError(400, '这是第一轮，没有可以撤回的了')
+        if (draft.rounds.length < 2) throw httpError(400, msg`这是第一轮，没有可以撤回的了`)
         draft.rounds.pop()
         draft.stage = 'discuss'
         draft.error = null
@@ -553,24 +558,24 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
     /** Write the talk up as a plan. */
     async plan(id) {
       const draft = await load(id)
-      if (!draft.rounds.some(r => r.assistant)) throw httpError(409, '先聊一轮再出方案')
+      if (!draft.rounds.some(r => r.assistant)) throw httpError(409, msg`先聊一轮再出方案`)
       // The last answer may still be waiting for a reply: plan from what was said.
       const rounds = draft.rounds.filter(r => r.assistant || r === draft.rounds.at(-1))
       draft.planPending = null
-      await run(draft, 'plan', ctx => planWork(ctx, planRequest(rounds, draft.brief)))
+      await run(draft, 'plan', ctx => planWork(ctx, planRequest(rounds, draft.brief, ctx.languages), ctx.languages.card))
       return view(draft)
     },
 
     /** Revise the plan by the user's comments (per section and overall). */
     async revise(id, { text, notes } = {}) {
       const draft = await load(id)
-      if (!draft.plan) throw httpError(409, '还没有方案')
+      if (!draft.plan) throw httpError(409, msg`还没有方案`)
       const cleanNotes = (Array.isArray(notes) ? notes : []).map(n => ({ section: clip(n?.section, 40), text: clip(n?.text, 1000) })).filter(n => n.section && n.text)
       const general = clip(text, MAX_TEXT)
-      if (!general && !cleanNotes.length) throw httpError(400, '先写下想怎么改')
+      if (!general && !cleanNotes.length) throw httpError(400, msg`先写下想怎么改`)
       draft.planNotes = [...(draft.planNotes ?? []), { at: new Date().toISOString(), text: general, notes: cleanNotes }].slice(-20)
       draft.planPending = { text: general, notes: cleanNotes }
-      await run(draft, 'plan', ctx => planWork(ctx, reviseRequest(draft.rounds.filter(r => r.assistant), draft.plan, { text: general, notes: cleanNotes })))
+      await run(draft, 'plan', ctx => planWork(ctx, reviseRequest(draft.rounds.filter(r => r.assistant), draft.plan, { text: general, notes: cleanNotes }), planLanguage(draft.plan)))
       return view(draft)
     },
 
@@ -580,7 +585,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
      */
     async write(id, { restart = false } = {}) {
       const draft = await load(id)
-      if (!draft.plan) throw httpError(409, '先出方案')
+      if (!draft.plan) throw httpError(409, msg`先出方案`)
       if (!draft.card || restart) {
         const avatar = draft.card?.avatar ?? null
         const savedCardId = draft.card?.savedCardId ?? null
@@ -593,14 +598,14 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
     async rewrite(id, { target, note } = {}) {
       const draft = await requireCard(id)
       const asked = clip(note, 1000)
-      if (!asked) throw httpError(400, '先写下想怎么改')
+      if (!asked) throw httpError(400, msg`先写下想怎么改`)
       return startRewrite(draft, clip(target, 60), asked)
     },
 
     /** The user's own edits to the written card. */
     async editCard(id, { entries, greetings, description, creatorNotes } = {}) {
       await requireCard(id)
-      if (jobs.has(id)) throw httpError(409, '正在写，等它写完再改')
+      if (jobs.has(id)) throw httpError(409, msg`正在写，等它写完再改`)
       const draft = await mutate(id, draft => {
       const card = draft.card
       for (const edit of Array.isArray(entries) ? entries : []) {
@@ -624,9 +629,9 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
     async uploadAvatar(id, { image } = {}) {
       const draft = await requireCard(id)
       const match = IMAGE.exec(String(image ?? ''))
-      if (!match) throw httpError(400, '只能用 PNG、JPEG 或 WebP 图片')
+      if (!match) throw httpError(400, msg`只能用 PNG、JPEG 或 WebP 图片`)
       const buffer = Buffer.from(match[2], 'base64')
-      if (buffer.length > MAX_IMAGE) throw httpError(400, '图片太大了（15 MB 以内）')
+      if (buffer.length > MAX_IMAGE) throw httpError(400, msg`图片太大了（15 MB 以内）`)
       await writeFile(avatarFile(id), buffer)
       const saved = await mutate(id, fresh => {
         fresh.card.avatar = { at: new Date().toISOString(), type: imageType(buffer), backend: '', source: 'upload', description: '' }
@@ -637,7 +642,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
 
     async readAvatar(id) {
       const draft = await requireCard(id)
-      if (!draft.card.avatar) throw httpError(404, '还没有头像')
+      if (!draft.card.avatar) throw httpError(404, msg`还没有头像`)
       return { buffer: await readFile(avatarFile(id)), type: `image/${draft.card.avatar.type}` }
     },
 
@@ -648,10 +653,10 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
      */
     async saveCard(id, { avatar } = {}) {
       const draft = await requireCard(id)
-      if (jobs.has(id)) throw httpError(409, '正在写，等它写完再保存')
-      if (!draft.card.greetings.some(g => g.text)) throw httpError(409, '开场白还没写')
+      if (jobs.has(id)) throw httpError(409, msg`正在写，等它写完再保存`)
+      if (!draft.card.greetings.some(g => g.text)) throw httpError(409, msg`开场白还没写`)
       const match = IMAGE.exec(String(avatar ?? ''))
-      if (!match || match[1] !== 'png') throw httpError(400, '头像要转成 PNG 再保存')
+      if (!match || match[1] !== 'png') throw httpError(400, msg`头像要转成 PNG 再保存`)
       const raw = cardJson(draft.plan, draft.card)
       const png = writeCardPng(Buffer.from(match[2], 'base64'), raw)
       const card = normalizeCard(raw)
