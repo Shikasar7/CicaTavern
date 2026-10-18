@@ -2,10 +2,11 @@
 // Start Agent Tavern:
 //   node bin/start.mjs [--port 8791] [--listen local|lan] [--idle-exit <seconds>] [--data <dir>]
 //                      [--proxy <url> | off] [--edition personal|release] [--open]
+// --open opens the app window (Edge or Chrome --app), as the desktop launcher does.
 // A packaged build names its edition in edition.json (server/edition.mjs).
 // --proxy or AGENT_TAVERN_PROXY fixes the proxy; otherwise 设置 → 网络代理 decides.
-import { spawn } from 'node:child_process'
 import { lanAddresses } from '../server/access.mjs'
+import { openAppWindow } from '../server/app-window.mjs'
 import { featuresOf, packagedEdition } from '../server/edition.mjs'
 import { createApp } from '../server/http.mjs'
 
@@ -53,7 +54,4 @@ const network = app.network.describe()
 const via = network.mode === 'system' ? `（跟随系统${network.source === 'env' ? '环境变量' : ''}）` : ''
 console.log(`${tag} 代理：${network.effective ?? '不使用'}${via}${network.locked ? '（启动参数指定）' : ''}`)
 if (app.subscription) console.log(`${tag} Claude 配置（独立）：${app.subscription.configDir}`)
-if (args.includes('--open')) {
-  const opener = process.platform === 'win32' ? ['cmd', ['/c', 'start', '', url]] : [process.platform === 'darwin' ? 'open' : 'xdg-open', [url]]
-  spawn(opener[0], opener[1], { stdio: 'ignore', detached: true }).unref()
-}
+if (args.includes('--open') && openAppWindow(url) === 'browser') console.log(`${tag} 没找到 Edge 或 Chrome，在默认浏览器里打开了`)

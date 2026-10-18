@@ -20,11 +20,14 @@ export const PERSONAL_PROXY = 'http://127.0.0.1:7897'
 // Every edition is CicaTavern now. This machine's own install keeps the data
 // folder and port it had as Agent 酒馆; the release has its own, so it can sit
 // next to it. proxy: the 网络代理 setting needs Node 24 (http.Agent proxyEnv);
-// the phone's Node is 18.
+// the phone's Node is 18. updates: what 设置 → 更多 → 更新 does (server/update/):
+// 'zip' installs the Windows package, 'apk' points to the phone app's download,
+// null for this machine's own install (a git checkout). privacyNotice: the public
+// builds list, once, the connections nobody configured (隐私与网络).
 const EDITIONS = {
-  personal: { subscription: true, lan: true, dshImport: true, xiaoya: true, proxy: true, defaultProxy: PERSONAL_PROXY, appName: 'CicaTavern', dataDir: '.agent-tavern', port: 8791 },
-  release: { subscription: false, lan: true, dshImport: false, xiaoya: false, proxy: true, defaultProxy: 'none', appName: 'CicaTavern', dataDir: '.cicatavern', port: 8790 },
-  android: { subscription: false, lan: false, dshImport: false, xiaoya: false, proxy: false, defaultProxy: 'none', appName: 'CicaTavern', dataDir: '.cicatavern', port: 0 },
+  personal: { subscription: true, lan: true, dshImport: true, xiaoya: true, proxy: true, defaultProxy: PERSONAL_PROXY, appName: 'CicaTavern', dataDir: '.agent-tavern', port: 8791, updates: null, privacyNotice: false },
+  release: { subscription: false, lan: true, dshImport: false, xiaoya: false, proxy: true, defaultProxy: 'none', appName: 'CicaTavern', dataDir: '.cicatavern', port: 8790, updates: 'zip', privacyNotice: true },
+  android: { subscription: false, lan: false, dshImport: false, xiaoya: false, proxy: false, defaultProxy: 'none', appName: 'CicaTavern', dataDir: '.cicatavern', port: 0, updates: 'apk', privacyNotice: true },
 }
 // The name this edition had before there were several.
 const ALIASES = { desktop: 'personal' }
@@ -35,7 +38,7 @@ export function editionName(value) {
   return Object.hasOwn(EDITIONS, name) ? name : 'personal'
 }
 
-/** { edition, subscription, lan, dshImport, xiaoya, proxy, defaultProxy, appName, dataDir, port } */
+/** { edition, subscription, lan, dshImport, xiaoya, proxy, defaultProxy, appName, dataDir, port, updates, privacyNotice } */
 export function featuresOf(edition) {
   const name = editionName(edition)
   return { edition: name, ...EDITIONS[name] }

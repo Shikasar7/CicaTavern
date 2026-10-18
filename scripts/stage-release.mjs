@@ -1,26 +1,31 @@
 #!/usr/bin/env node
 // Build the Windows release folder (and zip) for other people:
-//   node scripts/stage-release.mjs [--out <dir>] [--node <node.exe>] [--zip] [--no-node]
+//   node scripts/stage-release.mjs [--out <dir>] [--node <node.exe>] [--exe <CicaTavern.exe>] [--zip] [--no-node] [--no-exe]
 //
 // dist/CicaTavern-<version>-win-x64/
-//   启动 CicaTavern.vbs          start in the background and open the app window
-//   创建桌面快捷方式.cmd        a desktop shortcut to the above
-//   Start-CicaTavern.cmd       start with a console (for troubleshooting)
-//   runtime/node.exe           bundled Node, so nothing needs installing
+//   CicaTavern.exe             start in the background and open the app window (launcher/, built
+//                              here with MSVC, or --exe: the one CI had signed)
+//   排查问题（带控制台）.cmd    the same with a console window showing the server's output
+//   runtime/node.exe           bundled Node (the official, OpenJS-signed build), so nothing needs installing
 //   bin/ server/ web/ examples/ node_modules/ (runtime modules only)
 //   package.json edition.json README.md CHANGELOG.md LICENSE THIRD_PARTY_NOTICES.md
 //
 // The release edition (server/edition.mjs): API providers only. Only what
 // scripts/public-files.mjs lets out is copied, and no @anthropic-ai module.
+// No script-host launchers (.vbs, .ps1): antivirus heuristics distrust them.
+// The zip is what 设置 → 更多 → 更新 downloads (server/update/): its one top
+// folder must stay CicaTavern-<version>-win-x64.
 import { execFileSync } from 'node:child_process'
 import { existsSync, readdirSync } from 'node:fs'
-import { cp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { crc32, deflateRawSync } from 'node:zlib'
-import { publicFile, releaseLaunchVbs, vbs } from './public-files.mjs'
+import { buildLauncher } from './build-launcher.mjs'
+import { publicFile } from './public-files.mjs'
 import { RUNTIME_MODULES } from './runtime-modules.mjs'
 import { featuresOf } from '../server/edition.mjs'
+import { packageFolder } from '../server/update/install.mjs'
+import { zipFolder } from '../server/update/zip.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const args = process.argv.slice(2)
@@ -30,13 +35,13 @@ const option = name => {
 }
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
 const release = featuresOf('release')
-const name = `${release.appName}-${pkg.version}-win-x64`
+const name = packageFolder(pkg.version)
 const out = path.resolve(option('out') ?? path.join(root, 'dist', name))
 const nodeExe = path.resolve(option('node') ?? process.execPath)
 const MIN_NODE = 24 // http.Agent proxyEnv (server/providers.mjs)
 
 // Only what the release runs.
-const BIN = ['start.mjs', 'launch.mjs', 'install-shortcut.mjs']
+const BIN = ['start.mjs', 'launch.mjs', 'update-apply.mjs']
 
 const crlf = text => text.replace(/\r?\n/g, '\r\n')
 
@@ -75,7 +80,6 @@ await cp(path.join(root, 'docs', 'brand', 'banner.jpg'), path.join(out, 'docs', 
 if (existsSync(path.join(root, 'docs', 'screenshots'))) await cp(path.join(root, 'docs', 'screenshots'), path.join(out, 'docs', 'screenshots'), { recursive: true })
 await cp(path.join(root, 'examples'), path.join(out, 'examples'), { recursive: true })
 for (const file of BIN) await cp(path.join(root, 'bin', file), path.join(out, 'bin', file))
-await writeFile(path.join(out, 'bin', 'launch.vbs'), await releaseLaunchVbs(root))
 for (const name of RUNTIME_MODULES) {
   await cp(path.join(root, 'node_modules', name), path.join(out, 'node_modules', name), { recursive: true })
 }
@@ -108,35 +112,23 @@ if (!args.includes('--no-node')) {
 }
 await writeFile(path.join(out, 'THIRD_PARTY_NOTICES.md'), await notices(nodeVersion))
 
-// Launchers. .cmd files stay ASCII inside (cmd reads them in the console code page).
+// Launchers. The .cmd stays ASCII inside (cmd reads it in the console code page).
+const exe = path.join(out, `${release.appName}.exe`)
+if (option('exe')) await cp(path.resolve(option('exe')), exe)
+else if (!args.includes('--no-exe')) await buildLauncher(root, exe, { version: pkg.version })
 await writeFile(
-  path.join(out, `启动 ${release.appName}.vbs`),
-  vbs(`' Starts ${release.appName} with the bundled Node: no console window; the app window opens.
-Set shell = CreateObject("WScript.Shell")
-dir = CreateObject("Scripting.FileSystemObject").GetParentFolderName(WScript.ScriptFullName)
-shell.Run "wscript.exe """ & dir & "\\bin\\launch.vbs"" """ & dir & "\\runtime\\node.exe""", 0, False
-`),
-)
-await writeFile(
-  path.join(out, '创建桌面快捷方式.cmd'),
+  path.join(out, '排查问题（带控制台）.cmd'),
   crlf(`@echo off
-cd /d "%~dp0"
-"runtime\\node.exe" bin\\install-shortcut.mjs %*
-pause
-`),
-)
-await writeFile(
-  path.join(out, `Start-${release.appName}.cmd`),
-  crlf(`@echo off
+rem Starts the server with its output in this window, then opens the app window.
 cd /d "%~dp0"
 "runtime\\node.exe" bin\\start.mjs --open %*
 if errorlevel 1 pause
 `),
 )
 
-// Nothing personal slipped in.
+// Nothing personal slipped in, and no script-host launcher.
 const shipped = readdirSync(out, { recursive: true }).map(String)
-const leaked = shipped.filter(file => !publicFile(path.join(out, file)) || /node_modules[\\/]@anthropic-ai/.test(file))
+const leaked = shipped.filter(file => !publicFile(path.join(out, file)) || /node_modules[\\/]@anthropic-ai/.test(file) || (/\.(vbs|vbe|js|ps1|wsf|hta)$/i.test(file) && !/^(node_modules|web)[\\/]/.test(file)))
 if (leaked.length) throw new Error(`发布目录里不该有：${leaked.slice(0, 5).join('、')}`)
 console.log(`[stage-release] ${out}（${shipped.length} 个文件）`)
 
@@ -145,68 +137,4 @@ if (args.includes('--zip')) {
   await rm(zip, { force: true })
   await writeFile(zip, await zipFolder(out))
   console.log(`[stage-release] ${zip}`)
-}
-
-/**
- * A zip of the folder (its name as the top directory), written here rather
- * than by a tool: Windows' tar.exe stores names in the console code page and
- * .NET Framework's writer uses backslashes, which garble the Chinese launcher
- * names or the folders elsewhere. Names are UTF-8 with the flag set (bit 11).
- */
-async function zipFolder(dir) {
-  const top = path.basename(dir)
-  const files = readdirSync(dir, { recursive: true, withFileTypes: true })
-    .filter(entry => entry.isFile())
-    .map(entry => path.join(entry.parentPath, entry.name))
-    .sort()
-  const locals = []
-  const central = []
-  let offset = 0
-  for (const file of files) {
-    const name = Buffer.from(`${top}/${path.relative(dir, file).split(path.sep).join('/')}`, 'utf8')
-    const data = await readFile(file)
-    const deflated = deflateRawSync(data, { level: 9 })
-    const stored = deflated.length >= data.length
-    const body = stored ? data : deflated
-    const crc = crc32(data)
-    const { time, date } = dosTime((await stat(file)).mtime)
-    const fields = (header, extra) => {
-      header.writeUInt16LE(0x0800, extra + 2) // UTF-8 names
-      header.writeUInt16LE(stored ? 0 : 8, extra + 4)
-      header.writeUInt16LE(time, extra + 6)
-      header.writeUInt16LE(date, extra + 8)
-      header.writeUInt32LE(crc, extra + 10)
-      header.writeUInt32LE(body.length, extra + 14)
-      header.writeUInt32LE(data.length, extra + 18)
-      header.writeUInt16LE(name.length, extra + 22)
-    }
-    const local = Buffer.alloc(30)
-    local.writeUInt32LE(0x04034b50, 0)
-    local.writeUInt16LE(20, 4)
-    fields(local, 4)
-    const entry = Buffer.alloc(46)
-    entry.writeUInt32LE(0x02014b50, 0)
-    entry.writeUInt16LE(20, 4) // made by: MS-DOS, zip 2.0
-    entry.writeUInt16LE(20, 6)
-    fields(entry, 6)
-    entry.writeUInt32LE(offset, 42)
-    locals.push(local, name, body)
-    central.push(entry, name)
-    offset += local.length + name.length + body.length
-  }
-  const directory = Buffer.concat(central)
-  const end = Buffer.alloc(22)
-  end.writeUInt32LE(0x06054b50, 0)
-  end.writeUInt16LE(files.length, 8)
-  end.writeUInt16LE(files.length, 10)
-  end.writeUInt32LE(directory.length, 12)
-  end.writeUInt32LE(offset, 16)
-  return Buffer.concat([...locals, directory, end])
-}
-
-function dosTime(when) {
-  return {
-    time: (when.getHours() << 11) | (when.getMinutes() << 5) | Math.floor(when.getSeconds() / 2),
-    date: ((Math.max(when.getFullYear(), 1980) - 1980) << 9) | ((when.getMonth() + 1) << 5) | when.getDate(),
-  }
 }

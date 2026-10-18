@@ -1,0 +1,37 @@
+// CicaTavern.exe's resources: icon, manifest (run as the user, DPI aware) and
+// version information. version.h is written by scripts/build-launcher.mjs
+// from package.json.
+#include <windows.h>
+#include "version.h"
+
+1 ICON "icon.ico"
+CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "app.manifest"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION VER_MAJOR,VER_MINOR,VER_PATCH,0
+ PRODUCTVERSION VER_MAJOR,VER_MINOR,VER_PATCH,0
+ FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+ FILEFLAGS 0x0L
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+ FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName", "Shikasar7"
+            VALUE "FileDescription", "CicaTavern"
+            VALUE "FileVersion", VER_STRING
+            VALUE "InternalName", "CicaTavern"
+            VALUE "LegalCopyright", "Copyright (c) 2026 Shikasar7. MIT License."
+            VALUE "OriginalFilename", "CicaTavern.exe"
+            VALUE "ProductName", "CicaTavern"
+            VALUE "ProductVersion", VER_STRING
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

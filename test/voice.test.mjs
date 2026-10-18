@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
+import { createServer as createTcpServer } from 'node:net'
 import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -8,7 +9,7 @@ import { cleanMedia, createMedia, mediaDefaults } from '../server/media.mjs'
 import { createApp } from '../server/http.mjs'
 import { normalizeProvider } from '../server/providers.mjs'
 import { createStore } from '../server/store.mjs'
-import { audioOf, audioType, requestSpec, unpack, wavFromPcm } from '../server/voice/cloud.mjs'
+import { audioOf, audioType, cloudError, createCloudSource, listAccountVoices, requestSpec, unpack, wavFromPcm } from '../server/voice/cloud.mjs'
 import { cleanVoiceList, prepareText } from '../server/voice/index.mjs'
 import { defaultVoices, speechRequest, takesInstructions } from '../server/voice/openai.mjs'
 
@@ -48,6 +49,7 @@ async function fakeVoices(t) {
     }
     if (req.url === '/fish/v1/tts') {
       if (req.headers.authorization !== `Bearer ${FISH_KEY}`) return send(401, { message: `Invalid key ${req.headers.authorization}` })
+      if (fake.fishBroke && req.headers.model !== 's2.1-pro-free') return send(402, { status: 402, message: 'Insufficient balance' })
       return send(200, MP3, 'audio/mpeg')
     }
     // 从账户读取音色: Fish pages through the account's models, MiniMax lists every kind at once.
@@ -260,6 +262,16 @@ test('Fish and MiniMax: keys kept server-side, tags only for Fish, hex decoded, 
   assert.match(failed.message, /MiniMax.*1008.*余额不足/)
   assert.equal((await files()).filter(f => f.endsWith('.mp3')).length, 4)
 
+  // An account with no balance: the paid models say so and name the free one, which still reads.
+  fake.fishBroke = true
+  await saveMedia(store, { fishModel: 'drama-3' })
+  const broke = await media.speak({ text: '没钱也想听', voice: `fish:${FISH_VOICE}` }).catch(error => error)
+  assert.equal(broke.status, 502)
+  assert.equal(broke.message, 'Fish Audio 余额不足（HTTP 402）：drama-3 按用量计费。去 fish.audio 充值，或在「配图与朗读 → 朗读来源 → Fish Audio」把模型换成 s2.1-pro-free（免费）。')
+  await saveMedia(store, { fishModel: 's2.1-pro-free' })
+  assert.equal((await media.speak({ text: '没钱也想听', voice: `fish:${FISH_VOICE}` })).mime, 'audio/mpeg')
+  fake.fishBroke = false
+
   // A wrong key: the service's echo of it is not passed on.
   await media.setVoiceKey('fish', 'fish-wrong-key-00000000')
   const denied = await media.speak({ text: '再来一句', voice: `fish:${FISH_VOICE}` }).catch(error => error)
@@ -311,6 +323,10 @@ test('从账户读取音色: Fish pages, MiniMax groups, merged into the form li
   const again = await media.accountVoices({ source: 'fish', media: { fishVoices: `${FISH_VOICE} 南晚\n${other} 小雅` } })
   assert.equal(fishCalls().length, 3)
   assert.deepEqual([again.voices, again.added, again.changed, again.full], [[{ id: FISH_VOICE, name: '南晚' }, { id: other, name: '小雅' }], 0, false, false])
+  // An account with no voices of its own answers too, and leaves the list as it was.
+  fake.fishModels = []
+  const none = await media.accountVoices({ source: 'fish' })
+  assert.deepEqual([none.found, none.added, none.changed, none.voices.length], [0, 0, false, 2])
 
   // A wrong key: Fish's echo of it is not passed on.
   await media.setVoiceKey('fish', 'fish-wrong-key-00000000')
@@ -341,6 +357,82 @@ test('从账户读取音色: Fish pages, MiniMax groups, merged into the form li
   const wrong = await media.accountVoices({ source: 'minimax', keys: { minimax: 'eyJwrong.minimax.key-0000' } }).catch(error => error)
   assert.match(wrong.message, /MiniMax.*1004.*站点/)
   assert.doesNotMatch(wrong.message, /eyJwrong/)
+})
+
+test('cloud voices give up on a service that never answers (读取音色, 试听, reading) and say whether a proxy was used', async t => {
+  // One address accepts the connection and stays silent (a blocked site, a dead proxy node);
+  // another sends its headers and then stalls; a third refuses.
+  const sockets = new Set()
+  const silent = createTcpServer(socket => sockets.add(socket))
+  const stalled = createServer((req, res) => {
+    sockets.add(res.socket)
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.write('{"items":[')
+  })
+  const closed = createTcpServer()
+  await Promise.all([silent, stalled, closed].map(server => new Promise(resolve => server.listen(0, '127.0.0.1', resolve))))
+  const at = server => `http://127.0.0.1:${server.address().port}`
+  const refused = at(closed)
+  await new Promise(resolve => closed.close(resolve))
+  t.after(() => {
+    for (const socket of sockets) socket.destroy()
+    silent.close()
+    stalled.close()
+  })
+  const list = (config, options = {}) => listAccountVoices({ service: 'fish', key: FISH_KEY, ...config }, { timeoutMs: 300, ...options }).catch(error => error)
+  const quick = async promise => {
+    const started = Date.now()
+    const error = await promise
+    assert.ok(Date.now() - started < 3000, `gave up after ${Date.now() - started} ms`)
+    return error
+  }
+
+  const direct = await quick(list({ urls: { fish: at(silent) } }))
+  assert.equal(direct.status, 504)
+  assert.match(direct.message, /^连不上 Fish Audio：等了 1 秒没有回应。现在没走代理：要开代理才能上这个网站的话，去「设置 → 网络代理」选「跟随系统代理」或填代理地址。$/)
+  assert.doesNotMatch(direct.message, new RegExp(FISH_KEY))
+  // Through a proxy: check that it runs (a loopback address is reached without it here).
+  const proxied = await quick(list({ urls: { fish: at(silent) } }, { proxy: 'http://127.0.0.1:1' }))
+  assert.match(proxied.message, /没有回应。检查网络，以及「设置 → 网络代理」里的代理是否在运行/)
+  // A body that never ends is given up on too.
+  assert.equal((await quick(list({ urls: { fish: at(stalled) } }))).status, 504)
+  // MiniMax's mainland site is direct on purpose: no proxy advice. The phone has no proxy menu.
+  const home = await quick(list({ service: 'minimax', key: MINIMAX_KEY, region: 'cn', urls: { minimax: { cn: at(silent) } } }))
+  assert.match(home.message, /^连不上 MiniMax：等了 1 秒没有回应。检查网络。$/)
+  const phone = await quick(list({ urls: { fish: at(silent) } }, { proxyMenu: false }))
+  assert.match(phone.message, /没有回应。检查网络和代理设置。$/)
+  // A refused connection says the same at once.
+  const down = await quick(list({ urls: { fish: refused } }, { timeoutMs: 20000 }))
+  assert.equal(down.status, 502)
+  assert.match(down.message, /^连不上 Fish Audio：现在没走代理/)
+  // Closing the page cancels as before, without the timeout's message.
+  const controller = new AbortController()
+  setTimeout(() => controller.abort(), 50)
+  const cancelled = await quick(list({ urls: { fish: at(silent) } }, { signal: controller.signal, timeoutMs: 20000 }))
+  assert.equal(cancelled.name, 'AbortError')
+
+  // Speech (reading and 试听) has its own, longer deadline.
+  const speak = (service, urls, { proxy = null, timeouts = { list: 300, speech: 300 }, region = 'cn', signal } = {}) => {
+    const source = createCloudSource(service, { urls, timeouts })
+    const media = { fishModel: 'drama-3', fishVoices: [], minimaxModel: 'speech-2.8-hd', minimaxRegion: region, minimaxVoices: [] }
+    return source.synth({ voice: FISH_VOICE, text: '你好' }, { media, keys: { fish: FISH_KEY, minimax: MINIMAX_KEY }, proxy: () => proxy, signal }).catch(error => error)
+  }
+  const stuck = await quick(speak('fish', { fish: at(silent) }))
+  assert.equal(stuck.status, 504)
+  assert.match(stuck.message, /^连不上 Fish Audio：等了 1 秒没有回应。现在没走代理：要开代理才能上这个网站的话/)
+  assert.equal((await quick(speak('fish', { fish: at(stalled) }))).status, 504)
+  // MiniMax's international site goes through the proxy when there is one.
+  const abroad = await quick(speak('minimax', { minimax: { intl: at(silent) } }, { region: 'intl', proxy: 'http://127.0.0.1:1' }))
+  assert.match(abroad.message, /^连不上 MiniMax：等了 1 秒没有回应。检查网络，以及「设置 → 网络代理」里的代理是否在运行。$/)
+  const refusedSpeech = await quick(speak('fish', { fish: refused }, { timeouts: { list: 20000, speech: 20000 } }))
+  assert.equal(refusedSpeech.status, 502)
+  assert.match(refusedSpeech.message, /^连不上 Fish Audio：现在没走代理/)
+  const stopped = new AbortController()
+  setTimeout(() => stopped.abort(), 50)
+  assert.equal((await quick(speak('fish', { fish: at(silent) }, { signal: stopped.signal, timeouts: { list: 20000, speech: 20000 } }))).name, 'AbortError')
+  // A connection reset during the TLS handshake names no code in its message.
+  const reset = Object.assign(new Error('Client network socket disconnected before secure TLS connection was established'), { code: 'ECONNRESET' })
+  assert.match(cloudError('Fish Audio', reset, FISH_KEY, { route: 'direct' }), /^连不上 Fish Audio：现在没走代理/)
 })
 
 test('voice routing: names the voice service lists go to it first; unprefixed names are its own', async t => {

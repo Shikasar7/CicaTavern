@@ -86,14 +86,27 @@ Windows 解压即用，也有安卓版。数据全部存在你自己的设备上
 
 ## 快速开始（Windows）
 
+<!-- Remove this note when 1.4.0 is released. -->
+> 这里写的是即将发布的 1.4.0。[发布页](https://github.com/Shikasar7/CicaTavern/releases/latest)上现在的 1.3.1 还是双击「启动 CicaTavern.vbs」启动，用「创建桌面快捷方式.cmd」放桌面图标，没有应用内更新和首次启动的隐私说明。
+
 1. 解压到任意位置（路径里有中文也可以）。
-2. 双击 **「启动 CicaTavern.vbs」**：后台启动服务，并打开一个应用窗口（用 Edge 或 Chrome，没有地址栏）。想要桌面图标，运行一次 **「创建桌面快捷方式.cmd」**。
+2. 双击 **「CicaTavern.exe」**：后台启动服务，并打开一个应用窗口（用 Edge 或 Chrome，没有地址栏）。第一次打开会先说明它会连哪些地方（见[隐私](#隐私)）。想要桌面图标：设置 → 更多 →「桌面快捷方式」。
 3. 第一次用：顶栏模型选择最下面的「管理模型供应商…」→「添加」→「从模板开始」，选一家，粘贴 API Key，再点「从接口获取模型列表」检查连接。然后在 设置 里选默认模型。
 4. 左上「导入角色卡、世界书或预设」，选 SillyTavern 的 PNG / JSON 角色卡，点「新对话」开始。
 
 自带 Node 运行环境（`runtime/node.exe`），不用另外安装任何东西。所有页面关掉约一分钟后，后台服务会自动退出；也可以在 设置 →「停止后台服务」立刻停止。
 
-Windows 可能提示「已保护你的电脑」（脚本没有数字签名）：点「更多信息 → 仍要运行」。不放心的话，可以先看一下两个启动脚本的内容，都只有几行。
+第一次打开时，Windows 可能提示「Windows 已保护你的电脑」：还没有数字签名的版本，点「更多信息 → 仍要运行」就行，之后不会再问；应用内更新下载的新版本也不会再问（见[代码签名](#code-signing-policy)）。CicaTavern.exe 是个很小的程序（源码在 `launcher/`），只做两件事：不开黑色窗口地运行 `runtime\node.exe bin\launch.mjs`，以及用 Windows 自己的接口建桌面快捷方式；`runtime\node.exe` 是 Node.js 官方签名的原版。包里没有任何脚本启动器。要看服务的输出，用「排查问题（带控制台）.cmd」启动。
+
+## 更新
+
+设置 → 更多 →「更新」：打开 CicaTavern 时每天最多查一次 GitHub 上有没有新版本，有的话在这里显示「有新版本 x.y.z」和发布说明（自动检查可以关掉，「检查更新」随时能查）。
+
+1. 点「下载更新」：下载 Windows 安装包，按发布页公布的 SHA-256 校验，对不上就丢弃；解压到现在这个文件夹旁边（例如 `CicaTavern-1.4.0-win-x64` 旁边多一个 `CicaTavern-1.5.0-win-x64`）。下载走「网络代理」里的设置。
+2. 点「重启并更新」：服务重启到新版本，页面自动刷新。新版本起来之后，桌面和开始菜单里的快捷方式才改指向新文件夹；旧文件夹里的 CicaTavern.exe 也会转去打开新版本。新版本没能启动的话，会自动回到原来的版本，什么都不改。
+3. 旧版本的文件夹留着：「回到上一版」可以切回去；确认新版本没问题后，在「旧版本文件夹」里删掉。
+
+数据在 `%USERPROFILE%\.cicatavern\`，不在程序文件夹里，更新、回到上一版、删除旧版本都不会碰它。更新器只下载 GitHub 发布页上的 zip，自己解压，不运行下载来的安装程序，也不用 PowerShell 或脚本。也可以照旧手动更新：解压新版到新文件夹，双击里面的 CicaTavern.exe，再在 设置 → 更多 →「桌面快捷方式」重新放一个图标。
 
 ## 网络代理
 
@@ -152,6 +165,7 @@ Fish 和 MiniMax 的密钥存在数据目录的 `voice-keys.json`，页面只看
 - 应用在手机上独立运行，界面和功能与电脑版相同；供应商和 API Key 要在手机上再填一次。
 - 手机和电脑的数据互不相通。要搬对话，可以在一边「导出存档」到另一边导入，或者用电脑上的「打包对话」。
 - 朗读请用云端服务：应用里一般没有浏览器音色。
+- 更新：设置 → 更多 →「更新」显示新版本和发布说明，「下载安装包」交给浏览器下载，下载完点开覆盖安装，数据都保留（安卓会核对新安装包和旧的是同一个签名）。
 - 构建方法和更多说明见 [android/README.md](android/README.md)。
 
 ## 数据
@@ -164,9 +178,44 @@ runtime\node.exe bin\start.mjs --data D:\酒馆数据 --open
 
 后台服务的日志在 `%USERPROFILE%\.cicatavern\logs\server.log`。
 
+## 隐私
+
+CicaTavern 不收集使用数据，也不往开发者那里发任何东西。数据都在你自己的设备上。
+
+它会连的地方：
+
+- **你自己添加的服务**：模型供应商、画图（OpenAI 兼容接口、ComfyUI、NovelAI）、朗读（Fish Audio、MiniMax 等）。只在你配置之后才连，发过去的是对话内容和相关设置，各家怎么处理数据见它们自己的隐私政策。
+- **不用配置也会连的**（第一次打开时会列出来，可以当场关掉，以后在 设置 → 更多 →「隐私与网络」「更新」里改；确认之前一个都不连）：
+  - 检查更新：每天最多一次访问 GitHub（api.github.com），只发送版本号；GitHub 能看到你的 IP 地址。手机版同样。
+  - 正文字体：从 Google Fonts 加载思源宋体。
+  - 酒馆助手脚本库：为酒馆助手做的角色卡界面用到 jQuery、Vue、Tailwind 等时，从 jsDelivr 等公共 CDN 加载。
+- **角色卡和预设里的网页内容**可能从卡片作者写的网址加载图片或字体。
+
+## 卸载
+
+1. 设置 → 更多 →「停止后台服务」（或者关掉所有窗口等一分钟）。
+2. 删掉程序文件夹（`CicaTavern-<版本>-win-x64`，用过应用内更新的话旁边可能还有旧版本的文件夹），以及桌面或开始菜单里的 CicaTavern 快捷方式。
+3. 数据在 `%USERPROFILE%\.cicatavern\`，不要了也一并删掉。CicaTavern 不写注册表，不装服务，也不设开机启动。
+
+安卓版：在系统设置里卸载应用即可，数据随应用一起删除。
+
+## Code signing policy
+
+Windows 包（含 CicaTavern.exe）由 GitHub Actions 从本仓库的源码自动构建（`.github/workflows/windows-release.yml`），每个发布页写明这一版是否签名。
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/)（申请通过之后的版本；在此之前的版本没有签名）。
+
+- Committers and reviewers: [Shikasar7](https://github.com/Shikasar7)
+- Approvers: [Shikasar7](https://github.com/Shikasar7)
+- Privacy policy: 见上面的[隐私](#隐私)。This program will not transfer any information to other networked systems unless specifically requested by the user, except for the connections listed there, which are shown at the first start and can be turned off.
+
+安卓 APK 由作者用自己的密钥在本地签名，证书指纹写在每个发布页。
+
 ## 常见问题
 
-- **双击没反应 / 提示没能启动**：看上面的日志；或者运行「Start-CicaTavern.cmd」，在黑色窗口里看报错。
+- **双击没反应 / 提示没能启动**：CicaTavern.exe 会弹窗说明原因；也可以看上面的日志，或者运行「排查问题（带控制台）.cmd」，在黑色窗口里看报错。
+- **提示找不到 runtime\node.exe**：多半被杀毒软件隔离了，从隔离区恢复，或者重新解压一遍。
+- **检查更新连不上 GitHub**：在国内通常要在「网络代理」里设代理；也可以到 Release 页面手动下载。
 - **端口 8790 被占用**：可能已经开着一个，直接打开 http://127.0.0.1:8790/ 。
 - **海外接口连不上**：检查「网络代理」那一栏显示的「现在走 …」是不是你的代理。
 - **回复被截断**：在供应商的「高级」里填「最大输出 token」。
@@ -179,7 +228,7 @@ runtime\node.exe bin\start.mjs --data D:\酒馆数据 --open
 npm install
 npm start          # 启动并打开 http://127.0.0.1:8790/
 npm test
-npm run package    # 打包 Windows 版到 dist/（带上当前的 node.exe）
+npm run package    # 打包 Windows 版到 dist/（带上当前的 node.exe；CicaTavern.exe 用 MSVC 编译，要装 Visual Studio Build Tools 的 C++ 工具）
 ```
 
 ## 说明

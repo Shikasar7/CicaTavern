@@ -14,6 +14,8 @@ export const MINIMAX_URLS = Object.freeze({ cn: 'https://api.minimaxi.com', intl
 
 // Fish answers an unknown model with its default one instead of an error: only these are sent.
 export const FISH_MODELS = ['drama-3', 's2.1-pro', 's2.1-pro-free', 's2-pro']
+// The one Fish model that is free (fair use); the others bill the account, which answers 402 when it is empty.
+export const FISH_FREE_MODEL = 's2.1-pro-free'
 export const MINIMAX_MODELS = ['speech-2.8-hd', 'speech-2.8-turbo', 'speech-2.6-hd']
 // MiniMax's system voices, offered while no voice of the account is listed.
 export const MINIMAX_VOICES = Object.freeze([
@@ -102,22 +104,61 @@ export function unpack(service, payload) {
 }
 
 const FISH_PAGE = 100
+// How long a cloud request may take. A connection that stalls (a site blocked
+// from where the user is, a dead proxy node) would otherwise wait for the
+// socket's ten-minute idle limit, with 从账户读取音色 or 试听 spinning all the
+// while. A voice list comes back in about a second; a piece of speech (up to
+// 300 characters, then the MP3) in well under half a minute.
+export const TIMEOUTS = Object.freeze({ list: 20_000, speech: 60_000 })
+
+/** How a request travels: 'proxy', 'direct' (no proxy set) or 'home' (MiniMax's mainland site, direct on purpose). */
+const routeOf = (service, region, proxy) => (proxy ? 'proxy' : service === 'minimax' && region === 'cn' ? 'home' : 'direct')
+
+/** Where to look when a service cannot be reached. proxyMenu: this app has 设置 → 网络代理 (the phone does not). */
+function reachHint(route, proxyMenu = true) {
+  if (route === 'proxy') return '检查网络，以及「设置 → 网络代理」里的代理是否在运行。'
+  if (route === 'home') return '检查网络。'
+  if (route === 'direct' && proxyMenu) return '现在没走代理：要开代理才能上这个网站的话，去「设置 → 网络代理」选「跟随系统代理」或填代理地址。'
+  return '检查网络和代理设置。'
+}
+
+/**
+ * run(signal) with a deadline: the caller's signal still cancels it; past the
+ * deadline the error carries `timedOut` (ms) for cloudError.
+ */
+async function bounded(ms, signal, run) {
+  const deadline = new AbortController()
+  const timer = setTimeout(() => deadline.abort(), ms)
+  const cancel = () => deadline.abort()
+  if (signal?.aborted) cancel()
+  signal?.addEventListener('abort', cancel, { once: true })
+  try {
+    return await run(deadline.signal)
+  } catch (error) {
+    if (deadline.signal.aborted && !signal?.aborted) error.timedOut = ms
+    throw error
+  } finally {
+    clearTimeout(timer)
+    signal?.removeEventListener('abort', cancel)
+  }
+}
 
 /**
  * The account's own voices as [{ id, name }]: the ones cloned or designed on
  * it, not the service's system voices. Fish lists them a page at a time.
  * @param config - { service, key, region, urls } as for requestSpec().
+ * @param options - proxy, signal; timeoutMs for the whole list; proxyMenu as for reachHint.
  */
-export async function listAccountVoices({ service, key, region = 'cn', urls = {} }, { proxy = null, signal } = {}) {
+export async function listAccountVoices({ service, key, region = 'cn', urls = {} }, { proxy = null, signal, timeoutMs = TIMEOUTS.list, proxyMenu = true } = {}) {
   const label = CLOUD[service]?.label
   if (!label) throw httpError(400, `不认识的语音服务：${service}`)
   if (!key) throw httpError(400, `${label} 还没填密钥：在「配图与朗读 → 朗读」里填`)
-  const headers = { authorization: `Bearer ${key}` }
   const found = []
-  try {
+  const list = async bound => {
+    const options = { headers: { authorization: `Bearer ${key}` }, proxy, signal: bound }
     if (service === 'fish') {
       for (let page = 1; page <= 20; page++) {
-        const { buffer } = await fetchBytes(`${urls.fish ?? FISH_URL}/model?self=true&page_size=${FISH_PAGE}&page_number=${page}`, { headers, proxy, signal })
+        const { buffer } = await fetchBytes(`${urls.fish ?? FISH_URL}/model?self=true&page_size=${FISH_PAGE}&page_number=${page}`, options)
         const json = parseReply(buffer, label)
         const items = Array.isArray(json?.items) ? json.items : []
         for (const model of items) {
@@ -127,34 +168,46 @@ export async function listAccountVoices({ service, key, region = 'cn', urls = {}
         }
         if (items.length < FISH_PAGE || json.has_more === false) break
       }
-    } else {
-      const { buffer } = await postJson(`${minimaxBase(region, urls)}/v1/get_voice`, { voice_type: 'all' }, { headers, proxy, signal })
-      const json = parseReply(buffer, label)
-      checkMinimax(json)
-      for (const [group, kind] of [['voice_cloning', '复刻'], ['voice_generation', '设计']]) {
-        for (const voice of Array.isArray(json[group]) ? json[group] : []) {
-          if (voice?.voice_id) found.push({ id: String(voice.voice_id), name: voice.voice_name ? `${String(voice.voice_name).trim().slice(0, 30)}（${kind}）` : kind })
-        }
+      return
+    }
+    const { buffer } = await postJson(`${minimaxBase(region, urls)}/v1/get_voice`, { voice_type: 'all' }, options)
+    const json = parseReply(buffer, label)
+    checkMinimax(json)
+    for (const [group, kind] of [['voice_cloning', '复刻'], ['voice_generation', '设计']]) {
+      for (const voice of Array.isArray(json[group]) ? json[group] : []) {
+        if (voice?.voice_id) found.push({ id: String(voice.voice_id), name: voice.voice_name ? `${String(voice.voice_name).trim().slice(0, 30)}（${kind}）` : kind })
       }
     }
+  }
+  try {
+    await bounded(timeoutMs, signal, list)
   } catch (error) {
     if (signal?.aborted) throw error
-    throw httpError(502, cloudError(label, error, key))
+    throw cloudFailure(label, error, key, { route: routeOf(service, region, proxy), proxyMenu })
   }
   return found
 }
 
 const STATUS_TEXT = { 400: '请求参数或音色不匹配', 401: '密钥无效或已过期', 402: '额度不足', 403: '没有权限', 404: '模型或音色不存在', 429: '限流或额度不足' }
+// Node's codes and messages for a connection that failed; a reset during the TLS handshake says only the latter.
+const UNREACHABLE = /ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNRESET|EHOSTUNREACH|ENETUNREACH|socket hang up|secure TLS connection|请求超时/i
 
-/** What went wrong, with the key taken out of anything the service echoed back. */
-export function cloudError(label, error, key) {
+/**
+ * What went wrong, with the key taken out of anything the service echoed back.
+ * @param options - { route, proxyMenu }: where to look when it cannot be reached (reachHint).
+ */
+export function cloudError(label, error, key, { route = '', proxyMenu = true } = {}) {
   const status = error?.providerStatus
   const raw = String(error?.message ?? error)
   const text = (key ? raw.split(key).join('[密钥已隐藏]') : raw).replace(/^\d{3} /, '').slice(0, 160)
+  if (error?.timedOut) return `连不上 ${label}：等了 ${Math.ceil(error.timedOut / 1000)} 秒没有回应。${reachHint(route, proxyMenu)}`
   if (status) return `${label} HTTP ${status}：${STATUS_TEXT[status] ?? '服务暂时异常'}${text ? `（${text}）` : ''}`
-  if (/ECONNREFUSED|ENOTFOUND|ETIMEDOUT|ECONNRESET|EHOSTUNREACH|socket hang up|请求超时/i.test(raw)) return `连不上 ${label}：检查网络和代理设置。`
+  if (UNREACHABLE.test(`${error?.code ?? ''} ${raw}`)) return `连不上 ${label}：${reachHint(route, proxyMenu)}`
   return `${label}：${text}`
 }
+
+/** cloudError as the error to throw: 504 when the service never answered, else 502. */
+const cloudFailure = (label, error, key, options) => httpError(error?.timedOut ? 504 : 502, cloudError(label, error, key, options))
 
 // ─── Audio ──────────────────────────────────────────────────────────────
 
@@ -226,8 +279,10 @@ export function audioOf(buffer, { contentType = '', pcmRate = 0, fallback = '' }
  * listed in 配图与朗读 (fishVoices / minimaxVoices); MiniMax offers its system
  * voices while none are listed.
  * @param urls - test addresses: { fish, minimax: { cn, intl } }.
+ * @param proxyMenu - this app has 设置 → 网络代理 to point to when a service cannot be reached.
+ * @param timeouts - { list, speech } in ms (TIMEOUTS; tests shorten them).
  */
-export function createCloudSource(service, { urls = {} } = {}) {
+export function createCloudSource(service, { urls = {}, proxyMenu = true, timeouts = TIMEOUTS } = {}) {
   const { label, emotion, chunkMax } = CLOUD[service]
   const settingsOf = media => (service === 'fish'
     ? { model: media.fishModel, voices: media.fishVoices ?? [], region: '' }
@@ -252,12 +307,16 @@ export function createCloudSource(service, { urls = {} } = {}) {
       const { model, region } = settingsOf(media)
       const key = keys[service]
       const spec = requestSpec({ service, key, model, voice, region, urls }, text)
+      const through = via(region, proxy)
       let result
       try {
-        result = await postJson(spec.url, spec.body, { headers: spec.headers, signal, proxy: via(region, proxy) })
+        result = await bounded(timeouts.speech, signal, bound => postJson(spec.url, spec.body, { headers: spec.headers, signal: bound, proxy: through }))
       } catch (error) {
         if (signal?.aborted) throw error
-        throw httpError(502, cloudError(label, error, key))
+        if (service === 'fish' && error?.providerStatus === 402 && model !== FISH_FREE_MODEL) {
+          throw httpError(502, `Fish Audio 余额不足（HTTP 402）：${model} 按用量计费。去 fish.audio 充值，或在「配图与朗读 → 朗读来源 → Fish Audio」把模型换成 ${FISH_FREE_MODEL}（免费）。`)
+        }
+        throw cloudFailure(label, error, key, { route: routeOf(service, region, through), proxyMenu })
       }
       try {
         return audioOf(unpack(service, result.buffer), { contentType: result.contentType })
@@ -268,7 +327,7 @@ export function createCloudSource(service, { urls = {} } = {}) {
     /** The account's own voices (listAccountVoices), with the key in `keys`. */
     account({ media, keys, proxy, signal }) {
       const { region } = settingsOf(media)
-      return listAccountVoices({ service, key: keys[service], region, urls }, { proxy: via(region, proxy), signal })
+      return listAccountVoices({ service, key: keys[service], region, urls }, { proxy: via(region, proxy), signal, proxyMenu, timeoutMs: timeouts.list })
     },
   }
 }

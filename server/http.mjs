@@ -3,6 +3,7 @@
 // other Host so a DNS-rebinding page cannot drive the API. A phone must present
 // the access token. Mutating requests must carry X-Agent-Tavern (a custom
 // header forces a CORS preflight we never approve).
+import { randomBytes } from 'node:crypto'
 import { createServer } from 'node:http'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
@@ -25,12 +26,17 @@ import { KEYED as VOICE_KEYED } from './voice/index.mjs'
 import { createPromptLibrary } from './prompts.mjs'
 import { createForge } from './forge/index.mjs'
 import { chatPackage, importChatPackage, savePackagePicture } from './transfer.mjs'
-import { createStore, defaultDataRoot, httpError } from './store.mjs'
+import { createStore, defaultDataRoot, httpError, PRIVACY_NOTICE } from './store.mjs'
+import { createUpdater } from './update/index.mjs'
+import { createShortcut } from './update/install.mjs'
 import { normalizeBook } from './worldbook.mjs'
 import { replaceMacros } from './prompt.mjs'
 import { accessCookie, hostAllowed, isLoopback, lanAddresses, loginPage, readCookie, tokensEqual } from './access.mjs'
 
 const WEB_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'web')
+// The Windows launcher (launcher/): in a package, or built at a checkout's root.
+const LAUNCHER = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'CicaTavern.exe')
+const hasLauncher = () => process.platform === 'win32' && existsSync(LAUNCHER)
 // The Claude subscription backend is in this machine's own install only; public
 // trees (CicaTavern, the phone app) do not have the folder.
 const subscriptionBackend = existsSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'subscription', 'index.mjs'))
@@ -49,6 +55,8 @@ const STATIC = {
   '/history.js': ['history.js', 'text/javascript; charset=utf-8'],
   '/menu.js': ['menu.js', 'text/javascript; charset=utf-8'],
   '/forge.js': ['forge.js', 'text/javascript; charset=utf-8'],
+  '/update.js': ['update.js', 'text/javascript; charset=utf-8'],
+  '/privacy.js': ['privacy.js', 'text/javascript; charset=utf-8'],
   '/shared/speech.js': ['shared/speech.js', 'text/javascript; charset=utf-8'],
   '/shared/vars.js': ['shared/vars.js', 'text/javascript; charset=utf-8'],
   '/shared/regex.js': ['shared/regex.js', 'text/javascript; charset=utf-8'],
@@ -109,9 +117,13 @@ function readCardUpload(body) {
  * @param accessToken - required from every client, loopback included: on a
  *   phone any other app can reach 127.0.0.1. The Android app sets it as the
  *   WebView's cookie before loading the page.
+ * @param update - tests replace parts of the updater (server/update/index.mjs:
+ *   root, feed, check, spawnSwitch...).
  */
-export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition = 'personal', accessToken = null } = {}) {
+export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition = 'personal', accessToken = null, update = {} } = {}) {
   const features = { ...featuresOf(edition) }
+  // Which server process answers: a page waiting out a restart (设置 → 更多 → 更新) reloads when it changes.
+  const instance = randomBytes(6).toString('hex')
   // A tree without the subscription backend (CicaTavern, the phone) has no subscription whatever the edition says.
   if (!subscriptionBackend) features.subscription = false
   const store = createStore(dataRoot ?? defaultDataRoot(features.dataDir), { subscription: features.subscription, lan: features.lan })
@@ -139,6 +151,18 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
   const media = createMedia(store, { proxy: () => isolation.proxy, askInContext: engine.askInContext, features })
   const prompts = createPromptLibrary(store)
   const forge = createForge(store, { proxyNow: () => isolation.proxy, ledger, draw: (input, signal) => media.drawCardArt(input, signal) })
+  // 设置 → 更多 → 更新. A restart after an update starts the server the way this one was started.
+  let listenArg
+  const updater = createUpdater({
+    features,
+    proxy: () => isolation.proxy,
+    busy: () => engine.busy() || forge.busy(),
+    onShutdown,
+    dataRoot: store.dirs.root,
+    // A server started from a console (no idle exit) comes back hidden, so it should still quit on its own.
+    relaunch: () => ({ port: access.port, data: store.dirs.root, edition: features.edition, idleExit: Math.round(idleExitMs / 1000) || 60, proxy, listen: listenArg }),
+    ...update,
+  })
 
   /** The media settings for the page: secrets only as "set, ends in …". */
   async function mediaSettingsView(settings) {
@@ -194,7 +218,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
   }
 
   const routes = [
-    ['GET', /^\/api\/health$/, () => ({ ok: true, app: 'agent-tavern', version: VERSION, edition: features.edition })],
+    ['GET', /^\/api\/health$/, () => ({ ok: true, app: 'agent-tavern', version: VERSION, edition: features.edition, instance })],
     ['GET', /^\/api\/status$/, () => ({
       rateLimit: engine.rateLimit(),
       lastInit: engine.lastInit(),
@@ -203,6 +227,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       proxy: isolation.proxy,
       network: network.describe(),
       claudeExecutable: subscription ? subscription.executable() : null,
+      launcher: hasLauncher(),
+      privacyNoticeVersion: PRIVACY_NOTICE,
       version: VERSION,
       edition: features.edition,
       features,
@@ -661,6 +687,16 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     return false
   }
 
+  /**
+   * A connection nobody configured may be made: its setting is on (when one is
+   * named) and, in the public builds, the 隐私与网络 notice has been seen.
+   */
+  async function allowed(setting) {
+    const settings = await store.getSettings()
+    if (setting && settings[setting] === false) return false
+    return !features.privacyNotice || settings.privacyNotice >= PRIVACY_NOTICE
+  }
+
   async function handle(req, res) {
     const url = new URL(req.url, 'http://localhost')
     if (!(await allow(req, res, url))) return
@@ -674,8 +710,13 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     }
     if (req.method === 'GET' && STATIC[url.pathname]) {
       const [file, type] = STATIC[url.pathname]
+      let body = await readFile(path.join(WEB_ROOT, file))
+      // 隐私与网络 → 网络字体 off, or not agreed to yet: the page asks nothing of Google Fonts.
+      if (file === 'index.html' && !(await allowed('webFonts'))) {
+        body = body.toString('utf8').split('\n').filter(line => !/fonts\.(googleapis|gstatic)\.com/.test(line)).join('\n')
+      }
       res.writeHead(200, { 'content-type': type, 'cache-control': 'no-cache' })
-      return res.end(await readFile(path.join(WEB_ROOT, file)))
+      return res.end(body)
     }
     const avatar = /^\/api\/cards\/([\w-]+)\/avatar$/.exec(url.pathname)
     if (req.method === 'GET' && avatar) {
@@ -800,6 +841,37 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       return sendJson(res, 200, { image, chat: { ...chatView(await store.saveChat(fresh)), running: engine.isRunning(chatId) } })
     }
 
+    // 设置 → 更多 → 更新: any page may check; downloading, switching versions and
+    // deleting old folders only from this computer, like 停止后台服务.
+    if (url.pathname === '/api/update' || url.pathname.startsWith('/api/update/')) {
+      const local = isLoopback(req.socket.remoteAddress)
+      const action = url.pathname.slice('/api/update'.length) || '/'
+      const body = req.method === 'GET' ? {} : await readBody(req)
+      const view = result => sendJson(res, 200, { ...result, local })
+      // The daily check by itself waits for the 隐私与网络 notice; 检查更新 is the user asking.
+      if (req.method === 'GET' && action === '/') return view(await (url.searchParams.get('auto') === '1' && (await allowed()) ? updater.check() : updater.status()))
+      if (req.method === 'POST' && action === '/check') return view(await updater.check({ force: true }))
+      if (req.method === 'PUT' && action === '/settings') return view(await updater.setAutoCheck(body.autoCheck !== false))
+      if (req.method === 'POST' && action === '/ack') return view(await updater.acknowledge())
+      if (req.method === 'POST' && action === '/skip') return view(await updater.skip(body.version))
+      const own = { 'GET /installs': () => updater.installs(), 'POST /download': () => updater.download(), 'POST /cancel': () => updater.cancel(), 'POST /apply': () => updater.apply(), 'POST /rollback': () => updater.rollback(), 'POST /remove': () => updater.remove(body.path) }[`${req.method} ${action}`]
+      if (!own) return sendJson(res, 404, { error: '没有这个接口' })
+      if (!local) return sendJson(res, 403, { error: '只能在这台电脑上更新' })
+      return view(await own())
+    }
+
+    // 设置 → 更多 →「桌面快捷方式」: CicaTavern.exe makes it itself (IShellLink), only for this computer.
+    if (req.method === 'POST' && url.pathname === '/api/shortcut') {
+      if (!isLoopback(req.socket.remoteAddress)) return sendJson(res, 403, { error: '只能在这台电脑上创建快捷方式' })
+      if (!hasLauncher()) return sendJson(res, 404, { error: '没有 CicaTavern.exe' })
+      const body = await readBody(req)
+      try {
+        return sendJson(res, 200, { file: await createShortcut(LAUNCHER, { startMenu: body.startMenu === true }) })
+      } catch (error) {
+        return sendJson(res, 500, { error: `快捷方式没建成：${error.message}` })
+      }
+    }
+
     if (req.method === 'POST' && url.pathname === '/api/shutdown') {
       if (!onShutdown) return sendJson(res, 404, { error: '这个服务不能从页面停止' })
       if (!isLoopback(req.socket.remoteAddress)) return sendJson(res, 403, { error: '只能在这台电脑上停止服务' })
@@ -834,6 +906,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     subscription,
     features,
     network,
+    updater,
     bound,
     async listen({ port = 8791, listen } = {}) {
       await store.init()
@@ -842,6 +915,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       await initTemplates()
       const settings = await store.getSettings()
       await network.apply(settings.proxy)
+      if (listen === 'lan' || listen === 'local') listenArg = listen
       const wanted = listen === 'lan' || listen === 'local' ? listen : settings.listen === 'lan' ? 'lan' : 'local'
       const mode = features.lan ? wanted : 'local'
       const host = mode === 'lan' ? '0.0.0.0' : '127.0.0.1'

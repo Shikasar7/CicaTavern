@@ -90,7 +90,9 @@ export function cleanVoiceKey(value) {
  */
 export function createVoices({ root, settings, providers, proxy = () => null, features = null, urls = {} }) {
   const bridge = createBridge({ root, features })
-  const sources = [createOpenaiSource(), createCloudSource('fish', { urls }), createCloudSource('minimax', { urls })]
+  // The phone has no 设置 → 网络代理 to point to.
+  const proxyMenu = features?.proxy !== false
+  const sources = [createOpenaiSource(), createCloudSource('fish', { urls, proxyMenu }), createCloudSource('minimax', { urls, proxyMenu })]
   const byId = new Map(sources.map(source => [source.id, source]))
   const ttsDir = path.join(root, 'media', 'tts')
 

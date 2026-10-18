@@ -63,9 +63,11 @@ const TEMPLATES = [
     note: '阿里云百炼，密钥在 bailian.console.aliyun.com 创建。qwen-max / qwen-plus 自动指向当前版本。',
   },
   {
-    name: '火山方舟', api: 'openai-completions', baseURL: 'https://ark.cn-beijing.volces.com/api/v3', apiKeyEnv: 'ARK_API_KEY', proxy: 'direct',
-    models: [{ id: 'deepseek-v4.1-flash' }],
-    note: '字节火山引擎（豆包、DeepSeek、GLM 等），模型要先在方舟控制台开通。买了 Agent / Coding 套餐的，地址换成 https://ark.cn-beijing.volces.com/api/plan/v3。',
+    name: '火山方舟 Agent Plan', api: 'openai-responses', baseURL: 'https://ark.cn-beijing.volces.com/api/plan/v3', apiKeyEnv: 'ARK_API_KEY', proxy: 'direct',
+    models: [{ id: 'deepseek-v4.1-flash' }, { id: 'glm-5.3-flash' }],
+    // The plan's address has no model list (GET …/models is 404).
+    listModels: false,
+    note: '字节火山引擎的 Agent Plan 包月套餐（DeepSeek、GLM、豆包、Kimi 等），国内直连。专属 API Key 在方舟控制台的 Agent Plan 页面创建，和按量付费、Coding Plan 的 Key 不通用。按量付费的方舟把地址换成 https://ark.cn-beijing.volces.com/api/v3，接口选 OpenAI 兼容。',
   },
   {
     name: 'xAI Grok', api: 'openai-completions', baseURL: 'https://api.x.ai/v1', apiKeyEnv: 'XAI_API_KEY', proxy: 'global',
@@ -79,6 +81,7 @@ const TEMPLATES = [
   },
 ]
 const TEMPLATE_CHECK = '模型 ID 更新得很快，填好 Key 后点「从接口获取模型列表」核对一遍。'
+const TEMPLATE_NO_LIST = '这个地址不提供模型列表，模型 ID 照控制台里写的填，一行一个。'
 
 /** "id" or "id = 显示名" per line. */
 function parseModels(text) {
@@ -301,7 +304,7 @@ export function initProviders({ api, el, toast, guard, saveFile, onChanged }) {
         other.classList.toggle('on', other === chip)
         other.setAttribute('aria-pressed', String(other === chip))
       }
-      templateNote.textContent = `${template.note} ${TEMPLATE_CHECK}`
+      templateNote.textContent = `${template.note} ${template.listModels === false ? TEMPLATE_NO_LIST : TEMPLATE_CHECK}`
       templateNote.hidden = false
       apiKey.focus()
     }

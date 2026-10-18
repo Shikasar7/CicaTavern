@@ -1,6 +1,6 @@
 // Agent Tavern web UI. Plain DOM, no build step.
 import { displayOf, htmlFrame, listenForFrameHeights, segments, streamingText, usesStatusPlaceholder } from '/render.js'
-import { broadcastInput, installFrameBridge, parseSlash, storedFrameStorage, storedVariables } from '/compat.js'
+import { allowLibraries, broadcastInput, installFrameBridge, parseSlash, storedFrameStorage, storedVariables } from '/compat.js'
 import { renderUsage } from '/usage.js'
 import { initPresets } from '/presets.js'
 import { initProviders } from '/providers.js'
@@ -8,6 +8,8 @@ import { initMedia } from '/media.js'
 import { initHistory } from '/history.js'
 import { createMenu, MENU_ICONS, whoLine } from '/menu.js'
 import { initForge } from '/forge.js'
+import { initUpdate } from '/update.js'
+import { connectionList, showPrivacyNotice } from '/privacy.js'
 
 const $ = id => document.getElementById(id)
 const EMPTY = $('empty')
@@ -1465,6 +1467,9 @@ const openSettings = guard(async () => {
   }
   renderAccess(await api('/api/access').catch(() => null))
   fillProxy(form, ui.settings.proxy, await api('/api/network').catch(() => null))
+  form.webFonts.checked = ui.settings.webFonts !== false
+  form.cdnLibraries.checked = ui.settings.cdnLibraries !== false
+  $('privacy-list').replaceChildren(connectionList(el, { updates: Boolean(ui.features?.updates) }))
   if (!ui.models.some(m => m.id === form.model.value)) form.model.value = ui.defaultModel ?? ui.models[0]?.id ?? ''
   const card = ui.cards.find(c => c.id === ui.cardId)
   const options = $('book-options')
@@ -1478,7 +1483,7 @@ const openSettings = guard(async () => {
         : [el('p', { class: 'book-none', text: '还没有导入独立世界书。想给这张卡多挂一本，先用「导入角色卡、世界书或预设」导入世界书 JSON。' })]),
     )
   }
-  const [providers, presets] = await Promise.all([api('/api/providers').catch(() => null), api('/api/presets').catch(() => [])])
+  const [providers, presets] = await Promise.all([api('/api/providers').catch(() => null), api('/api/presets').catch(() => []), updateUi.load()])
   settingsMenu.start()
   layOutSettings({ form, card, providers: providers?.providers ?? [], presets })
   $('settings-dialog').showModal()
@@ -1577,6 +1582,19 @@ function layOutSettings({ form, card, providers, presets }) {
       summary: () => '画图方式、朗读来源，每张卡的画风、名册和音色',
     },
     {
+      id: 'update', title: '更新', look: 'shared', pane: settingsPages.update, hidden: () => !updateUi.enabled(),
+      summary: () => updateUi.summary(),
+      status: () => updateUi.status(),
+    },
+    {
+      id: 'privacy', title: '隐私与网络', look: 'shared', pane: settingsPages.privacy,
+      summary: () => `不用配置也会连：${[form.webFonts.checked && '网络字体', form.cdnLibraries.checked && '酒馆助手脚本库'].filter(Boolean).join('、') || '都关了'}`,
+    },
+    {
+      id: 'shortcut', title: '桌面快捷方式', look: 'shared', action: () => makeShortcut(), hidden: () => !ui.launcher,
+      summary: () => '在桌面放一个 CicaTavern 图标，指向这个文件夹里的 CicaTavern.exe',
+    },
+    {
       id: 'show-prompt', title: '查看当前对话的提示词', look: 'shared',
       action: () => (ui.chat ? showPrompt() : toast('先打开一个对话')),
       summary: () => noChat() || '固定前缀和最近一轮发出去的内容',
@@ -1600,7 +1618,7 @@ function layOutSettings({ form, card, providers, presets }) {
       { id: 'write', title: '写作', icon: MENU_ICONS.write, rows: ['persona', 'style', 'presets'] },
       { id: 'books', title: '世界书与状态', icon: MENU_ICONS.book, rows: ['scan', cardRow, 'books'] },
       { id: 'link', title: '连接', icon: MENU_ICONS.link, rows: ['network', 'access'] },
-      { id: 'more', title: '更多', icon: MENU_ICONS.tools, rows: ['media', 'show-prompt', 'rebuild-prompt', 'stop-server'] },
+      { id: 'more', title: '更多', icon: MENU_ICONS.tools, rows: ['media', 'update', 'privacy', 'shortcut', 'show-prompt', 'rebuild-prompt', 'stop-server'] },
     ],
     sections,
     note: '名字、角色设定和文风写进对话开局时的固定前缀，只对之后新开的对话生效；模型、思考、字数和世界书扫描随时生效。',
@@ -1627,11 +1645,14 @@ const saveSettings = guard(async () => {
         dynamicStrip: form.dynamicStrip.value,
         replyLength: Math.max(0, num('replyLength')),
         listen: form.listen.value === 'lan' ? 'lan' : 'local',
+        webFonts: form.webFonts.checked,
+        cdnLibraries: form.cdnLibraries.checked,
         ...(form.proxyMode.disabled ? {} : { proxy: form.proxyMode.value === 'manual' ? form.proxyUrl.value.trim() : form.proxyMode.value }),
       },
     }),
   ])
   fillProxy(form, ui.settings.proxy, await api('/api/network').catch(() => null))
+  allowLibraries(ui.settings.cdnLibraries !== false)
   if (ui.cardId) {
     const ids = [...form.querySelectorAll('input[name="book"]:checked')].map(i => i.value)
     await api(`/api/cards/${ui.cardId}/worldbooks`, { method: 'PUT', body: { ids } })
@@ -1724,6 +1745,12 @@ function holdPresence() {
   presence = new EventSource('/api/presence')
 }
 
+// CicaTavern.exe makes the shortcut itself (IShellLink); the server only asks it to.
+const makeShortcut = guard(async () => {
+  const { file } = await api('/api/shortcut', { method: 'POST', body: {} })
+  toast(`已创建：${file}`, 6000)
+})
+
 const stopServer = guard(async () => {
   if (ui.generating) throw new Error('正在生成，先停止')
   if (!confirm('停止后台服务？这个窗口和手机上的页面都会断开，下次从桌面图标打开。')) return
@@ -1754,6 +1781,8 @@ const mediaUi = initMedia({
 })
 
 const historyUi = initHistory({ el, getChat: () => ui.chat })
+
+const updateUi = initUpdate({ api, el, toast, guard, onChange: () => settingsMenu?.refresh(), isGenerating: () => ui.generating })
 
 const forgeUi = initForge({
   api,
@@ -2041,6 +2070,26 @@ async function boot() {
   for (const [key, value] of Object.entries(ui.features)) {
     if (typeof value === 'boolean') document.documentElement.dataset[`feature${key[0].toUpperCase()}${key.slice(1)}`] = String(value)
   }
+  ui.launcher = Boolean(status?.launcher)
+  ui.settings = await api('/api/settings').catch(() => null)
+  // The public builds say, once, what they connect to without being configured; nothing of it happens before.
+  if (ui.features.privacyNotice && ui.settings && ui.settings.privacyNotice < (status?.privacyNoticeVersion ?? 1)) {
+    allowLibraries(false)
+    const update = await api('/api/update').catch(() => ({}))
+    await showPrivacyNotice({
+      el,
+      features: ui.features,
+      settings: ui.settings,
+      autoCheck: update.autoCheck,
+      async save(choice) {
+        if (choice.autoCheck !== undefined) await api('/api/update/settings', { method: 'PUT', body: { autoCheck: choice.autoCheck } })
+        ui.settings = await api('/api/settings', { method: 'PUT', body: { webFonts: choice.webFonts, cdnLibraries: choice.cdnLibraries, privacyNotice: status.privacyNoticeVersion } })
+      },
+    })
+    // The web font, when wanted, comes with the page.
+    if (ui.settings.webFonts) return location.reload()
+  }
+  allowLibraries(ui.settings?.cdnLibraries !== false)
   if (ui.features.subscription) {
     subscriptionPage = await import('/subscription.js').catch(() => null)
     document.querySelector('.brand-sub').textContent = '个人版 · 可用 Claude 订阅'
@@ -2055,6 +2104,8 @@ async function boot() {
   }
   checkAuth()
   loadModels()
+  // The daily update check runs on the server; this only asks how it went.
+  updateUi.boot()
   ui.books = await api('/api/worldbooks').catch(() => [])
   await refreshCards()
   // Start on the newest card still in the list; archived ones wait until asked for.

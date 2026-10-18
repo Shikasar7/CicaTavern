@@ -76,8 +76,15 @@ export const DEFAULT_SETTINGS = Object.freeze({
   listen: 'local', // 'local' or 'lan'; applied on the next start
   subscription: 'on', // 'off' hides the Claude subscription models (API providers only)
   proxy: null, // 'none' | 'system' | an http(s) URL; null = the edition's default (proxy.mjs)
+  // Connections nobody configured (隐私与网络; the public builds ask once, privacyNotice = the notice's version seen):
+  webFonts: true, // the body font from Google Fonts
+  cdnLibraries: true, // jQuery, Vue, Tailwind… from jsDelivr for cards built for Tavern Helper (web/compat.js)
+  privacyNotice: 0,
   media: null, // pictures and voice (media.mjs cleanMedia); written through /api/media/settings only
 })
+
+/** The 隐私与网络 notice's version: settings.privacyNotice below it means not seen yet. */
+export const PRIVACY_NOTICE = 1
 
 export const DEFAULT_PERSONA = Object.freeze({ name: '你', description: '' })
 
@@ -123,6 +130,9 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
       if (next.subscription !== 'off') next.subscription = 'on'
       next.proxy = cleanProxySetting(next.proxy)
       if (!['often', 'rare', 'off'].includes(next.dynamicStrip)) next.dynamicStrip = 'rare'
+      next.webFonts = next.webFonts !== false
+      next.cdnLibraries = next.cdnLibraries !== false
+      next.privacyNotice = Math.max(0, Math.floor(Number(next.privacyNotice) || 0))
       const saved = lockSettings(next)
       await writeJson(path.join(root, 'settings.json'), saved)
       return saved

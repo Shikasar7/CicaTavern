@@ -361,8 +361,8 @@ function isLoopbackHost(hostname) {
 
 const agents = new Map()
 
-/** Node's own proxy support (http.Agent `proxyEnv`), scoped to these requests only. */
-function agentFor(url, proxy) {
+/** Node's own proxy support (http.Agent `proxyEnv`), scoped to these requests (and the updater's) only. */
+export function agentFor(url, proxy) {
   if (!proxy || isLoopbackHost(url.hostname)) return undefined
   const key = `${url.protocol}${proxy}`
   if (!agents.has(key)) {

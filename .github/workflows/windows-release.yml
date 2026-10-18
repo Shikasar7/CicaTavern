@@ -1,0 +1,142 @@
+# Windows release: the package built from this repository's source on a
+# GitHub-hosted runner, so a signature can vouch for exactly this source.
+#
+#   1. Official Node.js, checked against the SHASUMS256.txt nodejs.org publishes.
+#   2. npm ci, npm test.
+#   3. CicaTavern.exe compiled from launcher/ with MSVC.
+#   4. With SignPath set up (the SIGNPATH_API_TOKEN secret and the SIGNPATH_*
+#      repository variables): the exe goes to SignPath and waits for the
+#      maintainer to approve it there; the signed exe comes back. Without it the
+#      package is built unsigned, as before.
+#   5. scripts/stage-release.mjs packs the zip; it goes to a DRAFT Release for the
+#      tag. The maintainer adds the APK (built and signed locally with the
+#      maintainer's own key) and the notes, then publishes.
+#
+# Runs when a version tag (v1.4.0) is pushed, or by hand for an existing tag.
+name: Windows release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to build, e.g. v1.4.0
+        required: true
+
+permissions:
+  contents: write # the draft Release and its zip
+  actions: read # SignPath reads the uploaded exe from this run
+
+env:
+  NODE_VERSION: v24.22.0
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    env:
+      SIGNING: ${{ secrets.SIGNPATH_API_TOKEN != '' && vars.SIGNPATH_ORGANIZATION_ID != '' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Version matches the tag
+        shell: bash
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [ "v$version" != "$TAG" ]; then echo "package.json says $version, the tag is $TAG"; exit 1; fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Official Node.js, checked against nodejs.org's SHASUMS256
+        shell: bash
+        run: |
+          set -euo pipefail
+          zip="node-${NODE_VERSION}-win-x64.zip"
+          curl -fsSLO "https://nodejs.org/dist/${NODE_VERSION}/${zip}"
+          curl -fsSLO "https://nodejs.org/dist/${NODE_VERSION}/SHASUMS256.txt"
+          grep "  ${zip}\$" SHASUMS256.txt | sha256sum -c -
+          unzip -q "$zip" -d "$RUNNER_TEMP"
+          dir="$RUNNER_TEMP/node-${NODE_VERSION}-win-x64"
+          echo "NODE_DIR=$dir" >> "$GITHUB_ENV"
+          echo "$dir" >> "$GITHUB_PATH"
+          rm "$zip" SHASUMS256.txt
+
+      - name: Install and test
+        shell: bash
+        run: |
+          node --version
+          npm ci
+          npm test
+
+      - name: Build CicaTavern.exe
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/unsigned"
+          node scripts/build-launcher.mjs --out "$RUNNER_TEMP/unsigned/CicaTavern.exe"
+          echo "EXE=$RUNNER_TEMP/unsigned/CicaTavern.exe" >> "$GITHUB_ENV"
+
+      - name: Upload the exe for signing
+        if: env.SIGNING == 'true'
+        id: unsigned
+        uses: actions/upload-artifact@v7
+        with:
+          name: CicaTavern-exe-unsigned
+          path: ${{ runner.temp }}/unsigned/CicaTavern.exe
+          if-no-files-found: error
+
+      - name: Sign through SignPath (waits for approval)
+        if: env.SIGNING == 'true'
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: ${{ runner.temp }}/signed
+
+      - name: Use the signed exe
+        if: env.SIGNING == 'true'
+        shell: bash
+        run: echo "EXE=$RUNNER_TEMP/signed/CicaTavern.exe" >> "$GITHUB_ENV"
+
+      - name: Stage and zip
+        shell: bash
+        run: |
+          out="$RUNNER_TEMP/dist/CicaTavern-${VERSION}-win-x64"
+          node scripts/stage-release.mjs --out "$out" --node "$NODE_DIR/node.exe" --exe "$EXE" --zip
+          echo "ZIP=$out.zip" >> "$GITHUB_ENV"
+          echo "ZIP_SHA256=$(sha256sum "$out.zip" | cut -d' ' -f1)" >> "$GITHUB_ENV"
+
+      - name: Keep the zip with this run
+        uses: actions/upload-artifact@v7
+        with:
+          name: CicaTavern-${{ env.VERSION }}-win-x64
+          path: ${{ env.ZIP }}
+          archive: false
+
+      - name: Draft Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sed -e "s/{{VERSION}}/${VERSION}/g" -e "s/{{NODE_VERSION}}/${NODE_VERSION}/g" -e "s/{{ZIP_SHA256}}/${ZIP_SHA256}/g" -e "s/{{SIGNED}}/$([ "$SIGNING" = true ] && echo '已签名（SignPath Foundation）' || echo '未签名')/g" docs/release-notes-template.md > "$RUNNER_TEMP/notes.md"
+          if draft=$(gh release view "$TAG" --json isDraft -q .isDraft 2>/dev/null); then
+            # A published release keeps its files: the in-app updater checks their SHA-256.
+            if [ "$draft" != "true" ]; then echo "$TAG is already published; not replacing its zip"; exit 1; fi
+          else
+            gh release create "$TAG" --draft --verify-tag --title "CicaTavern ${VERSION}" --notes-file "$RUNNER_TEMP/notes.md"
+          fi
+          gh release upload "$TAG" "$ZIP" --clobber
+          {
+            echo "### CicaTavern ${VERSION}"
+            echo ""
+            echo "- CicaTavern.exe: $([ "$SIGNING" = true ] && echo 'signed through SignPath' || echo 'unsigned')"
+            echo "- SHA-256 \`${ZIP_SHA256}\`  $(basename "$ZIP")"
+            echo "- Draft Release: add the APK and the notes, then publish."
+          } >> "$GITHUB_STEP_SUMMARY"

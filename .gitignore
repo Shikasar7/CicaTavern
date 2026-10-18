@@ -1,5 +1,7 @@
 node_modules/
 dist/
+# The launcher built for a checkout (scripts/build-launcher.mjs)
+/CicaTavern.exe
 # Android build output, the downloaded nodejs-mobile and this machine's SDK path (android/README.md)
 android/.gradle/
 android/build/

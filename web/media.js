@@ -1508,7 +1508,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       keyField('fish', 'API Key', voiceKeys.fish, 'fish.audio → API Keys 里创建', fishBadge.update),
       field('模型', el('select', { name: 'fishModel' }, FISH_MODELS.map(([value, text]) => option(value, text, media.fishModel)))),
       field('音色（每行一个：音色页链接或 32 位 ID，后面可以空一格写名字）', el('textarea', { name: 'fishVoices', rows: 3, spellcheck: 'false', placeholder: 'https://fish.audio/m/0123456789abcdef0123456789abcdef 南晚', text: voiceListText(media.fishVoices) }),
-        '自己克隆的音色点「从账户读取音色」；别人的音色在 fish.audio 打开，复制地址栏的链接粘贴进来。回复里的情绪放在台词前当语气标签。按字数计费，走「设置」里的代理。'),
+        '自己克隆的音色点「从账户读取音色」；别人的音色在 fish.audio 打开，复制地址栏的链接粘贴进来。回复里的情绪放在台词前当语气标签。除 s2.1-pro-free 外按字数计费，账户没余额时换成它；走「设置」里的代理。'),
       el('div', { class: 'row voice-actions' }, [listen('fish'), fromAccount('fish')]),
     ])
 

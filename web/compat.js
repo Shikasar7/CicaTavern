@@ -34,8 +34,15 @@ const LIBRARIES = [
   },
 ]
 
+// 隐私与网络 → 酒馆助手脚本库 (and, in the public builds, not before the notice).
+let librariesAllowed = true
+export function allowLibraries(on) {
+  librariesAllowed = Boolean(on)
+}
+
 /** `<script>`/`<link>` tags for the libraries a frame body seems to use. */
 export function libraryTags(body) {
+  if (!librariesAllowed) return ''
   return LIBRARIES.filter(lib => lib.test.test(body)).flatMap(lib => lib.tags).join('')
 }
 

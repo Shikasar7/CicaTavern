@@ -258,6 +258,16 @@
         <div id="access-links" class="access-links muted small"></div>
         <p class="hint">改完要重启服务。不要把端口映射到公网：拿到链接的人能用你的模型额度。出门时在电脑和手机都装 Tailscale，用这里的 Tailscale 地址打开。手机打不开时，在 Windows 防火墙里允许 Node.js 入站。</p>
       </div>
+      <div data-section="privacy">
+        <div id="privacy-list" class="privacy-page"></div>
+        <label class="check-row"><input type="checkbox" name="webFonts"> 加载网络字体（Google Fonts）</label>
+        <label class="check-row"><input type="checkbox" name="cdnLibraries"> 加载酒馆助手脚本库（jsDelivr 等）</label>
+        <p class="hint">自动检查更新的开关在「更新」里。字体的改动下次打开时生效。</p>
+      </div>
+      <!-- Filled by web/update.js. -->
+      <div data-section="update" class="upd-page">
+        <p class="hint">正在读取…</p>
+      </div>
     </form>
   </dialog>
 

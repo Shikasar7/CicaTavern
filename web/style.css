@@ -1349,3 +1349,42 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .pop-menu button.danger:hover, .pop-menu button.danger:focus-visible { background: color-mix(in srgb, var(--bad) 10%, transparent); }
 .pop-menu .pop-head { font-size: 11.5px; color: var(--faint); padding: 6px 10px 2px; }
 .pop-menu hr { border: 0; border-top: 1px solid var(--line-soft); margin: 4px 2px; }
+
+/* 设置 → 更多 → 更新 (web/update.js) */
+.upd-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
+.upd-current { font-size: 14px; color: var(--ink); }
+.upd-path { word-break: break-all; line-height: 1.45; margin-top: 2px; }
+.menu-pane .upd-auto { margin: 0 0 4px; }
+.upd-new { margin: 14px 0 6px; padding: 14px 16px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--raised); }
+.upd-new-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.upd-new h3 { margin: 0; font-size: 15px; color: var(--lamp); }
+.upd-notes { max-height: 260px; overflow: auto; margin: 10px 0 12px; padding: 2px 12px; border-left: 2px solid var(--line); font-size: 13px; line-height: 1.7; color: var(--ink); }
+.upd-notes h4 { margin: 10px 0 2px; font-size: 13px; }
+.upd-notes p, .upd-notes ul { margin: 4px 0; }
+.upd-notes ul { padding-left: 1.3em; }
+.upd-notes hr { border: 0; border-top: 1px solid var(--line-soft); margin: 10px 0; }
+.upd-notes pre, .upd-result pre { white-space: pre-wrap; word-break: break-all; font: 11px/1.5 var(--mono); background: var(--surface); padding: 6px 8px; border-radius: 6px; margin: 6px 0; }
+.upd-new .row { gap: 8px; flex-wrap: wrap; align-items: center; }
+.upd-new .hint { margin: 8px 0 0; }
+.upd-skip { margin-top: 8px; }
+.upd-progress { display: flex; align-items: center; gap: 10px; margin: 4px 0 10px; }
+.upd-bar { flex: 1; height: 6px; border-radius: 3px; background: var(--line-soft); overflow: hidden; }
+.upd-bar span { display: block; height: 100%; background: var(--accent); transition: width .4s var(--ease); }
+.upd-latest { font-size: 13px; color: var(--ok); margin: 10px 0; }
+.upd-previous, .upd-install { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line-soft); font-size: 13px; }
+.upd-previous { margin-top: 12px; }
+.upd-installs { margin-top: 8px; font-size: 13px; }
+.upd-installs summary { cursor: pointer; color: var(--muted); padding: 6px 0; }
+.upd-result { margin: 10px 0; padding: 10px 12px; border-radius: 10px; background: var(--accent-soft); font-size: 13px; }
+.upd-result.failed { background: color-mix(in srgb, var(--bad) 10%, transparent); }
+.upd-result p { margin: 0 0 8px; }
+.upd-result pre { max-height: 200px; overflow: auto; }
+@media (max-width: 560px) { .upd-previous, .upd-install, .upd-head { flex-wrap: wrap; } }
+
+/* 隐私与网络 (web/privacy.js) */
+.privacy-notice { max-width: 560px; }
+.privacy-notice h2 { margin: 0 0 12px; font-size: 17px; }
+.privacy-list { margin: 0 0 12px; padding-left: 1.2em; font-size: 13px; line-height: 1.7; color: var(--ink); }
+.privacy-list li + li { margin-top: 4px; }
+.privacy-notice .check-row { margin: 0 0 8px; }
+.privacy-actions { justify-content: flex-end; margin-top: 8px; }
