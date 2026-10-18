@@ -8,7 +8,7 @@
 //   排查问题（带控制台）.cmd    the same with a console window showing the server's output
 //   runtime/node.exe           bundled Node (the official, OpenJS-signed build), so nothing needs installing
 //   bin/ server/ web/ examples/ node_modules/ (runtime modules only)
-//   package.json edition.json README.md CHANGELOG.md LICENSE THIRD_PARTY_NOTICES.md
+//   package.json edition.json README.md README.en.md CHANGELOG.md LICENSE THIRD_PARTY_NOTICES.md
 //
 // The release edition (server/edition.mjs): API providers only. Only what
 // scripts/public-files.mjs lets out is copied, and no @anthropic-ai module.
@@ -91,6 +91,13 @@ await writeFile(path.join(out, 'edition.json'), JSON.stringify({ edition: 'relea
 // The private repository keeps the release README apart from its own; the public tree has it as README.md.
 const releaseReadme = path.join(root, 'docs', 'README-release.md')
 await cp(existsSync(releaseReadme) ? releaseReadme : path.join(root, 'README.md'), path.join(out, 'README.md'))
+// The English README (README-release.en.md here, README.en.md in the public tree).
+for (const english of [path.join(root, 'docs', 'README-release.en.md'), path.join(root, 'README.en.md')]) {
+  if (existsSync(english)) {
+    await cp(english, path.join(out, 'README.en.md'))
+    break
+  }
+}
 await cp(path.join(root, 'CHANGELOG.md'), path.join(out, 'CHANGELOG.md'))
 if (existsSync(path.join(root, 'LICENSE'))) await cp(path.join(root, 'LICENSE'), path.join(out, 'LICENSE'))
 else console.warn('[stage-release] 仓库根目录还没有 LICENSE：发布前选一个许可证')

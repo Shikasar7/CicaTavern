@@ -2,7 +2,7 @@
 
 CicaTavern 的版本记录。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
-## 未发布
+## 1.4.0 - 2026-10-18
 
 ### 应用内更新
 
@@ -18,10 +18,11 @@ CicaTavern 的版本记录。格式参考 [Keep a Changelog](https://keepachange
 - 包里不再有任何脚本启动器：去掉了「启动 CicaTavern.vbs」和「创建桌面快捷方式.cmd」。桌面快捷方式改在 设置 → 更多 →「桌面快捷方式」里创建，由 CicaTavern.exe 用 Windows 自己的接口完成。
 - 「Start-CicaTavern.cmd」改名为「排查问题（带控制台）.cmd」，它和从命令行 `start.mjs --open` 启动时也打开应用窗口，不再打开浏览器标签页；只有没装 Edge 和 Chrome 时才用默认浏览器。
 - 第一次打开时会先说明 CicaTavern 会连哪些地方，确认之前一个都不连：检查更新（GitHub）、正文字体（Google Fonts）、酒馆助手卡片界面用的脚本库（jsDelivr 等），每一项都可以当场关掉，以后在 设置 → 更多 →「隐私与网络」里改。
-- Windows 包改由 GitHub Actions 从源码自动构建（Node.js 按官方 SHASUMS256 校验），为申请 SignPath 的开源代码签名做准备；在此之前 CicaTavern.exe 没有数字签名，第一次打开时 Windows 可能提示「已保护你的电脑」，点「更多信息 → 仍要运行」。README 加了隐私、卸载和 Code signing policy 三节。
+- Windows 包改由 GitHub Actions 从源码自动构建（Node.js 按官方 SHASUMS256 校验），为申请 SignPath 的开源代码签名做准备。SignPath 的申请已经提交；1.4.0 的 CicaTavern.exe 还没有数字签名，第一次打开时 Windows 可能提示「已保护你的电脑」，点「更多信息 → 仍要运行」。README 加了隐私、卸载和 Code signing policy 三节。
 
 ### 改进
 
+- README 有了英文版（README.en.md），两个页面顶上可以切换语言。应用界面暂时还是中文。
 - 添加供应商时的「火山方舟」模板换成「火山方舟 Agent Plan」：包月套餐的专属地址（/api/plan/v3）、OpenAI Responses 接口、国内直连，带上 deepseek-v4.1-flash 和 glm-5.3-flash。这个地址不提供模型列表，模板说明里写了照控制台填模型 ID；按量付费的方舟怎么改地址也写在说明里。
 
 ### 修复

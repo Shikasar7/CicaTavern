@@ -1,5 +1,7 @@
 <p align="center"><img src="docs/brand/banner.jpg" alt="CicaTavern" width="720"></p>
 
+<p align="center">简体中文 | <a href="README.en.md">English</a></p>
+
 # CicaTavern
 
 **Agent 式的 SillyTavern 角色卡酒馆。** 导入酒馆的角色卡、世界书和预设，用**你自己的模型 API**（DeepSeek、OpenRouter、Anthropic、OpenAI、Gemini、Kimi、智谱、通义、火山方舟、本机 Ollama 等）跑剧情：
@@ -86,9 +88,6 @@ Windows 解压即用，也有安卓版。数据全部存在你自己的设备上
 
 ## 快速开始（Windows）
 
-<!-- Remove this note when 1.4.0 is released. -->
-> 这里写的是即将发布的 1.4.0。[发布页](https://github.com/Shikasar7/CicaTavern/releases/latest)上现在的 1.3.1 还是双击「启动 CicaTavern.vbs」启动，用「创建桌面快捷方式.cmd」放桌面图标，没有应用内更新和首次启动的隐私说明。
-
 1. 解压到任意位置（路径里有中文也可以）。
 2. 双击 **「CicaTavern.exe」**：后台启动服务，并打开一个应用窗口（用 Edge 或 Chrome，没有地址栏）。第一次打开会先说明它会连哪些地方（见[隐私](#隐私)）。想要桌面图标：设置 → 更多 →「桌面快捷方式」。
 3. 第一次用：顶栏模型选择最下面的「管理模型供应商…」→「添加」→「从模板开始」，选一家，粘贴 API Key，再点「从接口获取模型列表」检查连接。然后在 设置 里选默认模型。
@@ -96,7 +95,7 @@ Windows 解压即用，也有安卓版。数据全部存在你自己的设备上
 
 自带 Node 运行环境（`runtime/node.exe`），不用另外安装任何东西。所有页面关掉约一分钟后，后台服务会自动退出；也可以在 设置 →「停止后台服务」立刻停止。
 
-第一次打开时，Windows 可能提示「Windows 已保护你的电脑」：还没有数字签名的版本，点「更多信息 → 仍要运行」就行，之后不会再问；应用内更新下载的新版本也不会再问（见[代码签名](#code-signing-policy)）。CicaTavern.exe 是个很小的程序（源码在 `launcher/`），只做两件事：不开黑色窗口地运行 `runtime\node.exe bin\launch.mjs`，以及用 Windows 自己的接口建桌面快捷方式；`runtime\node.exe` 是 Node.js 官方签名的原版。包里没有任何脚本启动器。要看服务的输出，用「排查问题（带控制台）.cmd」启动。
+**CicaTavern.exe 目前还没有数字签名**：已经申请 SignPath 的免费开源代码签名，批下来之后的版本会签名。在此之前，第一次打开时 Windows 可能提示「Windows 已保护你的电脑」，点「更多信息 → 仍要运行」就行，之后不会再问；应用内更新下载的新版本也不会再问（见[代码签名](#code-signing-policy)）。CicaTavern.exe 是个很小的程序（源码在 `launcher/`），只做两件事：不开黑色窗口地运行 `runtime\node.exe bin\launch.mjs`，以及用 Windows 自己的接口建桌面快捷方式；`runtime\node.exe` 是 Node.js 官方签名的原版。包里没有任何脚本启动器。要看服务的输出，用「排查问题（带控制台）.cmd」启动。
 
 ## 更新
 
@@ -203,7 +202,7 @@ CicaTavern 不收集使用数据，也不往开发者那里发任何东西。数
 
 Windows 包（含 CicaTavern.exe）由 GitHub Actions 从本仓库的源码自动构建（`.github/workflows/windows-release.yml`），每个发布页写明这一版是否签名。
 
-Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/)（申请通过之后的版本；在此之前的版本没有签名）。
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/)（申请通过之后的版本；在此之前的版本，包括 1.4.0，没有签名）。
 
 - Committers and reviewers: [Shikasar7](https://github.com/Shikasar7)
 - Approvers: [Shikasar7](https://github.com/Shikasar7)
