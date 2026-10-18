@@ -1543,9 +1543,12 @@ function layOutSettings({ form, card, providers, presets }) {
       id: 'scan', title: '扫描与状态', look: 'shared', tag: '所有对话', pane: settingsPages.scan,
       summary: () => `扫描最近 ${value('scanDepth')} 条 · 隔 ${value('reinjectAfter')} 轮再注入 · 每 ${value('stateRefreshEvery')} 轮重发状态 · ${STRIP[value('dynamicStrip')] ?? ''}`,
     },
-    card && {
-      id: 'books', title: '挂载的世界书', pane: settingsPages.books, crumb: `世界书与状态 · ${card.name}`,
+    // Without a card the row hides but the page stays mounted: a page left out of
+    // the layout leaves the document, and openSettings fills #book-options by id.
+    {
+      id: 'books', title: '挂载的世界书', pane: settingsPages.books, crumb: card ? `世界书与状态 · ${card.name}` : undefined, hidden: () => !card,
       summary: () => {
+        if (!card) return ''
         const own = card.bookEntries ? `卡里自带 ${card.bookEntries} 条` : '卡里没带世界书'
         const names = [...form.querySelectorAll('input[name="book"]:checked')].map(input => ui.books.find(b => b.id === input.value)?.name).filter(Boolean)
         const mounted = !ui.books.length ? '还没导入独立世界书' : names.length ? `挂了 ${names.length} 本：${names.join('、')}` : '没挂独立世界书'
