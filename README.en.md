@@ -97,7 +97,7 @@ If you can't quite say what you want, the creator guides you round by round:
 
 The Node runtime comes with it (`runtime/node.exe`); nothing else needs installing. About a minute after every page is closed, the background server exits by itself; 设置 → 停止后台服务 (Stop the background server) stops it at once.
 
-**CicaTavern.exe is not code-signed yet.** Free open-source signing through SignPath has been applied for; once it is approved, releases will be signed. Until then Windows may say "Windows protected your PC" the first time: click **More info → Run anyway**. It won't ask again, and versions downloaded by the in-app updater don't ask either (see [Code signing policy](#code-signing-policy)). CicaTavern.exe is a very small program (source in `launcher/`) that does two things: runs `runtime\node.exe bin\launch.mjs` without a console window, and creates the desktop shortcut through Windows' own interface. `runtime\node.exe` is the official, signed Node.js. There are no script launchers in the package. To see the server's output, start it with 排查问题（带控制台）.cmd (troubleshooting, with a console).
+**CicaTavern.exe is not code-signed.** Windows may say "Windows protected your PC" the first time: click **More info → Run anyway**. It won't ask again, and versions downloaded by the in-app updater don't ask either (see [Code signing](#code-signing)). CicaTavern.exe is a very small program (source in `launcher/`) that does two things: runs `runtime\node.exe bin\launch.mjs` without a console window, and creates the desktop shortcut through Windows' own interface. `runtime\node.exe` is the official, signed Node.js. There are no script launchers in the package. To see the server's output, start it with 排查问题（带控制台）.cmd (troubleshooting, with a console).
 
 ## Updates
 
@@ -200,15 +200,9 @@ What it connects to:
 
 Android: uninstall the app in the system settings; its data goes with it.
 
-## Code signing policy
+## Code signing
 
-The Windows package, including CicaTavern.exe, is built automatically from this repository's source by GitHub Actions (`.github/workflows/windows-release.yml`). Each release page says whether that release is signed.
-
-Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/) (for releases after the project is approved; earlier releases, 1.4.0 included, are unsigned).
-
-- Committers and reviewers: [Shikasar7](https://github.com/Shikasar7)
-- Approvers: [Shikasar7](https://github.com/Shikasar7)
-- Privacy policy: see [Privacy](#privacy) above. This program will not transfer any information to other networked systems unless specifically requested by the user, except for the connections listed there, which are shown at the first start and can be turned off.
+CicaTavern.exe is not code-signed at the moment. The Windows package, including CicaTavern.exe, is built automatically from this repository's source by GitHub Actions (`.github/workflows/windows-release.yml`; the build logs are on the Actions page). Every release page lists the zip's SHA-256, which the in-app updater checks too; use it to verify a package you downloaded by hand.
 
 The Android APK is signed locally by the author with their own key; the certificate fingerprint is on every release page.
 

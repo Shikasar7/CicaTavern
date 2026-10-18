@@ -95,7 +95,7 @@ Windows 解压即用，也有安卓版。数据全部存在你自己的设备上
 
 自带 Node 运行环境（`runtime/node.exe`），不用另外安装任何东西。所有页面关掉约一分钟后，后台服务会自动退出；也可以在 设置 →「停止后台服务」立刻停止。
 
-**CicaTavern.exe 目前还没有数字签名**：已经申请 SignPath 的免费开源代码签名，批下来之后的版本会签名。在此之前，第一次打开时 Windows 可能提示「Windows 已保护你的电脑」，点「更多信息 → 仍要运行」就行，之后不会再问；应用内更新下载的新版本也不会再问（见[代码签名](#code-signing-policy)）。CicaTavern.exe 是个很小的程序（源码在 `launcher/`），只做两件事：不开黑色窗口地运行 `runtime\node.exe bin\launch.mjs`，以及用 Windows 自己的接口建桌面快捷方式；`runtime\node.exe` 是 Node.js 官方签名的原版。包里没有任何脚本启动器。要看服务的输出，用「排查问题（带控制台）.cmd」启动。
+**CicaTavern.exe 目前没有数字签名**：第一次打开时 Windows 可能提示「Windows 已保护你的电脑」，点「更多信息 → 仍要运行」就行，之后不会再问；应用内更新下载的新版本也不会再问（见[代码签名](#代码签名)）。CicaTavern.exe 是个很小的程序（源码在 `launcher/`），只做两件事：不开黑色窗口地运行 `runtime\node.exe bin\launch.mjs`，以及用 Windows 自己的接口建桌面快捷方式；`runtime\node.exe` 是 Node.js 官方签名的原版。包里没有任何脚本启动器。要看服务的输出，用「排查问题（带控制台）.cmd」启动。
 
 ## 更新
 
@@ -198,15 +198,9 @@ CicaTavern 不收集使用数据，也不往开发者那里发任何东西。数
 
 安卓版：在系统设置里卸载应用即可，数据随应用一起删除。
 
-## Code signing policy
+## 代码签名
 
-Windows 包（含 CicaTavern.exe）由 GitHub Actions 从本仓库的源码自动构建（`.github/workflows/windows-release.yml`），每个发布页写明这一版是否签名。
-
-Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/)（申请通过之后的版本；在此之前的版本，包括 1.4.0，没有签名）。
-
-- Committers and reviewers: [Shikasar7](https://github.com/Shikasar7)
-- Approvers: [Shikasar7](https://github.com/Shikasar7)
-- Privacy policy: 见上面的[隐私](#隐私)。This program will not transfer any information to other networked systems unless specifically requested by the user, except for the connections listed there, which are shown at the first start and can be turned off.
+CicaTavern.exe 目前没有数字签名。Windows 包（含 CicaTavern.exe）由 GitHub Actions 从本仓库的源码自动构建（`.github/workflows/windows-release.yml`，构建记录在 Actions 页）。每个发布页都写着 zip 的 SHA-256，应用内更新也按它校验，手动下载的包可以用它核对。
 
 安卓 APK 由作者用自己的密钥在本地签名，证书指纹写在每个发布页。
 

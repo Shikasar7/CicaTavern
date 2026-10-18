@@ -40,14 +40,6 @@ Windows 包由 GitHub Actions 从本仓库源码自动构建（构建记录在 A
 SHA-256  45:84:66:61:33:a8:b9:9a:6a:d3:a1:4e:5e:d0:5e:d5:ec:2f:b9:23:87:30:68:6b:9b:5d:8b:eb:a3:e3:d5:9d
 ```
 
-## Code signing policy
-
-Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/) (for releases built after the project is approved; earlier builds are unsigned).
-
-- Committers and reviewers: [Shikasar7](https://github.com/Shikasar7)
-- Approvers: [Shikasar7](https://github.com/Shikasar7)
-- Privacy: see [隐私](https://github.com/Shikasar7/CicaTavern#隐私). CicaTavern sends nothing to the developer; the connections it makes without being configured (update check, web font, card script libraries) are listed at the first start and can be switched off.
-
 ## 第三方组件
 
 - Windows 包：Node.js（许可证在 `runtime/LICENSE`），其余见包里的 `THIRD_PARTY_NOTICES.md`。
