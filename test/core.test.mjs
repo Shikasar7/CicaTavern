@@ -4,7 +4,7 @@ import { deflateSync } from 'node:zlib'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { exportCard, importOwnCard, normalizeCard, parseCardFile, readPngText } from '../server/cards.mjs'
+import { cardSummary, exportCard, importOwnCard, normalizeCard, parseCardFile, readPngText } from '../server/cards.mjs'
 import { normalizeBook, triggeredEntries, initialState, constantEntries } from '../server/worldbook.mjs'
 import { applyStateUpdates, displayText, parseArgs } from '../server/state.mjs'
 import { buildSystemPrompt, buildTurnPrompt, renderEntry, replaceMacros } from '../server/prompt.mjs'
@@ -103,6 +103,16 @@ test('worldbook: constants, keyword, regex + AND_ALL secondary, dedupe, initvar'
   assert.equal(triggeredEntries(books, '桂花', new Set(['b:1'])).length, 0, 'recently injected entries are skipped')
   assert.equal(triggeredEntries(books, '老板来了', new Set()).length, 0, 'AND_ALL needs the secondary key')
   assert.equal(triggeredEntries(books, '老板生气了', new Set()).length, 1)
+})
+
+test('card summary counts its own book: entries, enabled, always-on among the enabled', () => {
+  const raw = structuredClone(SAMPLE_CARD)
+  raw.data.character_book.entries.push({ keys: [], content: '旧设定', constant: true, enabled: false, comment: '停用' })
+  const summary = cardSummary(normalizeCard(raw))
+  assert.deepEqual([summary.bookEntries, summary.bookEnabled, summary.bookConstant], [5, 4, 2])
+  delete raw.data.character_book
+  const bare = cardSummary(normalizeCard(raw))
+  assert.deepEqual([bare.bookEntries, bare.bookEnabled, bare.bookConstant], [0, 0, 0])
 })
 
 test('standalone SillyTavern world file shape', () => {

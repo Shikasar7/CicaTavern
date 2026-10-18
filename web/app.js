@@ -1469,12 +1469,13 @@ const openSettings = guard(async () => {
   const card = ui.cards.find(c => c.id === ui.cardId)
   const options = $('book-options')
   if (!card) options.replaceChildren(document.createTextNode('先选择一张角色卡'))
-  else if (!ui.books.length) options.replaceChildren(document.createTextNode('还没有导入独立世界书'))
   else {
     options.replaceChildren(
-      ...ui.books.map(book =>
-        el('label', {}, [el('input', { type: 'checkbox', name: 'book', value: book.id, checked: card.worldbookIds.includes(book.id) }), `${book.name}（${book.entries} 条）`]),
-      ),
+      cardBookLine(card),
+      ...(ui.books.length
+        ? ui.books.map(book =>
+          el('label', {}, [el('input', { type: 'checkbox', name: 'book', value: book.id, checked: card.worldbookIds.includes(book.id) }), `${book.name}（${book.entries} 条）`]))
+        : [el('p', { class: 'book-none', text: '还没有导入独立世界书。想给这张卡多挂一本，先用「导入角色卡、世界书或预设」导入世界书 JSON。' })]),
     )
   }
   const [providers, presets] = await Promise.all([api('/api/providers').catch(() => null), api('/api/presets').catch(() => [])])
@@ -1482,6 +1483,20 @@ const openSettings = guard(async () => {
   layOutSettings({ form, card, providers: providers?.providers ?? [], presets })
   $('settings-dialog').showModal()
 })
+
+/** 设置 → 挂载的世界书: the card's own book, which always applies, so it is a line and not a checkbox. */
+function cardBookLine(card) {
+  if (!card.bookEntries) return el('div', { class: 'card-book none', text: '这张卡没有自带世界书' })
+  return el('div', { class: 'card-book' }, [
+    el('span', { text: `卡里自带：${cardBookCount(card)}` }),
+    el('span', { class: 'card-book-on', text: '始终生效' }),
+  ])
+}
+
+/** "42 条（启用 41，其中常驻 24）"; just the total from a server that does not count the rest yet. */
+function cardBookCount(card) {
+  return card.bookEnabled == null ? `${card.bookEntries} 条` : `${card.bookEntries} 条（启用 ${card.bookEnabled}，其中常驻 ${card.bookConstant}）`
+}
 
 // The settings window as a menu (web/menu.js). Its pages are in index.html;
 // they are taken out of the form once, then placed by every layout.
@@ -1531,9 +1546,10 @@ function layOutSettings({ form, card, providers, presets }) {
     card && {
       id: 'books', title: '挂载的世界书', pane: settingsPages.books, crumb: `世界书与状态 · ${card.name}`,
       summary: () => {
-        if (!ui.books.length) return '还没导入独立世界书'
+        const own = card.bookEntries ? `卡里自带 ${card.bookEntries} 条` : '卡里没带世界书'
         const names = [...form.querySelectorAll('input[name="book"]:checked')].map(input => ui.books.find(b => b.id === input.value)?.name).filter(Boolean)
-        return names.length ? `${names.length} 本：${names.join('、')}` : '没挂独立世界书（卡里自带的照常生效）'
+        const mounted = !ui.books.length ? '还没导入独立世界书' : names.length ? `挂了 ${names.length} 本：${names.join('、')}` : '没挂独立世界书'
+        return `${own} · ${mounted}`
       },
     },
     {

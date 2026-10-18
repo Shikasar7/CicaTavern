@@ -218,6 +218,9 @@ export function cardSummary(card) {
     hasAvatar: card.hasAvatar,
     greetings: greetingsOf(card).length,
     bookEntries: card.book?.entries.length ?? 0,
+    // Of those, the ones in use, and the always-on ones among them (the rest wait for their keywords).
+    bookEnabled: card.book?.entries.filter(e => e.enabled !== false).length ?? 0,
+    bookConstant: card.book?.entries.filter(e => e.enabled !== false && e.constant).length ?? 0,
     worldbookIds: card.worldbookIds,
     creatorNotes: card.creatorNotes.slice(0, 400),
     // Cards imported before 0.2 stored only a count.
