@@ -348,7 +348,7 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
     const paragraphs = assistant.reply.split(/\n+/).filter(Boolean).map(p => el('p', { text: p }))
     const questions = live ? assistant.questions.map(questionCard) : []
     const asked = !live && assistant.questions.length ? el('p', { class: 'forge-asked', text: t`问了：${assistant.questions.map(q => q.title).join(' · ')}` }) : null
-    const note = live && assistant.unreadable ? el('p', { class: 'hint warn', text: t`这次回复的格式不完整，草图没有跟着更新。可以点「换一组问题」重来。` }) : null
+    const note = live && assistant.unreadable ? el('p', { class: 'hint warn', text: t`这次回复的格式不完整，问题或草图没能读出来。可以点「换一组问题」重来。` }) : null
     const tools = live
       ? el('div', { class: 'forge-say-tools' }, [
           el('span', { class: 'forge-by', text: assistant.model }),

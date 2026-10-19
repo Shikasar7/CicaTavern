@@ -791,7 +791,7 @@ export default {
   "你来定": "You decide",
   "都不是：{0}": "None of these: {0}",
   "问了：{0}": "Asked: {0}",
-  "这次回复的格式不完整，草图没有跟着更新。可以点「换一组问题」重来。": "This reply came back incomplete, so the sketch wasn't updated. Click \"New questions\" to try again.",
+  "这次回复的格式不完整，问题或草图没能读出来。可以点「换一组问题」重来。": "This reply came back incomplete, so the questions or the sketch couldn't be read. Click \"New questions\" to try again.",
   "换一组问题": "New questions",
   "让向导重新回这一轮": "Have the guide answer this turn again",
   "停下": "Stop",

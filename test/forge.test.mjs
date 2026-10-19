@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { configureEntries } from '../server/forge/configure.mjs'
 import { createForge } from '../server/forge/index.mjs'
-import { cleanQuestions, discussRequest, emptyBrief, forgeLanguages, mergeBrief, normalizePlan, partialReply, planRequest, readDiscussion, readPlan } from '../server/forge/prompts.mjs'
+import { cleanQuestions, discussRequest, emptyBrief, forgeLanguages, mergeBrief, normalizePlan, partialReply, planRequest, readDiscussion, readPlan, section } from '../server/forge/prompts.mjs'
 import { cardJson, entriesRequest, newCard, reviewRequest } from '../server/forge/write.mjs'
 import { withLanguage } from '../server/i18n.mjs'
 import { normalizeProvider } from '../server/providers.mjs'
@@ -114,6 +114,32 @@ test('a round is read back: reply, questions with two or more options, sketch; p
   assert.equal(plain.brief.title, '旧')
   // Fenced or slightly malformed JSON still reads.
   assert.equal(cleanQuestions(JSON.parse('[{"title":"x","options":["a","b"]}]'))[0].options[0].label, 'a')
+})
+
+test('an answer whose tags went astray still reads: the questions and the sketch are told apart by shape', () => {
+  const questions = '[{"id": "q1", "title": "故事放在哪？", "why": "", "kind": "single", "options": [{"label": "便利店", "sample": "「欢迎光临。」"}, {"label": "车站", "sample": "「末班车走了。」"}]}]'
+  const brief = '{"title": "雨宿", "readiness": 30, "items": [{"key": "lead", "label": "核心角色", "value": "店员", "by": "user"}], "open": []}'
+  const empty = { title: '', readiness: 0, items: [], open: [] }
+  // Closed with the sketch's tag, as deepseek-v4.1-flash does.
+  const crossed = readDiscussion(`<reply>\n下面两个问题。\n</reply>\n<questions>\n${questions}\n</brief>\n<brief>\n${brief}\n</brief>`, empty)
+  assert.equal(crossed.reply, '下面两个问题。')
+  assert.deepEqual(crossed.questions.map(q => q.title), ['故事放在哪？'])
+  assert.equal(crossed.brief.title, '雨宿')
+  assert.equal(crossed.readable, true)
+  // No opening tag for the sketch, or no tags at all.
+  for (const text of [`<reply>好</reply>\n<questions>\n${questions}\n</brief>\n${brief}`, `好\n${questions}\n${brief}`]) {
+    const read = readDiscussion(text, empty)
+    assert.equal(read.questions.length, 1)
+    assert.equal(read.brief.readiness, 30)
+  }
+  // Questions that were there but could not be read are reported, so the page says so.
+  const broken = readDiscussion(`<reply>好</reply><questions>[{"title": "坏了", "options": [</questions><brief>${brief}</brief>`, empty)
+  assert.equal(broken.questions.length, 0)
+  assert.equal(broken.brief.title, '雨宿')
+  assert.equal(broken.readable, false)
+  // The plan and the reviewer's notes share the reader.
+  assert.equal(section('<plan>{"name": "x"}</brief>', 'plan'), '{"name": "x"}')
+  assert.equal(section('<reply>a <user> b</reply>', 'reply'), 'a <user> b')
 })
 
 test('the sketch keeps what the user locked and what the model left out', () => {

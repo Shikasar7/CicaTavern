@@ -104,7 +104,7 @@ const discussSystem = (languages, settingsName = '') => `你是一位角色卡�
 
 ${talkWriting(languages)}
 
-回答严格分成下面三段，标签之外不写任何东西：
+回答严格分成下面三段，每段用自己的结束标签收尾（</reply>、</questions>、</brief>），标签之外不写任何东西：
 <reply>
 对用户说的话，2 到 5 句，像朋友聊天。
 </reply>
@@ -124,10 +124,46 @@ const KINDS = new Set(['single', 'multi', 'taste'])
 
 const clip = (value, max) => (typeof value === 'string' ? value.trim().slice(0, max) : '')
 
-/** Text between <tag> and </tag>; up to the end when the answer was cut off. */
+// The sections an answer is split into. <user> is not one: values name the player that way.
+const SECTIONS = 'reply|questions|brief|plan|issues'
+
+/**
+ * Text between <tag> and </tag>; up to the next section, or the end when the
+ * answer was cut off. Some models close a section with another one's tag
+ * (<questions>…</brief>): that stray tag is dropped.
+ */
 export function section(text, tag) {
-  const match = new RegExp(`<${tag}>([\\s\\S]*?)(?:</${tag}>|$)`, 'i').exec(String(text ?? ''))
-  return match ? match[1].trim() : ''
+  const source = String(text ?? '')
+  const open = new RegExp(`<${tag}>`, 'i').exec(source)
+  if (!open) return ''
+  const rest = source.slice(open.index + open[0].length)
+  const end = rest.search(new RegExp(`</${tag}>|<(?:${SECTIONS})>`, 'i'))
+  return (end < 0 ? rest : rest.slice(0, end)).replace(new RegExp(`(?:\\s*</(?:${SECTIONS})>)+\\s*$`, 'i'), '').trim()
+}
+
+/** Every JSON object or array in a text, in order; for answers whose tags went astray. */
+function jsonValues(text) {
+  const source = String(text ?? '')
+  const found = []
+  for (let start = source.search(/[[{]/); start >= 0; ) {
+    let depth = 0
+    let quoted = false
+    let end = -1
+    for (let i = start; i < source.length && end < 0; i++) {
+      const char = source[i]
+      if (quoted) {
+        if (char === '\\') i++
+        else if (char === '"') quoted = false
+      } else if (char === '"') quoted = true
+      else if (char === '[' || char === '{') depth++
+      else if ((char === ']' || char === '}') && --depth === 0) end = i
+    }
+    const value = end < 0 ? null : looseJson(source.slice(start, end + 1))
+    if (value && typeof value === 'object') found.push(value)
+    const next = source.slice(value ? end + 1 : start + 1).search(/[[{]/)
+    start = next < 0 ? -1 : (value ? end + 1 : start + 1) + next
+  }
+  return found
 }
 
 /** JSON from a model's answer: fences and chatter around it are ignored. */
@@ -259,12 +295,23 @@ export function discussRequest(rounds, brief, languages, { userName = '' } = {})
   return { system: discussSystem(languages, settingsNameOf(userName)), messages, maxTokens: TALK_TOKENS, softCap: true }
 }
 
-/** A round's answer → { reply, questions, brief }; whatever could be read. */
+const isQuestions = value => Array.isArray(value) && value.some(q => Array.isArray(q?.options))
+const isBrief = value => Boolean(value) && !Array.isArray(value) && (Array.isArray(value.items) || 'readiness' in value)
+
+/**
+ * A round's answer → { reply, questions, brief }; whatever could be read.
+ * When the tags went astray, the questions and the sketch are told apart by their shape.
+ */
 export function readDiscussion(text, previous) {
   const reply = section(text, 'reply') || (/<questions>|<brief>/i.test(text) ? '' : String(text ?? '').trim())
-  const questions = cleanQuestions(looseJson(section(text, 'questions')))
-  const briefJson = looseJson(section(text, 'brief'))
-  return { reply: reply.slice(0, 2000), questions, brief: briefJson ? mergeBrief(briefJson, previous) : previous, readable: Boolean(briefJson) }
+  const tagged = [looseJson(section(text, 'questions')), looseJson(section(text, 'brief'))]
+  let all
+  const find = test => tagged.find(test) ?? (all ??= jsonValues(text)).find(test)
+  const questions = cleanQuestions(find(isQuestions))
+  const briefJson = find(isBrief)
+  // Questions the answer had but that could not be read count as a broken answer too.
+  const lost = !questions.length && /<questions>\s*\[\s*\{/i.test(text)
+  return { reply: reply.slice(0, 2000), questions, brief: briefJson ? mergeBrief(briefJson, previous) : previous, readable: Boolean(briefJson) && !lost }
 }
 
 /** The reply part of an answer still being written, for the page to show as it comes. */
