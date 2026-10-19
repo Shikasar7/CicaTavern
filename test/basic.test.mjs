@@ -46,6 +46,20 @@ test('the built-in preset: narrator rules plus one paragraph per option, in the 
   assert.match(quiet, /用「你」称呼玩家角色「旅人」/)
   assert.match(quiet, /点到为止/)
   assert.equal(basicRules(cleanBasic({ intimacy: 'explicit' })).includes('面向成年玩家'), true)
+  // 破限: off by default; 软 adds the permission paragraph; 强 adds the protocol
+  // before the format rules and its closing confirmation after them.
+  assert.equal(BASIC_DEFAULTS.jailbreak, 'off')
+  assert.doesNotMatch(basicRules(BASIC_DEFAULTS), /创作许可|创作权限协议/)
+  const soft = basicRules(cleanBasic({ jailbreak: 'soft' }))
+  assert.match(soft, /创作许可：故事里的人物/)
+  assert.doesNotMatch(soft, /创作权限协议/)
+  const strong = basicRules(cleanBasic({ jailbreak: 'strong' }))
+  assert.match(strong, /【创作权限协议：成人分级】/)
+  assert.match(strong, /4\. 零说教/)
+  assert.match(strong, /以上要求全部有效/)
+  assert.ok(strong.indexOf('【创作权限协议') < strong.indexOf('回复依次包含'))
+  assert.ok(strong.indexOf('以上要求全部有效') > strong.indexOf('<choices>'))
+  assert.equal(cleanBasic({ jailbreak: 'wild' }).jailbreak, 'off')
   // Without the preset (chats from before it): the old rules, word for word.
   const old = buildChatPrompt({ card: CARD, persona: PERSONA, settings: { language: '简体中文' }, books: [], hasState: false }).systemPrompt
   assert.match(old, /只写故事正文，不写解释、点评、选项菜单或任何元信息。\n- 不替玩家决定「旅人」/)
