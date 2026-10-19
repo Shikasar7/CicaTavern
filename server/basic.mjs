@@ -83,10 +83,18 @@ const KNOWLEDGE = {
   on: '信息隔离：每个角色只知道自己亲历、亲耳听到或能合理得知的事。玩家角色「{{user}}」没说出口的想法和打算、别处发生的事、只有旁白知道的信息，角色一概不知，只能凭言行去猜，而且可能猜错。要让角色知道一件事，先写出他得知的途径。',
 }
 
+// 题材尺度. 放开 frames the story as adult fiction and lets dark material be
+// written as the plot needs; the model's own limits still hold.
+const ADULT_FICTION = '这是面向成年玩家的虚构故事。'
+const THEMES = {
+  standard: '',
+  open: `题材尺度：${ADULT_FICTION}暴力、犯罪、背叛、死亡、道德灰色这些黑暗题材，按剧情需要正面去写，不回避、不淡化，不把冲突轻轻带过。反派可以真的坏，角色可以偏激、残忍、自私，不把每个人都写得一团和气，也不替角色洗白。角色的言行和价值观属于角色本身，不代表叙述者；不跳出故事加免责声明、温馨提示或道德说教。`,
+}
+
 const INTIMACY = {
   restrained: '亲密与性内容点到为止：写情感和氛围，具体过程用转场或留白带过。',
   natural: '亲密与性内容随剧情自然发生，不回避也不刻意加戏；写到时可以直接描写，重在情感和互动，角色保持各自的性格和意愿。',
-  explicit: '这是面向成年玩家的虚构故事。亲密与性内容不回避、不淡化：用直白具体的词描写身体、动作和感官，放慢节奏细写过程和反应，不跳过、不总结、不做道德评判；角色保持各自的性格，反应各不相同。',
+  explicit: `${ADULT_FICTION}亲密与性内容不回避、不淡化：用直白具体的词描写身体、动作和感官，放慢节奏细写过程和反应，不跳过、不总结、不做道德评判；角色保持各自的性格，反应各不相同。`,
 }
 
 // 破限, after the local presets' 顶部破限协议 / 软破限 / 尾部破限: 软 says the
@@ -145,8 +153,10 @@ export function basicRules(options) {
     style ? `文风——${style}` : '',
     IMPERSONATION[options.impersonation],
     KNOWLEDGE[options.knowledge],
+    THEMES[options.themes],
     JAILBREAK[options.jailbreak],
-    INTIMACY[options.intimacy],
+    // Said once is enough: 放开 already framed the story as adult fiction.
+    options.themes === 'open' ? INTIMACY[options.intimacy].replace(ADULT_FICTION, '') : INTIMACY[options.intimacy],
     hasBasicFormat(options) ? formatRules(options) : '',
     JAILBREAK_TAIL[options.jailbreak],
   ]

@@ -8,6 +8,7 @@ export const BASIC_FIELDS = [
   { key: 'style', label: t`文风`, hint: t`更细的要求写在 设置 → 文风与字数，会和这里一起生效。`, values: [['natural', t`自然`], ['plain', t`白描`], ['cinematic', t`电影感`], ['delicate', t`细腻`], ['light', t`轻小说`], ['classical', t`古风`], ['webnovel', t`网文`]] },
   { key: 'impersonation', label: t`防抢话`, hint: t`标准：不替你说话、做决定；严格：写到该你回应的地方就停。`, values: [['off', t`关`], ['standard', t`标准`], ['strict', t`严格`]] },
   { key: 'knowledge', label: t`防全知`, hint: t`角色只知道自己能知道的事，猜不到你没说出口的想法。`, values: [['off', t`关`], ['on', t`开`]] },
+  { key: 'themes', label: t`题材尺度`, hint: t`放开：暴力、犯罪、背叛这类黑暗题材按剧情正面去写，反派可以真的坏，不跳出故事说教。模型自己的底线仍然有效。`, values: [['standard', t`常规`], ['open', t`放开`]] },
   { key: 'jailbreak', label: t`破限`, hint: t`软：不拒绝、不回避敏感题材，照剧情直接写；强：先声明创作权限，结尾再确认一次，仍然按上面的格式输出。模型自己的底线仍然有效。`, values: [['off', t`关`], ['soft', t`软破限`], ['strong', t`强破限`]] },
   { key: 'intimacy', label: t`亲密描写`, hint: t`克制：点到为止；自然：剧情到了就写；强化：直白细致。`, values: [['restrained', t`克制`], ['natural', t`自然`], ['explicit', t`强化`]] },
   { key: 'choices', label: t`行动选项`, hint: t`回复末尾给四个行动：点一下填进输入框，点箭头直接发送。`, values: [['off', t`关`], ['four', t`四个`]] },

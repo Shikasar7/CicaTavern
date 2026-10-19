@@ -46,6 +46,17 @@ test('the built-in preset: narrator rules plus one paragraph per option, in the 
   assert.match(quiet, /用「你」称呼玩家角色「旅人」/)
   assert.match(quiet, /点到为止/)
   assert.equal(basicRules(cleanBasic({ intimacy: 'explicit' })).includes('面向成年玩家'), true)
+  // 题材尺度: 常规 by default adds nothing; 放开 adds its paragraph, and the adult-fiction
+  // framing is said once even with 强化 intimacy.
+  assert.equal(BASIC_DEFAULTS.themes, 'standard')
+  assert.doesNotMatch(basicRules(BASIC_DEFAULTS), /题材尺度|黑暗题材/)
+  const open = basicRules(cleanBasic({ themes: 'open' }))
+  assert.match(open, /题材尺度：这是面向成年玩家的虚构故事。暴力、犯罪、背叛/)
+  assert.match(open, /不跳出故事加免责声明、温馨提示或道德说教/)
+  const both = basicRules(cleanBasic({ themes: 'open', intimacy: 'explicit' }))
+  assert.equal(both.split('面向成年玩家').length - 1, 1)
+  assert.match(both, /\n\n亲密与性内容不回避、不淡化/)
+  assert.equal(cleanBasic({ themes: 'wild' }).themes, 'standard')
   // 破限: off by default; 软 adds the permission paragraph; 强 adds the protocol
   // before the format rules and its closing confirmation after them.
   assert.equal(BASIC_DEFAULTS.jailbreak, 'off')
