@@ -3,6 +3,12 @@
 // starts (or when the preset is applied to it again); 每轮 prompts are rendered
 // into every turn, so toggling those takes effect on the next message.
 import { t } from '/i18n.js'
+import { BASIC_ID } from '/shared/basic.js'
+import { BASIC_FIELDS, basicField } from '/basic-options.js'
+
+// The built-in preset is '' in this list (the default setting); chats name it BASIC_ID.
+// Chats from before it existed have none (null): they show here too, as not yet applied.
+const listId = chat => (chat?.presetId === BASIC_ID ? '' : chat?.presetId ?? '')
 
 // What each placement of the prompts after the chat history means for the player.
 const POST_MODE_NOTES = {
@@ -30,14 +36,14 @@ const PLACEMENT = {
 }
 
 /**
- * @param deps - { api, el, toast, guard, getChat, isGenerating, onChatChanged(chatView), onPresetEdited(id) }
+ * @param deps - { api, el, toast, guard, getChat, isGenerating, onChatChanged(chatView), onPresetEdited(id), onBasicChanged(settings) }
  */
-export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenerating, onChatChanged, onPresetEdited }) {
+export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenerating, onChatChanged, onPresetEdited, onBasicChanged }) {
   const $ = id => document.getElementById(id)
   const state = {
     list: [],
     defaultId: '',
-    selected: null, // preset id, or '' for "no preset"
+    selected: null, // preset id, or '' for the built-in preset
     detail: null,
     query: '',
     open: new Set(), // expanded prompt ids
@@ -49,7 +55,7 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
     state.list = list
     state.defaultId = settings.presetId || ''
     const chat = getChat()
-    const wanted = selectId ?? chat?.presetId ?? (state.defaultId || list[0]?.id || '')
+    const wanted = selectId ?? (chat ? listId(chat) : state.defaultId)
     await select(list.some(p => p.id === wanted) ? wanted : '')
     if (!$('preset-dialog').open) $('preset-dialog').showModal()
   }
@@ -58,7 +64,7 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
     state.selected = id
     state.query = ''
     state.open.clear()
-    state.detail = id ? await api(`/api/presets/${id}`) : null
+    state.detail = await api(`/api/presets/${id || BASIC_ID}`)
     renderNav()
     renderMain()
   }
@@ -73,14 +79,14 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
     const item = (id, name, sub) => {
       const tags = []
       if (state.defaultId === id) tags.push(el('span', { class: 'tag', text: t`默认` }))
-      if (chat && (chat.presetId ?? '') === id) tags.push(el('span', { class: 'tag', text: t`当前对话` }))
+      if (chat && listId(chat) === id) tags.push(el('span', { class: 'tag', text: t`当前对话` }))
       return el('li', { class: state.selected === id ? 'active' : '', onclick: () => guard(select)(id) }, [
         el('div', { class: 'item-title' }, [el('span', { class: 'item-main', text: name }), ...tags]),
         el('div', { class: 'item-sub', text: sub }),
       ])
     }
     $('preset-list').replaceChildren(
-      item('', t`不用预设`, t`内置的叙述规则`),
+      item('', t`基础预设`, t`应用自带，轻量，选项可调`),
       ...state.list.map(p => item(p.id, p.name, t`启用 ${p.enabled}/${p.prompts} 条${p.regexScripts ? t`　正则 ${p.regexScripts}` : ''}`)),
     )
   }
@@ -92,8 +98,9 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
     const id = state.selected
     const detail = state.detail
     const isDefault = state.defaultId === (id ?? '')
-    const inChat = chat && (chat.presetId ?? '') === (id ?? '')
-    const stale = inChat && id && state.stale.has(id)
+    const inChat = chat && listId(chat) === (id ?? '')
+    // A chat from before the built-in preset still has the plain built-in rules in its prefix.
+    const stale = inChat && (state.stale.has(id) || (detail.builtin && !chat.presetId))
 
     const actions = el('div', { class: 'preset-actions' }, [
       el('button', { class: 'btn small', type: 'button', disabled: isDefault, text: isDefault ? t`已是新对话默认` : t`设为新对话默认`, onclick: guard(setDefault) }),
@@ -101,16 +108,23 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
         class: `btn small${stale ? ' primary' : ''}`, type: 'button', disabled: (inChat && !stale) || isGenerating(),
         text: inChat && !stale ? t`当前对话正在用` : t`用于当前对话`, onclick: guard(applyToChat),
       }) : null,
-      detail ? el('button', { class: 'btn small', type: 'button', text: t`导出`, title: t`连同在这里做的修改存成文件，用来搬到另一台设备（手机版）`, onclick: guard(exportPreset) }) : null,
-      detail ? el('button', { class: 'btn small danger', type: 'button', text: t`删除`, onclick: guard(remove) }) : null,
+      detail.builtin ? null : el('button', { class: 'btn small', type: 'button', text: t`导出`, title: t`连同在这里做的修改存成文件，用来搬到另一台设备（手机版）`, onclick: guard(exportPreset) }),
+      detail.builtin ? null : el('button', { class: 'btn small danger', type: 'button', text: t`删除`, onclick: guard(remove) }),
     ])
+    const applyBar = stale ? el('div', { class: 'preset-apply' }, [
+      el('span', { text: detail.builtin && !chat.presetId ? t`当前对话开始时还没有基础预设，用的是旧的内置规则。应用后改用基础预设，下一轮会重新写入一次缓存。` : t`当前对话的固定前缀还是改动前的版本。应用后，下一轮会重新写入一次缓存。` }),
+      el('button', { class: 'btn small primary', type: 'button', disabled: isGenerating(), text: t`应用到当前对话`, onclick: guard(applyToChat) }),
+    ]) : null
 
-    if (!detail) {
-      return [el('header', { class: 'preset-head' }, [
-        el('h3', { class: 'preset-title', text: t`不用预设` }),
-        el('div', { class: 'preset-meta', text: t`按内置规则叙述：只写正文、不替玩家行动、设定资料只作参考。你在设置里写的文风要求照常生效。` }),
-        actions,
-      ])]
+    if (detail.builtin) {
+      return [
+        el('header', { class: 'preset-head' }, [
+          el('h3', { class: 'preset-title', text: t`基础预设` }),
+          el('div', { class: 'preset-meta', text: t`应用自带的轻量预设：叙述规则加上下面这些选项，固定前缀里约 ${detail.rules.length.toLocaleString()} 字。改了选项对新对话生效，正在进行的对话点「应用到当前对话」。你在设置里写的文风要求照常生效。` }),
+          actions,
+        ]),
+        applyBar,
+      ]
     }
 
     const prefixChars = sumChars(detail, 'prefix')
@@ -131,24 +145,35 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
         el('div', { class: 'preset-meta', text: meta.join(t`。`) + t`。` }),
         actions,
       ]),
-      stale ? el('div', { class: 'preset-apply' }, [
-        el('span', { text: t`当前对话的固定前缀还是改动前的版本。应用后，下一轮会重新写入一次缓存。` }),
-        el('button', { class: 'btn small primary', type: 'button', disabled: isGenerating(), text: t`应用到当前对话`, onclick: guard(applyToChat) }),
-      ]) : null,
+      applyBar,
     ]
+  }
+
+  /** The built-in preset's page: its options, and what they add to the prompt. */
+  function renderBasic(main, head) {
+    const detail = state.detail
+    const pick = guard(async (key, value) => {
+      const settings = await api('/api/settings', { method: 'PUT', body: { basic: { ...detail.options, [key]: value } } })
+      state.detail = await api(`/api/presets/${BASIC_ID}`)
+      onBasicChanged?.(settings)
+      if (BASIC_FIELDS.find(f => f.key === key)?.prompt !== false) markStale()
+      $('preset-headwrap').replaceChildren(...headParts())
+      rules.textContent = state.detail.rules
+    })
+    const rules = el('pre', { class: 'basic-rules', text: detail.rules })
+    main.replaceChildren(
+      head,
+      el('div', { class: 'basic-options' }, BASIC_FIELDS.map(field => basicField(el, field, detail.options[field.key], { onPick: pick }))),
+      el('details', { class: 'basic-preview' }, [el('summary', { text: t`这些选项加进提示词的内容` }), rules]),
+      state.list.length ? null : el('p', { class: 'basic-import', text: t`想用 SillyTavern 的预设：在它的「AI 响应配置」里导出预设 JSON（或用 SillyTavern/data/default-user/OpenAI Settings 里的文件），点左上角「导入」或拖进窗口。` }),
+    )
   }
 
   function renderMain() {
     const main = $('preset-main')
     const detail = state.detail
     const head = el('div', { id: 'preset-headwrap' }, headParts())
-    if (!detail) {
-      main.replaceChildren(head, state.list.length ? null : el('div', { class: 'preset-empty' }, [
-        el('p', { text: t`还没有导入预设。` }),
-        el('p', { class: 'small', text: t`在 SillyTavern 的「AI 响应配置」里导出预设 JSON，或直接用 SillyTavern/data/default-user/OpenAI Settings 里的文件，点左上角「导入」或拖进窗口。` }),
-      ]))
-      return
-    }
+    if (detail.builtin) return renderBasic(main, head)
     const search = el('input', { type: 'search', placeholder: t`搜索条目名称或内容`, value: state.query })
     search.addEventListener('input', () => { state.query = search.value.trim().toLowerCase(); filterRows() })
     const mode = el('div', { class: 'seg', role: 'group', 'aria-label': t`聊天记录之后的条目` }, [
@@ -418,7 +443,7 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
 
   function markStale() {
     const chat = getChat()
-    if (chat && chat.presetId === state.selected) state.stale.add(state.selected)
+    if (chat && listId(chat) === state.selected) state.stale.add(state.selected)
   }
 
   async function setDefault() {
@@ -426,18 +451,18 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
     state.defaultId = state.selected || ''
     renderNav()
     renderMain()
-    toast(state.selected ? t`新对话默认使用「${state.detail.name}」` : t`新对话默认不用预设`)
+    toast(state.selected ? t`新对话默认使用「${state.detail.name}」` : t`新对话默认使用基础预设`)
   }
 
   async function applyToChat() {
     const chat = getChat()
     if (!chat) return
-    const view = await api(`/api/chats/${chat.id}/preset`, { method: 'POST', body: { presetId: state.selected || '' } })
+    const view = await api(`/api/chats/${chat.id}/preset`, { method: 'POST', body: { presetId: state.selected || BASIC_ID } })
     state.stale.delete(state.selected)
     onChatChanged(view)
     renderNav()
     renderMain()
-    toast(t`这个对话改用${view.presetName ? t`「${view.presetName}」` : t`内置规则`}。下一轮会重新写入一次缓存。`)
+    toast(t`这个对话改用「${view.presetId === BASIC_ID ? t`基础预设` : view.presetName}」。下一轮会重新写入一次缓存。`)
   }
 
   async function exportPreset() {
@@ -446,13 +471,13 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
   }
 
   async function remove() {
-    if (!confirm(t`删除预设「${state.detail.name}」？用它的对话会改回内置规则（下次应用时）。`)) return
+    if (!confirm(t`删除预设「${state.detail.name}」？用它的对话会改用基础预设（下次应用时）。`)) return
     await api(`/api/presets/${state.selected}`, { method: 'DELETE' })
     onPresetEdited?.(state.selected)
     const [list, settings] = await Promise.all([api('/api/presets'), api('/api/settings')])
     state.list = list
     state.defaultId = settings.presetId || ''
-    await select(list[0]?.id ?? '')
+    await select('')
   }
 
   $('preset-import').addEventListener('change', guard(async event => {

@@ -321,7 +321,8 @@ test('a Chinese page writing Chinese asks exactly as before; an English card get
   assert.match(card.entries.find(e => e.part === 'rules').content, /^Variable update rules:/)
   assert.match(reviewRequest(card, [], 'English').system, /suggestion 也用English写/)
   const json = cardJson(enPlan, card)
-  assert.deepEqual(json.data.extensions.regex_scripts.map(s => s.scriptName), ['Hide variable updates from the model', 'Hide variable updates from the player'])
+  assert.deepEqual(json.data.extensions.regex_scripts.map(s => s.scriptName), ['Hide variable updates from the model', 'Hide variable updates from the player', 'Hide the status bar from the model', 'Status bar'])
+  assert.match(json.data.extensions.tavern_helper.scripts[0].info, /^MVU variable framework/)
   // Plans from before the language was kept are Chinese.
   const { language, ...old } = zhPlan
   assert.match(entriesRequest(old, old.entries.slice(0, 1), []).system, /全文简体中文/)

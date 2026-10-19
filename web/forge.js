@@ -10,6 +10,8 @@
 //             upload the avatar, save it as a card and export the PNG.
 // The model works in the background; the window polls the draft while it does.
 import { t, zh } from '/i18n.js'
+import { cleanPath, cleanStatusSpec, rangeOf } from '/shared/status.js'
+import { statusBar } from '/status.js'
 const STEPS = [
   ['discuss', t`聊想法`],
   ['plan', t`定方案`],
@@ -33,6 +35,27 @@ const WORLD_KIND = new Map([[zh`真实`, t`真实`], [zh`架空`, t`架空`]])
 const STRATEGY = { constant: [t`常驻`, 'on'], keyword: [t`提到时`, 'key'], off: [t`不发送`, 'off'] }
 const POSITION = { before: t`角色定义前`, after: t`角色定义后`, depth: t`上下文末尾` }
 const STAGE_TEXT = { discuss: t`聊想法`, plan: t`定方案`, write: t`动笔`, polish: t`打磨与头像` }
+// How a tracked variable shows in the status bar, and the value type each implies (hidden keeps its own).
+const SHOWS = [['meter', t`进度条`], ['number', t`数字`], ['text', t`文字`], ['tags', t`标签`], ['flag', t`是或否`], ['hidden', t`不显示`]]
+const SHOW_TYPE = { meter: 'number', number: 'number', text: 'string', tags: 'list', flag: 'boolean' }
+
+/** The variables' initial values as the card's [InitVar] will have them (server/forge/write.mjs typedValue). */
+function initialOf(variables) {
+  const root = {}
+  for (const v of variables) {
+    const keys = cleanPath(v.path).split('.').filter(Boolean)
+    if (!keys.length) continue
+    const raw = String(v.initial ?? '').trim()
+    let value = raw
+    if (v.type === 'number') value = Number.isFinite(Number(raw)) && raw !== '' ? Number(raw) : 0
+    else if (v.type === 'boolean') value = /^(true|是|有|1)$/i.test(raw) // i18n-ignore: values typed into the card
+    else if (v.type === 'list') value = raw ? raw.split(/[、,，]/).map(s => s.trim()).filter(Boolean) : []
+    let at = root
+    for (const key of keys.slice(0, -1)) at = at[key] = at[key] && typeof at[key] === 'object' ? at[key] : {}
+    at[keys.at(-1)] = value
+  }
+  return root
+}
 const MANAGE_PROVIDERS = '__manage_providers__'
 const ICON_LOCK = '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="4.5" y="9" width="11" height="7.5" rx="2"/><path d="M7 9V6.5a3 3 0 0 1 6 0V9"/></svg>'
 const ICON_OPEN = '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="4.5" y="9" width="11" height="7.5" rx="2"/><path d="M7 9V6.5a3 3 0 0 1 5.6-1.5"/></svg>'
@@ -233,11 +256,16 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
     box.scrollTop = atBottom ? box.scrollHeight : top
   }
 
-  function renderMain() {
-    const draft = state.draft
+  /** What the main column shows, as a key: it is redrawn only when this changes. */
+  function mainKey(draft) {
     // The job counts by which one it is, not by its progress: fillBusy keeps that current.
     const job = draft?.job ? [draft.job.kind, draft.job.step, draft.job.startedAt] : null
-    const key = draft ? JSON.stringify([draft.id, draft.stage, draft.rounds.length, draft.rounds.at(-1)?.assistant?.at, job, draft.error, draft.plan ? draft.updatedAt : '', state.editing, state.noteFor, [...state.open].join()]) : `home:${state.list.length}:${state.list.map(d => d.updatedAt).join()}`
+    return draft ? JSON.stringify([draft.id, draft.stage, draft.rounds.length, draft.rounds.at(-1)?.assistant?.at, job, draft.error, draft.plan ? draft.updatedAt : '', state.editing, state.noteFor, [...state.open].join()]) : `home:${state.list.length}:${state.list.map(d => d.updatedAt).join()}`
+  }
+
+  function renderMain() {
+    const draft = state.draft
+    const key = mainKey(draft)
     if (key === state.shown) {
       if (draft?.job && state.busy?.working.isConnected) keepScroll(() => fillBusy(draft.job), draft.stage === 'discuss')
       return
@@ -604,14 +632,7 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
         plan.play_rules.length ? el('h5', { text: t`扮演准则` }) : null,
         plan.play_rules.length ? bullets(plan.play_rules) : null,
       ]),
-      section(t`状态记录`, [
-        plan.tracking.enabled
-          ? el('table', { class: 'plan-vars' }, [
-              el('tr', {}, [t`变量`, t`初始`, t`范围`, t`怎么变`].map(cell => el('th', { text: cell }))),
-              ...plan.tracking.variables.map(v => el('tr', {}, [v.path, v.initial, v.range, v.check].map(cell => el('td', { text: cell })))),
-            ])
-          : el('p', { class: 'hint', text: t`不记录会变化的数值。想要好感度、体力这类数值，在下面写一句。` }),
-      ]),
+      section(t`状态栏`, statusEditor(draft)),
       section(t`开场白`, [el('ol', { class: 'plan-list' }, plan.greetings.map(g => el('li', {}, [el('b', { text: g.title }), el('span', { text: t` ${[g.scene, g.situation].filter(Boolean).join(t`：`)}（${g.length} 字）` })])))]),
       section(t`世界书`, [
         el('p', { class: 'hint', text: t`常驻的每轮都在；「提到时」的只在对话里出现关键词时才交给模型，省上下文。这些按规则自动配好。` }),
@@ -624,6 +645,114 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
       el('p', { class: 'forge-lead', text: t`方案出来了。哪里不合意，就在那一块点「提意见」写一句，写完点下面的「按意见修改方案」；也可以回去接着聊。` }),
       ...sections,
     ])
+  }
+
+  /**
+   * The tracked variables, edited in place, with the status bar they make
+   * (initial values) beside them. Each change is saved as it is made; the
+   * editor stays as it is under the cursor.
+   */
+  function statusEditor(draft) {
+    const tracking = draft.plan.tracking
+    const busy = Boolean(draft.job)
+    let variables = tracking.variables.map(v => ({ ...v }))
+    const save = guard(async ({ enabled = state.draft.plan.tracking.enabled, redraw = false } = {}) => {
+      const body = { tracking: { enabled, title: title.value.trim(), variables: variables.filter(v => v.path.trim()) } }
+      const view = await api(`/api/forge/${draft.id}`, { method: 'PUT', body })
+      if (redraw) return apply(view)
+      state.draft = view
+      state.shown = mainKey(view)
+    })
+    const title = el('input', { type: 'text', class: 'var-title', maxlength: 30, disabled: busy, placeholder: t`状态栏标题（可不填）`, 'aria-label': t`状态栏标题` })
+    title.value = tracking.title ?? ''
+
+    if (!tracking.enabled) {
+      // A first variable to start from, in the card's language.
+      const english = /^(en|english)/i.test(String(draft.plan.language ?? ''))
+      const first = draft.plan.characters.find(c => c.kind === 'core')?.name ?? draft.plan.name
+      const sample = english
+        ? { path: `${first}.affection`, label: 'Affection' }
+        : { path: `${first}.${zh`好感度`}`, label: zh`好感` }
+      return [
+        el('p', { class: 'hint', text: t`不记录会变化的数值。要的话，加上状态栏，记下好感、体力这类数值，显示在每条回复下面。` }),
+        el('button', { type: 'button', class: 'btn small', disabled: busy, text: t`加上状态栏`, onclick: () => {
+          if (!variables.length) variables = [{ ...sample, type: 'number', initial: '20', range: '0~100', show: 'meter', check: '' }]
+          save({ enabled: true, redraw: true })
+        } }),
+      ]
+    }
+
+    const preview = el('div', { class: 'status-preview' })
+    const rows = el('div', { class: 'var-rows' })
+    const drawPreview = () => {
+      const shown = variables.filter(v => v.path.trim())
+      const spec = cleanStatusSpec({ title: title.value.trim(), fields: shown.map(v => ({ path: v.path, label: v.label, show: v.show, ...rangeOf(v.range) })) })
+      preview.replaceChildren(spec ? statusBar(el, spec, initialOf(shown), { collapsible: false, note: t`预览 · 初始值` }) ?? empty() : empty())
+    }
+    const empty = () => el('p', { class: 'hint', text: t`还没有要显示的项。` })
+    const drawRows = () => rows.replaceChildren(...variables.map(variableRow))
+    const variableRow = (v, index) => {
+      const input = (key, attrs) => {
+        const box = el('input', { type: 'text', disabled: busy, ...attrs })
+        box.value = v[key] ?? ''
+        box.addEventListener('input', () => { v[key] = box.value; drawPreview() })
+        box.addEventListener('change', () => save())
+        return box
+      }
+      const range = input('range', { class: 'var-range', placeholder: t`范围 0~100`, 'aria-label': t`范围` })
+      range.hidden = v.type !== 'number'
+      const show = el('select', { class: 'var-show', disabled: busy, 'aria-label': t`显示方式` }, SHOWS.map(([value, label]) => el('option', { value, text: label })))
+      show.value = v.show
+      const row = el('div', { class: `var-row${v.show === 'hidden' ? ' quiet' : ''}` }, [
+        el('div', { class: 'var-line' }, [
+          input('path', { class: 'var-path', placeholder: t`谁的.什么，比如 林小雨.好感度`, 'aria-label': t`变量` }),
+          input('label', { class: 'var-label', maxlength: 12, placeholder: t`短名`, 'aria-label': t`状态栏上的名字` }),
+          show,
+          el('button', { type: 'button', class: 'icon-btn', disabled: busy, title: t`删掉这一项`, 'aria-label': t`删掉这一项`, html: ICON_CLOSE, onclick: () => {
+            variables.splice(index, 1)
+            drawRows()
+            drawPreview()
+            save()
+          } }),
+        ]),
+        el('div', { class: 'var-line' }, [
+          input('initial', { class: 'var-initial', placeholder: t`初始值`, 'aria-label': t`初始值` }),
+          range,
+          input('check', { class: 'var-check', placeholder: t`什么事会让它怎么变`, 'aria-label': t`怎么变` }),
+        ]),
+      ])
+      show.addEventListener('change', () => {
+        v.show = show.value
+        if (SHOW_TYPE[v.show]) v.type = SHOW_TYPE[v.show]
+        range.hidden = v.type !== 'number'
+        row.classList.toggle('quiet', v.show === 'hidden')
+        drawPreview()
+        save()
+      })
+      return row
+    }
+    title.addEventListener('input', drawPreview)
+    title.addEventListener('change', () => save())
+    drawRows()
+    drawPreview()
+    return [
+      el('p', { class: 'hint', text: t`这些数值显示在每条回复下面的状态栏里，模型每轮按「怎么变」更新它们。直接在这里改，上面的预览跟着变；也可以点「提意见」让向导改。` }),
+      el('div', { class: 'status-editor' }, [
+        el('div', { class: 'var-editor' }, [
+          title,
+          rows,
+          el('div', { class: 'row' }, [
+            el('button', { type: 'button', class: 'btn small', disabled: busy, text: t`＋ 加一项`, onclick: () => {
+              variables.push({ path: '', label: '', type: 'number', initial: '0', range: '0~100', show: 'meter', check: '' })
+              drawRows()
+              rows.lastElementChild?.querySelector('.var-path')?.focus()
+            } }),
+            el('button', { type: 'button', class: 'btn ghost small', disabled: busy, text: t`不要状态栏`, onclick: () => save({ enabled: false, redraw: true }) }),
+          ]),
+        ]),
+        preview,
+      ]),
+    ]
   }
 
   function characterCard(c, fields) {

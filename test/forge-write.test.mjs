@@ -8,8 +8,10 @@ import zlib from 'node:zlib'
 import YAML from 'yaml'
 import { normalizeCard, parseCardFile, readPngText, writeCardPng } from '../server/cards.mjs'
 import { createForge } from '../server/forge/index.mjs'
-import { normalizePlan } from '../server/forge/prompts.mjs'
-import { applyIssues, cardJson, lintText, newCard, readTagged, stateContent } from '../server/forge/write.mjs'
+import { cleanVariables, editTracking, normalizePlan } from '../server/forge/prompts.mjs'
+import { applyIssues, cardJson, lintText, newCard, readTagged, retrack, stateContent } from '../server/forge/write.mjs'
+import { statusSpecOf } from '../server/forge/status.mjs'
+import { rangeOf } from '../web/shared/status.js'
 import { normalizeProvider } from '../server/providers.mjs'
 import { createStore } from '../server/store.mjs'
 
@@ -141,13 +143,59 @@ test('the card as SillyTavern reads it: V3 with its book in order, wrapped entri
   assert.equal(basic.extensions.position, 1)
   assert.equal(book.find(e => e.comment === '[InitVar]请勿打开').enabled, false)
   assert.equal(book.find(e => e.comment === '王店长').constant, false)
-  assert.deepEqual(json.data.extensions.regex_scripts.map(s => [s.promptOnly, s.markdownOnly]), [[true, false], [false, true]])
+  const scripts = json.data.extensions.regex_scripts
+  assert.deepEqual(scripts.map(s => [s.promptOnly, s.markdownOnly]), [[true, false], [false, true], [true, false], [false, true]])
+  // The status bar: its layout for this app, an HTML copy and MVU for SillyTavern.
+  const layout = {
+    title: '',
+    fields: [
+      { path: '林小雨.好感度', label: '', show: 'meter', min: 0, max: 100 },
+      { path: '世界.雨势', label: '', show: 'text' },
+    ],
+  }
+  assert.deepEqual(json.data.extensions.cicatavern.status_bar, layout)
+  const bar = scripts.find(s => s.id === 'cicatavern-status-bar')
+  assert.equal(bar.findRegex, '<StatusPlaceHolderImpl/>')
+  assert.match(bar.replaceString, /^```html\n[\s\S]*Mvu\.getMvuData[\s\S]*\n```$/)
+  assert.ok(bar.replaceString.includes('"path":"林小雨.好感度"'))
+  assert.equal(json.data.extensions.tavern_helper.scripts[0].name, 'MVU')
   // The app reads it back the same way, MVU entries and all.
   const read = normalizeCard(json)
   assert.equal(read.book.entries.length, book.length)
   assert.ok(read.book.entries.find(e => e.comment === '[InitVar]请勿打开').initvar)
-  assert.equal(read.regexScripts.length, 2)
+  assert.equal(read.regexScripts.length, 4)
+  assert.deepEqual(read.statusBar, layout)
   assert.match(read.description, /林小雨：雨女/)
+  // Without tracking: no bar, no MVU.
+  const plain = cardJson({ ...plan, tracking: { enabled: false, title: '', variables: [] } }, card)
+  assert.equal(plain.data.extensions.cicatavern, undefined)
+  assert.equal(plain.data.extensions.tavern_helper, undefined)
+})
+
+test('the plan\'s status bar: how each variable shows, edits by hand, a written card follows', () => {
+  const plan = normalizePlan(PLAN)
+  assert.deepEqual(plan.tracking.variables.map(v => v.show), ['meter', 'text'])
+  assert.deepEqual(cleanVariables([
+    { path: '/stat_data/主角/体力', type: 'number', range: '0-200' },
+    { path: '主角.随身', type: 'list', show: 'nope' },
+    { path: '主角.体力', type: 'string' },
+    { path: '  ', type: 'number' },
+  ]).map(v => [v.path, v.show]), [['主角.体力', 'meter'], ['主角.随身', 'tags']])
+  const edited = editTracking(plan, { title: '雨夜', variables: [...plan.tracking.variables, { path: '主角.体力', label: '体力', type: 'number', initial: '80', range: '0~100', show: 'meter' }] })
+  assert.equal(edited.tracking.title, '雨夜')
+  assert.equal(statusSpecOf(edited).fields.length, 3)
+  assert.deepEqual(rangeOf('0~100'), { min: 0, max: 100 })
+  assert.deepEqual(rangeOf('一到十'), {})
+  // A written card gets its state entries from the edited variables; turning it off removes them.
+  const card = newCard(plan)
+  const after = retrack(card, edited)
+  assert.match(after.entries.find(e => e.part === 'initvar').content, /体力: 80/)
+  const off = editTracking(plan, { enabled: false })
+  assert.equal(off.entries.filter(e => e.type === '状态').length, 0)
+  assert.equal(retrack(card, off).entries.filter(e => e.type === '状态').length, 0)
+  assert.equal(statusSpecOf(off), null)
+  // Every variable hidden: nothing to show.
+  assert.equal(statusSpecOf(editTracking(plan, { variables: plan.tracking.variables.map(v => ({ ...v, show: 'hidden' })) })), null)
 })
 
 test('a PNG carries the card in chara and ccv3 chunks with valid CRCs', { skip: !zlib.crc32 && 'no zlib.crc32 to compare with' }, () => {

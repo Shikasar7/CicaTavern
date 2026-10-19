@@ -27,7 +27,7 @@ The model takes care of several jobs in the background while you play:
 
 - **Generation runs in the background**: switch to another chat or reload the page, and the turn still finishes.
 - **Models share the work**: for a picture, a helper model reads the scene and writes the image prompt from the character roster; "compress context" (压缩上下文) has the model write the story so far into a save (characters, events, foreshadowing, style) and carry on in a clean context; the card creator plans, drafts, reviews and revises.
-- **State updates itself**: variable updates at the end of a reply (MVU format) are parsed and shown live in the right panel, and you can edit them by hand.
+- **State updates itself**: variable updates at the end of a reply (MVU format) are parsed and shown in a status bar under the latest reply (numbers as bars, with this turn's change); you can also edit them by hand in the right panel.
 
 ### High cache hit rates: long stories stay cheap and fast
 
@@ -49,7 +49,7 @@ From the author's own long chats (October 2026):
 
 - **Character cards**: SillyTavern V1/V2/V3 PNG and JSON, with embedded world books, regex scripts and alternate greetings. A new version of a card can replace the old one in place, keeping your chats.
 - **World books**: always-on and keyword entries, with regex keys, secondary keys, probability and insertion position. Standalone world books can be attached to a card.
-- **Presets**: import Chat Completion presets, toggle and edit their entries, and pin the ones you use most as quick switches.
+- **Presets**: a light built-in "Basic preset" with switches for point of view, style, not acting for you, limited knowledge, intimacy, choices (tap to send) and a time box, so it plays well without importing anything. You can also import Chat Completion presets, toggle and edit their entries, and pin the ones you use most as quick switches.
 - **MVU variables and status bars**: `[InitVar]`, `<UpdateVariable>` / JSONPatch and the older `_.set()` are supported; EJS templates run in a QuickJS sandbox. HTML UIs inside cards render in isolated iframes, with a compatibility layer for the common Tavern Helper (酒馆助手) functions. The libraries those UIs need, such as jQuery and Vue, load from jsDelivr, so some may be missing offline.
 - **Versions and branches**: regenerate, swipe between versions, branch from any message, roll back, edit any message; a whole chat can be packed up and moved to another device.
 
@@ -72,7 +72,7 @@ From the author's own long chats (October 2026):
 If you can't quite say what you want, the creator guides you round by round:
 
 1. **Talk it through**: each round it says how it understands your idea, then asks the two or three questions that matter most. Every option comes with a line the character might say, so you can pick by feel; the writing style is chosen from short samples. The sketch beside it updates with your choices; you can edit or lock any part.
-2. **Settle the plan**: characters, setting, style, state variables, greetings and world book entries at a glance. Anything the creator filled in for you is listed separately; write a sentence wherever you want a change.
+2. **Settle the plan**: characters, setting, style, status bar, greetings and world book entries at a glance. Anything the creator filled in for you is listed separately; write a sentence wherever you want a change. Which values the status bar tracks, how they show and how they change can be edited directly, with a live preview; the finished card has the same status bar in SillyTavern.
 3. **Write**: the full world book and greetings are written in a few steps from the plan, then checked for clichés and contradictions and fixed.
 4. **Polish and portrait**: edit any part directly, or write a note and let the creator rewrite it. The portrait is drawn by your image backend from the character's looks, or you can upload one. Save to start playing, or export a PNG that SillyTavern imports directly.
 

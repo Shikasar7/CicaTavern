@@ -689,7 +689,7 @@ test('switch-over back to an older folder: it stops forwarding, and its daily ch
 test('launch.mjs in a replaced folder hands over to the newer one, arguments and all', async t => {
   const base = await scratch(t)
   const a = path.join(base, 'old')
-  for (const rel of ['bin/launch.mjs', 'server/app-window.mjs', 'server/edition.mjs', 'server/store.mjs', 'server/proxy.mjs', 'server/update/install.mjs', 'server/update/zip.mjs']) {
+  for (const rel of ['bin/launch.mjs', 'server/app-window.mjs', 'server/edition.mjs', 'server/store.mjs', 'server/proxy.mjs', 'web/shared/basic.js', 'server/update/install.mjs', 'server/update/zip.mjs']) {
     await cp(path.join(REPO_ROOT, rel), path.join(a, rel))
   }
   const b = await makeInstall(path.join(base, 'new'), '1.1.0', {

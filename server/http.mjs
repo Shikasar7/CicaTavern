@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url'
 import { backfillEntryPositions, cardSummary, cleanGroup, exportCard, greetingsOf, importOwnCard, normalizeCard, organizeCard, parseCardFile, previousVersion, unwrapWorkspace } from './cards.mjs'
 import { chatSummary, chatView, createChat, selectNode, activePath, rebuildPrompt, restoreFolded, rollbackTo, editCompaction, dropCompaction, exportStory, importStory, forkChat } from './chats.mjs'
 import { editPreset, exportPreset, importOwnPreset, normalizePreset, presetDetail, presetSummary } from './presets.mjs'
+import { basicDetail } from './basic.mjs'
 import { appVersion, featuresOf } from './edition.mjs'
 import { createProxy, proxyOverride } from './proxy.mjs'
 import { createEngine } from './engine.mjs'
@@ -58,12 +59,16 @@ const STATIC = {
   '/forge.js': ['forge.js', 'text/javascript; charset=utf-8'],
   '/update.js': ['update.js', 'text/javascript; charset=utf-8'],
   '/privacy.js': ['privacy.js', 'text/javascript; charset=utf-8'],
+  '/status.js': ['status.js', 'text/javascript; charset=utf-8'],
+  '/basic-options.js': ['basic-options.js', 'text/javascript; charset=utf-8'],
   '/i18n.js': ['i18n.js', 'text/javascript; charset=utf-8'],
   '/i18n/en.js': ['i18n/en.js', 'text/javascript; charset=utf-8'],
   '/shared/i18n.js': ['shared/i18n.js', 'text/javascript; charset=utf-8'],
   '/shared/speech.js': ['shared/speech.js', 'text/javascript; charset=utf-8'],
   '/shared/vars.js': ['shared/vars.js', 'text/javascript; charset=utf-8'],
   '/shared/regex.js': ['shared/regex.js', 'text/javascript; charset=utf-8'],
+  '/shared/basic.js': ['shared/basic.js', 'text/javascript; charset=utf-8'],
+  '/shared/status.js': ['shared/status.js', 'text/javascript; charset=utf-8'],
   '/icon.png': ['icon.png', 'image/png'],
   '/favicon.ico': ['icon.ico', 'image/x-icon'],
 }
@@ -458,6 +463,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
         description: card.description,
         scenario: card.scenario,
         regexScriptList: Array.isArray(card.regexScripts) ? card.regexScripts : [],
+        statusBar: card.statusBar ?? null,
       }
     }],
     ['GET', /^\/api\/cards\/([\w-]+)\/export$/, async ([id]) => {
@@ -528,6 +534,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       return presetSummary(preset)
     }],
     ['GET', /^\/api\/presets\/([\w-]+)\/export$/, async ([id]) => exportPreset(await store.getPreset(id))],
+    // The built-in preset: its options live in the settings (PUT /api/settings { basic }).
+    ['GET', /^\/api\/presets\/basic$/, async () => basicDetail(await store.getSettings())],
     ['GET', /^\/api\/presets\/([\w-]+)$/, async ([id]) => presetDetail(await store.getPreset(id))],
     ['PUT', /^\/api\/presets\/([\w-]+)$/, async ([id], body) => presetDetail(await store.savePreset(editPreset(await store.getPreset(id), body)))],
     ['DELETE', /^\/api\/presets\/([\w-]+)$/, async ([id]) => {

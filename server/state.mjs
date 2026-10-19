@@ -17,6 +17,9 @@ const HIDDEN_BLOCKS = [
   /<thinking>[\s\S]*?<\/thinking>/gi,
   /<think>[\s\S]*?<\/think>/gi,
   /<StatusPlaceHolderImpl\s*\/>/gi,
+  // The built-in preset's time box and choices (web/shared/basic.js): the page draws them itself.
+  /<time_box>[\s\S]*?<\/time_box>/gi,
+  /<choices>[\s\S]*?<\/choices>/gi,
 ]
 
 /** Reply text as shown to the player when the card has no display regex: bookkeeping removed. */

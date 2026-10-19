@@ -6,6 +6,7 @@ import YAML from 'yaml'
 import { toBookEntry } from './configure.mjs'
 import { DEFAULT_LANGUAGE, LONG_TOKENS, TALK_TOKENS, englishCard, looseJson, plainWriting, planLanguage, section } from './prompts.mjs'
 import { msg } from '../i18n.mjs'
+import { mvuHelper, statusScripts, statusSpecOf } from './status.mjs'
 
 const clip = (value, max) => (typeof value === 'string' ? value.trim().slice(0, max) : '')
 
@@ -286,6 +287,8 @@ const STATE_WORDS = {
     ],
     rulesKey: '变量更新规则', anyChange: '按剧情更新',
     hideFromModel: '对模型隐藏变量更新', hideFromPlayer: '对玩家隐藏变量更新',
+    hidePlaceholder: '对模型隐藏状态栏', statusBar: '状态栏',
+    mvuInfo: 'MVU 变量框架：在 SillyTavern 里按回复末尾的变量更新改变量、显示状态栏（需要酒馆助手）。CicaTavern 不运行它，自带同样的功能。',
     with: '与<user>：', colon: '：', separator: '；',
     creator: '由 CicaTavern「创作角色卡」生成。',
   },
@@ -298,6 +301,8 @@ const STATE_WORDS = {
     ],
     rulesKey: 'Variable update rules', anyChange: 'changes with the story',
     hideFromModel: 'Hide variable updates from the model', hideFromPlayer: 'Hide variable updates from the player',
+    hidePlaceholder: 'Hide the status bar from the model', statusBar: 'Status bar',
+    mvuInfo: 'MVU variable framework: in SillyTavern it applies the variable updates at the end of each reply and shows the status bar (needs Tavern Helper). CicaTavern does not run it; it has the same built in.',
     with: 'with <user>: ', colon: ': ', separator: '; ',
     creator: "Made with CicaTavern's card creator.",
   },
@@ -391,6 +396,15 @@ export function newCard(plan) {
   }
 }
 
+/**
+ * A written card after the plan's variables were edited: its state entries made
+ * again from the plan (they are built in code), everything else kept.
+ */
+export function retrack(card, plan) {
+  const state = plan.entries.filter(entry => entry.type === '状态').map(entry => ({ ...entry, content: stateContent(entry, plan) }))
+  return { ...card, entries: [...card.entries.filter(entry => entry.type !== '状态'), ...state] }
+}
+
 /** A short card description for the character definition: who is who, three lines at most. */
 function describe(plan) {
   const words = stateWords(plan)
@@ -432,6 +446,10 @@ const regexScript = (name, options) => ({ id: name, scriptName: name, findRegex:
 export function cardJson(plan, card) {
   const entries = [...card.entries].sort((a, b) => a.order - b.order).map((entry, i) => toBookEntry({ ...entry, content: wrapped(entry) }, i))
   const greetings = card.greetings.map(g => g.text).filter(Boolean)
+  const words = stateWords(plan)
+  const status = statusSpecOf(plan)
+  const scripts = plan.tracking.enabled ? [regexScript(words.hideFromModel, { promptOnly: true }), regexScript(words.hideFromPlayer, { markdownOnly: true })] : []
+  if (status) scripts.push(...statusScripts(status, words))
   const data = {
     name: plan.name,
     description: card.description,
@@ -451,7 +469,10 @@ export function cardJson(plan, card) {
       fav: false,
       world: plan.name,
       depth_prompt: { prompt: '', depth: 4, role: 'system' },
-      regex_scripts: plan.tracking.enabled ? [regexScript(stateWords(plan).hideFromModel, { promptOnly: true }), regexScript(stateWords(plan).hideFromPlayer, { markdownOnly: true })] : [],
+      regex_scripts: scripts,
+      // SillyTavern needs MVU (a Tavern Helper script) to apply the updates and show the bar.
+      ...(plan.tracking.enabled ? { tavern_helper: mvuHelper(words) } : {}),
+      ...(status ? { cicatavern: { status_bar: status } } : {}),
     },
     character_book: { name: plan.name, entries },
   }

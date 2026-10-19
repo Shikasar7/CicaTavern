@@ -15,6 +15,7 @@ import { normalizeScripts } from '../web/shared/regex.js'
 import { httpError, newId } from './store.mjs'
 import { replaceMacros } from './prompt.mjs'
 import { msg } from './i18n.mjs'
+import { hasBasicFormat } from './basic.mjs'
 
 export const MARKERS = new Set([
   'chatHistory', 'dialogueExamples', 'worldInfoBefore', 'worldInfoAfter',
@@ -116,6 +117,7 @@ const sentEachTurn = preset => preset.postMode === 'turn' || preset.postMode ===
 
 /** Whether the preset's post-history prompts went into the frozen prefix (not sent each turn). */
 export function hasPrefixRules(preset) {
+  if (preset?.builtin) return hasBasicFormat(preset.options)
   if (!preset || sentEachTurn(preset)) return false
   const sections = sectionsOf(preset)
   return preset.prompts.some((p, i) => p.enabled && sections[i] === 'post' && str(p.content).trim())

@@ -1,5 +1,9 @@
 // Agent Tavern web UI. Plain DOM, no build step.
-import { displayOf, htmlFrame, listenForFrameHeights, segments, streamingText, usesStatusPlaceholder } from '/render.js'
+import { displayOf, htmlFrame, listenForFrameHeights, segments, streamingText, usesStatusPlaceholder, withoutOwnStatus } from '/render.js'
+import { choiceList, statusBar, timeBox } from '/status.js'
+import { BASIC_ID, choicesOf, timeBoxOf } from '/shared/basic.js'
+import { autoStatusSpec } from '/shared/status.js'
+import { BASIC_FIELDS, basicField } from '/basic-options.js'
 import { allowLibraries, broadcastInput, installFrameBridge, parseSlash, storedFrameStorage, storedVariables } from '/compat.js'
 import { renderUsage } from '/usage.js'
 import { initPresets } from '/presets.js'
@@ -168,12 +172,21 @@ async function stream(path, body, onEvent) {
   }
 }
 
+// The toast is a popover: shown again each time, it goes on top of whatever window is open
+// (a modal dialog would otherwise cover it until it closes).
 function toast(message, ms = 4000) {
   const el = $('toast')
   el.textContent = message
   el.hidden = false
+  if (el.showPopover) {
+    if (el.matches(':popover-open')) el.hidePopover()
+    el.showPopover()
+  }
   clearTimeout(toast.timer)
-  toast.timer = setTimeout(() => { el.hidden = true }, ms)
+  toast.timer = setTimeout(() => {
+    if (el.matches?.(':popover-open')) el.hidePopover()
+    el.hidden = true
+  }, ms)
 }
 
 function guard(fn) {
@@ -674,7 +687,42 @@ const startChat = guard(async greetingIndex => {
 
 /** Regex scripts of the chat's preset, then its card (both cached), as the server applies them. */
 function scriptsFor(chat) {
-  return [...(ui.presetDetails.get(chat?.presetId)?.regexScriptList ?? []), ...(ui.cardDetails.get(chat?.cardId)?.regexScriptList ?? [])]
+  const card = ui.cardDetails.get(chat?.cardId)
+  const scripts = [...(ui.presetDetails.get(chat?.presetId)?.regexScriptList ?? []), ...(card?.regexScriptList ?? [])]
+  // A card creator card's bar is drawn here from its layout; its SillyTavern copy stays out.
+  return card?.statusBar ? withoutOwnStatus(scripts) : scripts
+}
+
+/**
+ * The status bar layout for a reply: the card's own (card creator cards), else,
+ * with the built-in preset's 状态栏 on, one laid out from the variables.
+ */
+function statusSpecFor(chat, node) {
+  const own = ui.cardDetails.get(chat.cardId)?.statusBar
+  if (own) return own
+  const builtin = !chat.presetId || chat.presetId === BASIC_ID
+  if (!builtin || ui.settings?.basic?.statusBar === 'off') return null
+  return autoStatusSpec(node.state ?? {})
+}
+
+/** The state before a reply: the assistant message before it on the path. */
+function previousState(chat, node) {
+  const index = chat.path.findIndex(n => n.id === node.id)
+  return chat.path.slice(0, Math.max(0, index)).reverse().find(n => n.role === 'assistant')?.state ?? null
+}
+
+function fillInput(text) {
+  const input = $('input')
+  input.value = text
+  fitInput()
+  input.focus()
+  input.setSelectionRange(text.length, text.length)
+}
+
+function sendChoice(text) {
+  $('input').value = text
+  fitInput()
+  send()
 }
 
 async function loadPresetDetail(presetId) {
@@ -724,7 +772,7 @@ function renderChat() {
   const presetPill = $('chat-preset')
   presetPill.hidden = !chat
   if (chat) {
-    presetPill.textContent = chat.presetName ? t`预设：${chat.presetName}` : t`不用预设`
+    presetPill.textContent = usesBasic(chat) ? t`预设：${t`基础预设`}` : chat.presetName ? t`预设：${chat.presetName}` : t`不用预设`
     presetPill.classList.toggle('unset', !chat.presetName)
     presetPill.disabled = ui.generating
   }
@@ -845,7 +893,13 @@ function renderNode(chat, node, isLastAssistant, depth = 0) {
   if (node.edited) tools.push(el('span', { class: 'chip', title: t`${new Date(node.edited.at).toLocaleString(locale)} 改过${node.edited.count > 1 ? t` ${node.edited.count} 次` : ''}`, text: t`已修改` }))
   if (isUser && node.templateErrors?.length) tools.push(el('span', { class: 'chip warn', title: node.templateErrors.join('\n'), text: t`⚠ ${node.templateErrors.length} 条 EJS 模板出错` }))
   const scripts = scriptsFor(chat)
-  const shown = displayOf(node, { scripts, names: chat.names, depth, withStatus: isLastAssistant && usesStatusPlaceholder(scripts) })
+  const cardStatus = usesStatusPlaceholder(scripts)
+  const shown = displayOf(node, { scripts, names: chat.names, depth, withStatus: isLastAssistant && cardStatus })
+  const raw = node.raw ?? node.text
+  const time = isUser ? null : timeBoxOf(raw)
+  const choices = !isUser && isLastAssistant ? choicesOf(raw) : []
+  const spec = !isUser && isLastAssistant && !cardStatus ? statusSpecFor(chat, node) : null
+  const bar = spec ? statusBar(el, spec, node.state ?? {}, { previous: previousState(chat, node) }) : null
   const imported = node.compaction?.imported
   const recap = !isUser && node.compaction
     ? el('div', { class: 'compaction-note' }, [
@@ -859,8 +913,11 @@ function renderNode(chat, node, isLastAssistant, depth = 0) {
     : null
   return el('article', { class: `msg ${isUser ? 'user' : 'assistant'}${isLastAssistant ? ' latest' : ''}`, 'data-id': node.id }, [
     el('div', { class: 'msg-head' }, [speakerFace(chat, node.role), el('span', { class: 'name', text: name }), node.id === 'root' ? el('span', { text: imported ? t`存档` : t`开场` }) : null]),
+    time ? timeBox(el, time) : null,
     messageBody(shown, frameContextFor(chat, node)),
     isUser ? null : mediaUi.gallery(chat, node),
+    bar,
+    choices.length ? choiceList(el, choices, { onFill: fillInput, onSend: sendChoice, disabled: ui.generating }) : null,
     tools.length ? el('div', { class: 'msg-tools' }, tools) : null,
     recap,
   ])
@@ -1548,7 +1605,7 @@ function layOutSettings({ form, card, providers, presets }) {
       id: 'presets', title: t`预设`, look: 'shared', action: () => presetsUi.open(),
       summary: () => {
         const preferred = presets.find(p => p.id === ui.settings?.presetId)
-        return presets.length ? t`${presets.length} 个 · 新对话默认：${preferred?.name ?? t`不用预设`}` : t`还没导入：导入 SillyTavern 的 Chat Completion 预设`
+        return presets.length ? t`${presets.length} 个 · 新对话默认：${preferred?.name ?? t`基础预设`}` : t`新对话默认：基础预设 · 也可以导入 SillyTavern 的预设`
       },
     },
     {
@@ -1874,6 +1931,11 @@ const presetsUi = initPresets({
     ui.presetDetails.delete(id)
     if (ui.chat?.presetId === id) loadPresetDetail(id).then(renderQuickButton)
   },
+  // The built-in preset's 状态栏 option shows at once.
+  onBasicChanged: settings => {
+    ui.settings = settings
+    renderChat()
+  },
 })
 
 // ─── Quick switches: preset entries pinned in the preset editor ─────────
@@ -1883,16 +1945,55 @@ function quickEntries() {
   return (detail?.quick ?? []).map(id => detail.prompts?.find(p => p.id === id)).filter(Boolean)
 }
 
+const usesBasic = chat => chat?.presetId === BASIC_ID
+
 function renderQuickButton() {
   const button = $('quick-open')
-  button.hidden = !ui.chat || !quickEntries().length
+  button.hidden = !ui.chat || !(usesBasic(ui.chat) || quickEntries().length)
   button.disabled = ui.generating
+}
+
+/** With the built-in preset the quick switches are its options. */
+function openBasicQuick() {
+  const saved = ui.settings?.basic ?? {}
+  const changed = new Map()
+  const rebuilds = () => [...changed.keys()].some(key => BASIC_FIELDS.find(f => f.key === key)?.prompt !== false)
+  const update = () => {
+    $('quick-apply').disabled = !changed.size
+    $('quick-hint').textContent = !changed.size
+      ? t`基础预设的选项，改动对这个对话和之后的新对话都生效。`
+      : rebuilds()
+        ? t`应用后会重建这个对话的固定前缀，下一轮重写一次缓存。`
+        : t`只影响显示，应用后马上生效。`
+  }
+  const pick = (key, value) => {
+    if (value === saved[key]) changed.delete(key)
+    else changed.set(key, value)
+    update()
+  }
+  $('quick-list').replaceChildren(...BASIC_FIELDS.map(field => el('li', {}, basicField(el, field, saved[field.key], { onPick: pick, compact: true }))))
+  ui.quickChanges = changed
+  ui.quickBasic = { saved, rebuilds }
+  update()
+  $('quick-dialog').showModal()
+}
+
+const applyBasicQuick = async () => {
+  const { saved, rebuilds } = ui.quickBasic
+  const rebuild = rebuilds()
+  ui.settings = await api('/api/settings', { method: 'PUT', body: { basic: { ...saved, ...Object.fromEntries(ui.quickChanges) } } })
+  if (rebuild) setChat(await api(`/api/chats/${ui.chat.id}/preset`, { method: 'POST', body: { presetId: BASIC_ID } }))
+  else renderChat()
+  $('quick-dialog').close()
+  toast(rebuild ? t`已应用。下一轮会重写一次缓存。` : t`已应用。`)
 }
 
 /** Entries placed after the chat history are sent every turn; the rest live in the frozen prefix. */
 const needsRebuild = (entries, ids) => ids.some(id => entries.find(p => p.id === id)?.placement !== 'turn')
 
 function openQuick() {
+  if (usesBasic(ui.chat)) return openBasicQuick()
+  ui.quickBasic = null
   const entries = quickEntries()
   const changed = new Map()
   const update = () => {
@@ -1924,6 +2025,7 @@ function openQuick() {
 const applyQuick = guard(async () => {
   const changed = ui.quickChanges
   if (!changed?.size || !ui.chat || ui.generating) return
+  if (ui.quickBasic) return applyBasicQuick()
   const presetId = ui.chat.presetId
   const rebuild = needsRebuild(quickEntries(), [...changed.keys()])
   await api(`/api/presets/${presetId}`, { method: 'PUT', body: { prompts: [...changed].map(([id, enabled]) => ({ id, enabled })) } })

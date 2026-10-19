@@ -390,18 +390,19 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     drawButton.disabled = !prompt.trim()
     box.oninput = () => { drawButton.disabled = !box.value.trim() }
     const modelSelect = $('image-model')
-    modelSelect.hidden = !isNovelAI()
-    if (isNovelAI()) modelSelect.replaceChildren(...modelChoices().map(([value, text]) => el('option', { value, text })))
+    const fillModels = () => {
+      modelSelect.hidden = !isNovelAI()
+      if (isNovelAI()) modelSelect.replaceChildren(...modelChoices().map(([value, text]) => el('option', { value, text })))
+    }
+    fillModels()
     drawButton.onclick = () => {
       const text = box.value.trim()
       if (!text) return
       dialog.close()
       draw(node, text, chatId, modelSelect.hidden ? '' : modelSelect.value)
     }
-    $('image-library').onclick = () => {
-      dialog.close()
-      openLibrary({ node, chatId })
-    }
+    // The library and the settings open on top of this window: closing them comes back here.
+    $('image-library').onclick = () => openLibrary({ node, chatId })
     $('image-keep').onclick = guard(async () => {
       const text = box.value.trim()
       if (!text) return
@@ -413,10 +414,11 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       writePrompt(node)
     }
     $('image-settings').onclick = () => {
-      dialog.close()
+      // A different backend or model may have been chosen there.
+      $('media-dialog').addEventListener('close', () => dialog.open && fillModels(), { once: true })
       openSettings('image')
     }
-    dialog.showModal()
+    if (!dialog.open) dialog.showModal()
   }
 
   // ─── Prompt library (server/prompts.mjs) ──────────────────────────────

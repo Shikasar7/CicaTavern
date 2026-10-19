@@ -13,8 +13,11 @@ const HIDDEN = [
   /<thinking>[\s\S]*?<\/thinking>/gi,
   /<think>[\s\S]*?<\/think>/gi,
   /<StatusPlaceHolderImpl\s*\/>/gi,
+  // The built-in preset's time box and choices: the page draws them (status.js), not as text.
+  /<time_box>[\s\S]*?<\/time_box>/gi,
+  /<choices>[\s\S]*?<\/choices>/gi,
 ]
-const OPEN_HIDDEN = /<(state|update(?:variable)?|thinking|think)>(?![\s\S]*<\/\1>)[\s\S]*$/i
+const OPEN_HIDDEN = /<(state|update(?:variable)?|thinking|think|time_box|choices)>(?![\s\S]*<\/\1>)[\s\S]*$/i
 const FENCE = /```([\w-]*)[^\n]*\n?([\s\S]*?)```/g
 const HTML_LIKE = /<(!doctype|html|head|body|style|script|div|table|section|details|svg|canvas|link|iframe|form|button)\b/i
 
@@ -38,6 +41,14 @@ export function streamingText(text) {
 
 export function usesStatusPlaceholder(scripts) {
   return scripts.some(s => !s.disabled && /StatusPlaceHolderImpl/.test(s.findRegex))
+}
+
+// The SillyTavern copy of a card creator status bar (server/forge/status.mjs). This page
+// draws that bar itself, from the layout the card carries.
+export const OWN_STATUS_SCRIPT = 'cicatavern-status-bar'
+
+export function withoutOwnStatus(scripts) {
+  return scripts.filter(s => !s.id.startsWith(OWN_STATUS_SCRIPT))
 }
 
 /**
@@ -166,7 +177,7 @@ function hash(text) {
 /** `context`: what the Tavern Helper stand-in needs (see compat.js); without it the frame gets plain HTML. */
 function frameDocument(body, id, context) {
   const css = getComputedStyle(document.documentElement)
-  const color = css.getPropertyValue('--text').trim() || '#222'
+  const color = css.getPropertyValue('--ink').trim() || '#222'
   const compat = context ? frameShim({ ...context, frame: id, frameName: `TH-message--${context.messageId}--${id}` }) + libraryTags(body) : ''
   if (context) body = replaceViewportHeight(body)
   // Measure the content, not the document: the document is never shorter than the frame, so a

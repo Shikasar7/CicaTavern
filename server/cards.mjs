@@ -5,6 +5,7 @@ import { inflateSync } from 'node:zlib'
 import { normalizeBook } from './worldbook.mjs'
 import { httpError, newId } from './store.mjs'
 import { normalizeScripts } from '../web/shared/regex.js'
+import { cleanStatusSpec } from '../web/shared/status.js'
 import { msg } from './i18n.mjs'
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
@@ -164,6 +165,8 @@ export function normalizeCard(raw) {
     depthPrompt: str(extensions.depth_prompt?.prompt),
     // Tavern Helper scripts are not run; MVU behaviour is built in.
     helperScripts: Array.isArray(extensions.tavern_helper?.scripts) ? extensions.tavern_helper.scripts.length : 0,
+    // The status bar layout a card creator card carries (web/shared/status.js); the page draws it.
+    statusBar: cleanStatusSpec(extensions.cicatavern?.status_bar),
     worldbookIds: [],
     hasAvatar: false,
     importedAt: new Date().toISOString(),

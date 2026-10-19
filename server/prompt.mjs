@@ -12,6 +12,7 @@
 import { constantEntries, entryText, entryTitle, lateEntries } from './worldbook.mjs'
 import { renderTemplate } from './template.mjs'
 import { renderPresetPrefix } from './presets.mjs'
+import { basicRules } from './basic.mjs'
 import { replaceVariableMacros, variablesOf } from '../web/shared/vars.js'
 
 export function replaceMacros(text, names) {
@@ -60,7 +61,12 @@ function stateProtocol(card, hasState) {
   ].join('\n')
 }
 
-export function buildSystemPrompt({ card, persona, settings, books, hasState }) {
+/**
+ * The built-in narrator rules. `options`: the built-in preset's (basic.mjs),
+ * whose paragraphs open the every-turn section; without them the rules read as
+ * they did before that preset existed.
+ */
+export function buildSystemPrompt({ card, persona, settings, books, hasState, options = null }) {
   const names = { char: card.name, user: persona.name || '你' }
   const m = text => replaceMacros(text, names)
   const constants = constantEntries(books)
@@ -76,14 +82,17 @@ export function buildSystemPrompt({ card, persona, settings, books, hasState }) 
     `你是一场互动小说的叙述者，同时扮演除玩家以外的所有角色。玩家扮演「${names.user}」。`,
     [
       '## 基本规则',
-      '- 只写故事正文，不写解释、点评、选项菜单或任何元信息。',
-      `- 不替玩家决定「${names.user}」的想法、台词和行动；可以写出他的行动带来的直接结果。`,
+      options
+        ? `- 除了「${EVERY_TURN}」一节要求的格式块，只写故事正文，不写解释、点评或任何元信息。`
+        : '- 只写故事正文，不写解释、点评、选项菜单或任何元信息。',
+      // With the built-in preset its 防抢话 option says this (or nothing, when it is off).
+      options ? '' : `- 不替玩家决定「${names.user}」的想法、台词和行动；可以写出他的行动带来的直接结果。`,
       '- 每条玩家消息里，<玩家输入> 是玩家本轮想做的事或希望看到的发展。用你自己的叙述把它演出来，不要照抄原句，然后顺着情节自然推进。',
       '- <世界书> 和 <动态设定> 是和当前情节相关的设定资料，<当前状态> 是游戏状态的最新值，<角色备注> 是作者给本轮的提醒，<本轮提醒> 指向系统提示里每轮都要执行的规则。它们不要原样复述。',
       '- 角色按各自的人设行动和说话，可以有自己的意志，不必顺着玩家。',
       '- 篇幅随情节而定；不要重复前文已经写过的内容。',
       `- 使用${settings.language || '简体中文'}写作。`,
-    ].join('\n'),
+    ].filter(Boolean).join('\n'),
     stateProtocol(card, hasState),
     section('文风与写作要求', m(settings.writingRules)),
     section(`玩家角色：${names.user}`, m(persona.description)),
@@ -96,7 +105,7 @@ export function buildSystemPrompt({ card, persona, settings, books, hasState }) 
     ].filter(Boolean).join('\n\n'),
     section('角色卡作者的指示', authorSystem),
     section('常驻设定', constants),
-    section(EVERY_TURN, [m(card.postHistoryInstructions), lateText(books, m)].filter(t => t.trim()).join('\n\n')),
+    section(EVERY_TURN, [options ? m(basicRules(options)) : '', m(card.postHistoryInstructions), lateText(books, m)].filter(t => t.trim()).join('\n\n')),
   ].filter(Boolean).join('\n\n')
 }
 
@@ -139,7 +148,7 @@ export function everyTurnReminder(systemPrompt, books, { presetRules = false } =
  * macros set, which every later turn starts from.
  */
 export function buildChatPrompt({ card, persona, settings, books, hasState, preset = null }) {
-  if (!preset) return { systemPrompt: buildSystemPrompt({ card, persona, settings, books, hasState }), presetVars: {} }
+  if (!preset || preset.builtin) return { systemPrompt: buildSystemPrompt({ card, persona, settings, books, hasState, options: preset?.options ?? null }), presetVars: {} }
   const names = { char: card.name, user: persona.name || '你' }
   const m = text => replaceMacros(text, names)
   const world = after =>

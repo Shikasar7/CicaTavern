@@ -9,6 +9,7 @@ import { applyStateUpdates, displayText } from './state.mjs'
 import { httpError, newId } from './store.mjs'
 import { MIN_TURNS, RECENT_TURNS, STORY_FORMAT, storyPath, storyTurns, turnsSinceCompaction } from './recap.mjs'
 import { msg } from './i18n.mjs'
+import { BASIC_ID, basicPreset } from './basic.mjs'
 
 export async function booksForCard(store, card) {
   const books = card.book ? [{ ...card.book, id: `card-${card.id}` }] : []
@@ -22,8 +23,13 @@ export async function booksForCard(store, card) {
   return books
 }
 
-/** The preset a chat uses, or null when it has none or it was deleted. */
+/**
+ * The preset a chat uses. '' (the setting's default) and BASIC_ID are the
+ * built-in preset; null when the chat predates it (plain built-in rules) or
+ * its preset was deleted.
+ */
 export async function presetFor(store, presetId) {
+  if (presetId === '' || presetId === BASIC_ID) return basicPreset(await store.getSettings())
   if (!presetId) return null
   return store.getPreset(presetId).catch(() => null)
 }
@@ -45,7 +51,9 @@ export async function chatScripts(store, chat) {
  */
 export async function rebuildPrompt(store, chat, presetId = chat.presetId ?? '') {
   const card = await store.getCard(chat.cardId)
-  const [persona, settings, preset] = await Promise.all([store.getPersona(), store.getSettings(), presetFor(store, presetId)])
+  const [persona, settings, chosen] = await Promise.all([store.getPersona(), store.getSettings(), presetFor(store, presetId ?? '')])
+  // A deleted preset, or a chat from before the built-in one: rebuilt with the built-in preset.
+  const preset = chosen ?? basicPreset(settings)
   const books = await booksForCard(store, card)
   const hasState = Object.keys(chat.nodes.root.state ?? {}).length > 0
   const built = buildChatPrompt({ card, persona: { ...persona, name: chat.names.user }, settings, books, hasState, preset })

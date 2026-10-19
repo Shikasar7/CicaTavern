@@ -5,6 +5,7 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { cleanProxySetting } from './proxy.mjs'
+import { cleanBasic } from '../web/shared/basic.js'
 
 /** @param dir - the edition's folder under the home directory (edition.mjs dataDir). */
 export function defaultDataRoot(dir = '.agent-tavern') {
@@ -73,7 +74,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   stateRefreshEvery: 5,
   dynamicStrip: 'rare', // when piled-up <动态设定> copies are stripped: 'often' | 'rare' | 'off' (dynamic.mjs)
   replyLength: 0, // target reply length in characters; 0 = no requirement
-  presetId: '', // SillyTavern preset for new chats; empty = built-in rules
+  presetId: '', // SillyTavern preset for new chats; empty = the built-in preset (basic.mjs)
+  basic: null, // the built-in preset's options (web/shared/basic.js); null = their defaults
   listen: 'local', // 'local' or 'lan'; applied on the next start
   subscription: 'on', // 'off' hides the Claude subscription models (API providers only)
   proxy: null, // 'none' | 'system' | an http(s) URL; null = the edition's default (proxy.mjs)
@@ -120,7 +122,8 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
     },
 
     async getSettings() {
-      return lockSettings({ ...DEFAULT_SETTINGS, ...(await readJson(path.join(root, 'settings.json'), {})) })
+      const saved = { ...DEFAULT_SETTINGS, ...(await readJson(path.join(root, 'settings.json'), {})) }
+      return lockSettings({ ...saved, basic: cleanBasic(saved.basic) })
     },
     async saveSettings(patch) {
       const next = { ...(await this.getSettings()) }
@@ -135,6 +138,7 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
       next.webFonts = next.webFonts !== false
       next.cdnLibraries = next.cdnLibraries !== false
       next.privacyNotice = Math.max(0, Math.floor(Number(next.privacyNotice) || 0))
+      next.basic = cleanBasic(next.basic)
       const saved = lockSettings(next)
       await writeJson(path.join(root, 'settings.json'), saved)
       return saved

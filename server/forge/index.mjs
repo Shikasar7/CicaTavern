@@ -20,8 +20,8 @@ import { cardSummary, normalizeCard, writeCardPng } from '../cards.mjs'
 import { cleanCardMedia } from '../media.mjs'
 import { complete, isProviderRef, providerError, refLabel, resolveRef } from '../providers.mjs'
 import { httpError, newId } from '../store.mjs'
-import { discussRequest, editBrief, emptyBrief, forgeLanguages, partialReply, planLanguage, planRequest, readDiscussion, readPlan, reviseRequest } from './prompts.mjs'
-import { applyIssues, cardJson, entriesRequest, greetingsRequest, initialState, lintCard, matchWritten, newCard, readIssues, readTagged, reviewRequest, rewriteRequest, stepDone, writeSteps } from './write.mjs'
+import { discussRequest, editBrief, editTracking, emptyBrief, forgeLanguages, partialReply, planLanguage, planRequest, readDiscussion, readPlan, reviseRequest } from './prompts.mjs'
+import { applyIssues, cardJson, entriesRequest, greetingsRequest, initialState, lintCard, matchWritten, newCard, readIssues, readTagged, retrack, reviewRequest, rewriteRequest, stepDone, writeSteps } from './write.mjs'
 import { currentLanguage, msg } from '../i18n.mjs'
 
 const ID = /^[a-zA-Z0-9_-]{1,64}$/
@@ -544,10 +544,18 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
     },
 
     /** The user's edits: the model to use, the sketch (values, locks, title), the stage to look at. */
-    async update(id, { model, brief, stage } = {}) {
+    async update(id, { model, brief, stage, tracking } = {}) {
+      if (tracking && typeof tracking === 'object' && jobs.has(id)) throw httpError(409, msg`上一步还在进行，等它写完或先停下`)
       const draft = await mutate(id, draft => {
         if (typeof model === 'string') draft.model = clip(model, 200)
         if (brief && typeof brief === 'object') draft.brief = editBrief(draft.brief, brief)
+        // The plan's status bar editor: variables edited by hand, no model call. A card
+        // already written gets its state entries again from them.
+        if (tracking && typeof tracking === 'object') {
+          if (!draft.plan) throw httpError(409, msg`还没有方案`)
+          draft.plan = editTracking(draft.plan, tracking)
+          if (draft.card) draft.card = retrack(draft.card, draft.plan)
+        }
         // Going back keeps what is ahead: the plan stays while talking, the card while planning.
         const reachable = { discuss: true, plan: Boolean(draft.plan), write: Boolean(draft.card), polish: Boolean(draft.card?.writtenAt) }
         if (STAGES.includes(stage) && reachable[stage]) draft.stage = stage

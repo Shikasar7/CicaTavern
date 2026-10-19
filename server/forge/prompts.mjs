@@ -4,6 +4,8 @@
 // say out loud what was assumed, keep the lore terse and concrete), written
 // here in this app's own words.
 import { configureEntries } from './configure.mjs'
+import { defaultShow } from './status.mjs'
+import { SHOWS, cleanPath } from '../../web/shared/status.js'
 import { msg } from '../i18n.mjs'
 
 // ─── Languages ────────────────────────────────────────────────────────────
@@ -66,7 +68,7 @@ const discussSystem = languages => `你是一位角色卡共创向导。用户�
 - 用户可能选「你来定」：那就由你挑最合适的一项，在回复里说你选了什么、为什么，并在草图里把这一项的 by 写成 "assistant"。
 - 不偷偷替用户拿主意。你自己补出来的设想写进草图时 by 写 "assistant"；用户亲口说的、选的，by 写 "user"，并尽量保留他的原话。谁补的只写在 by 里，value 只写设定本身，不加「谁补的」「随时可改」这类注明，界面会标出来。
 - 草图里 locked 为 true 的项是用户锁定的，不能改动，只能在它的基础上补充。
-- 用大白话交流，不说「世界书」「条目」「MVU」「常驻」这类术语。问状态记录时说成「要不要记录她对你的好感、你的体力这类会变化的数值」。
+- 用大白话交流，不说「世界书」「条目」「MVU」「常驻」这类术语。问状态记录时说成「要不要记录她对你的好感、你的体力这类会变化的数值，显示在每条回复下面的状态栏里」；用户想要的话，再用一个问题和他商量记哪几项、各自怎么变（比如什么事让好感涨、什么事让它掉），选项给出具体的组合。
 - 当核心角色、和 <user> 的关系、舞台、基调都已清楚，readiness 给到 75 以上，并在回复里提一句「可以出方案了，也可以接着细化」。用户可能随时要求出方案，你只管把每一轮聊好。
 
 ${talkWriting(languages)}
@@ -268,7 +270,7 @@ const PLAN_SCHEMA = `{
   }],
   "style": {"perspective": "第三人称 或 第二人称", "tone": "语言基调", "mood": "情绪氛围", "reference": "参照的作品或文风，可为空", "special": ["特别要求"]},
   "play_rules": ["扮演时的互动规则，可执行的指令，例如不替 <user> 说话做决定"],
-  "tracking": {"enabled": false, "variables": [{"path": "林小雨.好感度", "type": "number", "initial": "20", "range": "0~100", "check": "什么事会让它怎么变"}]},
+  "tracking": {"enabled": false, "title": "状态栏标题，可为空", "variables": [{"path": "林小雨.好感度", "label": "好感", "type": "number", "initial": "20", "range": "0~100", "show": "meter", "check": "什么事会让它怎么变"}]},
   "greetings": [{"title": "开场的名字", "scene": "时间、地点", "situation": "开场时正在发生什么、悬念在哪", "length": "500~700"}],
   "avatar": {"character": "头像画的是谁", "description": "中文，外貌、神态、构图", "tags": "English tags for the picture"},
   "assumptions": ["你补出来、用户没有说过的设定，一条一句"],
@@ -283,7 +285,8 @@ const planSystem = language => `你是角色卡策划。根据你和用户的讨
 - 核心角色通常 1 个，最多 4 个；配角 0 到 3 个，每个都要有在故事里的作用。
 - 外貌只写让人认得出的特征，不写放在谁身上都成立的美貌描写。
 - 性格用「底色 + 主色调 + 点缀」来想：底色是最深层、最稳定的那一面，主色调是最常表现出来的，点缀是偶尔露出的。facets 只在角色在不同处境下判若两人时才设为 true。
-- 只有用户想要记录好感、体力、金钱这类会变化的数值时，tracking.enabled 才为 true；变量路径用「角色名.变量名」，不要用 <user> 或 {{user}} 当键名。
+- 只有用户想要记录好感、体力、金钱这类会变化的数值时，tracking.enabled 才为 true；变量路径用「角色名.变量名」，<user> 自己的用「主角.变量名」，不要用 <user> 或 {{user}} 当键名。
+- 这些变量会显示在每条回复下面的状态栏里。label 是状态栏上的短名（2 到 4 个字）；show 是显示方式：meter 进度条（有范围的数值）、number 数字、text 一句话、tags 标签（物品、状态这类列表）、flag 是或否、hidden 只给模型看不显示。状态栏放玩家最在意的 3 到 8 项，其余用 hidden。
 - 开场白默认 2 个，场景各不相同，每个都要有悬念或张力，并让 <user> 一开口就有话可接。
 - 所有专有名词在这里一次定好，之后不再新造。
 
@@ -381,6 +384,34 @@ const OWN_WORDS = {
 /** The card's own words for a plan's language. */
 export const ownWords = language => OWN_WORDS[englishCard(language) ? 'en' : 'zh']
 
+const VARIABLE_TYPES = ['number', 'string', 'boolean', 'list']
+
+/**
+ * The tracked variables as the plan keeps them, from the model or from the
+ * player's edits in the plan's status bar editor. `show` (how the status bar
+ * shows it) is filled in from the type when missing.
+ */
+export function cleanVariables(list) {
+  const seen = new Set()
+  return (Array.isArray(list) ? list : [])
+    .filter(v => v && typeof v === 'object' && clip(v.path, 60))
+    .map(v => {
+      const type = VARIABLE_TYPES.includes(v.type) ? v.type : 'string'
+      const variable = {
+        path: cleanPath(clip(v.path, 60).replace(/[{}\s]+/g, '')),
+        label: clip(v.label, 12),
+        type,
+        initial: clip(String(v.initial ?? ''), 120),
+        range: clip(v.range, 40),
+        check: clip(v.check, 200),
+      }
+      variable.show = SHOWS.includes(v.show) ? v.show : defaultShow(variable)
+      return variable
+    })
+    .filter(v => v.path && !seen.has(v.path) && seen.add(v.path))
+    .slice(0, 24)
+}
+
 /** @param language - 写作语言 when the plan was made (forgeLanguages().card). */
 export function normalizePlan(raw, { language = DEFAULT_LANGUAGE } = {}) {
   if (!raw || typeof raw !== 'object') return null
@@ -415,16 +446,7 @@ export function normalizePlan(raw, { language = DEFAULT_LANGUAGE } = {}) {
     characters[0].kind = 'core'
   }
   const tracking = raw.tracking && typeof raw.tracking === 'object' ? raw.tracking : {}
-  const variables = (Array.isArray(tracking.variables) ? tracking.variables : [])
-    .filter(v => v && typeof v === 'object' && clip(v.path, 60))
-    .slice(0, 24)
-    .map(v => ({
-      path: clip(v.path, 60).replace(/^stat_data\./, '').replace(/[{}]/g, ''),
-      type: ['number', 'string', 'boolean', 'list'].includes(v.type) ? v.type : 'string',
-      initial: clip(String(v.initial ?? ''), 120),
-      range: clip(v.range, 40),
-      check: clip(v.check, 200),
-    }))
+  const variables = cleanVariables(tracking.variables)
   const plan = {
     name: clip(raw.name, 40) || characters[0].name,
     summary: clip(raw.summary, 400),
@@ -455,7 +477,7 @@ export function normalizePlan(raw, { language = DEFAULT_LANGUAGE } = {}) {
       special: list(raw.style?.special, 6, 120),
     },
     play_rules: list(raw.play_rules, 8, 160),
-    tracking: { enabled: tracking.enabled === true && variables.length > 0, variables },
+    tracking: { enabled: tracking.enabled === true && variables.length > 0, title: clip(tracking.title, 30), variables },
     greetings: (Array.isArray(raw.greetings) ? raw.greetings : [])
       .filter(g => g && typeof g === 'object')
       .slice(0, 4)
@@ -513,6 +535,21 @@ export function planEntries(plan) {
     add({ name: words.updateFormat, type: '状态', part: 'format', purpose: words.updateFormatPurpose })
   }
   return configureEntries(entries)
+}
+
+/**
+ * The plan with its tracked variables edited by hand (the status bar editor):
+ * `{ enabled?, title?, variables? }`, each left as it was when missing. The
+ * state entries come and go with `enabled`.
+ */
+export function editTracking(plan, edit) {
+  const before = plan.tracking ?? { enabled: false, title: '', variables: [] }
+  const variables = Array.isArray(edit.variables) ? cleanVariables(edit.variables) : before.variables
+  const enabled = (typeof edit.enabled === 'boolean' ? edit.enabled : before.enabled) && variables.length > 0
+  const next = { ...plan, tracking: { enabled, title: typeof edit.title === 'string' ? clip(edit.title, 30) : before.title ?? '', variables } }
+  next.entries = planEntries(next)
+  next.warnings = planWarnings(next)
+  return next
 }
 
 /** Things worth a look before writing: placeholder names, missing pieces. */

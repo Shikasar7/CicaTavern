@@ -1,8 +1,9 @@
 // The settings windows' layout (设置, 配图与朗读): a menu of panels whose rows
 // each open one part on its own page, or run an action (another window). The
 // title row and the save row stay in place while the middle scrolls. From a
-// page, a click outside the window or Esc goes back to the menu; on the menu
-// Esc closes, asking first when something typed is not saved. Everything stays
+// page, 返回 (the close button there), a click outside the window or Esc goes
+// back to the menu; on the menu, or on a page the window was opened straight
+// to, they close it, asking first when something typed is not saved. Everything stays
 // in one form, so one 保存 saves every part.
 import { t } from '/i18n.js'
 
@@ -61,16 +62,22 @@ export function createMenu({ dialog, form, el, title: menuTitle, edits = countsA
   form.addEventListener('input', event => edits(event.target) && setDirty(true))
   form.addEventListener('change', event => edits(event.target) && setDirty(true))
 
+  // The page the window was opened on (start), when it was opened straight to one: the level
+  // above that page is whatever opened the window, not this menu.
+  let entered = null
+  const goesBack = () => Boolean(current) && current !== entered
+  /** One level up: from a page to the menu, from the menu (or a page opened directly) out. */
+  const up = () => (goesBack() ? show(null, 'back') : close())
+
   dialog.addEventListener('click', event => {
-    if (event.target !== dialog || !current) return
+    if (event.target !== dialog || !goesBack()) return
     const box = dialog.getBoundingClientRect()
     const outside = event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom
     if (outside) show(null, 'back')
   })
   dialog.addEventListener('cancel', event => {
     event.preventDefault()
-    if (current) show(null, 'back')
-    else close()
+    up()
   })
 
   function entry(section) {
@@ -134,15 +141,16 @@ export function createMenu({ dialog, form, el, title: menuTitle, edits = countsA
     const body = el('div', { class: 'menu-body' }, [home, ...panes])
     const dirtyNote = el('span', { class: 'menu-dirty', hidden: true, text: t`有改动还没保存` })
     const saveButton = save ? el('button', { type: 'button', class: 'btn primary', text: save.text ?? t`保存`, onclick: save.onClick }) : null
+    const closeButton = el('button', { type: 'button', class: 'btn', text: t`关闭`, onclick: () => up() })
     form.replaceChildren(
       el('div', { class: 'menu-head' }, [back, el('div', { class: 'menu-titles' }, [crumb, title])]),
       body,
       el('div', { class: 'menu-foot' }, [
         el('div', { class: 'row' }, footStart),
-        el('div', { class: 'row' }, [dirtyNote, ...footEnd, el('button', { type: 'button', class: 'btn', text: t`关闭`, onclick: () => close() }), saveButton]),
+        el('div', { class: 'row' }, [dirtyNote, ...footEnd, closeButton, saveButton]),
       ]),
     )
-    view = { home, panels: panelNodes, panes, back, crumb, title, body, entries, dirtyNote, saveButton }
+    view = { home, panels: panelNodes, panes, back, crumb, title, body, entries, dirtyNote, saveButton, closeButton }
     setDirty(dirty)
     show(sections.some(s => s.id === current && !s.action) ? current : null)
   }
@@ -152,6 +160,9 @@ export function createMenu({ dialog, form, el, title: menuTitle, edits = countsA
     if (!view) return
     const section = sections.find(s => s.id === id && !s.action) ?? null
     current = section?.id ?? null
+    // Once on the menu, every page is one level below it.
+    if (!section) entered = null
+    view.closeButton.textContent = goesBack() ? t`返回` : t`关闭`
     view.home.hidden = Boolean(section)
     for (const pane of view.panes) pane.hidden = pane.dataset.section !== current
     view.back.hidden = !section
@@ -198,6 +209,7 @@ export function createMenu({ dialog, form, el, title: menuTitle, edits = countsA
     /** Before showing the dialog: start on a page, or on the menu. */
     start(id = null) {
       current = id
+      entered = id
       setDirty(false)
     },
     get current() {

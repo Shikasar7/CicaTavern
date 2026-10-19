@@ -9,6 +9,7 @@ import path from 'node:path'
 import { isProviderRef } from './providers.mjs'
 import { httpError, newId } from './store.mjs'
 import { msg } from './i18n.mjs'
+import { BASIC_ID } from './basic.mjs'
 
 export const PACKAGE_MAGIC = 'AGENT-TAVERN-CHAT 1\n'
 export const PACKAGE_FORMAT = 'agent-tavern-chat'
@@ -55,7 +56,8 @@ export async function importChatPackage(store, { header, cardId = '' }) {
   const cards = await store.listCards()
   const card = cards.find(c => c.name === header.cardName) ?? cards.find(c => c.id === cardId)
   if (!card) throw httpError(404, msg`这台设备上没有角色卡「${header.cardName}」，先导入它`)
-  const presets = await store.listPresets().catch(() => [])
+  // The built-in preset exists on every device.
+  const presets = source.presetId === BASIC_ID ? [{ id: BASIC_ID, name: source.presetName }] : await store.listPresets().catch(() => [])
   const preset = presets.find(p => p.id === source.presetId) ?? presets.find(p => source.presetName && p.name === source.presetName)
   const providers = await store.getProviders()
   const model = typeof source.model === 'string' && isProviderRef(source.model) && providers.some(p => source.model.startsWith(`${p.id}/`)) ? source.model : null
