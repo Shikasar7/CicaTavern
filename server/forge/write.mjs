@@ -52,9 +52,21 @@ const writeSystem = language => `你是角色卡写手，按创作方案写 Sill
 - 方案里的名字、设定一律照用，不新造专有名词；用户的原话（verbatim）原样保留。
 ${plainWriting(language)}`
 
+// Without the player's name: the card says <user>, whatever the player is called.
 const SAMPLE_PLAN = plan => {
-  const { entries, warnings, ...rest } = plan
-  return JSON.stringify(rest)
+  const { entries, warnings, user_role: { name, ...role } = {}, ...rest } = plan
+  return JSON.stringify({ ...rest, user_role: role })
+}
+
+/**
+ * Written text with the player's name (one the player chose) put back as <user>,
+ * should a writer have used it. A name inside another name is left alone.
+ */
+export function userTagged(text, plan) {
+  const name = plan?.user_role?.name ?? ''
+  const taken = (plan?.characters ?? []).flatMap(c => [c.name, ...(c.aliases ?? [])])
+  if (name.length < 2 || taken.some(word => word.includes(name))) return text
+  return text.replaceAll(name, '<user>')
 }
 
 /** Entries already written, as context for the next call (trimmed). */
@@ -291,6 +303,7 @@ const STATE_WORDS = {
     mvuInfo: 'MVU 变量框架：在 SillyTavern 里按回复末尾的变量更新改变量、显示状态栏（需要酒馆助手）。CicaTavern 不运行它，自带同样的功能。',
     with: '与<user>：', colon: '：', separator: '；',
     creator: '由 CicaTavern「创作角色卡」生成。',
+    playerName: name => `主角名：${name}。在 CicaTavern 里用这张卡开的对话会自动用这个名字；在 SillyTavern 里，把用户名（Persona）设成「${name}」。`,
   },
   en: {
     formatLead: 'At the end of every reply, write how the variables changed this turn, like this:',
@@ -305,6 +318,7 @@ const STATE_WORDS = {
     mvuInfo: 'MVU variable framework: in SillyTavern it applies the variable updates at the end of each reply and shows the status bar (needs Tavern Helper). CicaTavern does not run it; it has the same built in.',
     with: 'with <user>: ', colon: ': ', separator: '; ',
     creator: "Made with CicaTavern's card creator.",
+    playerName: name => `The player's name: ${name}. Chats on this card in CicaTavern use it; in SillyTavern, set your persona's name to "${name}".`,
   },
 }
 const stateWords = plan => STATE_WORDS[englishCard(planLanguage(plan)) ? 'en' : 'zh']
@@ -448,6 +462,9 @@ export function cardJson(plan, card) {
   const greetings = card.greetings.map(g => g.text).filter(Boolean)
   const words = stateWords(plan)
   const status = statusSpecOf(plan)
+  // A name of the card's own for the player (创作角色卡 asked); none = the one in settings.
+  const userName = plan.user_role.name ?? ''
+  const own = { ...(status ? { status_bar: status } : {}), ...(userName ? { user_name: userName } : {}) }
   const scripts = plan.tracking.enabled ? [regexScript(words.hideFromModel, { promptOnly: true }), regexScript(words.hideFromPlayer, { markdownOnly: true })] : []
   if (status) scripts.push(...statusScripts(status, words))
   const data = {
@@ -457,7 +474,7 @@ export function cardJson(plan, card) {
     scenario: '',
     first_mes: greetings[0] ?? '',
     mes_example: '',
-    creator_notes: card.creatorNotes,
+    creator_notes: [card.creatorNotes, userName && words.playerName(userName)].filter(Boolean).join('\n\n'),
     system_prompt: '',
     post_history_instructions: '',
     alternate_greetings: greetings.slice(1),
@@ -472,7 +489,7 @@ export function cardJson(plan, card) {
       regex_scripts: scripts,
       // SillyTavern needs MVU (a Tavern Helper script) to apply the updates and show the bar.
       ...(plan.tracking.enabled ? { tavern_helper: mvuHelper(words) } : {}),
-      ...(status ? { cicatavern: { status_bar: status } } : {}),
+      ...(Object.keys(own).length ? { cicatavern: own } : {}),
     },
     character_book: { name: plan.name, entries },
   }

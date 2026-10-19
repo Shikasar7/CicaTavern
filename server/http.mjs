@@ -456,7 +456,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     }],
     ['GET', /^\/api\/cards\/([\w-]+)$/, async ([id]) => {
       const [card, persona] = await Promise.all([store.getCard(id), store.getPersona()])
-      const names = { char: card.name, user: persona.name || '你' }
+      const names = { char: card.name, user: card.userName || persona.name || '你' }
       return {
         ...cardSummary(card),
         greetingTexts: greetingsOf(card).map(text => replaceMacros(text.replace(/\{\{random[^}]*\}\}/gi, '…'), names)),

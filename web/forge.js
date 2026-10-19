@@ -94,6 +94,7 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
     noteFor: null, // the piece a rewrite note is being written for
     noteText: '',
     avatarDesc: null, // the avatar scene as the user edits it; null = the plan's
+    settingsName: '', // 设置 → 你的名字; '' when not filled in (the default 你)
   }
   const view = {}
 
@@ -614,7 +615,7 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
       plan.assumptions.length
         ? section(t`向导补的设定`, [el('p', { class: 'hint', text: t`这些是你没说过、向导替你补上的。不合意的，在下面写一句就会改掉。` }), bullets(plan.assumptions, 'assumed')], 'lamp')
         : null,
-      section(t`你的身份`, [fields([[t`身份`, plan.user_role.identity], [t`限制`, plan.user_role.constraints]])]),
+      section(t`你的身份`, [nameField(draft), fields([[t`身份`, plan.user_role.identity], [t`限制`, plan.user_role.constraints]])]),
       section(t`舞台`, [
         fields([[t`类型`, WORLD_KIND.get(plan.world.kind) ?? plan.world.kind], [t`概述`, plan.world.overview]]),
         plan.world.rules.length ? el('h5', { text: t`和常识不同的规则` }) : null,
@@ -644,6 +645,28 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
       draft.job?.kind === 'plan' ? busyBlock(draft) : draft.error ? errorBlock(draft.error) : null,
       el('p', { class: 'forge-lead', text: t`方案出来了。哪里不合意，就在那一块点「提意见」写一句，写完点下面的「按意见修改方案」；也可以回去接着聊。` }),
       ...sections,
+    ])
+  }
+
+  /**
+   * The player's name in this card: empty for the one in settings, or a name of
+   * the card's own. Saved as it is changed, without redrawing under the cursor.
+   */
+  function nameField(draft) {
+    const box = el('input', {
+      type: 'text', class: 'plan-username', maxlength: 24, disabled: Boolean(draft.job), 'aria-label': t`你在这张卡里的名字`,
+      placeholder: state.settingsName ? t`用设置里的名字（${state.settingsName}）` : t`用设置里的名字（还没填，叫「你」）`,
+    })
+    box.value = draft.plan.user_role.name ?? ''
+    box.addEventListener('change', guard(async () => {
+      const view = await api(`/api/forge/${draft.id}`, { method: 'PUT', body: { userName: box.value.trim() } })
+      box.value = view.plan.user_role.name ?? ''
+      state.draft = view
+      state.shown = mainKey(view)
+    }))
+    return el('dl', { class: 'plan-fields' }, [
+      el('dt', { text: t`名字` }),
+      el('dd', {}, [box, el('p', { class: 'hint', text: t`空着就用设置里「你的名字」，以后改了设置也跟着变。填一个名字，用这张卡开的对话里你就叫这个名字。卡里写的都是 {{user}}，导到 SillyTavern 也一样。` })]),
     ])
   }
 
@@ -1127,6 +1150,8 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
     async open() {
       if (!view.main) layout()
       await loadModels()
+      const persona = await api('/api/persona').catch(() => null)
+      state.settingsName = /^(你|you)?$/i.test(String(persona?.name ?? '').trim()) ? '' : persona.name.trim()
       if (!dialog.open) dialog.showModal()
       if (state.draft) {
         state.shown = ''

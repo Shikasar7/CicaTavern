@@ -20,8 +20,8 @@ import { cardSummary, normalizeCard, writeCardPng } from '../cards.mjs'
 import { cleanCardMedia } from '../media.mjs'
 import { complete, isProviderRef, providerError, refLabel, resolveRef } from '../providers.mjs'
 import { httpError, newId } from '../store.mjs'
-import { discussRequest, editBrief, editTracking, emptyBrief, forgeLanguages, partialReply, planLanguage, planRequest, readDiscussion, readPlan, reviseRequest } from './prompts.mjs'
-import { applyIssues, cardJson, entriesRequest, greetingsRequest, initialState, lintCard, matchWritten, newCard, readIssues, readTagged, retrack, reviewRequest, rewriteRequest, stepDone, writeSteps } from './write.mjs'
+import { chosenUserName, discussRequest, editBrief, editTracking, editUserName, emptyBrief, forgeLanguages, partialReply, planLanguage, planRequest, readDiscussion, readPlan, reviseRequest } from './prompts.mjs'
+import { applyIssues, cardJson, entriesRequest, greetingsRequest, initialState, lintCard, matchWritten, newCard, readIssues, readTagged, retrack, reviewRequest, rewriteRequest, stepDone, userTagged, writeSteps } from './write.mjs'
 import { currentLanguage, msg } from '../i18n.mjs'
 
 const ID = /^[a-zA-Z0-9_-]{1,64}$/
@@ -261,7 +261,8 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
   // ─── Talk and plan ──────────────────────────────────────────────────────
 
   async function discussWork(ctx, draft) {
-    const result = await ctx.call(discussRequest(draft.rounds, draft.brief, ctx.languages))
+    const persona = await store.getPersona()
+    const result = await ctx.call(discussRequest(draft.rounds, draft.brief, ctx.languages, { userName: persona.name }))
     await ctx.update(fresh => {
       const read = readDiscussion(result.text, fresh.brief)
       if (!read.reply && !read.questions.length) throw new Error(msg`${ctx.label} 这次没有回出能读的内容${cutNote(result)}，再试一次，或者换个模型`)
@@ -270,11 +271,15 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
     })
   }
 
-  /** @param language - the card's: 写作语言 for a new plan, the plan's own when revising. */
-  async function planWork(ctx, request, language) {
+  /**
+   * @param language - the card's: 写作语言 for a new plan, the plan's own when revising.
+   * @param names - { userName, said } for readPlan: the player's name as settled, and
+   *   the words a revision answers (a new name counts only when they say it).
+   */
+  async function planWork(ctx, request, language, names = {}) {
     const result = await ctx.call(request)
     await ctx.update(fresh => {
-      const plan = readPlan(result.text, { language })
+      const plan = readPlan(result.text, { language, ...names })
       if (!plan) throw new Error(msg`${ctx.label} 写的方案读不出来${cutNote(result)}，再试一次，或者换个模型`)
       fresh.plan = plan
       fresh.planModel = ctx.label
@@ -332,7 +337,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
     const found = matchWritten(readTagged(result.text, 'entry'), targets.map(t => t.name))
     if (!found.size) throw new Error(msg`${ctx.label} 没有按格式写出「${step.label}」${cutNote(result)}，再试一次，或者换个模型`)
     await ctx.update(fresh => {
-      for (const [name, text] of found) fresh.card.entries.find(e => e.name === name).content = text.slice(0, MAX_PIECE)
+      for (const [name, text] of found) fresh.card.entries.find(e => e.name === name).content = userTagged(text, plan).slice(0, MAX_PIECE)
     })
   }
 
@@ -346,7 +351,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
     const found = targets.map(g => [g.index, blocks.get(String(g.index + 1)) ?? lone]).filter(([, text]) => text)
     if (!found.length) throw new Error(msg`${ctx.label} 没有按格式写出开场白${cutNote(result)}，再试一次，或者换个模型`)
     await ctx.update(fresh => {
-      for (const [index, text] of found) fresh.card.greetings[index].text = text.slice(0, MAX_PIECE)
+      for (const [index, text] of found) fresh.card.greetings[index].text = userTagged(text, plan).slice(0, MAX_PIECE)
     })
   }
 
@@ -376,15 +381,15 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
       .filter(Boolean)
   }
 
-  /** Apply rewritten pieces (entries and openings) from an answer. */
-  function applyPieces(card, pieces, text) {
+  /** Apply rewritten pieces (entries and openings) from an answer; the plan names the player. */
+  function applyPieces(card, pieces, text, plan) {
     const entries = readTagged(text, 'entry')
     const greetings = readTagged(text, 'greeting', 'index')
     let applied = 0
     const lone = pieces.length === 1 && entries.size + greetings.size === 1 ? [...entries.values(), ...greetings.values()][0] : null
     for (const piece of pieces) {
       const fresh = piece.greeting ? greetings.get(String(piece.index + 1)) : matchWritten(entries, [piece.name]).get(piece.name)
-      const value = (fresh ?? lone)?.slice(0, MAX_PIECE)
+      const value = fresh ?? lone ? userTagged(fresh ?? lone, plan).slice(0, MAX_PIECE) : ''
       if (!value) continue
       if (piece.greeting) card.greetings[piece.index].text = value
       else card.entries.find(e => e.name === piece.name).content = value
@@ -397,7 +402,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
     const pieces = piecesOf(card, card.pending).slice(0, FIX_PIECES)
     const result = pieces.length ? await ctx.call(rewriteRequest(plan, card, pieces)) : null
     await ctx.update(fresh => {
-      if (result) applyPieces(fresh.card, pieces, result.text)
+      if (result) applyPieces(fresh.card, pieces, result.text, plan)
       fresh.card.pending = {}
       fresh.card.fixed = true
       fresh.card.checks = lintCard(fresh.card, plan.verbatim)
@@ -440,7 +445,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
       ctx.step(target)
       const result = await ctx.call(rewriteRequest(draft.plan, draft.card, pieces))
       await ctx.update(fresh => {
-        if (!applyPieces(fresh.card, pieces, result.text)) throw new Error(msg`${ctx.label} 没有按格式写出改好的内容${cutNote(result)}，再试一次`)
+        if (!applyPieces(fresh.card, pieces, result.text, fresh.plan)) throw new Error(msg`${ctx.label} 没有按格式写出改好的内容${cutNote(result)}，再试一次`)
         fresh.card.checks = lintCard(fresh.card, fresh.plan.verbatim)
         fresh.lastRewrite = null
       })
@@ -544,8 +549,8 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
     },
 
     /** The user's edits: the model to use, the sketch (values, locks, title), the stage to look at. */
-    async update(id, { model, brief, stage, tracking } = {}) {
-      if (tracking && typeof tracking === 'object' && jobs.has(id)) throw httpError(409, msg`上一步还在进行，等它写完或先停下`)
+    async update(id, { model, brief, stage, tracking, userName } = {}) {
+      if (((tracking && typeof tracking === 'object') || typeof userName === 'string') && jobs.has(id)) throw httpError(409, msg`上一步还在进行，等它写完或先停下`)
       const draft = await mutate(id, draft => {
         if (typeof model === 'string') draft.model = clip(model, 200)
         if (brief && typeof brief === 'object') draft.brief = editBrief(draft.brief, brief)
@@ -555,6 +560,12 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
           if (!draft.plan) throw httpError(409, msg`还没有方案`)
           draft.plan = editTracking(draft.plan, tracking)
           if (draft.card) draft.card = retrack(draft.card, draft.plan)
+        }
+        // The player's name, set by hand in the plan ('' = the one in settings). The card
+        // says <user> throughout, so a written card needs nothing more.
+        if (typeof userName === 'string') {
+          if (!draft.plan) throw httpError(409, msg`还没有方案`)
+          draft.plan = editUserName(draft.plan, userName)
         }
         // Going back keeps what is ahead: the plan stays while talking, the card while planning.
         const reachable = { discuss: true, plan: Boolean(draft.plan), write: Boolean(draft.card), polish: Boolean(draft.card?.writtenAt) }
@@ -570,7 +581,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
       // The last answer may still be waiting for a reply: plan from what was said.
       const rounds = draft.rounds.filter(r => r.assistant || r === draft.rounds.at(-1))
       draft.planPending = null
-      await run(draft, 'plan', ctx => planWork(ctx, planRequest(rounds, draft.brief, ctx.languages), ctx.languages.card))
+      await run(draft, 'plan', ctx => planWork(ctx, planRequest(rounds, draft.brief, ctx.languages), ctx.languages.card, { userName: chosenUserName(draft.brief) }))
       return view(draft)
     },
 
@@ -583,7 +594,8 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
       if (!general && !cleanNotes.length) throw httpError(400, msg`先写下想怎么改`)
       draft.planNotes = [...(draft.planNotes ?? []), { at: new Date().toISOString(), text: general, notes: cleanNotes }].slice(-20)
       draft.planPending = { text: general, notes: cleanNotes }
-      await run(draft, 'plan', ctx => planWork(ctx, reviseRequest(draft.rounds.filter(r => r.assistant), draft.plan, { text: general, notes: cleanNotes }), planLanguage(draft.plan)))
+      const names = { userName: draft.plan.user_role.name ?? '', said: [general, ...cleanNotes.map(n => n.text)].join('\n') }
+      await run(draft, 'plan', ctx => planWork(ctx, reviseRequest(draft.rounds.filter(r => r.assistant), draft.plan, { text: general, notes: cleanNotes }), planLanguage(draft.plan), names))
       return view(draft)
     },
 

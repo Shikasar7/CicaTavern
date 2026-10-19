@@ -46,6 +46,16 @@ export async function chatScripts(store, chat) {
 }
 
 /**
+ * The player in a chat on `card`: `name` (the chat's, or for a new chat the
+ * card's own name for the player, else the one in settings) and the settings
+ * description. A card with a name of its own says who that person is itself,
+ * so the settings description, written for someone else, is left out.
+ */
+export function playerOf(card, persona, name = card.userName || persona.name || '你') {
+  return { ...persona, name, description: card.userName && name === card.userName ? '' : persona.description }
+}
+
+/**
  * Re-render a chat's frozen system prompt from the card, persona, settings and
  * preset as they are now. The next turn writes the cache once more.
  */
@@ -56,7 +66,7 @@ export async function rebuildPrompt(store, chat, presetId = chat.presetId ?? '')
   const preset = chosen ?? basicPreset(settings)
   const books = await booksForCard(store, card)
   const hasState = Object.keys(chat.nodes.root.state ?? {}).length > 0
-  const built = buildChatPrompt({ card, persona: { ...persona, name: chat.names.user }, settings, books, hasState, preset })
+  const built = buildChatPrompt({ card, persona: playerOf(card, persona, chat.names.user), settings, books, hasState, preset })
   chat.systemPrompt = built.systemPrompt
   chat.presetVars = built.presetVars
   chat.presetId = preset?.id ?? null
@@ -102,10 +112,11 @@ async function startChat(store, cardId, makeRoot) {
   const [persona, settings] = await Promise.all([store.getPersona(), store.getSettings()])
   const preset = await presetFor(store, settings.presetId)
   const books = await booksForCard(store, card)
-  const names = { char: card.name, user: persona.name || '你' }
+  const player = playerOf(card, persona)
+  const names = { char: card.name, user: player.name }
   const root = makeRoot({ card, names, state: initialState(books) })
   const now = new Date().toISOString()
-  const built = buildChatPrompt({ card, persona, settings, books, hasState: Object.keys(root.state).length > 0, preset })
+  const built = buildChatPrompt({ card, persona: player, settings, books, hasState: Object.keys(root.state).length > 0, preset })
   const chat = {
     id: newId(),
     cardId,

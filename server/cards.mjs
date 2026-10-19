@@ -167,6 +167,8 @@ export function normalizeCard(raw) {
     helperScripts: Array.isArray(extensions.tavern_helper?.scripts) ? extensions.tavern_helper.scripts.length : 0,
     // The status bar layout a card creator card carries (web/shared/status.js); the page draws it.
     statusBar: cleanStatusSpec(extensions.cicatavern?.status_bar),
+    // The player's name a card creator card has of its own; '' = the one in settings.
+    userName: str(extensions.cicatavern?.user_name).trim().slice(0, 24),
     worldbookIds: [],
     hasAvatar: false,
     importedAt: new Date().toISOString(),

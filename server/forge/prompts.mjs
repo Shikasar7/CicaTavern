@@ -58,11 +58,42 @@ export const LONG_TOKENS = 32000
 
 // ─── Talking it through ───────────────────────────────────────────────────
 
-const discussSystem = languages => `你是一位角色卡共创向导。用户想在 SillyTavern 一类的角色扮演应用里玩一张新角色卡，但往往说不清自己真正想要什么。你陪他把一个模糊的念头聊成清晰的设想：用具体、可感的选择帮他发现自己的偏好，而不是替他做决定。
+// ─── The player's name ────────────────────────────────────────────────────
+// A card names the player <user>: the app (and SillyTavern) puts in the name
+// the player goes by. The guide asks whether that is the name in settings or
+// one of the card's own; the answer is the sketch item user_name, and only
+// that answer (or the player's own words) names the player. A name a model
+// made up on its own is taken back out of the plan.
+
+/** Whether a settings name was filled in (the default is 你 / You). */
+const settingsNameOf = name => (/^(你|you)?$/i.test(String(name ?? '').trim()) ? '' : String(name).trim())
+
+// "The name in settings", however the guide put it, and other ways of saying "no name of its own".
+const NO_OWN_NAME = /设置|設定|setting|默认|default|^(你|you|<user>|\{\{user\}\}|主角|protagonist)$/i
+
+/** A name as the sketch or the plan has it, or '' for "the one in settings". */
+export function cleanUserName(value) {
+  const name = String(value ?? '')
+    .trim()
+    .replace(/^[「『“"'《]+|[」』”"'》]+$/g, '')
+    .split(/[，,。；;：:（(、\n]/)[0]
+    .trim()
+  return !name || name.length > 24 || NO_OWN_NAME.test(name) ? '' : name
+}
+
+/** The name the player chose in the talk (sketch item user_name); '' = the one in settings. */
+export const chosenUserName = brief => cleanUserName(brief?.items?.find(item => item.key === 'user_name')?.value)
+
+/** Where the player's own tracked values live in a card of this language. */
+export const playerRoot = language => (englishCard(language) ? 'Protagonist' : '主角')
+
+const discussSystem = (languages, settingsName = '') => `你是一位角色卡共创向导。用户想在 SillyTavern 一类的角色扮演应用里玩一张新角色卡，但往往说不清自己真正想要什么。你陪他把一个模糊的念头聊成清晰的设想：用具体、可感的选择帮他发现自己的偏好，而不是替他做决定。
 
 做法：
 - 每轮先用一两句话说出你此刻理解的样子，要具体、有画面；再提 2 到 3 个此刻最影响全局的问题，不要一次问很多。
 - 提问的先后：先定舞台（世界）和核心角色是谁，再定 <user> 的身份、和角色的关系、互动方式与玩法，然后是基调、文风和开场，最后才是要不要记录会变化的数值。已经定下的不再问。
+- 定 <user> 的身份时，顺带问一句 <user> 在这个故事里叫什么。第一个选项是「用设置里的名字」，detail 写「${settingsName ? `设置里填的是「${settingsName}」，以后改了设置，故事里也跟着变` : '设置里还没填名字，故事里就叫你「你」；以后在设置里填了，就跟着变'}」；再给两三个合这个世界的名字，sample 写一句角色喊这个名字的话。用户选了、说了或让你定了名字，草图里记一项 key 为 user_name：value 只写名字本身，用设置里的名字就写「用设置里的名字」。
+- 除了这一问，不替 <user> 起名字；选项的样例和试写里，玩家角色写 <user>，不写名字。
 - 每个问题给 3 到 4 个彼此差别明显的选项。每个选项都要具体，并附一句样例：角色可能说的一句话，或一两句小场景，让用户凭感觉挑。样例要像活人说的话。
 - 文风、语气这类难以描述的东西，用 kind 为 taste 的问题：给两到三段同一情境、不同写法的短试写（每段 60 到 120 字），让用户挑喜欢的一段。
 - 用户可能选「你来定」：那就由你挑最合适的一项，在回复里说你选了什么、为什么，并在草图里把这一项的 by 写成 "assistant"。
@@ -85,7 +116,7 @@ ${talkWriting(languages)}
 </brief>
 
 kind 取 single（选一个）、multi（可多选）或 taste（试写挑一段，options 的 sample 放试写正文，label 写「第一段」「第二段」）。
-草图的 key 尽量用：stage 舞台、lead 核心角色、user 你的身份、bond 你们的关系、play 玩法、tone 基调、style 文风、cast 配角、track 记录的数值、opening 开场；还没谈到的不要写。`
+草图的 key 尽量用：stage 舞台、lead 核心角色、user 你的身份、user_name 你的名字、bond 你们的关系、play 玩法、tone 基调、style 文风、cast 配角、track 记录的数值、opening 开场；还没谈到的不要写。`
 
 const LIMITS = { questions: 4, options: 5, items: 14, open: 6 }
 const BY = new Set(['user', 'assistant'])
@@ -212,8 +243,11 @@ export function userTurnText(user, { first = false } = {}) {
   return lines.join('\n')
 }
 
-/** The request for the next round of talk; languages from forgeLanguages. */
-export function discussRequest(rounds, brief, languages) {
+/**
+ * The request for the next round of talk; languages from forgeLanguages,
+ * userName the name in settings (你的名字), for the guide to offer.
+ */
+export function discussRequest(rounds, brief, languages, { userName = '' } = {}) {
   const messages = []
   rounds.forEach((round, i) => {
     let content = userTurnText(round.user, { first: i === 0 })
@@ -222,7 +256,7 @@ export function discussRequest(rounds, brief, languages) {
     messages.push({ role: 'user', content })
     if (!last && round.assistant) messages.push({ role: 'assistant', content: round.assistant.raw })
   })
-  return { system: discussSystem(languages), messages, maxTokens: TALK_TOKENS, softCap: true }
+  return { system: discussSystem(languages, settingsNameOf(userName)), messages, maxTokens: TALK_TOKENS, softCap: true }
 }
 
 /** A round's answer → { reply, questions, brief }; whatever could be read. */
@@ -247,7 +281,7 @@ export function partialReply(text) {
 const PLAN_SCHEMA = `{
   "name": "卡名，具体好记",
   "summary": "给玩家看的简介，2 到 3 句",
-  "user_role": {"identity": "<user> 是谁、为什么在这里", "constraints": ["<user> 的限制，可为空"]},
+  "user_role": {"name": "用户给 <user> 定的名字（草图里的 user_name）；没定、用设置里的名字就留空", "identity": "<user> 是谁、为什么在这里", "constraints": ["<user> 的限制，可为空"]},
   "world": {
     "kind": "真实 或 架空",
     "overview": "舞台概述，几句",
@@ -285,7 +319,8 @@ const planSystem = language => `你是角色卡策划。根据你和用户的讨
 - 核心角色通常 1 个，最多 4 个；配角 0 到 3 个，每个都要有在故事里的作用。
 - 外貌只写让人认得出的特征，不写放在谁身上都成立的美貌描写。
 - 性格用「底色 + 主色调 + 点缀」来想：底色是最深层、最稳定的那一面，主色调是最常表现出来的，点缀是偶尔露出的。facets 只在角色在不同处境下判若两人时才设为 true。
-- 只有用户想要记录好感、体力、金钱这类会变化的数值时，tracking.enabled 才为 true；变量路径用「角色名.变量名」，<user> 自己的用「主角.变量名」，不要用 <user> 或 {{user}} 当键名。
+- 玩家角色一律写 <user>。不替 <user> 起名字：用户没定名字，user_role.name 就留空；定了名字也只写在 user_role.name，其余地方照样写 <user>。
+- 只有用户想要记录好感、体力、金钱这类会变化的数值时，tracking.enabled 才为 true；变量路径用「角色名.变量名」，<user> 自己的一律用「${playerRoot(language)}.变量名」，不要用 <user>、{{user}} 或他的名字当键名。
 - 这些变量会显示在每条回复下面的状态栏里。label 是状态栏上的短名（2 到 4 个字）；show 是显示方式：meter 进度条（有范围的数值）、number 数字、text 一句话、tags 标签（物品、状态这类列表）、flag 是或否、hidden 只给模型看不显示。状态栏放玩家最在意的 3 到 8 项，其余用 hidden。
 - 开场白默认 2 个，场景各不相同，每个都要有悬念或张力，并让 <user> 一开口就有话可接。
 - 所有专有名词在这里一次定好，之后不再新造。
@@ -412,8 +447,14 @@ export function cleanVariables(list) {
     .slice(0, 24)
 }
 
-/** @param language - 写作语言 when the plan was made (forgeLanguages().card). */
-export function normalizePlan(raw, { language = DEFAULT_LANGUAGE } = {}) {
+/**
+ * @param language - 写作语言 when the plan was made (forgeLanguages().card).
+ * @param userName - the player's name as the player settled it ('' = the one in
+ *   settings); left out, the plan's own is taken as it is.
+ * @param said - the player's words this plan answers (a revision's comments):
+ *   a name the model put in user_role.name counts only when they contain it.
+ */
+export function normalizePlan(raw, { language = DEFAULT_LANGUAGE, userName, said = '' } = {}) {
   if (!raw || typeof raw !== 'object') return null
   const words = ownWords(language)
   const world = raw.world && typeof raw.world === 'object' ? raw.world : {}
@@ -450,7 +491,7 @@ export function normalizePlan(raw, { language = DEFAULT_LANGUAGE } = {}) {
   const plan = {
     name: clip(raw.name, 40) || characters[0].name,
     summary: clip(raw.summary, 400),
-    user_role: { identity: clip(raw.user_role?.identity, 300), constraints: list(raw.user_role?.constraints, 6, 120) },
+    user_role: { name: '', identity: clip(raw.user_role?.identity, 300), constraints: list(raw.user_role?.constraints, 6, 120) },
     world: {
       kind: /^(真实|real)/i.test(String(world.kind ?? '').trim()) ? '真实' : '架空',
       overview: clip(world.overview, 800),
@@ -488,14 +529,81 @@ export function normalizePlan(raw, { language = DEFAULT_LANGUAGE } = {}) {
   }
   if (!plan.greetings.length) plan.greetings.push({ title: words.greeting(1), scene: '', situation: '', length: '500~700' })
   plan.language = language
+  const proposed = cleanUserName(raw.user_role?.name)
+  const name = userName === undefined || (proposed && said.includes(proposed)) ? proposed : cleanUserName(userName)
+  settleUserName(plan, name, [proposed, ...namedIn(raw.user_role?.identity)])
+  if (!plan.characters.length) return null
   plan.entries = planEntries(plan)
   plan.warnings = planWarnings(plan)
   return plan
 }
 
-/** A plan's answer → the plan, or null when nothing usable came back. */
-export function readPlan(text, { language = DEFAULT_LANGUAGE } = {}) {
-  return normalizePlan(looseJson(section(text, 'plan') || text), { language })
+/** A plan's answer → the plan, or null when nothing usable came back. Options as normalizePlan's. */
+export function readPlan(text, options = {}) {
+  return normalizePlan(looseJson(section(text, 'plan') || text), options)
+}
+
+// "你叫江砚，" / "<user>名叫江砚。" / "your name is Lin": a name the plan gives the player.
+// Only with punctuation (or the end) after it, so the name is all that is caught.
+const NAMED = [
+  /(?:你|<user>)\s*(?:叫做?|名叫|名为|的名字是|姓名是?)\s*[「『“"]?([^\s，,。；;、：:「」『』“”"（()）<>]{2,6})(?=[」』”"]?(?:[，,。；;、（(\s]|$))/gi,
+  /(?:your name is|you are (?:called|named)|<user> is (?:called|named))\s+([A-Z][\w'-]*(?: [A-Z][\w'-]*)?)/g,
+]
+const namedIn = text => NAMED.flatMap(pattern => [...String(text ?? '').matchAll(pattern)].map(m => m[1]))
+
+// Keys a model uses for the player's own values, besides a name.
+const PLAYER_KEYS = new Set(['<user>', '{{user}}', 'user', 'player', '你', '玩家', '主角', 'protagonist'])
+const escapeRegex = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+const mapText = (value, fn) =>
+  typeof value === 'string' ? fn(value)
+    : Array.isArray(value) ? value.map(v => mapText(v, fn))
+      : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([k, v]) => [k, mapText(v, fn)]))
+        : value
+
+/**
+ * The player's name settled in a plan: `name` ('' = the one in settings) in
+ * user_role.name, and every name the plan gave the player taken back out (the
+ * one settled too): the text says <user>, the player's values sit under 主角,
+ * and the player is not one of the card's characters.
+ * @param others - names the model gave the player (its user_role.name, ones in the identity).
+ */
+function settleUserName(plan, name, others) {
+  plan.user_role.name = name
+  const player = new Set([name, cleanUserName(others[0])].filter(Boolean))
+  plan.characters = plan.characters.filter(c => !player.has(c.name))
+  if (plan.characters.length && !plan.characters.some(c => c.kind === 'core')) plan.characters[0].kind = 'core'
+  // A name that is part of another name (青梧 in 顾青梧) is left alone: replacing it would break that one.
+  const taken = [plan.name, ...plan.characters.flatMap(c => [c.name, ...c.aliases]), ...plan.world.places.map(p => p.name), ...plan.world.factions.map(f => f.name)]
+  const names = [...new Set([...player, ...others.map(cleanUserName)])].filter(n => n.length >= 2 && !taken.some(word => word.includes(n)))
+  let strip = text => text
+  if (names.length) {
+    const alternatives = names.map(escapeRegex).join('|')
+    const naming = new RegExp(`(?:你|<user>)\\s*(?:叫做?|名叫|名为|的名字是|姓名是?)\\s*[「『“"]?(?:${alternatives})[」』”"]?[，,、]?\\s*`, 'g')
+    const inBrackets = new RegExp(`[（(](?:${alternatives})[）)]`, 'g')
+    strip = text => names.reduce((s, n) => s.replaceAll(n, '<user>'), text.replace(naming, '').replace(inBrackets, ''))
+    // A guess about the name is no setting of the story.
+    plan.assumptions = plan.assumptions.filter(a => !(names.some(n => a.includes(n)) && /定名|起名|取名|名字|叫|name/i.test(a)))
+    for (const key of ['summary', 'world', 'characters', 'style', 'play_rules', 'greetings', 'assumptions', 'verbatim']) plan[key] = mapText(plan[key], strip)
+    plan.user_role.identity = strip(plan.user_role.identity)
+    plan.user_role.constraints = plan.user_role.constraints.map(strip)
+    plan.avatar.description = strip(plan.avatar.description)
+    plan.tracking.title = strip(plan.tracking.title)
+  }
+  const root = playerRoot(plan.language)
+  const variables = plan.tracking.variables.map(v => {
+    const at = v.path.indexOf('.')
+    const head = at > 0 ? v.path.slice(0, at) : ''
+    const own = head && (PLAYER_KEYS.has(head.toLowerCase()) || names.includes(head) || player.has(head))
+    return { ...v, path: own ? root + v.path.slice(at) : v.path, label: strip(v.label), check: strip(v.check), initial: strip(v.initial) }
+  })
+  plan.tracking.variables = cleanVariables(variables)
+  plan.tracking.enabled = plan.tracking.enabled && plan.tracking.variables.length > 0
+  if (!plan.characters.some(c => c.name === plan.avatar.character)) plan.avatar.character = plan.characters.find(c => c.kind === 'core')?.name ?? ''
+}
+
+/** The plan with the player's name set by hand ('' = the one in settings). */
+export function editUserName(plan, name) {
+  return { ...plan, user_role: { ...plan.user_role, name: cleanUserName(name) } }
 }
 
 /**

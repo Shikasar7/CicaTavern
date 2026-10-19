@@ -4,7 +4,7 @@
 // prefix cache hits.
 // Other model references go to an optional backend passed in as `subscription`
 // (this machine's own install: server/subscription/); without one they are refused.
-import { activePath, booksForCard, editMessage as editChatMessage, pathTo, presetFor, scriptsOf, selectNode } from './chats.mjs'
+import { activePath, booksForCard, editMessage as editChatMessage, pathTo, playerOf, presetFor, scriptsOf, selectNode } from './chats.mjs'
 import { hasPrefixRules, renderPresetTail } from './presets.mjs'
 import { buildTurnPrompt, everyTurnReminder, renderEntry, replaceMacros } from './prompt.mjs'
 import { applyStateUpdates, displayText } from './state.mjs'
@@ -88,7 +88,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     const promptInput = applyScripts(input, scripts, { placement: PLACEMENT.USER_INPUT, target: 'prompt', depth: 0, macros })
     const characterNote = card.depthPrompt ? replaceMacros(replaceVariableMacros(card.depthPrompt, state), names).trim() : ''
     const presetText = preset
-      ? renderPresetTail(preset, { card, persona: { ...persona, name: names.user }, names, vars: chat.presetVars, input: promptInput, lastChar: parent.display ?? parent.text })
+      ? renderPresetTail(preset, { card, persona: playerOf(card, persona, names.user), names, vars: chat.presetVars, input: promptInput, lastChar: parent.display ?? parent.text })
       : ''
 
     const renderedDynamic = dynamic
