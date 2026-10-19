@@ -2,6 +2,12 @@
 
 CicaTavern 的版本记录。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## 1.6.1 - 2026-10-19
+
+### 修复
+
+- 预设窗口打开「基础预设」时，如果导入过别的预设，或者刚改了一个选项，窗口里会多出一行「null」。
+
 ## 1.6.0 - 2026-10-19
 
 ### 基础预设
