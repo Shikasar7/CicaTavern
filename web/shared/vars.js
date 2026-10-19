@@ -2,6 +2,14 @@
 // web UI (display). Variables are `{ stat_data: <chat state> }`, matching the
 // paths MVU cards use (`stat_data.角色.好感度`).
 
+/**
+ * A variable update in a reply: <state> (JSON merge patch) or MVU's
+ * <UpdateVariable> (also spelled <update>); group 1 the tag, group 2 the body.
+ * A block ends at its closing tag, at another update block's closing tag (some
+ * models mix them up: <state>…</UpdateVariable>), or, cut off, at the reply's end.
+ */
+export const UPDATE_BLOCK = /<(state|update(?:variable)?)>([\s\S]*?)(?:<\/(?:state|update(?:variable)?)>|(?=<(?:state|update(?:variable)?)>)|$)/gi
+
 /** Split `a.b[0].c` or `/a/b/0/c` into keys. */
 export function splitPath(path) {
   const text = String(path ?? '').trim()

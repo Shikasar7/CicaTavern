@@ -37,6 +37,29 @@ test('MVU JSON Patch: replace / add / remove / delta, stat_data prefix, <update>
   assert.deepEqual(state.角色.好感度, 10, 'input state is not mutated')
 })
 
+test('update blocks with a stray or missing closing tag: applied when whole, hidden either way, story kept', async () => {
+  const { displayText } = await import('../server/state.mjs')
+  const { displayOf } = await import('../web/render.js')
+  const shown = text => displayOf({ role: 'assistant', raw: text, state: {} }, { scripts: [], names: { char: '她', user: '你' }, depth: 0 })
+  const cases = [
+    // [reply, state after, why]
+    ['她笑了。\n<state>{"好感": 30}</UpdateVariable>', { 好感: 30 }, 'closed with the MVU tag'],
+    ['她笑了。\n<UpdateVariable>\n_.set(\'好感\', 10, 30);\n</state>', { 好感: 30 }, 'MVU closed with the state tag'],
+    ['她笑了。\n<state>{"好感": 30}', { 好感: 30 }, 'never closed, but whole'],
+    ['她笑了。\n<state>{"好感": 3', {}, 'cut off mid-block: nothing applied'],
+    ['她笑了。\n<UpdateVariable>\n<JSONPatch>[{"op":"replace","path":"/好感","value":30}]</JSONPatch>\n_.set(\'金', { 好感: 30 }, 'cut off after a whole patch'],
+  ]
+  for (const [reply, after, why] of cases) {
+    assert.deepEqual(applyStateUpdates({}, reply).state, after, why)
+    assert.equal(displayText(reply), '她笑了。', why)
+    assert.equal(shown(reply), '她笑了。', why)
+  }
+  // Two blocks, one closed wrong: each read on its own; well-formed replies read as before.
+  assert.deepEqual(applyStateUpdates({}, '<state>{"a": 1}</update>正文<state>{"b": 2}</state>').state, { a: 1, b: 2 })
+  assert.equal(displayText('<state>{"a": 1}</update>正文<state>{"b": 2}</state>'), '正文')
+  assert.equal(displayText('前文<state>{"a": 1}</state>后文'), '前文后文')
+})
+
 test('SillyTavern regex rules: parsing, placement, prompt/display split, depth, trim, groups, macros', () => {
   assert.equal(regexFromString('<StatusPlaceHolderImpl/>').source, '<StatusPlaceHolderImpl\\/>')
   assert.equal(regexFromString('/a+/gi').flags, 'gi')

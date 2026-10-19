@@ -46,15 +46,21 @@ export function cleanBasic(value) {
   return out
 }
 
-const TIME_BOX = /<time_box>([\s\S]*?)<\/time_box>/i
+// A time box the model closed with another tag, or not at all, ends with its line;
+// choices the model did not close yet (still streaming, or cut off) run to the end.
+const TIME_BOX_SOURCE = '<time_box>(?:([\\s\\S]*?)<\\/time_box>|([^\\n]*?)(?:<\\/[\\w-]+>|$))'
+const TIME_BOX = new RegExp(TIME_BOX_SOURCE, 'im')
 const CHOICES = /<choices>([\s\S]*?)(?:<\/choices>|$)/i
+/** Both blocks, for hiding them from the story text. */
+export const TIME_BOX_BLOCK = new RegExp(TIME_BOX_SOURCE, 'gim')
+export const CHOICES_BLOCK = /<choices>[\s\S]*?(?:<\/choices>|$)/gi
 const ITEM = /^\s*(?:[-*•]\s*)?(?:[A-Da-d]|[1-4]|[①②③④])\s*[.、:：)）．]\s*/
 
 /** The time box's parts (time, place, weather…), or null when the reply has none. */
 export function timeBoxOf(text) {
   const match = TIME_BOX.exec(String(text ?? ''))
   if (!match) return null
-  const parts = match[1].split(/[｜|]/).map(part => part.trim()).filter(Boolean)
+  const parts = (match[1] ?? match[2]).split(/[｜|]/).map(part => part.trim()).filter(Boolean)
   return parts.length ? parts : null
 }
 
@@ -73,6 +79,6 @@ export function choicesOf(text) {
 /** Remove both blocks (the page draws them on its own). */
 export function withoutBasicBlocks(text) {
   return String(text ?? '')
-    .replace(/<time_box>[\s\S]*?<\/time_box>\s*/gi, '')
+    .replace(new RegExp(`${TIME_BOX_SOURCE}\\s*`, 'gim'), '')
     .replace(/<choices>[\s\S]*?(?:<\/choices>|$)\s*/gi, '')
 }

@@ -27,6 +27,7 @@ const CARD = {
   },
 }
 
+const CROSSED = '\n\n<state>{"好感": 30}</UpdateVariable>'
 const SUMMARY = `<剧情存档>\n${'小雨和你在咖啡店聊起了桂花拿铁。'.repeat(20)}\n</剧情存档>`
 const KEY = 'sk-test-1234567890abcd'
 
@@ -67,7 +68,8 @@ async function fakeProvider(t) {
       return res.end(JSON.stringify({ data: [{ id: 'm-b' }, { id: 'm-a' }] }))
     }
     const lastUser = JSON.stringify((json.messages ?? json.input).at(-1))
-    const text = lastUser.includes('暂停扮演') ? SUMMARY : `第 ${++count} 次回复<hide>变量${count}</hide>`
+    // 「标签写错」: a state block closed with MVU's tag, as some models write it.
+    const text = lastUser.includes('暂停扮演') ? SUMMARY : lastUser.includes('标签写错') ? `第 ${++count} 次回复${CROSSED}` : `第 ${++count} 次回复<hide>变量${count}</hide>`
     const half = Math.ceil(text.length / 2)
     res.writeHead(200, { 'content-type': 'text/event-stream' })
     const send = (data, event) => res.write(`${event ? `event: ${event}\n` : ''}data: ${typeof data === 'string' ? data : JSON.stringify(data)}\n\n`)
@@ -181,6 +183,21 @@ test('OpenAI-compatible provider: history rebuilt from the tree, regex-trimmed r
   assert.equal(tip.usage.cacheRead, 60)
   assert.equal(tip.usage.output, 7)
   assert.equal(tip.timing.api, true)
+})
+
+test('a state block closed with the wrong tag: applied and hidden, but sent back to the model as it was written', async t => {
+  const { fake, turn } = await setup(t, 'openai-completions')
+  const first = await turn('标签写错了也要记上')
+  const reply = activePath(first.chat).at(-1)
+  assert.equal(reply.text, `第 1 次回复${CROSSED}`, 'the stored reply keeps everything')
+  assert.equal(reply.display, '第 1 次回复')
+  assert.equal(reply.state.好感, 30)
+  await turn('再来块蛋糕')
+  const [one, two] = fake.requests.map(r => r.body)
+  // Only what the page shows and the state changed: the history is the reply as written,
+  // so the next turn's prefix is what it was before this fix and stays cached.
+  assert.deepEqual(two.messages.slice(0, 2), one.messages)
+  assert.deepEqual(two.messages[2], { role: 'assistant', content: `第 1 次回复${CROSSED}` })
 })
 
 test('provider compaction too long for the context: the older half first, then the newer half on top of it', async t => {

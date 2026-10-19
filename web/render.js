@@ -3,19 +3,20 @@
 // `allow-scripts` but never `allow-same-origin`, so card code runs in an
 // opaque origin: it cannot read this page, its storage, or call the local API.
 import { applyScripts, PLACEMENT } from './shared/regex.js'
-import { replaceVariableMacros } from './shared/vars.js'
+import { replaceVariableMacros, UPDATE_BLOCK } from './shared/vars.js'
+import { CHOICES_BLOCK, TIME_BOX_BLOCK } from './shared/basic.js'
 import { frameShim, libraryTags, replaceViewportHeight } from './compat.js'
 
 const PLACEHOLDER = /<StatusPlaceHolderImpl\s*\/>/i
 const HIDDEN = [
-  /<state>[\s\S]*?<\/state>/gi,
-  /<(update(?:variable)?)>[\s\S]*?<\/\1>/gi,
+  // Closed with another update block's tag, or left open at the end, still hidden.
+  UPDATE_BLOCK,
   /<thinking>[\s\S]*?<\/thinking>/gi,
   /<think>[\s\S]*?<\/think>/gi,
   /<StatusPlaceHolderImpl\s*\/>/gi,
   // The built-in preset's time box and choices: the page draws them (status.js), not as text.
-  /<time_box>[\s\S]*?<\/time_box>/gi,
-  /<choices>[\s\S]*?<\/choices>/gi,
+  TIME_BOX_BLOCK,
+  CHOICES_BLOCK,
 ]
 const OPEN_HIDDEN = /<(state|update(?:variable)?|thinking|think|time_box|choices)>(?![\s\S]*<\/\1>)[\s\S]*$/i
 const FENCE = /```([\w-]*)[^\n]*\n?([\s\S]*?)```/g

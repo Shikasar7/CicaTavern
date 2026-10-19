@@ -106,6 +106,16 @@ test('reading the time box and the choices, however the model numbers them', () 
   assert.deepEqual(choicesOf('<choices>\nA. 还在写'), ['还在写'])
   assert.deepEqual(choicesOf('正文'), [])
   assert.equal(withoutBasicBlocks('<time_box>x</time_box>正文<choices>\nA. y\n</choices>'), '正文')
+  // A time box closed with another tag, or not at all, ends with its line; the story stays.
+  for (const reply of ['<time_box>傍晚｜书店</timebox>\n她笑了。', '<time_box>傍晚｜书店\n她笑了。']) {
+    assert.deepEqual(timeBoxOf(reply), ['傍晚', '书店'])
+    assert.equal(withoutBasicBlocks(reply), '她笑了。')
+    assert.equal(displayText(reply), '她笑了。')
+    assert.equal(streamingText(reply), '她笑了。')
+  }
+  assert.deepEqual(timeBoxOf('<time_box>傍晚\n｜书店</time_box>正文'), ['傍晚', '书店'], 'a closed box may span lines')
+  // Choices cut off before </choices> are hidden from the finished reply too.
+  assert.equal(displayText('她笑了。\n\n<choices>\nA. 问她\nB. 走'), '她笑了。')
 })
 
 test('chats: new ones use the built-in preset; older ones keep their rules until rebuilt', async t => {

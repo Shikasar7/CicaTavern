@@ -3,23 +3,22 @@
 //   <UpdateVariable><JSONPatch>[{"op":"replace","path":"/好感","value":12}]</JSONPatch></UpdateVariable>
 //                                                               MVU (zod) JSON Patch
 //   <UpdateVariable> _.set('好感', 10, 12); </UpdateVariable>    MVU (classic) calls
-// The tag may also be spelled <update>. Model output is parsed as data by
-// JSON/YAML parsers and a small literal parser — never evaluated.
+// The tag may also be spelled <update>; a block closed with another one's tag, or
+// left open at the end of a cut-off reply, still counts (UPDATE_BLOCK). Model
+// output is parsed as data by JSON/YAML parsers and a small literal parser — never evaluated.
 import YAML from 'yaml'
 // Old MVU values are [value, "description"]; reads and writes target the value slot.
-import { isDescribed, splitPath } from '../web/shared/vars.js'
+import { isDescribed, splitPath, UPDATE_BLOCK } from '../web/shared/vars.js'
+import { CHOICES_BLOCK, TIME_BOX_BLOCK } from '../web/shared/basic.js'
 
-const STATE_BLOCK = /<state>([\s\S]*?)<\/state>/gi
-const MVU_BLOCK = /<(update(?:variable)?)>([\s\S]*?)<\/\1>/gi
 const HIDDEN_BLOCKS = [
-  STATE_BLOCK,
-  MVU_BLOCK,
+  UPDATE_BLOCK,
   /<thinking>[\s\S]*?<\/thinking>/gi,
   /<think>[\s\S]*?<\/think>/gi,
   /<StatusPlaceHolderImpl\s*\/>/gi,
   // The built-in preset's time box and choices (web/shared/basic.js): the page draws them itself.
-  /<time_box>[\s\S]*?<\/time_box>/gi,
-  /<choices>[\s\S]*?<\/choices>/gi,
+  TIME_BOX_BLOCK,
+  CHOICES_BLOCK,
 ]
 
 /** Reply text as shown to the player when the card has no display regex: bookkeeping removed. */
@@ -32,14 +31,17 @@ export function displayText(text) {
 export function applyStateUpdates(state, text) {
   let next = structuredClone(state ?? {})
   const changes = []
-  for (const match of String(text ?? '').matchAll(STATE_BLOCK)) {
-    const patch = parseLoose(match[1])
+  const blocks = [...String(text ?? '').matchAll(UPDATE_BLOCK)]
+  const isState = match => match[1].toLowerCase() === 'state'
+  // <state> patches first, then MVU's updates.
+  for (const match of blocks.filter(isState)) {
+    const patch = parseLoose(match[2])
     if (patch && typeof patch === 'object' && !Array.isArray(patch)) {
       next = mergePatch(next, patch)
       changes.push(...Object.keys(patch))
     }
   }
-  for (const match of String(text ?? '').matchAll(MVU_BLOCK)) {
+  for (const match of blocks.filter(match => !isState(match))) {
     const body = match[2]
     for (const ops of jsonPatches(body)) {
       for (const op of ops) {
