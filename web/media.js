@@ -2,11 +2,25 @@
 // under a reply, the reading bar above the input box and the settings window.
 // Nothing here changes what the model sees.
 import { speechChunks } from '/shared/speech.js'
+import { speakerNames, splitLines } from '/shared/vn.js'
 import { createMenu, MENU_ICONS, whoLine } from '/menu.js'
 import { locale, t, zh } from '/i18n.js'
 
 const SHAPES = [['square', t`方图`], ['portrait', t`竖图`], ['landscape', t`横图`]]
-const IMAGE_BACKEND_TEXT = { openai: t`图片接口`, comfy: 'ComfyUI', novelai: 'NovelAI' }
+const IMAGE_BACKEND_TEXT = { openai: t`图片接口`, gemini: 'Gemini', comfy: 'ComfyUI', sdwebui: 'SD WebUI', novelai: 'NovelAI' }
+// The image backends as offered, the usual first.
+const imageBackends = () => [
+  ['openai', t`OpenAI 兼容图片接口（gpt-image 等）`],
+  ['gemini', t`Gemini 原生生图（Nano Banana，能照人设图画）`],
+  ['novelai', t`NovelAI（二次元推荐）`],
+  ['comfy', t`ComfyUI 工作流（本地）`],
+  ['sdwebui', t`SD WebUI / Forge（本地）`],
+]
+const GEMINI_IMAGE_MODELS = ['gemini-2.5-flash-image', 'gemini-3-pro-image-preview']
+const GEMINI_TTS_MODELS = ['gemini-2.5-flash-preview-tts', 'gemini-2.5-pro-preview-tts']
+const SD_SAMPLERS = ['Euler a', 'Euler', 'DPM++ 2M', 'DPM++ 2M Karras', 'DPM++ SDE Karras', 'DPM++ 2M SDE', 'DDIM', 'UniPC']
+/** A provider holding Google's key (the Gemini template), offered first for Gemini's own models. */
+const isGoogle = p => /generativelanguage\.googleapis\.com|\/v1beta\/openai\/?$/i.test(p?.baseURL ?? '')
 // A voice service on this machine or the LAN (小雅, or the tavern on a PC):
 // local TTS models, as against the cloud services.
 const BRIDGE_NAME = t`本地语音桥接`
@@ -28,8 +42,8 @@ const speech = typeof speechSynthesis !== 'undefined' && typeof SpeechSynthesisU
 speech?.getVoices()
 
 // Voice sources on the server (server/voice/): a card names a voice as `<source>:<id>`.
-const VOICE_SOURCES = ['openai', 'fish', 'minimax']
-const VOICE_FIELDS = ['ttsProvider', 'ttsModel', 'ttsVoices', 'fishModel', 'fishVoices', 'minimaxModel', 'minimaxRegion', 'minimaxVoices']
+const VOICE_SOURCES = ['openai', 'fish', 'minimax', 'gemini']
+const VOICE_FIELDS = ['ttsProvider', 'ttsModel', 'ttsVoices', 'fishModel', 'fishVoices', 'minimaxModel', 'minimaxRegion', 'minimaxVoices', 'geminiTtsProvider', 'geminiTtsModel', 'geminiTtsVoices']
 const TTS_MODELS = ['gpt-4o-mini-tts', 'tts-1', 'tts-1-hd', 'FunAudioLLM/CosyVoice2-0.5B']
 const FISH_MODELS = [['drama-3', t`drama-3（情绪最足，按用量计费）`], ['s2.1-pro', 's2.1-pro'], ['s2.1-pro-free', t`s2.1-pro-free（免费，合理使用）`], ['s2-pro', 's2-pro']]
 const MINIMAX_MODELS = ['speech-2.8-hd', 'speech-2.8-turbo', 'speech-2.6-hd']
@@ -37,7 +51,7 @@ const MINIMAX_MODELS = ['speech-2.8-hd', 'speech-2.8-turbo', 'speech-2.6-hd']
 const PREVIEW_LINE = zh`你好呀，很高兴见到你。今天想听我讲点什么呢？`
 // Characters per chunk: the bridge's Qwen3 voices keep their intonation over ~100;
 // cloud voices bill per request, so longer; Chrome stops a long utterance after ~15 s.
-const CHUNK_MAX = { bridge: 100, browser: 150, openai: 250, fish: 250, minimax: 300 }
+const CHUNK_MAX = { bridge: 100, browser: 150, openai: 250, fish: 250, minimax: 300, gemini: 300 }
 
 const browserVoiceList = () => (speech ? speech.getVoices() : [])
 
@@ -170,6 +184,8 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     if (!media) return ''
     if (media.imageBackend === 'novelai') return `NovelAI ${media.naiModel.replace(/^nai-diffusion-(\d)-(\d)-/, 'V$1.$2 ').replace(/^nai-diffusion-(\d)-/, 'V$1 ')}`
     if (media.imageBackend === 'comfy') return 'ComfyUI'
+    if (media.imageBackend === 'sdwebui') return 'SD WebUI'
+    if (media.imageBackend === 'gemini') return media.geminiImageModel
     return media.imageModel
   }
 
@@ -760,10 +776,53 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     },
   }
 
+  // ─── Who speaks: a cast member's lines in their own voice ───────────────
+  // The speaker of a line is the visual novel mode's guess (web/shared/vn.js);
+  // one it cannot tell, or nobody in the cast, takes the card's dialogue voice.
+
+  const cast = () => state.cardMedia?.roster ?? []
+  /** Anyone in the cast with a voice of their own: only then are speakers told apart. */
+  const castVoiced = () => cast().some(entry => entry.voice)
+
+  function castNames() {
+    const chat = getChat()
+    return speakerNames({ char: chat?.names?.char, user: chat?.names?.user, roster: cast() })
+  }
+
+  /** A speaker's voice: their cast entry's own, else the card's dialogue voice. */
+  function voiceOf(speaker, names = castNames()) {
+    const id = speaker ? names.find(entry => entry.name === speaker)?.id : null
+    return (id && cast().find(entry => entry.id === id)?.voice) || state.cardMedia?.voice || ''
+  }
+
+  /** Characters per dialogue chunk: the shortest any voice in use takes. */
+  const dialogueMax = () => Math.min(chunkMaxFor(state.cardMedia?.voice), ...cast().filter(entry => entry.voice).map(entry => chunkMaxFor(entry.voice)))
+
+  /**
+   * (quote text) → who says it, for a reply's quotes in reading order: found in
+   * the beats the visual novel mode cuts the same text into.
+   */
+  function quoteSpeakers(text, names) {
+    const key = s => String(s ?? '').replace(/[\s“”「」『』"]/g, '')
+    const beats = splitLines(String(text ?? '').replace(/\[voice:[^\]\n]*\]/gi, ''), { names }).map(beat => ({ plain: key(beat.plain), speaker: beat.speaker }))
+    let at = 0
+    return quote => {
+      const want = key(quote).slice(0, 12)
+      if (!want) return null
+      const found = beats.findIndex((beat, i) => i >= at && beat.plain.includes(want))
+      if (found < 0) return null
+      at = found
+      return beats[found].speaker
+    }
+  }
+
   function readNode(node) {
-    const { voice, narratorVoice } = state.cardMedia
+    const { narratorVoice } = state.cardMedia
+    const text = shownText(node)
+    const names = castNames()
+    const speakerOf = castVoiced() ? quoteSpeakers(text, names) : null
     // Emotions go before their lines as [tags]; the server keeps them only for voices that act on them (Fish).
-    const chunks = speechChunks(shownText(node), { narration: Boolean(narratorVoice), tags: true, max: { dialogue: chunkMaxFor(voice), narration: chunkMaxFor(narratorVoice) } })
+    const chunks = speechChunks(text, { narration: Boolean(narratorVoice), tags: true, speakerOf, max: { dialogue: dialogueMax(), narration: chunkMaxFor(narratorVoice) } })
     if (!chunks.length) return toast(t`这一段没有能读的文字`)
     if (!narratorVoice && !state.warnedNarrator) {
       state.warnedNarrator = true
@@ -771,7 +830,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     }
     player.start(node.id, chunks.map(chunk => ({
       ...chunk,
-      voice: chunk.kind === 'dialogue' ? voice : narratorVoice,
+      voice: chunk.kind === 'dialogue' ? voiceOf(chunk.speaker, names) : narratorVoice,
       // Narration is long and even: the bridge's steady mode keeps one voice across blocks.
       stable: chunk.kind === 'narration',
     })))
@@ -779,12 +838,14 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
 
   /**
    * One line of the visual novel's text box (web/vn.js), read as it shows: the
-   * quotes in the character's voice, the rest in the narrator's. done() once it
+   * quotes in the speaker's voice, the rest in the narrator's. done() once it
    * has been read; a line with nothing to read is done at once.
+   * @param speaker - who says it, as the text box's name plate has it.
    */
-  function readBeat(nodeId, text, done) {
-    const { voice, narratorVoice } = state.cardMedia ?? {}
+  function readBeat(nodeId, text, done, speaker = null) {
+    const { narratorVoice } = state.cardMedia ?? {}
     const plain = String(text ?? '').replace(/<[^<>]*>/g, '')
+    const voice = voiceOf(speaker)
     const chunks = speechChunks(plain, { narration: Boolean(narratorVoice), tags: true, max: { dialogue: chunkMaxFor(voice), narration: chunkMaxFor(narratorVoice) } })
     if (!chunks.length) return done?.()
     player.start(nodeId, chunks.map(chunk => ({
@@ -794,14 +855,17 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     })), null, done)
   }
 
-  /** One line of dialogue, clicked in the reply: read on its own in the character's voice. */
+  /** One line of dialogue, clicked in the reply: read on its own in its speaker's voice. */
   function readLine(span) {
     const nodeId = span.closest('.msg[data-id]')?.dataset.id
     if (!nodeId) return
     if (player.line === span) return player.stop()
-    const chunks = speechChunks(span.innerText + voiceTagFor(span), { narration: false, tags: true, max: chunkMaxFor(state.cardMedia.voice) })
+    const node = getChat()?.path.find(n => n.id === nodeId)
+    const names = castNames()
+    const voice = castVoiced() && node ? voiceOf(quoteSpeakers(shownText(node), names)(span.innerText), names) : state.cardMedia.voice
+    const chunks = speechChunks(span.innerText + voiceTagFor(span), { narration: false, tags: true, max: chunkMaxFor(voice) })
     if (!chunks.length) return toast(t`这句没有能读的文字`)
-    player.start(nodeId, chunks.map(chunk => ({ ...chunk, voice: state.cardMedia.voice, stable: false })), span)
+    player.start(nodeId, chunks.map(chunk => ({ ...chunk, voice, stable: false })), span)
   }
 
   document.addEventListener('click', event => {
@@ -854,11 +918,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     const field = (label, control, hint) => el('label', {}, [label, control, hint ? el('span', { class: 'hint', text: hint }) : null])
 
     // Pictures
-    const backend = el('select', { name: 'imageBackend' }, [
-      option('openai', t`OpenAI 兼容图片接口（grok2api 等）`, media.imageBackend),
-      option('comfy', t`ComfyUI 工作流`, media.imageBackend),
-      option('novelai', 'NovelAI', media.imageBackend),
-    ])
+    const backend = el('select', { name: 'imageBackend' }, imageBackends().map(([value, text]) => option(value, text, media.imageBackend)))
     const imageProviders = providers.filter(p => p.api !== 'anthropic-messages')
     const provider = el('select', { name: 'imageProvider' }, [option('', imageProviders.length ? t`选一个供应商` : t`先在「供应商」里添加`, media.imageProvider), ...imageProviders.map(p => option(p.id, p.name, media.imageProvider))])
     const modelList = el('datalist', { id: 'image-models' })
@@ -972,12 +1032,64 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       field(t`负面提示词`, el('textarea', { name: 'naiNegative', rows: 3, spellcheck: 'false', text: media.naiNegative })),
       el('p', { class: 'hint', text: t`尺寸和步数都在 Opus 的免费范围内（不超过 1024×1024 像素、23 步）：V4.5 不限量，V5 用上面那份额度，都不扣 Anlas。走「设置」里的代理。` }),
     ])
+    // Gemini's own image models: a provider with Google's key, the first such one until another is picked.
+    const googleProviders = imageProviders.filter(isGoogle)
+    const geminiPick = media.geminiImageProvider || googleProviders[0]?.id || ''
+    const geminiProvider = el('select', { name: 'geminiImageProvider' }, [
+      option('', imageProviders.length ? t`选一个供应商` : t`先在「供应商」里添加`, geminiPick),
+      ...[...googleProviders, ...imageProviders.filter(p => !isGoogle(p))].map(p => option(p.id, p.name, geminiPick)),
+    ])
+    const geminiModels = el('datalist', { id: 'gemini-image-models' }, GEMINI_IMAGE_MODELS.map(id => el('option', { value: id })))
+    const geminiModel = el('input', { name: 'geminiImageModel', value: media.geminiImageModel, list: 'gemini-image-models', spellcheck: 'false' })
+    const fetchGemini = el('button', { type: 'button', class: 'btn small', text: t`获取` })
+    fetchGemini.onclick = guard(async () => {
+      if (!geminiProvider.value) throw new Error(t`先选供应商`)
+      const { models } = await api('/api/providers/models', { method: 'POST', body: { id: geminiProvider.value } })
+      const images = models.filter(id => /image/i.test(id) && !/imagen/i.test(id))
+      geminiModels.replaceChildren(...(images.length ? images : GEMINI_IMAGE_MODELS).map(id => el('option', { value: id })))
+      toast(images.length ? t`找到 ${images.length} 个生图模型，点输入框选` : t`这个供应商没列出 Gemini 生图模型，列的是常用的`)
+      geminiModel.focus()
+    })
+    const geminiBox = el('div', {}, [
+      el('div', { class: 'grid' }, [
+        field(t`供应商`, geminiProvider, googleProviders.length ? '' : t`先用「Gemini」模板建一个供应商（密钥在 aistudio.google.com 创建）`),
+        el('label', {}, [t`生图模型`, el('span', { class: 'select-with-action' }, [geminiModel, fetchGemini]), geminiModels]),
+      ]),
+      el('label', { class: 'check-row' }, [
+        el('input', { type: 'checkbox', name: 'geminiReference', checked: media.geminiReference }),
+        el('span', { text: t`画面里的名册角色有人设图时，一起发过去照着画（最多三个人，长相更稳）` }),
+      ]),
+      el('p', { class: 'hint', text: t`走 Google 自己的接口，和对话共用「Gemini」供应商的密钥和代理。gemini-2.5-flash-image 快、便宜；gemini-3-pro-image-preview 画得更细。提示词写法选「自然语言」。` }),
+    ])
+    // Stable Diffusion WebUI / Forge: the model loaded there draws.
+    const sdSamplers = el('datalist', { id: 'sd-samplers' }, SD_SAMPLERS.map(id => el('option', { value: id })))
+    const sdBox = el('div', {}, [
+      field(t`WebUI 地址`, el('input', { name: 'sdUrl', value: media.sdUrl, spellcheck: 'false' }), t`AUTOMATIC1111、Forge、reForge 都行，启动参数要加 --api。用 WebUI 里当前加载的模型画。`),
+      el('div', { class: 'grid three' }, [
+        el('label', {}, [t`采样器`, el('input', { name: 'sdSampler', value: media.sdSampler, list: 'sd-samplers', spellcheck: 'false' }), sdSamplers]),
+        field(t`步数`, el('input', { name: 'sdSteps', type: 'number', min: '1', max: '80', step: '1', value: String(media.sdSteps) })),
+        field('CFG', el('input', { name: 'sdCfg', type: 'number', min: '1', max: '20', step: '0.5', value: String(media.sdCfg) })),
+      ]),
+      field(t`负面提示词`, el('textarea', { name: 'sdNegative', rows: 2, spellcheck: 'false', text: media.sdNegative })),
+      el('p', { class: 'hint', text: t`名册角色或这张卡设了 LoRA 时，写成 <lora:文件名:强度> 加进提示词（文件要在 WebUI 的 Lora 文件夹里）。提示词写法选「标签」。` }),
+    ])
     const syncBackend = () => {
       openaiBox.hidden = backend.value !== 'openai'
       referenceRow.hidden = backend.value !== 'openai'
+      geminiBox.hidden = backend.value !== 'gemini'
       comfyBox.hidden = backend.value !== 'comfy'
+      sdBox.hidden = backend.value !== 'sdwebui'
       naiBox.hidden = backend.value !== 'novelai'
       readAllowance()
+    }
+    /** What keeps pictures from being drawn as the form stands, or ''. */
+    const imageNeed = () => {
+      if (backend.value === 'openai' && !provider.value) return t`没选供应商`
+      if (backend.value === 'openai' && !model.value.trim()) return t`没填生图模型`
+      if (backend.value === 'gemini' && !geminiProvider.value) return t`没选供应商`
+      if (backend.value === 'novelai' && !novelai?.hasToken && !naiToken.value.trim()) return t`没填令牌`
+      if (backend.value === 'comfy' && !workflowInfo.dataset.imported) return t`没导入工作流`
+      return ''
     }
     backend.onchange = syncBackend
     const referenceRow = el('div', {}, [
@@ -993,11 +1105,8 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     // services (keys, billed per character).
     // Only this machine's own install assumes the xiaoya bridge; elsewhere the browser reads unless a source is set up.
     const xiaoya = document.documentElement.dataset.featureXiaoya !== 'false'
-    const sources = Object.fromEntries((voiceInfo.sources ?? []).map(s => [s.id, s]))
-    const external = sources.bridge ?? { ok: true, configured: false, voices: [], cloud: [], current: null }
-    const service = Boolean(media.ttsUrl)
-    const voices = external.voices ?? []
-    const chinese = browserVoices.filter(v => /^zh/i.test(v.lang))
+    const choices = voiceChoices({ voiceInfo, browserVoices, media, providers })
+    const { sources, external, service, voices, cloud, chinese, groups, known, dialogueDefault } = choices
     const ttsUrl = el('input', { name: 'ttsUrl', value: media.ttsUrl, spellcheck: 'false', placeholder: xiaoya ? '' : t`不用就留空` })
     const ttsStatus = el('span', {
       class: external.ok ? 'hint' : 'hint warn',
@@ -1007,39 +1116,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     const ttsKeyHint = el('span', { class: 'hint tts-key-hint' })
     voiceKeyText(ttsKeyHint, voiceKey)
     const autoRead = el('input', { type: 'checkbox', name: 'autoRead', checked: media.autoRead })
-    // The bridge's own model voices, cloud voices it relays by name, this tavern's own cloud services, then this device's browser voices.
-    const cloud = external.cloud ?? []
-    const browserLabel = v => `${v.name.replace(/^Microsoft /, '')}${v.localService ? '' : t`（在线）`}`
-    const ownGroup = id => {
-      const source = sources[id]
-      if (!source?.voices?.length) return null
-      const provider = id === 'openai' ? providers.find(p => p.id === media.ttsProvider)?.name ?? '' : ''
-      return [t`云端服务 · ${provider || source.label} · ${source.model}（按字数计费）`, source.voices.map(v => [v.ref, v.label])]
-    }
-    const groups = [
-      voices.length ? [t`${BRIDGE_NAME} · 本地模型音色`, voices.map(v => [v, v])] : null,
-      cloud.length ? [t`${BRIDGE_NAME} · 经它转发的云端音色（按字数计费）`, cloud.map(v => [v.name, t`${v.label}（${v.provider.replace(/ · 云端$/, '')} · ${v.model}）`])] : null,
-      ...VOICE_SOURCES.map(ownGroup),
-      chinese.length ? [t`浏览器 · 这台设备自带的音色（免费）`, chinese.map(v => [`${BROWSER}${v.name}`, browserLabel(v)])] : null,
-    ].filter(Boolean)
-    const known = new Set(groups.flatMap(([, list]) => list.map(([value]) => value)))
-    const missing = value => (value.startsWith(BROWSER) ? t`${value.slice(BROWSER.length)}（这台设备没有，用默认中文音色）` : t`${value}（现在没有）`)
-    const voiceSelect = (name, value, empty) =>
-      el('select', { name }, [
-        option('', empty, value),
-        ...(groups.length > 1
-          ? groups.map(([label, list]) => el('optgroup', { label }, list.map(([v, text]) => option(v, text, value))))
-          : groups.flatMap(([, list]) => list.map(([v, text]) => option(v, text, value)))),
-        value && !known.has(value) ? option(value, missing(value), value) : null,
-      ].filter(Boolean))
-    // A voice picker with its own 试听.
-    const voicePicker = (name, value, empty) => {
-      const select = voiceSelect(name, value, empty)
-      const listen = el('button', { type: 'button', class: 'btn small', text: t`试听`, title: t`用这个音色读一句示例（没保存的设置也算）` })
-      listen.onclick = () => previewVoice(listen, { voice: select.value, form, silent: name === 'narratorVoice' })
-      return el('span', { class: 'select-with-action' }, [select, listen])
-    }
-    const dialogueDefault = service ? t`${BRIDGE_NAME}当前的音色${external.current ? t`（${external.current}）` : ''}` : t`浏览器默认中文音色`
+    const voicePicker = (name, value, empty) => voicePickerFrom(choices, { name, value, empty, form, silent: name === 'narratorVoice' })
     const anyCloud = cloud.length || VOICE_SOURCES.some(id => sources[id]?.voices?.length)
     const narratorHint = anyCloud
       ? xiaoya && cloud.length
@@ -1062,17 +1139,23 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     const browserLine = el('p', {
       class: 'hint',
       text: speech
-        ? t`免费、不用设置：这台设备有 ${chinese.length} 个中文音色（Edge 的「Xiaoxiao Online (Natural)」这类在线音色效果最好）。`
-        : t`这个浏览器不能朗读：设一个本地语音桥接或云端服务，或者换 Edge / Chrome 打开。`,
+        ? t`免费、不用设置：这台设备有 ${chinese.length} 个中文音色。`
+        : t`这个浏览器不能朗读：设一个云端服务或本地语音桥接，或者换 Edge / Chrome 打开。`,
     })
-    // The 朗读来源 page: the three kinds, nearest first.
+    // The 朗读来源 page: cloud services first (the most natural voices), this device's own, then a local bridge.
     const sourceGroup = (title, note, boxes) =>
       el('section', { class: 'voice-group' }, [el('h4', { class: 'voice-group-title' }, [title, el('span', { text: note })]), ...boxes])
     const voiceSourceSections = [
+      sourceGroup(t`云端服务`, t`要密钥，按字数计费`, sourceBoxes),
       sourceGroup(t`浏览器`, t`这台设备自带，免费`, [browserLine]),
       sourceGroup(BRIDGE_NAME, t`本机或局域网里的 TTS 模型，不经过云端`, [externalBox]),
-      sourceGroup(t`云端服务`, t`要密钥，按字数计费`, sourceBoxes),
     ]
+    /** Nothing but the browser to read with, as saved: the 朗读来源 row asks to be opened. */
+    const voiceNeed = () => {
+      const bridgeSet = Boolean(form.elements.ttsUrl?.value.trim())
+      if (VOICE_SOURCES.some(id => sources[id]?.configured) || (bridgeSet && external.ok)) return ''
+      return bridgeSet ? t`${BRIDGE_NAME}没开` : t`还没设朗读服务`
+    }
 
     // The dialog as a menu (web/menu.js): 配图 and 朗读, each with what every card
     // shares first (how pictures are drawn, where voices come from), then this
@@ -1088,18 +1171,22 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       shared(t`配图`, {
         id: 'image',
         title: t`画图方式`,
-        summary: () => [IMAGE_BACKEND_TEXT[backend.value], backend.value === 'novelai' ? naiModel.selectedOptions[0]?.text.split(t`（`)[0] : backend.value === 'openai' ? model.value : '', SHAPES.find(([value]) => value === size.value)?.[1]].filter(Boolean).join(' · '),
+        summary: () => {
+          if (imageNeed()) return t`还没设好，现在画不了图：点这里选画图方式，填好供应商或令牌`
+          const modelText = { novelai: naiModel.selectedOptions[0]?.text.split(t`（`)[0], openai: model.value, gemini: geminiModel.value }[backend.value]
+          return [IMAGE_BACKEND_TEXT[backend.value], modelText, SHAPES.find(([value]) => value === size.value)?.[1]].filter(Boolean).join(' · ')
+        },
         status: () => {
-          if (backend.value === 'openai' && !provider.value) return ['warn', t`没选供应商`]
-          if (backend.value === 'novelai' && !novelai?.hasToken && !naiToken.value.trim()) return ['warn', t`没填令牌`]
-          if (backend.value === 'comfy' && !workflowInfo.dataset.imported) return ['warn', t`没导入工作流`]
-          return null
+          const need = imageNeed()
+          return need ? ['need', need] : null
         },
         body: [
-          el('div', { class: 'grid' }, [field(t`画图用`, backend), field(t`画幅`, size, t`图片接口：1024×1024 / 1024×1536 / 1536×1024；ComfyUI 和 NovelAI：1024×1024 / 832×1216 / 1216×832`)]),
+          el('div', { class: 'grid' }, [field(t`画图用`, backend), field(t`画幅`, size, t`图片接口：1024×1024 / 1024×1536 / 1536×1024；Gemini：1:1 / 2:3 / 3:2；ComfyUI、SD WebUI 和 NovelAI：1024×1024 / 832×1216 / 1216×832`)]),
           openaiBox,
           referenceRow,
+          geminiBox,
           comfyBox,
+          sdBox,
           naiBox,
           field(t`画面提示词怎么写`, promptSource, t`「接着对话写」把固定前缀和这段对话原样发给写这段剧情的模型，再追加一句要提示词：几乎全部命中缓存，人物现在穿什么、在哪都对得上，但用的是对话模型的价格和速度。订阅模型写的剧情借不了，会自动改用辅助模型。`),
           el('div', { class: 'grid' }, [
@@ -1148,19 +1235,27 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         id: 'voice',
         title: t`朗读来源`,
         summary: () => {
+          if (voiceNeed()) return speech ? t`现在只能用浏览器音色：设一个云端服务（Fish Audio、MiniMax、Gemini 或供应商的朗读接口），声音自然得多` : t`还没有能用的音色：点这里设一个云端服务`
           const parts = []
-          if (form.elements.ttsUrl?.value.trim() && external.ok) parts.push(t`${BRIDGE_NAME} ${voices.length + cloud.length} 个音色`)
           for (const id of VOICE_SOURCES) if (sources[id]?.configured) parts.push(t`${sources[id].label} ${sources[id].voices.length} 个音色`)
           if (speech) parts.push(t`浏览器 ${chinese.length} 个音色`)
-          return parts.join(' · ') || t`还没有能用的音色`
+          if (form.elements.ttsUrl?.value.trim() && external.ok) parts.push(t`${BRIDGE_NAME} ${voices.length + cloud.length} 个音色`)
+          return parts.join(' · ')
         },
-        status: () => (form.elements.ttsUrl?.value.trim() && !external.ok ? ['warn', t`${BRIDGE_NAME}没开`] : null),
+        status: () => {
+          const need = voiceNeed()
+          if (need) return ['need', need]
+          return form.elements.ttsUrl?.value.trim() && !external.ok ? ['warn', t`${BRIDGE_NAME}没开`] : null
+        },
         body: voiceSourceSections,
       }),
       card && own(t`朗读`, {
         id: 'card-voice',
         title: t`音色`,
-        summary: () => t`对白：${voiceName(form.elements.voice?.value, dialogueDefault)} · 旁白：${voiceName(form.elements.narratorVoice?.value, t`不读`)}`,
+        summary: () => {
+          const own = card.roster.filter(entry => form.elements[`castVoice:${entry.id}`]?.value).length
+          return t`对白：${voiceName(form.elements.voice?.value, dialogueDefault)} · 旁白：${voiceName(form.elements.narratorVoice?.value, t`不读`)}${own ? t` · ${own} 个角色有自己的音色` : ''}`
+        },
         status: () => {
           const voice = form.elements.voice?.value ?? ''
           // A card without a voice reads with the local bridge's current one.
@@ -1174,6 +1269,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
             field(t`旁白音色`, voicePicker('narratorVoice', card.narratorVoice, t`不读旁白`), narratorHint),
           ]),
           el('p', { class: 'hint', text: t`没选对白音色时，用${service ? t`${BRIDGE_NAME}当前的音色` : t`浏览器默认的中文音色`}读。选了哪个来源的音色，就只用那个来源，别的来源开没开都不影响。` }),
+          ...castVoiceBlock(card.roster, choices, form, () => settingsMenu.show('roster', 'forward')),
         ],
       }),
     ].filter(Boolean)
@@ -1195,6 +1291,179 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     })
     syncBackend()
     syncReference()
+  }
+
+  // ─── Voice choices: what a card or a cast member can be read in ────────
+
+  /**
+   * The voices to pick from, grouped: the local bridge's model voices, cloud
+   * voices it relays by name, this tavern's own cloud services, then this
+   * device's browser voices.
+   */
+  function voiceChoices({ voiceInfo, browserVoices = [], media, providers = [] }) {
+    const sources = Object.fromEntries((voiceInfo?.sources ?? []).map(s => [s.id, s]))
+    const external = sources.bridge ?? { ok: true, configured: false, voices: [], cloud: [], current: null }
+    const service = Boolean(media?.ttsUrl)
+    const voices = external.voices ?? []
+    const cloud = external.cloud ?? []
+    const chinese = browserVoices.filter(v => /^zh/i.test(v.lang))
+    const browserLabel = v => `${v.name.replace(/^Microsoft /, '')}${v.localService ? '' : t`（在线）`}`
+    const ownGroup = id => {
+      const source = sources[id]
+      if (!source?.voices?.length) return null
+      const provider = id === 'openai' ? providers.find(p => p.id === media?.ttsProvider)?.name ?? '' : ''
+      return [t`云端服务 · ${provider || source.label} · ${source.model}（按字数计费）`, source.voices.map(v => [v.ref, v.label])]
+    }
+    // As 朗读来源 lists them: cloud services, this device's browser voices, then the local bridge.
+    const groups = [
+      ...VOICE_SOURCES.map(ownGroup),
+      chinese.length ? [t`浏览器 · 这台设备自带的音色（免费）`, chinese.map(v => [`${BROWSER}${v.name}`, browserLabel(v)])] : null,
+      voices.length ? [t`${BRIDGE_NAME} · 本地模型音色`, voices.map(v => [v, v])] : null,
+      cloud.length ? [t`${BRIDGE_NAME} · 经它转发的云端音色（按字数计费）`, cloud.map(v => [v.name, t`${v.label}（${v.provider.replace(/ · 云端$/, '')} · ${v.model}）`])] : null,
+    ].filter(Boolean)
+    const known = new Set(groups.flatMap(([, list]) => list.map(([value]) => value)))
+    const dialogueDefault = service ? t`${BRIDGE_NAME}当前的音色${external.current ? t`（${external.current}）` : ''}` : t`浏览器默认中文音色`
+    return { sources, external, service, voices, cloud, chinese, groups, known, dialogueDefault }
+  }
+
+  function voiceSelectFrom({ groups, known }, { name, value, empty }) {
+    const option = (v, text) => el('option', { value: v, text, selected: v === value })
+    const missing = v => (v.startsWith(BROWSER) ? t`${v.slice(BROWSER.length)}（这台设备没有，用默认中文音色）` : t`${v}（现在没有）`)
+    return el('select', { name }, [
+      option('', empty),
+      ...(groups.length > 1
+        ? groups.map(([label, list]) => el('optgroup', { label }, list.map(([v, text]) => option(v, text))))
+        : groups.flatMap(([, list]) => list.map(([v, text]) => option(v, text)))),
+      value && !known.has(value) ? option(value, missing(value)) : null,
+    ].filter(Boolean))
+  }
+
+  /** A voice picker with its own 试听; onChange(value) once one is picked. */
+  function voicePickerFrom(choices, { name, value, empty, form, silent = false, onChange = null }) {
+    const select = voiceSelectFrom(choices, { name, value, empty })
+    if (onChange) select.addEventListener('change', () => onChange(select.value))
+    const listen = el('button', { type: 'button', class: 'btn small', text: t`试听`, title: t`用这个音色读一句示例（没保存的设置也算）` })
+    listen.onclick = () => previewVoice(listen, { voice: select.value, form, silent })
+    return el('span', { class: 'select-with-action' }, [select, listen])
+  }
+
+  /**
+   * 角色各自的音色: a picker for each one in the cast ('' = the card's dialogue voice).
+   * @param toRoster - opens 角色名册, for a card without a cast.
+   * @param onChange - (entry, voice) once one is picked.
+   */
+  function castVoiceBlock(roster, choices, form, toRoster, onChange = null) {
+    const rows = roster.map(entry => el('label', { class: 'cast-voice' }, [
+      el('span', { class: 'cast-voice-name', text: entry.player ? t`${entry.name}（主角）` : entry.name }),
+      voicePickerFrom(choices, { name: `castVoice:${entry.id}`, value: entry.voice ?? '', empty: t`同对白音色`, form, onChange: onChange && (value => onChange(entry, value)) }),
+    ]))
+    return [
+      el('h4', { class: 'cast-voice-title', text: t`角色各自的音色` }),
+      ...(rows.length
+        ? [el('div', { class: 'cast-voices' }, rows), el('p', { class: 'hint', text: t`说话的人在角色名册里，就用自己的音色；没选的、猜不出是谁的，用对白音色。视觉小说模式按每句的说话人读，普通模式点「朗读」或点一句对白也一样。` })]
+        : [el('p', { class: 'hint', text: t`先在角色名册里添加角色（「让辅助模型起草」最快），保存后就能给每个人选音色。` }), toRoster ? el('button', { type: 'button', class: 'btn small', 'data-settings': '', text: t`去角色名册`, onclick: toRoster }) : null]),
+    ].filter(Boolean)
+  }
+
+  // ─── Quick settings (the visual novel mode's 朗读 / 配图 menus) ─────────
+
+  /**
+   * The few settings that matter while playing, into `box`: saved as soon as
+   * one changes. 更多 opens the settings window on that page.
+   * @param kind - 'voice' (this card's voices, the cast's, the voice models) or
+   *   'image' (how pictures are drawn, the model, the shape).
+   */
+  async function fillQuick(box, kind) {
+    const option = (value, text, selected) => el('option', { value, text, selected: value === selected })
+    const row = (label, control, hint) => el('label', { class: 'quick-row' }, [el('span', { class: 'quick-label', text: label }), control, hint ? el('span', { class: 'hint', text: hint }) : null])
+    // data-settings: the menu it sits in closes as the window opens.
+    const more = (text, section) => el('button', { type: 'button', class: 'btn small ghost', 'data-settings': '', text, onclick: () => openSettings(section) })
+    const redraw = () => fillQuick(box, kind)
+    // A model changes what there is to pick: draw the menu again.
+    const saveMedia = (patch, again = false) => guard(async () => {
+      state.settings = (await api('/api/media/settings', { method: 'PUT', body: patch })).media
+      toast(t`已保存`, 1500)
+      if (again) redraw()
+    })()
+    box.replaceChildren(el('p', { class: 'hint', text: t`读取中…` }))
+    if (!state.settings) await loadSettings()
+    const media = state.settings ?? {}
+
+    if (kind === 'image') {
+      const backend = el('select', { onchange: () => saveMedia({ imageBackend: backend.value }, true) }, imageBackends().map(([id, text]) => option(id, text, media.imageBackend)))
+      const geminiModel = el('input', { value: media.geminiImageModel ?? '', list: 'quick-gemini-models', spellcheck: 'false', onchange: () => saveMedia({ geminiImageModel: geminiModel.value.trim() }) })
+      const nai = el('select', { onchange: () => saveMedia({ naiModel: nai.value }) }, [
+        ...NAI_MODELS.map(([value, text]) => option(value, text, media.naiModel)),
+        NAI_MODELS.some(([value]) => value === media.naiModel) ? null : option(media.naiModel, media.naiModel, media.naiModel),
+      ].filter(Boolean))
+      const model = el('input', { value: media.imageModel ?? '', spellcheck: 'false', placeholder: t`例如 grok-imagine-image-2.0`, onchange: () => saveMedia({ imageModel: model.value.trim() }) })
+      const unset = text => el('p', { class: 'hint warn', text })
+      const modelRow = {
+        openai: media.imageProvider ? row(t`生图模型`, model) : unset(t`还没选供应商：在「更多配图设置」里选`),
+        gemini: media.geminiImageProvider
+          ? row(t`Gemini 生图模型`, el('span', {}, [geminiModel, el('datalist', { id: 'quick-gemini-models' }, GEMINI_IMAGE_MODELS.map(id => el('option', { value: id })))]))
+          : unset(t`还没选 Gemini 的供应商：在「更多配图设置」里选`),
+        novelai: row(t`NovelAI 模型`, nai),
+        comfy: el('p', { class: 'hint', text: t`用导入的 ComfyUI 工作流画，在「更多配图设置」里换。` }),
+        sdwebui: el('p', { class: 'hint', text: t`用 SD WebUI 里当前加载的模型画（${media.sdUrl}）。` }),
+      }[media.imageBackend] ?? null
+      const shape = el('select', { onchange: () => saveMedia({ imageShape: shape.value }) }, SHAPES.map(([value, text]) => option(value, text, media.imageShape)))
+      // replaceChildren prints a null as text: leave the empty ones out.
+      box.replaceChildren(...[
+        row(t`画图用`, backend),
+        modelRow,
+        row(t`画幅`, shape),
+        el('div', { class: 'quick-more' }, [more(t`更多配图设置…`, 'image'), state.cardId ? more(t`角色名册…`, 'roster') : null].filter(Boolean)),
+      ].filter(Boolean))
+      return
+    }
+
+    const [voiceInfo, browserVoices, providers] = await Promise.all([
+      api('/api/media/voices'),
+      loadBrowserVoices(),
+      api('/api/providers').then(info => info.providers, () => []),
+    ])
+    state.voiceInfo = voiceInfo
+    const choices = voiceChoices({ voiceInfo, browserVoices, media, providers })
+    // 试听 reads with the saved settings: a form holding only the bridge's address.
+    const form = el('form', {}, [el('input', { type: 'hidden', name: 'ttsUrl', value: media.ttsUrl ?? '' })])
+    const saveCard = guard(async patch => {
+      if (!state.cardId) return
+      state.cardMedia = await api(`/api/cards/${state.cardId}/media`, { method: 'PUT', body: patch })
+      toast(t`已保存`, 1500)
+    })
+    const card = state.cardMedia ?? {}
+    const { sources } = choices
+    const models = []
+    if (sources.openai?.configured) {
+      const input = el('input', { value: media.ttsModel ?? '', list: 'quick-tts-models', spellcheck: 'false', onchange: () => saveMedia({ ttsModel: input.value.trim() }, true) })
+      models.push(row(t`朗读模型（供应商）`, el('span', {}, [input, el('datalist', { id: 'quick-tts-models' }, TTS_MODELS.map(id => el('option', { value: id })))])))
+    }
+    if (sources.fish?.configured) {
+      const select = el('select', { onchange: () => saveMedia({ fishModel: select.value }, true) }, FISH_MODELS.map(([value, text]) => option(value, text, media.fishModel)))
+      models.push(row(t`朗读模型（Fish Audio）`, select))
+    }
+    if (sources.minimax?.configured) {
+      const list = MINIMAX_MODELS.includes(media.minimaxModel) ? MINIMAX_MODELS : [...MINIMAX_MODELS, media.minimaxModel]
+      const select = el('select', { onchange: () => saveMedia({ minimaxModel: select.value }, true) }, list.map(id => option(id, id, media.minimaxModel)))
+      models.push(row(t`朗读模型（MiniMax）`, select))
+    }
+    if (sources.gemini?.configured) {
+      const input = el('input', { value: media.geminiTtsModel ?? '', list: 'quick-gemini-tts', spellcheck: 'false', onchange: () => saveMedia({ geminiTtsModel: input.value.trim() }, true) })
+      models.push(row(t`朗读模型（Gemini）`, el('span', {}, [input, el('datalist', { id: 'quick-gemini-tts' }, GEMINI_TTS_MODELS.map(id => el('option', { value: id })))])))
+    }
+    box.replaceChildren(...[
+      ...(state.cardId
+        ? [
+            row(t`对白音色`, voicePickerFrom(choices, { name: 'voice', value: card.voice ?? '', empty: choices.dialogueDefault, form, onChange: value => saveCard({ voice: value }) })),
+            row(t`旁白音色`, voicePickerFrom(choices, { name: 'narratorVoice', value: card.narratorVoice ?? '', empty: t`不读旁白`, form, silent: true, onChange: value => saveCard({ narratorVoice: value }) })),
+            ...castVoiceBlock(cast(), choices, form, () => openSettings('roster'), (entry, value) => saveCard({ roster: cast().map(e => (e.id === entry.id ? { ...e, voice: value } : e)) })),
+          ]
+        : [el('p', { class: 'hint', text: t`选一张角色卡后，这里可以给它选音色。` })]),
+      choices.service && !choices.external.ok ? el('p', { class: 'hint warn', text: t`${BRIDGE_NAME}连不上：${choices.external.error ?? ''}` }) : null,
+      ...models,
+      el('div', { class: 'quick-more' }, [more(t`更多朗读设置…`, state.cardId ? 'card-voice' : 'voice')]),
+    ].filter(Boolean))
   }
 
   // ─── Cast (角色名册) ────────────────────────────────────────────────
@@ -1224,9 +1493,9 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     return canvas.toDataURL('image/png')
   }
 
-  /** The roster as the form shows it now. */
+  /** The roster as the form shows it now; each one's voice from 朗读 → 音色 (one added since has none yet). */
   function collectRoster(form) {
-    return [...form.querySelectorAll('.roster-entry')].map(readEntry)
+    return [...form.querySelectorAll('.roster-entry')].map(box => ({ ...readEntry(box), voice: form.elements[`castVoice:${box.dataset.id}`]?.value ?? box.dataset.voice ?? '' }))
   }
 
   /** One roster entry as its box shows it now. */
@@ -1267,7 +1536,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         const current = readEntry(node)
         viewPicture(img.src, t`${current.name}：${current.looks}${current.outfit ? t`；${current.outfit}` : ''}`, t`人设图`)
       }
-      const node = el('fieldset', { class: 'roster-entry', 'data-id': entry.id, 'data-ref': entry.ref ? '1' : '' })
+      const node = el('fieldset', { class: 'roster-entry', 'data-id': entry.id, 'data-ref': entry.ref ? '1' : '', 'data-voice': entry.voice ?? '' })
       const setRef = has => {
         node.dataset.ref = has ? '1' : ''
         thumb.replaceChildren(has ? el('img', { src: refUrl(cardId, entry.id), alt: '' }) : el('span', { text: t`没有人设图` }))
@@ -1568,7 +1837,35 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         t`复刻或设计的音色点「从账户读取音色」，或者把 voice_id 写在这里。按字数计费。`),
       el('div', { class: 'row voice-actions' }, [listen('minimax'), fromAccount('minimax')]),
     ])
-    return [openai, fish, minimax]
+
+    // Gemini's speech models through a provider holding Google's key (the one chat uses).
+    const googleSpeakers = speakers.filter(isGoogle)
+    const geminiModelList = el('datalist', { id: 'gemini-tts-models' }, GEMINI_TTS_MODELS.map(id => el('option', { value: id })))
+    const geminiProvider = el('select', { name: 'geminiTtsProvider' }, [
+      option('', speakers.length ? t`不用` : t`先在「供应商」里添加`, media.geminiTtsProvider),
+      ...[...googleSpeakers, ...speakers.filter(p => !isGoogle(p))].map(p => option(p.id, p.name, media.geminiTtsProvider)),
+    ])
+    const geminiModel = el('input', { name: 'geminiTtsModel', value: media.geminiTtsModel, list: 'gemini-tts-models', spellcheck: 'false' })
+    const fetchModels = el('button', { type: 'button', class: 'btn small', text: t`获取` })
+    fetchModels.onclick = guard(async () => {
+      if (!geminiProvider.value) throw new Error(t`先选供应商`)
+      const { models } = await api('/api/providers/models', { method: 'POST', body: { id: geminiProvider.value } })
+      const found = models.filter(id => /tts/i.test(id))
+      geminiModelList.replaceChildren(...(found.length ? found : GEMINI_TTS_MODELS).map(id => el('option', { value: id })))
+      toast(found.length ? t`找到 ${found.length} 个朗读模型，点输入框选` : t`这个供应商没列出朗读模型，列的是常用的`)
+      geminiModel.focus()
+    })
+    const gemini = el('details', { class: 'voice-source', open: Boolean(media.geminiTtsProvider) }, [
+      el('summary', {}, [el('span', { text: t`Gemini 朗读（Google）` }), state('gemini')]),
+      el('div', { class: 'grid' }, [
+        field(t`供应商`, geminiProvider, googleSpeakers.length ? t`选用「Gemini」模板建的供应商，和对话共用密钥和代理` : t`先用「Gemini」模板建一个供应商（密钥在 aistudio.google.com 创建）`),
+        el('label', {}, [t`模型`, el('span', { class: 'select-with-action' }, [geminiModel, fetchModels]), geminiModelList]),
+      ]),
+      field(t`音色（每行一个：音色名，后面可以空一格写说明）`, el('textarea', { name: 'geminiTtsVoices', rows: 3, spellcheck: 'false', placeholder: t`留空列出全部 30 个预置音色，例如\nKore 女主\nPuck 男主`, text: voiceListText(media.geminiTtsVoices) }),
+        t`预置音色有 Kore、Leda、Aoede（女声）、Puck、Charon、Fenrir（男声）等 30 个，中文也能读。回复里的情绪会变成「用…的语气说」放在台词前。按用量计费，走「设置」里的代理。`),
+      el('div', { class: 'row voice-actions' }, [listen('gemini')]),
+    ])
+    return [openai, fish, minimax, gemini]
   }
 
   /** The voice settings and typed keys as the form shows them, for 试听 and saving. */
@@ -1666,6 +1963,14 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         imageReference: checked('imageReference'),
         imageEditModel: value('imageEditModel'),
         comfyUrl: value('comfyUrl'),
+        geminiImageProvider: value('geminiImageProvider'),
+        geminiImageModel: value('geminiImageModel'),
+        geminiReference: checked('geminiReference'),
+        sdUrl: value('sdUrl'),
+        sdSampler: value('sdSampler'),
+        sdSteps: Number(value('sdSteps') || 28),
+        sdCfg: Number(value('sdCfg') || 6),
+        sdNegative: value('sdNegative'),
         naiModel: value('naiModel'),
         naiQuality: value('naiQuality'),
         naiReference: checked('naiReference'),
@@ -1711,5 +2016,5 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
   $('player-stop').addEventListener('click', () => player.stop())
   loadSettings()
 
-  return { openLibrary, toolsFor: mediaTools, gallery, openSettings, setCard, afterTurn, flags, readBeat, stopReading: () => player.stop(), toggleReading: () => player.toggle() }
+  return { openLibrary, toolsFor: mediaTools, gallery, openSettings, setCard, afterTurn, flags, readBeat, fillQuick, stopReading: () => player.stop(), toggleReading: () => player.toggle() }
 }

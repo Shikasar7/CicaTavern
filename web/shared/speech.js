@@ -63,8 +63,11 @@ export function emotionTag(emotion) {
  *   voices take different lengths (cloud voices bill per request, so longer).
  * @param tags - put a line's emotion before it as a [tag] (voices that act on
  *   bracket tags, such as Fish; the server drops them for the others).
+ * @param speakerOf - (quote text) → who says it, for each quote in order: the
+ *   chunk's `speaker`, and two people's lines are never joined.
+ * @returns {{ kind: 'dialogue'|'narration', text: string, speaker?: string|null }[]}
  */
-export function speechChunks(text, { narration = true, max = 100, tags = false } = {}) {
+export function speechChunks(text, { narration = true, max = 100, tags = false, speakerOf = null } = {}) {
   const limit = kind => (typeof max === 'number' ? max : max?.[kind] ?? 100)
   // An options block is not part of the story; voice tags give a line its emotion, then go.
   const source = String(text ?? '').replace(/<small>[\s\S]*?<\/small>/gi, '')
@@ -76,7 +79,8 @@ export function speechChunks(text, { narration = true, max = 100, tags = false }
     last = match.index + match[0].length
     const voiceTag = VOICE_AFTER.exec(source.slice(last))
     if (voiceTag) last += voiceTag[0].length
-    runs.push({ kind: 'dialogue', text: match[0].slice(1, -1), tag: tags && voiceTag ? emotionTag(voiceTag[1]) : '' })
+    const said = match[0].slice(1, -1)
+    runs.push({ kind: 'dialogue', text: said, tag: tags && voiceTag ? emotionTag(voiceTag[1]) : '', ...(speakerOf ? { speaker: speakerOf(said) ?? null } : {}) })
   }
   if (last < source.length) runs.push({ kind: 'narration', text: source.slice(last) })
 
@@ -88,8 +92,8 @@ export function speechChunks(text, { narration = true, max = 100, tags = false }
     if (!SPEAKABLE.test(clean)) continue
     const said = (run.tag ?? '') + clean
     const previous = merged.at(-1)
-    if (previous && previous.kind === run.kind) previous.text += (/[，。！？、；：,.!?…~～]$/.test(previous.text) ? '' : '，') + said // i18n-ignore: story text read aloud
-    else merged.push({ kind: run.kind, text: said })
+    if (previous && previous.kind === run.kind && previous.speaker === run.speaker) previous.text += (/[，。！？、；：,.!?…~～]$/.test(previous.text) ? '' : '，') + said // i18n-ignore: story text read aloud
+    else merged.push({ kind: run.kind, text: said, ...('speaker' in run ? { speaker: run.speaker } : {}) })
   }
-  return merged.flatMap(run => splitLong(run.text, limit(run.kind)).map(piece => ({ kind: run.kind, text: piece.trim() }))).filter(chunk => SPEAKABLE.test(chunk.text))
+  return merged.flatMap(run => splitLong(run.text, limit(run.kind)).map(piece => ({ kind: run.kind, text: piece.trim(), ...('speaker' in run ? { speaker: run.speaker } : {}) }))).filter(chunk => SPEAKABLE.test(chunk.text))
 }

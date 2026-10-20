@@ -444,7 +444,7 @@ test('voice: voices listed, speech proxied and cached, a dead bridge explained',
   const { fake, store, media } = await setup(t)
   const [external, ...own] = (await media.voices()).sources
   assert.deepEqual(external, { id: 'bridge', label: '本地语音桥接', chunkMax: 100, configured: true, ok: true, voices: ['jok', '南晚'], cloud: [{ name: 'fish:abc', label: '南晚 · abc', provider: 'Fish Audio · 云端', model: 'drama-3', tags: true }], current: 'jok', remote: false })
-  assert.deepEqual(own.map(s => [s.id, s.configured]), [['openai', false], ['fish', false], ['minimax', false]])
+  assert.deepEqual(own.map(s => [s.id, s.configured]), [['openai', false], ['fish', false], ['minimax', false], ['gemini', false]])
   const first = await media.speak({ text: '站住。', voice: '南晚', stable: true })
   assert.deepEqual([first.buffer.toString(), first.mime], ['RIFF....WAVE', 'audio/wav'])
   const call = fake.seen.find(r => r.url === '/api/tts')
@@ -524,6 +524,22 @@ test('speech chunks: quoted speech vs narration, cleanup, ~100-character blocks'
     { kind: 'dialogue', text: '嗯。[害羞、小声] 走吧，' },
   ])
   assert.deepEqual(speechChunks(tagged).map(c => c.text), ['她笑了：', '太好了！', '他说', '嗯。走吧，'], 'off by default')
+  // Told who says each quote: two people's lines stay apart, one person's still join.
+  const talk = '林雪说：“站住。”沈梨答：“不。”“偏不。”“坐下。”'
+  const speakerOf = quote => ({ '站住。': '林雪', '坐下。': '林雪' })[quote] ?? '沈梨'
+  assert.deepEqual(speechChunks(talk, { narration: false, speakerOf }), [
+    { kind: 'dialogue', text: '站住。', speaker: '林雪' },
+    { kind: 'dialogue', text: '不。偏不。', speaker: '沈梨' },
+    { kind: 'dialogue', text: '坐下。', speaker: '林雪' },
+  ])
+})
+
+test('a cast member keeps the voice picked for them; none means the card\'s dialogue voice', async () => {
+  const { cleanRoster } = await import('../server/roster.mjs')
+  const [lin, shen] = cleanRoster([{ name: '林雪', voice: ' fish:abc 林雪 ' }, { name: '沈梨' }])
+  assert.equal(lin.voice, 'fish:abc 林雪')
+  assert.equal(shen.voice, '')
+  assert.equal(cleanRoster([{ name: '长', voice: 'x'.repeat(400) }])[0].voice.length, 250)
 })
 
 test('a newer version of a card takes over the older one\'s picture settings, cast and reference pictures', async t => {

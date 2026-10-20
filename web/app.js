@@ -1963,9 +1963,11 @@ const vnUi = initVn({
   cardOf: id => ui.cards.find(card => card.id === id),
   send: sendChoice,
   fill: fillInput,
+  fitInput,
   regenerate: userNodeId => regenerate(userNodeId),
   selectNode: nodeId => selectNode(nodeId),
-  readBeat: (nodeId, text, done) => mediaUi.readBeat(nodeId, text, done),
+  readBeat: (nodeId, text, done, speaker) => mediaUi.readBeat(nodeId, text, done, speaker),
+  fillQuick: (box, kind) => mediaUi.fillQuick(box, kind),
   stopReading: () => mediaUi.stopReading(),
   toggleReading: () => mediaUi.toggleReading(),
   mediaFlags: () => mediaUi.flags(),
@@ -2168,6 +2170,8 @@ const applyQuick = guard(async () => {
 function fitInput() {
   const input = $('input')
   input.style.height = 'auto'
+  // Hidden (the visual novel's text box in its place) it measures 0: one line until it shows again.
+  if (!input.getClientRects().length) return
   input.style.height = `${Math.min(input.scrollHeight, window.innerHeight * 0.4)}px`
 }
 

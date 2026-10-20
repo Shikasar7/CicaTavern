@@ -2,6 +2,7 @@
 //   openai:<provider id>:<voice>  a provider's /audio/speech (openai.mjs)
 //   fish:<reference_id>           Fish Audio (cloud.mjs)
 //   minimax:<voice_id>            MiniMax (cloud.mjs)
+//   gemini:<voice name>           Gemini's speech models via a provider with Google's key (gemini.mjs)
 //   bridge:<name>, or no prefix   an external voice service (bridge.mjs)
 // browser:<name> is spoken by the page and never reaches the server.
 // On this machine's own install the xiaoya bridge also calls cloud voices by
@@ -17,6 +18,7 @@ import path from 'node:path'
 import { httpError } from '../store.mjs'
 import { createBridge } from './bridge.mjs'
 import { AUDIO_EXT, audioOf, createCloudSource } from './cloud.mjs'
+import { createGeminiSource } from './gemini.mjs'
 import { createOpenaiSource, instructionsFor } from './openai.mjs'
 import { msg } from '../i18n.mjs'
 
@@ -93,7 +95,7 @@ export function createVoices({ root, settings, providers, proxy = () => null, fe
   const bridge = createBridge({ root, features })
   // The phone has no 设置 → 网络代理 to point to.
   const proxyMenu = features?.proxy !== false
-  const sources = [createOpenaiSource(), createCloudSource('fish', { urls, proxyMenu }), createCloudSource('minimax', { urls, proxyMenu })]
+  const sources = [createOpenaiSource(), createCloudSource('fish', { urls, proxyMenu }), createCloudSource('minimax', { urls, proxyMenu }), createGeminiSource()]
   const byId = new Map(sources.map(source => [source.id, source]))
   const ttsDir = path.join(root, 'media', 'tts')
 
@@ -151,7 +153,8 @@ export function createVoices({ root, settings, providers, proxy = () => null, fe
     const source = cut > 0 ? byId.get(value.slice(0, cut)) : null
     const target = source?.target(value.slice(cut + 1))
     // A source the tavern has no key for: the voice service may still know the name (or say it is down).
-    if (source && target && (source.configured(ctx) || source.id === 'openai' || !hasBridge)) {
+    // A provider's voice says what is wrong with its provider rather than going to the bridge.
+    if (source && target && (source.configured(ctx) || source.id === 'openai' || source.id === 'gemini' || !hasBridge)) {
       const model = source.model(ctx.media)
       return { source, ...target, emotion: source.emotion(ctx.media), speaker: `${source.id}|${model}|${value.slice(cut + 1)}` }
     }
@@ -246,7 +249,7 @@ export function createVoices({ root, settings, providers, proxy = () => null, fe
     if (!ref && sourceId) {
       const source = byId.get(sourceId)
       if (!source) throw httpError(400, msg`不认识的语音来源：${sourceId}`)
-      if (!source.configured(ctx)) throw httpError(400, source.id === 'openai' ? msg`先选一个供应商并填模型` : msg`${source.label} 还没填密钥`)
+      if (!source.configured(ctx)) throw httpError(400, source.id === 'openai' || source.id === 'gemini' ? msg`先选一个供应商并填模型` : msg`${source.label} 还没填密钥`)
       ref = source.list(ctx)[0]?.ref ?? ''
       if (!ref) throw httpError(400, msg`${source.label} 还没列音色：在音色框里至少写一个`)
     }

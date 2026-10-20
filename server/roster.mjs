@@ -56,6 +56,8 @@ export function cleanRoster(input) {
       lora: cleanLora(raw.lora),
       loraTrigger: text(raw.loraTrigger, 80),
       loraStrength: cleanStrength(raw.loraStrength),
+      // Their lines read aloud in this voice ('' = the card's dialogue voice); as long as a card's.
+      voice: text(raw.voice, 250),
     })
   }
   return out

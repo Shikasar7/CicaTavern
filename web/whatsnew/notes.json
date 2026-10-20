@@ -71,6 +71,67 @@
           }
         }
       ]
+    },
+    {
+      "version": "1.8.1",
+      "date": "2026-10",
+      "items": [
+        {
+          "image": "1.8.1-voices.webp",
+          "zh": {
+            "title": "每个角色有自己的音色",
+            "text": "在「配图与朗读 → 朗读 → 音色」里，给角色名册里的每个人选一个音色，没选的用对白音色。\n视觉小说模式按每句的说话人读；普通模式点「朗读」或点一句对白也一样，两个人挨着说的话不再连成一段。"
+          },
+          "en": {
+            "title": "A voice for each character",
+            "text": "In Pictures & voice → Voice → Voices, give everyone in the cast a voice of their own; anyone without one takes the dialogue voice.\nVisual novel mode reads each line in its speaker's voice, and so do Read aloud and clicking a line; two people's lines next to each other are no longer read as one."
+          }
+        },
+        {
+          "image": "1.8.1-pictures.webp",
+          "zh": {
+            "title": "视觉小说里直接改设置",
+            "text": "右上角「朗读」「配图」旁边的 ▾：逐句朗读、自动翻页、各人的音色、朗读模型；新回复自动配图、场景和立绘怎么画、画图方式和模型、画幅。\n改了马上保存，「更多…」打开完整的设置。"
+          },
+          "en": {
+            "title": "Settings right in the visual novel",
+            "text": "The ▾ beside Read and Pictures at the top right: line-by-line reading, auto-advance, everyone's voice and the voice model; pictures for new replies, how scenes and sprites are drawn, the image backend, model and shape.\nChanges save at once; More… opens the full settings."
+          }
+        },
+        {
+          "image": "1.8.1-gallery.webp",
+          "zh": {
+            "title": "CG 回廊",
+            "text": "右上角「CG」或按 G：这条故事线上所有的配图，标着是开场还是第几轮。\n点一张全屏看，← → 翻遍所有 CG，Esc 回到回廊。"
+          },
+          "en": {
+            "title": "CG gallery",
+            "text": "CG at the top right, or G: every picture on this storyline, each marked with its turn.\nOpen one full size, ← → go through all of them, Esc goes back to the gallery."
+          }
+        },
+        {
+          "icon": "🎨",
+          "zh": {
+            "title": "更多画图方式和音色",
+            "text": "新增 Gemini 原生生图（Nano Banana，能照人设图画）、本地的 SD WebUI / Forge，OpenRouter 的出图模型也能用了；朗读多了 Gemini 的 30 个音色。Gemini 用「Gemini」模板建的供应商，和对话共用密钥。\n还没设好的画图方式和朗读来源，会在「配图与朗读」里标出来。"
+          },
+          "en": {
+            "title": "More ways to draw and to speak",
+            "text": "New: Gemini's own image models (Nano Banana, following reference pictures), local SD WebUI / Forge, and OpenRouter's image models; Gemini's 30 voices for reading aloud. Gemini uses the provider made from the Gemini template, the same key as chat.\nAn image backend or voice source that isn't set up yet now stands out in Pictures & voice."
+          }
+        },
+        {
+          "icon": "🔖",
+          "zh": {
+            "title": "名字栏更准",
+            "text": "冒号前的叙述（「嘴角翘起来：」「笑得很短：」）不再被当成人名，「柏木绾追问」「顾言如实说」这类认得出名字；刚打开一张卡时，第一句的名字栏也不会错。\n另外修了：视觉小说里选完选项后，输入框只剩一条缝。"
+          },
+          "en": {
+            "title": "Sharper name plates",
+            "text": "Narration before a colon is no longer taken for a name, and more ways of naming who speaks are understood; the first line's plate is right when a card has just opened.\nAlso fixed: the input box shrinking to a sliver after a choice in visual novel mode."
+          }
+        }
+      ]
     }
   ]
 }

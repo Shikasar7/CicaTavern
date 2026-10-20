@@ -184,10 +184,12 @@ export function createMenu({ dialog, form, el, title: menuTitle, edits = countsA
     for (const { section, button, summary, status } of view?.entries.values() ?? []) {
       button.hidden = Boolean(typeof section.hidden === 'function' ? section.hidden() : section.hidden)
       summary.textContent = section.summary?.() ?? ''
+      // 'need': nothing usable set up yet; the whole row stands out.
       const [kind, text] = section.status?.() ?? []
       status.hidden = !kind
       status.className = `menu-pill ${kind ?? ''}`
       status.textContent = text ?? ''
+      button.classList.toggle('need', kind === 'need')
     }
     // A panel with every row hidden goes too (the phone app has nothing under 连接).
     for (const panel of view?.panels ?? []) panel.hidden = [...panel.children].slice(1).every(row => row.hidden)

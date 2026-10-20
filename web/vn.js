@@ -89,12 +89,13 @@ async function asPng(file) {
  *   (latest: as the newest reply, with its status bar and choices).
  * @param deps.live - () → the open chat's job while a turn is written ({ kind, text, echo }), or null.
  * @param deps.statusFor - (chat, node) → the status bar element for the latest reply, or null.
- * @param deps.readBeat - (nodeId, text, done) reads one line aloud; done() once it has been read.
+ * @param deps.readBeat - (nodeId, text, done, speaker) reads one line aloud, in its speaker's voice; done() once it has been read.
+ * @param deps.fillQuick - (box, 'voice'|'image') fills the ▾ menu with the settings the transcript shares.
  * @param deps.mediaFlags - () → { read, image } as the transcript has them, or null before they load.
  * @param deps.openMedia - (section) opens 配图与朗读 there.
  */
 export function initVn(deps) {
-  const { api, el, toast, guard, renderStory, getChat, live, display, statusFor, frameContext, cardOf, send, fill, regenerate, selectNode, isGenerating } = deps
+  const { api, el, toast, guard, renderStory, getChat, live, display, statusFor, frameContext, cardOf, send, fill, fitInput, regenerate, selectNode, isGenerating } = deps
   const $ = id => document.getElementById(id)
   const stage = document.querySelector('.stage')
   const root = $('vn')
@@ -145,14 +146,22 @@ export function initVn(deps) {
     remember(PREFS_KEY, prefs)
     renderSpeed()
   })
-  // 朗读 and 配图 here are kept apart from the transcript's own switches.
+  // 朗读 and 配图 here are kept apart from the transcript's own switches; ▾ opens their settings.
   const readButton = control(t`朗读`, t`逐句朗读：每显示一句读一句。和普通模式的「自动朗读」分开记。`, () => setQuick('read', !prefs.read))
   const imageButton = control(t`配图`, t`新回复自动配图，画好后在左上角点开看。和普通模式的「自动配图」分开记。`, () => setQuick('image', !prefs.image))
+  const readMore = control('▾', t`朗读设置：音色、每个角色的音色、朗读模型`, () => togglePop('voice'))
+  const imageMore = control('▾', t`配图设置：画图方式、模型、场景和立绘`, () => togglePop('image'))
+  for (const b of [readMore, imageMore]) b.classList.add('vn-more')
+  const split = (main, more) => el('span', { class: 'vn-split' }, [main, more])
+  // The settings by those switches: this mode's own first, then what the transcript shares (web/media.js).
+  const pop = el('div', { class: 'vn-pop', hidden: true, role: 'dialog' })
+  let popKind = null
   const optionsButton = control(t`选项`, t`这一轮的行动选项（O）`, () => (menu.hidden ? showMenu() : hideMenu()))
   const fullButton = control(t`全屏`, t`全屏（F），Esc 退出`, () => toggleFullscreen())
   const controls = el('div', { class: 'vn-controls' }, [
-    el('span', { class: 'vn-quick' }, [readButton, imageButton]),
+    el('span', { class: 'vn-quick' }, [split(readButton, readMore), split(imageButton, imageMore)]),
     control(t`回看`, t`回看（L）`, () => openLog()),
+    control('CG', t`CG 回廊：这条故事线上所有的配图（G）`, () => openGallery()),
     autoButton,
     control(t`跳过`, t`跳到最新一句`, () => skip()),
     speedButton,
@@ -165,7 +174,7 @@ export function initVn(deps) {
     control(t`✎ 行动`, t`写下你的行动（回车）`, () => compose(true)),
     control(t`退出`, t`退出视觉小说模式`, () => setOn(state.cardId, false)),
   ])
-  root.append(bg, tint, sprite, corner, title, panel, menu, box, controls, logBox, cgView)
+  root.append(bg, tint, sprite, corner, title, panel, menu, box, controls, pop, logBox, cgView)
 
   voice.addEventListener('click', event => {
     event.stopPropagation()
@@ -217,6 +226,7 @@ export function initVn(deps) {
       button.classList.toggle('on', Boolean(on))
       button.setAttribute('aria-pressed', String(Boolean(on)))
     }
+    renderPopOwn()
   }
 
   function setQuick(key, on) {
@@ -231,6 +241,66 @@ export function initVn(deps) {
         deps.stopReading?.()
       }
     }
+  }
+
+  // ─── 朗读 / 配图 settings (▾) ──────────────────────────────────────
+  const popOwn = el('div', { class: 'vn-pop-own' })
+  const popShared = el('div', { class: 'vn-pop-shared' })
+  // Going on to the settings window: this menu is done.
+  popShared.addEventListener('click', event => {
+    if (event.target.closest('[data-settings]')) closePop()
+  })
+
+  function togglePop(kind) {
+    if (!pop.hidden && popKind === kind) return closePop()
+    openPop(kind)
+  }
+
+  function openPop(kind) {
+    popKind = kind
+    const tabs = el('div', { class: 'seg' }, [['voice', t`朗读`], ['image', t`配图`]].map(([value, text]) => {
+      const b = el('button', { type: 'button', 'aria-pressed': String(kind === value), text })
+      b.addEventListener('click', () => openPop(value))
+      return b
+    }))
+    const close = el('button', { type: 'button', class: 'vn-btn', text: '×', title: t`关闭（Esc）`, onclick: closePop })
+    pop.setAttribute('aria-label', kind === 'voice' ? t`朗读设置` : t`配图设置`)
+    pop.replaceChildren(el('div', { class: 'vn-pop-head' }, [tabs, close]), popOwn, popShared)
+    renderPopOwn()
+    // Just below the controls, wherever they wrapped to.
+    pop.style.top = `${controls.offsetTop + controls.offsetHeight + 8}px`
+    pop.hidden = false
+    readMore.classList.toggle('open', kind === 'voice')
+    imageMore.classList.toggle('open', kind === 'image')
+    if (deps.fillQuick) deps.fillQuick(popShared, kind)
+    else popShared.replaceChildren()
+  }
+
+  function closePop() {
+    pop.hidden = true
+    popKind = null
+    readMore.classList.remove('open')
+    imageMore.classList.remove('open')
+  }
+
+  /** This mode's own switches at the top of the menu, as they are now. */
+  function renderPopOwn() {
+    if (!popKind) return
+    const switchRow = (text, on, onChange, hint) => {
+      const input = el('input', { type: 'checkbox', class: 'switch', checked: Boolean(on) })
+      input.addEventListener('change', () => onChange(input.checked))
+      return el('label', { class: 'vn-pop-switch' }, [el('span', {}, [text, el('small', { text: hint })]), input])
+    }
+    popOwn.replaceChildren(...(popKind === 'voice'
+      ? [
+          switchRow(t`逐句朗读`, prefs.read, on => setQuick('read', on), t`每显示一句读一句`),
+          switchRow(t`自动翻页`, state.auto, on => setAuto(on), t`读完一句接着下一句（A）`),
+        ]
+      : [
+          switchRow(t`新回复自动配图`, prefs.image, on => setQuick('image', on), t`画好后在左上角点开看`),
+          artMode('newScene', t`到了新地点：`, renderPopOwn),
+          artMode('newSprite', t`没有立绘的角色说话时：`, renderPopOwn),
+        ]))
   }
 
   // ─── On / off per card ─────────────────────────────────────────────
@@ -309,10 +379,12 @@ export function initVn(deps) {
     state.on = on
     root.hidden = !on
     stage.classList.toggle('vn-on', on)
-    if (!on) return
+    if (!on) return fitInput?.()
     quickDefaults()
     renderQuick()
     if (chat.cardId !== state.cardId) {
+      // The settings menu was another card's.
+      if (state.cardId) closePop()
       state.cardId = chat.cardId
       loadRoster(chat.cardId)
     }
@@ -358,6 +430,11 @@ export function initVn(deps) {
     drawCg(chat)
     if (state.index < 0 || state.pending) catchUp()
     else if (!writing && state.index >= state.available - 1 && state.phase !== 'typing') showStep(false)
+    else {
+      // The cast arrived while this line was being typed (it names someone else now): its plate follows.
+      const now = state.steps[state.index]
+      if (now?.type === 'line' && current?.type === 'line' && now.plain === current.plain && now.speaker !== current.speaker) drawSpeaker(now)
+    }
     if (writing && state.index < 0) waitingLine(job.echo)
   }
 
@@ -414,6 +491,18 @@ export function initVn(deps) {
     return entry?.char ? 'char' : entry?.player ? 'player' : 'cast'
   }
 
+  /** The name plate and the one standing in front, for a line. */
+  function drawSpeaker(step) {
+    box.dataset.kind = step.kind
+    plate.hidden = !step.speaker
+    plate.textContent = step.speaker ? shownName(step.speaker) : ''
+    plate.dataset.who = step.speaker ? whoIs(step.speaker) : ''
+    plate.style.setProperty('--who', step.speaker ? String(hueOf(step.speaker)) : '')
+    // The one speaking stands in front; narration has nobody.
+    if (step.kind === 'dialogue' && step.speaker) showSprite(step.speaker)
+    else hideSprite()
+  }
+
   function showStep(animate) {
     const step = state.steps[state.index]
     clearTimeout(state.autoTimer)
@@ -437,14 +526,7 @@ export function initVn(deps) {
       return lineShown()
     }
     closePanel()
-    box.dataset.kind = step.kind
-    plate.hidden = !step.speaker
-    plate.textContent = step.speaker ? shownName(step.speaker) : ''
-    plate.dataset.who = step.speaker ? whoIs(step.speaker) : ''
-    plate.style.setProperty('--who', step.speaker ? String(hueOf(step.speaker)) : '')
-    // The one speaking stands in front; narration has nobody.
-    if (step.kind === 'dialogue' && step.speaker) showSprite(step.speaker)
-    else hideSprite()
+    drawSpeaker(step)
     lineBox.innerHTML = renderStory(step.text)
     markSpeech(lineBox)
     spoken.textContent = `${step.speaker ? t`${shownName(step.speaker)}：` : ''}${step.plain}`
@@ -491,7 +573,7 @@ export function initVn(deps) {
       state.reading = false
       // 自动 waits for the voice, then moves on.
       if (state.auto && state.phase === 'shown') state.autoTimer = setTimeout(() => state.auto && advance(), 450)
-    })
+    }, step.speaker)
   }
 
   function lineShown() {
@@ -626,10 +708,12 @@ export function initVn(deps) {
   }
 
   function setAuto(on) {
+    const changed = state.auto !== on
     state.auto = on
     autoButton.classList.toggle('on', on)
     autoButton.setAttribute('aria-pressed', String(on))
     clearTimeout(state.autoTimer)
+    if (changed && popKind === 'voice') renderPopOwn()
     if (on && state.phase === 'shown') lineShown()
   }
 
@@ -638,6 +722,8 @@ export function initVn(deps) {
   function compose(open) {
     stage.classList.toggle('vn-compose', open)
     if (open) {
+      // Filled while hidden, it has its height only now.
+      fitInput?.()
       setAuto(false)
       if (state.phase === 'ended' && menu.hidden) showMenu()
       $('input')?.focus()
@@ -690,27 +776,86 @@ export function initVn(deps) {
     cgButton.replaceChildren(el('img', { src, alt: '' }), el('span', { text: images.length > 1 ? `CG ${images.length}` : 'CG' }))
   }
 
-  function openCg() {
-    const chat = getChat()
-    const images = state.node?.media?.images ?? []
-    if (!chat || !images.length) return
-    setAuto(false)
-    let at = images.length - 1
-    const picture = el('img', { alt: '' })
-    const show = () => {
-      picture.src = `/api/media/${chat.id}/${images[at].file}`
+  /** Every illustration on the story's path so far, oldest first, with the turn it belongs to (0: the opening). */
+  function allCgs(chat) {
+    const out = []
+    let turn = 0
+    for (const node of chat?.path ?? []) {
+      if (node.role === 'user') turn += 1
+      if (node.role !== 'assistant') continue
+      for (const image of node.media?.images ?? []) out.push({ src: `/api/media/${chat.id}/${image.file}`, nodeId: node.id, turn, prompt: image.prompt ?? '' })
     }
-    const tools = images.length > 1
-      ? [control('‹', '', () => { at = (at + images.length - 1) % images.length; show() }), control('›', '', () => { at = (at + 1) % images.length; show() })]
-      : []
-    cgView.replaceChildren(picture, el('div', { class: 'vn-cg-tools' }, [...tools, control(t`关闭`, t`Esc`, () => closeCg())]))
+    return out
+  }
+  const cgLabel = cg => (cg.turn ? t`第 ${cg.turn} 轮` : t`开场`)
+
+  /**
+   * One picture full size, ‹ › through all of them (←/→). Without `start`, this
+   * turn's newest; from the gallery, Esc goes back to it.
+   */
+  function openCg(start = null, fromGallery = false) {
+    const chat = getChat()
+    const all = allCgs(chat)
+    if (!chat || !all.length) return
+    setAuto(false)
+    closePop()
+    let at = start ?? Math.max(0, all.findLastIndex(cg => cg.nodeId === state.node?.id))
+    const picture = el('img', { alt: '' })
+    const count = el('span', { class: 'vn-cg-count' })
+    const show = () => {
+      picture.src = all[at].src
+      picture.alt = all[at].prompt
+      count.textContent = `${cgLabel(all[at])} · ${at + 1} / ${all.length}`
+    }
+    const step = by => {
+      at = (at + by + all.length) % all.length
+      show()
+    }
+    cgView.replaceChildren(picture, el('div', { class: 'vn-cg-tools' }, [
+      count,
+      ...(all.length > 1 ? [control('‹', t`上一张（←）`, () => step(-1)), control('›', t`下一张（→）`, () => step(1))] : []),
+      control(t`回廊`, t`这条故事线上所有的 CG（G）`, () => openGallery()),
+      control(t`关闭`, t`Esc`, () => closeCg()),
+    ]))
+    Object.assign(cgView.dataset, { mode: 'one', back: fromGallery ? '1' : '' })
+    state.cgStep = step
     show()
     cgView.hidden = false
+  }
+
+  /** CG 回廊: every picture on the story's path as a wall of thumbnails, this turn's marked. */
+  function openGallery() {
+    const chat = getChat()
+    if (!chat) return
+    const all = allCgs(chat)
+    setAuto(false)
+    closePop()
+    const grid = el('div', { class: 'vn-gallery-grid' }, all.map((cg, i) => {
+      const item = el('button', { type: 'button', class: `vn-gallery-item${cg.nodeId === state.node?.id ? ' here' : ''}`, title: cg.prompt }, [el('img', { src: cg.src, alt: '', loading: 'lazy' }), el('span', { text: cgLabel(cg) })])
+      item.addEventListener('click', event => {
+        event.stopPropagation()
+        openCg(i, true)
+      })
+      return item
+    }))
+    cgView.replaceChildren(el('section', { class: 'vn-gallery' }, [
+      el('div', { class: 'vn-gallery-head' }, [
+        el('b', { text: t`CG 回廊` }),
+        el('span', { class: 'muted small', text: all.length ? t`这条故事线上的 ${all.length} 张配图` : '' }),
+        control(t`关闭`, t`Esc`, () => closeCg()),
+      ]),
+      all.length ? grid : el('p', { class: 'vn-waiting', text: t`这条故事线上还没有配图。右上角「配图」开着时，新回复会自动配图。` }),
+    ]))
+    Object.assign(cgView.dataset, { mode: 'gallery', back: '' })
+    state.cgStep = null
+    cgView.hidden = false
+    grid.querySelector('.here')?.scrollIntoView({ block: 'center' })
   }
 
   function closeCg() {
     cgView.hidden = true
     cgView.replaceChildren()
+    state.cgStep = null
   }
   cgButton.addEventListener('click', event => {
     event.stopPropagation()
@@ -1088,13 +1233,13 @@ export function initVn(deps) {
   }
 
   /** 到了新地点 / 没有立绘的角色说话时: 自动画, 先问, 不画. */
-  function artMode(key, label) {
+  function artMode(key, label, after = renderLibrary) {
     const seg = el('div', { class: 'seg' }, Object.entries(NEW_ART).map(([value, text]) => {
       const b = el('button', { type: 'button', 'aria-pressed': String(prefs[key] === value), text })
       b.addEventListener('click', () => {
         prefs[key] = value
         remember(PREFS_KEY, prefs)
-        renderLibrary()
+        after()
         drawChip()
       })
       return b
@@ -1306,12 +1451,14 @@ export function initVn(deps) {
       root.classList.remove('bare')
       return
     }
-    if (event.target.closest('button, a, input, select, textarea, details, iframe, .vn-log, .vn-panel, .vn-menu, .vn-controls, .vn-end, .vn-corner, .vn-cg')) return
+    if (event.target.closest('button, a, input, select, textarea, details, iframe, .vn-log, .vn-panel, .vn-pop, .vn-menu, .vn-controls, .vn-end, .vn-corner, .vn-cg')) return
     if (String(getSelection?.() ?? '').trim()) return
+    // A click beside the settings menu closes it, without reading on.
+    if (!pop.hidden) return closePop()
     advance()
   })
   root.addEventListener('wheel', event => {
-    if (event.deltaY < 0 && logBox.hidden && cgView.hidden && !event.target.closest('.vn-panel, .vn-log')) openLog()
+    if (event.deltaY < 0 && logBox.hidden && cgView.hidden && !event.target.closest('.vn-panel, .vn-pop, .vn-log')) openLog()
   }, { passive: true })
   lineBox.addEventListener('click', event => {
     const option = event.target.closest('.choice')
@@ -1325,7 +1472,9 @@ export function initVn(deps) {
     if (!state.on || root.hidden) return
     const target = event.target
     if (event.key === 'Escape') {
-      if (!cgView.hidden) return closeCg()
+      if (!pop.hidden) return closePop()
+      // A picture opened from the gallery goes back to it.
+      if (!cgView.hidden) return cgView.dataset.back ? openGallery() : closeCg()
       if (!logBox.hidden) return closeLog()
       if (!menu.hidden && target?.id !== 'input') return hideMenu()
       if (stage.classList.contains('vn-full') && target?.id !== 'input') return setFull(false)
@@ -1347,6 +1496,15 @@ export function initVn(deps) {
     if (document.querySelector('dialog[open], .pop-menu')) return
     if ((event.key === ' ' || event.key === 'Enter') && target?.closest?.('button, a, summary, [role="button"]')) return
     const key = event.key
+    // Over the pictures: ←/→ go through them, G is the gallery; nothing reads on underneath.
+    if (!cgView.hidden) {
+      if ((key === 'ArrowLeft' || key === 'ArrowRight') && state.cgStep) {
+        event.preventDefault()
+        state.cgStep(key === 'ArrowLeft' ? -1 : 1)
+      } else if (key === 'g' || key === 'G') openGallery()
+      return
+    }
+    if (key === 'g' || key === 'G') return openGallery()
     if (key === ' ' || key === 'Enter' || key === 'ArrowRight' || key === 'PageDown') {
       event.preventDefault()
       if (!logBox.hidden || !cgView.hidden) return
@@ -1375,6 +1533,7 @@ export function initVn(deps) {
     voice.hidden = true
     if (stage.classList.contains('vn-full')) setFull(false)
     closePanel()
+    closePop()
     closeLog()
     closeCg()
     hideSprite()

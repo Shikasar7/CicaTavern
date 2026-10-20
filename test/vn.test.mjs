@@ -186,6 +186,39 @@ test('speakers: a quote alone on its line, from the lines either side; people ca
   assert.deepEqual(said('师父说的话还在耳边响：「杀是好杀。」'), ['清虚子'])
 })
 
+test('speakers: narration before a colon is no name; the nearest clause with a subject says who', () => {
+  const said = text => splitLines(text, { names: nian }).filter(b => b.kind === 'dialogue').map(b => b.speaker)
+  assert.deepEqual(said('她刷了一会儿,忽然抬眼看你,嘴角翘起来:"紧张?"'), ['顾念念'])
+  assert.deepEqual(said('过了片刻,她忽然笑了,笑得很短:"不敢也正常。昨天你没做,我也没逼你。今天——"'), ['顾念念'])
+  assert.equal(guessSpeaker('她刷了一会儿,忽然抬眼看你,嘴角翘起来:', '', nian), null)
+  assert.equal(pronounNear('过了片刻,她忽然笑了,笑得很短:', ''), '她')
+  // The clause nearest the quote decides: a name there, or 你 after 她.
+  assert.equal(guessSpeaker('她看向慕寒漪,慕寒漪笑着说:', '', nian), '慕寒漪')
+  assert.equal(guessSpeaker('过了片刻,她看向慕寒漪,', '', nian), null)
+  assert.equal(guessSpeaker('她看着你,你忍不住问:', '', nian), null)
+  assert.equal(pronounNear('她看着你,你忍不住问:', ''), '你')
+  // Words that are no unknown name: alone before a colon, on a line of their own, or before 说 after a quote.
+  for (const lead of ['笑得很短：', '沉默片刻：', '缓缓说：', '嘴角翘起来：']) assert.equal(guessSpeaker(lead, '', nian), null, lead)
+  assert.deepEqual(splitLines('笑得很短：\n「走吧。」', { names: nian }).map(b => b.kind), ['narration', 'dialogue'])
+  assert.equal(guessSpeaker('', '半晌才说。', nian), null)
+  for (const lead of ['心里默念：', '内心想法：', '😈坏笑着说：', '第二根：', '开头一行：', '最后才说：']) assert.equal(guessSpeaker(lead, '', nian), null, lead)
+  // A doubled name is no doubled adverb (缓缓说).
+  assert.equal(guessSpeaker('念念说：', '', nian), '顾念念')
+  assert.equal(guessSpeaker('', '温梨慢悠悠地说，', nian), '温梨')
+  assert.equal(guessSpeaker('', '这个问题咽回去。', nian), null)
+  assert.equal(guessSpeaker('', '王师兄话没说完，就咳了起来。', nian), null)
+  // Unknown names still work: 王师兄：, 王师兄笑着说：, 「…」王师兄笑道 / 追问 / 慢慢说 / 如实说.
+  assert.equal(guessSpeaker('王师兄：', '', nian), '王师兄')
+  assert.equal(guessSpeaker('王师兄笑着说：', '', nian), '王师兄')
+  assert.equal(guessSpeaker('第三个人说：', '', nian), '第三个人')
+  for (const tail of ['王师兄笑道。', '王师兄追问。', '王师兄慢慢说，', '王师兄如实说，']) assert.equal(guessSpeaker('', tail, nian), '王师兄', tail)
+  // Someone's voice, or someone heard, says whose the quote is even after 他/你.
+  assert.equal(guessSpeaker('他关了水，耳边慕寒漪的声音还在絮絮叨叨：', '', nian), '慕寒漪')
+  assert.equal(guessSpeaker('他继续回想慕寒漪说过的话：', '', nian), '慕寒漪')
+  assert.equal(guessSpeaker('他听见慕寒漪在旁边小声倒抽了一口气：', '', nian), '慕寒漪')
+  assert.equal(guessSpeaker('你听到慕寒漪的脚步声，转身问：', '', nian), null, 'only the nearest clause hears')
+})
+
 test('options: 1️⃣ lines come apart from the story; the rest of their <small> block goes', () => {
   const reply = '她还在等。\n\n<small>\n请选择小蝉的下一步行动:\n1️⃣ 😖 低头承认,小声说「是……」\n\n2️⃣ 😰 试图转移话题\n\ntips: "假装昏倒！"\n</small>'
   assert.deepEqual(splitLines(reply, { names: nian }).map(b => [b.kind, b.plain]), [

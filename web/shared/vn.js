@@ -15,18 +15,27 @@ const CARRIED = /^(b|strong|i|em|u|s|del|ins|sub|sup|mark|big|center|q|code|ruby
 const QUOTE = /“[^”\n]*”|「[^」\n]*」|『[^』\n]*』|"[^"\n]*"/g
 const SENTENCE_END = /[。！？!?…]+[”」』]?/g
 const MASK = '\u0001'
-// Before a quote: the speaker, then 说/道… (or a colon). Adverbs in between are not the name.
-const SAY_TAIL = /(?:轻声|低声|小声|大声|笑着|冷冷地|淡淡地|慢慢地|忍不住|又|也|便|就)?(?:说|道|问|答|喊|叫|笑道|问道|答道|喊道|叫道)(?:道)?[：:，,]?$/
-const COLON_TAIL = /([^\s，,。！？!?；;：:“”「」『』"]{1,6})[：:]$/
+// Before a quote: the speaker, then 说/道… (or a colon). Adverbs in between are not the name (缓缓说, 如实说, 追问).
+// A doubled word is listed, not matched: 念念说 is a name.
+const SAY_TAIL = /(?:轻声|低声|小声|大声|笑着|忍不住|如实|继续|重复|追|又|也|便|就|才|(?:缓缓|慢慢|轻轻|淡淡|冷冷|静静|悄悄|默默|喃喃|幽幽|懒懒|慢悠悠|懒洋洋|笑嘻嘻|笑眯眯)地?)?(?:说|道|问|答|喊|叫|笑道|问道|答道|喊道|叫道)(?:道)?[：:，,]?$/
 const PRONOUN = /^(她|他|它|我|你|您|他们|她们|我们|你们|大家|对方)/
 const SUBJECT = /^(你|她|他)(?![们])/
+// Words a clause may open with before its subject (这时林青禾开口：).
+const OPENER = /^(?:就在这时|这时候?|此时|忽然|突然|随即|然后|于是|接着)/
+// What an unknown name is not made of: 笑得很短, 沉默片刻 or 缓缓 before a colon is narration.
+const NOT_NAME = /.[了着得]|[地很太才却还便就把被像嘴话]|(.)\1|片刻|半晌|良久|一会|一下|一眼|一[行句声]|忽然|突然|随即|然后|于是|最后|最终|终于|随后|之后|起来|下来|过来|出来|回来|点头|摇头|抬头|低头|抬眼|转身|开口|沉默|眼睛|声音|心里|心中|内心|想法|默念|^第[一二三四五六七八九十\d]+[条根个件点步句]$/
+// After a name: its voice or words (耳边白芷的声音还在响：, 回想白芷说过的话：) — the quote is theirs.
+const VOICE = /^(?:的(?:声音|话|语气|嗓音|笑声)|说过的话|说的话)/
+// Before a name: hearing them (他听见伊梦洁倒抽了一口气：) — the sound is theirs.
+const HEARD = /(?:听见|听到)了?$/
 // Unnamed people the story calls by their trade (掌柜的愣了一下): a name plate of their own.
 const ROLE_WORDS = '掌柜 店小二 小二 伙计 老板娘:girl 老板 老头 老汉 大爷 大娘:girl 婆婆:girl 老妇人:girl 郎中 管家 侍卫 守卫 衙役 捕快 车夫 船夫 丫鬟:girl 侍女:girl 和尚' // i18n-ignore: words in the story
 const ROLES = ROLE_WORDS.split(' ').map(word => {
   const [name, kind = 'boy'] = word.split(':')
   return { name, keys: [name], kind, role: true }
 })
-const SAID_AFTER = /^([^\s，,。！？!?；;：:“”「」『』"]{2,4}?)(?:轻声|低声|小声|大声|笑着|冷冷地|淡淡地)?(?:说|道|问|答|喊|叫|笑道|问道|答道|喊道|叫道)/
+// After a quote: 王师兄笑道, 柏木绾追问, 林栖慢慢说 — but not 话没说完 or 这个问题.
+const SAID_AFTER = /^([^\s，,。！？!?；;：:“”「」『』"]{2,4}?)(?:轻声|低声|小声|大声|笑着|如实|继续|重复|追|又|才|(?:缓缓|慢慢|轻轻|淡淡|冷冷|静静|悄悄|默默|喃喃|幽幽|懒懒|慢悠悠|懒洋洋|笑嘻嘻|笑眯眯)地?)?(?:说|道|问|答|喊|叫|笑道|问道|答道|喊道|叫道)(?!完|不出|出口|题)/
 // An option the story offers (1️⃣ …), as the transcript draws them: the end buttons here.
 const OPTION = /^\s*(?:<[^<>]+>\s*)*([1-9])️?⃣\s*(\S[\s\S]*)$/
 const OPTION_LINE = /^\s*(?:<[^<>]+>\s*)*[1-9]️?⃣/m
@@ -116,6 +125,32 @@ function knownIn(text, names, { last = true } = {}) {
   return best
 }
 
+/** A name nobody listed (老板娘, 王师兄): short, and none of narration's words. */
+const nameLike = text => text.length >= 2 && text.length <= 4 && /^[一-鿿·A-Za-z]+$/.test(text) && !PRONOUN.test(text) && !/[你我她他它们]/.test(text) && !NOT_NAME.test(text)
+
+/**
+ * Who a sentence's clauses are about, the nearest first: one opening with a
+ * pronoun ({ pronoun }) or a known name ({ name }), or holding someone's voice
+ * (the nearest one also someone heard); null when none does.
+ * 她刷了一会儿，忽然抬眼看你，嘴角翘起来 is about 她; 她看向林青禾，林青禾笑着 about 林青禾.
+ */
+function clauseSubject(sentence, names) {
+  const clauses = sentence.split(/[，,]/).filter(Boolean).reverse()
+  for (const [i, clause] of clauses.entries()) {
+    const body = clause.replace(OPENER, '')
+    const heard = names.find(entry => entry.keys.some(key => {
+      const at = body.indexOf(key)
+      return at >= 0 && (VOICE.test(body.slice(at + key.length)) || (i === 0 && HEARD.test(body.slice(0, at))))
+    }))
+    if (heard) return { name: heard.name }
+    const pronoun = PRONOUN.exec(body)?.[1]
+    if (pronoun) return { pronoun }
+    const named = names.find(entry => entry.keys.some(key => body.startsWith(key)))
+    if (named) return { name: named.name }
+  }
+  return null
+}
+
 /**
  * Who says a quote, from the text right before it and right after it; null
  * when it cannot be told (no name plate rather than a wrong one).
@@ -125,23 +160,21 @@ export function guessSpeaker(before, after, names) {
   // The sentence the quote follows; its subject comes first.
   const sentence = text => text.split(/[。！？!?；;]/).filter(Boolean).pop() ?? ''
   const said = SAY_TAIL.exec(lead)
-  if (said) {
-    // 林青禾放下茶杯，轻声说：「…」 — the name before the verb, not a pronoun.
-    const clause = sentence(lead.slice(0, said.index)).replace(/[，,]$/, '')
-    if (PRONOUN.test(clause)) return null
-    // An unknown name works when it is all there is before the verb (老板娘笑着说).
-    return knownIn(clause, names, { last: false }) ?? (clause.length >= 2 && clause.length <= 4 && !/[，,你我她他它]/.test(clause) ? clause : null)
-  }
-  const colon = COLON_TAIL.exec(lead)
-  if (colon) {
-    // 老板娘：「…」 — an unknown name works too; 师父说的话还在耳边响：「…」 is no name, but names one.
-    const clause = sentence(lead.replace(/[：:]$/, '')).split(/[，,]/).pop() ?? ''
-    if (clause.length > 5) return knownIn(clause, names, { last: false })
-    return knownIn(colon[1], names) ?? (PRONOUN.test(colon[1]) ? null : colon[1])
+  if (said || /[：:]$/.test(lead)) {
+    // 林青禾放下茶杯，轻声说：「…」 / 她抬眼看你，嘴角翘起来：「…」 — whoever the nearest clause is about; a pronoun is told later.
+    const words = sentence(said ? lead.slice(0, said.index) : lead.slice(0, -1)).replace(/[，,]$/, '')
+    const subject = clauseSubject(words, names)
+    if (subject) return subject.name ?? null
+    // 一旁的林青禾笑着说 / 师父说的话还在耳边响 — no name opens a clause, but one is there.
+    const known = knownIn(words, names, { last: false })
+    if (known) return known
+    // An unknown name works when it is all there is before the verb or the colon (老板娘笑着说：/ 老板娘：).
+    return nameLike(words) ? words : null
   }
   // 林青禾看了沈梨一眼。「…」 — the one the sentence before is about.
   const previous = sentence(lead)
-  const near = PRONOUN.test(previous) ? null : knownIn(previous, names, { last: false })
+  const subject = clauseSubject(previous, names)
+  const near = subject ? subject.name : knownIn(previous, names, { last: false })
   if (near) return near
   // 「…」林青禾笑道。 An unknown name works when the verb follows it at once (「…」王师兄笑道。).
   const tail = plainOf(after).replace(/\s+/g, '').replace(/^[，,]/, '').split(/[。！？!?]/)[0].slice(0, 12)
@@ -149,14 +182,18 @@ export function guessSpeaker(before, after, names) {
   const known = knownIn(tail, names, { last: false })
   if (known) return known
   const unknown = SAID_AFTER.exec(tail)
-  return unknown && !/[你我她他它们]/.test(unknown[1]) ? unknown[1] : null
+  return unknown && nameLike(unknown[1]) ? unknown[1] : null
 }
 
-/** The pronoun a quote is said by (你, 她, 他): the subject of the sentence leading into it, else of the one after. */
+/**
+ * The pronoun a quote is said by (你, 她, 他): the subject of the nearest clause
+ * leading into it that has one (过了片刻，她忽然笑了，笑得很短：), else of the sentence after.
+ */
 export function pronounNear(before, after) {
   const lead = plainOf(before).replace(/\s+/g, '').split(/[。！？!?；;]/).filter(Boolean).pop() ?? ''
   const tail = plainOf(after).replace(/\s+/g, '').replace(/^[，,]/, '').split(/[。！？!?]/)[0]
-  return SUBJECT.exec(lead)?.[1] ?? SUBJECT.exec(tail)?.[1] ?? null
+  const clauses = lead.split(/[，,]/).filter(Boolean).reverse()
+  return clauses.map(clause => SUBJECT.exec(clause.replace(OPENER, ''))?.[1]).find(Boolean) ?? SUBJECT.exec(tail)?.[1] ?? null
 }
 
 /**
@@ -230,7 +267,7 @@ function labelOf(row, names) {
   const exact = names.find(entry => entry.keys.includes(body))
   if (exact) return { name: exact.name, drop: true }
   if (!colon) return null
-  if (body.length <= 4 && !PRONOUN.test(body) && !/[，,]/.test(body)) return { name: body, drop: true }
+  if (nameLike(body)) return { name: body, drop: true }
   const known = knownIn(body, names, { last: false })
   return known ? { name: known, drop: false } : null
 }

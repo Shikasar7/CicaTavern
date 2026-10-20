@@ -830,6 +830,35 @@ export async function providerRequest(provider, suffix, { method = 'POST', body,
   return { contentType: String(res.headers['content-type'] ?? ''), buffer: await readBuffer(res) }
 }
 
+/**
+ * Google's own Gemini API beside a provider set up with its OpenAI-compatible
+ * address (…/v1beta/openai): images and speech come only from there
+ * (generateContent). Same key and proxy; a relay that copies Google's layout works too.
+ */
+export function googleBase(provider) {
+  const base = String(provider?.baseURL ?? '').replace(/\/+$/, '')
+  if (/\/openai$/i.test(base)) return base.replace(/\/openai$/i, '')
+  if (/generativelanguage\.googleapis\.com/i.test(base)) return 'https://generativelanguage.googleapis.com/v1beta'
+  return base
+}
+
+/** A provider whose key is Google's (the Gemini template, or a relay of it). */
+export const isGoogle = provider => Boolean(provider) && provider.api !== 'anthropic-messages' && (/generativelanguage\.googleapis\.com/i.test(provider.baseURL) || /\/v1beta\/openai\/?$/i.test(provider.baseURL))
+
+/** POST to Google's own API (`/models/<model>:generateContent`) with the provider's key → the parsed JSON. */
+export async function googleRequest(provider, suffix, { body, signal, proxy = null } = {}) {
+  const key = apiKeyOf(provider)
+  const res = await send(joinUrl(googleBase(provider), suffix), {
+    method: 'POST',
+    headers: { 'user-agent': 'agent-tavern/0.2.0', ...(key ? { 'x-goog-api-key': key } : {}), ...provider.headers },
+    body,
+    signal,
+    proxy: provider.proxy === 'direct' ? null : proxy,
+  })
+  await failIfBad(res)
+  return parseJson(await readText(res, 64 * 1024 * 1024))
+}
+
 /** GET a URL (an image a provider links to, a local service) as bytes. */
 export async function fetchBytes(url, { headers = {}, signal, proxy = null } = {}) {
   const res = await send(url, { headers, signal, proxy })

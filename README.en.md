@@ -57,8 +57,8 @@ From the author's own long chats (October 2026):
 
 ### Pictures and read-aloud
 
-- **Pictures**: one click, and a helper model writes the image prompt from the scene, the characters' looks and the card's art style; you can review it before drawing. Backends: an OpenAI-compatible image API, a ComfyUI workflow, or NovelAI. New replies can be illustrated automatically. Prompts you have drawn are kept in a prompt library.
-- **Read-aloud**: quoted dialogue uses the dialogue voice and everything else the narrator voice; tap a line in the story to hear just that line. Voices can come from the browser (free), a TTS model on your computer or local network, or cloud services such as Fish Audio, MiniMax or any OpenAI-compatible speech API. Audio is cached once read. New replies can be read automatically.
+- **Pictures**: one click, and a helper model writes the image prompt from the scene, the characters' looks and the card's art style; you can review it before drawing. Backends: an OpenAI-compatible image API (gpt-image and others), Gemini's own image models, NovelAI, or a local ComfyUI workflow or SD WebUI / Forge. New replies can be illustrated automatically. Prompts you have drawn are kept in a prompt library.
+- **Read-aloud**: quoted dialogue uses the dialogue voice and everything else the narrator voice; tap a line in the story to hear just that line. Voices can come from cloud services such as Fish Audio, MiniMax, Gemini or any OpenAI-compatible speech API, the browser (free), or a TTS model on your computer or local network; everyone in the cast can have a voice of their own. Audio is cached once read. New replies can be read automatically.
 
 ### Visual novel mode
 
@@ -68,7 +68,8 @@ From the author's own long chats (October 2026):
 - **Sprites**: whoever speaks steps forward and steps back during narration. White-background reference pictures in the roster are cut out and outlined; anyone without one gets a half-body sprite drawn from their looks.
 - **Scenes**: when the story reaches a new place, an empty scene is drawn as the background and reused whenever the story returns; time of day and weather are tints and rain or snow over it.
 - **Speakers and dialogue**: who speaks is told even from "she said" or a nameless innkeeper; each name plate has its own colour, and dialogue is coloured apart from narration.
-- **Plays like a game**: the choices open in the middle of the picture and number keys pick them; backlog, auto, skip, full screen and line-by-line reading are all there.
+- **Plays like a game**: the choices open in the middle of the picture and number keys pick them; backlog, auto, skip, full screen and line-by-line reading are all there, and the ▾ beside Read and Pictures changes voices, models and drawing without leaving.
+- **CG gallery**: every picture on the storyline in one place, each marked with its turn, to browse full size.
 
 ### Characters keep their look
 
@@ -136,31 +137,35 @@ Providers set to 直连 (direct) skip the proxy: DeepSeek, Kimi, Zhipu, Qwen, Vo
 
 Pick a backend under 配图与朗读 (Pictures and voice) → 画图方式 (How to draw):
 
-- **OpenAI-compatible image API**: choose a provider you've added and its image model; the portrait or a reference picture can be used as a reference.
+- **OpenAI-compatible image API**: choose a provider you've added and its image model (gpt-image, grok, SiliconFlow and others); the portrait or a reference picture can be used as a reference. With OpenRouter as the provider, its image models (`google/gemini-…-image` and others) are used.
+- **Gemini's own image models** (Nano Banana): choose the provider made from the "Gemini" template; the model defaults to `gemini-2.5-flash-image`, or try `gemini-3-pro-image-preview`. Reference pictures of cast members in the frame are sent along, so faces stay the same.
 - **ComfyUI**: import a workflow saved with "Export (API)", with placeholders marking the prompt, size and so on. `examples/comfy-illustrious-api.json` is a text-to-image example; change the model name to your own.
-- **NovelAI**: enter a persistent token. V4.5 / V5 and character references are supported.
+- **NovelAI**: enter a persistent token. V4.5 / V5 and character references are supported; the best choice for anime.
+- **SD WebUI / Forge**: AUTOMATIC1111, Forge or reForge on your computer (started with `--api`), drawing with the model loaded there; sampler, steps, CFG and negative prompt can be set, and a cast member's or the card's LoRA goes into the prompt as `<lora:…>`.
+
+While the image backend isn't set up (no provider, no token), its row in Pictures and voice stands out.
 
 The helper model that writes image prompts is chosen here too. With a card selected, the same window sets that card's art style, negative prompt and character roster.
 
 ## Read-aloud
 
-In 配图与朗读 (Pictures and voice), choose each card's 对白音色 (dialogue voice) and 旁白音色 (narrator voice): quoted dialogue uses the dialogue voice and the rest the narrator voice (no narrator voice means narration isn't read). Tap a line of dialogue to hear just that line. Voices come from three kinds of source, all set under 配图与朗读 → 朗读来源 (Voice sources), each with a 试听 (preview) button that works before saving:
-
-**Browser** (built into the device, free, works out of the box)
-
-- The voices depend on the browser and system. Edge has online neural voices such as "Xiaoxiao Online (Natural)", which sound best; Chrome has "Google 普通话".
-- Browser voices belong to each device: where a device doesn't have the same voice, its default Chinese voice is used.
-
-**Local voice bridge** (a TTS model on your computer or local network, nothing goes to the cloud)
-
-- Enter its bridge address. The service needs `POST /api/tts` (`{ "text", "voice" }` → audio) and `GET /api/persona/list` (`{ "voices": [{ "name" }] }`).
-- On a phone, paste the whole link from the computer's CicaTavern (设置 → 手机访问, Phone access) to use the voices set up there (the cloud keys stay on the computer).
+In 配图与朗读 (Pictures and voice), choose each card's 对白音色 (dialogue voice) and 旁白音色 (narrator voice): quoted dialogue uses the dialogue voice and the rest the narrator voice (no narrator voice means narration isn't read). Everyone in the card's cast can also have a voice of their own: visual novel mode reads each line in its speaker's voice, and so do Read aloud and tapping a line in the chat, with the dialogue voice for anyone without one. Tap a line of dialogue to hear just that line. Voices come from three kinds of source, all set under 配图与朗读 → 朗读来源 (Voice sources), each with a 试听 (preview) button that works before saving:
 
 **Cloud services** (need a key, billed per character, on your own account)
 
 - **A provider's speech API**: choose a provider you've added and enter the model and voice. It uses the provider's OpenAI-compatible `/audio/speech`, with the provider's address, key and proxy setting. OpenAI: `gpt-4o-mini-tts` (adjusts the delivery to the emotion in the reply). SiliconFlow: `FunAudioLLM/CosyVoice2-0.5B`; leave the voice box empty to list its preset voices. Local OpenAI-compatible wrappers such as Kokoro or GPT-SoVITS go here too; they run locally and cost nothing.
 - **Fish Audio**: enter your API key (saved when you leave the box or press Enter) and paste the links of voices you like (`fish.audio/m/…`) into the voice box, optionally followed by a space and a name; for voices you cloned yourself, click 从账户读取音色 (Read voices from account). Emotions in the reply are passed as tone tags before the line.
 - **MiniMax**: enter your API key and choose the mainland or international site (a key only works on the site that issued it). Leave the voice box empty for the system voices; for cloned or designed voices, click 从账户读取音色 or enter a voice_id.
+- **Gemini speech**: choose the provider made from the "Gemini" template (it shares the key and proxy with chat); the model defaults to `gemini-2.5-flash-preview-tts`. Leave the voice box empty to list Google's 30 prebuilt voices (Kore, Leda, Puck, Charon…), which read Chinese too; emotions in the reply become a spoken-style prompt before the line.
+
+**Browser** (built into the device, free, works out of the box)
+
+- The voices depend on the browser and system. Browser voices belong to each device: where a device doesn't have the same voice, its default Chinese voice is used.
+
+**Local voice bridge** (a TTS model on your computer or local network, nothing goes to the cloud)
+
+- Enter its bridge address. The service needs `POST /api/tts` (`{ "text", "voice" }` → audio) and `GET /api/persona/list` (`{ "voices": [{ "name" }] }`).
+- On a phone, paste the whole link from the computer's CicaTavern (设置 → 手机访问, Phone access) to use the voices set up there (the cloud keys stay on the computer).
 
 Fish and MiniMax keys are kept in the data folder's `voice-keys.json`; the page only ever sees the last four characters. Audio is cached in the data folder's `media/tts/` and made again when you change the voice or model; if a line sounds wrong, click 重新合成 (Synthesize again) on the progress bar. When a card has no dialogue voice and a local voice bridge is set, the bridge's current voice reads.
 
@@ -198,7 +203,7 @@ CicaTavern collects no usage data and sends nothing to the developer. Your data 
 
 What it connects to:
 
-- **Services you add yourself**: model providers, image backends (OpenAI-compatible APIs, ComfyUI, NovelAI) and voice services (Fish Audio, MiniMax and others). They are contacted only after you set them up, and what goes to them is your chat content and the related settings; how each one handles data is covered by its own privacy policy.
+- **Services you add yourself**: model providers, image backends (OpenAI-compatible APIs, Gemini, NovelAI, ComfyUI, SD WebUI) and voice services (Fish Audio, MiniMax, Gemini and others). They are contacted only after you set them up, and what goes to them is your chat content and the related settings; how each one handles data is covered by its own privacy policy.
 - **Connections made without being configured.** They are listed at the first start, where each can be switched off; later, change them under 设置 → 更多 → 隐私与网络 (Privacy and network) and 更新 (Update). Nothing on this list happens before you confirm:
   - Update check: GitHub (api.github.com) at most once a day, sending only the version number; GitHub can see your IP address. The Android app does the same.
   - Body font: the Noto Serif SC font from Google Fonts.

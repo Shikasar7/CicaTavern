@@ -834,6 +834,13 @@ button.chip.on { background: var(--accent); border-color: var(--accent); color: 
 .menu-pill { flex: none; font-size: 11px; line-height: 20px; padding: 0 9px; border-radius: 999px; color: var(--faint); background: var(--line-soft); }
 .menu-pill.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 13%, transparent); }
 .menu-pill.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
+/* Nothing usable set up yet: the row asks to be opened. */
+.menu-pill.need { color: var(--accent-ink); background: var(--accent); font-weight: 600; }
+.menu-entry.need { background: color-mix(in srgb, var(--accent) 9%, transparent); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 55%, transparent); }
+.menu-entry.need:hover { background: color-mix(in srgb, var(--accent) 15%, transparent); }
+.menu-entry.need .menu-entry-title, .menu-entry.shared.need .menu-entry-title { color: var(--ink); font-weight: 600; }
+.menu-entry.need .menu-entry-sub, .menu-entry.shared.need .menu-entry-sub { color: var(--accent); white-space: normal; }
+.menu-entry.need .menu-entry-go { color: var(--accent); }
 .menu-entry-go { flex: none; display: grid; color: var(--faint); transition: transform .16s var(--ease), color .16s; }
 .menu-entry-go svg { width: 16px; height: 16px; }
 .menu-entry:hover .menu-entry-go { color: var(--accent); transform: translateX(2px); }
@@ -1698,6 +1705,24 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .vn-cg[hidden] { display: none; }
 .vn-cg img { max-width: 100%; max-height: 100%; object-fit: contain; }
 .vn-cg-tools { position: absolute; top: 12px; right: 12px; display: flex; gap: 6px; }
+.vn-cg-count { align-self: center; padding: 0 8px; color: #fff; font: 12px/1.5 var(--ui); text-shadow: 0 1px 2px rgb(0 0 0 / .6); }
+/* CG 回廊: every picture on the story's path, a wall of thumbnails. */
+.vn-cg[data-mode="gallery"] { cursor: default; background: rgb(0 0 0 / .55); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+.vn-gallery {
+  width: min(980px, calc(100% - 32px)); max-height: calc(100% - 32px); display: flex; flex-direction: column; overflow: hidden; border-radius: 16px;
+  background: color-mix(in srgb, var(--raised) 96%, transparent); border: 1px solid var(--line-soft); box-shadow: var(--shadow-3); color: var(--ink);
+}
+.vn-gallery-head { display: flex; align-items: baseline; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); }
+.vn-gallery-head b { font: 600 16px var(--serif); letter-spacing: .14em; }
+.vn-gallery-head .vn-btn { margin-left: auto; align-self: center; }
+.vn-gallery > .vn-waiting { padding: 28px 16px; text-align: center; }
+.vn-gallery-grid { overflow-y: auto; padding: 14px; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(160px, 40vw), 1fr)); gap: 12px; }
+.vn-gallery-item { position: relative; aspect-ratio: 4 / 3; padding: 0; border: 1px solid var(--line-soft); border-radius: 10px; overflow: hidden; cursor: zoom-in; background: var(--bg); }
+.vn-cg .vn-gallery-item img { width: 100%; height: 100%; max-width: none; max-height: none; object-fit: cover; display: block; transition: transform .25s var(--ease); }
+.vn-gallery-item:hover img, .vn-gallery-item:focus-visible img { transform: scale(1.04); }
+.vn-gallery-item span { position: absolute; left: 6px; bottom: 6px; padding: 0 7px; border-radius: 999px; background: rgb(0 0 0 / .55); color: #fff; font: 600 11px/1.7 var(--ui); }
+.vn-gallery-item.here { outline: 2px solid var(--accent); outline-offset: -2px; }
+@media (prefers-reduced-motion: reduce) { .vn-gallery-item img { transition: none; } }
 .vn-title {
   position: absolute; left: 50%; top: 26%; transform: translateX(-50%); padding: 6px 22px; pointer-events: none; white-space: nowrap;
   font: 600 26px/1.4 var(--serif); letter-spacing: .12em; color: var(--ink); text-shadow: 0 1px 12px var(--bg); opacity: 0;
@@ -1761,6 +1786,41 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .vn-controls { position: absolute; top: 12px; right: 12px; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; max-width: calc(100% - 24px); }
 /* 朗读 and 配图: switches of their own, set apart from the rest. */
 .vn-quick { display: inline-flex; gap: 4px; padding-right: 6px; margin-right: 2px; border-right: 1px solid var(--line-soft); }
+/* ▾ beside each: the two halves of one pill. */
+.vn-split { display: inline-flex; }
+.vn-split > .vn-btn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; padding-right: 9px; }
+.vn-btn.vn-more { border-top-left-radius: 0; border-bottom-left-radius: 0; margin-left: -1px; padding-left: 6px; padding-right: 8px; color: var(--muted); }
+.vn-btn.vn-more.open { color: var(--accent); border-color: var(--accent); }
+/* Their settings, just below the controls. */
+.vn-pop {
+  position: absolute; z-index: 3; top: 52px; right: 12px; width: min(380px, calc(100% - 24px)); max-height: calc(100% - 80px); overflow-y: auto;
+  display: flex; flex-direction: column; gap: 10px; padding: 12px 14px 14px; border-radius: 16px; font: 13px/1.5 var(--ui); color: var(--ink);
+  background: color-mix(in srgb, var(--raised) 94%, transparent); border: 1px solid var(--line-soft); box-shadow: var(--shadow-3);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); animation: vn-pop-in .18s var(--ease);
+}
+.vn-pop[hidden] { display: none; }
+@keyframes vn-pop-in { from { opacity: 0; transform: translateY(-4px); } }
+@media (prefers-reduced-motion: reduce) { .vn-pop { animation: none; } }
+.vn-pop-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.vn-pop-own, .vn-pop-shared { display: flex; flex-direction: column; gap: 10px; }
+.vn-pop-own:not(:empty) { padding-bottom: 12px; border-bottom: 1px solid var(--line-soft); }
+.vn-pop-switch { display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; }
+.vn-pop-switch small { display: block; color: var(--muted); font-size: 12px; }
+.vn-pop .vn-library-mode { flex-wrap: wrap; gap: 6px; }
+.vn-pop select, .vn-pop input:not([type="checkbox"]) {
+  min-width: 0; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); padding: 5px 8px; color: var(--ink); font: 13px var(--ui);
+}
+.vn-pop .hint { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.5; }
+.vn-pop .hint.warn { color: var(--warn); }
+.quick-row { display: flex; flex-direction: column; gap: 4px; }
+.quick-label { font-size: 12px; color: var(--muted); }
+.quick-row > input, .quick-row > select, .quick-row > span > input { width: 100%; }
+.quick-more { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+/* 角色各自的音色: a name, then its picker. */
+.cast-voice-title { margin: 4px 0 0; font: 600 12px var(--ui); color: var(--muted); }
+.cast-voices { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+label.cast-voice, .dialog label.cast-voice { display: grid; grid-template-columns: minmax(56px, max-content) minmax(0, 1fr); flex-direction: row; align-items: center; gap: 10px; margin: 0; }
+.cast-voice-name { max-width: 10em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-size: 13px; }
 
 /* The turn's choices: a game's menu in the middle of the picture above the text box, the picture stepping back behind it. */
 .vn-menu {

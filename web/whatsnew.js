@@ -3,7 +3,7 @@
 // (pictures beside it, named after their version). Shown once per version;
 // opened again from the version under the app's name, or 设置 → 更多 → 更新.
 import { lang, t } from '/i18n.js'
-import { compareVersions, notesToShow } from '/shared/whatsnew.js'
+import { compareVersions, notesToShow, seriesNotes } from '/shared/whatsnew.js'
 
 const SEEN_KEY = 'cicatavern.seenVersion'
 
@@ -54,10 +54,11 @@ export function initWhatsNew({ el }) {
     open(due)
   }
 
-  /** The notes of `entries`, else of the running version (or the newest there are). */
+  /** The notes of `entries`, else of the running version's series (or the newest there are): 1.8.0, then 1.8.1. */
   async function open(entries) {
     const versions = (await load()).slice().sort((a, b) => compareVersions(b.version, a.version))
-    const list = entries ?? [versions.find(entry => compareVersions(entry.version, current) <= 0) ?? versions[0]].filter(Boolean)
+    const newest = versions.find(entry => compareVersions(entry.version, current) <= 0) ?? versions[0]
+    const list = entries ?? (newest ? seriesNotes(versions, newest.version) : [])
     pages = list.flatMap(entry => (entry.items ?? []).map(item => ({ version: entry.version, date: entry.date ?? '', image: item.image ?? '', icon: item.icon ?? '', ...(item[lang] ?? item.zh ?? {}) })))
     if (!pages.length) return
     at = 0

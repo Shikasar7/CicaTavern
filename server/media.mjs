@@ -17,7 +17,7 @@ import { randomInt } from 'node:crypto'
 import { copyFile, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { inflateRawSync } from 'node:zlib'
 import path from 'node:path'
-import { complete, fetchBytes, isProviderRef, postJson, providerError, providerRequest, refLabel, resolveRef } from './providers.mjs'
+import { complete, fetchBytes, googleRequest, isProviderRef, postJson, providerError, providerRequest, refLabel, resolveRef } from './providers.mjs'
 import { cleanFrame, cleanLora, cleanRoster, cleanStrength, countTags, draftMaterial, flattenFrame, frameFormat, isFramePrompt, isRosterId, leadOf, naiCharacters, parseFrame, parseRosterDraft, rosterBrief, rosterDraftRequest } from './roster.mjs'
 import { httpError, newId } from './store.mjs'
 import { FISH_MODELS } from './voice/cloud.mjs'
@@ -27,7 +27,7 @@ import { msg } from './i18n.mjs'
 export const DEFAULT_MEDIA = Object.freeze({
   helperModel: '', // provider ref that writes image prompts; empty = the chat's model when it is a provider
   promptSource: 'helper', // 'helper': a short standalone request; 'chat': asked at the end of the conversation (cache hits)
-  imageBackend: 'openai', // 'openai' | 'comfy' | 'novelai'
+  imageBackend: 'openai', // 'openai' | 'gemini' | 'comfy' | 'sdwebui' | 'novelai'
   imageProvider: '', // provider id whose base URL serves /images/generations
   imageModel: '',
   imageShape: 'square', // 'square' | 'portrait' | 'landscape'; pixel size per backend (imageSize)
@@ -35,6 +35,14 @@ export const DEFAULT_MEDIA = Object.freeze({
   imageEditModel: '', // model for /images/edits; empty = imageModel (some gateways split generate and edit models)
   promptStyle: 'natural', // 'natural' sentences or comma-separated 'tags' (SD-style workflows)
   comfyUrl: 'http://127.0.0.1:8188',
+  geminiImageProvider: '', // a provider with Google's key: Gemini's own image models (generateContent)
+  geminiImageModel: 'gemini-2.5-flash-image',
+  geminiReference: true, // cast members in the frame with a reference picture: sent along, so the faces stay
+  sdUrl: 'http://127.0.0.1:7860', // Stable Diffusion WebUI / Forge, started with --api
+  sdSteps: 28,
+  sdCfg: 6,
+  sdSampler: 'Euler a',
+  sdNegative: 'lowres, bad anatomy, bad hands, text, error, missing fingers, worst quality, low quality, jpeg artifacts, signature, watermark, blurry',
   naiModel: 'nai-diffusion-5-full',
   naiQuality: 'very aesthetic, masterpiece, no text', // appended to every NovelAI prompt
   naiReference: true, // a frame with one cast member who has a reference picture: V4.5 with it (+5 Anlas)
@@ -51,6 +59,9 @@ export const DEFAULT_MEDIA = Object.freeze({
   minimaxModel: 'speech-2.8-hd',
   minimaxRegion: 'cn', // 'cn' 国内站 | 'intl' 国际站
   minimaxVoices: Object.freeze([]), // none listed = MiniMax's system voices
+  geminiTtsProvider: '', // a provider with Google's key: Gemini's speech models (voices gemini:<name>)
+  geminiTtsModel: 'gemini-2.5-flash-preview-tts',
+  geminiTtsVoices: Object.freeze([]), // none listed = Gemini's prebuilt voices
   autoRead: false,
   autoImage: false,
 })
@@ -67,10 +78,18 @@ const SHAPES = ['square', 'portrait', 'landscape']
 const PIXELS = {
   openai: { square: '1024x1024', portrait: '1024x1536', landscape: '1536x1024' },
   comfy: { square: '1024x1024', portrait: '832x1216', landscape: '1216x832' },
+  sdwebui: { square: '1024x1024', portrait: '832x1216', landscape: '1216x832' },
   // All within Opus's free size (at most 1024×1024 pixels).
   novelai: { square: '1024x1024', portrait: '832x1216', landscape: '1216x832' },
 }
+// Gemini's image models take an aspect ratio, not a size.
+const ASPECT = { square: '1:1', portrait: '2:3', landscape: '3:2' }
+export const IMAGE_BACKENDS = ['openai', 'gemini', 'comfy', 'sdwebui', 'novelai']
+const MODEL_NAME = /^[\w.:/@+-]{1,120}$/
 export const NAI_MODELS = ['nai-diffusion-5-full', 'nai-diffusion-5-curated', 'nai-diffusion-4-5-full', 'nai-diffusion-4-5-curated']
+
+/** The images API's answer format: gpt-image models always answer in base64 and refuse to be asked. */
+export const imageFormat = model => (/^(openai\/)?(gpt-image|chatgpt-image)/i.test(String(model ?? '')) ? {} : { response_format: 'b64_json' })
 
 /** Pixel size for a backend and shape. */
 export function imageSize(backend, shape) {
@@ -104,7 +123,19 @@ export function cleanMedia(input, previous = DEFAULT_MEDIA, defaults = DEFAULT_M
   text('imageProvider', 40)
   text('imageModel')
   text('imageEditModel')
-  if (['openai', 'comfy', 'novelai'].includes(source.imageBackend)) value.imageBackend = source.imageBackend
+  if (IMAGE_BACKENDS.includes(source.imageBackend)) value.imageBackend = source.imageBackend
+  text('geminiImageProvider', 40)
+  text('geminiTtsProvider', 40)
+  for (const key of ['geminiImageModel', 'geminiTtsModel']) {
+    if (typeof source[key] !== 'string') continue
+    const model = source[key].trim().replace(/^models\//, '')
+    if (model && !MODEL_NAME.test(model)) throw httpError(400, msg`Gemini 模型名不对（例如 ${DEFAULT_MEDIA[key]}）`)
+    value[key] = model || DEFAULT_MEDIA[key]
+  }
+  if (source.sdSteps !== undefined && Number.isFinite(Number(source.sdSteps))) value.sdSteps = Math.min(80, Math.max(1, Math.round(Number(source.sdSteps))))
+  if (source.sdCfg !== undefined && Number.isFinite(Number(source.sdCfg))) value.sdCfg = Math.min(20, Math.max(1, Math.round(Number(source.sdCfg) * 10) / 10))
+  if (typeof source.sdSampler === 'string') value.sdSampler = source.sdSampler.trim().slice(0, 60) || DEFAULT_MEDIA.sdSampler
+  if (typeof source.sdNegative === 'string') value.sdNegative = source.sdNegative.trim().slice(0, 1500)
   if (typeof source.naiModel === 'string') {
     const model = source.naiModel.trim()
     if (!/^nai-diffusion-[a-z0-9-]{1,40}$/.test(model)) throw httpError(400, msg`NovelAI 模型名不对（例如 nai-diffusion-5-full）`)
@@ -124,10 +155,10 @@ export function cleanMedia(input, previous = DEFAULT_MEDIA, defaults = DEFAULT_M
   else if (shapeOf(source.imageSize)) value.imageShape = shapeOf(source.imageSize)
   if (source.promptStyle === 'natural' || source.promptStyle === 'tags') value.promptStyle = source.promptStyle
   if (source.promptSource === 'helper' || source.promptSource === 'chat') value.promptSource = source.promptSource
-  for (const key of ['comfyUrl', 'ttsUrl']) {
+  for (const key of ['comfyUrl', 'sdUrl', 'ttsUrl']) {
     if (typeof source[key] !== 'string') continue
     const url = source[key].trim().replace(/\/+$/, '')
-    if (url && !/^https?:\/\/[^\s/]+(\/\S*)?$/.test(url)) throw httpError(400, msg`${key === 'comfyUrl' ? 'ComfyUI' : msg`本地语音桥接`}地址不对`)
+    if (url && !/^https?:\/\/[^\s/]+(\/\S*)?$/.test(url)) throw httpError(400, msg`${{ comfyUrl: 'ComfyUI', sdUrl: 'SD WebUI' }[key] ?? msg`本地语音桥接`}地址不对`)
     value[key] = url || defaults[key]
   }
   if (source.naiV5Empty === 'v45' || source.naiV5Empty === 'anlas') value.naiV5Empty = source.naiV5Empty
@@ -146,10 +177,10 @@ export function cleanMedia(input, previous = DEFAULT_MEDIA, defaults = DEFAULT_M
     value.minimaxModel = source.minimaxModel
   }
   if (source.minimaxRegion === 'cn' || source.minimaxRegion === 'intl') value.minimaxRegion = source.minimaxRegion
-  for (const key of ['ttsVoices', 'fishVoices', 'minimaxVoices']) {
+  for (const key of ['ttsVoices', 'fishVoices', 'minimaxVoices', 'geminiTtsVoices']) {
     if (typeof source[key] === 'string' || Array.isArray(source[key])) value[key] = cleanVoiceList(source[key], { fish: key === 'fishVoices' })
   }
-  for (const key of ['imageReference', 'autoRead', 'autoImage', 'naiReference', 'naiRefStyle']) if (typeof source[key] === 'boolean') value[key] = source[key]
+  for (const key of ['imageReference', 'autoRead', 'autoImage', 'naiReference', 'naiRefStyle', 'geminiReference']) if (typeof source[key] === 'boolean') value[key] = source[key]
   return value
 }
 
@@ -678,10 +709,12 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     if (provider.api === 'anthropic-messages') throw httpError(400, msg`${provider.name} 是 Anthropic 接口，没有生图接口`)
     if (!media.imageModel) throw httpError(400, msg`还没填生图模型`)
     const reference = media.imageReference ? (cast?.lead && (await rosterRef(cardId, cast.lead.id))) || (await avatarOf(cardId)) : null
+    // OpenRouter draws through chat (Gemini and GPT image models answer with a picture).
+    if (/openrouter\.ai/i.test(provider.baseURL)) return { buffer: await chatImage(provider, media, prompt, reference, signal), note: '' }
     const size = imageSize('openai', media.imageShape)
     const generate = () =>
       providerRequest(provider, '/images/generations', {
-        body: { model: media.imageModel, prompt, n: 1, size, response_format: 'b64_json' },
+        body: { model: media.imageModel, prompt, n: 1, size, ...imageFormat(media.imageModel) },
         signal,
         proxy: proxyNow(),
       })
@@ -730,7 +763,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     const dataUrl = `data:${reference[0] === 0xff ? 'image/jpeg' : 'image/png'};base64,${reference.toString('base64')}`
     try {
       return await providerRequest(provider, '/images/edits', {
-        body: { model, prompt, n: 1, size, response_format: 'b64_json', image: { url: dataUrl } },
+        body: { model, prompt, n: 1, size, ...imageFormat(model), image: { url: dataUrl } },
         signal,
         proxy: proxyNow(),
       })
@@ -738,11 +771,136 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
       const wantsForm = error.providerStatus === 415 || /multipart|form-data|image.+file|must be a file/i.test(error.message)
       if (!wantsForm || signal?.aborted) throw error
       return providerRequest(provider, '/images/edits', {
-        body: multipart({ model, prompt, n: '1', size, response_format: 'b64_json', image: { buffer: reference, filename: 'reference.png', type: 'image/png' } }),
+        body: multipart({ model, prompt, n: '1', size, ...imageFormat(model), image: { buffer: reference, filename: 'reference.png', type: 'image/png' } }),
         signal,
         proxy: proxyNow(),
       })
     }
+  }
+
+  /**
+   * An image model behind chat completions (OpenRouter: google/gemini-…-image,
+   * openai/gpt-…-image): asked for an image answer, the reference picture in the
+   * message when there is one.
+   */
+  async function chatImage(provider, media, prompt, reference, signal) {
+    const content = reference
+      ? [{ type: 'image_url', image_url: { url: `data:image/${extOf('', reference) === 'jpg' ? 'jpeg' : extOf('', reference)};base64,${reference.toString('base64')}` } }, { type: 'text', text: `${prompt}\n\nKeep the character's face, hair and body from the picture above.` }]
+      : prompt
+    let response
+    try {
+      response = await providerRequest(provider, '/chat/completions', {
+        body: { model: media.imageModel, messages: [{ role: 'user', content }], modalities: ['image', 'text'], image_config: { aspect_ratio: ASPECT[media.imageShape] ?? '1:1' } },
+        signal,
+        proxy: proxyNow(),
+      })
+    } catch (error) {
+      if (error.status || signal?.aborted) throw error
+      throw httpError(502, imageError(provider, error))
+    }
+    let json
+    try {
+      json = JSON.parse(response.buffer.toString('utf8'))
+    } catch {
+      throw httpError(502, msg`${provider.name} 返回的不是图片结果`)
+    }
+    const message = json.choices?.[0]?.message
+    const url = message?.images?.[0]?.image_url?.url ?? ''
+    const data = /^data:image\/[\w.+-]+;base64,(.+)$/s.exec(url)?.[1]
+    if (data) return Buffer.from(data, 'base64')
+    if (/^https?:/.test(url)) return (await fetchBytes(url, { signal, proxy: provider.proxy === 'direct' ? null : proxyNow() })).buffer
+    const said = typeof message?.content === 'string' ? message.content.trim().slice(0, 160) : ''
+    throw httpError(502, msg`${provider.name} · ${media.imageModel} 没有返回图片${said ? msg`：${said}` : msg`：选一个能出图的模型（名字里带 image 的）`}`)
+  }
+
+  /**
+   * Gemini's own image models (Nano Banana: generateContent answering with an
+   * image). Cast members in the frame who have a reference picture go along
+   * first (up to three), each named, so their faces stay the same.
+   */
+  async function geminiImage(media, prompt, cardId, signal, cast = null, { scenery = false } = {}) {
+    const provider = (await store.getProviders()).find(p => p.id === media.geminiImageProvider)
+    if (!provider) throw httpError(400, msg`还没选 Gemini 生图用的供应商：在「配图与朗读 → 画图方式」里选用「Gemini」模板建的那个`)
+    if (provider.api === 'anthropic-messages') throw httpError(400, msg`${provider.name} 是 Anthropic 接口，没有生图接口`)
+    const model = media.geminiImageModel || DEFAULT_MEDIA.geminiImageModel
+    const parts = []
+    if (media.geminiReference && !scenery && cardId) {
+      for (const { entry } of cast?.characters ?? []) {
+        if (parts.length >= 6) break
+        const ref = await rosterRef(cardId, entry.id)
+        if (!ref) continue
+        const type = extOf('', ref) === 'jpg' ? 'jpeg' : extOf('', ref)
+        parts.push({ text: `Reference picture of ${entry.name}: keep this face, hair and body in the new picture.` }, { inlineData: { mimeType: `image/${type}`, data: ref.toString('base64') } })
+      }
+    }
+    parts.push({ text: prompt })
+    const ask = config => googleRequest(provider, `/models/${model}:generateContent`, {
+      body: { contents: [{ role: 'user', parts }], generationConfig: { responseModalities: ['TEXT', 'IMAGE'], ...config } },
+      signal,
+      proxy: proxyNow(),
+    })
+    let json
+    try {
+      try {
+        json = await ask({ imageConfig: { aspectRatio: ASPECT[media.imageShape] ?? '1:1' } })
+      } catch (error) {
+        // An older model without aspect ratios: draw it square.
+        if (error.providerStatus !== 400 || !/image_?config|aspect/i.test(error.message) || signal?.aborted) throw error
+        json = await ask({})
+      }
+    } catch (error) {
+      if (error.status || signal?.aborted) throw error
+      const hint = error.providerStatus === 404 ? msg`（模型名不对，或者这个供应商不是 Google 的地址）` : ''
+      throw httpError(502, `${imageError(provider, error)}${hint}`)
+    }
+    const candidate = json?.candidates?.[0]
+    const image = candidate?.content?.parts?.find(part => part.inlineData?.data || part.inline_data?.data)
+    if (image) return Buffer.from((image.inlineData ?? image.inline_data).data, 'base64')
+    const said = (candidate?.content?.parts ?? []).map(part => part.text).filter(Boolean).join(' ').trim().slice(0, 160)
+    const why = json?.promptFeedback?.blockReason || candidate?.finishReason || ''
+    throw httpError(502, msg`${provider.name} · ${model} 没有画出图${why ? msg`（${why}）` : ''}${said ? msg`：${said}` : ''}`)
+  }
+
+  /**
+   * Stable Diffusion WebUI or Forge (txt2img over its --api). The model is the
+   * one loaded in the WebUI; a card's or a lone cast member's LoRA goes in the
+   * prompt as <lora:name:strength>, with its trigger word.
+   */
+  async function sdwebuiImage(media, prompt, cardId, signal, cast = null, { scenery = false } = {}) {
+    const cardMedia = cardId ? cleanCardMedia((await store.getCard(cardId)).media) : DEFAULT_CARD_MEDIA
+    const owner = scenery ? null : cast ? (cast.solo?.lora ? cast.solo : null) : cardMedia.lora ? cardMedia : null
+    if (owner) prompt = `${withTrigger(prompt, owner.loraTrigger)}, <lora:${owner.lora.replace(/^.*[\\/]/, '').replace(/\.(safetensors|pt|ckpt)$/i, '')}:${owner.loraStrength}>`
+    const [width, height] = imageSize('sdwebui', media.imageShape).split('x').map(Number)
+    const body = {
+      prompt,
+      negative_prompt: [media.sdNegative, scenery ? SCENERY_NEGATIVE : ''].filter(Boolean).join(', '),
+      steps: media.sdSteps,
+      cfg_scale: media.sdCfg,
+      sampler_name: media.sdSampler,
+      width,
+      height,
+      seed: -1,
+      batch_size: 1,
+      n_iter: 1,
+    }
+    let result
+    try {
+      result = await postJson(`${media.sdUrl}/sdapi/v1/txt2img`, body, { signal })
+    } catch (error) {
+      if (signal?.aborted) throw error
+      if (/ECONNREFUSED/.test(String(error.message ?? error.code))) throw httpError(502, msg`连不上 SD WebUI：先打开 WebUI（启动参数加 --api），再确认地址（默认 http://127.0.0.1:7860）`)
+      const hint = error.providerStatus === 404 ? msg`（WebUI 启动参数要加 --api）` : ''
+      throw httpError(502, msg`SD WebUI：${String(error.message).slice(0, 200)}${hint}`)
+    }
+    let json
+    try {
+      json = JSON.parse(result.buffer.toString('utf8'))
+    } catch {
+      throw httpError(502, msg`SD WebUI 返回的不是图片结果`)
+    }
+    const first = json.images?.[0]
+    if (typeof first !== 'string' || !first) throw httpError(502, msg`SD WebUI 没有返回图片`)
+    return Buffer.from(first.replace(/^data:image\/[\w.+-]+;base64,/, ''), 'base64')
   }
 
   /** @param options.scenery - a background (scenes.mjs): no LoRA, no trigger word, a negative prompt that keeps people out. */
@@ -1097,6 +1255,8 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
       })
       return { buffer, note, backend: label }
     }
+    if (media.imageBackend === 'gemini') return { buffer: await geminiImage(media, flat, cardId, signal, cast, { scenery }), note: '', backend: media.geminiImageModel }
+    if (media.imageBackend === 'sdwebui') return { buffer: await sdwebuiImage(media, flat, cardId, signal, cast, { scenery }), note: '', backend: 'SD WebUI' }
     const { buffer, note } = await openaiImage(media, flat, cardId, signal, cast)
     return { buffer, note, backend: media.imageReference && !note ? media.imageEditModel || media.imageModel : media.imageModel }
   }
@@ -1112,7 +1272,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     if (!entry?.looks) throw httpError(400, msg`先写这个角色的长相，再画人设图`)
     const media = await settingsFor(model)
     const cast = { scene: PORTRAIT_SCENE, characters: [{ entry, action: [entry.outfit, 'standing'].filter(Boolean).join(', '), position: '' }], solo: entry, lead: entry }
-    const plain = { ...media, imageShape: 'portrait', naiReference: false, imageReference: false, naiNegative: [media.naiNegative, 'nsfw, multiple views, text'].filter(Boolean).join(', ') }
+    const plain = { ...media, imageShape: 'portrait', naiReference: false, imageReference: false, geminiReference: false, naiNegative: [media.naiNegative, 'nsfw, multiple views, text'].filter(Boolean).join(', '), sdNegative: [media.sdNegative, 'nsfw, multiple views, text'].filter(Boolean).join(', ') }
     const { buffer, backend } = await render(plain, cardId, cast, cast, '', signal)
     const type = extOf('', buffer) === 'jpg' ? 'jpeg' : extOf('', buffer)
     return { image: `data:image/${type};base64,${buffer.toString('base64')}`, backend }
@@ -1130,7 +1290,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     if (!entry.looks) throw httpError(400, msg`先在「配图 → 角色名单」里写${entry.name}的长相，再画立绘`)
     const media = await settings()
     const cast = { scene: SPRITE_SCENE, characters: [{ entry, action: [entry.outfit, 'standing'].filter(Boolean).join(', '), position: '' }], solo: entry, lead: entry }
-    const plain = { ...media, imageShape: 'portrait', naiNegative: [media.naiNegative, SPRITE_NEGATIVE].filter(Boolean).join(', ') }
+    const plain = { ...media, imageShape: 'portrait', naiNegative: [media.naiNegative, SPRITE_NEGATIVE].filter(Boolean).join(', '), sdNegative: [media.sdNegative, SPRITE_NEGATIVE].filter(Boolean).join(', ') }
     return render(plain, cardId, cast, cast, '', signal)
   }
 
@@ -1145,7 +1305,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     const media = await settings()
     const scene = typeof input.scene === 'string' && input.scene.trim() ? input.scene.trim().slice(0, 400) : PORTRAIT_SCENE
     const cast = { scene, characters: [{ entry, action: [entry.outfit, 'looking at viewer'].filter(Boolean).join(', '), position: '' }], solo: entry, lead: entry }
-    const plain = { ...media, imageShape: 'portrait', naiReference: false, imageReference: false, naiNegative: [media.naiNegative, 'nsfw, multiple views, text'].filter(Boolean).join(', ') }
+    const plain = { ...media, imageShape: 'portrait', naiReference: false, imageReference: false, geminiReference: false, naiNegative: [media.naiNegative, 'nsfw, multiple views, text'].filter(Boolean).join(', '), sdNegative: [media.sdNegative, 'nsfw, multiple views, text'].filter(Boolean).join(', ') }
     return render(plain, null, cast, cast, '', signal)
   }
 
