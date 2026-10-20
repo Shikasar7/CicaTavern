@@ -61,7 +61,7 @@ export function applyAppearance(value) {
 }
 
 /** A picture file → a JPEG data URL no larger than MAX_SIDE on its long side. */
-async function shrink(file) {
+export async function shrink(file) {
   const bitmap = await createImageBitmap(file).catch(() => {
     throw new Error(t`读不出这张图片，换一张 PNG、JPG 或 WebP 试试`)
   })

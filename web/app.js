@@ -13,9 +13,11 @@ import { initHistory } from '/history.js'
 import { createMenu, MENU_ICONS, whoLine } from '/menu.js'
 import { initForge } from '/forge.js'
 import { initUpdate } from '/update.js'
+import { initWhatsNew } from '/whatsnew.js'
 import { connectionList, showPrivacyNotice } from '/privacy.js'
 import { initTheme } from '/theme.js'
 import { initRegex } from '/regex.js'
+import { initVn } from '/vn.js'
 import { isRegexFile, scriptsInFile } from '/shared/regex.js'
 import { lang, locale, t, zh } from '/i18n.js'
 import { pickLanguage } from '/shared/i18n.js'
@@ -609,6 +611,11 @@ const importFiles = guard(async files => {
   let presets = 0
   let reselect = false
   for (const file of files) {
+    // A SillyTavern chat: under the selected card (opens it and says so itself).
+    if (/\.jsonl$/i.test(file.name)) {
+      await importSillyTavernFile(file)
+      continue
+    }
     const data = await fileToBase64(file)
     const json = await jsonOf(file)
     if (json?.format === STORY_FORMAT) {
@@ -793,6 +800,7 @@ function renderChat() {
   if (!chat) {
     box.replaceChildren(EMPTY)
     historyUi.refresh()
+    vnUi.render(null)
     return
   }
   const lastAssistant = [...chat.path].reverse().find(n => n.role === 'assistant')
@@ -809,6 +817,7 @@ function renderChat() {
   renderBranchNote()
   box.scrollTop = box.scrollHeight
   historyUi.refresh()
+  vnUi.render(chat)
 }
 
 /** The turn being written in this chat, as far as it has come (also after switching back). */
@@ -898,14 +907,8 @@ function renderNode(chat, node, isLastAssistant, depth = 0) {
   }
   if (node.edited) tools.push(el('span', { class: 'chip', title: t`${new Date(node.edited.at).toLocaleString(locale)} 改过${node.edited.count > 1 ? t` ${node.edited.count} 次` : ''}`, text: t`已修改` }))
   if (isUser && node.templateErrors?.length) tools.push(el('span', { class: 'chip warn', title: node.templateErrors.join('\n'), text: t`⚠ ${node.templateErrors.length} 条 EJS 模板出错` }))
-  const scripts = scriptsFor(chat)
-  const cardStatus = usesStatusPlaceholder(scripts)
-  const shown = displayOf(node, { scripts, names: chat.names, depth, withStatus: isLastAssistant && cardStatus })
-  const raw = node.raw ?? node.text
-  const time = isUser ? null : timeBoxOf(raw)
-  const choices = !isUser && isLastAssistant ? choicesOf(raw) : []
-  const spec = !isUser && isLastAssistant && !cardStatus ? statusSpecFor(chat, node) : null
-  const bar = spec ? statusBar(el, spec, node.state ?? {}, { previous: previousState(chat, node) }) : null
+  const { shown, time, choices, cardStatus } = replyDisplay(chat, node, isLastAssistant, depth)
+  const bar = !isUser && isLastAssistant && !cardStatus ? statusFor(chat, node) : null
   const imported = node.compaction?.imported
   const recap = !isUser && node.compaction
     ? el('div', { class: 'compaction-note' }, [
@@ -927,6 +930,22 @@ function renderNode(chat, node, isLastAssistant, depth = 0) {
     tools.length ? el('div', { class: 'msg-tools' }, tools) : null,
     recap,
   ])
+}
+
+/** What a reply shows (the transcript and the visual novel view): text after the card's regex, its time box, its choices. */
+function replyDisplay(chat, node, isLastAssistant, depth = 0) {
+  const isUser = node.role === 'user'
+  const scripts = scriptsFor(chat)
+  const cardStatus = usesStatusPlaceholder(scripts)
+  const shown = displayOf(node, { scripts, names: chat.names, depth, withStatus: isLastAssistant && cardStatus })
+  const raw = node.raw ?? node.text
+  return { shown, raw, cardStatus, time: isUser ? null : timeBoxOf(raw), choices: !isUser && isLastAssistant ? choicesOf(raw) : [] }
+}
+
+/** The built-in status bar under a reply, or null (cards that draw their own use their regex). */
+function statusFor(chat, node) {
+  const spec = statusSpecFor(chat, node)
+  return spec ? statusBar(el, spec, node.state ?? {}, { previous: previousState(chat, node) }) : null
 }
 
 // ─── Editing a message in place ─────────────────────────────────────────
@@ -1355,6 +1374,47 @@ async function importPackages(files) {
   toast(t`已导入 ${done.length} 段对话：${notes.join(t`；`)}`, 10000)
 }
 
+// Past this many characters an imported chat is worth compacting before it continues.
+const LONG_IMPORT = 60000
+
+/** A card name without its version (顾念念-武当抽奖系统-v1.6 → 顾念念-武当抽奖系统). */
+const unversioned = name => String(name ?? '').trim().replace(/[\s_-]*v?\d+(?:\.\d+)*$/i, '').trim()
+
+/**
+ * A SillyTavern chat file (.jsonl) as a new chat under the selected card: every
+ * turn comes in; a long one is offered a compaction before it continues, and a
+ * last line with no reply goes back into the input box.
+ */
+const importSillyTavernFile = guard(async file => {
+  if (!ui.cardId) throw new Error(t`先在左边选一张角色卡，对话会导入到它下面`)
+  const text = await file.text()
+  // Who the chat was with: the header's name, or (newer SillyTavern writes "unused" there) the first reply's.
+  const head = text.split('\n', 8).map(line => {
+    try {
+      return JSON.parse(line)
+    } catch {
+      return null
+    }
+  })
+  let character = String(head[0]?.character_name ?? '')
+  if (!character || character === 'unused') character = String(head.find(row => typeof row?.mes === 'string' && !row.is_user && !row.is_system)?.name ?? '')
+  const card = ui.cards.find(c => c.id === ui.cardId)
+  if (character && card && unversioned(character) !== unversioned(card.name) && !confirm(t`这段对话是和「${character}」的，要导入到「${card.name}」下吗？`)) return
+  toast(t`正在导入「${file.name}」……`, 60000)
+  const view = await api('/api/chats/import-sillytavern', { method: 'POST', body: { cardId: ui.cardId, filename: file.name, text } })
+  await refreshChats()
+  setChat(view)
+  const { turns, chars, pendingInput } = view.imported
+  if (pendingInput) fillInput(pendingInput)
+  toast(t`已导入「${file.name}」：${turns} 轮、${fmt(chars)} 字${pendingInput ? t`；最后一句还没有回复，放回了输入框` : ''}。`, 7000)
+  if (chars > LONG_IMPORT && view.compactable) {
+    const ask =
+      t`这段对话有 ${turns} 轮、约 ${fmt(chars)} 字。接着写时，每一轮都会把它整个发给模型，又慢又费额度。\n\n` +
+      t`先压缩成剧情存档吗？会用 ${labelOf(ui.chat.model || ui.defaultModel)} 把全文读一遍（太长的分几段读），之后每轮只发存档和最近两轮。原文都留着，随时可以往上翻看。`
+    if (confirm(ask)) await runCompaction()
+  }
+})
+
 const importStoryFile = guard(async file => {
   const json = await jsonOf(file)
   if (json?.format !== STORY_FORMAT) throw new Error(t`这不是酒馆导出的剧情存档`)
@@ -1398,6 +1458,7 @@ async function generate(endpoint, body, echoUserText) {
         if (event.compacted?.removedChars && viewing()) toast(t`已清掉历史里堆积的变量列表（${fmt(event.compacted.removedChars)} 字）。这一轮会重写对话历史的缓存，固定前缀还在。`)
       } else if (event.type === 'delta') {
         job.text += event.text
+        if (viewing()) vnUi.streamed()
         const target = live()?.querySelector('.msg-body')
         if (target) {
           target.innerHTML = renderStory(streamingText(job.text))
@@ -1421,7 +1482,7 @@ async function generate(endpoint, body, echoUserText) {
   if (finished) {
     if (viewing()) {
       setChat(finished)
-      mediaUi.afterTurn(finishedNode)
+      mediaUi.afterTurn(finishedNode, vnUi.turnFlags(finished.cardId))
     } else {
       toast(t`「${title}」这一轮写好了`, 5000)
     }
@@ -1891,6 +1952,25 @@ const mediaUi = initMedia({
 })
 
 const historyUi = initHistory({ el, getChat: () => ui.chat })
+const vnUi = initVn({
+  api, el, toast, guard, renderStory,
+  getChat: () => ui.chat,
+  isGenerating: () => ui.generating,
+  live: () => (ui.chat ? ui.busy.get(ui.chat.id) ?? null : null),
+  display: (chat, node, latest = true) => replyDisplay(chat, node, latest),
+  statusFor: (chat, node) => (usesStatusPlaceholder(scriptsFor(chat)) ? null : statusFor(chat, node)),
+  frameContext: frameContextFor,
+  cardOf: id => ui.cards.find(card => card.id === id),
+  send: sendChoice,
+  fill: fillInput,
+  regenerate: userNodeId => regenerate(userNodeId),
+  selectNode: nodeId => selectNode(nodeId),
+  readBeat: (nodeId, text, done) => mediaUi.readBeat(nodeId, text, done),
+  stopReading: () => mediaUi.stopReading(),
+  toggleReading: () => mediaUi.toggleReading(),
+  mediaFlags: () => mediaUi.flags(),
+  openMedia: section => mediaUi.openSettings(section),
+})
 
 /**
  * What the regex window shows besides the global scripts: the open chat's card
@@ -1927,7 +2007,8 @@ function regexChanged(scope, id, scripts) {
 
 const regexUi = initRegex({ api, el, toast, guard, context: regexContext, onChanged: regexChanged })
 const themeUi = initTheme({ api, el, toast, guard, getSettings: () => ui.settings, setSettings: settings => { ui.settings = settings } })
-const updateUi = initUpdate({ api, el, toast, guard, onChange: () => settingsMenu?.refresh(), isGenerating: () => ui.generating })
+const whatsNewUi = initWhatsNew({ el })
+const updateUi = initUpdate({ api, el, toast, guard, onChange: () => settingsMenu?.refresh(), isGenerating: () => ui.generating, openNotes: () => whatsNewUi.open() })
 
 const forgeUi = initForge({
   api,
@@ -2148,8 +2229,15 @@ function bind() {
     toast(t`已填进输入框，可以改一改再发送`)
   })
   $('new-chat').addEventListener('click', newChat)
-  $('import-story').addEventListener('change', event => {
-    const packages = [...event.target.files].filter(file => /\.tavernchat$/i.test(file.name) || file.type === 'application/octet-stream')
+  $('import-story').addEventListener('change', async event => {
+    const files = [...event.target.files]
+    const tavern = files.filter(file => /\.jsonl$/i.test(file.name))
+    if (tavern.length) {
+      event.target.value = ''
+      for (const file of tavern) await importSillyTavernFile(file)
+      return
+    }
+    const packages = files.filter(file => /\.tavernchat$/i.test(file.name) || file.type === 'application/octet-stream')
     if (packages.length) {
       event.target.value = ''
       guard(importPackages)(packages)
@@ -2231,6 +2319,9 @@ function bind() {
 }
 
 async function boot() {
+  // Opened from a phone's home screen with the key in its address (manifest, login page): logged in by now.
+  const standalone = navigator.standalone || matchMedia('(display-mode: standalone)').matches
+  if (standalone && location.hash.startsWith('#k=')) history.replaceState(null, '', location.pathname + location.search)
   bind()
   holdPresence()
   const status = await api('/api/status').catch(() => null)
@@ -2285,6 +2376,8 @@ async function boot() {
   const first = ui.cards.find(card => !card.archived)
   if (first) await selectCard(first.id)
   else renderChat()
+  // After an update: what is new, once (someone with cards already has updated; a new player has not).
+  whatsNewUi.boot({ version: status?.version, returning: ui.cards.length > 0 })
 }
 
 boot()

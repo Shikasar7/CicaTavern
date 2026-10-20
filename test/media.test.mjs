@@ -551,3 +551,39 @@ test('a newer version of a card takes over the older one\'s picture settings, ca
   await store.deleteCard(card.id)
   assert.deepEqual(await media.readRosterRef(newer.id, saved.roster[0].id), PNG)
 })
+
+test('scenery (视觉小说 backgrounds): landscape, nobody in it, no reference picture or card LoRA', async t => {
+  const { fake, store, card, media } = await setup(t)
+  // OpenAI-compatible with references on: still a plain generation, landscape; the helper hears the place and its lore.
+  await store.saveSettings({ media: cleanMedia({ imageReference: true }, (await store.getSettings()).media) })
+  const drawn = await media.drawScenery({ cardId: card.id, place: '旧城茶馆二楼', lore: '临窗的雅座，挂着竹帘' })
+  assert.deepEqual(drawn.buffer, PNG)
+  assert.equal(fake.seen.some(r => r.url === '/v1/images/edits'), false)
+  const generated = fake.seen.findLast(r => r.url === '/v1/images/generations').json
+  assert.equal(generated.size, '1536x1024')
+  const asked = fake.seen.findLast(r => r.url === '/v1/chat/completions').json.messages.at(-1).content
+  assert.match(asked, /<place name="旧城茶馆二楼">\n临窗的雅座/)
+  assert.match(asked, /no people/i)
+  assert.match(drawn.prompt, /No people\.$/)
+
+  // ComfyUI with a card LoRA: no LoRA or trigger for a background; the negative keeps people out.
+  await store.saveSettings({ media: cleanMedia({ imageBackend: 'comfy', promptStyle: 'tags' }, (await store.getSettings()).media) })
+  await media.saveWorkflow({
+    4: { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: 'base.safetensors' } },
+    6: { class_type: 'CLIPTextEncode', inputs: { text: '{{prompt}}', clip: ['4', 1] } },
+    7: { class_type: 'CLIPTextEncode', inputs: { text: '{{negative}}', clip: ['4', 1] } },
+  })
+  const withLora = await store.getCard(card.id)
+  withLora.media = cleanCardMedia({ lora: 'linxue.safetensors', loraTrigger: 'linxue', style: 'watercolor' })
+  await store.saveCard(withLora)
+  const comfy = await media.drawScenery({ cardId: card.id, place: '码头', prompt: 'scenery, no humans, a pier at dusk' })
+  const sent = fake.workflowSent()
+  assert.equal(Object.values(sent).some(node => node.class_type === 'LoraLoader'), false)
+  assert.equal(sent[6].inputs.text, 'scenery, no humans, a pier at dusk')
+  assert.match(sent[7].inputs.text, /people/)
+  assert.equal(comfy.note, '')
+
+  // The helper's tags start with scenery, no humans; the card's style goes first.
+  const tagged = await media.drawScenery({ cardId: card.id, place: '码头' })
+  assert.match(tagged.prompt, /^watercolor, scenery, no humans, /)
+})

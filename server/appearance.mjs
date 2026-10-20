@@ -12,7 +12,7 @@ const MAX_BYTES = 12 * 1024 * 1024
 const TYPES = { jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp' }
 
 /** The file's type from its first bytes, or '' when it is none of the three. */
-function sniff(buffer) {
+export function imageKind(buffer) {
   if (buffer[0] === 0xff && buffer[1] === 0xd8) return 'jpg'
   if (buffer.subarray(0, 4).toString('latin1') === '\x89PNG') return 'png'
   if (buffer.subarray(0, 4).toString('latin1') === 'RIFF' && buffer.subarray(8, 12).toString('latin1') === 'WEBP') return 'webp'
@@ -29,7 +29,7 @@ export function createAppearance(store) {
   async function saveBackdrop(dataUrl) {
     const match = /^data:image\/(?:png|jpeg|webp);base64,([A-Za-z0-9+/=]+)$/.exec(String(dataUrl ?? ''))
     const buffer = match ? Buffer.from(match[1], 'base64') : null
-    const kind = buffer ? sniff(buffer) : ''
+    const kind = buffer ? imageKind(buffer) : ''
     if (!kind) throw httpError(400, msg`背景图要是 PNG、JPG 或 WebP`)
     if (buffer.length > MAX_BYTES) throw httpError(400, msg`背景图太大（最多 12MB）`)
     const before = (await store.getSettings()).appearance.backdrop

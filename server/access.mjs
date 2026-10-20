@@ -16,6 +16,9 @@ export function hostOf(header) {
 }
 
 const VIRTUAL_ADAPTER = /vethernet|wsl|hyper-v|default switch|virtualbox|vmware|docker|loopback/i
+// macOS names its links en0, en1… (Wi-Fi or wired); bridge, vmenet, utun, awdl and llw are virtual.
+const MAC_LINK = /^en\d+$/
+const MAC_VIRTUAL = /^(bridge|vmenet|utun|awdl|llw|anpi|ap)\d+$/
 
 /**
  * What kind of network an address is on. Wi-Fi, wired and Tailscale are the
@@ -25,7 +28,8 @@ const VIRTUAL_ADAPTER = /vethernet|wsl|hyper-v|default switch|virtualbox|vmware|
 export function addressKind(adapter, ip) {
   const name = String(adapter ?? '')
   if (/tailscale/i.test(name) || /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(ip) || /^fd7a:115c:a1e0:/i.test(ip)) return 'tailscale'
-  if (VIRTUAL_ADAPTER.test(name)) return 'virtual'
+  if (VIRTUAL_ADAPTER.test(name) || MAC_VIRTUAL.test(name)) return 'virtual'
+  if (MAC_LINK.test(name)) return 'wifi'
   if (/wi-?fi|wlan|wireless|无线/i.test(name)) return 'wifi'
   if (/ethernet|以太网/i.test(name)) return 'wired'
   return 'other'
@@ -106,6 +110,9 @@ export function loginPage(appName = 'CicaTavern') {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="${appName}">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <title>${appName}</title>
   <style>
     :root { color-scheme: light dark; }
@@ -144,7 +151,9 @@ export function loginPage(appName = 'CicaTavern') {
         body: JSON.stringify({ token: form.token.value.trim() }),
       })
       if (!res.ok) { err.textContent = ${JSON.stringify(msg`口令不对`)}; return }
-      location.replace(location.pathname)
+      // In iPhone Safari the link keeps its key, so「添加到主屏幕」saves one that opens without asking again.
+      const keepKey = /iP(hone|od|ad)/.test(navigator.userAgent) && !navigator.standalone
+      location.replace(keepKey ? location.pathname + location.hash : location.pathname)
     })
     if (fromHash) (form.requestSubmit ? form.requestSubmit() : form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true })))
   </script>

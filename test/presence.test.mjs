@@ -44,3 +44,50 @@ test('a console server never exits on its own', async t => {
   await wait(400)
   assert.equal(stopped(), 0)
 })
+
+test('open to phones (手机访问): the server stays up after the pages are gone', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'tavern-presence-'))
+  let stopped = 0
+  const app = createApp({ dataRoot: root, proxy: 'off', edition: 'release', onShutdown: () => { stopped++ }, idleExitMs: 200 })
+  // LAN mode, kept on loopback for the test.
+  const server = await app.listen({ port: 0, listen: 'lan', host: '127.0.0.1' })
+  t.after(async () => {
+    app.network.stop()
+    server.closeAllConnections?.()
+    server.close()
+    await rm(root, { recursive: true, force: true })
+  })
+  const base = `http://127.0.0.1:${server.address().port}`
+  const page = new AbortController()
+  await fetch(`${base}/api/presence`, { signal: page.signal })
+  page.abort()
+  await wait(500)
+  assert.equal(stopped, 0)
+})
+
+test('the home-screen app: icons and manifest for anyone; its start address carries the key only for a phone that has logged in', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'tavern-presence-'))
+  const app = createApp({ dataRoot: root, proxy: 'off', edition: 'release', accessToken: 'k'.repeat(32) })
+  const server = await app.listen({ port: 0, listen: 'lan', host: '127.0.0.1' })
+  t.after(async () => {
+    app.network.stop()
+    server.closeAllConnections?.()
+    server.close()
+    await rm(root, { recursive: true, force: true })
+  })
+  const base = `http://127.0.0.1:${server.address().port}`
+  for (const file of ['/apple-touch-icon.png', '/icon-192.png', '/icon-512.png']) {
+    const res = await fetch(`${base}${file}`)
+    assert.equal(res.headers.get('content-type'), 'image/png', file)
+  }
+  const plain = await fetch(`${base}/manifest.webmanifest`)
+  assert.match(plain.headers.get('content-type'), /application\/manifest\+json/)
+  const manifest = await plain.json()
+  assert.equal(manifest.start_url, '/')
+  assert.equal(manifest.display, 'standalone')
+  assert.deepEqual(manifest.icons.map(i => i.sizes), ['192x192', '512x512'])
+  const signedIn = await (await fetch(`${base}/manifest.webmanifest`, { headers: { cookie: `tavern_key=${'k'.repeat(32)}` } })).json()
+  assert.equal(signedIn.start_url, `/#k=${'k'.repeat(32)}`)
+  const wrong = await (await fetch(`${base}/manifest.webmanifest`, { headers: { cookie: 'tavern_key=nope' } })).json()
+  assert.equal(wrong.start_url, '/')
+})

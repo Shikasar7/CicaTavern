@@ -12,7 +12,7 @@ import path from 'node:path'
 import YAML from 'yaml'
 import { fileURLToPath } from 'node:url'
 import { backfillEntryPositions, cardSummary, cleanGroup, exportCard, greetingsOf, importOwnCard, normalizeCard, organizeCard, parseCardFile, previousVersion, unwrapWorkspace } from './cards.mjs'
-import { chatSummary, chatView, createChat, selectNode, activePath, rebuildPrompt, restoreFolded, rollbackTo, editCompaction, dropCompaction, exportStory, importStory, forkChat } from './chats.mjs'
+import { chatSummary, chatView, createChat, selectNode, activePath, rebuildPrompt, restoreFolded, rollbackTo, editCompaction, dropCompaction, exportStory, importStory, importSillyTavern, forkChat } from './chats.mjs'
 import { editPreset, exportPreset, importOwnPreset, normalizePreset, presetDetail, presetSummary } from './presets.mjs'
 import { basicDetail } from './basic.mjs'
 import { appVersion, featuresOf } from './edition.mjs'
@@ -25,6 +25,7 @@ import { createLedger } from './usage.mjs'
 import { cleanMedia, createMedia } from './media.mjs'
 import { createAppearance } from './appearance.mjs'
 import { createRegex } from './regex.mjs'
+import { createScenes } from './scenes.mjs'
 import { KEYED as VOICE_KEYED } from './voice/index.mjs'
 import { createPromptLibrary } from './prompts.mjs'
 import { createForge } from './forge/index.mjs'
@@ -74,9 +75,20 @@ const STATIC = {
   '/shared/appearance.js': ['shared/appearance.js', 'text/javascript; charset=utf-8'],
   '/theme.js': ['theme.js', 'text/javascript; charset=utf-8'],
   '/regex.js': ['regex.js', 'text/javascript; charset=utf-8'],
+  '/vn.js': ['vn.js', 'text/javascript; charset=utf-8'],
+  '/shared/vn.js': ['shared/vn.js', 'text/javascript; charset=utf-8'],
+  '/shared/cutout.js': ['shared/cutout.js', 'text/javascript; charset=utf-8'],
+  '/whatsnew.js': ['whatsnew.js', 'text/javascript; charset=utf-8'],
+  '/shared/whatsnew.js': ['shared/whatsnew.js', 'text/javascript; charset=utf-8'],
   '/icon.png': ['icon.png', 'image/png'],
   '/favicon.ico': ['icon.ico', 'image/x-icon'],
+  // A phone's home screen (Safari「添加到主屏幕」, Android「安装应用」): see /manifest.webmanifest.
+  '/apple-touch-icon.png': ['apple-touch-icon.png', 'image/png'],
+  '/icon-192.png': ['icon-192.png', 'image/png'],
+  '/icon-512.png': ['icon-512.png', 'image/png'],
 }
+// Fetched by a phone without the access cookie (the icon is read before anyone logs in).
+const OPEN_FILES = new Set(['/icon.png', '/favicon.ico', '/apple-touch-icon.png', '/icon-192.png', '/icon-512.png', '/manifest.webmanifest'])
 const MAX_BODY = 40 * 1024 * 1024
 
 /** `<provider>/<model>` stays as it is; subscription aliases become catalog ids. */
@@ -166,6 +178,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
   const media = createMedia(store, { proxy: () => isolation.proxy, askInContext: engine.askInContext, features })
   const appearance = createAppearance(store)
   const regex = createRegex(store)
+  const scenes = createScenes(store, { media })
   const prompts = createPromptLibrary(store)
   const forge = createForge(store, { proxyNow: () => isolation.proxy, ledger, draw: (input, signal) => media.drawCardArt(input, signal) })
   // 设置 → 更多 → 更新. A restart after an update starts the server the way this one was started.
@@ -199,7 +212,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
   let idleTimer = null
   function armIdle() {
     clearTimeout(idleTimer)
-    if (!idleExitMs || !onShutdown || presence.size) return
+    // Open to phones (手机访问): a phone in the background drops its stream, and the server must stay up for it.
+    if (!idleExitMs || !onShutdown || presence.size || access.mode === 'lan') return
     idleTimer = setTimeout(() => {
       if (presence.size) return
       if (engine.busy() || forge.busy()) return armIdle()
@@ -352,6 +366,16 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       if (saved.proxy !== before) await network.apply(saved.proxy)
       return saved
     }],
+    // 场景图库 (scenes.mjs): a card's backgrounds for the visual novel mode; drawing is a slow call below.
+    ['GET', /^\/api\/cards\/([\w-]+)\/scenes$/, ([id]) => scenes.list(id)],
+    ['POST', /^\/api\/cards\/([\w-]+)\/scenes$/, ([id], body) => scenes.add(id, body ?? {})],
+    ['PUT', /^\/api\/cards\/([\w-]+)\/scenes\/([\w-]+)$/, ([id, sceneId], body) => scenes.update(id, sceneId, body ?? {})],
+    ['PUT', /^\/api\/cards\/([\w-]+)\/scenes\/([\w-]+)\/image$/, ([id, sceneId], body) => scenes.setImage(id, sceneId, body?.image)],
+    ['DELETE', /^\/api\/cards\/([\w-]+)\/scenes\/([\w-]+)$/, ([id, sceneId]) => scenes.remove(id, sceneId)],
+    // 立绘 (scenes.mjs): one picture per cast member; drawing is a slow call below.
+    ['GET', /^\/api\/cards\/([\w-]+)\/sprites$/, ([id]) => scenes.sprites(id)],
+    ['PUT', /^\/api\/cards\/([\w-]+)\/sprites\/([\w-]+)$/, ([id, entryId], body) => scenes.setSprite(id, entryId, body?.image)],
+    ['DELETE', /^\/api\/cards\/([\w-]+)\/sprites\/([\w-]+)$/, ([id, entryId]) => scenes.removeSprite(id, entryId)],
     // 正则管理 (regex.mjs): the global scripts, and the ones a card or a preset carries.
     ['GET', /^\/api\/regex$/, () => regex.list()],
     ['PUT', /^\/api\/regex$/, (_, body) => regex.save(body?.scripts)],
@@ -466,6 +490,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       await store.saveCard(card, avatar)
       if (previous) {
         await media.inheritCardMedia(previous.id, card.id)
+        await scenes.inherit(previous.id, card.id)
         return { ...cardSummary(card), inherited: previous.name }
       }
       return cardSummary(card)
@@ -633,6 +658,11 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       return { chat: chatView(chat), cardId: card.id, cardName: card.name, missingPreset }
     }],
     ['POST', /^\/api\/chats\/import$/, async (_, body) => chatView(await importStory(store, String(body.cardId ?? ''), body.archive))],
+    // A SillyTavern chat file (.jsonl, sent as text): every turn, under the chosen card (st-chat.mjs).
+    ['POST', /^\/api\/chats\/import-sillytavern$/, async (_, body) => {
+      const { chat, turns, chars, pendingInput } = await importSillyTavern(store, String(body.cardId ?? ''), { text: body.text, filename: typeof body.filename === 'string' ? body.filename : '' })
+      return { ...chatView(chat), imported: { turns, chars, pendingInput } }
+    }],
     ['DELETE', /^\/api\/chats\/([\w-]+)\/compaction$/, async ([id], _, url) => {
       if (engine.isRunning(id)) throw httpError(409, msg`正在生成，先停止`)
       const chat = await store.getChat(id)
@@ -694,7 +724,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       return false
     }
     if (!accessToken && (access.mode !== 'lan' || isLoopback(req.socket.remoteAddress))) return true
-    if (req.method === 'GET' && (url.pathname === '/icon.png' || url.pathname === '/favicon.ico')) return true
+    if (req.method === 'GET' && OPEN_FILES.has(url.pathname)) return true
     const token = accessToken ?? (await store.ensureAccessToken())
     const presented = readCookie(req.headers.cookie, 'tavern_key') || String(req.headers['x-agent-tavern-key'] ?? '')
     if (tokensEqual(presented, token)) return true
@@ -767,6 +797,56 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       } catch {
         return sendJson(res, 404, { error: msg`没有头像` })
       }
+    }
+
+    // The home-screen app. Asked for by a phone that has logged in, it starts with the access
+    // token, so the icon opens straight into the app even where it keeps cookies of its own (iOS).
+    if (req.method === 'GET' && url.pathname === '/manifest.webmanifest') {
+      const token = access.mode === 'lan' ? accessToken ?? (await store.ensureAccessToken()) : ''
+      const signedIn = Boolean(token) && tokensEqual(readCookie(req.headers.cookie, 'tavern_key'), token)
+      res.writeHead(200, { 'content-type': 'application/manifest+json; charset=utf-8', 'cache-control': 'no-store' })
+      return res.end(JSON.stringify({
+        name: features.appName,
+        short_name: features.appName,
+        start_url: signedIn ? `/#k=${encodeURIComponent(token)}` : '/',
+        scope: '/',
+        display: 'standalone',
+        background_color: '#eceeea',
+        theme_color: '#eceeea',
+        icons: [
+          { src: '/icon-192.png', sizes: '192x192', type: 'image/png' },
+          { src: '/icon-512.png', sizes: '512x512', type: 'image/png' },
+        ],
+      }))
+    }
+
+    const scenePicture = /^\/api\/scenes\/([\w-]+)\/([\w.-]+)$/.exec(url.pathname)
+    if (req.method === 'GET' && scenePicture) {
+      const found = await scenes.readPicture(scenePicture[1], scenePicture[2])
+      if (!found) return sendJson(res, 404, { error: msg`没有这张场景图` })
+      // A picture's name changes with the picture: it can stay cached.
+      res.writeHead(200, { 'content-type': found.type, 'cache-control': 'max-age=31536000, immutable' })
+      return res.end(found.data)
+    }
+    // 更新了什么 (web/whatsnew.js): the notes and their pictures, shipped in web/whatsnew/.
+    const whatsNew = /^\/whatsnew\/([\w.-]+\.(json|webp|png|jpg))$/.exec(url.pathname)
+    if (req.method === 'GET' && whatsNew) {
+      const type = { json: 'application/json; charset=utf-8', webp: 'image/webp', png: 'image/png', jpg: 'image/jpeg' }[whatsNew[2]]
+      try {
+        const data = await readFile(path.join(WEB_ROOT, 'whatsnew', whatsNew[1]))
+        // Notes change with each version; a picture's name carries its version.
+        res.writeHead(200, { 'content-type': type, 'cache-control': whatsNew[2] === 'json' ? 'no-cache' : 'max-age=31536000, immutable' })
+        return res.end(data)
+      } catch {
+        return sendJson(res, 404, { error: msg`没有这个文件` })
+      }
+    }
+    const spritePicture = /^\/api\/sprites\/([\w-]+)\/([\w.-]+)$/.exec(url.pathname)
+    if (req.method === 'GET' && spritePicture) {
+      const found = await scenes.readSprite(spritePicture[1], spritePicture[2])
+      if (!found) return sendJson(res, 404, { error: msg`没有这张立绘` })
+      res.writeHead(200, { 'content-type': found.type, 'cache-control': 'max-age=31536000, immutable' })
+      return res.end(found.data)
     }
 
     const backdrop = /^\/api\/appearance\/(backdrop-[\w.-]+)$/.exec(url.pathname)
@@ -867,6 +947,17 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       const source = typeof body.source === 'string' ? body.source : ''
       return sendJson(res, 200, await media.accountVoices({ source, media: body.media, keys: body.keys }, cancelOnClose()))
     }
+    const sceneDraw = /^\/api\/cards\/([\w-]+)\/scenes\/draw$/.exec(url.pathname)
+    if (req.method === 'POST' && sceneDraw) {
+      const body = await readBody(req)
+      const text = name => (typeof body[name] === 'string' ? body[name] : '')
+      return sendJson(res, 200, await scenes.draw(sceneDraw[1], { place: text('place'), sceneId: text('sceneId'), prompt: text('prompt'), rewrite: body.rewrite === true, passage: text('passage') }, cancelOnClose()))
+    }
+    const spriteDraw = /^\/api\/cards\/([\w-]+)\/sprites\/([\w-]+)\/draw$/.exec(url.pathname)
+    if (req.method === 'POST' && spriteDraw) {
+      await readBody(req)
+      return sendJson(res, 200, await scenes.drawSprite(spriteDraw[1], spriteDraw[2], cancelOnClose()))
+    }
     const imageRoute = /^\/api\/chats\/([\w-]+)\/nodes\/([\w-]+)\/(image-prompt|image)$/.exec(url.pathname)
     if (req.method === 'POST' && imageRoute) {
       const [, chatId, nodeId, kind] = imageRoute
@@ -957,7 +1048,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     network,
     updater,
     bound,
-    async listen({ port = 8791, listen } = {}) {
+    /** @param host - the address to bind instead of the mode's own (tests keep a LAN-mode server on loopback). */
+    async listen({ port = 8791, listen, host: bindHost } = {}) {
       await store.init()
       await backfillEntryPositions(store)
       if (subscription) await subscription.prepareStorage()
@@ -967,7 +1059,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       if (listen === 'lan' || listen === 'local') listenArg = listen
       const wanted = listen === 'lan' || listen === 'local' ? listen : settings.listen === 'lan' ? 'lan' : 'local'
       const mode = features.lan ? wanted : 'local'
-      const host = mode === 'lan' ? '0.0.0.0' : '127.0.0.1'
+      const host = bindHost ?? (mode === 'lan' ? '0.0.0.0' : '127.0.0.1')
       access = { mode, port, host }
       const server = createServer((req, res) => {
         handle(req, res).catch(error => {

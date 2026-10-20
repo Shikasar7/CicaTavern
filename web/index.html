@@ -5,10 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#eceeea">
   <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="CicaTavern">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <title>CicaTavern</title>
   <link rel="icon" href="/favicon.ico" sizes="any">
   <link rel="icon" href="/icon.png" type="image/png">
-  <link rel="apple-touch-icon" href="/icon.png">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <!-- With the cookie, so a phone that has logged in gets a start address that keeps it logged in. -->
+  <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600&display=swap">
@@ -30,7 +34,7 @@
     <aside class="pane left" id="left">
       <header class="brand">
         <img class="brand-mark" src="/icon.png" alt="" width="38" height="38">
-        <span class="brand-name">CicaTavern</span>
+        <span class="brand-line"><span class="brand-name">CicaTavern</span><button type="button" class="brand-version" id="whatsnew-open" title="这一版更新了什么" hidden></button></span>
         <span class="brand-sub">用自己的 API 游玩角色卡</span>
       </header>
       <label class="import" title="SillyTavern 角色卡（PNG/JSON）、世界书或预设（JSON），也可以直接把文件拖进窗口">
@@ -47,8 +51,8 @@
       <div class="section-title row">
         <span>对话</span>
         <span class="row-actions">
-          <label class="btn small ghost" id="import-story-label" title="导入剧情存档（.json，在这张角色卡下接着写）或对话包（.tavernchat，整段对话连同配图，自动放到同名角色卡下）；可以一次选多个" aria-disabled="true">
-            导入存档<input type="file" id="import-story" accept=".json,.tavernchat,application/json,application/octet-stream" multiple hidden disabled>
+          <label class="btn small ghost" id="import-story-label" title="导入剧情存档（.json，在这张角色卡下接着写）、对话包（.tavernchat，整段对话连同配图，自动放到同名角色卡下）或 SillyTavern 的对话记录（.jsonl，每一轮都导进来，放在这张角色卡下）；可以一次选多个" aria-disabled="true">
+            导入存档<input type="file" id="import-story" accept=".json,.jsonl,.tavernchat,application/json,application/octet-stream" multiple hidden disabled>
           </label>
           <button class="btn small" id="new-chat" disabled>新对话</button>
         </span>
@@ -73,6 +77,11 @@
         <button class="pill" id="compact-chat" title="把前面的剧情压缩成一份存档，之后在新的上下文里接着写" hidden>压缩<span class="wide-only">上下文</span></button>
         <select class="pill model-select" id="chat-model" title="这个对话用的模型（缓存按模型区分，切换后下一轮会重新写入缓存）" hidden></select>
         <div class="quota" id="quota" hidden></div>
+        <button class="vn-switch" id="vn-toggle" title="视觉小说模式：背景、立绘、一句一句地读（这张卡记住）" aria-pressed="false" hidden>
+          <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13" rx="2.5" /><path d="M2.5 12h15M5.5 14.3h6" /></svg>
+          <span class="vn-switch-label">视觉小说</span>
+          <span class="vn-switch-track" aria-hidden="true"><span></span></span>
+        </button>
         <button class="btn ghost icon" id="history-open" title="回看历史（Ctrl+K）" aria-label="回看历史" aria-controls="history" aria-expanded="false" hidden>
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 10a6.5 6.5 0 1 0 1.9-4.6M3.5 3.5v3h3" /><path d="M10 6.5V10l2.5 1.6" /></svg>
         </button>
@@ -98,6 +107,7 @@
             <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12m0 0-5-5m5 5 5-5" /></svg>
           </button>
         </div>
+        <div class="vn" id="vn" hidden></div>
         <section class="history" id="history" role="dialog" aria-label="回看历史" hidden>
           <div class="history-search">
             <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="5.5" /><path d="m13.2 13.2 3.3 3.3" /></svg>
@@ -120,11 +130,12 @@
       </div>
       <form class="composer" id="composer">
         <div class="player" id="player" role="status" hidden>
+          <span class="player-wave" aria-hidden="true"><i></i><i></i><i></i></span>
           <span class="player-count" id="player-count"></span>
           <span class="player-text" id="player-text"></span>
-          <button type="button" class="btn small ghost" id="player-redo" title="这一段丢掉缓存重新合成，接下来读的也都重新合成（合成得不好、换了音色时用）">重新合成</button>
-          <button type="button" class="btn small ghost" id="player-toggle">暂停</button>
-          <button type="button" class="btn small" id="player-stop">停止</button>
+          <button type="button" class="player-btn" id="player-redo" title="这一段丢掉缓存重新合成，接下来读的也都重新合成（合成得不好、换了音色时用）" aria-label="重新合成">⟳</button>
+          <button type="button" class="player-btn" id="player-toggle" title="暂停">❚❚</button>
+          <button type="button" class="player-btn" id="player-stop" title="停止" aria-label="停止">■</button>
         </div>
         <div class="branch-note" id="branch-note" hidden></div>
         <div class="composer-box">
@@ -266,6 +277,7 @@
           </select>
         </label>
         <div id="access-links" class="access-links muted small"></div>
+        <p class="hint">iPhone：用 Safari 打开上面的链接，点底部的「分享」→「添加到主屏幕」，以后从主屏幕的图标直接进，全屏显示。安卓用 Chrome 打开，菜单里选「添加到主屏幕」。电脑要开着酒馆。</p>
         <p class="hint">改完要重启服务。不要把端口映射到公网：拿到链接的人能用你的模型额度。出门时在电脑和手机都装 Tailscale，用这里的 Tailscale 地址打开。手机打不开时，在 Windows 防火墙里允许 Node.js 入站。</p>
       </div>
       <div data-section="privacy">

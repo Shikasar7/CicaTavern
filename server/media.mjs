@@ -272,6 +272,68 @@ export function withStyle(prompt, style, promptStyle) {
   return lines.join('\n')
 }
 
+// ─── Scenery (视觉小说模式 backgrounds, server/scenes.mjs) ────────────────
+
+export const SCENERY_NEGATIVE = 'people, person, 1girl, 1boy, character, crowd, text, watermark'
+
+/**
+ * The helper's request for a place's background: the place, what the card's
+ * worldbook says about it, the card's setting and art style. Empty of people;
+ * neutral daylight (the page lays the time of day and the weather over it).
+ */
+/**
+ * @param passage - 画这一轮的场景: the reply the background is for. The place is
+ *   then where it happens, as it looks in it (light, weather, objects), and the
+ *   answer starts with a PLACE: line naming it (readSceneryAnswer).
+ */
+export function sceneryPromptRequest({ place, lore = '', setting = '', style = '', promptStyle = 'natural', passage = '' }) {
+  const tags = promptStyle === 'tags'
+  const format = tags
+    ? 'Format: 25-50 comma-separated English tags starting with "scenery, no humans": the place, its architecture and objects, era and culture, lighting, camera. No sentences.'
+    : 'Format: one English paragraph of 30-70 words describing the empty place: architecture, objects, era and culture, lighting, a wide eye-level view. End with "No people."'
+  const task = passage
+    ? [
+        'TASK: write an image-generation prompt for a visual novel background of where the story in <passage> takes place, as it looks there and then. Do not write story text.',
+        'The place is empty: leave out every person and animal in the passage, and any text or writing on signs. Keep the objects, light, time of day and weather it describes.',
+        'A wide establishing shot at eye level.',
+        'Match the era and culture of <setting>.',
+        format,
+        `First line: PLACE: the place's short name in the passage's language (at most 12 characters${place ? `; "${String(place).replace(/"/g, '')}" if it fits` : ''}). Then the prompt on the next line, in English. Nothing else.`,
+      ].join('\n')
+    : [
+        'TASK: write an image-generation prompt for a visual novel background of the place in <place>. Do not write story text, no Chinese.',
+        'The place is empty: no people, no animals, no text or writing on signs.',
+        'A wide establishing shot at eye level in neutral daylight with no particular weather (time of day and weather are added separately).',
+        'Match the era and culture of <setting>.',
+        format,
+        'Reply with the prompt only.',
+      ].join('\n')
+  const name = String(place ?? '').replace(/"/g, '')
+  const content = [
+    name || lore ? `<place name="${name}">${lore ? `\n${clip(lore, 1200)}\n` : ''}</place>` : '',
+    passage ? `<passage>\n${clip(passage, 3000)}\n</passage>` : '',
+    setting ? `<setting>\n${clip(setting, 500)}\n</setting>` : '',
+    style ? `<art_style>${style}</art_style>` : '',
+    task,
+  ].filter(Boolean).join('\n\n')
+  return { system: `You write prompts for an image generator. You never write story text.\n${format}`, messages: [{ role: 'user', content }], maxTokens: PROMPT_MAX_TOKENS + 40 }
+}
+
+/** A passage scenery answer → { place, prompt }: the PLACE: line, then the prompt. */
+export function readSceneryAnswer(text) {
+  const value = String(text ?? '').replace(/<think>[\s\S]*?<\/think>/gi, '')
+  const line = /^\s*\**\s*(?:PLACE|地点)\s*\**\s*[:：]\s*(.+)$/im.exec(value)
+  const place = line ? line[1].replace(/[*"「」“”]/g, '').trim().slice(0, 40) : ''
+  return { place, prompt: line ? value.slice(0, line.index) + value.slice(line.index + line[0].length) : value }
+}
+
+/** A scenery prompt that says, in its own style, that nobody is in the picture. */
+export function ensureScenery(prompt, promptStyle = 'natural') {
+  const text = String(prompt ?? '').trim()
+  if (promptStyle === 'tags') return ['scenery', 'no humans', ...text.split(/\s*,\s*/).filter(tag => tag && !/^(scenery|no humans)$/i.test(tag))].join(', ')
+  return /no (people|humans|one)/i.test(text) ? text : `${text} No people.`.trim()
+}
+
 /**
  * Strip quotes, labels, code fences and thinking a model may wrap the prompt
  * in, keep the first paragraph, and cut a rambling answer at a word limit.
@@ -360,6 +422,9 @@ export function checkWorkflow(json) {
 
 // A cast member's reference picture: one person, nothing else to copy from it.
 const PORTRAIT_SCENE = 'solo, upper body, looking at viewer, simple background, white background'
+// 立绘 for the visual novel mode: the page cuts the white out, so nothing may touch the edges but the body.
+const SPRITE_SCENE = 'solo, upper body, cowboy shot, looking at viewer, standing, simple background, white background, full color'
+const SPRITE_NEGATIVE = 'multiple views, text, scenery, detailed background, gradient background, frame, border, nsfw'
 
 // ─── NovelAI ────────────────────────────────────────────────────────────
 
@@ -680,13 +745,14 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     }
   }
 
-  async function comfyImage(media, prompt, cardId, signal, cast = null) {
+  /** @param options.scenery - a background (scenes.mjs): no LoRA, no trigger word, a negative prompt that keeps people out. */
+  async function comfyImage(media, prompt, cardId, signal, cast = null, { scenery = false } = {}) {
     const imported = await loadWorkflow()
     if (!imported) throw httpError(400, msg`还没导入 ComfyUI 工作流：在「配图与朗读」里导入「导出（API）」的 JSON`)
     // No card yet (a card being created): no card LoRA.
     const cardMedia = cardId ? cleanCardMedia((await store.getCard(cardId)).media) : DEFAULT_CARD_MEDIA
     // Several LoRAs in one picture bleed into each other: a named cast uses only a lone member's own.
-    const owner = cast ? (cast.solo?.lora ? cast.solo : null) : cardMedia.lora ? cardMedia : null
+    const owner = scenery ? null : cast ? (cast.solo?.lora ? cast.solo : null) : cardMedia.lora ? cardMedia : null
     const workflow = owner ? withLora(imported, { name: owner.lora, strength: owner.loraStrength }) : imported
     if (owner) prompt = withTrigger(prompt, owner.loraTrigger)
     const base = media.comfyUrl
@@ -699,7 +765,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
       const upload = await postMultipart(`${base}/upload/image`, multipart({ image: { buffer: avatar, filename: `tavern-${cardId}.png`, type: 'image/png' }, overwrite: 'true' }), signal)
       reference = JSON.parse(upload.toString('utf8')).name
     }
-    const filled = fillWorkflow(workflow, { prompt, negative: '', seed: randomInt(1, 2 ** 31), width, height, reference })
+    const filled = fillWorkflow(workflow, { prompt, negative: scenery ? SCENERY_NEGATIVE : '', seed: randomInt(1, 2 ** 31), width, height, reference })
     let queued
     try {
       queued = JSON.parse((await postJson(`${base}/prompt`, { prompt: filled, client_id: 'agent-tavern' }, { signal })).buffer.toString('utf8'))
@@ -1003,13 +1069,32 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     return { file, prompt: text, backend, at: new Date().toISOString(), ...(note ? { note } : {}) }
   }
 
-  /** One picture from whichever backend is chosen. */
-  async function render(media, cardId, frame, cast, text, signal) {
+  /**
+   * One picture from whichever backend is chosen.
+   * @param options.scenery - a background with nobody in it (comfyImage).
+   */
+  // NovelAI draws one picture at a time per account: a second request while one runs is refused.
+  let naiTail = Promise.resolve()
+  function naiAlone(fn) {
+    const run = naiTail.then(fn, fn)
+    naiTail = run.catch(() => {})
+    return run
+  }
+
+  async function render(media, cardId, frame, cast, text, signal, { scenery = false } = {}) {
     // Backends without per-character prompts get the cast written out in one prompt.
     const flat = cast ? flattenFrame(cast, media.promptStyle) : frame ? frame.scene : text
-    if (media.imageBackend === 'comfy') return { buffer: await comfyImage(media, flat, cardId, signal, cast), note: '', backend: 'ComfyUI' }
+    if (media.imageBackend === 'comfy') {
+      const buffer = await comfyImage(media, flat, cardId, signal, cast, { scenery })
+      // A workflow built around a reference picture puts the card's picture into the background too.
+      const referenced = scenery && describeWorkflow(await loadWorkflow().catch(() => null))?.placeholders.includes('reference')
+      return { buffer, note: referenced ? msg`这个 ComfyUI 工作流要参考图，背景里可能会出现人物` : '', backend: 'ComfyUI' }
+    }
     if (media.imageBackend === 'novelai') {
-      const { buffer, label, note } = await naiImage(media, flat, signal, cast, cardId)
+      const { buffer, label, note } = await naiAlone(() => {
+        if (signal?.aborted) throw new Error('aborted')
+        return naiImage(media, flat, signal, cast, cardId)
+      })
       return { buffer, note, backend: label }
     }
     const { buffer, note } = await openaiImage(media, flat, cardId, signal, cast)
@@ -1034,6 +1119,22 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
   }
 
   /**
+   * A 立绘 for the visual novel mode: one cast member, half-body, on white,
+   * with their reference picture as configured (so it stays the same face).
+   * → { buffer, backend, note }
+   */
+  async function drawSprite(cardId, entryId, signal) {
+    const { roster } = cleanCardMedia((await store.getCard(cardId)).media)
+    const entry = roster.find(item => item.id === entryId)
+    if (!entry) throw httpError(404, msg`名单里没有这个角色`)
+    if (!entry.looks) throw httpError(400, msg`先在「配图 → 角色名单」里写${entry.name}的长相，再画立绘`)
+    const media = await settings()
+    const cast = { scene: SPRITE_SCENE, characters: [{ entry, action: [entry.outfit, 'standing'].filter(Boolean).join(', '), position: '' }], solo: entry, lead: entry }
+    const plain = { ...media, imageShape: 'portrait', naiNegative: [media.naiNegative, SPRITE_NEGATIVE].filter(Boolean).join(', ') }
+    return render(plain, cardId, cast, cast, '', signal)
+  }
+
+  /**
    * A picture of one character for a card that does not exist yet (创作角色卡):
    * looks and outfit as a cast member, the scene as given (else a plain upper
    * body). No references, no card LoRA. Returns { buffer, backend }.
@@ -1046,6 +1147,51 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     const cast = { scene, characters: [{ entry, action: [entry.outfit, 'looking at viewer'].filter(Boolean).join(', '), position: '' }], solo: entry, lead: entry }
     const plain = { ...media, imageShape: 'portrait', naiReference: false, imageReference: false, naiNegative: [media.naiNegative, 'nsfw, multiple views, text'].filter(Boolean).join(', ') }
     return render(plain, null, cast, cast, '', signal)
+  }
+
+  /**
+   * A background for a place (scenes.mjs): the helper writes the prompt from the
+   * place, its worldbook text, the card's setting and style; landscape, no
+   * reference pictures, no LoRA. Without a helper, a plain prompt for sentence
+   * style; tag style needs one. → { buffer, prompt, backend, note }
+   */
+  async function drawScenery({ cardId, place, lore = '', prompt = '', passage = '' }, signal) {
+    const media = await settings()
+    const card = await store.getCard(cardId)
+    const cardMedia = cleanCardMedia(card.media)
+    let text = String(prompt ?? '').trim()
+    let named = ''
+    if (!text) {
+      let target = null
+      try {
+        target = await helperTarget({ model: '' }, media)
+      } catch (error) {
+        if (media.promptStyle === 'tags') throw error
+      }
+      if (target) {
+        const { provider, modelId } = target
+        const request = sceneryPromptRequest({ place, lore, passage, setting: card.scenario, style: cardMedia.style, promptStyle: media.promptStyle })
+        let result
+        try {
+          result = await complete(provider, modelId, { ...request, signal }, { proxy: proxyNow() })
+        } catch (error) {
+          if (error.status) throw error
+          throw httpError(502, providerError(provider, error))
+        }
+        const answer = passage ? readSceneryAnswer(result.text) : { place: '', prompt: result.text }
+        named = answer.place
+        text = cleanPrompt(answer.prompt, media.promptStyle)
+        if (!text) throw httpError(502, msg`${provider.name} · ${modelId} 没有写出场景提示词`)
+      } else if (passage && !place) {
+        throw httpError(400, msg`按这一轮画场景要辅助模型读回复：在「配图与朗读」里选一个辅助模型`)
+      } else {
+        text = `A visual novel background of ${place}: the empty place, a wide eye-level view, soft natural light.`
+      }
+      text = withStyle(ensureScenery(text, media.promptStyle), cardMedia.style, media.promptStyle)
+    }
+    const plain = { ...media, imageShape: 'landscape', imageReference: false, naiReference: false, naiNegative: [media.naiNegative, SCENERY_NEGATIVE].filter(Boolean).join(', ') }
+    const { buffer, note, backend } = await render(plain, cardId, null, null, text, signal, { scenery: true })
+    return { buffer, prompt: text, backend, note, place: named }
   }
 
   async function readImage(chatId, file) {
@@ -1110,5 +1256,5 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     return voices.accountVoices({ source, draft: await voiceDraft(draft, keys) }, signal)
   }
 
-  return { defaults, settings, naiStatus, setNaiToken, naiCheck, cardMediaView, saveCardMedia, inheritCardMedia, draftRoster, drawPortrait, drawCardArt, readRosterRef, saveRosterRef, removeRosterRef, writeImagePrompt, generateImage, readImage, removeImage, removeChatMedia, copyChatMedia, loras, voices: voices.list, personaList: voices.personaList, ttsKeyStatus: voices.ttsKeyStatus, setTtsKey: voices.setTtsKey, voiceKeys: voices.keyStatus, setVoiceKey: voices.setKey, speak, previewVoice, accountVoices, loadWorkflow, saveWorkflow, describeWorkflow }
+  return { defaults, settings, naiStatus, setNaiToken, naiCheck, cardMediaView, saveCardMedia, inheritCardMedia, draftRoster, drawPortrait, drawCardArt, drawScenery, drawSprite, readRosterRef, saveRosterRef, removeRosterRef, writeImagePrompt, generateImage, readImage, removeImage, removeChatMedia, copyChatMedia, loras, voices: voices.list, personaList: voices.personaList, ttsKeyStatus: voices.ttsKeyStatus, setTtsKey: voices.setTtsKey, voiceKeys: voices.keyStatus, setVoiceKey: voices.setKey, speak, previewVoice, accountVoices, loadWorkflow, saveWorkflow, describeWorkflow }
 }

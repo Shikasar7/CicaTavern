@@ -24,6 +24,8 @@ const PRESET_BLOCK = /\n*<预设指令>\n[\s\S]*?\n<\/预设指令>/
 // Output tokens a story turn may ask for at most (presets often say 65535): enough for any
 // reply with its thinking and status blocks, and within what current Claude models accept.
 const MAX_REPLY_TOKENS = 32000
+// An imported chat's history is summarised in parts of about this many characters (well inside 200k tokens).
+const IMPORTED_PART_CHARS = 120000
 
 /** A failure without a status in words that say what to do (the backend words its own). */
 function friendlyError(message, subscription) {
@@ -205,7 +207,13 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
    * then archived on top of it (halving again as often as needed).
    * @param carry - an archive of what came before `history`, or ''
    */
-  async function summarizeInParts(target, chat, history, signal, carry = '', depth = 0) {
+  /**
+   * The archive of `history`, in parts when it does not fit: each part's archive
+   * is carried into the next. A history longer than `maxChars` is cut before it
+   * is sent (an imported one has no cache to read from, and a refused request
+   * would only be sent again in halves).
+   */
+  async function summarizeInParts(target, chat, history, signal, carry = '', depth = 0, { maxChars = Infinity } = {}) {
     const instruction = { role: 'user', content: summaryInstruction(chat.names) }
     const lead = carry
       ? [
@@ -213,20 +221,24 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
           { role: 'assistant', content: '（已读前情。）' },
         ]
       : []
-    try {
-      return await generateApi(target, { system: chat.systemPrompt, messages: [...lead, ...history, instruction] }, signal, () => {})
-    } catch (error) {
-      if (!CONTEXT_FULL.test(error.message) || history.length < 4 || depth >= 4) throw error
+    const size = history.reduce((sum, message) => sum + String(message.content ?? '').length, 0)
+    const tooLong = size > maxChars && history.length >= 4 && depth < 8
+    if (!tooLong) {
+      try {
+        return await generateApi(target, { system: chat.systemPrompt, messages: [...lead, ...history, instruction] }, signal, () => {})
+      } catch (error) {
+        if (!CONTEXT_FULL.test(error.message) || history.length < 4 || depth >= 4) throw error
+      }
     }
     // Cut at a user message near the middle: each part reads as a conversation of its own.
     let cut = Math.floor(history.length / 2)
     while (cut < history.length && history[cut].role !== 'user') cut++
     if (cut >= history.length) cut = history.length - 2
     const plain = history.map(({ role, content }) => ({ role, content }))
-    const older = await summarizeInParts(target, chat, plain.slice(0, cut), signal, carry, depth + 1)
+    const older = await summarizeInParts(target, chat, plain.slice(0, cut), signal, carry, depth + 1, { maxChars })
     const archive = extractSummary(older.reply)
     if (archive.length < 200) throw httpError(502, msg`前半段的剧情存档没有写完整，这次没有压缩，可以再试一次`)
-    const newer = await summarizeInParts(target, chat, plain.slice(cut), signal, archive, depth + 1)
+    const newer = await summarizeInParts(target, chat, plain.slice(cut), signal, archive, depth + 1, { maxChars })
     const tokens = Object.fromEntries(Object.entries(newer.tokens).map(([key, value]) => [key, typeof value === 'number' ? value + (older.tokens[key] ?? 0) : value]))
     return { ...newer, tokens }
   }
@@ -404,7 +416,9 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     }
     if (tip.sdk && subscription && settings.subscription !== 'off') return subscription.target(tip.model || modelFor(chat, settings))
     const current = await targetFor(modelFor(chat, settings), settings)
-    if (!current.api && !tip.sdk) throw httpError(400, msg`这段剧情是用自定义供应商写的，订阅模型读不到它的上下文：选一个供应商的模型再压缩`)
+    if (!current.api && !tip.sdk) {
+      throw httpError(400, tip.imported ? msg`导入的剧情要用供应商的模型来压缩（订阅模型读不到它）：在顶栏选一个供应商的模型再压缩` : msg`这段剧情是用自定义供应商写的，订阅模型读不到它的上下文：选一个供应商的模型再压缩`)
+    }
     return current
   }
 
@@ -422,14 +436,14 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       const chat = await store.getChat(chatId)
       const path = activePath(chat)
       const tip = path.at(-1)
-      if (tip.role !== 'assistant' || (!tip.sdk && !tip.api)) throw httpError(400, msg`还没有可以压缩的剧情`)
+      if (tip.role !== 'assistant' || (!tip.sdk && !tip.api && !tip.imported)) throw httpError(400, msg`还没有可以压缩的剧情`)
       if (turnsSinceCompaction(path) < MIN_TURNS) throw httpError(400, msg`上次压缩之后不到 ${MIN_TURNS} 轮，不用再压缩`)
       const settings = await store.getSettings()
       const target = await compactionTarget(chat, tip, settings)
       const started = Date.now()
       let used
       if (target.api) {
-        used = await summarizeInParts(target, chat, await apiMessages(chat, tip), abortController.signal)
+        used = await summarizeInParts(target, chat, await apiMessages(chat, tip), abortController.signal, '', 0, { maxChars: tip.imported ? IMPORTED_PART_CHARS : Infinity })
       } else {
         used = await subscription.compact({ chat, tip, settings, abortController, model: target.model })
       }

@@ -10,6 +10,7 @@ import { httpError, newId } from './store.mjs'
 import { MIN_TURNS, RECENT_TURNS, STORY_FORMAT, storyPath, storyTurns, turnsSinceCompaction } from './recap.mjs'
 import { msg } from './i18n.mjs'
 import { BASIC_ID, basicPreset } from './basic.mjs'
+import { readSillyTavernChat } from './st-chat.mjs'
 
 export async function booksForCard(store, card) {
   const books = card.book ? [{ ...card.book, id: `card-${card.id}` }] : []
@@ -106,13 +107,14 @@ export function greetingState(state, greeting) {
 /**
  * A new chat for `cardId` whose root is what `makeRoot({ card, names, state })`
  * returns: { text, state, compaction?, title? }. `state` is the card's initial one.
+ * @param options.userName - the player's name in this chat, instead of the card's or the persona's.
  */
-async function startChat(store, cardId, makeRoot) {
+async function startChat(store, cardId, makeRoot, { userName = '' } = {}) {
   const card = await store.getCard(cardId)
   const [persona, settings] = await Promise.all([store.getPersona(), store.getSettings()])
   const preset = await presetFor(store, settings.presetId)
   const books = await booksForCard(store, card)
-  const player = playerOf(card, persona)
+  const player = userName ? playerOf(card, persona, userName) : playerOf(card, persona)
   const names = { char: card.name, user: player.name }
   const root = makeRoot({ card, names, state: initialState(books) })
   const now = new Date().toISOString()
@@ -235,6 +237,62 @@ export async function importStory(store, cardId, archive) {
       recent: story.recent.slice(0, -1),
     },
   }))
+}
+
+// SillyTavern's default player names: the persona here names the player instead.
+const DEFAULT_USER = /^(user|you|你)$/i
+
+/**
+ * A new chat for `cardId` from a SillyTavern chat file (st-chat.mjs): every
+ * turn on one path, a reply's swipes as its other versions, each reply's
+ * variables as SillyTavern kept them (else replayed from its update blocks).
+ * Nodes are marked `imported`; nothing here wrote them, so a long chat is
+ * compacted before it continues (engine.compactChat).
+ * A last player message with no reply comes back as `pendingInput`.
+ * @returns {{ chat, turns, chars, pendingInput }}
+ */
+export async function importSillyTavern(store, cardId, { text, filename = '' } = {}) {
+  const st = readSillyTavernChat(text)
+  const messages = [...st.messages]
+  const opening = messages[0].role === 'assistant' ? messages.shift() : null
+  const pendingInput = messages.at(-1)?.role === 'user' ? messages.pop().versions[0].text : ''
+  const title = String(filename).replace(/\.jsonl$/i, '').trim().slice(0, 60)
+  let base = {}
+  const chat = await startChat(
+    store,
+    cardId,
+    ({ card, state }) => {
+      base = state
+      const first = opening?.versions[opening.selected] ?? { text: '', state: null }
+      return { text: first.text, state: first.state ? mergeState(state, first.state) : greetingState(state, first.text), title: msg`${title || card.name}（导入）` }
+    },
+    { userName: DEFAULT_USER.test(st.userName) ? '' : st.userName },
+  )
+  const now = new Date().toISOString()
+  const root = chat.nodes.root
+  root.imported = 'sillytavern'
+  let parent = root
+  let chars = root.text.length
+  for (let i = 0; i < messages.length; i += 2) {
+    const said = messages[i].versions[0]
+    const reply = messages[i + 1]
+    const user = { id: newId(), parent: parent.id, role: 'user', text: said.text, prompt: said.text, injected: [], injectedTitles: [], templateErrors: [], sel: null, createdAt: said.at ?? now, imported: true }
+    chat.nodes[user.id] = user
+    parent.sel = user.id
+    chars += said.text.length
+    let chosen = null
+    reply.versions.forEach((version, index) => {
+      const { state, changes } = version.state ? { state: mergeState(base, version.state), changes: [] } : applyStateUpdates(parent.state, version.text)
+      const node = { id: newId(), parent: user.id, role: 'assistant', text: version.text, display: displayText(version.text), state, stateChanges: changes, sdk: null, model: null, sel: null, createdAt: version.at ?? now, imported: true }
+      chat.nodes[node.id] = node
+      if (index === reply.selected) chosen = node
+    })
+    chars += chosen.text.length
+    user.sel = chosen.id
+    parent = chosen
+  }
+  chat.updatedAt = now
+  return { chat: await store.saveChat(chat), turns: messages.length / 2, chars, pendingInput }
 }
 
 /**
@@ -430,6 +488,8 @@ export function chatView(chat) {
       stateChanges: node.stateChanges ?? undefined,
       compaction: node.compaction ? compactionView(chat, node) : undefined,
       media: node.media?.images?.length ? node.media : undefined,
+      // Brought in from SillyTavern (importSillyTavern): no model of ours wrote it.
+      imported: node.imported || undefined,
       createdAt: node.createdAt,
     }
   })
@@ -450,7 +510,7 @@ export function chatView(chat) {
     path,
     folded: foldedTurns(chat),
     // Turns a manual compaction would fold into a summary; 0 when there is nothing worth it.
-    compactable: tip.role === 'assistant' && (tip.sdk || tip.api) && sinceCompaction >= MIN_TURNS ? sinceCompaction : 0,
+    compactable: tip.role === 'assistant' && (tip.sdk || tip.api || tip.imported) && sinceCompaction >= MIN_TURNS ? sinceCompaction : 0,
     state: lastAssistant?.state ?? {},
     systemPromptChars: chat.systemPrompt.length,
   }

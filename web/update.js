@@ -77,7 +77,7 @@ function notesView(el, markdown) {
  * @param onChange - after the state changes (the settings menu redraws its row).
  * @param isGenerating - true while the open chat is writing.
  */
-export function initUpdate({ api, el, toast, guard, onChange = () => {}, isGenerating = () => false }) {
+export function initUpdate({ api, el, toast, guard, onChange = () => {}, isGenerating = () => false, openNotes = null }) {
   let info = null
   let installs = null
   let poll = null
@@ -281,6 +281,7 @@ export function initUpdate({ api, el, toast, guard, onChange = () => {}, isGener
         el('div', {}, [
           el('div', { class: 'upd-current', text: t`现在的版本 ${info.version}` }),
           info.root ? el('div', { class: 'muted small upd-path', text: info.root }) : null,
+          openNotes ? el('button', { type: 'button', class: 'btn ghost small upd-notes', text: t`这一版更新了什么`, onclick: openNotes }) : null,
         ]),
         el('button', { type: 'button', class: 'btn small upd-check', text: checking ? t`正在检查…` : t`检查更新`, disabled: checking, onclick: check }),
       ]),

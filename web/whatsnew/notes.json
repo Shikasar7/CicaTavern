@@ -1,0 +1,76 @@
+{
+  "versions": [
+    {
+      "version": "1.8.0",
+      "date": "2026-10",
+      "items": [
+        {
+          "image": "1.8.0-vn.webp",
+          "zh": {
+            "title": "视觉小说模式",
+            "text": "点顶栏的「视觉小说」，最新一条回复就变成游戏画面：场景做背景，说话的人站在前面，名字栏、打字机，一句一句往下读。\n开关按角色卡记住；发给模型的内容一字不改，缓存不受影响。"
+          },
+          "en": {
+            "title": "Visual novel mode",
+            "text": "Switch on Visual novel in the top bar and the latest reply plays like a game: the scene behind, whoever speaks in front, a name plate and typewriter text, one line at a time.\nRemembered per card; what the model is sent never changes, so the cache is untouched."
+          }
+        },
+        {
+          "image": "1.8.0-sprites.webp",
+          "zh": {
+            "title": "每个人都有立绘",
+            "text": "谁说话谁站出来，旁白时退下。配图名单里白底的人设图自动抠图、描白边；没有能用的就按长相画一张半身立绘。\n说话人自动认出来——连「她说」「掌柜的愣了一下」这种也认得；名字栏按人分颜色，对白和旁白分开上色。"
+          },
+          "en": {
+            "title": "A sprite for everyone",
+            "text": "Whoever speaks steps forward; during narration they step back. White-background reference pictures in the cast list are cut out and outlined; anyone without one gets a half-body sprite drawn from their looks.\nSpeakers are told even from \"she said\" or a nameless innkeeper; each name plate has its own colour, and dialogue is coloured apart from narration."
+          }
+        },
+        {
+          "image": "1.8.0-scenes.webp",
+          "zh": {
+            "title": "场景图",
+            "text": "故事到了新地点，自动画一张没有人物的场景当背景，存在这张卡下面，下次到同一个地方直接用。也可以「画这一轮的场景」，按这一轮写的样子画。\n傍晚、夜里、雨、雪用色调和动画表现，不用重画。"
+          },
+          "en": {
+            "title": "Scenes",
+            "text": "When the story reaches a new place, an empty scene is drawn for it as the background, kept with the card and reused whenever the story returns. Or draw this turn's scene, as the reply describes it.\nDusk, night, rain and snow are tints and animations over it, not new pictures."
+          }
+        },
+        {
+          "image": "1.8.0-menu.webp",
+          "zh": {
+            "title": "像游戏一样选",
+            "text": "读到最后，行动选项在画面中央弹出来，按 1–4 直接选，✎ 先改再发，也可以自己写。\n还有回看、自动、跳过、全屏（F）、逐句朗读，一条回复中途换地点时背景也跟着换。"
+          },
+          "en": {
+            "title": "Choose like in a game",
+            "text": "At the end of a reply the choices open in the middle of the picture: press 1–4 to pick, ✎ to edit one first, or write your own.\nAlso: backlog, auto, skip, full screen (F), line-by-line reading, and the background follows the story when it moves on halfway through a reply."
+          }
+        },
+        {
+          "icon": "📥",
+          "zh": {
+            "title": "导入 SillyTavern 的对话",
+            "text": "把 SillyTavern 的对话记录（.jsonl）拖进窗口，或者在角色卡下点「导入存档」：每一轮、每个 swipe、MVU 变量都带过来。\n很长的对话可以先压缩成剧情存档，之后只发存档和最近两轮，原文都还在。"
+          },
+          "en": {
+            "title": "Import SillyTavern chats",
+            "text": "Drop a SillyTavern chat (.jsonl) into the window, or use Import archive under a card: every turn, every swipe and the MVU variables come with it.\nA long one can be compacted into a story archive first, so each turn sends only the archive and the last two turns; the full text stays."
+          }
+        },
+        {
+          "icon": "📱",
+          "zh": {
+            "title": "手机添加到主屏幕",
+            "text": "开着「手机访问」时，iPhone 用 Safari、安卓用 Chrome 打开链接，添加到主屏幕后像 App 一样全屏打开，不用再输口令。\n朗读的控制条也变成了输入框上方的小胶囊，不再挡住输入框。"
+          },
+          "en": {
+            "title": "On your phone's home screen",
+            "text": "With phone access on, open the link in Safari (iPhone) or Chrome (Android) and add it to the home screen: it opens full screen like an app, no key to type again.\nThe read-aloud controls are now a small pill above the input instead of a bar over it."
+          }
+        }
+      ]
+    }
+  ]
+}

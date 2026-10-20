@@ -214,6 +214,16 @@ svg { flex: none; }
 .brand { padding: 22px 20px 14px; display: grid; grid-template-columns: auto 1fr; column-gap: 11px; row-gap: 2px; align-items: center; }
 .brand-mark { grid-row: span 2; width: 38px; height: 38px; display: block; }
 .brand-name { font: 600 20px/1.2 var(--serif); letter-spacing: .04em; }
+.brand-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
+/* The version: opens 更新了什么 (web/whatsnew.js); a dot while this version's notes are unread. */
+.brand-version {
+  position: relative; flex: none; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line-soft); background: var(--surface);
+  font: 11px/1.6 var(--mono); color: var(--muted); cursor: pointer; transition: color .15s, border-color .15s;
+}
+.brand-version[hidden] { display: none; }
+.brand-version:hover { color: var(--accent); border-color: var(--accent); }
+.brand-version.unread { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
+.brand-version.unread::after { content: ""; position: absolute; top: -2px; right: -2px; width: 7px; height: 7px; border-radius: 50%; background: var(--lamp); box-shadow: 0 0 0 2px var(--pane, var(--bg)); }
 .brand-sub { font-size: 12px; color: var(--muted); }
 
 .import {
@@ -740,12 +750,37 @@ button.chip.on { background: var(--accent); border-color: var(--accent); color: 
 .media-tools { display: inline-flex; gap: 0; }
 .msg-tools button.on { color: var(--accent); background: var(--accent-soft); }
 .msg.speaking .msg-head .name::after { content: "  正在朗读"; font: 12px var(--ui); color: var(--faint); letter-spacing: 0; }
+/* Reading aloud: a small pill floating over the input's top right, taking no room; the line shows on hover. */
 .player {
-  width: 100%; max-width: calc(var(--read) + 48px); margin: 0 auto; display: flex; align-items: center; gap: 10px;
-  padding: 6px 8px 6px 16px; border-radius: 14px; background: var(--surface); border: 1px solid var(--line-soft); box-shadow: var(--shadow-1);
+  position: absolute; z-index: 3; right: max(24px, calc((100% - var(--read) - 48px) / 2)); bottom: calc(100% + 6px);
+  display: flex; align-items: center; gap: 4px; max-width: min(460px, calc(100% - 48px));
+  padding: 3px 4px 3px 11px; border-radius: 999px; border: 1px solid var(--line-soft); box-shadow: var(--shadow-2);
+  background: color-mix(in srgb, var(--raised) 92%, transparent); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  animation: rise .2s var(--ease);
 }
-.player-count { font: 12px var(--mono); color: var(--accent); flex: none; }
-.player-text { flex: 1; min-width: 0; font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.player[hidden] { display: none; }
+.player-wave { display: inline-flex; align-items: flex-end; gap: 2px; width: 13px; height: 12px; flex: none; margin-right: 2px; }
+.player-wave i { flex: 1; height: 100%; border-radius: 2px; background: var(--lamp); transform-origin: bottom; transform: scaleY(.4); }
+.player[data-state="playing"] .player-wave i { animation: player-wave .9s ease-in-out infinite; }
+.player-wave i:nth-child(2) { animation-delay: -.3s !important; }
+.player-wave i:nth-child(3) { animation-delay: -.6s !important; }
+.player[data-state="loading"] .player-wave i { animation: player-wait 1s ease-in-out infinite; }
+@keyframes player-wave { 0%, 100% { transform: scaleY(.3); } 50% { transform: scaleY(1); } }
+@keyframes player-wait { 0%, 100% { transform: scaleY(.25); opacity: .35; } 50% { transform: scaleY(.25); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .player-wave i { animation: none !important; } }
+.player-count { font: 11px var(--mono); color: var(--accent); flex: none; }
+.player-text {
+  min-width: 0; max-width: 0; opacity: 0; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transition: max-width .3s var(--ease), opacity .2s var(--ease), margin .3s var(--ease);
+}
+.player:hover .player-text, .player:focus-within .player-text { max-width: 300px; opacity: 1; margin: 0 4px; }
+.player-btn {
+  flex: none; width: 26px; height: 26px; border: 0; border-radius: 999px; background: transparent; color: var(--muted);
+  font: 12px/1 var(--ui); cursor: pointer; display: grid; place-items: center;
+}
+.player-btn:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent); }
+.player-btn:disabled { opacity: .4; cursor: default; }
+@media (max-width: 760px) { .player { right: 12px; max-width: calc(100% - 24px); } }
 .dialog .hint.warn { color: var(--warn); }
 .dialog .other-lang { color: var(--faint); }
 /* English: a word next to its neighbour needs the space Chinese does without (a flex pill drops a leading one). */
@@ -1603,4 +1638,304 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 @media (max-width: 560px) {
   .regex-form { padding: 14px 16px 8px; }
   .regex-actions { padding: 12px 16px 16px; }
+}
+
+/* ─── 视觉小说模式 (web/vn.js): over the transcript, inside .reader ───── */
+.vn { position: absolute; inset: 0; z-index: 5; overflow: hidden; background: var(--bg); user-select: none; -webkit-user-select: none; }
+.vn-bg {
+  position: absolute; inset: 0; background-color: var(--bg);
+  background-image: var(--backdrop-image, none), radial-gradient(ellipse at 50% 28%, color-mix(in srgb, var(--accent) 22%, var(--bg)), var(--bg) 72%);
+  background-size: cover, cover; background-position: center, center; transition: filter .8s var(--ease);
+}
+/* Time of day and weather over the picture (web/shared/vn.js timeOfDay, weatherOf). */
+.vn-tint { position: absolute; inset: 0; pointer-events: none; transition: background-color .8s var(--ease); }
+.vn[data-time="dawn"] .vn-tint { background-color: rgb(255 170 170 / .16); }
+.vn[data-time="dusk"] .vn-tint { background-color: rgb(255 140 60 / .22); }
+.vn[data-time="night"] .vn-tint { background-color: rgb(20 35 90 / .42); }
+.vn[data-time="night"] .vn-bg { filter: brightness(.75) saturate(.85); }
+.vn[data-weather="cloudy"] .vn-bg, .vn[data-weather="fog"] .vn-bg { filter: saturate(.75) brightness(.95); }
+.vn-tint::after { content: ""; position: absolute; inset: 0; }
+.vn[data-weather="rain"] .vn-tint::after, .vn[data-weather="storm"] .vn-tint::after {
+  background-image: repeating-linear-gradient(105deg, transparent 0 14px, rgb(220 230 255 / .18) 14px 15px, transparent 15px 34px);
+  background-size: 120px 120px; animation: vn-rain .5s linear infinite;
+}
+.vn[data-weather="snow"] .vn-tint::after {
+  background-image: radial-gradient(circle, rgb(255 255 255 / .8) 0 1.6px, transparent 2.2px), radial-gradient(circle, rgb(255 255 255 / .55) 0 1.1px, transparent 1.6px);
+  background-size: 90px 90px, 60px 60px; animation: vn-snow 7s linear infinite;
+}
+.vn[data-weather="fog"] .vn-tint::after { background: linear-gradient(to top, rgb(230 235 240 / .45), transparent 70%); }
+@keyframes vn-rain { to { background-position: -30px 120px; } }
+@keyframes vn-snow { to { background-position: 30px 90px, -20px 60px; } }
+@media (prefers-reduced-motion: reduce) { .vn-tint::after { animation: none; } }
+
+/* The one speaking stands behind the text box, cut out and outlined (web/shared/cutout.js); narration has nobody. */
+.vn {
+  --vn-outline: rgb(255 255 255 / .92);
+  --vn-narration: color-mix(in srgb, var(--ink) 60%, var(--bg));
+  --vn-dialogue: var(--ink);
+}
+.vn-sprite {
+  position: absolute; left: 50%; bottom: 0; transform: translate(-50%, 18px);
+  height: min(88%, 980px); max-width: 64%; object-fit: contain; object-position: bottom; pointer-events: none;
+  opacity: 0; visibility: hidden;
+  filter: drop-shadow(2px 0 0 var(--vn-outline)) drop-shadow(-2px 0 0 var(--vn-outline)) drop-shadow(0 2px 0 var(--vn-outline)) drop-shadow(0 -2px 0 var(--vn-outline)) drop-shadow(0 10px 24px rgb(0 0 0 / .28));
+  transition: opacity .28s var(--ease), transform .28s var(--ease), visibility 0s .28s;
+}
+.vn-sprite.show { opacity: 1; visibility: visible; transform: translate(-50%, 0); transition: opacity .28s var(--ease), transform .28s var(--ease), visibility 0s; }
+@media (prefers-reduced-motion: reduce) { .vn-sprite, .vn-sprite.show { transform: translate(-50%, 0); } }
+/* The controls take the top row; under them on the left: the time box, what is being drawn, the turn's CG. */
+.vn-corner { position: absolute; top: 52px; left: 12px; max-width: calc(100% - 24px); display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.vn-sign[hidden] { display: none; }
+.vn-sign .time-box { margin: 0; background: color-mix(in srgb, var(--raised) 78%, transparent); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+.vn-cg-thumb {
+  position: relative; width: 92px; aspect-ratio: 3 / 2; padding: 0; border-radius: 10px; overflow: hidden; cursor: pointer;
+  border: 2px solid var(--vn-outline); background: var(--pane); box-shadow: var(--shadow-2);
+}
+.vn-cg-thumb[hidden] { display: none; }
+.vn-cg-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.vn-cg-thumb span { position: absolute; right: 4px; bottom: 3px; padding: 0 6px; border-radius: 999px; background: rgb(0 0 0 / .55); color: #fff; font: 600 10px/1.6 var(--ui); }
+.vn-cg { position: absolute; inset: 0; z-index: 3; display: grid; place-items: center; background: rgb(0 0 0 / .82); cursor: zoom-out; }
+.vn-cg[hidden] { display: none; }
+.vn-cg img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.vn-cg-tools { position: absolute; top: 12px; right: 12px; display: flex; gap: 6px; }
+.vn-title {
+  position: absolute; left: 50%; top: 26%; transform: translateX(-50%); padding: 6px 22px; pointer-events: none; white-space: nowrap;
+  font: 600 26px/1.4 var(--serif); letter-spacing: .12em; color: var(--ink); text-shadow: 0 1px 12px var(--bg); opacity: 0;
+}
+.vn-title.show { animation: vn-title 2.6s var(--ease); }
+@keyframes vn-title { 15%, 70% { opacity: 1; } to { opacity: 0; } }
+
+.vn-box {
+  position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%);
+  width: min(920px, calc(100% - 32px)); min-height: 132px; max-height: min(40%, 260px); overflow-y: auto;
+  padding: 18px 24px 26px; border-radius: 16px; border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  box-shadow: var(--shadow-2); font: 17px/1.85 var(--serif); color: var(--ink); cursor: pointer;
+}
+.vn-name {
+  display: inline-block; margin: -6px 0 6px -6px; padding: 2px 14px; border-radius: 999px;
+  background: var(--accent); color: var(--accent-ink); font: 600 14px/1.6 var(--ui); letter-spacing: .04em;
+}
+.vn-name[hidden] { display: none; }
+/* The card's own in the accent, the player quieter, everyone else a colour of their own. */
+.vn-name[data-who="player"] { background: color-mix(in srgb, var(--muted) 70%, var(--bg)); color: var(--bg); }
+.vn-name[data-who="cast"] { background: hsl(var(--who) 45% 42%); color: #fff; }
+/* Narration a step back; what is said in front, its quotes tinted. */
+.vn-box .vn-text { color: var(--vn-narration); }
+/* What is said in the transcript's dialogue colour, the narration around it a step back; 【系统】 text in the accent. */
+.vn-box[data-kind="dialogue"] .vn-text .q, .vn-log-dialogue .q { color: var(--lamp); }
+.vn-text .vn-sys, .vn-log-body .vn-sys { color: var(--accent); }
+.vn-turn-hint { margin-right: auto; font: 600 12px var(--ui); letter-spacing: .12em; color: var(--lamp); animation: vn-hint 1.8s ease-in-out infinite; }
+@keyframes vn-hint { 50% { opacity: .4; } }
+/* The line being read aloud: three bars in the box's corner (web/media.js says when); the input's pill stays out of this mode. */
+.vn-voice { position: absolute; top: 16px; right: 18px; display: inline-flex; align-items: flex-end; gap: 2px; width: 20px; height: 15px; padding: 0; border: 0; background: none; cursor: pointer; }
+.vn-voice[hidden] { display: none; }
+.vn-voice i { flex: 1; height: 100%; border-radius: 2px; background: var(--lamp); transform-origin: bottom; transform: scaleY(.35); }
+.vn-voice[data-state="playing"] i { animation: player-wave .9s ease-in-out infinite; }
+.vn-voice i:nth-child(2) { animation-delay: -.3s !important; }
+.vn-voice i:nth-child(3) { animation-delay: -.6s !important; }
+.vn-voice[data-state="loading"] i { animation: player-wait 1s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .vn-voice i, .vn-turn-hint { animation: none !important; } }
+.stage.vn-on .player { display: none; }
+.vn-text p { margin: 0; text-indent: 0; }
+.vn-text p + p { margin-top: .4em; }
+.vn-waiting { color: var(--faint); }
+.vn-next { position: absolute; right: 16px; bottom: 8px; font-size: 12px; color: var(--accent); }
+.vn-next::after { content: "▼"; display: inline-block; animation: vn-bob 1.1s ease-in-out infinite; }
+.vn-next.wait::after { content: "…"; animation: none; }
+.vn-next.end::after { content: ""; }
+@keyframes vn-bob { 50% { transform: translateY(3px); } }
+.vn-end { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 10px; font: 13px var(--ui); }
+.vn-end[hidden] { display: none; }
+.vn-swipe { color: var(--muted); font-size: 12px; }
+.vn-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+
+.vn-btn {
+  border: 1px solid var(--line-soft); border-radius: 999px; padding: 4px 11px; cursor: pointer; white-space: nowrap;
+  background: color-mix(in srgb, var(--raised) 80%, transparent); color: var(--ink); font: 12px/1.5 var(--ui);
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); transition: background .15s, border-color .15s;
+}
+.vn-btn:hover:not(:disabled) { border-color: var(--accent); }
+.vn-btn:disabled { opacity: .45; cursor: default; }
+.vn-btn.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.vn-controls { position: absolute; top: 12px; right: 12px; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; max-width: calc(100% - 24px); }
+/* 朗读 and 配图: switches of their own, set apart from the rest. */
+.vn-quick { display: inline-flex; gap: 4px; padding-right: 6px; margin-right: 2px; border-right: 1px solid var(--line-soft); }
+
+/* The turn's choices: a game's menu in the middle of the picture above the text box, the picture stepping back behind it. */
+.vn-menu {
+  position: absolute; z-index: 1; left: 50%; top: calc((100% - min(40%, 260px)) / 2 + 24px); transform: translate(-50%, -50%);
+  width: min(640px, calc(100% - 32px)); max-height: calc(100% - min(40%, 260px) - 100px); overflow-y: auto;
+  display: flex; flex-direction: column; gap: 12px; padding: 18px 18px 14px; border-radius: 20px;
+  background: color-mix(in srgb, var(--bg) 74%, transparent); border: 1px solid color-mix(in srgb, var(--lamp) 32%, var(--line-soft));
+  box-shadow: var(--shadow-3); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  animation: vn-menu-in .28s var(--ease);
+}
+.vn-menu[hidden] { display: none; }
+/* Under the backlog the menu waits out of sight. */
+.vn.reading-log .vn-menu { visibility: hidden; }
+@keyframes vn-menu-in { from { opacity: 0; transform: translate(-50%, calc(-50% + 12px)) scale(.98); } }
+.vn.choosing .vn-bg { filter: brightness(.6) saturate(.85); }
+.vn.choosing .vn-sprite.show { opacity: .35; }
+.vn-menu-head { display: flex; align-items: baseline; justify-content: center; gap: 12px; font-family: var(--serif); }
+.vn-menu-head b { font-size: 18px; font-weight: 600; letter-spacing: .24em; color: var(--lamp); }
+.vn-menu-head span { font-size: 13px; color: var(--muted); }
+.vn-menu-list { display: flex; flex-direction: column; gap: 9px; }
+.vn-choice-row { display: flex; gap: 6px; animation: vn-choice-in .32s var(--ease) both; animation-delay: calc(var(--i, 0) * 60ms); }
+@keyframes vn-choice-in { from { opacity: 0; transform: translateY(8px); } }
+.vn-choice {
+  flex: 1; display: flex; align-items: center; gap: 12px; text-align: left; padding: 12px 16px; border-radius: 14px; cursor: pointer;
+  font: 16px/1.55 var(--serif); color: var(--ink); border: 1px solid var(--line-soft);
+  background: color-mix(in srgb, var(--raised) 92%, transparent); box-shadow: var(--shadow-1); transition: border-color .15s, transform .15s, background .15s;
+}
+.vn-choice:hover:not(:disabled), .vn-choice:focus-visible { border-color: var(--lamp); background: color-mix(in srgb, var(--lamp) 10%, var(--raised)); transform: translateX(3px); }
+.vn-choice:disabled { opacity: .5; cursor: default; }
+.vn-choice-n { flex: none; width: 26px; height: 26px; border-radius: 999px; display: grid; place-items: center; font: 600 13px var(--ui); color: var(--accent-ink); background: var(--lamp); }
+.vn-choice-text { flex: 1; min-width: 0; }
+.vn-choice-edit { flex: none; width: 42px; border-radius: 14px; border: 1px solid var(--line-soft); background: color-mix(in srgb, var(--raised) 80%, transparent); color: var(--muted); cursor: pointer; }
+.vn-choice-edit:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+.vn-menu-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.vn-menu-own { border: 1px dashed color-mix(in srgb, var(--lamp) 55%, var(--line)); border-radius: 999px; padding: 6px 14px; background: transparent; color: var(--ink); font: 13px var(--ui); cursor: pointer; }
+.vn-menu-own:hover { border-style: solid; border-color: var(--lamp); }
+@media (prefers-reduced-motion: reduce) { .vn-menu, .vn-choice-row { animation: none; } }
+
+.vn-panel {
+  position: absolute; z-index: 2; left: 50%; top: 96px; transform: translateX(-50%); width: min(720px, calc(100% - 32px));
+  max-height: calc(100% - min(40%, 260px) - 84px); overflow-y: auto; padding: 12px; border-radius: 14px; user-select: text; -webkit-user-select: text;
+  background: color-mix(in srgb, var(--raised) 92%, transparent); border: 1px solid var(--line-soft); box-shadow: var(--shadow-2);
+}
+.vn-panel iframe { width: 100%; min-height: 120px; }
+.vn-status { display: flex; flex-direction: column; gap: 10px; align-items: stretch; }
+.vn-status .vn-btn { align-self: flex-end; }
+
+.vn-log {
+  position: absolute; inset: 56px max(16px, calc(50% - 400px)) 16px; z-index: 2; display: flex; flex-direction: column; user-select: text; -webkit-user-select: text;
+  background: color-mix(in srgb, var(--raised) 96%, transparent); border: 1px solid var(--line-soft); border-radius: 16px; box-shadow: var(--shadow-3);
+}
+.vn-log[hidden] { display: none; }
+.vn-log-head { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); }
+.vn-log-body { flex: 1; overflow-y: auto; padding: 12px 18px 18px; font: 15px/1.8 var(--serif); }
+.vn-log-body > p, .vn-log-line { margin: 0 0 .5em; }
+.vn-log-line p { margin: 0; }
+/* Where the story is from here on: a quiet divider. */
+.vn-log-scene { display: flex; align-items: center; gap: 12px; margin: 14px 0 10px; font: 12px/1.6 var(--ui); letter-spacing: .08em; color: var(--faint); }
+.vn-log-scene::before, .vn-log-scene::after { content: ""; flex: 1; border-top: 1px solid var(--line-soft); }
+.vn-log-dialogue { color: var(--vn-narration); }
+.vn-log-body b { color: var(--accent); font-weight: 600; margin-right: 2px; }
+.vn-log-body b[data-who="player"] { color: var(--muted); }
+.vn-log-body b[data-who="cast"] { color: hsl(var(--who) 50% 45%); }
+.vn-log-narration { color: var(--vn-narration); }
+.vn-log-user { color: var(--muted); }
+.vn-log-current { cursor: pointer; border-radius: 6px; padding: 0 4px; margin-left: -4px; }
+.vn-log-current:hover { background: var(--accent-soft); }
+.vn-log-current.here { box-shadow: inset 3px 0 0 var(--accent); background: color-mix(in srgb, var(--accent-soft) 60%, transparent); }
+
+/* Hide the interface (H): only the picture stays; a click brings it back. */
+.vn > :not(.vn-bg, .vn-tint, .vn-sprite) { transition: opacity .25s var(--ease); }
+.vn.bare > :not(.vn-bg, .vn-tint, .vn-sprite) { opacity: 0; pointer-events: none; }
+
+/* The stage in this mode: the reader fills it; the composer floats at the foot and opens on ✎ 行动. */
+.stage.vn-on .reader > :is(#rail, #whereabouts) { display: none; }
+.stage.vn-on .composer { position: absolute; left: 0; right: 0; bottom: 0; z-index: 8; }
+.stage.vn-on .composer::before { display: none; }
+.stage.vn-on:not(.vn-compose) .composer :is(.composer-box, .composer-row, .branch-note) { display: none; }
+.stage.vn-on.vn-compose .composer { background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); padding-top: 10px; }
+/* The switch in the top bar: a labelled pill with a track, in the dialogue colour so it is seen; once tried, it stops pulsing. */
+.vn-switch {
+  flex: none; display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 8px 0 11px; border-radius: 999px; cursor: pointer;
+  border: 1.5px solid color-mix(in srgb, var(--lamp) 70%, var(--line)); background: color-mix(in srgb, var(--lamp) 9%, var(--surface));
+  color: var(--lamp); font: 600 13px var(--ui); letter-spacing: .04em; transition: background .2s, color .2s, border-color .2s, box-shadow .2s;
+}
+.vn-switch[hidden] { display: none; }
+.vn-switch svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; flex: none; }
+.vn-switch:hover { background: color-mix(in srgb, var(--lamp) 16%, var(--surface)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--lamp) 18%, transparent); }
+.vn-switch-track { position: relative; width: 26px; height: 15px; border-radius: 999px; background: color-mix(in srgb, var(--lamp) 28%, var(--line)); transition: background .2s; flex: none; }
+.vn-switch-track span { position: absolute; top: 2px; left: 2px; width: 11px; height: 11px; border-radius: 50%; background: var(--surface); box-shadow: 0 1px 2px rgb(0 0 0 / .25); transition: transform .2s var(--ease); }
+.vn-switch[aria-pressed="true"] { background: var(--lamp); border-color: var(--lamp); color: var(--accent-ink); }
+.vn-switch[aria-pressed="true"] .vn-switch-track { background: color-mix(in srgb, var(--accent-ink) 45%, transparent); }
+.vn-switch[aria-pressed="true"] .vn-switch-track span { transform: translateX(11px); background: var(--accent-ink); }
+.vn-switch.fresh { animation: vn-switch-call 2.2s ease-out infinite; }
+@keyframes vn-switch-call { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--lamp) 45%, transparent); } 70%, 100% { box-shadow: 0 0 0 9px transparent; } }
+@media (prefers-reduced-motion: reduce) { .vn-switch.fresh { animation: none; } }
+/* Writing an action: the last line stays readable above the composer, the choices above it. */
+.stage.vn-compose .vn-box { bottom: 112px; max-height: min(34%, 220px); }
+.stage.vn-compose .vn-menu { top: calc((100% - 112px - min(34%, 220px)) / 2 + 24px); max-height: calc(100% - 112px - min(34%, 220px) - 90px); }
+/* 全屏: the stage alone, filling the window (and the screen where the browser allows it). */
+.stage.vn-full { position: fixed; inset: 0; z-index: 60; width: auto; height: auto; max-width: none; margin: 0; background: var(--bg); }
+.stage:fullscreen { background: var(--bg); }
+.stage.vn-full .topbar, .stage:fullscreen .topbar { display: none; }
+
+@media (max-width: 560px) {
+  .topbar #vn-toggle { order: 2; }
+  .vn-switch { height: 30px; padding: 0 7px 0 9px; gap: 5px; font-size: 12px; }
+  .vn-box { font-size: 16px; min-height: 120px; max-height: 42%; padding: 16px 18px 24px; }
+  .vn-sprite { height: 72%; max-width: 92%; }
+  .vn-menu { top: calc(58% / 2 + 40px); max-height: calc(58% - 110px); padding: 14px 12px 10px; }
+  .vn-choice { font-size: 15px; padding: 10px 12px; gap: 10px; }
+  .vn-controls { top: 10px; left: 10px; right: 10px; max-width: none; justify-content: flex-end; gap: 5px; }
+  .vn-btn { padding: 3px 9px; }
+  .vn-corner { top: 84px; }
+  .vn-title { font-size: 21px; }
+}
+@media (orientation: landscape) and (max-height: 520px) {
+  .stage.vn-on .topbar { display: none; }
+  .vn-sprite { left: 22%; height: 94%; }
+  .vn-box { left: auto; right: 16px; transform: none; width: min(62%, 720px); max-height: 46%; font-size: 15px; }
+  .vn-menu { left: auto; right: 16px; transform: translateY(-50%); width: min(62%, 600px); top: 27%; max-height: 50%; animation: none; }
+}
+
+/* Scenes (web/vn.js): the picture crossfades in; the chip under the time box says what is being drawn. */
+.vn-bg { transition: filter .8s var(--ease), background-image .6s var(--ease); }
+.vn-scene-chip {
+  max-width: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  padding: 4px 6px 4px 12px; border-radius: 999px; font: 12px/1.5 var(--ui); color: var(--ink);
+  background: color-mix(in srgb, var(--raised) 82%, transparent); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+}
+.vn-scene-chip[hidden] { display: none; }
+.vn-scene-chip .bad { color: var(--bad); }
+
+.vn-library { width: min(820px, calc(100vw - 32px)); }
+.vn-library-head { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
+.vn-library-head p { margin: 0; color: var(--muted); font-size: 13px; }
+.vn-library-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.vn-library-top h2 { margin: 0; }
+.vn-library-sprite { position: relative; width: 100%; aspect-ratio: 3 / 4; display: grid; place-items: center; background: repeating-conic-gradient(var(--pane) 0 25%, var(--surface) 0 50%) 0 0 / 18px 18px; }
+.vn-library-item .vn-library-sprite img { position: absolute; inset: 6px; width: calc(100% - 12px); height: calc(100% - 12px); aspect-ratio: auto; background: none; object-fit: contain; filter: drop-shadow(1px 0 0 #fff) drop-shadow(-1px 0 0 #fff) drop-shadow(0 1px 0 #fff) drop-shadow(0 -1px 0 #fff); }
+.vn-library-grid.sprites { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+.vn-library-mode { gap: 10px; }
+.vn-library-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; max-height: 58vh; overflow-y: auto; padding: 2px; }
+.vn-library-item { margin: 0; border: 1px solid var(--line-soft); border-radius: 12px; overflow: hidden; background: var(--surface); display: flex; flex-direction: column; }
+.vn-library-item.current { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.vn-library-item img, .vn-library-empty { width: 100%; aspect-ratio: 3 / 2; object-fit: cover; display: block; background: var(--pane); }
+.vn-library-empty { display: grid; place-items: center; color: var(--faint); font-size: 12px; }
+.vn-library-item figcaption { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px 4px; font-size: 13px; }
+.vn-library-item .row { flex-wrap: wrap; gap: 4px; padding: 4px 8px 10px; }
+@media (max-width: 560px) {
+  .vn-cg-thumb { width: 72px; }
+}
+
+/* 更新了什么 (web/whatsnew.js): one page at a time, a picture over its words. */
+.whatsnew { width: min(780px, calc(100vw - 32px)); padding: 0; overflow: hidden; }
+.whatsnew-head { display: flex; align-items: baseline; gap: 10px; padding: 16px 16px 12px 22px; }
+.whatsnew-kicker { font: 600 12px var(--ui); letter-spacing: .16em; color: var(--lamp); }
+.whatsnew-head b { font: 600 18px var(--serif); }
+.whatsnew-x { margin-left: auto; align-self: center; }
+.whatsnew-figure { margin: 0 22px; border-radius: 14px; overflow: hidden; aspect-ratio: 16 / 9; background: var(--pane); box-shadow: var(--shadow-1); animation: whatsnew-in .35s var(--ease); }
+.whatsnew-figure img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.whatsnew-icon { width: 100%; height: 100%; display: grid; place-items: center; font-size: 72px; background: radial-gradient(circle at 30% 25%, color-mix(in srgb, var(--lamp) 28%, var(--surface)), var(--pane) 70%); }
+.whatsnew-body { padding: 18px 24px 2px; animation: whatsnew-in .35s var(--ease); }
+.whatsnew-body h3 { margin: 0 0 6px; font: 600 20px var(--serif); }
+.whatsnew-body p { margin: 0; color: var(--muted); font-size: 14.5px; line-height: 1.8; white-space: pre-line; }
+.whatsnew-foot { display: flex; align-items: center; gap: 10px; padding: 18px 22px 20px; }
+.whatsnew-dots { display: flex; gap: 6px; margin-right: auto; }
+.whatsnew-dots button { width: 8px; height: 8px; padding: 0; border: 0; border-radius: 999px; background: var(--line); cursor: pointer; transition: width .25s var(--ease), background .25s; }
+.whatsnew-dots button.on { width: 22px; background: var(--lamp); }
+@keyframes whatsnew-in { from { opacity: 0; transform: translateY(6px); } }
+@media (prefers-reduced-motion: reduce) { .whatsnew-figure, .whatsnew-body { animation: none; } }
+@media (max-width: 560px) {
+  .whatsnew-head { padding: 14px 10px 10px 16px; }
+  .whatsnew-figure { margin: 0 14px; }
+  .whatsnew-body { padding: 14px 16px 0; }
+  .whatsnew-foot { padding: 14px 16px 16px; }
+  .whatsnew-foot .muted { display: none; }
 }

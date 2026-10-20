@@ -92,6 +92,14 @@ test('phone links put Wi-Fi first and fold VPN / virtual adapters', () => {
   )
   assert.equal(names.has('172.31.16.1'), true)
   assert.equal(names.has('fe80::1'), false)
+  // macOS: en0 is the Wi-Fi (or wired) link; bridges and tunnels are folded; Tailscale by its address.
+  const mac = lanAddresses({
+    bridge100: [v4('192.168.64.1')],
+    en0: [v4('192.168.0.23')],
+    utun4: [v4('100.80.1.9')],
+    utun2: [v6('fd00::1')],
+  })
+  assert.deepEqual(mac.addresses.map(item => [item.host, item.kind]), [['192.168.0.23', 'wifi'], ['100.80.1.9', 'tailscale'], ['192.168.64.1', 'virtual'], ['[fd00::1]', 'virtual']])
 })
 
 test('compactThreshold grows with the full list, so one full copy never strips every turn', () => {

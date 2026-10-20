@@ -9,6 +9,7 @@
 - **High cache hit rates**: prompts are built around the provider's cache, so in a long story most of every turn is billed at the much cheaper cached rate, and replies start faster.
 - **SillyTavern-compatible**: character cards, world books, presets, regex scripts, MVU variables and the status-bar UIs inside cards work as imported.
 - **Pictures and read-aloud built in**: illustrate a scene with one click; dialogue and narration each get their own voice, and you can tap any line to hear it.
+- **Visual novel mode**: turn the story into a game screen with one switch — scene backgrounds, the speaker's sprite, a name plate, one line at a time, and the choices in the middle of the picture.
 - **Characters keep their look**: every character's face, outfit, reference picture and voice are kept, so they stay the same person however many pictures you make.
 - **A guided card creator**: not sure what you want yet? The creator asks you step by step and writes a complete card at the end.
 
@@ -51,12 +52,23 @@ From the author's own long chats (October 2026):
 - **World books**: always-on and keyword entries, with regex keys, secondary keys, probability and insertion position. Standalone world books can be attached to a card.
 - **Presets**: a light built-in "Basic preset" with switches for point of view, style, not acting for you, limited knowledge, dark themes, intimacy, choices (tap to send) and a time box, so it plays well without importing anything. You can also import Chat Completion presets, toggle and edit their entries, and pin the ones you use most as quick switches.
 - **MVU variables and status bars**: `[InitVar]`, `<UpdateVariable>` / JSONPatch and the older `_.set()` are supported; EJS templates run in a QuickJS sandbox. HTML UIs inside cards render in isolated iframes, with a compatibility layer for the common Tavern Helper (酒馆助手) functions. The libraries those UIs need, such as jQuery and Vue, load from jsDelivr, so some may be missing offline.
+- **SillyTavern chats**: import a .jsonl (drop it into the window or use Import archive) with every turn, every swipe and the MVU variables; a long one can be compacted into a story archive first.
 - **Versions and branches**: regenerate, swipe between versions, branch from any message, roll back, edit any message; a whole chat can be packed up and moved to another device.
 
 ### Pictures and read-aloud
 
 - **Pictures**: one click, and a helper model writes the image prompt from the scene, the characters' looks and the card's art style; you can review it before drawing. Backends: an OpenAI-compatible image API, a ComfyUI workflow, or NovelAI. New replies can be illustrated automatically. Prompts you have drawn are kept in a prompt library.
 - **Read-aloud**: quoted dialogue uses the dialogue voice and everything else the narrator voice; tap a line in the story to hear just that line. Voices can come from the browser (free), a TTS model on your computer or local network, or cloud services such as Fish Audio, MiniMax or any OpenAI-compatible speech API. Audio is cached once read. New replies can be read automatically.
+
+### Visual novel mode
+
+<p align="center"><img src="docs/screenshots/vn.jpg" alt="Visual novel mode: a teahouse in the rain as the background, the speaking character's sprite in front, a text box showing one line at a time" width="880"></p>
+
+- **One switch**: turn on Visual novel in the top bar and the latest reply plays like a game; remembered per card. What the model is sent never changes, so the cache is untouched.
+- **Sprites**: whoever speaks steps forward and steps back during narration. White-background reference pictures in the roster are cut out and outlined; anyone without one gets a half-body sprite drawn from their looks.
+- **Scenes**: when the story reaches a new place, an empty scene is drawn as the background and reused whenever the story returns; time of day and weather are tints and rain or snow over it.
+- **Speakers and dialogue**: who speaks is told even from "she said" or a nameless innkeeper; each name plate has its own colour, and dialogue is coloured apart from narration.
+- **Plays like a game**: the choices open in the middle of the picture and number keys pick them; backlog, auto, skip, full screen and line-by-line reading are all there.
 
 ### Characters keep their look
 
@@ -84,6 +96,7 @@ If you can't quite say what you want, the creator guides you round by round:
 
 - On the same Wi-Fi or over Tailscale, open the passcode link in your phone's browser and play with the models and data on your computer.
 - Or install the Android app, which runs on the phone by itself, no computer needed.
+- On iPhone (Safari) or Android (Chrome), add the link to the home screen: it opens full screen like an app, no passcode to type again.
 - The interface is laid out for phone screens, and the settings windows are grouped menus.
 
 <br clear="right">

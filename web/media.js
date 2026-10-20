@@ -575,10 +575,12 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     fetched: new Map(), // index → Promise<objectURL>
     line: null, // the dialogue span being read on its own
     fresh: false, // skip the server's cached audio (after 重新合成)
+    onDone: null, // called once the whole queue has been read (not when stopped or replaced)
 
-    start(nodeId, queue, line = null) {
+    start(nodeId, queue, line = null, onDone = null) {
       this.stop()
       this.nodeId = nodeId
+      this.onDone = onDone
       this.line = line
       this.fresh = false
       line?.classList.add('reading')
@@ -611,7 +613,12 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
 
     async play() {
       const i = this.index
-      if (i >= this.queue.length) return this.stop()
+      if (i >= this.queue.length) {
+        const done = this.onDone
+        this.onDone = null
+        this.stop()
+        return done?.()
+      }
       const signal = this.controller.signal
       if (spokenHere(this.queue[i])) return this.speakHere(i, signal)
       this.mode = 'audio'
@@ -708,6 +715,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     },
 
     stop() {
+      this.onDone = null
       this.controller?.abort()
       this.audio?.pause()
       if (this.mode === 'browser') {
@@ -732,13 +740,19 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
 
     render(loading) {
       const bar = $('player')
+      // The visual novel mode shows its own small sign for the line being read.
+      const announce = state => document.dispatchEvent(new CustomEvent('cicatavern:reading', { detail: { state, nodeId: this.nodeId } }))
       if (!this.nodeId) {
         bar.hidden = true
-        return
+        bar.dataset.state = ''
+        return announce('')
       }
       bar.hidden = false
+      bar.dataset.state = loading ? 'loading' : this.paused ? 'paused' : 'playing'
+      announce(bar.dataset.state)
       const chunk = this.queue[this.index]
-      $('player-toggle').textContent = this.paused ? t`继续` : t`暂停`
+      $('player-toggle').textContent = this.paused ? '▶' : '❚❚'
+      $('player-toggle').title = this.paused ? t`继续` : t`暂停`
       $('player-toggle').disabled = loading
       $('player-redo').disabled = loading
       $('player-count').textContent = `${Math.min(this.index + 1, this.queue.length)}/${this.queue.length}`
@@ -763,6 +777,23 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     })))
   }
 
+  /**
+   * One line of the visual novel's text box (web/vn.js), read as it shows: the
+   * quotes in the character's voice, the rest in the narrator's. done() once it
+   * has been read; a line with nothing to read is done at once.
+   */
+  function readBeat(nodeId, text, done) {
+    const { voice, narratorVoice } = state.cardMedia ?? {}
+    const plain = String(text ?? '').replace(/<[^<>]*>/g, '')
+    const chunks = speechChunks(plain, { narration: Boolean(narratorVoice), tags: true, max: { dialogue: chunkMaxFor(voice), narration: chunkMaxFor(narratorVoice) } })
+    if (!chunks.length) return done?.()
+    player.start(nodeId, chunks.map(chunk => ({
+      ...chunk,
+      voice: chunk.kind === 'dialogue' ? voice : narratorVoice,
+      stable: chunk.kind === 'narration',
+    })), null, done)
+  }
+
   /** One line of dialogue, clicked in the reply: read on its own in the character's voice. */
   function readLine(span) {
     const nodeId = span.closest('.msg[data-id]')?.dataset.id
@@ -780,13 +811,19 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     readLine(span)
   })
 
-  /** After a new reply: read it and/or draw it, if switched on. */
-  async function afterTurn(nodeId) {
+  /**
+   * After a new reply: read it and/or draw it, if switched on.
+   * @param override - { read, image } in place of the settings (the visual novel mode keeps its own).
+   */
+  async function afterTurn(nodeId, override = null) {
     const node = getChat()?.path.find(n => n.id === nodeId)
     if (!node || !state.settings) return
-    if (state.settings.autoRead) readNode(node)
-    if (state.settings.autoImage) writePrompt(node, { auto: true })
+    if (override ? override.read : state.settings.autoRead) readNode(node)
+    if (override ? override.image : state.settings.autoImage) writePrompt(node, { auto: true })
   }
+
+  /** 新回复自动朗读 / 自动配图 as set, or null before the settings load. */
+  const flags = () => (state.settings ? { read: Boolean(state.settings.autoRead), image: Boolean(state.settings.autoImage) } : null)
 
   // ─── Settings ─────────────────────────────────────────────────────────
 
@@ -1674,5 +1711,5 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
   $('player-stop').addEventListener('click', () => player.stop())
   loadSettings()
 
-  return { openLibrary, toolsFor: mediaTools, gallery, openSettings, setCard, afterTurn, stopReading: () => player.stop() }
+  return { openLibrary, toolsFor: mediaTools, gallery, openSettings, setCard, afterTurn, flags, readBeat, stopReading: () => player.stop(), toggleReading: () => player.toggle() }
 }
