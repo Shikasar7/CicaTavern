@@ -105,6 +105,70 @@
   --meter-track: #263137;
 }
 
+/* Colour styles (主题 → 配色, web/theme.js). 灯下 is the set above; each of
+   these sets the frame's colours for light, then for dark: the dark rules
+   name one more attribute, so they win whenever the page is dark. */
+:root[data-style="sakura"] {
+  --bg: #f6efef; --pane: #efe5e6; --surface: #fbf7f7; --raised: #fdfbfb; --line: #e5d6d8; --line-soft: #ede2e3;
+  --ink: #2a2124; --muted: #6e5c61; --faint: #a08f94; --accent: #b04a68; --accent-ink: #fdfbfb; --lamp: #a4533a;
+}
+:root[data-style="bamboo"] {
+  --bg: #edf1e9; --pane: #e4eadf; --surface: #f7f9f4; --raised: #fbfcf9; --line: #d2dccb; --line-soft: #dfe6d9;
+  --ink: #1f2a20; --muted: #5b6b5a; --faint: #8c998a; --accent: #3f7a4a; --accent-ink: #f7f9f4; --lamp: #8a6a17;
+}
+:root[data-style="paper"] {
+  --bg: #f1eadc; --pane: #e9e0cd; --surface: #faf5ea; --raised: #fdf9f1; --line: #dccfb5; --line-soft: #e6dcc6;
+  --ink: #2e261b; --muted: #6f6150; --faint: #a29480; --accent: #8a4b23; --accent-ink: #faf5ea; --lamp: #9a5b10;
+}
+:root[data-style="night"] {
+  --bg: #eeeef5; --pane: #e5e5f0; --surface: #f8f8fc; --raised: #fcfcfe; --line: #d6d6e6; --line-soft: #e1e1ee;
+  --ink: #1f1f33; --muted: #5f5f7a; --faint: #9393ab; --accent: #5148a8; --accent-ink: #f8f8fc; --lamp: #9b5a1c;
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-style="sakura"]:not([data-theme="light"]) {
+    --bg: #171214; --pane: #1c1618; --surface: #241c1f; --raised: #2b2225; --line: #3a2d31; --line-soft: #2f2528;
+    --ink: #eee1e4; --muted: #b19ca2; --faint: #7d6a70; --accent: #e89ab0; --accent-ink: #171214; --lamp: #f0b48f;
+  }
+  :root[data-style="bamboo"]:not([data-theme="light"]) {
+    --bg: #101511; --pane: #141a15; --surface: #1a221b; --raised: #212a22; --line: #2b372c; --line-soft: #222c23;
+    --ink: #dfe8de; --muted: #98a796; --faint: #6a786a; --accent: #8fcf9b; --accent-ink: #101511; --lamp: #e2c47c;
+  }
+  :root[data-style="paper"]:not([data-theme="light"]) {
+    --bg: #16120d; --pane: #1b1610; --surface: #231d15; --raised: #2a231a; --line: #3a3024; --line-soft: #2f271d;
+    --ink: #ece2d0; --muted: #b3a48c; --faint: #7f725f; --accent: #e0a874; --accent-ink: #16120d; --lamp: #ecc58a;
+  }
+  :root[data-style="night"]:not([data-theme="light"]) {
+    --bg: #111120; --pane: #151527; --surface: #1c1c31; --raised: #232339; --line: #2f2f4a; --line-soft: #26263e;
+    --ink: #e2e2f2; --muted: #a0a0c0; --faint: #6f6f8e; --accent: #a9a2f0; --accent-ink: #111120; --lamp: #edc48e;
+  }
+}
+:root[data-style="sakura"][data-theme="dark"] {
+  --bg: #171214; --pane: #1c1618; --surface: #241c1f; --raised: #2b2225; --line: #3a2d31; --line-soft: #2f2528;
+  --ink: #eee1e4; --muted: #b19ca2; --faint: #7d6a70; --accent: #e89ab0; --accent-ink: #171214; --lamp: #f0b48f;
+}
+:root[data-style="bamboo"][data-theme="dark"] {
+  --bg: #101511; --pane: #141a15; --surface: #1a221b; --raised: #212a22; --line: #2b372c; --line-soft: #222c23;
+  --ink: #dfe8de; --muted: #98a796; --faint: #6a786a; --accent: #8fcf9b; --accent-ink: #101511; --lamp: #e2c47c;
+}
+:root[data-style="paper"][data-theme="dark"] {
+  --bg: #16120d; --pane: #1b1610; --surface: #231d15; --raised: #2a231a; --line: #3a3024; --line-soft: #2f271d;
+  --ink: #ece2d0; --muted: #b3a48c; --faint: #7f725f; --accent: #e0a874; --accent-ink: #16120d; --lamp: #ecc58a;
+}
+:root[data-style="night"][data-theme="dark"] {
+  --bg: #111120; --pane: #151527; --surface: #1c1c31; --raised: #232339; --line: #2f2f4a; --line-soft: #26263e;
+  --ink: #e2e2f2; --muted: #a0a0c0; --faint: #6f6f8e; --accent: #a9a2f0; --accent-ink: #111120; --lamp: #edc48e;
+}
+
+/* The picture behind the page (主题 → 背景图): over the page colour at the
+   chosen opacity, under everything else; the side panes let it through. */
+:root[data-backdrop] body::before {
+  content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background: var(--backdrop-image) center / cover no-repeat; opacity: var(--backdrop-opacity, .5);
+}
+:root[data-backdrop] .pane { background: color-mix(in srgb, var(--pane) 80%, transparent); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+/* The story's fade into the page colour above the composer would show as a band over a picture. */
+:root[data-backdrop] .composer::before { display: none; }
+
 /* ─── Base ───────────────────────────────────────────────────────── */
 * { box-sizing: border-box; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
 [hidden] { display: none !important; }
@@ -205,7 +269,9 @@ li:hover .item-del, .item-del:focus-visible { opacity: 1; }
   transition: background .18s, color .18s;
 }
 .foot-btn:hover { background: var(--accent-soft); color: var(--ink); }
-.foot-btn.theme { flex: 0 0 auto; padding: 7px 10px; }
+.foot-btn.theme { flex: 0 0 auto; padding: 7px 10px; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+/* The dot is the colour style's accent, so the button reads as the one for the look. */
+.foot-btn.theme::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
 
 /* ─── Stage ──────────────────────────────────────────────────────── */
 .stage { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; }
@@ -455,6 +521,7 @@ dl.usage dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; 
 .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 15px; height: 15px; border-radius: 50%; background: var(--raised); box-shadow: 0 1px 2px rgb(0 0 0 / .25); transition: transform .22s var(--ease); }
 .switch:checked { background: var(--accent); }
 .switch:checked::after { transform: translateX(13px); }
+.switch:disabled { opacity: .45; cursor: not-allowed; }
 
 /* Dropping files anywhere imports them. */
 .app.dragging::after {
@@ -614,6 +681,9 @@ button.chip.on { background: var(--accent); border-color: var(--accent); color: 
 .template-row { display: flex; flex-direction: column; gap: 7px; font-size: 12px; color: var(--muted); padding-bottom: 14px; margin-bottom: 14px; border-bottom: 1px solid var(--line-soft); }
 .provider-templates button.chip { font-family: inherit; font-size: 12.5px; padding: 4px 12px; }
 .dialog .template-note { margin: 0; color: var(--muted); }
+.dialog .key-links { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: -4px 0 12px; }
+.key-links a { color: var(--accent); text-decoration: none; }
+.key-links a:hover { text-decoration: underline; }
 .provider-advanced { border-top: 1px solid var(--line-soft); padding-top: 10px; margin: 4px 0 14px; }
 .provider-advanced summary { cursor: pointer; font-size: 12px; color: var(--muted); padding: 2px 0 10px; }
 .provider-actions { border-top: 1px solid var(--line-soft); padding-top: 14px; }
@@ -1469,3 +1539,68 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .privacy-list li + li { margin-top: 4px; }
 .privacy-notice .check-row { margin: 0 0 8px; }
 .privacy-actions { justify-content: flex-end; margin-top: 8px; }
+
+/* 主题 (web/theme.js) */
+.theme-dialog { width: min(520px, calc(100vw - 32px)); }
+.theme-row { display: flex; align-items: center; gap: 16px; padding: 12px 0; border-top: 1px solid var(--line-soft); }
+.theme-row.top { align-items: flex-start; }
+.theme-row:first-of-type { border-top: 0; padding-top: 0; }
+.theme-label { flex: 0 0 4.5em; font-size: 13px; color: var(--muted); padding-top: 2px; }
+.theme-styles { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; flex: 1; }
+.theme-style {
+  display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px 6px 7px; cursor: pointer;
+  border: 1px solid var(--line-soft); border-radius: 12px; background: var(--surface); color: var(--ink); font-size: 12.5px;
+  transition: border-color .15s, box-shadow .15s;
+}
+.theme-style:hover { border-color: var(--accent); }
+.theme-style[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+/* Light half and dark half, each with its accent. */
+.theme-swatch { display: flex; width: 100%; height: 34px; border-radius: 8px; overflow: hidden; border: 1px solid var(--line-soft); }
+.theme-swatch > span { flex: 1; display: flex; align-items: center; justify-content: center; }
+.theme-swatch i { width: 12px; height: 12px; border-radius: 50%; }
+.theme-backdrop { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.theme-preview { width: 100%; max-height: 140px; object-fit: cover; border-radius: 10px; border: 1px solid var(--line-soft); }
+.dialog label.theme-opacity { flex-direction: row; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); margin: 0; }
+.dialog .theme-opacity input[type="range"] { flex: 1; padding: 0; border: 0; background: none; box-shadow: none; accent-color: var(--accent); }
+.theme-opacity input:disabled { opacity: .45; }
+.theme-opacity-value { width: 3em; text-align: right; font-variant-numeric: tabular-nums; color: var(--ink); }
+.theme-backdrop .hint { margin: 0; }
+@media (max-width: 560px) {
+  .theme-row, .theme-row.top { flex-direction: column; align-items: stretch; gap: 8px; }
+  .theme-label { flex-basis: auto; padding-top: 0; }
+  .theme-row .seg { align-self: flex-start; }
+}
+
+/* 正则 (web/regex.js): the preset window's layout; groups in the list, an editor with a test box. */
+.regex-groups { flex: 1; min-height: 0; overflow-y: auto; }
+.regex-groups .preset-list { flex: none; overflow: visible; }
+.regex-group + .regex-group { margin-top: 14px; }
+.regex-group-title { display: flex; align-items: baseline; gap: 8px; margin: 0 8px 6px; font: 600 12px/1.4 var(--ui); color: var(--muted); }
+.regex-group-title span { font-weight: 400; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.regex-item { display: flex; align-items: center; gap: 10px; }
+.regex-item .item-main { flex: 1; }
+.regex-item .item-title { font-size: 13.5px; }
+.preset-list li.off .item-main { opacity: .55; }
+.regex-empty { margin: 0 8px; font-size: 12px; color: var(--faint); }
+.regex-form { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 28px 8px; }
+.dialog .mono, .regex-form .mono { font-family: var(--mono); font-size: 13px; }
+.regex-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; margin: 0 0 12px; }
+.regex-label { font-size: 12px; color: var(--muted); min-width: 3.5em; }
+.dialog .regex-row label.check-row { margin: 0; }
+.regex-more { margin: 0 0 12px; font-size: 12px; color: var(--muted); }
+.regex-more summary { cursor: pointer; padding: 2px 0 10px; }
+.regex-test { border-top: 1px solid var(--line-soft); padding-top: 12px; }
+.regex-test textarea { width: 100%; }
+.regex-results { margin-top: 8px; }
+.regex-results .hint { margin: 0 0 6px; }
+.regex-out { margin-bottom: 8px; }
+.regex-out span { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+.regex-out pre { margin: 0; padding: 10px 12px; max-height: 12rem; overflow: auto; background: var(--surface); border: 1px solid var(--line-soft); border-radius: 10px; font: 12.5px/1.6 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.hint.bad { color: var(--bad); }
+.regex-actions { padding: 12px 28px 18px; border-top: 1px solid var(--line-soft); }
+/* On a phone the whole pane scrolls: the buttons stay at its foot. */
+#regex-main .regex-actions { position: sticky; bottom: 0; background: var(--raised); }
+@media (max-width: 560px) {
+  .regex-form { padding: 14px 16px 8px; }
+  .regex-actions { padding: 12px 16px 16px; }
+}

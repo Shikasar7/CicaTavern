@@ -15,56 +15,68 @@ const URL_HINT = {
 }
 
 // Starting points for a new provider. Model ids change often: the note asks to
-// check them with 「从接口获取模型列表」 once the key is in.
+// check them with 「从接口获取模型列表」 once the key is in. site = where to sign
+// up, keys = where the key is made (the console's front page when its key page
+// has no stable address).
 const TEMPLATES = [
   {
     name: 'Anthropic', api: 'anthropic-messages', baseURL: 'https://api.anthropic.com', apiKeyEnv: 'ANTHROPIC_API_KEY', proxy: 'global', cacheTtl: '1h',
+    site: 'https://www.anthropic.com/api', keys: 'https://console.anthropic.com/settings/keys',
     models: [{ id: 'claude-opus-5-5', label: 'Opus 5.5' }, { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5' }, { id: 'claude-haiku-4-5', label: 'Haiku 4.5' }, { id: 'claude-fable-5-1', label: 'Fable 5.1' }],
     note: t`官方 API，按量计费，密钥在 console.anthropic.com 创建。和「Claude 订阅」是两回事：订阅额度不能当 API Key 用。`,
   },
   {
     name: 'OpenAI', api: 'openai-responses', baseURL: 'https://api.openai.com/v1', apiKeyEnv: 'OPENAI_API_KEY', proxy: 'global',
+    site: 'https://platform.openai.com', keys: 'https://platform.openai.com/api-keys',
     models: [{ id: 'gpt-6.1-sol' }, { id: 'gpt-6-astra' }],
     note: t`ChatGPT 的官方 API，密钥在 platform.openai.com 创建；ChatGPT 会员不含 API 额度。缓存由 OpenAI 自动处理。`,
   },
   {
     name: 'DeepSeek', api: 'openai-completions', baseURL: 'https://api.deepseek.com/v1', apiKeyEnv: 'DEEPSEEK_API_KEY', proxy: 'direct',
+    site: 'https://platform.deepseek.com', keys: 'https://platform.deepseek.com/api_keys',
     models: [{ id: 'deepseek-flash' }, { id: 'deepseek-v4-pro' }],
     note: t`密钥在 platform.deepseek.com 创建，国内直连。前缀不变时自动命中缓存，很便宜。`,
   },
   {
     name: 'Gemini', api: 'openai-completions', baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai', apiKeyEnv: 'GEMINI_API_KEY', proxy: 'global',
+    site: 'https://aistudio.google.com', keys: 'https://aistudio.google.com/apikey',
     models: [{ id: 'gemini-3.1-pro-preview' }, { id: 'gemini-3-flash-preview' }],
     note: t`Google 的 OpenAI 兼容接口，密钥在 aistudio.google.com 创建，需要走代理。`,
   },
   {
     name: 'OpenRouter', api: 'openai-completions', baseURL: 'https://openrouter.ai/api/v1', apiKeyEnv: 'OPENROUTER_API_KEY', proxy: 'global',
+    site: 'https://openrouter.ai', keys: 'https://openrouter.ai/settings/keys',
     headers: { 'HTTP-Referer': 'http://localhost', 'X-Title': 'Agent Tavern' },
     models: [{ id: 'anthropic/claude-sonnet-5.5' }, { id: 'google/gemini-3.1-pro-preview' }, { id: 'deepseek/deepseek-v4-flash' }],
     note: t`一个密钥用各家模型，模型 ID 写成「厂商/模型」。主要跑 Claude 的话，用「OpenRouter · Claude」模板：Anthropic 接口能打缓存断点，长对话便宜很多。`,
   },
   {
     name: 'OpenRouter · Claude', api: 'anthropic-messages', baseURL: 'https://openrouter.ai/api', apiKeyEnv: 'OPENROUTER_API_KEY', proxy: 'global', cacheTtl: '1h',
+    site: 'https://openrouter.ai', keys: 'https://openrouter.ai/settings/keys',
     models: [{ id: 'anthropic/claude-opus-5.5' }, { id: 'anthropic/claude-sonnet-5.5' }],
     note: t`走 OpenRouter 的 Anthropic 接口，酒馆会打缓存断点。`,
   },
   {
     name: 'Kimi', api: 'openai-completions', baseURL: 'https://api.moonshot.cn/v1', apiKeyEnv: 'MOONSHOT_API_KEY', proxy: 'direct',
+    site: 'https://platform.moonshot.cn', keys: 'https://platform.moonshot.cn/console/api-keys',
     models: [{ id: 'kimi-k3' }],
     note: t`月之暗面，密钥在 platform.moonshot.cn 创建。国际站的密钥要把地址换成 https://api.moonshot.ai/v1，两边的密钥不通用。`,
   },
   {
     name: t`智谱 GLM`, api: 'openai-completions', baseURL: 'https://open.bigmodel.cn/api/paas/v4', apiKeyEnv: 'ZHIPU_API_KEY', proxy: 'direct',
+    site: 'https://bigmodel.cn', keys: 'https://bigmodel.cn/usercenter/proj-mgmt/apikeys',
     models: [{ id: 'glm-5.1' }],
     note: t`密钥在 bigmodel.cn 创建。国际站（z.ai）把地址换成 https://api.z.ai/api/paas/v4。`,
   },
   {
     name: t`通义千问`, api: 'openai-completions', baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1', apiKeyEnv: 'DASHSCOPE_API_KEY', proxy: 'direct',
+    site: 'https://www.aliyun.com/product/bailian', keys: 'https://bailian.console.aliyun.com',
     models: [{ id: 'qwen-max' }, { id: 'qwen-plus' }],
     note: t`阿里云百炼，密钥在 bailian.console.aliyun.com 创建。qwen-max / qwen-plus 自动指向当前版本。`,
   },
   {
     name: t`火山方舟 Agent Plan`, api: 'openai-responses', baseURL: 'https://ark.cn-beijing.volces.com/api/plan/v3', apiKeyEnv: 'ARK_API_KEY', proxy: 'direct',
+    site: 'https://www.volcengine.com/product/ark', keys: 'https://console.volcengine.com/ark',
     models: [{ id: 'deepseek-v4.1-flash' }, { id: 'glm-5.3-flash' }],
     // The plan's address has no model list (GET …/models is 404).
     listModels: false,
@@ -72,15 +84,22 @@ const TEMPLATES = [
   },
   {
     name: 'xAI Grok', api: 'openai-completions', baseURL: 'https://api.x.ai/v1', apiKeyEnv: 'XAI_API_KEY', proxy: 'global',
+    site: 'https://x.ai/api', keys: 'https://console.x.ai',
     models: [{ id: 'grok-4.7' }],
     note: t`密钥在 console.x.ai 创建，需要走代理。`,
   },
   {
     name: t`本机 Ollama`, api: 'openai-completions', baseURL: 'http://127.0.0.1:11434/v1', apiKeyEnv: '', proxy: 'direct',
+    site: 'https://ollama.com/download',
     models: [{ id: 'qwen3:8b' }],
     note: t`本机跑的开源模型，不用密钥。直接点「从接口获取模型列表」，选你已经 pull 下来的模型。LM Studio 把端口换成 1234。`,
   },
 ]
+/** The template whose address this is, for its sign-up links. */
+function templateFor(baseURL) {
+  const clean = url => String(url ?? '').trim().replace(/\/+$/, '').toLowerCase()
+  return TEMPLATES.find(tpl => tpl.site && clean(tpl.baseURL) === clean(baseURL))
+}
 const TEMPLATE_CHECK = t`模型 ID 更新得很快，填好 Key 后点「从接口获取模型列表」核对一遍。`
 const TEMPLATE_NO_LIST = t`这个地址不提供模型列表，模型 ID 照控制台里写的填，一行一个。`
 
@@ -204,6 +223,20 @@ export function initProviders({ api, el, toast, guard, saveFile, onChanged }) {
     const keyNote = p.hasKey ? t`已保存（${p.keyHint}），留空不改` : t`粘贴 API Key`
     const apiKey = el('input', { name: 'apiKey', type: 'password', placeholder: keyNote, autocomplete: 'new-password', spellcheck: 'false' })
     const clearKey = el('input', { type: 'checkbox', name: 'clearKey' })
+    // Where to sign up and make a key, for the service the address belongs to.
+    const keyLinks = el('p', { class: 'hint key-links' })
+    const syncLinks = () => {
+      const template = templateFor(baseURL.value)
+      const link = (href, text) => el('a', { href, target: '_blank', rel: 'noopener noreferrer', text })
+      keyLinks.replaceChildren(...(template ? [
+        template.keys ? t`还没有 API Key？` : t`还没装？`,
+        link(template.site, template.keys ? t`注册账号 ↗` : t`下载 ↗`),
+        ...(template.keys ? [link(template.keys, t`创建 API Key ↗`)] : []),
+      ] : []))
+      keyLinks.hidden = !template
+    }
+    baseURL.addEventListener('input', syncLinks)
+    syncLinks()
     const keyEnv = el('input', { name: 'apiKeyEnv', value: p.apiKeyEnv, placeholder: t`例如 DEEPSEEK_API_KEY`, spellcheck: 'false' })
     const proxy = el('select', { name: 'proxy' }, [
       el('option', { value: 'global', text: t`跟随酒馆的代理设置`, selected: p.proxy !== 'direct' }),
@@ -293,6 +326,7 @@ export function initProviders({ api, el, toast, guard, saveFile, onChanged }) {
       apiSelect.value = template.api
       apiSelect.dispatchEvent(new Event('change'))
       baseURL.value = template.baseURL
+      syncLinks()
       keyEnv.value = template.apiKeyEnv
       proxy.value = template.proxy
       cacheTtl.value = template.cacheTtl ?? '5m'
@@ -346,6 +380,7 @@ export function initProviders({ api, el, toast, guard, saveFile, onChanged }) {
         field('API Key', apiKey),
         field(t`或者读取环境变量`, keyEnv, p.apiKeyEnv && !p.envKeySet ? t`酒馆的进程里没有这个变量` : ''),
       ]),
+      keyLinks,
       ...(p.hasKey ? [el('label', { class: 'check-row' }, [clearKey, el('span', { text: t`清除已保存的密钥` })])] : []),
       field(t`网络`, proxy),
       cacheField,

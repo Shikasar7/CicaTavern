@@ -92,3 +92,12 @@ export function applyScripts(text, scripts, { placement, target, depth, macros =
   }
   return out
 }
+
+/** The scripts a SillyTavern file holds: one script, a list of them, or a card/preset's regex_scripts. */
+export function scriptsInFile(json) {
+  const list = Array.isArray(json) ? json : Array.isArray(json?.regex_scripts) ? json.regex_scripts : Array.isArray(json?.extensions?.regex_scripts) ? json.extensions.regex_scripts : [json]
+  return list.filter(s => s && typeof s === 'object' && typeof s.findRegex === 'string' && s.findRegex)
+}
+
+/** Whether a file is SillyTavern regex on its own (the importer sends it to 正则), not a card or a preset carrying some. */
+export const isRegexFile = json => scriptsInFile(json).length > 0 && !json?.spec && !json?.data && !json?.prompts && json?.first_mes === undefined && json?.char_name === undefined

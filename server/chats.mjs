@@ -34,15 +34,15 @@ export async function presetFor(store, presetId) {
   return store.getPreset(presetId).catch(() => null)
 }
 
-/** Regex scripts that apply to a chat: the preset's before the card's, as in SillyTavern. */
-export function scriptsOf(card, preset) {
-  return [...(preset?.regexScripts ?? []), ...(Array.isArray(card?.regexScripts) ? card.regexScripts : [])]
+/** Regex scripts that apply to a chat: the global ones, then the preset's, then the card's, as in SillyTavern. */
+export function scriptsOf(card, preset, global = []) {
+  return [...global, ...(preset?.regexScripts ?? []), ...(Array.isArray(card?.regexScripts) ? card.regexScripts : [])]
 }
 
 /** scriptsOf() for a chat's card and preset as they are now. */
 export async function chatScripts(store, chat) {
-  const [card, preset] = await Promise.all([store.getCard(chat.cardId).catch(() => null), presetFor(store, chat.presetId)])
-  return scriptsOf(card, preset)
+  const [card, preset, global] = await Promise.all([store.getCard(chat.cardId).catch(() => null), presetFor(store, chat.presetId), store.getRegex()])
+  return scriptsOf(card, preset, global)
 }
 
 /**

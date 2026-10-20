@@ -55,9 +55,9 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
   }
 
   async function preparePrompt(chat, parent, input, { forceFull = false } = {}) {
-    const [settings, card, preset, persona] = await Promise.all([store.getSettings(), store.getCard(chat.cardId), presetFor(store, chat.presetId), store.getPersona()])
+    const [settings, card, preset, persona, globalScripts] = await Promise.all([store.getSettings(), store.getCard(chat.cardId), presetFor(store, chat.presetId), store.getPersona(), store.getRegex()])
     const books = await booksForCard(store, card)
-    const scripts = scriptsOf(card, preset)
+    const scripts = scriptsOf(card, preset, globalScripts)
     const names = chat.names
     const macros = text => replaceMacros(text, names)
     const path = pathTo(chat, parent.id)
@@ -156,8 +156,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
    * before it; `stripAll` does that for this turn.
    */
   async function apiMessages(chat, parent, { stripAll = false } = {}) {
-    const [card, preset] = await Promise.all([store.getCard(chat.cardId).catch(() => null), presetFor(store, chat.presetId)])
-    const scripts = scriptsOf(card, preset)
+    const [card, preset, globalScripts] = await Promise.all([store.getCard(chat.cardId).catch(() => null), presetFor(store, chat.presetId), store.getRegex()])
+    const scripts = scriptsOf(card, preset, globalScripts)
     const macros = text => replaceMacros(text, chat.names)
     const path = pathTo(chat, parent.id)
     let start = 0

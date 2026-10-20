@@ -11,6 +11,7 @@ import { testSubscription } from './support/subscription.mjs'
 import { editPreset, normalizePreset } from '../server/presets.mjs'
 import { complete, exportProviders, importProviders, listRemoteModels, normalizeProvider, providerChoices, providerError, publicProvider, reasoningFields } from '../server/providers.mjs'
 import { createStore } from '../server/store.mjs'
+import { cleanScripts } from '../server/regex.mjs'
 
 const CARD = {
   spec: 'chara_card_v2',
@@ -198,6 +199,18 @@ test('a state block closed with the wrong tag: applied and hidden, but sent back
   // so the next turn's prefix is what it was before this fix and stays cached.
   assert.deepEqual(two.messages.slice(0, 2), one.messages)
   assert.deepEqual(two.messages[2], { role: 'assistant', content: `第 1 次回复${CROSSED}` })
+})
+
+test('global regex (正则): a prompt-side script changes what the model reads again, before the card\'s; a display-only one never does', async t => {
+  const { fake, turn, store } = await setup(t, 'openai-completions')
+  await store.saveRegex(cleanScripts([
+    { scriptName: 'shorten', findRegex: '/第 (\\d+) 次回复/g', replaceString: '回复$1', placement: [2], promptOnly: true },
+    { scriptName: 'shown', findRegex: '/回复/g', replaceString: 'REPLY', placement: [2], markdownOnly: true },
+  ]))
+  await turn('一')
+  await turn('二')
+  // The global script first, then the card's own (which drops <hide>…</hide>).
+  assert.deepEqual(fake.requests[1].body.messages[2], { role: 'assistant', content: '回复1' })
 })
 
 test('provider compaction too long for the context: the older half first, then the newer half on top of it', async t => {

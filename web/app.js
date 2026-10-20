@@ -1,5 +1,5 @@
 // Agent Tavern web UI. Plain DOM, no build step.
-import { displayOf, htmlFrame, listenForFrameHeights, segments, streamingText, usesStatusPlaceholder, withoutOwnStatus } from '/render.js'
+import { displayOf, htmlFrame, listenForFrameHeights, nameMacros, segments, streamingText, usesStatusPlaceholder, withoutOwnStatus } from '/render.js'
 import { choiceList, statusBar, timeBox } from '/status.js'
 import { BASIC_ID, choicesOf, timeBoxOf } from '/shared/basic.js'
 import { autoStatusSpec } from '/shared/status.js'
@@ -14,6 +14,9 @@ import { createMenu, MENU_ICONS, whoLine } from '/menu.js'
 import { initForge } from '/forge.js'
 import { initUpdate } from '/update.js'
 import { connectionList, showPrivacyNotice } from '/privacy.js'
+import { initTheme } from '/theme.js'
+import { initRegex } from '/regex.js'
+import { isRegexFile, scriptsInFile } from '/shared/regex.js'
 import { lang, locale, t, zh } from '/i18n.js'
 import { pickLanguage } from '/shared/i18n.js'
 
@@ -31,6 +34,7 @@ const ui = {
   cardId: null,
   chat: null,
   settings: null,
+  globalRegex: [], // 正则 → 全局: run before every chat's preset and card scripts
   persona: null,
   // Work in progress per chat: chatId → { kind: 'turn'|'compact'|'server', text, note, echo }.
   // A turn keeps streaming when you switch chats; switching back redraws it.
@@ -447,7 +451,7 @@ const selectCard = guard(async id => {
     card.creator && t`作者：${card.creator}`,
     card.tags?.length && t`标签：${card.tags.join(t`、`)}`,
     card.creatorNotes,
-    card.regexScripts ? t`正则脚本 ${card.regexScripts} 条（显示与发送规则已生效）` : '',
+    card.regexScripts ? t`正则脚本 ${card.regexScripts} 条（已生效；设置 → 正则 里可以开关和修改）` : '',
     card.helperScripts ? t`酒馆助手脚本 ${card.helperScripts} 个（不执行；MVU 变量更新已内置）` : '',
   ].filter(Boolean).join('\n\n') || '—'
   if (ui.chats[0]) await openChat(ui.chats[0].id)
@@ -620,8 +624,10 @@ const importFiles = guard(async files => {
       presets++
       continue
     }
-    if (json && typeof json.findRegex === 'string') {
-      done.push(t`「${file.name}」是单独的正则脚本，暂不支持导入（预设和角色卡里带的正则会自动生效）`)
+    // A SillyTavern regex export (one script or a list): into the global ones (正则).
+    if (isRegexFile(json)) {
+      const added = await regexUi.importScripts(scriptsInFile(json))
+      done.push(t`正则 ${added} 条（放在全局）`)
       continue
     }
     if (looksLikeWorldbook(json)) {
@@ -685,10 +691,10 @@ const startChat = guard(async greetingIndex => {
   $('input').focus()
 })
 
-/** Regex scripts of the chat's preset, then its card (both cached), as the server applies them. */
+/** Regex scripts: the global ones, the chat's preset's, then its card's (all cached), as the server applies them. */
 function scriptsFor(chat) {
   const card = ui.cardDetails.get(chat?.cardId)
-  const scripts = [...(ui.presetDetails.get(chat?.presetId)?.regexScriptList ?? []), ...(card?.regexScriptList ?? [])]
+  const scripts = [...ui.globalRegex, ...(ui.presetDetails.get(chat?.presetId)?.regexScriptList ?? []), ...(card?.regexScriptList ?? [])]
   // A card creator card's bar is drawn here from its layout; its SillyTavern copy stays out.
   return card?.statusBar ? withoutOwnStatus(scripts) : scripts
 }
@@ -1609,6 +1615,10 @@ function layOutSettings({ form, card, providers, presets }) {
       },
     },
     {
+      id: 'regex', title: t`正则`, look: 'shared', action: () => regexUi.open(),
+      summary: () => (ui.globalRegex.length ? t`全局 ${ui.globalRegex.length} 条 · 卡和预设自带的也在这里开关` : t`导入或新建全局正则；卡和预设自带的也在这里开关`),
+    },
+    {
       id: 'scan', title: t`扫描与状态`, look: 'shared', tag: t`所有对话`, pane: settingsPages.scan,
       summary: () => t`扫描最近 ${value('scanDepth')} 条 · 隔 ${value('reinjectAfter')} 轮再注入 · 每 ${value('stateRefreshEvery')} 轮重发状态 · ${STRIP[value('dynamicStrip')] ?? ''}`,
     },
@@ -1683,7 +1693,7 @@ function layOutSettings({ form, card, providers, presets }) {
   settingsMenu.mount({
     panels: [
       { id: 'model', title: t`模型`, icon: MENU_ICONS.model, rows: ['model', 'providers'] },
-      { id: 'write', title: t`写作`, icon: MENU_ICONS.write, rows: ['persona', 'style', 'presets'] },
+      { id: 'write', title: t`写作`, icon: MENU_ICONS.write, rows: ['persona', 'style', 'presets', 'regex'] },
       { id: 'books', title: t`世界书与状态`, icon: MENU_ICONS.book, rows: ['scan', cardRow, 'books'] },
       { id: 'link', title: t`连接`, icon: MENU_ICONS.link, rows: ['network', 'access'] },
       { id: 'more', title: t`更多`, icon: MENU_ICONS.tools, rows: ['interface', 'media', 'update', 'privacy', 'shortcut', 'show-prompt', 'rebuild-prompt', 'stop-server'] },
@@ -1882,6 +1892,41 @@ const mediaUi = initMedia({
 
 const historyUi = initHistory({ el, getChat: () => ui.chat })
 
+/**
+ * What the regex window shows besides the global scripts: the open chat's card
+ * and preset (or, with no chat open, the chosen card and the default preset),
+ * and the latest reply for its test box.
+ */
+async function regexContext() {
+  const cardId = ui.chat?.cardId ?? ui.cardId
+  // Old chats made before the built-in preset (presetId null) have no preset.
+  const presetId = ui.chat ? ui.chat.presetId : ui.settings?.presetId
+  const presetKey = presetId === null ? null : presetId || BASIC_ID
+  await Promise.all([loadCardDetail(cardId), presetKey ? loadPresetDetail(presetKey) : null])
+  const card = cardId ? ui.cardDetails.get(cardId) : null
+  const preset = presetKey ? ui.presetDetails.get(presetKey) : null
+  const reply = ui.chat?.path?.findLast(node => node.role === 'assistant')?.text ?? ''
+  const names = ui.chat?.names ?? { char: card?.name ?? '', user: ui.persona?.name ?? '' }
+  return {
+    card: card?.name ? { id: cardId, name: card.name, scripts: card.regexScriptList ?? [] } : null,
+    preset: preset?.name ? { id: presetKey, name: preset.name, builtin: Boolean(preset.builtin), scripts: preset.regexScriptList ?? [] } : null,
+    sample: reply.slice(0, 4000),
+    macros: text => nameMacros(text, names),
+  }
+}
+
+/** A scope's scripts were saved: the page draws with them from now on. */
+function regexChanged(scope, id, scripts) {
+  if (scope === 'global') ui.globalRegex = scripts
+  else {
+    const detail = (scope === 'card' ? ui.cardDetails : ui.presetDetails).get(id)
+    if (detail) Object.assign(detail, { regexScriptList: scripts, regexScripts: scripts.length })
+  }
+  if (ui.chat) renderChat()
+}
+
+const regexUi = initRegex({ api, el, toast, guard, context: regexContext, onChanged: regexChanged })
+const themeUi = initTheme({ api, el, toast, guard, getSettings: () => ui.settings, setSettings: settings => { ui.settings = settings } })
 const updateUi = initUpdate({ api, el, toast, guard, onChange: () => settingsMenu?.refresh(), isGenerating: () => ui.generating })
 
 const forgeUi = initForge({
@@ -2045,24 +2090,6 @@ function fitInput() {
   input.style.height = `${Math.min(input.scrollHeight, window.innerHeight * 0.4)}px`
 }
 
-const THEMES = ['auto', 'light', 'dark']
-const THEME_LABEL = { auto: t`自动`, light: t`浅色`, dark: t`深色` }
-function currentTheme() {
-  return document.documentElement.dataset.theme || 'auto'
-}
-function renderThemeButton() {
-  const theme = currentTheme()
-  $('toggle-theme').textContent = THEME_LABEL[theme]
-  $('toggle-theme').title = t`主题：${THEME_LABEL[theme]}（点击切换）`
-}
-function cycleTheme() {
-  const next = THEMES[(THEMES.indexOf(currentTheme()) + 1) % THEMES.length]
-  if (next === 'auto') delete document.documentElement.dataset.theme
-  else document.documentElement.dataset.theme = next
-  try { localStorage.setItem('theme', next) } catch { /* private mode: theme just isn't remembered */ }
-  renderThemeButton()
-}
-
 function closeDrawers() {
   document.querySelector('.app').classList.remove('show-left', 'show-right')
 }
@@ -2082,7 +2109,7 @@ function bind() {
     // Capture phase: the provider list re-renders inside the item's own click
     // handler, after which the clicked item is no longer in the list.
     layout.addEventListener('click', event => {
-      if (event.target.closest('.preset-list li, #provider-add')) layout.classList.add('show-main')
+      if (event.target.closest('.preset-list li, #provider-add, #regex-new') && !event.target.closest('.switch')) layout.classList.add('show-main')
     }, { capture: true })
     layout.querySelector('.preset-back')?.addEventListener('click', () => layout.classList.remove('show-main'))
     const dialog = layout.closest('dialog')
@@ -2161,9 +2188,7 @@ function bind() {
   })
   $('chat-preset').addEventListener('click', () => presetsUi.open(ui.chat?.presetId))
   $('chat-title').addEventListener('click', () => { if (ui.chat) renameChat(ui.chat) })
-  $('toggle-theme').addEventListener('click', cycleTheme)
   $('scrim').addEventListener('click', closeDrawers)
-  renderThemeButton()
   if (window.visualViewport) {
     const syncKeyboard = () => {
       const viewport = window.visualViewport
@@ -2217,6 +2242,9 @@ async function boot() {
   }
   ui.launcher = Boolean(status?.launcher)
   ui.settings = await api('/api/settings').catch(() => null)
+  ui.globalRegex = (await api('/api/regex').catch(() => null))?.scripts ?? []
+  // The style and the picture saved here win over the copy this browser drew at start.
+  if (ui.settings) themeUi.apply()
   // The public builds say, once, what they connect to without being configured; nothing of it happens before.
   if (ui.features.privacyNotice && ui.settings && ui.settings.privacyNotice < (status?.privacyNoticeVersion ?? 1)) {
     allowLibraries(false)

@@ -6,6 +6,7 @@ import { homedir } from 'node:os'
 import path from 'node:path'
 import { cleanProxySetting } from './proxy.mjs'
 import { cleanBasic } from '../web/shared/basic.js'
+import { cleanAppearance } from '../web/shared/appearance.js'
 
 /** @param dir - the edition's folder under the home directory (edition.mjs dataDir). */
 export function defaultDataRoot(dir = '.agent-tavern') {
@@ -84,6 +85,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   cdnLibraries: true, // jQuery, Vue, Tailwind… from jsDelivr for cards built for Tavern Helper (web/compat.js)
   privacyNotice: 0,
   media: null, // pictures and voice (media.mjs cleanMedia); written through /api/media/settings only
+  appearance: null, // colour style and background picture (web/shared/appearance.js); the picture itself through /api/appearance/backdrop only
 })
 
 /** The 隐私与网络 notice's version: settings.privacyNotice below it means not seen yet. */
@@ -123,10 +125,11 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
 
     async getSettings() {
       const saved = { ...DEFAULT_SETTINGS, ...(await readJson(path.join(root, 'settings.json'), {})) }
-      return lockSettings({ ...saved, basic: cleanBasic(saved.basic) })
+      return lockSettings({ ...saved, basic: cleanBasic(saved.basic), appearance: cleanAppearance(saved.appearance) })
     },
-    async saveSettings(patch) {
-      const next = { ...(await this.getSettings()) }
+    async saveSettings(patch, { backdrop } = {}) {
+      const current = await this.getSettings()
+      const next = { ...current }
       for (const key of Object.keys(DEFAULT_SETTINGS)) {
         if (patch[key] !== undefined) next[key] = patch[key]
       }
@@ -139,6 +142,8 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
       next.cdnLibraries = next.cdnLibraries !== false
       next.privacyNotice = Math.max(0, Math.floor(Number(next.privacyNotice) || 0))
       next.basic = cleanBasic(next.basic)
+      // The picture's file name only changes with the picture (setBackdrop below).
+      next.appearance = cleanAppearance({ ...current.appearance, ...next.appearance, backdrop: backdrop ?? current.appearance.backdrop })
       const saved = lockSettings(next)
       await writeJson(path.join(root, 'settings.json'), saved)
       return saved
@@ -231,6 +236,15 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
     },
     async deletePreset(id) {
       await rm(presetFile(id), { force: true })
+    },
+    /** Regex scripts for every chat (regex.mjs, which cleans them before they are saved). */
+    async getRegex() {
+      const value = await readJson(path.join(root, 'regex.json'), {})
+      return Array.isArray(value.scripts) ? value.scripts : []
+    },
+    async saveRegex(scripts) {
+      await writeJson(path.join(root, 'regex.json'), { scripts })
+      return scripts
     },
 
     async listChats(cardId) {

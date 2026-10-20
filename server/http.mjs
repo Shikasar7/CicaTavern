@@ -23,6 +23,8 @@ import { initTemplates } from './template.mjs'
 import { canonicalModel } from './models.mjs'
 import { createLedger } from './usage.mjs'
 import { cleanMedia, createMedia } from './media.mjs'
+import { createAppearance } from './appearance.mjs'
+import { createRegex } from './regex.mjs'
 import { KEYED as VOICE_KEYED } from './voice/index.mjs'
 import { createPromptLibrary } from './prompts.mjs'
 import { createForge } from './forge/index.mjs'
@@ -69,6 +71,9 @@ const STATIC = {
   '/shared/regex.js': ['shared/regex.js', 'text/javascript; charset=utf-8'],
   '/shared/basic.js': ['shared/basic.js', 'text/javascript; charset=utf-8'],
   '/shared/status.js': ['shared/status.js', 'text/javascript; charset=utf-8'],
+  '/shared/appearance.js': ['shared/appearance.js', 'text/javascript; charset=utf-8'],
+  '/theme.js': ['theme.js', 'text/javascript; charset=utf-8'],
+  '/regex.js': ['regex.js', 'text/javascript; charset=utf-8'],
   '/icon.png': ['icon.png', 'image/png'],
   '/favicon.ico': ['icon.ico', 'image/x-icon'],
 }
@@ -159,6 +164,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     : null
   const engine = createEngine(store, isolation, ledger, { subscription })
   const media = createMedia(store, { proxy: () => isolation.proxy, askInContext: engine.askInContext, features })
+  const appearance = createAppearance(store)
+  const regex = createRegex(store)
   const prompts = createPromptLibrary(store)
   const forge = createForge(store, { proxyNow: () => isolation.proxy, ledger, draw: (input, signal) => media.drawCardArt(input, signal) })
   // 设置 → 更多 → 更新. A restart after an update starts the server the way this one was started.
@@ -345,6 +352,15 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       if (saved.proxy !== before) await network.apply(saved.proxy)
       return saved
     }],
+    // 正则管理 (regex.mjs): the global scripts, and the ones a card or a preset carries.
+    ['GET', /^\/api\/regex$/, () => regex.list()],
+    ['PUT', /^\/api\/regex$/, (_, body) => regex.save(body?.scripts)],
+    ['POST', /^\/api\/regex\/import$/, (_, body) => regex.importScripts(body?.scripts)],
+    ['PUT', /^\/api\/cards\/([\w-]+)\/regex$/, ([id], body) => regex.saveCardScripts(id, body?.scripts)],
+    ['PUT', /^\/api\/presets\/([\w-]+)\/regex$/, ([id], body) => regex.savePresetScripts(id, body?.scripts)],
+    // 外观: the picture behind the page (appearance.mjs); style and opacity go through PUT /api/settings { appearance }.
+    ['PUT', /^\/api\/appearance\/backdrop$/, (_, body) => appearance.saveBackdrop(body?.image)],
+    ['DELETE', /^\/api\/appearance\/backdrop$/, () => appearance.removeBackdrop()],
     // 设置 → 网络代理: the mode in force, the proxy it resolved to, and whether --proxy fixed it.
     ['GET', /^\/api\/network$/, () => network.describe()],
     ['POST', /^\/api\/network\/refresh$/, async () => network.apply((await store.getSettings()).proxy)],
@@ -751,6 +767,15 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       } catch {
         return sendJson(res, 404, { error: msg`没有头像` })
       }
+    }
+
+    const backdrop = /^\/api\/appearance\/(backdrop-[\w.-]+)$/.exec(url.pathname)
+    if (req.method === 'GET' && backdrop) {
+      const found = await appearance.readBackdrop(backdrop[1])
+      if (!found) return sendJson(res, 404, { error: msg`没有这张背景图` })
+      // Each picture has a name of its own that never changes: it can stay cached.
+      res.writeHead(200, { 'content-type': found.type, 'cache-control': 'max-age=31536000, immutable' })
+      return res.end(found.data)
     }
 
     // The avatar of a card being created (创作角色卡).

@@ -13,7 +13,17 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600&display=swap">
   <link rel="stylesheet" href="/style.css">
-  <script>try { const t = localStorage.getItem('theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t } catch {}</script>
+  <!-- The look this browser saw last (theme.js), drawn before the page appears; the settings confirm it once loaded. -->
+  <script>try {
+    const root = document.documentElement, t = localStorage.getItem('theme'), a = JSON.parse(localStorage.getItem('appearance') || 'null')
+    if (t === 'light' || t === 'dark') root.dataset.theme = t
+    if (a && /^(sakura|bamboo|paper|night)$/.test(a.style)) root.dataset.style = a.style
+    if (a && /^backdrop-[a-z0-9]{4,16}\.(jpg|png|webp)$/.test(a.backdrop)) {
+      root.dataset.backdrop = ''
+      root.style.setProperty('--backdrop-image', `url("/api/appearance/${a.backdrop}")`)
+      root.style.setProperty('--backdrop-opacity', String(Number(a.backdropOpacity) || .5))
+    }
+  } catch {}</script>
 </head>
 <body>
   <div class="app" id="app">
@@ -48,7 +58,7 @@
         <button class="foot-btn" id="open-presets">预设</button>
         <button class="foot-btn" id="open-usage">用量</button>
         <button class="foot-btn" id="open-settings">设置</button>
-        <button class="foot-btn theme" id="toggle-theme" title="切换主题" aria-label="切换主题"></button>
+        <button class="foot-btn theme" id="toggle-theme">主题</button>
       </footer>
     </aside>
     <div class="scrim" id="scrim"></div>
@@ -292,6 +302,29 @@
       </nav>
       <button type="button" class="btn small ghost preset-back">‹ 全部预设</button>
       <section class="preset-main" id="preset-main"></section>
+      <form method="dialog" class="preset-close"><button class="btn ghost icon" aria-label="关闭">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15" /></svg>
+      </button></form>
+    </div>
+  </dialog>
+
+  <dialog id="regex-dialog" class="dialog presets regex">
+    <div class="preset-layout">
+      <nav class="preset-nav">
+        <div class="preset-nav-head">
+          <h2>正则</h2>
+          <span class="row">
+            <button type="button" class="btn small" id="regex-new">新建</button>
+            <label class="btn small" title="导入 SillyTavern 导出的正则（.json），放进全局">导入
+              <input type="file" id="regex-import" accept=".json,application/json" multiple hidden>
+            </label>
+          </span>
+        </div>
+        <div class="regex-groups" id="regex-list"></div>
+        <p class="muted small preset-nav-note">依次运行：全局 → 预设 → 角色卡。只改显示的正则不影响缓存；会改发给模型内容的，改完下一轮会重新写入一次缓存。</p>
+      </nav>
+      <button type="button" class="btn small ghost preset-back">‹ 全部正则</button>
+      <section class="preset-main" id="regex-main"></section>
       <form method="dialog" class="preset-close"><button class="btn ghost icon" aria-label="关闭">
         <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15" /></svg>
       </button></form>
