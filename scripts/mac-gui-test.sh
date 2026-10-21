@@ -11,9 +11,9 @@
 #   - /api/status answers with this version, edition release, the check-only
 #     Mac updater, from the app's own runtime/node;
 #   - closing the app leaves the server to quit by itself (its idle exit).
-# Screenshots in <out>: the first start (隐私与网络 notice), then, with the
-# example card imported and the notice confirmed, the main window in English
-# and in Chinese; a short screen recording of the first start; and the logs.
+# Screenshots in <out>: the first start (隐私与网络 notice), the empty main
+# window once the notice is confirmed, then the example card imported and
+# opened, in English and in Chinese; a recording of the first start; the logs.
 # The zip is not quarantined here, so Gatekeeper's first-open prompt is not
 # part of this test (spctl's verdict is logged).
 set -euo pipefail
@@ -122,8 +122,24 @@ shoot() {
   say "screenshot: $name.png ($(sips -g pixelWidth -g pixelHeight "$out/$name.png" | awk '/pixel/ {print $2}' | paste -sd x -))"
 }
 
+# Quit as ⌘Q does (the app leaves the page first, then quits). The Apple Event may
+# need an Automation permission this Mac has not given, so it gets 10 seconds;
+# then SIGTERM.
 close_app() {
-  pkill -TERM -x CicaTavern || true
+  running || return 0
+  osascript -e 'tell application id "app.cicatavern.mac" to quit' > /dev/null 2>&1 &
+  local asker=$!
+  for _ in $(seq 1 10); do
+    running || break
+    sleep 1
+  done
+  kill "$asker" 2> /dev/null || true
+  if running; then
+    say "quit: no answer to the Apple Event, so SIGTERM"
+    pkill -TERM -x CicaTavern || true
+  else
+    say "quit: by Apple Event, as ⌘Q"
+  fi
   for _ in $(seq 1 30); do
     running || return 0
     sleep 1
@@ -163,8 +179,16 @@ wait_ready
 check_status
 shoot 1-first-start
 
-# 2. The example card imported and the notice confirmed (the server keeps
-#    running while the app is closed), then the main window again.
+# 2. The notice confirmed (as its 「好，开始吧」 does) and no card yet: the empty
+#    main window, which also marks this version's 更新了什么 as seen, as for a new player.
+api PUT /api/settings '{"privacyNotice":1}' > /dev/null
+close_app
+open_app empty
+wait_ready
+shoot 2-empty
+
+# 3. The example card imported: the app opens on it. 更新了什么 showing here would
+#    mean the page's storage did not survive the restart.
 node -e '
   const fs = require("fs")
   const file = process.argv[1]
@@ -172,20 +196,19 @@ node -e '
 ' "$app/Contents/Resources/app/examples/示例-小雨.json" > "$tmp/card.json"
 api POST /api/cards/import "@$tmp/card.json" | head -c 300 | tee -a "$log"
 echo | tee -a "$log"
-api PUT /api/settings '{"privacyNotice":1}' > /dev/null
 close_app
-open_app main-auto
+open_app card
 wait_ready
-shoot 2-main-auto-language
+shoot 3-card
 
-# 3. The same in Chinese (设置 → 更多 → 界面语言).
+# 4. The same in Chinese (设置 → 更多 → 界面语言).
 api PUT /api/settings '{"uiLanguage":"zh"}' > /dev/null
 close_app
-open_app main-zh
+open_app chinese
 wait_ready
-shoot 3-main-chinese
+shoot 4-card-chinese
 
-# 4. Closed: the page has gone, so the server quits by itself about a minute
+# 5. Closed: the page has gone, so the server quits by itself about a minute
 #    later. Watched by its process, not by asking it: a request restarts the countdown.
 close_app
 cp "$HOME/.cicatavern/logs/server.log" "$out/server.log" 2> /dev/null || true

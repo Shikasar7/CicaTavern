@@ -9,8 +9,8 @@
 #      smoke-tested;
 #   3. scripts/mac-gui-test.sh opens the app from ~/Applications: the window, the
 #      bundled server's /api/status, the page connected to it, screenshots (first
-#      start, main window in English and in Chinese), a short recording, and the
-#      server quitting by itself after the app closes.
+#      start, the empty main window, the example card in English and in Chinese), a
+#      recording, the app quitting and the server then quitting by itself.
 # The screenshots, recording, logs and zips are this run's artifacts (kept 14
 # days); the run's summary links them.
 name: macOS test (screenshots)
@@ -82,8 +82,8 @@ jobs:
       - name: Main screenshot under its own name
         if: always()
         run: |
-          if [ -f "$RUNNER_TEMP/shots/3-main-chinese.png" ]; then
-            cp "$RUNNER_TEMP/shots/3-main-chinese.png" "$RUNNER_TEMP/CicaTavern-${{ matrix.slug }}.png"
+          if [ -f "$RUNNER_TEMP/shots/4-card-chinese.png" ]; then
+            cp "$RUNNER_TEMP/shots/4-card-chinese.png" "$RUNNER_TEMP/CicaTavern-${{ matrix.slug }}.png"
           fi
 
       - name: Keep the screenshots, recording and logs
@@ -127,7 +127,7 @@ jobs:
             if grep -q "all checks passed" "$steps" 2> /dev/null; then echo "**All checks passed.**"; else echo "**Not all checks passed: see the job's log.**"; fi
             echo ""
             [ -f "$RUNNER_TEMP/shots/system.txt" ] && sed 's/^/    /' "$RUNNER_TEMP/shots/system.txt" && echo ""
-            grep -E "^(window|/api/status|server process|runtime/node|screenshot|the server quit|Gatekeeper|.*: rejected|.*accepted)" "$steps" 2> /dev/null | sed 's/^/- /' || true
+            grep -E "^(window|/api/status|server process|runtime/node|screenshot|quit:|the server quit|Gatekeeper|.*: rejected|.*accepted)" "$steps" 2> /dev/null | sed 's/^/- /' || true
             echo ""
             echo "- [Main window screenshot](${{ steps.main.outputs.artifact-url }})"
             echo "- [All screenshots, the recording and the logs](${{ steps.shots.outputs.artifact-url }})"
