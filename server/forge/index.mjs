@@ -60,6 +60,9 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
   const jobs = new Map()
 
   async function load(id) {
+    // Asked before reading: a job that ends during the read (it saves its end,
+    // then leaves `jobs`) can leave this read with the file from before its end.
+    const runningBefore = jobs.has(id)
     let draft
     try {
       draft = JSON.parse(await readFile(fileOf(id), 'utf8'))
@@ -68,7 +71,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
       throw error
     }
     // A job recorded on disk but not running here: the server stopped in the middle of it.
-    if (draft.job && !jobs.has(id)) {
+    if (draft.job && !runningBefore && !jobs.has(id)) {
       draft.error = { kind: draft.job.kind, message: msg`上次还没写完服务就停了，再试一次。` }
       draft.job = null
     }
