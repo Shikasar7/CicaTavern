@@ -26,8 +26,13 @@ const OPENER = /^(?:就在这时|这时候?|此时|忽然|突然|随即|然后|�
 const NOT_NAME = /.[了着得]|[地很太才却还便就把被像嘴话]|(.)\1|片刻|半晌|良久|一会|一下|一眼|一[行句声]|忽然|突然|随即|然后|于是|最后|最终|终于|随后|之后|起来|下来|过来|出来|回来|点头|摇头|抬头|低头|抬眼|转身|开口|沉默|眼睛|声音|心里|心中|内心|想法|默念|^第[一二三四五六七八九十\d]+[条根个件点步句]$/
 // After a name: its voice or words (耳边白芷的声音还在响：, 回想白芷说过的话：) — the quote is theirs.
 const VOICE = /^(?:的(?:声音|话|语气|嗓音|笑声)|说过的话|说的话)/
-// Before a name: hearing them (他听见伊梦洁倒抽了一口气：) — the sound is theirs.
+// Before a name: hearing them (他听见伊梦洁倒抽了一口气：) — the sound is theirs; so with 她/他 (他听见她说：).
 const HEARD = /(?:听见|听到)了?$/
+const HEARD_PRONOUN = /(?:听见|听到)了?([她他])(?![们])/
+// After a name, on the line after a quote: saying or answering it (白芷接得很快。, 顾念念在你身后喊了一声, 清虚子打断他。) — the quote is theirs.
+const REPLIED = /^[^，,听让等]{0,6}?(?<![没不未])(?:说|问|喊|叫|打断|接(?:话|道|口|得|了一句)|答(?:道|话|得|了)|回(?:答|道|嘴|得|了一句)|应(?:道|声|了一声))(?!不出|出口|题|起)/
+// The line after a quote saying who said it: 你说。, 他低声说，… — not 你说没有 or 你又说了一遍, which answer it.
+const PRONOUN_SAID = /^(你|她|他)(?![们])(?:轻声|低声|小声|大声|笑着|如实|继续|才)?(?:说|道|问|答|喊|叫)(?:道)?(?=$|[，,：:])/
 // Unnamed people the story calls by their trade (掌柜的愣了一下): a name plate of their own.
 const ROLE_WORDS = '掌柜 店小二 小二 伙计 老板娘:girl 老板 老头 老汉 大爷 大娘:girl 婆婆:girl 老妇人:girl 郎中 管家 侍卫 守卫 衙役 捕快 车夫 船夫 丫鬟:girl 侍女:girl 和尚' // i18n-ignore: words in the story
 const ROLES = ROLE_WORDS.split(' ').map(word => {
@@ -186,72 +191,213 @@ export function guessSpeaker(before, after, names) {
 }
 
 /**
- * The pronoun a quote is said by (你, 她, 他): the subject of the nearest clause
- * leading into it that has one (过了片刻，她忽然笑了，笑得很短：), else of the sentence after.
+ * The pronoun a quote is said by (你, 她, 他): the one the nearest clause hears
+ * (他听见她说：), else the subject of the nearest clause leading into it that
+ * has one (过了片刻，她忽然笑了，笑得很短：), else of the sentence after.
  */
 export function pronounNear(before, after) {
   const lead = plainOf(before).replace(/\s+/g, '').split(/[。！？!?；;]/).filter(Boolean).pop() ?? ''
   const tail = plainOf(after).replace(/\s+/g, '').replace(/^[，,]/, '').split(/[。！？!?]/)[0]
   const clauses = lead.split(/[，,]/).filter(Boolean).reverse()
-  return clauses.map(clause => SUBJECT.exec(clause.replace(OPENER, ''))?.[1]).find(Boolean) ?? SUBJECT.exec(tail)?.[1] ?? null
+  const heard = clauses.length ? HEARD_PRONOUN.exec(clauses[0])?.[1] : null
+  return heard ?? clauses.map(clause => SUBJECT.exec(clause.replace(OPENER, ''))?.[1]).find(Boolean) ?? SUBJECT.exec(tail)?.[1] ?? null
 }
 
 /**
  * Who a pronoun means: 你 the player; 她/他 the cast member of that kind named
- * last, else the card's character when it could be (a one-character card
+ * last (in a story told in the third person, the player until someone else
+ * is), else the card's character when it could be (a one-character card
  * calls its heroine 她 for whole replies).
  */
 function byPronoun(pronoun, names, recent) {
   if (pronoun === '你') return names.find(entry => entry.player)?.name ?? null // i18n-ignore: a pronoun in the story
   const kind = pronoun === '她' ? 'girl' : 'boy' // i18n-ignore: a pronoun in the story
-  if (recent[kind]) return recent[kind]
+  // A trade word (掌柜) named more than three lines ago is no longer who 他 means.
+  if (recent[kind] && !(recent.row - recent.at?.[kind] > 3)) return recent[kind]
   const char = names.find(entry => entry.char)
   return char && (!char.kind || char.kind === kind) ? char.name : null
 }
 
 /**
- * A quote alone on its line. The line before it is about the one who speaks
+ * A quote alone on its line → { speaker } when the lines either side tell
+ * (null: the player with no name, or a 她/他 nobody fits), else null.
+ * The line after may say who said or answered it (你说。 / 白芷接得很快。).
+ * Right after another quote (`turn`: the cast entries of the one answering it
+ * and the one who said it, the likelier first; see answers()) it is the first
+ * of the two the line after allows (他说，…; 你点头。 is the player listening;
+ * the player is no 他/她 unless the story is told in the `third` person).
+ * Else the line before it is about the one who speaks
  * (她停在你面前。 / 师妹乖巧地点头。 / 殿里传来师父的声音。 / 掌柜的愣了一下。);
  * one about 你 is the player listening (你摇头。), unless it names someone
  * else (你还没回答，殿里传来师父的声音。). Else the line after it, when it
  * starts with 她/他 (她跑远了。); a 你 there is the player answering.
  */
-function fromNeighbours(previous, next, names, recent) {
+function fromNeighbours(previous, next, names, recent, turn, third) {
   const clean = row => plainOf(row ?? '').replace(/\s+/g, '')
+  const told = speaker => ({ speaker })
+  const following = clean(next).split(/[。！？!?]/)[0] ?? ''
+  // Not 白芷问：「…」, which says a quote of its own.
+  const answered = !/[：:“「『"]/.test(following) && names.find(entry => entry.keys.some(key => following.startsWith(key) && REPLIED.test(following.slice(key.length))))
+  if (answered) return told(answered.name)
+  const said = PRONOUN_SAID.exec(following)?.[1]
+  if (said === '你') return told(byPronoun(said, names, recent)) // i18n-ignore: a pronoun
+  const pronoun = said ?? (/^[“「『"]/.test(following) ? null : SUBJECT.exec(following)?.[1])
+  if (turn) {
+    // Only 他说 counts here: 他没回答。 is as often the one listening.
+    const kind = said === '她' ? 'girl' : 'boy' // i18n-ignore: a pronoun in the story
+    const fits = entry => (said ? (third || !entry.player) && (!entry.kind || entry.kind === kind) : !(pronoun === '你' && entry.player)) // i18n-ignore: a pronoun
+    const pick = turn.find(fits)
+    return told(pick ? pick.name : byPronoun(said, names, recent))
+  }
+  if (said) return told(byPronoun(said, names, recent))
   const before = clean(previous).split(/[。！？!?]/).filter(Boolean).pop() ?? ''
   if (before && !/[”」』"]$/.test(before)) {
     const subject = SUBJECT.exec(before)?.[1]
-    if (subject && subject !== '你') return byPronoun(subject, names, recent) // i18n-ignore: a pronoun
+    if (subject && subject !== '你') return told(byPronoun(subject, names, recent)) // i18n-ignore: a pronoun
     const lead = names.find(entry => !entry.player && entry.keys.some(key => before.startsWith(key)))
-    if (lead) return lead.name
+    if (lead) return told(lead.name)
     const known = knownIn(before, names.filter(entry => !entry.player), { last: false })
-    if (known) return known
-    // 你和她一前一后走着，她走在前面 — the other one in the sentence.
+    if (known) return told(known)
+    // 你和她一前一后走着，她走在前面 — the other one in the sentence (阿蝉的喉口一紧，他… is still the player).
     const other = /[，,](她|他)/.exec(before)?.[1]
-    if (other) return byPronoun(other, names, recent)
+    const meant = other ? byPronoun(other, names, recent) : null
+    if (other && !(third && meant === names.find(entry => entry.player)?.name)) return told(meant)
   }
-  const following = clean(next).split(/[。！？!?]/)[0] ?? ''
-  if (following && !/^[“「『"]/.test(following)) {
-    const pronoun = SUBJECT.exec(following)?.[1]
-    if (pronoun && pronoun !== '你') return byPronoun(pronoun, names, recent) // i18n-ignore: a pronoun
-  }
-  return null
+  // 她跑远了。 — when someone is 她; else it tells nothing (他仰起头 may be the one listening).
+  const after = pronoun && pronoun !== '你' ? byPronoun(pronoun, names, recent) : null // i18n-ignore: a pronoun
+  return after ? told(after) : null
 }
 
-/** The cast named in narration (not inside quotes), in order: the last of each kind is who 她/他 means. */
+/** A quote's words, without its marks. */
+const innerOf = quote => plainOf(quote).trim().replace(/^[“「『"]|[”」』"]$/g, '')
+
+/** Whether words call on someone by name: it opens them or a sentence or clause in them, and a pause or 你 follows (白芷，… / 哇，好凶！白芷你变了). */
+const callsOn = (text, entry) => entry.keys.some(key => {
+  const at = text.indexOf(key)
+  return at >= 0 && (at === 0 || /[\s，,。！？!?…~～—、]/.test(text[at - 1])) && /^(?:$|[，,。！？!?…~～—、你])/.test(text.slice(at + key.length))
+})
+
+/**
+ * Who would answer a quote said by `from`: the one it calls on (「念念。」);
+ * in a story told to 你, the player answers everyone else (one with no name
+ * when the player has none); else someone among the last few to speak, or null.
+ */
+function answererOf(from, previous, spoke, names, third) {
+  const called = names.find(entry => entry !== from && callsOn(innerOf(previous), entry))
+  if (called) return called
+  const player = names.find(entry => entry.player)
+  if (!third && !from.player) return player ?? { name: null, player: true, keys: [] }
+  const name = [...spoke.slice(-5)].reverse().find(said => said && said !== from.name)
+  return name ? (names.find(entry => entry.name === name) ?? { name, keys: [] }) : null
+}
+
+// A quote that says yes to the one before it (嗯。 / ……好。), or asks what, a short one even with no mark
+// (什么？ / 为什么会高兴。 — not 谁都跑不掉。).
+const REPLY = /^[…。.~～—]*(?:嗯|好[的吧啊呀]?[。！!，,…~～]|对[。！!，,啊呀]|行[。！!，,]|哦)/
+const ASKS_WHAT = /^[…。.~～—]*(?:为什么|什么(?![都也])|怎么|谁(?![都也])|哪(?![儿里]?[都也]))/
+
+/**
+ * Whether a quote alone right after another (`previous`, said by `from`; `by`
+ * the one who would answer it) answers it: true, false (the same one goes on)
+ * or null when its words do not tell. The player's name in it is said to them
+ * (师兄……); someone else's calls on them when it opens the quote or a sentence
+ * or clause in it (白芷，… / 白芷你变了…), or else is how they speak of themselves
+ * (朵朵想找一个人。). 嗯 / 什么？ or a short question (怕什么？) answers; so does
+ * one after a quote calling on `by` (not the player in a story told to 你,
+ * whom everyone calls on), or a statement after a question, unless the one
+ * before spoke of themselves by name.
+ */
+function answers(quote, previous, by, from, third) {
+  const now = innerOf(quote)
+  const then = innerOf(previous)
+  const named = (text, entry) => entry.keys.some(key => text.includes(key))
+  const asks = text => /[？?][~～…！!]*$/.test(text)
+  if (from.player && named(now, from)) return true
+  if (by.player && named(now, by)) return false
+  if (callsOn(now, from)) return true
+  if (callsOn(now, by)) return false
+  if (named(now, from)) return false
+  if (named(now, by)) return true
+  if (REPLY.test(now) || (ASKS_WHAT.test(now) && (asks(now) || now.length <= 8)) || (asks(now) && !asks(then) && now.length <= 5)) return true
+  if ((third || !by.player) && callsOn(then, by)) return true
+  if (named(then, from)) return false
+  return asks(then) && !asks(now) ? true : null
+}
+
+/**
+ * The kinds a reply shows for the cast that has none: the pronoun opening the
+ * next clause that has a subject after one about them (汐汐原地站了两秒，像是
+ * 没料到，她眨了两下眼 → girl), by a clear majority (two votes for the player,
+ * who the story follows doing things to 她). Someone else named, or another
+ * 她/他, on the way is no evidence; nor is a quote between.
+ * @returns {Map<object, 'girl'|'boy'>}
+ */
+function kindsIn(text, names) {
+  const votes = new Map()
+  for (const stretch of plainOf(text).replace(QUOTE, MASK).split(MASK)) {
+    let about = null
+    for (const clause of stretch.split(/[，,。！？!?；;：:…—\n]+/)) {
+      const body = clause.trim().replace(OPENER, '')
+      if (!body) continue
+      const lead = names.find(entry => entry.keys.some(key => body.startsWith(key)))
+      const others = names.some(entry => entry !== lead && entry.keys.some(key => body.includes(key)))
+      const pronoun = /^([她他])(?![们])/.exec(body)?.[1]
+      if (pronoun && about && !/[她他]/.test(body.slice(1)) && !lead && !others) {
+        const tally = votes.get(about) ?? { girl: 0, boy: 0 }
+        tally[pronoun === '她' ? 'girl' : 'boy']++ // i18n-ignore: a pronoun in the story
+        votes.set(about, tally)
+      }
+      if (lead) about = others || /[她他]/.test(body) ? null : lead
+      else if (pronoun || others || /^[你我您]|[她他]/.test(body)) about = null
+    }
+  }
+  const kinds = new Map()
+  for (const [entry, { girl, boy }] of votes) {
+    const margin = entry.player ? 2 : 1
+    if (girl > 2 * boy && girl >= boy + margin) kinds.set(entry, 'girl')
+    else if (boy > 2 * girl && boy >= girl + margin) kinds.set(entry, 'boy')
+  }
+  return kinds
+}
+
+/** The cast with the kinds the reply shows; the card's character and the player, when only one of them has a kind, the other one's opposite. */
+function withKinds(text, names) {
+  const shown = kindsIn(text, names)
+  const out = names.map(entry => (entry.kind || !shown.has(entry) ? entry : { ...entry, kind: shown.get(entry) }))
+  const char = out.find(entry => entry.char)
+  const player = out.find(entry => entry.player)
+  const opposite = { girl: 'boy', boy: 'girl' }[char?.kind ?? player?.kind]
+  if (char && player && !char.kind !== !player.kind && opposite) {
+    const lone = char.kind ? player : char
+    out[out.indexOf(lone)] = { ...lone, kind: opposite }
+  }
+  return out
+}
+
+/**
+ * The cast named in narration (not inside quotes or a 【system panel】), in order: the last of each kind is who 她/他 means.
+ * A trade word only where it opens a clause (掌柜的愣了一下) or brings one in (门外站着个年轻捕快), not in passing
+ * (几个老汉蹲在墙根); `recent.at` keeps the line it was named on (`recent.row`).
+ */
 function noteNamed(text, names, recent) {
-  const prose = masked(String(text ?? '')).replace(QUOTE, '')
+  const prose = masked(String(text ?? '')).replace(QUOTE, '').replace(/【[^】]*(?:】|$)/g, '')
+  const opens = at => /[\s\u0001，,。！？!?；;：:、”」』"]/.test(prose[at - 1]) || /(?:^|[^几两三四五六七八九十许些多])[个位名][^\s，,。！？!?]{0,3}$/.test(prose.slice(Math.max(0, at - 6), at))
   const found = []
   for (const entry of names) {
-    if (entry.player) continue
     for (const key of entry.keys) {
-      const at = prose.lastIndexOf(key)
+      let at = prose.lastIndexOf(key)
+      while (entry.role && at > 0 && !opens(at)) at = prose.lastIndexOf(key, at - 1)
       if (at >= 0) found.push({ at: at + key.length, entry })
     }
   }
+  recent.at ??= {}
   for (const { entry } of found.sort((a, b) => a.at - b.at)) {
-    if (entry.kind !== 'boy') recent.girl = entry.name
-    if (entry.kind !== 'girl') recent.boy = entry.name
+    const note = kind => {
+      recent[kind] = entry.name
+      recent.at[kind] = entry.role ? recent.row : undefined
+    }
+    if (entry.kind !== 'boy') note('girl')
+    if (entry.kind !== 'girl') note('boy')
   }
 }
 
@@ -365,11 +511,21 @@ export function splitLines(text, { names = [], max = 90, partial = false } = {})
   const recent = {}
   let label = null
   let lastSpeaker = null
-  const own = names
-  names = [...own, ...ROLES.filter(role => !own.some(entry => entry.keys.includes(role.name)))]
-  const player = own.find(entry => entry.player)
+  // The quote the line before ends with ({ speaker, quote, answered }: a quote alone after it may answer it), and everyone who spoke.
+  let answering = null
+  const spoke = []
+  names = withKinds(source, [...names, ...ROLES.filter(role => !names.some(entry => entry.keys.includes(role.name)))])
+  const player = names.find(entry => entry.player)
+  // Told in the third person (阿蝉推门进去。, not 你): the player is one more 他/她, the one the story follows.
+  const prose = plainOf(source).replace(QUOTE, '')
+  const third = Boolean(player?.kind) && player.keys.reduce((n, key) => n + prose.split(key).length - 1, 0) > (prose.match(/你/g) ?? []).length
+  const noted = third ? names : names.filter(entry => !entry.player)
+  if (third) recent[player.kind] = player.name
   rows.forEach((row, i) => {
     const unfinished = partial && i === rows.length - 1
+    recent.row = i
+    const turnFrom = answering
+    answering = null
     // A rule between scenes.
     if (/^[-—–*＊=_~·\s]{3,}$/.test(plainOf(row).trim())) return
     // A header line (日期 · 时辰 · 地点): the sign and the background, not a line to read.
@@ -391,29 +547,40 @@ export function splitLines(text, { names = [], max = 90, partial = false } = {})
       return
     }
     let rowSpeaker = null
-    for (const beat of beatsOf(row, max)) {
+    beatsOf(row, max).forEach((beat, b) => {
       let speaker = null
       if (beat.kind === 'dialogue') {
-        noteNamed(beat.before, names, recent)
+        noteNamed(beat.before, noted, recent)
         const pronoun = pronounNear(beat.before, beat.after)
         speaker = guessSpeaker(beat.before, beat.after, names) ?? label ?? (pronoun ? byPronoun(pronoun, names, recent) : null) ?? rowSpeaker
-        // Nothing around it on its line: the lines either side.
+        // Nothing around it on its line: the lines either side. Right after another quote, it answers that one or
+        // the same one goes on: its words say which, else as the line before went (else the player is answered).
         const bare = !plainOf(beat.before).trim() && !plainOf(beat.after).replace(/[\s~～…。！？!?，,]/g, '')
-        if (!speaker && bare) speaker = fromNeighbours(rows[i - 1], rows[i + 1], names, recent)
-        // 「师兄，渴不渴？」 is said to the player, not by them.
         const quoted = plainOf(beat.text.slice(beat.before.length, beat.text.length - beat.after.length))
-        if (player && speaker === player.name && player.keys.some(key => quoted.includes(key))) speaker = null
+        const from = !speaker && bare && b === 0 && turnFrom?.speaker ? (names.find(entry => entry.name === turnFrom.speaker) ?? { name: turnFrom.speaker, keys: [] }) : null
+        const by = from ? answererOf(from, turnFrom.quote, spoke, names, third) : null
+        const answered = by && (answers(quoted, turnFrom.quote, by, from, third) ?? turnFrom.answered ?? Boolean(from.player))
+        const turn = by ? (answered ? [by, from] : [from, by]) : null
+        let near = !speaker && bare ? fromNeighbours(rows[i - 1], rows[i + 1], names, recent, turn, third) : null
+        if (near) speaker = near.speaker
+        // 「师兄，渴不渴？」 is said to the player, not by them (and lines either side that said so told nothing).
+        if (player && speaker === player.name && player.keys.some(key => quoted.includes(key))) speaker = near = null
         // Nothing says who: whoever spoke last (not the player, whose lines are written as such), else the card's
         // own. A line led in by 说 that still cannot be told (等你说「是。」) keeps no name.
-        if (!speaker && !pronoun && !SAY_TAIL.test(plainOf(beat.before).replace(/\s+/g, ''))) speaker = lastSpeaker ?? names.find(entry => entry.char)?.name ?? null
+        if (!speaker && !near && !pronoun && !SAY_TAIL.test(plainOf(beat.before).replace(/\s+/g, ''))) speaker = lastSpeaker ?? names.find(entry => entry.char)?.name ?? null
         rowSpeaker = speaker
-        if (speaker && !names.find(entry => entry.name === speaker)?.player) lastSpeaker = speaker
         const who = names.find(entry => entry.name === speaker)
-        if (who && !who.player) noteNamed(who.keys[0], [who], recent)
-        noteNamed(beat.after, names, recent)
-      } else noteNamed(beat.text, names, recent)
+        spoke.push(speaker)
+        if (speaker && !who?.player) lastSpeaker = speaker
+        if (who && noted.includes(who)) noteNamed(who.keys[0], [who], recent)
+        noteNamed(beat.after, noted, recent)
+        answering = { speaker, quote: quoted, answered: by ? speaker !== from.name : undefined }
+      } else {
+        noteNamed(beat.text, noted, recent)
+        answering = null
+      }
       beats.push({ kind: beat.kind, text: beat.text, speaker })
-    }
+    })
     label = named?.name ?? null
   })
   const texts = carryTags(beats.map(beat => beat.text))

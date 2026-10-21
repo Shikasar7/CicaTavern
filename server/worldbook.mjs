@@ -18,6 +18,10 @@ const list = value =>
     .map(item => String(item).trim())
     .filter(Boolean)
 
+// MVU-style cards keep the initial variables in an entry, not in the prompt.
+const INITVAR = /initvar|初始变量|\[init/i
+const SCRIPT = /<%[\s\S]*?%>/
+
 function normalizeEntry(raw, index) {
   const ext = raw.extensions && typeof raw.extensions === 'object' ? raw.extensions : {}
   const comment = str(raw.comment || raw.name).trim()
@@ -39,9 +43,8 @@ function normalizeEntry(raw, index) {
     wholeWords: (raw.matchWholeWords ?? ext.match_whole_words) === true,
     probability: Number(raw.probability ?? ext.probability ?? 100),
     useProbability: (raw.useProbability ?? ext.useProbability) === true,
-    // MVU-style cards keep the initial variables in an entry, not in the prompt.
-    initvar: /initvar|初始变量|\[init/i.test(comment),
-    hasScript: /<%[\s\S]*?%>/.test(content),
+    initvar: INITVAR.test(comment),
+    hasScript: SCRIPT.test(content),
   }
 }
 
@@ -101,11 +104,12 @@ export function isLate(entry) {
   return entry.position >= 2 && entry.position <= 4
 }
 
-const isStaticConstant = e => e.enabled && e.constant && !e.initvar && !isDynamic(e)
+/** Static constant entries: rendered into a chat's frozen prefix when it starts. */
+export const inPrefix = e => e.enabled && e.constant && !e.initvar && !isDynamic(e)
 
 /** Constant entries that never change: they go into the cached prefix. */
 export function constantEntries(books) {
-  return sortEntries(books.flatMap(book => book.entries.filter(e => isStaticConstant(e) && !isLate(e))))
+  return sortEntries(books.flatMap(book => book.entries.filter(e => inPrefix(e) && !isLate(e))))
 }
 
 /**
@@ -116,7 +120,7 @@ export function constantEntries(books) {
  * cache for everything after the edit.
  */
 export function lateEntries(books) {
-  return sortEntries(books.flatMap(book => book.entries.filter(e => isStaticConstant(e) && isLate(e))))
+  return sortEntries(books.flatMap(book => book.entries.filter(e => inPrefix(e) && isLate(e))))
 }
 
 export function entryTitle(entry) {
@@ -183,4 +187,71 @@ export function triggeredEntries(books, scanText, recentlyInjected) {
     }
   }
   return hits.sort((a, b) => a.entry.order - b.entry.order)
+}
+
+/** "27 entries, 26 in use, 19 of them constant", as the settings show a book. */
+export function bookCounts(book) {
+  const enabled = book.entries.filter(e => e.enabled !== false)
+  return { entries: book.entries.length, enabled: enabled.length, constant: enabled.filter(e => e.constant).length }
+}
+
+// What of an entry the frozen prefix holds: its text, title and place, and whether it is in at all.
+const PREFIX_FIELDS = ['enabled', 'constant', 'content', 'comment', 'order', 'position']
+const MAX_ENTRIES = 2000
+
+/** An entry's fields as the page edits them; anything else in `change` is left alone. */
+function editEntry(entry, change) {
+  if (typeof change.enabled === 'boolean') entry.enabled = change.enabled
+  if (typeof change.constant === 'boolean') entry.constant = change.constant
+  if (typeof change.comment === 'string') entry.comment = change.comment.trim().slice(0, 200)
+  if (change.keys !== undefined) entry.keys = list(change.keys).slice(0, 100)
+  if (change.secondaryKeys !== undefined) entry.secondaryKeys = list(change.secondaryKeys).slice(0, 100)
+  if (typeof change.content === 'string') entry.content = change.content
+  if (change.order !== undefined) {
+    const order = Math.trunc(Number(change.order))
+    if (Number.isFinite(order)) entry.order = Math.min(99999, Math.max(-99999, order))
+  }
+  if (change.position !== undefined) {
+    const position = Math.trunc(Number(change.position))
+    if (position >= 0 && position <= 7) entry.position = position
+  }
+  entry.initvar = INITVAR.test(entry.comment)
+  entry.hasScript = SCRIPT.test(entry.content)
+  return entry
+}
+
+/**
+ * Edit a book's entries in place (a card's own or an imported one):
+ * `{ entries: [{ uid, enabled, constant, comment, keys, secondaryKeys, content, order, position }], add: { … }, remove: [uid] }`.
+ * Returns whether a chat's frozen prefix would now come out different, so the
+ * page can say an open chat keeps the old text until it is applied again;
+ * keyword entries and templated ones are read every turn.
+ */
+export function editBook(book, patch = {}) {
+  let prefix = false
+  let added = null
+  const touches = (before, after) => (inPrefix(before) || inPrefix(after)) && PREFIX_FIELDS.some(key => before[key] !== after[key])
+  for (const change of Array.isArray(patch.entries) ? patch.entries : []) {
+    const entry = book.entries.find(e => e.uid === String(change?.uid))
+    if (!entry) continue
+    const before = { ...entry }
+    if (touches(before, editEntry(entry, change))) prefix = true
+  }
+  if (patch.add && typeof patch.add === 'object') {
+    if (book.entries.length >= MAX_ENTRIES) throw httpError(400, msg`条目太多（最多 ${MAX_ENTRIES} 条）`)
+    // SillyTavern numbers entries; the next free number keeps that.
+    const taken = new Set(book.entries.map(e => e.uid))
+    let uid = book.entries.reduce((max, e) => Math.max(max, Number(e.uid) || 0), -1) + 1
+    while (taken.has(String(uid))) uid++
+    const entry = editEntry(normalizeEntry({ uid, comment: '', content: '' }, uid), patch.add)
+    book.entries.push(entry)
+    if (inPrefix(entry)) prefix = true
+    added = entry.uid
+  }
+  if (Array.isArray(patch.remove)) {
+    const gone = new Set(patch.remove.map(String))
+    if (book.entries.some(e => gone.has(e.uid) && inPrefix(e))) prefix = true
+    book.entries = book.entries.filter(e => !gone.has(e.uid))
+  }
+  return { book, prefix, added }
 }

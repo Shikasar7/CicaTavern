@@ -49,7 +49,7 @@ From the author's own long chats (October 2026):
 ### Works with SillyTavern cards, world books and presets
 
 - **Character cards**: SillyTavern V1/V2/V3 PNG and JSON, with embedded world books, regex scripts and alternate greetings. A new version of a card can replace the old one in place, keeping your chats.
-- **World books**: always-on and keyword entries, with regex keys, secondary keys, probability and insertion position. Standalone world books can be attached to a card.
+- **World books**: always-on and keyword entries, with regex keys, secondary keys, probability and insertion position. Standalone world books can be attached to a card, and after import every entry can be searched, switched on or off and edited under View entries (查看条目).
 - **Presets**: a light built-in "Basic preset" with switches for point of view, style, not acting for you, limited knowledge, dark themes, intimacy, choices (tap to send) and a time box, so it plays well without importing anything. You can also import Chat Completion presets, toggle and edit their entries, and pin the ones you use most as quick switches.
 - **MVU variables and status bars**: `[InitVar]`, `<UpdateVariable>` / JSONPatch and the older `_.set()` are supported; EJS templates run in a QuickJS sandbox. HTML UIs inside cards render in isolated iframes, with a compatibility layer for the common Tavern Helper (酒馆助手) functions. The libraries those UIs need, such as jQuery and Vue, load from jsDelivr, so some may be missing offline.
 - **SillyTavern chats**: import a .jsonl (drop it into the window or use Import archive) with every turn, every swipe and the MVU variables; a long one can be compacted into a story archive first.
@@ -103,17 +103,16 @@ If you can't quite say what you want, the creator guides you round by round:
 
 <br clear="right">
 
-## Latest changes [1.8.1]
+## Latest changes [1.8.2]
 
-<p align="center"><img src="docs/screenshots/vn-cg.jpg" alt="Visual novel mode in 1.8.1: a ▾ menu beside Read and Pictures at the top right, and this turn's CG at the top left, which opens onto every CG so far" width="880"></p>
+<p align="center"><img src="docs/screenshots/books.jpg" alt="The lorebook entries window in 1.8.2: a card's own lorebook entry by entry, each with its switch, search, and ✎ to edit the name, trigger, keywords, position, order and text" width="880"></p>
 
-- **A voice for everyone in the cast**: pick a voice for each character in the roster; visual novel mode reads each line in its speaker's voice, and Read aloud in the chat splits the reply by speaker too.
-- **Settings inside visual novel mode**: the ▾ beside Read and Pictures changes line-by-line reading, auto-advance, voices and the speech model, or auto pictures, the image backend, model and aspect ratio, without leaving the mode.
-- **CG gallery**: press G or click CG to see every picture on the storyline, each marked with its turn, and page through them full size.
-- **More ways to draw and more voices**: Gemini's own image models (Nano Banana, following the cast's reference pictures), a local SD WebUI / Forge, and OpenRouter's image models; read-aloud adds Gemini's 30 prebuilt voices.
-- **Better name plates**: narration before a colon is no longer taken for a name, and names are picked up from more ways of saying who speaks.
+- **View and edit lorebook entries**: Settings → Attached lorebooks → View entries lists a card's own lorebook and the imported ones entry by entry, to search, switch on or off and edit; changes save at once.
+- **Visual novel mode on phones**: one row of buttons at the top right, the rest behind ⋯; the ▾ settings open as a sheet from the bottom, the choices fit between the buttons and the text box, long ones included, and held sideways the card list steps aside.
+- **Sharper name plates**: with no genders in the cast list, "he" and "she" are worked out from the reply, and when two people trade lines a lone quote goes to the right one.
+- **Pictures & voice is a group of its own in Settings** instead of a row under More.
 
-Download from [Releases](https://github.com/Shikasar7/CicaTavern/releases/latest); 1.4.0 and later can update in the app. Everything that changed is in [CHANGELOG.md](CHANGELOG.md).
+Visual novel mode came in 1.8.0; voices for each character, the ▾ menus and the CG gallery in 1.8.1 (see above). Download from [Releases](https://github.com/Shikasar7/CicaTavern/releases/latest); 1.4.0 and later can update in the app. Everything that changed is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Getting started (Windows)
 

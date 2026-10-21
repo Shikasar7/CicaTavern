@@ -320,6 +320,25 @@
     </div>
   </dialog>
 
+  <!-- 设置 → 挂载的世界书 → 查看条目 (web/books.js). -->
+  <dialog id="book-dialog" class="dialog presets books">
+    <div class="preset-layout">
+      <nav class="preset-nav">
+        <div class="preset-nav-head">
+          <h2>世界书条目</h2>
+        </div>
+        <ul class="preset-list" id="book-list"></ul>
+        <p class="muted small preset-nav-note">卡里自带的始终生效；独立世界书在「挂载的世界书」里勾上才对这张卡生效。常驻条目写进对话开局时的固定前缀，关键词条目提到时才发送。</p>
+      </nav>
+      <button type="button" class="btn small ghost preset-back">‹ 全部世界书</button>
+      <section class="preset-main" id="book-main"></section>
+      <!-- autofocus: opening the window does not put a phone's keyboard up for the search box. -->
+      <form method="dialog" class="preset-close"><button class="btn ghost icon" aria-label="关闭" autofocus>
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15" /></svg>
+      </button></form>
+    </div>
+  </dialog>
+
   <dialog id="regex-dialog" class="dialog presets regex">
     <div class="preset-layout">
       <nav class="preset-nav">

@@ -497,6 +497,12 @@ dl.usage dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; 
 .card-book.none { color: var(--muted); }
 .card-book-on { margin-left: auto; font-size: 11px; color: var(--accent); background: var(--accent-soft); border-radius: 999px; padding: 1px 8px; white-space: nowrap; }
 .book-none { margin: 4px 2px 0; line-height: 1.6; }
+/* Each book's name with its count (under it on a phone), and a button at the row's end that opens its entries (web/books.js). */
+.book-text { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
+.book-name { min-width: 0; overflow-wrap: anywhere; }
+.book-count { color: var(--muted); font-size: 12px; }
+.book-open { margin-left: auto; flex: none; }
+.card-book-on + .book-open { margin-left: 0; }
 .access { border: 1px solid var(--line-soft); border-radius: 12px; margin: 0 0 14px; padding: 10px 14px; }
 .access legend { font-size: 12px; color: var(--muted); padding: 0 4px; }
 .access select { margin-top: 4px; }
@@ -1647,6 +1653,19 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
   .regex-actions { padding: 12px 16px 16px; }
 }
 
+/* 世界书条目 (web/books.js): the preset window's rows, with an entry's keys and its 常驻/关键词 tag (forge's .strategy). */
+.book-keys { flex: 0 1 auto; max-width: 40%; min-width: 0; font-size: 12px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prow-line .strategy { flex: none; white-space: nowrap; }
+.prow.off .strategy { opacity: .5; }
+.prompt-field.wide { grid-column: 1 / -1; }
+/* Phones: switch and name on the first line; the tag, then the keys filling the rest, below. */
+@media (max-width: 780px) {
+  .book-entries .prow-line > .strategy { order: 1; }
+  .book-entries .prow-line > .book-keys { order: 2; flex: 1 1 0; max-width: none; }
+  .book-entries .prow-line > .prow-size { order: 3; }
+  .book-entries .prow-line > .prow-edit { order: 4; }
+}
+
 /* ─── 视觉小说模式 (web/vn.js): over the transcript, inside .reader ───── */
 .vn { position: absolute; inset: 0; z-index: 5; overflow: hidden; background: var(--bg); user-select: none; -webkit-user-select: none; }
 .vn-bg {
@@ -1691,7 +1710,7 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .vn-sprite.show { opacity: 1; visibility: visible; transform: translate(-50%, 0); transition: opacity .28s var(--ease), transform .28s var(--ease), visibility 0s; }
 @media (prefers-reduced-motion: reduce) { .vn-sprite, .vn-sprite.show { transform: translate(-50%, 0); } }
 /* The controls take the top row; under them on the left: the time box, what is being drawn, the turn's CG. */
-.vn-corner { position: absolute; top: 52px; left: 12px; max-width: calc(100% - 24px); display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.vn-corner { position: absolute; top: var(--vn-above, 52px); left: 12px; max-width: calc(100% - 24px); display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
 .vn-sign[hidden] { display: none; }
 .vn-sign .time-box { margin: 0; background: color-mix(in srgb, var(--raised) 78%, transparent); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
 .vn-cg-thumb {
@@ -1790,10 +1809,16 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .vn-split { display: inline-flex; }
 .vn-split > .vn-btn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; padding-right: 9px; }
 .vn-btn.vn-more { border-top-left-radius: 0; border-bottom-left-radius: 0; margin-left: -1px; padding-left: 6px; padding-right: 8px; color: var(--muted); }
-.vn-btn.vn-more.open { color: var(--accent); border-color: var(--accent); }
+.vn-btn.vn-more.open, .vn-btn.vn-overflow.open { color: var(--accent); border-color: var(--accent); }
+/* ⋯: only where the row is cut short (phones, below). */
+.vn-overflow, .vn-scrim { display: none; }
+.vn-pop-head > b { font: 600 14px var(--ui); letter-spacing: .08em; }
+.vn-more-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.vn-more-grid .vn-btn { padding: 10px 6px; font-size: 13px; overflow: hidden; text-overflow: ellipsis; background: var(--surface); border-color: var(--line); }
+.vn-more-grid .vn-btn.on { background: var(--accent); border-color: var(--accent); }
 /* Their settings, just below the controls. */
 .vn-pop {
-  position: absolute; z-index: 3; top: 52px; right: 12px; width: min(380px, calc(100% - 24px)); max-height: calc(100% - 80px); overflow-y: auto;
+  position: absolute; z-index: 3; top: var(--vn-above, 52px); right: 12px; width: min(380px, calc(100% - 24px)); max-height: calc(100% - var(--vn-above, 52px) - 16px); overflow-y: auto;
   display: flex; flex-direction: column; gap: 10px; padding: 12px 14px 14px; border-radius: 16px; font: 13px/1.5 var(--ui); color: var(--ink);
   background: color-mix(in srgb, var(--raised) 94%, transparent); border: 1px solid var(--line-soft); box-shadow: var(--shadow-3);
   backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); animation: vn-pop-in .18s var(--ease);
@@ -1822,10 +1847,12 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 label.cast-voice, .dialog label.cast-voice { display: grid; grid-template-columns: minmax(56px, max-content) minmax(0, 1fr); flex-direction: row; align-items: center; gap: 10px; margin: 0; }
 .cast-voice-name { max-width: 10em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-size: 13px; }
 
-/* The turn's choices: a game's menu in the middle of the picture above the text box, the picture stepping back behind it. */
+/* The turn's choices: a game's menu in the middle of the picture above the text box, the picture stepping back behind it.
+   Centred in what is left between the controls (and the time box) and the text box, both measured by web/vn.js. */
 .vn-menu {
-  position: absolute; z-index: 1; left: 50%; top: calc((100% - min(40%, 260px)) / 2 + 24px); transform: translate(-50%, -50%);
-  width: min(640px, calc(100% - 32px)); max-height: calc(100% - min(40%, 260px) - 100px); overflow-y: auto;
+  position: absolute; z-index: 1; left: 50%; transform: translate(-50%, -50%);
+  top: calc(var(--vn-menu-top, 52px) + (100% - var(--vn-menu-top, 52px) - var(--vn-below, 40%)) / 2);
+  width: min(640px, calc(100% - 32px)); max-height: calc(100% - var(--vn-menu-top, 52px) - var(--vn-below, 40%) - 8px); overflow-y: auto;
   display: flex; flex-direction: column; gap: 12px; padding: 18px 18px 14px; border-radius: 20px;
   background: color-mix(in srgb, var(--bg) 74%, transparent); border: 1px solid color-mix(in srgb, var(--lamp) 32%, var(--line-soft));
   box-shadow: var(--shadow-3); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
@@ -1917,9 +1944,8 @@ label.cast-voice, .dialog label.cast-voice { display: grid; grid-template-column
 .vn-switch.fresh { animation: vn-switch-call 2.2s ease-out infinite; }
 @keyframes vn-switch-call { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--lamp) 45%, transparent); } 70%, 100% { box-shadow: 0 0 0 9px transparent; } }
 @media (prefers-reduced-motion: reduce) { .vn-switch.fresh { animation: none; } }
-/* Writing an action: the last line stays readable above the composer, the choices above it. */
-.stage.vn-compose .vn-box { bottom: 112px; max-height: min(34%, 220px); }
-.stage.vn-compose .vn-menu { top: calc((100% - 112px - min(34%, 220px)) / 2 + 24px); max-height: calc(100% - 112px - min(34%, 220px) - 90px); }
+/* Writing an action: the last line stays readable above the composer (its height from web/vn.js), the choices above it. */
+.stage.vn-compose .vn-box { bottom: calc(var(--vn-composer, 104px) + 8px); max-height: min(34%, 220px); }
 /* 全屏: the stage alone, filling the window (and the screen where the browser allows it). */
 .stage.vn-full { position: fixed; inset: 0; z-index: 60; width: auto; height: auto; max-width: none; margin: 0; background: var(--bg); }
 .stage:fullscreen { background: var(--bg); }
@@ -1928,20 +1954,57 @@ label.cast-voice, .dialog label.cast-voice { display: grid; grid-template-column
 @media (max-width: 560px) {
   .topbar #vn-toggle { order: 2; }
   .vn-switch { height: 30px; padding: 0 7px 0 9px; gap: 5px; font-size: 12px; }
-  .vn-box { font-size: 16px; min-height: 120px; max-height: 42%; padding: 16px 18px 24px; }
+  .vn-box { font-size: 16px; line-height: 1.8; min-height: 112px; max-height: 42%; padding: 14px 16px 22px; }
+  .vn.choosing .vn-box { max-height: min(30%, 200px); }
   .vn-sprite { height: 72%; max-width: 92%; }
-  .vn-menu { top: calc(58% / 2 + 40px); max-height: calc(58% - 110px); padding: 14px 12px 10px; }
-  .vn-choice { font-size: 15px; padding: 10px 12px; gap: 10px; }
   .vn-controls { top: 10px; left: 10px; right: 10px; max-width: none; justify-content: flex-end; gap: 5px; }
   .vn-btn { padding: 3px 9px; }
-  .vn-corner { top: 84px; }
   .vn-title { font-size: 21px; }
+  /* The choices take the width; up and down they sit as everywhere else. */
+  .stage.vn-on .vn-menu { left: 10px; right: 10px; width: auto; transform: translateY(-50%); animation-name: vn-menu-rise; padding: 12px 10px 10px; gap: 10px; border-radius: 18px; }
+  .stage.vn-on .vn-panel { left: 10px; right: 10px; width: auto; transform: none; top: var(--vn-above, 48px); max-height: calc(100% - var(--vn-above, 48px) - var(--vn-below, 45%) - 8px); }
 }
+@keyframes vn-menu-rise { from { opacity: 0; transform: translateY(calc(-50% + 12px)) scale(.98); } }
+/* Phones, upright or on their side: one row of controls, the rest behind ⋯; the settings rise from the foot as a sheet. */
+@media (max-width: 560px), (orientation: landscape) and (max-height: 520px) {
+  .vn-controls { flex-wrap: nowrap; }
+  .vn-controls :is(.vn-extra, .vn-tucked) { display: none; }
+  .vn-overflow { display: inline-block; padding-left: 11px; padding-right: 11px; font-weight: 600; }
+  .vn-scrim:not([hidden]) { display: block; position: absolute; inset: 0; z-index: 3; background: rgb(0 0 0 / .32); animation: vn-fade-in .2s var(--ease); }
+  .vn-pop {
+    top: auto; left: 0; right: 0; bottom: 0; width: auto; max-height: min(78%, calc(100% - 40px));
+    padding: 0 16px max(16px, env(safe-area-inset-bottom)); border-radius: 18px 18px 0 0; border-bottom: 0;
+    background: var(--raised); box-shadow: 0 -10px 30px rgb(0 0 0 / .22); animation: vn-sheet-in .22s var(--ease);
+  }
+  .vn-pop-head { position: sticky; top: 0; z-index: 1; margin: 0 -16px; padding: 12px 16px 10px; background: var(--raised); border-bottom: 1px solid var(--line-soft); }
+  .vn-pop-head > .vn-btn { padding: 3px 12px; font-size: 16px; }
+  .vn-menu-head b { font-size: 16px; letter-spacing: .18em; }
+  .vn-menu-head span { font-size: 12px; }
+  .vn-menu-list { gap: 7px; }
+  .vn-choice-row { gap: 5px; }
+  .vn-choice { font-size: 14.5px; line-height: 1.55; padding: 9px 11px; gap: 9px; border-radius: 12px; }
+  .vn-choice:hover:not(:disabled) { transform: none; }
+  .vn-choice-n { width: 22px; height: 22px; font-size: 12px; }
+  .vn-choice-edit { width: 34px; border-radius: 12px; }
+  /* No Shift on a phone keyboard: the Enter hint only takes room from the picture. */
+  .stage.vn-compose .composer-row { display: none; }
+}
+@keyframes vn-sheet-in { from { opacity: 0; transform: translateY(32px); } }
+@keyframes vn-fade-in { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .vn-scrim:not([hidden]) { animation: none; } }
 @media (orientation: landscape) and (max-height: 520px) {
   .stage.vn-on .topbar { display: none; }
+  /* The card list would stay a column here, and with the top bar gone nothing could close it: the picture takes the width. */
+  .app:has(.stage.vn-on) { grid-template-columns: minmax(0, 1fr); }
+  .app:has(.stage.vn-on) .pane.left { display: none; }
   .vn-sprite { left: 22%; height: 94%; }
   .vn-box { left: auto; right: 16px; transform: none; width: min(62%, 720px); max-height: 46%; font-size: 15px; }
-  .vn-menu { left: auto; right: 16px; transform: translateY(-50%); width: min(62%, 600px); top: 27%; max-height: 50%; animation: none; }
+  /* The choices take the text box's column (the time box is on the other side), from under the controls down to the foot or the input. */
+  .stage.vn-on .vn-menu {
+    left: auto; right: 16px; transform: none; width: min(62%, 720px); animation: none;
+    top: var(--vn-above, 48px); max-height: calc(100% - var(--vn-above, 48px) - 12px);
+  }
+  .stage.vn-compose .vn-menu { max-height: calc(100% - var(--vn-above, 48px) - var(--vn-composer, 104px) - 16px); }
 }
 
 /* Scenes (web/vn.js): the picture crossfades in; the chip under the time box says what is being drawn. */

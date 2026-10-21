@@ -17,6 +17,7 @@ import { initWhatsNew } from '/whatsnew.js'
 import { connectionList, showPrivacyNotice } from '/privacy.js'
 import { initTheme } from '/theme.js'
 import { initRegex } from '/regex.js'
+import { countText, initBooks } from '/books.js'
 import { initVn } from '/vn.js'
 import { isRegexFile, scriptsInFile } from '/shared/regex.js'
 import { lang, locale, t, zh } from '/i18n.js'
@@ -1603,35 +1604,61 @@ const openSettings = guard(async () => {
   $('privacy-list').replaceChildren(connectionList(el, { updates: Boolean(ui.features?.updates) }))
   if (!ui.models.some(m => m.id === form.model.value)) form.model.value = ui.defaultModel ?? ui.models[0]?.id ?? ''
   const card = ui.cards.find(c => c.id === ui.cardId)
-  const options = $('book-options')
-  if (!card) options.replaceChildren(document.createTextNode(t`先选择一张角色卡`))
-  else {
-    options.replaceChildren(
-      cardBookLine(card),
-      ...(ui.books.length
-        ? ui.books.map(book =>
-          el('label', {}, [el('input', { type: 'checkbox', name: 'book', value: book.id, checked: card.worldbookIds.includes(book.id) }), t`${book.name}（${book.entries} 条）`]))
-        : [el('p', { class: 'book-none', text: t`还没有导入独立世界书。想给这张卡多挂一本，先用「导入角色卡、世界书或预设」导入世界书 JSON。` })]),
-    )
-  }
+  renderBookOptions(card)
   const [providers, presets] = await Promise.all([api('/api/providers').catch(() => null), api('/api/presets').catch(() => []), updateUi.load()])
   settingsMenu.start()
   layOutSettings({ form, card, providers: providers?.providers ?? [], presets })
   $('settings-dialog').showModal()
 })
 
-/** 设置 → 挂载的世界书: the card's own book, which always applies, so it is a line and not a checkbox. */
+/**
+ * 设置 → 挂载的世界书: the card's own book, then a checkable row per imported
+ * book; each opens its entries (web/books.js). `ticked` keeps the boxes as the
+ * page had them when it is drawn again after an edit there.
+ */
+function renderBookOptions(card, ticked = new Set(card?.worldbookIds ?? [])) {
+  const options = $('book-options')
+  if (!card) return options.replaceChildren(document.createTextNode(t`先选择一张角色卡`))
+  options.replaceChildren(
+    cardBookLine(card),
+    ...(ui.books.length
+      ? ui.books.map(book =>
+        el('label', {}, [
+          el('input', { type: 'checkbox', name: 'book', value: book.id, checked: ticked.has(book.id), 'aria-label': book.name }),
+          el('span', { class: 'book-text' }, [
+            el('span', { class: 'book-name', text: book.name }),
+            el('span', { class: 'book-count', text: bookCount({ entries: book.entries, enabled: book.enabled, constant: book.constant }) }),
+          ]),
+          bookEntriesButton(book.id),
+        ]))
+      : [el('p', { class: 'book-none', text: t`还没有导入独立世界书。想给这张卡多挂一本，先用「导入角色卡、世界书或预设」导入世界书 JSON。` })]),
+  )
+}
+
+/** The card's own book, which always applies, so it is a line and not a checkbox. */
 function cardBookLine(card) {
   if (!card.bookEntries) return el('div', { class: 'card-book none', text: t`这张卡没有自带世界书` })
   return el('div', { class: 'card-book' }, [
-    el('span', { text: t`卡里自带：${cardBookCount(card)}` }),
+    el('span', { text: t`卡里自带：${bookCount({ entries: card.bookEntries, enabled: card.bookEnabled, constant: card.bookConstant })}` }),
     el('span', { class: 'card-book-on', text: t`始终生效` }),
+    bookEntriesButton(`card-${card.id}`),
   ])
 }
 
 /** "42 条（启用 41，其中常驻 24）"; just the total from a server that does not count the rest yet. */
-function cardBookCount(card) {
-  return card.bookEnabled == null ? t`${card.bookEntries} 条` : t`${card.bookEntries} 条（启用 ${card.bookEnabled}，其中常驻 ${card.bookConstant}）`
+function bookCount(counts) {
+  return counts.enabled == null ? t`${counts.entries} 条` : countText(counts)
+}
+
+// Inside a row's label: a button there does not tick the box.
+function bookEntriesButton(id) {
+  return el('button', { type: 'button', class: 'btn small ghost book-open', text: t`查看条目`, onclick: () => openBookEntries(id) })
+}
+
+const tickedBooks = () => [...$('book-options').querySelectorAll('input[name="book"]:checked')].map(input => input.value)
+
+function openBookEntries(id) {
+  booksUi.open({ card: ui.cards.find(c => c.id === ui.cardId), books: ui.books, mounted: tickedBooks(), select: id })
 }
 
 // The settings window as a menu (web/menu.js). Its pages are in index.html;
@@ -1689,7 +1716,9 @@ function layOutSettings({ form, card, providers, presets }) {
       id: 'books', title: t`挂载的世界书`, pane: settingsPages.books, crumb: card ? t`世界书与状态 · ${card.name}` : undefined, hidden: () => !card,
       summary: () => {
         if (!card) return ''
-        const own = card.bookEntries ? t`卡里自带 ${card.bookEntries} 条` : t`卡里没带世界书`
+        // Counted again after edits in the entries window.
+        const entries = (ui.cards.find(c => c.id === card.id) ?? card).bookEntries
+        const own = entries ? t`卡里自带 ${entries} 条` : t`卡里没带世界书`
         const names = [...form.querySelectorAll('input[name="book"]:checked')].map(input => ui.books.find(b => b.id === input.value)?.name).filter(Boolean)
         const mounted = !ui.books.length ? t`还没导入独立世界书` : names.length ? t`挂了 ${names.length} 本：${names.join(t`、`)}` : t`没挂独立世界书`
         return `${own} · ${mounted}`
@@ -1755,9 +1784,10 @@ function layOutSettings({ form, card, providers, presets }) {
     panels: [
       { id: 'model', title: t`模型`, icon: MENU_ICONS.model, rows: ['model', 'providers'] },
       { id: 'write', title: t`写作`, icon: MENU_ICONS.write, rows: ['persona', 'style', 'presets', 'regex'] },
+      { id: 'media', title: t`配图与朗读`, icon: MENU_ICONS.picture, rows: ['media'] },
       { id: 'books', title: t`世界书与状态`, icon: MENU_ICONS.book, rows: ['scan', cardRow, 'books'] },
       { id: 'link', title: t`连接`, icon: MENU_ICONS.link, rows: ['network', 'access'] },
-      { id: 'more', title: t`更多`, icon: MENU_ICONS.tools, rows: ['interface', 'media', 'update', 'privacy', 'shortcut', 'show-prompt', 'rebuild-prompt', 'stop-server'] },
+      { id: 'more', title: t`更多`, icon: MENU_ICONS.tools, rows: ['interface', 'update', 'privacy', 'shortcut', 'show-prompt', 'rebuild-prompt', 'stop-server'] },
     ],
     sections,
     note: t`名字、角色设定和文风写进对话开局时的固定前缀，只对之后新开的对话生效；模型、思考、字数和世界书扫描随时生效。`,
@@ -2064,6 +2094,22 @@ const presetsUi = initPresets({
     ui.settings = settings
     renderChat()
   },
+})
+
+const booksUi = initBooks({
+  api, el, toast, guard,
+  getChat: () => ui.chat,
+  getCards: () => ui.cards,
+  isGenerating: () => ui.generating,
+  onChatChanged: chat => setChat(chat),
+  // The counts under 设置 → 挂载的世界书 and in the card list follow each edit.
+  onChanged: guard(async () => {
+    const ticked = new Set(tickedBooks())
+    ;[ui.books] = await Promise.all([api('/api/worldbooks'), refreshCards()])
+    if (!$('settings-dialog').open) return
+    renderBookOptions(ui.cards.find(c => c.id === ui.cardId), ticked)
+    settingsMenu?.refresh()
+  }),
 })
 
 // ─── Quick switches: preset entries pinned in the preset editor ─────────

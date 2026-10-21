@@ -132,6 +132,45 @@
           }
         }
       ]
+    },
+    {
+      "version": "1.8.2",
+      "date": "2026-10",
+      "items": [
+        {
+          "image": "1.8.2-books.webp",
+          "zh": {
+            "title": "世界书条目可以查看和修改",
+            "text": "设置 →「挂载的世界书」→「查看条目」：卡里自带的和导入的世界书逐条列出，可以搜索、开关，改名字、触发方式、关键词、位置、顺序和内容，改了自动保存。\n常驻条目写在对话开局的固定前缀里，进行中的对话要「应用到当前对话」才会用上；关键词条目下一轮就生效。"
+          },
+          "en": {
+            "title": "View and edit lorebook entries",
+            "text": "Settings → Attached lorebooks → View entries: a card's own lorebook and the imported ones, entry by entry. Search them, switch them on or off, and edit the name, trigger, keywords, position, order and text; changes save at once.\nAlways-on entries live in the fixed prefix written when a chat starts, so a chat under way picks them up after Apply to this chat; keyword entries take effect on the next turn."
+          }
+        },
+        {
+          "image": "1.8.2-phone.webp",
+          "zh": {
+            "title": "手机上的视觉小说",
+            "text": "右上角只留一行按钮，其余收进「⋯」；「朗读」「配图」旁的 ▾ 从屏幕底部弹出，人多也能滚到底。\n选项排在控制栏和文本框之间，长选项也能完整显示；手机横过来时，左边的角色卡栏收起。"
+          },
+          "en": {
+            "title": "Visual novel mode on phones",
+            "text": "One row of buttons at the top right, the rest behind ⋯; the ▾ beside Read and Pictures opens as a sheet from the bottom that scrolls however long the cast is.\nThe choices fit between the buttons and the text box, long ones included; held sideways, the card list steps aside."
+          }
+        },
+        {
+          "icon": "🔖",
+          "zh": {
+            "title": "名字栏更准",
+            "text": "角色名册没写性别时，也能从回复里推断「他」「她」是谁；两人一来一回说话时，单独一句引号认得出是谁说的；「他听见她说」归给「她」。\n另外，设置里的「配图与朗读」单独成了一组，不用再去「更多」里找。"
+          },
+          "en": {
+            "title": "Sharper name plates",
+            "text": "With no genders in the cast list, \"he\" and \"she\" are worked out from the reply; when two people trade lines, a lone quote goes to the right one; \"he heard her say\" goes to her.\nAlso: Pictures & voice is a group of its own in Settings instead of a row under More."
+          }
+        }
+      ]
     }
   ]
 }

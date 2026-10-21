@@ -34,7 +34,7 @@ import { createStore, defaultDataRoot, httpError, PRIVACY_NOTICE } from './store
 import { currentLanguage, localize, msg, pageIn, requestLanguage, withLanguage } from './i18n.mjs'
 import { createUpdater } from './update/index.mjs'
 import { createShortcut } from './update/install.mjs'
-import { normalizeBook } from './worldbook.mjs'
+import { bookCounts, editBook, isDynamic, normalizeBook } from './worldbook.mjs'
 import { replaceMacros } from './prompt.mjs'
 import { accessCookie, hostAllowed, isLoopback, lanAddresses, loginPage, readCookie, tokensEqual } from './access.mjs'
 
@@ -75,6 +75,7 @@ const STATIC = {
   '/shared/appearance.js': ['shared/appearance.js', 'text/javascript; charset=utf-8'],
   '/theme.js': ['theme.js', 'text/javascript; charset=utf-8'],
   '/regex.js': ['regex.js', 'text/javascript; charset=utf-8'],
+  '/books.js': ['books.js', 'text/javascript; charset=utf-8'],
   '/vn.js': ['vn.js', 'text/javascript; charset=utf-8'],
   '/shared/vn.js': ['shared/vn.js', 'text/javascript; charset=utf-8'],
   '/shared/cutout.js': ['shared/cutout.js', 'text/javascript; charset=utf-8'],
@@ -121,6 +122,15 @@ function sendJson(res, status, value) {
 function decodeUpload(body) {
   if (typeof body.data !== 'string' || typeof body.filename !== 'string') throw httpError(400, msg`缺少文件`)
   return { filename: body.filename, buffer: Buffer.from(body.data, 'base64') }
+}
+
+/**
+ * A worldbook with its entries for the page; `dynamic` marks the ones rendered
+ * every turn (templates). `prefix` in a PUT's answer says the edit reached
+ * chats' frozen prefix.
+ */
+function bookView(book, id = book.id) {
+  return { id, name: book.name, entries: book.entries.map(entry => ({ ...entry, dynamic: isDynamic(entry) })) }
 }
 
 /** An uploaded card file (SillyTavern PNG/JSON, or this app's own export) → { card, avatar }. */
@@ -542,8 +552,29 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       return cardSummary(card)
     }],
 
+    // A card's own worldbook entry by entry (worldbook.mjs editBook); chats know it as card-<id>.
+    ['GET', /^\/api\/cards\/([\w-]+)\/book$/, async ([id]) => {
+      const card = await store.getCard(id)
+      if (!card.book) throw httpError(404, msg`这张卡没有自带世界书`)
+      return bookView(card.book, `card-${card.id}`)
+    }],
+    ['PUT', /^\/api\/cards\/([\w-]+)\/book$/, async ([id], body) => {
+      const card = await store.getCard(id)
+      if (!card.book) throw httpError(404, msg`这张卡没有自带世界书`)
+      const { prefix, added } = editBook(card.book, body ?? {})
+      await store.saveCard(card)
+      return { ...bookView(card.book, `card-${card.id}`), prefix, added, card: cardSummary(card) }
+    }],
+
     ['GET', /^\/api\/worldbooks$/, async () =>
-      (await store.listBooks()).map(b => ({ id: b.id, name: b.name, entries: b.entries.length, importedAt: b.importedAt }))],
+      (await store.listBooks()).map(b => ({ id: b.id, name: b.name, ...bookCounts(b), importedAt: b.importedAt }))],
+    ['GET', /^\/api\/worldbooks\/([\w-]+)$/, async ([id]) => bookView(await store.getBook(id))],
+    ['PUT', /^\/api\/worldbooks\/([\w-]+)$/, async ([id], body) => {
+      const book = await store.getBook(id)
+      const { prefix, added } = editBook(book, body ?? {})
+      await store.saveBook(book)
+      return { ...bookView(book), prefix, added }
+    }],
     ['POST', /^\/api\/worldbooks\/import$/, async (_, body) => {
       const { filename, buffer } = decodeUpload(body)
       let json

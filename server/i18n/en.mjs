@@ -382,6 +382,8 @@ export default {
   "这台设备上没有角色卡「{0}」，先导入它": "There's no character card \"{0}\" on this device. Import it first",
   "这个对话里没有这张图": "This chat doesn't have that picture",
   "世界书格式无效": "Invalid lorebook format",
+  "这张卡没有自带世界书": "This card has no built-in lorebook",
+  "条目太多（最多 {0} 条）": n => `Too many entries (at most ${n})`,
   "世界书里没有 entries": "The lorebook has no entries",
 
   // ─── added by hand ─────────────────────────────────────────────────────

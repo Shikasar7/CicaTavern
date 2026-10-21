@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Put the app's shortcut ("CicaTavern") on the desktop (Windows), for a source
+// Put the app's shortcut ("CicaTavern 个人版" here, "CicaTavern" for a checkout without the subscription code) on the desktop (Windows), for a source
 // checkout such as this machine's own install: it opens CicaTavern.exe at the
 // checkout's root (launcher/; built here first if missing, which needs the
 // MSVC Build Tools). The exe runs bin/launch.mjs with the node.exe on PATH and

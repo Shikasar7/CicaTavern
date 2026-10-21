@@ -375,15 +375,17 @@ int CreateShortcut(const std::wstring& exe, const std::wstring& dir, const std::
   }
   if (folder.empty()) folder = KnownFolder(Has(args, L"--start-menu") ? FOLDERID_Programs : FOLDERID_Desktop);
   if (folder.empty() || !IsFolder(folder)) return Error(L"找不到要放快捷方式的文件夹。");
-  std::wstring path = Join(folder, L"CicaTavern.lnk");
+  // The personal edition (a checkout with the subscription code) has its own
+  // name, so its shortcut and a release package's sit side by side.
+  bool personal = IsFolder(Join(dir, L"server\\subscription"));
+  std::wstring path = Join(folder, personal ? L"CicaTavern 个人版.lnk" : L"CicaTavern.lnk");
   Link link;
   if (!link.Make()) return Error(L"建不了快捷方式（IShellLink 不可用）。");
-  bool package = IsFile(Join(dir, L"edition.json"));
   link.shell->SetPath(exe.c_str());
   link.shell->SetArguments(L"");
   link.shell->SetWorkingDirectory(dir.c_str());
   link.shell->SetIconLocation(exe.c_str(), 0);
-  link.shell->SetDescription(package ? L"用自己的模型 API 游玩角色卡" : L"CicaTavern 个人版");
+  link.shell->SetDescription(personal ? L"CicaTavern 个人版" : L"用自己的模型 API 游玩角色卡");
   if (FAILED(link.file->Save(path.c_str(), TRUE))) return Error(L"快捷方式保存不了：" + path);
   Print(path);
   return 0;

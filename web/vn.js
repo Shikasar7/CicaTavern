@@ -155,26 +155,71 @@ export function initVn(deps) {
   const split = (main, more) => el('span', { class: 'vn-split' }, [main, more])
   // The settings by those switches: this mode's own first, then what the transcript shares (web/media.js).
   const pop = el('div', { class: 'vn-pop', hidden: true, role: 'dialog' })
+  // On a phone the menu is a sheet over a dimmed picture: a tap there closes it, and reaches nothing under it.
+  const scrim = el('div', { class: 'vn-scrim', hidden: true })
   let popKind = null
   const optionsButton = control(t`选项`, t`这一轮的行动选项（O）`, () => (menu.hidden ? showMenu() : hideMenu()))
   const fullButton = control(t`全屏`, t`全屏（F），Esc 退出`, () => toggleFullscreen())
+  const cgControl = control('CG', t`CG 回廊：这条故事线上所有的配图（G）`, () => openGallery())
+  const sceneControl = control(t`场景`, t`这张卡的场景图`, () => openLibrary('scenes'))
+  const spriteControl = control(t`立绘`, t`角色说话时显示的立绘`, () => openLibrary('sprites'))
+  const hideControl = control(t`隐藏`, t`隐藏界面（H），点一下恢复`, () => root.classList.add('bare'))
+  const actControl = control(t`✎ 行动`, t`写下你的行动（回车）`, () => compose(true))
+  const exitControl = control(t`退出`, t`退出视觉小说模式`, () => setOn(state.cardId, false))
+  // On a phone the row keeps 朗读, 配图, 回看, 自动, 跳过; the rest wait behind ⋯ (CSS hides them, its menu lists them).
+  const extras = [cgControl, speedButton, statusButton, optionsButton, sceneControl, spriteControl, hideControl, fullButton, actControl, exitControl]
+  for (const b of extras) b.classList.add('vn-extra')
+  const moreButton = control('⋯', t`更多：CG、速度、状态、选项、场景、立绘、隐藏、全屏、行动、退出`, () => togglePop('more'))
+  moreButton.classList.add('vn-overflow')
+  const logControl = control(t`回看`, t`回看（L）`, () => openLog())
+  const skipControl = control(t`跳过`, t`跳到最新一句`, () => skip())
+  // Where even that row runs long (English on a narrow phone), these go behind ⋯ too, in this order.
+  const tuckable = [logControl, skipControl, autoButton]
   const controls = el('div', { class: 'vn-controls' }, [
     el('span', { class: 'vn-quick' }, [split(readButton, readMore), split(imageButton, imageMore)]),
-    control(t`回看`, t`回看（L）`, () => openLog()),
-    control('CG', t`CG 回廊：这条故事线上所有的配图（G）`, () => openGallery()),
+    logControl,
+    cgControl,
     autoButton,
-    control(t`跳过`, t`跳到最新一句`, () => skip()),
+    skipControl,
     speedButton,
     statusButton,
     optionsButton,
-    control(t`场景`, t`这张卡的场景图`, () => openLibrary('scenes')),
-    control(t`立绘`, t`角色说话时显示的立绘`, () => openLibrary('sprites')),
-    control(t`隐藏`, t`隐藏界面（H），点一下恢复`, () => root.classList.add('bare')),
+    sceneControl,
+    spriteControl,
+    hideControl,
     fullButton,
-    control(t`✎ 行动`, t`写下你的行动（回车）`, () => compose(true)),
-    control(t`退出`, t`退出视觉小说模式`, () => setOn(state.cardId, false)),
+    actControl,
+    exitControl,
+    moreButton,
   ])
-  root.append(bg, tint, sprite, corner, title, panel, menu, box, controls, pop, logBox, cgView)
+  root.append(bg, tint, sprite, corner, title, panel, menu, box, controls, scrim, pop, logBox, cgView)
+
+  // Where the layers in between may go: under the controls (however they wrapped), above the text box,
+  // and the text box itself above the input while it is open.
+  function placeLayers() {
+    if (root.hidden) return
+    fitControls()
+    const composer = $('composer')
+    if (composer) root.style.setProperty('--vn-composer', `${composer.offsetHeight}px`)
+    const below = controls.offsetTop + controls.offsetHeight
+    root.style.setProperty('--vn-above', `${below + 8}px`)
+    // The choices also keep clear of the time box (the CG under it may go behind them).
+    const signFoot = sign.hidden || !sign.offsetHeight ? 0 : corner.offsetTop + sign.offsetTop + sign.offsetHeight
+    root.style.setProperty('--vn-menu-top', `${Math.max(below, signFoot) + 8}px`)
+    root.style.setProperty('--vn-below', `${root.clientHeight - box.offsetTop + 10}px`)
+  }
+  /** With ⋯ showing, the row keeps what fits; it is aligned right, so too much runs off its left edge. */
+  function fitControls() {
+    for (const b of tuckable) b.classList.remove('vn-tucked')
+    if (getComputedStyle(moreButton).display === 'none') return
+    const runsOver = () => controls.firstElementChild.getBoundingClientRect().left < controls.getBoundingClientRect().left - 0.5
+    for (const b of tuckable) {
+      if (!runsOver()) break
+      b.classList.add('vn-tucked')
+    }
+  }
+  const layout = new ResizeObserver(() => placeLayers())
+  for (const node of [root, controls, box, sign, $('composer')]) if (node) layout.observe(node)
 
   voice.addEventListener('click', event => {
     event.stopPropagation()
@@ -258,34 +303,60 @@ export function initVn(deps) {
 
   function openPop(kind) {
     popKind = kind
-    const tabs = el('div', { class: 'seg' }, [['voice', t`朗读`], ['image', t`配图`]].map(([value, text]) => {
-      const b = el('button', { type: 'button', 'aria-pressed': String(kind === value), text })
-      b.addEventListener('click', () => openPop(value))
-      return b
-    }))
     const close = el('button', { type: 'button', class: 'vn-btn', text: '×', title: t`关闭（Esc）`, onclick: closePop })
-    pop.setAttribute('aria-label', kind === 'voice' ? t`朗读设置` : t`配图设置`)
-    pop.replaceChildren(el('div', { class: 'vn-pop-head' }, [tabs, close]), popOwn, popShared)
-    renderPopOwn()
-    // Just below the controls, wherever they wrapped to.
-    pop.style.top = `${controls.offsetTop + controls.offsetHeight + 8}px`
+    if (kind === 'more') {
+      pop.setAttribute('aria-label', t`更多`)
+      pop.replaceChildren(
+        el('div', { class: 'vn-pop-head' }, [el('b', { text: t`更多` }), close]),
+        el('div', { class: 'vn-more-grid' }, [...tuckable.filter(b => b.classList.contains('vn-tucked')), ...extras].filter(b => !b.hidden).map(proxyOf)),
+      )
+    } else {
+      const tabs = el('div', { class: 'seg' }, [['voice', t`朗读`], ['image', t`配图`]].map(([value, text]) => {
+        const b = el('button', { type: 'button', 'aria-pressed': String(kind === value), text })
+        b.addEventListener('click', () => openPop(value))
+        return b
+      }))
+      pop.setAttribute('aria-label', kind === 'voice' ? t`朗读设置` : t`配图设置`)
+      pop.replaceChildren(el('div', { class: 'vn-pop-head' }, [tabs, close]), popOwn, popShared)
+      renderPopOwn()
+    }
+    // Just below the controls, wherever they wrapped to (on a phone it rises from the foot instead).
+    placeLayers()
     pop.hidden = false
-    readMore.classList.toggle('open', kind === 'voice')
-    imageMore.classList.toggle('open', kind === 'image')
+    scrim.hidden = false
+    for (const [button, which] of [[readMore, 'voice'], [imageMore, 'image'], [moreButton, 'more']]) button.classList.toggle('open', kind === which)
+    if (kind === 'more') return
     if (deps.fillQuick) deps.fillQuick(popShared, kind)
     else popShared.replaceChildren()
   }
 
+  /** ⋯'s menu: a control from the row, as it is now. */
+  function proxyOf(button) {
+    const proxy = el('button', { type: 'button', class: 'vn-btn', title: button.title, text: button.textContent })
+    proxy.classList.toggle('on', button.classList.contains('on'))
+    proxy.addEventListener('click', event => {
+      event.stopPropagation()
+      // 速度 changes in place; the rest open something or leave, so the menu goes first.
+      if (button === speedButton) {
+        button.click()
+        return openPop('more')
+      }
+      closePop()
+      button.click()
+    })
+    return proxy
+  }
+
   function closePop() {
     pop.hidden = true
+    scrim.hidden = true
     popKind = null
-    readMore.classList.remove('open')
-    imageMore.classList.remove('open')
+    for (const button of [readMore, imageMore, moreButton]) button.classList.remove('open')
   }
 
   /** This mode's own switches at the top of the menu, as they are now. */
   function renderPopOwn() {
-    if (!popKind) return
+    if (popKind !== 'voice' && popKind !== 'image') return
     const switchRow = (text, on, onChange, hint) => {
       const input = el('input', { type: 'checkbox', class: 'switch', checked: Boolean(on) })
       input.addEventListener('change', () => onChange(input.checked))
@@ -627,6 +698,7 @@ export function initVn(deps) {
       el('div', { class: 'vn-menu-list' }, rows),
       el('div', { class: 'vn-menu-foot' }, [own, control(t`收起`, t`先收起选项看看画面（右上角「选项」或 O 再打开）`, () => hideMenu())]),
     )
+    placeLayers()
     menu.hidden = false
     root.classList.add('choosing')
     optionsButton.classList.add('on')
@@ -721,6 +793,8 @@ export function initVn(deps) {
   /** The input box at the foot; opening it brings the turn's choices back too. */
   function compose(open) {
     stage.classList.toggle('vn-compose', open)
+    // The text box moves up over the input, or back down: the menu above it follows.
+    placeLayers()
     if (open) {
       // Filled while hidden, it has its height only now.
       fitInput?.()
