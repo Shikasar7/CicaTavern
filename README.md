@@ -73,7 +73,7 @@ Windows 解压即用，也有安卓版；界面有简体中文和英文。数据
 ### 视觉小说模式
 
 <p align="center"><img src="docs/screenshots/vn.jpg" alt="视觉小说模式：雨中茶馆的场景背景，说话的角色立绘站在前面，下方文本框一句一句地显示" width="880"></p>
-<p align="center"><img src="docs/screenshots/vn-sprites.jpg" alt="换人说话时立绘跟着换：周管事端着账本站出来，名字栏换成他的颜色" width="436"> <img src="docs/screenshots/vn-choices.jpg" alt="读到最后，行动选项在画面中央弹出，按 1–4 直接选，✎ 先改再发" width="436"></p>
+<p align="center"><img src="docs/screenshots/vn-sprites.jpg" alt="换人说话时立绘跟着换：周管事端着账本站出来，名字栏换成他的颜色" width="49%"> <img src="docs/screenshots/vn-choices.jpg" alt="读到最后，行动选项在画面中央弹出，按 1–4 直接选，✎ 先改再发" width="49%"></p>
 
 - **一键切换**：顶栏的「视觉小说」一开，最新一条回复就变成游戏画面，按角色卡记住；发给模型的内容一字不改，缓存不受影响。
 - **立绘**：谁说话谁站出来，旁白时退下。名册里白底的人设图自动抠图描边；没有的话按长相画一张半身立绘。

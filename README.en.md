@@ -75,7 +75,7 @@ From the author's own long chats (October 2026):
 ### Visual novel mode
 
 <p align="center"><img src="docs/screenshots/vn.jpg" alt="Visual novel mode: a teahouse in the rain as the background, the speaking character's sprite in front, a text box showing one line at a time" width="880"></p>
-<p align="center"><img src="docs/screenshots/vn-sprites.jpg" alt="When someone else speaks, their sprite steps in: the steward with his ledger, and the name plate in his colour" width="436"> <img src="docs/screenshots/vn-choices.jpg" alt="At the end of a reply the choices open in the middle of the picture; 1–4 picks one, ✎ edits it first" width="436"></p>
+<p align="center"><img src="docs/screenshots/vn-sprites.jpg" alt="When someone else speaks, their sprite steps in: the steward with his ledger, and the name plate in his colour" width="49%"> <img src="docs/screenshots/vn-choices.jpg" alt="At the end of a reply the choices open in the middle of the picture; 1–4 picks one, ✎ edits it first" width="49%"></p>
 
 - **One switch**: turn on Visual novel in the top bar and the latest reply plays like a game; remembered per card. What the model is sent never changes, so the cache is untouched.
 - **Sprites**: whoever speaks steps forward and steps back during narration. White-background reference pictures in the roster are cut out and outlined; anyone without one gets a half-body sprite drawn from their looks.
