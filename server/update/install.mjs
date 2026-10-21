@@ -6,11 +6,14 @@
 //                                     bin/launch.mjs here forwards there
 //   <install>/update/previous.json    the folder this one replaced (回到上一版)
 //   <install>/update/result.json      how the last switch went (bin/update-apply.mjs)
+// The Mac's CicaTavern.app only checks for updates; its state.json goes to
+// ~/Library/Application Support/CicaTavern/update, never into the bundle.
 // Nothing here reads or writes the data folder (%USERPROFILE%\.cicatavern).
 import { execFile } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import path from 'node:path'
 import { extractZip } from './zip.mjs'
 
@@ -79,18 +82,34 @@ export async function writable(dir) {
   }
 }
 
-/** Where downloads go and new versions are unpacked: beside this install, else under LOCALAPPDATA. */
-export async function installBase(root, env = process.env) {
-  const beside = path.dirname(root)
-  if (await writable(beside)) return beside
-  return path.join(env.LOCALAPPDATA ?? path.join(env.USERPROFILE ?? '', 'AppData', 'Local'), 'Programs', 'CicaTavern')
+/**
+ * The per-user folder for what cannot go next to the install: %LOCALAPPDATA%
+ * on Windows, ~/Library/Application Support on macOS (which has neither
+ * LOCALAPPDATA nor USERPROFILE).
+ */
+export function userAppData(env = process.env, platform = process.platform) {
+  if (platform === 'darwin') return path.join(env.HOME || homedir(), 'Library', 'Application Support')
+  return env.LOCALAPPDATA ?? path.join(env.USERPROFILE ?? '', 'AppData', 'Local')
 }
 
-/** The updater's own files for this install: <install>/update, else under LOCALAPPDATA. */
-export async function stateDir(root, env = process.env) {
+/**
+ * The app folder inside CicaTavern.app (Contents/Resources/app). Nothing is
+ * written there: a changed bundle no longer matches its signature.
+ */
+export const inAppBundle = dir => /\.app[\\/]Contents([\\/]|$)/i.test(path.resolve(dir))
+
+/** Where downloads go and new versions are unpacked: beside this install, else under LOCALAPPDATA (Application Support on a Mac). */
+export async function installBase(root, env = process.env, platform = process.platform) {
+  const beside = path.dirname(root)
+  if (!inAppBundle(root) && (await writable(beside))) return beside
+  return platform === 'darwin' ? path.join(userAppData(env, platform), 'CicaTavern') : path.join(userAppData(env, platform), 'Programs', 'CicaTavern')
+}
+
+/** The updater's own files for this install: <install>/update, else under LOCALAPPDATA (Application Support on a Mac). */
+export async function stateDir(root, env = process.env, platform = process.platform) {
   const own = path.join(root, UPDATE_DIR)
-  if (await writable(own)) return own
-  return path.join(env.LOCALAPPDATA ?? path.join(env.USERPROFILE ?? '', 'AppData', 'Local'), 'CicaTavern', UPDATE_DIR)
+  if (!inAppBundle(root) && (await writable(own))) return own
+  return path.join(userAppData(env, platform), 'CicaTavern', UPDATE_DIR)
 }
 
 /** base/name, or base/name-2, -3… when it is taken. */

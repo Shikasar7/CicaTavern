@@ -24,10 +24,15 @@ export function compareVersions(a, b) {
   return x[3] < y[3] ? -1 : 1
 }
 
-/** Which package an asset is: 'zip' (Windows), 'apk' (Android) or null. */
-export function assetKind(name) {
+/**
+ * Which package an asset is: 'zip' (Windows), 'apk' (Android), 'mac' (the
+ * CicaTavern.app zip for this Mac's processor: -mac-arm64 or -mac-x64) or null.
+ */
+export function assetKind(name, arch = process.arch) {
   if (/-win-x64\.zip$/i.test(name)) return 'zip'
   if (/-android-arm64\.apk$/i.test(name)) return 'apk'
+  const mac = /-mac-(arm64|x64)\.zip$/i.exec(name)
+  if (mac) return mac[1].toLowerCase() === arch ? 'mac' : null
   return null
 }
 
@@ -86,16 +91,17 @@ export function trustedDownload(href, { repo = REPO, feed = FEED } = {}) {
 }
 
 /**
- * GET /releases/latest → { version, tag, name, notes, url, publishedAt, assets: { zip, apk } }.
+ * GET /releases/latest → { version, tag, name, notes, url, publishedAt, assets: { zip, apk, mac } }.
  * Each asset: { name, size, url, sha256, hashFrom } or { …, hashError }. Drafts
  * and pre-releases never come from /latest; a tag that is not a version is refused.
+ * arch: which Mac zip is 'mac' (process.arch).
  */
-export function releaseInfo(json, { repo = REPO, feed = FEED } = {}) {
+export function releaseInfo(json, { repo = REPO, feed = FEED, arch = process.arch } = {}) {
   const version = parseVersion(json?.tag_name)
   if (!version) throw new Error(msg`最新发布的标签不是版本号：${String(json?.tag_name ?? msg`（没有）`).slice(0, 40)}`)
   const assets = {}
   for (const asset of Array.isArray(json.assets) ? json.assets : []) {
-    const kind = assetKind(String(asset?.name ?? ''))
+    const kind = assetKind(String(asset?.name ?? ''), arch)
     if (!kind || assets[kind] || !trustedDownload(asset.browser_download_url, { repo, feed })) continue
     const hash = expectedHash(asset, json.body)
     assets[kind] = {

@@ -194,7 +194,8 @@ async function tavern(t, { version = '1.0.0', feed, edition = 'release', update 
     proxy: 'off',
     edition,
     onShutdown: () => { shutdowns++ },
-    update: { root, feed, platform: 'win32', check: async () => 'v24.22.0', spawnSwitch: async args => { switches.push(args) }, ...update },
+    // The Windows package's updater, whatever this machine is (featuresOf('release') is 'mac' on macOS).
+    update: { features: featuresOf(edition, update.platform ?? 'win32'), root, feed, platform: 'win32', check: async () => 'v24.22.0', spawnSwitch: async args => { switches.push(args) }, ...update },
   })
   const server = await app.listen({ port: 0 })
   if (noticeSeen) await app.store.saveSettings({ privacyNotice: 1 })
@@ -227,7 +228,7 @@ test('versions compare as semver; a pre-release comes before its release', () =>
   assert.equal(compareVersions('v2.0.0', '2.0.0'), 0)
   assert.equal(compareVersions('1.4.0-beta.1', '1.4.0'), -1)
   assert.equal(compareVersions('nonsense', '0.0.1'), -1)
-  assert.deepEqual(['personal', 'release', 'android'].map(e => featuresOf(e).updates), [null, 'zip', 'apk'])
+  assert.deepEqual(['personal', 'release', 'android'].map(e => featuresOf(e, 'win32').updates), [null, 'zip', 'apk'])
 })
 
 test('the expected SHA-256: GitHub digest and the notes must agree, and one must exist', () => {
@@ -373,7 +374,7 @@ test('shortcuts move when the old folder is named in its 8.3 short form', { skip
 test('the updater compares install folders in their long spelling', async t => {
   const base = await scratch(t)
   const root = await makeInstall(path.join(base, 'CicaTavern-1.4.0-win-x64'), '1.4.0')
-  const updater = createUpdater({ features: featuresOf('release'), root: windows ? shortForm(root) : root, platform: 'win32' })
+  const updater = createUpdater({ features: featuresOf('release', 'win32'), root: windows ? shortForm(root) : root, platform: 'win32' })
   assert.equal((await updater.status()).root, root)
   assert.deepEqual((await updater.installs()).installs, [], 'the running install is never listed as an old one')
 })
@@ -534,7 +535,7 @@ test('update: checking GitHub goes through 设置 → 网络代理', async t => 
   })
   await new Promise(resolve => proxy.listen(0, '127.0.0.1', resolve))
   t.after(() => proxy.close())
-  const updater = createUpdater({ features: featuresOf('release'), root: await scratch(t), proxy: () => `http://127.0.0.1:${proxy.address().port}` })
+  const updater = createUpdater({ features: featuresOf('release', 'win32'), root: await scratch(t), proxy: () => `http://127.0.0.1:${proxy.address().port}` })
   await assert.rejects(updater.check({ force: true }), /GitHub|代理/)
   assert.deepEqual(seen, ['CONNECT api.github.com:443 HTTP/1.1'])
 })
@@ -546,7 +547,7 @@ test('update: no restart while a turn is being written', async t => {
   const root = await makeInstall(path.join(base, packageFolder('1.0.0')), '1.0.0')
   let busy = true
   const switches = []
-  const updater = createUpdater({ features: featuresOf('release'), root, feed: github.feed, platform: 'win32', check: async () => {}, busy: () => busy, onShutdown: () => {}, spawnSwitch: async args => { switches.push(args) } })
+  const updater = createUpdater({ features: featuresOf('release', 'win32'), root, feed: github.feed, platform: 'win32', check: async () => {}, busy: () => busy, onShutdown: () => {}, spawnSwitch: async args => { switches.push(args) } })
   await updater.check({ force: true })
   await updater.download()
   for (let i = 0; i < 100 && (await updater.status()).job.step !== 'ready'; i++) await wait(50)
