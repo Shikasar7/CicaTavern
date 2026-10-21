@@ -394,6 +394,8 @@
 
   <!-- 创作角色卡 (forge.js): filled in by script. -->
   <dialog id="forge-dialog" class="dialog forge-dialog" aria-label="创作角色卡"></dialog>
+  <!-- 修改角色卡 (web/card-edit.js), from the card list's ⋯ -->
+  <dialog id="card-edit-dialog" class="dialog forge-dialog card-edit-dialog" aria-label="修改角色卡"></dialog>
 
   <dialog id="image-dialog" class="dialog wide">
     <form method="dialog">
@@ -409,7 +411,7 @@
         <div class="row">
           <button class="btn" value="cancel">取消</button>
           <button type="button" class="btn" id="image-rewrite">重写</button>
-          <select id="image-model" class="image-model" title="这一张用哪个 NovelAI 模型画" hidden></select>
+          <button type="button" class="btn" id="image-pick" title="这一张换个画图方式或模型" disabled>换个画法…</button>
           <button type="button" class="btn primary" id="image-draw" disabled>画</button>
         </div>
       </div>

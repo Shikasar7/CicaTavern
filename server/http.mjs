@@ -11,7 +11,7 @@ import { homedir } from 'node:os'
 import path from 'node:path'
 import YAML from 'yaml'
 import { fileURLToPath } from 'node:url'
-import { backfillEntryPositions, cardSummary, cleanGroup, exportCard, greetingsOf, importOwnCard, normalizeCard, organizeCard, parseCardFile, previousVersion, unwrapWorkspace } from './cards.mjs'
+import { backfillEntryPositions, cardSummary, cleanGroup, exportCard, greetingsOf, importOwnCard, normalizeCard, organizeCard, parseCardFile, previousVersion, rawOfPicture, sillyTavernCard, unwrapWorkspace, writeCardPng } from './cards.mjs'
 import { chatSummary, chatView, createChat, selectNode, activePath, rebuildPrompt, restoreFolded, rollbackTo, editCompaction, dropCompaction, exportStory, importStory, importSillyTavern, forkChat } from './chats.mjs'
 import { editPreset, exportPreset, importOwnPreset, normalizePreset, presetDetail, presetSummary } from './presets.mjs'
 import { basicDetail } from './basic.mjs'
@@ -22,13 +22,15 @@ import { APIS, draftProvider, exportProviders, importProviders, isProviderRef, l
 import { initTemplates } from './template.mjs'
 import { canonicalModel } from './models.mjs'
 import { createLedger } from './usage.mjs'
-import { cleanMedia, createMedia } from './media.mjs'
+import { createMedia, drawChoiceOf } from './media.mjs'
 import { createAppearance } from './appearance.mjs'
 import { createRegex } from './regex.mjs'
 import { createScenes } from './scenes.mjs'
 import { KEYED as VOICE_KEYED } from './voice/index.mjs'
 import { createPromptLibrary } from './prompts.mjs'
 import { createForge } from './forge/index.mjs'
+import { ensureBook } from './forge/edit.mjs'
+import { editCard, greetingList } from '../web/shared/card-edit.js'
 import { chatPackage, importChatPackage, savePackagePicture } from './transfer.mjs'
 import { createStore, defaultDataRoot, httpError, PRIVACY_NOTICE } from './store.mjs'
 import { currentLanguage, localize, msg, pageIn, requestLanguage, withLanguage } from './i18n.mjs'
@@ -76,6 +78,10 @@ const STATIC = {
   '/theme.js': ['theme.js', 'text/javascript; charset=utf-8'],
   '/regex.js': ['regex.js', 'text/javascript; charset=utf-8'],
   '/books.js': ['books.js', 'text/javascript; charset=utf-8'],
+  '/card-edit.js': ['card-edit.js', 'text/javascript; charset=utf-8'],
+  '/shared/card-edit.js': ['shared/card-edit.js', 'text/javascript; charset=utf-8'],
+  '/draw-choice.js': ['draw-choice.js', 'text/javascript; charset=utf-8'],
+  '/shared/draw.js': ['shared/draw.js', 'text/javascript; charset=utf-8'],
   '/vn.js': ['vn.js', 'text/javascript; charset=utf-8'],
   '/shared/vn.js': ['shared/vn.js', 'text/javascript; charset=utf-8'],
   '/shared/cutout.js': ['shared/cutout.js', 'text/javascript; charset=utf-8'],
@@ -133,6 +139,25 @@ function bookView(book, id = book.id) {
   return { id, name: book.name, entries: book.entries.map(entry => ({ ...entry, dynamic: isDynamic(entry) })) }
 }
 
+/** A card's fields as 修改角色卡 edits them (web/card-edit.js), with its counts from cardSummary. */
+function cardEditView(card) {
+  return {
+    ...cardSummary(card),
+    description: card.description,
+    personality: card.personality,
+    scenario: card.scenario,
+    mesExample: card.mesExample,
+    systemPrompt: card.systemPrompt,
+    postHistoryInstructions: card.postHistoryInstructions,
+    depthPrompt: card.depthPrompt ?? '',
+    creatorNotes: card.creatorNotes,
+    greetings: greetingList(card),
+  }
+}
+
+const PNG_IMAGE = /^data:image\/png;base64,([A-Za-z0-9+/=\s]+)$/
+const MAX_AVATAR = 15 * 1024 * 1024
+
 /** An uploaded card file (SillyTavern PNG/JSON, or this app's own export) → { card, avatar }. */
 function readCardUpload(body) {
   const { filename, buffer } = decodeUpload(body)
@@ -185,12 +210,14 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       })
     : null
   const engine = createEngine(store, isolation, ledger, { subscription })
-  const media = createMedia(store, { proxy: () => isolation.proxy, askInContext: engine.askInContext, features })
+  // This install's own image backends (server/subscription/), offered beside the usual ones.
+  const ownBackends = features.subscription ? subscriptionBackend.imageBackends?.({ store, proxy: () => isolation.proxy }) ?? [] : []
+  const media = createMedia(store, { proxy: () => isolation.proxy, askInContext: engine.askInContext, features, ownBackends })
   const appearance = createAppearance(store)
   const regex = createRegex(store)
   const scenes = createScenes(store, { media })
   const prompts = createPromptLibrary(store)
-  const forge = createForge(store, { proxyNow: () => isolation.proxy, ledger, draw: (input, signal) => media.drawCardArt(input, signal) })
+  const forge = createForge(store, { proxyNow: () => isolation.proxy, ledger, draw: (input, signal, choice) => media.drawCardArt(input, signal, choice) })
   // 设置 → 更多 → 更新. A restart after an update starts the server the way this one was started.
   let listenArg
   const updater = createUpdater({
@@ -210,6 +237,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       media: settings,
       workflow: media.describeWorkflow(await media.loadWorkflow()),
       novelai: await media.naiStatus(),
+      ownBackends: await media.ownBackends(),
       voiceKey: await media.ttsKeyStatus(),
       voiceKeys: await media.voiceKeys(),
     }
@@ -410,7 +438,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
         voiceKey = /(?:^|&)k=([^&]+)/.exec(fragment)?.[1] ?? null
         body = { ...body, ttsUrl: url }
       }
-      const next = cleanMedia(body, previous, media.defaults)
+      const next = media.cleanSettings(body, previous)
       if (voiceKey) await media.setTtsKey(decodeURIComponent(voiceKey))
       // A key belongs to the address it came with: a new address without one drops it.
       else if (body.ttsClearKey === true || next.ttsUrl !== previous.ttsUrl) await media.setTtsKey('')
@@ -434,7 +462,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['GET', /^\/api\/cards\/([\w-]+)\/media$/, ([id]) => media.cardMediaView(id)],
     ['PUT', /^\/api\/cards\/([\w-]+)\/media$/, ([id], body) => media.saveCardMedia(id, body)],
     ['POST', /^\/api\/cards\/([\w-]+)\/roster\/draft$/, ([id]) => media.draftRoster(id, AbortSignal.timeout(180000))],
-    ['POST', /^\/api\/cards\/([\w-]+)\/roster\/portrait$/, ([id], body) => media.drawPortrait(id, body?.entry, AbortSignal.timeout(600000), { model: typeof body?.model === 'string' ? body.model : '' })],
+    ['POST', /^\/api\/cards\/([\w-]+)\/roster\/portrait$/, ([id], body) => media.drawPortrait(id, body?.entry, AbortSignal.timeout(600000), drawChoiceOf(body))],
     ['PUT', /^\/api\/cards\/([\w-]+)\/roster\/([\w-]+)\/ref$/, ([id, entryId], body) => media.saveRosterRef(id, entryId, body?.image)],
     ['DELETE', /^\/api\/cards\/([\w-]+)\/roster\/([\w-]+)\/ref$/, ([id, entryId]) => media.removeRosterRef(id, entryId)],
     ['DELETE', /^\/api\/chats\/([\w-]+)\/nodes\/([\w-]+)\/image$/, async ([id, nodeId], _, url) => {
@@ -523,7 +551,63 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     }],
     ['DELETE', /^\/api\/cards\/([\w-]+)$/, async ([id]) => {
       await store.deleteCard(id)
+      await forge.dropEdit(id)
       return { ok: true }
+    }],
+    // 修改角色卡 (web/card-edit.js): the card's fields, edited in place. It keeps its id, so
+    // its chats, cast, sprites, scenes, picture and voice settings stay. `prefix`: the
+    // edit reached what a chat freezes when it starts; open chats keep theirs until applied.
+    ['GET', /^\/api\/cards\/([\w-]+)\/edit$/, async ([id]) => {
+      const card = await store.getCard(id)
+      // A card made in 创作角色卡 goes back to its draft's text when saved from there again.
+      const drafts = await forge.list().catch(() => [])
+      return { ...cardEditView(card), fromForge: drafts.some(draft => draft.savedCardId === id) }
+    }],
+    ['PUT', /^\/api\/cards\/([\w-]+)\/edit$/, async ([id], body) => {
+      const card = await store.getCard(id)
+      let result
+      try {
+        result = editCard(card, body ?? {})
+      } catch (error) {
+        throw error.blankName ? httpError(400, msg`名字不能空着`) : error
+      }
+      if (result.changed.length) await store.saveCard(card)
+      return { ...cardEditView(card), changed: result.changed, prefix: result.prefix }
+    }],
+    // A new picture (PNG; the page converts others): the card goes into it as SillyTavern
+    // keeps it, over what the old picture carried, so an export still has all of it.
+    ['PUT', /^\/api\/cards\/([\w-]+)\/avatar$/, async ([id], body) => {
+      const match = PNG_IMAGE.exec(String(body?.image ?? ''))
+      if (!match) throw httpError(400, msg`头像要转成 PNG 再保存`)
+      const png = Buffer.from(match[1], 'base64')
+      if (png.length > MAX_AVATAR) throw httpError(400, msg`图片太大了（15 MB 以内）`)
+      const card = await store.getCard(id)
+      const old = card.hasAvatar ? await readFile(store.avatarPath(id)).catch(() => null) : null
+      const file = writeCardPng(png, sillyTavernCard(card, rawOfPicture(old)))
+      card.hasAvatar = true
+      await store.saveCard(card, file)
+      return cardEditView(card)
+    }],
+    // 修改角色卡 → 生成头像: drawn with the 画图方式 and model picked for it, not saved; the page
+    // shows it, and taking it is PUT /api/cards/:id/avatar like an upload.
+    ['POST', /^\/api\/cards\/([\w-]+)\/avatar\/draw$/, ([id], body) => media.drawAvatar(id, AbortSignal.timeout(600000), drawChoiceOf(body))],
+    // The card as SillyTavern's JSON, edits included (the PNG is GET /api/cards/:id/png).
+    ['GET', /^\/api\/cards\/([\w-]+)\/sillytavern$/, async ([id]) => {
+      const card = await store.getCard(id)
+      const picture = card.hasAvatar ? await readFile(store.avatarPath(id)).catch(() => null) : null
+      return sillyTavernCard(card, rawOfPicture(picture))
+    }],
+    // 修改角色卡 → 对话修改: the card's edit session (forge/edit.mjs), run like a draft's jobs.
+    ['GET', /^\/api\/cards\/([\w-]+)\/assistant$/, ([id]) => forge.editGet(id)],
+    ['PUT', /^\/api\/cards\/([\w-]+)\/assistant$/, ([id], body) => forge.editUpdate(id, body ?? {})],
+    ['POST', /^\/api\/cards\/([\w-]+)\/assistant$/, ([id], body) => forge.editAsk(id, body ?? {})],
+    ['DELETE', /^\/api\/cards\/([\w-]+)\/assistant$/, ([id]) => forge.editClear(id)],
+    ['POST', /^\/api\/cards\/([\w-]+)\/assistant\/retry$/, ([id]) => forge.editRetry(id)],
+    ['POST', /^\/api\/cards\/([\w-]+)\/assistant\/stop$/, ([id]) => forge.editStop(id)],
+    ['POST', /^\/api\/cards\/([\w-]+)\/assistant\/discard$/, ([id]) => forge.editDiscard(id)],
+    ['POST', /^\/api\/cards\/([\w-]+)\/assistant\/apply$/, async ([id], body) => {
+      const { session, card, applied, prefix } = await forge.editApply(id, body ?? {})
+      return { session, applied, prefix, card: cardEditView(card) }
     }],
     // Groups and the archive: where a card sits in the list. Nothing else about it changes.
     ['PUT', /^\/api\/cards\/([\w-]+)\/organize$/, async ([id], body) => {
@@ -560,6 +644,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     }],
     ['PUT', /^\/api\/cards\/([\w-]+)\/book$/, async ([id], body) => {
       const card = await store.getCard(id)
+      // A card without a book of its own gets one with its first entry (修改角色卡).
+      if (!card.book && body?.add) ensureBook(card)
       if (!card.book) throw httpError(404, msg`这张卡没有自带世界书`)
       const { prefix, added } = editBook(card.book, body ?? {})
       await store.saveCard(card)
@@ -819,6 +905,19 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       res.writeHead(200, { 'content-type': type, 'cache-control': 'no-cache' })
       return res.end(body)
     }
+    // The card as a SillyTavern PNG, in-app edits included (修改角色卡 → 导出 PNG).
+    const cardPng = /^\/api\/cards\/([\w-]+)\/png$/.exec(url.pathname)
+    if (req.method === 'GET' && cardPng) {
+      try {
+        const card = await store.getCard(cardPng[1])
+        const picture = await readFile(store.avatarPath(card.id))
+        const data = writeCardPng(picture, sillyTavernCard(card, rawOfPicture(picture)))
+        res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'no-store', 'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(`${card.name}.png`)}` })
+        return res.end(data)
+      } catch (error) {
+        return sendJson(res, error.status ?? 404, { error: error.status ? error.message : msg`没有头像` })
+      }
+    }
     const avatar = /^\/api\/cards\/([\w-]+)\/avatar$/.exec(url.pathname)
     if (req.method === 'GET' && avatar) {
       try {
@@ -1002,7 +1101,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
         const input = node.parent ? chat.nodes[node.parent]?.text ?? '' : ''
         return sendJson(res, 200, await media.writeImagePrompt(chat, node, { reply, input }, signal))
       }
-      const image = await media.generateImage(chat, nodeId, body.prompt, signal, { model: typeof body.model === 'string' ? body.model : '' })
+      const image = await media.generateImage(chat, nodeId, body.prompt, signal, drawChoiceOf(body))
       // Re-read: the chat may have moved on while the picture was drawn.
       const fresh = await store.getChat(chatId)
       const target = fresh.nodes[nodeId]

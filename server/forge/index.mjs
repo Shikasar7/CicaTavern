@@ -10,6 +10,9 @@
 //            failed run carries on from the step it was at;
 //   polish:  the card to read and edit, any piece rewritten by a note, the
 //            avatar drawn or uploaded; saved as a card (PNG with the card in it).
+// A card already saved, imported or made here, can be changed the same way by
+// talking (修改角色卡, edit.mjs): a session per card, edit-<card id>, kept in
+// <data>/forge/edits/ and run like a draft's jobs.
 // Model calls run in the background: a request starts a job and returns the
 // draft at once; the page polls the draft until the job is done. Closing the
 // window loses nothing.
@@ -17,14 +20,17 @@ import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promise
 import path from 'node:path'
 import YAML from 'yaml'
 import { cardSummary, normalizeCard, writeCardPng } from '../cards.mjs'
-import { cleanCardMedia } from '../media.mjs'
+import { cleanCardMedia, drawChoiceOf } from '../media.mjs'
 import { complete, isProviderRef, providerError, refLabel, resolveRef } from '../providers.mjs'
 import { httpError, newId } from '../store.mjs'
 import { chosenUserName, discussRequest, editBrief, editTracking, editUserName, emptyBrief, forgeLanguages, partialReply, planLanguage, planRequest, readDiscussion, readPlan, reviseRequest } from './prompts.mjs'
 import { applyIssues, cardJson, entriesRequest, greetingsRequest, initialState, lintCard, matchWritten, newCard, readIssues, readTagged, retrack, reviewRequest, rewriteRequest, stepDone, userTagged, writeSteps } from './write.mjs'
+import { applyChanges, editRequest, readEdit } from './edit.mjs'
 import { currentLanguage, msg } from '../i18n.mjs'
 
 const ID = /^[a-zA-Z0-9_-]{1,64}$/
+const EDIT = 'edit-'
+const MAX_EDIT_TURNS = 30
 const STAGES = ['discuss', 'plan', 'write', 'polish']
 const MAX_ROUNDS = 40
 const MAX_TEXT = 4000
@@ -46,14 +52,15 @@ function imageType(buffer) {
 }
 
 /**
- * @param draw - (input, signal) → { buffer, backend }: one picture from the image
- *   backend set up in 配图 (media.drawCardArt); without it, avatars are upload-only.
+ * @param draw - (input, signal, choice) → { buffer, backend }: one picture from the image
+ *   backend set up in 配图, or the one `choice` picks for it ({ backend, model },
+ *   media.drawCardArt); without it, avatars are upload-only.
  */
 export function createForge(store, { proxyNow = () => null, ledger = null, draw = null } = {}) {
   const dir = path.join(store.dirs.root, 'forge')
   const fileOf = id => {
     if (!ID.test(String(id))) throw httpError(400, msg`无效的 ID`)
-    return path.join(dir, `${id}.json`)
+    return id.startsWith(EDIT) ? path.join(dir, 'edits', `${id}.json`) : path.join(dir, `${id}.json`)
   }
   const avatarFile = id => fileOf(id).replace(/\.json$/, '.avatar')
   // id → { kind, step, controller, partial, startedAt } of the job in progress.
@@ -77,8 +84,8 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
 
   async function save(draft) {
     draft.updatedAt = new Date().toISOString()
-    await mkdir(dir, { recursive: true })
     const file = fileOf(draft.id)
+    await mkdir(path.dirname(file), { recursive: true })
     const tmp = `${file}.${process.pid}.${newId()}.tmp`
     await writeFile(tmp, JSON.stringify(draft, null, 1), 'utf8')
     // Windows refuses to replace a file another request is reading at that moment
@@ -252,7 +259,10 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
   async function record(id, result, ref) {
     if (!ledger || !result?.usage) return
     const draft = await load(id)
-    const chat = { id: `forge-${id}`, title: msg`创作：${draft.plan?.name || draft.brief.title || msg`未命名`}`, cardId: null }
+    // An edit session's calls count under its card.
+    const chat = draft.cardId
+      ? { id: `forge-${id}`, title: msg`修改：${draft.cardName}`, cardId: draft.cardId }
+      : { id: `forge-${id}`, title: msg`创作：${draft.plan?.name || draft.brief.title || msg`未命名`}`, cardId: null }
     await ledger.recordTurn(chat, { model: ref, usage: result.usage, createdAt: new Date().toISOString() })
   }
 
@@ -453,16 +463,16 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
     return view(draft)
   }
 
-  async function startAvatar(draft, description) {
+  async function startAvatar(draft, description, choice = {}) {
     if (!draw) throw httpError(400, msg`这里画不了图，上传一张吧`)
     const subject = avatarSubject(draft.plan, description)
-    draft.lastAvatar = { description: clip(description, 400) }
+    draft.lastAvatar = { description: clip(description, 400), choice }
     await run(
       draft,
       'avatar',
       async ctx => {
         ctx.step('avatar')
-        const { buffer, backend } = await draw(subject, ctx.signal)
+        const { buffer, backend } = await draw(subject, ctx.signal, choice)
         await writeFile(avatarFile(draft.id), buffer)
         await ctx.update(fresh => {
           fresh.card.avatar = { at: new Date().toISOString(), type: imageType(buffer), backend, source: 'drawn', description: subject.scene }
@@ -474,8 +484,144 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
     return view(draft)
   }
 
+  // ─── 修改角色卡 (edit.mjs) ─────────────────────────────────────────────
+
+  const editId = cardId => `${EDIT}${cardId}`
+  const EDIT_TARGET = /^(field:[a-zA-Z]+|greeting:\d+|entry:[\w-]+)$/
+
+  /** The card and its session; a new session (saved by its first job) when it has none. */
+  async function loadEdit(cardId) {
+    const card = await store.getCard(cardId)
+    const session = await load(editId(cardId)).catch(error => {
+      if (error.status !== 404) throw error
+      const now = new Date().toISOString()
+      return { id: editId(cardId), cardId, createdAt: now, updatedAt: now, model: '', turns: [], job: null, error: null }
+    })
+    session.cardName = card.name
+    return { session, card }
+  }
+
+  /** Change a session without another change slipping in between. */
+  const mutateEdit = (cardId, fn) =>
+    serial(editId(cardId), async () => {
+      const { session, card } = await loadEdit(cardId)
+      const out = await fn(session, card)
+      await save(session)
+      return out ?? session
+    })
+
+  /** The session as the page sees it: requests, replies with their changes, what became of them. */
+  function editView(session) {
+    const job = jobs.get(session.id)
+    return {
+      cardId: session.cardId,
+      model: session.model,
+      turns: session.turns.map(turn => ({
+        user: turn.user,
+        assistant: turn.assistant ? { reply: turn.assistant.reply, changes: turn.assistant.changes, model: turn.assistant.model, at: turn.assistant.at } : null,
+        outcome: turn.outcome ?? null,
+      })),
+      job: job ? { kind: job.kind, startedAt: job.startedAt, partial: partialReply(job.partial), chars: job.partial.length } : null,
+      error: session.error ?? null,
+      updatedAt: session.updatedAt,
+    }
+  }
+
+  async function editWork(ctx, cardId) {
+    const { session, card } = await loadEdit(cardId)
+    const turn = session.turns.at(-1)
+    const { request, shown } = editRequest(card, { text: turn.user.text, target: turn.user.target, turns: session.turns.slice(0, -1), reply: ctx.languages.reply })
+    const result = await ctx.call(request)
+    await ctx.update(fresh => {
+      const read = readEdit(result.text, card, { shown, target: turn.user.target })
+      if (!read.reply && !read.changes.length) throw new Error(msg`${ctx.label} 这次没有回出能读的内容${cutNote(result)}，再试一次，或者换个模型`)
+      fresh.turns.at(-1).assistant = { raw: result.text, reply: read.reply, changes: read.changes, model: ctx.label, at: new Date().toISOString() }
+    })
+  }
+
   return {
     busy: () => jobs.size > 0,
+
+    async editGet(cardId) {
+      return editView((await loadEdit(cardId)).session)
+    },
+
+    /**
+     * What the user wants changed; `target` keeps it to one piece (field:description,
+     * greeting:0, entry:3). A proposal still waiting for an answer is set aside.
+     */
+    async editAsk(cardId, { text, target } = {}) {
+      const { session } = await loadEdit(cardId)
+      if (jobs.has(session.id)) throw httpError(409, msg`上一步还在进行，等它写完或先停下`)
+      const asked = clip(text, MAX_TEXT)
+      if (!asked) throw httpError(400, msg`先写下想怎么改`)
+      const now = new Date().toISOString()
+      const last = session.turns.at(-1)
+      if (last && !last.assistant) session.turns.pop()
+      else if (last?.assistant?.changes.length && !last.outcome) last.outcome = { discarded: true, at: now }
+      session.turns.push({ user: { text: asked, target: EDIT_TARGET.test(String(target ?? '')) ? target : '', at: now }, assistant: null, outcome: null })
+      session.turns = session.turns.slice(-MAX_EDIT_TURNS)
+      await run(session, 'edit', ctx => editWork(ctx, cardId))
+      return editView(session)
+    },
+
+    /** Ask the last request again (after a failure or a stop). */
+    async editRetry(cardId) {
+      const { session } = await loadEdit(cardId)
+      if (!session.turns.length || session.turns.at(-1).assistant) throw httpError(409, msg`没有要重试的`)
+      await run(session, 'edit', ctx => editWork(ctx, cardId))
+      return editView(session)
+    },
+
+    /** The model the session talks to ('' = the default). */
+    async editUpdate(cardId, { model } = {}) {
+      return editView(await mutateEdit(cardId, session => {
+        if (typeof model === 'string') session.model = clip(model, 200)
+      }))
+    },
+
+    /** Put the chosen changes (by id) of the waiting proposal into the card. Returns the card as saved. */
+    async editApply(cardId, { ids } = {}) {
+      if (jobs.has(editId(cardId))) throw httpError(409, msg`正在写，等它写完再改`)
+      return mutateEdit(cardId, async (session, card) => {
+        const turn = session.turns.at(-1)
+        const changes = turn?.assistant?.changes ?? []
+        if (!changes.length || turn.outcome) throw httpError(409, msg`没有等着采用的修改`)
+        const chosen = (Array.isArray(ids) ? ids : []).filter(id => changes.some(change => change.id === id))
+        if (!chosen.length) throw httpError(400, msg`先勾选要采用的修改`)
+        const { applied, prefix } = applyChanges(card, changes, chosen)
+        await store.saveCard(card)
+        turn.outcome = { applied: chosen, at: new Date().toISOString() }
+        return { session: editView(session), card, applied, prefix }
+      })
+    },
+
+    /** Set the waiting proposal aside without changing anything. */
+    async editDiscard(cardId) {
+      return editView(await mutateEdit(cardId, session => {
+        const turn = session.turns.at(-1)
+        if (turn?.assistant && !turn.outcome) turn.outcome = { discarded: true, at: new Date().toISOString() }
+      }))
+    },
+
+    /** Start over: the session's talk is forgotten (the card keeps what was applied). */
+    async editClear(cardId) {
+      jobs.get(editId(cardId))?.controller.abort()
+      await rm(fileOf(editId(cardId)), { force: true })
+      return editView((await loadEdit(cardId)).session)
+    },
+
+    editStop(cardId) {
+      const job = jobs.get(editId(cardId))
+      job?.controller.abort()
+      return { stopped: Boolean(job) }
+    },
+
+    /** A deleted card's session goes with it. */
+    async dropEdit(cardId) {
+      jobs.get(editId(cardId))?.controller.abort()
+      await rm(fileOf(editId(cardId)), { force: true })
+    },
 
     async list() {
       let names
@@ -529,7 +675,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
       if (kind === 'plan') return draft.planPending ? this.revise(id, draft.planPending) : this.plan(id)
       if (kind === 'write') return startWrite(draft)
       if (kind === 'rewrite' && draft.lastRewrite) return startRewrite(draft, draft.lastRewrite.target, draft.lastRewrite.note)
-      if (kind === 'avatar') return startAvatar(draft, draft.lastAvatar?.description)
+      if (kind === 'avatar') return startAvatar(draft, draft.lastAvatar?.description, draft.lastAvatar?.choice)
       const last = draft.rounds.at(-1)
       if (last.assistant) last.assistant = null
       await run(draft, 'discuss', ctx => discussWork(ctx, draft))
@@ -640,9 +786,12 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
       return view(draft)
     },
 
-    /** Draw the avatar with the image backend set up in 配图; `description` overrides the scene. */
-    async drawAvatar(id, { description } = {}) {
-      return startAvatar(await requireCard(id), description)
+    /**
+     * Draw the avatar with the image backend set up in 配图, or `backend` and `model`
+     * picked for this one; `description` overrides the scene.
+     */
+    async drawAvatar(id, { description, backend, model } = {}) {
+      return startAvatar(await requireCard(id), description, drawChoiceOf({ backend, model }))
     },
 
     /** Use the user's own picture as the avatar. */

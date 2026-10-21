@@ -67,6 +67,8 @@ export async function rebuildPrompt(store, chat, presetId = chat.presetId ?? '')
   const preset = chosen ?? basicPreset(settings)
   const books = await booksForCard(store, card)
   const hasState = Object.keys(chat.nodes.root.state ?? {}).length > 0
+  // A card renamed in 修改角色卡: {{char}} in later turns follows the prefix.
+  chat.names = { ...chat.names, char: card.name }
   const built = buildChatPrompt({ card, persona: playerOf(card, persona, chat.names.user), settings, books, hasState, preset })
   chat.systemPrompt = built.systemPrompt
   chat.presetVars = built.presetVars

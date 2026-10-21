@@ -18,6 +18,8 @@ import { connectionList, showPrivacyNotice } from '/privacy.js'
 import { initTheme } from '/theme.js'
 import { initRegex } from '/regex.js'
 import { countText, initBooks } from '/books.js'
+import { initCardEdit } from '/card-edit.js'
+import { initDrawChoice } from '/draw-choice.js'
 import { initVn } from '/vn.js'
 import { isRegexFile, scriptsInFile } from '/shared/regex.js'
 import { lang, locale, t, zh } from '/i18n.js'
@@ -358,7 +360,7 @@ function cardItem(card, nested = false) {
       el('div', { class: 'item-title', text: card.name }),
       el('div', { class: 'item-sub', text: t`${card.greetings} 个开场 · ${card.bookEntries} 条内嵌世界书${card.worldbookIds.length ? t` · 挂载 ${card.worldbookIds.length} 本` : ''}` }),
     ]),
-    el('button', { type: 'button', class: 'item-del item-edit item-more', title: t`分组、归档、删除`, 'aria-label': t`「${card.name}」：分组、归档、删除`, text: '⋯', onclick: event => { event.stopPropagation(); openCardMenu(card, event.currentTarget) } }),
+    el('button', { type: 'button', class: 'item-del item-edit item-more', title: t`修改、分组、归档、删除`, 'aria-label': t`「${card.name}」：修改、分组、归档、删除`, text: '⋯', onclick: event => { event.stopPropagation(); openCardMenu(card, event.currentTarget) } }),
   ])
 }
 
@@ -450,6 +452,14 @@ const selectCard = guard(async id => {
   await refreshChats()
   const card = await api(`/api/cards/${id}`)
   ui.cardDetails.set(id, card)
+  showCardInfo(card)
+  if (ui.chats[0]) await openChat(ui.chats[0].id)
+  else setChat(null)
+  document.body.querySelector('.app').classList.remove('show-left')
+})
+
+/** The chosen card's author, tags, notes and scripts, under the card list. */
+function showCardInfo(card) {
   $('card-info').textContent = [
     card.creator && t`作者：${card.creator}`,
     card.tags?.length && t`标签：${card.tags.join(t`、`)}`,
@@ -457,10 +467,7 @@ const selectCard = guard(async id => {
     card.regexScripts ? t`正则脚本 ${card.regexScripts} 条（已生效；设置 → 正则 里可以开关和修改）` : '',
     card.helperScripts ? t`酒馆助手脚本 ${card.helperScripts} 个（不执行；MVU 变量更新已内置）` : '',
   ].filter(Boolean).join('\n\n') || '—'
-  if (ui.chats[0]) await openChat(ui.chats[0].id)
-  else setChat(null)
-  document.body.querySelector('.app').classList.remove('show-left')
-})
+}
 
 // ─── A small menu next to a button ─────────────────────────────────────
 // entries: { label, onClick, danger, current, hint } | { header } | '-'
@@ -519,6 +526,8 @@ function askGroupName(title, initial = '') {
 function openCardMenu(card, anchor) {
   const groups = cardGroups()
   popMenu(anchor, [
+    { label: t`修改角色卡`, hint: t`改名字、描述、开场白和世界书，也可以说说想怎么改，让向导来改`, onClick: () => cardEditUi.open(card.id) },
+    '-',
     { header: t`移到分组` },
     ...groups.map(name => ({ label: name, current: card.group === name, onClick: () => organizeCard(card, { group: name }) })),
     { label: t`新分组…`, onClick: () => { const name = askGroupName(t`把「${card.name}」放进哪个新分组？`); if (name) organizeCard(card, { group: name }) } },
@@ -1970,6 +1979,10 @@ const showPrompt = guard(async () => {
 })
 
 // ─── Presets ────────────────────────────────────────────────────────────
+// 这一张怎么画: the 画图方式 and model for one drawing (配图's 重画, 角色名册's 画一张,
+// 创作角色卡's avatar, 修改角色卡's 生成头像); nothing it picks is saved.
+const drawChoice = initDrawChoice({ api, el, guard, openSettings: section => mediaUi.openSettings(section) })
+
 const mediaUi = initMedia({
   api,
   el,
@@ -1979,6 +1992,7 @@ const mediaUi = initMedia({
   getModels: () => ui.models,
   openProviders: () => providersUi.open(),
   saveFile,
+  pickDraw: drawChoice.pick,
 })
 
 const historyUi = initHistory({ el, getChat: () => ui.chat })
@@ -2048,6 +2062,7 @@ const forgeUi = initForge({
   toast,
   guard,
   openProviders: () => providersUi.open(),
+  pickDraw: drawChoice.pick,
   async onCardSaved(id) {
     avatarVersions.set(id, Date.now())
     ui.cardDetails.delete(id)
@@ -2110,6 +2125,32 @@ const booksUi = initBooks({
     renderBookOptions(ui.cards.find(c => c.id === ui.cardId), ticked)
     settingsMenu?.refresh()
   }),
+})
+
+// 修改角色卡 (the card list's ⋯): the card's fields, its picture and its own book, and 对话修改.
+const cardEditUi = initCardEdit({
+  api, el, toast, guard, saveFile,
+  pickDraw: drawChoice.pick,
+  getChat: () => ui.chat,
+  isGenerating: () => ui.generating,
+  openProviders: () => providersUi.open(),
+  onChatChanged: chat => setChat(chat),
+  // The entries window on the card's own book (its first entry may just have been made).
+  async openBook(id) {
+    ;[ui.books] = await Promise.all([api('/api/worldbooks'), refreshCards()])
+    const card = ui.cards.find(c => c.id === id)
+    await booksUi.open({ card, books: ui.books, mounted: card?.worldbookIds ?? [], select: `card-${id}` })
+  },
+  // The list, the card's details under it and its picture follow an edit.
+  async onCardChanged(id, { avatar = false } = {}) {
+    if (avatar) avatarVersions.set(id, Date.now())
+    ui.cardDetails.delete(id)
+    await refreshCards()
+    if (ui.cardId !== id) return
+    await loadCardDetail(id)
+    showCardInfo(ui.cardDetails.get(id))
+    if (ui.chat?.cardId === id) renderChat()
+  },
 })
 
 // ─── Quick switches: preset entries pinned in the preset editor ─────────

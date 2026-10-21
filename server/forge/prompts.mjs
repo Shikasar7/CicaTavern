@@ -28,7 +28,7 @@ export const englishCard = language => /^(en\b|english|英文|英语)/i.test(Str
 // ─── Shared writing rules ─────────────────────────────────────────────────
 // Kinds of wording to avoid, named by kind only: listing the phrases themselves
 // in a prompt tends to put them into the answer. The checker has the list.
-const WRITING_RULES = [
+export const WRITING_RULES = [
   '名称一律具体：地名、学校、组织、店名都要有名字，不写「某城市」「某学校」「那个地方」。',
   '写具体的画面和行为，不贴性格标签，不写空泛的赞美或评价。',
   '不用套话：陈旧比喻、「仿佛/似乎」一类的模糊词、细小表情的固定写法、「带着……的语气」一类的声线描写、夸张的情绪词。',

@@ -171,6 +171,34 @@
           }
         }
       ]
+    },
+    {
+      "version": "1.8.3",
+      "date": "2026-10",
+      "items": [
+        {
+          "image": "1.8.3-edit.webp",
+          "zh": {
+            "title": "修改角色卡",
+            "text": "角色卡的「⋯ → 修改角色卡」：名字、描述、开场白、世界书这些都能直接改，改了存进这张卡，对话和名册都不变。\n也可以在右边用对话修改：说说想怎么改，模型把每一处改前改后标出来，勾选的才会用上。"
+          },
+          "en": {
+            "title": "Edit a card",
+            "text": "A card's ⋯ → Edit card: change the name, description, greetings, lorebook and the rest in place; it saves into the card, and its chats and cast stay as they are.\nOr edit by chat on the right: say what to change, and each change is shown before and after, applied only if ticked."
+          }
+        },
+        {
+          "image": "1.8.3-avatar.webp",
+          "zh": {
+            "title": "生成头像，每次画图都能选方式",
+            "text": "修改角色卡里点「生成头像」，按卡里的角色画一张方形头像，满意了再换上。\n生成头像、名册的「画一张」、配图的「重画」和「换个画法…」都能临时选这一张用哪种画图方式和模型，不改设置。"
+          },
+          "en": {
+            "title": "Generate an avatar, pick how each picture is drawn",
+            "text": "In Edit card, Generate avatar draws a square avatar of the card's character, put on only when you take it.\nGenerate avatar, the cast's Draw one, and Redraw or Draw it differently… under a picture can each pick the image backend and model for that one picture, without changing your settings."
+          }
+        }
+      ]
     }
   ]
 }

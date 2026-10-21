@@ -103,16 +103,16 @@ If you can't quite say what you want, the creator guides you round by round:
 
 <br clear="right">
 
-## Latest changes [1.8.2]
+## Latest changes [1.8.3]
 
-<p align="center"><img src="docs/screenshots/books.jpg" alt="The lorebook entries window in 1.8.2: a card's own lorebook entry by entry, each with its switch, search, and ✎ to edit the name, trigger, keywords, position, order and text" width="880"></p>
+<p align="center"><img src="docs/screenshots/card-edit.jpg" alt="Edit card in 1.8.3: the card's fields edited in place on the left, a newly drawn avatar waiting to be taken; on the right, edit by chat with each change shown before and after" width="880"></p>
 
-- **View and edit lorebook entries**: Settings → Attached lorebooks → View entries lists a card's own lorebook and the imported ones entry by entry, to search, switch on or off and edit; changes save at once.
-- **Visual novel mode on phones**: one row of buttons at the top right, the rest behind ⋯; the ▾ settings open as a sheet from the bottom, the choices fit between the buttons and the text box, long ones included, and held sideways the card list steps aside.
-- **Sharper name plates**: with no genders in the cast list, "he" and "she" are worked out from the reply, and when two people trade lines a lone quote goes to the right one.
-- **Pictures & voice is a group of its own in Settings** instead of a row under More.
+- **Edit a card**: a card's ⋯ → Edit card changes the name, description, personality, greetings, system prompt, tags, avatar and the card's own lorebook in place. It saves into the card; its chats, cast and sprites stay as they are, and PNG / JSON export carries the edits.
+- **Edit by chat**: say what to change ("make her colder", "add an NPC entry for a childhood friend") and each change is shown before and after, applied only if ticked.
+- **Generate avatar**: a square avatar of the card's character in the card's style, put on only when you take it.
+- **Pick the image backend and model for each picture**: Generate avatar, the cast's Draw one, the Card Forge avatar, and Redraw or Draw it differently… under a picture, without changing your settings.
 
-Visual novel mode came in 1.8.0; voices for each character, the ▾ menus and the CG gallery in 1.8.1 (see above). Download from [Releases](https://github.com/Shikasar7/CicaTavern/releases/latest); 1.4.0 and later can update in the app. Everything that changed is in [CHANGELOG.md](CHANGELOG.md).
+Visual novel mode came in 1.8.0; voices for each character, the ▾ menus and the CG gallery in 1.8.1; lorebook entry editing and visual novel mode on phones in 1.8.2. Download from [Releases](https://github.com/Shikasar7/CicaTavern/releases/latest); 1.4.0 and later can update in the app. Everything that changed is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Getting started (Windows)
 

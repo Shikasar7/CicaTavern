@@ -219,7 +219,7 @@ test('a PNG carries the card in chara and ccv3 chunks with valid CRCs', { skip: 
 
 test('writing a card: steps in order, a failed step carries on, check and fix, then edits, rewrites, avatar and saving', async t => {
   const drawn = []
-  const { forge, fake, store, root } = await setup(t, { draw: async (input, signal) => (drawn.push(input), assert.ok(signal), { buffer: PNG, backend: 'NovelAI' }) })
+  const { forge, fake, store, root } = await setup(t, { draw: async (input, signal, choice) => (drawn.push({ ...input, choice }), assert.ok(signal), { buffer: PNG, backend: 'NovelAI' }) })
 
   // The first entries call answers without tags: that step fails, the rest waits.
   fake.state.fail = 1
@@ -264,6 +264,11 @@ test('writing a card: steps in order, a failed step carries on, check and fix, t
   draft = await settled(forge, 'draftone')
   assert.equal(draft.card.avatar.backend, 'NovelAI')
   assert.deepEqual([drawn[0].name, drawn[0].kind, drawn[0].looks, drawn[0].scene], ['林小雨', 'girl', 'black hair, wet hair', '1girl, raincoat, night'])
+  assert.deepEqual(drawn[0].choice, { backend: '', model: '' }, 'as the picture settings say')
+  // Another 画图方式 and model for this one (web/draw-choice.js).
+  await forge.drawAvatar('draftone', { description: '1girl, raincoat, night', backend: 'gemini', model: 'gemini-3-pro-image-preview' })
+  await settled(forge, 'draftone')
+  assert.deepEqual(drawn[1].choice, { backend: 'gemini', model: 'gemini-3-pro-image-preview' })
   assert.deepEqual((await forge.readAvatar('draftone')).buffer, PNG)
   await assert.rejects(forge.uploadAvatar('draftone', { image: 'data:text/plain;base64,aGk=' }), /PNG、JPEG/)
   draft = await forge.uploadAvatar('draftone', { image: PNG_URL })

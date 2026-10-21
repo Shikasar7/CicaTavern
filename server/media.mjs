@@ -62,6 +62,7 @@ export const DEFAULT_MEDIA = Object.freeze({
   geminiTtsProvider: '', // a provider with Google's key: Gemini's speech models (voices gemini:<name>)
   geminiTtsModel: 'gemini-2.5-flash-preview-tts',
   geminiTtsVoices: Object.freeze([]), // none listed = Gemini's prebuilt voices
+  localModels: Object.freeze({}), // the model picked for each of this install's own image backends (createMedia ownBackends), by id
   autoRead: false,
   autoImage: false,
 })
@@ -88,6 +89,37 @@ export const IMAGE_BACKENDS = ['openai', 'gemini', 'comfy', 'sdwebui', 'novelai'
 const MODEL_NAME = /^[\w.:/@+-]{1,120}$/
 export const NAI_MODELS = ['nai-diffusion-5-full', 'nai-diffusion-5-curated', 'nai-diffusion-4-5-full', 'nai-diffusion-4-5-curated']
 
+/**
+ * The settings for one drawing with the 画图方式 and model picked for it
+ * (web/draw-choice.js), nothing saved: `backend` one of IMAGE_BACKENDS ('' =
+ * the saved one), `model` that method's model ('' = its saved one). ComfyUI and
+ * SD WebUI draw with what they have loaded. A string is a NovelAI model, as
+ * pages before the picker sent it. `backends`: the ones there are, this
+ * install's own included (their model goes into localModels).
+ */
+export function withDrawChoice(media, choice = {}, backends = IMAGE_BACKENDS) {
+  const { backend = '', model = '' } = typeof choice === 'string' ? { model: choice } : choice ?? {}
+  const using = backends.includes(backend) ? backend : media.imageBackend
+  const next = { ...media, imageBackend: using }
+  const name = String(model ?? '').trim()
+  if (!name) return next
+  if (using === 'novelai') {
+    if (!/^nai-diffusion-[a-z0-9-]{1,40}$/.test(name)) throw httpError(400, msg`NovelAI 模型名不对`)
+    return { ...next, naiModel: name, naiModelPicked: true }
+  }
+  if (!MODEL_NAME.test(name)) throw httpError(400, msg`模型名不对：${name.slice(0, 60)}`)
+  if (using === 'gemini') return { ...next, geminiImageModel: name.replace(/^models\//, '') }
+  if (using === 'openai') return { ...next, imageModel: name }
+  if (!IMAGE_BACKENDS.includes(using)) return { ...next, localModels: { ...media.localModels, [using]: name } }
+  return next
+}
+
+/** A draw request's { backend, model } (or the old lone `model`), as withDrawChoice takes it. */
+export function drawChoiceOf(body) {
+  const pick = key => (typeof body?.[key] === 'string' ? body[key].trim().slice(0, 200) : '')
+  return { backend: pick('backend'), model: pick('model') }
+}
+
 /** The images API's answer format: gpt-image models always answer in base64 and refuse to be asked. */
 export const imageFormat = model => (/^(openai\/)?(gpt-image|chatgpt-image)/i.test(String(model ?? '')) ? {} : { response_format: 'b64_json' })
 
@@ -112,8 +144,9 @@ export function mediaDefaults(features) {
 /**
  * @param defaults - mediaDefaults() of the edition; an emptied address goes
  *   back to its default ('' = no voice service where none is assumed).
+ * @param options.backends - the image backends there are: IMAGE_BACKENDS and this install's own.
  */
-export function cleanMedia(input, previous = DEFAULT_MEDIA, defaults = DEFAULT_MEDIA) {
+export function cleanMedia(input, previous = DEFAULT_MEDIA, defaults = DEFAULT_MEDIA, { backends = IMAGE_BACKENDS } = {}) {
   const value = { ...defaults, ...previous }
   const source = input && typeof input === 'object' ? input : {}
   const text = (key, max = 200) => {
@@ -123,7 +156,18 @@ export function cleanMedia(input, previous = DEFAULT_MEDIA, defaults = DEFAULT_M
   text('imageProvider', 40)
   text('imageModel')
   text('imageEditModel')
-  if (IMAGE_BACKENDS.includes(source.imageBackend)) value.imageBackend = source.imageBackend
+  if (backends.includes(source.imageBackend)) value.imageBackend = source.imageBackend
+  // A backend this install no longer has (a saved setting read by another build): the default.
+  if (!backends.includes(value.imageBackend)) value.imageBackend = DEFAULT_MEDIA.imageBackend
+  if (source.localModels && typeof source.localModels === 'object' && !Array.isArray(source.localModels)) {
+    value.localModels = { ...value.localModels }
+    for (const [id, model] of Object.entries(source.localModels)) {
+      if (!/^[a-z][\w-]{0,30}$/.test(id) || typeof model !== 'string') continue
+      const name = model.trim()
+      if (name && !MODEL_NAME.test(name)) throw httpError(400, msg`模型名不对：${name.slice(0, 60)}`)
+      value.localModels[id] = name
+    }
+  }
   text('geminiImageProvider', 40)
   text('geminiTtsProvider', 40)
   for (const key of ['geminiImageModel', 'geminiTtsModel']) {
@@ -453,6 +497,9 @@ export function checkWorkflow(json) {
 
 // A cast member's reference picture: one person, nothing else to copy from it.
 const PORTRAIT_SCENE = 'solo, upper body, looking at viewer, simple background, white background'
+// A card's avatar (修改角色卡 → 生成头像): square, the face and shoulders filling it.
+const AVATAR_SCENE = 'solo, portrait, face and shoulders, close-up, looking at viewer, simple background'
+const AVATAR_NEGATIVE = 'nsfw, multiple views, text, full body, lower body'
 // 立绘 for the visual novel mode: the page cuts the white out, so nothing may touch the edges but the body.
 const SPRITE_SCENE = 'solo, upper body, cowboy shot, looking at viewer, standing, simple background, white background, full color'
 const SPRITE_NEGATIVE = 'multiple views, text, scenery, detailed background, gradient background, frame, border, nsfw'
@@ -607,17 +654,33 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
  * @param voiceUrls - cloud speech addresses, the same way: { fish, minimax: { cn, intl } }.
  * @param features - the edition's capabilities (edition.mjs); without the
  *   xiaoya bridge assumed, no voice service is configured by default.
+ * @param ownBackends - this install's own image backends, beside IMAGE_BACKENDS:
+ *   { id, status() → { id, name, ready, need, hint, models: [{ id, label }], model },
+ *   draw({ prompt, shape, references: [Buffer], model, signal }) → { buffer, label, note } }.
  */
-export function createMedia(store, { proxy = null, askInContext = null, novelai = {}, voiceUrls = {}, features = null } = {}) {
+export function createMedia(store, { proxy = null, askInContext = null, novelai = {}, voiceUrls = {}, features = null, ownBackends = [] } = {}) {
   const proxyNow = typeof proxy === 'function' ? proxy : () => proxy
   const defaults = mediaDefaults(features)
+  const backends = [...IMAGE_BACKENDS, ...ownBackends.map(own => own.id)]
   // Since 2026-09-21 api.novelai.net refuses third-party tools ("update to the
   // image URL"); generation and the subscription lookup both live on the image host.
   const naiImageUrl = novelai.imageUrl ?? 'https://image.novelai.net'
   const mediaDir = chatId => path.join(store.dirs.root, 'media', chatId)
 
   async function settings() {
-    return cleanMedia((await store.getSettings()).media ?? {}, defaults, defaults)
+    return cleanMedia((await store.getSettings()).media ?? {}, defaults, defaults, { backends })
+  }
+
+  /** A settings form or patch over the saved settings (PUT /api/media/settings). */
+  const cleanSettings = (input, previous) => cleanMedia(input, previous, defaults, { backends })
+
+  /** This install's own image backends as the page offers them, each with the model it draws with. */
+  async function ownBackendViews() {
+    const media = await settings()
+    return Promise.all(ownBackends.map(async own => {
+      const view = await own.status()
+      return { ...view, model: media.localModels?.[own.id] || view.model }
+    }))
   }
 
   const voices = createVoices({ root: store.dirs.root, settings, providers: () => store.getProviders(), proxy: proxyNow, features, urls: voiceUrls })
@@ -1204,19 +1267,16 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     return { roster, model: `${provider.name} · ${modelId}` }
   }
 
-  /** Generate one image for a reply and record it on the node. */
-  /** The settings with a NovelAI model picked for one picture, if any. */
-  async function settingsFor(model) {
-    const media = await settings()
-    if (!model) return media
-    if (!/^nai-diffusion-[a-z0-9-]{1,40}$/.test(String(model))) throw httpError(400, msg`NovelAI 模型名不对`)
-    return { ...media, naiModel: model, naiModelPicked: true }
+  /** The settings with the 画图方式 and model picked for one picture, if any (withDrawChoice). */
+  async function settingsFor(choice) {
+    return withDrawChoice(await settings(), choice, backends)
   }
 
-  async function generateImage(chat, nodeId, prompt, signal, { model = '' } = {}) {
+  /** Generate one image for a reply and record it on the node; `backend` and `model` for this one only. */
+  async function generateImage(chat, nodeId, prompt, signal, { model = '', backend: method = '' } = {}) {
     const text = String(prompt ?? '').trim()
     if (!text) throw httpError(400, msg`提示词是空的`)
-    const media = await settingsFor(model)
+    const media = await settingsFor({ backend: method, model })
     const { roster } = cleanCardMedia((await store.getCard(chat.cardId)).media)
     const frame = roster.length && isFramePrompt(text) ? parseFrame(text, roster, chat.names?.user) : null
     const cast = frame?.characters.length ? { ...frame, solo: frame.characters.length === 1 ? frame.characters[0].entry : null, lead: leadOf(frame.characters) } : null
@@ -1239,9 +1299,20 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     return run
   }
 
-  async function render(media, cardId, frame, cast, text, signal, { scenery = false } = {}) {
+  /**
+   * @param options.references - what this install's own backends get to keep faces
+   *   the same: 'all' (the cast's reference pictures, else the card's avatar
+   *   when the picture is of the card's own character), 'cast' (only theirs), 'none'.
+   */
+  async function render(media, cardId, frame, cast, text, signal, { scenery = false, references = 'all' } = {}) {
     // Backends without per-character prompts get the cast written out in one prompt.
     const flat = cast ? flattenFrame(cast, media.promptStyle) : frame ? frame.scene : text
+    const own = ownBackends.find(item => item.id === media.imageBackend)
+    if (own) {
+      const pictures = scenery || references === 'none' ? [] : await castPictures(cardId, cast, { avatar: references === 'all' })
+      const { buffer, label, note = '' } = await own.draw({ prompt: flat, shape: media.imageShape, references: pictures, model: media.localModels?.[own.id] ?? '', signal })
+      return { buffer, note, backend: label }
+    }
     if (media.imageBackend === 'comfy') {
       const buffer = await comfyImage(media, flat, cardId, signal, cast, { scenery })
       // A workflow built around a reference picture puts the card's picture into the background too.
@@ -1262,18 +1333,39 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
   }
 
   /**
+   * Reference pictures for a picture of `cast`: its members' (four at most), else
+   * with `avatar` the card's avatar, when no cast is named or the lead is the
+   * card's own character.
+   */
+  async function castPictures(cardId, cast, { avatar = true } = {}) {
+    if (!cardId) return []
+    const pictures = []
+    for (const { entry } of cast?.characters ?? []) {
+      if (pictures.length >= 4) break
+      const ref = await rosterRef(cardId, entry.id)
+      if (ref) pictures.push(ref)
+    }
+    if (pictures.length || !avatar) return pictures
+    const card = await store.getCard(cardId).catch(() => null)
+    const lead = cast?.lead
+    const own = !lead || [lead.name, ...String(lead.aliases ?? '').split(/[,，、]/)].map(name => name.trim()).some(name => name && card?.name.includes(name))
+    const picture = own ? await avatarOf(cardId) : null
+    return picture ? [picture] : []
+  }
+
+  /**
    * A reference picture for a cast member drawn from their looks and usual
    * outfit: one person, upper body, plain background, no reference of its
    * own. Returned to the page, which pads it like an upload.
    */
-  async function drawPortrait(cardId, input, signal, { model = '' } = {}) {
+  async function drawPortrait(cardId, input, signal, { model = '', backend: method = '' } = {}) {
     await store.getCard(cardId)
     const [entry] = cleanRoster([input])
     if (!entry?.looks) throw httpError(400, msg`先写这个角色的长相，再画人设图`)
-    const media = await settingsFor(model)
+    const media = await settingsFor({ backend: method, model })
     const cast = { scene: PORTRAIT_SCENE, characters: [{ entry, action: [entry.outfit, 'standing'].filter(Boolean).join(', '), position: '' }], solo: entry, lead: entry }
     const plain = { ...media, imageShape: 'portrait', naiReference: false, imageReference: false, geminiReference: false, naiNegative: [media.naiNegative, 'nsfw, multiple views, text'].filter(Boolean).join(', '), sdNegative: [media.sdNegative, 'nsfw, multiple views, text'].filter(Boolean).join(', ') }
-    const { buffer, backend } = await render(plain, cardId, cast, cast, '', signal)
+    const { buffer, backend } = await render(plain, cardId, cast, cast, '', signal, { references: 'none' })
     const type = extOf('', buffer) === 'jpg' ? 'jpeg' : extOf('', buffer)
     return { image: `data:image/${type};base64,${buffer.toString('base64')}`, backend }
   }
@@ -1299,14 +1391,68 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
    * looks and outfit as a cast member, the scene as given (else a plain upper
    * body). No references, no card LoRA. Returns { buffer, backend }.
    */
-  async function drawCardArt(input, signal) {
+  async function drawCardArt(input, signal, choice = {}) {
     const [entry] = cleanRoster([{ name: input?.name || '角色', kind: input?.kind, looks: input?.looks, outfit: input?.outfit }])
     if (!entry?.looks) throw httpError(400, msg`还没有这个角色的长相描述`)
-    const media = await settings()
+    const media = await settingsFor(choice)
     const scene = typeof input.scene === 'string' && input.scene.trim() ? input.scene.trim().slice(0, 400) : PORTRAIT_SCENE
     const cast = { scene, characters: [{ entry, action: [entry.outfit, 'looking at viewer'].filter(Boolean).join(', '), position: '' }], solo: entry, lead: entry }
     const plain = { ...media, imageShape: 'portrait', naiReference: false, imageReference: false, geminiReference: false, naiNegative: [media.naiNegative, 'nsfw, multiple views, text'].filter(Boolean).join(', '), sdNegative: [media.sdNegative, 'nsfw, multiple views, text'].filter(Boolean).join(', ') }
-    return render(plain, null, cast, cast, '', signal)
+    return render(plain, null, cast, cast, '', signal, { references: 'none' })
+  }
+
+  /**
+   * Who a saved card's avatar shows, and how they look: the card's own character
+   * in its cast (looks and outfit), else one the helper model reads from the
+   * card and its lore (as 草拟名册 does), else the description as it is.
+   * → { entry, from: 'roster' | 'draft' | 'description', model? }
+   */
+  async function avatarSubject(card, media, signal) {
+    const names = entry => [entry.name, ...String(entry.aliases ?? '').split(/[,，、]/)].map(name => name.trim()).filter(Boolean)
+    const own = list => list.find(entry => !entry.player && entry.looks && names(entry).some(name => card.name.includes(name) || name.includes(card.name)))
+    const drawable = list => list.filter(entry => !entry.player && entry.looks)
+    const cast = cleanCardMedia(card.media).roster
+    // The card's own character, or the only one the cast has.
+    const listed = own(cast) ?? (drawable(cast).length === 1 ? drawable(cast)[0] : null)
+    if (listed) return { entry: listed, from: 'roster' }
+    let target = null
+    try {
+      target = await helperTarget({ model: '' }, media)
+    } catch {
+      // No helper model: the description it is.
+    }
+    if (target) {
+      const books = await Promise.all((card.worldbookIds ?? []).map(id => store.getBook(id).catch(() => null)))
+      try {
+        const result = await complete(target.provider, target.modelId, { ...rosterDraftRequest(draftMaterial(card, books.filter(Boolean))), signal }, { proxy: proxyNow() })
+        const drafted = parseRosterDraft(result.text)
+        const entry = own(drafted) ?? drawable(drafted)[0]
+        if (entry) return { entry, from: 'draft', model: `${target.provider.name} · ${target.modelId}` }
+      } catch (error) {
+        if (signal?.aborted) throw error
+      }
+    }
+    const looks = String(card.description ?? '').replace(/\{\{char\}\}/gi, card.name).replace(/\s+/g, ' ').trim().slice(0, 400)
+    if (!looks) throw httpError(400, msg`这张卡没有描述，名册里也没有长相：先在「配图与朗读 → 角色名册」里写长相`)
+    return { entry: cleanRoster([{ name: card.name, kind: 'other', looks }])[0], from: 'description' }
+  }
+
+  /**
+   * An avatar for a saved card (修改角色卡 → 生成头像): its own character, face
+   * and shoulders, square, in the card's style. Not saved: the page shows it to
+   * take or draw again. → { image (data URL), backend, from, note }
+   */
+  async function drawAvatar(cardId, signal, choice = {}) {
+    const card = await store.getCard(cardId)
+    const media = await settingsFor(choice)
+    const { entry, from, model } = await avatarSubject(card, media, signal)
+    const { style } = cleanCardMedia(card.media)
+    const cast = { scene: [style, AVATAR_SCENE].filter(Boolean).join(', '), characters: [{ entry, action: [entry.outfit, 'looking at viewer'].filter(Boolean).join(', '), position: '' }], solo: entry, lead: entry }
+    const plain = { ...media, imageShape: 'square', naiReference: false, imageReference: false, geminiReference: false, naiNegative: [media.naiNegative, AVATAR_NEGATIVE].filter(Boolean).join(', '), sdNegative: [media.sdNegative, AVATAR_NEGATIVE].filter(Boolean).join(', ') }
+    const { buffer, backend, note } = await render(plain, cardId, cast, cast, '', signal, { references: 'cast' })
+    const type = extOf('', buffer) === 'jpg' ? 'jpeg' : extOf('', buffer)
+    const how = from === 'draft' ? msg`名册里没有${card.name}的长相，这次由 ${model} 从卡里读出来画。` : from === 'description' ? msg`名册里没有${card.name}的长相，这次照着描述画；在「角色名册」里写好长相会更准。` : ''
+    return { image: `data:image/${type};base64,${buffer.toString('base64')}`, backend, from, note: [note, how].filter(Boolean).join(' ') }
   }
 
   /**
@@ -1416,5 +1562,5 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     return voices.accountVoices({ source, draft: await voiceDraft(draft, keys) }, signal)
   }
 
-  return { defaults, settings, naiStatus, setNaiToken, naiCheck, cardMediaView, saveCardMedia, inheritCardMedia, draftRoster, drawPortrait, drawCardArt, drawScenery, drawSprite, readRosterRef, saveRosterRef, removeRosterRef, writeImagePrompt, generateImage, readImage, removeImage, removeChatMedia, copyChatMedia, loras, voices: voices.list, personaList: voices.personaList, ttsKeyStatus: voices.ttsKeyStatus, setTtsKey: voices.setTtsKey, voiceKeys: voices.keyStatus, setVoiceKey: voices.setKey, speak, previewVoice, accountVoices, loadWorkflow, saveWorkflow, describeWorkflow }
+  return { defaults, settings, cleanSettings, ownBackends: ownBackendViews, naiStatus, setNaiToken, naiCheck, cardMediaView, saveCardMedia, inheritCardMedia, draftRoster, drawPortrait, drawCardArt, drawAvatar, drawScenery, drawSprite, readRosterRef, saveRosterRef, removeRosterRef, writeImagePrompt, generateImage, readImage, removeImage, removeChatMedia, copyChatMedia, loras, voices: voices.list, personaList: voices.personaList, ttsKeyStatus: voices.ttsKeyStatus, setTtsKey: voices.setTtsKey, voiceKeys: voices.keyStatus, setVoiceKey: voices.setKey, speak, previewVoice, accountVoices, loadWorkflow, saveWorkflow, describeWorkflow }
 }
