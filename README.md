@@ -18,6 +18,18 @@ Windows 解压即用，也有安卓版；界面有简体中文和英文。数据
 <p align="center"><img src="docs/screenshots/chat.jpg" alt="CicaTavern 的对话界面：剧情正文、可点的行动选项、一键配出的插图，右侧是状态变量和这一轮的缓存命中" width="880"></p>
 <p align="center"><sub>示例截图：这张卡是用「创作角色卡」做出来的，插图由画图接口按剧情画出。</sub></p>
 
+## 最新版本：1.8.1
+
+<p align="center"><img src="docs/screenshots/vn-cg.jpg" alt="1.8.1 的视觉小说画面：右上角「朗读」「配图」旁多了 ▾ 快捷设置，左上角是这一轮的 CG，点开可以翻看之前所有的 CG" width="880"></p>
+
+- **每个角色有自己的音色**：角色名册里的每个人都能单独选一个音色；视觉小说按每句的说话人读，普通模式点「朗读」也按说话人分开读。
+- **视觉小说里直接改设置**：「朗读」「配图」旁边的 ▾，不用退出就能改逐句朗读、自动翻页、音色和朗读模型，以及自动配图、画图方式、模型和画幅。
+- **CG 回廊**：按 G 或点「CG」，这条故事线上所有的配图都收在这里，标着是第几轮，全屏翻看。
+- **更多画图方式和音色**：Gemini 原生生图（Nano Banana，照着名册里的人设图画）、本地的 SD WebUI / Forge、OpenRouter 的出图模型；朗读加了 Gemini 的 30 个音色。
+- **名字栏更准**：冒号前的叙述（「嘴角翘起来：」）不再被当成人名，「某某追问」这类说法也认得出名字。
+
+下载见 [Releases](https://github.com/Shikasar7/CicaTavern/releases/latest)，1.4.0 以后的版本可以在应用里直接更新；完整改动见 [CHANGELOG.md](CHANGELOG.md)。
+
 ## 为什么用 CicaTavern
 
 ### Agent 式：不只是一个聊天框
@@ -61,6 +73,7 @@ Windows 解压即用，也有安卓版；界面有简体中文和英文。数据
 ### 视觉小说模式
 
 <p align="center"><img src="docs/screenshots/vn.jpg" alt="视觉小说模式：雨中茶馆的场景背景，说话的角色立绘站在前面，下方文本框一句一句地显示" width="880"></p>
+<p align="center"><img src="docs/screenshots/vn-sprites.jpg" alt="换人说话时立绘跟着换：周管事端着账本站出来，名字栏换成他的颜色" width="436"> <img src="docs/screenshots/vn-choices.jpg" alt="读到最后，行动选项在画面中央弹出，按 1–4 直接选，✎ 先改再发" width="436"></p>
 
 - **一键切换**：顶栏的「视觉小说」一开，最新一条回复就变成游戏画面，按角色卡记住；发给模型的内容一字不改，缓存不受影响。
 - **立绘**：谁说话谁站出来，旁白时退下。名册里白底的人设图自动抠图描边；没有的话按长相画一张半身立绘。
