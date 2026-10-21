@@ -20,18 +20,6 @@ Unzip and run on Windows; there is an Android app too. Everything stays on your 
 <p align="center"><img src="docs/screenshots/chat.jpg" alt="The chat screen: story text, clickable action choices, a generated illustration, and on the right the state variables and this turn's cache hit" width="880"></p>
 <p align="center"><sub>Example screenshot: this card was made with the card creator, and the illustration was drawn from the story by an image API.</sub></p>
 
-## Latest release: 1.8.1
-
-<p align="center"><img src="docs/screenshots/vn-cg.jpg" alt="Visual novel mode in 1.8.1: a ▾ menu beside Read and Pictures at the top right, and this turn's CG at the top left, which opens onto every CG so far" width="880"></p>
-
-- **A voice for everyone in the cast**: pick a voice for each character in the roster; visual novel mode reads each line in its speaker's voice, and Read aloud in the chat splits the reply by speaker too.
-- **Settings inside visual novel mode**: the ▾ beside Read and Pictures changes line-by-line reading, auto-advance, voices and the speech model, or auto pictures, the image backend, model and aspect ratio, without leaving the mode.
-- **CG gallery**: press G or click CG to see every picture on the storyline, each marked with its turn, and page through them full size.
-- **More ways to draw and more voices**: Gemini's own image models (Nano Banana, following the cast's reference pictures), a local SD WebUI / Forge, and OpenRouter's image models; read-aloud adds Gemini's 30 prebuilt voices.
-- **Better name plates**: narration before a colon is no longer taken for a name, and names are picked up from more ways of saying who speaks.
-
-Download from [Releases](https://github.com/Shikasar7/CicaTavern/releases/latest); 1.4.0 and later can update in the app. Everything that changed is in [CHANGELOG.md](CHANGELOG.md).
-
 ## Why CicaTavern
 
 ### Agent-style: more than a chat box
@@ -114,6 +102,18 @@ If you can't quite say what you want, the creator guides you round by round:
 - The interface is laid out for phone screens, and the settings windows are grouped menus.
 
 <br clear="right">
+
+## Latest changes [1.8.1]
+
+<p align="center"><img src="docs/screenshots/vn-cg.jpg" alt="Visual novel mode in 1.8.1: a ▾ menu beside Read and Pictures at the top right, and this turn's CG at the top left, which opens onto every CG so far" width="880"></p>
+
+- **A voice for everyone in the cast**: pick a voice for each character in the roster; visual novel mode reads each line in its speaker's voice, and Read aloud in the chat splits the reply by speaker too.
+- **Settings inside visual novel mode**: the ▾ beside Read and Pictures changes line-by-line reading, auto-advance, voices and the speech model, or auto pictures, the image backend, model and aspect ratio, without leaving the mode.
+- **CG gallery**: press G or click CG to see every picture on the storyline, each marked with its turn, and page through them full size.
+- **More ways to draw and more voices**: Gemini's own image models (Nano Banana, following the cast's reference pictures), a local SD WebUI / Forge, and OpenRouter's image models; read-aloud adds Gemini's 30 prebuilt voices.
+- **Better name plates**: narration before a colon is no longer taken for a name, and names are picked up from more ways of saying who speaks.
+
+Download from [Releases](https://github.com/Shikasar7/CicaTavern/releases/latest); 1.4.0 and later can update in the app. Everything that changed is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Getting started (Windows)
 
