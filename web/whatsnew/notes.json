@@ -199,6 +199,23 @@
           }
         }
       ]
+    },
+    {
+      "version": "1.8.4",
+      "date": "2026-10",
+      "items": [
+        {
+          "icon": "📲",
+          "zh": {
+            "title": "手机上的应用内更新",
+            "text": "设置 → 更多 → 更新 →「下载并安装」：在应用里下载，断网了接着下；核对 SHA-256 和签名后直接打开系统的安装界面，点「更新」就好，数据保留。\n第一次会先打开「安装未知应用」的设置，打开开关后返回会接着安装。"
+          },
+          "en": {
+            "title": "In-app updates on the phone",
+            "text": "Settings → More → Updates → Download and install: the app downloads it, picking up where a dropped connection left off, checks the SHA-256 and signature, then opens the system installer; tap Update and your data stays.\nThe first time, it opens the Install unknown apps setting: turn it on and come back, and the install carries on."
+          }
+        }
+      ]
     }
   ]
 }

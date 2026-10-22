@@ -182,7 +182,8 @@ async function tavern(t) {
     model.close()
     server.closeAllConnections?.()
     server.close()
-    await rm(dataRoot, { recursive: true, force: true })
+    // A write still finishing on Windows can leave the folder briefly not empty.
+    await rm(dataRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   })
   const base = `http://127.0.0.1:${server.address().port}`
   const call = async (pathname, { method = 'GET', body } = {}) => {

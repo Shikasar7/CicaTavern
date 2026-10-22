@@ -103,11 +103,12 @@ If you can't quite say what you want, the creator guides you round by round:
 
 <br clear="right">
 
-## Latest changes [1.8.3]
+## Latest changes [1.8.4]
 
 <p align="center"><img src="docs/screenshots/card-edit.jpg" alt="Edit card in 1.8.3: the card's fields edited in place on the left, a newly drawn avatar waiting to be taken; on the right, edit by chat with each change shown before and after" width="880"></p>
 
-- **Edit a card**: a card's ⋯ → Edit card changes the name, description, personality, greetings, system prompt, tags, avatar and the card's own lorebook in place. It saves into the card; its chats, cast and sprites stay as they are, and PNG / JSON export carries the edits.
+- **In-app updates on the phone** (1.8.4): the Android app downloads the new version itself, checks the SHA-256 and signature, and opens the system installer, with no hunting through the browser's downloads.
+- **Edit a card** (1.8.3): a card's ⋯ → Edit card changes the name, description, personality, greetings, system prompt, tags, avatar and the card's own lorebook in place. It saves into the card; its chats, cast and sprites stay as they are, and PNG / JSON export carries the edits.
 - **Edit by chat**: say what to change ("make her colder", "add an NPC entry for a childhood friend") and each change is shown before and after, applied only if ticked.
 - **Generate avatar**: a square avatar of the card's character in the card's style, put on only when you take it.
 - **Pick the image backend and model for each picture**: Generate avatar, the cast's Draw one, the Card Forge avatar, and Redraw or Draw it differently… under a picture, without changing your settings.
