@@ -16,7 +16,7 @@ import { featuresOf } from '../server/edition.mjs'
 import { createApp } from '../server/http.mjs'
 import { createUpdater } from '../server/update/index.mjs'
 import { checkRuntime, createShortcut, freeFolder, isInstall, listShortcuts, otherInstalls, packageFolder, removeInstall, retargetShortcuts, stageInstall, supersededBy } from '../server/update/install.mjs'
-import { compareVersions, digestHash, expectedHash, notesHash, releaseInfo, trustedDownload } from '../server/update/release.mjs'
+import { compareVersions, digestHash, expectedHash, latestFile, latestFileUrl, notesHash, releaseInfo, trustedDownload } from '../server/update/release.mjs'
 import { extractZip, listZip, safeEntryPath, zipFolder } from '../server/update/zip.mjs'
 import { buildLauncher, findVcvars } from '../scripts/build-launcher.mjs'
 
@@ -140,22 +140,48 @@ function snapshot(dir) {
 
 /**
  * GitHub's API and download host, locally: /releases/latest, the repository's
- * download URL that redirects to the asset, and the asset itself.
+ * download URL that redirects to the asset, and the asset itself. limited:
+ * 'rate' (the API's hourly limit used up) or 'refuse' (a 403 without one);
+ * the release's latest.json is there unless noFile.
  */
 async function fakeGitHub(t, release) {
-  const hits = { latest: 0, download: 0 }
+  const hits = { latest: 0, download: 0, file: 0 }
   let current = release
+  const apiRelease = base => {
+    const { version, zip, apk, digest, notes } = current
+    const zipName = `CicaTavern-${version}-win-x64.zip`
+    const assets = []
+    if (zip) assets.push({ name: zipName, size: zip.length, digest: digest === undefined ? `sha256:${sha256(zip)}` : digest, browser_download_url: `${base}/Shikasar7/CicaTavern/releases/download/v${version}/${zipName}` })
+    if (apk) assets.push({ name: `CicaTavern-${version}-android-arm64.apk`, size: apk.length, digest: `sha256:${sha256(apk)}`, browser_download_url: `${base}/Shikasar7/CicaTavern/releases/download/v${version}/CicaTavern-${version}-android-arm64.apk` })
+    return { tag_name: `v${version}`, name: `CicaTavern ${version}`, body: notes ?? `## 新内容\n\n- 一项改进\n\n## 校验\n\n\`\`\`\nSHA-256  ${zip ? sha256(zip) : ''}  ${zipName}\n\`\`\``, html_url: `${base}/release`, published_at: '2026-10-20T00:00:00Z', assets }
+  }
   const server = http.createServer((req, res) => {
     const base = `http://127.0.0.1:${server.address().port}`
     if (req.url === '/repos/Shikasar7/CicaTavern/releases/latest') {
       hits.latest++
-      const { version, zip, apk, digest, notes } = current
-      const zipName = `CicaTavern-${version}-win-x64.zip`
-      const assets = []
-      if (zip) assets.push({ name: zipName, size: zip.length, digest: digest === undefined ? `sha256:${sha256(zip)}` : digest, browser_download_url: `${base}/Shikasar7/CicaTavern/releases/download/v${version}/${zipName}` })
-      if (apk) assets.push({ name: `CicaTavern-${version}-android-arm64.apk`, size: apk.length, digest: `sha256:${sha256(apk)}`, browser_download_url: `${base}/Shikasar7/CicaTavern/releases/download/v${version}/CicaTavern-${version}-android-arm64.apk` })
+      if (current.limited === 'rate') {
+        res.writeHead(403, { 'x-ratelimit-limit': '60', 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(Math.floor(Date.now() / 1000) + 25 * 60) })
+        return res.end('{"message":"API rate limit exceeded"}')
+      }
+      if (current.limited === 'refuse') {
+        res.writeHead(403)
+        return res.end('{}')
+      }
       res.writeHead(200, { 'content-type': 'application/json' })
-      return res.end(JSON.stringify({ tag_name: `v${version}`, name: `CicaTavern ${version}`, body: notes ?? `## 新内容\n\n- 一项改进\n\n## 校验\n\n\`\`\`\nSHA-256  ${zip ? sha256(zip) : ''}  ${zipName}\n\`\`\``, html_url: `${base}/release`, published_at: '2026-10-20T00:00:00Z', assets }))
+      return res.end(JSON.stringify(apiRelease(base)))
+    }
+    if (req.url === '/Shikasar7/CicaTavern/releases/latest/download/latest.json') {
+      res.writeHead(302, { location: '/assets/latest.json' })
+      return res.end()
+    }
+    if (req.url === '/assets/latest.json') {
+      hits.file++
+      if (current.noFile) {
+        res.writeHead(404)
+        return res.end('Not Found')
+      }
+      res.writeHead(200, { 'content-type': 'application/json' })
+      return res.end(JSON.stringify(latestFile(apiRelease(base))))
     }
     if (req.url.startsWith('/Shikasar7/CicaTavern/releases/download/')) {
       res.writeHead(302, { location: `/assets/${path.basename(req.url)}` })
@@ -484,6 +510,47 @@ test('update: no published hash, or two that disagree: no download at all', asyn
   res = await call('/api/update/download', { method: 'POST', body: {} })
   assert.equal(res.status, 400)
   assert.equal(github.hits.download, 0)
+})
+
+test('update: when GitHub limits the API, the check reads the release\'s latest.json, and says why when that fails too', async t => {
+  const zip = await packageZip(t, '1.1.0')
+  const github = await fakeGitHub(t, { version: '1.1.0', zip, limited: 'rate' })
+  const { call, settle } = await tavern(t, { feed: github.feed })
+  let res = await call('/api/update/check', { method: 'POST', body: {} })
+  assert.equal(res.status, 200)
+  assert.equal(res.body.newer, true)
+  assert.equal(res.body.latest.version, '1.1.0')
+  assert.equal(res.body.latest.assets.zip.sha256, sha256(zip))
+  assert.equal(github.hits.file, 1)
+  // The download link in latest.json is the repository's, so the update goes on as usual.
+  assert.equal((await call('/api/update/download', { method: 'POST', body: {} })).status, 200)
+  assert.equal((await settle()).job.step, 'ready')
+
+  github.set({ noFile: true })
+  res = await call('/api/update/check', { method: 'POST', body: {} })
+  assert.equal(res.status, 502)
+  assert.match(res.body.error, /每小时只能查 60 次/)
+  assert.match(res.body.error, /大约 2[56] 分钟后恢复/)
+  assert.match(res.body.error, /latest\.json 也没读到（HTTP 404）/)
+  github.set({ limited: 'refuse' })
+  res = await call('/api/update/check', { method: 'POST', body: {} })
+  assert.match(res.body.error, /GitHub 拒绝了这次查询（403）/)
+})
+
+test('latest.json: the release cut down to what the check reads, at GitHub\'s latest-release download link', () => {
+  assert.equal(latestFileUrl(), 'https://github.com/Shikasar7/CicaTavern/releases/latest/download/latest.json')
+  assert.equal(latestFileUrl('http://127.0.0.1:9/repos/Shikasar7/CicaTavern'), 'http://127.0.0.1:9/Shikasar7/CicaTavern/releases/latest/download/latest.json')
+  const api = {
+    tag_name: 'v1.8.4', name: 'CicaTavern 1.8.4', body: 'notes', html_url: 'https://github.com/Shikasar7/CicaTavern/releases/tag/v1.8.4', published_at: '2026-10-22T00:00:00Z', author: { login: 'x' },
+    assets: [
+      { name: 'CicaTavern-1.8.4-win-x64.zip', size: 10, digest: `sha256:${'ab'.repeat(32)}`, browser_download_url: 'https://github.com/Shikasar7/CicaTavern/releases/download/v1.8.4/CicaTavern-1.8.4-win-x64.zip', uploader: {} },
+      { name: 'latest.json', size: 1, browser_download_url: 'https://github.com/Shikasar7/CicaTavern/releases/download/v1.8.4/latest.json' },
+    ],
+  }
+  const file = latestFile(api)
+  assert.deepEqual(Object.keys(file), ['tag_name', 'name', 'body', 'html_url', 'published_at', 'assets'])
+  assert.deepEqual(file.assets.map(a => a.name), ['CicaTavern-1.8.4-win-x64.zip'])
+  assert.deepEqual(releaseInfo(file), releaseInfo(api))
 })
 
 test('update: the same version or an older one is not offered', async t => {

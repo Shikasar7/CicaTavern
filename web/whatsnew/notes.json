@@ -216,6 +216,45 @@
           }
         }
       ]
+    },
+    {
+      "version": "1.8.5",
+      "date": "2026-10",
+      "items": [
+        {
+          "image": "1.8.5-stage.webp",
+          "zh": {
+            "title": "视觉小说：多人同屏、表情和演出",
+            "text": "场景里说话的人一起站在台上（电脑最多三个，手机两个），说话的亮起，其余的暗下去；叙述里写了离开或者换了地点就退场。\n「立绘」窗口里可以给每个角色画一套表情，每句按叙述换；闪电、巨响时画面闪白或震动。"
+          },
+          "en": {
+            "title": "Visual novel: several on stage, expressions and effects",
+            "text": "The people in a scene stand on stage together (up to three on a computer, two on a phone): the speaker lit, the rest dimmed, stepping off when the narration has them leave or the place changes.\nIn the Sprites window each character can get a set of expressions, picked line by line from the narration; lightning or a crash flashes or shakes the picture."
+          }
+        },
+        {
+          "image": "1.8.5-saves.webp",
+          "zh": {
+            "title": "存档和读档",
+            "text": "视觉小说模式右上角的「存档」「读档」：每张卡 18 个存档位、一个快速存档（F5 存、F9 读）和每轮自动存的最近十个。\n读档回到存档的那一句接着玩，之后写过的收起来保留成分支，不会删掉。"
+          },
+          "en": {
+            "title": "Save and load",
+            "text": "Save and Load at the top right of visual novel mode: 18 slots for each card, a quick save (F5 to save, F9 to load) and the last ten turns saved on their own.\nLoading picks up at the saved line; whatever was written after it is kept as a branch, not deleted."
+          }
+        },
+        {
+          "image": "1.8.5-books.webp",
+          "zh": {
+            "title": "世界书管理",
+            "text": "角色卡列表上方的「世界书」，或 设置 → 世界书与状态 →「管理世界书」：导入的每本世界书都能改名、写备注、导出、复制、删除，一次勾选挂在哪些卡上，还能单独设扫描深度。\n「多选」可以一次启用、停用、删除条目，或者复制、移动到另一本。"
+          },
+          "en": {
+            "title": "Manage lorebooks",
+            "text": "Lorebook beside the card list's heading, or Settings → Lorebooks & state → Manage lorebooks: rename, note, export, duplicate or delete each imported lorebook, tick the cards it's attached to in one place, and give it its own scan depth.\nSelect enables, disables or deletes several entries at once, or copies or moves them to another lorebook."
+          }
+        }
+      ]
     }
   ]
 }

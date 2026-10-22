@@ -46,7 +46,12 @@
         <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 16c3.5-.6 6.3-2.4 8.4-5.4L16 5l-1-1-5.6 3.6C6.4 9.7 4.6 12.5 4 16Z" /><path d="M8.5 11.5 4 16" /></svg>
         <span>创作角色卡</span>
       </button>
-      <div class="section-title">角色卡</div>
+      <div class="section-title row">
+        <span>角色卡</span>
+        <span class="row-actions">
+          <button class="btn small ghost" id="open-books" type="button" title="导入的世界书：改名、导出、挂到哪些卡上，逐条或成批编辑条目">世界书</button>
+        </span>
+      </div>
       <ul class="card-list" id="card-list"></ul>
       <div class="section-title row">
         <span>对话</span>
@@ -320,15 +325,21 @@
     </div>
   </dialog>
 
-  <!-- 设置 → 挂载的世界书 → 查看条目 (web/books.js). -->
+  <!-- 世界书 (beside the card list's heading) and 设置 → 挂载的世界书 → 查看条目 (web/books.js). -->
   <dialog id="book-dialog" class="dialog presets books">
     <div class="preset-layout">
       <nav class="preset-nav">
         <div class="preset-nav-head">
-          <h2>世界书条目</h2>
+          <h2>世界书</h2>
+          <span class="row-actions">
+            <button type="button" class="btn small" id="book-new" title="新建一本空的世界书">新建</button>
+            <label class="btn small" title="导入 SillyTavern 的世界书 JSON">导入
+              <input type="file" id="book-import" accept=".json,application/json" multiple hidden>
+            </label>
+          </span>
         </div>
         <ul class="preset-list" id="book-list"></ul>
-        <p class="muted small preset-nav-note">卡里自带的始终生效；独立世界书在「挂载的世界书」里勾上才对这张卡生效。常驻条目写进对话开局时的固定前缀，关键词条目提到时才发送。</p>
+        <p class="muted small preset-nav-note">卡里自带的始终生效；导入的世界书挂到卡上才生效，在一本书的「用到它的卡」里勾，或在设置的「挂载的世界书」里勾。常驻条目写进对话开局时的固定前缀，关键词条目提到时才发送。</p>
       </nav>
       <button type="button" class="btn small ghost preset-back">‹ 全部世界书</button>
       <section class="preset-main" id="book-main"></section>

@@ -85,8 +85,36 @@ export function trustedDownload(href, { repo = REPO, feed = FEED } = {}) {
   return url.protocol === 'https:' && url.hostname === 'github.com' && url.pathname.startsWith(`/${repo}/releases/download/`)
 }
 
+/** The small file each release carries (scripts/release-latest.mjs): /releases/latest cut down to what releaseInfo reads. */
+export const LATEST_FILE = 'latest.json'
+
 /**
- * GET /releases/latest → { version, tag, name, notes, url, publishedAt, assets: { zip, apk } }.
+ * Where latest.json is when the API says no: GitHub's latest-release download
+ * link, which is not counted against the API's per-address limit. A local test
+ * feed serves it itself.
+ */
+export function latestFileUrl(feed = FEED, repo = REPO) {
+  const url = new URL(feed)
+  const host = url.hostname === 'api.github.com' ? 'https://github.com' : url.origin
+  return `${host}/${repo}/releases/latest/download/${LATEST_FILE}`
+}
+
+/** A release from the API (/releases/latest or /releases/tags/…) → latest.json's contents. */
+export function latestFile(json) {
+  return {
+    tag_name: json.tag_name,
+    name: json.name,
+    body: json.body,
+    html_url: json.html_url,
+    published_at: json.published_at,
+    assets: (Array.isArray(json.assets) ? json.assets : [])
+      .filter(asset => assetKind(String(asset?.name ?? '')))
+      .map(asset => ({ name: asset.name, size: asset.size, digest: asset.digest ?? null, browser_download_url: asset.browser_download_url })),
+  }
+}
+
+/**
+ * GET /releases/latest (or latest.json) → { version, tag, name, notes, url, publishedAt, assets: { zip, apk } }.
  * Each asset: { name, size, url, sha256, hashFrom } or { …, hashError }. Drafts
  * and pre-releases never come from /latest; a tag that is not a version is refused.
  */

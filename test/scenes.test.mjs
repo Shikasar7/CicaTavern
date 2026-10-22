@@ -149,7 +149,7 @@ test('画这一轮的场景 and 立绘: a new scene named by the helper, the pla
 
   // 立绘: only for someone on the cast list, with looks.
   await call(`/api/cards/${id}/media`, { method: 'PUT', body: { roster: [{ id: 'qinghe', name: '林青禾', looks: 'long black hair' }, { id: 'nolooks', name: '周管事' }] } })
-  assert.deepEqual((await call(`/api/cards/${id}/sprites`)).body, { sprites: {}, drawing: null })
+  assert.deepEqual((await call(`/api/cards/${id}/sprites`)).body, { sprites: {}, expressions: {}, drawing: null })
   assert.equal((await call(`/api/cards/${id}/sprites/nobody/draw`, { method: 'POST', body: {} })).status, 404)
   assert.equal((await call(`/api/cards/${id}/sprites/nolooks/draw`, { method: 'POST', body: {} })).status, 400)
   const drawn = (await call(`/api/cards/${id}/sprites/qinghe/draw`, { method: 'POST', body: {} })).body
@@ -166,4 +166,38 @@ test('画这一轮的场景 and 立绘: a new scene named by the helper, the pla
   assert.equal((await fetch(`${base}/api/sprites/${id}/${drawn.sprites.qinghe.file}`)).status, 404)
   await call(`/api/cards/${id}/media`, { method: 'PUT', body: { roster: [{ id: 'nolooks', name: '周管事' }] } })
   assert.deepEqual((await call(`/api/cards/${id}/sprites`)).body.sprites, {})
+})
+
+test('表情差分: the 立绘 with only the face changed, drawn from it or uploaded, kept apart from it', async t => {
+  const { fake, base, call, importCard } = await tavern(t)
+  const { id } = await importCard(card('雨宿'))
+  await call(`/api/cards/${id}/media`, { method: 'PUT', body: { roster: [{ id: 'qinghe', name: '林青禾', looks: 'long black hair', outfit: 'qipao' }] } })
+  // Nothing to keep the face from yet: no 立绘, no reference picture.
+  assert.equal((await call(`/api/cards/${id}/sprites/qinghe/expressions/smile/draw`, { method: 'POST', body: {} })).status, 400)
+  assert.equal((await call(`/api/cards/${id}/sprites/qinghe/expressions/neutral/draw`, { method: 'POST', body: {} })).status, 404)
+  assert.equal((await call(`/api/cards/${id}/sprites/qinghe/expressions/weird`, { method: 'PUT', body: { image: dataUrl } })).status, 404)
+  await call(`/api/cards/${id}/sprites/qinghe`, { method: 'PUT', body: { image: dataUrl } })
+
+  const drawn = (await call(`/api/cards/${id}/sprites/qinghe/expressions/smile/draw`, { method: 'POST', body: {} })).body
+  assert.match(drawn.expressions.qinghe.smile.file, /^qinghe-smile-[0-9a-f]{6}\.png$/)
+  assert.equal(drawn.expressions.qinghe.smile.source, 'drawn')
+  // The 立绘 went along as the picture to edit, with only the face to change.
+  const edit = fake.seen.at(-1)
+  assert.equal(edit.url, '/v1/images/edits')
+  assert.match(edit.json.prompt, /change only the facial expression, to a gentle, warm closed-mouth smile/)
+  assert.match(edit.json.prompt, /long black hair/)
+  assert.equal(edit.json.image.url, dataUrl)
+  const picture = await fetch(`${base}/api/sprites/${id}/${drawn.expressions.qinghe.smile.file}`)
+  assert.equal(picture.headers.get('content-type'), 'image/png')
+
+  const shy = (await call(`/api/cards/${id}/sprites/qinghe/expressions/shy`, { method: 'PUT', body: { image: dataUrl } })).body
+  assert.deepEqual(Object.keys(shy.expressions.qinghe).sort(), ['shy', 'smile'])
+  assert.equal(shy.expressions.qinghe.shy.source, 'upload')
+  // The 立绘 can go and come back; its expressions stay.
+  const bare = (await call(`/api/cards/${id}/sprites/qinghe`, { method: 'DELETE' })).body
+  assert.deepEqual(bare.sprites, {})
+  assert.deepEqual(Object.keys(bare.expressions.qinghe).sort(), ['shy', 'smile'])
+  const left = (await call(`/api/cards/${id}/sprites/qinghe/expressions/smile`, { method: 'DELETE' })).body
+  assert.deepEqual(Object.keys(left.expressions.qinghe), ['shy'])
+  assert.equal((await fetch(`${base}/api/sprites/${id}/${drawn.expressions.qinghe.smile.file}`)).status, 404)
 })

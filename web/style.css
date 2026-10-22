@@ -1752,6 +1752,44 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
   .book-entries .prow-line > .prow-size { order: 3; }
   .book-entries .prow-line > .prow-edit { order: 4; }
 }
+/* 世界书 as whole books: the window scrolls as one page, so a book's settings and cards above
+   the entries do not squeeze them, and the 多选 bar stays at the top while it scrolls. */
+.dialog.books .preset-main { overflow-y: auto; }
+.dialog.books .book-entries { overflow: visible; flex: none; }
+.book-panels { display: grid; gap: 8px; padding: 12px 28px 0; }
+.book-panel { border: 1px solid var(--line-soft); border-radius: 12px; background: var(--raised); }
+.book-panel > summary { cursor: pointer; list-style: none; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; padding: 10px 14px; font-size: 13px; color: var(--ink); }
+.book-panel > summary::-webkit-details-marker { display: none; }
+.book-panel > summary::before { content: "›"; color: var(--faint); transition: transform .2s var(--ease); }
+.book-panel[open] > summary::before { transform: rotate(90deg); }
+.book-panel-sub { font-size: 12px; color: var(--muted); }
+.book-panel-body { padding: 2px 14px 14px; }
+.book-panel-body > .prompt-field { margin: 0 0 10px; }
+.book-panel-body textarea { width: 100%; resize: vertical; }
+.book-fields { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
+.dialog label.book-check { margin: 0; gap: 8px; }
+.book-match, .prompt-field.book-match { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px 18px; }
+.book-match label.book-check { white-space: nowrap; }
+.book-match-label { font-size: 12px; color: var(--muted); }
+.book-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 6px 14px; max-height: 240px; overflow-y: auto; margin-bottom: 8px; }
+.book-card-name { min-width: 0; overflow-wrap: anywhere; }
+.book-bulk {
+  position: sticky; top: 0; z-index: 2; margin: 6px 18px 0; padding: 8px 12px; border-radius: 12px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; background: var(--surface); box-shadow: var(--shadow-1); font-size: 13px;
+}
+.book-bulk-count { font-variant-numeric: tabular-nums; color: var(--ink); margin-right: 4px; }
+.book-bulk-gap { flex: 1; }
+.book-bulk-to { display: inline-flex; align-items: center; gap: 6px; }
+.book-bulk-to select { max-width: 12rem; }
+.book-entries:not(.picking) .book-pick { display: none; }
+.book-entries.picking .prow-line { cursor: pointer; }
+.book-pick { flex: none; margin: 0; }
+.prow.picked { background: var(--accent-soft); }
+@media (max-width: 780px) {
+  .book-panels { padding: 10px 18px 0; }
+  .book-bulk { margin: 6px 8px 0; }
+  .book-bulk-gap { display: none; }
+}
 
 /* ─── 视觉小说模式 (web/vn.js): over the transcript, inside .reader ───── */
 .vn { position: absolute; inset: 0; z-index: 5; overflow: hidden; background: var(--bg); user-select: none; -webkit-user-select: none; }
@@ -1787,15 +1825,40 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
   --vn-narration: color-mix(in srgb, var(--ink) 60%, var(--bg));
   --vn-dialogue: var(--ink);
 }
-.vn-sprite {
-  position: absolute; left: 50%; bottom: 0; transform: translate(-50%, 18px);
-  height: min(88%, 980px); max-width: 64%; object-fit: contain; object-position: bottom; pointer-events: none;
-  opacity: 0; visibility: hidden;
-  filter: drop-shadow(2px 0 0 var(--vn-outline)) drop-shadow(-2px 0 0 var(--vn-outline)) drop-shadow(0 2px 0 var(--vn-outline)) drop-shadow(0 -2px 0 var(--vn-outline)) drop-shadow(0 10px 24px rgb(0 0 0 / .28));
-  transition: opacity .28s var(--ease), transform .28s var(--ease), visibility 0s .28s;
+.vn-bg { transition: background-image .6s var(--ease); }
+/* The stage: the ones in the scene (three at most, two on a phone), standing at --x across, the speaker
+   lit and a little forward, the rest dimmed; narration dims everyone a little. Each holds its pictures
+   stacked, so another expression fades in over the last. */
+/* Its own layer: the speaker comes forward among the others, never over the text box. */
+.vn-actors { position: absolute; inset: 0; pointer-events: none; z-index: 0; isolation: isolate; }
+.vn-actor {
+  position: absolute; left: var(--x, 50%); bottom: 0; width: 0; height: min(88%, 980px);
+  opacity: 0; transform: translateY(18px); transform-origin: bottom center; --dim: brightness(1) saturate(1);
+  transition: left .45s var(--ease), opacity .3s var(--ease), transform .3s var(--ease);
 }
-.vn-sprite.show { opacity: 1; visibility: visible; transform: translate(-50%, 0); transition: opacity .28s var(--ease), transform .28s var(--ease), visibility 0s; }
-@media (prefers-reduced-motion: reduce) { .vn-sprite, .vn-sprite.show { transform: translate(-50%, 0); } }
+.vn-actors[data-count="3"] .vn-actor { height: min(80%, 900px); }
+.vn-actor.show { opacity: 1; transform: none; }
+.vn-actor.show.speaking { transform: scale(1.03); z-index: 2; }
+/* Dimmed through the pictures (the box itself has no size to filter). */
+.vn-actor.idle { --dim: brightness(.58) saturate(.85); }
+.vn-actors.narration .vn-actor { --dim: brightness(.9) saturate(1); }
+.vn-actor img {
+  position: absolute; bottom: 0; left: 0; height: 100%; width: auto; max-width: 64vw; transform: translateX(-50%);
+  object-fit: contain; object-position: bottom; opacity: 0; transition: opacity .25s var(--ease), filter .3s var(--ease);
+  filter: var(--dim) drop-shadow(2px 0 0 var(--vn-outline)) drop-shadow(-2px 0 0 var(--vn-outline)) drop-shadow(0 2px 0 var(--vn-outline)) drop-shadow(0 -2px 0 var(--vn-outline)) drop-shadow(0 10px 24px rgb(0 0 0 / .28));
+}
+.vn-actor img.show { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .vn-actor, .vn-actor.show, .vn-actor.show.speaking { transform: none; } }
+/* 演出效果: the picture shakes or flashes white, the speaker hops or trembles (web/shared/stage.js effectsOf). */
+.vn.vn-shake :is(.vn-bg, .vn-actors) { animation: vn-shake .45s ease-out; }
+@keyframes vn-shake { 0%, 100% { translate: 0 0; } 15% { translate: -10px 4px; } 30% { translate: 9px -5px; } 45% { translate: -7px 3px; } 60% { translate: 5px -2px; } 80% { translate: -2px 1px; } }
+.vn-flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; }
+.vn-flash.on { animation: vn-flash .6s ease-out; }
+@keyframes vn-flash { 0% { opacity: 0; } 12% { opacity: .85; } 100% { opacity: 0; } }
+.vn-actor.jump { animation: vn-jump .45s var(--ease); }
+@keyframes vn-jump { 0%, 100% { translate: 0 0; } 35% { translate: 0 -26px; } 62% { translate: 0 0; } 80% { translate: 0 -7px; } }
+.vn-actor.tremble { animation: vn-tremble .6s linear; }
+@keyframes vn-tremble { 0%, 100% { translate: 0 0; } 10%, 50%, 90% { translate: -2px 0; } 30%, 70% { translate: 2px 0; } }
 /* The controls take the top row; under them on the left: the time box, what is being drawn, the turn's CG. */
 .vn-corner { position: absolute; top: var(--vn-above, 52px); left: 12px; max-width: calc(100% - 24px); display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
 .vn-sign[hidden] { display: none; }
@@ -1950,7 +2013,7 @@ label.cast-voice, .dialog label.cast-voice { display: grid; grid-template-column
 .vn.reading-log .vn-menu { visibility: hidden; }
 @keyframes vn-menu-in { from { opacity: 0; transform: translate(-50%, calc(-50% + 12px)) scale(.98); } }
 .vn.choosing .vn-bg { filter: brightness(.6) saturate(.85); }
-.vn.choosing .vn-sprite.show { opacity: .35; }
+.vn.choosing .vn-actor.show { opacity: .35; }
 .vn-menu-head { display: flex; align-items: baseline; justify-content: center; gap: 12px; font-family: var(--serif); }
 .vn-menu-head b { font-size: 18px; font-weight: 600; letter-spacing: .24em; color: var(--lamp); }
 .vn-menu-head span { font-size: 13px; color: var(--muted); }
@@ -2005,8 +2068,8 @@ label.cast-voice, .dialog label.cast-voice { display: grid; grid-template-column
 .vn-log-current.here { box-shadow: inset 3px 0 0 var(--accent); background: color-mix(in srgb, var(--accent-soft) 60%, transparent); }
 
 /* Hide the interface (H): only the picture stays; a click brings it back. */
-.vn > :not(.vn-bg, .vn-tint, .vn-sprite) { transition: opacity .25s var(--ease); }
-.vn.bare > :not(.vn-bg, .vn-tint, .vn-sprite) { opacity: 0; pointer-events: none; }
+.vn > :not(.vn-bg, .vn-tint, .vn-actors, .vn-flash) { transition: opacity .25s var(--ease); }
+.vn.bare > :not(.vn-bg, .vn-tint, .vn-actors, .vn-flash) { opacity: 0; pointer-events: none; }
 
 /* The stage in this mode: the reader fills it; the composer floats at the foot and opens on ✎ 行动. */
 .stage.vn-on .reader > :is(#rail, #whereabouts) { display: none; }
@@ -2043,7 +2106,10 @@ label.cast-voice, .dialog label.cast-voice { display: grid; grid-template-column
   .vn-switch { height: 30px; padding: 0 7px 0 9px; gap: 5px; font-size: 12px; }
   .vn-box { font-size: 16px; line-height: 1.8; min-height: 112px; max-height: 42%; padding: 14px 16px 22px; }
   .vn.choosing .vn-box { max-height: min(30%, 200px); }
-  .vn-sprite { height: 72%; max-width: 92%; }
+  .vn-actor, .vn-actors[data-count="3"] .vn-actor { height: 72%; }
+  .vn-actor img { max-width: 92vw; }
+  /* Two side by side: a little smaller, so they overlap less. */
+  .vn-actors[data-count="2"] .vn-actor { height: 62%; }
   .vn-controls { top: 10px; left: 10px; right: 10px; max-width: none; justify-content: flex-end; gap: 5px; }
   .vn-btn { padding: 3px 9px; }
   .vn-title { font-size: 21px; }
@@ -2084,7 +2150,8 @@ label.cast-voice, .dialog label.cast-voice { display: grid; grid-template-column
   /* The card list would stay a column here, and with the top bar gone nothing could close it: the picture takes the width. */
   .app:has(.stage.vn-on) { grid-template-columns: minmax(0, 1fr); }
   .app:has(.stage.vn-on) .pane.left { display: none; }
-  .vn-sprite { left: 22%; height: 94%; }
+  /* The text box takes the right: the stage keeps to the left. */
+  .vn-actor, .vn-actors[data-count="3"] .vn-actor { left: calc(var(--x, 50%) * .45); height: 94%; }
   .vn-box { left: auto; right: 16px; transform: none; width: min(62%, 720px); max-height: 46%; font-size: 15px; }
   /* The choices take the text box's column (the time box is on the other side), from under the controls down to the foot or the input. */
   .stage.vn-on .vn-menu {
@@ -2148,4 +2215,40 @@ label.cast-voice, .dialog label.cast-voice { display: grid; grid-template-column
   .whatsnew-body { padding: 14px 16px 0; }
   .whatsnew-foot { padding: 14px 16px 16px; }
   .whatsnew-foot .muted { display: none; }
+}
+
+/* 立绘 window: each one's expressions under it (表情差分). */
+/* Its switches as rows (a dialog's labels otherwise stack). */
+.dialog .vn-library-head label.vn-pop-switch { flex-direction: row; align-items: center; justify-content: space-between; margin: 0; color: var(--ink); font-size: 13px; }
+.vn-faces { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line-soft); }
+.vn-faces-head { justify-content: space-between; align-items: center; }
+.vn-face-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
+.vn-face { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 3px; border-radius: 8px; background: color-mix(in srgb, var(--raised) 70%, transparent); font-size: 11px; }
+/* The head is what changes: a square from the top of the picture. */
+.vn-face-pic { width: 100%; aspect-ratio: 1; display: grid; place-items: center; overflow: hidden; border-radius: 6px; background: var(--pane); }
+.vn-face-pic img { width: 100%; height: 260%; object-fit: cover; object-position: top; align-self: start; }
+.vn-face-tools { display: flex; gap: 2px; flex-wrap: wrap; justify-content: center; }
+.vn-face-tools .btn { padding: 0 5px; min-height: 0; font-size: 11px; line-height: 1.6; }
+
+/* 存档 / 读档 (web/vn-saves.js): six slots a page, each a picture of the stage and where it was. */
+.vn-saves { width: min(880px, calc(100vw - 32px)); }
+.vn-save-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; margin: 10px 0; }
+.vn-save-grid.one { grid-template-columns: minmax(250px, 420px); }
+.vn-save { position: relative; border-radius: 12px; border: 1px solid var(--line-soft); background: var(--raised); overflow: hidden; }
+.vn-save.gone { opacity: .55; }
+.vn-save-main { display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 8px; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.vn-save-main:disabled { cursor: default; }
+.vn-save-main:not(:disabled):hover { background: color-mix(in srgb, var(--lamp) 8%, transparent); }
+.vn-save-main > img, .vn-save-empty { flex: none; width: 112px; height: auto; aspect-ratio: 16 / 9; border-radius: 8px; object-fit: cover; background: var(--pane); }
+.vn-save-empty { display: grid; place-items: center; color: var(--muted); font-size: 12px; }
+.vn-save-meta { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding-right: 48px; }
+.vn-save-meta b { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vn-save-label { color: var(--lamp); font: 600 11px var(--ui); letter-spacing: .06em; }
+.vn-save-line { font-size: 12px; color: var(--ink-2, var(--ink)); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.vn-save-note { font-size: 12px; color: var(--accent, var(--lamp)); }
+.vn-save-tools { position: absolute; top: 6px; right: 6px; display: flex; gap: 2px; }
+.vn-save-pages { justify-content: center; }
+@media (max-width: 560px) {
+  .vn-save-grid { grid-template-columns: 1fr; }
+  .vn-save-main > img, .vn-save-empty { width: 96px; }
 }

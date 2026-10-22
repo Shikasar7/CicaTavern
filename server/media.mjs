@@ -23,6 +23,7 @@ import { httpError, newId } from './store.mjs'
 import { FISH_MODELS } from './voice/cloud.mjs'
 import { KEYED, cleanVoiceKey, cleanVoiceList, createVoices } from './voice/index.mjs'
 import { msg } from './i18n.mjs'
+import { EXPRESSION_LOOK, expressionRequest, parseExpressionLabels } from '../web/shared/stage.js'
 
 export const DEFAULT_MEDIA = Object.freeze({
   helperModel: '', // provider ref that writes image prompts; empty = the chat's model when it is a provider
@@ -771,7 +772,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     if (!provider) throw httpError(400, msg`还没选生图的供应商：在「配图与朗读」里选`)
     if (provider.api === 'anthropic-messages') throw httpError(400, msg`${provider.name} 是 Anthropic 接口，没有生图接口`)
     if (!media.imageModel) throw httpError(400, msg`还没填生图模型`)
-    const reference = media.imageReference ? (cast?.lead && (await rosterRef(cardId, cast.lead.id))) || (await avatarOf(cardId)) : null
+    const reference = media.imageReference ? (cast?.lead && (await refFor(cardId, cast.lead))) || (await avatarOf(cardId)) : null
     // OpenRouter draws through chat (Gemini and GPT image models answer with a picture).
     if (/openrouter\.ai/i.test(provider.baseURL)) return { buffer: await chatImage(provider, media, prompt, reference, signal), note: '' }
     const size = imageSize('openai', media.imageShape)
@@ -890,7 +891,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     if (media.geminiReference && !scenery && cardId) {
       for (const { entry } of cast?.characters ?? []) {
         if (parts.length >= 6) break
-        const ref = await rosterRef(cardId, entry.id)
+        const ref = await refFor(cardId, entry)
         if (!ref) continue
         const type = extOf('', ref) === 'jpg' ? 'jpeg' : extOf('', ref)
         parts.push({ text: `Reference picture of ${entry.name}: keep this face, hair and body in the new picture.` }, { inlineData: { mimeType: `image/${type}`, data: ref.toString('base64') } })
@@ -981,7 +982,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     let reference = ''
     const needsReference = JSON.stringify(workflow).includes('{{reference}}')
     if (needsReference) {
-      const avatar = (cast?.lead && (await rosterRef(cardId, cast.lead.id))) || (await avatarOf(cardId))
+      const avatar = (cast?.lead && (await refFor(cardId, cast.lead))) || (await avatarOf(cardId))
       if (!avatar) throw httpError(400, msg`工作流要参考图（{{reference}}），这张卡没有头像`)
       const upload = await postMultipart(`${base}/upload/image`, multipart({ image: { buffer: avatar, filename: `tavern-${cardId}.png`, type: 'image/png' }, overwrite: 'true' }), signal)
       reference = JSON.parse(upload.toString('utf8')).name
@@ -1121,7 +1122,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     let reference = null
     // A model picked for this one picture is used as picked: a reference picture only goes along when it can take one (V4.5).
     const canRefer = !media.naiModelPicked || /^nai-diffusion-4-5-/.test(model)
-    const picture = media.naiReference && canRefer && cast?.lead ? await rosterRef(cardId, cast.lead.id) : null
+    const picture = media.naiReference && canRefer && cast?.lead ? await refFor(cardId, cast.lead) : null
     if (picture) {
       model = referenceModel(model)
       reference = { image: picture.toString('base64'), fidelity: media.naiRefFidelity, style: media.naiRefStyle }
@@ -1179,6 +1180,12 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     } catch {
       return null
     }
+  }
+
+  /** The picture that keeps someone's looks: one riding along with them (a 立绘 for its expressions), else their roster picture. */
+  async function refFor(cardId, entry) {
+    if (Buffer.isBuffer(entry?.picture)) return entry.picture
+    return entry?.id ? rosterRef(cardId, entry.id) : null
   }
 
   async function readRosterRef(cardId, entryId) {
@@ -1342,7 +1349,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     const pictures = []
     for (const { entry } of cast?.characters ?? []) {
       if (pictures.length >= 4) break
-      const ref = await rosterRef(cardId, entry.id)
+      const ref = await refFor(cardId, entry)
       if (ref) pictures.push(ref)
     }
     if (pictures.length || !avatar) return pictures
@@ -1384,6 +1391,54 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     const cast = { scene: SPRITE_SCENE, characters: [{ entry, action: [entry.outfit, 'standing'].filter(Boolean).join(', '), position: '' }], solo: entry, lead: entry }
     const plain = { ...media, imageShape: 'portrait', naiNegative: [media.naiNegative, SPRITE_NEGATIVE].filter(Boolean).join(', '), sdNegative: [media.sdNegative, SPRITE_NEGATIVE].filter(Boolean).join(', ') }
     return render(plain, cardId, cast, cast, '', signal)
+  }
+
+  /**
+   * One expression of a 立绘 (视觉小说 表情差分): the 立绘 itself, else the cast
+   * member's reference picture, goes along as the picture to keep, and only the
+   * face is to change. SD WebUI and a ComfyUI workflow without a reference
+   * picture draw it anew from the looks. → { buffer, backend, note }
+   */
+  async function drawExpression(cardId, entryId, expression, base, signal) {
+    const look = EXPRESSION_LOOK[expression]
+    if (!look) throw httpError(404, msg`没有这种表情`)
+    const { roster } = cleanCardMedia((await store.getCard(cardId)).media)
+    const entry = roster.find(item => item.id === entryId)
+    if (!entry) throw httpError(404, msg`名单里没有这个角色`)
+    const picture = base ?? (await rosterRef(cardId, entryId))
+    if (!picture) throw httpError(400, msg`先给${entry.name}画或上传立绘，再画表情`)
+    const media = await settings()
+    const tags = media.promptStyle === 'tags'
+    const scene = tags
+      ? `${SPRITE_SCENE}, same character, same outfit, same pose`
+      : `Edit the reference picture of ${entry.name}: keep the same character, face, hair, outfit, pose, framing, art style and the plain white background; change only the facial expression, to ${look.words}`
+    const lead = { ...entry, picture }
+    const cast = { scene, characters: [{ entry: lead, action: tags ? [entry.outfit, look.tags].filter(Boolean).join(', ') : `with ${look.words}`, position: '' }], solo: lead, lead }
+    const plain = { ...media, imageShape: 'portrait', imageReference: true, geminiReference: true, naiReference: true, naiNegative: [media.naiNegative, SPRITE_NEGATIVE].filter(Boolean).join(', '), sdNegative: [media.sdNegative, SPRITE_NEGATIVE].filter(Boolean).join(', ') }
+    const result = await render(plain, cardId, cast, cast, '', signal, { references: 'cast' })
+    const fresh = media.imageBackend === 'sdwebui' || (media.imageBackend === 'comfy' && !describeWorkflow(await loadWorkflow().catch(() => null))?.placeholders.includes('reference'))
+    const note = fresh ? msg`这种画图方式不能照着立绘改，表情是按长相重新画的，可能和立绘不太一样。` : ''
+    return { ...result, note: [result.note, note].filter(Boolean).join(' ') }
+  }
+
+  /**
+   * 用辅助模型判断表情: the helper labels each spoken line of a reply with its
+   * speaker's expression. `lines`: { speaker, text } or null per step.
+   * → { labels: expression or null per step }
+   */
+  async function labelExpressions(lines, signal) {
+    const list = (Array.isArray(lines) ? lines : []).slice(0, 400).map(line => (line && typeof line.text === 'string' && typeof line.speaker === 'string' ? { speaker: line.speaker, text: line.text } : null))
+    if (!list.some(Boolean)) return { labels: list.map(() => null) }
+    const media = await settings()
+    const { provider, modelId } = await helperTarget({ model: '' }, media)
+    let result
+    try {
+      result = await complete(provider, modelId, { ...expressionRequest(list), signal }, { proxy: proxyNow() })
+    } catch (error) {
+      if (error.status) throw error
+      throw httpError(502, providerError(provider, error))
+    }
+    return { labels: parseExpressionLabels(result.text, list.length) }
   }
 
   /**
@@ -1562,5 +1617,5 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     return voices.accountVoices({ source, draft: await voiceDraft(draft, keys) }, signal)
   }
 
-  return { defaults, settings, cleanSettings, ownBackends: ownBackendViews, naiStatus, setNaiToken, naiCheck, cardMediaView, saveCardMedia, inheritCardMedia, draftRoster, drawPortrait, drawCardArt, drawAvatar, drawScenery, drawSprite, readRosterRef, saveRosterRef, removeRosterRef, writeImagePrompt, generateImage, readImage, removeImage, removeChatMedia, copyChatMedia, loras, voices: voices.list, personaList: voices.personaList, ttsKeyStatus: voices.ttsKeyStatus, setTtsKey: voices.setTtsKey, voiceKeys: voices.keyStatus, setVoiceKey: voices.setKey, speak, previewVoice, accountVoices, loadWorkflow, saveWorkflow, describeWorkflow }
+  return { defaults, settings, cleanSettings, ownBackends: ownBackendViews, naiStatus, setNaiToken, naiCheck, cardMediaView, saveCardMedia, inheritCardMedia, draftRoster, drawPortrait, drawCardArt, drawAvatar, drawScenery, drawSprite, drawExpression, labelExpressions, readRosterRef, saveRosterRef, removeRosterRef, writeImagePrompt, generateImage, readImage, removeImage, removeChatMedia, copyChatMedia, loras, voices: voices.list, personaList: voices.personaList, ttsKeyStatus: voices.ttsKeyStatus, setTtsKey: voices.setTtsKey, voiceKeys: voices.keyStatus, setVoiceKey: voices.setKey, speak, previewVoice, accountVoices, loadWorkflow, saveWorkflow, describeWorkflow }
 }

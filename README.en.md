@@ -103,17 +103,17 @@ If you can't quite say what you want, the creator guides you round by round:
 
 <br clear="right">
 
-## Latest changes [1.8.4]
+## Latest changes [1.8.5]
 
-<p align="center"><img src="docs/screenshots/card-edit.jpg" alt="Edit card in 1.8.3: the card's fields edited in place on the left, a newly drawn avatar waiting to be taken; on the right, edit by chat with each change shown before and after" width="880"></p>
+<p align="center"><img src="docs/screenshots/vn-stage.jpg" alt="Several on stage in 1.8.5's visual novel mode: Lin Qinghe and Steward Zhou together in the teahouse, the speaking steward lit and Lin Qinghe dimmed" width="880"></p>
 
-- **In-app updates on the phone** (1.8.4): the Android app downloads the new version itself, checks the SHA-256 and signature, and opens the system installer, with no hunting through the browser's downloads.
-- **Edit a card** (1.8.3): a card's ⋯ → Edit card changes the name, description, personality, greetings, system prompt, tags, avatar and the card's own lorebook in place. It saves into the card; its chats, cast and sprites stay as they are, and PNG / JSON export carries the edits.
-- **Edit by chat**: say what to change ("make her colder", "add an NPC entry for a childhood friend") and each change is shown before and after, applied only if ticked.
-- **Generate avatar**: a square avatar of the card's character in the card's style, put on only when you take it.
-- **Pick the image backend and model for each picture**: Generate avatar, the cast's Draw one, the Card Forge avatar, and Redraw or Draw it differently… under a picture, without changing your settings.
+- **Several on stage in visual novel mode**: the people talking in a scene stand together (up to three on a computer, two on a phone), the speaker lit and the rest dimmed, stepping off when the narration has them leave or the place changes.
+- **Expressions and stage effects**: in the Sprites window, draw a set of expressions for each character (only the face changes), picked line by line from the narration; lightning, a crash or a slammed table flashes or shakes the picture.
+- **Save and load**: 18 slots for each card, a quick save (F5 / F9) and the last ten turns saved on their own; loading picks up at that line, and what came after is kept as a branch.
+- **Manage lorebooks**: imported lorebooks one by one: rename, note, export, duplicate, delete, tick the cards each is attached to, and give one its own scan depth; select several entries to enable, disable or delete them, or copy or move them to another lorebook.
+- **Steadier update checks**: when GitHub's query limit is used up, the check reads the version information the release carries instead.
 
-Visual novel mode came in 1.8.0; voices for each character, the ▾ menus and the CG gallery in 1.8.1; lorebook entry editing and visual novel mode on phones in 1.8.2. Download from [Releases](https://github.com/Shikasar7/CicaTavern/releases/latest); 1.4.0 and later can update in the app. Everything that changed is in [CHANGELOG.md](CHANGELOG.md).
+Visual novel mode came in 1.8.0; voices for each character and the CG gallery in 1.8.1; lorebook entry editing in 1.8.2; Edit card and Generate avatar in 1.8.3; in-app updates on the phone in 1.8.4. Download from [Releases](https://github.com/Shikasar7/CicaTavern/releases/latest); 1.4.0 and later can update in the app. Everything that changed is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Getting started (Windows)
 

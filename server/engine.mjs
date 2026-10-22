@@ -75,7 +75,14 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       return { title: entry.comment, text }
     }
 
-    const hits = triggeredEntries(books, scanWindow(storyPath(path), settings.scanDepth, input), newSession ? new Set() : recentRefs(path, settings.reinjectAfter))
+    // A book may look further back or less far than the setting (世界书 → 扫描深度).
+    const windows = new Map()
+    const scanFor = book => {
+      const depth = book.scanDepth || settings.scanDepth
+      if (!windows.has(depth)) windows.set(depth, scanWindow(storyPath(path), depth, input))
+      return windows.get(depth)
+    }
+    const hits = triggeredEntries(books, scanFor, newSession ? new Set() : recentRefs(path, settings.reinjectAfter))
     const dynamic = dynamicEntries(books)
     // A card that feeds its own variables through a dynamic entry
     // ({{format_message_variable::stat_data}}) does not need our state block too.

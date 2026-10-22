@@ -10,7 +10,8 @@ import { httpError } from './store.mjs'
 import { msg } from './i18n.mjs'
 
 const MAX_SCRIPTS = 200
-const MAX_TEXT = 20000
+// A beautifier's replacement is a whole page of HTML and CSS: presets ship ones of 40 000 characters and more.
+const MAX_TEXT = 400_000
 
 /** Scripts from the page or a SillyTavern file → stored ones, each with an id of its own. */
 export function cleanScripts(list) {

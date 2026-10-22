@@ -1666,6 +1666,12 @@ function bookEntriesButton(id) {
 
 const tickedBooks = () => [...$('book-options').querySelectorAll('input[name="book"]:checked')].map(input => input.value)
 
+/** The 世界书 window on every imported book (the card list's 世界书, 设置 → 管理世界书). */
+const openBookManager = guard(async () => {
+  ui.books = await api('/api/worldbooks')
+  await booksUi.open({ books: ui.books })
+})
+
 function openBookEntries(id) {
   booksUi.open({ card: ui.cards.find(c => c.id === ui.cardId), books: ui.books, mounted: tickedBooks(), select: id })
 }
@@ -1718,6 +1724,11 @@ function layOutSettings({ form, card, providers, presets }) {
     {
       id: 'scan', title: t`扫描与状态`, look: 'shared', tag: t`所有对话`, pane: settingsPages.scan,
       summary: () => t`扫描最近 ${value('scanDepth')} 条 · 隔 ${value('reinjectAfter')} 轮再注入 · 每 ${value('stateRefreshEvery')} 轮重发状态 · ${STRIP[value('dynamicStrip')] ?? ''}`,
+    },
+    // The 世界书 window, as beside the card list's heading: every imported book, whatever card is picked.
+    {
+      id: 'manage-books', title: t`管理世界书`, look: 'shared', action: () => openBookManager(),
+      summary: () => (ui.books.length ? t`导入的 ${ui.books.length} 本：改名、导出、挂到哪些卡上，成批编辑条目` : t`还没导入：在这里导入 SillyTavern 的世界书，或新建一本`),
     },
     // Without a card the row hides but the page stays mounted: a page left out of
     // the layout leaves the document, and openSettings fills #book-options by id.
@@ -1794,7 +1805,7 @@ function layOutSettings({ form, card, providers, presets }) {
       { id: 'model', title: t`模型`, icon: MENU_ICONS.model, rows: ['model', 'providers'] },
       { id: 'write', title: t`写作`, icon: MENU_ICONS.write, rows: ['persona', 'style', 'presets', 'regex'] },
       { id: 'media', title: t`配图与朗读`, icon: MENU_ICONS.picture, rows: ['media'] },
-      { id: 'books', title: t`世界书与状态`, icon: MENU_ICONS.book, rows: ['scan', cardRow, 'books'] },
+      { id: 'books', title: t`世界书与状态`, icon: MENU_ICONS.book, rows: ['scan', 'manage-books', cardRow, 'books'] },
       { id: 'link', title: t`连接`, icon: MENU_ICONS.link, rows: ['network', 'access'] },
       { id: 'more', title: t`更多`, icon: MENU_ICONS.tools, rows: ['interface', 'update', 'privacy', 'shortcut', 'show-prompt', 'rebuild-prompt', 'stop-server'] },
     ],
@@ -2010,6 +2021,11 @@ const vnUi = initVn({
   fitInput,
   regenerate: userNodeId => regenerate(userNodeId),
   selectNode: nodeId => selectNode(nodeId),
+  // 读档: the save's chat as the server left it (that reply on screen).
+  showChat: view => {
+    followServerTurn(view)
+    setChat(view)
+  },
   readBeat: (nodeId, text, done, speaker) => mediaUi.readBeat(nodeId, text, done, speaker),
   fillQuick: (box, kind) => mediaUi.fillQuick(box, kind),
   stopReading: () => mediaUi.stopReading(),
@@ -2112,17 +2128,24 @@ const presetsUi = initPresets({
 })
 
 const booksUi = initBooks({
-  api, el, toast, guard,
+  api, el, toast, guard, saveFile,
   getChat: () => ui.chat,
   getCards: () => ui.cards,
+  getScanDepth: () => ui.settings?.scanDepth ?? 4,
   isGenerating: () => ui.generating,
   onChatChanged: chat => setChat(chat),
   // The counts under 设置 → 挂载的世界书 and in the card list follow each edit.
-  onChanged: guard(async () => {
+  onChanged: guard(async ({ mounts = [] } = {}) => {
     const ticked = new Set(tickedBooks())
     ;[ui.books] = await Promise.all([api('/api/worldbooks'), refreshCards()])
     if (!$('settings-dialog').open) return
-    renderBookOptions(ui.cards.find(c => c.id === ui.cardId), ticked)
+    const card = ui.cards.find(c => c.id === ui.cardId)
+    // A book whose cards were ticked in its own page is ticked here as the card has it now.
+    for (const id of mounts) {
+      if ((card?.worldbookIds ?? []).includes(id)) ticked.add(id)
+      else ticked.delete(id)
+    }
+    renderBookOptions(card, ticked)
     settingsMenu?.refresh()
   }),
 })
@@ -2354,6 +2377,7 @@ function bind() {
   $('open-settings').addEventListener('click', openSettings)
   $('open-usage').addEventListener('click', openUsage)
   $('open-presets').addEventListener('click', () => presetsUi.open())
+  $('open-books').addEventListener('click', openBookManager)
   $('forge-open').addEventListener('click', () => forgeUi.open())
   $('open-providers').addEventListener('click', () => providersUi.open())
   $('provider-add').addEventListener('click', () => providersUi.add())

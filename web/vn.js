@@ -1,14 +1,18 @@
 // 视觉小说模式: the latest reply shown a line at a time in a text box over the
-// chat, like a visual novel — a name plate when the speaker can be told, that
-// character's 立绘 (cut out of a plain background) while they speak, the place
-// as a small sign over its background, choices as buttons at the end. On or off
-// per card (localStorage). It only reads the chat: what the model is sent never
-// changes. The transcript keeps rendering underneath.
+// chat, like a visual novel — a name plate when the speaker can be told, the
+// ones in the scene standing on the stage (立绘 cut out of a plain background,
+// the speaker lit, each with the expression their lines last showed), a shake
+// or a flash where the narration plainly calls for one, the place as a small
+// sign over its background, choices as buttons at the end, save slots
+// (web/vn-saves.js). On or off per card (localStorage). It only reads the chat:
+// what the model is sent never changes. The transcript keeps rendering underneath.
 import { t } from '/i18n.js'
 import { htmlFrame, segments, streamingText } from '/render.js'
 import { timeBox } from '/status.js'
 import { latestPlace, matchScene, placeIn, speakerNames, splitLines, timeOfDay, weatherOf } from '/shared/vn.js'
 import { cutOut } from '/shared/cutout.js'
+import { EXPRESSIONS, stageAt } from '/shared/stage.js'
+import { initVnSaves } from '/vn-saves.js'
 import { shrink } from '/theme.js'
 
 const MODE_KEY = 'cicatavern.vnMode'
@@ -23,6 +27,11 @@ const SPEED_LABEL = { slow: t`慢`, normal: t`中`, fast: t`快`, instant: t`瞬
 const NEW_ART = { auto: t`自动画`, ask: t`先问`, off: t`不画` }
 const LOG_REPLIES = 20
 const SPRITE_SIDE = 1400
+// Where the ones on stage stand (percent across), by how many there are.
+const SLOTS = { 1: [50], 2: [32, 68], 3: [20, 50, 80] }
+const FACE_LABEL = { neutral: t`平静`, smile: t`微笑`, happy: t`开心`, shy: t`害羞`, angry: t`生气`, sad: t`难过`, surprised: t`惊讶`, thinking: t`思考` }
+// A phone (or a phone on its side) has room for two.
+const NARROW = '(max-width: 560px), (orientation: landscape) and (max-height: 520px)'
 
 function recall(key, fallback) {
   try {
@@ -110,7 +119,8 @@ export function initVn(deps) {
   // ─── The layers, back to front ──────────────────────────────────────
   const bg = el('div', { class: 'vn-bg' })
   const tint = el('div', { class: 'vn-tint' })
-  const sprite = el('img', { class: 'vn-sprite', alt: '' })
+  const actors = el('div', { class: 'vn-actors' })
+  const flash = el('div', { class: 'vn-flash', 'aria-hidden': 'true' })
   const sign = el('div', { class: 'vn-sign' })
   const sceneChip = el('div', { class: 'vn-scene-chip', hidden: true })
   const cgButton = el('button', { type: 'button', class: 'vn-cg-thumb', hidden: true, title: t`这一轮的配图` })
@@ -166,10 +176,12 @@ export function initVn(deps) {
   const hideControl = control(t`隐藏`, t`隐藏界面（H），点一下恢复`, () => root.classList.add('bare'))
   const actControl = control(t`✎ 行动`, t`写下你的行动（回车）`, () => compose(true))
   const exitControl = control(t`退出`, t`退出视觉小说模式`, () => setOn(state.cardId, false))
+  const saveControl = control(t`存档`, t`存档（F5 快速存档）`, () => saves.open('save'))
+  const loadControl = control(t`读档`, t`读档（F9 快速读档）`, () => saves.open('load'))
   // On a phone the row keeps 朗读, 配图, 回看, 自动, 跳过; the rest wait behind ⋯ (CSS hides them, its menu lists them).
-  const extras = [cgControl, speedButton, statusButton, optionsButton, sceneControl, spriteControl, hideControl, fullButton, actControl, exitControl]
+  const extras = [cgControl, speedButton, statusButton, optionsButton, saveControl, loadControl, sceneControl, spriteControl, hideControl, fullButton, actControl, exitControl]
   for (const b of extras) b.classList.add('vn-extra')
-  const moreButton = control('⋯', t`更多：CG、速度、状态、选项、场景、立绘、隐藏、全屏、行动、退出`, () => togglePop('more'))
+  const moreButton = control('⋯', t`更多：CG、速度、状态、选项、存档、读档、场景、立绘、隐藏、全屏、行动、退出`, () => togglePop('more'))
   moreButton.classList.add('vn-overflow')
   const logControl = control(t`回看`, t`回看（L）`, () => openLog())
   const skipControl = control(t`跳过`, t`跳到最新一句`, () => skip())
@@ -184,6 +196,8 @@ export function initVn(deps) {
     speedButton,
     statusButton,
     optionsButton,
+    saveControl,
+    loadControl,
     sceneControl,
     spriteControl,
     hideControl,
@@ -192,7 +206,7 @@ export function initVn(deps) {
     exitControl,
     moreButton,
   ])
-  root.append(bg, tint, sprite, corner, title, panel, menu, box, controls, scrim, pop, logBox, cgView)
+  root.append(bg, tint, actors, flash, corner, title, panel, menu, box, controls, scrim, pop, logBox, cgView)
 
   // Where the layers in between may go: under the controls (however they wrapped), above the text box,
   // and the text box itself above the input while it is open.
@@ -374,6 +388,62 @@ export function initVn(deps) {
         ]))
   }
 
+  // ─── Saves (web/vn-saves.js): the line on screen, and getting back to it ──
+  const saves = initVnSaves({
+    api, el, toast, guard,
+    // What a save keeps: the reply and the line in it, where and when, a picture of the stage.
+    current: () => {
+      const chat = getChat()
+      const step = state.steps[state.index]
+      if (!chat || !state.node || state.streaming || !step) return null
+      const where = state.stepWhere ?? latestPlace(chat.path)
+      return {
+        cardId: chat.cardId, chatId: chat.id, chatTitle: chat.title ?? '', nodeId: state.node.id, line: state.index,
+        place: where?.place ?? '', time: where?.time ?? '', text: `${step.speaker ? t`${shownName(step.speaker)}：` : ''}${step.plain ?? ''}`.slice(0, 80),
+      }
+    },
+    snapshot: () => snapshot(),
+    cardId: () => state.cardId,
+    busy: () => isGenerating(),
+    // A save's reply opened (its chat, its branch), then its line once that reply is on screen.
+    open: async (save, chat) => {
+      state.jump = { key: `${save.chatId}:${save.nodeId}`, line: save.line, at: Date.now() }
+      await deps.showChat(chat)
+    },
+  })
+
+  /** The stage as a small picture for a save: the background, then whoever stands there. */
+  async function snapshot() {
+    const width = 384
+    const height = Math.round(width * Math.min(0.75, Math.max(0.42, root.clientHeight / Math.max(1, root.clientWidth))))
+    const canvas = Object.assign(document.createElement('canvas'), { width, height })
+    const context = canvas.getContext('2d')
+    context.fillStyle = getComputedStyle(root).getPropertyValue('--bg') || '#222'
+    context.fillRect(0, 0, width, height)
+    const load = src => new Promise(resolve => {
+      const image = new Image()
+      image.onload = () => resolve(image)
+      image.onerror = () => resolve(null)
+      image.src = src
+    })
+    const back = bg.dataset.url ? await load(bg.dataset.url) : null
+    if (back) {
+      const scale = Math.max(width / back.width, height / back.height)
+      context.drawImage(back, (width - back.width * scale) / 2, (height - back.height * scale) / 2, back.width * scale, back.height * scale)
+    }
+    for (const box of actors.querySelectorAll('.vn-actor.show')) {
+      const face = box.querySelector('img.show')
+      if (!face?.naturalHeight) continue
+      const h = height * 0.86
+      const w = face.naturalWidth * (h / face.naturalHeight)
+      const x = (parseFloat(box.style.getPropertyValue('--x')) || 50) / 100 * width
+      context.globalAlpha = box.classList.contains('idle') ? 0.75 : 1
+      context.drawImage(face, x - w / 2, height - h, w, h)
+      context.globalAlpha = 1
+    }
+    return canvas.toDataURL('image/jpeg', 0.78)
+  }
+
   // ─── On / off per card ─────────────────────────────────────────────
   const cardsOn = () => new Set(recall(MODE_KEY, []))
   const isOn = cardId => Boolean(cardId) && cardsOn().has(cardId)
@@ -496,10 +566,23 @@ export function initVn(deps) {
       const far = furthest ? at(furthest) : -1
       state.seen = Math.max(state.index, far >= 0 ? far : Math.min(state.seen, steps.length - 1))
     }
+    // Loaded from a save (a moment ago): straight to its line, everything before it read.
+    const jumped = state.jump?.key === key && Date.now() - state.jump.at < 10_000 && steps.length > 0
+    if (jumped) {
+      state.index = Math.min(state.jump.line, steps.length - 1)
+      state.seen = Math.max(state.seen, state.index)
+      state.stepWhere = [...steps.slice(0, state.index + 1)].reverse().find(step => step.where)?.where ?? null
+      state.pending = false
+      state.follow = false
+      state.jump = null
+      closePanel()
+    }
     drawScene(chat, writing ? job.text : null)
     drawStatus(chat)
     drawCg(chat)
-    if (state.index < 0 || state.pending) catchUp()
+    if (!writing && node) labelFaces()
+    if (jumped) showStep(false)
+    else if (state.index < 0 || state.pending) catchUp()
     else if (!writing && state.index >= state.available - 1 && state.phase !== 'typing') showStep(false)
     else {
       // The cast arrived while this line was being typed (it names someone else now): its plate follows.
@@ -525,7 +608,7 @@ export function initVn(deps) {
     box.dataset.kind = 'narration'
     lineBox.replaceChildren(el('p', { class: 'vn-waiting', text: echo ? `${echo}` : '…' }))
     nextMark.className = 'vn-next wait'
-    hideSprite()
+    clearStage()
   }
 
   /** Moves on when the player is waiting for a line that has now arrived. */
@@ -562,16 +645,14 @@ export function initVn(deps) {
     return entry?.char ? 'char' : entry?.player ? 'player' : 'cast'
   }
 
-  /** The name plate and the one standing in front, for a line. */
-  function drawSpeaker(step) {
+  /** The name plate and the stage, for a line; `fresh`: just reached, so its effects play. */
+  function drawSpeaker(step, fresh = false) {
     box.dataset.kind = step.kind
     plate.hidden = !step.speaker
     plate.textContent = step.speaker ? shownName(step.speaker) : ''
     plate.dataset.who = step.speaker ? whoIs(step.speaker) : ''
     plate.style.setProperty('--who', step.speaker ? String(hueOf(step.speaker)) : '')
-    // The one speaking stands in front; narration has nobody.
-    if (step.kind === 'dialogue' && step.speaker) showSprite(step.speaker)
-    else hideSprite()
+    drawStage({ effects: fresh })
   }
 
   function showStep(animate) {
@@ -591,13 +672,13 @@ export function initVn(deps) {
     if (step.type === 'panel') {
       plate.hidden = true
       box.dataset.kind = 'narration'
-      hideSprite()
+      clearStage()
       lineBox.replaceChildren(el('p', { class: 'vn-waiting', text: t`（卡片画面）` }))
       showPanel(step.kind === 'html' ? frameOf(step.body, getChat()) : el('pre', { class: 'code', text: step.body }))
       return lineShown()
     }
     closePanel()
-    drawSpeaker(step)
+    drawSpeaker(step, animate)
     lineBox.innerHTML = renderStory(step.text)
     markSpeech(lineBox)
     spoken.textContent = `${step.speaker ? t`${shownName(step.speaker)}：` : ''}${step.plain}`
@@ -1013,8 +1094,9 @@ export function initVn(deps) {
       const chat = getChat()
       if (chat?.cardId === cardId && state.on) {
         drawScene(chat, null)
-        const step = state.steps[state.index]
-        if (step?.kind === 'dialogue' && step.speaker) showSprite(step.speaker)
+        // A new picture may bring someone onto the stage.
+        cast.none.clear()
+        drawStage()
       }
       if (library?.open) renderLibrary()
       const next = (art.queue.get(cardId) ?? []).shift()
@@ -1144,19 +1226,25 @@ export function initVn(deps) {
     })
   }
 
-  // ─── 立绘: the speaker cut out of a plain background ────────────────
-  const cast = { lists: new Map(), loading: new Map(), cuts: new Map(), token: 0, missing: null }
+  // ─── 立绘: the ones in the scene, cut out of a plain background ──────
+  // lists: { entryId: 立绘 }; faces: { entryId: { smile: … } } (表情差分); none: names with no picture at all.
+  const cast = { lists: new Map(), faces: new Map(), loading: new Map(), cuts: new Map(), token: 0, missing: null, none: new Map() }
+
+  /** A sprites view from the server (GET, a drawing, an upload) becomes the lists. */
+  function takeSprites(cardId, view) {
+    cast.lists.set(cardId, view?.sprites ?? {})
+    cast.faces.set(cardId, view?.expressions ?? {})
+  }
 
   async function spritesOf(cardId) {
     if (cast.lists.has(cardId)) return cast.lists.get(cardId)
     if (!cast.loading.has(cardId)) {
       cast.loading.set(cardId, api(`/api/cards/${cardId}/sprites`)
-        .then(view => view.sprites ?? {})
         .catch(() => ({}))
-        .then(list => {
-          cast.lists.set(cardId, list)
+        .then(view => {
+          takeSprites(cardId, view)
           cast.loading.delete(cardId)
-          return list
+          return cast.lists.get(cardId)
         }))
     }
     return cast.loading.get(cardId)
@@ -1214,34 +1302,124 @@ export function initVn(deps) {
     return null
   }
 
-  async function showSprite(speaker) {
-    const token = ++cast.token
-    const entry = state.names.find(item => item.name === speaker)
-    const cardId = state.cardId
-    // The player is who reads; they have no picture on stage.
-    if (!entry || entry.player || !cardId) return hideSprite()
-    const found = await spriteFor(cardId, entry)
-    if (token !== cast.token || !state.on) return
-    if (!found) {
-      hideSprite(false)
-      return missingSprite(cardId, entry)
+  /** Someone's picture with an expression: that 表情 when it has been drawn, else their 立绘. → object URL or null. */
+  async function actorPicture(cardId, entry, expression) {
+    await spritesOf(cardId)
+    const face = expression !== 'neutral' && entry.id ? cast.faces.get(cardId)?.[entry.id]?.[expression] : null
+    if (face) {
+      const src = await cutPicture(`/api/sprites/${cardId}/${face.file}`)
+      if (src) return src
     }
-    cast.missing = null
-    if (sprite.dataset.who === entry.name && sprite.getAttribute('src') === found.src) {
-      sprite.classList.add('show')
-      return
-    }
-    sprite.classList.remove('show')
-    sprite.dataset.who = entry.name
-    sprite.onload = () => {
-      if (token === cast.token) sprite.classList.add('show')
-    }
-    sprite.src = found.src
+    return (await spriteFor(cardId, entry))?.src ?? null
   }
 
-  function hideSprite(forgetMissing = true) {
+  /** Who may stand on the stage: someone in the cast who is not the player, unless they turned out to have no picture. */
+  function isActor(name) {
+    const entry = state.names.find(item => item.name === name)
+    return Boolean(entry && !entry.player && !cast.none.has(`${state.cardId}:${name}`))
+  }
+
+  // name → { box, src }: the ones standing there now.
+  const onStage = new Map()
+
+  /**
+   * The stage for the line on screen (web/shared/stage.js): who stands where,
+   * the speaker lit and the rest dimmed, each with their expression; with
+   * `effects`, the line's shake, flash or hop plays (once, as the line arrives).
+   */
+  async function drawStage({ effects = false } = {}) {
+    const token = ++cast.token
+    const cardId = state.cardId
+    const step = state.steps[state.index]
+    if (!cardId || step?.type !== 'line') return clearStage()
+    const narrow = matchMedia(NARROW).matches
+    const layout = stageAt(state.steps, state.index, { names: state.names, max: narrow ? 2 : 3, isActor, labels: faceLabels.get(state.key) })
+    const members = await Promise.all(layout.members.map(async member => {
+      const entry = state.names.find(item => item.name === member.name)
+      return { ...member, entry, src: entry ? await actorPicture(cardId, entry, member.expression) : null }
+    }))
+    if (token !== cast.token || !state.on) return
+    // No picture at all: off the stage (a 立绘 drawn later brings them back); the speaker may get one drawn (自动 / 先问).
+    const missing = members.filter(member => !member.src)
+    if (missing.length) {
+      for (const member of missing) cast.none.set(`${cardId}:${member.name}`, true)
+      const speaker = missing.find(member => member.name === step.speaker && step.kind === 'dialogue')
+      if (speaker?.entry) missingSprite(cardId, speaker.entry)
+      return drawStage({ effects })
+    }
+    if (layout.speaker && cast.missing) {
+      cast.missing = null
+      drawChip()
+    }
+    const places = SLOTS[members.length] ?? []
+    for (const [name, actor] of onStage) {
+      if (members.some(member => member.name === name)) continue
+      onStage.delete(name)
+      actor.box.classList.remove('show')
+      setTimeout(() => actor.box.remove(), 360)
+    }
+    members.forEach((member, i) => {
+      let actor = onStage.get(member.name)
+      if (!actor) {
+        actor = { box: el('div', { class: 'vn-actor' }), src: '' }
+        onStage.set(member.name, actor)
+        actors.append(actor.box)
+        // Laid out once where it starts, so it fades and rises in.
+        void actor.box.offsetWidth
+        actor.box.classList.add('show')
+      }
+      actor.box.style.setProperty('--x', `${places[i]}%`)
+      actor.box.dataset.who = member.name
+      actor.box.dataset.expression = member.expression
+      actor.box.classList.toggle('speaking', member.name === layout.speaker)
+      actor.box.classList.toggle('idle', Boolean(layout.speaker) && member.name !== layout.speaker)
+      if (actor.src !== member.src) setPicture(actor, member.src)
+    })
+    actors.classList.toggle('narration', !layout.speaker)
+    actors.dataset.count = String(members.length)
+    if (effects) playEffects(layout)
+  }
+
+  /** A new picture for someone on stage (another expression): the new one fades in over the old. */
+  function setPicture(actor, src) {
+    actor.src = src
+    const image = el('img', { alt: '' })
+    image.onload = () => {
+      if (actor.src !== src) return image.remove()
+      for (const old of actor.box.querySelectorAll('img.show')) {
+        old.classList.remove('show')
+        setTimeout(() => old.remove(), 320)
+      }
+      image.classList.add('show')
+    }
+    actor.box.append(image)
+    image.src = src
+  }
+
+  /** Once, as a line arrives: the picture shakes or flashes, the speaker hops or trembles. */
+  function playEffects(layout) {
+    if (prefs.effects === false || reducedMotion()) return
+    const replay = (node, name) => {
+      node.classList.remove(name)
+      void node.offsetWidth
+      node.classList.add(name)
+      node.addEventListener('animationend', () => node.classList.remove(name), { once: true })
+    }
+    const { screen, actor } = layout.effects
+    if (screen === 'shake') replay(root, 'vn-shake')
+    if (screen === 'flash') replay(flash, 'on')
+    const speaker = layout.speaker && onStage.get(layout.speaker)
+    if (actor && speaker) replay(speaker.box, actor)
+  }
+
+  /** Nobody on stage (a card's panel, waiting for the first line, leaving the mode). */
+  function clearStage(forgetMissing = true) {
     cast.token++
-    sprite.classList.remove('show')
+    for (const actor of onStage.values()) {
+      actor.box.classList.remove('show')
+      setTimeout(() => actor.box.remove(), 360)
+    }
+    onStage.clear()
     if (forgetMissing && cast.missing) {
       cast.missing = null
       drawChip()
@@ -1265,7 +1443,18 @@ export function initVn(deps) {
       label: t`${entry.name}的立绘`,
       url: `/api/cards/${cardId}/sprites/${entry.id}/draw`,
       body: {},
-      done: data => cast.lists.set(cardId, data.sprites ?? {}),
+      done: data => takeSprites(cardId, data),
+    })
+  }
+
+  /** One 表情 of someone's 立绘, drawn from it (the queue takes them one at a time). */
+  function drawFace(cardId, entry, face) {
+    enqueue(cardId, {
+      key: `face:${entry.id}:${face}`,
+      label: t`${entry.name}·${FACE_LABEL[face]}`,
+      url: `/api/cards/${cardId}/sprites/${entry.id}/expressions/${face}/draw`,
+      body: {},
+      done: data => takeSprites(cardId, data),
     })
   }
 
@@ -1406,9 +1595,24 @@ export function initVn(deps) {
   async function spriteTab(chat, cardId) {
     const roster = state.roster.get(cardId) ?? []
     const list = await spritesOf(cardId)
+    const toggleRow = (text, hint, on, onChange) => {
+      const input = el('input', { type: 'checkbox', class: 'switch', checked: on })
+      input.addEventListener('change', () => onChange(input.checked))
+      return el('label', { class: 'vn-pop-switch' }, [el('span', {}, [text, el('small', { text: hint })]), input])
+    }
     const head = el('div', { class: 'vn-library-head' }, [
-      el('p', { text: t`角色说话时，立绘浮现在文本框后面，旁白时退下。名单里白底的人设图会自动抠出来用；背景不是纯色的（或者没有人设图），可以按名单里的长相画一张半身立绘。` }),
+      el('p', { text: t`场景里说话的人站在台上（电脑最多三个，手机两个），说话的亮、其余的暗下去，换地点时退场。名单里白底的人设图会自动抠出来用；背景不是纯色的（或者没有人设图），可以按名单里的长相画一张半身立绘。` }),
+      el('p', { class: 'muted small', text: t`表情：每句按引号前后的叙述换（笑了笑→微笑、红了脸→害羞、皱眉→生气……），认不出就保持上一个。下面每个人可以画一套表情，在立绘上只改脸。` }),
       artMode('newSprite', t`没有立绘的角色说话时：`),
+      toggleRow(t`演出效果`, t`闪电、巨响时画面闪白、震动，吓一跳时立绘跳一下`, prefs.effects !== false, on => {
+        prefs.effects = on
+        remember(PREFS_KEY, prefs)
+      }),
+      toggleRow(t`用辅助模型判断表情`, t`每轮写完后，辅助模型逐句标一次表情，比看叙述准；每轮多一次小请求，发给主模型的内容不变`, Boolean(prefs.faceHelper), on => {
+        prefs.faceHelper = on
+        remember(PREFS_KEY, prefs)
+        if (on) labelFaces()
+      }),
     ])
     if (!roster.some(member => !member.player)) {
       return [head, el('div', { class: 'vn-library-head' }, [
@@ -1436,14 +1640,13 @@ export function initVn(deps) {
         act(t`上传`, async () => {
           const file = await pickPicture()
           if (!file) return
-          const view = await api(`/api/cards/${cardId}/sprites/${member.id}`, { method: 'PUT', body: { image: await asPng(file) } })
-          cast.lists.set(cardId, view.sprites)
+          takeSprites(cardId, await api(`/api/cards/${cardId}/sprites/${member.id}`, { method: 'PUT', body: { image: await asPng(file) } }))
+          cast.none.clear()
           renderLibrary()
         }),
         drawn ? act(t`删除`, async () => {
           if (!confirm(t`删除${member.name}的立绘？（人设图不受影响）`)) return
-          const view = await api(`/api/cards/${cardId}/sprites/${member.id}`, { method: 'DELETE' })
-          cast.lists.set(cardId, view.sprites)
+          takeSprites(cardId, await api(`/api/cards/${cardId}/sprites/${member.id}`, { method: 'DELETE' }))
           renderLibrary()
         }, { danger: true }) : null,
       ]
@@ -1451,9 +1654,72 @@ export function initVn(deps) {
         thumb,
         el('figcaption', {}, [el('b', { text: member.player ? t`${entry.name}（玩家）` : entry.name }), kindLabel]),
         el('div', { class: 'row' }, tools),
+        member.player ? null : faceRow(cardId, entry, member, Boolean(drawn || member.ref)),
       ])
     }))
     return [head, grid]
+  }
+
+  /** Someone's expressions: each drawn from their 立绘 (or uploaded), and 画一套 for the ones missing. */
+  function faceRow(cardId, entry, member, canDraw) {
+    const faces = cast.faces.get(cardId)?.[member.id] ?? {}
+    const names = EXPRESSIONS.filter(name => name !== 'neutral')
+    const queued = name => art.jobs.get(cardId)?.key === `face:${member.id}:${name}` || (art.queue.get(cardId) ?? []).some(job => job.key === `face:${member.id}:${name}`)
+    const cells = names.map(name => {
+      const face = faces[name]
+      const picture = el('div', { class: 'vn-face-pic' }, [el('span', { class: 'muted small', text: queued(name) ? '…' : '—' })])
+      if (face) cutPicture(`/api/sprites/${cardId}/${face.file}`).then(src => src && picture.replaceChildren(el('img', { src, alt: '' })))
+      const tools = el('div', { class: 'vn-face-tools' }, [
+        act(face ? t`重画` : t`画`, () => drawFace(cardId, entry, name), { disabled: !canDraw || queued(name), title: canDraw ? '' : t`先画或上传立绘（或在名单里放人设图）` }),
+        act(t`传`, async () => {
+          const file = await pickPicture()
+          if (!file) return
+          takeSprites(cardId, await api(`/api/cards/${cardId}/sprites/${member.id}/expressions/${name}`, { method: 'PUT', body: { image: await asPng(file) } }))
+          renderLibrary()
+        }, { title: t`上传这个表情` }),
+        face ? act('×', async () => {
+          takeSprites(cardId, await api(`/api/cards/${cardId}/sprites/${member.id}/expressions/${name}`, { method: 'DELETE' }))
+          renderLibrary()
+        }, { title: t`删除这个表情`, danger: true }) : null,
+      ])
+      return el('div', { class: 'vn-face' }, [picture, el('span', { class: 'small', text: FACE_LABEL[name] }), tools])
+    })
+    const missing = names.filter(name => !faces[name] && !queued(name))
+    return el('div', { class: 'vn-faces' }, [
+      el('div', { class: 'row vn-faces-head' }, [
+        el('span', { class: 'muted small', text: t`表情 ${names.length - names.filter(name => !faces[name]).length}/${names.length}` }),
+        act(t`画一套表情`, () => {
+          for (const name of missing) drawFace(cardId, entry, name)
+          renderLibrary()
+        }, { disabled: !canDraw || !missing.length, title: t`用现在的画图方式，在立绘上只改表情，缺的 ${missing.length} 个一个一个画` }),
+      ]),
+      el('div', { class: 'vn-face-grid' }, cells),
+    ])
+  }
+
+  // ─── 用辅助模型判断表情: one small request per finished reply ──────────
+  // reply key → expression (or null) per step.
+  const faceLabels = new Map()
+  const labelling = new Set()
+
+  /** The latest reply's lines labelled by the helper (when switched on), once; the stage redraws with them. */
+  async function labelFaces() {
+    const key = state.key
+    if (!prefs.faceHelper || !state.on || state.streaming || !state.node || !key || faceLabels.has(key) || labelling.has(key)) return
+    const lines = state.steps.map(step => (step.type === 'line' && step.kind === 'dialogue' && step.speaker && isActor(step.speaker) ? { speaker: step.speaker, text: step.plain } : null))
+    if (!lines.some(Boolean)) return
+    labelling.add(key)
+    try {
+      const { labels } = await api('/api/vn/expressions', { method: 'POST', body: { lines } })
+      faceLabels.set(key, Array.isArray(labels) ? labels : [])
+      if (faceLabels.size > 40) faceLabels.delete(faceLabels.keys().next().value)
+      if (state.key === key) drawStage()
+    } catch (error) {
+      toldOnce('toldFaceHelper', t`辅助模型没能标表情（${error.message}），这一轮按叙述判断。`)
+      faceLabels.set(key, [])
+    } finally {
+      labelling.delete(key)
+    }
   }
 
   // ─── Backlog ───────────────────────────────────────────────────────
@@ -1579,6 +1845,10 @@ export function initVn(deps) {
       return
     }
     if (key === 'g' || key === 'G') return openGallery()
+    if (key === 'F5' || key === 'F9') {
+      event.preventDefault()
+      return key === 'F5' ? saves.quickSave() : saves.quickLoad()
+    }
     if (key === ' ' || key === 'Enter' || key === 'ArrowRight' || key === 'PageDown') {
       event.preventDefault()
       if (!logBox.hidden || !cgView.hidden) return
@@ -1610,7 +1880,7 @@ export function initVn(deps) {
     closePop()
     closeLog()
     closeCg()
-    hideSprite()
+    clearStage()
     if (state.reading) deps.stopReading?.()
     state.reading = false
     root.classList.remove('bare')
@@ -1618,9 +1888,15 @@ export function initVn(deps) {
     state.place = undefined
   }
 
-  /** What a finished turn does in this mode (read line by line here; 配图 as switched here), or null when it is off. */
+  /**
+   * What a finished turn does in this mode (read line by line here; 配图 as
+   * switched here), or null when it is off. Called once per finished turn on
+   * screen, so the turn's auto save is made here too.
+   */
   function turnFlags(cardId) {
-    return isOn(cardId) ? { read: false, image: Boolean(prefs.image) } : null
+    if (!isOn(cardId)) return null
+    saves.autoSave()
+    return { read: false, image: Boolean(prefs.image) }
   }
 
   return { render, streamed, isOn, turnFlags }

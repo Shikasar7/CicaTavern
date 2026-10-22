@@ -12,7 +12,7 @@ import path from 'node:path'
 import YAML from 'yaml'
 import { fileURLToPath } from 'node:url'
 import { backfillEntryPositions, cardSummary, cleanGroup, exportCard, greetingsOf, importOwnCard, normalizeCard, organizeCard, parseCardFile, previousVersion, rawOfPicture, sillyTavernCard, unwrapWorkspace, writeCardPng } from './cards.mjs'
-import { chatSummary, chatView, createChat, selectNode, activePath, rebuildPrompt, restoreFolded, rollbackTo, editCompaction, dropCompaction, exportStory, importStory, importSillyTavern, forkChat } from './chats.mjs'
+import { chatSummary, chatView, childrenOf, createChat, selectNode, activePath, rebuildPrompt, restoreFolded, rollbackTo, editCompaction, dropCompaction, exportStory, importStory, importSillyTavern, forkChat } from './chats.mjs'
 import { editPreset, exportPreset, importOwnPreset, normalizePreset, presetDetail, presetSummary } from './presets.mjs'
 import { basicDetail } from './basic.mjs'
 import { appVersion, featuresOf } from './edition.mjs'
@@ -26,17 +26,18 @@ import { createMedia, drawChoiceOf } from './media.mjs'
 import { createAppearance } from './appearance.mjs'
 import { createRegex } from './regex.mjs'
 import { createScenes } from './scenes.mjs'
+import { createSaves } from './saves.mjs'
 import { KEYED as VOICE_KEYED } from './voice/index.mjs'
 import { createPromptLibrary } from './prompts.mjs'
 import { createForge } from './forge/index.mjs'
 import { ensureBook } from './forge/edit.mjs'
 import { editCard, greetingList } from '../web/shared/card-edit.js'
 import { chatPackage, importChatPackage, savePackagePicture } from './transfer.mjs'
-import { createStore, defaultDataRoot, httpError, PRIVACY_NOTICE } from './store.mjs'
+import { createStore, defaultDataRoot, httpError, newId, PRIVACY_NOTICE } from './store.mjs'
 import { currentLanguage, localize, msg, pageIn, requestLanguage, withLanguage } from './i18n.mjs'
 import { createUpdater } from './update/index.mjs'
 import { createShortcut } from './update/install.mjs'
-import { bookCounts, editBook, isDynamic, normalizeBook } from './worldbook.mjs'
+import { addEntries, bookCounts, editBook, editBookInfo, emptyBook, isDynamic, normalizeBook, worldFile } from './worldbook.mjs'
 import { replaceMacros } from './prompt.mjs'
 import { accessCookie, hostAllowed, isLoopback, lanAddresses, loginPage, readCookie, tokensEqual } from './access.mjs'
 
@@ -84,6 +85,8 @@ const STATIC = {
   '/shared/draw.js': ['shared/draw.js', 'text/javascript; charset=utf-8'],
   '/vn.js': ['vn.js', 'text/javascript; charset=utf-8'],
   '/shared/vn.js': ['shared/vn.js', 'text/javascript; charset=utf-8'],
+  '/shared/stage.js': ['shared/stage.js', 'text/javascript; charset=utf-8'],
+  '/vn-saves.js': ['vn-saves.js', 'text/javascript; charset=utf-8'],
   '/shared/cutout.js': ['shared/cutout.js', 'text/javascript; charset=utf-8'],
   '/whatsnew.js': ['whatsnew.js', 'text/javascript; charset=utf-8'],
   '/shared/whatsnew.js': ['shared/whatsnew.js', 'text/javascript; charset=utf-8'],
@@ -136,8 +139,20 @@ function decodeUpload(body) {
  * chats' frozen prefix.
  */
 function bookView(book, id = book.id) {
-  return { id, name: book.name, entries: book.entries.map(entry => ({ ...entry, dynamic: isDynamic(entry) })) }
+  return {
+    id,
+    name: book.name,
+    description: book.description ?? '',
+    scanDepth: book.scanDepth ?? null,
+    // Whether an export carries the SillyTavern fields this app does not read (not for books imported before they were kept).
+    complete: book.extras === true,
+    // `extra` stays on the server: the page does not edit it.
+    entries: book.entries.map(({ extra, ...entry }) => ({ ...entry, dynamic: isDynamic(entry) })),
+  }
 }
+
+/** An imported book in the list (世界书 window, 设置 → 挂载的世界书). */
+const bookSummary = b => ({ id: b.id, name: b.name, description: b.description ?? '', scanDepth: b.scanDepth ?? null, ...bookCounts(b), importedAt: b.importedAt })
 
 /** A card's fields as 修改角色卡 edits them (web/card-edit.js), with its counts from cardSummary. */
 function cardEditView(card) {
@@ -216,6 +231,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
   const appearance = createAppearance(store)
   const regex = createRegex(store)
   const scenes = createScenes(store, { media })
+  const saves = createSaves(store)
   const prompts = createPromptLibrary(store)
   const forge = createForge(store, { proxyNow: () => isolation.proxy, ledger, draw: (input, signal, choice) => media.drawCardArt(input, signal, choice) })
   // 设置 → 更多 → 更新. A restart after an update starts the server the way this one was started.
@@ -414,6 +430,25 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['GET', /^\/api\/cards\/([\w-]+)\/sprites$/, ([id]) => scenes.sprites(id)],
     ['PUT', /^\/api\/cards\/([\w-]+)\/sprites\/([\w-]+)$/, ([id, entryId], body) => scenes.setSprite(id, entryId, body?.image)],
     ['DELETE', /^\/api\/cards\/([\w-]+)\/sprites\/([\w-]+)$/, ([id, entryId]) => scenes.removeSprite(id, entryId)],
+    // 表情差分: the 立绘 with another face, uploaded or (a slow call below) drawn.
+    ['PUT', /^\/api\/cards\/([\w-]+)\/sprites\/([\w-]+)\/expressions\/(\w+)$/, ([id, entryId, expression], body) => scenes.setExpression(id, entryId, expression, body?.image)],
+    ['DELETE', /^\/api\/cards\/([\w-]+)\/sprites\/([\w-]+)\/expressions\/(\w+)$/, ([id, entryId, expression]) => scenes.removeExpression(id, entryId, expression)],
+    // 存档 (saves.mjs): a card's save slots for the visual novel mode.
+    ['GET', /^\/api\/cards\/([\w-]+)\/saves$/, ([id]) => saves.list(id)],
+    ['PUT', /^\/api\/cards\/([\w-]+)\/saves\/slot\/(\w+)$/, ([id, slot], body) => saves.put(id, slot, body)],
+    ['POST', /^\/api\/cards\/([\w-]+)\/saves\/auto$/, ([id], body) => saves.auto(id, body)],
+    ['PUT', /^\/api\/cards\/([\w-]+)\/saves\/([\w-]+)\/note$/, ([id, saveId], body) => saves.setNote(id, saveId, body?.note)],
+    ['DELETE', /^\/api\/cards\/([\w-]+)\/saves\/([\w-]+)$/, ([id, saveId]) => saves.remove(id, saveId)],
+    // Loading shows the saved reply: later turns are rolled back (kept as a branch), as 回滚 does.
+    ['POST', /^\/api\/cards\/([\w-]+)\/saves\/([\w-]+)\/load$/, async ([id, saveId]) => {
+      const save = await saves.get(id, saveId)
+      if (engine.isRunning(save.chatId)) throw httpError(409, msg`正在生成，先停止`)
+      const chat = await store.getChat(save.chatId).catch(() => null)
+      if (!chat?.nodes[save.nodeId]) throw httpError(404, msg`这个存档的那一轮已经删掉了`)
+      if (childrenOf(chat, save.nodeId).length) rollbackTo(chat, save.nodeId)
+      else selectNode(chat, save.nodeId)
+      return { save, chat: chatView(await store.saveChat(chat)) }
+    }],
     // 正则管理 (regex.mjs): the global scripts, and the ones a card or a preset carries.
     ['GET', /^\/api\/regex$/, () => regex.list()],
     ['PUT', /^\/api\/regex$/, (_, body) => regex.save(body?.scripts)],
@@ -652,14 +687,68 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       return { ...bookView(card.book, `card-${card.id}`), prefix, added, card: cardSummary(card) }
     }],
 
-    ['GET', /^\/api\/worldbooks$/, async () =>
-      (await store.listBooks()).map(b => ({ id: b.id, name: b.name, ...bookCounts(b), importedAt: b.importedAt }))],
+    // Imported books as whole books (web/books.js, 世界书): which cards use one is
+    // each card's worldbookIds, which the page has in its card list.
+    ['GET', /^\/api\/worldbooks$/, async () => (await store.listBooks()).map(bookSummary)],
+    ['POST', /^\/api\/worldbooks$/, async (_, body) => bookSummary(await store.saveBook(emptyBook(body?.name)))],
     ['GET', /^\/api\/worldbooks\/([\w-]+)$/, async ([id]) => bookView(await store.getBook(id))],
+    // Entries as for a card's own book, and the book's name, description and scan depth.
     ['PUT', /^\/api\/worldbooks\/([\w-]+)$/, async ([id], body) => {
-      const book = await store.getBook(id)
+      const book = editBookInfo(await store.getBook(id), body ?? {})
       const { prefix, added } = editBook(book, body ?? {})
       await store.saveBook(book)
       return { ...bookView(book), prefix, added }
+    }],
+    ['GET', /^\/api\/worldbooks\/([\w-]+)\/export$/, async ([id]) => worldFile(await store.getBook(id))],
+    // A copy to change apart from the original; no card uses it yet.
+    ['POST', /^\/api\/worldbooks\/([\w-]+)\/copy$/, async ([id]) => {
+      const book = await store.getBook(id)
+      const copy = { ...structuredClone(book), id: newId(), name: msg`${book.name}（副本）`, importedAt: new Date().toISOString() }
+      return bookSummary(await store.saveBook(copy))
+    }],
+    // The cards that use a book, ticked at once: `{ ids }` is all of them.
+    // Their open chats keep the constant entries they started with until applied.
+    ['PUT', /^\/api\/worldbooks\/([\w-]+)\/cards$/, async ([id], body) => {
+      await store.getBook(id)
+      const wanted = new Set(Array.isArray(body?.ids) ? body.ids.map(String) : [])
+      const changed = []
+      for (const card of await store.listCards()) {
+        const ids = card.worldbookIds ?? []
+        if (ids.includes(id) === wanted.has(card.id)) continue
+        card.worldbookIds = wanted.has(card.id) ? [...ids, id] : ids.filter(x => x !== id)
+        await store.saveCard(card)
+        changed.push(card.id)
+      }
+      return { changed }
+    }],
+    /**
+     * Entries copied or moved (`move`) out of a book, a card's own one
+     * (card-<id>) included, into an imported one or a new one (`to` empty,
+     * named `name`). The copy is saved before anything leaves the source.
+     */
+    ['POST', /^\/api\/worldbooks\/transfer$/, async (_, body) => {
+      const from = String(body?.from ?? '')
+      const ownCard = from.startsWith('card-') ? await store.getCard(from.slice(5)) : null
+      if (ownCard && !ownCard.book) throw httpError(404, msg`这张卡没有自带世界书`)
+      const source = ownCard ? ownCard.book : await store.getBook(from)
+      const uids = new Set(Array.isArray(body?.uids) ? body.uids.map(String) : [])
+      const picked = source.entries.filter(e => uids.has(e.uid))
+      if (!picked.length) throw httpError(400, msg`没选条目`)
+      const to = String(body?.to ?? '')
+      if (to === from) throw httpError(400, msg`已经在这本里了`)
+      const target = to ? await store.getBook(to) : emptyBook(body?.name)
+      const { added, prefix: targetPrefix } = addEntries(target, picked)
+      await store.saveBook(target)
+      let sourcePrefix = false
+      if (body?.move === true) {
+        sourcePrefix = editBook(source, { remove: picked.map(e => e.uid) }).prefix
+        if (ownCard) await store.saveCard(ownCard)
+        else await store.saveBook(source)
+      }
+      return {
+        from: { ...bookView(source, from), prefix: sourcePrefix, ...(ownCard ? { card: cardSummary(ownCard) } : {}) },
+        to: { ...bookSummary(target), prefix: targetPrefix, added },
+      }
     }],
     ['POST', /^\/api\/worldbooks\/import$/, async (_, body) => {
       const { filename, buffer } = decodeUpload(body)
@@ -669,13 +758,21 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       } catch {
         throw httpError(400, msg`无法解析世界书 JSON`)
       }
-      const book = normalizeBook(unwrapWorkspace(json), filename.replace(/\.json$/i, ''))
+      const book = normalizeBook(unwrapWorkspace(json), filename.replace(/\.json$/i, ''), { standalone: true })
       await store.saveBook(book)
       return { id: book.id, name: book.name, entries: book.entries.length }
     }],
+    // The cards it was attached to let go of it too (chats already skip a missing book).
     ['DELETE', /^\/api\/worldbooks\/([\w-]+)$/, async ([id]) => {
       await store.deleteBook(id)
-      return { ok: true }
+      const detached = []
+      for (const card of await store.listCards()) {
+        if (!(card.worldbookIds ?? []).includes(id)) continue
+        card.worldbookIds = card.worldbookIds.filter(x => x !== id)
+        await store.saveCard(card)
+        detached.push(card.name)
+      }
+      return { ok: true, detached }
     }],
 
     ['GET', /^\/api\/presets$/, async () => (await store.listPresets()).map(presetSummary)],
@@ -971,6 +1068,14 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
         return sendJson(res, 404, { error: msg`没有这个文件` })
       }
     }
+    const savePicture = /^\/api\/saves\/([\w-]+)\/([\w.-]+)$/.exec(url.pathname)
+    if (req.method === 'GET' && savePicture) {
+      const found = await saves.readPicture(savePicture[1], savePicture[2])
+      if (!found) return sendJson(res, 404, { error: msg`没有这张图` })
+      // Each save's picture has a name of its own.
+      res.writeHead(200, { 'content-type': found.type, 'cache-control': 'max-age=31536000, immutable' })
+      return res.end(found.data)
+    }
     const spritePicture = /^\/api\/sprites\/([\w-]+)\/([\w.-]+)$/.exec(url.pathname)
     if (req.method === 'GET' && spritePicture) {
       const found = await scenes.readSprite(spritePicture[1], spritePicture[2])
@@ -1087,6 +1192,16 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     if (req.method === 'POST' && spriteDraw) {
       await readBody(req)
       return sendJson(res, 200, await scenes.drawSprite(spriteDraw[1], spriteDraw[2], cancelOnClose()))
+    }
+    // 用辅助模型判断表情 (视觉小说): the helper labels a reply's lines.
+    if (req.method === 'POST' && url.pathname === '/api/vn/expressions') {
+      const body = await readBody(req)
+      return sendJson(res, 200, await media.labelExpressions(body.lines, cancelOnClose()))
+    }
+    const expressionDraw = /^\/api\/cards\/([\w-]+)\/sprites\/([\w-]+)\/expressions\/(\w+)\/draw$/.exec(url.pathname)
+    if (req.method === 'POST' && expressionDraw) {
+      await readBody(req)
+      return sendJson(res, 200, await scenes.drawExpression(expressionDraw[1], expressionDraw[2], expressionDraw[3], cancelOnClose()))
     }
     const imageRoute = /^\/api\/chats\/([\w-]+)\/nodes\/([\w-]+)\/(image-prompt|image)$/.exec(url.pathname)
     if (req.method === 'POST' && imageRoute) {

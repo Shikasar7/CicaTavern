@@ -7,8 +7,12 @@
 //      server, starts the new one and only then points the shortcuts and this
 //      folder's launcher at it; when the new one does not come up, it starts
 //      this one again.
-// The phone app only checks: its button opens the APK in the browser, and
-// Android keeps the data when the same signature installs over it.
+// The phone app only checks here: the app itself downloads the APK, checks it
+// and opens the system installer (android ApkUpdate.java), and Android keeps the
+// data when the same signature installs over it.
+// GitHub's API answers 60 unauthenticated queries an hour per network address,
+// shared by everyone behind it (phone networks, offices); when it says no, the
+// check reads the latest.json the release carries instead.
 // The data folder is never read or written here: the updater's state lives
 // with the install (install.mjs).
 import { spawn } from 'node:child_process'
@@ -21,7 +25,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { appVersion } from '../edition.mjs'
 import { agentFor } from '../providers.mjs'
-import { compareVersions, FEED, releaseInfo, REPO } from './release.mjs'
+import { compareVersions, FEED, latestFileUrl, releaseInfo, REPO } from './release.mjs'
 import { canonical, checkRuntime, installBase, isInstall, otherInstalls, previousInstall, readJson, removeInstall, stateDir, stageInstall, writeJsonFile } from './install.mjs'
 import { localize, msg } from '../i18n.mjs'
 
@@ -182,13 +186,40 @@ export function createUpdater({
     }
     const text = await readText(res)
     if (res.statusCode === 404) throw failure(502, msg`还没有发布任何版本`)
-    if (res.statusCode === 403 || res.statusCode === 429) throw failure(502, msg`GitHub 暂时限制了查询次数，过一会儿再试`)
+    if (res.statusCode === 403 || res.statusCode === 429) return fromLatestFile(limitReason(res), signal)
     if (res.statusCode !== 200) throw failure(502, msg`GitHub 回复 ${res.statusCode}`)
     let json
     try {
       json = JSON.parse(text)
     } catch {
       throw failure(502, msg`GitHub 的回复读不懂`)
+    }
+    return releaseInfo(json, { repo, feed })
+  }
+
+  /** Why the API said no, from its headers. */
+  function limitReason(res) {
+    const reset = Number(res.headers['x-ratelimit-reset'])
+    if (res.headers['x-ratelimit-remaining'] === '0' && reset) {
+      const minutes = Math.max(1, Math.ceil((reset * 1000 - now()) / 60_000))
+      return msg`GitHub 的查询次数用完了：没登录时每个网络地址每小时只能查 60 次，手机网络、公司或学校的网络常常很多人共用一个地址。大约 ${minutes} 分钟后恢复`
+    }
+    const retry = Number(res.headers['retry-after'])
+    if (retry > 0) return msg`GitHub 说查得太频繁，大约 ${Math.max(1, Math.ceil(retry / 60))} 分钟后再试`
+    return msg`GitHub 拒绝了这次查询（${res.statusCode}）`
+  }
+
+  /** The API said no: the release's latest.json instead, which the same limit does not count. */
+  async function fromLatestFile(reason, signal) {
+    let json
+    try {
+      const res = await get(latestFileUrl(feed, repo), { proxy: proxy(), signal, allowHttp, headers: { accept: 'application/json', 'user-agent': userAgent } })
+      const text = await readText(res)
+      if (res.statusCode !== 200) throw new Error(`HTTP ${res.statusCode}`)
+      json = JSON.parse(text)
+    } catch (error) {
+      const why = signal.aborted ? msg`超时` : String(error?.code ?? error?.message ?? error).slice(0, 80)
+      throw failure(502, msg`${reason}。备用的 latest.json 也没读到（${why}），过一会儿再试，或者打开发布页看看`)
     }
     return releaseInfo(json, { repo, feed })
   }

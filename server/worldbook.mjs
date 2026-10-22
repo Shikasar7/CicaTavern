@@ -22,10 +22,30 @@ const list = value =>
 const INITVAR = /initvar|初始变量|\[init/i
 const SCRIPT = /<%[\s\S]*?%>/
 
-function normalizeEntry(raw, index) {
+// What normalizeEntry reads of an entry. An imported book keeps the rest
+// (depth, group, sticky…) as `extra`, so its export gives SillyTavern them back.
+const READ = new Set(['uid', 'id', 'comment', 'name', 'keys', 'key', 'secondary_keys', 'keysecondary', 'selective', 'selectiveLogic', 'content', 'constant', 'enabled', 'disable', 'insertion_order', 'order', 'position', 'case_sensitive', 'caseSensitive', 'matchWholeWords', 'probability', 'useProbability', 'extensions'])
+const READ_EXT = new Set(['position', 'selectiveLogic', 'probability', 'useProbability', 'case_sensitive', 'match_whole_words'])
+const camel = key => key.replace(/_([a-z])/g, (_, c) => c.toUpperCase())
+
+/** What SillyTavern keeps of an entry and this app does not read, in world-file names. */
+function extraOf(raw) {
+  const extra = {}
+  for (const [key, value] of Object.entries(raw)) if (!READ.has(key)) extra[key] = value
+  // character_book keeps SillyTavern's fields under extensions, in snake case.
+  const ext = raw.extensions && typeof raw.extensions === 'object' ? raw.extensions : {}
+  for (const [key, value] of Object.entries(ext)) if (!READ_EXT.has(key) && !(camel(key) in extra)) extra[camel(key)] = value
+  // null is "as the global setting says" in SillyTavern; off here, and null again on the way back.
+  if (raw.caseSensitive === null) extra.caseSensitive = null
+  if (raw.matchWholeWords === null) extra.matchWholeWords = null
+  return extra
+}
+
+function normalizeEntry(raw, index, { keep = false } = {}) {
   const ext = raw.extensions && typeof raw.extensions === 'object' ? raw.extensions : {}
   const comment = str(raw.comment || raw.name).trim()
   const content = str(raw.content)
+  const extra = keep ? extraOf(raw) : {}
   return {
     uid: String(raw.uid ?? raw.id ?? index),
     comment,
@@ -45,10 +65,16 @@ function normalizeEntry(raw, index) {
     useProbability: (raw.useProbability ?? ext.useProbability) === true,
     initvar: INITVAR.test(comment),
     hasScript: SCRIPT.test(content),
+    ...(Object.keys(extra).length ? { extra } : {}),
   }
 }
 
-export function normalizeBook(input, fallbackName = '世界书') {
+/**
+ * @param standalone - an imported world file (not a card's own book): it keeps
+ *   each entry's SillyTavern fields (`extras`), and the description and scan
+ *   depth this app's own export writes.
+ */
+export function normalizeBook(input, fallbackName = '世界书', { standalone = false } = {}) {
   if (!input || typeof input !== 'object') throw httpError(400, msg`世界书格式无效`)
   const rawEntries = Array.isArray(input.entries)
     ? input.entries
@@ -56,12 +82,46 @@ export function normalizeBook(input, fallbackName = '世界书') {
       ? Object.values(input.entries)
       : null
   if (!rawEntries) throw httpError(400, msg`世界书里没有 entries`)
-  return {
+  const book = {
     id: newId(),
     name: str(input.name).trim() || fallbackName,
-    entries: rawEntries.filter(e => e && typeof e === 'object').map(normalizeEntry),
+    entries: rawEntries.filter(e => e && typeof e === 'object').map((raw, index) => normalizeEntry(raw, index, { keep: standalone })),
     importedAt: new Date().toISOString(),
   }
+  if (!standalone) return book
+  // Only `scanDepth`, which this app writes: character_book's scan_depth is not
+  // read (SillyTavern does not use it either), so a book plays as it did before.
+  return editBookInfo({ ...book, extras: true }, { description: str(input.description), scanDepth: input.scanDepth ?? null })
+}
+
+/** A new empty book (世界书 → 新建, or the target of entries moved out of another). */
+export function emptyBook(name) {
+  return { id: newId(), name: cleanBookName(name) || msg`新世界书`, entries: [], importedAt: new Date().toISOString(), extras: true }
+}
+
+const cleanBookName = value => (typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, 100) : '')
+
+/** How many recent messages a book's keywords are looked for in; null follows the setting. */
+export function scanDepthOf(value) {
+  if (value === null || value === undefined || value === '') return null
+  const depth = Math.trunc(Number(value))
+  return Number.isFinite(depth) && depth >= 1 ? Math.min(100, depth) : null
+}
+
+/**
+ * An imported book's own fields: `{ name, description, scanDepth }`. None of
+ * them is in a chat's prefix: the name and description are for the player, and
+ * the scan depth decides which keyword entries a turn sends.
+ */
+export function editBookInfo(book, change = {}) {
+  if (change.name !== undefined) {
+    const name = cleanBookName(change.name)
+    if (!name) throw httpError(400, msg`名字不能空着`)
+    book.name = name
+  }
+  if (typeof change.description === 'string') book.description = change.description.slice(0, 4000)
+  if (change.scanDepth !== undefined) book.scanDepth = scanDepthOf(change.scanDepth)
+  return book
 }
 
 /** Entry text with any EJS removed (used when a template cannot be rendered). */
@@ -171,17 +231,19 @@ function entryMatches(entry, text) {
 /**
  * Keyword-triggered entries for this turn.
  * @param books - active books.
- * @param scanText - recent story text plus the player's input.
+ * @param scanText - recent story text plus the player's input, or a function
+ *   giving it for a book (a book may scan its own number of messages).
  * @param recentlyInjected - `${bookId}:${uid}` refs still visible in recent turns.
  */
 export function triggeredEntries(books, scanText, recentlyInjected) {
   const hits = []
   for (const book of books) {
+    const text = typeof scanText === 'function' ? scanText(book) : scanText
     for (const entry of book.entries) {
       if (!entry.enabled || entry.constant || entry.initvar) continue
       const ref = `${book.id}:${entry.uid}`
       if (recentlyInjected.has(ref)) continue
-      if (!entryMatches(entry, scanText)) continue
+      if (!entryMatches(entry, text)) continue
       if (entry.useProbability && entry.probability < 100 && Math.random() * 100 >= entry.probability) continue
       hits.push({ ref, entry })
     }
@@ -203,6 +265,8 @@ const MAX_ENTRIES = 2000
 function editEntry(entry, change) {
   if (typeof change.enabled === 'boolean') entry.enabled = change.enabled
   if (typeof change.constant === 'boolean') entry.constant = change.constant
+  if (typeof change.caseSensitive === 'boolean') entry.caseSensitive = change.caseSensitive
+  if (typeof change.wholeWords === 'boolean') entry.wholeWords = change.wholeWords
   if (typeof change.comment === 'string') entry.comment = change.comment.trim().slice(0, 200)
   if (change.keys !== undefined) entry.keys = list(change.keys).slice(0, 100)
   if (change.secondaryKeys !== undefined) entry.secondaryKeys = list(change.secondaryKeys).slice(0, 100)
@@ -222,7 +286,7 @@ function editEntry(entry, change) {
 
 /**
  * Edit a book's entries in place (a card's own or an imported one):
- * `{ entries: [{ uid, enabled, constant, comment, keys, secondaryKeys, content, order, position }], add: { … }, remove: [uid] }`.
+ * `{ entries: [{ uid, enabled, constant, caseSensitive, wholeWords, comment, keys, secondaryKeys, content, order, position }], add: { … }, remove: [uid] }`.
  * Returns whether a chat's frozen prefix would now come out different, so the
  * page can say an open chat keeps the old text until it is applied again;
  * keyword entries and templated ones are read every turn.
@@ -254,4 +318,75 @@ export function editBook(book, patch = {}) {
     book.entries = book.entries.filter(e => !gone.has(e.uid))
   }
   return { book, prefix, added }
+}
+
+/**
+ * Copies of entries into a book (移动/复制到): each keeps its number unless the
+ * book has it already, and all it carries (its SillyTavern fields too).
+ * `prefix`: a constant entry arrived, so chats using the book start differently.
+ */
+export function addEntries(book, entries) {
+  if (book.entries.length + entries.length > MAX_ENTRIES) throw httpError(400, msg`条目太多（最多 ${MAX_ENTRIES} 条）`)
+  const taken = new Set(book.entries.map(e => e.uid))
+  let next = book.entries.reduce((max, e) => Math.max(max, Number(e.uid) || 0), -1) + 1
+  const added = []
+  let prefix = false
+  for (const entry of entries) {
+    const copy = structuredClone(entry)
+    if (taken.has(copy.uid)) {
+      while (taken.has(String(next))) next++
+      copy.uid = String(next)
+    }
+    taken.add(copy.uid)
+    book.entries.push(copy)
+    added.push(copy.uid)
+    if (inPrefix(copy)) prefix = true
+  }
+  return { added, prefix }
+}
+
+// What SillyTavern gives a new entry, for the fields an entry made here never had.
+const WORLD_DEFAULTS = { addMemo: true, depth: 4, group: '', groupOverride: false, groupWeight: 100, excludeRecursion: false, preventRecursion: false, delayUntilRecursion: false, scanDepth: null, useGroupScoring: null, automationId: '', role: null, vectorized: false, sticky: null, cooldown: null, delay: null }
+
+/**
+ * A book as SillyTavern's world file (World Info → import): the entries as
+ * this app keeps them, over the fields they came with. Books imported before
+ * those were kept have only what this app reads. The description and scan
+ * depth go along for this app to read back; SillyTavern leaves them alone.
+ */
+export function worldFile(book) {
+  const numbered = book.entries.map(e => e.uid).filter(uid => /^\d+$/.test(uid)).map(Number)
+  let next = Math.max(-1, ...numbered) + 1
+  const entries = {}
+  book.entries.forEach((entry, index) => {
+    // SillyTavern numbers its entries; one named otherwise gets the next number.
+    const uid = /^\d+$/.test(entry.uid) ? Number(entry.uid) : next++
+    const extra = entry.extra ?? {}
+    entries[uid] = {
+      ...WORLD_DEFAULTS,
+      displayIndex: index,
+      ...extra,
+      uid,
+      key: entry.keys,
+      keysecondary: entry.secondaryKeys,
+      comment: entry.comment,
+      content: entry.content,
+      constant: entry.constant,
+      selective: entry.selective,
+      selectiveLogic: entry.selectiveLogic,
+      order: entry.order,
+      position: entry.position,
+      disable: !entry.enabled,
+      probability: entry.probability,
+      useProbability: entry.useProbability,
+      caseSensitive: entry.caseSensitive ? true : extra.caseSensitive === null ? null : false,
+      matchWholeWords: entry.wholeWords ? true : extra.matchWholeWords === null ? null : false,
+    }
+  })
+  return {
+    name: book.name,
+    ...(book.description ? { description: book.description } : {}),
+    ...(book.scanDepth ? { scanDepth: book.scanDepth } : {}),
+    entries,
+  }
 }
