@@ -103,11 +103,12 @@ If you can't quite say what you want, the creator guides you round by round:
 
 <br clear="right">
 
-## Latest changes [1.8.5]
+## Latest changes [1.8.6]
 
 <p align="center"><img src="docs/screenshots/vn-stage.jpg" alt="Several on stage in 1.8.5's visual novel mode: Lin Qinghe and Steward Zhou together in the teahouse, the speaking steward lit and Lin Qinghe dimmed" width="880"></p>
 
-- **Several on stage in visual novel mode**: the people talking in a scene stand together (up to three on a computer, two on a phone), the speaker lit and the rest dimmed, stepping off when the narration has them leave or the place changes.
+- **Fixes** (1.8.6): on a phone, What's new no longer pushes Next out of the window when there are many pages, shows its words and buttons when the phone is on its side, and keeps its title on one line; visual novel saves read Save in English, not Archive.
+- **Several on stage in visual novel mode** (1.8.5): the people talking in a scene stand together (up to three on a computer, two on a phone), the speaker lit and the rest dimmed, stepping off when the narration has them leave or the place changes.
 - **Expressions and stage effects**: in the Sprites window, draw a set of expressions for each character (only the face changes), picked line by line from the narration; lightning, a crash or a slammed table flashes or shakes the picture.
 - **Save and load**: 18 slots for each card, a quick save (F5 / F9) and the last ten turns saved on their own; loading picks up at that line, and what came after is kept as a branch.
 - **Manage lorebooks**: imported lorebooks one by one: rename, note, export, duplicate, delete, tick the cards each is attached to, and give one its own scan depth; select several entries to enable, disable or delete them, or copy or move them to another lorebook.

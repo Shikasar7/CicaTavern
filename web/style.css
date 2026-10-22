@@ -2191,8 +2191,11 @@ label.cast-voice, .dialog label.cast-voice { display: grid; grid-template-column
   .vn-cg-thumb { width: 72px; }
 }
 
-/* 更新了什么 (web/whatsnew.js): one page at a time, a picture over its words. */
+/* 更新了什么 (web/whatsnew.js): one page at a time, a picture over its words.
+   The head and the foot stay in the window; long words scroll between them. */
 .whatsnew { width: min(780px, calc(100vw - 32px)); padding: 0; overflow: hidden; }
+.whatsnew[open] { display: flex; flex-direction: column; }
+.whatsnew-head, .whatsnew-figure, .whatsnew-foot { flex: none; }
 .whatsnew-head { display: flex; align-items: baseline; gap: 10px; padding: 16px 16px 12px 22px; }
 .whatsnew-kicker { font: 600 12px var(--ui); letter-spacing: .16em; color: var(--lamp); }
 .whatsnew-head b { font: 600 18px var(--serif); }
@@ -2200,21 +2203,41 @@ label.cast-voice, .dialog label.cast-voice { display: grid; grid-template-column
 .whatsnew-figure { margin: 0 22px; border-radius: 14px; overflow: hidden; aspect-ratio: 16 / 9; background: var(--pane); box-shadow: var(--shadow-1); animation: whatsnew-in .35s var(--ease); }
 .whatsnew-figure img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .whatsnew-icon { width: 100%; height: 100%; display: grid; place-items: center; font-size: 72px; background: radial-gradient(circle at 30% 25%, color-mix(in srgb, var(--lamp) 28%, var(--surface)), var(--pane) 70%); }
-.whatsnew-body { padding: 18px 24px 2px; animation: whatsnew-in .35s var(--ease); }
+.whatsnew-body { flex: 0 1 auto; min-height: 0; overflow-y: auto; padding: 18px 24px 2px; animation: whatsnew-in .35s var(--ease); }
 .whatsnew-body h3 { margin: 0 0 6px; font: 600 20px var(--serif); }
 .whatsnew-body p { margin: 0; color: var(--muted); font-size: 14.5px; line-height: 1.8; white-space: pre-line; }
 .whatsnew-foot { display: flex; align-items: center; gap: 10px; padding: 18px 22px 20px; }
-.whatsnew-dots { display: flex; gap: 6px; margin-right: auto; }
+/* Many pages (a whole series, 1.8.0 to 1.8.5) wrap the dots instead of pushing the buttons out. */
+.whatsnew-dots { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; margin-right: auto; }
+.whatsnew-foot > .btn, .whatsnew-foot > form { flex: none; }
 .whatsnew-dots button { width: 8px; height: 8px; padding: 0; border: 0; border-radius: 999px; background: var(--line); cursor: pointer; transition: width .25s var(--ease), background .25s; }
 .whatsnew-dots button.on { width: 22px; background: var(--lamp); }
 @keyframes whatsnew-in { from { opacity: 0; transform: translateY(6px); } }
 @media (prefers-reduced-motion: reduce) { .whatsnew-figure, .whatsnew-body { animation: none; } }
 @media (max-width: 560px) {
-  .whatsnew-head { padding: 14px 10px 10px 16px; }
+  /* 更新了什么 on a line above the version and the date, none of them broken; ✕ beside both. */
+  .whatsnew-head { display: grid; grid-template: "kicker kicker x" auto "title date x" auto / auto minmax(0, 1fr) auto; column-gap: 8px; row-gap: 2px; padding: 14px 10px 10px 16px; }
+  .whatsnew-kicker { grid-area: kicker; }
+  .whatsnew-head b { grid-area: title; }
+  .whatsnew-head .muted { grid-area: date; }
+  .whatsnew-head > * { white-space: nowrap; }
+  .whatsnew-x { grid-area: x; margin: 0; }
   .whatsnew-figure { margin: 0 14px; }
   .whatsnew-body { padding: 14px 16px 0; }
-  .whatsnew-foot { padding: 14px 16px 16px; }
+  /* The dots on a line of their own, the two buttons under them sharing the width. */
+  .whatsnew-foot { flex-wrap: wrap; row-gap: 14px; padding: 14px 16px 16px; }
   .whatsnew-foot .muted { display: none; }
+  .whatsnew-dots { flex-basis: 100%; justify-content: center; margin: 0; }
+  .whatsnew-foot > .btn, .whatsnew-foot > form { flex: 1 1 0; }
+  .whatsnew-foot form .btn { width: 100%; }
+}
+/* A phone on its side: the picture alone would be taller than the screen, so the words go beside it. */
+@media (orientation: landscape) and (max-height: 520px) {
+  .whatsnew[open] { display: grid; grid-template: auto minmax(0, 1fr) auto / minmax(0, 1.15fr) minmax(0, 1fr); }
+  .whatsnew-head, .whatsnew-foot { grid-column: 1 / -1; }
+  .whatsnew-figure { margin: 0 0 0 22px; align-self: start; }
+  .whatsnew-body { padding: 0 22px 0 18px; }
+  .whatsnew-foot { padding-top: 12px; padding-bottom: 14px; }
 }
 
 /* 立绘 window: each one's expressions under it (表情差分). */

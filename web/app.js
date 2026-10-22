@@ -931,7 +931,7 @@ function renderNode(chat, node, isLastAssistant, depth = 0) {
       ])
     : null
   return el('article', { class: `msg ${isUser ? 'user' : 'assistant'}${isLastAssistant ? ' latest' : ''}`, 'data-id': node.id }, [
-    el('div', { class: 'msg-head' }, [speakerFace(chat, node.role), el('span', { class: 'name', text: name }), node.id === 'root' ? el('span', { text: imported ? t`存档` : t`开场` }) : null]),
+    el('div', { class: 'msg-head' }, [speakerFace(chat, node.role), el('span', { class: 'name', text: name }), node.id === 'root' ? el('span', { text: imported ? t`剧情存档` : t`开场` }) : null]),
     time ? timeBox(el, time) : null,
     messageBody(shown, frameContextFor(chat, node)),
     isUser ? null : mediaUi.gallery(chat, node),
