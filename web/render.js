@@ -20,7 +20,8 @@ const HIDDEN = [
 ]
 const OPEN_HIDDEN = /<(state|update(?:variable)?|thinking|think|time_box|choices)>(?![\s\S]*<\/\1>)[\s\S]*$/i
 const FENCE = /```([\w-]*)[^\n]*\n?([\s\S]*?)```/g
-const HTML_LIKE = /<(!doctype|html|head|body|style|script|div|table|section|details|svg|canvas|link|iframe|form|button)\b/i
+// A chunk with any of these is shown in a frame of its own, styles kept (regex.js's trial shows it the same way).
+export const HTML_LIKE = /<(!doctype|html|head|body|style|script|div|table|section|details|svg|canvas|link|iframe|form|button)\b/i
 
 export function nameMacros(text, names) {
   return String(text ?? '')

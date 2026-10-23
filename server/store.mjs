@@ -86,7 +86,11 @@ export const DEFAULT_SETTINGS = Object.freeze({
   privacyNotice: 0,
   media: null, // pictures and voice (media.mjs cleanMedia); written through /api/media/settings only
   appearance: null, // colour style and background picture (web/shared/appearance.js); the picture itself through /api/appearance/backdrop only
+  globalBookIds: [], // 全局世界书: imported books every chat uses, mounted or not (chats.mjs booksForCard); set through PUT /api/worldbooks/:id/global
 })
+
+/** Book ids as settings keep them: strings that can name a file, each once. */
+const cleanIds = ids => [...new Set((Array.isArray(ids) ? ids : []).filter(id => typeof id === 'string' && /^[\w-]{1,64}$/.test(id)))]
 
 /** The 隐私与网络 notice's version: settings.privacyNotice below it means not seen yet. */
 export const PRIVACY_NOTICE = 1
@@ -125,7 +129,7 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
 
     async getSettings() {
       const saved = { ...DEFAULT_SETTINGS, ...(await readJson(path.join(root, 'settings.json'), {})) }
-      return lockSettings({ ...saved, basic: cleanBasic(saved.basic), appearance: cleanAppearance(saved.appearance) })
+      return lockSettings({ ...saved, basic: cleanBasic(saved.basic), appearance: cleanAppearance(saved.appearance), globalBookIds: cleanIds(saved.globalBookIds) })
     },
     async saveSettings(patch, { backdrop } = {}) {
       const current = await this.getSettings()
@@ -142,6 +146,7 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
       next.cdnLibraries = next.cdnLibraries !== false
       next.privacyNotice = Math.max(0, Math.floor(Number(next.privacyNotice) || 0))
       next.basic = cleanBasic(next.basic)
+      next.globalBookIds = cleanIds(next.globalBookIds)
       // The picture's file name only changes with the picture (setBackdrop below).
       next.appearance = cleanAppearance({ ...current.appearance, ...next.appearance, backdrop: backdrop ?? current.appearance.backdrop })
       const saved = lockSettings(next)

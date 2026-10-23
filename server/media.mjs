@@ -18,7 +18,7 @@ import { copyFile, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promi
 import { inflateRawSync } from 'node:zlib'
 import path from 'node:path'
 import { complete, fetchBytes, googleRequest, isProviderRef, postJson, providerError, providerRequest, refLabel, resolveRef } from './providers.mjs'
-import { cleanFrame, cleanLora, cleanRoster, cleanStrength, countTags, draftMaterial, flattenFrame, frameFormat, isFramePrompt, isRosterId, leadOf, naiCharacters, parseFrame, parseRosterDraft, rosterBrief, rosterDraftRequest } from './roster.mjs'
+import { cleanFrame, cleanLora, cleanRoster, cleanStrength, countTags, draftMaterial, flattenFrame, frameFormat, isFramePrompt, isRosterId, leadOf, naiCharacters, parseFrame, parseRosterDraft, rosterBrief, rosterDraftRequest, withSomeone } from './roster.mjs'
 import { httpError, newId } from './store.mjs'
 import { FISH_MODELS } from './voice/cloud.mjs'
 import { KEYED, cleanVoiceKey, cleanVoiceList, createVoices } from './voice/index.mjs'
@@ -308,6 +308,9 @@ export function imagePromptRequest({ card, names, reply, input, state, style, pr
     cast
       ? 'Pick the most vivid moment of <latest_passage>. No text, captions or speech bubbles in the picture.'
       : 'Pick the most vivid moment of <latest_passage>. Keep the character\'s looks consistent with <character>. No text, captions or speech bubbles in the picture.',
+    cast
+      ? `Somebody is always in the picture: at least one cast member, ${names.char} or another one rather than the player alone where the moment allows. Never an empty room or a close-up of objects only.`
+      : `Somebody is always in the picture, normally ${names.char}. Never an empty room or a close-up of objects only.`,
     format,
     'Reply with the prompt only.',
   ].join('\n')
@@ -452,6 +455,7 @@ export function contextImageInstruction({ promptStyle, style, passage, roster = 
     cast
       ? `为${passage ? '上面这段' : '你上一条回复里'}最有画面感的一个瞬间，写给生图模型用的英文提示词。人物长相会自动补上，你只写谁在画面里、现在穿什么（换过的衣服、受的伤都要对）、在做什么、什么表情、站在哪。画面里不要出现文字、字幕或对话气泡。`
       : `为${passage ? '上面这段' : '你上一条回复里'}最有画面感的一个瞬间，写一段给生图模型用的英文提示词。人物外貌以角色设定和剧情里的最新状态为准（换过的衣服、受的伤、所在的地方都要对）。画面里不要出现文字、字幕或对话气泡。`,
+    cast ? '画面里一定要有人：至少一个出场人物，能选的话画角色本人或其他人，不要只有玩家。不要画空场景，也不要只画物品特写。' : '画面里一定要有人，通常是角色本人。不要画空场景，也不要只画物品特写。',
     style ? `画风：${style}` : '',
     format,
     '只输出提示词本身，不要标题、解释或思考过程。',
@@ -724,7 +728,11 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     const cardMedia = cleanCardMedia(card.media)
     const roster = cardMedia.roster
     // A cast answers in its own format; an answer that ignored it is still usable as a plain prompt.
-    const clean = text => (roster.length && cleanFrame(text)) || cleanPrompt(text, media.promptStyle)
+    // Either way somebody from the cast is in it when the answer left everyone out.
+    const clean = text => {
+      const prompt = (roster.length && cleanFrame(text)) || cleanPrompt(text, media.promptStyle)
+      return withSomeone(prompt, roster, chat.names.user, card.name, media.promptStyle)
+    }
     let note = ''
     if (media.promptSource === 'chat' && askInContext) {
       const providers = await store.getProviders()
@@ -1555,6 +1563,15 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     return { buffer, prompt: text, backend, note, place: named }
   }
 
+  /** 主题 → 对话修改: a picture behind the page from the talk's prompt, landscape, nobody in it, no card's look. */
+  async function drawBackdrop(prompt, signal) {
+    const media = await settings()
+    const text = ensureScenery(String(prompt ?? '').trim(), media.promptStyle)
+    const plain = { ...media, imageShape: 'landscape', imageReference: false, naiReference: false, geminiReference: false, naiNegative: [media.naiNegative, SCENERY_NEGATIVE].filter(Boolean).join(', ') }
+    const { buffer, backend } = await render(plain, null, null, null, text, signal, { scenery: true, references: 'none' })
+    return { buffer, backend }
+  }
+
   async function readImage(chatId, file) {
     if (!FILE.test(file)) throw httpError(400, msg`文件名不对`)
     return readFile(path.join(mediaDir(chatId), file))
@@ -1617,5 +1634,5 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     return voices.accountVoices({ source, draft: await voiceDraft(draft, keys) }, signal)
   }
 
-  return { defaults, settings, cleanSettings, ownBackends: ownBackendViews, naiStatus, setNaiToken, naiCheck, cardMediaView, saveCardMedia, inheritCardMedia, draftRoster, drawPortrait, drawCardArt, drawAvatar, drawScenery, drawSprite, drawExpression, labelExpressions, readRosterRef, saveRosterRef, removeRosterRef, writeImagePrompt, generateImage, readImage, removeImage, removeChatMedia, copyChatMedia, loras, voices: voices.list, personaList: voices.personaList, ttsKeyStatus: voices.ttsKeyStatus, setTtsKey: voices.setTtsKey, voiceKeys: voices.keyStatus, setVoiceKey: voices.setKey, speak, previewVoice, accountVoices, loadWorkflow, saveWorkflow, describeWorkflow }
+  return { defaults, settings, cleanSettings, ownBackends: ownBackendViews, naiStatus, setNaiToken, naiCheck, cardMediaView, saveCardMedia, inheritCardMedia, draftRoster, drawPortrait, drawCardArt, drawAvatar, drawScenery, drawBackdrop, drawSprite, drawExpression, labelExpressions, readRosterRef, saveRosterRef, removeRosterRef, writeImagePrompt, generateImage, readImage, removeImage, removeChatMedia, copyChatMedia, loras, voices: voices.list, personaList: voices.personaList, ttsKeyStatus: voices.ttsKeyStatus, setTtsKey: voices.setTtsKey, voiceKeys: voices.keyStatus, setVoiceKey: voices.setKey, speak, previewVoice, accountVoices, loadWorkflow, saveWorkflow, describeWorkflow }
 }

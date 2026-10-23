@@ -23,7 +23,27 @@ export function countText({ entries, enabled, constant }) {
   return t`${entries} 条（启用 ${enabled}，其中常驻 ${constant}）`
 }
 
+/** A search box's words, lower-cased: a match has every one of them (the card list, the books, a book's entries). */
+export const searchTerms = query => String(query ?? '').toLowerCase().split(/\s+/).filter(Boolean)
+export const matchesTerms = (text, terms) => {
+  const hay = String(text ?? '').toLowerCase()
+  return terms.every(term => hay.includes(term))
+}
+
+/** A search box above a list, with the magnifier the history panel has. */
+export function searchBox(el, { placeholder, label, onInput }) {
+  const input = el('input', { type: 'search', placeholder, 'aria-label': label, autocomplete: 'off', spellcheck: 'false', enterkeyhint: 'search' })
+  input.addEventListener('input', () => onInput(input.value))
+  const box = el('label', { class: 'list-search' }, [
+    el('span', { class: 'list-search-icon', 'aria-hidden': 'true', html: '<svg viewBox="0 0 20 20"><circle cx="9" cy="9" r="5.5" /><path d="m13.2 13.2 3.3 3.3" /></svg>' }),
+    input,
+  ])
+  return { box, input }
+}
+
 const titleOf = e => e.comment || e.content.replace(/\s+/g, ' ').trim().slice(0, 24) || t`未命名条目`
+// What a book's entry search looks through.
+const entryText = e => `${e.comment ?? ''}\n${e.keys?.join('\n') ?? ''}\n${e.content ?? ''}`
 const splitKeys = text => text.split(/[,，]/).map(key => key.trim()).filter(Boolean)
 // Entries a chat freezes into its prefix (server/worldbook.mjs inPrefix).
 const inPrefix = e => e.enabled && e.constant && !e.initvar && !e.dynamic
@@ -48,7 +68,10 @@ function noteOf(e) {
  *   onChanged runs after every save, so the settings page and the card list
  *   count again; `mounts` names the books whose cards changed here.
  */
-export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, getScanDepth, isGenerating, onChatChanged, onChanged }) {
+/**
+ * @param deps - { …, openTalk(options) (talk-dialog.js: 对话修改 on the book shown) }
+ */
+export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, getScanDepth, isGenerating, onChatChanged, onChanged, openTalk }) {
   const $ = id => document.getElementById(id)
   const dialog = $('book-dialog')
   const state = {
@@ -65,6 +88,9 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
     target: null, // the book picked to copy or move them to ('' a new one), kept while ticking more
     stale: new Set(), // book ids edited in the prefix since the open chat applied them
     remounted: new Set(), // of those, books the open chat's card took on or let go of here
+    find: '', // the search above the books: names, notes, and every book's entries
+    everything: new Map(), // book id → its entries, read once for that search; dropped when the books change
+    reading: null, // while they are read
   }
   const urlOf = id => (id.startsWith('card-') ? `/api/cards/${id.slice(5)}/book` : `/api/worldbooks/${id}`)
   const navOf = id => state.books.find(b => b.id === id)
@@ -73,7 +99,7 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
   /** Whether the open chat has this book in its prefix: its card's own, or one its card has mounted. */
   function chatUses(chat, id) {
     if (!chat) return false
-    if (id === `card-${chat.cardId}`) return true
+    if (id === `card-${chat.cardId}` || navOf(id)?.global) return true
     return (getCards().find(c => c.id === chat.cardId)?.worldbookIds ?? []).includes(id)
   }
   // The open chat's prefix is behind this book: edited, or taken on or let go of by its card.
@@ -85,8 +111,39 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
     const own = state.books.find(b => b.own)
     state.books = [
       ...(card && (card.bookEntries || own) ? [own ?? { id: `card-${card.id}`, name: t`卡里自带`, own: true, counts: { entries: card.bookEntries, enabled: card.bookEnabled, constant: card.bookConstant } }] : []),
-      ...list.map(b => ({ id: b.id, name: b.name, own: false, counts: { entries: b.entries, enabled: b.enabled, constant: b.constant } })),
+      ...list.map(b => ({ id: b.id, name: b.name, description: b.description ?? '', own: false, global: Boolean(b.global), counts: { entries: b.entries, enabled: b.enabled, constant: b.constant } })),
     ]
+  }
+
+  // Searching the books: a name or note matches at once; entries match once every book has been read.
+  const finder = searchBox(el, {
+    placeholder: t`搜索书名、备注或条目`,
+    label: t`搜索世界书`,
+    onInput: value => {
+      state.find = value
+      renderNav()
+      if (searchTerms(value).length) guard(readEverything)()
+    },
+  })
+  $('book-list').before(finder.box)
+
+  /** Every book's entries, for the search: the shown book's as they are now, the others read once. */
+  async function readEverything() {
+    const missing = state.books.filter(b => !state.everything.has(b.id) && b.id !== state.detail?.id)
+    if (!missing.length || state.reading) return
+    state.reading = Promise.all(missing.map(b => api(urlOf(b.id)).then(book => state.everything.set(b.id, book.entries))))
+    try {
+      await state.reading
+    } finally {
+      state.reading = null
+      renderNav()
+    }
+  }
+
+  /** How many of a book's entries the search finds; null while they are being read. */
+  function hitsIn(b, terms) {
+    const entries = b.id === state.detail?.id ? state.detail.entries : state.everything.get(b.id)
+    return entries ? entries.filter(e => matchesTerms(entryText(e), terms)).length : null
   }
 
   /**
@@ -99,6 +156,9 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
     state.card = card
     state.mounted = new Set(mounted)
     state.books = []
+    state.find = ''
+    finder.input.value = ''
+    state.everything.clear()
     setBooks(books ?? await api('/api/worldbooks'))
     await select(navOf(wanted) ? wanted : state.books[0]?.id ?? null)
     if (!dialog.open) dialog.showModal()
@@ -106,9 +166,12 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
     dialog.querySelector('.preset-layout').classList.toggle('show-main', Boolean(wanted && navOf(wanted)))
   }
 
-  async function select(id) {
+  /** @param query - the entry search to open the book with (from the search above the books). */
+  async function select(id, query = '') {
+    // The book left keeps its entries as edited here, for the search across books.
+    if (state.detail) state.everything.set(state.detail.id, state.detail.entries)
     state.selected = id
-    state.query = ''
+    state.query = query
     state.open.clear()
     state.picking = false
     state.picked.clear()
@@ -119,18 +182,29 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
 
   async function refreshBooks() {
     setBooks(await api('/api/worldbooks'))
+    // Entries may have gone to another book: read them again when searched.
+    state.everything.clear()
     renderNav()
+    if (searchTerms(state.find).length) await readEverything()
   }
 
   function renderNav() {
-    $('book-list').replaceChildren(...state.books.map(b => {
+    const terms = searchTerms(state.find)
+    const rows = []
+    for (const b of state.books) {
+      const hits = terms.length ? hitsIn(b, terms) : 0
+      if (terms.length && !hits && !matchesTerms(`${b.name}\n${b.description ?? ''}`, terms)) continue
       const users = b.own ? 0 : usedBy(b.id).length
-      const tag = b.own ? t`始终生效` : state.card ? (state.mounted.has(b.id) ? t`已挂载` : '') : users ? t`${users} 张卡在用` : ''
-      return el('li', { class: state.selected === b.id ? 'active' : '', onclick: () => guard(select)(b.id) }, [
+      const tag = b.own ? t`始终生效` : b.global ? t`全局` : state.card ? (state.mounted.has(b.id) ? t`已挂载` : '') : users ? t`${users} 张卡在用` : ''
+      // Opened from the search, a book shows the entries it found.
+      rows.push(el('li', { class: state.selected === b.id ? 'active' : '', onclick: () => guard(select)(b.id, hits ? state.find.trim() : '') }, [
         el('div', { class: 'item-title' }, [el('span', { class: 'item-main', text: b.name }), tag ? el('span', { class: 'tag', text: tag }) : null]),
-        el('div', { class: 'item-sub', text: countText(b.counts) }),
-      ])
-    }))
+        el('div', { class: 'item-sub' }, [hits ? el('span', { class: 'book-hits', text: t`${hits} 条匹配` }) : null, hits ? ' · ' : null, countText(b.counts)]),
+      ]))
+    }
+    if (terms.length && !rows.length) rows.push(el('li', { class: 'list-none', text: state.reading ? t`正在搜索…` : t`没有找到「${state.find.trim()}」` }))
+    else if (terms.length && state.reading) rows.push(el('li', { class: 'list-none', text: t`正在搜索条目…` }))
+    $('book-list').replaceChildren(...rows)
   }
 
   // ─── Main column ──────────────────────────────────────────────────────
@@ -142,7 +216,9 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
     const users = own ? [] : usedBy(detail.id)
     const where = own
       ? t`「${card.name}」卡里自带，这张卡的每个对话都用。重新导入这张卡来更新时，会换成文件里的版本，这里的修改不保留。`
-      : card
+      : navOf(detail.id)?.global
+        ? t`全局世界书：每张卡的对话都用，不用挂到卡上。`
+        : card
         ? state.mounted.has(detail.id)
           ? t`挂在「${card.name}」上。挂着这本的每张卡都会用到这里的修改。`
           : t`没挂在「${card.name}」上：在下面「用到它的卡」里勾上，才对这张卡生效。`
@@ -153,7 +229,8 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
       el('header', { class: 'preset-head' }, [
         el('h3', { class: 'preset-title', text: own ? t`卡里自带的世界书` : detail.name }),
         el('div', { class: 'preset-meta', text: [countText(countEntries(detail.entries)), where].join(t`。`) }),
-        own ? null : el('div', { class: 'preset-actions' }, [
+        el('div', { class: 'preset-actions' }, own ? [talkButton()] : [
+          talkButton(),
           el('button', { class: 'btn small', type: 'button', text: t`导出`, title: t`存成 SillyTavern 的世界书 JSON：可以在 SillyTavern 里导入，也可以搬到另一台设备`, onclick: guard(exportBook) }),
           el('button', { class: 'btn small', type: 'button', text: t`复制一份`, title: t`复制出一本一样的，改它不影响原来这本；新的一本先不挂到卡上`, onclick: guard(copyBook) }),
           el('button', { class: 'btn small danger', type: 'button', text: t`删除`, onclick: guard(removeBook) }),
@@ -181,7 +258,7 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
     }
     const own = navOf(detail.id)?.own
     const search = el('input', { type: 'search', placeholder: t`搜索条目名称、关键词或内容`, value: state.query })
-    search.addEventListener('input', () => { state.query = search.value.trim().toLowerCase(); filterRows() })
+    search.addEventListener('input', () => { state.query = search.value.trim(); filterRows() })
     $('book-main').replaceChildren(...[
       el('div', { id: 'book-headwrap' }, headParts().filter(Boolean)),
       own ? null : el('div', { class: 'book-panels' }, [settingsPanel(), cardsPanel()]),
@@ -193,7 +270,11 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
       state.picking ? bulkBar() : null,
       detail.entries.length
         ? el('ul', { class: `prompt-list book-entries${state.picking ? ' picking' : ''}`, id: 'book-entries' }, detail.entries.map(entryRow))
-        : el('p', { class: 'preset-empty', text: t`这本世界书还没有条目。` }),
+        : el('div', { class: 'preset-empty' }, [
+            el('p', { text: t`这本世界书还没有条目。` }),
+            el('p', { class: 'small', text: t`可以一条条新增，也可以说说这本书写什么，让向导写出来。` }),
+            el('button', { type: 'button', class: 'btn small primary', text: t`用对话来写`, onclick: () => talkAbout() }),
+          ]),
     ].filter(Boolean))
     filterRows()
   }
@@ -210,6 +291,7 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
   function settingsSummary() {
     const d = state.detail
     return [
+      navOf(d.id)?.global ? t`全局` : '',
       d.scanDepth ? t`扫描最近 ${d.scanDepth} 条` : t`扫描深度跟随设置（${getScanDepth()} 条）`,
       d.description.trim() ? t`有备注` : '',
     ].filter(Boolean).join(' · ')
@@ -237,7 +319,18 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
     note.addEventListener('change', guard(async () => {
       if (note.value !== d.description) await saveInfo({ description: note.value }, t`已保存`)
     }))
+    const global = el('input', { type: 'checkbox', class: 'switch', checked: Boolean(navOf(d.id)?.global) })
+    global.addEventListener('change', guard(async () => {
+      try {
+        await saveGlobal(global.checked)
+      } catch (error) {
+        global.checked = !global.checked
+        throw error
+      }
+    }))
     return panel('settings', [el('span', { text: t`书的设置` }), el('span', { class: 'book-panel-sub', id: 'book-settings-sub', text: settingsSummary() })], [
+      el('label', { class: 'check-row book-check book-global' }, [global, el('span', { text: t`全局：所有对话都用` })]),
+      el('p', { class: 'prompt-note', text: t`打开后，每张卡的对话都用这本，不用一张张挂；和挂在卡上的同时开着也只算一次。常驻条目写在对话开局时的固定前缀里，进行中的对话要「应用到当前对话」才会用上。` }),
       el('div', { class: 'prompt-fields book-fields' }, [
         field(t`名称`, name),
         field(t`扫描深度`, depth),
@@ -290,10 +383,28 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
         c.archived ? el('span', { class: 'book-panel-sub', text: t`已归档` }) : null,
       ])
     }))
-    return panel('cards', [el('span', { text: t`用到它的卡` }), el('span', { class: 'book-panel-sub', text: using.size ? t`${using.size} 张` : t`还没有` })], [
+    const global = navOf(id)?.global
+    return panel('cards', [el('span', { text: t`用到它的卡` }), el('span', { class: 'book-panel-sub', text: global ? t`全局：每张卡都用` : using.size ? t`${using.size} 张` : t`还没有` })], [
+      global ? el('p', { class: 'book-global-note', text: t`这本是全局的，每张卡的对话都用，不用在这里勾。这里勾上的卡在取消全局后照旧挂着。` }) : null,
       cards.length ? list : el('p', { class: 'prompt-note', text: t`还没有角色卡。` }),
       el('p', { class: 'prompt-note', text: t`勾上的卡，它的每个对话都用这本：关键词条目下一轮就生效；常驻条目写在对话开局时的固定前缀里，进行中的对话要「应用到当前对话」或重建前缀。` }),
     ])
+  }
+
+  /** 全局 on or off: every chat takes the book on or lets it go, the open one's prefix included. */
+  async function saveGlobal(on) {
+    const id = state.detail.id
+    const { prefix } = await api(`/api/worldbooks/${id}/global`, { method: 'PUT', body: { global: on } })
+    const nav = navOf(id)
+    if (nav) nav.global = on
+    if (prefix && getChat()) {
+      state.stale.add(id)
+      state.remounted.add(id)
+    }
+    await onChanged?.({ globals: true })
+    renderNav()
+    redraw()
+    toast(on ? t`已设为全局：每张卡的对话都用这本` : t`不再是全局：只有挂着它的卡用`)
   }
 
   async function saveCards(list, card, ticked) {
@@ -499,6 +610,7 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
       el('p', { class: 'prompt-note', text: noteOf(e) }),
       area,
       el('div', { class: 'prompt-actions' }, [
+        el('button', { type: 'button', class: 'btn small ghost', text: t`按意见改`, title: t`在「对话修改」里说说这一条想怎么改`, onclick: () => talkAbout({ id: `entry:${e.uid}`, label: titleOf(e) }) }),
         el('button', { type: 'button', class: 'btn small danger', text: t`删除条目`, onclick: guard(() => removeEntry(e)) }),
       ]),
     ]))
@@ -509,11 +621,10 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
   }
 
   function filterRows() {
-    const q = state.query
+    const terms = searchTerms(state.query)
     for (const row of document.querySelectorAll('#book-entries .prow')) {
       const e = state.detail.entries.find(x => x.uid === row.dataset.uid)
-      const text = `${e?.comment ?? ''}\n${e?.keys.join('\n') ?? ''}\n${e?.content ?? ''}`.toLowerCase()
-      row.hidden = Boolean(q) && !text.includes(q)
+      row.hidden = terms.length > 0 && !(e && matchesTerms(entryText(e), terms))
     }
   }
 
@@ -640,6 +751,72 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
     const said = move ? t`已把 ${uids.length} 条移到「${result.to.name}」` : t`已把 ${uids.length} 条复制到「${result.to.name}」`
     // Constant entries left or arrived in a book the open chat uses.
     const behind = (move && result.from.prefix && chatUses(getChat(), from)) || (result.to.prefix && chatUses(getChat(), result.to.id))
+    toast(behind ? [said, t`当前对话的固定前缀还是改动前的版本，要「应用到当前对话」才会跟着变。`].join(t`。`) : said, behind ? 6000 : 3000)
+  }
+
+  // ─── 对话修改 (talk-dialog.js) ─────────────────────────────────────────
+  function talkButton() {
+    return el('button', { class: 'btn small', type: 'button', text: t`对话修改`, title: t`说说想怎么改，向导把要改的条目整条写出来，勾上的才会改进书里`, onclick: () => talkAbout() })
+  }
+
+  /** The talk on the book shown; `aim` keeps the first request to one entry. */
+  function talkAbout(aim = null) {
+    const id = state.selected
+    const own = navOf(id)?.own
+    const empty = () => !state.detail?.entries.length
+    openTalk?.({
+      url: `/api/talk/book/${id}`,
+      title: t`对话修改世界书`,
+      name: own ? t`「${state.card?.name ?? ''}」卡里自带` : state.detail.name,
+      aim,
+      intro: () => (empty()
+        ? t`说说这本世界书写什么：世界的规则、人物、地点、组织……向导一条条写出来，勾上的才会写进书里，写完还能接着说怎么改。`
+        : t`说说想怎么改这本世界书：向导把要改的条目整条写出来，改前改后对照着给你看，勾上的才会改进书里。也可以只是问问，比如哪些设定互相矛盾。`),
+      ideas: () => (empty()
+        ? [t`修仙世界：三个宗门、两座城，灵气正在枯竭`, t`现代都市：深夜才营业的花店和它的常客`]
+        : [t`给人物条目补全关键词`, t`查查有没有互相矛盾的设定`, t`太长的条目拆成几条`]),
+      placeholder: target => (target ? t`「${target.label}」想怎么改，比如：写短一点，加上她的口头禅` : empty() ? t`说说这本书写什么，比如：一座雨夜才开门的旧城` : t`说说想怎么改，比如：给每个人物补上外号当关键词`),
+      busy: job => (job.step === 'pick' ? t`书比较长，先看目录挑要读的条目…` : job.chars ? t`正在写，已经写了 ${job.chars.toLocaleString()} 字…` : t`正在读这本世界书…`),
+      changeTitle: change => {
+        if (change.kind === 'bookInfo') return t`书名和简介`
+        if (change.kind === 'newEntry') return t`新条目 · ${change.name}`
+        if (change.kind === 'removeEntry') return t`删除条目 · ${change.title || t`未命名条目`}`
+        return t`条目 · ${change.title || t`未命名条目`}`
+      },
+      changeWhere: change => {
+        if (change.kind === 'bookInfo') return [t`不发给模型`, 'off', t`给玩家看的`]
+        if (change.enabled === false) return [t`停用`, 'off', t`不再发给模型`]
+        const constant = change.mode ? change.mode === 'constant' : change.constant
+        return constant ? [t`常驻`, 'on', t`写进对话开局时的固定前缀`] : [t`关键词`, 'key', t`最近的对话提到关键词时随消息发送`]
+      },
+      changeNotes: change => {
+        const notes = []
+        if (change.kind === 'bookInfo' && change.name) notes.push(t`书名：${change.beforeName} → ${change.name}`)
+        if (change.kind === 'entry' && change.name) notes.push(t`名称：${change.title || t`未命名条目`} → ${change.name}`)
+        if (change.kind === 'newEntry' || change.keys) notes.push(t`关键词：${(change.keys ?? []).join(t`、`) || t`（无）`}`)
+        if (change.mode) notes.push(change.mode === 'constant' ? t`改成常驻：写进对话开局时的固定前缀` : t`改成关键词触发`)
+        if (change.kind === 'newEntry' && change.constant) notes.push(t`常驻：写进对话开局时的固定前缀`)
+        if (change.enabled !== undefined) notes.push(change.enabled ? t`启用` : t`停用`)
+        return notes
+      },
+      targetLabel: target => (target === 'book' ? t`书名和简介` : t`条目 ${target.slice(6)}`),
+      onApplied: result => talked(id, result, t`已改进书里：${result.applied} 处`),
+      onUndone: result => talked(id, result, t`已撤销这次修改`),
+    })
+  }
+
+  /** What the talk applied or undid: the book drawn again, the prefix bar if it reached it. */
+  async function talked(id, result, said) {
+    if (result.prefix) state.stale.add(id)
+    if (state.selected === id) {
+      state.detail = { ...state.detail, ...result.book, entries: state.detail.entries }
+      takeEntries(result.book.entries)
+      redraw()
+    }
+    await refreshBooks()
+    await onChanged?.()
+    // Constant entries changed in a book the open chat uses.
+    const behind = result.prefix && chatUses(getChat(), id)
     toast(behind ? [said, t`当前对话的固定前缀还是改动前的版本，要「应用到当前对话」才会跟着变。`].join(t`。`) : said, behind ? 6000 : 3000)
   }
 

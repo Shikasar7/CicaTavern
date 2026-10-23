@@ -103,18 +103,17 @@ If you can't quite say what you want, the creator guides you round by round:
 
 <br clear="right">
 
-## Latest changes [1.8.6]
+## Latest changes [1.9.0]
 
-<p align="center"><img src="docs/screenshots/vn-stage.jpg" alt="Several on stage in 1.8.5's visual novel mode: Lin Qinghe and Steward Zhou together in the teahouse, the speaking steward lit and Lin Qinghe dimmed" width="880"></p>
+<p align="center"><img src="docs/screenshots/talk-edit.jpg" alt="Editing a lorebook by chat in 1.9.0: asked to make Qinghe colder, make the dock constant and add a boatman, the guide lists three changes, each before and after" width="880"></p>
 
-- **Fixes** (1.8.6): on a phone, What's new no longer pushes Next out of the window when there are many pages, shows its words and buttons when the phone is on its side, and keeps its title on one line; visual novel saves read Save in English, not Archive.
-- **Several on stage in visual novel mode** (1.8.5): the people talking in a scene stand together (up to three on a computer, two on a phone), the speaker lit and the rest dimmed, stepping off when the narration has them leave or the place changes.
-- **Expressions and stage effects**: in the Sprites window, draw a set of expressions for each character (only the face changes), picked line by line from the narration; lightning, a crash or a slammed table flashes or shakes the picture.
-- **Save and load**: 18 slots for each card, a quick save (F5 / F9) and the last ten turns saved on their own; loading picks up at that line, and what came after is kept as a branch.
-- **Manage lorebooks**: imported lorebooks one by one: rename, note, export, duplicate, delete, tick the cards each is attached to, and give one its own scan depth; select several entries to enable, disable or delete them, or copy or move them to another lorebook.
-- **Steadier update checks**: when GitHub's query limit is used up, the check reads the version information the release carries instead.
+- **Edit lorebooks, presets, regex and the theme by chat**: as with Edit card, say what to change and the guide writes out each piece it would change, before and after side by side; only what you tick goes in, and the last change can be undone. An empty lorebook can be written from one sentence; a long lorebook or preset is looked through first for the entries to read.
+- **Regex is tried before it's saved**: a regex the guide writes is first run on the chat's latest reply, showing how many places it matches and what each becomes (styled HTML shown as it looks); one that doesn't compile can't be ticked, and one that hangs is flagged.
+- **Custom colours, font and size**: tune the twelve colours of the theme one by one, or say "ink wash" and get a light and a dark set to preview before you keep them; the story's font and size can change, kept for each device.
+- **Search and global lorebooks**: search the card list and the lorebooks (entries' text included); a lorebook can be made global, used by every chat without attaching it card by card.
+- **Improvements**: pictures always have someone in them; a card with many openings shows each one in full before you pick.
 
-Visual novel mode came in 1.8.0; voices for each character and the CG gallery in 1.8.1; lorebook entry editing in 1.8.2; Edit card and Generate avatar in 1.8.3; in-app updates on the phone in 1.8.4. Download from [Releases](https://github.com/Shikasar7/CicaTavern/releases/latest); 1.4.0 and later can update in the app. Everything that changed is in [CHANGELOG.md](CHANGELOG.md).
+Visual novel mode came in 1.8.0; voices for each character and the CG gallery in 1.8.1; lorebook entry editing in 1.8.2; Edit card and Generate avatar in 1.8.3; in-app updates on the phone in 1.8.4; several on stage, expressions, save and load, and lorebook management in 1.8.5. Download from [Releases](https://github.com/Shikasar7/CicaTavern/releases/latest); 1.4.0 and later can update in the app. Everything that changed is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Getting started (Windows)
 

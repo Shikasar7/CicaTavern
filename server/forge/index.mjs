@@ -11,11 +11,14 @@
 //   polish:  the card to read and edit, any piece rewritten by a note, the
 //            avatar drawn or uploaded; saved as a card (PNG with the card in it).
 // A card already saved, imported or made here, can be changed the same way by
-// talking (修改角色卡, edit.mjs): a session per card, edit-<card id>, kept in
-// <data>/forge/edits/ and run like a draft's jobs.
+// talking (修改角色卡, edit.mjs), and so can a worldbook (book-edit.mjs) and a
+// preset (preset-edit.mjs): a session per thing, edit-<card id>,
+// edit-book-<book id> or edit-preset-<preset id>, kept in <data>/forge/edits/
+// and run like a draft's jobs.
 // Model calls run in the background: a request starts a job and returns the
 // draft at once; the page polls the draft until the job is done. Closing the
 // window loses nothing.
+import { createHash } from 'node:crypto'
 import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import YAML from 'yaml'
@@ -25,7 +28,13 @@ import { complete, isProviderRef, providerError, refLabel, resolveRef } from '..
 import { httpError, newId } from '../store.mjs'
 import { chosenUserName, discussRequest, editBrief, editTracking, editUserName, emptyBrief, forgeLanguages, partialReply, planLanguage, planRequest, readDiscussion, readPlan, reviseRequest } from './prompts.mjs'
 import { applyIssues, cardJson, entriesRequest, greetingsRequest, initialState, lintCard, matchWritten, newCard, readIssues, readTagged, retrack, reviewRequest, rewriteRequest, stepDone, userTagged, writeSteps } from './write.mjs'
-import { applyChanges, editRequest, readEdit } from './edit.mjs'
+import { applyChanges, editRequest, ensureBook, readEdit } from './edit.mjs'
+import { applyBookChanges, bookEditRequest, bookTooLong, pickRequest, readBookEdit, readPicked } from './book-edit.mjs'
+import { applyPresetChanges, presetEditRequest, presetPickRequest, presetTooLong, readPickedPrompts, readPresetEdit } from './preset-edit.mjs'
+import { applyRegexChanges, readRegexEdit, regexEditRequest, tryChanges } from './regex-edit.mjs'
+import { cleanThemeContext, readThemeEdit, themeApplier, themeEditRequest } from './theme-edit.mjs'
+import { cleanScripts } from '../regex.mjs'
+import { BASIC_ID } from '../../web/shared/basic.js'
 import { currentLanguage, msg } from '../i18n.mjs'
 
 const ID = /^[a-zA-Z0-9_-]{1,64}$/
@@ -56,7 +65,11 @@ function imageType(buffer) {
  *   backend set up in 配图, or the one `choice` picks for it ({ backend, model },
  *   media.drawCardArt); without it, avatars are upload-only.
  */
-export function createForge(store, { proxyNow = () => null, ledger = null, draw = null } = {}) {
+/**
+ * @param drawBackdrop - (prompt, signal) → { buffer }: a picture behind the page, drawn as
+ *   配图 is set up; storeBackdrop(buffer) → its file name (主题 → 对话修改, theme-edit.mjs).
+ */
+export function createForge(store, { proxyNow = () => null, ledger = null, draw = null, drawBackdrop = null, storeBackdrop = null } = {}) {
   const dir = path.join(store.dirs.root, 'forge')
   const fileOf = id => {
     if (!ID.test(String(id))) throw httpError(400, msg`无效的 ID`)
@@ -259,10 +272,12 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
   async function record(id, result, ref) {
     if (!ledger || !result?.usage) return
     const draft = await load(id)
-    // An edit session's calls count under its card.
-    const chat = draft.cardId
-      ? { id: `forge-${id}`, title: msg`修改：${draft.cardName}`, cardId: draft.cardId }
-      : { id: `forge-${id}`, title: msg`创作：${draft.plan?.name || draft.brief.title || msg`未命名`}`, cardId: null }
+    // An edit session's calls count under its card, or under the book or preset it changes.
+    const chat = draft.kind && draft.kind !== 'card'
+      ? { id: `forge-${id}`, title: SUBJECTS[draft.kind].title(draft.subjectName), cardId: null }
+      : draft.cardId
+        ? { id: `forge-${id}`, title: msg`修改：${draft.cardName}`, cardId: draft.cardId }
+        : { id: `forge-${id}`, title: msg`创作：${draft.plan?.name || draft.brief.title || msg`未命名`}`, cardId: null }
     await ledger.recordTurn(chat, { model: ref, usage: result.usage, createdAt: new Date().toISOString() })
   }
 
@@ -484,57 +499,209 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
     return view(draft)
   }
 
-  // ─── 修改角色卡 (edit.mjs) ─────────────────────────────────────────────
+  // ─── 对话修改 (edit.mjs, book-edit.mjs, preset-edit.mjs) ─────────────────
 
-  const editId = cardId => `${EDIT}${cardId}`
-  const EDIT_TARGET = /^(field:[a-zA-Z]+|greeting:\d+|entry:[\w-]+)$/
+  /**
+   * What a session changes. `load(id)` → { subject, name, own?, holder? } (a
+   * card's own book is held by its card, which is what gets saved); `pick`: a
+   * first look at a subject too long to send whole; `undo`: the last applied
+   * proposal can be taken back; `context(value)`: what the page sends along
+   * with a request, cleaned (the latest reply to try regex on, the colours on
+   * screen); `finish(changes, context, signal)`: the changes once more after
+   * they are read (a regex tried on the latest reply). `apply` may be async.
+   */
+  const SUBJECTS = {
+    card: {
+      prefix: EDIT,
+      target: /^(field:[a-zA-Z]+|greeting:\d+|entry:[\w-]+)$/,
+      title: name => msg`修改：${name}`,
+      async load(id) {
+        const card = await store.getCard(id)
+        return { subject: card, name: card.name }
+      },
+      save: loaded => store.saveCard(loaded.subject),
+      request: editRequest,
+      read: readEdit,
+      apply: applyChanges,
+    },
+    book: {
+      prefix: `${EDIT}book-`,
+      target: /^(entry:[\w-]+|book)$/,
+      title: name => msg`修改世界书：${name}`,
+      async load(id) {
+        if (id.startsWith('card-')) {
+          const card = await store.getCard(id.slice(5))
+          return { subject: ensureBook(card), name: card.name, own: true, holder: card }
+        }
+        const book = await store.getBook(id)
+        return { subject: book, name: book.name }
+      },
+      save: loaded => (loaded.holder ? store.saveCard(loaded.holder) : store.saveBook(loaded.subject)),
+      restore(loaded, snapshot) {
+        if (!loaded.holder) return { ...snapshot, id: loaded.subject.id }
+        loaded.holder.book = snapshot
+        return snapshot
+      },
+      tooLong: bookTooLong,
+      pick: pickRequest,
+      readPick: readPicked,
+      request: bookEditRequest,
+      read: readBookEdit,
+      apply: applyBookChanges,
+      undo: true,
+    },
+    preset: {
+      prefix: `${EDIT}preset-`,
+      target: /^prompt:[\s\S]{1,200}$/,
+      title: name => msg`修改预设：${name}`,
+      async load(id) {
+        if (id === 'basic') throw httpError(400, msg`基础预设用选项调整，不能对话修改`)
+        const preset = await store.getPreset(id)
+        return { subject: preset, name: preset.name }
+      },
+      save: loaded => store.savePreset(loaded.subject),
+      restore: (loaded, snapshot) => ({ ...snapshot, id: loaded.subject.id }),
+      tooLong: presetTooLong,
+      pick: presetPickRequest,
+      readPick: readPickedPrompts,
+      request: presetEditRequest,
+      read: readPresetEdit,
+      apply: applyPresetChanges,
+      undo: true,
+    },
+    // The global scripts (global), a card's (card-<id>) or a preset's (preset-<id>).
+    regex: {
+      prefix: `${EDIT}regex-`,
+      target: /^regex:[\w-]{1,64}$/,
+      title: name => msg`修改正则：${name}`,
+      async load(id) {
+        if (id === 'global') return { subject: { scripts: await store.getRegex() }, name: msg`全局` }
+        if (id.startsWith('card-')) {
+          const card = await store.getCard(id.slice(5))
+          return { subject: { scripts: card.regexScripts ?? [] }, name: card.name, holder: card }
+        }
+        if (id.startsWith('preset-') && id.slice(7) !== BASIC_ID) {
+          const preset = await store.getPreset(id.slice(7))
+          return { subject: { scripts: preset.regexScripts ?? [] }, name: preset.name, holder: preset, preset: true }
+        }
+        throw httpError(404, msg`不认识的修改对象`)
+      },
+      async save(loaded) {
+        loaded.subject.scripts = cleanScripts(loaded.subject.scripts)
+        if (!loaded.holder) return store.saveRegex(loaded.subject.scripts)
+        loaded.holder.regexScripts = loaded.subject.scripts
+        return loaded.preset ? store.savePreset(loaded.holder) : store.saveCard(loaded.holder)
+      },
+      restore: (loaded, snapshot) => snapshot,
+      context: value => (typeof value?.sample === 'string' && value.sample.trim() ? { sample: value.sample.slice(-20000) } : null),
+      request: regexEditRequest,
+      read: readRegexEdit,
+      finish: tryChanges,
+      apply: applyRegexChanges,
+      undo: true,
+    },
+    // The page's look (settings.appearance): one, under the id appearance.
+    theme: {
+      prefix: `${EDIT}theme-`,
+      target: /^$/,
+      title: () => msg`修改主题`,
+      async load(id) {
+        if (id !== 'appearance') throw httpError(404, msg`不认识的修改对象`)
+        return { subject: (await store.getSettings()).appearance, name: msg`主题` }
+      },
+      async save(loaded) {
+        const { style, custom, backdrop } = loaded.subject
+        const saved = await store.saveSettings({ appearance: { style, custom } }, { backdrop })
+        loaded.subject = saved.appearance
+        return saved
+      },
+      restore: (loaded, snapshot) => snapshot,
+      context: cleanThemeContext,
+      request: themeEditRequest,
+      read: readThemeEdit,
+      apply: themeApplier({
+        drawBackdrop: (prompt, signal) => {
+          if (!drawBackdrop) throw httpError(400, msg`这里不能画背景图`)
+          return drawBackdrop(prompt, signal)
+        },
+        storeBackdrop: buffer => storeBackdrop(buffer),
+      }),
+      undo: true,
+    },
+  }
 
-  /** The card and its session; a new session (saved by its first job) when it has none. */
-  async function loadEdit(cardId) {
-    const card = await store.getCard(cardId)
-    const session = await load(editId(cardId)).catch(error => {
+  function subjectOf(kind) {
+    const spec = Object.hasOwn(SUBJECTS, kind) ? SUBJECTS[kind] : null
+    if (!spec) throw httpError(404, msg`不认识的修改对象`)
+    return spec
+  }
+  const talkId = (kind, id) => `${subjectOf(kind).prefix}${id}`
+  // What a subject is as saved, to tell whether it changed after a proposal went in.
+  const stamp = subject => createHash('sha1').update(JSON.stringify(subject)).digest('hex')
+
+  /** The subject and its session; a new session (saved by its first job) when it has none. */
+  async function loadTalk(kind, id) {
+    const loaded = await subjectOf(kind).load(id)
+    const session = await load(talkId(kind, id)).catch(error => {
       if (error.status !== 404) throw error
       const now = new Date().toISOString()
-      return { id: editId(cardId), cardId, createdAt: now, updatedAt: now, model: '', turns: [], job: null, error: null }
+      return { id: talkId(kind, id), kind, subjectId: id, ...(kind === 'card' ? { cardId: id } : {}), createdAt: now, updatedAt: now, model: '', turns: [], job: null, error: null }
     })
-    session.cardName = card.name
-    return { session, card }
+    if (kind === 'card') session.cardName = loaded.name
+    else session.subjectName = loaded.name
+    return { session, loaded }
   }
 
   /** Change a session without another change slipping in between. */
-  const mutateEdit = (cardId, fn) =>
-    serial(editId(cardId), async () => {
-      const { session, card } = await loadEdit(cardId)
-      const out = await fn(session, card)
+  const mutateTalk = (kind, id, fn) =>
+    serial(talkId(kind, id), async () => {
+      const { session, loaded } = await loadTalk(kind, id)
+      const out = await fn(session, loaded)
       await save(session)
       return out ?? session
     })
 
   /** The session as the page sees it: requests, replies with their changes, what became of them. */
-  function editView(session) {
+  function talkView(session) {
     const job = jobs.get(session.id)
+    const last = session.turns.at(-1)
     return {
-      cardId: session.cardId,
+      ...(session.cardId ? { cardId: session.cardId } : { kind: session.kind, subjectId: session.subjectId }),
       model: session.model,
       turns: session.turns.map(turn => ({
-        user: turn.user,
+        user: { text: turn.user.text, target: turn.user.target, at: turn.user.at },
         assistant: turn.assistant ? { reply: turn.assistant.reply, changes: turn.assistant.changes, model: turn.assistant.model, at: turn.assistant.at } : null,
         outcome: turn.outcome ?? null,
       })),
-      job: job ? { kind: job.kind, startedAt: job.startedAt, partial: partialReply(job.partial), chars: job.partial.length } : null,
+      job: job ? { kind: job.kind, step: job.step, startedAt: job.startedAt, partial: partialReply(job.partial), chars: job.partial.length } : null,
       error: session.error ?? null,
+      // The last proposal taken in can be taken back while it is the latest turn.
+      undo: Boolean(session.undo && last?.outcome?.applied && session.undo.at === last.outcome.at),
       updatedAt: session.updatedAt,
     }
   }
 
-  async function editWork(ctx, cardId) {
-    const { session, card } = await loadEdit(cardId)
+  async function talkWork(ctx, kind, id) {
+    const spec = subjectOf(kind)
+    const { session, loaded } = await loadTalk(kind, id)
     const turn = session.turns.at(-1)
-    const { request, shown } = editRequest(card, { text: turn.user.text, target: turn.user.target, turns: session.turns.slice(0, -1), reply: ctx.languages.reply })
+    const asked = { text: turn.user.text, target: turn.user.target, turns: session.turns.slice(0, -1), reply: ctx.languages.reply, own: loaded.own === true, name: loaded.name, context: turn.user.context ?? null }
+    // A subject too long to send whole: a look at its contents first, for what to read.
+    if (spec.pick && !turn.user.target && spec.tooLong(loaded.subject)) {
+      ctx.step('pick')
+      const looked = await ctx.call(spec.pick(loaded.subject, asked))
+      asked.picked = spec.readPick(looked.text, loaded.subject)
+    }
+    ctx.step('edit')
+    const { request, shown } = spec.request(loaded.subject, asked)
     const result = await ctx.call(request)
+    const read = spec.read(result.text, loaded.subject, { shown, target: turn.user.target, own: loaded.own === true, context: asked.context })
+    if (!read.reply && !read.changes.length) throw new Error(msg`${ctx.label} 这次没有回出能读的内容${cutNote(result)}，再试一次，或者换个模型`)
+    if (spec.finish) {
+      ctx.step('check')
+      read.changes = await spec.finish(read.changes, asked.context, ctx.signal)
+    }
     await ctx.update(fresh => {
-      const read = readEdit(result.text, card, { shown, target: turn.user.target })
-      if (!read.reply && !read.changes.length) throw new Error(msg`${ctx.label} 这次没有回出能读的内容${cutNote(result)}，再试一次，或者换个模型`)
       fresh.turns.at(-1).assistant = { raw: result.text, reply: read.reply, changes: read.changes, model: ctx.label, at: new Date().toISOString() }
     })
   }
@@ -542,16 +709,18 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
   return {
     busy: () => jobs.size > 0,
 
-    async editGet(cardId) {
-      return editView((await loadEdit(cardId)).session)
+    async talkGet(kind, id) {
+      return talkView((await loadTalk(kind, id)).session)
     },
 
     /**
-     * What the user wants changed; `target` keeps it to one piece (field:description,
-     * greeting:0, entry:3). A proposal still waiting for an answer is set aside.
+     * What the user wants changed; `target` keeps it to one piece (a card's
+     * field:description, greeting:0 or entry:3, a book's entry:3, a preset's
+     * prompt:main). A proposal still waiting for an answer is set aside.
      */
-    async editAsk(cardId, { text, target } = {}) {
-      const { session } = await loadEdit(cardId)
+    async talkAsk(kind, id, { text, target, context } = {}) {
+      const spec = subjectOf(kind)
+      const { session } = await loadTalk(kind, id)
       if (jobs.has(session.id)) throw httpError(409, msg`上一步还在进行，等它写完或先停下`)
       const asked = clip(text, MAX_TEXT)
       if (!asked) throw httpError(400, msg`先写下想怎么改`)
@@ -559,68 +728,93 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
       const last = session.turns.at(-1)
       if (last && !last.assistant) session.turns.pop()
       else if (last?.assistant?.changes.length && !last.outcome) last.outcome = { discarded: true, at: now }
-      session.turns.push({ user: { text: asked, target: EDIT_TARGET.test(String(target ?? '')) ? target : '', at: now }, assistant: null, outcome: null })
+      const sent = spec.context ? spec.context(context) : null
+      session.turns.push({ user: { text: asked, target: spec.target.test(String(target ?? '')) ? target : '', at: now, ...(sent ? { context: sent } : {}) }, assistant: null, outcome: null })
       session.turns = session.turns.slice(-MAX_EDIT_TURNS)
-      await run(session, 'edit', ctx => editWork(ctx, cardId))
-      return editView(session)
+      await run(session, 'edit', ctx => talkWork(ctx, kind, id))
+      return talkView(session)
     },
 
     /** Ask the last request again (after a failure or a stop). */
-    async editRetry(cardId) {
-      const { session } = await loadEdit(cardId)
+    async talkRetry(kind, id) {
+      const { session } = await loadTalk(kind, id)
       if (!session.turns.length || session.turns.at(-1).assistant) throw httpError(409, msg`没有要重试的`)
-      await run(session, 'edit', ctx => editWork(ctx, cardId))
-      return editView(session)
+      await run(session, 'edit', ctx => talkWork(ctx, kind, id))
+      return talkView(session)
     },
 
     /** The model the session talks to ('' = the default). */
-    async editUpdate(cardId, { model } = {}) {
-      return editView(await mutateEdit(cardId, session => {
+    async talkUpdate(kind, id, { model } = {}) {
+      return talkView(await mutateTalk(kind, id, session => {
         if (typeof model === 'string') session.model = clip(model, 200)
       }))
     },
 
-    /** Put the chosen changes (by id) of the waiting proposal into the card. Returns the card as saved. */
-    async editApply(cardId, { ids } = {}) {
-      if (jobs.has(editId(cardId))) throw httpError(409, msg`正在写，等它写完再改`)
-      return mutateEdit(cardId, async (session, card) => {
+    /**
+     * Put the chosen changes (by id) of the waiting proposal into the subject.
+     * Returns it as saved; a book or a preset keeps what it was before, to undo.
+     */
+    async talkApply(kind, id, { ids } = {}) {
+      const spec = subjectOf(kind)
+      if (jobs.has(talkId(kind, id))) throw httpError(409, msg`正在写，等它写完再改`)
+      return mutateTalk(kind, id, async (session, loaded) => {
         const turn = session.turns.at(-1)
         const changes = turn?.assistant?.changes ?? []
         if (!changes.length || turn.outcome) throw httpError(409, msg`没有等着采用的修改`)
-        const chosen = (Array.isArray(ids) ? ids : []).filter(id => changes.some(change => change.id === id))
+        const chosen = (Array.isArray(ids) ? ids : []).filter(change => changes.some(c => c.id === change))
         if (!chosen.length) throw httpError(400, msg`先勾选要采用的修改`)
-        const { applied, prefix } = applyChanges(card, changes, chosen)
-        await store.saveCard(card)
-        turn.outcome = { applied: chosen, at: new Date().toISOString() }
-        return { session: editView(session), card, applied, prefix }
+        const before = spec.undo ? structuredClone(loaded.subject) : null
+        const { applied, prefix } = await spec.apply(loaded.subject, changes, chosen)
+        await spec.save(loaded)
+        const at = new Date().toISOString()
+        turn.outcome = { applied: chosen, at }
+        session.undo = before ? { at, before, after: stamp(loaded.subject), prefix } : null
+        return { session: talkView(session), subject: loaded.subject, holder: loaded.holder ?? null, applied, prefix }
+      })
+    },
+
+    /** Take the last applied proposal back, as long as nothing else changed the subject since. */
+    async talkUndo(kind, id) {
+      const spec = subjectOf(kind)
+      if (!spec.undo) throw httpError(400, msg`这里不能撤销`)
+      return mutateTalk(kind, id, async (session, loaded) => {
+        const turn = session.turns.at(-1)
+        const undo = session.undo
+        if (!undo || !turn?.outcome?.applied || undo.at !== turn.outcome.at) throw httpError(409, msg`没有可以撤销的修改`)
+        if (stamp(loaded.subject) !== undo.after) throw httpError(409, msg`采用之后又在别处改过，不能撤销了`)
+        loaded.subject = spec.restore(loaded, undo.before)
+        await spec.save(loaded)
+        turn.outcome = { ...turn.outcome, undone: true }
+        session.undo = null
+        return { session: talkView(session), subject: loaded.subject, holder: loaded.holder ?? null, prefix: undo.prefix }
       })
     },
 
     /** Set the waiting proposal aside without changing anything. */
-    async editDiscard(cardId) {
-      return editView(await mutateEdit(cardId, session => {
+    async talkDiscard(kind, id) {
+      return talkView(await mutateTalk(kind, id, session => {
         const turn = session.turns.at(-1)
         if (turn?.assistant && !turn.outcome) turn.outcome = { discarded: true, at: new Date().toISOString() }
       }))
     },
 
-    /** Start over: the session's talk is forgotten (the card keeps what was applied). */
-    async editClear(cardId) {
-      jobs.get(editId(cardId))?.controller.abort()
-      await rm(fileOf(editId(cardId)), { force: true })
-      return editView((await loadEdit(cardId)).session)
+    /** Start over: the session's talk is forgotten (the subject keeps what was applied). */
+    async talkClear(kind, id) {
+      jobs.get(talkId(kind, id))?.controller.abort()
+      await rm(fileOf(talkId(kind, id)), { force: true })
+      return talkView((await loadTalk(kind, id)).session)
     },
 
-    editStop(cardId) {
-      const job = jobs.get(editId(cardId))
+    talkStop(kind, id) {
+      const job = jobs.get(talkId(kind, id))
       job?.controller.abort()
       return { stopped: Boolean(job) }
     },
 
-    /** A deleted card's session goes with it. */
-    async dropEdit(cardId) {
-      jobs.get(editId(cardId))?.controller.abort()
-      await rm(fileOf(editId(cardId)), { force: true })
+    /** A deleted card's, book's or preset's session goes with it. */
+    async dropTalk(kind, id) {
+      jobs.get(talkId(kind, id))?.controller.abort()
+      await rm(fileOf(talkId(kind, id)), { force: true })
     },
 
     async list() {

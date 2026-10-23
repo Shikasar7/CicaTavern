@@ -28,6 +28,13 @@
   --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
   --ease: cubic-bezier(.2, .8, .2, 1);
   --read: 40rem;
+  /* The story's font and size (主题 → 字体, 字号; web/theme.js, set on the root per device).
+     Each stack ends in Song, which the story always had. */
+  --story-font: var(--serif);
+  --story-scale: 1;
+  --font-hei: "PingFang SC", "HarmonyOS Sans SC", "MiSans", "Microsoft YaHei", "Noto Sans SC", "Noto Sans CJK SC", "Source Han Sans SC", sans-serif;
+  --font-kai: "LXGW WenKai", "LXGW WenKai Screen", "Kaiti SC", "STKaiti", "KaiTi", "KaiTi_GB2312", "AR PL UKai CN", var(--serif);
+  --font-fang: "FangSong", "STFangsong", "FangSong_GB2312", var(--serif);
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
@@ -238,6 +245,24 @@ svg { flex: none; }
 .row-actions { display: flex; gap: 6px; align-items: center; }
 label.btn[aria-disabled="true"] { opacity: .45; pointer-events: none; }
 
+/* A search box above a list (搜索角色卡, the 世界书 window's books; books.js searchBox). */
+.list-search {
+  flex: none; position: relative; display: flex; align-items: center; margin: 2px 14px 8px;
+  border: 1px solid var(--line-soft); border-radius: 10px; background: color-mix(in srgb, var(--surface) 75%, transparent);
+  transition: border-color .15s, background .15s, box-shadow .15s;
+}
+.list-search:focus-within { border-color: var(--accent); background: var(--surface); box-shadow: 0 0 0 3px var(--accent-soft); }
+.list-search-icon { position: absolute; left: 9px; display: flex; color: var(--faint); pointer-events: none; }
+.list-search-icon svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }
+/* Over the dialogs' own label and input look (a column, a border of its own). */
+label.list-search input[type="search"], label.list-search input[type="search"]:focus {
+  flex: 1; min-width: 0; height: 32px; padding: 0 8px 0 30px; border: 0; border-radius: 10px; background: none; box-shadow: none; outline: none; color: var(--ink); font-size: 13px;
+}
+.list-search input::placeholder { color: var(--faint); }
+.dialog .list-search { flex-direction: row; gap: 0; margin: 0 8px 10px; }
+.preset-list li.list-none { cursor: default; color: var(--muted); font-size: 12px; }
+.preset-list li.list-none:hover { background: none; }
+.book-hits { color: var(--accent); font-weight: 600; }
 .card-list, .chat-list { list-style: none; margin: 0; padding: 0 10px; overflow-y: auto; }
 .card-list { max-height: 38vh; }
 .chat-list { flex: 1; min-height: 60px; }
@@ -340,7 +365,7 @@ select.pill { appearance: none; padding-right: 28px; background-image: linear-gr
 .msg-head .name { font: 600 13px var(--serif); color: var(--muted); letter-spacing: .06em; }
 .msg.assistant .msg-head .name { color: var(--accent); }
 .msg-body { overflow-wrap: anywhere; }
-.msg.assistant .msg-body { font: 17px/2 var(--serif); letter-spacing: .015em; }
+.msg.assistant .msg-body { font: calc(17px * var(--story-scale))/2 var(--story-font); letter-spacing: .015em; }
 .msg.assistant .story p { margin: 0 0 .85em; text-indent: 2em; }
 .msg-body p:last-child { margin-bottom: 0; }
 .msg-body strong { font-weight: 600; }
@@ -351,7 +376,7 @@ select.pill { appearance: none; padding-right: 28px; background-image: linear-gr
 .msg-body .q.reading { background: color-mix(in srgb, var(--lamp) 20%, transparent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--lamp) 20%, transparent); }
 .msg-body .story + .story, .msg-body .card-frame + .story, .msg-body .story + .card-frame { margin-top: .85em; }
 .msg.user { padding: 2px 0 2px 16px; border-left: 2px solid color-mix(in srgb, var(--accent) 55%, transparent); }
-.msg.user .msg-body { font: 15px/1.8 var(--ui); color: var(--ink); }
+.msg.user .msg-body { font: calc(15px * var(--story-scale))/1.8 var(--ui); color: var(--ink); }
 .msg.user .msg-body p { margin: 0 0 .5em; }
 .card-frame { display: block; width: 100%; border: 0; margin: 6px 0; background: transparent; color-scheme: normal; }
 .msg-body pre.code { margin: .6em 0; padding: 10px 12px; background: var(--surface); border: 1px solid var(--line-soft); border-radius: 10px; overflow-x: auto; font: 12px/1.6 var(--mono); white-space: pre-wrap; text-indent: 0; }
@@ -435,7 +460,7 @@ select.pill { appearance: none; padding-right: 28px; background-image: linear-gr
   box-shadow: var(--shadow-2); transition: border-color .2s, box-shadow .25s;
 }
 .composer-box:focus-within { border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); box-shadow: var(--shadow-2), 0 0 0 4px var(--accent-soft); }
-.composer textarea { flex: 1; min-width: 0; border: 0; background: transparent; resize: none; outline: none; padding: 7px 0; font: 15px/1.7 var(--ui); max-height: 40vh; overflow-y: auto; }
+.composer textarea { flex: 1; min-width: 0; border: 0; background: transparent; resize: none; outline: none; padding: 7px 0; font: calc(15px * var(--story-scale))/1.7 var(--ui); max-height: 40vh; overflow-y: auto; }
 .composer textarea::placeholder { color: var(--faint); }
 .send {
   width: 38px; height: 38px; flex: none; border-radius: 50%; border: 0; background: var(--accent); color: var(--accent-ink);
@@ -503,6 +528,10 @@ dl.usage dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; 
 .book-count { color: var(--muted); font-size: 12px; }
 .book-open { margin-left: auto; flex: none; }
 .card-book-on + .book-open { margin-left: 0; }
+/* A global book (全局世界书): ticked for every card, so the row is not one to click. */
+.dialog .book-options label.global { cursor: default; }
+.book-global-note { margin: 0 0 8px; padding: 8px 12px; border-radius: 10px; background: var(--accent-soft); color: var(--ink); font-size: 12.5px; line-height: 1.6; }
+.dialog label.book-global { margin: 0 0 2px; }
 .access { border: 1px solid var(--line-soft); border-radius: 12px; margin: 0 0 14px; padding: 10px 14px; }
 .access legend { font-size: 12px; color: var(--muted); padding: 0 4px; }
 .access select { margin-top: 4px; }
@@ -515,14 +544,26 @@ dl.usage dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; 
 .access-more[open] summary { margin-bottom: 8px; }
 .access-more .access-row + .access-row { margin-top: 8px; }
 @media (max-width: 560px) { .access-row { flex-wrap: wrap; } .access-kind { width: 100%; } }
-.greetings { display: flex; flex-direction: column; gap: 10px; max-height: 60vh; overflow-y: auto; margin-bottom: 14px; }
-.greeting {
-  text-align: left; border: 1px solid var(--line-soft); border-radius: 12px; padding: 12px 16px; background: var(--surface); cursor: pointer;
-  font: 14px/1.8 var(--serif); white-space: pre-wrap; max-height: 9.6em; overflow: hidden; transition: border-color .18s, box-shadow .18s, transform .18s var(--ease);
-  -webkit-mask-image: linear-gradient(to bottom, #000 70%, transparent);
-  mask-image: linear-gradient(to bottom, #000 70%, transparent);
+/* 选择开场白 (app.js newChat): the list scrolls between the title and 取消, however many there are;
+   each opening keeps its first lines (they were squeezed to a sliver) and opens in place to be read whole. */
+.dialog.greeting-dialog { width: min(680px, calc(100vw - 32px)); }
+.greeting-dialog[open] { display: flex; flex-direction: column; }
+.greeting-dialog > form { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.greeting-dialog h2 { margin-bottom: 4px; }
+.greeting-count { margin: 0 0 12px; }
+.greetings { flex: 1 1 auto; min-height: 0; overflow-y: auto; list-style: none; margin: 0 0 14px; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.greeting { flex: none; padding: 10px 14px 8px; border: 1px solid var(--line-soft); border-radius: 12px; background: var(--surface); transition: border-color .18s; }
+.greeting:hover, .greeting.open { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.greeting-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; font-size: 12px; color: var(--faint); }
+.greeting-head b { font: 600 12.5px var(--ui); color: var(--accent); }
+.greeting-text {
+  font: 14px/1.8 var(--story-font); color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; cursor: pointer;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden;
 }
-.greeting:hover { border-color: var(--accent); box-shadow: var(--shadow-2); transform: translateY(-1px); }
+.greeting.open .greeting-text { display: block; overflow: visible; }
+.greeting-foot { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.greeting-use { margin-left: auto; color: var(--accent); }
+@media (max-width: 560px) { .greeting-text { -webkit-line-clamp: 3; } }
 .prompt { background: var(--surface); border: 1px solid var(--line-soft); border-radius: 12px; padding: 12px; max-height: 32vh; overflow: auto; white-space: pre-wrap; font: 12px/1.6 var(--mono); }
 
 .toast {
@@ -663,7 +704,7 @@ dl.usage dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; 
   .wide-only { display: none; }
   .transcript { padding: 12px 16px 24px; }
   .composer { padding: 0 12px calc(12px + env(safe-area-inset-bottom) + var(--kb, 0px)); }
-  .msg.assistant .msg-body { font-size: 16px; line-height: 1.9; }
+  .msg.assistant .msg-body { font-size: calc(16px * var(--story-scale)); line-height: 1.9; }
   .preset-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
   .preset-nav { border-right: 0; border-bottom: 1px solid var(--line-soft); max-height: 34vh; }
   .preset-head { padding: 16px 56px 12px 18px; }
@@ -1600,6 +1641,41 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .ce-compose { border-top: 1px solid var(--line-soft); padding: 10px 14px 12px; display: flex; flex-direction: column; gap: 8px; background: var(--raised); }
 .ce-target { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--accent); }
 .ce-target[hidden] { display: none; }
+.ce-outcome-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.ce-outcome-row .ce-outcome { margin: 0; flex: 1; }
+
+/* 世界书 / 预设 → 对话修改 (talk-dialog.js): the talk alone, over the window it was opened from. */
+.dialog.talk-dialog { width: min(760px, calc(100vw - 32px)); }
+.forge.talk { grid-template-rows: auto minmax(0, 1fr); }
+.talk .forge-head { grid-template-columns: minmax(0, 1fr) auto; }
+.talk-body { display: grid; grid-template-rows: minmax(0, 1fr) auto; min-height: 0; background: var(--pane); }
+.talk-body .ce-thread { padding: 16px 22px 18px; }
+/* 正则 / 主题 in the talk: what a script does on the latest reply, a palette's colours and a sample in them. */
+.talk-label { font-size: 11.5px; color: var(--muted); margin: 8px 0 -2px; }
+.talk-trial { margin: 8px 0 0; font-size: 12.5px; color: var(--muted); }
+.talk-trial p { margin: 0 0 4px; }
+.talk-trial.bad { color: var(--bad); }
+.talk-trial.warn { color: var(--warn); }
+.talk-trial-sample { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px; margin-top: 4px; }
+.talk-trial-sample pre { margin: 0; padding: 4px 8px; border-radius: 6px; font: 12px/1.6 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 120px; overflow-y: auto; }
+.talk-trial-sample .from { background: color-mix(in srgb, var(--bad) 8%, transparent); }
+.talk-trial-sample .to { background: color-mix(in srgb, var(--ok) 10%, transparent); color: var(--ink); }
+.talk-trial-html { width: 100%; height: 72px; border: 0; border-radius: 6px; background: color-mix(in srgb, var(--ok) 10%, transparent); resize: vertical; }
+.talk-prompt { margin: 6px 0 0; padding: 6px 8px; border-radius: 6px; background: var(--raised); font: 12px/1.6 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.talk-swatches { display: flex; align-items: center; gap: 3px; margin-top: 6px; font-size: 11.5px; color: var(--muted); }
+.talk-swatches span { width: 3em; flex: none; }
+.talk-swatches i { flex: 1; height: 18px; border-radius: 4px; border: 1px solid rgb(0 0 0 / .12); }
+.talk-mock { margin-top: 8px; padding: 10px; border: 1px solid; border-radius: 10px; }
+.talk-mock-card { padding: 8px 12px; border: 1px solid; border-radius: 8px; font: 14px/1.7 var(--serif); }
+.talk-mock-card p { margin: 0; }
+.talk-mock-btn { display: inline-block; margin-top: 6px; padding: 2px 12px; border-radius: 999px; font: 12px/1.8 var(--ui); }
+@media (max-width: 780px) {
+  .dialog.talk-dialog { width: 100vw; }
+  .talk .forge-titles h2 { overflow: hidden; text-overflow: ellipsis; font-size: 17px; }
+  .talk .forge-sub { display: none; }
+  .talk .forge-model { max-width: 40vw; }
+  .talk-body .ce-thread { padding: 12px 14px 16px; }
+}
 
 @media (max-width: 780px) {
   .ce-tabs { display: flex; grid-column: 1 / -1; grid-row: 2; gap: 4px; }
@@ -1700,6 +1776,29 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .theme-opacity input:disabled { opacity: .45; }
 .theme-opacity-value { width: 3em; text-align: right; font-variant-numeric: tabular-nums; color: var(--ink); }
 .theme-backdrop .hint { margin: 0; }
+/* 配色: the styles, 对话修改 and 细调颜色 (twelve pickers for the mode shown). */
+.theme-colors { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.theme-colors .theme-styles { grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); }
+.theme-color-tools { gap: 6px; flex-wrap: wrap; }
+.theme-tuner { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px solid var(--line-soft); border-radius: 12px; background: var(--surface); }
+.theme-tuner .hint { margin: 0; }
+.theme-tunes { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 6px 10px; }
+.dialog label.theme-tune { flex-direction: row; align-items: center; gap: 8px; margin: 0; font-size: 12.5px; color: var(--ink); }
+.dialog .theme-tune input[type="color"] { width: 30px; height: 26px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: none; cursor: pointer; flex: none; }
+.theme-issues { margin: 0; padding-left: 18px; font-size: 12px; color: var(--warn); line-height: 1.6; }
+.theme-issues:empty { display: none; }
+/* 字体 and 字号: the chips as the colour styles', each written in its own font; one this device lacks is faint. */
+.theme-reading { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.theme-reading .hint { margin: 0; }
+.theme-reading .row .hint { flex: 1; }
+.theme-font { gap: 2px; padding-top: 6px; line-height: 1.3; text-align: center; }
+.theme-font-sample { font: 24px/1.3 var(--serif); }
+.theme-font.missing .theme-font-sample { opacity: .35; }
+.theme-font.missing { color: var(--faint); }
+.theme-size-a { flex: none; font: 13px/1 var(--serif); color: var(--muted); }
+.theme-size-a.big { font-size: 20px; }
+.theme-reading-sample { margin: 0; padding: 10px 14px; border-radius: 10px; border: 1px solid var(--line-soft); background: var(--surface); color: var(--ink); font: calc(17px * var(--story-scale))/1.9 var(--story-font); }
+@media (max-width: 780px) { .theme-reading-sample { font-size: calc(16px * var(--story-scale)); } }
 @media (max-width: 560px) {
   .theme-row, .theme-row.top { flex-direction: column; align-items: stretch; gap: 8px; }
   .theme-label { flex-basis: auto; padding-top: 0; }
@@ -1712,6 +1811,7 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .regex-group + .regex-group { margin-top: 14px; }
 .regex-group-title { display: flex; align-items: baseline; gap: 8px; margin: 0 8px 6px; font: 600 12px/1.4 var(--ui); color: var(--muted); }
 .regex-group-title span { font-weight: 400; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.regex-group-title .btn { margin-left: auto; flex: none; font-weight: 400; padding: 1px 8px; }
 .regex-item { display: flex; align-items: center; gap: 10px; }
 .regex-item .item-main { flex: 1; }
 .regex-item .item-title { font-size: 13.5px; }
@@ -1904,7 +2004,7 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
   width: min(920px, calc(100% - 32px)); min-height: 132px; max-height: min(40%, 260px); overflow-y: auto;
   padding: 18px 24px 26px; border-radius: 16px; border: 1px solid var(--line);
   background: color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
-  box-shadow: var(--shadow-2); font: 17px/1.85 var(--serif); color: var(--ink); cursor: pointer;
+  box-shadow: var(--shadow-2); font: calc(17px * var(--story-scale))/1.85 var(--story-font); color: var(--ink); cursor: pointer;
 }
 .vn-name {
   display: inline-block; margin: -6px 0 6px -6px; padding: 2px 14px; border-radius: 999px;
@@ -2051,7 +2151,7 @@ label.cast-voice, .dialog label.cast-voice { display: grid; grid-template-column
 }
 .vn-log[hidden] { display: none; }
 .vn-log-head { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); }
-.vn-log-body { flex: 1; overflow-y: auto; padding: 12px 18px 18px; font: 15px/1.8 var(--serif); }
+.vn-log-body { flex: 1; overflow-y: auto; padding: 12px 18px 18px; font: calc(15px * var(--story-scale))/1.8 var(--story-font); }
 .vn-log-body > p, .vn-log-line { margin: 0 0 .5em; }
 .vn-log-line p { margin: 0; }
 /* Where the story is from here on: a quiet divider. */
@@ -2104,7 +2204,7 @@ label.cast-voice, .dialog label.cast-voice { display: grid; grid-template-column
 @media (max-width: 560px) {
   .topbar #vn-toggle { order: 2; }
   .vn-switch { height: 30px; padding: 0 7px 0 9px; gap: 5px; font-size: 12px; }
-  .vn-box { font-size: 16px; line-height: 1.8; min-height: 112px; max-height: 42%; padding: 14px 16px 22px; }
+  .vn-box { font-size: calc(16px * var(--story-scale)); line-height: 1.8; min-height: 112px; max-height: 42%; padding: 14px 16px 22px; }
   .vn.choosing .vn-box { max-height: min(30%, 200px); }
   .vn-actor, .vn-actors[data-count="3"] .vn-actor { height: 72%; }
   .vn-actor img { max-width: 92vw; }
@@ -2152,7 +2252,7 @@ label.cast-voice, .dialog label.cast-voice { display: grid; grid-template-column
   .app:has(.stage.vn-on) .pane.left { display: none; }
   /* The text box takes the right: the stage keeps to the left. */
   .vn-actor, .vn-actors[data-count="3"] .vn-actor { left: calc(var(--x, 50%) * .45); height: 94%; }
-  .vn-box { left: auto; right: 16px; transform: none; width: min(62%, 720px); max-height: 46%; font-size: 15px; }
+  .vn-box { left: auto; right: 16px; transform: none; width: min(62%, 720px); max-height: 46%; font-size: calc(15px * var(--story-scale)); }
   /* The choices take the text box's column (the time box is on the other side), from under the controls down to the foot or the input. */
   .stage.vn-on .vn-menu {
     left: auto; right: 16px; transform: none; width: min(62%, 720px); animation: none;

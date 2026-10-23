@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { cleanAppearance } from '../web/shared/appearance.js'
+import { cleanAppearance, cleanFontName, cleanReading, storyFontOf } from '../web/shared/appearance.js'
 import { createApp } from '../server/http.mjs'
 
 // The smallest valid images of each kind the page may send.
@@ -32,19 +32,34 @@ async function tavern(t) {
 }
 
 test('appearance values: unknown styles, names and opacities fall back', () => {
-  assert.deepEqual(cleanAppearance(null), { style: 'lamp', backdrop: '', backdropOpacity: 0.5 })
-  assert.deepEqual(cleanAppearance({ style: 'sakura', backdrop: 'backdrop-abc123.jpg', backdropOpacity: 0.333 }), { style: 'sakura', backdrop: 'backdrop-abc123.jpg', backdropOpacity: 0.33 })
+  assert.deepEqual(cleanAppearance(null), { style: 'lamp', backdrop: '', backdropOpacity: 0.5, custom: null })
+  assert.deepEqual(cleanAppearance({ style: 'sakura', backdrop: 'backdrop-abc123.jpg', backdropOpacity: 0.333 }), { style: 'sakura', backdrop: 'backdrop-abc123.jpg', backdropOpacity: 0.33, custom: null })
   assert.equal(cleanAppearance({ style: 'neon' }).style, 'lamp')
   assert.equal(cleanAppearance({ backdrop: '../settings.json' }).backdrop, '')
   assert.equal(cleanAppearance({ backdrop: 'backdrop-abc123.svg' }).backdrop, '')
   assert.deepEqual([0, 7, -1].map(o => cleanAppearance({ backdropOpacity: o }).backdropOpacity), [0.05, 1, 0.05])
 })
 
+test('the story font and size: unknown fonts and sizes fall back, a typed name cannot break out of its quotes', () => {
+  assert.deepEqual(cleanReading(null), { font: 'song', custom: '', scale: 1 })
+  assert.deepEqual(cleanReading({ font: 'kai', scale: 1.234 }), { font: 'kai', custom: '', scale: 1.23 })
+  assert.equal(cleanReading({ font: 'comic' }).font, 'song')
+  assert.deepEqual([0.2, 9, 'big'].map(scale => cleanReading({ scale }).scale), [0.8, 1.6, 1])
+  assert.equal(cleanFontName(' 霞鹜文楷 '), '霞鹜文楷')
+  assert.equal(cleanFontName('x"; } body { display: none'), 'x  body  display: none'.replace(/\s+/g, ' '))
+  assert.equal(cleanFontName('a'.repeat(80)).length, 60)
+  assert.equal(storyFontOf({ font: 'song' }), '')
+  assert.equal(storyFontOf({ font: 'hei' }), 'var(--font-hei)')
+  assert.equal(storyFontOf({ font: 'custom', custom: '霞鹜文楷' }), '"霞鹜文楷", var(--serif)')
+  // Picked but not named yet: the usual font.
+  assert.equal(storyFontOf({ font: 'custom', custom: ' "' }), '')
+})
+
 test('style and opacity save with the settings; the picture only through its own address', async t => {
   const { base, call, files } = await tavern(t)
-  assert.deepEqual((await call('/api/settings')).body.appearance, { style: 'lamp', backdrop: '', backdropOpacity: 0.5 })
+  assert.deepEqual((await call('/api/settings')).body.appearance, { style: 'lamp', backdrop: '', backdropOpacity: 0.5, custom: null })
   const styled = await call('/api/settings', { method: 'PUT', body: { appearance: { style: 'night', backdropOpacity: 0.3, backdrop: 'backdrop-zzzzzz.png' } } })
-  assert.deepEqual(styled.body.appearance, { style: 'night', backdrop: '', backdropOpacity: 0.3 }, 'a picture name from the page is ignored')
+  assert.deepEqual(styled.body.appearance, { style: 'night', backdrop: '', backdropOpacity: 0.3, custom: null }, 'a picture name from the page is ignored')
 
   const first = await call('/api/appearance/backdrop', { method: 'PUT', body: { image: `data:image/png;base64,${PNG}` } })
   assert.equal(first.status, 200)
@@ -71,6 +86,6 @@ test('style and opacity save with the settings; the picture only through its own
   assert.equal((await fetch(`${base}/api/appearance/backdrop-..%2Fsettings.json`)).status, 404)
 
   const removed = await call('/api/appearance/backdrop', { method: 'DELETE' })
-  assert.deepEqual(removed.body.appearance, { style: 'paper', backdrop: '', backdropOpacity: 0.3 })
+  assert.deepEqual(removed.body.appearance, { style: 'paper', backdrop: '', backdropOpacity: 0.3, custom: null })
   assert.deepEqual(await files(), [])
 })

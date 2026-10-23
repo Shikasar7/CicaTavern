@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { createApp } from '../server/http.mjs'
 import { normalizeCard } from '../server/cards.mjs'
-import { activePath, createChat } from '../server/chats.mjs'
+import { activePath, booksForCard, createChat } from '../server/chats.mjs'
 import { createEngine } from '../server/engine.mjs'
 import { normalizeProvider } from '../server/providers.mjs'
 import { createStore } from '../server/store.mjs'
@@ -162,6 +162,32 @@ test('the cards that use a book are ticked at once, and deleting it lets go of t
   assert.deepEqual((await call('/api/worldbooks')).body.map(x => x.name), ['别的'])
 })
 
+test('a book turned global and back, listed as such, and taken off the list when deleted', async t => {
+  const { call, upload } = await tavern(t)
+  const book = (await call('/api/worldbooks/import', { method: 'POST', body: upload('雪国.json', WORLD) })).body
+  const keywords = (await call('/api/worldbooks/import', { method: 'POST', body: upload('灯.json', { entries: { 0: { uid: 0, key: ['灯'], content: '灯油是配给的。' } } }) })).body
+  const globals = async () => (await call('/api/settings')).body.globalBookIds
+  const listed = async () => Object.fromEntries((await call('/api/worldbooks')).body.map(b => [b.name, b.global]))
+
+  const on = await call(`/api/worldbooks/${book.id}/global`, { method: 'PUT', body: { global: true } })
+  assert.deepEqual(on.body, { id: book.id, global: true, prefix: true }, 'its constant entry is in every chat\'s prefix')
+  assert.equal((await call(`/api/worldbooks/${keywords.id}/global`, { method: 'PUT', body: { global: true } })).body.prefix, false, 'keywords only')
+  assert.deepEqual(await globals(), [book.id, keywords.id])
+  assert.deepEqual(await listed(), { 雪国: true, 灯: true })
+  await call(`/api/worldbooks/${book.id}/global`, { method: 'PUT', body: { global: true } })
+  assert.deepEqual(await globals(), [book.id, keywords.id], 'once')
+
+  assert.equal((await call(`/api/worldbooks/${keywords.id}/global`, { method: 'PUT', body: { global: false } })).body.global, false)
+  assert.deepEqual(await listed(), { 雪国: true, 灯: false })
+  // Saving the settings page, which does not send the list, leaves it.
+  await call('/api/settings', { method: 'PUT', body: { scanDepth: 5 } })
+  assert.deepEqual(await globals(), [book.id])
+
+  await call(`/api/worldbooks/${book.id}`, { method: 'DELETE' })
+  assert.deepEqual(await globals(), [])
+  assert.equal((await call('/api/worldbooks/nothere/global', { method: 'PUT', body: { global: true } })).status, 404)
+})
+
 test('entries are copied or moved between books, out of a card\'s own one too', async t => {
   const { call, upload, importCard } = await tavern(t)
   const book = (await call('/api/worldbooks/import', { method: 'POST', body: upload('雪国.json', WORLD) })).body
@@ -234,4 +260,33 @@ test('a turn looks for a book\'s keywords as far back as the book says', async t
   const user = await turn('嗯')
   assert.deepEqual(user.injected, [`${far.id}:0`], 'the near book sees only the last reply')
   assert.equal(activePath(await store.getChat(chat.id)).at(-1).text, '夜深了。', 'the turn went through')
+})
+
+test('a global book reaches the chats of a card that never mounted it, and is read once when mounted too', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'tavern-global-'))
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 3 }))
+  const store = createStore(root)
+  await store.init()
+  const provider = normalizeProvider({ name: 'Fake', api: 'openai-completions', baseURL: await fakeModel(t), apiKey: 'sk-test', models: [{ id: 'm1' }] })
+  await store.saveProviders([provider])
+  const rules = normalizeBook({ name: '规矩', entries: { 0: { uid: 0, key: [], content: '王都终年下雪。', constant: true }, 1: { uid: 1, key: ['灯笼'], content: '灯笼是红的。' } } }, 'x', { standalone: true })
+  await store.saveBook(rules)
+  await store.saveSettings({ model: `${provider.id}/m1`, subscription: 'off', globalBookIds: [rules.id, '../settings', rules.id, 7] })
+  assert.deepEqual((await store.getSettings()).globalBookIds, [rules.id], 'ids that name a file, each once')
+  const card = normalizeCard({ spec: 'chara_card_v2', data: { name: '林雪', first_mes: '雪下了一整夜。' } })
+  await store.saveCard(card)
+
+  const chat = await createChat(store, card.id)
+  assert.match(chat.systemPrompt, /王都终年下雪/, 'the constant entry is in the prefix of a card that never mounted the book')
+  assert.deepEqual(chat.bookIds, [rules.id])
+  const engine = createEngine(store, { proxy: null })
+  await engine.runTurn(chat.id, { parentId: activePath(chat).at(-1).id, input: '灯笼亮了' }, () => {})
+  const user = activePath(await store.getChat(chat.id)).filter(node => node.role === 'user').at(-1)
+  assert.deepEqual(user.injected, [`${rules.id}:1`], 'its keyword entry each turn')
+
+  card.worldbookIds = [rules.id]
+  await store.saveCard(card)
+  assert.deepEqual((await booksForCard(store, card)).map(b => b.id), [rules.id], 'mounted and global: once')
+  const prompt = (await createChat(store, card.id)).systemPrompt
+  assert.equal(prompt.split('王都终年下雪').length - 1, 1, 'and its entry once in the prefix')
 })

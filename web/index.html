@@ -22,11 +22,20 @@
     const root = document.documentElement, t = localStorage.getItem('theme'), a = JSON.parse(localStorage.getItem('appearance') || 'null')
     if (t === 'light' || t === 'dark') root.dataset.theme = t
     if (a && /^(sakura|bamboo|paper|night)$/.test(a.style)) root.dataset.style = a.style
+    // The custom style: its colours as theme.js wrote them last (paletteCss).
+    const p = localStorage.getItem('appearance-palette')
+    if (p) document.head.append(Object.assign(document.createElement('style'), { id: 'custom-palette', textContent: p }))
+    if (a && a.style === 'custom' && p) root.dataset.style = 'custom'
     if (a && /^backdrop-[a-z0-9]{4,16}\.(jpg|png|webp)$/.test(a.backdrop)) {
       root.dataset.backdrop = ''
       root.style.setProperty('--backdrop-image', `url("/api/appearance/${a.backdrop}")`)
       root.style.setProperty('--backdrop-opacity', String(Number(a.backdropOpacity) || .5))
     }
+    // The story's font and size on this device (theme.js applyReading).
+    const r = JSON.parse(localStorage.getItem('reading') || 'null'), s = Number(r && r.scale)
+    if (r && /^(hei|kai|fang)$/.test(r.font)) root.style.setProperty('--story-font', `var(--font-${r.font})`)
+    if (r && r.font === 'custom' && /^[^"'\\;{}<>\r\n\t]{1,60}$/.test(r.custom)) root.style.setProperty('--story-font', `"${r.custom}", var(--serif)`)
+    if (s >= .8 && s <= 1.6 && s !== 1) root.style.setProperty('--story-scale', String(s))
   } catch {}</script>
 </head>
 <body>
@@ -187,10 +196,12 @@
     </aside>
   </div>
 
-  <dialog id="greeting-dialog" class="dialog">
+  <!-- Filled by newChat (app.js): the list scrolls between the title and 取消. -->
+  <dialog id="greeting-dialog" class="dialog greeting-dialog">
     <form method="dialog">
       <h2>选择开场白</h2>
-      <div class="greetings" id="greetings"></div>
+      <p class="muted small greeting-count" id="greeting-count"></p>
+      <ol class="greetings" id="greetings"></ol>
       <div class="row end">
         <button class="btn" value="cancel">取消</button>
       </div>
@@ -407,6 +418,7 @@
   <dialog id="forge-dialog" class="dialog forge-dialog" aria-label="创作角色卡"></dialog>
   <!-- 修改角色卡 (web/card-edit.js), from the card list's ⋯ -->
   <dialog id="card-edit-dialog" class="dialog forge-dialog card-edit-dialog" aria-label="修改角色卡"></dialog>
+  <dialog id="talk-dialog" class="dialog forge-dialog talk-dialog" aria-label="对话修改"></dialog>
 
   <dialog id="image-dialog" class="dialog wide">
     <form method="dialog">

@@ -255,6 +255,34 @@
           }
         }
       ]
+    },
+    {
+      "version": "1.9.0",
+      "date": "2026-10",
+      "items": [
+        {
+          "image": "1.9.0-talk.webp",
+          "zh": {
+            "title": "对话修改：世界书、预设、正则和主题",
+            "text": "这四个窗口都有了「对话修改」：说想怎么改，向导把要改的地方整条写出来，改前改后对照着看，勾上的才改进去，刚采用的还能撤销。\n空白的世界书说一句想法就写出一整本；正则先拿最新回复试一遍再给你看；主题配好浅色和深色两套，能先在界面上预览。"
+          },
+          "en": {
+            "title": "Edit by chat: lorebooks, presets, regex and the theme",
+            "text": "All four windows now have Edit by chat: say what to change, and the guide writes out each piece it would change, before and after side by side; only what you tick goes in, and the last change can be undone.\nAn empty lorebook can be written from one sentence; regex is tried on the latest reply before you see it; the theme comes as a light and a dark set you can preview on the page first."
+          }
+        },
+        {
+          "image": "1.9.0-theme.webp",
+          "zh": {
+            "title": "自定义配色、字体字号、搜索和全局世界书",
+            "text": "「主题」里有了自定义配色（十二个颜色逐个调）和故事正文的字体、字号；角色卡列表和世界书都能搜索，世界书还能设成全局，所有对话都用。\n另外，配图里一定会有人物，开场白多的卡也能一条条看清再选。"
+          },
+          "en": {
+            "title": "Custom colours, font and size, search, global lorebooks",
+            "text": "Theme now has custom colours (twelve, each adjustable) and the story's font and size; the card list and the lorebooks can be searched, and a lorebook can be made global for every chat.\nAlso: pictures always have someone in them, and a card with many openings shows each one in full before you pick."
+          }
+        }
+      ]
     }
   ]
 }

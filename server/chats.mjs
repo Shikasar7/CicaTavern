@@ -12,9 +12,15 @@ import { msg } from './i18n.mjs'
 import { BASIC_ID, basicPreset } from './basic.mjs'
 import { readSillyTavernChat } from './st-chat.mjs'
 
-export async function booksForCard(store, card) {
+/**
+ * A chat's books: the card's own, the imported ones it has mounted, then the
+ * global ones (全局世界书) it has not, each once.
+ * @param settings - when the caller has them already.
+ */
+export async function booksForCard(store, card, settings = null) {
   const books = card.book ? [{ ...card.book, id: `card-${card.id}` }] : []
-  for (const id of card.worldbookIds ?? []) {
+  const { globalBookIds = [] } = settings ?? await store.getSettings()
+  for (const id of new Set([...(card.worldbookIds ?? []), ...globalBookIds])) {
     try {
       books.push(await store.getBook(id))
     } catch {
@@ -65,7 +71,7 @@ export async function rebuildPrompt(store, chat, presetId = chat.presetId ?? '')
   const [persona, settings, chosen] = await Promise.all([store.getPersona(), store.getSettings(), presetFor(store, presetId ?? '')])
   // A deleted preset, or a chat from before the built-in one: rebuilt with the built-in preset.
   const preset = chosen ?? basicPreset(settings)
-  const books = await booksForCard(store, card)
+  const books = await booksForCard(store, card, settings)
   const hasState = Object.keys(chat.nodes.root.state ?? {}).length > 0
   // A card renamed in 修改角色卡: {{char}} in later turns follows the prefix.
   chat.names = { ...chat.names, char: card.name }
@@ -115,7 +121,7 @@ async function startChat(store, cardId, makeRoot, { userName = '' } = {}) {
   const card = await store.getCard(cardId)
   const [persona, settings] = await Promise.all([store.getPersona(), store.getSettings()])
   const preset = await presetFor(store, settings.presetId)
-  const books = await booksForCard(store, card)
+  const books = await booksForCard(store, card, settings)
   const player = userName ? playerOf(card, persona, userName) : playerOf(card, persona)
   const names = { char: card.name, user: player.name }
   const root = makeRoot({ card, names, state: initialState(books) })

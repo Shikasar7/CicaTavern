@@ -38,7 +38,10 @@ const PLACEMENT = {
 /**
  * @param deps - { api, el, toast, guard, getChat, isGenerating, onChatChanged(chatView), onPresetEdited(id), onBasicChanged(settings) }
  */
-export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenerating, onChatChanged, onPresetEdited, onBasicChanged }) {
+/**
+ * @param deps - { …, openTalk(options) (talk-dialog.js: 对话修改 on the preset shown) }
+ */
+export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenerating, onChatChanged, onPresetEdited, onBasicChanged, openTalk }) {
   const $ = id => document.getElementById(id)
   const state = {
     list: [],
@@ -108,6 +111,7 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
         class: `btn small${stale ? ' primary' : ''}`, type: 'button', disabled: (inChat && !stale) || isGenerating(),
         text: inChat && !stale ? t`当前对话正在用` : t`用于当前对话`, onclick: guard(applyToChat),
       }) : null,
+      detail.builtin ? null : el('button', { class: 'btn small', type: 'button', text: t`对话修改`, title: t`说说想怎么改，或者问问某一条在做什么：向导把要改的条目整条写出来，勾上的才会改进预设`, onclick: () => talkAbout() }),
       detail.builtin ? null : el('button', { class: 'btn small', type: 'button', text: t`导出`, title: t`连同在这里做的修改存成文件，用来搬到另一台设备（手机版）`, onclick: guard(exportPreset) }),
       detail.builtin ? null : el('button', { class: 'btn small danger', type: 'button', text: t`删除`, onclick: guard(remove) }),
     ])
@@ -346,6 +350,7 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
         el('div', { class: 'prompt-actions' }, [
           el('button', { type: 'button', class: 'btn small ghost', text: t`↑ 上移`, disabled: index <= 0, onclick: guard(() => move(p.id, -1)) }),
           el('button', { type: 'button', class: 'btn small ghost', text: t`↓ 下移`, disabled: index >= state.detail.prompts.length - 1, onclick: guard(() => move(p.id, 1)) }),
+          el('button', { type: 'button', class: 'btn small ghost', text: t`按意见改`, title: t`在「对话修改」里说说这一条想怎么改，或者问它在做什么`, onclick: () => talkAbout({ id: `prompt:${p.id}`, label: p.name }) }),
           el('button', { type: 'button', class: 'btn small danger', text: t`删除条目`, onclick: guard(() => removePrompt(p)) }),
         ]),
       ]),
@@ -444,6 +449,63 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
   function markStale() {
     const chat = getChat()
     if (chat && listId(chat) === state.selected) state.stale.add(state.selected)
+  }
+
+  // ─── 对话修改 (talk-dialog.js) ─────────────────────────────────────────
+  /** The talk on the preset shown; `aim` keeps the first request to one prompt. */
+  function talkAbout(aim = null) {
+    const id = state.selected
+    const nameOf = pid => MARKER_LABEL[pid] ?? state.detail?.prompts.find(p => p.id === pid)?.name ?? pid
+    const where = place => {
+      const [label, tip] = PLACEMENT[place] ?? PLACEMENT.prefix
+      return [label, place === 'prefix' ? 'on' : 'key', tip]
+    }
+    openTalk?.({
+      url: `/api/talk/preset/${id}`,
+      title: t`对话修改预设`,
+      name: state.detail.name,
+      aim,
+      intro: () => t`说说想怎么改这个预设，或者问问某一条在做什么：向导把要改的条目整条写出来，改前改后对照着给你看，勾上的才会改进预设。`,
+      ideas: () => [t`这个预设大概在做什么？`, t`文风改得口语一些`, t`加一条：每轮回复不超过 600 字`],
+      placeholder: target => (target ? t`「${target.label}」想怎么改，或者问它在做什么` : t`说说想怎么改，比如：结尾别再写总结`),
+      busy: job => (job.step === 'pick' ? t`预设比较长，先看条目列表挑要读的…` : job.chars ? t`正在写，已经写了 ${job.chars.toLocaleString()} 字…` : t`正在读这个预设…`),
+      changeTitle: change => {
+        if (change.kind === 'newPrompt') return t`新条目 · ${change.name}`
+        if (change.kind === 'removePrompt') return t`删除条目 · ${change.title}`
+        return change.marker ? nameOf(change.pid) : change.title
+      },
+      changeWhere: change => {
+        if (change.kind === 'newPrompt' || change.marker) return ['', '', '']
+        if (change.enabled === false) return [t`停用`, 'off', t`不再发给模型`]
+        return where(change.place)
+      },
+      changeNotes: change => {
+        const notes = []
+        if (change.name) notes.push(t`名称：${change.title} → ${change.name}`)
+        if (change.role) notes.push(t`角色：${ROLE_LABEL[change.role] ?? t`系统`}`)
+        if (change.enabled !== undefined) notes.push(change.enabled ? t`改为启用` : t`改为停用`)
+        if (change.kind === 'newPrompt') {
+          notes.push(change.afterId ? t`放在「${nameOf(change.afterId)}」后面` : t`放在聊天记录之前`)
+          if (change.role !== 'system') notes.push(t`角色：${ROLE_LABEL[change.role]}`)
+        }
+        return notes
+      },
+      targetLabel: target => nameOf(target.slice(7)),
+      onApplied: result => talked(id, result, t`已改进预设：${result.applied} 处`),
+      onUndone: result => talked(id, result, t`已撤销这次修改`),
+    })
+  }
+
+  /** What the talk applied or undid: the preset drawn again, the apply bar if a chat uses it. */
+  async function talked(id, result, said) {
+    if (state.selected === id) state.detail = result.preset
+    if (result.prefix) markStale()
+    onPresetEdited?.(id)
+    await refreshList()
+    if (state.selected === id) renderMain()
+    const chat = getChat()
+    const behind = result.prefix && chat && listId(chat) === id
+    toast(behind ? [said, t`当前对话的固定前缀还是改动前的版本，要「应用到当前对话」才会跟着变。`].join(t`。`) : said, behind ? 6000 : 3000)
   }
 
   async function setDefault() {

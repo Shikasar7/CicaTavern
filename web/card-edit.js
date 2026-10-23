@@ -14,9 +14,9 @@
 // on the old text until applied (the bar the preset and entries windows show).
 import { t } from '/i18n.js'
 import { pngOf } from '/forge.js'
-import { CARD_FIELDS, diffLines, foldSame } from '/shared/card-edit.js'
+import { CARD_FIELDS } from '/shared/card-edit.js'
+import { createTalk } from '/talk.js'
 
-const MANAGE_PROVIDERS = '__manage__'
 const ICON_CLOSE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>'
 
 // [label, what it is]; the ones in the prefix say so with a tag.
@@ -47,18 +47,9 @@ export function initCardEdit({ api, el, toast, guard, saveFile, getChat, isGener
   const dialog = $('card-edit-dialog')
   const state = {
     card: null, // GET /api/cards/:id/edit
-    session: null, // GET /api/cards/:id/assistant
-    models: [],
-    defaultModel: '',
-    target: null, // { id, label }: the next request is kept to this piece
-    picked: new Set(), // ticked changes of the waiting proposal
-    pickedFor: '', // the proposal they belong to
-    folded: new Set(), // changes shown closed
     stale: false, // a saved edit reached the prefix; the open chat on this card has not applied it
     told: false, // the prefix toast was shown (no open chat on this card)
-    poll: null,
     pane: 'card', // on a phone: 'card' or 'assist'
-    shown: '', // what the thread last showed
     saving: Promise.resolve(),
     drawn: null, // 生成头像: { busy, picked } while drawing, then { image, backend, note, picked } to take or drop
   }
@@ -68,34 +59,16 @@ export function initCardEdit({ api, el, toast, guard, saveFile, getChat, isGener
   function layout() {
     view.sub = el('span', { class: 'forge-sub' })
     view.status = el('span', { class: 'ce-status', 'aria-live': 'polite' })
-    view.model = el('select', { class: 'forge-model', title: t`对话修改用哪个模型`, onchange: () => changeModel() })
     const close = el('button', { type: 'button', class: 'btn ghost icon', title: t`关闭`, 'aria-label': t`关闭`, html: ICON_CLOSE, onclick: () => dialog.close() })
     view.tabs = el('div', { class: 'ce-tabs', role: 'tablist' }, [
       el('button', { type: 'button', role: 'tab', 'data-pane': 'card', text: t`卡片`, onclick: () => showPane('card') }),
       el('button', { type: 'button', role: 'tab', 'data-pane': 'assist', text: t`对话修改`, onclick: () => showPane('assist') }),
     ])
     view.main = el('div', { class: 'forge-main ce-main' })
-    view.thread = el('div', { class: 'ce-thread' })
-    view.targetChip = el('div', { class: 'ce-target', hidden: true })
-    view.composer = el('textarea', {
-      class: 'forge-input',
-      rows: 2,
-      placeholder: t`说说想怎么改，比如：让她说话更冷淡一点`,
-      oninput: () => updateFoot(),
-      onkeydown: event => {
-        if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
-          event.preventDefault()
-          ask()
-        }
-      },
-    })
-    view.send = el('button', { type: 'button', class: 'btn primary', text: t`发送`, onclick: () => ask() })
-    view.stop = el('button', { type: 'button', class: 'btn', text: t`停下`, hidden: true, onclick: () => stopJob() })
-    view.clear = el('button', { type: 'button', class: 'btn ghost small', text: t`清空对话`, title: t`忘掉这里聊过的内容（已经改进卡里的不受影响）`, onclick: () => clearTalk() })
     view.assist = el('aside', { class: 'ce-assist' }, [
-      el('header', { class: 'ce-assist-head' }, [el('h3', { text: t`对话修改` }), view.clear]),
-      view.thread,
-      el('div', { class: 'ce-compose' }, [view.targetChip, view.composer, el('div', { class: 'forge-actions' }, [el('span', { class: 'grow' }), view.stop, view.send])]),
+      el('header', { class: 'ce-assist-head' }, [el('h3', { text: t`对话修改` }), talk.clear]),
+      talk.thread,
+      talk.compose,
     ])
     view.body = el('div', { class: 'ce-body' }, [view.main, view.assist])
     dialog.replaceChildren(
@@ -103,7 +76,7 @@ export function initCardEdit({ api, el, toast, guard, saveFile, getChat, isGener
         el('header', { class: 'forge-head' }, [
           el('div', { class: 'forge-titles' }, [el('h2', { text: t`修改角色卡` }), view.sub]),
           view.tabs,
-          el('div', { class: 'forge-tools' }, [view.status, view.model, close]),
+          el('div', { class: 'forge-tools' }, [view.status, talk.model, close]),
         ]),
         view.body,
       ]),
@@ -114,55 +87,14 @@ export function initCardEdit({ api, el, toast, guard, saveFile, getChat, isGener
     state.pane = pane
     view.body.dataset.pane = pane
     for (const tab of view.tabs.children) tab.setAttribute('aria-selected', String(tab.dataset.pane === pane))
-    if (pane === 'assist') queueMicrotask(() => scrollThread())
+    if (pane === 'assist') queueMicrotask(() => talk.scroll())
   }
 
   // ─── Data ─────────────────────────────────────────────────────────────
-  async function loadModels() {
-    const data = await api('/api/models').catch(() => ({ choices: [], defaultModel: '' }))
-    state.models = data.choices.filter(m => m.id.includes('/'))
-    state.defaultModel = data.defaultModel || ''
-  }
-
   /** A card view from the server; fromForge is only worked out when the window opens. */
   function absorb(card) {
     state.card = { ...card, fromForge: card.fromForge ?? state.card?.fromForge ?? false }
     view.sub.textContent = state.card.name
-  }
-
-  function applySession(session) {
-    state.session = session
-    const waiting = proposal()
-    const key = waiting ? `${session.turns.length}:${waiting.assistant.at}` : ''
-    if (key !== state.pickedFor) {
-      // A new proposal starts with everything ticked.
-      state.pickedFor = key
-      state.picked = new Set(waiting?.assistant.changes.map(c => c.id) ?? [])
-      state.folded = new Set(waiting && waiting.assistant.changes.length > 4 ? waiting.assistant.changes.map(c => c.id) : [])
-    }
-    renderModels()
-    renderThread()
-    updateFoot()
-    schedule()
-  }
-
-  /** The last turn when its changes wait for an answer. */
-  function proposal() {
-    const last = state.session?.turns.at(-1)
-    return last?.assistant?.changes.length && !last.outcome ? last : null
-  }
-
-  function schedule() {
-    clearTimeout(state.poll)
-    if (!state.session?.job || !dialog.open) return
-    const id = state.card.id
-    state.poll = setTimeout(async () => {
-      try {
-        if (state.card?.id === id) applySession(await api(`/api/cards/${id}/assistant`))
-      } catch {
-        schedule()
-      }
-    }, 900)
   }
 
   /** Saves go one after another, and a request to the model waits for them. */
@@ -454,7 +386,7 @@ export function initCardEdit({ api, el, toast, guard, saveFile, getChat, isGener
     await openBook(id)
   })
 
-  // ─── 对话修改 ─────────────────────────────────────────────────────────
+  // ─── 对话修改 (talk.js) ───────────────────────────────────────────────
   const KIND_TEXT = { field: '', greeting: '', entry: t`世界书`, newEntry: t`新条目`, removeEntry: t`删除条目` }
 
   function changeTitle(change) {
@@ -475,56 +407,12 @@ export function initCardEdit({ api, el, toast, guard, saveFile, getChat, isGener
     return change.constant ? [t`常驻`, 'on', t`写进对话开局时的固定前缀`] : [t`关键词`, 'key', t`最近的对话提到关键词时随消息发送`]
   }
 
-  function renderThread() {
-    const session = state.session
-    const key = JSON.stringify([session?.turns.map(turn => [turn.user.at, turn.assistant?.at, turn.outcome?.at]), session?.job?.startedAt, session?.error, [...state.folded].join()])
-    view.clear.hidden = !session?.turns.length
-    if (key === state.shown) {
-      if (session?.job) fillBusy(session.job)
-      return
-    }
-    state.shown = key
-    const atBottom = view.thread.scrollHeight - view.thread.scrollTop - view.thread.clientHeight < 80
-    const turns = session?.turns ?? []
-    view.thread.replaceChildren(
-      ...(turns.length ? [] : [intro()]),
-      ...turns.map((turn, i) => turnBlock(turn, i === turns.length - 1)),
-    )
-    if (session?.job) fillBusy(session.job)
-    pickedCount()
-    if (atBottom || session?.job) scrollThread()
-  }
-
-  /** The apply button says how many changes are ticked. */
-  function pickedCount() {
-    if (!view.applyPicked?.isConnected) return
-    view.applyPicked.textContent = t`采用勾选的 ${state.picked.size} 处`
-    view.applyPicked.disabled = !state.picked.size
-  }
-
-  function scrollThread() {
-    view.thread.scrollTop = view.thread.scrollHeight
-  }
-
-  function intro() {
-    return el('div', { class: 'ce-intro' }, [
-      el('p', { text: t`说说想怎么改：向导会把要改的地方整段写出来，改前改后对照着给你看，勾上的才会改进卡里。` }),
-      el('div', { class: 'forge-ideas' }, IDEAS.map(text => el('button', { type: 'button', class: 'chip', text, onclick: () => { view.composer.value = text; updateFoot(); view.composer.focus() } }))),
-    ])
-  }
-
-  function turnBlock(turn, last) {
-    const job = last && !turn.assistant ? state.session.job : null
-    const error = last && !turn.assistant && !job ? state.session.error : null
-    return el('div', { class: 'ce-turn' }, [
-      el('div', { class: 'forge-you' }, [
-        turn.user.target ? el('div', { class: 'ce-aimed', text: t`只改：${targetLabel(turn.user.target)}` }) : null,
-        el('p', { text: turn.user.text }),
-      ]),
-      job ? busyBlock() : null,
-      error ? el('div', { class: 'forge-error' }, [el('p', { text: error.message }), el('button', { type: 'button', class: 'btn small', text: t`重试`, onclick: () => retry() })]) : null,
-      turn.assistant ? answerBlock(turn, last) : null,
-    ])
+  function changeNotes(change) {
+    const notes = []
+    if (change.kind === 'entry' && change.name) notes.push(t`名称：${change.title || t`未命名条目`} → ${change.name}`)
+    if (change.kind === 'newEntry' || change.keys) notes.push(t`关键词：${(change.keys ?? []).join(t`、`) || t`（无）`}`)
+    if (change.kind === 'newEntry' && change.constant) notes.push(t`常驻：写进对话开局时的固定前缀`)
+    return notes
   }
 
   function targetLabel(id) {
@@ -534,168 +422,33 @@ export function initCardEdit({ api, el, toast, guard, saveFile, getChat, isGener
     return t`条目 ${rest}`
   }
 
-  function busyBlock() {
-    view.busyText = el('div', { class: 'ce-partial' })
-    view.busyLine = el('span')
-    return el('div', { class: 'forge-say' }, [el('div', { class: 'forge-working' }, [el('span', { class: 'dots' }), view.busyLine]), view.busyText])
-  }
+  const talk = createTalk({ api, el, guard, openProviders }, {
+    url: () => `/api/cards/${state.card.id}/assistant`,
+    isOpen: () => dialog.open,
+    intro: () => t`说说想怎么改：向导会把要改的地方整段写出来，改前改后对照着给你看，勾上的才会改进卡里。`,
+    ideas: () => IDEAS,
+    placeholder: target => (target ? t`「${target.label}」想怎么改，比如：再短一点，语气冷一些` : t`说说想怎么改，比如：让她说话更冷淡一点`),
+    busy: job => (job.chars ? t`正在改，已经写了 ${job.chars.toLocaleString()} 字…` : t`正在读这张卡…`),
+    changeTitle,
+    changeWhere,
+    changeNotes,
+    targetLabel,
+    // A request waits for the fields still saving.
+    beforeAsk: () => state.saving,
+    async onApplied(result) {
+      absorb(result.card)
+      renderMain()
+      saved(result.prefix, t`已改进卡里：${result.applied} 处`)
+      toast(t`已改进卡里：${result.applied} 处`)
+      await onCardChanged?.(state.card.id)
+    },
+  })
 
-  function fillBusy(job) {
-    if (!view.busyLine?.isConnected) return
-    view.busyLine.textContent = job.chars ? t`正在改，已经写了 ${job.chars.toLocaleString()} 字…` : t`正在读这张卡…`
-    view.busyText.replaceChildren(...String(job.partial ?? '').split(/\n+/).filter(Boolean).map(p => el('p', { text: p })))
-  }
-
-  function answerBlock(turn, last) {
-    const { reply, changes, model } = turn.assistant
-    const waiting = last && changes.length && !turn.outcome
-    const applied = new Set(turn.outcome?.applied ?? [])
-    const outcome = !changes.length
-      ? null
-      : waiting
-        ? null
-        : el('p', { class: 'ce-outcome', text: turn.outcome?.applied ? t`采用了 ${applied.size} 处，共 ${changes.length} 处` : t`没有采用` })
-    return el('div', { class: 'forge-say' }, [
-      reply ? el('div', { class: 'forge-voice' }, reply.split(/\n+/).filter(Boolean).map(p => el('p', { text: p }))) : null,
-      el('div', { class: 'forge-by', text: model }),
-      changes.length ? el('div', { class: `ce-changes${waiting ? '' : ' done'}` }, changes.map(change => changeBlock(change, { waiting, applied: applied.has(change.id) }))) : null,
-      !changes.length ? el('p', { class: 'ce-outcome', text: t`这次没有提出改动。` }) : null,
-      waiting
-        ? el('div', { class: 'forge-actions ce-decide' }, [
-            el('button', { type: 'button', class: 'btn ghost small', text: t`放弃`, onclick: () => discard() }),
-            el('span', { class: 'grow' }),
-            (view.applyPicked = el('button', { type: 'button', class: 'btn primary small', onclick: () => applyPicked() })),
-          ])
-        : outcome,
-    ])
-  }
-
-  function changeBlock(change, { waiting, applied }) {
-    const [where, cls, tip] = changeWhere(change)
-    const open = !state.folded.has(change.id)
-    const toggle = () => {
-      open ? state.folded.add(change.id) : state.folded.delete(change.id)
-      renderThread()
-    }
-    const head = el('div', { class: 'ce-change-head' }, [
-      waiting
-        ? el('input', { type: 'checkbox', checked: state.picked.has(change.id), 'aria-label': t`采用「${changeTitle(change)}」`, onchange: event => { event.target.checked ? state.picked.add(change.id) : state.picked.delete(change.id); pickedCount() } })
-        : el('span', { class: `ce-mark${applied ? ' on' : ''}`, text: applied ? '✓' : '–' }),
-      el('button', { type: 'button', class: 'ce-change-title', 'aria-expanded': String(open), onclick: toggle, text: changeTitle(change) }),
-      el('span', { class: `strategy ${cls}`, title: tip, text: where }),
-    ])
-    if (!open) return el('div', { class: 'ce-change folded' }, [head])
-    return el('div', { class: 'ce-change' }, [head, ...changeDetail(change)])
-  }
-
-  function changeDetail(change) {
-    const notes = []
-    if (change.kind === 'entry' && change.name) notes.push(t`名称：${change.title || t`未命名条目`} → ${change.name}`)
-    if (change.kind === 'newEntry' || change.keys) notes.push(t`关键词：${(change.keys ?? []).join(t`、`) || t`（无）`}`)
-    if (change.kind === 'newEntry' && change.constant) notes.push(t`常驻：写进对话开局时的固定前缀`)
-    const before = change.kind === 'newEntry' ? '' : change.before
-    const after = change.kind === 'removeEntry' ? '' : change.after
-    return [notes.length ? el('p', { class: 'ce-change-note', text: notes.join(t`；`) }) : null, before === after ? null : diffBox(before, after)]
-  }
-
-  function diffBox(before, after) {
-    const lines = foldSame(diffLines(before, after), 1)
-    return el('div', { class: 'ce-diff' }, lines.map(line => {
-      if (line.op === 'skip') return el('div', { class: 'ce-line skip', text: t`…没改的 ${line.count} 行…` })
-      if (line.op === 'change') return el('div', { class: 'ce-line change' }, line.parts.map(part => (part.op === 'same' ? part.text : el(part.op === 'del' ? 'del' : 'ins', { text: part.text }))))
-      return el('div', { class: `ce-line ${line.op}`, text: line.text || ' ' })
-    }))
-  }
-
-  function updateFoot() {
-    const busy = Boolean(state.session?.job)
-    view.send.hidden = busy
-    view.stop.hidden = !busy
-    view.send.disabled = !view.composer.value.trim()
-    view.composer.disabled = busy
-    view.model.disabled = busy
-    view.targetChip.hidden = !state.target
-    if (state.target) {
-      view.targetChip.replaceChildren(
-        el('span', { text: t`只改：${state.target.label}` }),
-        el('button', { type: 'button', class: 'btn ghost small', 'aria-label': t`不限定`, text: '×', onclick: () => aim(null) }),
-      )
-    }
-    view.composer.placeholder = state.target ? t`「${state.target.label}」想怎么改，比如：再短一点，语气冷一些` : t`说说想怎么改，比如：让她说话更冷淡一点`
-  }
-
+  /** 按意见改: the next request is kept to this piece. */
   function aim(id, label) {
-    state.target = id ? { id, label } : null
-    updateFoot()
+    talk.aim(id, label)
     showPane('assist')
-    view.composer.focus()
   }
-
-  /** `force`: rebuild even when nothing changed (to put the choice back after 管理模型供应商…). */
-  function renderModels(force = false) {
-    const current = state.session?.model ?? ''
-    const known = state.models.find(m => m.id === state.defaultModel)
-    const label = m => `${m.group} · ${m.label}`
-    const key = JSON.stringify([current, state.defaultModel, state.models.map(label)])
-    if (!force && key === state.modelsShown) return
-    state.modelsShown = key
-    view.model.replaceChildren(
-      ...[
-        el('option', { value: '', selected: !current, text: known ? t`默认模型（${label(known)}）` : t`默认模型（还没选）` }),
-        ...state.models.map(m => el('option', { value: m.id, selected: m.id === current, text: label(m) })),
-        current && !state.models.some(m => m.id === current) ? el('option', { value: current, selected: true, text: t`${current}（不可用）` }) : null,
-        el('option', { value: MANAGE_PROVIDERS, text: t`管理模型供应商…` }),
-      ].filter(Boolean),
-    )
-  }
-
-  const changeModel = guard(async () => {
-    const value = view.model.value
-    if (value === MANAGE_PROVIDERS) {
-      renderModels(true)
-      openProviders?.()
-      return
-    }
-    applySession(await api(`/api/cards/${state.card.id}/assistant`, { method: 'PUT', body: { model: value } }))
-  })
-
-  const ask = guard(async () => {
-    const text = view.composer.value.trim()
-    if (!text || state.session?.job) return
-    if (proposal() && !confirm(t`上一次的改动还没采用。发新的要求会把它放下，继续？`)) return
-    await state.saving
-    const session = await api(`/api/cards/${state.card.id}/assistant`, { method: 'POST', body: { text, target: state.target?.id ?? '' } })
-    view.composer.value = ''
-    state.target = null
-    applySession(session)
-    scrollThread()
-  })
-
-  const retry = guard(async () => applySession(await api(`/api/cards/${state.card.id}/assistant/retry`, { method: 'POST' })))
-
-  const stopJob = guard(async () => {
-    await api(`/api/cards/${state.card.id}/assistant/stop`, { method: 'POST' })
-    applySession(await api(`/api/cards/${state.card.id}/assistant`))
-  })
-
-  const discard = guard(async () => applySession(await api(`/api/cards/${state.card.id}/assistant/discard`, { method: 'POST' })))
-
-  const clearTalk = guard(async () => {
-    if (!confirm(t`清空这里聊过的内容？已经改进卡里的不受影响。`)) return
-    applySession(await api(`/api/cards/${state.card.id}/assistant`, { method: 'DELETE' }))
-  })
-
-  const applyPicked = guard(async () => {
-    await state.saving
-    const id = state.card.id
-    const result = await api(`/api/cards/${id}/assistant/apply`, { method: 'POST', body: { ids: [...state.picked] } })
-    absorb(result.card)
-    renderMain()
-    applySession(result.session)
-    saved(result.prefix, t`已改进卡里：${result.applied} 处`)
-    toast(t`已改进卡里：${result.applied} 处`)
-    await onCardChanged?.(id)
-  })
 
   // The entries window edits the card's book: count again when it closes.
   $('book-dialog')?.addEventListener('close', guard(async () => {
@@ -703,7 +456,7 @@ export function initCardEdit({ api, el, toast, guard, saveFile, getChat, isGener
     absorb(await api(`/api/cards/${state.card.id}/edit`))
     renderMain()
   }))
-  dialog.addEventListener('close', () => clearTimeout(state.poll))
+  dialog.addEventListener('close', () => talk.stop())
   // Esc: the field being typed in saves as it loses focus.
   dialog.addEventListener('cancel', () => document.activeElement?.blur?.())
 
@@ -711,25 +464,22 @@ export function initCardEdit({ api, el, toast, guard, saveFile, getChat, isGener
     open: guard(async cardId => {
       if (!view.main) layout()
       const switching = state.card?.id !== cardId
-      const [card, session] = await Promise.all([api(`/api/cards/${cardId}/edit`), api(`/api/cards/${cardId}/assistant`), loadModels()])
+      const [card, session] = await Promise.all([api(`/api/cards/${cardId}/edit`), api(`/api/cards/${cardId}/assistant`), talk.loadModels()])
       if (switching) {
         state.card = null
-        state.target = null
         state.stale = false
         state.told = false
-        state.shown = ''
-        state.pickedFor = ''
         state.drawn = null
-        view.composer.value = ''
+        talk.reset()
         view.main.scrollTop = 0
       }
       absorb(card)
       showPane(state.pane)
       renderMain()
-      applySession(session)
+      talk.load(session)
       if (!dialog.open) dialog.showModal()
       // The talk opens at its latest turn (it has no size until the window shows).
-      scrollThread()
+      talk.scroll()
     }),
   }
 }

@@ -17,8 +17,9 @@ import { initWhatsNew } from '/whatsnew.js'
 import { connectionList, showPrivacyNotice } from '/privacy.js'
 import { initTheme } from '/theme.js'
 import { initRegex } from '/regex.js'
-import { countText, initBooks } from '/books.js'
+import { countText, initBooks, matchesTerms, searchBox, searchTerms } from '/books.js'
 import { initCardEdit } from '/card-edit.js'
+import { initTalkDialog } from '/talk-dialog.js'
 import { initDrawChoice } from '/draw-choice.js'
 import { initVn } from '/vn.js'
 import { isRegexFile, scriptsInFile } from '/shared/regex.js'
@@ -376,6 +377,8 @@ function groupHead(name, cards, folded, { archive = false } = {}) {
 }
 
 function toggleGroup(name, archive) {
+  // While searching every group is open; folding waits until the box is cleared.
+  if (searchTerms(cardQuery).length) return
   if (archive) ui.archiveOpen = !ui.archiveOpen
   else {
     foldedGroups.has(name) ? foldedGroups.delete(name) : foldedGroups.add(name)
@@ -387,24 +390,34 @@ function toggleGroup(name, archive) {
 /** Names of the groups in use, in a stable order. */
 const cardGroups = () => [...new Set(ui.cards.filter(card => card.group).map(card => card.group))].sort((a, b) => a.localeCompare(b, 'zh-CN'))
 
+// 搜索角色卡 (the box above the list): only the cards whose name, tags, group or
+// author have every word show, in every group and the archive opened for it;
+// emptied, the list folds as it was.
+let cardQuery = ''
+const cardText = card => [card.name, card.group, card.creator, ...(card.tags ?? [])].filter(Boolean).join('\n')
+
 function renderCards() {
   const list = $('card-list')
-  const live = ui.cards.filter(card => !card.archived)
-  const archived = ui.cards.filter(card => card.archived)
+  const terms = searchTerms(cardQuery)
+  const found = terms.length ? ui.cards.filter(card => matchesTerms(cardText(card), terms)) : ui.cards
+  const live = found.filter(card => !card.archived)
+  const archived = found.filter(card => card.archived)
   const items = live.filter(card => !card.group).map(card => cardItem(card))
   for (const name of cardGroups()) {
     const cards = live.filter(card => card.group === name)
     if (!cards.length) continue
-    const folded = foldedGroups.has(name)
+    const folded = !terms.length && foldedGroups.has(name)
     items.push(groupHead(name, cards, folded))
     if (!folded) items.push(...cards.map(card => cardItem(card, true)))
   }
   if (archived.length) {
-    items.push(groupHead(t`已归档`, archived, !ui.archiveOpen, { archive: true }))
-    if (ui.archiveOpen) items.push(...archived.map(card => cardItem(card, true)))
+    const open = terms.length > 0 || ui.archiveOpen
+    items.push(groupHead(t`已归档`, archived, !open, { archive: true }))
+    if (open) items.push(...archived.map(card => cardItem(card, true)))
   }
   list.replaceChildren(...items)
   if (ui.cards.length === 0) list.append(el('li', { class: 'muted small', text: t`还没有角色卡` }))
+  else if (!found.length) list.append(el('li', { class: 'muted small', text: t`没有找到「${cardQuery.trim()}」` }))
   $('new-chat').disabled = !ui.cardId
   $('import-story').disabled = !ui.cardId
   $('import-story-label').setAttribute('aria-disabled', String(!ui.cardId))
@@ -692,14 +705,45 @@ const newChat = guard(async () => {
   const card = await api(`/api/cards/${ui.cardId}`)
   const texts = card.greetingTexts.length ? card.greetingTexts : ['']
   if (texts.length === 1) return startChat(0)
-  const box = $('greetings')
-  box.replaceChildren(
-    ...texts.map((text, index) =>
-      el('button', { class: 'greeting', type: 'button', text: text.slice(0, 400) || t`（空开场）`, onclick: () => { $('greeting-dialog').close(); startChat(index) } }),
-    ),
-  )
+  const pick = index => {
+    $('greeting-dialog').close()
+    startChat(index)
+  }
+  $('greeting-count').textContent = t`${texts.length} 个开场。点一下文字读完整的，再选一个开始。`
+  $('greetings').replaceChildren(...texts.map((text, index) => greetingItem(text, index, pick)))
   $('greeting-dialog').showModal()
+  $('greetings').scrollTop = 0
+  // Only the ones cut short open.
+  for (const item of $('greetings').children) {
+    const body = item.querySelector('.greeting-text')
+    item.querySelector('.greeting-more').hidden = body.scrollHeight <= body.clientHeight + 1
+  }
 })
+
+/** One opening in 选择开场白: its first lines (blank lines left out), the whole of it on a tap, and a button to start with it. */
+function greetingItem(text, index, pick) {
+  const whole = text.trim() || t`（空开场）`
+  const brief = whole.replace(/\n\s*\n+/g, '\n')
+  const item = el('li', { class: 'greeting' })
+  const body = el('div', { class: 'greeting-text', text: brief })
+  const more = el('button', { type: 'button', class: 'btn small ghost greeting-more', text: t`展开全文`, 'aria-expanded': 'false' })
+  const toggle = () => {
+    if (more.hidden) return
+    const open = item.classList.toggle('open')
+    body.textContent = open ? whole : brief
+    more.textContent = open ? t`收起` : t`展开全文`
+    more.setAttribute('aria-expanded', String(open))
+    if (!open) item.scrollIntoView({ block: 'nearest' })
+  }
+  body.addEventListener('click', toggle)
+  more.addEventListener('click', toggle)
+  item.append(
+    el('div', { class: 'greeting-head' }, [el('b', { text: t`开场 ${index + 1}` }), el('span', { text: t`${[...whole].length} 字` })]),
+    body,
+    el('div', { class: 'greeting-foot' }, [more, el('button', { type: 'button', class: 'btn small greeting-use', text: t`用这个开场`, onclick: () => pick(index) })]),
+  )
+  return item
+}
 
 const startChat = guard(async greetingIndex => {
   const chat = await api('/api/chats', { method: 'POST', body: { cardId: ui.cardId, greetingIndex } })
@@ -1632,12 +1676,18 @@ function renderBookOptions(card, ticked = new Set(card?.worldbookIds ?? [])) {
     cardBookLine(card),
     ...(ui.books.length
       ? ui.books.map(book =>
-        el('label', {}, [
-          el('input', { type: 'checkbox', name: 'book', value: book.id, checked: ticked.has(book.id), 'aria-label': book.name }),
+        el('label', { class: book.global ? 'global' : '' }, [
+          // A global book applies to every card: ticked and fixed here. Whether this card
+          // has it mounted as well is kept (the hidden box), for when it stops being global.
+          book.global
+            ? el('input', { type: 'checkbox', checked: true, disabled: true, 'aria-label': t`${book.name}（全局）` })
+            : el('input', { type: 'checkbox', name: 'book', value: book.id, checked: ticked.has(book.id), 'aria-label': book.name }),
+          book.global ? el('input', { type: 'checkbox', name: 'book', value: book.id, checked: ticked.has(book.id), hidden: true }) : null,
           el('span', { class: 'book-text' }, [
             el('span', { class: 'book-name', text: book.name }),
             el('span', { class: 'book-count', text: bookCount({ entries: book.entries, enabled: book.enabled, constant: book.constant }) }),
           ]),
+          book.global ? el('span', { class: 'card-book-on', title: t`全局世界书：每张卡的对话都用。在世界书窗口这本的「书的设置」里关掉。`, text: t`全局` }) : null,
           bookEntriesButton(book.id),
         ]))
       : [el('p', { class: 'book-none', text: t`还没有导入独立世界书。想给这张卡多挂一本，先用「导入角色卡、世界书或预设」导入世界书 JSON。` })]),
@@ -1739,9 +1789,11 @@ function layOutSettings({ form, card, providers, presets }) {
         // Counted again after edits in the entries window.
         const entries = (ui.cards.find(c => c.id === card.id) ?? card).bookEntries
         const own = entries ? t`卡里自带 ${entries} 条` : t`卡里没带世界书`
-        const names = [...form.querySelectorAll('input[name="book"]:checked')].map(input => ui.books.find(b => b.id === input.value)?.name).filter(Boolean)
+        // The global ones count on their own, mounted or not.
+        const globals = ui.books.filter(b => b.global).length
+        const names = [...form.querySelectorAll('input[name="book"]:checked')].map(input => ui.books.find(b => b.id === input.value && !b.global)?.name).filter(Boolean)
         const mounted = !ui.books.length ? t`还没导入独立世界书` : names.length ? t`挂了 ${names.length} 本：${names.join(t`、`)}` : t`没挂独立世界书`
-        return `${own} · ${mounted}`
+        return [own, mounted, globals ? t`全局 ${globals} 本` : ''].filter(Boolean).join(' · ')
       },
     },
     {
@@ -2067,8 +2119,10 @@ function regexChanged(scope, id, scripts) {
   if (ui.chat) renderChat()
 }
 
-const regexUi = initRegex({ api, el, toast, guard, context: regexContext, onChanged: regexChanged })
-const themeUi = initTheme({ api, el, toast, guard, getSettings: () => ui.settings, setSettings: settings => { ui.settings = settings } })
+// 世界书 / 预设 / 正则 / 主题 → 对话修改: the talk on one of them, over the window it came from.
+const talkUi = initTalkDialog({ api, el, guard, openProviders: () => providersUi.open() })
+const regexUi = initRegex({ api, el, toast, guard, context: regexContext, onChanged: regexChanged, openTalk: talkUi.open })
+const themeUi = initTheme({ api, el, toast, guard, getSettings: () => ui.settings, setSettings: settings => { ui.settings = settings }, onReading: () => fitInput(), openTalk: talkUi.open })
 const whatsNewUi = initWhatsNew({ el })
 const updateUi = initUpdate({ api, el, toast, guard, onChange: () => settingsMenu?.refresh(), isGenerating: () => ui.generating, openNotes: () => whatsNewUi.open() })
 
@@ -2110,6 +2164,7 @@ const providersUi = initProviders({
 
 const presetsUi = initPresets({
   api, el, toast, guard, saveFile,
+  openTalk: talkUi.open,
   getChat: () => ui.chat,
   isGenerating: () => ui.generating,
   onChatChanged: chat => {
@@ -2129,6 +2184,7 @@ const presetsUi = initPresets({
 
 const booksUi = initBooks({
   api, el, toast, guard, saveFile,
+  openTalk: talkUi.open,
   getChat: () => ui.chat,
   getCards: () => ui.cards,
   getScanDepth: () => ui.settings?.scanDepth ?? 4,
@@ -2322,6 +2378,15 @@ function bind() {
       if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) layout.classList.remove('show-main')
     })
   }
+  const cardSearch = searchBox(el, {
+    placeholder: t`搜索角色卡：名字、标签、分组`,
+    label: t`搜索角色卡`,
+    onInput: value => {
+      cardQuery = value
+      renderCards()
+    },
+  })
+  $('card-list').before(cardSearch.box)
   listenForFrameHeights()
   installFrameBridge({
     toast: (_level, text) => toast(text),

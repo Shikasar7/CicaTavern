@@ -58,7 +58,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
 
   async function preparePrompt(chat, parent, input, { forceFull = false } = {}) {
     const [settings, card, preset, persona, globalScripts] = await Promise.all([store.getSettings(), store.getCard(chat.cardId), presetFor(store, chat.presetId), store.getPersona(), store.getRegex()])
-    const books = await booksForCard(store, card)
+    const books = await booksForCard(store, card, settings)
     const scripts = scriptsOf(card, preset, globalScripts)
     const names = chat.names
     const macros = text => replaceMacros(text, names)

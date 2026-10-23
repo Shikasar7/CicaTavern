@@ -37,7 +37,7 @@ import { createStore, defaultDataRoot, httpError, newId, PRIVACY_NOTICE } from '
 import { currentLanguage, localize, msg, pageIn, requestLanguage, withLanguage } from './i18n.mjs'
 import { createUpdater } from './update/index.mjs'
 import { createShortcut } from './update/install.mjs'
-import { addEntries, bookCounts, editBook, editBookInfo, emptyBook, isDynamic, normalizeBook, worldFile } from './worldbook.mjs'
+import { addEntries, bookCounts, editBook, editBookInfo, emptyBook, inPrefix, isDynamic, normalizeBook, worldFile } from './worldbook.mjs'
 import { replaceMacros } from './prompt.mjs'
 import { accessCookie, hostAllowed, isLoopback, lanAddresses, loginPage, readCookie, tokensEqual } from './access.mjs'
 
@@ -80,6 +80,8 @@ const STATIC = {
   '/regex.js': ['regex.js', 'text/javascript; charset=utf-8'],
   '/books.js': ['books.js', 'text/javascript; charset=utf-8'],
   '/card-edit.js': ['card-edit.js', 'text/javascript; charset=utf-8'],
+  '/talk.js': ['talk.js', 'text/javascript; charset=utf-8'],
+  '/talk-dialog.js': ['talk-dialog.js', 'text/javascript; charset=utf-8'],
   '/shared/card-edit.js': ['shared/card-edit.js', 'text/javascript; charset=utf-8'],
   '/draw-choice.js': ['draw-choice.js', 'text/javascript; charset=utf-8'],
   '/shared/draw.js': ['shared/draw.js', 'text/javascript; charset=utf-8'],
@@ -233,7 +235,13 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
   const scenes = createScenes(store, { media })
   const saves = createSaves(store)
   const prompts = createPromptLibrary(store)
-  const forge = createForge(store, { proxyNow: () => isolation.proxy, ledger, draw: (input, signal, choice) => media.drawCardArt(input, signal, choice) })
+  const forge = createForge(store, {
+    proxyNow: () => isolation.proxy,
+    ledger,
+    draw: (input, signal, choice) => media.drawCardArt(input, signal, choice),
+    drawBackdrop: (prompt, signal) => media.drawBackdrop(prompt, signal),
+    storeBackdrop: buffer => appearance.storeBackdrop(buffer),
+  })
   // 设置 → 更多 → 更新. A restart after an update starts the server the way this one was started.
   let listenArg
   const updater = createUpdater({
@@ -586,7 +594,9 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     }],
     ['DELETE', /^\/api\/cards\/([\w-]+)$/, async ([id]) => {
       await store.deleteCard(id)
-      await forge.dropEdit(id)
+      await forge.dropTalk('card', id)
+      await forge.dropTalk('book', `card-${id}`)
+      await forge.dropTalk('regex', `card-${id}`)
       return { ok: true }
     }],
     // 修改角色卡 (web/card-edit.js): the card's fields, edited in place. It keeps its id, so
@@ -633,16 +643,38 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       return sillyTavernCard(card, rawOfPicture(picture))
     }],
     // 修改角色卡 → 对话修改: the card's edit session (forge/edit.mjs), run like a draft's jobs.
-    ['GET', /^\/api\/cards\/([\w-]+)\/assistant$/, ([id]) => forge.editGet(id)],
-    ['PUT', /^\/api\/cards\/([\w-]+)\/assistant$/, ([id], body) => forge.editUpdate(id, body ?? {})],
-    ['POST', /^\/api\/cards\/([\w-]+)\/assistant$/, ([id], body) => forge.editAsk(id, body ?? {})],
-    ['DELETE', /^\/api\/cards\/([\w-]+)\/assistant$/, ([id]) => forge.editClear(id)],
-    ['POST', /^\/api\/cards\/([\w-]+)\/assistant\/retry$/, ([id]) => forge.editRetry(id)],
-    ['POST', /^\/api\/cards\/([\w-]+)\/assistant\/stop$/, ([id]) => forge.editStop(id)],
-    ['POST', /^\/api\/cards\/([\w-]+)\/assistant\/discard$/, ([id]) => forge.editDiscard(id)],
+    ['GET', /^\/api\/cards\/([\w-]+)\/assistant$/, ([id]) => forge.talkGet('card', id)],
+    ['PUT', /^\/api\/cards\/([\w-]+)\/assistant$/, ([id], body) => forge.talkUpdate('card', id, body ?? {})],
+    ['POST', /^\/api\/cards\/([\w-]+)\/assistant$/, ([id], body) => forge.talkAsk('card', id, body ?? {})],
+    ['DELETE', /^\/api\/cards\/([\w-]+)\/assistant$/, ([id]) => forge.talkClear('card', id)],
+    ['POST', /^\/api\/cards\/([\w-]+)\/assistant\/retry$/, ([id]) => forge.talkRetry('card', id)],
+    ['POST', /^\/api\/cards\/([\w-]+)\/assistant\/stop$/, ([id]) => forge.talkStop('card', id)],
+    ['POST', /^\/api\/cards\/([\w-]+)\/assistant\/discard$/, ([id]) => forge.talkDiscard('card', id)],
     ['POST', /^\/api\/cards\/([\w-]+)\/assistant\/apply$/, async ([id], body) => {
-      const { session, card, applied, prefix } = await forge.editApply(id, body ?? {})
-      return { session, applied, prefix, card: cardEditView(card) }
+      const { session, subject, applied, prefix } = await forge.talkApply('card', id, body ?? {})
+      return { session, applied, prefix, card: cardEditView(subject) }
+    }],
+    // 世界书 / 预设 / 正则 / 主题 → 对话修改 (web/talk.js): a book (an imported one, or
+    // card-<id> for a card's own), a preset, regex scripts (global, card-<id> or
+    // preset-<id>) or the look (appearance), changed by talking like a card; the
+    // last proposal taken in can be undone. Apply and undo answer with what was saved.
+    ['GET', /^\/api\/talk\/(book|preset|regex|theme)\/([\w-]+)$/, ([kind, id]) => forge.talkGet(kind, id)],
+    ['PUT', /^\/api\/talk\/(book|preset|regex|theme)\/([\w-]+)$/, ([kind, id], body) => forge.talkUpdate(kind, id, body ?? {})],
+    ['POST', /^\/api\/talk\/(book|preset|regex|theme)\/([\w-]+)$/, ([kind, id], body) => forge.talkAsk(kind, id, body ?? {})],
+    ['DELETE', /^\/api\/talk\/(book|preset|regex|theme)\/([\w-]+)$/, ([kind, id]) => forge.talkClear(kind, id)],
+    ['POST', /^\/api\/talk\/(book|preset|regex|theme)\/([\w-]+)\/retry$/, ([kind, id]) => forge.talkRetry(kind, id)],
+    ['POST', /^\/api\/talk\/(book|preset|regex|theme)\/([\w-]+)\/stop$/, ([kind, id]) => forge.talkStop(kind, id)],
+    ['POST', /^\/api\/talk\/(book|preset|regex|theme)\/([\w-]+)\/discard$/, ([kind, id]) => forge.talkDiscard(kind, id)],
+    ['POST', /^\/api\/talk\/(book|preset|regex|theme)\/([\w-]+)\/(apply|undo)$/, async ([kind, id, action], body) => {
+      const done = action === 'apply' ? await forge.talkApply(kind, id, body ?? {}) : await forge.talkUndo(kind, id)
+      const views = {
+        book: () => bookView(done.subject, done.holder ? `card-${done.holder.id}` : done.subject.id),
+        preset: () => presetDetail(done.subject),
+        regex: () => ({ scripts: done.subject.scripts }),
+        theme: async () => await store.getSettings(),
+      }
+      const holder = kind === 'book' && done.holder ? { card: cardSummary(done.holder) } : {}
+      return { session: done.session, applied: done.applied ?? 0, prefix: done.prefix, [kind === 'theme' ? 'settings' : kind]: await views[kind](), ...holder }
     }],
     // Groups and the archive: where a card sits in the list. Nothing else about it changes.
     ['PUT', /^\/api\/cards\/([\w-]+)\/organize$/, async ([id], body) => {
@@ -689,7 +721,10 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
 
     // Imported books as whole books (web/books.js, 世界书): which cards use one is
     // each card's worldbookIds, which the page has in its card list.
-    ['GET', /^\/api\/worldbooks$/, async () => (await store.listBooks()).map(bookSummary)],
+    ['GET', /^\/api\/worldbooks$/, async () => {
+      const { globalBookIds } = await store.getSettings()
+      return (await store.listBooks()).map(book => ({ ...bookSummary(book), global: globalBookIds.includes(book.id) }))
+    }],
     ['POST', /^\/api\/worldbooks$/, async (_, body) => bookSummary(await store.saveBook(emptyBook(body?.name)))],
     ['GET', /^\/api\/worldbooks\/([\w-]+)$/, async ([id]) => bookView(await store.getBook(id))],
     // Entries as for a card's own book, and the book's name, description and scan depth.
@@ -698,6 +733,17 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       const { prefix, added } = editBook(book, body ?? {})
       await store.saveBook(book)
       return { ...bookView(book), prefix, added }
+    }],
+    // 全局: every chat uses the book, mounted or not. `prefix`: it has constant
+    // entries, so open chats keep their prefix as it was until it is applied again.
+    ['PUT', /^\/api\/worldbooks\/([\w-]+)\/global$/, async ([id], body) => {
+      const book = await store.getBook(id)
+      const global = body?.global === true
+      const { globalBookIds } = await store.getSettings()
+      if (globalBookIds.includes(id) !== global) {
+        await store.saveSettings({ globalBookIds: global ? [...globalBookIds, id] : globalBookIds.filter(x => x !== id) })
+      }
+      return { id, global, prefix: book.entries.some(inPrefix) }
     }],
     ['GET', /^\/api\/worldbooks\/([\w-]+)\/export$/, async ([id]) => worldFile(await store.getBook(id))],
     // A copy to change apart from the original; no card uses it yet.
@@ -762,9 +808,12 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       await store.saveBook(book)
       return { id: book.id, name: book.name, entries: book.entries.length }
     }],
-    // The cards it was attached to let go of it too (chats already skip a missing book).
+    // The cards it was attached to let go of it too, and the global list (chats already skip a missing book).
     ['DELETE', /^\/api\/worldbooks\/([\w-]+)$/, async ([id]) => {
       await store.deleteBook(id)
+      await forge.dropTalk('book', id)
+      const { globalBookIds } = await store.getSettings()
+      if (globalBookIds.includes(id)) await store.saveSettings({ globalBookIds: globalBookIds.filter(x => x !== id) })
       const detached = []
       for (const card of await store.listCards()) {
         if (!(card.worldbookIds ?? []).includes(id)) continue
@@ -795,6 +844,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['PUT', /^\/api\/presets\/([\w-]+)$/, async ([id], body) => presetDetail(await store.savePreset(editPreset(await store.getPreset(id), body)))],
     ['DELETE', /^\/api\/presets\/([\w-]+)$/, async ([id]) => {
       await store.deletePreset(id)
+      await forge.dropTalk('preset', id)
+      await forge.dropTalk('regex', `preset-${id}`)
       const settings = await store.getSettings()
       if (settings.presetId === id) await store.saveSettings({ presetId: '' })
       return { ok: true }

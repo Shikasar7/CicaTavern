@@ -6,7 +6,8 @@
 import { editBook } from '../worldbook.mjs'
 import { newId } from '../store.mjs'
 import { CARD_FIELDS, cleanTags, editCard, greetingList } from '../../web/shared/card-edit.js'
-import { LONG_TOKENS, WRITING_RULES, section } from './prompts.mjs'
+import { LONG_TOKENS, WRITING_RULES } from './prompts.mjs'
+import { attr, historyLines, readBlocks, splitKeys } from './blocks.mjs'
 
 // The card's fields as the model knows them: SillyTavern's names.
 export const FIELD_TAGS = Object.freeze({
@@ -25,12 +26,8 @@ export const FIELD_TAGS = Object.freeze({
 const FIELD_OF = Object.fromEntries(Object.entries(FIELD_TAGS).flatMap(([key, tag]) => [[tag, key], [key.toLowerCase(), key]]))
 
 // Entry text sent in full, at most; past it, entries go by name and can't be changed this time.
-const ENTRY_BUDGET = 60000
-const MAX_HISTORY = 6
-
-const attr = value => String(value ?? '').replace(/"/g, "'").replace(/\s+/g, ' ').trim()
-const modeOf = entry => (entry.initvar ? 'initvar' : entry.constant ? 'constant' : 'keyword')
-const splitKeys = text => [...new Set(String(text ?? '').split(/[,，、]/).map(key => key.trim()).filter(Boolean))].slice(0, 100)
+export const ENTRY_BUDGET = 60000
+export const modeOf = entry => (entry.initvar ? 'initvar' : entry.constant ? 'constant' : 'keyword')
 
 /** A card without a worldbook of its own gets an empty one, named as the importer names it. */
 export function ensureBook(card) {
@@ -38,16 +35,20 @@ export function ensureBook(card) {
   return card.book
 }
 
-/** The uids of the entries sent in full: the one asked about and those the request names first, then by order. */
-export function shownEntries(entries, words, target = '') {
+/**
+ * The uids of the entries sent in full: the one asked about, those `picked`
+ * (a worldbook's first look, book-edit.mjs) and those the request names first,
+ * then by order, as far as `budget` characters go.
+ */
+export function shownEntries(entries, words, target = '', { picked = [], budget = ENTRY_BUDGET } = {}) {
   const first = target.startsWith('entry:') ? target.slice(6) : null
   const named = e => [e.comment, ...e.keys].some(name => name && name.length >= 2 && words.includes(name))
-  const rank = e => (e.uid === first ? 2 : named(e) ? 1 : 0)
+  const rank = e => (e.uid === first ? 3 : picked.includes(e.uid) ? 2 : named(e) ? 1 : 0)
   const ranked = [...entries].sort((a, b) => rank(b) - rank(a) || a.order - b.order)
   const shown = new Set()
   let used = 0
   for (const entry of ranked) {
-    if (shown.size && used + entry.content.length > ENTRY_BUDGET) continue
+    if (shown.size && used + entry.content.length > budget) continue
     used += entry.content.length
     shown.add(entry.uid)
   }
@@ -68,8 +69,9 @@ function cardBlock(card) {
   return [...filled, empty.length ? `空着的字段：${empty.join('、')}` : '', ...greetings].filter(Boolean).join('\n\n')
 }
 
-function bookBlock(entries, shown) {
-  if (!entries.length) return '（这张卡还没有世界书条目）'
+/** Entries as the model reads them: in full when `shown`, else by name only. */
+export function bookBlock(entries, shown, empty = '（这张卡还没有世界书条目）') {
+  if (!entries.length) return empty
   return entries
     .map(e => {
       const head = `<entry uid="${attr(e.uid)}" name="${attr(e.comment)}" mode="${modeOf(e)}" keys="${attr(e.keys.join(', '))}"${e.enabled ? '' : ' enabled="false"'}>`
@@ -84,13 +86,6 @@ function targetTag(target) {
   if (kind === 'field') return `<field name="${FIELD_TAGS[id] ?? id}">`
   if (kind === 'greeting') return `<greeting index="${Number(id) + 1}">`
   if (kind === 'entry') return `<entry uid="${id}">`
-  return ''
-}
-
-function outcomeText(turn) {
-  if (!turn.assistant?.changes.length) return ''
-  if (turn.outcome?.discarded) return '（用户没有采用）'
-  if (turn.outcome?.applied) return `（用户采用了其中 ${turn.outcome.applied.length} 处）`
   return ''
 }
 
@@ -129,10 +124,7 @@ ${WRITING_RULES.filter(rule => !rule.includes('<user>')).map(rule => `- ${rule}`
 export function editRequest(card, { text, target = '', turns = [], reply = '简体中文' } = {}) {
   const entries = card.book?.entries ?? []
   const shown = shownEntries(entries, `${text}\n${target}`, target)
-  const history = turns
-    .filter(turn => turn.assistant)
-    .slice(-MAX_HISTORY)
-    .map(turn => `- 用户：${turn.user.text}\n  你：${turn.assistant.reply || '（只给了改动）'}${outcomeText(turn)}`)
+  const history = historyLines(turns)
   const content = [
     `<card>\n${cardBlock(card)}\n</card>`,
     `<worldbook>\n${bookBlock(entries, shown)}\n</worldbook>`,
@@ -145,15 +137,7 @@ export function editRequest(card, { text, target = '', turns = [], reply = '简�
 
 // ─── Reading the answer ───────────────────────────────────────────────────
 
-const TAGS = 'field|greeting|entry|new_entry|remove_entry'
-// A block ends at its close tag, the next block, the reply, or the end of an answer cut off.
-const BLOCK = new RegExp(`<(${TAGS})\\b([^>]*)>([\\s\\S]*?)(?:</\\1\\s*>|(?=<(?:${TAGS})\\b|</?reply>)|$)`, 'gi')
-
-const attrsOf = text => Object.fromEntries([...String(text).matchAll(/([\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)].map(([, key, a, b]) => [key.toLowerCase(), a ?? b]))
-// A body without fences, or a close tag of another kind the model ended it with.
-const STRAY_CLOSE = new RegExp(`\\s*</(?:${TAGS})\\s*>\\s*$`, 'i')
-const bodyOf = text => String(text).replace(STRAY_CLOSE, '').replace(/^\s*```[a-z]*\s*\n?/i, '').replace(/\n?```\s*$/, '').trim()
-const OPENING = new RegExp(`<(?:${TAGS})\\b`, 'i')
+const TAGS = ['field', 'greeting', 'entry', 'new_entry', 'remove_entry']
 
 /**
  * An answer → { reply, changes }. A change is
@@ -166,16 +150,12 @@ const OPENING = new RegExp(`<(?:${TAGS})\\b`, 'i')
  * `target` anything else, are left out.
  */
 export function readEdit(text, card, { shown = null, target = '' } = {}) {
-  // A reply left open runs into the first block; an answer without any tags is all reply.
-  const reply = (section(text, 'reply') || (OPENING.test(text) ? '' : String(text ?? '').trim())).split(OPENING)[0].trim()
+  const { reply, blocks } = readBlocks(text, TAGS)
   const greetings = greetingList(card)
   const entries = card.book?.entries ?? []
   const changes = new Map()
   let fresh = 0
-  for (const [, rawTag, rawAttrs, rawBody] of String(text ?? '').matchAll(BLOCK)) {
-    const tag = rawTag.toLowerCase()
-    const attrs = attrsOf(rawAttrs)
-    const body = bodyOf(rawBody)
+  for (const { tag, attrs, body } of blocks) {
     if (tag === 'field') {
       const key = FIELD_OF[String(attrs.name ?? '').trim().toLowerCase()]
       if (!key) continue
@@ -214,7 +194,7 @@ export function readEdit(text, card, { shown = null, target = '' } = {}) {
     }
   }
   const list = [...changes.values()]
-  return { reply: reply.slice(0, 2000), changes: target ? list.filter(change => change.id === target) : list }
+  return { reply, changes: target ? list.filter(change => change.id === target) : list }
 }
 
 // ─── Applying ─────────────────────────────────────────────────────────────
