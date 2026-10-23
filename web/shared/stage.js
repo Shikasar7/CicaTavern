@@ -167,3 +167,61 @@ export function parseExpressionLabels(text, count) {
   }
   return labels
 }
+
+// ─── 导入表情包: a SillyTavern expression pack ────────────────────────────
+
+/**
+ * The names a pack's pictures go by (SillyTavern's classifier's 28 and a few
+ * plain words) for each expression here, the closest first: an expression
+ * takes the first its pack has.
+ */
+export const PACK_NAMES = {
+  neutral: ['neutral', 'default', 'normal', 'idle', '平静', '默认'], // i18n-ignore: file names
+  smile: ['smile', 'approval', 'caring', 'optimism', 'gratitude', 'relief', 'admiration', 'pride', '微笑'], // i18n-ignore: file names
+  happy: ['happy', 'joy', 'amusement', 'excitement', 'love', '开心', '高兴'], // i18n-ignore: file names
+  shy: ['shy', 'embarrassment', 'blush', 'love', 'nervousness', 'desire', '害羞', '脸红'], // i18n-ignore: file names
+  angry: ['angry', 'anger', 'annoyance', 'disapproval', 'disgust', '生气', '愤怒'], // i18n-ignore: file names
+  sad: ['sad', 'sadness', 'grief', 'disappointment', 'remorse', '难过', '伤心'], // i18n-ignore: file names
+  surprised: ['surprised', 'surprise', 'shock', 'realization', 'fear', '惊讶', '吃惊'], // i18n-ignore: file names
+  thinking: ['thinking', 'confusion', 'curiosity', 'thoughtful', '思考', '疑惑'], // i18n-ignore: file names
+}
+export const PACK_PICTURE = /\.(png|jpe?g|webp|gif)$/i
+const PACK_KNOWN = new Set(Object.values(PACK_NAMES).flat())
+
+/** The name a picture's file goes by (joy.png, joy-2.png, Seraphina_joy.webp, 微笑.png), or ''. */
+function packName(file) {
+  const words = file.split('/').pop().replace(PACK_PICTURE, '').toLowerCase().split(/[-_.\s]+/).map(word => word.replace(/\d+$/, ''))
+  return words.find(word => PACK_KNOWN.has(word)) ?? ''
+}
+
+/**
+ * A pack's pictures (paths in a zip, or file names) → for each folder holding
+ * some, the picture each expression takes and the ones left over; the folder
+ * with the most first. Several of one name (joy.png, joy-1.png): the plainest.
+ * @returns {{ folder: string, faces: Object<string, string>, unused: string[] }[]}
+ */
+export function packFaces(files) {
+  const folders = new Map()
+  for (const file of files) {
+    if (!PACK_PICTURE.test(file) || /(^|\/)(__MACOSX|\.)/.test(file)) continue
+    const folder = file.includes('/') ? file.slice(0, file.lastIndexOf('/')) : ''
+    if (!folders.has(folder)) folders.set(folder, [])
+    folders.get(folder).push(file)
+  }
+  return [...folders].map(([folder, list]) => {
+    const byName = new Map()
+    for (const file of list.slice().sort((a, b) => a.length - b.length || a.localeCompare(b))) {
+      const name = packName(file)
+      if (name && !byName.has(name)) byName.set(name, file)
+    }
+    const faces = {}
+    for (const [expression, names] of Object.entries(PACK_NAMES)) {
+      const found = names.find(name => byName.has(name))
+      if (found) faces[expression] = byName.get(found)
+    }
+    const used = new Set(Object.values(faces))
+    return { folder, faces, unused: list.filter(file => !used.has(file)) }
+  })
+    .filter(pack => Object.keys(pack.faces).length)
+    .sort((a, b) => Object.keys(b.faces).length - Object.keys(a.faces).length)
+}

@@ -7,6 +7,7 @@ import { httpError, newId } from './store.mjs'
 import { normalizeScripts } from '../web/shared/regex.js'
 import { cleanStatusSpec } from '../web/shared/status.js'
 import { msg } from './i18n.mjs'
+import { usesMvu } from './mvu.mjs'
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 
@@ -325,6 +326,8 @@ export function cardSummary(card) {
     // Cards imported before 0.2 stored only a count.
     regexScripts: Array.isArray(card.regexScripts) ? card.regexScripts.length : Number(card.regexScripts) || 0,
     helperScripts: card.helperScripts ?? 0,
+    // Replies end with an <UpdateVariable> block (the page offers 补写变量 when one does not).
+    mvu: usesMvu(card, card.book ? [card.book] : []),
     importedAt: card.importedAt,
     group: card.group ?? '',
     archived: card.archived === true,

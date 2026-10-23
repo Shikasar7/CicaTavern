@@ -17,6 +17,7 @@ import { complete, CONTEXT_FULL, isProviderRef, providerError, resolveRef } from
 import { canonicalModel } from './models.mjs'
 import { extractSummary, MIN_TURNS, recapBlock, recentExchanges, storyPath, storyTurns, summaryInstruction, turnsSinceCompaction } from './recap.mjs'
 import { msg } from './i18n.mjs'
+import { extractUpdate, fillInstruction, fillRequest, hasUpdateBlock, usesMvu } from './mvu.mjs'
 
 // The preset's per-turn block in a turn's message (buildTurnPrompt).
 const PRESET_BLOCK = /\n*<预设指令>\n[\s\S]*?\n<\/预设指令>/
@@ -24,6 +25,8 @@ const PRESET_BLOCK = /\n*<预设指令>\n[\s\S]*?\n<\/预设指令>/
 // Output tokens a story turn may ask for at most (presets often say 65535): enough for any
 // reply with its thinking and status blocks, and within what current Claude models accept.
 const MAX_REPLY_TOKENS = 32000
+// 补写变量: a big card's update block (many fields, its analysis) fits in this.
+const FILL_MAX_TOKENS = 4000
 // An imported chat's history is summarised in parts of about this many characters (well inside 200k tokens).
 const IMPORTED_PART_CHARS = 120000
 
@@ -125,7 +128,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       input: promptInput,
       replyLength: Number(settings.replyLength) || 0,
       presetText,
-      reminder: everyTurnReminder(chat.systemPrompt, books, { presetRules: hasPrefixRules(preset) }),
+      reminder: everyTurnReminder(chat.systemPrompt, books, { presetRules: hasPrefixRules(preset), mvu: usesMvu(card, books) }),
     })
     return {
       settings,
@@ -517,6 +520,60 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     return { chat, behindCompaction: edit.behindCompaction, sessions, missed }
   }
 
+  /**
+   * 补写变量: the latest reply of an MVU card came without its <UpdateVariable>
+   * block. Asked inside the conversation when a provider wrote it (the same
+   * prefix and history, so the cache hits), else of the helper model with the
+   * card's variable rules, the variables and the reply. The block is appended
+   * to the reply (as an edit, so a subscription session sees it too) and the
+   * reply's state is worked out again.
+   * @returns the chat.
+   */
+  async function fillUpdate(chatId, nodeId) {
+    if (running.has(chatId)) throw httpError(409, msg`正在生成，先停止`)
+    const abortController = new AbortController()
+    running.set(chatId, abortController)
+    try {
+      const chat = await store.getChat(chatId)
+      const path = activePath(chat)
+      const node = path.at(-1)
+      if (!node || node.id !== nodeId || node.role !== 'assistant' || node.id === 'root') throw httpError(400, msg`只能给最新一条回复补写变量`)
+      if (hasUpdateBlock(node.text)) throw httpError(400, msg`这条回复已经有变量更新了`)
+      const [settings, card] = await Promise.all([store.getSettings(), store.getCard(chat.cardId)])
+      const books = await booksForCard(store, card, settings)
+      if (!usesMvu(card, books)) throw httpError(400, msg`这张卡不用 MVU 变量`)
+      // As the turn worked it out: from the reply it continued (the player's message sits in between).
+      const before = chat.nodes[chat.nodes[node.parent]?.parent]?.state ?? {}
+      const started = Date.now()
+      let answer = await askInContext(chatId, nodeId, fillInstruction(), { maxTokens: FILL_MAX_TOKENS, signal: abortController.signal })
+      if (!answer) {
+        // A subscription session cannot be borrowed: the helper model gets what it needs to work it out.
+        const ref = [settings.media?.helperModel, settings.model].find(r => isProviderRef(r))
+        if (!ref) throw httpError(400, msg`补写变量要用供应商的模型（这条回复不是供应商模型写的，借不了它的上下文）：在顶栏选一个供应商的模型，或在「配图与朗读」里选一个辅助模型`)
+        const target = await targetFor(ref, settings)
+        const render = entry => renderEntry(entry, { state: before, names: chat.names }).text
+        const result = await generateApi(target, fillRequest({ books, render, state: before, reply: node.display ?? node.text, maxTokens: FILL_MAX_TOKENS }), abortController.signal, () => {})
+        await ledger?.recordTurn(chat, { createdAt: new Date().toISOString(), model: result.model, usage: result.tokens, timing: { totalMs: Date.now() - started, firstTokenMs: null, forked: false, api: true } }).catch(() => {})
+        answer = { text: result.reply, model: result.model }
+      }
+      const block = extractUpdate(answer.text)
+      if (!block) throw httpError(502, msg`模型没有写出变量更新块，可以再试一次`)
+      const fresh = await store.getChat(chatId)
+      const edit = editChatMessage(fresh, nodeId, `${fresh.nodes[nodeId].text.trimEnd()}\n\n${block}`)
+      const { state, changes } = applyStateUpdates(before, edit.node.text)
+      edit.node.state = state
+      edit.node.stateChanges = changes
+      edit.node.filledUpdate = { at: new Date().toISOString(), model: answer.model ?? null }
+      if (subscription) await subscription.editTranscripts({ chat: fresh, node: edit.node, edit, path: activePath(fresh) })
+      return await store.saveChat(fresh)
+    } catch (error) {
+      if (abortController.signal.aborted) throw httpError(499, msg`已停止补写`)
+      throw error
+    } finally {
+      running.delete(chatId)
+    }
+  }
+
   /** The exact user message a turn would send, without calling the model. */
   async function previewTurn(chatId, { parentId, input }) {
     const chat = await store.getChat(chatId)
@@ -533,6 +590,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     runTurn,
     compactChat,
     askInContext,
+    fillUpdate,
     previewTurn,
     editMessage,
     stop(chatId) {

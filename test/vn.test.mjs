@@ -1,6 +1,7 @@
 // 视觉小说模式: a reply cut into beats, who says each, which scene a place is.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import * as vnDays from '../web/shared/vn.js'
 import { carryTags, guessSpeaker, headerPlace, latestPlace, matchScene, normalizePlace, placeIn, placeOf, pronounNear, speakerNames, splitLines, timeOfDay, weatherOf, withoutFolds } from '../web/shared/vn.js'
 
 const names = speakerNames({ char: '林青禾', user: '沈梨', roster: [{ name: '周管事', aliases: '老周，管事' }] })
@@ -265,4 +266,33 @@ test('options: 1️⃣ lines come apart from the story; the rest of their <small
   ])
   // Still coming in: the open block's prompt is hidden, the option being written waits.
   assert.deepEqual(splitLines('她还在等。\n\n<small>\n请选择:\n1️⃣ 低头\n2️⃣ 试', { names: nian, partial: true }).map(b => b.kind), ['narration', 'option'])
+})
+
+test('days: the date a time box names, how far the story moved, and which day of it this is', () => {
+  const { dateOf, advanceDay, storyDay, opensNextDay } = vnDays
+  assert.deepEqual(dateOf('10月20日 周一 清晨7:50'), { key: '10月20日 周一', month: 10, day: 20, weekday: 1 })
+  assert.equal(dateOf('永和十七年八月十五 亥时 21:40').day, 15)
+  assert.equal(dateOf('第3天 上午').count, 3)
+  assert.equal(dateOf('清晨7:50').key, '', 'a time of day alone names no date')
+  let at = { day: 1, date: null }
+  const go = time => (at = advanceDay(at, time))
+  assert.equal(go('10月20日 周一 清晨').changed, false, 'the first date is day 1')
+  assert.equal(go('10月20日 傍晚').changed, false, 'the same day written another way')
+  assert.deepEqual([go('10月21日 周二 清晨').day, at.changed], [2, true])
+  assert.deepEqual([go('10月24日').day, at.changed], [5, true], 'three days on')
+  assert.deepEqual([go('10月23日').day, at.changed], [5, false], 'back a day (a memory): the day stays')
+  assert.deepEqual([go('10月25日').day, at.changed], [6, true], 'and counts on from the furthest')
+  assert.deepEqual([advanceDay({ day: 1, date: dateOf('腊月三十') }, '正月初一').day, advanceDay({ day: 1, date: dateOf('第2天') }, '第4天').day], [2, 4])
+  // A story without dates: a paragraph opening on 次日 is the next day; one only planning it is not.
+  assert.deepEqual(storyDay(['<time_box>10月20日 周一｜旧城茶馆二楼</time_box>\n她推门进来。', '她坐下。', '次日清晨，雨停了。', '第二天就要考试了，她……']).day, 2)
+  assert.deepEqual(storyDay([{ text: '她醒了。', time: '第5天 清晨' }]).day, 5, 'the time a chat\'s variables give')
+  assert.ok(opensNextDay('**次日**清晨，雨停了。'))
+  assert.ok(!opensNextDay('「第二天我们再去。」'))
+})
+
+test('a memory: a paragraph opening on long ago, or drifting back to it, and a few after, until the story comes back', () => {
+  const memory = text => splitLines(text, { names }).map(b => Boolean(b.memory))
+  assert.deepEqual(memory('她低头看着那枚铜钥匙，思绪飘回了十年前。\n\n那年冬天，父亲还在。\n\n她回过神来，钥匙攥得发烫。\n\n门外有人敲门。'), [true, true, false, false])
+  assert.deepEqual(memory('她回想起刚才的事，脸又红了。\n\n门外有人敲门。'), [false, false], 'a moment ago is no memory')
+  assert.deepEqual(memory('那年冬天，雪很大。\n\n一\n\n二\n\n三\n\n四'), [true, true, true, true, false], 'at most three paragraphs after')
 })

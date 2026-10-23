@@ -434,6 +434,7 @@ export default {
   "没有这个存档位": "No such save slot",
   "这个存档的那一轮已经删掉了": "The turn this save was in has been deleted",
   "这个对话不是这张卡的": "That chat isn't this card's",
+  "这个对话还没有内容可读": "This chat has nothing to read yet",
   "没有这种表情": "No such expression",
   "先给{0}画或上传立绘，再画表情": "Draw or upload a sprite for {0} before drawing expressions",
   "这种画图方式不能照着立绘改，表情是按长相重新画的，可能和立绘不太一样。": "This image backend can't edit the sprite, so the expression was drawn anew from the looks and may not quite match the sprite.",
@@ -466,6 +467,12 @@ export default {
   "{0}的性格还空着": "{0}'s personality is still empty",
   "{0}和 <user> 的关系还空着": "{0}'s relationship with <user> is still empty",
   "<user> 的身份还没定": "Who <user> is hasn't been decided yet",
+  "只能给最新一条回复补写变量": "Variables can only be written for the latest reply",
+  "这条回复已经有变量更新了": "This reply already has a variable update",
+  "这张卡不用 MVU 变量": "This card does not use MVU variables",
+  "补写变量要用供应商的模型（这条回复不是供应商模型写的，借不了它的上下文）：在顶栏选一个供应商的模型，或在「配图与朗读」里选一个辅助模型": "Writing variables needs a provider's model (this reply was not written by one, so its context cannot be borrowed): choose a provider model in the top bar, or a helper model in Pictures & voice",
+  "模型没有写出变量更新块，可以再试一次": "The model did not write a variable update block; try again",
+  "已停止补写": "Stopped writing variables",
 }
 
 // Whole messages from the modules bin/launch.mjs loads on its own (store.mjs,

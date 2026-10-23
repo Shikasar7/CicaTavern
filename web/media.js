@@ -98,6 +98,11 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     api('/api/media/voices').then(info => { state.voiceInfo = info }, () => {})
   }
 
+  /** The card's settings just saved: the visual novel mode's cast (web/vn.js) follows its 角色名册. */
+  function announceCardMedia() {
+    document.dispatchEvent(new CustomEvent('cicatavern:card-media', { detail: { cardId: state.cardId, media: state.cardMedia } }))
+  }
+
   async function setCard(cardId) {
     state.cardId = cardId
     state.cardMedia = cardId ? await api(`/api/cards/${cardId}/media`).catch(() => state.cardMedia) : { voice: '', narratorVoice: '', style: '', styleNegative: '', lora: '', loraTrigger: '', loraStrength: 0.8 }
@@ -1410,6 +1415,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     const saveCard = guard(async patch => {
       if (!state.cardId) return
       state.cardMedia = await api(`/api/cards/${state.cardId}/media`, { method: 'PUT', body: patch })
+      announceCardMedia()
       toast(t`已保存`, 1500)
     })
     const card = state.cardMedia ?? {}
@@ -1644,11 +1650,37 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       }
     })
     const draftButton = el('button', { type: 'button', class: 'btn small', text: t`让辅助模型起草`, title: t`读这张卡的描述和世界书，列出主要角色和主角的长相、衣着`, onclick: draft })
+    // 从对话里补充: whoever joined the story in the open chat's recent turns and is not in the list yet.
+    const chat = getChat()
+    const ownChat = chat?.cardId === cardId ? chat : null
+    const fromChat = guard(async () => {
+      chatButton.disabled = true
+      status.textContent = t`辅助模型在读最近几轮对话，可能要一两分钟…`
+      try {
+        const names = collectRoster($('media-form')).flatMap(e => [e.name, e.aliases]).filter(Boolean)
+        const { roster, model } = await api(`/api/cards/${cardId}/roster/draft-chat`, { method: 'POST', body: { chatId: ownChat.id, names } })
+        const have = new Set(collectRoster($('media-form')).map(e => e.name.trim()))
+        const fresh = roster.filter(e => !have.has(e.name.trim())).map(e => ({ ...e, player: false, ref: false }))
+        fresh.forEach(add)
+        box.open = true
+        status.textContent = fresh.length ? t`${model} 从对话里找到 ${fresh.length} 个新角色，看过、改好再保存。` : t`${model} 没在最近几轮里找到名册之外的角色。`
+      } catch (error) {
+        status.textContent = ''
+        throw error
+      } finally {
+        chatButton.disabled = !ownChat
+      }
+    })
+    const chatButton = el('button', {
+      type: 'button', class: 'btn small', text: t`从对话里补充`, disabled: !ownChat, onclick: fromChat,
+      title: ownChat ? t`读正在打开的对话最近几轮，列出后来出场、名册里还没有的角色` : t`先打开这张卡的一个对话`,
+    })
     box.append(
       el('div', { class: 'roster-actions' }, [
         el('button', { type: 'button', class: 'btn small', text: t`添加角色`, onclick: () => add(blank()) }),
         el('button', { type: 'button', class: 'btn small', text: t`添加主角`, onclick: () => add(blank({ player: !collectRoster($('media-form')).some(e => e.player), name: t`主角`, kind: 'boy' })) }),
         draftButton,
+        chatButton,
         status,
       ]),
     )
@@ -1987,6 +2019,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         method: 'PUT',
         body: { voice: value('voice'), narratorVoice: value('narratorVoice'), style: value('style'), styleNegative: value('styleNegative'), lora: value('lora'), loraTrigger: value('loraTrigger'), loraStrength: Number(value('loraStrength') || 0.8), roster: collectRoster(form) },
       })
+      announceCardMedia()
     }
     settingsMenu.markClean()
     toast(t`已保存`)

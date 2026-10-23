@@ -4,7 +4,7 @@
 import { greetingsOf } from './cards.mjs'
 import { buildChatPrompt, replaceMacros } from './prompt.mjs'
 import YAML from 'yaml'
-import { initialState } from './worldbook.mjs'
+import { constantEntries, initialState, lateEntries } from './worldbook.mjs'
 import { applyStateUpdates, displayText } from './state.mjs'
 import { httpError, newId } from './store.mjs'
 import { MIN_TURNS, RECENT_TURNS, STORY_FORMAT, storyPath, storyTurns, turnsSinceCompaction } from './recap.mjs'
@@ -28,6 +28,29 @@ export async function booksForCard(store, card, settings = null) {
     }
   }
   return books
+}
+
+/**
+ * What mounting or taking off books means for a chat's frozen prefix: the
+ * books mounted or taken off since its prefix was built that hold constant
+ * entries ({ id, name, entries }). null when the prefix would come out the
+ * same (keyword entries follow the mounts on the next turn by themselves),
+ * or for a chat from before chats recorded their books.
+ */
+export async function mountChange(store, chat, card) {
+  if (!Array.isArray(chat.bookIds)) return null
+  const books = await booksForCard(store, card)
+  const now = new Set(books.map(book => book.id))
+  const before = new Set(chat.bookIds)
+  const frozen = book => constantEntries([book]).length + lateEntries([book]).length
+  const added = books.filter(book => !before.has(book.id) && frozen(book) > 0).map(book => ({ id: book.id, name: book.name, entries: frozen(book) }))
+  const removed = []
+  for (const id of before) {
+    if (now.has(id) || id.startsWith('card-')) continue
+    const book = await store.getBook(id).catch(() => null)
+    if (book && frozen(book) > 0) removed.push({ id, name: book.name, entries: frozen(book) })
+  }
+  return added.length || removed.length ? { added, removed } : null
 }
 
 /**

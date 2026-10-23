@@ -103,17 +103,17 @@ If you can't quite say what you want, the creator guides you round by round:
 
 <br clear="right">
 
-## Latest changes [1.9.0]
+## Latest changes [1.9.1]
 
-<p align="center"><img src="docs/screenshots/talk-edit.jpg" alt="Editing a lorebook by chat in 1.9.0: asked to make Qinghe colder, make the dock constant and add a boatman, the guide lists three changes, each before and after" width="880"></p>
+<p align="center"><img src="docs/screenshots/vn-hud.jpg" alt="The visual novel HUD in 1.9.1: affection, stamina and money at the top left, and at the end of the turn the notes Affection +5, Stamina −4, Got: old letter" width="880"></p>
 
-- **Edit lorebooks, presets, regex and the theme by chat**: as with Edit card, say what to change and the guide writes out each piece it would change, before and after side by side; only what you tick goes in, and the last change can be undone. An empty lorebook can be written from one sentence; a long lorebook or preset is looked through first for the entries to read.
-- **Regex is tried before it's saved**: a regex the guide writes is first run on the chat's latest reply, showing how many places it matches and what each becomes (styled HTML shown as it looks); one that doesn't compile can't be ticked, and one that hangs is flagged.
-- **Custom colours, font and size**: tune the twelve colours of the theme one by one, or say "ink wash" and get a light and a dark set to preview before you keep them; the story's font and size can change, kept for each device.
-- **Search and global lorebooks**: search the card list and the lorebooks (entries' text included); a lorebook can be made global, used by every chat without attaching it card by card.
-- **Improvements**: pictures always have someone in them; a card with many openings shows each one in full before you pick.
+- **A HUD in visual novel mode**: a few variables stay at the top left, by default the first few numbers (affection, stamina, money…); click it to choose which and show each as a bar, a number or an icon. At the end of a turn, what it changed pops up under it ("Affection +5", "Got: old letter").
+- **New days and memories**: when the date moves on, "Day N" crosses the picture with the date and place; memories turn the picture and the sprites sepia with dark corners.
+- **Write variables, choice buttons**: when an MVU card's reply leaves out its variable update, "Write variables" writes just that block; a card's or preset's own action options become buttons too.
+- **Expression packs, the cast list**: Sprites can import a SillyTavern expression pack, matched to the eight expressions; the cast list can add the characters who joined later, from the chat.
+- **Improvements**: mounting a lorebook with constant entries asks whether to apply it to the open chat; What's new can show each 1.8 version's pages; the sprite window follows the cast list as soon as it is saved.
 
-Visual novel mode came in 1.8.0; voices for each character and the CG gallery in 1.8.1; lorebook entry editing in 1.8.2; Edit card and Generate avatar in 1.8.3; in-app updates on the phone in 1.8.4; several on stage, expressions, save and load, and lorebook management in 1.8.5. Download from [Releases](https://github.com/Shikasar7/CicaTavern/releases/latest); 1.4.0 and later can update in the app. Everything that changed is in [CHANGELOG.md](CHANGELOG.md).
+Editing lorebooks, presets, regex and the theme by chat, custom colours, font and size, search and global lorebooks came in 1.9.0; visual novel mode in 1.8.0, with several on stage, expressions and save and load in 1.8.5. Download from [Releases](https://github.com/Shikasar7/CicaTavern/releases/latest); 1.4.0 and later can update in the app. Everything that changed is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Getting started (Windows)
 

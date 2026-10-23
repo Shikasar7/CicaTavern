@@ -18,7 +18,7 @@ import { copyFile, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promi
 import { inflateRawSync } from 'node:zlib'
 import path from 'node:path'
 import { complete, fetchBytes, googleRequest, isProviderRef, postJson, providerError, providerRequest, refLabel, resolveRef } from './providers.mjs'
-import { cleanFrame, cleanLora, cleanRoster, cleanStrength, countTags, draftMaterial, flattenFrame, frameFormat, isFramePrompt, isRosterId, leadOf, naiCharacters, parseFrame, parseRosterDraft, rosterBrief, rosterDraftRequest, withSomeone } from './roster.mjs'
+import { chatMaterial, cleanFrame, cleanLora, cleanRoster, cleanStrength, countTags, draftMaterial, flattenFrame, frameFormat, isFramePrompt, isRosterId, leadOf, naiCharacters, parseFrame, parseRosterDraft, rosterBrief, rosterChatRequest, rosterDraftRequest, withSomeone } from './roster.mjs'
 import { httpError, newId } from './store.mjs'
 import { FISH_MODELS } from './voice/cloud.mjs'
 import { KEYED, cleanVoiceKey, cleanVoiceList, createVoices } from './voice/index.mjs'
@@ -1282,6 +1282,36 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     return { roster, model: `${provider.name} · ${modelId}` }
   }
 
+  /**
+   * 从对话里补充: the characters in a chat's recent turns that the 角色名册 does
+   * not have yet, written by the helper model; not saved.
+   * @param chat - { path (activePath), user (the player's name) }.
+   * @param names - the names the list on the page already has (saved or not).
+   */
+  async function draftRosterFromChat(cardId, chat, names = [], signal) {
+    const media = await settings()
+    const card = await store.getCard(cardId)
+    const saved = cleanCardMedia(card.media).roster
+    const split = list => list.flatMap(name => String(name ?? '').split(/[,，、/|]+/)).map(name => name.trim()).filter(Boolean)
+    const known = [...new Set(split([...saved.flatMap(entry => [entry.name, entry.aliases]), ...names, chat.user]))]
+    const material = chatMaterial(chat.path)
+    if (!material) throw httpError(400, msg`这个对话还没有内容可读`)
+    const { provider, modelId } = await helperTarget({ model: '' }, media)
+    let result
+    try {
+      result = await complete(provider, modelId, { ...rosterChatRequest(material, { known, setting: card.scenario || card.description || '' }), signal }, { proxy: proxyNow() })
+    } catch (error) {
+      if (error.status) throw error
+      throw httpError(502, providerError(provider, error))
+    }
+    // Nobody new is an answer too; whoever the list has after all is left out.
+    const has = new Set(known.map(name => name.toLowerCase()))
+    const roster = parseRosterDraft(result.text)
+      .filter(entry => !split([entry.name, entry.aliases]).some(name => has.has(name.toLowerCase())))
+      .map(entry => ({ ...entry, player: false }))
+    return { roster, model: `${provider.name} · ${modelId}` }
+  }
+
   /** The settings with the 画图方式 and model picked for one picture, if any (withDrawChoice). */
   async function settingsFor(choice) {
     return withDrawChoice(await settings(), choice, backends)
@@ -1634,5 +1664,5 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     return voices.accountVoices({ source, draft: await voiceDraft(draft, keys) }, signal)
   }
 
-  return { defaults, settings, cleanSettings, ownBackends: ownBackendViews, naiStatus, setNaiToken, naiCheck, cardMediaView, saveCardMedia, inheritCardMedia, draftRoster, drawPortrait, drawCardArt, drawAvatar, drawScenery, drawBackdrop, drawSprite, drawExpression, labelExpressions, readRosterRef, saveRosterRef, removeRosterRef, writeImagePrompt, generateImage, readImage, removeImage, removeChatMedia, copyChatMedia, loras, voices: voices.list, personaList: voices.personaList, ttsKeyStatus: voices.ttsKeyStatus, setTtsKey: voices.setTtsKey, voiceKeys: voices.keyStatus, setVoiceKey: voices.setKey, speak, previewVoice, accountVoices, loadWorkflow, saveWorkflow, describeWorkflow }
+  return { defaults, settings, cleanSettings, ownBackends: ownBackendViews, naiStatus, setNaiToken, naiCheck, cardMediaView, saveCardMedia, inheritCardMedia, draftRoster, draftRosterFromChat, drawPortrait, drawCardArt, drawAvatar, drawScenery, drawBackdrop, drawSprite, drawExpression, labelExpressions, readRosterRef, saveRosterRef, removeRosterRef, writeImagePrompt, generateImage, readImage, removeImage, removeChatMedia, copyChatMedia, loras, voices: voices.list, personaList: voices.personaList, ttsKeyStatus: voices.ttsKeyStatus, setTtsKey: voices.setTtsKey, voiceKeys: voices.keyStatus, setVoiceKey: voices.setKey, speak, previewVoice, accountVoices, loadWorkflow, saveWorkflow, describeWorkflow }
 }

@@ -1962,6 +1962,51 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 /* The controls take the top row; under them on the left: the time box, what is being drawn, the turn's CG. */
 .vn-corner { position: absolute; top: var(--vn-above, 52px); left: 12px; max-width: calc(100% - 24px); display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
 .vn-sign[hidden] { display: none; }
+/* 游戏式 HUD (web/vn-hud.js): a few variables under the time box, each a bar, a number, an icon or words. */
+.vn-hud {
+  display: grid; gap: 3px; width: max-content; min-width: 150px; max-width: min(250px, 62vw); padding: 7px 11px; border-radius: 12px; cursor: pointer;
+  background: color-mix(in srgb, var(--raised) 78%, transparent); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  box-shadow: var(--shadow-1); font: 12px/1.55 var(--ui); color: var(--ink);
+}
+.vn-hud-row { display: flex; align-items: center; gap: 7px; min-width: 0; margin: 0 -4px; padding: 0 4px; border-radius: 6px; }
+.vn-hud-label { flex: none; min-width: 2.5em; max-width: 9em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.vn-hud-bar { flex: 1 1 70px; min-width: 48px; height: 6px; border-radius: 999px; overflow: hidden; background: color-mix(in srgb, var(--ink) 14%, transparent); }
+.vn-hud-bar i { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width .9s var(--ease); }
+.vn-hud-value { margin-left: auto; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.vn-hud-row.look-text .vn-hud-value { max-width: 11em; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+.vn-hud-row.look-icon .vn-hud-value { margin-left: 0; }
+.vn-hud-icon { width: 1.4em; text-align: center; font-size: 14px; line-height: 1; }
+/* A number that moved lights up for a moment. */
+.vn-hud-row.bump.up { animation: vn-hud-up 1.4s var(--ease); }
+.vn-hud-row.bump.down { animation: vn-hud-down 1.4s var(--ease); }
+@keyframes vn-hud-up { 15%, 45% { background: color-mix(in srgb, var(--ok) 26%, transparent); } }
+@keyframes vn-hud-down { 15%, 45% { background: color-mix(in srgb, var(--bad) 26%, transparent); } }
+/* What a reply changed: notes one after another under the HUD, over the choices if they reach that far. */
+.vn-notes { position: relative; z-index: 2; display: grid; justify-items: start; gap: 5px; pointer-events: none; }
+.vn-notes:empty { display: none; }
+.vn-note {
+  padding: 5px 15px; border-radius: 999px; white-space: nowrap; opacity: 0; font: 600 14px/1.5 var(--ui); color: var(--ink);
+  background: color-mix(in srgb, var(--raised) 88%, transparent); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); box-shadow: var(--shadow-1);
+  animation: vn-note 3.2s var(--ease) var(--delay, 0ms) both;
+}
+.vn-note.up, .vn-note.on { color: var(--ok); }
+.vn-note.down { color: var(--bad); }
+.vn-note.gain { color: var(--lamp); }
+.vn-note.lose, .vn-note.off { color: var(--muted); }
+@keyframes vn-note { 0% { opacity: 0; transform: translateX(-10px); } 10%, 80% { opacity: 1; transform: none; } to { opacity: 0; transform: translateX(-6px); } }
+@keyframes vn-note-still { 8%, 85% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .vn-note { animation-name: vn-note-still; }
+  .vn-hud-bar i { transition: none; }
+  .vn-hud-row.bump { animation: none; }
+}
+/* Its settings: each variable ticked if kept, with its look. */
+.vn-hud-picks { display: grid; gap: 2px; max-height: 46vh; overflow-y: auto; margin: 2px 0 8px; }
+.vn-hud-pick { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 2px; border-bottom: 1px solid var(--line-soft); }
+.vn-hud-pick label { display: flex; align-items: center; gap: 7px; min-width: 0; margin: 0; flex-direction: row; font-size: 13px; color: var(--ink); cursor: pointer; }
+.vn-hud-pick label small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vn-hud-pick .seg { flex: none; }
+.vn-hud-pick .seg button { padding: 2px 8px; font-size: 12px; }
 .vn-sign .time-box { margin: 0; background: color-mix(in srgb, var(--raised) 78%, transparent); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
 .vn-cg-thumb {
   position: relative; width: 92px; aspect-ratio: 3 / 2; padding: 0; border-radius: 10px; overflow: hidden; cursor: pointer;
@@ -1998,6 +2043,23 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 }
 .vn-title.show { animation: vn-title 2.6s var(--ease); }
 @keyframes vn-title { 15%, 70% { opacity: 1; } to { opacity: 0; } }
+/* 换天: the day's title across the picture for a moment, a band fading out to both sides. */
+.vn-chapter {
+  position: absolute; left: 0; right: 0; top: 40%; transform: translateY(-50%); display: grid; justify-items: center; gap: 2px;
+  padding: 20px 16px 18px; text-align: center; pointer-events: none; opacity: 0;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--bg) 78%, transparent) 24%, color-mix(in srgb, var(--bg) 78%, transparent) 76%, transparent);
+}
+.vn-chapter b { font: 600 34px/1.35 var(--serif); letter-spacing: .3em; text-indent: .3em; color: var(--ink); }
+.vn-chapter span { font: 14px/1.7 var(--ui); letter-spacing: .12em; color: var(--muted); }
+.vn-chapter.show { animation: vn-chapter 3.6s var(--ease); }
+@keyframes vn-chapter { 14%, 74% { opacity: 1; } to { opacity: 0; } }
+/* 回忆滤镜: a memory's lines in sepia, the corners darkened; the people too, the text box not. */
+.vn-memory {
+  position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity .9s var(--ease);
+  -webkit-backdrop-filter: sepia(.7) saturate(.85) contrast(.94); backdrop-filter: sepia(.7) saturate(.85) contrast(.94);
+  background: radial-gradient(ellipse 75% 70% at 50% 45%, transparent 50%, rgb(45 28 12 / .5) 100%);
+}
+.vn.memory .vn-memory { opacity: 1; }
 
 .vn-box {
   position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%);
@@ -2168,8 +2230,8 @@ label.cast-voice, .dialog label.cast-voice { display: grid; grid-template-column
 .vn-log-current.here { box-shadow: inset 3px 0 0 var(--accent); background: color-mix(in srgb, var(--accent-soft) 60%, transparent); }
 
 /* Hide the interface (H): only the picture stays; a click brings it back. */
-.vn > :not(.vn-bg, .vn-tint, .vn-actors, .vn-flash) { transition: opacity .25s var(--ease); }
-.vn.bare > :not(.vn-bg, .vn-tint, .vn-actors, .vn-flash) { opacity: 0; pointer-events: none; }
+.vn > :not(.vn-bg, .vn-tint, .vn-actors, .vn-memory, .vn-flash, .vn-chapter) { transition: opacity .25s var(--ease); }
+.vn.bare > :not(.vn-bg, .vn-tint, .vn-actors, .vn-memory, .vn-flash) { opacity: 0; pointer-events: none; }
 
 /* The stage in this mode: the reader fills it; the composer floats at the foot and opens on ✎ 行动. */
 .stage.vn-on .reader > :is(#rail, #whereabouts) { display: none; }
@@ -2213,6 +2275,11 @@ label.cast-voice, .dialog label.cast-voice { display: grid; grid-template-column
   .vn-controls { top: 10px; left: 10px; right: 10px; max-width: none; justify-content: flex-end; gap: 5px; }
   .vn-btn { padding: 3px 9px; }
   .vn-title { font-size: 21px; }
+  .vn-hud { min-width: 128px; padding: 5px 9px; font-size: 11px; }
+  .vn-hud-bar { flex-basis: 52px; min-width: 40px; }
+  .vn-note { font-size: 13px; padding: 4px 12px; }
+  .vn-chapter b { font-size: 27px; }
+  .vn-chapter span { font-size: 13px; }
   /* The choices take the width; up and down they sit as everywhere else. */
   .stage.vn-on .vn-menu { left: 10px; right: 10px; width: auto; transform: translateY(-50%); animation-name: vn-menu-rise; padding: 12px 10px 10px; gap: 10px; border-radius: 18px; }
   .stage.vn-on .vn-panel { left: 10px; right: 10px; width: auto; transform: none; top: var(--vn-above, 48px); max-height: calc(100% - var(--vn-above, 48px) - var(--vn-below, 45%) - 8px); }
@@ -2299,6 +2366,13 @@ label.cast-voice, .dialog label.cast-voice { display: grid; grid-template-column
 .whatsnew-head { display: flex; align-items: baseline; gap: 10px; padding: 16px 16px 12px 22px; }
 .whatsnew-kicker { font: 600 12px var(--ui); letter-spacing: .16em; color: var(--lamp); }
 .whatsnew-head b { font: 600 18px var(--serif); }
+/* More than one series: the version is a picker, turning back to an earlier one's pages. */
+.whatsnew-head .whatsnew-series {
+  appearance: none; font: 600 18px var(--serif); color: var(--ink); border: 0; border-radius: 6px; padding: 0 20px 0 0; cursor: pointer;
+  background: linear-gradient(45deg, transparent 50%, currentColor 50%) right 6px center / 5px 5px no-repeat, linear-gradient(135deg, currentColor 50%, transparent 50%) right 1px center / 5px 5px no-repeat;
+}
+.whatsnew-head .whatsnew-series:hover { color: var(--accent); }
+.whatsnew-head .whatsnew-series option { font: 15px var(--ui); color: var(--ink); background: var(--surface); }
 .whatsnew-x { margin-left: auto; align-self: center; }
 .whatsnew-figure { margin: 0 22px; border-radius: 14px; overflow: hidden; aspect-ratio: 16 / 9; background: var(--pane); box-shadow: var(--shadow-1); animation: whatsnew-in .35s var(--ease); }
 .whatsnew-figure img { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -2318,7 +2392,7 @@ label.cast-voice, .dialog label.cast-voice { display: grid; grid-template-column
   /* 更新了什么 on a line above the version and the date, none of them broken; ✕ beside both. */
   .whatsnew-head { display: grid; grid-template: "kicker kicker x" auto "title date x" auto / auto minmax(0, 1fr) auto; column-gap: 8px; row-gap: 2px; padding: 14px 10px 10px 16px; }
   .whatsnew-kicker { grid-area: kicker; }
-  .whatsnew-head b { grid-area: title; }
+  .whatsnew-head b, .whatsnew-head .whatsnew-series { grid-area: title; }
   .whatsnew-head .muted { grid-area: date; }
   .whatsnew-head > * { white-space: nowrap; }
   .whatsnew-x { grid-area: x; margin: 0; }
@@ -2352,6 +2426,12 @@ label.cast-voice, .dialog label.cast-voice { display: grid; grid-template-column
 .vn-face-pic img { width: 100%; height: 260%; object-fit: cover; object-position: top; align-self: start; }
 .vn-face-tools { display: flex; gap: 2px; flex-wrap: wrap; justify-content: center; }
 .vn-face-tools .btn { padding: 0 5px; min-height: 0; font-size: 11px; line-height: 1.6; }
+.vn-faces-head > .row { gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+/* 导入表情包: the pack against the expressions, before anything is kept. */
+.vn-pack .vn-face.off { opacity: .45; }
+.vn-pack-file { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
+.vn-pack .vn-faces-head select { max-width: 60%; font-size: 12px; padding: 3px 6px; }
+.dialog label.vn-pack-replace { flex-direction: row; align-items: center; gap: 6px; margin: 0; color: var(--ink); cursor: pointer; }
 
 /* 存档 / 读档 (web/vn-saves.js): six slots a page, each a picture of the stage and where it was. */
 .vn-saves { width: min(880px, calc(100vw - 32px)); }

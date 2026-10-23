@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { cleanFrame, cleanRoster, countTags, draftMaterial, flattenFrame, isFramePrompt, leadOf, naiCharacters, parseFrame, parseRosterDraft, rosterBrief, withSomeone } from '../server/roster.mjs'
+import { chatMaterial, cleanFrame, cleanRoster, countTags, draftMaterial, flattenFrame, isFramePrompt, leadOf, naiCharacters, parseFrame, parseRosterDraft, rosterBrief, rosterChatRequest, withSomeone } from '../server/roster.mjs'
 import { imagePromptRequest, naiRequest, referenceModel, withStyle } from '../server/media.mjs'
 
 const ROSTER = cleanRoster([
@@ -131,4 +131,21 @@ test('leadOf: the one person, or the one besides the player', () => {
   assert.equal(leadOf([{ entry: her }, { entry: him }]), her)
   assert.equal(leadOf([{ entry: her }, { entry: other }]), null)
   assert.equal(leadOf([{ entry: her }, { entry: other }, { entry: him }]), null)
+})
+
+test('从对话里补充: the last turns as shown, newest kept when long; the request names who the list has', () => {
+  const path = [
+    { role: 'assistant', display: '开场。' },
+    { role: 'user', text: '你好' },
+    { role: 'assistant', display: '老周撑着船过来。', text: '老周撑着船过来。<state>{}</state>' },
+    { role: 'user', text: '' },
+  ]
+  assert.equal(chatMaterial(path), '<reply>\n开场。\n</reply>\n\n<player>\n你好\n</player>\n\n<reply>\n老周撑着船过来。\n</reply>')
+  assert.equal(chatMaterial(path, { turns: 1 }), '<reply>\n老周撑着船过来。\n</reply>', 'the newest turns')
+  assert.equal(chatMaterial(path, { budget: 30 }), '<reply>\n老周撑着船过来。\n</reply>', 'over the budget: the newest kept')
+  const request = rosterChatRequest('<reply>…</reply>', { known: ['林雪', '主角'], setting: '民国，上海' })
+  const asked = request.messages[0].content
+  assert.ok(asked.startsWith('<setting>\n民国，上海\n</setting>'))
+  assert.match(asked, /Already in the cast list \(skip them under any of their names\): 林雪, 主角\./)
+  assert.match(rosterChatRequest('x').messages[0].content, /\(nobody yet\)/)
 })

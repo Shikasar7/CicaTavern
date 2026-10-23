@@ -2,7 +2,7 @@
 // effects, and who stands on the stage line by line.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { effectsOf, EXPRESSION_LOOK, EXPRESSIONS, guessExpression, stageAt } from '../web/shared/stage.js'
+import { effectsOf, EXPRESSION_LOOK, EXPRESSIONS, guessExpression, packFaces, stageAt } from '../web/shared/stage.js'
 
 test('an expression from the narration around a line, else from the voice', () => {
   assert.equal(guessExpression('林青禾笑了笑：「来了？」'), 'smile')
@@ -86,4 +86,24 @@ test('the stage: labels from the helper model come before the narration', () => 
   assert.equal(stageAt(steps, 1, { names, labels: [null, 'angry'] }).members[0].expression, 'angry')
   // Something that is not an expression is ignored.
   assert.equal(stageAt(steps, 0, { names, labels: ['furious'] }).members[0].expression, 'smile')
+})
+
+test('an expression pack: SillyTavern\'s names (and plain ones) to the expressions here, folder by folder', () => {
+  const packs = packFaces([
+    'Seraphina/joy.png', 'Seraphina/joy-1.png', 'Seraphina/anger.png', 'Seraphina/neutral.png', 'Seraphina/curiosity.webp',
+    'Seraphina/love.png', 'Seraphina/admiration.png', 'Seraphina/grief.png', '__MACOSX/Seraphina/._joy.png', 'Other/微笑.png', 'readme.txt',
+  ])
+  assert.deepEqual(packs.map(pack => pack.folder), ['Seraphina', 'Other'], 'the fullest first; no mac leftovers')
+  assert.deepEqual(packs[0].faces, {
+    neutral: 'Seraphina/neutral.png',
+    smile: 'Seraphina/admiration.png',
+    happy: 'Seraphina/joy.png',
+    shy: 'Seraphina/love.png',
+    angry: 'Seraphina/anger.png',
+    sad: 'Seraphina/grief.png',
+    thinking: 'Seraphina/curiosity.webp',
+  })
+  assert.deepEqual(packs[0].unused, ['Seraphina/joy-1.png'], 'of several, the plainest name')
+  assert.deepEqual(packs[1].faces, { smile: 'Other/微笑.png' })
+  assert.deepEqual(packFaces(['a.png', 'notes.txt']), [], 'nothing named after a feeling')
 })

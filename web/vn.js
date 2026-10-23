@@ -9,10 +9,12 @@
 import { t } from '/i18n.js'
 import { htmlFrame, segments, streamingText } from '/render.js'
 import { timeBox } from '/status.js'
-import { latestPlace, matchScene, placeIn, speakerNames, splitLines, timeOfDay, weatherOf } from '/shared/vn.js'
+import { advanceDay, latestPlace, matchScene, normalizePlace, opensNextDay, placeIn, speakerNames, splitLines, stateTime, storyDay, timeOfDay, timesIn, weatherOf } from '/shared/vn.js'
 import { cutOut } from '/shared/cutout.js'
-import { EXPRESSIONS, stageAt } from '/shared/stage.js'
+import { EXPRESSIONS, PACK_PICTURE, packFaces, stageAt } from '/shared/stage.js'
 import { initVnSaves } from '/vn-saves.js'
+import { initVnHud } from '/vn-hud.js'
+import { changeNotes } from '/shared/hud.js'
 import { shrink } from '/theme.js'
 
 const MODE_KEY = 'cicatavern.vnMode'
@@ -120,12 +122,18 @@ export function initVn(deps) {
   const bg = el('div', { class: 'vn-bg' })
   const tint = el('div', { class: 'vn-tint' })
   const actors = el('div', { class: 'vn-actors' })
+  // 回忆滤镜: over the picture and the people while a memory's lines are read.
+  const memoryLayer = el('div', { class: 'vn-memory', 'aria-hidden': 'true' })
   const flash = el('div', { class: 'vn-flash', 'aria-hidden': 'true' })
   const sign = el('div', { class: 'vn-sign' })
   const sceneChip = el('div', { class: 'vn-scene-chip', hidden: true })
   const cgButton = el('button', { type: 'button', class: 'vn-cg-thumb', hidden: true, title: t`这一轮的配图` })
-  const corner = el('div', { class: 'vn-corner' }, [sign, sceneChip, cgButton])
+  // 游戏式 HUD: a few variables under the time box; what a reply changed pops up at its end.
+  const hud = initVnHud({ el, prefs, savePrefs: () => remember(PREFS_KEY, prefs), open: () => togglePop('hud') })
+  const corner = el('div', { class: 'vn-corner' }, [sign, hud.box, hud.notes, sceneChip, cgButton])
   const title = el('div', { class: 'vn-title', hidden: true })
+  // A new day: its title across the picture for a moment (第 3 天, the date, the place).
+  const chapter = el('div', { class: 'vn-chapter', 'aria-hidden': 'true' })
   const panel = el('div', { class: 'vn-panel', hidden: true })
   // The turn's choices, as a game's: a menu in the middle of the picture.
   const menu = el('div', { class: 'vn-menu', hidden: true, role: 'dialog', 'aria-label': t`行动选项` })
@@ -150,6 +158,7 @@ export function initVn(deps) {
   }
   const autoButton = control(t`自动`, t`自动翻页（A）`, () => setAuto(!state.auto))
   const statusButton = control(t`状态`, t`状态栏`, () => togglePanel('status'))
+  const hudControl = control('HUD', t`角落里常驻显示的变量：显示哪些、怎么显示，还有数值变化提示`, () => togglePop('hud'))
   const speedButton = control('', t`打字速度`, () => {
     const order = Object.keys(SPEEDS)
     prefs.speed = order[(order.indexOf(prefs.speed) + 1) % order.length]
@@ -179,9 +188,9 @@ export function initVn(deps) {
   const saveControl = control(t`存档`, t`存档（F5 快速存档）`, () => saves.open('save'))
   const loadControl = control(t`读档`, t`读档（F9 快速读档）`, () => saves.open('load'))
   // On a phone the row keeps 朗读, 配图, 回看, 自动, 跳过; the rest wait behind ⋯ (CSS hides them, its menu lists them).
-  const extras = [cgControl, speedButton, statusButton, optionsButton, saveControl, loadControl, sceneControl, spriteControl, hideControl, fullButton, actControl, exitControl]
+  const extras = [cgControl, speedButton, statusButton, hudControl, optionsButton, saveControl, loadControl, sceneControl, spriteControl, hideControl, fullButton, actControl, exitControl]
   for (const b of extras) b.classList.add('vn-extra')
-  const moreButton = control('⋯', t`更多：CG、速度、状态、选项、存档、读档、场景、立绘、隐藏、全屏、行动、退出`, () => togglePop('more'))
+  const moreButton = control('⋯', t`更多：CG、速度、状态、HUD、选项、存档、读档、场景、立绘、隐藏、全屏、行动、退出`, () => togglePop('more'))
   moreButton.classList.add('vn-overflow')
   const logControl = control(t`回看`, t`回看（L）`, () => openLog())
   const skipControl = control(t`跳过`, t`跳到最新一句`, () => skip())
@@ -195,6 +204,7 @@ export function initVn(deps) {
     skipControl,
     speedButton,
     statusButton,
+    hudControl,
     optionsButton,
     saveControl,
     loadControl,
@@ -206,7 +216,7 @@ export function initVn(deps) {
     exitControl,
     moreButton,
   ])
-  root.append(bg, tint, actors, flash, corner, title, panel, menu, box, controls, scrim, pop, logBox, cgView)
+  root.append(bg, tint, actors, memoryLayer, flash, corner, title, chapter, panel, menu, box, controls, scrim, pop, logBox, cgView)
 
   // Where the layers in between may go: under the controls (however they wrapped), above the text box,
   // and the text box itself above the input while it is open.
@@ -318,7 +328,10 @@ export function initVn(deps) {
   function openPop(kind) {
     popKind = kind
     const close = el('button', { type: 'button', class: 'vn-btn', text: '×', title: t`关闭（Esc）`, onclick: closePop })
-    if (kind === 'more') {
+    if (kind === 'hud') {
+      pop.setAttribute('aria-label', t`HUD 设置`)
+      pop.replaceChildren(el('div', { class: 'vn-pop-head' }, [el('b', { text: t`HUD` }), close]), el('div', { class: 'vn-pop-own vn-hud-settings' }, hud.settings(() => openPop('hud'))))
+    } else if (kind === 'more') {
       pop.setAttribute('aria-label', t`更多`)
       pop.replaceChildren(
         el('div', { class: 'vn-pop-head' }, [el('b', { text: t`更多` }), close]),
@@ -339,7 +352,7 @@ export function initVn(deps) {
     pop.hidden = false
     scrim.hidden = false
     for (const [button, which] of [[readMore, 'voice'], [imageMore, 'image'], [moreButton, 'more']]) button.classList.toggle('open', kind === which)
-    if (kind === 'more') return
+    if (kind === 'more' || kind === 'hud') return
     if (deps.fillQuick) deps.fillQuick(popShared, kind)
     else popShared.replaceChildren()
   }
@@ -500,13 +513,27 @@ export function initVn(deps) {
     return stepsOf(display(chat, node, latest).shown, false).steps.filter(step => step.type === 'line')
   }
 
-  async function loadRoster(cardId) {
-    if (!cardId || state.roster.has(cardId)) return
-    state.roster.set(cardId, [])
+  /** The card's 角色名册, once (`fresh`: again, as the library opens). */
+  async function loadRoster(cardId, fresh = false) {
+    if (!cardId || (!fresh && state.roster.has(cardId))) return
+    if (!state.roster.has(cardId)) state.roster.set(cardId, [])
     const media = await api(`/api/cards/${cardId}/media`).catch(() => null)
-    state.roster.set(cardId, Array.isArray(media?.roster) ? media.roster : [])
-    if (state.cardId === cardId) render(getChat())
+    if (media || !fresh) takeRoster(cardId, media?.roster)
   }
+
+  /** A card's 角色名册 as it is now: the names, the stage and the library follow. */
+  function takeRoster(cardId, roster) {
+    state.roster.set(cardId, Array.isArray(roster) ? roster : [])
+    cast.none.clear()
+    if (state.cardId !== cardId) return
+    if (state.on) render(getChat())
+    if (library?.open) renderLibrary()
+  }
+  // Saved in 配图与朗读 (web/media.js): the cast here is that one from now on.
+  document.addEventListener('cicatavern:card-media', event => {
+    const { cardId, media } = event.detail ?? {}
+    if (cardId && Array.isArray(media?.roster)) takeRoster(cardId, media.roster)
+  })
 
   /** Redraws from the chat as it is now: a new reply starts at its first line, the same one keeps its place. */
   function render(chat) {
@@ -551,6 +578,13 @@ export function initVn(deps) {
     state.available = writing ? Math.max(0, steps.length - 1) : steps.length
     if (writing) compose(false)
     if (fresh) {
+      // Which day the story had reached before this reply; its own dates count on from there.
+      // Opening a chat (or coming back to this mode) shows no title for the reply already there.
+      const quiet = state.day?.chatId !== chat.id
+      const before = (chat.path ?? []).filter(item => item.role === 'assistant' && (writing || item.id !== node?.id))
+      state.day = { chatId: chat.id, at: storyDay(before.map(item => ({ text: item.raw ?? item.text, time: stateTime(item.state) }))), dated: false, shown: false, quiet }
+      // The HUD shows the state before this reply until the player reaches its end (one already there counts as read).
+      state.reached = quiet ? key : null
       state.index = -1
       state.seen = -1
       state.stepWhere = null
@@ -566,6 +600,8 @@ export function initVn(deps) {
       const far = furthest ? at(furthest) : -1
       state.seen = Math.max(state.index, far >= 0 ? far : Math.min(state.seen, steps.length - 1))
     }
+    // Whether this reply says its date (its time box may still be coming): then 次日 in it is no new day.
+    if (state.day && !state.day.dated) state.day.dated = timesIn(writing ? job.text : node ? node.raw ?? node.text : '').length > 0 || Boolean(!writing && stateTime(node?.state))
     // Loaded from a save (a moment ago): straight to its line, everything before it read.
     const jumped = state.jump?.key === key && Date.now() - state.jump.at < 10_000 && steps.length > 0
     if (jumped) {
@@ -580,6 +616,7 @@ export function initVn(deps) {
     drawScene(chat, writing ? job.text : null)
     drawStatus(chat)
     drawCg(chat)
+    drawHud(chat)
     if (!writing && node) labelFaces()
     if (jumped) showStep(false)
     else if (state.index < 0 || state.pending) catchUp()
@@ -663,12 +700,18 @@ export function initVn(deps) {
     endRow.hidden = true
     if (!step) return
     state.seen = Math.max(state.seen, state.index)
-    // The story moved on to another place: the sign and the background follow.
-    if (step.where?.place && step.where.place !== state.stepWhere?.place) {
+    // The story moved on to another place or time: the sign, the background and the day follow.
+    if (step.where?.place && (step.where.place !== state.stepWhere?.place || step.where.time !== state.stepWhere?.time)) {
       state.stepWhere = step.where
       const chat = getChat()
       if (chat) drawScene(chat, state.streaming ? live()?.text ?? null : null)
     }
+    // A story that writes no dates: a paragraph opening on 次日 is the next day.
+    if (step.type === 'line' && state.day && !state.day.dated && opensNextDay(step.text)) {
+      state.day.at = { day: state.day.at.day + 1, date: null }
+      turnDay(state.day.at.day, state.stepWhere ?? latestPlace(getChat()?.path))
+    }
+    root.classList.toggle('memory', step.type === 'line' && Boolean(step.memory) && prefs.effects !== false)
     if (step.type === 'panel') {
       plate.hidden = true
       box.dataset.kind = 'narration'
@@ -735,6 +778,7 @@ export function initVn(deps) {
     const last = state.index >= state.available - 1
     const ended = last && !state.streaming
     nextMark.className = `vn-next${last && state.streaming ? ' wait' : ''}${ended ? ' end' : ''}`
+    if (ended) reachEnd()
     if (ended) showEnd()
     else if (state.auto && !state.reading) {
       const step = state.steps[state.index]
@@ -915,6 +959,31 @@ export function initVn(deps) {
     showPanel(el('div', { class: 'vn-status' }, [...parts, close]), kind)
   }
 
+  /** The state before a reply: the assistant message before it on the path. */
+  function stateBefore(chat, node) {
+    const index = chat.path.findIndex(item => item.id === node.id)
+    return chat.path.slice(0, Math.max(0, index)).reverse().find(item => item.role === 'assistant')?.state ?? null
+  }
+
+  /** The HUD: the state as the reply on screen left it once its end is reached, the one before until then. */
+  function drawHud(chat) {
+    // While a turn is written, the reply before it (its state is the one before).
+    const node = state.node ?? latestReply(chat)
+    const spec = node ? deps.hudSpec?.(chat, node) ?? null : null
+    hudControl.hidden = !spec?.fields?.some(field => field.show !== 'hidden')
+    const reached = Boolean(state.node) && state.reached === state.key
+    hud.draw({ cardId: chat.cardId, spec, state: (state.node && !reached ? stateBefore(chat, state.node) : node?.state) ?? {} })
+  }
+
+  /** The reply read to its end: the HUD moves to its state, and what it changed pops up. */
+  function reachEnd() {
+    const chat = getChat()
+    if (!chat || !state.node || state.reached === state.key) return
+    state.reached = state.key
+    drawHud(chat)
+    hud.notify(changeNotes(deps.hudSpec?.(chat, state.node) ?? null, stateBefore(chat, state.node), state.node.state ?? null))
+  }
+
   function drawStatus(chat) {
     statusButton.hidden = !(state.trailing.length || (state.node && statusFor(chat, state.node)))
   }
@@ -1038,9 +1107,16 @@ export function initVn(deps) {
     const parts = where ? [where.time, where.place, where.weather].filter(Boolean) : []
     sign.replaceChildren(...(parts.length ? [timeBox(el, parts)] : []))
     sign.hidden = !parts.length
+    // A later date: the day's title (which names the place too).
+    let turned = false
+    if (state.day && where?.time) {
+      const next = advanceDay(state.day.at, where.time)
+      state.day.at = { day: next.day, date: next.date }
+      if (next.changed) turned = turnDay(next.day, where)
+    }
     // A new place: its name fades in for a moment.
     if (where?.place && where.place !== state.place) {
-      if (state.place !== undefined) {
+      if (state.place !== undefined && !turned) {
         title.textContent = where.place
         title.hidden = false
         title.classList.remove('show')
@@ -1050,6 +1126,23 @@ export function initVn(deps) {
       state.place = where.place
     }
     showScene(chat, where, Boolean(writing))
+  }
+
+  /**
+   * A later day: its title across the picture for a moment, once a reply (none for
+   * the reply already there when the chat opens). → whether it showed.
+   */
+  function turnDay(day, where) {
+    if (!state.day || state.day.quiet || state.day.shown) return false
+    state.day.shown = true
+    // The day count is the title; the date line says the rest.
+    const time = String(where?.time ?? '').replace(/第\s*[\d零〇一二两三四五六七八九十百]+\s*[天日]|\bday\s*\d+\b/i, '').trim() // i18n-ignore: a day count
+    const when = [time, where?.weather].filter(Boolean).join(' · ')
+    chapter.replaceChildren(...[el('b', { text: t`第 ${day} 天` }), when ? el('span', { text: when }) : null, where?.place ? el('span', { text: where.place }) : null].filter(Boolean))
+    chapter.classList.remove('show')
+    void chapter.offsetWidth
+    chapter.classList.add('show')
+    return true
   }
 
   // ─── Pictures drawn for the card (server/scenes.mjs): one at a time per card ──
@@ -1465,6 +1558,8 @@ export function initVn(deps) {
   function openLibrary(tab = libraryTab) {
     setAuto(false)
     libraryTab = tab
+    // The 角色名册 may have changed since (another window, another device): read it again.
+    loadRoster(getChat()?.cardId, true)
     if (!library) {
       library = el('dialog', { class: 'dialog vn-library' })
       document.body.append(library)
@@ -1604,7 +1699,7 @@ export function initVn(deps) {
       el('p', { text: t`场景里说话的人站在台上（电脑最多三个，手机两个），说话的亮、其余的暗下去，换地点时退场。名单里白底的人设图会自动抠出来用；背景不是纯色的（或者没有人设图），可以按名单里的长相画一张半身立绘。` }),
       el('p', { class: 'muted small', text: t`表情：每句按引号前后的叙述换（笑了笑→微笑、红了脸→害羞、皱眉→生气……），认不出就保持上一个。下面每个人可以画一套表情，在立绘上只改脸。` }),
       artMode('newSprite', t`没有立绘的角色说话时：`),
-      toggleRow(t`演出效果`, t`闪电、巨响时画面闪白、震动，吓一跳时立绘跳一下`, prefs.effects !== false, on => {
+      toggleRow(t`演出效果`, t`闪电、巨响时画面闪白、震动，吓一跳时立绘跳一下，回忆的段落泛黄`, prefs.effects !== false, on => {
         prefs.effects = on
         remember(PREFS_KEY, prefs)
       }),
@@ -1654,7 +1749,7 @@ export function initVn(deps) {
         thumb,
         el('figcaption', {}, [el('b', { text: member.player ? t`${entry.name}（玩家）` : entry.name }), kindLabel]),
         el('div', { class: 'row' }, tools),
-        member.player ? null : faceRow(cardId, entry, member, Boolean(drawn || member.ref)),
+        member.player ? null : pack?.cardId === cardId && pack.memberId === member.id ? packView(cardId, entry, member) : faceRow(cardId, entry, member, Boolean(drawn || member.ref)),
       ])
     }))
     return [head, grid]
@@ -1688,13 +1783,139 @@ export function initVn(deps) {
     return el('div', { class: 'vn-faces' }, [
       el('div', { class: 'row vn-faces-head' }, [
         el('span', { class: 'muted small', text: t`表情 ${names.length - names.filter(name => !faces[name]).length}/${names.length}` }),
-        act(t`画一套表情`, () => {
-          for (const name of missing) drawFace(cardId, entry, name)
-          renderLibrary()
-        }, { disabled: !canDraw || !missing.length, title: t`用现在的画图方式，在立绘上只改表情，缺的 ${missing.length} 个一个一个画` }),
+        el('span', { class: 'row' }, [
+          act(t`导入表情包`, () => importPack(cardId, entry, member), { title: t`SillyTavern 的表情包：一个 zip，或者一组按情绪命名的图片（joy.png、anger.png……）` }),
+          act(t`画一套表情`, () => {
+            for (const name of missing) drawFace(cardId, entry, name)
+            renderLibrary()
+          }, { disabled: !canDraw || !missing.length, title: t`用现在的画图方式，在立绘上只改表情，缺的 ${missing.length} 个一个一个画` }),
+        ]),
       ]),
       el('div', { class: 'vn-face-grid' }, cells),
     ])
+  }
+
+  // ─── 导入表情包: a SillyTavern expression pack, read in the page ──────────
+  // The pack being looked at before 导入: { cardId, memberId, packs, choice, load, replace, urls, busy }.
+  let pack = null
+
+  /** Files from the player: pictures, or a zip of them. */
+  const pickFiles = () => new Promise(resolve => {
+    const input = el('input', { type: 'file', multiple: true, accept: '.zip,application/zip,application/x-zip-compressed,image/png,image/jpeg,image/webp,image/gif' })
+    input.addEventListener('change', () => resolve([...input.files]))
+    input.click()
+  })
+  const inflateRaw = async data => new Uint8Array(await new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer())
+  const PICTURE_TYPES = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif' }
+
+  /** Reads the pack the player picks and shows it against the expressions; nothing is kept until 导入. */
+  async function importPack(cardId, entry, member) {
+    const files = await pickFiles()
+    if (!files.length) return
+    // Each picture's path in the pack → its bytes, read when shown or taken.
+    const load = new Map()
+    for (const file of files) {
+      if (/\.zip$/i.test(file.name)) {
+        // The zip reader loads when a pack is first read.
+        const { zipData, zipEntries } = await import('/shared/zip.js')
+        const bytes = new Uint8Array(await file.arrayBuffer())
+        let entries
+        try {
+          entries = zipEntries(bytes)
+        } catch {
+          throw new Error(t`读不出「${file.name}」：不是 zip 文件，或者是分卷、zip64 的`)
+        }
+        for (const item of entries) {
+          const type = PICTURE_TYPES[item.name.split('.').pop().toLowerCase()]
+          if (type) load.set(item.name, async () => new Blob([await zipData(bytes, item, inflateRaw)], { type }))
+        }
+      } else if (PACK_PICTURE.test(file.name)) load.set(file.name, async () => file)
+    }
+    const packs = packFaces([...load.keys()])
+    if (!packs.length) return toast(t`没认出表情：图片要按情绪命名，比如 joy.png、anger.png（SillyTavern 的表情包），或者 微笑.png、生气.png`, 7000)
+    // A pack of several people: the folder named after this one, else the fullest.
+    const keys = new Set([entry.name, ...(entry.keys ?? [])].map(normalizePlace).filter(Boolean))
+    const choice = Math.max(0, packs.findIndex(item => keys.has(normalizePlace(item.folder.split('/').pop()))))
+    closePack()
+    pack = { cardId, memberId: member.id, packs, choice, load, replace: true, urls: new Map(), busy: '' }
+    renderLibrary()
+  }
+
+  function closePack() {
+    for (const url of pack?.urls.values() ?? []) url.then(src => src && URL.revokeObjectURL(src))
+    pack = null
+  }
+
+  /** A picture of the pack to show: its object URL (made once), or null when it cannot be read. */
+  function packUrl(path) {
+    if (!pack.urls.has(path)) pack.urls.set(path, pack.load.get(path)().then(blob => URL.createObjectURL(blob)).catch(() => null))
+    return pack.urls.get(path)
+  }
+
+  /** The pack against someone's expressions: which picture each takes, 导入 to keep them. */
+  function packView(cardId, entry, member) {
+    const current = pack.packs[pack.choice]
+    const cells = EXPRESSIONS.map(name => {
+      const path = current.faces[name]
+      const picture = el('div', { class: 'vn-face-pic' }, [el('span', { class: 'muted small', text: path ? '…' : '—' })])
+      if (path) packUrl(path).then(src => src && picture.replaceChildren(el('img', { src, alt: '' })))
+      const off = !path || (name === 'neutral' && !pack.replace)
+      return el('div', { class: `vn-face${off ? ' off' : ''}` }, [
+        picture,
+        el('span', { class: 'small', text: name === 'neutral' ? t`立绘` : FACE_LABEL[name] }),
+        el('span', { class: 'muted small vn-pack-file', text: path ? path.split('/').pop() : t`包里没有`, title: path ?? '' }),
+      ])
+    })
+    const taken = Object.keys(current.faces).filter(name => name !== 'neutral' || pack.replace)
+    const go = act(pack.busy || t`导入 ${taken.length} 张`, () => takePack(cardId, entry, member), { disabled: Boolean(pack.busy) || !taken.length })
+    go.classList.add('primary')
+    pack.go = go
+    const folders = pack.packs.length > 1
+      ? el('select', { 'aria-label': t`用包里哪个文件夹`, onchange: event => {
+        pack.choice = Number(event.target.value)
+        renderLibrary()
+      } }, pack.packs.map((item, i) => el('option', { value: String(i), selected: i === pack.choice, text: t`${item.folder || t`最外层`}（${Object.keys(item.faces).length} 个表情）` })))
+      : null
+    const replace = el('input', { type: 'checkbox', checked: pack.replace })
+    replace.addEventListener('change', () => {
+      pack.replace = replace.checked
+      renderLibrary()
+    })
+    const unused = current.unused.map(file => file.split('/').pop())
+    return el('div', { class: 'vn-faces vn-pack' }, [
+      el('div', { class: 'row vn-faces-head' }, [el('b', { class: 'small', text: t`从表情包导入` }), folders]),
+      el('div', { class: 'vn-face-grid' }, cells),
+      current.faces.neutral
+        ? el('label', { class: 'vn-pack-replace small' }, [replace, el('span', { text: t`包里的 neutral 当立绘（换掉现在的；表情和立绘出自同一套，换表情时才不跳）` })])
+        : el('p', { class: 'muted small', text: t`包里没有 neutral：平静时还用现在的立绘。` }),
+      unused.length ? el('p', { class: 'muted small', text: t`没对上的 ${unused.length} 张：${unused.slice(0, 6).join(t`、`)}${unused.length > 6 ? '…' : ''}` }) : null,
+      el('div', { class: 'row' }, [go, act(t`取消`, () => {
+        closePack()
+        renderLibrary()
+      })]),
+    ])
+  }
+
+  /** 导入: the pack's pictures become this one's 立绘 and expressions, one at a time. */
+  async function takePack(cardId, entry, member) {
+    const mine = pack
+    const current = mine.packs[mine.choice]
+    const jobs = Object.entries(current.faces).filter(([name]) => name !== 'neutral' || mine.replace)
+    try {
+      for (const [i, [name, path]] of jobs.entries()) {
+        mine.busy = t`导入中 ${i + 1}/${jobs.length}`
+        if (mine.go) Object.assign(mine.go, { textContent: mine.busy, disabled: true })
+        const image = await asPng(await mine.load.get(path)())
+        const url = name === 'neutral' ? `/api/cards/${cardId}/sprites/${member.id}` : `/api/cards/${cardId}/sprites/${member.id}/expressions/${name}`
+        takeSprites(cardId, await api(url, { method: 'PUT', body: { image } }))
+      }
+    } finally {
+      mine.busy = ''
+    }
+    if (pack === mine) closePack()
+    cast.none.clear()
+    renderLibrary()
+    toast(t`${entry.name}：导入了 ${jobs.length} 张`)
   }
 
   // ─── 用辅助模型判断表情: one small request per finished reply ──────────
@@ -1883,9 +2104,12 @@ export function initVn(deps) {
     clearStage()
     if (state.reading) deps.stopReading?.()
     state.reading = false
-    root.classList.remove('bare')
+    root.classList.remove('bare', 'memory')
+    chapter.classList.remove('show')
+    hud.clear()
     state.key = null
     state.place = undefined
+    state.day = null
   }
 
   /**

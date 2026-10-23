@@ -1,7 +1,7 @@
 // Agent Tavern web UI. Plain DOM, no build step.
 import { displayOf, htmlFrame, listenForFrameHeights, nameMacros, segments, streamingText, usesStatusPlaceholder, withoutOwnStatus } from '/render.js'
 import { choiceList, statusBar, timeBox } from '/status.js'
-import { BASIC_ID, choicesOf, timeBoxOf } from '/shared/basic.js'
+import { BASIC_ID, choicesOf, otherChoices, timeBoxOf } from '/shared/basic.js'
 import { autoStatusSpec } from '/shared/status.js'
 import { BASIC_FIELDS, basicField } from '/basic-options.js'
 import { allowLibraries, broadcastInput, installFrameBridge, parseSlash, storedFrameStorage, storedVariables } from '/compat.js'
@@ -877,7 +877,7 @@ function renderChat() {
 /** The turn being written in this chat, as far as it has come (also after switching back). */
 function liveNodes(chat, { animate = false } = {}) {
   const job = ui.busy.get(chat.id)
-  if (!job || job.kind === 'compact') return []
+  if (!job || job.kind === 'compact' || job.kind === 'fill') return []
   const nodes = []
   if (job.echo) {
     const echo = renderNode(chat, { id: 'pending-user', role: 'user', text: job.echo, siblingCount: 1 }, false)
@@ -959,6 +959,11 @@ function renderNode(chat, node, isLastAssistant, depth = 0) {
   if (!isUser && node.truncated) {
     tools.push(el('span', { class: 'chip warn', title: t`模型写到了单次输出的上限，回复后半段（常见的是变量更新、行动选项这些放在最后的块）没写出来。上限取预设的「最大回复长度」；供应商设置里填了「最大输出」时以那个为准。可以重新生成，或调大上限。`, text: t`⚠ 写到输出上限，被截断` }))
   }
+  if (!isUser && isLastAssistant && node.id !== 'root' && !node.compaction && missingUpdate(chat, node)) {
+    const filling = ui.busy.get(chat.id)?.kind === 'fill'
+    tools.push(el('span', { class: 'chip warn', title: t`这张卡每轮结尾要写 <UpdateVariable> 变量更新块，这一轮模型没写，状态不会跟着剧情变。「补写变量」让模型只补这一块，正文不动。`, text: t`⚠ 这轮没写变量更新` }))
+    tools.push(el('button', { text: filling ? t`补写中…` : t`补写变量`, title: t`按这张卡的变量规则，让模型为这一轮补写变量更新，补完状态立即更新`, disabled: ui.generating, onclick: () => fillUpdate(node.id) }))
+  }
   if (node.edited) tools.push(el('span', { class: 'chip', title: t`${new Date(node.edited.at).toLocaleString(locale)} 改过${node.edited.count > 1 ? t` ${node.edited.count} 次` : ''}`, text: t`已修改` }))
   if (isUser && node.templateErrors?.length) tools.push(el('span', { class: 'chip warn', title: node.templateErrors.join('\n'), text: t`⚠ ${node.templateErrors.length} 条 EJS 模板出错` }))
   const { shown, time, choices, cardStatus } = replyDisplay(chat, node, isLastAssistant, depth)
@@ -991,9 +996,16 @@ function replyDisplay(chat, node, isLastAssistant, depth = 0) {
   const isUser = node.role === 'user'
   const scripts = scriptsFor(chat)
   const cardStatus = usesStatusPlaceholder(scripts)
-  const shown = displayOf(node, { scripts, names: chat.names, depth, withStatus: isLastAssistant && cardStatus })
+  let shown = displayOf(node, { scripts, names: chat.names, depth, withStatus: isLastAssistant && cardStatus })
   const raw = node.raw ?? node.text
-  return { shown, raw, cardStatus, time: isUser ? null : timeBoxOf(raw), choices: !isUser && isLastAssistant ? choicesOf(raw) : [] }
+  let choices = !isUser && isLastAssistant ? choicesOf(raw) : []
+  // A card's or preset's own options (🩶探索选项🩶：…, <w2g>, a 请选择… list) as the same buttons,
+  // unless its display regex already drew them.
+  if (!isUser && isLastAssistant && !choices.length) {
+    const other = otherChoices(shown)
+    if (other.choices.length) ({ choices, text: shown } = other)
+  }
+  return { shown, raw, cardStatus, time: isUser ? null : timeBoxOf(raw), choices }
 }
 
 /** The built-in status bar under a reply, or null (cards that draw their own use their regex). */
@@ -1249,6 +1261,35 @@ function askSwitch(turns) {
     dialog.addEventListener('click', onClick)
     dialog.addEventListener('close', onClose)
   })
+}
+
+/** An MVU card's reply that came without its <UpdateVariable> block. */
+function missingUpdate(chat, node) {
+  const card = ui.cards.find(c => c.id === chat.cardId)
+  return Boolean(card?.mvu) && !/<UpdateVariable>/i.test(node.raw ?? node.text ?? '')
+}
+
+/** 补写变量: the model writes the latest reply's missing update block; it is appended and the state follows. */
+async function fillUpdate(nodeId) {
+  const chatId = ui.chat?.id
+  if (!chatId || ui.generating) return
+  ui.busy.set(chatId, { kind: 'fill' })
+  renderChat()
+  renderChats()
+  toast(t`正在补写变量更新……`, 120000)
+  try {
+    const view = await api(`/api/chats/${chatId}/nodes/${nodeId}/fill-update`, { method: 'POST', body: {} })
+    ui.busy.delete(chatId)
+    if (ui.chat?.id === chatId) setChat(view)
+    const changes = view.path.at(-1).stateChanges?.length ?? 0
+    toast(changes ? t`已补写变量更新，${changes} 项变了` : t`已补写变量更新（模型认为这一轮没有变量变化）`, 6000)
+  } catch (error) {
+    toast(error.status === 499 ? t`已停止补写，什么都没改` : error.message, 8000)
+  } finally {
+    ui.busy.delete(chatId)
+    if (ui.chat?.id === chatId) renderChat()
+    renderChats()
+  }
 }
 
 /** Ask the model that wrote the story for an archive. Resolves true when it was saved. */
@@ -1895,10 +1936,15 @@ const saveSettings = guard(async () => {
   ])
   fillProxy(form, ui.settings.proxy, await api('/api/network').catch(() => null))
   allowLibraries(ui.settings.cdnLibraries !== false)
+  let applied = false
   if (ui.cardId) {
     const ids = [...form.querySelectorAll('input[name="book"]:checked')].map(i => i.value)
-    await api(`/api/cards/${ui.cardId}/worldbooks`, { method: 'PUT', body: { ids } })
+    const before = ui.cards.find(c => c.id === ui.cardId)?.worldbookIds ?? []
+    const changed = ids.length !== before.length || ids.some(id => !before.includes(id))
+    const chatId = ui.chat?.cardId === ui.cardId ? ui.chat.id : undefined
+    const saved = await api(`/api/cards/${ui.cardId}/worldbooks`, { method: 'PUT', body: { ids, chatId } })
     await refreshCards()
+    if (changed) applied = await offerMountRebuild(saved.prefixChange)
   }
   const access = await api('/api/access').catch(() => null)
   renderAccess(access)
@@ -1909,7 +1955,7 @@ const saveSettings = guard(async () => {
     return
   }
   settingsMenu?.refresh()
-  toast(form.listen.value === 'lan' && access?.running !== 'lan' ? t`已保存。重启服务后，手机才能连上。` : t`设置已保存`)
+  toast(form.listen.value === 'lan' && access?.running !== 'lan' ? t`已保存。重启服务后，手机才能连上。` : applied ? t`设置已保存，并已应用到当前对话（下一轮会重写一次缓存）` : t`设置已保存`)
 })
 
 /**
@@ -2003,6 +2049,21 @@ function renderAccess(info) {
   )
 }
 
+/**
+ * Books mounted or taken off that hold constant entries: the open chat keeps the
+ * prefix it started with (keyword entries follow on the next turn by themselves).
+ * Ask whether to rebuild it now.
+ */
+async function offerMountRebuild(change) {
+  if (!change || !ui.chat || ui.generating) return false
+  const list = books => books.map(book => t`「${book.name}」（${book.entries} 条常驻）`).join(t`、`)
+  const what = [change.added.length ? t`挂上了${list(change.added)}` : '', change.removed.length ? t`摘下了${list(change.removed)}` : ''].filter(Boolean).join(t`；`)
+  const ok = confirm(t`本次改动涉及常驻条目：${what}。\n\n常驻条目写在对话开局时的固定前缀里，当前对话还在用改动前的。现在应用到当前对话吗？会重建这个对话的固定前缀（历史不变），下一轮会重新写一次缓存，那一轮慢一点、贵一点。\n\n取消：当前对话先不变，新开的对话直接用新的；以后也可以在「设置 → 更多」里重建前缀。`)
+  if (!ok) return false
+  setChat(await api(`/api/chats/${ui.chat.id}/preset`, { method: 'POST', body: {} }))
+  return true
+}
+
 const rebuildPrompt = guard(async () => {
   if (!ui.chat) return
   if (!confirm(t`按现在的角色卡、设置和预设重新生成这个对话的固定前缀？历史不变；下一轮会重新写入一次缓存（大卡约占一轮的额度）。`)) return
@@ -2066,6 +2127,8 @@ const vnUi = initVn({
   live: () => (ui.chat ? ui.busy.get(ui.chat.id) ?? null : null),
   display: (chat, node, latest = true) => replyDisplay(chat, node, latest),
   statusFor: (chat, node) => (usesStatusPlaceholder(scriptsFor(chat)) ? null : statusFor(chat, node)),
+  // The HUD reads any card's variables: its own status bar layout, else one laid out from the state (whatever the preset).
+  hudSpec: (chat, node) => ui.cardDetails.get(chat.cardId)?.statusBar ?? autoStatusSpec(node.state ?? {}),
   frameContext: frameContextFor,
   cardOf: id => ui.cards.find(card => card.id === id),
   send: sendChoice,

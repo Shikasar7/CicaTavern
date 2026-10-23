@@ -126,19 +126,41 @@ function lateText(books, m) {
  * late entries had their own section keep them elsewhere in the prefix, so the
  * entry titles alone must identify them.
  */
-export function everyTurnReminder(systemPrompt, books, { presetRules = false } = {}) {
-  const titles = lateEntries(books).map(entry => `【${entryTitle(entry)}】`)
+export function everyTurnReminder(systemPrompt, books, { presetRules = false, mvu = false } = {}) {
+  const late = lateEntries(books)
+  const titles = late.map(entry => `【${entryTitle(entry)}】`)
   const hasSection = systemPrompt.includes(`## ${EVERY_TURN}`)
   if (!titles.length && !hasSection) return ''
   // SillyTavern sends a preset's post-history prompts right before the reply; here they sit in
   // the prefix, a long history away, and the blocks they ask for after the story get dropped.
   const preset = presetRules && hasSection ? '预设规定的输出格式和顺序（正文之后要求附加的内容块一个都不能省）' : ''
-  if (!titles.length) return `本轮回复同样要遵守系统提示末尾「${EVERY_TURN}」一节的全部要求${preset ? `，尤其是${preset}` : ''}。`
+  // An MVU card's update block is what a long chat drops first: named outright.
+  const update = mvu ? '结尾完整闭合的 <UpdateVariable> 变量更新块（照卡里的变量规则写，不能省）' : ''
+  const demands = [preset, update].filter(Boolean)
+  if (!titles.length) return `本轮回复同样要遵守系统提示末尾「${EVERY_TURN}」一节的全部要求${demands.length ? `，尤其是${demands.join('、')}` : ''}。`
+  // Many entries (a world's maps, monsters, lore) would bury the few that ask for something
+  // in the reply: those are named, the rest counted.
+  const named = late.length > NAME_ALL ? late.filter(asksForOutput).slice(0, NAME_MAX).map(entry => `【${entryTitle(entry)}】`) : titles
+  const rest = late.length - named.length
+  const others = rest > 0 ? `${named.length ? '，以及' : ''}其余 ${rest} 条常驻设定` : ''
+  const listed = named.join('、')
   const inSection = hasSection && systemPrompt.lastIndexOf(titles[0]) > systemPrompt.lastIndexOf(`## ${EVERY_TURN}`)
-  if (inSection) return `本轮回复同样要遵守系统提示末尾「${EVERY_TURN}」一节的全部要求，包括${preset ? `${preset}、` : ''}${titles.join('、')}。`
-  return preset
-    ? `本轮回复同样要遵守系统提示末尾「${EVERY_TURN}」一节里${preset}，以及系统提示中${titles.join('、')}的要求。`
-    : `本轮回复同样要遵守系统提示中${titles.join('、')}的要求。`
+  if (inSection) return `本轮回复同样要遵守系统提示末尾「${EVERY_TURN}」一节的全部要求，包括${[...demands, listed].filter(Boolean).join('、')}${others}。`
+  const where = `系统提示中${listed}${others}`
+  return demands.length
+    ? `本轮回复同样要遵守系统提示末尾「${EVERY_TURN}」一节里${demands.join('、')}，以及${where}的要求。`
+    : `本轮回复同样要遵守${where}的要求。`
+}
+
+// Up to this many entries are all named; beyond it, only those asking for something in the reply.
+const NAME_ALL = 4
+const NAME_MAX = 8
+const ASKS_TITLE = /UpdateVariable|JSONPatch|mvu|变量|状态栏|格式|输出|选项|时间戳|时间与|日程|锚点|每轮|每次|规则|禁止|要求/i
+const ASKS_TEXT = /UpdateVariable|JSONPatch|<StatusPlaceHolder|每次(回复|输出|剧情)|每轮|回复的?(开头|末尾|结尾|第一行)|(末尾|结尾|开头)(输出|插入|写|附)|按照以下格式|必须|务必|不可|禁止/
+
+/** Whether an entry asks for something in each reply (a format, a block, a rule) rather than describing the world. */
+function asksForOutput(entry) {
+  return ASKS_TITLE.test(entryTitle(entry)) || ASKS_TEXT.test(entryText(entry).slice(0, 160))
 }
 
 /**

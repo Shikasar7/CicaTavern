@@ -281,6 +281,58 @@
             "title": "Custom colours, font and size, search, global lorebooks",
             "text": "Theme now has custom colours (twelve, each adjustable) and the story's font and size; the card list and the lorebooks can be searched, and a lorebook can be made global for every chat.\nAlso: pictures always have someone in them, and a card with many openings shows each one in full before you pick."
           }
+        },
+        {
+          "image": "1.8.0-vn.webp",
+          "recap": "1.8",
+          "zh": {
+            "title": "视觉小说模式（1.8 起）",
+            "text": "点顶栏的「视觉小说」，回复变成一句一句读的游戏画面：说话的人站上台、带着表情，几个人可以同屏；到了新地点自动画一张场景当背景，配图都收进 CG 回廊；每个角色有自己的音色，还能存档读档。\n只改显示，发给模型的内容一字不改。"
+          },
+          "en": {
+            "title": "Visual novel mode (since 1.8)",
+            "text": "Turn on \"Visual novel\" in the top bar and replies play like a game, a line at a time: whoever speaks steps on stage with an expression, several at once; a new place gets a scene drawn behind it, and every picture goes into the CG gallery; each character can have their own voice, and you can save and load.\nOnly the display changes; what goes to the model stays word for word."
+          }
+        },
+        {
+          "icon": "🗂️",
+          "recap": "1.8",
+          "zh": {
+            "title": "1.8 的其他更新",
+            "text": "修改角色卡、生成头像；世界书逐条修改和整本管理；导入 SillyTavern 的对话；手机添加到主屏幕，安卓在应用里下载更新；画图多了 Gemini、SD WebUI 和 OpenRouter。\n想看每一版的详细介绍，点上面的「CicaTavern 1.9」换到 1.8。"
+          },
+          "en": {
+            "title": "More from 1.8",
+            "text": "Edit a card and generate its avatar; edit lorebook entries and manage whole lorebooks; import SillyTavern chats; add the app to your phone's home screen, and on Android download updates in the app; draw with Gemini, SD WebUI or OpenRouter.\nFor each version's own pages, pick 1.8 from \"CicaTavern 1.9\" above."
+          }
+        }
+      ]
+    },
+    {
+      "version": "1.9.1",
+      "date": "2026-10",
+      "items": [
+        {
+          "image": "1.9.1-hud.webp",
+          "zh": {
+            "title": "视觉小说：HUD、换天和回忆",
+            "text": "画面左上角常驻几个变量（好感、体力、金钱……点一下选显示哪些，显示成条、数字还是图标）；读到一轮的结尾，下面弹出「好感 +5」「获得：旧信」。\n日期往后走时画面中间出现「第 N 天」，回忆的段落画面泛黄。"
+          },
+          "en": {
+            "title": "Visual novel: a HUD, new days and memories",
+            "text": "A few variables stay at the top left (affection, stamina, money…; click it to choose which, each as a bar, a number or an icon); at the end of a turn, notes like \"Affection +5\" and \"Got: old letter\" pop up under it.\nWhen the date moves on, \"Day N\" crosses the picture, and memories turn sepia."
+          }
+        },
+        {
+          "icon": "🧩",
+          "zh": {
+            "title": "补写变量、选项按钮和表情包",
+            "text": "MVU 卡的回复漏了变量更新块时，点「补写变量」只补那一块；卡和预设自己的行动选项（「探索选项」「请选择你的下一步行动」这类）也变成能点的按钮。\n「立绘」里能导入 SillyTavern 的表情包，「角色名册」能从对话里补上后来出场的角色。"
+          },
+          "en": {
+            "title": "Write variables, choice buttons and expression packs",
+            "text": "When an MVU card's reply leaves out its variable update, \"Write variables\" writes just that block; a card's or preset's own action options become buttons too.\nSprites can import a SillyTavern expression pack, and the cast list can add the characters who joined later, from the chat."
+          }
         }
       ]
     }

@@ -1,9 +1,10 @@
 // 更新了什么: after an update, a few pages on what is new — a picture, a title,
 // a few lines each — from web/whatsnew/notes.json, written with each release
 // (pictures beside it, named after their version). Shown once per version;
-// opened again from the version under the app's name, or 设置 → 更多 → 更新.
+// opened again from the version under the app's name, or 设置 → 更多 → 更新,
+// where the version over the pages also turns back to an earlier series'.
 import { lang, t } from '/i18n.js'
-import { compareVersions, notesToShow, seriesNotes } from '/shared/whatsnew.js'
+import { compareVersions, notesToShow, seriesNotes, seriesOf, shelfOf } from '/shared/whatsnew.js'
 
 const SEEN_KEY = 'cicatavern.seenVersion'
 
@@ -29,6 +30,7 @@ export function initWhatsNew({ el }) {
   let notes = null
   let dialog = null
   let pages = []
+  let shelf = []
   let at = 0
 
   async function load() {
@@ -58,10 +60,9 @@ export function initWhatsNew({ el }) {
   async function open(entries) {
     const versions = (await load()).slice().sort((a, b) => compareVersions(b.version, a.version))
     const newest = versions.find(entry => compareVersions(entry.version, current) <= 0) ?? versions[0]
-    const list = entries ?? (newest ? seriesNotes(versions, newest.version) : [])
-    pages = list.flatMap(entry => (entry.items ?? []).map(item => ({ version: entry.version, date: entry.date ?? '', image: item.image ?? '', icon: item.icon ?? '', ...(item[lang] ?? item.zh ?? {}) })))
+    shelf = shelfOf(versions, current)
+    show(entries ?? (newest ? seriesNotes(versions, newest.version) : []))
     if (!pages.length) return
-    at = 0
     if (!dialog) {
       dialog = el('dialog', { class: 'dialog whatsnew', 'aria-label': t`更新了什么` })
       dialog.addEventListener('close', () => {
@@ -69,15 +70,32 @@ export function initWhatsNew({ el }) {
         badge.classList.remove('unread')
       })
       dialog.addEventListener('keydown', event => {
+        if (event.target.closest('select')) return
         if (event.key === 'ArrowRight') go(1)
         else if (event.key === 'ArrowLeft') go(-1)
       })
       document.body.append(dialog)
     }
-    // The pictures load while the first page is read.
-    for (const page of pages) if (page.image) new Image().src = `/whatsnew/${page.image}`
     render()
     if (!dialog.open) dialog.showModal()
+  }
+
+  /** `list`'s pages from the first, a recap of an earlier series last. */
+  function show(list) {
+    pages = list
+      .flatMap(entry => (entry.items ?? []).map(item => ({ version: entry.version, date: entry.date ?? '', image: item.image ?? '', icon: item.icon ?? '', recap: item.recap ?? '', ...(item[lang] ?? item.zh ?? {}) })))
+      .sort((a, b) => Boolean(a.recap) - Boolean(b.recap))
+    at = 0
+    // The pictures load while the first page is read.
+    for (const page of pages) if (page.image) new Image().src = `/whatsnew/${page.image}`
+  }
+
+  /** The picker: another series' pages, read from the first. */
+  async function turnTo(series) {
+    const shelved = shelf.find(item => item.series === series)
+    if (!shelved) return
+    show(seriesNotes(await load(), shelved.version))
+    if (pages.length) render()
   }
 
   function go(step) {
@@ -97,11 +115,17 @@ export function initWhatsNew({ el }) {
       const dot = el('button', { type: 'button', class: i === at ? 'on' : '', 'aria-label': t`第 ${i + 1} 项`, onclick: () => { at = i; render() } })
       return dot
     }))
+    // With more than one series, the version picks which one to read; the page's own version goes by its date.
+    const picker = shelf.length > 1
+    const when = [picker ? page.version : '', page.date].filter(Boolean).join(' · ')
     dialog.replaceChildren(
       el('div', { class: 'whatsnew-head' }, [
         el('span', { class: 'whatsnew-kicker', text: t`更新了什么` }),
-        el('b', { text: `CicaTavern ${page.version}` }),
-        page.date ? el('span', { class: 'muted small', text: page.date }) : null,
+        picker
+          ? el('select', { class: 'whatsnew-series', 'aria-label': t`看哪一版的更新`, onchange: event => turnTo(event.target.value) },
+            shelf.map(({ series }) => el('option', { value: series, text: `CicaTavern ${series}`, selected: series === seriesOf(page.version) })))
+          : el('b', { text: `CicaTavern ${page.version}` }),
+        when ? el('span', { class: 'muted small', text: when }) : null,
         el('form', { method: 'dialog', class: 'whatsnew-x' }, [el('button', { class: 'btn ghost icon', 'aria-label': t`关闭`, text: '✕' })]),
       ]),
       el('figure', { class: 'whatsnew-figure' }, [picture]),

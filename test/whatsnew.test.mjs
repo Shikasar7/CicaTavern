@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { compareVersions, notesToShow, seriesNotes } from '../web/shared/whatsnew.js'
+import { compareVersions, notesToShow, seriesNotes, shelfOf } from '../web/shared/whatsnew.js'
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -37,6 +37,18 @@ test('a fix release shows after the release it fixes: the whole series in order,
   assert.deepEqual(seriesNotes(versions, '1.8.1').map(entry => entry.version), ['1.8.0', '1.8.1'], 'the version badge: up to the one running')
 })
 
+test('a page recapping an earlier series stands for its pages; the picker lists every series', () => {
+  const versions = ['1.7.0', '1.8.0', '1.8.1', '1.9.0'].map(version => ({ version, items: [{ zh: { title: version } }] }))
+  versions[3].items.push({ recap: '1.8', zh: { title: '1.8 recap' } })
+  const shown = options => notesToShow(versions, options).map(entry => entry.version)
+  assert.deepEqual(shown({ current: '1.9.0', seen: '1.6.0' }), ['1.9.0', '1.7.0'], 'not 1.8.0 and 1.8.1 again')
+  assert.deepEqual(shown({ current: '1.9.0', seen: '1.8.1' }), ['1.9.0'])
+  assert.deepEqual(shown({ current: '1.8.1', seen: '1.6.0' }), ['1.8.0', '1.8.1', '1.7.0'], 'the recap is not out yet')
+  assert.deepEqual(shelfOf(versions, '1.9.0'), [{ series: '1.9', version: '1.9.0' }, { series: '1.8', version: '1.8.1' }, { series: '1.7', version: '1.7.0' }])
+  assert.deepEqual(shelfOf(versions, '1.8.0'), [{ series: '1.8', version: '1.8.0' }, { series: '1.7', version: '1.7.0' }])
+  assert.deepEqual(seriesNotes(versions, shelfOf(versions, '1.9.0')[1].version).map(entry => entry.version), ['1.8.0', '1.8.1'], 'picking 1.8 reads it whole')
+})
+
 test('the shipped notes: both languages on every page, every picture there', () => {
   const notes = JSON.parse(readFileSync(path.join(ROOT, 'web', 'whatsnew', 'notes.json'), 'utf8'))
   assert.ok(notes.versions.length > 0)
@@ -47,6 +59,7 @@ test('the shipped notes: both languages on every page, every picture there', () 
         assert.ok(item[lang]?.title && item[lang]?.text, `${entry.version}: ${lang} title and text`)
       }
       assert.doesNotMatch(item.en.title + item.en.text, /[一-鿿]/, `${entry.version}: English page without Chinese`)
+      if (item.recap) assert.ok(/^\d+\.\d+$/.test(item.recap) && compareVersions(item.recap, entry.version) < 0, `${entry.version}: recaps an earlier series`)
       if (item.image) {
         assert.match(item.image, /^[\w.-]+\.(webp|png|jpg)$/)
         assert.ok(existsSync(path.join(ROOT, 'web', 'whatsnew', item.image)), `${item.image} is there`)

@@ -12,7 +12,7 @@ import path from 'node:path'
 import YAML from 'yaml'
 import { fileURLToPath } from 'node:url'
 import { backfillEntryPositions, cardSummary, cleanGroup, exportCard, greetingsOf, importOwnCard, normalizeCard, organizeCard, parseCardFile, previousVersion, rawOfPicture, sillyTavernCard, unwrapWorkspace, writeCardPng } from './cards.mjs'
-import { chatSummary, chatView, childrenOf, createChat, selectNode, activePath, rebuildPrompt, restoreFolded, rollbackTo, editCompaction, dropCompaction, exportStory, importStory, importSillyTavern, forkChat } from './chats.mjs'
+import { chatSummary, chatView, childrenOf, createChat, selectNode, activePath, rebuildPrompt, restoreFolded, rollbackTo, editCompaction, dropCompaction, exportStory, importStory, importSillyTavern, forkChat, mountChange } from './chats.mjs'
 import { editPreset, exportPreset, importOwnPreset, normalizePreset, presetDetail, presetSummary } from './presets.mjs'
 import { basicDetail } from './basic.mjs'
 import { appVersion, featuresOf } from './edition.mjs'
@@ -88,7 +88,10 @@ const STATIC = {
   '/vn.js': ['vn.js', 'text/javascript; charset=utf-8'],
   '/shared/vn.js': ['shared/vn.js', 'text/javascript; charset=utf-8'],
   '/shared/stage.js': ['shared/stage.js', 'text/javascript; charset=utf-8'],
+  '/shared/zip.js': ['shared/zip.js', 'text/javascript; charset=utf-8'],
+  '/shared/hud.js': ['shared/hud.js', 'text/javascript; charset=utf-8'],
   '/vn-saves.js': ['vn-saves.js', 'text/javascript; charset=utf-8'],
+  '/vn-hud.js': ['vn-hud.js', 'text/javascript; charset=utf-8'],
   '/shared/cutout.js': ['shared/cutout.js', 'text/javascript; charset=utf-8'],
   '/whatsnew.js': ['whatsnew.js', 'text/javascript; charset=utf-8'],
   '/shared/whatsnew.js': ['shared/whatsnew.js', 'text/javascript; charset=utf-8'],
@@ -505,6 +508,13 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['GET', /^\/api\/cards\/([\w-]+)\/media$/, ([id]) => media.cardMediaView(id)],
     ['PUT', /^\/api\/cards\/([\w-]+)\/media$/, ([id], body) => media.saveCardMedia(id, body)],
     ['POST', /^\/api\/cards\/([\w-]+)\/roster\/draft$/, ([id]) => media.draftRoster(id, AbortSignal.timeout(180000))],
+    // 从对话里补充: the characters in an open chat's recent turns that the list does not have yet.
+    ['POST', /^\/api\/cards\/([\w-]+)\/roster\/draft-chat$/, async ([id], body) => {
+      const chat = await store.getChat(String(body?.chatId ?? ''))
+      if (chat.cardId !== id) throw httpError(400, msg`这个对话不是这张卡的`)
+      const names = Array.isArray(body?.names) ? body.names.filter(name => typeof name === 'string').slice(0, 100) : []
+      return media.draftRosterFromChat(id, { path: activePath(chat), user: chat.names?.user ?? '' }, names, AbortSignal.timeout(180000))
+    }],
     ['POST', /^\/api\/cards\/([\w-]+)\/roster\/portrait$/, ([id], body) => media.drawPortrait(id, body?.entry, AbortSignal.timeout(600000), drawChoiceOf(body))],
     ['PUT', /^\/api\/cards\/([\w-]+)\/roster\/([\w-]+)\/ref$/, ([id, entryId], body) => media.saveRosterRef(id, entryId, body?.image)],
     ['DELETE', /^\/api\/cards\/([\w-]+)\/roster\/([\w-]+)\/ref$/, ([id, entryId]) => media.removeRosterRef(id, entryId)],
@@ -700,7 +710,9 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       const card = await store.getCard(id)
       card.worldbookIds = Array.isArray(body.ids) ? body.ids.filter(x => typeof x === 'string') : []
       await store.saveCard(card)
-      return cardSummary(card)
+      // The open chat (`chatId`) of this card keeps the constant entries it started with until its prefix is rebuilt.
+      const chat = typeof body.chatId === 'string' ? await store.getChat(body.chatId).catch(() => null) : null
+      return { ...cardSummary(card), prefixChange: chat?.cardId === card.id ? await mountChange(store, chat, card) : null }
     }],
 
     // A card's own worldbook entry by entry (worldbook.mjs editBook); chats know it as card-<id>.
@@ -908,6 +920,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     }],
     // Manual compaction: one summary call, then the next turn starts a new session (see recap.mjs).
     ['POST', /^\/api\/chats\/([\w-]+)\/compact$/, async ([id]) => ({ ...chatView(await engine.compactChat(id)), running: false })],
+    // 补写变量: the latest reply of an MVU card came without its update block.
+    ['POST', /^\/api\/chats\/([\w-]+)\/nodes\/([\w-]+)\/fill-update$/, async ([id, nodeId]) => ({ ...chatView(await engine.fillUpdate(id, nodeId)), running: false })],
     ['PUT', /^\/api\/chats\/([\w-]+)\/compaction$/, async ([id], body) => {
       if (engine.isRunning(id)) throw httpError(409, msg`正在生成，先停止`)
       const chat = await store.getChat(id)

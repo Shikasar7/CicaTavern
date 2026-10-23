@@ -281,6 +281,55 @@ export function rosterDraftRequest(material) {
   }
 }
 
+/**
+ * 从对话里补充: the last few turns of a chat as the helper reads them, the
+ * player's words and the replies as shown, oldest first; when they run long the
+ * newest are kept.
+ * @param path - the chat's nodes from the start to the reply on screen (chats.mjs activePath).
+ */
+export function chatMaterial(path, { turns = 8, budget = 20000 } = {}) {
+  const pieces = []
+  let used = 0
+  let replies = 0
+  for (const node of [...(path ?? [])].reverse()) {
+    if (node.role !== 'assistant' && node.role !== 'user') continue
+    const text = String(node.role === 'user' ? node.text : node.display ?? node.text ?? '').trim()
+    if (!text) continue
+    const piece = node.role === 'user' ? `<player>\n${text.slice(0, 2000)}\n</player>` : `<reply>\n${text.slice(0, 8000)}\n</reply>`
+    if (used + piece.length > budget && pieces.length) break
+    pieces.unshift(piece)
+    used += piece.length
+    if (node.role === 'assistant' && ++replies >= turns) break
+  }
+  return pieces.join('\n\n')
+}
+
+/**
+ * The helper's request for the characters in those turns that the 角色名册
+ * does not have yet, in the draft's format (rosterDraftRequest).
+ * @param known - every name the list (and the player) already goes by.
+ * @param setting - a little of the card, for looks that fit where and when the story is.
+ */
+export function rosterChatRequest(material, { known = [], setting = '' } = {}) {
+  const task = [
+    'TASK: list the characters who take part in these recent turns of the story and are NOT in the cast list yet, for an anime image generator.',
+    `Already in the cast list (skip them under any of their names): ${known.length ? known.join(', ') : '(nobody yet)'}.`,
+    'Leave out the player character (the one the player plays, written as 你 or by the player\'s name), and anyone only mentioned or passing by without a part in the scene.',
+    'Where the turns do not say what someone looks like, give a plausible look that fits their role, age and the setting.',
+    'At most 8 entries; nobody new is a fine answer: [].',
+    'Reply with a JSON array only, no other text:',
+    '[{"name": "Chinese name as in the story (or their role, like 掌柜, if they have no name)", "aliases": "other names, comma-separated", "kind": "girl" | "boy" | "other", "player": false,',
+    '  "looks": "8-20 English booru tags for what never changes: apparent age, hair colour and style, eye colour, build, skin, distinctive marks",',
+    '  "outfit": "5-15 English booru tags for what they usually wear"}]',
+  ].join('\n')
+  const context = setting ? `<setting>\n${setting.slice(0, 1500)}\n</setting>\n\n` : ''
+  return {
+    system: 'You extract character appearance sheets for an image generator. You reply with JSON only.',
+    messages: [{ role: 'user', content: `${context}<turns>\n${material}\n</turns>\n\n${task}` }],
+    maxTokens: 3000,
+  }
+}
+
 /** The helper's JSON (possibly fenced or with chatter around it) → roster entries. */
 export function parseRosterDraft(answer) {
   const value = String(answer ?? '').replace(/<think>[\s\S]*?<\/think>/gi, '')
