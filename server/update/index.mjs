@@ -278,6 +278,7 @@ export function createUpdater({
     const folder = await stateFolder()
     const part = path.join(folder, `${asset.name}.part`)
     const zipFile = path.join(folder, asset.name)
+    let done
     try {
       const res = await get(asset.url, { proxy: proxy(), signal, allowHttp, headers: { accept: 'application/octet-stream', 'user-agent': userAgent } }).catch(error => {
         throw signal.aborted ? Object.assign(new Error(msg`已取消`), { name: 'AbortError' }) : new Error(networkTrouble(error))
@@ -314,13 +315,15 @@ export function createUpdater({
       const base = await installBase(root, env, platform)
       const folderPath = await stageInstall(await readFile(zipFile), { base, version: latest.version, check })
       await save({ staged: { version: latest.version, path: folderPath, sha256 } })
-      job = { step: 'ready', version: latest.version }
+      done = { step: 'ready', version: latest.version }
     } catch (error) {
-      job = { step: 'error', version: latest.version, error: error.name === 'AbortError' ? msg`已取消下载` : localize(error.message) }
+      done = { step: 'error', version: latest.version, error: error.name === 'AbortError' ? msg`已取消下载` : localize(error.message) }
     } finally {
       controller = null
       await rm(part, { force: true }).catch(() => {})
       await rm(zipFile, { force: true }).catch(() => {})
+      // Ready (or failed) once the download is gone, so nothing asking then still finds the zip.
+      job = done
     }
   }
 
