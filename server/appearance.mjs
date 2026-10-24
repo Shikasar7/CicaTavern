@@ -41,6 +41,20 @@ export function createAppearance(store) {
     return saved
   }
 
+  /**
+   * A picture drawn for the page (主题 → 对话修改) → its new file's name; the
+   * settings name it as the talk saves the look. The one it replaces stays on
+   * disk, so the talk's undo can go back to it.
+   */
+  async function storeBackdrop(buffer) {
+    const kind = imageKind(buffer)
+    if (!kind) throw httpError(502, msg`画出来的不是图片`)
+    const file = `backdrop-${randomBytes(5).toString('hex')}.${kind}`
+    await mkdir(dir, { recursive: true })
+    await writeFile(path.join(dir, file), buffer)
+    return file
+  }
+
   async function removeBackdrop() {
     const before = (await store.getSettings()).appearance.backdrop
     const saved = await store.saveSettings({}, { backdrop: '' })
@@ -55,5 +69,5 @@ export function createAppearance(store) {
     return data && { data, type: TYPES[file.split('.').pop()] }
   }
 
-  return { saveBackdrop, removeBackdrop, readBackdrop }
+  return { saveBackdrop, storeBackdrop, removeBackdrop, readBackdrop }
 }

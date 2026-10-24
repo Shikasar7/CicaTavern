@@ -44,6 +44,7 @@ public class MainActivity extends Activity {
     private final Handler main = new Handler(Looper.getMainLooper());
     private WebView web;
     private ValueCallback<Uri[]> pendingChooser;
+    private ApkUpdate update;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -63,6 +64,8 @@ public class MainActivity extends Activity {
         settings.setAllowContentAccess(true);
         web.setWebViewClient(new LocalOnlyClient());
         web.setWebChromeClient(new Chooser());
+        update = new ApkUpdate(this, state -> main.post(() ->
+            web.evaluateJavascript("window.dispatchEvent(new CustomEvent('cicatavern-apk', { detail: " + state + " }))", null)));
         web.addJavascriptInterface(new Bridge(), "AgentTavernAndroid");
         setContentView(web);
         recordCrashes();
@@ -214,6 +217,12 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        if (update != null) update.resume();
+    }
+
+    @Override
     protected void onDestroy() {
         if (isFinishing()) stopService(new Intent(this, NodeService.class));
         web.destroy();
@@ -294,7 +303,10 @@ public class MainActivity extends Activity {
         return types.isEmpty() ? null : types.toArray(new String[0]);
     }
 
-    /** window.AgentTavernAndroid: story archives go to Downloads (web/app.js saveFile); retry and copy on error pages. */
+    /**
+     * window.AgentTavernAndroid: story archives go to Downloads (web/app.js saveFile); retry and copy on error pages;
+     * installUpdate / cancelUpdate / updateState for 设置 → 更多 → 更新 (web/update.js, ApkUpdate).
+     */
     private final class Bridge {
         @JavascriptInterface
         public void retry() {
@@ -308,6 +320,21 @@ public class MainActivity extends Activity {
                 clipboard.setPrimaryClip(ClipData.newPlainText("CicaTavern 报错", text));
                 android.widget.Toast.makeText(MainActivity.this, "已复制", android.widget.Toast.LENGTH_SHORT).show();
             });
+        }
+
+        @JavascriptInterface
+        public boolean installUpdate(String url, String sha256) {
+            return update.start(url, sha256);
+        }
+
+        @JavascriptInterface
+        public void cancelUpdate() {
+            update.cancel();
+        }
+
+        @JavascriptInterface
+        public String updateState() {
+            return update.state();
         }
 
         @JavascriptInterface

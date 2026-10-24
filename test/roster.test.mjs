@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { cleanFrame, cleanRoster, countTags, draftMaterial, flattenFrame, isFramePrompt, leadOf, naiCharacters, parseFrame, parseRosterDraft, rosterBrief } from '../server/roster.mjs'
+import { chatMaterial, cleanFrame, cleanRoster, countTags, draftMaterial, flattenFrame, isFramePrompt, leadOf, naiCharacters, parseFrame, parseRosterDraft, rosterBrief, rosterChatRequest, withSomeone } from '../server/roster.mjs'
 import { imagePromptRequest, naiRequest, referenceModel, withStyle } from '../server/media.mjs'
 
 const ROSTER = cleanRoster([
@@ -83,6 +83,22 @@ test('cast-format answers cleaned; style goes first in the scene line', () => {
   assert.match(request.messages[0].content, /<cast>\n- \[顾念念\]/)
   assert.match(request.messages[0].content, /Never describe their hair, eyes, face or body/)
   assert.doesNotMatch(request.messages[0].content, /Keep the character's looks consistent/)
+  assert.match(request.messages[0].content, /Somebody is always in the picture: at least one cast member, 顾念念/)
+})
+
+test('an illustration always has somebody in it: the card\'s own character joins an empty scene', () => {
+  // The helper wrote only the setting (or an empty room as plain tags): 顾念念, the card's character, stands in it.
+  assert.equal(withSomeone('场景: dark bedroom, messy bed, night', ROSTER, '大师兄', '顾念念 - 武当', 'tags'), '场景: dark bedroom, messy bed, night\n[顾念念] white and pale blue wudang robe, standing, looking at viewer | center')
+  assert.equal(withSomeone('scenery, no humans, bedroom', ROSTER, '大师兄', '武当', 'tags'), '场景: scenery, bedroom\n[顾念念] white and pale blue wudang robe, standing, looking at viewer | center', 'no card name match: the first one who is not the player')
+  assert.match(withSomeone('A quiet bedroom at night. No people.', ROSTER, '大师兄', '顾念念', 'natural'), /^场景: A quiet bedroom at night\.?\n\[顾念念\] white and pale blue wudang robe, standing in the scene, looking at the viewer \| center$/)
+  // Somebody is already there: a [Name] line (the player counts), a head count, a person in the words.
+  for (const prompt of ['场景: forest\n[主角] walking', '1girl, forest', 'A girl waits under the tree.', '场景: market\n[掌柜] counting coins']) {
+    assert.equal(withSomeone(prompt, ROSTER, '大师兄', '顾念念', 'tags'), prompt)
+  }
+  assert.equal(withSomeone('', ROSTER, '大师兄', '顾念念'), '', 'no prompt stays no prompt')
+  assert.equal(withSomeone('bedroom', [], '大师兄', '顾念念'), 'bedroom', 'no cast: left to the instructions')
+  // A [Name] line in bold is still a [Name] line.
+  assert.equal(cleanFrame('**场景:** forest\n**[顾念念]** running'), '场景: forest\n[顾念念] running')
 })
 
 test('roster draft: material ranks looks-heavy entries first, JSON pulled out of chatter', () => {
@@ -115,4 +131,21 @@ test('leadOf: the one person, or the one besides the player', () => {
   assert.equal(leadOf([{ entry: her }, { entry: him }]), her)
   assert.equal(leadOf([{ entry: her }, { entry: other }]), null)
   assert.equal(leadOf([{ entry: her }, { entry: other }, { entry: him }]), null)
+})
+
+test('从对话里补充: the last turns as shown, newest kept when long; the request names who the list has', () => {
+  const path = [
+    { role: 'assistant', display: '开场。' },
+    { role: 'user', text: '你好' },
+    { role: 'assistant', display: '老周撑着船过来。', text: '老周撑着船过来。<state>{}</state>' },
+    { role: 'user', text: '' },
+  ]
+  assert.equal(chatMaterial(path), '<reply>\n开场。\n</reply>\n\n<player>\n你好\n</player>\n\n<reply>\n老周撑着船过来。\n</reply>')
+  assert.equal(chatMaterial(path, { turns: 1 }), '<reply>\n老周撑着船过来。\n</reply>', 'the newest turns')
+  assert.equal(chatMaterial(path, { budget: 30 }), '<reply>\n老周撑着船过来。\n</reply>', 'over the budget: the newest kept')
+  const request = rosterChatRequest('<reply>…</reply>', { known: ['林雪', '主角'], setting: '民国，上海' })
+  const asked = request.messages[0].content
+  assert.ok(asked.startsWith('<setting>\n民国，上海\n</setting>'))
+  assert.match(asked, /Already in the cast list \(skip them under any of their names\): 林雪, 主角\./)
+  assert.match(rosterChatRequest('x').messages[0].content, /\(nobody yet\)/)
 })

@@ -196,7 +196,7 @@ export function frameFormat(promptStyle) {
     'Format, one item per line:',
     `场景: ${tags ? '15-30 comma-separated English tags' : 'one English sentence'} for the setting, composition, camera angle, lighting and mood. No people here.`,
     `[Name] ${tags ? '10-25 comma-separated English tags' : 'one English sentence'}: what they are wearing right now (the usual outfit unless the story changed it), pose, action, expression | left, center or right`,
-    'One [Name] line for each cast member visible in the frame, at most 4, names exactly as in the cast list; leave out the rest.',
+    'One [Name] line for each cast member visible in the frame: at least one, at most 4, names exactly as in the cast list; leave out the rest.',
     'Never describe their hair, eyes, face or body: that is filled in automatically. Refer to other people as him, her or the girl, never by name.',
     'Anyone visible who is not in the cast goes into the 场景 line, briefly.',
   ].join('\n')
@@ -208,13 +208,35 @@ export function cleanFrame(answer) {
     .replace(/<think>[\s\S]*?<\/think>/gi, '')
     .replace(/```\w*/g, '')
     .split(/\r?\n/)
-    .map(line => line.trim().replace(/^[-*•]\s*/, ''))
+    .map(line => line.trim().replace(/\*\*/g, '').replace(/^[-*•]\s*/, ''))
     .filter(line => SCENE_LABEL.test(line) || CHARACTER_LINE.test(line))
   if (!lines.some(line => CHARACTER_LINE.test(line))) return null
   const scene = lines.filter(line => SCENE_LABEL.test(line)).slice(0, 1)
   const people = lines.filter(line => CHARACTER_LINE.test(line)).slice(0, FRAME_MAX)
   const clip = (line, words) => line.split(/\s+/).slice(0, words).join(' ')
   return [...scene.map(line => clip(line, 70)), ...people.map(line => clip(line, 50))].join('\n')
+}
+
+// Somebody described without a [Name] line: a head count, or a person word in the scene.
+const PERSON = /\b(?:\d+\s*(?:girl|boy|other)s?|solo|girls?|boys?|wom[ae]n|m[ae]n|people|person|figure|couple|crowd)\b/i
+const NOBODY = /\b(?:no humans|no people|nobody|no one)\b\.?/gi
+
+/**
+ * An illustration always has somebody in it. A prompt with nobody in it (only a
+ * 场景 line, or an empty room written as a plain prompt) gets the card's own
+ * character, in the usual outfit, standing in the scene; "no humans" goes.
+ */
+export function withSomeone(prompt, roster, userName, cardName = '', promptStyle = 'tags') {
+  const value = String(prompt ?? '').trim()
+  if (!value || !roster.length) return value
+  const lines = value.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
+  const named = lines.filter(line => CHARACTER_LINE.test(line))
+  const scene = lines.filter(line => !CHARACTER_LINE.test(line)).map(line => line.replace(SCENE_LABEL, '')).join(', ')
+  if (named.length || PERSON.test(scene.replace(NOBODY, ''))) return value
+  const lead = roster.find(entry => !entry.player && cardName.includes(entry.name)) ?? roster.find(entry => !entry.player) ?? roster[0]
+  const pose = promptStyle === 'tags' ? 'standing, looking at viewer' : 'standing in the scene, looking at the viewer'
+  const empty = scene.replace(NOBODY, '').replace(/\s*,\s*(?:,\s*)+/g, ', ').replace(/^[\s,.]+|[\s,]+$/g, '')
+  return [empty ? `场景: ${empty}` : '', `[${nameFor(lead, userName)}] ${[lead.outfit, pose].filter(Boolean).join(', ')} | center`].filter(Boolean).join('\n')
 }
 
 // ─── Drafting a roster from the card ────────────────────────────────────
@@ -256,6 +278,55 @@ export function rosterDraftRequest(material) {
     system: 'You extract character appearance sheets for an image generator. You reply with JSON only.',
     messages: [{ role: 'user', content: `${material}\n\n${task}` }],
     maxTokens: 4000,
+  }
+}
+
+/**
+ * 从对话里补充: the last few turns of a chat as the helper reads them, the
+ * player's words and the replies as shown, oldest first; when they run long the
+ * newest are kept.
+ * @param path - the chat's nodes from the start to the reply on screen (chats.mjs activePath).
+ */
+export function chatMaterial(path, { turns = 8, budget = 20000 } = {}) {
+  const pieces = []
+  let used = 0
+  let replies = 0
+  for (const node of [...(path ?? [])].reverse()) {
+    if (node.role !== 'assistant' && node.role !== 'user') continue
+    const text = String(node.role === 'user' ? node.text : node.display ?? node.text ?? '').trim()
+    if (!text) continue
+    const piece = node.role === 'user' ? `<player>\n${text.slice(0, 2000)}\n</player>` : `<reply>\n${text.slice(0, 8000)}\n</reply>`
+    if (used + piece.length > budget && pieces.length) break
+    pieces.unshift(piece)
+    used += piece.length
+    if (node.role === 'assistant' && ++replies >= turns) break
+  }
+  return pieces.join('\n\n')
+}
+
+/**
+ * The helper's request for the characters in those turns that the 角色名册
+ * does not have yet, in the draft's format (rosterDraftRequest).
+ * @param known - every name the list (and the player) already goes by.
+ * @param setting - a little of the card, for looks that fit where and when the story is.
+ */
+export function rosterChatRequest(material, { known = [], setting = '' } = {}) {
+  const task = [
+    'TASK: list the characters who take part in these recent turns of the story and are NOT in the cast list yet, for an anime image generator.',
+    `Already in the cast list (skip them under any of their names): ${known.length ? known.join(', ') : '(nobody yet)'}.`,
+    'Leave out the player character (the one the player plays, written as 你 or by the player\'s name), and anyone only mentioned or passing by without a part in the scene.',
+    'Where the turns do not say what someone looks like, give a plausible look that fits their role, age and the setting.',
+    'At most 8 entries; nobody new is a fine answer: [].',
+    'Reply with a JSON array only, no other text:',
+    '[{"name": "Chinese name as in the story (or their role, like 掌柜, if they have no name)", "aliases": "other names, comma-separated", "kind": "girl" | "boy" | "other", "player": false,',
+    '  "looks": "8-20 English booru tags for what never changes: apparent age, hair colour and style, eye colour, build, skin, distinctive marks",',
+    '  "outfit": "5-15 English booru tags for what they usually wear"}]',
+  ].join('\n')
+  const context = setting ? `<setting>\n${setting.slice(0, 1500)}\n</setting>\n\n` : ''
+  return {
+    system: 'You extract character appearance sheets for an image generator. You reply with JSON only.',
+    messages: [{ role: 'user', content: `${context}<turns>\n${material}\n</turns>\n\n${task}` }],
+    maxTokens: 3000,
   }
 }
 

@@ -7,6 +7,7 @@ import { httpError, newId } from './store.mjs'
 import { normalizeScripts } from '../web/shared/regex.js'
 import { cleanStatusSpec } from '../web/shared/status.js'
 import { msg } from './i18n.mjs'
+import { usesMvu } from './mvu.mjs'
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 
@@ -200,6 +201,99 @@ export function greetingsOf(card) {
   return [card.firstMes, ...card.alternateGreetings].filter(g => g.trim() !== '')
 }
 
+// ─── Back to SillyTavern ──────────────────────────────────────────────────
+// A card is kept as the fields this app reads; its picture is the file it came
+// in (or the last one written by 修改角色卡), so what the app does not read
+// (character_version, entry groups and depths, Tavern Helper scripts…) comes
+// from there and the fields kept here go over it.
+
+/** The card JSON in a picture's text chunks, or null. */
+export function rawOfPicture(buffer) {
+  if (!buffer) return null
+  try {
+    const texts = readPngText(buffer)
+    const payload = texts.ccv3 ?? texts.chara
+    const raw = payload ? decodeCardPayload(payload) : null
+    return raw && typeof raw === 'object' ? raw : null
+  } catch {
+    return null
+  }
+}
+
+const plain = value => (value && typeof value === 'object' && !Array.isArray(value) ? value : {})
+
+/** A worldbook entry as character_book keeps it, over the entry it was read from. */
+function stEntry(entry, base = {}) {
+  const out = {
+    ...base,
+    id: /^\d+$/.test(entry.uid) ? Number(entry.uid) : entry.uid,
+    keys: entry.keys,
+    secondary_keys: entry.secondaryKeys,
+    comment: entry.comment,
+    content: entry.content,
+    constant: entry.constant,
+    selective: entry.selective,
+    insertion_order: entry.order,
+    enabled: entry.enabled,
+    position: entry.position === 1 ? 'after_char' : 'before_char',
+    extensions: {
+      ...plain(base.extensions),
+      position: entry.position,
+      selectiveLogic: entry.selectiveLogic,
+      probability: entry.probability,
+      useProbability: entry.useProbability,
+      ...(entry.caseSensitive ? { case_sensitive: true } : {}),
+      ...(entry.wholeWords ? { match_whole_words: true } : {}),
+    },
+  }
+  // A world-file style entry keeps its own names for the same things.
+  if ('disable' in base) out.disable = !entry.enabled
+  if ('key' in base) out.key = entry.keys
+  if ('keysecondary' in base) out.keysecondary = entry.secondaryKeys
+  if ('order' in base) out.order = entry.order
+  return out
+}
+
+/**
+ * The card as SillyTavern's V3 JSON, for export: the fields kept here over
+ * `base`, the JSON it was imported from (rawOfPicture), so the rest survives.
+ */
+export function sillyTavernCard(card, base = null) {
+  const from = plain(base?.data && typeof base.data === 'object' ? base.data : base)
+  const extensions = { ...plain(from.extensions) }
+  if (Array.isArray(card.regexScripts)) {
+    const before = Array.isArray(extensions.regex_scripts) ? extensions.regex_scripts : []
+    extensions.regex_scripts = card.regexScripts.map((script, i) => ({ ...plain(before.find(s => s?.id && String(s.id) === script.id) ?? before[i]), ...script }))
+  }
+  extensions.depth_prompt = { depth: 4, role: 'system', ...plain(extensions.depth_prompt), prompt: card.depthPrompt ?? '' }
+  const own = { ...plain(extensions.cicatavern), ...(card.statusBar ? { status_bar: card.statusBar } : {}), ...(card.userName ? { user_name: card.userName } : {}) }
+  if (Object.keys(own).length) extensions.cicatavern = own
+  const data = {
+    ...from,
+    name: card.name,
+    description: card.description,
+    personality: card.personality,
+    scenario: card.scenario,
+    first_mes: card.firstMes,
+    mes_example: card.mesExample,
+    creator_notes: card.creatorNotes,
+    system_prompt: card.systemPrompt,
+    post_history_instructions: card.postHistoryInstructions,
+    alternate_greetings: card.alternateGreetings,
+    tags: card.tags,
+    creator: card.creator,
+    extensions,
+  }
+  delete data.creatorcomment
+  if (card.book) {
+    const book = plain(from.character_book)
+    const rawEntries = Array.isArray(book.entries) ? book.entries : Object.values(plain(book.entries))
+    const byUid = new Map(rawEntries.filter(e => e && typeof e === 'object').map((e, i) => [String(e.uid ?? e.id ?? i), e]))
+    data.character_book = { ...book, name: book.name ?? card.book.name, entries: card.book.entries.map(entry => stEntry(entry, byUid.get(entry.uid))) }
+  } else delete data.character_book
+  return { spec: 'chara_card_v3', spec_version: '3.0', data }
+}
+
 /** A card's name without its version ("林雪-异能抽奖系统-v1.2" → "林雪-异能抽奖系统"), to find older versions of it. */
 export function baseName(name) {
   return String(name ?? '')
@@ -232,6 +326,8 @@ export function cardSummary(card) {
     // Cards imported before 0.2 stored only a count.
     regexScripts: Array.isArray(card.regexScripts) ? card.regexScripts.length : Number(card.regexScripts) || 0,
     helperScripts: card.helperScripts ?? 0,
+    // Replies end with an <UpdateVariable> block (the page offers 补写变量 when one does not).
+    mvu: usesMvu(card, card.book ? [card.book] : []),
     importedAt: card.importedAt,
     group: card.group ?? '',
     archived: card.archived === true,

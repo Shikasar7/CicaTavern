@@ -64,7 +64,7 @@ export function initHistory({ el, getChat }) {
       if (node.role === 'user') {
         rounds.push({ n: 0, input: bodyText(article) || flat(node.text), reply: '', nodes: [article], top: 0 })
       } else if (!rounds.length) {
-        rounds.push({ n: 0, input: '', reply: bodyText(article), nodes: [article], top: 0, opening: node.compaction ? t`存档` : t`开场` })
+        rounds.push({ n: 0, input: '', reply: bodyText(article), nodes: [article], top: 0, opening: node.compaction ? t`前情` : t`开场` })
       } else {
         const round = rounds.at(-1)
         round.reply ||= bodyText(article)

@@ -37,6 +37,10 @@ test('stored scripts: each gets an id of its own; one without a pattern is dropp
   assert.notEqual(cleaned[1].id, 'same')
   assert.throws(() => cleanScripts('nope'), /格式/)
   assert.throws(() => cleanScripts(Array.from({ length: 201 }, (_, i) => script(`s${i}`))), /最多/)
+  // A beautifier's page of HTML (a preset's 行动选项美化 is 41 839 characters) is kept; only a runaway one is refused.
+  const page = `<div class="fox">${'<span>狐</span>'.repeat(3000)}</div>`
+  assert.equal(cleanScripts([script('美化', { replaceString: page })])[0].replaceString.length, page.length)
+  assert.throws(() => cleanScripts([script('太大', { replaceString: 'x'.repeat(400_001) })]), /太长了/)
 })
 
 test('a SillyTavern regex file: one script, a list, or a card\'s regex_scripts', () => {

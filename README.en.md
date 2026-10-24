@@ -103,16 +103,17 @@ If you can't quite say what you want, the creator guides you round by round:
 
 <br clear="right">
 
-## Latest changes [1.8.2]
+## Latest changes [1.9.1]
 
-<p align="center"><img src="docs/screenshots/books.jpg" alt="The lorebook entries window in 1.8.2: a card's own lorebook entry by entry, each with its switch, search, and ✎ to edit the name, trigger, keywords, position, order and text" width="880"></p>
+<p align="center"><img src="docs/screenshots/vn-hud.jpg" alt="The visual novel HUD in 1.9.1: affection, stamina and money at the top left, and at the end of the turn the notes Affection +5, Stamina −4, Got: old letter" width="880"></p>
 
-- **View and edit lorebook entries**: Settings → Attached lorebooks → View entries lists a card's own lorebook and the imported ones entry by entry, to search, switch on or off and edit; changes save at once.
-- **Visual novel mode on phones**: one row of buttons at the top right, the rest behind ⋯; the ▾ settings open as a sheet from the bottom, the choices fit between the buttons and the text box, long ones included, and held sideways the card list steps aside.
-- **Sharper name plates**: with no genders in the cast list, "he" and "she" are worked out from the reply, and when two people trade lines a lone quote goes to the right one.
-- **Pictures & voice is a group of its own in Settings** instead of a row under More.
+- **A HUD in visual novel mode**: a few variables stay at the top left, by default the first few numbers (affection, stamina, money…); click it to choose which and show each as a bar, a number or an icon. At the end of a turn, what it changed pops up under it ("Affection +5", "Got: old letter").
+- **New days and memories**: when the date moves on, "Day N" crosses the picture with the date and place; memories turn the picture and the sprites sepia with dark corners.
+- **Write variables, choice buttons**: when an MVU card's reply leaves out its variable update, "Write variables" writes just that block; a card's or preset's own action options become buttons too.
+- **Expression packs, the cast list**: Sprites can import a SillyTavern expression pack, matched to the eight expressions; the cast list can add the characters who joined later, from the chat.
+- **Improvements**: mounting a lorebook with constant entries asks whether to apply it to the open chat; What's new can show each 1.8 version's pages; the sprite window follows the cast list as soon as it is saved.
 
-Visual novel mode came in 1.8.0; voices for each character, the ▾ menus and the CG gallery in 1.8.1 (see above). Download from [Releases](https://github.com/Shikasar7/CicaTavern/releases/latest); 1.4.0 and later can update in the app. Everything that changed is in [CHANGELOG.md](CHANGELOG.md).
+Editing lorebooks, presets, regex and the theme by chat, custom colours, font and size, search and global lorebooks came in 1.9.0; visual novel mode in 1.8.0, with several on stage, expressions and save and load in 1.8.5. Download from [Releases](https://github.com/Shikasar7/CicaTavern/releases/latest); 1.4.0 and later can update in the app. Everything that changed is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Getting started (Windows)
 

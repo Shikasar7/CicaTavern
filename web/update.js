@@ -1,7 +1,9 @@
 // 设置 → 更多 → 更新 (server/update/): the version in use, a newer one with its
 // release notes, and on Windows 下载更新 → 重启并更新, 回到上一版 and the old
-// version folders. The phone app's button opens the APK in the browser, the
-// Mac's the release page.
+// version folders. The phone app downloads the APK itself, checks it and opens
+// the system installer (android ApkUpdate, through window.AgentTavernAndroid);
+// an app without that hands the APK link to the browser. The Mac's button opens
+// the release page.
 // Release notes come from GitHub: they are drawn as text, never as HTML.
 import { locale, t } from '/i18n.js'
 
@@ -84,6 +86,20 @@ export function initUpdate({ api, el, toast, guard, onChange = () => {}, isGener
   let poll = null
   let checking = false
   const pane = () => document.querySelector('#settings-form [data-section="update"]')
+  // The phone app's own download: { step, received, total, error, detail } (ApkUpdate.java).
+  const phone = window.AgentTavernAndroid?.installUpdate ? window.AgentTavernAndroid : null
+  let apkState = { step: 'idle' }
+  if (phone) {
+    try {
+      apkState = JSON.parse(phone.updateState())
+    } catch {
+      // An older state format: start from idle.
+    }
+    window.addEventListener('cicatavern-apk', event => {
+      apkState = event.detail ?? { step: 'idle' }
+      render()
+    })
+  }
 
   function set(next) {
     info = next
@@ -211,6 +227,53 @@ export function initUpdate({ api, el, toast, guard, onChange = () => {}, isGener
     ])
   }
 
+  /** Why the phone's own download stopped, by ApkUpdate's code. */
+  function apkError(state) {
+    switch (state.error) {
+      case 'hash': return t`下载的文件和发布页公布的 SHA-256 对不上，已经删掉。再试一次，还不行就到发布页手动下载。`
+      case 'package':
+      case 'signature': return t`下载的安装包不是这个应用的正式版（包名或签名不一致），已经删掉，不会安装。`
+      case 'older': return t`下载的版本不比现在的新，不用安装。`
+      case 'storage': return t`手机存储写不进去：${state.detail ?? ''}`
+      case 'installer': return t`手机上没有能打开安装包的安装程序。到发布页下载后手动安装。`
+      case 'denied': return t`还没允许 CicaTavern「安装未知应用」，所以没装上。再点一次「下载并安装」，在打开的设置里打开开关后返回。`
+      default: return t`下载没成功：${state.detail ?? ''}。检查网络（国内网络可能连不上 GitHub）后再试，或者到发布页手动下载。`
+    }
+  }
+
+  /** The phone app: download, check and install in the app; the system installer asks before installing. */
+  function phoneActions(apk, open) {
+    const state = apkState
+    const start = () => {
+      if (!phone.installUpdate(apk.url, apk.sha256)) toast(t`这个下载地址不是 CicaTavern 的发布页，没有下载。`)
+    }
+    switch (state.step) {
+      case 'downloading':
+        return [
+          progress({ received: state.received ?? 0, total: state.total || apk.size }),
+          el('div', { class: 'row' }, [el('button', { type: 'button', class: 'btn small', text: t`取消`, onclick: () => phone.cancelUpdate() })]),
+        ]
+      case 'verifying':
+        return [el('p', { class: 'hint', text: t`正在核对 SHA-256 和签名…` })]
+      case 'permission':
+        return [el('p', { class: 'hint', text: t`第一次更新要允许 CicaTavern「安装未知应用」：在打开的设置里打开开关，再返回这里，会接着安装。` })]
+      case 'installing':
+        return [
+          el('p', { class: 'hint', text: t`已下载并核对（SHA-256 和签名都一致）。在系统的安装界面点「更新」或「安装」，覆盖安装会保留所有数据；装好后重新打开 CicaTavern。` }),
+          el('div', { class: 'row' }, [el('button', { type: 'button', class: 'btn small', text: t`重新下载安装`, onclick: start }), open]),
+        ]
+      default:
+        return [
+          state.step === 'error' ? el('p', { class: 'hint warn', text: apkError(state) }) : null,
+          el('div', { class: 'row' }, [
+            el('button', { type: 'button', class: 'btn primary', text: t`${state.step === 'error' ? t`重新下载` : t`下载并安装`}（${mb(apk.size)}）`, onclick: start }),
+            open,
+          ]),
+          el('p', { class: 'hint', text: t`在应用里下载，核对发布页公布的 SHA-256 和签名后打开系统的安装界面，覆盖安装会保留所有数据。` }),
+        ]
+    }
+  }
+
   /** What can be done about the newer version here. */
   function actions() {
     const job = info.job ?? { step: 'idle' }
@@ -219,6 +282,7 @@ export function initUpdate({ api, el, toast, guard, onChange = () => {}, isGener
     if (info.kind === 'apk') {
       const apk = latest.assets?.apk
       if (!apk) return [el('p', { class: 'hint', text: t`这个版本没有安卓安装包。` }), open]
+      if (phone && apk.sha256) return phoneActions(apk, open)
       return [
         el('div', { class: 'row' }, [
           // The app hands links that are not its own page to the browser, which downloads the APK.

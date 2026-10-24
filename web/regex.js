@@ -6,6 +6,7 @@
 // turn writes the cache once more; display-only scripts never touch it.
 import { t } from '/i18n.js'
 import { applyScripts, PLACEMENT, regexFromString, scriptsInFile } from '/shared/regex.js'
+import { HTML_LIKE } from '/render.js'
 
 const EFFECT_LABEL = { both: t`显示和发送都改`, display: t`只改显示`, prompt: t`只改发给模型的` }
 // A reply to try a script on when the chat has none yet.
@@ -16,11 +17,14 @@ const effectOf = script => (script.markdownOnly ? 'display' : script.promptOnly 
 const touchesPrompt = script => Boolean(script) && !script.markdownOnly && (script.placement.includes(PLACEMENT.AI_OUTPUT) || script.placement.includes(PLACEMENT.USER_INPUT))
 const newId = () => (crypto.randomUUID ? crypto.randomUUID() : `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`)
 
+const ON_LABEL = { ai: t`AI 回复`, user: t`用户输入`, both: t`AI 回复和用户输入`, none: t`不作用` }
+
 /**
  * @param context - async () → { card: { id, name, scripts } | null, preset: { id, name, builtin, scripts } | null, sample, macros }
  * @param onChanged - (scope, id, scripts) after a scope's scripts were saved.
+ * @param openTalk - talk-dialog.js: 对话修改 on a scope's scripts.
  */
-export function initRegex({ api, el, toast, guard, context, onChanged }) {
+export function initRegex({ api, el, toast, guard, context, onChanged, openTalk }) {
   const $ = id => document.getElementById(id)
   const dialog = $('regex-dialog')
   const state = { global: [], card: null, preset: null, selected: null, draft: null, sample: '', macros: text => text }
@@ -75,7 +79,11 @@ export function initRegex({ api, el, toast, guard, context, onChanged }) {
         return li
       })
       return el('section', { class: 'regex-group' }, [
-        el('h3', { class: 'regex-group-title' }, [scope.title, el('span', { text: scope.note })]),
+        el('h3', { class: 'regex-group-title' }, [
+          scope.title,
+          el('span', { text: scope.note }),
+          scope.editable ? el('button', { type: 'button', class: 'btn ghost small', text: t`对话修改`, title: t`说说想让回复怎么变，向导写好正则，先拿最新回复试一遍`, onclick: () => talkAbout(scope.key) }) : null,
+        ]),
         items.length ? el('ul', { class: 'preset-list' }, items) : el('p', { class: 'regex-empty', text: scope.key === 'global' ? t`还没有。点「新建」或「导入」。` : t`没有` }),
       ])
     })
@@ -202,6 +210,9 @@ export function initRegex({ api, el, toast, guard, context, onChanged }) {
       render()
     }))
     const remove = !state.draft && editable ? el('button', { type: 'button', class: 'btn danger', text: t`删除` }) : null
+    const aimed = !state.draft && editable
+      ? el('button', { type: 'button', class: 'btn ghost', text: t`按意见改`, title: t`在「对话修改」里说说这一条想怎么改，或者问它为什么不生效`, onclick: () => talkAbout(scope.key, { id: `regex:${script.id}`, label: script.scriptName || script.findRegex }) })
+      : null
     remove?.addEventListener('click', guard(async () => {
       if (!confirm(t`删除「${script.scriptName || script.findRegex}」？`)) return
       await save(scope.key, scope.scripts.filter(s => s.id !== script.id), { before: script })
@@ -238,7 +249,7 @@ export function initRegex({ api, el, toast, guard, context, onChanged }) {
           results,
         ]),
       ]),
-      el('div', { class: 'row end regex-actions' }, [remove, saveButton]),
+      el('div', { class: 'row end regex-actions' }, [aimed, remove, saveButton]),
     )
     changed()
   }
@@ -246,6 +257,98 @@ export function initRegex({ api, el, toast, guard, context, onChanged }) {
   function render() {
     renderList()
     renderEditor()
+  }
+
+  // ─── 对话修改 (talk-dialog.js) ─────────────────────────────────────────
+  /** The talk on a scope's scripts; `aim` keeps the first request to one script. */
+  function talkAbout(key, aim = null) {
+    const scope = scopeOf(key)
+    const id = key === 'global' ? 'global' : `${key}-${state[key].id}`
+    openTalk?.({
+      url: `/api/talk/regex/${id}`,
+      title: t`对话修改正则`,
+      name: key === 'global' ? t`全局` : t`${scope.title}「${scope.note}」`,
+      aim,
+      intro: () => t`说说想让回复怎么变，或者哪条正则不管用：向导把要改的正则整条写出来，先拿当前对话的最新回复试一遍，给你看匹配到什么、变成什么，勾上的才会存进去。`,
+      ideas: () => [t`把【】里的内容变成彩色小框`, t`藏起回复里的思维链`, t`这些正则分别在做什么？`],
+      placeholder: target => (target ? t`「${target.label}」想怎么改，或者问它为什么不生效` : t`说说想让回复怎么变，比如：把状态栏那段藏起来`),
+      busy: job => (job.step === 'check' ? t`拿最新回复试跑…` : job.chars ? t`正在写，已经写了 ${job.chars.toLocaleString()} 字…` : t`正在读这些正则…`),
+      changeTitle: change => {
+        if (change.kind === 'newRegex') return t`新正则 · ${change.name || change.find}`
+        if (change.kind === 'removeRegex') return t`删除 · ${change.title}`
+        return change.title
+      },
+      changeWhere: change => {
+        if (change.kind === 'removeRegex') return ['', '', '']
+        if (change.enabled === false) return [t`停用`, 'off', '']
+        const effect = change.newEffect ?? change.effect
+        return [EFFECT_LABEL[effect], effect === 'display' ? 'off' : 'key', effect === 'display' ? t`发给模型的不变，不影响缓存` : t`会改发给模型的内容，下一轮会重新写入一次缓存`]
+      },
+      changeNotes: () => [],
+      changeBody: (change, { diffBox }) => regexBody(change, diffBox),
+      canTake: change => !change.invalid,
+      context: () => ({ sample: state.sample }),
+      targetLabel: target => {
+        const script = scope.scripts.find(s => `regex:${s.id}` === target)
+        return script?.scriptName || script?.findRegex || target.slice(6)
+      },
+      onApplied: result => talked(key, result, t`已存进正则：${result.applied} 处`),
+      onUndone: result => talked(key, result, t`已撤销这次修改`),
+    })
+  }
+
+  /** A proposed script: what changes in it, and how it did on the latest reply. */
+  function regexBody(change, diffBox) {
+    const notes = []
+    if (change.kind === 'regex' && change.name) notes.push(t`名称：${change.title} → ${change.name}`)
+    if (change.kind === 'newRegex' || change.newOn) notes.push(t`作用于：${ON_LABEL[change.newOn ?? change.on]}`)
+    if (change.newEffect) notes.push(t`效果：${EFFECT_LABEL[change.newEffect]}`)
+    if (change.enabled !== undefined) notes.push(change.enabled ? t`改为启用` : t`改为停用`)
+    const [findBefore, findAfter] = change.kind === 'newRegex' ? ['', change.find] : change.kind === 'removeRegex' ? [change.find, ''] : [change.findBefore, change.findAfter]
+    const [replaceBefore, replaceAfter] = change.kind === 'newRegex' ? ['', change.replace] : change.kind === 'removeRegex' ? [change.replace, ''] : [change.replaceBefore, change.replaceAfter]
+    if (change.kind === 'newRegex' && !change.replace) notes.push(t`替换为空：删掉匹配到的部分`)
+    return [
+      notes.length ? el('p', { class: 'ce-change-note', text: notes.join(t`；`) }) : null,
+      findBefore !== findAfter ? el('div', { class: 'talk-label', text: t`查找` }) : null,
+      findBefore !== findAfter ? diffBox(findBefore, findAfter) : null,
+      replaceBefore !== replaceAfter ? el('div', { class: 'talk-label', text: t`替换为` }) : null,
+      replaceBefore !== replaceAfter ? diffBox(replaceBefore, replaceAfter) : null,
+      change.kind === 'removeRegex' ? null : trialBox(change),
+    ]
+  }
+
+  function trialBox(change) {
+    if (change.invalid) return el('p', { class: 'talk-trial bad', text: t`这个表达式写得不对，读不出来，不能采用。` })
+    const trial = change.trial
+    if (!trial) return el('p', { class: 'talk-trial', text: t`这个对话还没有回复，没法试跑。` })
+    if (trial.error === 'timeout') return el('p', { class: 'talk-trial bad', text: t`试跑超时：这个表达式在最新回复上卡住了，不建议采用。` })
+    if (trial.error) return el('p', { class: 'talk-trial', text: t`没能试跑。` })
+    if (!trial.matches) return el('p', { class: 'talk-trial warn', text: t`在最新回复里没有匹配到。` })
+    return el('div', { class: 'talk-trial' }, [
+      el('p', { text: t`在最新回复里匹配到 ${trial.matches} 处，前几处变成：` }),
+      ...trial.samples.map(sample => el('div', { class: 'talk-trial-sample' }, [
+        el('pre', { class: 'from', text: sample.match }),
+        HTML_LIKE.test(sample.shown) ? htmlSample(sample.shown) : el('pre', { class: 'to', text: sample.shown || t`（删掉）` }),
+      ])),
+    ])
+  }
+
+  /** Block HTML a script puts in, as the chat shows it (render.js): in a sandboxed frame, where nothing it holds can run. */
+  function htmlSample(html) {
+    const style = getComputedStyle(document.documentElement)
+    const head = `<!doctype html><meta charset="utf-8"><style>body{margin:4px 8px;font:14px/1.7 ${style.getPropertyValue('--serif')};color:${style.getPropertyValue('--ink')}}</style>`
+    return el('iframe', { class: 'talk-trial-html', sandbox: '', srcdoc: head + html, title: t`显示出来的样子` })
+  }
+
+  /** What the talk saved or undid: the scope's scripts drawn again, the chat following them. */
+  function talked(key, result, said) {
+    const scripts = result.regex.scripts
+    if (key === 'global') state.global = scripts
+    else state[key].scripts = scripts
+    onChanged(key, key === 'global' ? '' : state[key].id, scripts)
+    if (state.selected?.scope === key && !scripts.some(s => s.id === state.selected.id)) state.selected = null
+    if (dialog.open) render()
+    toast(result.prefix ? [said, t`会改发给模型的内容，下一轮会重新写入一次缓存。`].join(t`。`) : said, result.prefix ? 6000 : 3000)
   }
 
   $('regex-new').addEventListener('click', () => {

@@ -43,6 +43,12 @@ const ROLES = ROLE_WORDS.split(' ').map(word => {
 const SAID_AFTER = /^([^\s，,。！？!?；;：:“”「」『』"]{2,4}?)(?:轻声|低声|小声|大声|笑着|如实|继续|重复|追|又|才|(?:缓缓|慢慢|轻轻|淡淡|冷冷|静静|悄悄|默默|喃喃|幽幽|懒懒|慢悠悠|懒洋洋|笑嘻嘻|笑眯眯)地?)?(?:说|道|问|答|喊|叫|笑道|问道|答道|喊道|叫道)(?!完|不出|出口|题)/
 // An option the story offers (1️⃣ …), as the transcript draws them: the end buttons here.
 const OPTION = /^\s*(?:<[^<>]+>\s*)*([1-9])️?⃣\s*(\S[\s\S]*)$/
+// A memory (回忆滤镜): a paragraph opening on long ago, or drifting back to it; it lasts a few paragraphs, until the story comes back.
+const LONG_AGO = '(?:那年|那一年|那天|那时|那个(?:冬天|夏天|春天|秋天|夜晚|雨夜|下午)|小时候|年少时|少年时|当年|从前|过去|多年前|很多年前|许多年前|很久以前|[一二两三四五六七八九十几数\\d]+年前)' // i18n-ignore: words for long ago
+const MEMORY_START = new RegExp(`^[\\s*_#>【\\[(（…—-]*(?:那年|那一年|多年前|很多年前|许多年前|很久以前|小时候|年少时|当年[，,]|[一二两三四五六七八九十几数\\d]+年前[，,的])|(?:回想起|回忆起|忆起|想起了?|思绪.{0,6}(?:飘回|飘远|飘向|回到)|记忆.{0,6}(?:回到|拉回到?|闪回|涌回)|仿佛又?回到了?).{0,10}${LONG_AGO}|^\\W*(?:years ago|back then|long ago),|\\bremembered (?:the (?:day|night|summer|winter)|when)\\b`, 'i') // i18n-ignore: words for a memory
+const MEMORY_END = /回过神|缓过神|思绪.{0,6}(?:拉回|收回|回到现实|回到眼前|回到当下)|回到现实|回到当下|从(?:回忆|记忆)(?:里|中)|^[\s*_#>【[(（]*(?:如今|而今|此刻|现在)[，,]|\bback to the present\b|\bsnapped (?:out|back)\b/i // i18n-ignore: words leaving a memory
+// How many paragraphs a memory may last after the one that opens it.
+const MEMORY_ROWS = 3
 const OPTION_LINE = /^\s*(?:<[^<>]+>\s*)*[1-9]️?⃣/m
 
 export const withoutFolds = text => String(text ?? '').replace(FOLD_BLOCK, '').replace(FOLD_OPEN, '')
@@ -521,19 +527,30 @@ export function splitLines(text, { names = [], max = 90, partial = false } = {})
   const third = Boolean(player?.kind) && player.keys.reduce((n, key) => n + prose.split(key).length - 1, 0) > (prose.match(/你/g) ?? []).length
   const noted = third ? names : names.filter(entry => !entry.player)
   if (third) recent[player.kind] = player.name
+  // Paragraphs of a memory still to come (0: none).
+  let memoryLeft = 0
   rows.forEach((row, i) => {
     const unfinished = partial && i === rows.length - 1
     recent.row = i
     const turnFrom = answering
     answering = null
     // A rule between scenes.
-    if (/^[-—–*＊=_~·\s]{3,}$/.test(plainOf(row).trim())) return
+    if (/^[-—–*＊=_~·\s]{3,}$/.test(plainOf(row).trim())) {
+      memoryLeft = 0
+      return
+    }
     // A header line (日期 · 时辰 · 地点): the sign and the background, not a line to read.
     const where = unfinished ? null : headerPlace(row)
     if (where) {
+      memoryLeft = 0
       beats.push({ kind: 'scene', text: '', speaker: null, where })
       return
     }
+    const told = plainOf(row).replace(QUOTE, ' ').trim()
+    if (MEMORY_END.test(told)) memoryLeft = 0
+    else if (MEMORY_START.test(told)) memoryLeft = MEMORY_ROWS + 1
+    const memory = memoryLeft > 0
+    if (memoryLeft) memoryLeft--
     const option = OPTION.exec(row)
     if (option) {
       // One still being written is not an option yet.
@@ -579,12 +596,12 @@ export function splitLines(text, { names = [], max = 90, partial = false } = {})
         noteNamed(beat.text, noted, recent)
         answering = null
       }
-      beats.push({ kind: beat.kind, text: beat.text, speaker })
+      beats.push({ kind: beat.kind, text: beat.text, speaker, ...(memory ? { memory } : {}) })
     })
     label = named?.name ?? null
   })
   const texts = carryTags(beats.map(beat => beat.text))
-  return beats.map((beat, i) => ({ kind: beat.kind, text: texts[i], plain: plainOf(beat.text).trim(), speaker: beat.speaker, ...(beat.where ? { where: beat.where } : {}) }))
+  return beats.map((beat, i) => ({ kind: beat.kind, text: texts[i], plain: plainOf(beat.text).trim(), speaker: beat.speaker, ...(beat.where ? { where: beat.where } : {}), ...(beat.memory ? { memory: true } : {}) }))
 }
 
 // ─── Scenes ──────────────────────────────────────────────────────────────
@@ -746,4 +763,136 @@ export function weatherOf(text) {
   if (/阴|云/.test(s)) return 'cloudy'
   if (/晴/.test(s)) return 'clear'
   return null
+}
+
+// ─── Days (换天的章节标题卡) ───────────────────────────────────────────────
+
+const DIGITS = { 零: 0, 〇: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 } // i18n-ignore: numerals
+const MONTH_WORDS = { 正: 1, 冬: 11, 腊: 12 } // i18n-ignore: month names
+const WEEKDAYS = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 日: 0, 天: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6, sun: 0 } // i18n-ignore: weekdays
+const MONTHS_EN = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
+
+/** 17, 十七, 二十三, 廿三, 初七, 二〇二六 → a number; else NaN. */
+function numberOf(text) {
+  const s = String(text ?? '').trim().replace(/^初/, '').replace(/^廿/, '二十').replace(/^卅/, '三十') // i18n-ignore: numerals
+  if (/^\d+$/.test(s)) return Number(s)
+  if (s in MONTH_WORDS) return MONTH_WORDS[s]
+  const tens = /^([一二两三四五六七八九])?十([一二三四五六七八九])?$/.exec(s)
+  if (tens) return (tens[1] ? DIGITS[tens[1]] : 1) * 10 + (tens[2] ? DIGITS[tens[2]] : 0)
+  if (/^[零〇一二两三四五六七八九]{1,4}$/.test(s)) return Number([...s].map(ch => DIGITS[ch]).join(''))
+  return NaN
+}
+
+/**
+ * The date in a time box's time ("10月20日 周一 清晨7:50", "永和十七年八月十五 亥时",
+ * "第3天 上午", "Oct 20"): { year, month, day, count, weekday, key }, its key ''
+ * when it names no date (a time of day alone).
+ */
+export function dateOf(time) {
+  const s = String(time ?? '')
+  const date = { key: '' }
+  const pieces = []
+  const take = (pattern, use) => {
+    const match = pattern.exec(s)
+    if (match && use(match) !== false) pieces.push(match[0].replace(/\s+/g, ''))
+  }
+  const fits = (n, max) => Number.isInteger(n) && n >= 1 && n <= max
+  take(/第\s*([\d零〇一二两三四五六七八九十百]+)\s*[天日]|\bday\s*(\d+)\b/i, m => fits((date.count = numberOf(m[1] ?? m[2])), 9999))
+  take(/(\d{4})\s*[-/.年]\s*(\d{1,2})\s*[-/.月]\s*(\d{1,2})/, m => {
+    Object.assign(date, { year: Number(m[1]), month: Number(m[2]), day: Number(m[3]) })
+  })
+  if (date.month == null) {
+    take(/([\d零〇一二两三四五六七八九十百千廿卅]+)\s*年/, m => fits((date.year = numberOf(m[1])), 99999))
+    take(/([\d正一二三四五六七八九十冬腊]+)\s*月\s*(?:(初[一二三四五六七八九十]|[一二三四五六七八九十廿卅]+|\d{1,2})\s*[日号]?)?/, m => {
+      date.month = numberOf(m[1])
+      if (m[2]) date.day = numberOf(m[2])
+      // 八月十五, 正月初七: a lunar month, thirty days or so.
+      if (!/\d/.test(m[0])) date.lunar = true
+      return fits(date.month, 12)
+    })
+    const en = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b/i.exec(s)
+    if (date.month == null && en) {
+      Object.assign(date, { month: MONTHS_EN.indexOf(en[1].toLowerCase()) + 1, day: Number(en[2]) })
+      pieces.push(en[0].replace(/\s+/g, ''))
+    }
+  }
+  if (date.month == null && date.count == null) take(/(?:^|[^\d第])(\d{1,2}|[一二三四五六七八九十廿卅]+)\s*[日号]/, m => fits((date.day = numberOf(m[1])), 31))
+  take(/(?:周|星期|礼拜)([一二三四五六日天])|\b(mon|tue|wed|thu|fri|sat|sun)[a-z]*\b/i, m => {
+    date.weekday = WEEKDAYS[(m[1] ?? m[2]).toLowerCase()]
+  })
+  if (!fits(date.count, 9999)) delete date.count
+  if (!fits(date.year, 99999)) delete date.year
+  if (!fits(date.month, 12)) delete date.month
+  if (!fits(date.day, 31)) delete date.day
+  date.key = pieces.join(' ')
+  return date
+}
+
+/** Days from one date to another, when they say: by the day count, the calendar, the day of the month, the weekday. Else null. */
+export function daysBetween(from, to) {
+  if (from?.count != null && to?.count != null) return to.count - from.count
+  if (from?.month && from.day && to?.month && to.day) {
+    // A lunar date and a calendar one cannot be counted between.
+    if (Boolean(from.lunar) !== Boolean(to.lunar)) return null
+    const fromYear = from.year ?? to.year ?? 2001
+    // No year written: a month far back is the next year's (腊月 → 正月), one a little back is earlier.
+    const toYear = to.year ?? (from.month - to.month >= 6 ? fromYear + 1 : fromYear)
+    if (from.lunar || to.lunar) return ((toYear - fromYear) * 12 + to.month - from.month) * 30 + to.day - from.day
+    return Math.round((Date.UTC(toYear, to.month - 1, to.day) - Date.UTC(fromYear, from.month - 1, from.day)) / 86_400_000)
+  }
+  if (from?.day && to?.day && from.month == null && to.month == null && to.day >= from.day) return to.day - from.day
+  if (from?.weekday != null && to?.weekday != null) return (to.weekday - from.weekday + 7) % 7
+  return null
+}
+
+/**
+ * The story at `at` ({ day, date }: the furthest date it reached) moving to a
+ * time box's time: the day it is now, and whether that is a later day. An
+ * earlier date (a memory) leaves the day where it was; one that changed in a
+ * way that cannot be counted is taken as the next day.
+ */
+export function advanceDay(at, time) {
+  const date = dateOf(time)
+  const day = at?.day ?? 1
+  if (!date.key) return { day, date: at?.date ?? null, changed: false }
+  if (!at?.date?.key) return { day: date.count ?? day, date, changed: false }
+  const diff = daysBetween(at.date, date)
+  if (diff === null && date.key !== at.date.key) return { day: date.count ?? day + 1, date, changed: true }
+  if (!(diff > 0)) return { day, date: at.date, changed: false }
+  return { day: date.count ?? day + diff, date, changed: true }
+}
+
+// A paragraph opening on the next day (次日清晨，…), in a story that writes no dates.
+const NEXT_DAY = /^[\s*_#>【[(（]*(?:次日|翌日|第二天(?![就要还得再便也都才])|第二日|隔天|隔日|次晨|翌晨|转天|一夜无话|the next (?:day|morning)\b)/i // i18n-ignore: words for the next day
+
+/** Whether a line opens on the next day. */
+export const opensNextDay = text => NEXT_DAY.test(plainOf(text).trim())
+
+/** The times a reply gives: its time box, then every header line in it. */
+export function timesIn(text) {
+  const raw = String(text ?? '')
+  const box = placeOf(timeBoxOf(raw)).time
+  const headers = raw.split('\n').map(line => headerPlace(line)?.time).filter(Boolean)
+  return [box, ...headers].filter(Boolean)
+}
+
+/** The time a chat's variables give (系统.当前时间), or ''. */
+export const stateTime = state => (state && typeof state === 'object' ? stateValue(state, 'time') : '')
+
+/**
+ * Which day of the story the replies so far reach (oldest first; each its text,
+ * or { text, time } with the time its variables gave): the first date seen is
+ * day 1 (or the day it counts, 第3天), each later date counts on from it, and a
+ * reply with no date that opens a paragraph on 次日 is one day more. → { day, date }.
+ */
+export function storyDay(replies) {
+  let at = { day: 1, date: null }
+  for (const reply of replies) {
+    const text = typeof reply === 'string' ? reply : reply?.text
+    const times = timesIn(text)
+    if (!times.length && reply?.time) times.push(reply.time)
+    if (times.length) for (const time of times) at = advanceDay(at, time)
+    else if (String(text ?? '').split('\n').some(opensNextDay)) at = { day: at.day + 1, date: null }
+  }
+  return { day: at.day, date: at.date }
 }

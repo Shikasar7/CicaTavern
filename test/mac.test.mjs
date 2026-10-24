@@ -6,6 +6,7 @@ import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import http from 'node:http'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -13,7 +14,7 @@ import { featuresOf } from '../server/edition.mjs'
 import { parseMacProxy, createProxy } from '../server/proxy.mjs'
 import { createUpdater } from '../server/update/index.mjs'
 import { inAppBundle, installBase, stateDir, userAppData } from '../server/update/install.mjs'
-import { assetKind, releaseInfo } from '../server/update/release.mjs'
+import { assetKind, latestFile, releaseInfo } from '../server/update/release.mjs'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const VERSION = JSON.parse(readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8')).version
@@ -129,6 +130,38 @@ test('the Mac updater: installable means "has a download page"; downloading is r
   const state = path.join(home, 'Library', 'Application Support', 'CicaTavern', 'update', 'state.json')
   assert.equal(JSON.parse(readFileSync(state, 'utf8')).autoCheck, false, 'kept in Application Support')
   assert.equal(existsSync(path.join(root, 'update')), false, 'nothing written into the bundle')
+})
+
+test('the Mac updater: when GitHub limits the API, latest.json gives the zip for this Mac\'s processor', async t => {
+  const dir = await scratch(t)
+  const root = path.join(dir, 'Applications', 'CicaTavern.app', 'Contents', 'Resources', 'app')
+  await mkdir(path.join(root, 'runtime'), { recursive: true })
+  await writeFile(path.join(root, 'runtime', 'node'), 'node')
+  // Not the processor running the test, so a check that forgot it would take the other zip.
+  const arch = process.arch === 'arm64' ? 'x64' : 'arm64'
+  const hex = { arm64: 'a'.repeat(64), x64: 'b'.repeat(64) }
+  const server = http.createServer((req, res) => {
+    const base = `http://127.0.0.1:${server.address().port}`
+    if (req.url === '/repos/Shikasar7/CicaTavern/releases/latest') {
+      res.writeHead(403, { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(Math.floor(Date.now() / 1000) + 600) })
+      return res.end('{}')
+    }
+    if (req.url === '/Shikasar7/CicaTavern/releases/latest/download/latest.json') {
+      const assets = ['arm64', 'x64'].map(a => ({ name: `CicaTavern-1.9.1-mac-${a}.zip`, size: 3, digest: `sha256:${hex[a]}`, browser_download_url: `${base}/Shikasar7/CicaTavern/releases/download/v1.9.1/CicaTavern-1.9.1-mac-${a}.zip` }))
+      res.writeHead(200, { 'content-type': 'application/json' })
+      return res.end(JSON.stringify(latestFile({ tag_name: 'v1.9.1', name: 'CicaTavern 1.9.1', body: '', html_url: `${base}/release`, published_at: '2026-10-24T00:00:00Z', assets })))
+    }
+    res.writeHead(404)
+    res.end()
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => server.close())
+  const feed = `http://127.0.0.1:${server.address().port}/repos/Shikasar7/CicaTavern`
+  const updater = createUpdater({ features: featuresOf('release', 'darwin'), root, version: '1.9.0', feed, platform: 'darwin', arch, env: { HOME: path.join(dir, 'home') } })
+  const status = await updater.check({ force: true })
+  assert.equal(status.newer, true)
+  assert.equal(status.latest.assets.mac.name, `CicaTavern-1.9.1-mac-${arch}.zip`)
+  assert.equal(status.latest.assets.mac.sha256, hex[arch])
 })
 
 test('the per-user fallback folder: LOCALAPPDATA on Windows, Application Support on macOS; never inside a .app', async t => {

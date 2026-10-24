@@ -5,6 +5,8 @@ import { speechChunks } from '/shared/speech.js'
 import { speakerNames, splitLines } from '/shared/vn.js'
 import { createMenu, MENU_ICONS, whoLine } from '/menu.js'
 import { locale, t, zh } from '/i18n.js'
+import { NAI_MODELS } from '/draw-choice.js'
+import { GEMINI_IMAGE_MODELS, IMAGE_MODEL } from '/shared/draw.js'
 
 const SHAPES = [['square', t`方图`], ['portrait', t`竖图`], ['landscape', t`横图`]]
 const IMAGE_BACKEND_TEXT = { openai: t`图片接口`, gemini: 'Gemini', comfy: 'ComfyUI', sdwebui: 'SD WebUI', novelai: 'NovelAI' }
@@ -16,7 +18,6 @@ const imageBackends = () => [
   ['comfy', t`ComfyUI 工作流（本地）`],
   ['sdwebui', t`SD WebUI / Forge（本地）`],
 ]
-const GEMINI_IMAGE_MODELS = ['gemini-2.5-flash-image', 'gemini-3-pro-image-preview']
 const GEMINI_TTS_MODELS = ['gemini-2.5-flash-preview-tts', 'gemini-2.5-pro-preview-tts']
 const SD_SAMPLERS = ['Euler a', 'Euler', 'DPM++ 2M', 'DPM++ 2M Karras', 'DPM++ SDE Karras', 'DPM++ 2M SDE', 'DDIM', 'UniPC']
 /** A provider holding Google's key (the Gemini template), offered first for Gemini's own models. */
@@ -24,13 +25,6 @@ const isGoogle = p => /generativelanguage\.googleapis\.com|\/v1beta\/openai\/?$/
 // A voice service on this machine or the LAN (小雅, or the tavern on a PC):
 // local TTS models, as against the cloud services.
 const BRIDGE_NAME = t`本地语音桥接`
-const NAI_MODELS = [
-  ['nai-diffusion-5-full', t`V5 Full（能画成人内容）`],
-  ['nai-diffusion-5-curated', t`V5 Curated（筛过的数据，不出成人内容）`],
-  ['nai-diffusion-4-5-full', 'V4.5 Full'],
-  ['nai-diffusion-4-5-curated', 'V4.5 Curated'],
-]
-const IMAGE_MODEL = /image|imagine|dall|flux|sdxl|stable|seedream|gpt-image|kolors|wanx|cogview|midjourney|recraft|ideogram/i
 
 // Browser voices (Web Speech API): spoken by the page itself, free, nothing
 // goes to the server. A card names one as `browser:<voice name>`; a device
@@ -73,9 +67,10 @@ function browserVoice(ref) {
 }
 
 /**
- * @param deps - { api, el, toast, guard, getChat, getModels, openProviders, saveFile }
+ * @param deps - { api, el, toast, guard, getChat, getModels, openProviders, saveFile,
+ *   pickDraw(options) (web/draw-choice.js: the 画图方式 and model for one picture) }
  */
-export function initMedia({ api, el, toast, guard, getChat, getModels, openProviders, saveFile }) {
+export function initMedia({ api, el, toast, guard, getChat, getModels, openProviders, saveFile, pickDraw }) {
   const $ = id => document.getElementById(id)
   // The settings window (配图与朗读) as a menu of parts (web/menu.js).
   const settingsMenu = createMenu({ dialog: $('media-dialog'), form: $('media-form'), el, title: t`配图与朗读` })
@@ -86,16 +81,26 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     jobs: new Map(), // nodeId → { stage, chatId, controller, started, backend } of a picture in the works
     failures: new Map(), // nodeId → { stage, chatId, prompt, message } shown in place of the picture
     fresh: new Set(), // files just drawn: they come into focus once loaded
+    // This install's own image backends, as /api/media/settings describes them ({ id, name, ready, need, hint, models, model }).
+    ownBackends: [],
   }
+  const ownBackend = id => state.ownBackends.find(own => own.id === id) ?? null
 
   async function loadSettings() {
     try {
-      state.settings = (await api('/api/media/settings')).media
+      const view = await api('/api/media/settings')
+      state.settings = view.media
+      state.ownBackends = view.ownBackends ?? []
     } catch {
       state.settings = null
     }
     // How long a piece each voice takes; until it arrives, the voice's prefix says.
     api('/api/media/voices').then(info => { state.voiceInfo = info }, () => {})
+  }
+
+  /** The card's settings just saved: the visual novel mode's cast (web/vn.js) follows its 角色名册. */
+  function announceCardMedia() {
+    document.dispatchEvent(new CustomEvent('cicatavern:card-media', { detail: { cardId: state.cardId, media: state.cardMedia } }))
   }
 
   async function setCard(cardId) {
@@ -166,7 +171,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         return el('figure', { class: 'reply-image' }, [
           img,
           el('figcaption', {}, [
-            el('button', { type: 'button', text: t`重画`, title: t`同一段提示词再画一张（NovelAI 可以先选模型）`, disabled: Boolean(job), onclick: event => withModel(event.currentTarget, model => draw(node, image.prompt, chat.id, model)) }),
+            el('button', { type: 'button', text: t`重画`, title: t`同一段提示词再画一张，可以先选画图方式和模型`, disabled: Boolean(job), onclick: () => redraw(node, image.prompt, chat.id) }),
             el('button', { type: 'button', text: t`改提示词`, disabled: Boolean(job), onclick: () => openImageDialog(node, image.prompt, { chatId: chat.id, note: t`这张图的提示词，改完点「画」。` }) }),
             el('button', { type: 'button', text: t`删除`, onclick: () => removeImage(node, image) }),
           ]),
@@ -182,6 +187,8 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
   function backendName() {
     const media = state.settings
     if (!media) return ''
+    const own = ownBackend(media.imageBackend)
+    if (own) return `${own.name} · ${own.models.find(m => m.id === own.model)?.label ?? own.model}`
     if (media.imageBackend === 'novelai') return `NovelAI ${media.naiModel.replace(/^nai-diffusion-(\d)-(\d)-/, 'V$1.$2 ').replace(/^nai-diffusion-(\d)-/, 'V$1 ')}`
     if (media.imageBackend === 'comfy') return 'ComfyUI'
     if (media.imageBackend === 'sdwebui') return 'SD WebUI'
@@ -275,9 +282,9 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
    * failure stays where the picture would have been, with its reason
    * (`prompt` is what a retry draws).
    */
-  async function runJob(node, chatId, stage, work, { prompt = '', reveal = false } = {}) {
+  async function runJob(node, chatId, stage, work, { prompt = '', reveal = false, backend = '' } = {}) {
     if (state.jobs.has(node.id)) return null
-    const job = { stage, chatId, controller: new AbortController(), started: Date.now(), backend: backendName() }
+    const job = { stage, chatId, controller: new AbortController(), started: Date.now(), backend: backend || backendName() }
     state.jobs.set(node.id, job)
     state.failures.delete(node.id)
     refreshNode(node.id)
@@ -310,18 +317,25 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     whenNoDialog(() => openImageDialog(node, data.prompt, { chatId, note: t`${data.note ? `${data.note}` : ''}${how}，可以改，也可以「重写」。` }))
   }
 
-  async function draw(node, prompt, chatId = getChat()?.id, model = '') {
+  /** @param picked - { body, label } from pickDraw: the 画图方式 and model for this one; none = the settings'. */
+  async function draw(node, prompt, chatId = getChat()?.id, picked = null) {
     if (!chatId) return
     // The picture joins the reply before the frame is taken down, so it takes the frame's place.
     const work = async signal => {
-      const data = await postJson(`/api/chats/${chatId}/nodes/${node.id}/image`, { prompt, ...(model ? { model } : {}) }, signal)
+      const data = await postJson(`/api/chats/${chatId}/nodes/${node.id}/image`, { prompt, ...(picked?.body ?? {}) }, signal)
       if (data.image?.file) state.fresh.add(data.image.file)
       adopt(data.chat, node.id)
       return data
     }
-    const data = await runJob(node, chatId, 'draw', work, { prompt, reveal: true })
+    const data = await runJob(node, chatId, 'draw', work, { prompt, reveal: true, backend: picked?.label })
     if (data?.image?.note) toast(data.image.note, 12000)
   }
+
+  /** 重画: the same prompt again, with the 画图方式 and model picked for it. */
+  const redraw = guard(async (node, prompt, chatId) => {
+    const picked = await pickDraw({ title: t`重画这张图`, note: t`同一段提示词再画一张。` })
+    if (picked) await draw(node, prompt, chatId, picked)
+  })
 
   /** Show `open` once no other dialog is up, so a finished prompt never covers one. */
   function whenNoDialog(open) {
@@ -349,51 +363,6 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     dialog.showModal()
   }
 
-  // ─── Model for one picture (NovelAI) ─────────────────────────────────
-
-  const isNovelAI = () => state.settings?.imageBackend === 'novelai'
-
-  /** [value, label] with '' = the model in the settings. */
-  function modelChoices() {
-    const current = state.settings?.naiModel
-    const name = NAI_MODELS.find(([value]) => value === current)?.[1] ?? current
-    return [['', t`默认：${name}`], ...NAI_MODELS.filter(([value]) => value !== current)]
-  }
-
-  /**
-   * With NovelAI, a small menu under the button asks which model to draw this
-   * one with; other backends go straight on.
-   */
-  function withModel(anchor, go) {
-    if (!isNovelAI()) return go('')
-    const open = anchor.parentElement.querySelector('.model-menu')
-    if (open) return open.remove()
-    const menu = el('div', { class: 'model-menu', role: 'menu' }, modelChoices().map(([value, text]) =>
-      el('button', { type: 'button', role: 'menuitem', text, onclick: () => { close(); go(value) } })))
-    const close = () => {
-      menu.remove()
-      document.removeEventListener('pointerdown', outside, true)
-      document.removeEventListener('keydown', escape, true)
-    }
-    const outside = event => { if (!menu.contains(event.target) && event.target !== anchor) close() }
-    const escape = event => { if (event.key === 'Escape') { event.preventDefault(); close() } }
-    anchor.parentElement.classList.add('has-model-menu')
-    anchor.after(menu)
-    menu.style.left = `${anchor.offsetLeft}px`
-    // Open upward when the scrolling area (or the window) ends below the button.
-    let box = anchor.parentElement
-    while (box && box !== document.body && !/(auto|scroll)/.test(getComputedStyle(box).overflowY)) box = box.parentElement
-    const area = box && box !== document.body ? box.getBoundingClientRect() : null
-    const floor = Math.min(window.innerHeight, area?.bottom ?? Infinity)
-    if (menu.getBoundingClientRect().bottom > floor - 8) menu.classList.add('up')
-    // Slide left when it would run past the right edge (a button near the right on a phone).
-    const overflow = menu.getBoundingClientRect().right - (Math.min(window.innerWidth, area?.right ?? Infinity) - 8)
-    if (overflow > 0) menu.style.left = `${anchor.offsetLeft - overflow}px`
-    menu.querySelector('button').focus({ preventScroll: true })
-    document.addEventListener('pointerdown', outside, true)
-    document.addEventListener('keydown', escape, true)
-  }
-
   /** The prompt is ready: draw it as is, edit it, or have it rewritten (in the background again). */
   function openImageDialog(node, prompt, { chatId, note, error = false }) {
     const dialog = $('image-dialog')
@@ -403,20 +372,24 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     $('image-status').classList.toggle('error', error)
     box.value = prompt
     box.scrollTop = 0
-    drawButton.disabled = !prompt.trim()
-    box.oninput = () => { drawButton.disabled = !box.value.trim() }
-    const modelSelect = $('image-model')
-    const fillModels = () => {
-      modelSelect.hidden = !isNovelAI()
-      if (isNovelAI()) modelSelect.replaceChildren(...modelChoices().map(([value, text]) => el('option', { value, text })))
-    }
-    fillModels()
+    const pickButton = $('image-pick')
+    drawButton.disabled = pickButton.disabled = !prompt.trim()
+    box.oninput = () => { drawButton.disabled = pickButton.disabled = !box.value.trim() }
     drawButton.onclick = () => {
       const text = box.value.trim()
       if (!text) return
       dialog.close()
-      draw(node, text, chatId, modelSelect.hidden ? '' : modelSelect.value)
+      draw(node, text, chatId)
     }
+    // This one with another 画图方式 or model; the picker opens over this window.
+    pickButton.onclick = guard(async () => {
+      const text = box.value.trim()
+      if (!text) return
+      const picked = await pickDraw({ title: t`这张图用什么画` })
+      if (!picked) return
+      dialog.close()
+      draw(node, text, chatId, picked)
+    })
     // The library and the settings open on top of this window: closing them comes back here.
     $('image-library').onclick = () => openLibrary({ node, chatId })
     $('image-keep').onclick = guard(async () => {
@@ -429,11 +402,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       dialog.close()
       writePrompt(node)
     }
-    $('image-settings').onclick = () => {
-      // A different backend or model may have been chosen there.
-      $('media-dialog').addEventListener('close', () => dialog.open && fillModels(), { once: true })
-      openSettings('image')
-    }
+    $('image-settings').onclick = () => openSettings('image')
     if (!dialog.open) dialog.showModal()
   }
 
@@ -898,7 +867,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
    */
   const openSettings = guard(async section => {
     if (!$('media-dialog').open || typeof section === 'string') settingsMenu.start(typeof section === 'string' ? section : null)
-    const [{ media, workflow, novelai, voiceKey, voiceKeys }, providers, voiceInfo, loraInfo, browserVoices] = await Promise.all([
+    const [{ media, workflow, novelai, voiceKey, voiceKeys, ownBackends = [] }, providers, voiceInfo, loraInfo, browserVoices] = await Promise.all([
       api('/api/media/settings'),
       api('/api/providers'),
       api('/api/media/voices'),
@@ -906,6 +875,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       loadBrowserVoices(),
     ])
     state.settings = media
+    state.ownBackends = ownBackends
     state.voiceInfo = voiceInfo
     const card = state.cardId ? await api(`/api/cards/${state.cardId}/media`) : null
     renderSettings({ media, workflow, novelai, voiceKey, voiceKeys, providers: providers.providers, voiceInfo, loraInfo, card, browserVoices })
@@ -918,7 +888,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     const field = (label, control, hint) => el('label', {}, [label, control, hint ? el('span', { class: 'hint', text: hint }) : null])
 
     // Pictures
-    const backend = el('select', { name: 'imageBackend' }, imageBackends().map(([value, text]) => option(value, text, media.imageBackend)))
+    const backend = el('select', { name: 'imageBackend' }, [...imageBackends(), ...state.ownBackends.map(own => [own.id, own.name])].map(([value, text]) => option(value, text, media.imageBackend)))
     const imageProviders = providers.filter(p => p.api !== 'anthropic-messages')
     const provider = el('select', { name: 'imageProvider' }, [option('', imageProviders.length ? t`选一个供应商` : t`先在「供应商」里添加`, media.imageProvider), ...imageProviders.map(p => option(p.id, p.name, media.imageProvider))])
     const modelList = el('datalist', { id: 'image-models' })
@@ -1073,7 +1043,14 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       field(t`负面提示词`, el('textarea', { name: 'sdNegative', rows: 2, spellcheck: 'false', text: media.sdNegative })),
       el('p', { class: 'hint', text: t`名册角色或这张卡设了 LoRA 时，写成 <lora:文件名:强度> 加进提示词（文件要在 WebUI 的 Lora 文件夹里）。提示词写法选「标签」。` }),
     ])
+    // This install's own backends: the model to draw with, and what the server says about them.
+    const ownBoxes = state.ownBackends.map(own => el('div', { 'data-own': own.id }, [
+      own.models.length ? field(t`模型`, el('select', { name: `localModel:${own.id}` }, own.models.map(m => option(m.id, m.label, own.model)))) : null,
+      own.ready ? null : el('p', { class: 'hint warn', text: own.need }),
+      own.hint ? el('p', { class: 'hint', text: own.hint }) : null,
+    ].filter(Boolean)))
     const syncBackend = () => {
+      for (const box of ownBoxes) box.hidden = backend.value !== box.dataset.own
       openaiBox.hidden = backend.value !== 'openai'
       referenceRow.hidden = backend.value !== 'openai'
       geminiBox.hidden = backend.value !== 'gemini'
@@ -1089,6 +1066,8 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       if (backend.value === 'gemini' && !geminiProvider.value) return t`没选供应商`
       if (backend.value === 'novelai' && !novelai?.hasToken && !naiToken.value.trim()) return t`没填令牌`
       if (backend.value === 'comfy' && !workflowInfo.dataset.imported) return t`没导入工作流`
+      const own = ownBackend(backend.value)
+      if (own && !own.ready) return own.need
       return ''
     }
     backend.onchange = syncBackend
@@ -1173,8 +1152,9 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         title: t`画图方式`,
         summary: () => {
           if (imageNeed()) return t`还没设好，现在画不了图：点这里选画图方式，填好供应商或令牌`
-          const modelText = { novelai: naiModel.selectedOptions[0]?.text.split(t`（`)[0], openai: model.value, gemini: geminiModel.value }[backend.value]
-          return [IMAGE_BACKEND_TEXT[backend.value], modelText, SHAPES.find(([value]) => value === size.value)?.[1]].filter(Boolean).join(' · ')
+          const ownModel = form.elements[`localModel:${backend.value}`]?.selectedOptions[0]?.text
+          const modelText = { novelai: naiModel.selectedOptions[0]?.text.split(t`（`)[0], openai: model.value, gemini: geminiModel.value }[backend.value] ?? ownModel
+          return [IMAGE_BACKEND_TEXT[backend.value] ?? ownBackend(backend.value)?.name, modelText, SHAPES.find(([value]) => value === size.value)?.[1]].filter(Boolean).join(' · ')
         },
         status: () => {
           const need = imageNeed()
@@ -1188,6 +1168,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
           comfyBox,
           sdBox,
           naiBox,
+          ...ownBoxes,
           field(t`画面提示词怎么写`, promptSource, t`「接着对话写」把固定前缀和这段对话原样发给写这段剧情的模型，再追加一句要提示词：几乎全部命中缓存，人物现在穿什么、在哪都对得上，但用的是对话模型的价格和速度。订阅模型写的剧情借不了，会自动改用辅助模型。`),
           el('div', { class: 'grid' }, [
             field(t`辅助模型`, helper, helperChoices.length ? '' : t`还没有供应商的模型`),
@@ -1381,7 +1362,9 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     const redraw = () => fillQuick(box, kind)
     // A model changes what there is to pick: draw the menu again.
     const saveMedia = (patch, again = false) => guard(async () => {
-      state.settings = (await api('/api/media/settings', { method: 'PUT', body: patch })).media
+      const view = await api('/api/media/settings', { method: 'PUT', body: patch })
+      state.settings = view.media
+      state.ownBackends = view.ownBackends ?? state.ownBackends
       toast(t`已保存`, 1500)
       if (again) redraw()
     })()
@@ -1390,7 +1373,9 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     const media = state.settings ?? {}
 
     if (kind === 'image') {
-      const backend = el('select', { onchange: () => saveMedia({ imageBackend: backend.value }, true) }, imageBackends().map(([id, text]) => option(id, text, media.imageBackend)))
+      const backend = el('select', { onchange: () => saveMedia({ imageBackend: backend.value }, true) }, [...imageBackends(), ...state.ownBackends.map(own => [own.id, own.name])].map(([id, text]) => option(id, text, media.imageBackend)))
+      const own = ownBackend(media.imageBackend)
+      const ownModel = own?.models.length ? el('select', { onchange: () => saveMedia({ localModels: { [own.id]: ownModel.value } }) }, own.models.map(m => option(m.id, m.label, own.model))) : null
       const geminiModel = el('input', { value: media.geminiImageModel ?? '', list: 'quick-gemini-models', spellcheck: 'false', onchange: () => saveMedia({ geminiImageModel: geminiModel.value.trim() }) })
       const nai = el('select', { onchange: () => saveMedia({ naiModel: nai.value }) }, [
         ...NAI_MODELS.map(([value, text]) => option(value, text, media.naiModel)),
@@ -1406,7 +1391,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         novelai: row(t`NovelAI 模型`, nai),
         comfy: el('p', { class: 'hint', text: t`用导入的 ComfyUI 工作流画，在「更多配图设置」里换。` }),
         sdwebui: el('p', { class: 'hint', text: t`用 SD WebUI 里当前加载的模型画（${media.sdUrl}）。` }),
-      }[media.imageBackend] ?? null
+      }[media.imageBackend] ?? (own ? (own.ready ? (ownModel ? row(t`模型`, ownModel) : null) : unset(own.need)) : null)
       const shape = el('select', { onchange: () => saveMedia({ imageShape: shape.value }) }, SHAPES.map(([value, text]) => option(value, text, media.imageShape)))
       // replaceChildren prints a null as text: leave the empty ones out.
       box.replaceChildren(...[
@@ -1430,6 +1415,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     const saveCard = guard(async patch => {
       if (!state.cardId) return
       state.cardMedia = await api(`/api/cards/${state.cardId}/media`, { method: 'PUT', body: patch })
+      announceCardMedia()
       toast(t`已保存`, 1500)
     })
     const card = state.cardMedia ?? {}
@@ -1564,14 +1550,16 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         if (!res.ok) throw new Error(t`这张卡没有头像`)
         await upload(await res.blob())
       })
-      const portrait = el('button', { type: 'button', class: 'btn small ghost', text: t`画一张`, title: t`用现在的生图后端，按长相和平时衣着画一张半身像当人设图（NovelAI 在 Opus 免费范围内）` })
-      portrait.onclick = event => withModel(event.currentTarget, model => drawPortrait(model))
-      const drawPortrait = guard(async model => {
+      const portrait = el('button', { type: 'button', class: 'btn small ghost', text: t`画一张`, title: t`按长相和平时衣着画一张半身像当人设图，可以先选画图方式和模型（NovelAI 在 Opus 免费范围内）` })
+      portrait.onclick = () => drawPortrait()
+      const drawPortrait = guard(async () => {
         const current = readEntry(node)
+        const picked = await pickDraw({ title: t`画「${current.name || t`这个角色`}」的人设图`, note: t`按长相和平时衣着画一张半身像。` })
+        if (!picked) return
         portrait.disabled = true
         thumb.replaceChildren(el('span', { text: t`正在画…` }))
         try {
-          const { image } = await api(`/api/cards/${cardId}/roster/portrait`, { method: 'POST', body: { entry: current, ...(model ? { model } : {}) } })
+          const { image } = await api(`/api/cards/${cardId}/roster/portrait`, { method: 'POST', body: { entry: current, ...picked.body } })
           await upload(await (await fetch(image)).blob())
         } catch (error) {
           setRef(node.dataset.ref === '1')
@@ -1662,11 +1650,37 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       }
     })
     const draftButton = el('button', { type: 'button', class: 'btn small', text: t`让辅助模型起草`, title: t`读这张卡的描述和世界书，列出主要角色和主角的长相、衣着`, onclick: draft })
+    // 从对话里补充: whoever joined the story in the open chat's recent turns and is not in the list yet.
+    const chat = getChat()
+    const ownChat = chat?.cardId === cardId ? chat : null
+    const fromChat = guard(async () => {
+      chatButton.disabled = true
+      status.textContent = t`辅助模型在读最近几轮对话，可能要一两分钟…`
+      try {
+        const names = collectRoster($('media-form')).flatMap(e => [e.name, e.aliases]).filter(Boolean)
+        const { roster, model } = await api(`/api/cards/${cardId}/roster/draft-chat`, { method: 'POST', body: { chatId: ownChat.id, names } })
+        const have = new Set(collectRoster($('media-form')).map(e => e.name.trim()))
+        const fresh = roster.filter(e => !have.has(e.name.trim())).map(e => ({ ...e, player: false, ref: false }))
+        fresh.forEach(add)
+        box.open = true
+        status.textContent = fresh.length ? t`${model} 从对话里找到 ${fresh.length} 个新角色，看过、改好再保存。` : t`${model} 没在最近几轮里找到名册之外的角色。`
+      } catch (error) {
+        status.textContent = ''
+        throw error
+      } finally {
+        chatButton.disabled = !ownChat
+      }
+    })
+    const chatButton = el('button', {
+      type: 'button', class: 'btn small', text: t`从对话里补充`, disabled: !ownChat, onclick: fromChat,
+      title: ownChat ? t`读正在打开的对话最近几轮，列出后来出场、名册里还没有的角色` : t`先打开这张卡的一个对话`,
+    })
     box.append(
       el('div', { class: 'roster-actions' }, [
         el('button', { type: 'button', class: 'btn small', text: t`添加角色`, onclick: () => add(blank()) }),
         el('button', { type: 'button', class: 'btn small', text: t`添加主角`, onclick: () => add(blank({ player: !collectRoster($('media-form')).some(e => e.player), name: t`主角`, kind: 'boy' })) }),
         draftButton,
+        chatButton,
         status,
       ]),
     )
@@ -1953,7 +1967,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     const voiceSettings = media => JSON.stringify(VOICE_FIELDS.map(name => media?.[name]))
     const voicesBefore = voiceSettings(state.settings)
     const { media: draftVoices, keys } = voiceDraft(form)
-    const { media, novelai, voiceKey } = await api('/api/media/settings', {
+    const { media, novelai, voiceKey, ownBackends } = await api('/api/media/settings', {
       method: 'PUT',
       body: {
         imageBackend: value('imageBackend'),
@@ -1979,6 +1993,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         naiV5Empty: value('naiV5Empty'),
         naiNegative: value('naiNegative'),
         naiToken: value('naiToken').trim(),
+        ...(state.ownBackends.length ? { localModels: Object.fromEntries(state.ownBackends.filter(own => form.elements[`localModel:${own.id}`]).map(own => [own.id, value(`localModel:${own.id}`)])) } : {}),
         helperModel: value('helperModel'),
         promptStyle: value('promptStyle'),
         promptSource: value('promptSource'),
@@ -1991,6 +2006,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     })
     for (const id of VOICE_SOURCES) if (form.elements[`${id}Key`]) form.elements[`${id}Key`].value = ''
     state.settings = media
+    state.ownBackends = ownBackends ?? state.ownBackends
     const keyHint = form.querySelector('.tts-key-hint')
     if (keyHint) voiceKeyText(keyHint, voiceKey)
     if (form.elements.ttsUrl) form.elements.ttsUrl.value = media.ttsUrl
@@ -2003,6 +2019,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         method: 'PUT',
         body: { voice: value('voice'), narratorVoice: value('narratorVoice'), style: value('style'), styleNegative: value('styleNegative'), lora: value('lora'), loraTrigger: value('loraTrigger'), loraStrength: Number(value('loraStrength') || 0.8), roster: collectRoster(form) },
       })
+      announceCardMedia()
     }
     settingsMenu.markClean()
     toast(t`已保存`)

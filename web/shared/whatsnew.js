@@ -13,7 +13,7 @@ export function compareVersions(a, b) {
 }
 
 /** The release series a version belongs to: 1.8.1 → "1.8". */
-const seriesOf = version => String(version ?? '').split(/[.-]/).slice(0, 2).map(part => Number.parseInt(part, 10) || 0).join('.')
+export const seriesOf = version => String(version ?? '').split(/[.-]/).slice(0, 2).map(part => Number.parseInt(part, 10) || 0).join('.')
 
 /** Notes with pages, up to the one running. */
 const shippedUpTo = (versions, current) => (Array.isArray(versions) ? versions : [])
@@ -42,5 +42,19 @@ export function notesToShow(versions, { current, seen = '', returning = false } 
   const due = !seen
     ? (returning ? list.filter(entry => compareVersions(entry.version, current) === 0) : [])
     : list.filter(entry => compareVersions(entry.version, seen) > 0)
-  return [...new Set(due.map(entry => seriesOf(entry.version)))].flatMap(series => seriesNotes(list, list.find(entry => seriesOf(entry.version) === series).version))
+  const series = [...new Set(due.map(entry => seriesOf(entry.version)))]
+  const notes = series.map(name => seriesNotes(list, list.find(entry => seriesOf(entry.version) === name).version))
+  // A page recapping an earlier series ("recap": "1.8") stands for that series' pages.
+  const recapped = new Set(notes.flat().flatMap(entry => entry.items.map(item => item?.recap).filter(Boolean).map(seriesOf)))
+  return notes.filter((_, i) => !recapped.has(series[i])).flat()
+}
+
+/** The series there are notes for, up to the one running, newest first, each with its newest version: the picker in 更新了什么. */
+export function shelfOf(versions, current) {
+  const shelf = []
+  for (const entry of shippedUpTo(versions, current).sort((a, b) => compareVersions(b.version, a.version))) {
+    const series = seriesOf(entry.version)
+    if (!shelf.some(item => item.series === series)) shelf.push({ series, version: entry.version })
+  }
+  return shelf
 }

@@ -568,7 +568,7 @@ test('image prompt inside the conversation: same prefix as the next turn, so the
   assert.deepEqual(side.messages.slice(0, -1), next.messages.slice(0, -1), 'identical prefix: system, both exchanges')
 
   // The opening is not in the history, so it rides along in the instruction.
-  assert.match(contextImageInstruction({ promptStyle: 'tags', style: '水彩', passage: '欢迎光临～' }), /<latest_passage>\n欢迎光临～[\s\S]*画风：水彩[\s\S]*逗号分隔/)
+  assert.match(contextImageInstruction({ promptStyle: 'tags', style: '水彩', passage: '欢迎光临～' }), /<latest_passage>\n欢迎光临～[\s\S]*画面里一定要有人[\s\S]*画风：水彩[\s\S]*逗号分隔/)
 
   // A chat on the subscription cannot lend its context: the helper model takes over.
   const saved = await store.getChat(chat.id)

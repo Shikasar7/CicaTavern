@@ -4,7 +4,7 @@
 import { greetingsOf } from './cards.mjs'
 import { buildChatPrompt, replaceMacros } from './prompt.mjs'
 import YAML from 'yaml'
-import { initialState } from './worldbook.mjs'
+import { constantEntries, initialState, lateEntries } from './worldbook.mjs'
 import { applyStateUpdates, displayText } from './state.mjs'
 import { httpError, newId } from './store.mjs'
 import { MIN_TURNS, RECENT_TURNS, STORY_FORMAT, storyPath, storyTurns, turnsSinceCompaction } from './recap.mjs'
@@ -12,9 +12,15 @@ import { msg } from './i18n.mjs'
 import { BASIC_ID, basicPreset } from './basic.mjs'
 import { readSillyTavernChat } from './st-chat.mjs'
 
-export async function booksForCard(store, card) {
+/**
+ * A chat's books: the card's own, the imported ones it has mounted, then the
+ * global ones (全局世界书) it has not, each once.
+ * @param settings - when the caller has them already.
+ */
+export async function booksForCard(store, card, settings = null) {
   const books = card.book ? [{ ...card.book, id: `card-${card.id}` }] : []
-  for (const id of card.worldbookIds ?? []) {
+  const { globalBookIds = [] } = settings ?? await store.getSettings()
+  for (const id of new Set([...(card.worldbookIds ?? []), ...globalBookIds])) {
     try {
       books.push(await store.getBook(id))
     } catch {
@@ -22,6 +28,29 @@ export async function booksForCard(store, card) {
     }
   }
   return books
+}
+
+/**
+ * What mounting or taking off books means for a chat's frozen prefix: the
+ * books mounted or taken off since its prefix was built that hold constant
+ * entries ({ id, name, entries }). null when the prefix would come out the
+ * same (keyword entries follow the mounts on the next turn by themselves),
+ * or for a chat from before chats recorded their books.
+ */
+export async function mountChange(store, chat, card) {
+  if (!Array.isArray(chat.bookIds)) return null
+  const books = await booksForCard(store, card)
+  const now = new Set(books.map(book => book.id))
+  const before = new Set(chat.bookIds)
+  const frozen = book => constantEntries([book]).length + lateEntries([book]).length
+  const added = books.filter(book => !before.has(book.id) && frozen(book) > 0).map(book => ({ id: book.id, name: book.name, entries: frozen(book) }))
+  const removed = []
+  for (const id of before) {
+    if (now.has(id) || id.startsWith('card-')) continue
+    const book = await store.getBook(id).catch(() => null)
+    if (book && frozen(book) > 0) removed.push({ id, name: book.name, entries: frozen(book) })
+  }
+  return added.length || removed.length ? { added, removed } : null
 }
 
 /**
@@ -65,8 +94,10 @@ export async function rebuildPrompt(store, chat, presetId = chat.presetId ?? '')
   const [persona, settings, chosen] = await Promise.all([store.getPersona(), store.getSettings(), presetFor(store, presetId ?? '')])
   // A deleted preset, or a chat from before the built-in one: rebuilt with the built-in preset.
   const preset = chosen ?? basicPreset(settings)
-  const books = await booksForCard(store, card)
+  const books = await booksForCard(store, card, settings)
   const hasState = Object.keys(chat.nodes.root.state ?? {}).length > 0
+  // A card renamed in 修改角色卡: {{char}} in later turns follows the prefix.
+  chat.names = { ...chat.names, char: card.name }
   const built = buildChatPrompt({ card, persona: playerOf(card, persona, chat.names.user), settings, books, hasState, preset })
   chat.systemPrompt = built.systemPrompt
   chat.presetVars = built.presetVars
@@ -113,7 +144,7 @@ async function startChat(store, cardId, makeRoot, { userName = '' } = {}) {
   const card = await store.getCard(cardId)
   const [persona, settings] = await Promise.all([store.getPersona(), store.getSettings()])
   const preset = await presetFor(store, settings.presetId)
-  const books = await booksForCard(store, card)
+  const books = await booksForCard(store, card, settings)
   const player = userName ? playerOf(card, persona, userName) : playerOf(card, persona)
   const names = { char: card.name, user: player.name }
   const root = makeRoot({ card, names, state: initialState(books) })

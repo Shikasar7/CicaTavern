@@ -4,6 +4,8 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- 设置 → 更多 → 更新 hands the downloaded APK to the system installer (ApkUpdate). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- No cloud backup: providers.json holds API keys. -->
     <application
@@ -33,5 +35,11 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Local server that generates role-play replies through the user's own API providers." />
         </service>
+
+        <provider
+            android:name=".ApkProvider"
+            android:authorities="${applicationId}.update"
+            android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 </manifest>

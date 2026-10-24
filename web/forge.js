@@ -72,7 +72,28 @@ function ago(iso) {
   return days === 1 ? t`昨天` : t`${days} 天前`
 }
 
-export function initForge({ api, el, toast, guard, openProviders, onCardSaved, startChatWith }) {
+/** Any picture the page can load, as PNG (cards carry their data in PNG text chunks); also used by 修改角色卡. */
+export async function pngOf(url) {
+  const img = new Image()
+  // onload rather than decode(): decode() can wait forever while the page is in the background.
+  await new Promise((resolve, reject) => {
+    img.onload = resolve
+    img.onerror = () => reject(new Error(t`读不了头像图片，换一张试试`))
+    img.src = url
+  })
+  const scale = Math.min(1, 1024 / Math.max(img.naturalWidth, img.naturalHeight))
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.round(img.naturalWidth * scale)
+  canvas.height = Math.round(img.naturalHeight * scale)
+  canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height)
+  return canvas.toDataURL('image/png')
+}
+
+/**
+ * @param deps - { api, el, toast, guard, openProviders, onCardSaved, startChatWith,
+ *   pickDraw(options) (web/draw-choice.js: the 画图方式 and model for the avatar) }
+ */
+export function initForge({ api, el, toast, guard, openProviders, onCardSaved, startChatWith, pickDraw }) {
   const $ = id => document.getElementById(id)
   const dialog = $('forge-dialog')
   const state = {
@@ -494,7 +515,8 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
     view.chat.hidden = !savedId
     view.png.hidden = !savedId
     if (savedId) {
-      view.png.href = `/api/cards/${savedId}/avatar?v=${encodeURIComponent(card.savedAt ?? '')}`
+      // The saved card as it is now: edits made in 修改角色卡 since are in it.
+      view.png.href = `/api/cards/${savedId}/png?v=${encodeURIComponent(card.savedAt ?? '')}`
       view.png.download = `${draft.title}.png`
     }
     view.saved.textContent = savedId ? t`已保存 ${ago(card.savedAt)}` : ''
@@ -982,23 +1004,6 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
     return canvas.toDataURL('image/png')
   }
 
-  /** Any picture the page can load, as PNG (cards carry their data in PNG text chunks). */
-  async function pngOf(url) {
-    const img = new Image()
-    // onload rather than decode(): decode() can wait forever while the page is in the background.
-    await new Promise((resolve, reject) => {
-      img.onload = resolve
-      img.onerror = () => reject(new Error(t`读不了头像图片，换一张试试`))
-      img.src = url
-    })
-    const scale = Math.min(1, 1024 / Math.max(img.naturalWidth, img.naturalHeight))
-    const canvas = document.createElement('canvas')
-    canvas.width = Math.round(img.naturalWidth * scale)
-    canvas.height = Math.round(img.naturalHeight * scale)
-    canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height)
-    return canvas.toDataURL('image/png')
-  }
-
   // ─── Actions ──────────────────────────────────────────────────────────
   const start = guard(async () => {
     const text = state.idea.trim()
@@ -1075,7 +1080,9 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
   })
 
   const drawAvatar = guard(async description => {
-    apply(await api(`/api/forge/${state.draft.id}/avatar`, { method: 'POST', body: { description } }))
+    const picked = await pickDraw({ title: state.draft.card?.avatar ? t`换一张头像` : t`画头像`, note: t`按方案里的长相和上面的画面描述画。` })
+    if (!picked) return
+    apply(await api(`/api/forge/${state.draft.id}/avatar`, { method: 'POST', body: { description, ...picked.body } }))
   })
 
   const uploadAvatar = guard(async file => {

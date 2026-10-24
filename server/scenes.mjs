@@ -5,12 +5,16 @@
 // card.media and roster/, which the media settings clean up on save.
 // 立绘 the same way: one half-body picture per cast member (the roster entry's
 // id), cards/<id>/sprites.json and cards/<id>/sprites/<entryId>-<6 hex>.<ext>;
-// the page cuts the plain background out. One picture is drawn at a time per
-// card, scene or sprite.
+// the page cuts the plain background out. Its expressions (表情差分) sit beside
+// it in sprites.json under expressions: { entryId: { smile: {…} } }, pictures
+// sprites/<entryId>-<expression>-<6 hex>.<ext>; they may exist for someone
+// shown from their reference picture, with no 立绘 of their own. One picture is
+// drawn at a time per card, scene, sprite or expression.
 import { randomBytes } from 'node:crypto'
 import { copyFile, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { normalizePlace, placeKeys } from '../web/shared/vn.js'
+import { EXPRESSIONS } from '../web/shared/stage.js'
 import { imageKind } from './appearance.mjs'
 import { booksForCard } from './chats.mjs'
 import { entryText } from './worldbook.mjs'
@@ -227,31 +231,45 @@ export function createScenes(store, { media }) {
 
   // ─── 立绘: one picture per cast member ───────────────────────────────
 
-  /** { entryId: { file, backend, source, updatedAt } } for members still on the roster. */
-  async function readSprites(cardId) {
+  /**
+   * sprites.json for members still on the roster: { sprites: { entryId: { file,
+   * backend, source, updatedAt } }, expressions: { entryId: { smile: { … } } } }.
+   */
+  async function readSpriteFile(cardId) {
     const card = await store.getCard(cardId)
     const ids = new Set((card.media?.roster ?? []).map(entry => entry.id))
+    const picture = value => FILE.test(value?.file ?? '')
     try {
-      const value = JSON.parse(await readFile(spriteFile(cardId), 'utf8')).sprites ?? {}
-      return Object.fromEntries(Object.entries(value).filter(([id, sprite]) => ids.has(id) && FILE.test(sprite?.file ?? '')))
+      const value = JSON.parse(await readFile(spriteFile(cardId), 'utf8'))
+      const sprites = Object.fromEntries(Object.entries(value.sprites ?? {}).filter(([id, sprite]) => ids.has(id) && picture(sprite)))
+      const expressions = {}
+      for (const [id, faces] of Object.entries(value.expressions ?? {})) {
+        if (!ids.has(id) || !faces || typeof faces !== 'object') continue
+        const kept = Object.fromEntries(Object.entries(faces).filter(([name, face]) => EXPRESSIONS.includes(name) && name !== 'neutral' && picture(face)))
+        if (Object.keys(kept).length) expressions[id] = kept
+      }
+      return { sprites, expressions }
     } catch {
-      return {}
+      return { sprites: {}, expressions: {} }
     }
   }
 
+  const readSprites = async cardId => (await readSpriteFile(cardId)).sprites
+
+  /** fn({ sprites, expressions }) changes them in place, alone for this card; the file is saved after. */
   function changeSprites(cardId, fn) {
     const key = `${cardId}:sprites`
     const run = (locks.get(key) ?? Promise.resolve()).then(async () => {
-      const sprites = await readSprites(cardId)
-      const result = await fn(sprites)
-      await writeFile(spriteFile(cardId), JSON.stringify({ sprites }, null, 1), 'utf8')
+      const all = await readSpriteFile(cardId)
+      const result = await fn(all)
+      await writeFile(spriteFile(cardId), JSON.stringify(all, null, 1), 'utf8')
       return result
     })
     locks.set(key, run.catch(() => {}))
     return run
   }
 
-  const spriteView = async cardId => ({ sprites: await readSprites(cardId), drawing: drawing.get(cardId) ?? null })
+  const spriteView = async cardId => ({ ...(await readSpriteFile(cardId)), drawing: drawing.get(cardId) ?? null })
 
   async function memberOf(cardId, entryId) {
     if (!ENTRY.test(String(entryId))) throw httpError(404, msg`名单里没有这个角色`)
@@ -262,7 +280,7 @@ export function createScenes(store, { media }) {
 
   async function putSprite(cardId, entryId, buffer, extra) {
     const file = await writeImage(cardId, entryId, buffer, spriteDir(cardId))
-    await changeSprites(cardId, async sprites => {
+    await changeSprites(cardId, async ({ sprites }) => {
       await dropFile(cardId, sprites[entryId]?.file, spriteDir(cardId))
       sprites[entryId] = { file, ...extra, updatedAt: new Date().toISOString() }
     })
@@ -284,9 +302,52 @@ export function createScenes(store, { media }) {
   }
 
   async function removeSprite(cardId, entryId) {
-    await changeSprites(cardId, async sprites => {
+    await changeSprites(cardId, async ({ sprites }) => {
       await dropFile(cardId, sprites[entryId]?.file, spriteDir(cardId))
       delete sprites[entryId]
+    })
+    return spriteView(cardId)
+  }
+
+  // ─── 表情差分: the same 立绘 with another face ──────────────────────────
+
+  function expressionName(expression) {
+    if (!EXPRESSIONS.includes(expression) || expression === 'neutral') throw httpError(404, msg`没有这种表情`)
+    return expression
+  }
+
+  async function putExpression(cardId, entryId, expression, buffer, extra) {
+    const file = await writeImage(cardId, `${entryId}-${expression}`, buffer, spriteDir(cardId))
+    await changeSprites(cardId, async ({ expressions }) => {
+      await dropFile(cardId, expressions[entryId]?.[expression]?.file, spriteDir(cardId))
+      expressions[entryId] = { ...expressions[entryId], [expression]: { file, ...extra, updatedAt: new Date().toISOString() } }
+    })
+    return spriteView(cardId)
+  }
+
+  /** The 立绘 (else the reference picture) with only the face changed (media.drawExpression). */
+  async function drawExpression(cardId, entryId, expression, signal) {
+    const entry = await memberOf(cardId, entryId)
+    expressionName(expression)
+    return alone(cardId, msg`${entry.name}的表情`, async () => {
+      const base = (await readSprites(cardId))[entryId]
+      const buffer = base ? await readFile(path.join(spriteDir(cardId), base.file)).catch(() => null) : null
+      const picture = await media.drawExpression(cardId, entryId, expression, buffer, signal)
+      return { ...(await putExpression(cardId, entryId, expression, picture.buffer, { backend: picture.backend, source: 'drawn' })), ...(picture.note ? { note: picture.note } : {}) }
+    })
+  }
+
+  async function setExpression(cardId, entryId, expression, image) {
+    await memberOf(cardId, entryId)
+    return putExpression(cardId, entryId, expressionName(expression), decode(image), { backend: '', source: 'upload' })
+  }
+
+  async function removeExpression(cardId, entryId, expression) {
+    expressionName(expression)
+    await changeSprites(cardId, async ({ expressions }) => {
+      await dropFile(cardId, expressions[entryId]?.[expression]?.file, spriteDir(cardId))
+      if (expressions[entryId]) delete expressions[entryId][expression]
+      if (expressions[entryId] && !Object.keys(expressions[entryId]).length) delete expressions[entryId]
     })
     return spriteView(cardId)
   }
@@ -314,14 +375,16 @@ export function createScenes(store, { media }) {
     // Roster entries keep their ids in the new version (inheritCardMedia), so the sprites still belong.
     let sprites = {}
     try {
-      sprites = JSON.parse(await readFile(spriteFile(fromId), 'utf8')).sprites ?? {}
+      sprites = JSON.parse(await readFile(spriteFile(fromId), 'utf8'))
     } catch {}
-    if (Object.keys(sprites).length) await copy(spriteDir(fromId), spriteDir(toId), sprites, list => writeFile(spriteFile(toId), JSON.stringify({ sprites: list }, null, 1), 'utf8'))
+    if (Object.keys(sprites.sprites ?? {}).length || Object.keys(sprites.expressions ?? {}).length) {
+      await copy(spriteDir(fromId), spriteDir(toId), sprites, all => writeFile(spriteFile(toId), JSON.stringify({ sprites: all.sprites ?? {}, expressions: all.expressions ?? {} }, null, 1), 'utf8'))
+    }
   }
 
   return {
     list: view, draw, add, update, setImage, remove, readPicture, inherit,
-    sprites: spriteView, drawSprite, setSprite, removeSprite, readSprite,
+    sprites: spriteView, drawSprite, setSprite, removeSprite, readSprite, drawExpression, setExpression, removeExpression,
   }
 }
 

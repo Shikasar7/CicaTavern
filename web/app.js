@@ -1,7 +1,7 @@
 // Agent Tavern web UI. Plain DOM, no build step.
 import { displayOf, htmlFrame, listenForFrameHeights, nameMacros, segments, streamingText, usesStatusPlaceholder, withoutOwnStatus } from '/render.js'
 import { choiceList, statusBar, timeBox } from '/status.js'
-import { BASIC_ID, choicesOf, timeBoxOf } from '/shared/basic.js'
+import { BASIC_ID, choicesOf, otherChoices, timeBoxOf } from '/shared/basic.js'
 import { autoStatusSpec } from '/shared/status.js'
 import { BASIC_FIELDS, basicField } from '/basic-options.js'
 import { allowLibraries, broadcastInput, installFrameBridge, parseSlash, storedFrameStorage, storedVariables } from '/compat.js'
@@ -17,7 +17,10 @@ import { initWhatsNew } from '/whatsnew.js'
 import { connectionList, showPrivacyNotice } from '/privacy.js'
 import { initTheme } from '/theme.js'
 import { initRegex } from '/regex.js'
-import { countText, initBooks } from '/books.js'
+import { countText, initBooks, matchesTerms, searchBox, searchTerms } from '/books.js'
+import { initCardEdit } from '/card-edit.js'
+import { initTalkDialog } from '/talk-dialog.js'
+import { initDrawChoice } from '/draw-choice.js'
 import { initVn } from '/vn.js'
 import { isRegexFile, scriptsInFile } from '/shared/regex.js'
 import { lang, locale, t, zh } from '/i18n.js'
@@ -358,7 +361,7 @@ function cardItem(card, nested = false) {
       el('div', { class: 'item-title', text: card.name }),
       el('div', { class: 'item-sub', text: t`${card.greetings} 个开场 · ${card.bookEntries} 条内嵌世界书${card.worldbookIds.length ? t` · 挂载 ${card.worldbookIds.length} 本` : ''}` }),
     ]),
-    el('button', { type: 'button', class: 'item-del item-edit item-more', title: t`分组、归档、删除`, 'aria-label': t`「${card.name}」：分组、归档、删除`, text: '⋯', onclick: event => { event.stopPropagation(); openCardMenu(card, event.currentTarget) } }),
+    el('button', { type: 'button', class: 'item-del item-edit item-more', title: t`修改、分组、归档、删除`, 'aria-label': t`「${card.name}」：修改、分组、归档、删除`, text: '⋯', onclick: event => { event.stopPropagation(); openCardMenu(card, event.currentTarget) } }),
   ])
 }
 
@@ -374,6 +377,8 @@ function groupHead(name, cards, folded, { archive = false } = {}) {
 }
 
 function toggleGroup(name, archive) {
+  // While searching every group is open; folding waits until the box is cleared.
+  if (searchTerms(cardQuery).length) return
   if (archive) ui.archiveOpen = !ui.archiveOpen
   else {
     foldedGroups.has(name) ? foldedGroups.delete(name) : foldedGroups.add(name)
@@ -385,24 +390,34 @@ function toggleGroup(name, archive) {
 /** Names of the groups in use, in a stable order. */
 const cardGroups = () => [...new Set(ui.cards.filter(card => card.group).map(card => card.group))].sort((a, b) => a.localeCompare(b, 'zh-CN'))
 
+// 搜索角色卡 (the box above the list): only the cards whose name, tags, group or
+// author have every word show, in every group and the archive opened for it;
+// emptied, the list folds as it was.
+let cardQuery = ''
+const cardText = card => [card.name, card.group, card.creator, ...(card.tags ?? [])].filter(Boolean).join('\n')
+
 function renderCards() {
   const list = $('card-list')
-  const live = ui.cards.filter(card => !card.archived)
-  const archived = ui.cards.filter(card => card.archived)
+  const terms = searchTerms(cardQuery)
+  const found = terms.length ? ui.cards.filter(card => matchesTerms(cardText(card), terms)) : ui.cards
+  const live = found.filter(card => !card.archived)
+  const archived = found.filter(card => card.archived)
   const items = live.filter(card => !card.group).map(card => cardItem(card))
   for (const name of cardGroups()) {
     const cards = live.filter(card => card.group === name)
     if (!cards.length) continue
-    const folded = foldedGroups.has(name)
+    const folded = !terms.length && foldedGroups.has(name)
     items.push(groupHead(name, cards, folded))
     if (!folded) items.push(...cards.map(card => cardItem(card, true)))
   }
   if (archived.length) {
-    items.push(groupHead(t`已归档`, archived, !ui.archiveOpen, { archive: true }))
-    if (ui.archiveOpen) items.push(...archived.map(card => cardItem(card, true)))
+    const open = terms.length > 0 || ui.archiveOpen
+    items.push(groupHead(t`已归档`, archived, !open, { archive: true }))
+    if (open) items.push(...archived.map(card => cardItem(card, true)))
   }
   list.replaceChildren(...items)
   if (ui.cards.length === 0) list.append(el('li', { class: 'muted small', text: t`还没有角色卡` }))
+  else if (!found.length) list.append(el('li', { class: 'muted small', text: t`没有找到「${cardQuery.trim()}」` }))
   $('new-chat').disabled = !ui.cardId
   $('import-story').disabled = !ui.cardId
   $('import-story-label').setAttribute('aria-disabled', String(!ui.cardId))
@@ -450,6 +465,14 @@ const selectCard = guard(async id => {
   await refreshChats()
   const card = await api(`/api/cards/${id}`)
   ui.cardDetails.set(id, card)
+  showCardInfo(card)
+  if (ui.chats[0]) await openChat(ui.chats[0].id)
+  else setChat(null)
+  document.body.querySelector('.app').classList.remove('show-left')
+})
+
+/** The chosen card's author, tags, notes and scripts, under the card list. */
+function showCardInfo(card) {
   $('card-info').textContent = [
     card.creator && t`作者：${card.creator}`,
     card.tags?.length && t`标签：${card.tags.join(t`、`)}`,
@@ -457,10 +480,7 @@ const selectCard = guard(async id => {
     card.regexScripts ? t`正则脚本 ${card.regexScripts} 条（已生效；设置 → 正则 里可以开关和修改）` : '',
     card.helperScripts ? t`酒馆助手脚本 ${card.helperScripts} 个（不执行；MVU 变量更新已内置）` : '',
   ].filter(Boolean).join('\n\n') || '—'
-  if (ui.chats[0]) await openChat(ui.chats[0].id)
-  else setChat(null)
-  document.body.querySelector('.app').classList.remove('show-left')
-})
+}
 
 // ─── A small menu next to a button ─────────────────────────────────────
 // entries: { label, onClick, danger, current, hint } | { header } | '-'
@@ -519,6 +539,8 @@ function askGroupName(title, initial = '') {
 function openCardMenu(card, anchor) {
   const groups = cardGroups()
   popMenu(anchor, [
+    { label: t`修改角色卡`, hint: t`改名字、描述、开场白和世界书，也可以说说想怎么改，让向导来改`, onClick: () => cardEditUi.open(card.id) },
+    '-',
     { header: t`移到分组` },
     ...groups.map(name => ({ label: name, current: card.group === name, onClick: () => organizeCard(card, { group: name }) })),
     { label: t`新分组…`, onClick: () => { const name = askGroupName(t`把「${card.name}」放进哪个新分组？`); if (name) organizeCard(card, { group: name }) } },
@@ -683,14 +705,45 @@ const newChat = guard(async () => {
   const card = await api(`/api/cards/${ui.cardId}`)
   const texts = card.greetingTexts.length ? card.greetingTexts : ['']
   if (texts.length === 1) return startChat(0)
-  const box = $('greetings')
-  box.replaceChildren(
-    ...texts.map((text, index) =>
-      el('button', { class: 'greeting', type: 'button', text: text.slice(0, 400) || t`（空开场）`, onclick: () => { $('greeting-dialog').close(); startChat(index) } }),
-    ),
-  )
+  const pick = index => {
+    $('greeting-dialog').close()
+    startChat(index)
+  }
+  $('greeting-count').textContent = t`${texts.length} 个开场。点一下文字读完整的，再选一个开始。`
+  $('greetings').replaceChildren(...texts.map((text, index) => greetingItem(text, index, pick)))
   $('greeting-dialog').showModal()
+  $('greetings').scrollTop = 0
+  // Only the ones cut short open.
+  for (const item of $('greetings').children) {
+    const body = item.querySelector('.greeting-text')
+    item.querySelector('.greeting-more').hidden = body.scrollHeight <= body.clientHeight + 1
+  }
 })
+
+/** One opening in 选择开场白: its first lines (blank lines left out), the whole of it on a tap, and a button to start with it. */
+function greetingItem(text, index, pick) {
+  const whole = text.trim() || t`（空开场）`
+  const brief = whole.replace(/\n\s*\n+/g, '\n')
+  const item = el('li', { class: 'greeting' })
+  const body = el('div', { class: 'greeting-text', text: brief })
+  const more = el('button', { type: 'button', class: 'btn small ghost greeting-more', text: t`展开全文`, 'aria-expanded': 'false' })
+  const toggle = () => {
+    if (more.hidden) return
+    const open = item.classList.toggle('open')
+    body.textContent = open ? whole : brief
+    more.textContent = open ? t`收起` : t`展开全文`
+    more.setAttribute('aria-expanded', String(open))
+    if (!open) item.scrollIntoView({ block: 'nearest' })
+  }
+  body.addEventListener('click', toggle)
+  more.addEventListener('click', toggle)
+  item.append(
+    el('div', { class: 'greeting-head' }, [el('b', { text: t`开场 ${index + 1}` }), el('span', { text: t`${[...whole].length} 字` })]),
+    body,
+    el('div', { class: 'greeting-foot' }, [more, el('button', { type: 'button', class: 'btn small greeting-use', text: t`用这个开场`, onclick: () => pick(index) })]),
+  )
+  return item
+}
 
 const startChat = guard(async greetingIndex => {
   const chat = await api('/api/chats', { method: 'POST', body: { cardId: ui.cardId, greetingIndex } })
@@ -824,7 +877,7 @@ function renderChat() {
 /** The turn being written in this chat, as far as it has come (also after switching back). */
 function liveNodes(chat, { animate = false } = {}) {
   const job = ui.busy.get(chat.id)
-  if (!job || job.kind === 'compact') return []
+  if (!job || job.kind === 'compact' || job.kind === 'fill') return []
   const nodes = []
   if (job.echo) {
     const echo = renderNode(chat, { id: 'pending-user', role: 'user', text: job.echo, siblingCount: 1 }, false)
@@ -906,6 +959,11 @@ function renderNode(chat, node, isLastAssistant, depth = 0) {
   if (!isUser && node.truncated) {
     tools.push(el('span', { class: 'chip warn', title: t`模型写到了单次输出的上限，回复后半段（常见的是变量更新、行动选项这些放在最后的块）没写出来。上限取预设的「最大回复长度」；供应商设置里填了「最大输出」时以那个为准。可以重新生成，或调大上限。`, text: t`⚠ 写到输出上限，被截断` }))
   }
+  if (!isUser && isLastAssistant && node.id !== 'root' && !node.compaction && missingUpdate(chat, node)) {
+    const filling = ui.busy.get(chat.id)?.kind === 'fill'
+    tools.push(el('span', { class: 'chip warn', title: t`这张卡每轮结尾要写 <UpdateVariable> 变量更新块，这一轮模型没写，状态不会跟着剧情变。「补写变量」让模型只补这一块，正文不动。`, text: t`⚠ 这轮没写变量更新` }))
+    tools.push(el('button', { text: filling ? t`补写中…` : t`补写变量`, title: t`按这张卡的变量规则，让模型为这一轮补写变量更新，补完状态立即更新`, disabled: ui.generating, onclick: () => fillUpdate(node.id) }))
+  }
   if (node.edited) tools.push(el('span', { class: 'chip', title: t`${new Date(node.edited.at).toLocaleString(locale)} 改过${node.edited.count > 1 ? t` ${node.edited.count} 次` : ''}`, text: t`已修改` }))
   if (isUser && node.templateErrors?.length) tools.push(el('span', { class: 'chip warn', title: node.templateErrors.join('\n'), text: t`⚠ ${node.templateErrors.length} 条 EJS 模板出错` }))
   const { shown, time, choices, cardStatus } = replyDisplay(chat, node, isLastAssistant, depth)
@@ -922,7 +980,7 @@ function renderNode(chat, node, isLastAssistant, depth = 0) {
       ])
     : null
   return el('article', { class: `msg ${isUser ? 'user' : 'assistant'}${isLastAssistant ? ' latest' : ''}`, 'data-id': node.id }, [
-    el('div', { class: 'msg-head' }, [speakerFace(chat, node.role), el('span', { class: 'name', text: name }), node.id === 'root' ? el('span', { text: imported ? t`存档` : t`开场` }) : null]),
+    el('div', { class: 'msg-head' }, [speakerFace(chat, node.role), el('span', { class: 'name', text: name }), node.id === 'root' ? el('span', { text: imported ? t`剧情存档` : t`开场` }) : null]),
     time ? timeBox(el, time) : null,
     messageBody(shown, frameContextFor(chat, node)),
     isUser ? null : mediaUi.gallery(chat, node),
@@ -938,9 +996,16 @@ function replyDisplay(chat, node, isLastAssistant, depth = 0) {
   const isUser = node.role === 'user'
   const scripts = scriptsFor(chat)
   const cardStatus = usesStatusPlaceholder(scripts)
-  const shown = displayOf(node, { scripts, names: chat.names, depth, withStatus: isLastAssistant && cardStatus })
+  let shown = displayOf(node, { scripts, names: chat.names, depth, withStatus: isLastAssistant && cardStatus })
   const raw = node.raw ?? node.text
-  return { shown, raw, cardStatus, time: isUser ? null : timeBoxOf(raw), choices: !isUser && isLastAssistant ? choicesOf(raw) : [] }
+  let choices = !isUser && isLastAssistant ? choicesOf(raw) : []
+  // A card's or preset's own options (🩶探索选项🩶：…, <w2g>, a 请选择… list) as the same buttons,
+  // unless its display regex already drew them.
+  if (!isUser && isLastAssistant && !choices.length) {
+    const other = otherChoices(shown)
+    if (other.choices.length) ({ choices, text: shown } = other)
+  }
+  return { shown, raw, cardStatus, time: isUser ? null : timeBoxOf(raw), choices }
 }
 
 /** The built-in status bar under a reply, or null (cards that draw their own use their regex). */
@@ -1196,6 +1261,35 @@ function askSwitch(turns) {
     dialog.addEventListener('click', onClick)
     dialog.addEventListener('close', onClose)
   })
+}
+
+/** An MVU card's reply that came without its <UpdateVariable> block. */
+function missingUpdate(chat, node) {
+  const card = ui.cards.find(c => c.id === chat.cardId)
+  return Boolean(card?.mvu) && !/<UpdateVariable>/i.test(node.raw ?? node.text ?? '')
+}
+
+/** 补写变量: the model writes the latest reply's missing update block; it is appended and the state follows. */
+async function fillUpdate(nodeId) {
+  const chatId = ui.chat?.id
+  if (!chatId || ui.generating) return
+  ui.busy.set(chatId, { kind: 'fill' })
+  renderChat()
+  renderChats()
+  toast(t`正在补写变量更新……`, 120000)
+  try {
+    const view = await api(`/api/chats/${chatId}/nodes/${nodeId}/fill-update`, { method: 'POST', body: {} })
+    ui.busy.delete(chatId)
+    if (ui.chat?.id === chatId) setChat(view)
+    const changes = view.path.at(-1).stateChanges?.length ?? 0
+    toast(changes ? t`已补写变量更新，${changes} 项变了` : t`已补写变量更新（模型认为这一轮没有变量变化）`, 6000)
+  } catch (error) {
+    toast(error.status === 499 ? t`已停止补写，什么都没改` : error.message, 8000)
+  } finally {
+    ui.busy.delete(chatId)
+    if (ui.chat?.id === chatId) renderChat()
+    renderChats()
+  }
 }
 
 /** Ask the model that wrote the story for an archive. Resolves true when it was saved. */
@@ -1623,12 +1717,18 @@ function renderBookOptions(card, ticked = new Set(card?.worldbookIds ?? [])) {
     cardBookLine(card),
     ...(ui.books.length
       ? ui.books.map(book =>
-        el('label', {}, [
-          el('input', { type: 'checkbox', name: 'book', value: book.id, checked: ticked.has(book.id), 'aria-label': book.name }),
+        el('label', { class: book.global ? 'global' : '' }, [
+          // A global book applies to every card: ticked and fixed here. Whether this card
+          // has it mounted as well is kept (the hidden box), for when it stops being global.
+          book.global
+            ? el('input', { type: 'checkbox', checked: true, disabled: true, 'aria-label': t`${book.name}（全局）` })
+            : el('input', { type: 'checkbox', name: 'book', value: book.id, checked: ticked.has(book.id), 'aria-label': book.name }),
+          book.global ? el('input', { type: 'checkbox', name: 'book', value: book.id, checked: ticked.has(book.id), hidden: true }) : null,
           el('span', { class: 'book-text' }, [
             el('span', { class: 'book-name', text: book.name }),
             el('span', { class: 'book-count', text: bookCount({ entries: book.entries, enabled: book.enabled, constant: book.constant }) }),
           ]),
+          book.global ? el('span', { class: 'card-book-on', title: t`全局世界书：每张卡的对话都用。在世界书窗口这本的「书的设置」里关掉。`, text: t`全局` }) : null,
           bookEntriesButton(book.id),
         ]))
       : [el('p', { class: 'book-none', text: t`还没有导入独立世界书。想给这张卡多挂一本，先用「导入角色卡、世界书或预设」导入世界书 JSON。` })]),
@@ -1656,6 +1756,12 @@ function bookEntriesButton(id) {
 }
 
 const tickedBooks = () => [...$('book-options').querySelectorAll('input[name="book"]:checked')].map(input => input.value)
+
+/** The 世界书 window on every imported book (the card list's 世界书, 设置 → 管理世界书). */
+const openBookManager = guard(async () => {
+  ui.books = await api('/api/worldbooks')
+  await booksUi.open({ books: ui.books })
+})
 
 function openBookEntries(id) {
   booksUi.open({ card: ui.cards.find(c => c.id === ui.cardId), books: ui.books, mounted: tickedBooks(), select: id })
@@ -1710,6 +1816,11 @@ function layOutSettings({ form, card, providers, presets }) {
       id: 'scan', title: t`扫描与状态`, look: 'shared', tag: t`所有对话`, pane: settingsPages.scan,
       summary: () => t`扫描最近 ${value('scanDepth')} 条 · 隔 ${value('reinjectAfter')} 轮再注入 · 每 ${value('stateRefreshEvery')} 轮重发状态 · ${STRIP[value('dynamicStrip')] ?? ''}`,
     },
+    // The 世界书 window, as beside the card list's heading: every imported book, whatever card is picked.
+    {
+      id: 'manage-books', title: t`管理世界书`, look: 'shared', action: () => openBookManager(),
+      summary: () => (ui.books.length ? t`导入的 ${ui.books.length} 本：改名、导出、挂到哪些卡上，成批编辑条目` : t`还没导入：在这里导入 SillyTavern 的世界书，或新建一本`),
+    },
     // Without a card the row hides but the page stays mounted: a page left out of
     // the layout leaves the document, and openSettings fills #book-options by id.
     {
@@ -1719,9 +1830,11 @@ function layOutSettings({ form, card, providers, presets }) {
         // Counted again after edits in the entries window.
         const entries = (ui.cards.find(c => c.id === card.id) ?? card).bookEntries
         const own = entries ? t`卡里自带 ${entries} 条` : t`卡里没带世界书`
-        const names = [...form.querySelectorAll('input[name="book"]:checked')].map(input => ui.books.find(b => b.id === input.value)?.name).filter(Boolean)
+        // The global ones count on their own, mounted or not.
+        const globals = ui.books.filter(b => b.global).length
+        const names = [...form.querySelectorAll('input[name="book"]:checked')].map(input => ui.books.find(b => b.id === input.value && !b.global)?.name).filter(Boolean)
         const mounted = !ui.books.length ? t`还没导入独立世界书` : names.length ? t`挂了 ${names.length} 本：${names.join(t`、`)}` : t`没挂独立世界书`
-        return `${own} · ${mounted}`
+        return [own, mounted, globals ? t`全局 ${globals} 本` : ''].filter(Boolean).join(' · ')
       },
     },
     {
@@ -1785,7 +1898,7 @@ function layOutSettings({ form, card, providers, presets }) {
       { id: 'model', title: t`模型`, icon: MENU_ICONS.model, rows: ['model', 'providers'] },
       { id: 'write', title: t`写作`, icon: MENU_ICONS.write, rows: ['persona', 'style', 'presets', 'regex'] },
       { id: 'media', title: t`配图与朗读`, icon: MENU_ICONS.picture, rows: ['media'] },
-      { id: 'books', title: t`世界书与状态`, icon: MENU_ICONS.book, rows: ['scan', cardRow, 'books'] },
+      { id: 'books', title: t`世界书与状态`, icon: MENU_ICONS.book, rows: ['scan', 'manage-books', cardRow, 'books'] },
       { id: 'link', title: t`连接`, icon: MENU_ICONS.link, rows: ['network', 'access'] },
       { id: 'more', title: t`更多`, icon: MENU_ICONS.tools, rows: ['interface', 'update', 'privacy', 'shortcut', 'show-prompt', 'rebuild-prompt', 'stop-server'] },
     ],
@@ -1823,10 +1936,15 @@ const saveSettings = guard(async () => {
   ])
   fillProxy(form, ui.settings.proxy, await api('/api/network').catch(() => null))
   allowLibraries(ui.settings.cdnLibraries !== false)
+  let applied = false
   if (ui.cardId) {
     const ids = [...form.querySelectorAll('input[name="book"]:checked')].map(i => i.value)
-    await api(`/api/cards/${ui.cardId}/worldbooks`, { method: 'PUT', body: { ids } })
+    const before = ui.cards.find(c => c.id === ui.cardId)?.worldbookIds ?? []
+    const changed = ids.length !== before.length || ids.some(id => !before.includes(id))
+    const chatId = ui.chat?.cardId === ui.cardId ? ui.chat.id : undefined
+    const saved = await api(`/api/cards/${ui.cardId}/worldbooks`, { method: 'PUT', body: { ids, chatId } })
     await refreshCards()
+    if (changed) applied = await offerMountRebuild(saved.prefixChange)
   }
   const access = await api('/api/access').catch(() => null)
   renderAccess(access)
@@ -1837,7 +1955,7 @@ const saveSettings = guard(async () => {
     return
   }
   settingsMenu?.refresh()
-  toast(form.listen.value === 'lan' && access?.running !== 'lan' ? t`已保存。重启服务后，手机才能连上。` : t`设置已保存`)
+  toast(form.listen.value === 'lan' && access?.running !== 'lan' ? t`已保存。重启服务后，手机才能连上。` : applied ? t`设置已保存，并已应用到当前对话（下一轮会重写一次缓存）` : t`设置已保存`)
 })
 
 /**
@@ -1885,7 +2003,7 @@ function fillProxy(form, saved, network) {
   const status = $('network-status')
   if (!network) return (status.textContent = '')
   const now = network.effective ? t`现在走 ${network.effective}` : t`现在不走代理`
-  const via = network.mode === 'system' ? (network.source === 'windows' ? t`（Windows 系统代理）` : network.source === 'env' ? t`（环境变量 HTTPS_PROXY）` : t`：系统代理没开`) : ''
+  const via = network.mode === 'system' ? (network.source === 'windows' ? t`（Windows 系统代理）` : network.source === 'macos' ? t`（macOS 系统代理）` : network.source === 'env' ? t`（环境变量 HTTPS_PROXY）` : t`：系统代理没开`) : ''
   status.textContent = locked ? t`${now}。启动时用 --proxy 或 AGENT_TAVERN_PROXY 指定了代理，这里改不了。` : t`${now}${via}。`
 }
 
@@ -1931,6 +2049,21 @@ function renderAccess(info) {
   )
 }
 
+/**
+ * Books mounted or taken off that hold constant entries: the open chat keeps the
+ * prefix it started with (keyword entries follow on the next turn by themselves).
+ * Ask whether to rebuild it now.
+ */
+async function offerMountRebuild(change) {
+  if (!change || !ui.chat || ui.generating) return false
+  const list = books => books.map(book => t`「${book.name}」（${book.entries} 条常驻）`).join(t`、`)
+  const what = [change.added.length ? t`挂上了${list(change.added)}` : '', change.removed.length ? t`摘下了${list(change.removed)}` : ''].filter(Boolean).join(t`；`)
+  const ok = confirm(t`本次改动涉及常驻条目：${what}。\n\n常驻条目写在对话开局时的固定前缀里，当前对话还在用改动前的。现在应用到当前对话吗？会重建这个对话的固定前缀（历史不变），下一轮会重新写一次缓存，那一轮慢一点、贵一点。\n\n取消：当前对话先不变，新开的对话直接用新的；以后也可以在「设置 → 更多」里重建前缀。`)
+  if (!ok) return false
+  setChat(await api(`/api/chats/${ui.chat.id}/preset`, { method: 'POST', body: {} }))
+  return true
+}
+
 const rebuildPrompt = guard(async () => {
   if (!ui.chat) return
   if (!confirm(t`按现在的角色卡、设置和预设重新生成这个对话的固定前缀？历史不变；下一轮会重新写入一次缓存（大卡约占一轮的额度）。`)) return
@@ -1970,6 +2103,10 @@ const showPrompt = guard(async () => {
 })
 
 // ─── Presets ────────────────────────────────────────────────────────────
+// 这一张怎么画: the 画图方式 and model for one drawing (配图's 重画, 角色名册's 画一张,
+// 创作角色卡's avatar, 修改角色卡's 生成头像); nothing it picks is saved.
+const drawChoice = initDrawChoice({ api, el, guard, openSettings: section => mediaUi.openSettings(section) })
+
 const mediaUi = initMedia({
   api,
   el,
@@ -1979,6 +2116,7 @@ const mediaUi = initMedia({
   getModels: () => ui.models,
   openProviders: () => providersUi.open(),
   saveFile,
+  pickDraw: drawChoice.pick,
 })
 
 const historyUi = initHistory({ el, getChat: () => ui.chat })
@@ -1989,6 +2127,8 @@ const vnUi = initVn({
   live: () => (ui.chat ? ui.busy.get(ui.chat.id) ?? null : null),
   display: (chat, node, latest = true) => replyDisplay(chat, node, latest),
   statusFor: (chat, node) => (usesStatusPlaceholder(scriptsFor(chat)) ? null : statusFor(chat, node)),
+  // The HUD reads any card's variables: its own status bar layout, else one laid out from the state (whatever the preset).
+  hudSpec: (chat, node) => ui.cardDetails.get(chat.cardId)?.statusBar ?? autoStatusSpec(node.state ?? {}),
   frameContext: frameContextFor,
   cardOf: id => ui.cards.find(card => card.id === id),
   send: sendChoice,
@@ -1996,6 +2136,11 @@ const vnUi = initVn({
   fitInput,
   regenerate: userNodeId => regenerate(userNodeId),
   selectNode: nodeId => selectNode(nodeId),
+  // 读档: the save's chat as the server left it (that reply on screen).
+  showChat: view => {
+    followServerTurn(view)
+    setChat(view)
+  },
   readBeat: (nodeId, text, done, speaker) => mediaUi.readBeat(nodeId, text, done, speaker),
   fillQuick: (box, kind) => mediaUi.fillQuick(box, kind),
   stopReading: () => mediaUi.stopReading(),
@@ -2037,8 +2182,10 @@ function regexChanged(scope, id, scripts) {
   if (ui.chat) renderChat()
 }
 
-const regexUi = initRegex({ api, el, toast, guard, context: regexContext, onChanged: regexChanged })
-const themeUi = initTheme({ api, el, toast, guard, getSettings: () => ui.settings, setSettings: settings => { ui.settings = settings } })
+// 世界书 / 预设 / 正则 / 主题 → 对话修改: the talk on one of them, over the window it came from.
+const talkUi = initTalkDialog({ api, el, guard, openProviders: () => providersUi.open() })
+const regexUi = initRegex({ api, el, toast, guard, context: regexContext, onChanged: regexChanged, openTalk: talkUi.open })
+const themeUi = initTheme({ api, el, toast, guard, getSettings: () => ui.settings, setSettings: settings => { ui.settings = settings }, onReading: () => fitInput(), openTalk: talkUi.open })
 const whatsNewUi = initWhatsNew({ el })
 const updateUi = initUpdate({ api, el, toast, guard, onChange: () => settingsMenu?.refresh(), isGenerating: () => ui.generating, openNotes: () => whatsNewUi.open() })
 
@@ -2048,6 +2195,7 @@ const forgeUi = initForge({
   toast,
   guard,
   openProviders: () => providersUi.open(),
+  pickDraw: drawChoice.pick,
   async onCardSaved(id) {
     avatarVersions.set(id, Date.now())
     ui.cardDetails.delete(id)
@@ -2079,6 +2227,7 @@ const providersUi = initProviders({
 
 const presetsUi = initPresets({
   api, el, toast, guard, saveFile,
+  openTalk: talkUi.open,
   getChat: () => ui.chat,
   isGenerating: () => ui.generating,
   onChatChanged: chat => {
@@ -2097,19 +2246,53 @@ const presetsUi = initPresets({
 })
 
 const booksUi = initBooks({
-  api, el, toast, guard,
+  api, el, toast, guard, saveFile,
+  openTalk: talkUi.open,
   getChat: () => ui.chat,
   getCards: () => ui.cards,
+  getScanDepth: () => ui.settings?.scanDepth ?? 4,
   isGenerating: () => ui.generating,
   onChatChanged: chat => setChat(chat),
   // The counts under 设置 → 挂载的世界书 and in the card list follow each edit.
-  onChanged: guard(async () => {
+  onChanged: guard(async ({ mounts = [] } = {}) => {
     const ticked = new Set(tickedBooks())
     ;[ui.books] = await Promise.all([api('/api/worldbooks'), refreshCards()])
     if (!$('settings-dialog').open) return
-    renderBookOptions(ui.cards.find(c => c.id === ui.cardId), ticked)
+    const card = ui.cards.find(c => c.id === ui.cardId)
+    // A book whose cards were ticked in its own page is ticked here as the card has it now.
+    for (const id of mounts) {
+      if ((card?.worldbookIds ?? []).includes(id)) ticked.add(id)
+      else ticked.delete(id)
+    }
+    renderBookOptions(card, ticked)
     settingsMenu?.refresh()
   }),
+})
+
+// 修改角色卡 (the card list's ⋯): the card's fields, its picture and its own book, and 对话修改.
+const cardEditUi = initCardEdit({
+  api, el, toast, guard, saveFile,
+  pickDraw: drawChoice.pick,
+  getChat: () => ui.chat,
+  isGenerating: () => ui.generating,
+  openProviders: () => providersUi.open(),
+  onChatChanged: chat => setChat(chat),
+  // The entries window on the card's own book (its first entry may just have been made).
+  async openBook(id) {
+    ;[ui.books] = await Promise.all([api('/api/worldbooks'), refreshCards()])
+    const card = ui.cards.find(c => c.id === id)
+    await booksUi.open({ card, books: ui.books, mounted: card?.worldbookIds ?? [], select: `card-${id}` })
+  },
+  // The list, the card's details under it and its picture follow an edit.
+  async onCardChanged(id, { avatar = false } = {}) {
+    if (avatar) avatarVersions.set(id, Date.now())
+    ui.cardDetails.delete(id)
+    await refreshCards()
+    if (ui.cardId !== id) return
+    await loadCardDetail(id)
+    showCardInfo(ui.cardDetails.get(id))
+    if (ui.chat?.cardId === id) renderChat()
+  },
 })
 
 // ─── Quick switches: preset entries pinned in the preset editor ─────────
@@ -2258,6 +2441,15 @@ function bind() {
       if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) layout.classList.remove('show-main')
     })
   }
+  const cardSearch = searchBox(el, {
+    placeholder: t`搜索角色卡：名字、标签、分组`,
+    label: t`搜索角色卡`,
+    onInput: value => {
+      cardQuery = value
+      renderCards()
+    },
+  })
+  $('card-list').before(cardSearch.box)
   listenForFrameHeights()
   installFrameBridge({
     toast: (_level, text) => toast(text),
@@ -2313,6 +2505,7 @@ function bind() {
   $('open-settings').addEventListener('click', openSettings)
   $('open-usage').addEventListener('click', openUsage)
   $('open-presets').addEventListener('click', () => presetsUi.open())
+  $('open-books').addEventListener('click', openBookManager)
   $('forge-open').addEventListener('click', () => forgeUi.open())
   $('open-providers').addEventListener('click', () => providersUi.open())
   $('provider-add').addEventListener('click', () => providersUi.add())

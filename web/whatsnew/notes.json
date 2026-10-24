@@ -171,6 +171,170 @@
           }
         }
       ]
+    },
+    {
+      "version": "1.8.3",
+      "date": "2026-10",
+      "items": [
+        {
+          "image": "1.8.3-edit.webp",
+          "zh": {
+            "title": "修改角色卡",
+            "text": "角色卡的「⋯ → 修改角色卡」：名字、描述、开场白、世界书这些都能直接改，改了存进这张卡，对话和名册都不变。\n也可以在右边用对话修改：说说想怎么改，模型把每一处改前改后标出来，勾选的才会用上。"
+          },
+          "en": {
+            "title": "Edit a card",
+            "text": "A card's ⋯ → Edit card: change the name, description, greetings, lorebook and the rest in place; it saves into the card, and its chats and cast stay as they are.\nOr edit by chat on the right: say what to change, and each change is shown before and after, applied only if ticked."
+          }
+        },
+        {
+          "image": "1.8.3-avatar.webp",
+          "zh": {
+            "title": "生成头像，每次画图都能选方式",
+            "text": "修改角色卡里点「生成头像」，按卡里的角色画一张方形头像，满意了再换上。\n生成头像、名册的「画一张」、配图的「重画」和「换个画法…」都能临时选这一张用哪种画图方式和模型，不改设置。"
+          },
+          "en": {
+            "title": "Generate an avatar, pick how each picture is drawn",
+            "text": "In Edit card, Generate avatar draws a square avatar of the card's character, put on only when you take it.\nGenerate avatar, the cast's Draw one, and Redraw or Draw it differently… under a picture can each pick the image backend and model for that one picture, without changing your settings."
+          }
+        }
+      ]
+    },
+    {
+      "version": "1.8.4",
+      "date": "2026-10",
+      "items": [
+        {
+          "icon": "📲",
+          "zh": {
+            "title": "手机上的应用内更新",
+            "text": "设置 → 更多 → 更新 →「下载并安装」：在应用里下载，断网了接着下；核对 SHA-256 和签名后直接打开系统的安装界面，点「更新」就好，数据保留。\n第一次会先打开「安装未知应用」的设置，打开开关后返回会接着安装。"
+          },
+          "en": {
+            "title": "In-app updates on the phone",
+            "text": "Settings → More → Updates → Download and install: the app downloads it, picking up where a dropped connection left off, checks the SHA-256 and signature, then opens the system installer; tap Update and your data stays.\nThe first time, it opens the Install unknown apps setting: turn it on and come back, and the install carries on."
+          }
+        }
+      ]
+    },
+    {
+      "version": "1.8.5",
+      "date": "2026-10",
+      "items": [
+        {
+          "image": "1.8.5-stage.webp",
+          "zh": {
+            "title": "视觉小说：多人同屏、表情和演出",
+            "text": "场景里说话的人一起站在台上（电脑最多三个，手机两个），说话的亮起，其余的暗下去；叙述里写了离开或者换了地点就退场。\n「立绘」窗口里可以给每个角色画一套表情，每句按叙述换；闪电、巨响时画面闪白或震动。"
+          },
+          "en": {
+            "title": "Visual novel: several on stage, expressions and effects",
+            "text": "The people in a scene stand on stage together (up to three on a computer, two on a phone): the speaker lit, the rest dimmed, stepping off when the narration has them leave or the place changes.\nIn the Sprites window each character can get a set of expressions, picked line by line from the narration; lightning or a crash flashes or shakes the picture."
+          }
+        },
+        {
+          "image": "1.8.5-saves.webp",
+          "zh": {
+            "title": "存档和读档",
+            "text": "视觉小说模式右上角的「存档」「读档」：每张卡 18 个存档位、一个快速存档（F5 存、F9 读）和每轮自动存的最近十个。\n读档回到存档的那一句接着玩，之后写过的收起来保留成分支，不会删掉。"
+          },
+          "en": {
+            "title": "Save and load",
+            "text": "Save and Load at the top right of visual novel mode: 18 slots for each card, a quick save (F5 to save, F9 to load) and the last ten turns saved on their own.\nLoading picks up at the saved line; whatever was written after it is kept as a branch, not deleted."
+          }
+        },
+        {
+          "image": "1.8.5-books.webp",
+          "zh": {
+            "title": "世界书管理",
+            "text": "角色卡列表上方的「世界书」，或 设置 → 世界书与状态 →「管理世界书」：导入的每本世界书都能改名、写备注、导出、复制、删除，一次勾选挂在哪些卡上，还能单独设扫描深度。\n「多选」可以一次启用、停用、删除条目，或者复制、移动到另一本。"
+          },
+          "en": {
+            "title": "Manage lorebooks",
+            "text": "Lorebook beside the card list's heading, or Settings → Lorebooks & state → Manage lorebooks: rename, note, export, duplicate or delete each imported lorebook, tick the cards it's attached to in one place, and give it its own scan depth.\nSelect enables, disables or deletes several entries at once, or copies or moves them to another lorebook."
+          }
+        }
+      ]
+    },
+    {
+      "version": "1.9.0",
+      "date": "2026-10",
+      "items": [
+        {
+          "image": "1.9.0-talk.webp",
+          "zh": {
+            "title": "对话修改：世界书、预设、正则和主题",
+            "text": "这四个窗口都有了「对话修改」：说想怎么改，向导把要改的地方整条写出来，改前改后对照着看，勾上的才改进去，刚采用的还能撤销。\n空白的世界书说一句想法就写出一整本；正则先拿最新回复试一遍再给你看；主题配好浅色和深色两套，能先在界面上预览。"
+          },
+          "en": {
+            "title": "Edit by chat: lorebooks, presets, regex and the theme",
+            "text": "All four windows now have Edit by chat: say what to change, and the guide writes out each piece it would change, before and after side by side; only what you tick goes in, and the last change can be undone.\nAn empty lorebook can be written from one sentence; regex is tried on the latest reply before you see it; the theme comes as a light and a dark set you can preview on the page first."
+          }
+        },
+        {
+          "image": "1.9.0-theme.webp",
+          "zh": {
+            "title": "自定义配色、字体字号、搜索和全局世界书",
+            "text": "「主题」里有了自定义配色（十二个颜色逐个调）和故事正文的字体、字号；角色卡列表和世界书都能搜索，世界书还能设成全局，所有对话都用。\n另外，配图里一定会有人物，开场白多的卡也能一条条看清再选。"
+          },
+          "en": {
+            "title": "Custom colours, font and size, search, global lorebooks",
+            "text": "Theme now has custom colours (twelve, each adjustable) and the story's font and size; the card list and the lorebooks can be searched, and a lorebook can be made global for every chat.\nAlso: pictures always have someone in them, and a card with many openings shows each one in full before you pick."
+          }
+        },
+        {
+          "image": "1.8.0-vn.webp",
+          "recap": "1.8",
+          "zh": {
+            "title": "视觉小说模式（1.8 起）",
+            "text": "点顶栏的「视觉小说」，回复变成一句一句读的游戏画面：说话的人站上台、带着表情，几个人可以同屏；到了新地点自动画一张场景当背景，配图都收进 CG 回廊；每个角色有自己的音色，还能存档读档。\n只改显示，发给模型的内容一字不改。"
+          },
+          "en": {
+            "title": "Visual novel mode (since 1.8)",
+            "text": "Turn on \"Visual novel\" in the top bar and replies play like a game, a line at a time: whoever speaks steps on stage with an expression, several at once; a new place gets a scene drawn behind it, and every picture goes into the CG gallery; each character can have their own voice, and you can save and load.\nOnly the display changes; what goes to the model stays word for word."
+          }
+        },
+        {
+          "icon": "🗂️",
+          "recap": "1.8",
+          "zh": {
+            "title": "1.8 的其他更新",
+            "text": "修改角色卡、生成头像；世界书逐条修改和整本管理；导入 SillyTavern 的对话；手机添加到主屏幕，安卓在应用里下载更新；画图多了 Gemini、SD WebUI 和 OpenRouter。\n想看每一版的详细介绍，点上面的「CicaTavern 1.9」换到 1.8。"
+          },
+          "en": {
+            "title": "More from 1.8",
+            "text": "Edit a card and generate its avatar; edit lorebook entries and manage whole lorebooks; import SillyTavern chats; add the app to your phone's home screen, and on Android download updates in the app; draw with Gemini, SD WebUI or OpenRouter.\nFor each version's own pages, pick 1.8 from \"CicaTavern 1.9\" above."
+          }
+        }
+      ]
+    },
+    {
+      "version": "1.9.1",
+      "date": "2026-10",
+      "items": [
+        {
+          "image": "1.9.1-hud.webp",
+          "zh": {
+            "title": "视觉小说：HUD、换天和回忆",
+            "text": "画面左上角常驻几个变量（好感、体力、金钱……点一下选显示哪些，显示成条、数字还是图标）；读到一轮的结尾，下面弹出「好感 +5」「获得：旧信」。\n日期往后走时画面中间出现「第 N 天」，回忆的段落画面泛黄。"
+          },
+          "en": {
+            "title": "Visual novel: a HUD, new days and memories",
+            "text": "A few variables stay at the top left (affection, stamina, money…; click it to choose which, each as a bar, a number or an icon); at the end of a turn, notes like \"Affection +5\" and \"Got: old letter\" pop up under it.\nWhen the date moves on, \"Day N\" crosses the picture, and memories turn sepia."
+          }
+        },
+        {
+          "icon": "🧩",
+          "zh": {
+            "title": "补写变量、选项按钮和表情包",
+            "text": "MVU 卡的回复漏了变量更新块时，点「补写变量」只补那一块；卡和预设自己的行动选项（「探索选项」「请选择你的下一步行动」这类）也变成能点的按钮。\n「立绘」里能导入 SillyTavern 的表情包，「角色名册」能从对话里补上后来出场的角色。"
+          },
+          "en": {
+            "title": "Write variables, choice buttons and expression packs",
+            "text": "When an MVU card's reply leaves out its variable update, \"Write variables\" writes just that block; a card's or preset's own action options become buttons too.\nSprites can import a SillyTavern expression pack, and the cast list can add the characters who joined later, from the chat."
+          }
+        }
+      ]
     }
   ]
 }
