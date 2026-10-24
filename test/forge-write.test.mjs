@@ -96,11 +96,14 @@ async function setup(t, { draw = null } = {}) {
   return { root, store, forge, fake, plan }
 }
 
+// Not too often: on Windows a job cannot replace the draft while it is being read
+// (forge save tries again for about 2.5 seconds), and reading every 10 ms in a busy
+// full run kept it out that long (the page reads every 900 ms).
 async function settled(forge, id) {
   for (let i = 0; i < 300; i++) {
     const draft = await forge.get(id)
     if (!draft.job) return draft
-    await new Promise(resolve => setTimeout(resolve, 10))
+    await new Promise(resolve => setTimeout(resolve, 50))
   }
   throw new Error('the job never finished')
 }

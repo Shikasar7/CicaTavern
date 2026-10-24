@@ -97,8 +97,10 @@ const LETTER = /^\s*(?:[-*•]\s*)?([A-Da-d]|[1-6]|[①②③④⑤⑥])\s*[.、
 // Letters are Latin and CJK; emoji the pictograph and symbol blocks.
 const WORD = 'A-Za-z\\u3400-\\u4DBF\\u4E00-\\u9FFF\\uF900-\\uFAFF'
 const EMOJI = '\\u{1F000}-\\u{1FAFF}\\u2190-\\u21FF\\u2300-\\u23FF\\u2460-\\u24FF\\u25A0-\\u27BF\\u2900-\\u297F\\u2B00-\\u2BFF\\u3030\\u303D\\u3297\\u3299\\u00A9\\u00AE\\u203C\\u2049\\u2122\\u2139'
-// 「🩶堕落选项🩶：……」「**探索选项**：……」
-const LABELLED = new RegExp(`^\\s*(?:[^${WORD}0-9\\s]|\\*\\*)*\\s*([${WORD}]{1,8}?)选项\\s*(?:[^${WORD}0-9\\s：:]|\\*\\*)*\\s*[：:]\\s*(\\S.*)$`, 'u') // i18n-ignore: a pattern
+// 「🩶堕落选项🩶：……」「**探索选项**：……」. The symbol runs are plain classes (they take ** too):
+// `(?:[^…]|\*\*)*` could split every ** two ways, and a line opening on a long run of them
+// (**·**·**·…) took seconds to minutes to turn down.
+const LABELLED = new RegExp(`^\\s*[^${WORD}0-9\\s]*\\s*([${WORD}]{1,8}?)选项\\s*[^${WORD}0-9\\s：:]*\\s*[：:]\\s*(\\S.*)$`, 'u') // i18n-ignore: a pattern
 const HEADING = new RegExp(`^\\s*(?:[#>*\\-—\\s]|[${EMOJI}\\uFE0F\\u200D])*[^。！？!?\\n]{0,16}(选择|选项|行动|下一步|接下来)[^。！？!?\\n]{0,16}[：:]\\s*(?:\\*\\*)?\\s*$`, 'u') // i18n-ignore: a pattern
 const BULLET = new RegExp(`^\\s*(?:[-*•·]|[${EMOJI}][${EMOJI}\\uFE0F\\u200D]*)\\s*`, 'u')
 const DIVIDER = /^\s*(?:[-—─━=*_~]\s*){3,}$/

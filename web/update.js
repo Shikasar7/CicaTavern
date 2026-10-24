@@ -2,13 +2,16 @@
 // release notes, and on Windows 下载更新 → 重启并更新, 回到上一版 and the old
 // version folders. The phone app downloads the APK itself, checks it and opens
 // the system installer (android ApkUpdate, through window.AgentTavernAndroid);
-// an app without that hands the APK link to the browser.
+// an app without that hands the APK link to the browser. Each package can come
+// from GitHub or the mirror in mainland China (cnb.cool; server/update/release.mjs):
+// the one the check read first, the other a click away.
 // Release notes come from GitHub: they are drawn as text, never as HTML.
 import { locale, t } from '/i18n.js'
 
 const MB = 1024 * 1024
 const mb = bytes => `${(bytes / MB).toFixed(bytes >= 10 * MB ? 0 : 1)} MB`
 const SEEN_KEY = 'cicatavern.update.seen'
+const sourceName = from => (from === 'mirror' ? t`国内镜像` : 'GitHub')
 const RESULT_KEY = 'cicatavern.update.result'
 
 function remember(key, value) {
@@ -236,16 +239,17 @@ export function initUpdate({ api, el, toast, guard, onChange = () => {}, isGener
       case 'storage': return t`手机存储写不进去：${state.detail ?? ''}`
       case 'installer': return t`手机上没有能打开安装包的安装程序。到发布页下载后手动安装。`
       case 'denied': return t`还没允许 CicaTavern「安装未知应用」，所以没装上。再点一次「下载并安装」，在打开的设置里打开开关后返回。`
-      default: return t`下载没成功：${state.detail ?? ''}。检查网络（国内网络可能连不上 GitHub）后再试，或者到发布页手动下载。`
+      default: return t`下载没成功：${state.detail ?? ''}。检查网络后再试，或者换个下载来源（国内网络常常连不上 GitHub），也可以到发布页手动下载。`
     }
   }
 
   /** The phone app: download, check and install in the app; the system installer asks before installing. */
-  function phoneActions(apk, open) {
+  function phoneActions(apk, open, choice) {
     const state = apkState
-    const start = () => {
-      if (!phone.installUpdate(apk.url, apk.sha256)) toast(t`这个下载地址不是 CicaTavern 的发布页，没有下载。`)
+    const start = (url = choice.first.url) => {
+      if (!phone.installUpdate(url, apk.sha256)) toast(t`这个下载地址不是 CicaTavern 的发布页，没有下载。`)
     }
+    const other = choice.other ? el('button', { type: 'button', class: 'btn small', text: choice.other.label, onclick: () => start(choice.other.url) }) : null
     switch (state.step) {
       case 'downloading':
         return [
@@ -259,13 +263,14 @@ export function initUpdate({ api, el, toast, guard, onChange = () => {}, isGener
       case 'installing':
         return [
           el('p', { class: 'hint', text: t`已下载并核对（SHA-256 和签名都一致）。在系统的安装界面点「更新」或「安装」，覆盖安装会保留所有数据；装好后重新打开 CicaTavern。` }),
-          el('div', { class: 'row' }, [el('button', { type: 'button', class: 'btn small', text: t`重新下载安装`, onclick: start }), open]),
+          el('div', { class: 'row' }, [el('button', { type: 'button', class: 'btn small', text: t`重新下载安装`, onclick: () => start() }), open]),
         ]
       default:
         return [
           state.step === 'error' ? el('p', { class: 'hint warn', text: apkError(state) }) : null,
           el('div', { class: 'row' }, [
-            el('button', { type: 'button', class: 'btn primary', text: t`${state.step === 'error' ? t`重新下载` : t`下载并安装`}（${mb(apk.size)}）`, onclick: start }),
+            el('button', { type: 'button', class: 'btn primary', text: t`${state.step === 'error' ? t`重新下载` : t`下载并安装`}（${mb(apk.size)}）`, onclick: () => start() }),
+            other,
             open,
           ]),
           el('p', { class: 'hint', text: t`在应用里下载，核对发布页公布的 SHA-256 和签名后打开系统的安装界面，覆盖安装会保留所有数据。` }),
@@ -274,18 +279,31 @@ export function initUpdate({ api, el, toast, guard, onChange = () => {}, isGener
   }
 
   /** What can be done about the newer version here. */
+  /**
+   * A package's two sources: first the one the check read (the mirror when
+   * GitHub did not answer), and the other as a second button.
+   */
+  function sourceChoice(asset) {
+    const github = { from: 'github', url: asset.url, label: t`改从 GitHub 下载` }
+    const mirror = asset.mirrorUrl ? { from: 'mirror', url: asset.mirrorUrl, label: t`从国内镜像下载` } : null
+    return info.latest.source === 'mirror' && mirror ? { first: mirror, other: github } : { first: github, other: mirror }
+  }
+
   function actions() {
     const job = info.job ?? { step: 'idle' }
     const latest = info.latest
-    const open = el('a', { class: 'btn small', href: latest.url, target: '_blank', rel: 'noopener', text: t`打开发布页` })
+    const page = latest.source === 'mirror' && latest.mirrorPage ? latest.mirrorPage : latest.url
+    const open = el('a', { class: 'btn small', href: page, target: '_blank', rel: 'noopener', text: t`打开发布页` })
     if (info.kind === 'apk') {
       const apk = latest.assets?.apk
       if (!apk) return [el('p', { class: 'hint', text: t`这个版本没有安卓安装包。` }), open]
-      if (phone && apk.sha256) return phoneActions(apk, open)
+      const choice = sourceChoice(apk)
+      if (phone && apk.sha256) return phoneActions(apk, open, choice)
       return [
         el('div', { class: 'row' }, [
           // The app hands links that are not its own page to the browser, which downloads the APK.
-          el('button', { type: 'button', class: 'btn primary', text: t`下载安装包（${mb(apk.size)}）`, onclick: () => { location.href = apk.url } }),
+          el('button', { type: 'button', class: 'btn primary', text: t`下载安装包（${mb(apk.size)}）`, onclick: () => { location.href = choice.first.url } }),
+          choice.other ? el('button', { type: 'button', class: 'btn small', text: choice.other.label, onclick: () => { location.href = choice.other.url } }) : null,
           open,
         ]),
         el('p', { class: 'hint', text: t`浏览器下载完成后点开安装，覆盖安装会保留所有数据。第一次可能要允许浏览器「安装未知应用」。安卓会核对新安装包和现在这个是同一个签名，不是的话装不上。` }),
@@ -296,9 +314,14 @@ export function initUpdate({ api, el, toast, guard, onChange = () => {}, isGener
     const zip = latest.assets?.zip
     if (!zip) return [el('p', { class: 'hint', text: t`这个版本没有 Windows 安装包。` }), open]
     if (zip.hashError) return [el('p', { class: 'hint warn', text: zip.hashError }), open]
+    const choice = sourceChoice(zip)
     switch (job.step) {
       case 'downloading':
-        return [progress(job), el('div', { class: 'row' }, [el('button', { type: 'button', class: 'btn small', text: t`取消`, onclick: act('/api/update/cancel') })])]
+        return [
+          el('p', { class: 'muted small', text: t`从 ${sourceName(job.from)} 下载` }),
+          progress(job),
+          el('div', { class: 'row' }, [el('button', { type: 'button', class: 'btn small', text: t`取消`, onclick: act('/api/update/cancel') })]),
+        ]
       case 'verifying':
         return [el('p', { class: 'hint', text: t`正在校验 SHA-256…` })]
       case 'unpacking':
@@ -314,12 +337,19 @@ export function initUpdate({ api, el, toast, guard, onChange = () => {}, isGener
         return [
           job.step === 'error' ? el('p', { class: 'hint warn', text: job.error }) : null,
           el('div', { class: 'row' }, [
-            el('button', { type: 'button', class: 'btn primary', text: t`${job.step === 'error' ? t`重新下载` : t`下载更新`}（${mb(zip.size)}）`, onclick: act('/api/update/download') }),
+            el('button', { type: 'button', class: 'btn primary', text: t`${job.step === 'error' ? t`重新下载` : t`下载更新`}（${mb(zip.size)}）`, onclick: act('/api/update/download', { body: { source: choice.first.from } }) }),
+            choice.other ? el('button', { type: 'button', class: 'btn small', text: choice.other.label, onclick: act('/api/update/download', { body: { source: choice.other.from } }) }) : null,
             open,
           ]),
           el('p', { class: 'hint', text: t`下载后核对发布页公布的 SHA-256，解压到 ${info.root ? info.root.replace(/[\\/][^\\/]+$/, '') : t`现在的文件夹旁边`}，不碰数据目录。` }),
         ]
     }
+  }
+
+  /** Where this release was read, when it was not GitHub. */
+  function mirrorLine(latest) {
+    if (latest.source !== 'mirror') return null
+    return el('p', { class: 'muted small', text: t`GitHub 没有及时回应，这次的版本信息来自国内镜像 cnb.cool（已核对签名）。` })
   }
 
   function resultLine() {
@@ -351,7 +381,7 @@ export function initUpdate({ api, el, toast, guard, onChange = () => {}, isGener
       ]),
       el('label', { class: 'check-row upd-auto' }, [
         el('input', { type: 'checkbox', checked: info.autoCheck, onchange: event => setAuto(event.target.checked) }),
-        t`自动检查更新（打开时，每天最多一次，访问 GitHub）`,
+        t`自动检查更新（打开时，每天最多一次，访问 GitHub；没有及时回应时也问国内镜像 cnb.cool）`,
       ]),
       el('p', { class: 'hint', text: info.checkError ? t`上次检查没成功：${info.checkError}` : info.checkedAt ? t`上次检查：${new Date(info.checkedAt).toLocaleString(locale)}` : t`还没检查过` }),
       resultLine(),
@@ -364,6 +394,7 @@ export function initUpdate({ api, el, toast, guard, onChange = () => {}, isGener
             latest.publishedAt ? el('span', { class: 'muted small', text: t`${new Date(latest.publishedAt).toLocaleDateString(locale)} 发布` }) : null,
           ]),
           notesView(el, latest.notes),
+          mirrorLine(latest),
           ...actions(),
           info.skipped !== latest.version
             ? el('button', { type: 'button', class: 'btn ghost small upd-skip', text: t`跳过这个版本（不再自动提醒）`, onclick: act('/api/update/skip', { body: { version: latest.version } }) })
@@ -371,7 +402,7 @@ export function initUpdate({ api, el, toast, guard, onChange = () => {}, isGener
         ]),
       )
     } else if (latest) {
-      parts.push(el('p', { class: 'upd-latest', text: t`已经是最新版本（GitHub 上最新的是 ${latest.version}）。` }))
+      parts.push(el('p', { class: 'upd-latest', text: latest.source === 'mirror' ? t`已经是最新版本（国内镜像上最新的是 ${latest.version}）。` : t`已经是最新版本（GitHub 上最新的是 ${latest.version}）。` }))
     }
     if (info.kind === 'zip' && info.installable && info.local) {
       if (info.previous) {

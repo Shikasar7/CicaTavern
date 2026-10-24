@@ -608,3 +608,18 @@ test('provider export and import: keys travel, loopback relays stay behind, defa
   assert.match(again.failed[0], /^broken：/)
   assert.throws(() => importProviders([], { providers: [] }), /不是酒馆导出的供应商文件/)
 })
+
+test('视觉小说格式: switched on for one turn and off for the next, the history is sent again as it was', async t => {
+  const { fake, store, chat, engine } = await setup(t, 'openai-completions')
+  const tip = async () => activePath(await store.getChat(chat.id)).at(-1).id
+  await engine.runTurn(chat.id, { parentId: await tip(), input: '你好', marks: true }, () => {})
+  await engine.runTurn(chat.id, { parentId: await tip(), input: '再见' }, () => {})
+  const [one, two] = fake.requests.map(r => r.body)
+  assert.match(JSON.stringify(one.messages.at(-1)), /<对白格式>/)
+  assert.doesNotMatch(JSON.stringify(two.messages.at(-1)), /<对白格式>/)
+  assert.deepEqual(two.messages.slice(0, one.messages.length), one.messages, 'the cached part does not change')
+  // Regenerating the first turn asks the same way it did.
+  const first = activePath(await store.getChat(chat.id)).find(node => node.role === 'user')
+  await engine.runTurn(chat.id, { userNodeId: first.id }, () => {})
+  assert.match(JSON.stringify(fake.requests.at(-1).body.messages.at(-1)), /<对白格式>/)
+})

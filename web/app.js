@@ -22,6 +22,7 @@ import { initCardEdit } from '/card-edit.js'
 import { initTalkDialog } from '/talk-dialog.js'
 import { initDrawChoice } from '/draw-choice.js'
 import { initVn } from '/vn.js'
+import { markSpeakers } from '/shared/vn.js'
 import { isRegexFile, scriptsInFile } from '/shared/regex.js'
 import { lang, locale, t, zh } from '/i18n.js'
 import { pickLanguage } from '/shared/i18n.js'
@@ -243,7 +244,8 @@ function inlineTag(closing, name, attrs) {
 function renderStory(text) {
   const folds = []
   const fold = (label, body) => (body.trim() ? `\n\n@@fold${folds.push({ label, body: body.trim() }) - 1}@@\n\n` : '')
-  const source = text
+  // 视觉小说格式: 【名字|表情】 before a line shows as the name (drawn by CSS, so reading aloud skips it); 【效果|…】 goes.
+  const source = markSpeakers(text, name => `${name}`)
     // A voice tag right after a line keeps its emotion for reading aloud (marked, then put on the line's span).
     .replace(QUOTE_VOICE, (_, quote, emotion) => (emotion.trim() ? `${quote}${emotion.trim()}` : quote))
     .replace(VOICE_TAG, '')
@@ -258,6 +260,7 @@ function renderStory(text) {
     last = match.index + match[0].length
   }
   html = (html + escapeHtml(source.slice(last)))
+    .replace(/([^\n]*)/g, '<span class="speaker" data-name="$1"></span>')
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/(^|[^*])\*([^*\n]+?)\*/g, '$1<em>$2</em>')
     .replace(/(“[^”\n]*”|「[^」\n]*」|&quot;[^&\n]*?&quot;)/g, '<span class="q">$1</span>')
@@ -1598,7 +1601,7 @@ const send = guard(async () => {
   input.value = ''
   fitInput()
   const chatId = ui.chat.id
-  const ok = await generate('turn', { parentId, input: text }, text)
+  const ok = await generate('turn', { parentId, input: text, marks: vnUi.marks(ui.chat) }, text)
   // Keep the draft so nothing is lost, unless you have moved on to another chat or typed anew.
   if (!ok && ui.chat?.id === chatId && !input.value.trim()) { input.value = text; fitInput() }
 })

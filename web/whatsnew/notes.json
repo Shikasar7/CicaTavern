@@ -335,6 +335,34 @@
           }
         }
       ]
+    },
+    {
+      "version": "1.9.2",
+      "date": "2026-10",
+      "items": [
+        {
+          "image": "1.9.2-marks.webp",
+          "zh": {
+            "title": "视觉小说：模型标出谁在说话",
+            "text": "视觉小说里，模型会在每句台词前标上说话人和表情（标记本身不显示），名字栏、立绘和表情都按标的来，不用再从叙述里猜；遇到冲击、雷电还能标上震屏、闪白。\n用基础预设时默认开；用导入的预设时在「立绘 → 对白标注」里打开。只加在每轮的消息里，开关不影响缓存。"
+          },
+          "en": {
+            "title": "Visual novel: the model marks who is speaking",
+            "text": "In the visual novel mode the model marks who says each line and how they look (the marks are not shown), so the name plate, the sprite and the expression follow them instead of a guess from the narration; it can also ask for a shake or a flash.\nOn by default with the built-in preset; with an imported one, turn it on in Sprites → Mark speakers. It rides on each turn's message only, so switching it costs no cache."
+          }
+        },
+        {
+          "icon": "🛠️",
+          "zh": {
+            "title": "国内更新镜像和修复",
+            "text": "检查更新时 GitHub 连不上或迟迟不回应，会改从国内镜像（cnb.cool）取版本信息和安装包，带签名校验，从下一次更新起用得上。\n修复：回复结尾有一长串 ** 装饰时打开对话会卡住；视觉小说边写边读时会被拉回前面一句、来回循环。"
+          },
+          "en": {
+            "title": "An update mirror in China, and fixes",
+            "text": "When GitHub cannot be reached for an update, or takes too long, the app turns to a mirror in China (cnb.cool) for the release and the package, with a signature check; it helps from the next update on.\nFixed: a chat froze when a reply ended on a long run of ** decorations; reading a visual novel reply while it was written kept jumping back to an earlier line."
+          }
+        }
+      ]
     }
   ]
 }

@@ -3,6 +3,7 @@
 // Shared with the server (server/scenes.mjs matches places) and the tests, so
 // it keeps to what the phone app's Node has: no \p{…}, Intl or normalize().
 import { timeBoxOf } from './basic.js'
+import { EFFECT_KINDS, faceOf, markEffects } from './stage.js'
 
 // Reasoning in its own tag (web/app.js folds it): not part of the story.
 const FOLD_TAG = '[\\w~-]*(?:think|draft|reasoning)[\\w~-]*'
@@ -449,10 +450,13 @@ const cited = quote => {
   return inner.length <= 6 && !/[。！？!?…~～，,、；;：:—-]/.test(inner)
 }
 
-/** The beats of one source line: quotes with the narration that leads into them, narration on its own. */
-function beatsOf(row, max) {
+/**
+ * The beats of one source line: quotes with the narration that leads into them, narration on its own.
+ * A dialogue beat's `at` is where its quote starts; a quote starting at one of `said` is spoken, however short.
+ */
+function beatsOf(row, max, said = []) {
   const hidden = masked(row)
-  const quotes = [...hidden.matchAll(QUOTE)].filter(quote => !cited(quote[0]))
+  const quotes = [...hidden.matchAll(QUOTE)].filter(quote => said.includes(quote.index) || !cited(quote[0]))
   if (!quotes.length) return packNarration(row, max).map(text => ({ kind: 'narration', text }))
   const out = []
   let start = 0
@@ -471,7 +475,7 @@ function beatsOf(row, max) {
     let end = quote.index + quote[0].length
     // What follows the last quote stays with it when short (「…」她笑了笑。).
     if (i === quotes.length - 1 && plainOf(hidden.slice(end)).length <= 30) end = row.length
-    out.push({ kind: 'dialogue', text: row.slice(lead, end), before: row.slice(lead, quote.index), after: row.slice(quote.index + quote[0].length, i === quotes.length - 1 ? row.length : quotes[i + 1].index) })
+    out.push({ kind: 'dialogue', text: row.slice(lead, end), at: quote.index, before: row.slice(lead, quote.index), after: row.slice(quote.index + quote[0].length, i === quotes.length - 1 ? row.length : quotes[i + 1].index) })
     start = end
   })
   if (start < row.length) for (const text of packNarration(row.slice(start), max)) out.push({ kind: 'narration', text })
@@ -486,6 +490,108 @@ const onlyOptions = body => (OPTION_LINE.test(body) ? body.split('\n').filter(li
 const withOptionsOnly = text => text
   .replace(/<small>([\s\S]*?)<\/small>/gi, (block, body) => onlyOptions(body) ?? block)
   .replace(/<small>((?:(?!<\/?small>)[\s\S])*)$/i, (block, body) => onlyOptions(body) ?? block)
+
+// ─── 视觉小说格式: the marks a reply carries when it is on ────────────────
+// server/prompt.mjs asks for them in the turn's message:
+//   【林青禾|微笑】「你来了。」   who says the line and how they look
+//   【效果|震屏】                 what the picture does (on its own line, before the line it is for)
+// The reader takes them out of the text; the chat shows the name instead
+// (markSpeakers). One way to read 【kind|value】 for the marks to come.
+
+// 【名字|表情】 right before a quote (a colon, spaces or ** between). The bar is what tells
+// it from a card's own 【系统】「…」; the expression may be left empty.
+const SAY_MARK = /(?:\*\*)?【\s*([^【】|｜\n]{1,24}?)\s*[|｜]\s*([^【】|｜\n]{0,24}?)\s*】(?:\*\*)?\s*[：:]?\s*(?=[“「『"])/g
+// The same mark alone on its line, the quote opening the next one.
+const LONE_MARK = /^\s*(?:\*\*)?【\s*([^【】|｜\n]{1,24}?)\s*[|｜]\s*([^【】|｜\n]{0,24}?)\s*】(?:\*\*)?\s*[：:]?\s*$/
+const OPENS_QUOTE = /^\s*(?:<[^<>]+>\s*)*[“「『"]/
+// 【效果|震屏】 (or 【效果|闪白|发抖】), anywhere.
+const EFFECT_MARK = /(?:\*\*)?【\s*([^【】|｜\n]{1,8}?)\s*[|｜]\s*([^【】\n]{1,40}?)\s*】(?:\*\*)?/g
+// A mark still being written at the end of a reply coming in.
+const OPEN_MARK = /(?:\*\*)?【[^【】\n]{0,40}$|(?:\*\*)?【[^【】\n]{1,40}[|｜][^【】\n]{0,40}】(?:\*\*)?\s*[：:]?\s*$/
+
+const isEffectKind = kind => EFFECT_KINDS.includes(String(kind).trim().toLowerCase())
+
+/** Two lots of effects as one (the later wins where both ask), or null when neither asks. */
+const joinEffects = (a, b) => (a || b ? { screen: b?.screen ?? a?.screen ?? null, actor: b?.actor ?? a?.actor ?? null } : null)
+
+/** The effect marks in a line taken out ({ screen, actor }, or null), and the line without them. */
+function takeEffects(text) {
+  let effects = null
+  const rest = text.replace(EFFECT_MARK, (mark, kind, words) => {
+    if (!isEffectKind(kind)) return mark
+    // 【效果|攻击力+5】 in a card's own text is not ours.
+    const asked = markEffects(words.split(/[|｜,，、\s]+/))
+    if (!asked) return mark
+    effects = { screen: asked.screen ?? effects?.screen ?? null, actor: asked.actor ?? effects?.actor ?? null }
+    return ''
+  })
+  return { text: rest, effects }
+}
+
+/**
+ * One line's marks taken out: the line as read, who says the quote starting
+ * at each place in it ({ at, name, face }), and the effects asked for. A mark
+ * alone on the line comes as `lone` ({ name, face }), the line kept as it is:
+ * it names the next line's speaker when that line opens with a quote.
+ */
+export function takeMarks(row, { partial = false } = {}) {
+  const { text: rest, effects } = takeEffects(String(row ?? ''))
+  const lone = LONE_MARK.exec(rest)
+  // (On the last row of a reply coming in, its quote is still to come.)
+  if (lone && !isEffectKind(lone[1])) return { text: partial ? '' : rest, says: [], lone: { name: lone[1], face: faceOf(lone[2]) }, effects }
+  const says = []
+  let text = ''
+  let last = 0
+  for (const match of rest.matchAll(SAY_MARK)) {
+    if (isEffectKind(match[1])) continue
+    text += rest.slice(last, match.index)
+    says.push({ at: text.length, name: match[1], face: faceOf(match[2]) })
+    last = match.index + match[0].length
+  }
+  text += rest.slice(last)
+  if (partial) text = text.replace(OPEN_MARK, '')
+  return { text, says, lone: null, effects }
+}
+
+/**
+ * Text with the marks for the chat: a speaker's mark becomes `wrap(name)`
+ * (the page draws it as a name), effects go, a line left empty by them too.
+ */
+export function markSpeakers(text, wrap = name => `${name}：`) { // i18n-ignore: the story's own colon
+  const lines = String(text ?? '').split('\n')
+  const out = []
+  let label = ''
+  lines.forEach((line, i) => {
+    const { text: rest, effects } = takeEffects(line)
+    if (effects && !rest.replace(/\*/g, '').trim()) return
+    const lone = LONE_MARK.exec(rest)
+    if (lone && !isEffectKind(lone[1]) && OPENS_QUOTE.test(lines[i + 1] ?? '')) {
+      label = wrap(lone[1].trim())
+      return
+    }
+    out.push(label + rest.replace(SAY_MARK, (mark, name) => (isEffectKind(name) ? mark : wrap(name.trim()))))
+    label = ''
+  })
+  // One still being written (or with its quote still to come) at the very end.
+  const joined = out.join('\n')
+  const cut = joined.replace(OPEN_MARK, '')
+  return cut === joined ? joined : cut.trimEnd()
+}
+
+/** Text without the marks at all. */
+export const withoutMarks = text => markSpeakers(text, () => '')
+
+/** Whether a reply carries a speaker's mark (it was written in the 视觉小说格式). */
+export const hasMarks = text => /【[^【】|｜\n]{1,24}[|｜][^【】|｜\n]{0,24}】/.test(String(text ?? ''))
+
+/** A mark's name → the cast name it means (an alias, or part of a longer name), else as written. */
+function castName(name, names) {
+  const n = String(name).replace(/\*/g, '').trim()
+  const exact = names.find(entry => entry.name === n || entry.keys.includes(n))
+  if (exact) return exact.name
+  const near = n.length >= 2 ? names.find(entry => !entry.role && entry.keys.some(key => key.length >= 2 && (key.includes(n) || n.includes(key)))) : null
+  return near?.name ?? n
+}
 
 /**
  * A reply's story text → the beats the text box shows one at a time.
@@ -513,6 +619,26 @@ export function splitLines(text, { names = [], max = 90, partial = false } = {})
     }
     if (carry && rows.length) rows[rows.length - 1] += carry
   }
+  // 视觉小说格式: each row's marks taken out. A row of effects only gives them to the next one;
+  // a speaker's mark alone on its row, to the quote opening the next.
+  const lines = []
+  const marksOf = []
+  let carried = null
+  let lone = null
+  rows.forEach((row, i) => {
+    const mark = takeMarks(row, { partial: partial && i === rows.length - 1 })
+    const effects = joinEffects(carried, mark.effects)
+    if (!plainOf(mark.text).trim() || (mark.lone && OPENS_QUOTE.test(rows[i + 1] ?? ''))) {
+      carried = effects
+      if (plainOf(mark.text).trim()) lone = mark.lone
+      return
+    }
+    lines.push(mark.text)
+    marksOf.push({ says: mark.says, lone, effects })
+    carried = null
+    lone = null
+  })
+  const story = withoutMarks(source)
   const beats = []
   const recent = {}
   let label = null
@@ -520,17 +646,21 @@ export function splitLines(text, { names = [], max = 90, partial = false } = {})
   // The quote the line before ends with ({ speaker, quote, answered }: a quote alone after it may answer it), and everyone who spoke.
   let answering = null
   const spoke = []
-  names = withKinds(source, [...names, ...ROLES.filter(role => !names.some(entry => entry.keys.includes(role.name)))])
+  names = withKinds(story, [...names, ...ROLES.filter(role => !names.some(entry => entry.keys.includes(role.name)))])
   const player = names.find(entry => entry.player)
   // Told in the third person (阿蝉推门进去。, not 你): the player is one more 他/她, the one the story follows.
-  const prose = plainOf(source).replace(QUOTE, '')
+  const prose = plainOf(story).replace(QUOTE, '')
   const third = Boolean(player?.kind) && player.keys.reduce((n, key) => n + prose.split(key).length - 1, 0) > (prose.match(/你/g) ?? []).length
   const noted = third ? names : names.filter(entry => !entry.player)
   if (third) recent[player.kind] = player.name
   // Paragraphs of a memory still to come (0: none).
   let memoryLeft = 0
-  rows.forEach((row, i) => {
-    const unfinished = partial && i === rows.length - 1
+  // Effects asked for on a row that shows nothing (a rule, a header line), for the next line shown.
+  let effectsDue = null
+  lines.forEach((row, i) => {
+    const unfinished = partial && i === lines.length - 1
+    const marks = marksOf[i]
+    effectsDue = joinEffects(effectsDue, marks.effects)
     recent.row = i
     const turnFrom = answering
     answering = null
@@ -554,37 +684,51 @@ export function splitLines(text, { names = [], max = 90, partial = false } = {})
     const option = OPTION.exec(row)
     if (option) {
       // One still being written is not an option yet.
-      if (!(partial && i === rows.length - 1)) beats.push({ kind: 'option', text: option[2].trim(), speaker: null })
+      if (!unfinished) beats.push({ kind: 'option', text: option[2].trim(), speaker: null })
       return
     }
     // The last line of a reply still coming in may not be finished: never a name line yet.
-    const named = partial && i === rows.length - 1 ? null : labelOf(row, names)
+    const named = unfinished ? null : labelOf(row, names)
     if (named?.drop) {
       label = named.name
       return
     }
     let rowSpeaker = null
-    beatsOf(row, max).forEach((beat, b) => {
+    // Marked quotes are spoken, however short: those a mark leads, and the first one after a mark on the row before.
+    const said = marks.says.map(mark => mark.at)
+    if (marks.lone) said.push(masked(row).search(QUOTE))
+    beatsOf(row, max, said).forEach((beat, b) => {
       let speaker = null
+      let face = null
       if (beat.kind === 'dialogue') {
         noteNamed(beat.before, noted, recent)
-        const pronoun = pronounNear(beat.before, beat.after)
-        speaker = guessSpeaker(beat.before, beat.after, names) ?? label ?? (pronoun ? byPronoun(pronoun, names, recent) : null) ?? rowSpeaker
-        // Nothing around it on its line: the lines either side. Right after another quote, it answers that one or
-        // the same one goes on: its words say which, else as the line before went (else the player is answered).
-        const bare = !plainOf(beat.before).trim() && !plainOf(beat.after).replace(/[\s~～…。！？!?，,]/g, '')
         const quoted = plainOf(beat.text.slice(beat.before.length, beat.text.length - beat.after.length))
-        const from = !speaker && bare && b === 0 && turnFrom?.speaker ? (names.find(entry => entry.name === turnFrom.speaker) ?? { name: turnFrom.speaker, keys: [] }) : null
-        const by = from ? answererOf(from, turnFrom.quote, spoke, names, third) : null
-        const answered = by && (answers(quoted, turnFrom.quote, by, from, third) ?? turnFrom.answered ?? Boolean(from.player))
-        const turn = by ? (answered ? [by, from] : [from, by]) : null
-        let near = !speaker && bare ? fromNeighbours(rows[i - 1], rows[i + 1], names, recent, turn, third) : null
-        if (near) speaker = near.speaker
-        // 「师兄，渴不渴？」 is said to the player, not by them (and lines either side that said so told nothing).
-        if (player && speaker === player.name && player.keys.some(key => quoted.includes(key))) speaker = near = null
-        // Nothing says who: whoever spoke last (not the player, whose lines are written as such), else the card's
-        // own. A line led in by 说 that still cannot be told (等你说「是。」) keeps no name.
-        if (!speaker && !near && !pronoun && !SAY_TAIL.test(plainOf(beat.before).replace(/\s+/g, ''))) speaker = lastSpeaker ?? names.find(entry => entry.char)?.name ?? null
+        // 【名字|表情】 says who, and how they look (a mark alone on the row before: its first quote).
+        const mark = marks.says.find(said => said.at === beat.at) ?? (marks.lone && !marks.lone.used ? marks.lone : null)
+        let from = null
+        let by = null
+        if (mark) {
+          mark.used = true
+          speaker = castName(mark.name, names)
+          face = mark.face
+        } else {
+          const pronoun = pronounNear(beat.before, beat.after)
+          speaker = guessSpeaker(beat.before, beat.after, names) ?? label ?? (pronoun ? byPronoun(pronoun, names, recent) : null) ?? rowSpeaker
+          // Nothing around it on its line: the lines either side. Right after another quote, it answers that one or
+          // the same one goes on: its words say which, else as the line before went (else the player is answered).
+          const bare = !plainOf(beat.before).trim() && !plainOf(beat.after).replace(/[\s~～…。！？!?，,]/g, '')
+          from = !speaker && bare && b === 0 && turnFrom?.speaker ? (names.find(entry => entry.name === turnFrom.speaker) ?? { name: turnFrom.speaker, keys: [] }) : null
+          by = from ? answererOf(from, turnFrom.quote, spoke, names, third) : null
+          const answered = by && (answers(quoted, turnFrom.quote, by, from, third) ?? turnFrom.answered ?? Boolean(from.player))
+          const turn = by ? (answered ? [by, from] : [from, by]) : null
+          let near = !speaker && bare ? fromNeighbours(lines[i - 1], lines[i + 1], names, recent, turn, third) : null
+          if (near) speaker = near.speaker
+          // 「师兄，渴不渴？」 is said to the player, not by them (and lines either side that said so told nothing).
+          if (player && speaker === player.name && player.keys.some(key => quoted.includes(key))) speaker = near = null
+          // Nothing says who: whoever spoke last (not the player, whose lines are written as such), else the card's
+          // own. A line led in by 说 that still cannot be told (等你说「是。」) keeps no name.
+          if (!speaker && !near && !pronoun && !SAY_TAIL.test(plainOf(beat.before).replace(/\s+/g, ''))) speaker = lastSpeaker ?? names.find(entry => entry.char)?.name ?? null
+        }
         rowSpeaker = speaker
         const who = names.find(entry => entry.name === speaker)
         spoke.push(speaker)
@@ -596,12 +740,40 @@ export function splitLines(text, { names = [], max = 90, partial = false } = {})
         noteNamed(beat.text, noted, recent)
         answering = null
       }
-      beats.push({ kind: beat.kind, text: beat.text, speaker, ...(memory ? { memory } : {}) })
+      beats.push({ kind: beat.kind, text: beat.text, speaker, ...(memory ? { memory } : {}), ...(face ? { expression: face } : {}), ...(effectsDue ? { effects: effectsDue } : {}) })
+      effectsDue = null
     })
     label = named?.name ?? null
   })
   const texts = carryTags(beats.map(beat => beat.text))
-  return beats.map((beat, i) => ({ kind: beat.kind, text: texts[i], plain: plainOf(beat.text).trim(), speaker: beat.speaker, ...(beat.where ? { where: beat.where } : {}), ...(beat.memory ? { memory: true } : {}) }))
+  return beats.map((beat, i) => ({
+    kind: beat.kind,
+    text: texts[i],
+    plain: plainOf(beat.text).trim(),
+    speaker: beat.speaker,
+    ...(beat.where ? { where: beat.where } : {}),
+    ...(beat.memory ? { memory: true } : {}),
+    ...(beat.expression ? { expression: beat.expression } : {}),
+    ...(beat.effects ? { effects: beat.effects } : {}),
+  }))
+}
+
+/**
+ * Where the line at `index` of `before` is in `after`, the same reply split again (more of it
+ * streamed in, finished, or drawn with other regex): the same copy of its words, so a line said
+ * twice (「嗯。」, 她说。) is not taken for the first. With fewer copies now, the one nearest;
+ * -1 when the words are gone.
+ */
+export function sameLine(before, index, after) {
+  const plain = before[index]?.plain
+  if (plain === undefined) return -1
+  const copies = []
+  after.forEach((step, i) => {
+    if (step.plain === plain) copies.push(i)
+  })
+  const copy = before.slice(0, index).filter(step => step.plain === plain).length
+  if (copy < copies.length) return copies[copy]
+  return copies.reduce((best, i) => (best < 0 || Math.abs(i - index) < Math.abs(best - index) ? i : best), -1)
 }
 
 // ─── Scenes ──────────────────────────────────────────────────────────────

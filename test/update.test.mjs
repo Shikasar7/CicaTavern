@@ -3,7 +3,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync, spawn } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, generateKeyPairSync } from 'node:crypto'
 import { copyFileSync, existsSync, linkSync, readdirSync, readFileSync, realpathSync, rmSync } from 'node:fs'
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import http from 'node:http'
@@ -16,7 +16,7 @@ import { featuresOf } from '../server/edition.mjs'
 import { createApp } from '../server/http.mjs'
 import { createUpdater } from '../server/update/index.mjs'
 import { checkRuntime, createShortcut, freeFolder, isInstall, listShortcuts, otherInstalls, packageFolder, removeInstall, retargetShortcuts, stageInstall, supersededBy } from '../server/update/install.mjs'
-import { compareVersions, digestHash, expectedHash, latestFile, latestFileUrl, notesHash, releaseInfo, trustedDownload } from '../server/update/release.mjs'
+import { compareVersions, digestHash, expectedHash, LATEST_KEY, latestFile, latestFileUrl, MIRROR, mirrorDownload, notesHash, releaseInfo, signLatest, trustedDownload, verifyLatest } from '../server/update/release.mjs'
 import { extractZip, listZip, safeEntryPath, zipFolder } from '../server/update/zip.mjs'
 import { buildLauncher, findVcvars } from '../scripts/build-launcher.mjs'
 
@@ -142,7 +142,9 @@ function snapshot(dir) {
  * GitHub's API and download host, locally: /releases/latest, the repository's
  * download URL that redirects to the asset, and the asset itself. limited:
  * 'rate' (the API's hourly limit used up) or 'refuse' (a 403 without one);
- * the release's latest.json is there unless noFile.
+ * the release's latest.json is there unless noFile. broken: every connection
+ * dropped (a network that cannot reach GitHub); slowMs: the API answers that
+ * late; downloadStatus: the asset host answers that instead of the file.
  */
 async function fakeGitHub(t, release) {
   const hits = { latest: 0, download: 0, file: 0 }
@@ -155,10 +157,12 @@ async function fakeGitHub(t, release) {
     if (apk) assets.push({ name: `CicaTavern-${version}-android-arm64.apk`, size: apk.length, digest: `sha256:${sha256(apk)}`, browser_download_url: `${base}/Shikasar7/CicaTavern/releases/download/v${version}/CicaTavern-${version}-android-arm64.apk` })
     return { tag_name: `v${version}`, name: `CicaTavern ${version}`, body: notes ?? `## 新内容\n\n- 一项改进\n\n## 校验\n\n\`\`\`\nSHA-256  ${zip ? sha256(zip) : ''}  ${zipName}\n\`\`\``, html_url: `${base}/release`, published_at: '2026-10-20T00:00:00Z', assets }
   }
-  const server = http.createServer((req, res) => {
+  const server = http.createServer(async (req, res) => {
     const base = `http://127.0.0.1:${server.address().port}`
+    if (current.broken) return req.socket.destroy()
     if (req.url === '/repos/Shikasar7/CicaTavern/releases/latest') {
       hits.latest++
+      if (current.slowMs) await wait(current.slowMs)
       if (current.limited === 'rate') {
         res.writeHead(403, { 'x-ratelimit-limit': '60', 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(Math.floor(Date.now() / 1000) + 25 * 60) })
         return res.end('{"message":"API rate limit exceeded"}')
@@ -189,6 +193,10 @@ async function fakeGitHub(t, release) {
     }
     if (req.url.startsWith('/assets/')) {
       hits.download++
+      if (current.downloadStatus) {
+        res.writeHead(current.downloadStatus)
+        return res.end()
+      }
       const body = req.url.endsWith('.apk') ? current.apk : (current.serve ?? current.zip)
       res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': body.length })
       return res.end(body)
@@ -201,7 +209,62 @@ async function fakeGitHub(t, release) {
     server.closeAllConnections?.()
     server.close()
   })
-  return { feed: `http://127.0.0.1:${server.address().port}/repos/Shikasar7/CicaTavern`, hits, set: next => { current = { ...current, ...next } } }
+  const base = `http://127.0.0.1:${server.address().port}`
+  return {
+    feed: `${base}/repos/Shikasar7/CicaTavern`,
+    hits,
+    set: next => { current = { ...current, ...next } },
+    // The release's latest.json as scripts/release-latest.mjs writes it.
+    latestJson: () => Buffer.from(JSON.stringify(latestFile(apiRelease(base)), null, 2) + '\n'),
+    release: () => current,
+  }
+}
+
+/** A key pair for latest.json in tests: { publicKey (SPKI DER base64, as LATEST_KEY), pem }. */
+function testKey() {
+  const { publicKey, privateKey } = generateKeyPairSync('ed25519')
+  return { publicKey: publicKey.export({ type: 'spki', format: 'der' }).toString('base64'), pem: privateKey.export({ type: 'pkcs8', format: 'pem' }) }
+}
+
+/**
+ * The mirror (cnb.cool) locally: its latest release's latest.json and signature
+ * (signed with key, from the fake GitHub's release unless set otherwise), and
+ * each file under /-/releases/download/<tag>/<name>, redirected to its storage
+ * as cnb.cool does. set({ json }) serves other bytes, set({ signed }) signs other
+ * bytes than it serves, set({ sign: false }) signs with another key.
+ */
+async function fakeMirror(t, github, key) {
+  const hits = { latest: 0, download: 0 }
+  let options = {}
+  const server = http.createServer((req, res) => {
+    const prefix = '/cicatavern/CicaTavern/-/releases'
+    if (req.url === `${prefix}/latest/download/latest.json` || req.url === `${prefix}/latest/download/latest.json.sig`) {
+      hits.latest++
+      const json = options.json ?? github.latestJson()
+      const body = req.url.endsWith('.sig') ? signLatest(options.signed ?? json, options.sign === false ? testKey().pem : key.pem) : json
+      res.writeHead(200, { 'content-type': 'application/octet-stream' })
+      return res.end(body)
+    }
+    if (req.url.startsWith(`${prefix}/download/`)) {
+      res.writeHead(302, { location: `/storage/${path.basename(req.url)}` })
+      return res.end()
+    }
+    if (req.url.startsWith('/storage/')) {
+      hits.download++
+      const release = github.release()
+      const body = req.url.endsWith('.apk') ? release.apk : release.zip
+      res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': body.length })
+      return res.end(body)
+    }
+    res.writeHead(404)
+    res.end()
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => {
+    server.closeAllConnections?.()
+    server.close()
+  })
+  return { mirror: `http://127.0.0.1:${server.address().port}/cicatavern/CicaTavern`, hits, set: next => { options = { ...options, ...next } } }
 }
 
 /** A release-edition app running from a fake package at <base>/CicaTavern-<version>-win-x64. */
@@ -553,6 +616,151 @@ test('latest.json: the release cut down to what the check reads, at GitHub\'s la
   assert.deepEqual(releaseInfo(file), releaseInfo(api))
 })
 
+test('latest.json\'s signature: exactly these bytes, by the key the app carries', () => {
+  const key = testKey()
+  const bytes = Buffer.from('{"tag_name":"v1.9.2","body":"校验"}\n')
+  const signature = signLatest(bytes, key.pem)
+  assert.equal(verifyLatest(bytes, signature, key.publicKey), true)
+  assert.equal(verifyLatest(bytes, `${signature}\n`, key.publicKey), true, 'a trailing newline in the .sig file is fine')
+  const changed = Buffer.from(bytes)
+  changed[3] ^= 1
+  assert.equal(verifyLatest(changed, signature, key.publicKey), false)
+  assert.equal(verifyLatest(bytes, signature, testKey().publicKey), false, 'another key')
+  assert.equal(verifyLatest(bytes, signature), false, 'not the shipped key')
+  assert.equal(verifyLatest(bytes, 'not base64 at all'), false)
+  assert.equal(verifyLatest(bytes, signature, 'not a key'), false)
+  // The shipped key is an Ed25519 public key that verifies without throwing.
+  assert.equal(verifyLatest(bytes, Buffer.alloc(64).toString('base64'), LATEST_KEY), false)
+})
+
+test('the mirror: the same file under the same tag, and nothing else there', () => {
+  assert.equal(mirrorDownload('v1.9.2', 'CicaTavern-1.9.2-win-x64.zip'), `${MIRROR}/-/releases/download/v1.9.2/CicaTavern-1.9.2-win-x64.zip`)
+  assert.equal(trustedDownload(`${MIRROR}/-/releases/download/v1.9.2/CicaTavern-1.9.2-android-arm64.apk`), true)
+  assert.equal(trustedDownload(`${MIRROR}/-/releases/download/../../../other/repo/-/releases/download/v1/x.apk`), false)
+  assert.equal(trustedDownload(`${MIRROR.replace('https:', 'http:')}/-/releases/download/v1/x.apk`), false)
+  assert.equal(trustedDownload('https://cnb.cool/someone/Else/-/releases/download/v1/x.apk'), false)
+  assert.equal(trustedDownload(`${MIRROR}/-/releases/download/v1/x.apk`, { mirror: null }), false)
+  const json = {
+    tag_name: 'v1.9.2',
+    body: `SHA-256  ${'ab'.repeat(32)}  CicaTavern-1.9.2-win-x64.zip`,
+    assets: [
+      // A release (or a mirror's copy of latest.json) may only point at GitHub; the mirror's links are made from the tag.
+      { name: 'CicaTavern-1.9.2-android-arm64.apk', size: 1, digest: `sha256:${'cd'.repeat(32)}`, browser_download_url: `${MIRROR}/-/releases/download/v1.9.2/CicaTavern-1.9.2-android-arm64.apk` },
+      { name: 'CicaTavern-1.9.2-win-x64.zip', size: 1, digest: `sha256:${'ab'.repeat(32)}`, browser_download_url: 'https://github.com/Shikasar7/CicaTavern/releases/download/v1.9.2/CicaTavern-1.9.2-win-x64.zip' },
+    ],
+  }
+  const info = releaseInfo(json, { source: 'mirror' })
+  assert.equal(info.source, 'mirror')
+  assert.deepEqual(Object.keys(info.assets), ['zip'])
+  assert.equal(info.assets.zip.url, 'https://github.com/Shikasar7/CicaTavern/releases/download/v1.9.2/CicaTavern-1.9.2-win-x64.zip')
+  assert.equal(info.assets.zip.mirrorUrl, `${MIRROR}/-/releases/download/v1.9.2/CicaTavern-1.9.2-win-x64.zip`)
+  assert.equal(info.mirrorPage, `${MIRROR}/-/releases/tag/v1.9.2`)
+  assert.equal(releaseInfo(json, { mirror: null }).assets.zip.mirrorUrl, null)
+  assert.equal(releaseInfo(json).source, 'github')
+})
+
+test('the phone app takes downloads from the same two places as the server', { skip: !existsSync(path.join(REPO_ROOT, 'android')) }, () => {
+  const java = readFileSync(path.join(REPO_ROOT, 'android', 'app', 'src', 'main', 'java', 'app', 'cicatavern', 'ApkUpdate.java'), 'utf8')
+  const prefixes = [...java.matchAll(/"(https:\/\/[^"]+\/releases\/download\/)"/g)].map(m => m[1]).sort()
+  assert.deepEqual(prefixes, [`${MIRROR}/-/releases/download/`, 'https://github.com/Shikasar7/CicaTavern/releases/download/'].sort())
+})
+
+test('update: GitHub out of reach: the mirror\'s signed latest.json, and the package from the mirror', async t => {
+  const zip = await packageZip(t, '1.1.0')
+  const github = await fakeGitHub(t, { version: '1.1.0', zip })
+  const key = testKey()
+  const cnb = await fakeMirror(t, github, key)
+  github.set({ broken: true })
+  const { call, settle } = await tavern(t, { feed: github.feed, update: { mirror: cnb.mirror, publicKey: key.publicKey } })
+  const status = (await call('/api/update/check', { method: 'POST', body: {} })).body
+  assert.equal(status.newer, true)
+  assert.equal(status.latest.version, '1.1.0')
+  assert.equal(status.latest.source, 'mirror')
+  assert.equal(status.latest.assets.zip.sha256, sha256(zip))
+  assert.equal(status.latest.assets.zip.mirrorUrl, `${cnb.mirror}/-/releases/download/v1.1.0/CicaTavern-1.1.0-win-x64.zip`)
+  await call('/api/update/download', { method: 'POST', body: {} })
+  const done = await settle()
+  assert.equal(done.job.step, 'ready', done.job.error)
+  assert.equal(cnb.hits.download, 1)
+  assert.equal(github.hits.download, 0, 'the mirror first: the release came from there')
+})
+
+test('update: the mirror\'s latest.json counts only with the right signature', async t => {
+  const github = await fakeGitHub(t, { version: '1.1.0', zip: await packageZip(t, '1.1.0'), broken: true })
+  const key = testKey()
+  const cnb = await fakeMirror(t, github, key)
+  cnb.set({ sign: false })
+  const { call } = await tavern(t, { feed: github.feed, update: { mirror: cnb.mirror, publicKey: key.publicKey } })
+  let res = await call('/api/update/check', { method: 'POST', body: {} })
+  assert.equal(res.status, 502)
+  assert.match(res.body.error, /连不上 GitHub/)
+  assert.match(res.body.error, /国内镜像也没读到（签名对不上，没有采用）/)
+  assert.equal(res.body.latest ?? null, null)
+  // Signed by the right key, then changed (another hash for the zip): the same.
+  const forged = Buffer.from(github.latestJson().toString('utf8').replaceAll(sha256(github.release().zip), '0'.repeat(64)))
+  cnb.set({ sign: true, json: forged, signed: github.latestJson() })
+  res = await call('/api/update/check', { method: 'POST', body: {} })
+  assert.equal(res.status, 502)
+  assert.match(res.body.error, /签名对不上/)
+  cnb.set({ json: null, signed: null })
+  const status = (await call('/api/update/check', { method: 'POST', body: {} })).body
+  assert.equal(status.latest.source, 'mirror')
+  assert.equal(status.latest.assets.zip.sha256, sha256(github.release().zip))
+})
+
+test('update: a slow GitHub: the mirror is asked after a while and its answer used; a quick one never asks it', async t => {
+  const zip = await packageZip(t, '1.1.0')
+  const github = await fakeGitHub(t, { version: '1.1.0', zip })
+  const key = testKey()
+  const cnb = await fakeMirror(t, github, key)
+  const { call } = await tavern(t, { feed: github.feed, update: { mirror: cnb.mirror, publicKey: key.publicKey, mirrorAfterMs: 100 } })
+  let status = (await call('/api/update/check', { method: 'POST', body: {} })).body
+  assert.equal(status.latest.source, 'github')
+  assert.equal(cnb.hits.latest, 0, 'GitHub answered in time')
+  github.set({ slowMs: 1500 })
+  const started = Date.now()
+  status = (await call('/api/update/check', { method: 'POST', body: {} })).body
+  assert.equal(status.latest.source, 'mirror')
+  assert.ok(Date.now() - started < 1400, 'without waiting for GitHub')
+  assert.equal(cnb.hits.latest, 2, 'latest.json and its signature')
+})
+
+test('update: a package GitHub does not deliver comes from the mirror, or from the one asked for first', async t => {
+  const zip = await packageZip(t, '1.1.0')
+  const github = await fakeGitHub(t, { version: '1.1.0', zip })
+  const key = testKey()
+  const cnb = await fakeMirror(t, github, key)
+  const { call, settle } = await tavern(t, { feed: github.feed, update: { mirror: cnb.mirror, publicKey: key.publicKey } })
+  await call('/api/update/check', { method: 'POST', body: {} })
+  github.set({ downloadStatus: 503 })
+  await call('/api/update/download', { method: 'POST', body: {} })
+  let status = await settle()
+  assert.equal(status.job.step, 'ready', status.job.error)
+  assert.equal(status.job.version, '1.1.0')
+  assert.equal(github.hits.download, 1)
+  assert.equal(cnb.hits.download, 1)
+
+  // Both fail: each one's reason.
+  const other = await tavern(t, { feed: github.feed, update: { mirror: `${cnb.mirror.replace(/:\d+\//, ':9/')}`, publicKey: key.publicKey } })
+  await other.call('/api/update/check', { method: 'POST', body: {} })
+  await other.call('/api/update/download', { method: 'POST', body: {} })
+  status = await other.settle()
+  assert.equal(status.job.step, 'error')
+  assert.match(status.job.error, /GitHub：下载失败：GitHub 回复 503/)
+  assert.match(status.job.error, /国内镜像：连不上国内镜像/)
+
+  github.set({ downloadStatus: null })
+  const third = await tavern(t, { feed: github.feed, update: { mirror: cnb.mirror, publicKey: key.publicKey } })
+  await third.call('/api/update/check', { method: 'POST', body: {} })
+  const before = github.hits.download
+  const started = (await third.call('/api/update/download', { method: 'POST', body: { source: 'mirror' } })).body
+  assert.equal(started.job.from, 'mirror')
+  status = await third.settle()
+  assert.equal(status.job.step, 'ready', status.job.error)
+  assert.equal(github.hits.download, before, 'the mirror, as asked')
+  assert.equal(cnb.hits.download, 2)
+})
+
 test('update: the same version or an older one is not offered', async t => {
   const github = await fakeGitHub(t, { version: '1.0.0', zip: await packageZip(t, '1.0.0') })
   const { call } = await tavern(t, { feed: github.feed })
@@ -591,7 +799,7 @@ test('update: the phone app gets the APK link; it does not download anything its
   assert.equal(github.hits.download, 0)
 })
 
-test('update: checking GitHub goes through 设置 → 网络代理', async t => {
+test('update: checking GitHub, and the mirror after it, goes through 设置 → 网络代理', async t => {
   const seen = []
   const proxy = net.createServer(socket => {
     socket.once('data', chunk => {
@@ -603,7 +811,9 @@ test('update: checking GitHub goes through 设置 → 网络代理', async t => 
   t.after(() => proxy.close())
   const updater = createUpdater({ features: featuresOf('release'), root: await scratch(t), proxy: () => `http://127.0.0.1:${proxy.address().port}` })
   await assert.rejects(updater.check({ force: true }), /GitHub|代理/)
-  assert.deepEqual(seen, ['CONNECT api.github.com:443 HTTP/1.1'])
+  // GitHub first; the mirror's latest.json and signature (two requests) once GitHub has failed.
+  assert.equal(seen[0], 'CONNECT api.github.com:443 HTTP/1.1')
+  assert.deepEqual([...new Set(seen.slice(1))], ['CONNECT cnb.cool:443 HTTP/1.1'])
 })
 
 test('update: no restart while a turn is being written', async t => {

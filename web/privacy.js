@@ -9,7 +9,7 @@ import { t } from '/i18n.js'
 export function connectionList(el, { updates }) {
   return el('ul', { class: 'privacy-list' }, [
     el('li', { text: t`你自己添加的模型供应商、画图和朗读服务：只在你配置之后才连，发过去的是对话内容和相关设置。` }),
-    updates ? el('li', { text: t`检查更新：每天最多一次访问 GitHub（api.github.com），只发送版本号（对方能看到你的 IP 地址）。` }) : null,
+    updates ? el('li', { text: t`检查更新：每天最多一次访问 GitHub（api.github.com）；GitHub 没有及时回应时也问国内镜像 cnb.cool（腾讯）。只发送版本号（对方能看到你的 IP 地址）。` }) : null,
     el('li', { text: t`正文字体：从 Google Fonts 加载思源宋体。关掉后用系统自带的字体。` }),
     el('li', { text: t`酒馆助手脚本库：为酒馆助手做的角色卡界面（状态栏等）用到 jQuery、Vue、Tailwind 等时，从 jsDelivr 等公共 CDN 加载。关掉后这类界面可能显示不全。` }),
     el('li', { text: t`角色卡和预设里的网页内容，可能从卡片作者写的网址加载图片或字体。` }),
@@ -27,7 +27,7 @@ export function showPrivacyNotice({ el, features, settings, autoCheck, save }) {
       const input = el('input', { type: 'checkbox', checked })
       return { input, row: el('label', { class: 'check-row' }, [input, label]) }
     }
-    const updates = features.updates ? box(t`每天检查一次更新（GitHub）`, autoCheck !== false) : null
+    const updates = features.updates ? box(t`每天检查一次更新（GitHub，国内镜像 cnb.cool 备用）`, autoCheck !== false) : null
     const fonts = box(t`加载网络字体（Google Fonts）`, settings.webFonts !== false)
     const libraries = box(t`加载酒馆助手脚本库（jsDelivr 等）`, settings.cdnLibraries !== false)
     const dialog = el('dialog', { class: 'dialog privacy-notice' })

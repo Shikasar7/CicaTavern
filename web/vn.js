@@ -9,13 +9,14 @@
 import { t } from '/i18n.js'
 import { htmlFrame, segments, streamingText } from '/render.js'
 import { timeBox } from '/status.js'
-import { advanceDay, latestPlace, matchScene, normalizePlace, opensNextDay, placeIn, speakerNames, splitLines, stateTime, storyDay, timeOfDay, timesIn, weatherOf } from '/shared/vn.js'
+import { advanceDay, latestPlace, matchScene, normalizePlace, opensNextDay, placeIn, sameLine, speakerNames, splitLines, stateTime, storyDay, timeOfDay, timesIn, weatherOf } from '/shared/vn.js'
 import { cutOut } from '/shared/cutout.js'
 import { EXPRESSIONS, PACK_PICTURE, packFaces, stageAt } from '/shared/stage.js'
 import { initVnSaves } from '/vn-saves.js'
 import { initVnHud } from '/vn-hud.js'
 import { changeNotes } from '/shared/hud.js'
 import { shrink } from '/theme.js'
+import { BASIC_ID } from '/shared/basic.js'
 
 const MODE_KEY = 'cicatavern.vnMode'
 const PREFS_KEY = 'cicatavern.vnPrefs'
@@ -23,6 +24,8 @@ const PREFS_KEY = 'cicatavern.vnPrefs'
 const PINS_KEY = 'cicatavern.vnPins'
 // Tried at least once: the top bar's switch stops calling for attention.
 const TRIED_KEY = 'cicatavern.vnTried'
+// 视觉小说格式 (【名字|表情】「…」) switched on or off by hand, per card: { cardId: boolean }.
+const FORMAT_KEY = 'cicatavern.vnFormat'
 const SPEEDS = { slow: 25, normal: 45, fast: 90, instant: 0 }
 const SPEED_LABEL = { slow: t`慢`, normal: t`中`, fast: t`快`, instant: t`瞬间` }
 // A place with no background, a speaker with no 立绘: draw one at once, offer to, or leave it.
@@ -566,8 +569,9 @@ export function initVn(deps) {
     // The reply that was streaming, now finished: the same reply, read on from where the player is.
     const finishing = !writing && state.key === `live:${chat.id}`
     const fresh = key !== state.key && !finishing
-    const current = state.steps[state.index]
-    const furthest = state.steps[state.seen]
+    const before = state.steps
+    const current = before[state.index]
+    const furthest = before[state.seen]
     state.key = key
     state.chatId = chat.id
     state.node = writing ? null : node
@@ -593,11 +597,10 @@ export function initVn(deps) {
       state.readId = null
       closePanel()
     } else if (current) {
-      // The same reply again (finished, or its regex changed): stay on the same line.
-      const at = step => steps.findIndex(other => other.plain === step.plain)
-      const same = at(current)
+      // The same reply again (more of it in, finished, or its regex changed): stay on the same line.
+      const same = sameLine(before, state.index, steps)
+      const far = furthest ? sameLine(before, state.seen, steps) : -1
       state.index = same >= 0 ? same : Math.min(state.index, steps.length - 1)
-      const far = furthest ? at(furthest) : -1
       state.seen = Math.max(state.index, far >= 0 ? far : Math.min(state.seen, steps.length - 1))
     }
     // Whether this reply says its date (its time box may still be coming): then 次日 in it is no new day.
@@ -1697,8 +1700,16 @@ export function initVn(deps) {
     }
     const head = el('div', { class: 'vn-library-head' }, [
       el('p', { text: t`场景里说话的人站在台上（电脑最多三个，手机两个），说话的亮、其余的暗下去，换地点时退场。名单里白底的人设图会自动抠出来用；背景不是纯色的（或者没有人设图），可以按名单里的长相画一张半身立绘。` }),
-      el('p', { class: 'muted small', text: t`表情：每句按引号前后的叙述换（笑了笑→微笑、红了脸→害羞、皱眉→生气……），认不出就保持上一个。下面每个人可以画一套表情，在立绘上只改脸。` }),
+      el('p', { class: 'muted small', text: formatOn(chat)
+        ? t`表情：按模型在每句对白前标的【名字|表情】换；没标的按引号前后的叙述换（笑了笑→微笑、红了脸→害羞……），认不出就保持上一个。下面每个人可以画一套表情，在立绘上只改脸。`
+        : t`表情：每句按引号前后的叙述换（笑了笑→微笑、红了脸→害羞、皱眉→生气……），认不出就保持上一个。下面每个人可以画一套表情，在立绘上只改脸。` }),
       artMode('newSprite', t`没有立绘的角色说话时：`),
+      toggleRow(t`对白标注`, builtinPreset(chat)
+        ? t`让模型给每句对白标上说话人和表情，再加上震屏、闪白这类效果，比按叙述猜准。只加在每轮的消息里，开关不影响缓存。`
+        : t`让模型给每句对白标上说话人和表情，比按叙述猜准。这个对话用的是导入的预设，默认不开：两套输出格式可能冲突，打开后看几轮再决定。只加在每轮的消息里，开关不影响缓存。`, formatOn(chat), on => {
+        setFormat(cardId, on)
+        renderLibrary()
+      }),
       toggleRow(t`演出效果`, t`闪电、巨响时画面闪白、震动，吓一跳时立绘跳一下，回忆的段落泛黄`, prefs.effects !== false, on => {
         prefs.effects = on
         remember(PREFS_KEY, prefs)
@@ -1927,7 +1938,8 @@ export function initVn(deps) {
   async function labelFaces() {
     const key = state.key
     if (!prefs.faceHelper || !state.on || state.streaming || !state.node || !key || faceLabels.has(key) || labelling.has(key)) return
-    const lines = state.steps.map(step => (step.type === 'line' && step.kind === 'dialogue' && step.speaker && isActor(step.speaker) ? { speaker: step.speaker, text: step.plain } : null))
+    // Lines the model marked (【名字|表情】) already say.
+    const lines = state.steps.map(step => (step.type === 'line' && step.kind === 'dialogue' && step.speaker && !step.expression && isActor(step.speaker) ? { speaker: step.speaker, text: step.plain } : null))
     if (!lines.some(Boolean)) return
     labelling.add(key)
     try {
@@ -2123,5 +2135,35 @@ export function initVn(deps) {
     return { read: false, image: Boolean(prefs.image) }
   }
 
-  return { render, streamed, isOn, turnFlags }
+  // ─── 视觉小说格式: the model marks who says each line and how they look ──
+  // Asked for in each turn's message while this mode is on (server/prompt.mjs dialogueFormat),
+  // so switching costs no cache. On by default with the built-in preset; an imported preset
+  // has its own output format, which the two could fight over, so there it waits to be switched on.
+
+  const builtinPreset = chat => !chat?.presetId || chat.presetId === BASIC_ID
+  const formatSaved = cardId => recall(FORMAT_KEY, {})[cardId]
+
+  /** Whether the chat's next turn asks for the format. */
+  function formatOn(chat) {
+    const saved = formatSaved(chat?.cardId)
+    return typeof saved === 'boolean' ? saved : builtinPreset(chat)
+  }
+
+  function setFormat(cardId, on) {
+    remember(FORMAT_KEY, { ...recall(FORMAT_KEY, {}), [cardId]: on })
+    toast(on ? t`下一轮起，模型会给每句对白标上说话人和表情` : t`下一轮起不再要求标注，说话人和表情按叙述判断`)
+  }
+
+  /** For a turn about to be sent: ask for the format? (Said once, the first time either way.) */
+  function marks(chat) {
+    if (!chat || !isOn(chat.cardId)) return false
+    const on = formatOn(chat)
+    if (typeof formatSaved(chat.cardId) !== 'boolean') {
+      if (on) toldOnce('toldFormat', t`视觉小说里，模型会给每句对白标上说话人和表情（【名字|表情】，标记本身不显示），认人、换表情更准。不想要可以在「立绘」里关掉「对白标注」。`)
+      else toldOnce('toldFormatPreset', t`用导入的预设时，不要求模型标说话人和表情，免得和预设自己的格式冲突。想要更准的认人和表情，可以在「立绘」里打开「对白标注」。`)
+    }
+    return on
+  }
+
+  return { render, streamed, isOn, turnFlags, marks }
 }

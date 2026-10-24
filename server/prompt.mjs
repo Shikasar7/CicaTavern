@@ -14,6 +14,7 @@ import { renderTemplate } from './template.mjs'
 import { renderPresetPrefix } from './presets.mjs'
 import { basicRules } from './basic.mjs'
 import { replaceVariableMacros, variablesOf } from '../web/shared/vars.js'
+import { EFFECT_WORDS, FACE_WORDS } from '../web/shared/stage.js'
 
 export function replaceMacros(text, names) {
   return String(text ?? '')
@@ -201,6 +202,23 @@ export function buildChatPrompt({ card, persona, settings, books, hasState, pres
 }
 
 /**
+ * 视觉小说格式: while the player reads in the visual novel mode with it on
+ * (web/vn.js), each turn's message asks for every line marked with who says it
+ * and how they look, and effects on lines of their own (web/shared/vn.js reads
+ * them). In the turn's message, never in the prefix: switching it costs no cache.
+ */
+export function dialogueFormat() {
+  const faces = Object.values(FACE_WORDS).join('、')
+  const effects = Object.values(EFFECT_WORDS).map(words => words[0]).join('、')
+  return [
+    '<对白格式>',
+    `本轮的对白按视觉小说格式写：每句台词单独起一行，开头标上说话人和表情，写成【名字|表情】「台词」，例如【名字|微笑】「……」。表情从 ${faces} 中选一个。动作、神态和叙述照常写在台词前后的行里，不放进标记。`,
+    `需要画面效果时，在那一句前面单独一行写【效果|震屏】，可选 ${effects}；只在冲击、雷电、受惊、害怕这类时候用，不要每段都加。其余格式要求不变。`,
+    '</对白格式>',
+  ].join('\n')
+}
+
+/**
  * The user message for one turn.
  * @param opening - the greeting, only on a chat's first turn (already prompt-processed).
  * @param entries - rendered keyword-triggered entries `{ title, text }`.
@@ -211,8 +229,9 @@ export function buildChatPrompt({ card, persona, settings, books, hasState, pres
  * @param replyLength - target reply length in characters, 0 for none.
  * @param presetText - the preset's per-turn paragraphs, rendered for this turn.
  * @param reminder - one line pointing at the prefix's every-turn rules.
+ * @param marks - ask for the 视觉小说格式 (dialogueFormat).
  */
-export function buildTurnPrompt({ names, opening, recap = '', entries = [], dynamic = [], characterNote = '', stateText, input, replyLength = 0, presetText = '', reminder = '' }) {
+export function buildTurnPrompt({ names, opening, recap = '', entries = [], dynamic = [], characterNote = '', stateText, input, replyLength = 0, presetText = '', reminder = '', marks = false }) {
   const parts = []
   const block = (tag, items) => {
     const body = items.filter(item => item.text).map(item => titled(item.title, item.text)).join('\n\n')
@@ -229,6 +248,7 @@ export function buildTurnPrompt({ names, opening, recap = '', entries = [], dyna
   parts.push(`<玩家输入>\n${replaceMacros(input, names)}\n</玩家输入>`)
   // After the input, like SillyTavern's post-history prompts.
   if (presetText) parts.push(`<预设指令>\n${presetText}\n</预设指令>`)
+  if (marks) parts.push(dialogueFormat())
   if (reminder) parts.push(`<本轮提醒>${reminder}</本轮提醒>`)
   return parts.join('\n\n')
 }

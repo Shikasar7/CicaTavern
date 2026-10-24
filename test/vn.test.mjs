@@ -296,3 +296,81 @@ test('a memory: a paragraph opening on long ago, or drifting back to it, and a f
   assert.deepEqual(memory('她回想起刚才的事，脸又红了。\n\n门外有人敲门。'), [false, false], 'a moment ago is no memory')
   assert.deepEqual(memory('那年冬天，雪很大。\n\n一\n\n二\n\n三\n\n四'), [true, true, true, true, false], 'at most three paragraphs after')
 })
+
+test('视觉小说格式: a mark says who speaks a line and how they look; an effect goes to the next line shown', () => {
+  const text = [
+    '她放下茶杯，抬头看你。',
+    '',
+    '【林青禾|微笑】「你来了。」',
+    '【效果|震屏】',
+    '门外一声巨响。',
+    '【老周|惊讶】：「好。」',
+    '【青禾|脸红了】',
+    '「嗯」',
+    '**【林青禾|苦笑】**「唉……」她叹气。',
+  ].join('\n')
+  const lines = splitLines(text, { names })
+  assert.deepEqual(lines.map(b => [b.kind, b.plain, b.speaker, b.expression ?? null]), [
+    ['narration', '她放下茶杯，抬头看你。', null, null],
+    ['dialogue', '「你来了。」', '林青禾', 'smile'],
+    ['narration', '门外一声巨响。', null, null],
+    // An alias, and part of a name, are the cast's names; a short quote is spoken when it is marked.
+    ['dialogue', '「好。」', '周管事', 'surprised'],
+    ['dialogue', '「嗯」', '林青禾', 'shy'],
+    ['dialogue', '「唉……」她叹气。', '林青禾', 'smile'],
+  ])
+  assert.deepEqual(lines[2].effects, { screen: 'shake', actor: null })
+  assert.equal(lines.filter(b => b.effects).length, 1)
+  // Someone the cast does not know keeps the name written; lines with no mark are still guessed.
+  assert.deepEqual(beats('【小满|开心】「我也来！」\n林青禾笑了笑：「坐吧。」'), [['dialogue', '「我也来！」', '小满'], ['dialogue', '林青禾笑了笑：「坐吧。」', '林青禾']])
+})
+
+test('视觉小说格式: a card\'s own 【…】 stays the story; a mark still being written is not shown yet', () => {
+  const own = splitLines('【系统】「欢迎来到武当。」\n【效果|攻击力+5】\n【状态|正常】\n她点头。', { names }).map(b => b.plain).join('\n')
+  assert.match(own, /【系统】/)
+  assert.match(own, /【效果\|攻击力\+5】/)
+  assert.match(own, /【状态\|正常】/)
+  for (const tail of ['【林青', '【林青禾|微笑】', '【林青禾|微笑】：']) {
+    const shown = splitLines(`【林青禾|微笑】「你来了。」\n${tail}`, { names, partial: true })
+    assert.deepEqual(shown.map(b => b.plain), ['「你来了。」'], tail)
+  }
+})
+
+test('a reply streaming in: the reader stays on the same copy of a line said twice, not the first', () => {
+  const reply = '「你来了。」林青禾说。\n\n「嗯。」\n\n她把茶盏往你这边推了推。\n\n「雨大了。」她说。\n\n「嗯。」\n\n她顿了一下。\n\n「今晚怕是回不去了。」\n\n她说。\n\n「那就再坐一会儿。」你说。\n\n「嗯。」\n\n她顿了一下。\n\n她笑了笑，没有看你。'
+  const copyOf = (steps, i) => steps.slice(0, i).filter(step => step.plain === steps[i].plain).length
+  let before = []
+  let checked = 0
+  for (let end = 3; end < reply.length + 3; end += 3) {
+    const after = splitLines(reply.slice(0, end), { names, partial: end < reply.length })
+    // Every line already shown (the last one may still be coming in), as web/vn.js render() places the reader again.
+    for (let i = 0; i < before.length - 1; i++) {
+      const at = vnDays.sameLine(before, i, after)
+      assert.equal(after[at]?.plain, before[i].plain, `${before[i].plain} at ${end}`)
+      assert.equal(copyOf(after, at), copyOf(before, i), `${before[i].plain} (copy ${copyOf(before, i) + 1}) at ${end}`)
+      if (copyOf(before, i)) checked++
+    }
+    before = after
+  }
+  assert.ok(checked > 0, 'the reply has lines said again')
+
+  const line = plain => ({ plain })
+  const said = ['a', '「嗯。」', 'b', '「嗯。」', 'c'].map(line)
+  assert.equal(vnDays.sameLine(said, 3, [...said, line('d')]), 3)
+  assert.equal(vnDays.sameLine(said, 1, said), 1)
+  // An earlier copy drawn differently now: the nearest one left.
+  assert.equal(vnDays.sameLine(said, 3, ['x', 'a', 'b', '「嗯。」', 'c'].map(line)), 3)
+  assert.equal(vnDays.sameLine(said, 4, ['a', 'b'].map(line)), -1)
+  assert.equal(vnDays.sameLine(said, 9, said), -1)
+})
+
+test('视觉小说格式 in the chat: the mark becomes the name, effects go, nothing else changes', () => {
+  const text = '【林青禾|微笑】「你来了。」\n【效果|震屏】\n门外一声巨响。\n【老周|惊讶】\n「好。」'
+  assert.equal(vnDays.markSpeakers(text), '林青禾：「你来了。」\n门外一声巨响。\n老周：「好。」')
+  assert.equal(vnDays.withoutMarks(text), '「你来了。」\n门外一声巨响。\n「好。」')
+  assert.equal(vnDays.markSpeakers(`${text}\n【林青禾|`), vnDays.markSpeakers(text), 'one still coming in')
+  const own = '【系统】「欢迎」\n【效果|攻击力+5】\n【状态|正常】\n她点头。'
+  assert.equal(vnDays.markSpeakers(own), own)
+  assert.equal(vnDays.hasMarks(text), true)
+  assert.equal(vnDays.hasMarks(own.split('\n')[0]), false)
+})

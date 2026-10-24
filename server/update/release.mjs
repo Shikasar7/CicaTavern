@@ -1,8 +1,17 @@
 // The latest release on GitHub, in the shape the updater uses. Pure functions:
 // the network is in index.mjs.
+import { createPrivateKey, createPublicKey, sign, verify } from 'node:crypto'
 import { msg } from '../i18n.mjs'
 export const REPO = 'Shikasar7/CicaTavern'
 export const FEED = `https://api.github.com/repos/${REPO}`
+
+/**
+ * The mirror for networks that cannot reach GitHub (mainland China, often): a
+ * public repository on cnb.cool (Tencent) whose releases carry the same files
+ * under the same tags (scripts/release-mirror.mjs). Its links look like GitHub's.
+ */
+export const MIRROR_REPO = 'cicatavern/CicaTavern'
+export const MIRROR = `https://cnb.cool/${MIRROR_REPO}`
 
 const VERSION = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9a-z.-]+))?$/i
 
@@ -72,9 +81,9 @@ function isLoopbackUrl(url) {
 
 /**
  * Only the repository's own release downloads (which GitHub then redirects to
- * its asset host); a local feed in tests may serve its own.
+ * its asset host) and the mirror's; a local feed in tests may serve its own.
  */
-export function trustedDownload(href, { repo = REPO, feed = FEED } = {}) {
+export function trustedDownload(href, { repo = REPO, feed = FEED, mirror = MIRROR } = {}) {
   let url
   try {
     url = new URL(href)
@@ -82,11 +91,48 @@ export function trustedDownload(href, { repo = REPO, feed = FEED } = {}) {
     return false
   }
   if (isLoopbackUrl(new URL(feed))) return isLoopbackUrl(url)
-  return url.protocol === 'https:' && url.hostname === 'github.com' && url.pathname.startsWith(`/${repo}/releases/download/`)
+  if (url.protocol !== 'https:') return false
+  if (url.hostname === 'github.com' && url.pathname.startsWith(`/${repo}/releases/download/`)) return true
+  if (!mirror) return false
+  const own = new URL(mirror)
+  return url.hostname === own.hostname && url.pathname.startsWith(`${own.pathname}/-/releases/download/`)
+}
+
+/** The same release file on the mirror: its name under the same tag. */
+export function mirrorDownload(tag, name, mirror = MIRROR) {
+  return `${mirror}/-/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(name)}`
 }
 
 /** The small file each release carries (scripts/release-latest.mjs): /releases/latest cut down to what releaseInfo reads. */
 export const LATEST_FILE = 'latest.json'
+
+/**
+ * latest.json's Ed25519 signature, base64, beside it in each release. The
+ * mirror's copy counts only when it holds: nothing else there vouches for the
+ * hashes. The private key stays on the machine that publishes releases.
+ */
+export const SIGNATURE_FILE = `${LATEST_FILE}.sig`
+export const LATEST_KEY = 'MCowBQYDK2VwAyEAHr3lw9wQxPdV+zaWjMTqUjIqH3t5BsE6NnMQXb8srBs='
+
+/** latest.json's bytes signed with a PKCS#8 PEM key → the .sig file's text. */
+export function signLatest(bytes, privateKeyPem) {
+  return sign(null, Buffer.from(bytes), createPrivateKey(privateKeyPem)).toString('base64')
+}
+
+/** true when signature (base64) is publicKey's (SPKI DER, base64) signature of exactly these bytes. */
+export function verifyLatest(bytes, signature, publicKey = LATEST_KEY) {
+  try {
+    const key = createPublicKey({ key: Buffer.from(publicKey, 'base64'), format: 'der', type: 'spki' })
+    return verify(null, Buffer.from(bytes), key, Buffer.from(String(signature).trim(), 'base64'))
+  } catch {
+    return false
+  }
+}
+
+/** Where the mirror's latest release keeps latest.json (or its signature). */
+export function mirrorLatestUrl(mirror = MIRROR, file = LATEST_FILE) {
+  return `${mirror}/-/releases/latest/download/${file}`
+}
 
 /**
  * Where latest.json is when the API says no: GitHub's latest-release download
@@ -114,32 +160,39 @@ export function latestFile(json) {
 }
 
 /**
- * GET /releases/latest (or latest.json) → { version, tag, name, notes, url, publishedAt, assets: { zip, apk } }.
- * Each asset: { name, size, url, sha256, hashFrom } or { …, hashError }. Drafts
- * and pre-releases never come from /latest; a tag that is not a version is refused.
+ * GET /releases/latest (or latest.json) → { version, tag, name, notes, url, publishedAt, source, assets: { zip, apk } }.
+ * Each asset: { name, size, url, mirrorUrl, sha256, hashFrom } or { …, hashError };
+ * url is GitHub's, mirrorUrl the same file on the mirror (null without one),
+ * made here from the tag and name rather than read from the release. source
+ * says where the release was read: 'github', or 'mirror' (its signed latest.json).
+ * Drafts and pre-releases never come from /latest; a tag that is not a version is refused.
  */
-export function releaseInfo(json, { repo = REPO, feed = FEED } = {}) {
+export function releaseInfo(json, { repo = REPO, feed = FEED, mirror = MIRROR, source = 'github' } = {}) {
   const version = parseVersion(json?.tag_name)
   if (!version) throw new Error(msg`最新发布的标签不是版本号：${String(json?.tag_name ?? msg`（没有）`).slice(0, 40)}`)
+  const tag = String(json.tag_name)
   const assets = {}
   for (const asset of Array.isArray(json.assets) ? json.assets : []) {
     const kind = assetKind(String(asset?.name ?? ''))
-    if (!kind || assets[kind] || !trustedDownload(asset.browser_download_url, { repo, feed })) continue
+    if (!kind || assets[kind] || !trustedDownload(asset.browser_download_url, { repo, feed, mirror: null })) continue
     const hash = expectedHash(asset, json.body)
     assets[kind] = {
       name: asset.name,
       size: Number(asset.size) || 0,
       url: asset.browser_download_url,
+      mirrorUrl: mirror ? mirrorDownload(tag, asset.name, mirror) : null,
       ...(hash.error ? { hashError: hash.error } : { sha256: hash.sha256, hashFrom: hash.from }),
     }
   }
   return {
-    version: String(json.tag_name).replace(/^v/i, ''),
-    tag: String(json.tag_name),
+    version: tag.replace(/^v/i, ''),
+    tag,
     name: String(json.name ?? json.tag_name),
     notes: String(json.body ?? '').slice(0, 40_000),
     url: typeof json.html_url === 'string' && json.html_url.startsWith('https://github.com/') ? json.html_url : `https://github.com/${repo}/releases/latest`,
+    mirrorPage: mirror ? `${mirror}/-/releases/tag/${encodeURIComponent(tag)}` : null,
     publishedAt: json.published_at ?? null,
+    source,
     assets,
   }
 }

@@ -370,6 +370,8 @@ select.pill { appearance: none; padding-right: 28px; background-image: linear-gr
 .msg-body p:last-child { margin-bottom: 0; }
 .msg-body strong { font-weight: 600; }
 .msg-body .q { color: var(--lamp); }
+/* 视觉小说格式: who says the line, from its 【名字|表情】 (generated, so it is not read aloud). */
+.msg-body .speaker::before { content: attr(data-name); font-weight: 600; font-size: .92em; color: var(--muted); margin-right: .3em; }
 /* A line of dialogue reads itself aloud on click. */
 .msg[data-id] .story .q { cursor: pointer; border-radius: 3px; transition: background-color .2s; }
 @media (hover: hover) { .msg[data-id] .story .q:hover { background: color-mix(in srgb, var(--lamp) 12%, transparent); } }

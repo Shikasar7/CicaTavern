@@ -13,6 +13,10 @@
 // GitHub's API answers 60 unauthenticated queries an hour per network address,
 // shared by everyone behind it (phone networks, offices); when it says no, the
 // check reads the latest.json the release carries instead.
+// Where GitHub fails or is slow to answer (mainland China, often), the check
+// also reads the mirror's latest.json (cnb.cool, release.mjs MIRROR), which
+// counts only with its Ed25519 signature; downloads try the mirror's copy of
+// the same file when GitHub's does not come, and the SHA-256 is checked as ever.
 // The data folder is never read or written here: the updater's state lives
 // with the install (install.mjs).
 import { spawn } from 'node:child_process'
@@ -25,7 +29,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { appVersion } from '../edition.mjs'
 import { agentFor } from '../providers.mjs'
-import { compareVersions, FEED, latestFileUrl, releaseInfo, REPO } from './release.mjs'
+import { compareVersions, FEED, LATEST_FILE, LATEST_KEY, latestFileUrl, MIRROR, mirrorLatestUrl, releaseInfo, REPO, SIGNATURE_FILE, trustedDownload, verifyLatest } from './release.mjs'
 import { canonical, checkRuntime, installBase, isInstall, otherInstalls, previousInstall, readJson, removeInstall, stateDir, stageInstall, writeJsonFile } from './install.mjs'
 import { localize, msg } from '../i18n.mjs'
 
@@ -33,6 +37,10 @@ const APP_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '
 const DAY_MS = 24 * 60 * 60 * 1000
 const CHECK_TIMEOUT_MS = 20_000
 const IDLE_TIMEOUT_MS = 60_000
+// How long GitHub has to answer the check before the mirror is asked as well.
+const MIRROR_AFTER_MS = 5_000
+const LOCAL = /^http:\/\/(127\.0\.0\.1|localhost|\[::1\])[:/]/
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms).unref?.())
 
 function failure(status, message) {
   return Object.assign(new Error(message), { status })
@@ -57,22 +65,49 @@ function get(href, { proxy, signal, headers, allowHttp }, hops = 0) {
   })
 }
 
-async function readText(res) {
-  let text = ''
+/** The body's bytes, whole (a signature covers exactly these), up to 2 MB. */
+async function readBytes(res) {
+  const chunks = []
+  let length = 0
   for await (const chunk of res) {
-    text += chunk
-    if (text.length > 2_000_000) throw new Error(msg`回复太长`)
+    chunks.push(chunk)
+    length += chunk.length
+    if (length > 2_000_000) throw new Error(msg`回复太长`)
   }
-  return text
+  return Buffer.concat(chunks)
+}
+
+const readText = async res => (await readBytes(res)).toString('utf8')
+
+/** A network error's code, or the start of its message. */
+function errorCode(error) {
+  const code = error?.code ?? error?.cause?.code
+  return code ? `${code}` : String(error?.message ?? error).slice(0, 120)
 }
 
 /** A network error in words: what to try. */
 function networkTrouble(error) {
   if (error?.name === 'AbortError') return msg`已取消`
-  const code = error?.code ?? error?.cause?.code
-  const what = code ? `${code}` : String(error?.message ?? error).slice(0, 120)
-  return msg`连不上 GitHub（${what}）。在国内通常要在 设置 → 网络代理 里设代理。`
+  return msg`连不上 GitHub（${errorCode(error)}）。在国内通常要在 设置 → 网络代理 里设代理。`
 }
+
+/** Where a download comes from, in words. */
+const sourceName = from => (from === 'mirror' ? msg`国内镜像` : 'GitHub')
+
+/** Resolves with the first { info } of these, or null once all have failed. */
+function firstAnswer(attempts) {
+  return new Promise(resolve => {
+    let left = attempts.length
+    for (const attempt of attempts) {
+      attempt.then(result => {
+        if (result.info) resolve(result)
+        else if (--left === 0) resolve(null)
+      })
+    }
+  })
+}
+
+const settle = promise => promise.then(info => ({ info }), error => ({ error }))
 
 /**
  * @param features - the edition's; features.updates is 'zip' (Windows package), 'apk' (phone) or null.
@@ -80,8 +115,9 @@ function networkTrouble(error) {
  * @param relaunch - the arguments the restarted server gets: { port, data, edition, idleExit, proxy?, listen? }.
  * @param busy - true while a turn or the card creator is writing (no restart then).
  * @param onShutdown - stops this server once the switch-over has started.
- * Tests replace: root, version, feed, now, env, platform, check (the bundled
- * Node's self-test), spawnSwitch (runs bin/update-apply.mjs).
+ * Tests replace: root, version, feed, mirror (null: none), publicKey (latest.json's),
+ * mirrorAfterMs, now, env, platform, check (the bundled Node's self-test),
+ * spawnSwitch (runs bin/update-apply.mjs).
  */
 export function createUpdater({
   features,
@@ -93,6 +129,9 @@ export function createUpdater({
   root = APP_ROOT,
   version = appVersion(root),
   feed = process.env.CICATAVERN_UPDATE_FEED || FEED,
+  mirror = process.env.CICATAVERN_UPDATE_MIRROR || MIRROR,
+  publicKey = LATEST_KEY,
+  mirrorAfterMs = MIRROR_AFTER_MS,
   repo = REPO,
   now = () => Date.now(),
   env = process.env,
@@ -102,7 +141,10 @@ export function createUpdater({
 } = {}) {
   root = canonical(root)
   const kind = features?.updates ?? null
-  const allowHttp = /^http:\/\/(127\.0\.0\.1|localhost|\[::1\])[:/]/.test(feed)
+  const allowHttp = LOCAL.test(feed)
+  // A local test feed goes with a local mirror or none, never the real one.
+  if (allowHttp && mirror && !LOCAL.test(mirror)) mirror = null
+  const trusted = href => trustedDownload(href, { repo, feed, mirror })
   const userAgent = `CicaTavern/${version} (+https://github.com/${repo})`
   // Why this copy cannot install by itself, or null.
   const notInstallable = () => {
@@ -171,7 +213,29 @@ export function createUpdater({
     }
   }
 
+  /**
+   * GitHub first. When it fails, or has not answered within a few seconds, the
+   * mirror is asked as well and the first release either gives is used: a
+   * network that reaches GitHub quickly never asks the mirror.
+   */
   async function fetchLatest() {
+    const github = settle(fromGitHub())
+    if (!mirror) {
+      const { info, error } = await github
+      if (error) throw error
+      return info
+    }
+    const early = await Promise.race([github, delay(mirrorAfterMs)])
+    if (early?.info) return early.info
+    const fromMirrorResult = settle(fromMirror())
+    const first = await firstAnswer([github, fromMirrorResult])
+    if (first) return first.info
+    const [{ error }, { error: mirrorError }] = await Promise.all([github, fromMirrorResult])
+    throw failure(502, msg`${error.message.replace(/[。.]$/, '')}；国内镜像也没读到（${mirrorError.message}）`)
+  }
+
+  /** The repository's latest release, from GitHub's API, or its latest.json when the API says no. */
+  async function fromGitHub() {
     const signal = AbortSignal.timeout(CHECK_TIMEOUT_MS)
     let res
     try {
@@ -194,7 +258,7 @@ export function createUpdater({
     } catch {
       throw failure(502, msg`GitHub 的回复读不懂`)
     }
-    return releaseInfo(json, { repo, feed })
+    return releaseInfo(json, { repo, feed, mirror })
   }
 
   /** Why the API said no, from its headers. */
@@ -221,7 +285,33 @@ export function createUpdater({
       const why = signal.aborted ? msg`超时` : String(error?.code ?? error?.message ?? error).slice(0, 80)
       throw failure(502, msg`${reason}。备用的 latest.json 也没读到（${why}），过一会儿再试，或者打开发布页看看`)
     }
-    return releaseInfo(json, { repo, feed })
+    return releaseInfo(json, { repo, feed, mirror })
+  }
+
+  /** The mirror's latest release: its latest.json, when the signature beside it holds. */
+  async function fromMirror() {
+    const signal = AbortSignal.timeout(CHECK_TIMEOUT_MS)
+    const read = async file => {
+      const res = await get(mirrorLatestUrl(mirror, file), { proxy: proxy(), signal, allowHttp, headers: { accept: 'application/json', 'user-agent': userAgent } })
+      const bytes = await readBytes(res)
+      if (res.statusCode !== 200) throw new Error(`HTTP ${res.statusCode}`)
+      return bytes
+    }
+    let bytes
+    let signature
+    try {
+      ;[bytes, signature] = await Promise.all([read(LATEST_FILE), read(SIGNATURE_FILE)])
+    } catch (error) {
+      throw failure(502, signal.aborted ? msg`超时` : errorCode(error))
+    }
+    if (!verifyLatest(bytes, signature.toString('utf8'), publicKey)) throw failure(502, msg`签名对不上，没有采用`)
+    let json
+    try {
+      json = JSON.parse(bytes.toString('utf8'))
+    } catch {
+      throw failure(502, msg`latest.json 读不懂`)
+    }
+    return releaseInfo(json, { repo, feed, mirror, source: 'mirror' })
   }
 
   /** Ask GitHub now (force), or when the daily check is due. */
@@ -253,7 +343,19 @@ export function createUpdater({
   }
 
   /** Download, verify and unpack the latest Windows package; runs on after the request returns. */
-  async function download() {
+  /** Where to fetch a package, in order: the source asked for (else the one the check read), then the other. */
+  function sources(latest, asset, wanted) {
+    const first = wanted ?? latest.source ?? 'github'
+    return [
+      { from: 'github', url: asset.url },
+      { from: 'mirror', url: asset.mirrorUrl },
+    ]
+      .filter(item => item.url && trusted(item.url))
+      .sort((a, b) => (b.from === first) - (a.from === first))
+  }
+
+  /** @param source - 'github' or 'mirror' to try that one first. */
+  async function download({ source } = {}) {
     const reason = notInstallable()
     if (kind !== 'zip' || reason) throw failure(400, reason ?? msg`这个版本不能在应用里安装更新`)
     if (['downloading', 'verifying', 'unpacking', 'restarting'].includes(job.step)) return status()
@@ -264,59 +366,85 @@ export function createUpdater({
     const asset = latest.assets?.zip
     if (!asset) throw failure(400, msg`这个版本没有 Windows 安装包`)
     if (!asset.sha256) throw failure(400, asset.hashError)
+    const order = sources(latest, asset, ['github', 'mirror'].includes(source) ? source : null)
+    if (!order.length) throw failure(400, msg`这个版本没有可信的下载地址`)
     controller = new AbortController()
-    job = { step: 'downloading', version: latest.version, received: 0, total: asset.size }
-    run(latest, asset, controller.signal).catch(() => {})
+    job = { step: 'downloading', version: latest.version, from: order[0].from, received: 0, total: asset.size }
+    run(latest, asset, order, controller.signal).catch(() => {})
     return status()
   }
 
-  async function run(latest, asset, signal) {
+  /** One source's copy of the package into `part` → its SHA-256, once it is the published one. */
+  async function fetchTo(url, from, part, asset, signal) {
+    const cancelled = () => Object.assign(new Error(msg`已取消`), { name: 'AbortError' })
+    const res = await get(url, { proxy: proxy(), signal, allowHttp, headers: { accept: 'application/octet-stream', 'user-agent': userAgent } }).catch(error => {
+      if (signal.aborted) throw cancelled()
+      throw new Error(from === 'mirror' ? msg`连不上国内镜像（${errorCode(error)}）` : networkTrouble(error))
+    })
+    if (res.statusCode !== 200) {
+      res.resume()
+      throw new Error(msg`下载失败：${sourceName(from)} 回复 ${res.statusCode}`)
+    }
+    job.total = Number(res.headers['content-length']) || asset.size
+    const hash = createHash('sha256')
+    const out = createWriteStream(part)
+    await new Promise((resolve, reject) => {
+      res.on('data', chunk => {
+        hash.update(chunk)
+        job.received += chunk.length
+      })
+      res.on('error', reject)
+      res.on('aborted', () => reject(new Error(msg`下载中断了`)))
+      out.on('error', reject)
+      out.on('finish', resolve)
+      res.pipe(out)
+      signal.addEventListener('abort', () => reject(cancelled()), { once: true })
+    }).catch(error => {
+      res.destroy()
+      out.destroy()
+      throw error
+    })
+    job.step = 'verifying'
+    const sha256 = hash.digest('hex')
+    if (asset.size && job.received !== asset.size) throw new Error(msg`下载不完整（${job.received} / ${asset.size} 字节），再试一次`)
+    if (sha256 !== asset.sha256) throw new Error(msg`SHA-256 对不上，已丢弃下载的文件。应为 ${asset.sha256}，实际 ${sha256}`)
+    return sha256
+  }
+
+  /** Each source in turn until one gives the published file; then unpack it. */
+  async function run(latest, asset, order, signal) {
     const folder = await stateFolder()
     const part = path.join(folder, `${asset.name}.part`)
     const zipFile = path.join(folder, asset.name)
+    let done
     try {
-      const res = await get(asset.url, { proxy: proxy(), signal, allowHttp, headers: { accept: 'application/octet-stream', 'user-agent': userAgent } }).catch(error => {
-        throw signal.aborted ? Object.assign(new Error(msg`已取消`), { name: 'AbortError' }) : new Error(networkTrouble(error))
-      })
-      if (res.statusCode !== 200) {
-        res.resume()
-        throw new Error(msg`下载失败：GitHub 回复 ${res.statusCode}`)
+      const failures = []
+      let sha256 = null
+      for (const { from, url } of order) {
+        job = { ...job, step: 'downloading', from, received: 0 }
+        try {
+          sha256 = await fetchTo(url, from, part, asset, signal)
+          break
+        } catch (error) {
+          if (error.name === 'AbortError') throw error
+          failures.push(order.length > 1 ? msg`${sourceName(from)}：${error.message}` : error.message)
+        }
       }
-      job.total = Number(res.headers['content-length']) || asset.size
-      const hash = createHash('sha256')
-      const out = createWriteStream(part)
-      await new Promise((resolve, reject) => {
-        res.on('data', chunk => {
-          hash.update(chunk)
-          job.received += chunk.length
-        })
-        res.on('error', reject)
-        res.on('aborted', () => reject(new Error(msg`下载中断了`)))
-        out.on('error', reject)
-        out.on('finish', resolve)
-        res.pipe(out)
-        signal.addEventListener('abort', () => reject(Object.assign(new Error(msg`已取消`), { name: 'AbortError' })), { once: true })
-      }).catch(error => {
-        res.destroy()
-        out.destroy()
-        throw error
-      })
-      job.step = 'verifying'
-      const sha256 = hash.digest('hex')
-      if (asset.size && job.received !== asset.size) throw new Error(msg`下载不完整（${job.received} / ${asset.size} 字节），再试一次`)
-      if (sha256 !== asset.sha256) throw new Error(msg`SHA-256 对不上，已丢弃下载的文件。应为 ${asset.sha256}，实际 ${sha256}`)
+      if (!sha256) throw new Error(failures.join(' / '))
       await rename(part, zipFile)
       job.step = 'unpacking'
       const base = await installBase(root, env)
       const folderPath = await stageInstall(await readFile(zipFile), { base, version: latest.version, check })
       await save({ staged: { version: latest.version, path: folderPath, sha256 } })
-      job = { step: 'ready', version: latest.version }
+      done = { step: 'ready', version: latest.version }
     } catch (error) {
-      job = { step: 'error', version: latest.version, error: error.name === 'AbortError' ? msg`已取消下载` : localize(error.message) }
+      done = { step: 'error', version: latest.version, error: error.name === 'AbortError' ? msg`已取消下载` : localize(error.message) }
     } finally {
       controller = null
       await rm(part, { force: true }).catch(() => {})
       await rm(zipFile, { force: true }).catch(() => {})
+      // Ready (or failed) once the download is gone, so nothing asking then still finds the zip.
+      job = done
     }
   }
 

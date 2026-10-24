@@ -2,7 +2,7 @@
 // effects, and who stands on the stage line by line.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { effectsOf, EXPRESSION_LOOK, EXPRESSIONS, guessExpression, packFaces, stageAt } from '../web/shared/stage.js'
+import { effectsOf, EXPRESSION_LOOK, EXPRESSIONS, FACE_WORDS, faceOf, guessExpression, markEffects, packFaces, stageAt } from '../web/shared/stage.js'
 
 test('an expression from the narration around a line, else from the voice', () => {
   assert.equal(guessExpression('林青禾笑了笑：「来了？」'), 'smile')
@@ -106,4 +106,28 @@ test('an expression pack: SillyTavern\'s names (and plain ones) to the expressio
   assert.deepEqual(packs[0].unused, ['Seraphina/joy-1.png'], 'of several, the plainest name')
   assert.deepEqual(packs[1].faces, { smile: 'Other/微笑.png' })
   assert.deepEqual(packFaces(['a.png', 'notes.txt']), [], 'nothing named after a feeling')
+})
+
+test('视觉小说格式: a mark\'s words to an expression and effects; the stage takes them before anything else', () => {
+  assert.equal(faceOf('微笑'), 'smile')
+  assert.equal(faceOf('Smile'), 'smile')
+  assert.equal(faceOf('joy'), 'happy')
+  assert.equal(faceOf('苦笑'), 'smile')
+  assert.equal(faceOf('脸红了'), 'shy')
+  assert.equal(faceOf('惊恐'), 'surprised')
+  assert.equal(faceOf('若有所思'), 'thinking')
+  assert.equal(faceOf('冷淡'), 'neutral')
+  assert.equal(faceOf(''), null)
+  assert.equal(faceOf('xyz'), null)
+  assert.deepEqual(markEffects(['震屏']), { screen: 'shake', actor: null })
+  assert.deepEqual(markEffects(['闪白', '发抖']), { screen: 'flash', actor: 'tremble' })
+  assert.equal(markEffects(['攻击力+5']), null)
+  assert.ok(Object.keys(FACE_WORDS).every(name => EXPRESSIONS.includes(name)) && Object.keys(FACE_WORDS).length === EXPRESSIONS.length)
+  // The mark wins over the narration (皱起眉 → angry) and over the helper's label.
+  const steps = [line('dialogue', '林青禾', '她皱起眉：「来了？」', { expression: 'happy' })]
+  assert.equal(stageAt(steps, 0, { names }).members[0].expression, 'happy')
+  assert.equal(stageAt(steps, 0, { names, labels: ['sad'] }).members[0].expression, 'happy')
+  const loud = [line('narration', null, '轰隆一声，门被撞开。', { effects: { screen: 'flash', actor: null } })]
+  assert.deepEqual(stageAt(loud, 0, { names }).effects, { screen: 'flash', actor: null })
+  assert.deepEqual(stageAt([line('narration', null, '轰隆一声，门被撞开。')], 0, { names }).effects, { screen: 'shake', actor: null })
 })

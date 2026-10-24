@@ -2,7 +2,7 @@
 // under a reply, the reading bar above the input box and the settings window.
 // Nothing here changes what the model sees.
 import { speechChunks } from '/shared/speech.js'
-import { speakerNames, splitLines } from '/shared/vn.js'
+import { hasMarks, speakerNames, splitLines } from '/shared/vn.js'
 import { createMenu, MENU_ICONS, whoLine } from '/menu.js'
 import { locale, t, zh } from '/i18n.js'
 import { NAI_MODELS } from '/draw-choice.js'
@@ -789,7 +789,8 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     const { narratorVoice } = state.cardMedia
     const text = shownText(node)
     const names = castNames()
-    const speakerOf = castVoiced() ? quoteSpeakers(text, names) : null
+    // A reply in the 视觉小说格式 says who speaks each line (【名字|表情】), which the page no longer shows as text.
+    const speakerOf = castVoiced() ? quoteSpeakers(hasMarks(node.text) ? (node.display ?? node.text) : text, names) : null
     // Emotions go before their lines as [tags]; the server keeps them only for voices that act on them (Fish).
     const chunks = speechChunks(text, { narration: Boolean(narratorVoice), tags: true, speakerOf, max: { dialogue: dialogueMax(), narration: chunkMaxFor(narratorVoice) } })
     if (!chunks.length) return toast(t`这一段没有能读的文字`)

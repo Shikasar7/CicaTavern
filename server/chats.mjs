@@ -11,6 +11,7 @@ import { MIN_TURNS, RECENT_TURNS, STORY_FORMAT, storyPath, storyTurns, turnsSinc
 import { msg } from './i18n.mjs'
 import { BASIC_ID, basicPreset } from './basic.mjs'
 import { readSillyTavernChat } from './st-chat.mjs'
+import { markSpeakers } from '../web/shared/vn.js'
 
 /**
  * A chat's books: the card's own, the imported ones it has mounted, then the
@@ -556,6 +557,6 @@ export function chatSummary(chat) {
     title: chat.title,
     updatedAt: chat.updatedAt,
     turns,
-    preview: (last?.role === 'user' ? last.text : last?.display ?? '').slice(0, 80),
+    preview: (last?.role === 'user' ? last.text : markSpeakers(last?.display ?? '')).slice(0, 80),
   }
 }

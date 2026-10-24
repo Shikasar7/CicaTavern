@@ -103,17 +103,15 @@ If you can't quite say what you want, the creator guides you round by round:
 
 <br clear="right">
 
-## Latest changes [1.9.1]
+## Latest changes [1.9.2]
 
-<p align="center"><img src="docs/screenshots/vn-hud.jpg" alt="The visual novel HUD in 1.9.1: affection, stamina and money at the top left, and at the end of the turn the notes Affection +5, Stamina −4, Got: old letter" width="880"></p>
+<p align="center"><img src="docs/screenshots/vn-marks.jpg" alt="The visual novel in 1.9.2: the model marked this line as the steward's, so the name plate and the sprite follow, with Lin Qinghe beside him" width="880"></p>
 
-- **A HUD in visual novel mode**: a few variables stay at the top left, by default the first few numbers (affection, stamina, money…); click it to choose which and show each as a bar, a number or an icon. At the end of a turn, what it changed pops up under it ("Affection +5", "Got: old letter").
-- **New days and memories**: when the date moves on, "Day N" crosses the picture with the date and place; memories turn the picture and the sprites sepia with dark corners.
-- **Write variables, choice buttons**: when an MVU card's reply leaves out its variable update, "Write variables" writes just that block; a card's or preset's own action options become buttons too.
-- **Expression packs, the cast list**: Sprites can import a SillyTavern expression pack, matched to the eight expressions; the cast list can add the characters who joined later, from the chat.
-- **Improvements**: mounting a lorebook with constant entries asks whether to apply it to the open chat; What's new can show each 1.8 version's pages; the sprite window follows the cast list as soon as it is saved.
+- **Speaker marks in visual novel mode**: the model marks who says each line and how they look (the marks are not shown), so the name plate, the sprite and the expression follow them instead of a guess from the narration; it can also ask for a shake or a flash. On by default with the built-in preset; with an imported one, turn it on in Sprites → Mark speakers. Switching it costs no cache.
+- **An update mirror in China**: when GitHub cannot be reached for an update, the app turns to a mirror on cnb.cool for the release and the package, with a signature check; it takes effect for updates after this one.
+- **Fixes**: a chat froze when a reply ended on a long run of `**` decorations (since 1.9.1); reading a visual novel reply while it was written kept jumping back to an earlier line; the in-app update could say ready a moment early.
 
-Editing lorebooks, presets, regex and the theme by chat, custom colours, font and size, search and global lorebooks came in 1.9.0; visual novel mode in 1.8.0, with several on stage, expressions and save and load in 1.8.5. Download from [Releases](https://github.com/Shikasar7/CicaTavern/releases/latest); 1.4.0 and later can update in the app. Everything that changed is in [CHANGELOG.md](CHANGELOG.md).
+The visual novel HUD, new days and memories came in 1.9.1; editing lorebooks, presets, regex and the theme by chat in 1.9.0; visual novel mode in 1.8.0. Download from [Releases](https://github.com/Shikasar7/CicaTavern/releases/latest); 1.4.0 and later can update in the app. Everything that changed is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Getting started (Windows)
 
@@ -128,13 +126,13 @@ The Node runtime comes with it (`runtime/node.exe`); nothing else needs installi
 
 ## Updates
 
-设置 (Settings) → 更多 (More) → 更新 (Update): when CicaTavern opens, it checks GitHub at most once a day for a new version and shows "有新版本 x.y.z" (new version available) with the release notes here. Automatic checks can be turned off; 检查更新 (Check for updates) works any time.
+设置 (Settings) → 更多 (More) → 更新 (Update): when CicaTavern opens, it checks GitHub at most once a day for a new version and shows "有新版本 x.y.z" (new version available) with the release notes here. Automatic checks can be turned off; 检查更新 (Check for updates) works any time. When GitHub can't be reached or hasn't answered within a few seconds (common in mainland China), it asks the mirror at [cnb.cool](https://cnb.cool/cicatavern/CicaTavern/-/releases) instead: the same files under the same version, and the release information there is used only with the publisher's Ed25519 signature. The package can come from GitHub or the mirror; both are checked against the same SHA-256.
 
 1. 下载更新 (Download update): downloads the Windows package and checks it against the SHA-256 published with the release, throwing it away on a mismatch. It is unpacked next to the current folder (for example `CicaTavern-1.5.0-win-x64` beside `CicaTavern-1.4.0-win-x64`). The download uses your proxy setting.
 2. 重启并更新 (Restart and update): the server restarts on the new version and the page reloads. Only once the new version is up are the desktop and Start-menu shortcuts pointed at the new folder; the old folder's CicaTavern.exe also forwards to the new version. If the new version fails to start, the old one comes back and nothing changes.
 3. The old version's folder stays: 回到上一版 (Back to the previous version) switches back; once you're happy with the new version, delete it under 旧版本文件夹 (Old version folders).
 
-Your data lives in `%USERPROFILE%\.cicatavern\`, outside the program folder, so updating, switching back or deleting old versions never touches it. The updater only downloads the zip from this project's GitHub Releases and unpacks it itself; it never runs a downloaded installer and uses no PowerShell or scripts. You can still update by hand: unzip the new version into a new folder, double-click its CicaTavern.exe, and add the desktop icon again under 设置 → 更多 → 桌面快捷方式.
+Your data lives in `%USERPROFILE%\.cicatavern\`, outside the program folder, so updating, switching back or deleting old versions never touches it. The updater only downloads the zip from this project's GitHub Releases (or their copy on the mirror in China) and unpacks it itself; it never runs a downloaded installer and uses no PowerShell or scripts. You can still update by hand: unzip the new version into a new folder, double-click its CicaTavern.exe, and add the desktop icon again under 设置 → 更多 → 桌面快捷方式.
 
 ## Proxy
 
@@ -218,7 +216,7 @@ What it connects to:
 
 - **Services you add yourself**: model providers, image backends (OpenAI-compatible APIs, Gemini, NovelAI, ComfyUI, SD WebUI) and voice services (Fish Audio, MiniMax, Gemini and others). They are contacted only after you set them up, and what goes to them is your chat content and the related settings; how each one handles data is covered by its own privacy policy.
 - **Connections made without being configured.** They are listed at the first start, where each can be switched off; later, change them under 设置 → 更多 → 隐私与网络 (Privacy and network) and 更新 (Update). Nothing on this list happens before you confirm:
-  - Update check: GitHub (api.github.com) at most once a day, sending only the version number; GitHub can see your IP address. The Android app does the same.
+  - Update check: GitHub (api.github.com) at most once a day, and the mirror in mainland China, cnb.cool (Tencent), when GitHub hasn't answered within a few seconds. Only the version number is sent; they can see your IP address. The Android app does the same.
   - Body font: the Noto Serif SC font from Google Fonts.
   - Tavern Helper libraries: jQuery, Vue, Tailwind and similar libraries from public CDNs such as jsDelivr, loaded when a card's Tavern Helper UI uses them.
 - **Web content inside cards and presets** may load pictures or fonts from addresses the card's author wrote into it.
@@ -241,7 +239,7 @@ The Android APK is signed locally by the author with their own key; the certific
 
 - **Nothing happens on double-click, or it says it couldn't start**: CicaTavern.exe shows the reason in a message box. You can also read the log above, or run 排查问题（带控制台）.cmd and look at the errors in the console window.
 - **It says runtime\node.exe is missing**: your antivirus has probably quarantined it. Restore it from quarantine, or unzip the package again.
-- **The update check can't reach GitHub**: in mainland China you usually need to set a proxy under 网络代理 (Network proxy); you can also download from the Releases page by hand.
+- **The update check can't reach GitHub**: it switches to the mirror at cnb.cool by itself; if that can't be reached either, set a proxy under 网络代理 (Network proxy), or download from the Releases page by hand.
 - **Port 8790 is in use**: one is probably already running; open http://127.0.0.1:8790/ directly.
 - **Overseas APIs don't connect**: check that the 网络代理 row shows your proxy under "现在走 …" (currently using).
 - **Replies are cut off**: set the maximum output tokens (最大输出 token) in the provider's 高级 (Advanced) section.

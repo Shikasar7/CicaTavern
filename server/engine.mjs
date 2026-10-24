@@ -59,7 +59,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     return refs
   }
 
-  async function preparePrompt(chat, parent, input, { forceFull = false } = {}) {
+  /** @param marks - ask for the 视觉小说格式 this turn (the page's visual novel mode has it on). */
+  async function preparePrompt(chat, parent, input, { forceFull = false, marks = false } = {}) {
     const [settings, card, preset, persona, globalScripts] = await Promise.all([store.getSettings(), store.getCard(chat.cardId), presetFor(store, chat.presetId), store.getPersona(), store.getRegex()])
     const books = await booksForCard(store, card, settings)
     const scripts = scriptsOf(card, preset, globalScripts)
@@ -129,6 +130,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       replyLength: Number(settings.replyLength) || 0,
       presetText,
       reminder: everyTurnReminder(chat.systemPrompt, books, { presetRules: hasPrefixRules(preset), mvu: usesMvu(card, books) }),
+      marks,
     })
     return {
       settings,
@@ -285,8 +287,9 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
    * Run one turn. `emit` receives { type: 'delta', text } while streaming.
    * @param parentId - the assistant node to continue from.
    * @param userNodeId - reuse an existing user node (regenerate) instead of creating one.
+   * @param marks - ask for the 视觉小说格式 (a regenerated turn keeps what it asked).
    */
-  async function runTurn(chatId, { parentId, input, userNodeId }, emit) {
+  async function runTurn(chatId, { parentId, input, userNodeId, marks = false }, emit) {
     if (running.has(chatId)) throw httpError(409, msg`这个对话正在生成`)
     const abortController = new AbortController()
     running.set(chatId, abortController)
@@ -305,12 +308,12 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       // (and its worldbook injections) matches the original attempt exactly.
       let prepared = userNode
         ? { settings: await store.getSettings(), prompt: userNode.prompt, injected: userNode.injected, injectedTitles: userNode.injectedTitles }
-        : await preparePrompt(chat, parent, text)
+        : await preparePrompt(chat, parent, text, { marks })
       const target = await targetFor(modelFor(chat, prepared.settings), prepared.settings)
       const newSession = Boolean(parent.compaction)
       // The turn's prompt again with the full variable list, the piled-up copies gone.
       const reprepare = async () => {
-        const full = await preparePrompt(chat, parent, text, { forceFull: true })
+        const full = await preparePrompt(chat, parent, text, { forceFull: true, marks })
         full.dynamicState = { ...full.dynamicState, compacted: true }
         return full
       }
@@ -575,14 +578,14 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
   }
 
   /** The exact user message a turn would send, without calling the model. */
-  async function previewTurn(chatId, { parentId, input }) {
+  async function previewTurn(chatId, { parentId, input, marks = false }) {
     const chat = await store.getChat(chatId)
     const parent = chat.nodes[parentId]
     if (!parent || parent.role !== 'assistant') throw httpError(400, msg`只能在一条叙述之后继续`)
-    let prepared = await preparePrompt(chat, parent, String(input ?? ''))
+    let prepared = await preparePrompt(chat, parent, String(input ?? ''), { marks })
     const api = isProviderRef(modelFor(chat, prepared.settings))
     const inPlace = subscription?.inPlace(chat, parent) ?? false
-    if (prepared.shouldCompact && (api || inPlace)) prepared = await preparePrompt(chat, parent, String(input ?? ''), { forceFull: true })
+    if (prepared.shouldCompact && (api || inPlace)) prepared = await preparePrompt(chat, parent, String(input ?? ''), { forceFull: true, marks })
     return { prompt: prepared.prompt, injected: prepared.injectedTitles, templateErrors: prepared.templateErrors }
   }
 

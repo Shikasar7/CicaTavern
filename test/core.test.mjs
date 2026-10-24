@@ -326,3 +326,10 @@ test('card export and import: edits to its data travel with its picture, setting
   assert.equal(importOwnCard({ spec: 'chara_card_v2', data: { name: 'x' } }), null)
   assert.throws(() => importOwnCard({ format: 'agent-tavern-card', card: { name: ' ' } }), /不完整/)
 })
+
+test('视觉小说格式: asked for in the turn\'s message only, after the preset\'s block and before the reminder', () => {
+  const names = { char: '小雨', user: '阿明' }
+  const turn = buildTurnPrompt({ names, input: '你好', presetText: '写短一点', reminder: '照规则', marks: true })
+  assert.match(turn, /<\/预设指令>\n\n<对白格式>\n[\s\S]*【名字\|表情】「台词」[\s\S]*平静、微笑、开心、害羞、生气、难过、惊讶、思考[\s\S]*震屏、闪白、跳动、发抖[\s\S]*<\/对白格式>\n\n<本轮提醒>/)
+  assert.doesNotMatch(buildTurnPrompt({ names, input: '你好' }), /对白格式/)
+})

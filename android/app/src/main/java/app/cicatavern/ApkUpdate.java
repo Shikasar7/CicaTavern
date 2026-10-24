@@ -29,15 +29,19 @@ import java.util.Set;
  * 设置 → 更多 → 更新 on the phone: downloads the release APK, checks it (the
  * SHA-256 the release publishes, this app's package, a newer version, the same
  * signing certificate) and hands it to the system installer, which asks the
- * user. Only the repository's own release downloads are fetched, so a page that
- * calls the bridge can at most offer the official newer version.
+ * user. Only the repository's own release downloads are fetched (GitHub's, or the
+ * same file on the mirror in mainland China, server/update/release.mjs MIRROR),
+ * so a page that calls the bridge can at most offer the official newer version.
  *
  * The page follows along through window events 'cicatavern-apk' whose detail is
  * the state: { step: idle | downloading | verifying | permission | installing | error,
  * received, total, error: network | hash | package | older | signature | storage | installer | denied, detail }.
  */
 final class ApkUpdate {
-    private static final String RELEASES = "https://github.com/Shikasar7/CicaTavern/releases/download/";
+    private static final String[] RELEASES = {
+        "https://github.com/Shikasar7/CicaTavern/releases/download/",
+        "https://cnb.cool/cicatavern/CicaTavern/-/releases/download/",
+    };
     private static final String APK_TYPE = "application/vnd.android.package-archive";
 
     interface Listener {
@@ -78,10 +82,15 @@ final class ApkUpdate {
         return state;
     }
 
+    private static boolean fromRelease(String url) {
+        for (String prefix : RELEASES) if (url.startsWith(prefix)) return true;
+        return false;
+    }
+
     /** false when the address or hash is not one this accepts. */
     synchronized boolean start(String url, String sha256) {
         if (url == null || sha256 == null) return false;
-        if (!url.startsWith(RELEASES) || !url.endsWith("-android-arm64.apk") || url.contains("..")) return false;
+        if (!fromRelease(url) || !url.endsWith("-android-arm64.apk") || url.contains("..")) return false;
         if (!sha256.matches("[0-9a-fA-F]{64}")) return false;
         if (thread != null && thread.isAlive()) return true;
         cancelled = false;

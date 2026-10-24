@@ -968,7 +968,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       return chatView(await store.saveChat(chat))
     }],
     ['POST', /^\/api\/chats\/([\w-]+)\/preview$/, ([id], body) =>
-      engine.previewTurn(id, { parentId: String(body.parentId), input: body.input })],
+      engine.previewTurn(id, { parentId: String(body.parentId), input: body.input, marks: body.marks === true })],
     ['GET', /^\/api\/chats\/([\w-]+)\/prompt$/, async ([id]) => {
       const chat = await store.getChat(id)
       const lastUser = [...activePath(chat)].reverse().find(n => n.role === 'user')
@@ -1304,7 +1304,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       if (req.method === 'PUT' && action === '/settings') return view(await updater.setAutoCheck(body.autoCheck !== false))
       if (req.method === 'POST' && action === '/ack') return view(await updater.acknowledge())
       if (req.method === 'POST' && action === '/skip') return view(await updater.skip(body.version))
-      const own = { 'GET /installs': () => updater.installs(), 'POST /download': () => updater.download(), 'POST /cancel': () => updater.cancel(), 'POST /apply': () => updater.apply(), 'POST /rollback': () => updater.rollback(), 'POST /remove': () => updater.remove(body.path) }[`${req.method} ${action}`]
+      const own = { 'GET /installs': () => updater.installs(), 'POST /download': () => updater.download({ source: body.source }), 'POST /cancel': () => updater.cancel(), 'POST /apply': () => updater.apply(), 'POST /rollback': () => updater.rollback(), 'POST /remove': () => updater.remove(body.path) }[`${req.method} ${action}`]
       if (!own) return sendJson(res, 404, { error: msg`没有这个接口` })
       if (!local) return sendJson(res, 403, { error: msg`只能在这台电脑上更新` })
       return view(await own())
@@ -1334,7 +1334,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     if (req.method === 'POST' && turn) {
       const body = await readBody(req)
       const args = turn[2] === 'turn'
-        ? { parentId: String(body.parentId), input: body.input }
+        ? { parentId: String(body.parentId), input: body.input, marks: body.marks === true }
         : { userNodeId: String(body.userNodeId) }
       return streamTurn(res, turn[1], args)
     }

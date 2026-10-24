@@ -72,6 +72,52 @@ export function effectsOf(text) {
   return { screen: find(SCREEN), actor: find(ACTOR) }
 }
 
+// ─── 视觉小说格式: what the marks may say (server/prompt.mjs asks, web/shared/vn.js reads) ──
+
+/** The word the format offers the model for each expression. */
+export const FACE_WORDS = { neutral: '平静', smile: '微笑', happy: '开心', shy: '害羞', angry: '生气', sad: '难过', surprised: '惊讶', thinking: '思考' } // i18n-ignore: words the model writes
+
+/** The effects a 【效果|…】 mark can ask for, the word the format offers first. */
+export const EFFECT_WORDS = {
+  shake: ['震屏', '震动', '震', '巨响', 'shake'], // i18n-ignore: words the model writes
+  flash: ['闪白', '闪光', '白光', '闪电', 'flash'], // i18n-ignore: words the model writes
+  jump: ['跳动', '一跳', '跳', 'jump', 'hop'], // i18n-ignore: words the model writes
+  tremble: ['发抖', '颤抖', '抖', 'tremble', 'shiver'], // i18n-ignore: words the model writes
+}
+export const EFFECT_KINDS = ['效果', '演出', '特效', 'effect', 'fx'] // i18n-ignore: words the model writes
+const SCREEN_EFFECTS = ['shake', 'flash']
+
+// A word the model chose that is not on the list (苦笑, 脸红了, 惊恐): the first expression it points to.
+const FACE_HINTS = [
+  ['shy', /羞|脸红|腼腆|\bblush|\bshy|embarrass/i],
+  ['angry', /怒|生气|恼|不满|不悦|\bangr|\bannoy|\bmad\b|\bfurious/i],
+  ['sad', /伤心|难过|悲|哭|泪|委屈|失落|沮丧|\bsad|\bcry|\bgrie|\bupset|\btear/i],
+  ['surprised', /惊|吓|错愕|诧异|怕|恐|\bsurpris|\bshock|\bfear|\bscared|\bafraid/i],
+  ['happy', /开心|高兴|快乐|喜|兴奋|大笑|欢|\bhapp|\bjoy|\bexcit|\blaugh|\bglad/i],
+  ['smile', /笑|\bsmil|\bgrin/i],
+  ['thinking', /思|想|疑|困惑|犹豫|沉吟|\bthink|\bconfus|\bcurio|\bponder|\bpuzzl/i],
+  ['neutral', /平静|冷静|淡|默认|普通|正常|无表情|\bneutral|\bcalm|\bdefault|\bplain/i],
+]
+
+/** A mark's expression word → one of EXPRESSIONS, or null when it says none. */
+export function faceOf(word) {
+  const w = String(word ?? '').trim().toLowerCase()
+  if (!w) return null
+  for (const [id, label] of Object.entries(FACE_WORDS)) if (w === label || w === id) return id
+  for (const [id, names] of Object.entries(PACK_NAMES)) if (names.includes(w)) return id
+  return FACE_HINTS.find(([, pattern]) => pattern.test(w))?.[0] ?? null
+}
+
+/** A 【效果|…】 mark's words → { screen, actor } (each null when not asked for), or null when it names none. */
+export function markEffects(words) {
+  const out = { screen: null, actor: null }
+  for (const word of words.map(w => String(w ?? '').trim().toLowerCase()).filter(Boolean)) {
+    const found = Object.entries(EFFECT_WORDS).find(([, list]) => list.some(item => word === item || (item.length > 1 && word.includes(item))))?.[0]
+    if (found) out[SCREEN_EFFECTS.includes(found) ? 'screen' : 'actor'] = found
+  }
+  return out.screen || out.actor ? out : null
+}
+
 const LEAVES = '(?:离开|走了出去|走出|离去|退下|告辞|转身走了|消失在|\\bleaves?\\b|\\bleft\\b|\\bwalks? out)' // i18n-ignore: words that move people off stage
 const escape = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 // After this many lines without a word, someone steps off.
@@ -118,8 +164,9 @@ export function stageAt(steps, index, { names = [], max = 3, isActor = () => tru
       members.push(member)
     }
     member.last = i
+    // The line's own mark (【名字|微笑】) first, then the helper's label, then the narration.
     const labelled = labels?.[i]
-    const expression = EXPRESSIONS.includes(labelled) ? labelled : guessExpression(plain)
+    const expression = EXPRESSIONS.includes(step.expression) ? step.expression : EXPRESSIONS.includes(labelled) ? labelled : guessExpression(plain)
     if (expression) member.expression = expression
   }
   const step = steps?.[last]
@@ -127,7 +174,8 @@ export function stageAt(steps, index, { names = [], max = 3, isActor = () => tru
   return {
     members: members.map(({ name, expression }) => ({ name, expression })),
     speaker,
-    effects: step?.type === 'line' ? effectsOf(step.plain) : { screen: null, actor: null },
+    // A 【效果|…】 mark says what the line does; else its narration.
+    effects: step?.type === 'line' ? (step.effects ? { screen: step.effects.screen ?? null, actor: step.effects.actor ?? null } : effectsOf(step.plain)) : { screen: null, actor: null },
   }
 }
 

@@ -176,3 +176,13 @@ test('mounting books in an open chat: which ones change its prefix', async t => 
   await store.saveCard(card)
   assert.equal(await mountChange(store, chat, card), null)
 })
+
+test('a card’s options: a line opening on a long run of ** and symbols is turned down at once', () => {
+  // (**·**·… could be split two ways at every ** and took seconds, then minutes, as it grew.)
+  for (const line of [`${'**·'.repeat(40)}x`, `${'**✦'.repeat(40)}探索选项：去码头`, `${'*'.repeat(80)}选项`]) {
+    const started = performance.now()
+    otherChoices(`正文。\n\n${line}`)
+    assert.ok(performance.now() - started < 200, line.slice(0, 20))
+  }
+  assert.deepEqual(otherChoices(`她笑了。\n\n${'**✦'.repeat(3)}**探索选项**：去码头\n**堕落选项**：留下`).choices, ['探索：去码头', '堕落：留下'])
+})
