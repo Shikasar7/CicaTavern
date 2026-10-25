@@ -286,6 +286,14 @@ export function dialogueFormat() {
  * @param reminder - one line pointing at the prefix's every-turn rules.
  * @param marks - ask for the 视觉小说格式 (dialogueFormat).
  */
+/**
+ * The turn's word on 联网 (the provider searches when the model asks): search only for what the
+ * story or the player needs from the real world, and keep the search out of the story.
+ */
+export function webSearchNote() {
+  return '<联网搜索>\n这一轮可以搜索网页。玩家问到、或剧情需要现实世界的信息（时事、真实的地点和人物、作品资料等）时再搜，否则不用搜。搜索前不要写任何文字；搜完照常以故事的口吻写正文，不提搜索，不写网址和引用标注。\n</联网搜索>'
+}
+
 export function buildTurnPrompt({ names, opening, recap = '', entries = [], dynamic = [], characterNote = '', stateText, input, replyLength = 0, presetText = '', reminder = '', marks = false }) {
   const parts = []
   const block = (tag, items) => {

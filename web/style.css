@@ -670,6 +670,18 @@ dl.usage dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; 
 .quick-btn:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent); }
 .quick-btn:disabled { opacity: .4; cursor: default; }
 .quick-btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }
+.quick-btn + .search-btn { margin-left: -6px; }
+.search-btn[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); }
+.search-btn.unavailable { opacity: .45; }
+.search-sources { margin-top: 6px; font-size: 12px; color: var(--muted); }
+.search-sources summary { cursor: pointer; width: fit-content; padding: 1px 8px; border-radius: 999px; background: var(--accent-soft); list-style: none; }
+.search-sources summary::-webkit-details-marker { display: none; }
+.search-sources ol { margin: 6px 0 0; padding-left: 22px; display: grid; gap: 2px; }
+.search-sources li { overflow-wrap: anywhere; }
+.search-sources a { color: var(--accent); text-decoration: none; }
+.search-sources a:hover { text-decoration: underline; }
+.search-sources .host { color: var(--faint); margin-left: 6px; }
+.search-sources .asked { margin: 6px 0 0; color: var(--faint); }
 .quick-list { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 2px; max-height: 60vh; overflow-y: auto; }
 .quick-list label { display: flex; align-items: center; gap: 10px; padding: 8px 6px; border-radius: 8px; cursor: pointer; }
 .quick-list label:hover { background: var(--accent-soft); }

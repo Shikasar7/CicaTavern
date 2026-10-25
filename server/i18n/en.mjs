@@ -357,6 +357,7 @@ export default {
   "一次最多渲染 {0} 段": "At most {0} texts can be rendered at once",
   "要渲染的内容太长": "The texts to render are too long",
   "要检查的模板太长": "The template to check is too long",
+  "（这个对话打开了「联网」：这个供应商或模型可能不支持联网搜索，点输入框左边的地球图标关掉再试。）": " (Web search is on for this chat: this provider or model may not support it. Click the globe left of the input box to turn it off and try again.)",
   "已停止生成": "Generation stopped",
   "这段剧情是用自定义供应商写的，订阅模型读不到它的上下文：选一个供应商的模型再压缩": "This part of the story was written with a custom provider, so a subscription model can't read its context: pick a provider's model, then compact",
   "还没有可以压缩的剧情": "Nothing to compact yet",
@@ -528,6 +529,14 @@ export default {
   "对话「{0}」 · 卡「{1}」 · 预设「{2}」 · 模型 {3}": "Chat \"{0}\" · card \"{1}\" · preset \"{2}\" · model {3}",
   "你的输入：": "Your input:",
   "模型的原始输出：": "The model's output as written:",
+
+  // ─── relay.mjs (卡片界面直连接口的转发) ───────────────────────────────────
+  "地址不对": "That address isn't valid",
+  "只能转发 http 和 https 的地址": "Only http and https addresses can be relayed",
+  "不能转发到 CicaTavern 自己": "Can't relay to CicaTavern itself",
+  "不支持的请求方法：{0}": "Unsupported request method: {0}",
+  "要转发的内容太大": "Too much to relay",
+  "替卡片界面连接 {0} 没有连上：{1}": "Couldn't reach {0} for the card's UI: {1}",
 }
 
 // Whole messages from the modules bin/launch.mjs loads on its own (store.mjs,

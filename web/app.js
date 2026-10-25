@@ -128,6 +128,7 @@ const changeChatModel = guard(async () => {
   const view = await api(`/api/chats/${ui.chat.id}`, { method: 'PUT', body: { model } })
   ui.chat = { ...ui.chat, model: view.model }
   renderModelSelect()
+  renderSearchButton()
   toast(t`这个对话改用 ${labelOf(view.model || ui.defaultModel)}。缓存按模型区分，下一轮会重新写入一次缓存。`)
 })
 
@@ -888,6 +889,7 @@ function renderChat() {
   heading.title = chat ? t`点击重命名` : ''
   renderModelSelect()
   renderQuickButton()
+  renderSearchButton()
   const presetPill = $('chat-preset')
   presetPill.hidden = !chat
   if (chat) {
@@ -1039,6 +1041,7 @@ function renderNode(chat, node, isLastAssistant, depth = 0) {
     bar,
     choices.length ? choiceList(el, choices, { onFill: fillInput, onSend: sendChoice, disabled: ui.generating }) : null,
     tools.length ? el('div', { class: 'msg-tools' }, tools) : null,
+    !isUser && node.search ? searchSources(node.search) : null,
     recap,
   ])
 }
@@ -1313,6 +1316,9 @@ function frameContextFor(chat, node) {
       return { message_id: i, name: n.role === 'user' ? chat.names.user : chat.names.char, role: n.role, message: n.raw ?? n.text ?? '', state: n.state ?? {} }
     }),
     storage: storedFrameStorage(),
+    // Direct API calls: this app's own address is never relayed; the addresses allowed for this card go through it at once.
+    appOrigin: location.origin,
+    relay: relayOrigins(chat.cardId),
     // A chat still on its opening can switch to another of the card's (a welcome page's swipe).
     openings: last === 0 ? card?.greetings ?? 0 : 0,
     input: $('input').value,
@@ -1427,6 +1433,40 @@ function allowGenerate(cardId) {
   }
 }
 
+// A card frame's own API call the browser could not make, made from the app instead (server/relay.mjs): allowed
+// per card and address, asked once; a no lasts until the page is opened again.
+const RELAY_KEY = 'agent-tavern:frame-relay'
+const relayRefused = new Set() // `${cardId} ${origin}`
+const frameFetches = new Map() // relay id → AbortController
+// This computer or the local network: allowed only when the player knows what answers there.
+const LOCAL_HOST = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|\[?::1\]?$|\[?f[cd][0-9a-f]{2}:)/i
+
+function relayOrigins(cardId) {
+  try {
+    const list = (JSON.parse(localStorage.getItem(RELAY_KEY) || '{}') ?? {})[cardId]
+    return Array.isArray(list) ? list : []
+  } catch {
+    return []
+  }
+}
+
+function allowRelay(cardId, origin) {
+  try {
+    const all = JSON.parse(localStorage.getItem(RELAY_KEY) || '{}') ?? {}
+    all[cardId] = [...new Set([...(Array.isArray(all[cardId]) ? all[cardId] : []), origin])]
+    localStorage.setItem(RELAY_KEY, JSON.stringify(all))
+  } catch {
+    // Private mode: asked again next time.
+  }
+}
+
+/** Bytes as base64, in slices (a spread of a large array overflows the stack). */
+function base64Of(bytes) {
+  let text = ''
+  for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+  return btoa(text)
+}
+
 /** The page's answers to what card frames ask for (web/compat.js installFrameBridge). */
 const frameHandlers = {
   // The latest floor's variables (Mvu.replaceMvuData, replaceVariables on the message): saved as 编辑状态 saves
@@ -1536,6 +1576,56 @@ const frameHandlers = {
   },
   stopGenerate({ id }) {
     for (const [key, controller] of frameGenerations) if (!id || key === id) controller.abort()
+  },
+  // A frame's own API call that failed in the browser: made from the app once the player allows this card and
+  // address, the answer streamed back as it comes (status and headers, then the body).
+  async fetch({ id, url, method, headers, body }, { frame, window: source }) {
+    const chat = ui.chat
+    if (!chat) throw new Error(t`没有打开的对话`)
+    let target
+    try {
+      target = new URL(url)
+    } catch {
+      throw new Error(t`地址不对`)
+    }
+    const refused = t`没有允许这张卡经 CicaTavern 连接 ${target.origin}`
+    if (!relayOrigins(chat.cardId).includes(target.origin)) {
+      if (relayRefused.has(`${chat.cardId} ${target.origin}`)) throw new Error(refused)
+      const name = ui.cards.find(c => c.id === chat.cardId)?.name ?? ''
+      const local = LOCAL_HOST.test(target.hostname) ? t`\n\n这是这台电脑或局域网里的地址：只有你知道那里是什么服务时才允许。` : ''
+      if (!confirm(t`「${name}」的卡片界面要连接 ${target.origin}，浏览器直接连没有连上（多半是对方不让网页直接调用，或者网页够不着这个地址）。\n\n改由 CicaTavern 替它连接吗？会走应用的网络代理；卡片界面发出的内容（包括它自己的 API Key）会经过 CicaTavern 发到这个地址。之后这张卡连这个地址不再询问。${local}`)) {
+        relayRefused.add(`${chat.cardId} ${target.origin}`)
+        throw new Error(refused)
+      }
+      allowRelay(chat.cardId, target.origin)
+    }
+    const controller = new AbortController()
+    frameFetches.set(id, controller)
+    const send = message => source?.postMessage({ agentTavernFetch: { frame, id, ...message } }, '*')
+    try {
+      const res = await fetch('/api/frame-fetch', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-agent-tavern': '1' },
+        body: JSON.stringify({ url: target.href, method, headers, body: body ? base64Of(new Uint8Array(body)) : null }),
+        signal: controller.signal,
+      })
+      // Not the API's answer: this app could not make the call.
+      if (!res.headers.get('x-relay')) throw new Error((await res.json().catch(() => ({}))).error ?? t`请求失败（${res.status}）`)
+      const kept = [...res.headers].filter(([name]) => !/^(x-relay|content-encoding|content-length)/i.test(name))
+      send({ head: { status: res.status, statusText: decodeURIComponent(res.headers.get('x-relay-status-text') ?? ''), headers: kept } })
+      const reader = res.body?.getReader()
+      for (;;) {
+        const { value, done } = reader ? await reader.read() : { done: true }
+        if (done) break
+        send({ chunk: value })
+      }
+      send({ done: true })
+    } finally {
+      frameFetches.delete(id)
+    }
+  },
+  fetchCancel({ id }) {
+    frameFetches.get(id)?.abort()
   },
 }
 
@@ -2679,6 +2769,67 @@ function quickEntries() {
 
 const usesBasic = chat => chat?.presetId === BASIC_ID
 
+// 联网: the provider searches the web for this chat's turns when the model asks, as SillyTavern's
+// 「Enable web search」 does. Only models whose provider has a search of its own (providers.mjs webSearchKind).
+const SEARCH_BY = {
+  get anthropic() { return t`Anthropic 的网页搜索，每次搜索另收费` },
+  get openai() { return t`OpenAI 的网页搜索，每次搜索另收费` },
+  get openrouter() { return t`OpenRouter 的联网插件，每轮约另收 0.02 美元` },
+}
+
+const searchKindOf = chat => (chat ? ui.models.find(m => m.id === (chat.model || ui.defaultModel))?.search ?? null : null)
+
+function renderSearchButton() {
+  const button = $('search-toggle')
+  const chat = ui.chat
+  button.hidden = !chat
+  if (!chat) return
+  const kind = searchKindOf(chat)
+  const on = Boolean(chat.webSearch && kind)
+  button.setAttribute('aria-pressed', String(on))
+  button.classList.toggle('unavailable', !kind)
+  button.disabled = ui.generating
+  button.title = !kind
+    ? t`联网搜索：这个模型用不了（Anthropic 接口的 Claude、OpenAI Responses 接口和 OpenRouter 的模型可以）`
+    : on
+      ? t`联网搜索已打开：需要现实世界的信息时，模型会先搜网页（${SEARCH_BY[kind]}）。点一下关掉`
+      : t`联网搜索：打开后，需要现实世界的信息时模型会先搜网页（${SEARCH_BY[kind]}）`
+}
+
+const toggleSearch = guard(async () => {
+  const chat = ui.chat
+  const kind = searchKindOf(chat)
+  if (!chat || ui.generating) return
+  if (!kind) return toast(t`这个模型用不了联网搜索：Anthropic 接口的 Claude、OpenAI Responses 接口和 OpenRouter 的模型可以。`)
+  const view = await api(`/api/chats/${chat.id}`, { method: 'PUT', body: { webSearch: !chat.webSearch } })
+  ui.chat = { ...ui.chat, webSearch: view.webSearch }
+  renderSearchButton()
+  toast(view.webSearch ? t`这个对话打开了联网搜索：${SEARCH_BY[kind]}。开关之后的第一轮会重新写一次缓存。` : t`这个对话关掉了联网搜索。`)
+})
+
+/** What a reply searched for and the pages it drew on, folded under it. */
+function searchSources(search) {
+  const host = url => {
+    try {
+      return new URL(url).hostname.replace(/^www\./, '')
+    } catch {
+      return ''
+    }
+  }
+  const sources = (search.sources ?? []).filter(source => /^https?:\/\//i.test(source.url))
+  const label = sources.length ? t`联网搜索 · ${sources.length} 个来源` : t`联网搜索了 ${search.count || 1} 次`
+  return el('details', { class: 'search-sources' }, [
+    el('summary', { text: label }),
+    search.queries?.length ? el('p', { class: 'asked', text: t`搜了：${search.queries.join(t`；`)}` }) : null,
+    sources.length
+      ? el('ol', {}, sources.map(source => el('li', {}, [
+          el('a', { href: source.url, target: '_blank', rel: 'noopener noreferrer', text: source.title || host(source.url) || source.url }),
+          source.title ? el('span', { class: 'host', text: host(source.url) }) : null,
+        ])))
+      : null,
+  ])
+}
+
 function renderQuickButton() {
   const button = $('quick-open')
   button.hidden = !ui.chat || !(usesBasic(ui.chat) || quickEntries().length)
@@ -2923,6 +3074,7 @@ function bind() {
   })
   $('compact-chat').addEventListener('click', compactNow)
   $('quick-open').addEventListener('click', openQuick)
+  $('search-toggle').addEventListener('click', toggleSearch)
   $('quick-apply').addEventListener('click', applyQuick)
   $('recap-save').addEventListener('click', saveRecap)
   $('recap-drop').addEventListener('click', dropRecap)

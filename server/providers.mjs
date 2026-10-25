@@ -339,8 +339,69 @@ export function providerChoices(providers) {
       group: provider.name,
       provider: provider.id,
       listed: true,
+      search: webSearchKind(provider, model.id),
     })),
   )
+}
+
+/**
+ * 联网: the web search a provider runs itself, as SillyTavern's 「Enable web search」 turns it on.
+ * 'openrouter': OpenRouter's web plugin (the `:online` variant of the model, on any interface);
+ * 'anthropic': Anthropic's web_search tool, for Claude models; 'openai': the Responses API's
+ * web_search tool. null: none we know of (plain Chat Completions has no common field for it).
+ */
+export function webSearchKind(provider, modelId = '') {
+  let host = ''
+  try {
+    host = new URL(provider.baseURL).hostname
+  } catch {
+    return null
+  }
+  if (/(^|\.)openrouter\.ai$/i.test(host)) return 'openrouter'
+  if (provider.api === 'anthropic-messages') return /claude/i.test(String(modelId)) ? 'anthropic' : null
+  if (provider.api === 'openai-responses') return 'openai'
+  return null
+}
+
+// At most this many searches in one reply (Anthropic's max_uses).
+const SEARCHES_PER_REPLY = 5
+
+/** What a reply's searches leave: how many, what was asked, the pages it drew on (cited first). */
+function searchLog() {
+  const log = { count: 0, queries: [], sources: [], cited: new Set() }
+  const add = (url, title, cited = false) => {
+    if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) return
+    const known = log.sources.find(source => source.url === url)
+    if (known) {
+      if (!known.title && title) known.title = String(title).slice(0, 200)
+    } else if (log.sources.length < 40) {
+      log.sources.push({ url: url.slice(0, 2000), title: title ? String(title).slice(0, 200) : '' })
+    }
+    if (cited) log.cited.add(url)
+  }
+  return {
+    log,
+    searched: () => log.count++,
+    asked: query => {
+      if (typeof query === 'string' && query.trim() && log.queries.length < 20) log.queries.push(query.trim().slice(0, 300))
+    },
+    found: (url, title) => add(url, title),
+    cited: (url, title) => add(url, title, true),
+    result: () => {
+      if (!log.count && !log.sources.length) return null
+      const sources = [...log.sources.filter(source => log.cited.has(source.url)), ...log.sources.filter(source => !log.cited.has(source.url))].slice(0, 12)
+      return { count: Math.max(log.count, log.queries.length), queries: log.queries, sources }
+    },
+  }
+}
+
+/**
+ * Text written before the last search is the model saying what it will look up ("让我查一下"),
+ * not story: dropped when it is that short. `cut` is where the text stood when the last results came.
+ */
+function afterSearch(text, cut) {
+  if (cut <= 0 || text.slice(0, cut).trim().length >= 400) return text
+  return text.slice(cut).replace(/^\s+/, '')
 }
 
 /** Readable name for a reference, e.g. "DeepSeek · deepseek-chat". */
@@ -513,19 +574,29 @@ function openaiUsage(usage) {
 // `reasoned`: the model thought before answering (its thinking is not part of `text`).
 const thoughtTokens = usage => (usage?.completion_tokens_details ?? usage?.output_tokens_details)?.reasoning_tokens > 0
 
+// OpenRouter's web plugin answers with url_citation annotations (on the message, or on a delta).
+function urlCitations(search, annotations) {
+  for (const note of Array.isArray(annotations) ? annotations : []) {
+    const cite = note?.url_citation ?? note
+    if (note?.type === 'url_citation' || cite?.url) search.cited(cite.url, cite.title)
+  }
+}
+
 async function openaiCompletions(provider, request, res) {
   let text = ''
   let usage = null
   let model = null
   let stopReason = null
   let reasoned = false
+  const search = searchLog()
   if (!/event-stream/.test(res.headers['content-type'] ?? '')) {
     const json = parseJson(await readText(res, 8 * 1024 * 1024)) ?? {}
     const message = json.choices?.[0]?.message
     text = message?.content ?? ''
     if (text) request.onDelta?.(text)
     reasoned = Boolean(message?.reasoning_content || message?.reasoning) || thoughtTokens(json.usage)
-    return { text, usage: openaiUsage(json.usage), model: json.model ?? null, stopReason: json.choices?.[0]?.finish_reason ?? null, reasoned }
+    urlCitations(search, message?.annotations)
+    return { text, usage: openaiUsage(json.usage), model: json.model ?? null, stopReason: json.choices?.[0]?.finish_reason ?? null, reasoned, search: search.result() }
   }
   for await (const { data } of sse(res)) {
     if (data === '[DONE]') break
@@ -537,6 +608,7 @@ async function openaiCompletions(provider, request, res) {
     if (thoughtTokens(json.usage)) reasoned = true
     const choice = json.choices?.[0]
     if (choice?.delta?.reasoning_content || choice?.delta?.reasoning) reasoned = true
+    urlCitations(search, choice?.delta?.annotations)
     const delta = choice?.delta?.content
     if (typeof delta === 'string' && delta) {
       text += delta
@@ -544,7 +616,18 @@ async function openaiCompletions(provider, request, res) {
     }
     if (choice?.finish_reason) stopReason = choice.finish_reason
   }
-  return { text, usage, model, stopReason, reasoned }
+  return { text, usage, model, stopReason, reasoned, search: search.result() }
+}
+
+/** The searches in a Responses output: web_search_call items (what was asked) and the pages the text cites. */
+function responsesSearch(search, output) {
+  for (const item of Array.isArray(output) ? output : []) {
+    if (item?.type === 'web_search_call') {
+      search.asked(item.action?.query)
+      for (const source of item.action?.sources ?? []) search.found(source?.url, source?.title)
+    }
+    for (const part of item?.content ?? []) for (const note of part?.annotations ?? []) if (note?.type === 'url_citation') search.cited(note.url, note.title)
+  }
 }
 
 async function openaiResponses(provider, request, res) {
@@ -553,12 +636,22 @@ async function openaiResponses(provider, request, res) {
   let model = null
   let stopReason = null
   let reasoned = false
+  const search = searchLog()
+  let cut = 0
   if (!/event-stream/.test(res.headers['content-type'] ?? '')) {
     const json = parseJson(await readText(res, 8 * 1024 * 1024)) ?? {}
-    text = (json.output ?? []).flatMap(item => item.content ?? []).filter(c => c.type === 'output_text').map(c => c.text).join('')
+    for (const item of json.output ?? []) {
+      if (item.type === 'web_search_call') {
+        search.searched()
+        cut = text.length
+      }
+      for (const part of item.content ?? []) if (part.type === 'output_text') text += part.text
+    }
+    responsesSearch(search, json.output)
+    text = afterSearch(text, cut)
     if (text) request.onDelta?.(text)
     reasoned = (json.output ?? []).some(item => item.type === 'reasoning') || thoughtTokens(json.usage)
-    return { text, usage: openaiUsage(json.usage), model: json.model ?? null, stopReason: json.status ?? null, reasoned }
+    return { text, usage: openaiUsage(json.usage), model: json.model ?? null, stopReason: json.status ?? null, reasoned, search: search.result() }
   }
   for await (const { data } of sse(res)) {
     const json = parseJson(data)
@@ -566,11 +659,17 @@ async function openaiResponses(provider, request, res) {
     if (json.type === 'response.output_text.delta' && typeof json.delta === 'string') {
       text += json.delta
       request.onDelta?.(json.delta)
+    } else if (json.type === 'response.output_item.added' && json.item?.type === 'web_search_call') {
+      search.searched()
+      cut = text.length
+    } else if (json.type === 'response.output_text.annotation.added' && json.annotation?.type === 'url_citation') {
+      search.cited(json.annotation.url, json.annotation.title)
     } else if (json.type === 'response.completed' || json.type === 'response.incomplete') {
       usage = openaiUsage(json.response?.usage)
       model = json.response?.model ?? model
       stopReason = json.response?.incomplete_details?.reason ?? json.response?.status ?? null
       if (thoughtTokens(json.response?.usage)) reasoned = true
+      responsesSearch(search, json.response?.output)
     } else if (json.type === 'response.failed' || json.type === 'error') {
       throw new Error(json.response?.error?.message ?? json.message ?? json.error?.message ?? msg`生成失败`)
     } else if (json.type === 'response.created') {
@@ -579,7 +678,12 @@ async function openaiResponses(provider, request, res) {
       reasoned = true
     }
   }
-  return { text, usage, model, stopReason, reasoned }
+  return { text: afterSearch(text, cut), usage, model, stopReason, reasoned, search: search.result() }
+}
+
+/** A web_search_tool_result block's pages (an error result has none). */
+function searchResults(search, block) {
+  for (const result of Array.isArray(block?.content) ? block.content : []) if (result?.type === 'web_search_result') search.found(result.url, result.title)
 }
 
 async function anthropicMessages(provider, request, res) {
@@ -589,6 +693,9 @@ async function anthropicMessages(provider, request, res) {
   let model = null
   let stopReason = null
   let reasoned = false
+  const search = searchLog()
+  let cut = 0
+  let searches = 0
   const takeUsage = u => {
     if (!u) return
     seenUsage = true
@@ -596,15 +703,33 @@ async function anthropicMessages(provider, request, res) {
     if (u.cache_read_input_tokens != null) usage.cacheRead = u.cache_read_input_tokens
     if (u.cache_creation_input_tokens != null) usage.cacheWrite = u.cache_creation_input_tokens
     if (u.output_tokens != null) usage.output = u.output_tokens
+    if (u.server_tool_use?.web_search_requests != null) searches = u.server_tool_use.web_search_requests
+  }
+  const counted = () => {
+    for (let n = search.log.count; n < searches; n++) search.searched()
+    return search.result()
   }
   if (!/event-stream/.test(res.headers['content-type'] ?? '')) {
     const json = parseJson(await readText(res, 8 * 1024 * 1024)) ?? {}
-    text = (json.content ?? []).filter(b => b.type === 'text').map(b => b.text).join('')
+    for (const block of json.content ?? []) {
+      if (block.type === 'text') {
+        text += block.text
+        for (const cite of block.citations ?? []) search.cited(cite?.url, cite?.title)
+      } else if (block.type === 'server_tool_use' && block.name === 'web_search') {
+        search.searched()
+        search.asked(block.input?.query)
+      } else if (block.type === 'web_search_tool_result') {
+        searchResults(search, block)
+        cut = text.length
+      }
+    }
+    text = afterSearch(text, cut)
     if (text) request.onDelta?.(text)
     takeUsage(json.usage)
     reasoned = (json.content ?? []).some(b => /thinking/.test(b.type ?? ''))
-    return { text, usage: seenUsage ? usage : null, model: json.model ?? null, stopReason: json.stop_reason ?? null, reasoned }
+    return { text, usage: seenUsage ? usage : null, model: json.model ?? null, stopReason: json.stop_reason ?? null, reasoned, search: counted() }
   }
+  const toolInput = new Map() // block index → the search's input JSON as it streams
   for await (const { data } of sse(res)) {
     const json = parseJson(data)
     if (!json) continue
@@ -614,6 +739,21 @@ async function anthropicMessages(provider, request, res) {
     } else if (json.type === 'content_block_delta' && json.delta?.type === 'text_delta') {
       text += json.delta.text
       request.onDelta?.(json.delta.text)
+    } else if (json.type === 'content_block_delta' && json.delta?.type === 'citations_delta') {
+      search.cited(json.delta.citation?.url, json.delta.citation?.title)
+    } else if (json.type === 'content_block_delta' && json.delta?.type === 'input_json_delta' && toolInput.has(json.index)) {
+      toolInput.set(json.index, toolInput.get(json.index) + (json.delta.partial_json ?? ''))
+    } else if (json.type === 'content_block_start' && json.content_block?.type === 'server_tool_use') {
+      if (json.content_block.name === 'web_search') {
+        search.searched()
+        toolInput.set(json.index, '')
+      }
+    } else if (json.type === 'content_block_start' && json.content_block?.type === 'web_search_tool_result') {
+      searchResults(search, json.content_block)
+      cut = text.length
+    } else if (json.type === 'content_block_stop' && toolInput.has(json.index)) {
+      search.asked(parseJson(toolInput.get(json.index))?.query)
+      toolInput.delete(json.index)
     } else if (json.type === 'content_block_start' && /thinking/.test(json.content_block?.type ?? '')) {
       reasoned = true
     } else if (json.type === 'message_delta') {
@@ -623,7 +763,7 @@ async function anthropicMessages(provider, request, res) {
       throw new Error(json.error?.message ?? msg`生成失败`)
     }
   }
-  return { text, usage: seenUsage ? usage : null, model, stopReason, reasoned }
+  return { text: afterSearch(text, cut), usage: seenUsage ? usage : null, model, stopReason, reasoned, search: counted() }
 }
 
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
@@ -665,9 +805,12 @@ export function reasoningFields(api, modelId, { thinking, effort } = {}) {
 const NO_REASONING = new Set()
 const REASONING_REFUSED = /thinking|effort|reasoning|output_config|extra inputs|unknown (field|param)|unrecognized|not (supported|permitted|allowed)|unsupported/i
 
-function requestBody(provider, modelId, { system, messages, maxTokens: cap, reasoning }, { ttl = provider.cacheTtl, withReasoning = true } = {}) {
+function requestBody(provider, modelId, { system, messages, maxTokens: cap, reasoning, webSearch }, { ttl = provider.cacheTtl, withReasoning = true } = {}) {
   // A request may cap its own output (short helper calls); otherwise the provider's setting.
   const maxTokens = cap || provider.maxTokens
+  // 联网: OpenRouter searches for the `:online` variant; Anthropic and Responses get the search tool.
+  const search = webSearch ? webSearchKind(provider, modelId) : null
+  if (search === 'openrouter' && !/:online$/.test(modelId)) modelId = `${modelId}:online`
   const common = {
     ...(provider.temperature !== null && provider.temperature !== undefined ? { temperature: provider.temperature } : {}),
     // The app's thinking settings; the provider's own extra parameters below win over them.
@@ -687,6 +830,7 @@ function requestBody(provider, modelId, { system, messages, maxTokens: cap, reas
         i === last || m.cache ? { role: m.role, content: [{ type: 'text', text: m.content, cache_control: cache }] } : { role: m.role, content: m.content },
       ),
       stream: true,
+      ...(search === 'anthropic' ? { tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: SEARCHES_PER_REPLY }] } : {}),
       ...common,
       ...(provider.extraBody ?? {}),
     }
@@ -698,6 +842,7 @@ function requestBody(provider, modelId, { system, messages, maxTokens: cap, reas
       input: messages.map(m => ({ role: m.role, content: m.content })),
       stream: true,
       store: false,
+      ...(search === 'openai' ? { tools: [{ type: 'web_search' }] } : {}),
       ...(maxTokens ? { max_output_tokens: maxTokens } : {}),
       ...common,
       ...(provider.extraBody ?? {}),
@@ -760,7 +905,7 @@ export async function complete(provider, modelId, request, { proxy = null } = {}
       const capRejected = req.softCap && (full || /max_?(output_|completion_)?tokens|maximum.*tokens|output.*limit/i.test(error.message))
       // A model or relay that takes no thinking / effort fields: leave them out, now and later.
       const reasoningRejected = reasoning && REASONING_REFUSED.test(error.message)
-      if (!ttlRejected && !capRejected && !reasoningRejected) throw contextHint(error)
+      if (!ttlRejected && !capRejected && !reasoningRejected) throw searchHint(contextHint(error), request)
       if (reasoningRejected) NO_REASONING.add(pair)
       res = await post({ ...(ttlRejected ? { ttl: '5m' } : {}), ...(reasoningRejected ? { withReasoning: false } : {}) }, capRejected ? { ...req, maxTokens: undefined } : req)
       await failIfBad(res).catch(retryError => { throw contextHint(retryError) })
@@ -789,6 +934,12 @@ const addUsage = (a, b) => (a && b ? Object.fromEntries(Object.keys(b).map(key =
 
 // A request longer than the model's context window, as providers word it.
 export const CONTEXT_FULL = /context (window|length)|prompt is too long|too many tokens|maximum context|exceeds? the (model's )?(context|maximum)/i
+
+/** A refusal while 联网 was on: the provider or model may not search. */
+function searchHint(error, request) {
+  if (request.webSearch && !CONTEXT_FULL.test(error.message)) error.message += msg`（这个对话打开了「联网」：这个供应商或模型可能不支持联网搜索，点输入框左边的地球图标关掉再试。）`
+  return error
+}
 
 /** Say what to do when the conversation no longer fits. */
 function contextHint(error) {

@@ -112,11 +112,95 @@ export function storedFrameStorage() {
 export function frameShim(ctx) {
   // `<` escaped so a `</script>` inside the story text cannot end the tag.
   const json = JSON.stringify(ctx).replace(/</g, '\\u003c')
-  return `<script>(${shimMain.toString()})(${json})<\/script>`
+  return `<script>(${shimMain.toString()})(${json}, ${frameFetch.toString()})<\/script>`
 }
 
-/* Runs inside the frame. Self-contained: it is serialised with toString(). */
-function shimMain(ctx) {
+/**
+ * The frame's `fetch`. Straight out first, as in SillyTavern. A call the browser
+ * cannot make (an API that does not let pages call it, the browser's own proxy,
+ * an address on this computer a sandboxed frame may not reach) is offered to the
+ * page, which makes it from the app once the player allows this card and address
+ * (web/app.js frameHandlers.fetch) and passes the answer back as it comes:
+ * `fetches.get(id)` gets head({ status, statusText, headers }), chunk(bytes), done().
+ * Addresses relayed before go that way at once; this app's own address never.
+ * Runs inside the frame. Self-contained: it is serialised with toString().
+ * @param deps - { direct (the browser's fetch), post(op, args), call(op, args) → Promise, fetches: Map,
+ *   frame, appOrigin, relayed: origins allowed before }
+ */
+export function frameFetch({ direct, post, call, fetches, frame, appOrigin, relayed: allowed }) {
+  const relayed = new Set(Array.isArray(allowed) ? allowed : [])
+  const NULL_BODY = [101, 103, 204, 205, 304]
+  let seq = 0
+  function relay(request, url) {
+    return new Promise((resolve, reject) => {
+      const id = `${frame}-${++seq}`
+      let stream = null
+      let answered = false
+      const body = new ReadableStream({ start: controller => { stream = controller }, cancel: () => post('fetchCancel', { id }) })
+      const fail = error => {
+        if (!fetches.has(id)) return
+        fetches.delete(id)
+        if (!answered) return reject(error)
+        try {
+          stream.error(error)
+        } catch {
+          // Read to the end already.
+        }
+      }
+      fetches.set(id, {
+        head: head => {
+          answered = true
+          relayed.add(url.origin)
+          try {
+            resolve(new Response(NULL_BODY.includes(head.status) || request.method === 'HEAD' ? null : body, { status: head.status, statusText: head.statusText, headers: head.headers }))
+          } catch (error) {
+            answered = false
+            fail(new TypeError(error.message))
+          }
+        },
+        chunk: bytes => stream.enqueue(bytes),
+        done: () => {
+          fetches.delete(id)
+          try {
+            stream.close()
+          } catch {
+            // Cancelled by the reader.
+          }
+        },
+        fail,
+      })
+      request.signal.addEventListener('abort', () => {
+        post('fetchCancel', { id })
+        fail(new DOMException('The user aborted a request.', 'AbortError'))
+      }, { once: true })
+      ;(['GET', 'HEAD'].includes(request.method) ? Promise.resolve(null) : request.arrayBuffer())
+        .then(buffer => call('fetch', { id, url: url.href, method: request.method, headers: [...request.headers], body: buffer }))
+        .catch(error => fail(new TypeError(error.message)))
+    })
+  }
+  return async (input, init) => {
+    const request = new Request(input, init)
+    let url = null
+    try {
+      url = new URL(request.url)
+    } catch {
+      return direct(request)
+    }
+    // Not http(s), or this app's own address: as it is.
+    if (!/^https?:$/.test(url.protocol) || url.origin === appOrigin) return direct(request)
+    if (relayed.has(url.origin)) return relay(request, url)
+    const spare = request.clone()
+    try {
+      return await direct(request)
+    } catch (error) {
+      if (request.signal.aborted || error?.name === 'AbortError') throw error
+      return relay(spare, url)
+    }
+  }
+}
+
+/* Runs inside the frame. Self-contained: it is serialised with toString(). `makeFetch` is frameFetch. */
+function shimMain(ctx, makeFetch) {
   const host = window.parent
   const post = (op, args) => host.postMessage({ agentTavernCall: ctx.frame, op, args }, '*')
   let seq = 0
@@ -148,6 +232,14 @@ function shimMain(ctx) {
         eventEmit('js_stream_token_received_fully', full, id).catch(() => {})
       }
       if (done) eventEmit('js_generation_ended', full, id).catch(() => {})
+    }
+    // An API call the page made for this frame (see fetch below): its status and headers, the body in pieces, the end.
+    if (data && data.agentTavernFetch && data.agentTavernFetch.frame === ctx.frame) {
+      const { id, head, chunk, done } = data.agentTavernFetch
+      const entry = fetches.get(id)
+      if (entry && head) entry.head(head)
+      if (entry && chunk) entry.chunk(chunk)
+      if (entry && done) entry.done()
     }
     if (data && data.agentTavernReply === ctx.frame && pending.has(data.id)) {
       const { resolve, reject } = pending.get(data.id)
@@ -540,6 +632,10 @@ function shimMain(ctx) {
     })
   }
 
+  // ── Direct API calls: straight out first, the page as a way round (frameFetch) ──
+  const fetches = new Map()
+  window.fetch = makeFetch({ direct: window.fetch.bind(window), post, call, fetches, frame: ctx.frame, appOrigin: ctx.appOrigin, relayed: ctx.relay })
+
   // ── MVU ──
   const Mvu = {
     events: {
@@ -874,7 +970,7 @@ function shimMain(ctx) {
  */
 export function installFrameBridge(handlers) {
   // What the frames may ask the page for, each answered with its result (handlers in web/app.js).
-  const ANSWERED = ['state', 'chatVars', 'mvuParse', 'editMessage', 'createMessages', 'deleteMessages', 'worldbook', 'generate', 'stopGenerate', 'ejs']
+  const ANSWERED = ['state', 'chatVars', 'mvuParse', 'editMessage', 'createMessages', 'deleteMessages', 'worldbook', 'generate', 'stopGenerate', 'ejs', 'fetch', 'fetchCancel']
   window.addEventListener('message', async event => {
     const data = event.data
     const id = data?.agentTavernCall

@@ -6,7 +6,7 @@
 // (this machine's own install: server/subscription/); without one they are refused.
 import { activePath, booksForCard, editMessage as editChatMessage, pathTo, playerOf, presetFor, scriptsOf, selectNode } from './chats.mjs'
 import { hasPrefixRules, renderPresetTail } from './presets.mjs'
-import { buildTurnPrompt, chatTemplates, everyTurnReminder, renderEntry, replaceMacros, templateText } from './prompt.mjs'
+import { buildTurnPrompt, chatTemplates, everyTurnReminder, renderEntry, replaceMacros, templateText, webSearchNote } from './prompt.mjs'
 import { applyStateUpdates, applyWrites, displayText, writeLabels } from './state.mjs'
 import { httpError, newId } from './store.mjs'
 import { dynamicEntries, inPrefix, isConstant, isInitvar, isPreprocessing, triggeredEntries } from './worldbook.mjs'
@@ -14,7 +14,7 @@ import { applyScripts, depthWindow, PLACEMENT } from '../web/shared/regex.js'
 import { replaceVariableMacros } from '../web/shared/vars.js'
 import { decoratorsOf, hasEjs, hasTemplate, stripTemplates, templateSession } from './template.mjs'
 import { accumulatedDynamic, compactThreshold, dynamicMemory, planDynamic, stripDynamicText } from './dynamic.mjs'
-import { complete, CONTEXT_FULL, isProviderRef, providerError, resolveRef } from './providers.mjs'
+import { complete, CONTEXT_FULL, isProviderRef, providerError, resolveRef, webSearchKind } from './providers.mjs'
 import { canonicalModel } from './models.mjs'
 import { extractSummary, MIN_TURNS, recapBlock, recentExchanges, storyPath, storyTurns, summaryInstruction, turnsSinceCompaction } from './recap.mjs'
 import { msg } from './i18n.mjs'
@@ -446,7 +446,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     const u = result.usage ?? {}
     const tokens = { input: u.input ?? 0, cacheRead: u.cacheRead ?? 0, cacheWrite: u.cacheWrite ?? 0, cacheWrite1h: 0, cacheWrite5m: u.cacheWrite ?? 0, output: u.output ?? 0, costUsd: null }
     const api = { provider: target.provider.id, model: result.model ?? target.modelId, ...(result.truncated ? { truncated: true } : {}) }
-    return { reply: result.text, model: target.model, tokens, sdk: null, api }
+    return { reply: result.text, model: target.model, tokens, sdk: null, api, search: result.search ?? null }
   }
 
   /**
@@ -487,6 +487,10 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         ? { settings: await store.getSettings(), prompt: userNode.prompt, injected: userNode.injected, injectedTitles: userNode.injectedTitles, templateWrites: userNode.templateWrites ?? [] }
         : await preparePrompt(chat, parent, text, { marks })
       const target = await targetFor(modelFor(chat, prepared.settings), prepared.settings)
+      // 联网: the provider's own search, when this chat has it on and the model has one. A new turn's
+      // message says when to search (kept with the turn, so a regenerate sends the same).
+      const webSearch = Boolean(chat.webSearch && target.api && webSearchKind(target.provider, target.modelId))
+      if (webSearch && !userNode) prepared = { ...prepared, prompt: `${prepared.prompt}\n\n${webSearchNote()}` }
       const newSession = Boolean(parent.compaction)
       // The turn's prompt again with the full variable list, the piled-up copies gone.
       const reprepare = async () => {
@@ -531,7 +535,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       if (target.api) {
         const history = await apiMessages(chat, parent, { stripAll: Boolean(compacted || userNode?.dynamic?.compacted) })
         const cap = await replyCap(chat, target.provider)
-        outcome = await generateApi(target, { system: chat.systemPrompt, messages: [...history, { role: 'user', content: prepared.prompt }], ...cap }, abortController.signal, onText)
+        outcome = await generateApi(target, { system: chat.systemPrompt, messages: [...history, { role: 'user', content: prepared.prompt }], ...cap, webSearch }, abortController.signal, onText)
       } else {
         outcome = await subscription.generate(prepared.prompt, run, { onText, onRate: info => emit({ type: 'rate_limit', info }) })
         if (!outcome.sdk) throw httpError(502, msg`模型没有返回正文`)
@@ -584,6 +588,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         ...(evaluated?.errors.length ? { templateErrors: evaluated.errors } : {}),
         sdk: outcome.sdk ?? null,
         ...(outcome.api ? { api: outcome.api } : {}),
+        ...(outcome.search ? { search: outcome.search } : {}),
         model: outcome.model,
         usage: outcome.tokens,
         timing: { totalMs: Date.now() - started, firstTokenMs: firstToken || null, forked: fork, ...(target.api ? { api: true } : {}) },

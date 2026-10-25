@@ -53,6 +53,7 @@ From the author's own long chats (October 2026):
 - **Presets**: a light built-in "Basic preset" with switches for point of view, style, not acting for you, limited knowledge, dark themes, intimacy, choices (tap to send) and a time box, so it plays well without importing anything. You can also import Chat Completion presets, toggle and edit their entries, and pin the ones you use most as quick switches.
 - **MVU variables and status bars**: `[InitVar]`, `<UpdateVariable>` / JSONPatch and the older `_.set()` are supported; EJS templates run in a QuickJS sandbox (with ST-Prompt-Template's `getwi`, `matchChatMessages` and the like). HTML UIs inside cards render in isolated iframes, with a compatibility layer for the common Tavern Helper (酒馆助手) functions: variables, lorebooks (changes kept for that chat only), calling the model (each card asks first) and sending messages. The libraries those UIs need, such as jQuery and Vue, load from jsDelivr, so some may be missing offline.
 - **SillyTavern chats**: import a .jsonl (drop it into the window or use Import archive) with every turn, every swipe and the MVU variables; a long one can be compacted into a story archive first.
+- **Web search**: the globe left of the input box turns it on per chat. It uses the provider's own search, like SillyTavern's "Enable web search": Claude on the Anthropic interface, the OpenAI Responses interface and OpenRouter models have it. When real-world facts are needed the model searches first and then writes; what it searched for and the pages it cited are listed under the reply. Searches cost extra.
 - **Versions and branches**: regenerate, swipe between versions, branch from any message, roll back, edit any message; a whole chat can be packed up and moved to another device.
 
 ### Pictures and read-aloud
@@ -103,16 +104,16 @@ If you can't quite say what you want, the creator guides you round by round:
 
 <br clear="right">
 
-## Latest changes [1.9.3]
+## Latest changes [1.9.4]
 
 <p align="center"><img src="docs/screenshots/vn-marks.jpg" alt="The visual novel in 1.9.2: the model marked this line as the steward's, so the name plate and the sprite follow, with Lin Qinghe beside him" width="880"></p>
 
+- **Web search (1.9.4)**: the globe left of the input box turns it on per chat. When real-world facts are needed, the model searches first and then writes; what it searched for and the pages it cited are listed under the reply. It uses the provider's own search: Claude on the Anthropic interface, the OpenAI Responses interface and OpenRouter models have it. Searches cost extra.
+- **Card UIs reaching their own API (1.9.4)**: when the browser cannot reach an API set in a card's UI ("Failed to fetch"), the app asks once; once you agree, that card reaches that address through CicaTavern and its network proxy.
 - **Card UIs can do more (1.9.3)**: start pages, battles and mini games built for Tavern Helper can call the model (each card asks you first, one call at a time), read and write lorebooks (for this chat only), keep chat variables, and add or remove messages; EJS templates follow the Prompt Template plugin more fully: `setvar` writes are kept, decorators work, and `<%= getvar(…) %>` in a display regex shows that message's value.
 - **An error log (1.9.3)**: Settings → More → Error log copies or saves a report to send to the developer, with no chat text and keys and user names taken out; it stays on your device. The cast list folds to one row per character with search, and a card's own lorebook can be exported.
-- **Speaker marks in visual novel mode (1.9.2)**: the model marks who says each line and how they look (the marks are not shown), so the name plate, the sprite and the expression follow them instead of a guess from the narration; it can also ask for a shake or a flash. On by default with the built-in preset; with an imported one, turn it on in Sprites → Mark speakers. Switching it costs no cache.
-- **An update mirror in China (1.9.2)**: when GitHub cannot be reached for an update, the app turns to a mirror on cnb.cool for the release and the package, with a signature check; updates from 1.9.2 on can use it.
 
-The visual novel HUD, new days and memories came in 1.9.1; editing lorebooks, presets, regex and the theme by chat in 1.9.0; visual novel mode in 1.8.0. Download from [Releases](https://github.com/Shikasar7/CicaTavern/releases/latest); 1.4.0 and later can update in the app. Everything that changed is in [CHANGELOG.md](CHANGELOG.md).
+Speaker marks and the update mirror in China came in 1.9.2; the visual novel HUD, new days and memories in 1.9.1; editing lorebooks, presets, regex and the theme by chat in 1.9.0; visual novel mode in 1.8.0. Download from [Releases](https://github.com/Shikasar7/CicaTavern/releases/latest); 1.4.0 and later can update in the app. Everything that changed is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Getting started (Windows)
 
@@ -215,12 +216,12 @@ CicaTavern collects no usage data and sends nothing to the developer. Your data 
 
 What it connects to:
 
-- **Services you add yourself**: model providers, image backends (OpenAI-compatible APIs, Gemini, NovelAI, ComfyUI, SD WebUI) and voice services (Fish Audio, MiniMax, Gemini and others). They are contacted only after you set them up, and what goes to them is your chat content and the related settings; how each one handles data is covered by its own privacy policy.
+- **Services you add yourself**: model providers (with web search on, they also run the searches), image backends (OpenAI-compatible APIs, Gemini, NovelAI, ComfyUI, SD WebUI) and voice services (Fish Audio, MiniMax, Gemini and others). They are contacted only after you set them up, and what goes to them is your chat content and the related settings; how each one handles data is covered by its own privacy policy.
 - **Connections made without being configured.** They are listed at the first start, where each can be switched off; later, change them under 设置 → 更多 → 隐私与网络 (Privacy and network) and 更新 (Update). Nothing on this list happens before you confirm:
   - Update check: GitHub (api.github.com) at most once a day, and the mirror in mainland China, cnb.cool (Tencent), when GitHub hasn't answered within a few seconds. Only the version number is sent; they can see your IP address. The Android app does the same.
   - Body font: the Noto Serif SC font from Google Fonts.
   - Tavern Helper libraries: jQuery, Vue, Tailwind and similar libraries from public CDNs such as jsDelivr, loaded when a card's Tavern Helper UI uses them.
-- **Web content inside cards and presets** may load pictures or fonts from addresses the card's author wrote into it. When a card's UI wants to call the model, each card asks you first; once you agree, its requests go to the model provider of that chat.
+- **Web content inside cards and presets** may load pictures or fonts from addresses the card's author wrote into it. When a card's UI wants to call the model, each card asks you first; once you agree, its requests go to the model provider of that chat. When a card's UI has its own API settings and the browser can't reach the address you entered, you're asked whether CicaTavern should connect for it instead (once per card and address); once you agree, what it sends goes to that address through CicaTavern.
 
 ## Uninstall
 

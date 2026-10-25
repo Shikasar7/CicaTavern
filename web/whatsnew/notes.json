@@ -391,6 +391,34 @@
           }
         }
       ]
+    },
+    {
+      "version": "1.9.4",
+      "date": "2026-10",
+      "items": [
+        {
+          "icon": "🌐",
+          "zh": {
+            "title": "联网搜索",
+            "text": "输入框左边多了一个地球图标，按对话开关。打开后，需要时事、真实地点和人物、作品资料这类现实世界的信息时，模型先搜网页再写，正文里不提搜索；回复下面可以展开看搜了什么、引用了哪些网页。\n用供应商自己的搜索：Anthropic 接口的 Claude、OpenAI Responses 接口、OpenRouter 的模型可以用，搜索按次另外收费。"
+          },
+          "en": {
+            "title": "Web search",
+            "text": "A globe left of the input box turns web search on for a chat. When real-world facts are needed (news, real places and people, details of a work), the model searches first and keeps the search out of the story; what it searched for and the pages it cited unfold under the reply.\nIt uses the provider's own search: Claude on the Anthropic interface, the OpenAI Responses interface and OpenRouter models have it. Searches cost extra."
+          }
+        },
+        {
+          "icon": "🔌",
+          "zh": {
+            "title": "卡片界面连不上自己的接口时",
+            "text": "有的大型卡在界面里自带 API 设置（比如角色创建界面），浏览器直接连你填的地址时常出现「Failed to fetch」。现在连不上时会问一次：改由 CicaTavern 替它连接吗？同意后这张卡连这个地址就经应用发出，走应用的网络代理，流式回复照样逐字到达。"
+          },
+          "en": {
+            "title": "When a card UI cannot reach its own API",
+            "text": "Some big cards have their own API settings in their UI (a character creator, say), and the browser calling the address you typed often ends in \"Failed to fetch\". Now, when that happens, the app asks once whether CicaTavern should make the call for it; once you agree, that card reaches that address through the app and its network proxy, and streamed replies still arrive as they are written."
+          }
+        }
+      ]
     }
   ]
 }

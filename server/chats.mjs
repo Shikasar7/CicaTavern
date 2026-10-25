@@ -643,6 +643,8 @@ export function chatView(chat) {
       // The model name a provider answered with: relays that switch upstream show it here.
       served: node.api?.model ?? undefined,
       truncated: node.api?.truncated || undefined,
+      // 联网: what the reply searched for and the pages it drew on.
+      search: node.search ?? undefined,
       stateChanges: node.stateChanges ?? undefined,
       compaction: node.compaction ? compactionView(chat, node) : undefined,
       media: node.media?.images?.length ? node.media : undefined,
@@ -661,6 +663,7 @@ export function chatView(chat) {
     title: chat.title,
     names: chat.names,
     model: chat.model ?? null,
+    webSearch: Boolean(chat.webSearch),
     presetId: chat.presetId ?? null,
     presetName: chat.presetName ?? null,
     createdAt: chat.createdAt,

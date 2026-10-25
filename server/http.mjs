@@ -42,6 +42,7 @@ import { addEntries, bookCounts, editBook, editBookInfo, emptyBook, inPrefix, is
 import { replaceMacros } from './prompt.mjs'
 import { accessCookie, hostAllowed, isLoopback, lanAddresses, loginPage, readCookie, tokensEqual } from './access.mjs'
 import { createDiagnostics } from './diagnostics.mjs'
+import { relayRequest } from './relay.mjs'
 
 const WEB_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'web')
 // The Windows launcher (launcher/): in a package, or built at a checkout's root.
@@ -970,6 +971,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       // A chat's own model; empty follows the global default. Caches are per model,
       // so switching costs one full cache write on the next turn.
       if (body.model !== undefined) chat.model = body.model ? modelRef(body.model) : null
+      // 联网: the provider searches the web for this chat's turns when the model asks (models that can).
+      if (body.webSearch !== undefined) chat.webSearch = Boolean(body.webSearch)
       return { ...chatView(await store.saveChat(chat)), running: engine.isRunning(id) }
     }],
     ['DELETE', /^\/api\/chats\/([\w-]+)$/, async ([id]) => {
@@ -1469,6 +1472,17 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
         send({ type: 'error', status: error.status ?? 500, message: localize(error.message) })
       }
       return res.end()
+    }
+
+    // A card frame's own API call that failed in the browser, made from here (server/relay.mjs; the page
+    // asked the player first): the API's answer as it comes. Given up when the page goes.
+    if (req.method === 'POST' && url.pathname === '/api/frame-fetch') {
+      const body = await readBody(req)
+      const controller = new AbortController()
+      res.on('close', () => {
+        if (!res.writableEnded) controller.abort()
+      })
+      return relayRequest(body, res, { proxy: isolation.proxy, ownPort: access.port, signal: controller.signal })
     }
 
     const turn = /^\/api\/chats\/([\w-]+)\/(turn|regenerate)$/.exec(url.pathname)

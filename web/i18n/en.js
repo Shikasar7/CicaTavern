@@ -2144,4 +2144,24 @@ export default {
   "保存为文件": "Save as a file",
   "CicaTavern 错误日志 {0}.txt": "CicaTavern error log {0}.txt",
   "已保存，把这个文件发给开发者就行": "Saved. Send this file to the developer",
+
+  // ─── 卡片界面直连接口的转发 (app.js frameHandlers.fetch) ────────────────────
+  "地址不对": "That address isn't valid",
+  "没有允许这张卡经 CicaTavern 连接 {0}": "This card isn't allowed to connect to {0} through CicaTavern",
+  "\n\n这是这台电脑或局域网里的地址：只有你知道那里是什么服务时才允许。": "\n\nThis address is on this computer or your local network: allow it only if you know what service answers there.",
+  "「{0}」的卡片界面要连接 {1}，浏览器直接连没有连上（多半是对方不让网页直接调用，或者网页够不着这个地址）。\n\n改由 CicaTavern 替它连接吗？会走应用的网络代理；卡片界面发出的内容（包括它自己的 API Key）会经过 CicaTavern 发到这个地址。之后这张卡连这个地址不再询问。{2}": "The UI of \"{0}\" wants to connect to {1}, and the browser couldn't do it directly (usually the service doesn't let web pages call it, or the page can't reach that address).\n\nLet CicaTavern connect for it instead? It goes through the app's network proxy, and what the card's UI sends (its own API key included) passes through CicaTavern to that address. You won't be asked again for this card and address.{2}",
+
+  "Anthropic 的网页搜索，每次搜索另收费": "Anthropic's web search, charged per search",
+  "OpenAI 的网页搜索，每次搜索另收费": "OpenAI's web search, charged per search",
+  "OpenRouter 的联网插件，每轮约另收 0.02 美元": "OpenRouter's web plugin, about $0.02 more per turn",
+  "联网搜索：这个模型用不了（Anthropic 接口的 Claude、OpenAI Responses 接口和 OpenRouter 的模型可以）": "Web search: not available for this model (Claude on the Anthropic interface, the OpenAI Responses interface and OpenRouter models have it)",
+  "联网搜索已打开：需要现实世界的信息时，模型会先搜网页（{0}）。点一下关掉": "Web search is on: when real-world facts are needed, the model searches the web first ({0}). Click to turn it off",
+  "联网搜索：打开后，需要现实世界的信息时模型会先搜网页（{0}）": "Web search: when on, the model searches the web first when real-world facts are needed ({0})",
+  "这个模型用不了联网搜索：Anthropic 接口的 Claude、OpenAI Responses 接口和 OpenRouter 的模型可以。": "Web search is not available for this model: Claude on the Anthropic interface, the OpenAI Responses interface and OpenRouter models have it.",
+  "这个对话打开了联网搜索：{0}。开关之后的第一轮会重新写一次缓存。": "Web search is on for this chat: {0}. The first turn after switching writes the cache again.",
+  "这个对话关掉了联网搜索。": "Web search is off for this chat.",
+  "联网搜索 · {0} 个来源": n => `Web search · ${pl(n, 'source', 'sources')}`,
+  "联网搜索了 {0} 次": n => `Searched the web ${n === 1 ? 'once' : `${n} times`}`,
+  "搜了：{0}": "Searched for: {0}",
+  "联网搜索": "Web search",
 }
