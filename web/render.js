@@ -180,7 +180,8 @@ function hash(text) {
 function frameDocument(body, id, context) {
   const css = getComputedStyle(document.documentElement)
   const color = css.getPropertyValue('--ink').trim() || '#222'
-  const compat = context ? frameShim({ ...context, frame: id, frameName: `TH-message--${context.messageId}--${id}` }) + libraryTags(body) : ''
+  // Tavern Helper's frame name: TH-message--<floor>--<n>.
+  const compat = context ? frameShim({ ...context, frame: id, frameName: `TH-message--${context.messageId}--${id.replace(/\D/g, '')}` }) + libraryTags(body) : ''
   if (context) body = replaceViewportHeight(body)
   // Measure the content, not the document: the document is never shorter than the frame, so a
   // block that collapses (a folded thinking panel, a re-render at a cached height) left a gap.

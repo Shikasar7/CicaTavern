@@ -2,7 +2,7 @@
 // reply): telling them apart, and writing a missing block afterwards (补写变量).
 // In a long chat the block is the part most often dropped, after a preset's own
 // end blocks or once the history no longer shows earlier ones.
-import { entryText, entryTitle } from './worldbook.mjs'
+import { entryText, entryTitle, isConstant, isInitvar } from './worldbook.mjs'
 
 const MVU = /_\.set\s*\(|UpdateVariable|JSONPatch/
 const BLOCK = /<UpdateVariable>[\s\S]*?<\/UpdateVariable>/i
@@ -53,7 +53,7 @@ const clip = (text, max) => (text.length > max ? `${text.slice(0, max)}\n…（�
 export function fillRequest({ books, render, state, reply, maxTokens = 3000 }) {
   const rules = books
     .flatMap(book => book.entries ?? [])
-    .filter(e => e.enabled !== false && e.constant && !e.initvar && (RULES.test(entryTitle(e)) || /UpdateVariable|JSONPatch/.test(entryText(e))))
+    .filter(e => e.enabled !== false && isConstant(e) && !isInitvar(e) && (RULES.test(entryTitle(e)) || /UpdateVariable|JSONPatch/.test(entryText(e))))
     .sort((a, b) => a.order - b.order)
     .map(e => `【${entryTitle(e)}】\n${render(e)}`)
     .filter(text => text.trim())

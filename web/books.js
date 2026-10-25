@@ -229,7 +229,11 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
       el('header', { class: 'preset-head' }, [
         el('h3', { class: 'preset-title', text: own ? t`卡里自带的世界书` : detail.name }),
         el('div', { class: 'preset-meta', text: [countText(countEntries(detail.entries)), where].join(t`。`) }),
-        el('div', { class: 'preset-actions' }, own ? [talkButton()] : [
+        el('div', { class: 'preset-actions' }, own ? [
+          talkButton(),
+          el('button', { class: 'btn small', type: 'button', text: t`导出`, title: t`存成 SillyTavern 的世界书 JSON：可以在 SillyTavern 里导入，也可以搬到另一台设备`, onclick: guard(exportOwn) }),
+          el('button', { class: 'btn small', type: 'button', text: t`抽出为单独的世界书`, title: t`复制成一本单独的世界书，可以挂到别的卡上，或者设成全局；这张卡还用它自带的这份`, onclick: guard(extractOwn) }),
+        ] : [
           talkButton(),
           el('button', { class: 'btn small', type: 'button', text: t`导出`, title: t`存成 SillyTavern 的世界书 JSON：可以在 SillyTavern 里导入，也可以搬到另一台设备`, onclick: guard(exportBook) }),
           el('button', { class: 'btn small', type: 'button', text: t`复制一份`, title: t`复制出一本一样的，改它不影响原来这本；新的一本先不挂到卡上`, onclick: guard(copyBook) }),
@@ -826,6 +830,25 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
     saveFile(t`世界书-${file.name}.json`, JSON.stringify(file, null, 2), state.detail.complete
       ? t`可以在 SillyTavern 的「世界信息」里导入，也可以导入另一台设备的 CicaTavern。`
       : t`这本导入得早，没留下 SillyTavern 里另外的字段（深度、分组等），导出的是这里记得的部分。可以在 SillyTavern 的「世界信息」里导入。`)
+  }
+
+  /** The card's own book as SillyTavern's world file, with the fields its card file has (server/worldbook.mjs standaloneBook). */
+  async function exportOwn() {
+    const file = await api(`/api/cards/${state.selected.slice(5)}/book/export`)
+    saveFile(t`世界书-${file.name}.json`, JSON.stringify(file, null, 2), t`可以在 SillyTavern 的「世界信息」里导入，也可以导入另一台设备的 CicaTavern。`)
+  }
+
+  /** The card's own book copied out as a book of its own, shown with its settings open (全局 is there). */
+  async function extractOwn() {
+    const cardName = state.card?.name ?? ''
+    const name = prompt(t`新世界书的名字`, state.detail.name)?.trim()
+    if (!name) return
+    const book = await api(`/api/cards/${state.selected.slice(5)}/book/extract`, { method: 'POST', body: { name } })
+    await refreshBooks()
+    state.panels.add('settings')
+    await select(book.id)
+    onChanged?.()
+    toast(t`已抽出为「${book.name}」。要每张卡都用，在「书的设置」里勾上「全局」；要给别的卡用，在「用到它的卡」里勾上。「${cardName}」还用它自带的那份，设成全局后它的对话里会有两份。`, 9000)
   }
 
   async function copyBook() {

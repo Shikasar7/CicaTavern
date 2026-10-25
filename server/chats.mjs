@@ -2,23 +2,26 @@
 // session + message uuid it ended on, so any node can be continued (resume) or
 // branched from (fork at that uuid) without replaying anything.
 import { greetingsOf } from './cards.mjs'
-import { buildChatPrompt, replaceMacros } from './prompt.mjs'
+import { buildChatPrompt, chatTemplates, replaceMacros, templateText } from './prompt.mjs'
 import YAML from 'yaml'
-import { constantEntries, initialState, lateEntries } from './worldbook.mjs'
-import { applyStateUpdates, displayText } from './state.mjs'
+import { constantEntries, entryText, initialState, lateEntries } from './worldbook.mjs'
+import { applyStateUpdates, applyWrites, displayText } from './state.mjs'
+import { hasEjs, renderTemplate } from './template.mjs'
 import { httpError, newId } from './store.mjs'
 import { MIN_TURNS, RECENT_TURNS, STORY_FORMAT, storyPath, storyTurns, turnsSinceCompaction } from './recap.mjs'
 import { msg } from './i18n.mjs'
 import { BASIC_ID, basicPreset } from './basic.mjs'
 import { readSillyTavernChat } from './st-chat.mjs'
 import { markSpeakers } from '../web/shared/vn.js'
+import { withChatChanges } from './frames.mjs'
 
 /**
  * A chat's books: the card's own, the imported ones it has mounted, then the
  * global ones (全局世界书) it has not, each once.
  * @param settings - when the caller has them already.
+ * @param chat - a chat whose card wrote to its books (frames.mjs): what that chat reads.
  */
-export async function booksForCard(store, card, settings = null) {
+export async function booksForCard(store, card, settings = null, chat = null) {
   const books = card.book ? [{ ...card.book, id: `card-${card.id}` }] : []
   const { globalBookIds = [] } = settings ?? await store.getSettings()
   for (const id of new Set([...(card.worldbookIds ?? []), ...globalBookIds])) {
@@ -28,7 +31,7 @@ export async function booksForCard(store, card, settings = null) {
       // A deleted worldbook is simply skipped.
     }
   }
-  return books
+  return chat ? withChatChanges(books, chat) : books
 }
 
 /**
@@ -88,18 +91,30 @@ export function playerOf(card, persona, name = card.userName || persona.name || 
 
 /**
  * Re-render a chat's frozen system prompt from the card, persona, settings and
- * preset as they are now. The next turn writes the cache once more.
+ * preset as they are now. The next turn writes the cache once more. Templates
+ * there render with the opening's state again; what they write is not kept.
  */
 export async function rebuildPrompt(store, chat, presetId = chat.presetId ?? '') {
   const card = await store.getCard(chat.cardId)
-  const [persona, settings, chosen] = await Promise.all([store.getPersona(), store.getSettings(), presetFor(store, presetId ?? '')])
+  const [persona, settings, chosen, globalScripts] = await Promise.all([store.getPersona(), store.getSettings(), presetFor(store, presetId ?? ''), store.getRegex()])
   // A deleted preset, or a chat from before the built-in one: rebuilt with the built-in preset.
   const preset = chosen ?? basicPreset(settings)
-  const books = await booksForCard(store, card, settings)
+  const books = await booksForCard(store, card, settings, chat)
   const hasState = Object.keys(chat.nodes.root.state ?? {}).length > 0
   // A card renamed in 修改角色卡: {{char}} in later turns follows the prefix.
   chat.names = { ...chat.names, char: card.name }
-  const built = buildChatPrompt({ card, persona: playerOf(card, persona, chat.names.user), settings, books, hasState, preset })
+  const prefix = prefixTemplates({
+    names: chat.names, card, preset, books, scripts: scriptsOf(card, preset, globalScripts),
+    state: chat.nodes.root.state ?? {}, local: chat.frameVars ?? {}, global: settings.globalVars ?? {},
+    messages: [{ role: 'assistant', text: chat.nodes.root.text ?? '' }],
+  })
+  let built
+  try {
+    built = buildChatPrompt({ card, persona: playerOf(card, persona, chat.names.user), settings, books, hasState, preset, render: prefix.render })
+    built.systemPrompt = prefix.resolve(built.systemPrompt)
+  } finally {
+    prefix.dispose()
+  }
   chat.systemPrompt = built.systemPrompt
   chat.presetVars = built.presetVars
   chat.presetId = preset?.id ?? null
@@ -109,12 +124,94 @@ export async function rebuildPrompt(store, chat, presetId = chat.presetId ?? '')
 }
 
 export async function createChat(store, cardId, greetingIndex = 0) {
-  return startChat(store, cardId, ({ card, names, state }) => {
+  return startChat(store, cardId, ({ card, state, open }) => {
     const greetings = greetingsOf(card)
-    // Macros (incl. {{random}}) resolve once, so the shown and the prompted opening match.
-    const greeting = replaceMacros(greetings[Math.min(Math.max(0, greetingIndex), greetings.length - 1)] ?? '', names)
-    return { text: greeting, state: greetingState(state, greeting) }
+    return open(state, greetings[Math.min(Math.max(0, greetingIndex), greetings.length - 1)] ?? '')
   })
+}
+
+/** [InitVar]-style entries with their EJS run once, as ST-Prompt-Template renders @@initial_variables before reading it. */
+const initvarText = names => entry => renderTemplate(entry.content, { names }).text ?? entryText(entry)
+
+/**
+ * An opening as a chat keeps it. Its templates run once with the opening's
+ * state (ST-Prompt-Template evaluates a new message's raw text once and keeps
+ * the result), then macros (incl. {{random}}) resolve once, so the shown and the
+ * prompted opening match. What its templates write lands after its own update blocks.
+ * @param ctx - chatTemplates options: { names, card, preset, books, scripts, local, global }.
+ * @returns { text, state, local, global, errors }: `local` and `global` are writes (state.mjs applyWrites).
+ */
+function openWith(ctx, state, greeting) {
+  let rendered = greeting
+  let writes = null
+  const errors = []
+  if (hasEjs(greeting)) {
+    const session = chatTemplates({ ...ctx, state: openingInit(state, greeting), messages: [{ role: 'assistant', text: greeting }], runType: 'render_permanent' })
+    try {
+      rendered = session.resolveInjected(templateText(session, greeting, errors))
+      writes = session.writes()
+    } finally {
+      session.dispose()
+    }
+  }
+  const text = replaceMacros(rendered, ctx.names)
+  return { text, state: applyWrites(greetingState(state, text), writes?.message), local: writes?.local ?? [], global: writes?.global ?? [], errors }
+}
+
+/**
+ * The frozen prefix's templates (card fields, persona, preset prompts) through
+ * one sandbox: `render` for buildChatPrompt, then `resolve` on the whole prompt
+ * for getPromptsInjected. Rendered once; see buildChatPrompt.
+ */
+function prefixTemplates(ctx) {
+  const session = chatTemplates({ ...ctx, runType: 'preparation' })
+  const errors = []
+  return {
+    render: text => (hasEjs(text) ? templateText(session, text, errors) : text),
+    resolve: text => session.resolveInjected(text),
+    writes: () => session.writes(),
+    errors,
+    dispose: () => session.dispose(),
+  }
+}
+
+/** Whether a chat's prefix material holds templates (an opening switched before the first turn renders it again). */
+function prefixHasTemplates(card, preset, persona) {
+  const texts = [card.description, card.personality, card.scenario, card.mesExample, card.systemPrompt, card.postHistoryInstructions, persona?.description, ...(preset?.prompts ?? []).map(p => p.content)]
+  return texts.some(hasEjs)
+}
+
+/** Template writes to the app-wide variables (the plugin's `global` scope), saved in settings. */
+async function saveGlobalWrites(store, writes) {
+  if (!writes?.length) return
+  const settings = await store.getSettings()
+  await store.saveSettings({ globalVars: applyWrites(settings.globalVars ?? {}, writes) })
+}
+
+/**
+ * Another of the card's openings for a chat nobody has played yet (a card's
+ * welcome page that switches the first message, as SillyTavern's swipes do),
+ * with that opening's variables.
+ */
+export async function switchOpening(store, chat, index) {
+  if (Object.values(chat.nodes).some(node => node.parent === 'root')) throw httpError(409, msg`对话已经开始，不能再换开场白`)
+  const card = await store.getCard(chat.cardId)
+  const greetings = greetingsOf(card)
+  if (!Number.isInteger(index) || index < 0 || index >= greetings.length) throw httpError(400, msg`没有这个开场白`)
+  const [settings, persona, globalScripts] = await Promise.all([store.getSettings(), store.getPersona(), store.getRegex()])
+  const preset = await presetFor(store, chat.presetId ?? '')
+  const books = await booksForCard(store, card, settings, chat)
+  const ctx = { names: chat.names, card, preset, books, scripts: scriptsOf(card, preset, globalScripts), local: chat.frameVars ?? {}, global: settings.globalVars ?? {} }
+  const opened = openWith(ctx, initialState(books, initvarText(chat.names)), greetings[index])
+  Object.assign(chat.nodes.root, { text: opened.text, display: displayText(opened.text), state: opened.state })
+  if (opened.errors.length) chat.nodes.root.templateErrors = opened.errors
+  else delete chat.nodes.root.templateErrors
+  if (opened.local.length) chat.frameVars = applyWrites(chat.frameVars ?? {}, opened.local)
+  await saveGlobalWrites(store, opened.global)
+  // Nothing has been sent yet: a prefix whose templates read the opening's state is rendered again.
+  if (prefixHasTemplates(card, preset, persona)) await rebuildPrompt(store, chat, chat.presetId ?? '')
+  chat.updatedAt = new Date().toISOString()
+  return store.saveChat(chat)
 }
 
 /**
@@ -123,34 +220,59 @@ export async function createChat(store, cardId, greetingIndex = 0) {
  * block in the opening applies on top.
  */
 export function greetingState(state, greeting) {
-  let next = state
+  return applyStateUpdates(openingInit(state, greeting), greeting.replace(/<initvar>[\s\S]*?<\/initvar>/gi, '')).state
+}
+
+/** The state an opening starts from: its <initvar> block, else the card's initial values. */
+function openingInit(state, greeting) {
   const init = /<initvar>([\s\S]*?)<\/initvar>/i.exec(greeting)
   if (init) {
     try {
       const parsed = YAML.parse(init[1])
-      if (isPlainObject(parsed)) next = parsed
+      if (isPlainObject(parsed)) return parsed
     } catch {
       // A malformed block keeps the card's initial values.
     }
   }
-  return applyStateUpdates(next, greeting.replace(/<initvar>[\s\S]*?<\/initvar>/gi, '')).state
+  return state
 }
 
 /**
- * A new chat for `cardId` whose root is what `makeRoot({ card, names, state })`
- * returns: { text, state, compaction?, title? }. `state` is the card's initial one.
+ * A new chat for `cardId` whose root is what `makeRoot({ card, names, state, open })`
+ * returns: { text, state, compaction?, title?, local?, global?, errors? }. `state` is
+ * the card's initial one; `open(state, greeting)` makes an opening (openWith).
+ * The frozen prefix's templates render once here, with the opening's state;
+ * what they and the opening write is kept.
  * @param options.userName - the player's name in this chat, instead of the card's or the persona's.
  */
 async function startChat(store, cardId, makeRoot, { userName = '' } = {}) {
   const card = await store.getCard(cardId)
-  const [persona, settings] = await Promise.all([store.getPersona(), store.getSettings()])
+  const [persona, settings, globalScripts] = await Promise.all([store.getPersona(), store.getSettings(), store.getRegex()])
   const preset = await presetFor(store, settings.presetId)
   const books = await booksForCard(store, card, settings)
   const player = userName ? playerOf(card, persona, userName) : playerOf(card, persona)
   const names = { char: card.name, user: player.name }
-  const root = makeRoot({ card, names, state: initialState(books) })
+  const ctx = { names, card, preset, books, scripts: scriptsOf(card, preset, globalScripts), local: {}, global: settings.globalVars ?? {} }
+  const root = makeRoot({ card, names, state: initialState(books, initvarText(names)), open: (state, greeting) => openWith(ctx, state, greeting) })
+  let frameVars = applyWrites({}, root.local)
+  const globalVars = applyWrites(settings.globalVars ?? {}, root.global)
+  const errors = [...(root.errors ?? [])]
   const now = new Date().toISOString()
-  const built = buildChatPrompt({ card, persona: player, settings, books, hasState: Object.keys(root.state).length > 0, preset })
+  const prefix = prefixTemplates({ ...ctx, state: root.state, local: frameVars, global: globalVars, messages: [{ role: 'assistant', text: root.text }] })
+  let built
+  let globalWrites = root.global ?? []
+  try {
+    built = buildChatPrompt({ card, persona: player, settings, books, hasState: Object.keys(root.state).length > 0, preset, render: prefix.render })
+    built.systemPrompt = prefix.resolve(built.systemPrompt)
+    const writes = prefix.writes()
+    root.state = applyWrites(root.state, writes.message)
+    frameVars = applyWrites(frameVars, writes.local)
+    globalWrites = [...globalWrites, ...writes.global]
+    errors.push(...prefix.errors)
+  } finally {
+    prefix.dispose()
+  }
+  await saveGlobalWrites(store, globalWrites)
   const chat = {
     id: newId(),
     cardId,
@@ -166,6 +288,8 @@ async function startChat(store, cardId, makeRoot, { userName = '' } = {}) {
     bookIds: books.map(b => b.id),
     tips: {},
     stateDirty: false,
+    // Chat-wide variables: the template `local` scope, Tavern Helper's chat variables.
+    ...(Object.keys(frameVars).length ? { frameVars } : {}),
     nodes: {
       root: {
         id: 'root',
@@ -174,6 +298,7 @@ async function startChat(store, cardId, makeRoot, { userName = '' } = {}) {
         text: root.text,
         display: displayText(root.text),
         state: root.state,
+        ...(errors.length ? { templateErrors: errors } : {}),
         ...(root.compaction ? { compaction: root.compaction } : {}),
         sel: null,
         sdk: null,
@@ -503,7 +628,8 @@ export function chatView(chat) {
       // `text` is ready to show; `raw` + `state` let the UI run the card's display regex and variable macros.
       text: node.role === 'user' ? node.text : node.display,
       raw: node.text,
-      state: node.role === 'assistant' ? node.state ?? {} : chat.nodes[node.parent]?.state ?? {},
+      // A player's message: the variables before it, with what its turn's templates wrote.
+      state: node.role === 'assistant' ? node.state ?? {} : applyWrites(chat.nodes[node.parent]?.state ?? {}, node.templateWrites),
       templateErrors: node.templateErrors?.length ? node.templateErrors : undefined,
       historyTrim: node.historyTrim ?? undefined,
       edited: node.edited ?? undefined,
@@ -544,6 +670,8 @@ export function chatView(chat) {
     // Turns a manual compaction would fold into a summary; 0 when there is nothing worth it.
     compactable: tip.role === 'assistant' && (tip.sdk || tip.api || tip.imported) && sinceCompaction >= MIN_TURNS ? sinceCompaction : 0,
     state: lastAssistant?.state ?? {},
+    // The chat variables (Tavern Helper's chat scope, the templates' local scope), for the card's frames.
+    frameVars: chat.frameVars ?? {},
     systemPromptChars: chat.systemPrompt.length,
   }
 }

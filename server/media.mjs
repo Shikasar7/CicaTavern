@@ -18,7 +18,7 @@ import { copyFile, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promi
 import { inflateRawSync } from 'node:zlib'
 import path from 'node:path'
 import { complete, fetchBytes, googleRequest, isProviderRef, postJson, providerError, providerRequest, refLabel, resolveRef } from './providers.mjs'
-import { chatMaterial, cleanFrame, cleanLora, cleanRoster, cleanStrength, countTags, draftMaterial, flattenFrame, frameFormat, isFramePrompt, isRosterId, leadOf, naiCharacters, parseFrame, parseRosterDraft, rosterBrief, rosterChatRequest, rosterDraftRequest, withSomeone } from './roster.mjs'
+import { chatMaterial, cleanFrame, cleanLora, cleanRoster, cleanStrength, countTags, draftMaterial, flattenFrame, frameFormat, isFramePrompt, isRosterId, leadOf, naiCharacters, parseFrame, parseRosterChat, parseRosterDraft, rosterBrief, rosterChatRequest, rosterDraftRequest, withSomeone } from './roster.mjs'
 import { httpError, newId } from './store.mjs'
 import { FISH_MODELS } from './voice/cloud.mjs'
 import { KEYED, cleanVoiceKey, cleanVoiceList, createVoices } from './voice/index.mjs'
@@ -1283,33 +1283,34 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
   }
 
   /**
-   * 从对话里补充: the characters in a chat's recent turns that the 角色名册 does
-   * not have yet, written by the helper model; not saved.
+   * 从对话里补充: what a chat's recent turns show that the 角色名册 lacks, by
+   * the helper model, not saved: the characters it does not have yet, and for
+   * those it has, the names the story calls them by now and a name it got wrong
+   * (parseRosterChat).
    * @param chat - { path (activePath), user (the player's name) }.
-   * @param names - the names the list on the page already has (saved or not).
+   * @param cast - the list on the page, saved or not: { id, name, aliases, player }; the saved one when not given.
    */
-  async function draftRosterFromChat(cardId, chat, names = [], signal) {
+  async function draftRosterFromChat(cardId, chat, cast = null, signal) {
     const media = await settings()
     const card = await store.getCard(cardId)
-    const saved = cleanCardMedia(card.media).roster
-    const split = list => list.flatMap(name => String(name ?? '').split(/[,，、/|]+/)).map(name => name.trim()).filter(Boolean)
-    const known = [...new Set(split([...saved.flatMap(entry => [entry.name, entry.aliases]), ...names, chat.user]))]
+    const list = (Array.isArray(cast) ? cast : cleanCardMedia(card.media).roster)
+      .filter(entry => entry && typeof entry === 'object')
+      .slice(0, 40)
+      .map(entry => ({ id: String(entry.id ?? ''), name: String(entry.name ?? '').trim().slice(0, 40), aliases: String(entry.aliases ?? '').trim().slice(0, 120), player: entry.player === true }))
+      .filter(entry => entry.name || entry.player)
+      .map(entry => ({ ...entry, name: entry.name || '主角' }))
     const material = chatMaterial(chat.path)
     if (!material) throw httpError(400, msg`这个对话还没有内容可读`)
     const { provider, modelId } = await helperTarget({ model: '' }, media)
     let result
     try {
-      result = await complete(provider, modelId, { ...rosterChatRequest(material, { known, setting: card.scenario || card.description || '' }), signal }, { proxy: proxyNow() })
+      result = await complete(provider, modelId, { ...rosterChatRequest(material, { cast: list, userName: chat.user, setting: card.scenario || card.description || '' }), signal }, { proxy: proxyNow() })
     } catch (error) {
       if (error.status) throw error
       throw httpError(502, providerError(provider, error))
     }
-    // Nobody new is an answer too; whoever the list has after all is left out.
-    const has = new Set(known.map(name => name.toLowerCase()))
-    const roster = parseRosterDraft(result.text)
-      .filter(entry => !split([entry.name, entry.aliases]).some(name => has.has(name.toLowerCase())))
-      .map(entry => ({ ...entry, player: false }))
-    return { roster, model: `${provider.name} · ${modelId}` }
+    // Nobody new and nothing to fix is an answer too.
+    return { ...parseRosterChat(result.text, list, chat.user), model: `${provider.name} · ${modelId}` }
   }
 
   /** The settings with the 画图方式 and model picked for one picture, if any (withDrawChoice). */

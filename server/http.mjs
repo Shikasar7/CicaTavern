@@ -12,14 +12,15 @@ import path from 'node:path'
 import YAML from 'yaml'
 import { fileURLToPath } from 'node:url'
 import { backfillEntryPositions, cardSummary, cleanGroup, exportCard, greetingsOf, importOwnCard, normalizeCard, organizeCard, parseCardFile, previousVersion, rawOfPicture, sillyTavernCard, unwrapWorkspace, writeCardPng } from './cards.mjs'
-import { chatSummary, chatView, childrenOf, createChat, selectNode, activePath, rebuildPrompt, restoreFolded, rollbackTo, editCompaction, dropCompaction, exportStory, importStory, importSillyTavern, forkChat, mountChange } from './chats.mjs'
+import { chatSummary, chatView, childrenOf, createChat, selectNode, activePath, rebuildPrompt, restoreFolded, rollbackTo, editCompaction, dropCompaction, exportStory, importStory, importSillyTavern, forkChat, mountChange, switchOpening, booksForCard, playerOf } from './chats.mjs'
+import { bookByName, bookNames, fieldChange, parseUpdates, setFrameVars, thEntry, withChatChanges, writeChatBook } from './frames.mjs'
 import { editPreset, exportPreset, importOwnPreset, normalizePreset, presetDetail, presetSummary } from './presets.mjs'
 import { basicDetail } from './basic.mjs'
 import { appVersion, featuresOf } from './edition.mjs'
 import { createProxy, proxyOverride } from './proxy.mjs'
 import { createEngine } from './engine.mjs'
 import { APIS, draftProvider, exportProviders, importProviders, isProviderRef, listRemoteModels, mergeDshProviders, normalizeProvider, providersFromDsh, providerChoices, providerError, publicProvider, refLabel } from './providers.mjs'
-import { initTemplates } from './template.mjs'
+import { initTemplates, templateSyntaxError } from './template.mjs'
 import { canonicalModel } from './models.mjs'
 import { createLedger } from './usage.mjs'
 import { createMedia, drawChoiceOf } from './media.mjs'
@@ -37,9 +38,10 @@ import { createStore, defaultDataRoot, httpError, newId, PRIVACY_NOTICE } from '
 import { currentLanguage, localize, msg, pageIn, requestLanguage, withLanguage } from './i18n.mjs'
 import { createUpdater } from './update/index.mjs'
 import { createShortcut } from './update/install.mjs'
-import { addEntries, bookCounts, editBook, editBookInfo, emptyBook, inPrefix, isDynamic, normalizeBook, worldFile } from './worldbook.mjs'
+import { addEntries, bookCounts, editBook, editBookInfo, emptyBook, inPrefix, isDynamic, isInitvar, normalizeBook, standaloneBook, worldFile } from './worldbook.mjs'
 import { replaceMacros } from './prompt.mjs'
 import { accessCookie, hostAllowed, isLoopback, lanAddresses, loginPage, readCookie, tokensEqual } from './access.mjs'
+import { createDiagnostics } from './diagnostics.mjs'
 
 const WEB_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'web')
 // The Windows launcher (launcher/): in a package, or built at a checkout's root.
@@ -95,6 +97,7 @@ const STATIC = {
   '/shared/cutout.js': ['shared/cutout.js', 'text/javascript; charset=utf-8'],
   '/whatsnew.js': ['whatsnew.js', 'text/javascript; charset=utf-8'],
   '/shared/whatsnew.js': ['shared/whatsnew.js', 'text/javascript; charset=utf-8'],
+  '/diagnostics.js': ['diagnostics.js', 'text/javascript; charset=utf-8'],
   '/icon.png': ['icon.png', 'image/png'],
   '/favicon.ico': ['icon.ico', 'image/x-icon'],
   // A phone's home screen (Safari「添加到主屏幕」, Android「安装应用」): see /manifest.webmanifest.
@@ -129,6 +132,8 @@ async function readBody(req) {
 
 function sendJson(res, status, value) {
   if (typeof value?.error === 'string') value = { ...value, error: localize(value.error) }
+  // For the error log, once the answer has gone (createApp's server).
+  if (status >= 400 && typeof value?.error === 'string') res.errorText = value.error
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
   res.end(JSON.stringify(value))
 }
@@ -152,7 +157,7 @@ function bookView(book, id = book.id) {
     // Whether an export carries the SillyTavern fields this app does not read (not for books imported before they were kept).
     complete: book.extras === true,
     // `extra` stays on the server: the page does not edit it.
-    entries: book.entries.map(({ extra, ...entry }) => ({ ...entry, dynamic: isDynamic(entry) })),
+    entries: book.entries.map(({ extra, ...entry }) => ({ ...entry, dynamic: isDynamic(entry), initvar: isInitvar(entry) })),
   }
 }
 
@@ -209,6 +214,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
   // A tree without the subscription backend (CicaTavern, the phone) has no subscription whatever the edition says.
   if (!subscriptionBackend) features.subscription = false
   const store = createStore(dataRoot ?? defaultDataRoot(features.dataDir), { subscription: features.subscription, lan: features.lan })
+  // 设置 → 更多 → 错误日志.
+  const diagnostics = createDiagnostics(store.dirs.root, store, { version: VERSION, edition: features.edition, appName: features.appName })
   const network = createProxy({ override: proxyOverride(proxy), defaultMode: features.defaultProxy })
   // Read on every request, so a changed proxy setting applies at once.
   const isolation = {
@@ -309,8 +316,76 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       send({ type: 'done', nodeId, chat: chatView(chat) })
     } catch (error) {
       send({ type: 'error', status: error.status ?? 500, message: localize(error.message) })
+      // Stopped by the player (499) is no error. One without a status is this app's own mistake: its stack too.
+      // In the log before the stream ends.
+      if (error.status !== 499) {
+        await diagnostics.record({ source: 'turn', status: error.status ?? 500, message: localize(error.message), stack: error.status ? '' : error.stack, model: await turnModel(chatId) }).catch(() => {})
+      }
     }
     res.end()
+  }
+
+  /** The model a chat's turns go to, as the model menu names it. */
+  async function turnModel(chatId) {
+    const [chat, settings, providers] = await Promise.all([store.getChat(chatId).catch(() => null), store.getSettings(), store.getProviders()])
+    const ref = chat?.model || settings.model
+    return refLabel(ref, providers) ?? ref
+  }
+
+  /**
+   * An API request that failed goes to the error log (not the log's own routes, nor one the page
+   * cancelled) before its answer goes out: whoever has the answer finds it in the log.
+   */
+  function holdFailures(req, res) {
+    const end = res.end
+    res.end = (...args) => {
+      res.end = end
+      const pathname = new URL(req.url, 'http://local').pathname
+      const failed = res.statusCode >= 400 && res.statusCode !== 499 && typeof res.errorText === 'string' && pathname.startsWith('/api/') && !pathname.startsWith('/api/diagnostics')
+      if (!failed) return end.apply(res, args)
+      diagnostics.record({ source: 'request', what: `${req.method} ${pathname}`, status: res.statusCode, message: res.errorText, stack: res.errorStack })
+        .catch(() => {})
+        .finally(() => {
+          if (!res.writableEnded) end.apply(res, args)
+        })
+      return res
+    }
+  }
+
+  /**
+   * A card frame reads or writes one of its chat's books (Tavern Helper getWorldbook / replaceWorldbook,
+   * /setentryfield). Writes are the chat's own changes; one reaching the frozen prefix rebuilds it.
+   * @param body - { action: 'get' | 'replace' | 'field', name, entries?, uid?, field?, value? }
+   */
+  async function frameBook(chatId, body) {
+    const chat = await store.getChat(chatId)
+    const [card, settings] = await Promise.all([store.getCard(chat.cardId), store.getSettings()])
+    const base = bookByName(await booksForCard(store, card, settings), body.name, card)
+    if (!base) throw httpError(404, msg`这个对话没有用名为「${String(body.name ?? '')}」的世界书`)
+    const [current] = withChatChanges([base], chat)
+    if (body.action === 'get') return { entries: current.entries.map(thEntry) }
+    if (engine.isRunning(chatId)) throw httpError(409, msg`正在生成，先停止`)
+    let entries = body.entries
+    if (body.action === 'field') {
+      const list = current.entries.map(thEntry)
+      const at = list.findIndex(e => e.uid === Number(body.uid))
+      if (at < 0) throw httpError(404, msg`世界书「${base.name}」里没有 uid 为 ${String(body.uid)} 的条目`)
+      list[at] = { ...list[at], ...fieldChange(body.field, body.value), strategy: { ...list[at].strategy, ...(fieldChange(body.field, body.value).strategy ?? {}) } }
+      entries = list
+    } else if (body.action !== 'replace') throw httpError(400, msg`不认识的世界书操作`)
+    const written = writeChatBook(chat, base, entries)
+    if (written.prefix) await rebuildPrompt(store, chat)
+    await store.saveChat(chat)
+    return written
+  }
+
+  /** A card's own book as an imported one, with the SillyTavern fields its picture's card JSON has (standaloneBook). */
+  async function ownBookCopy(cardId, name = '') {
+    const card = await store.getCard(cardId)
+    if (!card.book) throw httpError(404, msg`这张卡没有自带世界书`)
+    const raw = rawOfPicture(card.hasAvatar ? await readFile(store.avatarPath(cardId)).catch(() => null) : null)
+    const data = raw?.data && typeof raw.data === 'object' ? raw.data : raw
+    return standaloneBook(card.book, data?.character_book ?? null, { name: typeof name === 'string' ? name : '' })
   }
 
   const routes = [
@@ -508,12 +583,13 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['GET', /^\/api\/cards\/([\w-]+)\/media$/, ([id]) => media.cardMediaView(id)],
     ['PUT', /^\/api\/cards\/([\w-]+)\/media$/, ([id], body) => media.saveCardMedia(id, body)],
     ['POST', /^\/api\/cards\/([\w-]+)\/roster\/draft$/, ([id]) => media.draftRoster(id, AbortSignal.timeout(180000))],
-    // 从对话里补充: the characters in an open chat's recent turns that the list does not have yet.
+    // 从对话里补充: the characters in an open chat's recent turns that the list (`cast`, as the page
+    // has it) does not have yet, and the names the story calls those it has by now.
     ['POST', /^\/api\/cards\/([\w-]+)\/roster\/draft-chat$/, async ([id], body) => {
       const chat = await store.getChat(String(body?.chatId ?? ''))
       if (chat.cardId !== id) throw httpError(400, msg`这个对话不是这张卡的`)
-      const names = Array.isArray(body?.names) ? body.names.filter(name => typeof name === 'string').slice(0, 100) : []
-      return media.draftRosterFromChat(id, { path: activePath(chat), user: chat.names?.user ?? '' }, names, AbortSignal.timeout(180000))
+      const cast = Array.isArray(body?.cast) ? body.cast : null
+      return media.draftRosterFromChat(id, { path: activePath(chat), user: chat.names?.user ?? '' }, cast, AbortSignal.timeout(180000))
     }],
     ['POST', /^\/api\/cards\/([\w-]+)\/roster\/portrait$/, ([id], body) => media.drawPortrait(id, body?.entry, AbortSignal.timeout(600000), drawChoiceOf(body))],
     ['PUT', /^\/api\/cards\/([\w-]+)\/roster\/([\w-]+)\/ref$/, ([id, entryId], body) => media.saveRosterRef(id, entryId, body?.image)],
@@ -552,6 +628,14 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['PUT', /^\/api\/forge\/([\w-]+)\/avatar$/, ([id], body) => forge.uploadAvatar(id, body ?? {})],
     ['POST', /^\/api\/forge\/([\w-]+)\/save$/, ([id], body) => forge.saveCard(id, body ?? {})],
     ['POST', /^\/api\/forge\/([\w-]+)\/stop$/, ([id]) => forge.stop(id)],
+    // 错误日志: the page's own mistakes come in; the report goes out only as the player copies or saves it.
+    ['GET', /^\/api\/diagnostics$/, async () => ({ count: (await diagnostics.list()).length })],
+    ['POST', /^\/api\/diagnostics\/page$/, async (_, body) => {
+      await diagnostics.record({ source: 'page', what: String(body?.kind ?? 'error').slice(0, 40), message: String(body?.message ?? ''), stack: String(body?.stack ?? '') })
+      return { ok: true }
+    }],
+    ['POST', /^\/api\/diagnostics\/report$/, (_, body) => diagnostics.report({ page: body?.page && typeof body.page === 'object' ? body.page : {}, chatId: String(body?.chatId ?? ''), lastTurn: body?.lastTurn === true })],
+    ['DELETE', /^\/api\/diagnostics$/, () => diagnostics.clear()],
     ['GET', /^\/api\/access$/, async () => accessView()],
     ['GET', /^\/api\/persona$/, () => store.getPersona()],
     ['PUT', /^\/api\/persona$/, (_, body) => store.savePersona(body)],
@@ -730,6 +814,14 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       await store.saveCard(card)
       return { ...bookView(card.book, `card-${card.id}`), prefix, added, card: cardSummary(card) }
     }],
+    // A card's own worldbook out of the card: as SillyTavern's world file (导出), or as an
+    // imported book of its own (抽出, named `name`) that other cards can mount or every
+    // chat can use (全局). The card keeps its own.
+    ['GET', /^\/api\/cards\/([\w-]+)\/book\/export$/, async ([id]) => worldFile(await ownBookCopy(id))],
+    ['POST', /^\/api\/cards\/([\w-]+)\/book\/extract$/, async ([id], body) => {
+      const book = await store.saveBook(await ownBookCopy(id, body?.name))
+      return { ...bookSummary(book), global: false }
+    }],
 
     // Imported books as whole books (web/books.js, 世界书): which cards use one is
     // each card's worldbookIds, which the page has in its card list.
@@ -865,6 +957,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
 
     ['GET', /^\/api\/chats$/, async (_, __, url) => (await store.listChats(url.searchParams.get('cardId'))).map(chatSummary)],
     ['POST', /^\/api\/chats$/, async (_, body) => chatView(await createChat(store, String(body.cardId), Number(body.greetingIndex) || 0))],
+    // A card's welcome page switching the first message to another of its openings (before the first turn).
+    ['POST', /^\/api\/chats\/([\w-]+)\/opening$/, async ([id], body) => chatView(await switchOpening(store, await store.getChat(id), Number(body?.index)))],
     ['GET', /^\/api\/chats\/([\w-]+)$/, async ([id]) => ({ ...chatView(await store.getChat(id)), running: engine.isRunning(id) })],
     ['PUT', /^\/api\/chats\/([\w-]+)$/, async ([id], body) => {
       const chat = await store.getChat(id)
@@ -969,6 +1063,35 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     }],
     ['POST', /^\/api\/chats\/([\w-]+)\/preview$/, ([id], body) =>
       engine.previewTurn(id, { parentId: String(body.parentId), input: body.input, marks: body.marks === true })],
+    // 楼层渲染: { nodeId, texts } → { texts, errors? }, the EJS in what a card's display regex made
+    // for one message, rendered at that message; nothing the templates write is kept (engine.renderForDisplay).
+    ['POST', /^\/api\/chats\/([\w-]+)\/display-render$/, ([id], body) => engine.renderForDisplay(id, body ?? {})],
+    // EjsTemplate.getSyntaxErrorInfo in a card's frame.
+    ['POST', /^\/api\/ejs\/check$/, async (_, body) => {
+      const code = String(body?.code ?? '')
+      if (code.length > 256 * 1024) throw httpError(400, msg`要检查的模板太长`)
+      return { error: templateSyntaxError(code) }
+    }],
+    // ── What a card's own HTML reads and writes besides the turns (server/frames.mjs, web/compat.js) ──
+    // The names of the books this chat uses, the app's global variables, the player's description.
+    ['GET', /^\/api\/chats\/([\w-]+)\/frame-info$/, async ([id]) => {
+      const chat = await store.getChat(id)
+      const [card, settings, persona] = await Promise.all([store.getCard(chat.cardId), store.getSettings(), store.getPersona()])
+      const books = await booksForCard(store, card, settings)
+      return { books: bookNames(books, card, settings.globalBookIds ?? []), vars: chat.frameVars ?? {}, globalVars: settings.globalVars ?? {}, persona: { description: playerOf(card, persona, chat.names.user).description ?? '' } }
+    }],
+    // Tavern Helper's chat variables (the templates' local scope).
+    ['PUT', /^\/api\/chats\/([\w-]+)\/frame-vars$/, async ([id], body) => {
+      const chat = setFrameVars(await store.getChat(id), body?.vars)
+      await store.saveChat(chat)
+      return { vars: chat.frameVars }
+    }],
+    // Mvu.parseMessage: the app's own parser, nothing saved.
+    ['POST', /^\/api\/mvu\/parse$/, async (_, body) => ({ state: parseUpdates(body?.state, body?.text) })],
+    // A book as Tavern Helper's entries: read ('get'), or written ('replace', or one field as
+    // /setentryfield does) as this chat's own changes; the book itself is not touched.
+    ['POST', /^\/api\/chats\/([\w-]+)\/worldbook$/, async ([id], body) => frameBook(id, { ...body, action: 'get' })],
+    ['PUT', /^\/api\/chats\/([\w-]+)\/worldbook$/, ([id], body) => frameBook(id, body ?? {})],
     ['GET', /^\/api\/chats\/([\w-]+)\/prompt$/, async ([id]) => {
       const chat = await store.getChat(id)
       const lastUser = [...activePath(chat)].reverse().find(n => n.role === 'user')
@@ -1330,6 +1453,24 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       return
     }
 
+    // A model call a card's frame makes (generate / generateRaw; the page asked the player first),
+    // streamed as server-sent events: { type: 'delta', text }, then { type: 'done', text } or { type: 'error' }.
+    const framed = /^\/api\/chats\/([\w-]+)\/frame-generate$/.exec(url.pathname)
+    if (req.method === 'POST' && framed) {
+      const body = await readBody(req)
+      res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', 'x-accel-buffering': 'no' })
+      const send = event => res.write(`data: ${JSON.stringify(event)}\n\n`)
+      const controller = new AbortController()
+      req.on('close', () => controller.abort())
+      try {
+        const text = await engine.frameGenerate(framed[1], { raw: body.raw === true, config: body.config ?? {} }, controller.signal, delta => send({ type: 'delta', text: delta }))
+        send({ type: 'done', text })
+      } catch (error) {
+        send({ type: 'error', status: error.status ?? 500, message: localize(error.message) })
+      }
+      return res.end()
+    }
+
     const turn = /^\/api\/chats\/([\w-]+)\/(turn|regenerate)$/.exec(url.pathname)
     if (req.method === 'POST' && turn) {
       const body = await readBody(req)
@@ -1352,6 +1493,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
   return {
     store,
     engine,
+    diagnostics,
     isolation,
     subscription,
     features,
@@ -1372,8 +1514,11 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       const host = bindHost ?? (mode === 'lan' ? '0.0.0.0' : '127.0.0.1')
       access = { mode, port, host }
       const server = createServer((req, res) => {
+        holdFailures(req, res)
         handle(req, res).catch(error => {
           if (res.headersSent) return res.end()
+          // Not an answer a route chose (httpError): where in this app it went wrong.
+          if (!error.status) res.errorStack = error.stack
           sendJson(res, error.status ?? 500, { error: error.message })
         })
       })

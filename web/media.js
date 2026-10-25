@@ -7,18 +7,41 @@ import { createMenu, MENU_ICONS, whoLine } from '/menu.js'
 import { locale, t, zh } from '/i18n.js'
 import { NAI_MODELS } from '/draw-choice.js'
 import { GEMINI_IMAGE_MODELS, IMAGE_MODEL } from '/shared/draw.js'
+import { matchesTerms, searchBox, searchTerms } from '/books.js'
 
 const SHAPES = [['square', t`方图`], ['portrait', t`竖图`], ['landscape', t`横图`]]
 const IMAGE_BACKEND_TEXT = { openai: t`图片接口`, gemini: 'Gemini', comfy: 'ComfyUI', sdwebui: 'SD WebUI', novelai: 'NovelAI' }
 // The image backends as offered, the usual first.
 const imageBackends = () => [
   ['openai', t`OpenAI 兼容图片接口（gpt-image 等）`],
-  ['gemini', t`Gemini 原生生图（Nano Banana，能照人设图画）`],
-  ['novelai', t`NovelAI（二次元推荐）`],
+  ['gemini', t`Gemini 原生生图（Nano Banana，能照人设图画，需科学上网）`],
+  ['novelai', t`NovelAI（二次元推荐，需科学上网）`],
   ['comfy', t`ComfyUI 工作流（本地）`],
   ['sdwebui', t`SD WebUI / Forge（本地）`],
 ]
 const GEMINI_TTS_MODELS = ['gemini-2.5-flash-preview-tts', 'gemini-2.5-pro-preview-tts']
+// Where to sign up for a picture or voice service (keys: where its key is made;
+// a local tool is downloaded), and how it is reached from mainland China.
+const NET_TEXT = { direct: t`国内直连`, proxy: t`需科学上网`, local: t`本机运行` }
+const GOOGLE_SITE = { name: 'Google AI Studio', site: 'https://aistudio.google.com', keys: 'https://aistudio.google.com/apikey', net: 'proxy' }
+const OPENAI_SITE = { name: 'OpenAI', site: 'https://platform.openai.com', keys: 'https://platform.openai.com/api-keys', net: 'proxy' }
+const SERVICE_SITES = {
+  openai: [{ ...OPENAI_SITE, name: t`OpenAI（gpt-image）` }, { name: t`xAI（grok-imagine）`, site: 'https://x.ai/api', keys: 'https://console.x.ai', net: 'proxy' }],
+  gemini: [GOOGLE_SITE],
+  novelai: [{ name: 'NovelAI', site: 'https://novelai.net', net: 'proxy' }],
+  comfy: [{ name: 'ComfyUI', site: 'https://www.comfy.org/download', net: 'local', download: true }],
+  sdwebui: [
+    { name: 'Forge', site: 'https://github.com/lllyasviel/stable-diffusion-webui-forge', net: 'local', download: true },
+    { name: 'AUTOMATIC1111', site: 'https://github.com/AUTOMATIC1111/stable-diffusion-webui', net: 'local', download: true },
+  ],
+  'voice:openai': [{ name: t`硅基流动（CosyVoice）`, site: 'https://cloud.siliconflow.cn', keys: 'https://cloud.siliconflow.cn/account/ak', net: 'direct' }, OPENAI_SITE],
+  'voice:fish': [{ name: 'Fish Audio', site: 'https://fish.audio', keys: 'https://fish.audio/app/api-keys/', net: 'direct' }],
+  'voice:minimax': [
+    { name: t`MiniMax 国内站`, site: 'https://platform.minimaxi.com', keys: 'https://platform.minimaxi.com/user-center/basic-information/interface-key', net: 'direct' },
+    { name: t`MiniMax 国际站`, site: 'https://platform.minimax.io', keys: 'https://platform.minimax.io/user-center/basic-information/interface-key', net: 'proxy' },
+  ],
+  'voice:gemini': [GOOGLE_SITE],
+}
 const SD_SAMPLERS = ['Euler a', 'Euler', 'DPM++ 2M', 'DPM++ 2M Karras', 'DPM++ SDE Karras', 'DPM++ 2M SDE', 'DDIM', 'UniPC']
 /** A provider holding Google's key (the Gemini template), offered first for Gemini's own models. */
 const isGoogle = p => /generativelanguage\.googleapis\.com|\/v1beta\/openai\/?$/i.test(p?.baseURL ?? '')
@@ -936,11 +959,15 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     const promptStyle = el('select', { name: 'promptStyle' }, [option('natural', t`自然语言（grok、gpt-image、Flux、NovelAI V5）`, media.promptStyle), option('tags', t`标签（SD / SDXL 工作流、NovelAI）`, media.promptStyle)])
     const autoImage = el('input', { type: 'checkbox', name: 'autoImage', checked: media.autoImage })
 
-    const openaiBox = el('div', { class: 'grid' }, [
-      field(t`供应商`, provider),
-      el('label', {}, [t`生图模型`, el('span', { class: 'select-with-action' }, [model, fetchModels]), modelList]),
+    const openaiBox = el('div', {}, [
+      serviceLinks('openai', t`常用的图片接口，在「管理供应商」里添加后在这里选：`),
+      el('div', { class: 'grid' }, [
+        field(t`供应商`, provider),
+        el('label', {}, [t`生图模型`, el('span', { class: 'select-with-action' }, [model, fetchModels]), modelList]),
+      ]),
     ])
     const comfyBox = el('div', {}, [
+      serviceLinks('comfy'),
       field(t`ComfyUI 地址`, comfyUrl),
       el('div', { class: 'workflow-row' }, [
         el('button', { type: 'button', class: 'btn small', text: t`导入工作流`, onclick: () => workflowInput.click() }),
@@ -984,6 +1011,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       NAI_MODELS.some(([value]) => value === media.naiModel) ? null : option(media.naiModel, media.naiModel, media.naiModel),
     ].filter(Boolean))
     const naiBox = el('div', {}, [
+      serviceLinks('novelai'),
       el('label', {}, [t`NovelAI 持久令牌`, el('span', { class: 'select-with-action' }, [naiToken, checkNai, clearNai]), naiTokenHint]),
       el('p', { class: 'hint', text: t`在 NovelAI 网页点左下角齿轮 →「Account」→「Get Persistent API Token」，复制后粘贴到这里再保存。「检查」只查订阅、V5 额度和 Anlas，不画图。` }),
       el('label', {}, [t`模型`, naiModel, naiAllowance]),
@@ -1022,6 +1050,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       geminiModel.focus()
     })
     const geminiBox = el('div', {}, [
+      serviceLinks('gemini'),
       el('div', { class: 'grid' }, [
         field(t`供应商`, geminiProvider, googleProviders.length ? '' : t`先用「Gemini」模板建一个供应商（密钥在 aistudio.google.com 创建）`),
         el('label', {}, [t`生图模型`, el('span', { class: 'select-with-action' }, [geminiModel, fetchGemini]), geminiModels]),
@@ -1035,6 +1064,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     // Stable Diffusion WebUI / Forge: the model loaded there draws.
     const sdSamplers = el('datalist', { id: 'sd-samplers' }, SD_SAMPLERS.map(id => el('option', { value: id })))
     const sdBox = el('div', {}, [
+      serviceLinks('sdwebui'),
       field(t`WebUI 地址`, el('input', { name: 'sdUrl', value: media.sdUrl, spellcheck: 'false' }), t`AUTOMATIC1111、Forge、reForge 都行，启动参数要加 --api。用 WebUI 里当前加载的模型画。`),
       el('div', { class: 'grid three' }, [
         el('label', {}, [t`采样器`, el('input', { name: 'sdSampler', value: media.sdSampler, list: 'sd-samplers', spellcheck: 'false' }), sdSamplers]),
@@ -1459,6 +1489,10 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
   // reference pictures upload at once.
 
   const KIND_TEXT = [['girl', t`女`], ['boy', t`男`], ['other', t`其他`]]
+  // As many as the server keeps (server/roster.mjs ROSTER_MAX).
+  const ROSTER_MAX = 24
+  /** 念念, 小师妹 → the names one by one, as the server splits them. */
+  const splitNames = value => String(value ?? '').split(/[,，、/|]+/).map(name => name.trim()).filter(Boolean)
   const newEntryId = () => Array.from(crypto.getRandomValues(new Uint8Array(5)), b => b.toString(16).padStart(2, '0')).join('')
   const refUrl = (cardId, id) => `/api/cards/${cardId}/roster/${id}/ref?v=${Date.now()}`
 
@@ -1503,19 +1537,26 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     }
   }
 
+  /**
+   * 角色名册 in the settings: the ways to fill it first, then everyone as a line
+   * (face, name, the names they go by, what is set) that opens to their sheet,
+   * a search once the list is long. What the helper drafts or fills in from the
+   * chat is marked new or changed until saved; a change can be taken back.
+   */
   function rosterEditor(card, loraInfo, userName) {
     const cardId = state.cardId
     const list = el('div', { class: 'roster-list' })
     const summary = el('summary')
-    const status = el('span', { class: 'hint' })
-    const box = el('details', { class: 'roster', open: card.roster.length > 0 }, [
-      summary,
-      el('p', { class: 'hint', text: t`名册里的人，长相按这里写的固定 tag 画，辅助模型只写谁在画面里、穿什么、在做什么。多人同框时每人单独成段，不会串。外貌和衣着用英文 tag。` }),
-      list,
-    ])
+    const status = el('span', { class: 'hint roster-status' })
+    const box = el('details', { class: 'roster', open: card.roster.length > 0 }, [summary])
     const option = (value, text, selected) => el('option', { value, text, selected: value === selected })
+    // How an entry takes a change the helper found in the chat (fromChat).
+    const fixers = new WeakMap()
+    const boxes = () => [...list.querySelectorAll('.roster-entry')]
+    // Every name someone on the page goes by, lower-cased.
+    const takenNames = () => new Set(collectRoster($('media-form')).flatMap(e => [e.name, ...splitNames(e.aliases)]).map(name => name.trim().toLowerCase()).filter(Boolean))
 
-    function entryBox(entry) {
+    function entryBox(entry, { open = false, flag = '' } = {}) {
       const thumb = el('div', { class: 'roster-thumb', title: t`点击放大` }, entry.ref ? [el('img', { src: refUrl(cardId, entry.id), alt: '' })] : [el('span', { text: t`没有人设图` })])
       thumb.onclick = () => {
         const img = thumb.querySelector('img')
@@ -1523,11 +1564,37 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         const current = readEntry(node)
         viewPicture(img.src, t`${current.name}：${current.looks}${current.outfit ? t`；${current.outfit}` : ''}`, t`人设图`)
       }
-      const node = el('fieldset', { class: 'roster-entry', 'data-id': entry.id, 'data-ref': entry.ref ? '1' : '', 'data-voice': entry.voice ?? '' })
+      const node = el('details', { class: 'roster-entry', 'data-id': entry.id, 'data-ref': entry.ref ? '1' : '', 'data-voice': entry.voice ?? '', 'data-flag': flag })
+      node.open = open
+      // The line it shows closed: a face, the name and the names it goes by, what is set.
+      const face = el('span', { class: 'roster-face', 'aria-hidden': 'true' })
+      const lineName = el('span', { class: 'roster-line-name' })
+      const lineSub = el('span', { class: 'roster-line-sub' })
+      const lineTags = el('span', { class: 'roster-line-tags' })
+      const tag = (text, kind = '') => el('span', { class: `roster-tag${kind ? ` ${kind}` : ''}`, text })
+      const syncLine = () => {
+        const now = readEntry(node)
+        const shown = now.name.trim() || (now.player ? t`主角` : t`未命名`)
+        lineName.textContent = shown
+        const others = splitNames(now.aliases)
+        lineSub.textContent = others.length ? t`也叫 ${others.join(t`、`)}` : now.looks.trim() ? now.looks.trim() : t`还没写长相`
+        lineSub.classList.toggle('empty', !others.length && !now.looks.trim())
+        const img = thumb.querySelector('img')
+        face.replaceChildren(img ? el('img', { src: img.src, alt: '' }) : el('span', { text: Array.from(shown)[0] ?? '?' }))
+        lineTags.replaceChildren(...[
+          node.dataset.flag === 'new' ? tag(t`新`, 'new') : null,
+          node.dataset.flag === 'changed' ? tag(t`名字有更新`, 'new') : null,
+          now.player ? tag(t`主角`, 'player') : null,
+          tag(KIND_TEXT.find(([value]) => value === now.kind)?.[1] ?? ''),
+          now.lora ? tag('LoRA') : null,
+        ].filter(Boolean))
+      }
+      const line = el('summary', { class: 'roster-line' }, [face, el('span', { class: 'roster-line-who' }, [lineName, lineSub]), lineTags])
       const setRef = has => {
         node.dataset.ref = has ? '1' : ''
         thumb.replaceChildren(has ? el('img', { src: refUrl(cardId, entry.id), alt: '' }) : el('span', { text: t`没有人设图` }))
         removeRef.hidden = !has
+        syncLine()
       }
       const upload = guard(async blob => {
         thumb.replaceChildren(el('span', { text: t`处理中…` }))
@@ -1577,72 +1644,174 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       const player = el('input', { type: 'checkbox', 'data-field': 'player', checked: entry.player })
       player.onchange = () => {
         // Only one player entry.
-        if (player.checked) for (const other of list.querySelectorAll('[data-field="player"]')) if (other !== player) other.checked = false
+        if (player.checked) {
+          for (const other of list.querySelectorAll('[data-field="player"]')) {
+            if (other === player || !other.checked) continue
+            other.checked = false
+            other.dispatchEvent(new Event('input', { bubbles: true }))
+          }
+        }
         syncSummary()
       }
       const name = el('input', { 'data-field': 'name', value: entry.name, placeholder: entry.player ? t`主角` : t`名字`, maxlength: '40' })
-      name.oninput = syncSummary
+      const aliases = el('input', { 'data-field': 'aliases', value: entry.aliases, placeholder: t`别称，用逗号分开（例如 念念, 小师妹）` })
+      // What 从对话里补充 changed here, with a way back.
+      const note = el('div', { class: 'roster-note', hidden: true })
+      const mark = (said, before) => {
+        node.dataset.flag = 'changed'
+        note.replaceChildren(
+          el('span', { text: said }),
+          el('button', {
+            type: 'button', class: 'btn small ghost', text: t`撤销`,
+            onclick: () => {
+              name.value = before.name
+              aliases.value = before.aliases
+              node.dataset.flag = before.flag
+              note.hidden = true
+              syncLine()
+              syncSummary()
+            },
+          }),
+        )
+        note.hidden = false
+      }
+      /** A change the helper found: { rename, aliases } (parseRosterChat); false when it adds nothing. */
+      fixers.set(node, fix => {
+        const before = { name: name.value, aliases: aliases.value, flag: node.dataset.flag }
+        const rename = String(fix.rename ?? '').trim()
+        const have = new Set([rename || name.value, ...splitNames(aliases.value)].map(n => n.trim().toLowerCase()))
+        const adding = (fix.aliases ?? []).map(n => String(n).trim()).filter(n => n && !have.has(n.toLowerCase()) && have.add(n.toLowerCase()))
+        if (!rename && !adding.length) return false
+        if (rename) name.value = rename
+        if (adding.length) aliases.value = [...splitNames(aliases.value), ...adding].join(', ')
+        const kept = adding.filter(n => n !== before.name)
+        mark([
+          rename ? t`名字从「${before.name}」改成「${rename}」，原来的名字留作别称` : '',
+          kept.length ? t`别称加了 ${kept.join(t`、`)}` : '',
+        ].filter(Boolean).join(t`；`) + t`。`, before)
+        syncLine()
+        return true
+      })
       const loras = loraInfo.loras ?? []
       node.append(
-        el('div', { class: 'roster-head' }, [
-          thumb,
-          el('div', { class: 'roster-main' }, [
-            el('div', { class: 'roster-row' }, [
-              name,
-              el('select', { 'data-field': 'kind' }, KIND_TEXT.map(([value, text]) => option(value, text, entry.kind))),
-              el('label', { class: 'check-row', title: t`玩家扮演的角色；剧情里叫「${userName || t`玩家`}」时也认得` }, [player, el('span', { text: t`主角` })]),
-              el('button', { type: 'button', class: 'btn small ghost danger', text: t`移除`, onclick: () => { node.remove(); syncSummary() } }),
-            ]),
-            el('input', { 'data-field': 'aliases', value: entry.aliases, placeholder: t`别称，用逗号分开（例如 念念, 小师妹）` }),
-            el('div', { class: 'roster-row' }, [
-              el('button', { type: 'button', class: 'btn small', text: t`上传人设图`, onclick: () => file.click() }),
-              el('button', { type: 'button', class: 'btn small ghost', text: t`用卡头像`, onclick: fromAvatar }),
-              portrait,
-              removeRef,
-              file,
+        line,
+        el('div', { class: 'roster-body' }, [
+          note,
+          el('div', { class: 'roster-head' }, [
+            thumb,
+            el('div', { class: 'roster-main' }, [
+              el('div', { class: 'roster-row' }, [
+                name,
+                el('select', { 'data-field': 'kind' }, KIND_TEXT.map(([value, text]) => option(value, text, entry.kind))),
+                el('label', { class: 'check-row', title: t`玩家扮演的角色；剧情里叫「${userName || t`玩家`}」时也认得` }, [player, el('span', { text: t`主角` })]),
+                el('button', { type: 'button', class: 'btn small ghost danger', text: t`移除`, onclick: () => { node.remove(); syncSummary() } }),
+              ]),
+              aliases,
+              el('div', { class: 'roster-row' }, [
+                el('button', { type: 'button', class: 'btn small', text: t`上传人设图`, onclick: () => file.click() }),
+                el('button', { type: 'button', class: 'btn small ghost', text: t`用卡头像`, onclick: fromAvatar }),
+                portrait,
+                removeRef,
+                file,
+              ]),
             ]),
           ]),
-        ]),
-        el('label', {}, [t`长相（固定不变的：发型发色、眼睛、身形、记号）`, el('textarea', { 'data-field': 'looks', rows: 2, spellcheck: 'false', placeholder: 'black hair, hair bun, white ribbon, dark eyes, dimples, petite', text: entry.looks })]),
-        el('label', {}, [t`平时的衣着（辅助模型据此写当下穿什么）`, el('input', { 'data-field': 'outfit', value: entry.outfit, spellcheck: 'false', placeholder: 'white and pale blue wudang robe, wide sleeves' })]),
-        el('div', { class: 'grid three' }, [
-          el('label', {}, [
-            t`LoRA（ComfyUI，单人画面用）`,
-            el('select', { 'data-field': 'lora' }, [
-              option('', t`不用`, entry.lora),
-              ...loras.map(n => option(n, n, entry.lora)),
-              entry.lora && !loras.includes(entry.lora) ? option(entry.lora, t`${entry.lora}（现在没有）`, entry.lora) : null,
-            ].filter(Boolean)),
+          el('label', {}, [t`长相（固定不变的：发型发色、眼睛、身形、记号）`, el('textarea', { 'data-field': 'looks', rows: 2, spellcheck: 'false', placeholder: 'black hair, hair bun, white ribbon, dark eyes, dimples, petite', text: entry.looks })]),
+          el('label', {}, [t`平时的衣着（辅助模型据此写当下穿什么）`, el('input', { 'data-field': 'outfit', value: entry.outfit, spellcheck: 'false', placeholder: 'white and pale blue wudang robe, wide sleeves' })]),
+          el('div', { class: 'grid three' }, [
+            el('label', {}, [
+              t`LoRA（ComfyUI，单人画面用）`,
+              el('select', { 'data-field': 'lora' }, [
+                option('', t`不用`, entry.lora),
+                ...loras.map(n => option(n, n, entry.lora)),
+                entry.lora && !loras.includes(entry.lora) ? option(entry.lora, t`${entry.lora}（现在没有）`, entry.lora) : null,
+              ].filter(Boolean)),
+            ]),
+            el('label', {}, [t`触发词`, el('input', { 'data-field': 'loraTrigger', value: entry.loraTrigger, spellcheck: 'false' })]),
+            el('label', {}, [t`强度`, el('input', { 'data-field': 'loraStrength', type: 'number', min: '0', max: '2', step: '0.05', value: String(entry.loraStrength ?? 0.8) })]),
           ]),
-          el('label', {}, [t`触发词`, el('input', { 'data-field': 'loraTrigger', value: entry.loraTrigger, spellcheck: 'false' })]),
-          el('label', {}, [t`强度`, el('input', { 'data-field': 'loraStrength', type: 'number', min: '0', max: '2', step: '0.05', value: String(entry.loraStrength ?? 0.8) })]),
         ]),
       )
+      // The line follows the sheet as it is typed in.
+      node.addEventListener('input', syncLine)
+      node.addEventListener('change', syncLine)
+      syncLine()
       return node
     }
 
+    // Past a handful of people: a search, and opening or closing them all.
+    const finder = searchBox(el, { placeholder: t`找角色：名字、别称或长相`, label: t`搜索角色名册`, onInput: () => filter() })
+    const toggleAll = el('button', { type: 'button', class: 'btn small ghost', onclick: () => {
+      const open = !boxes().some(node => node.open)
+      for (const node of boxes()) if (!node.hidden) node.open = open
+      syncSummary()
+    } })
+    const tools = el('div', { class: 'roster-tools' }, [finder.box, toggleAll])
+    const empty = el('p', { class: 'hint roster-empty' })
+    list.addEventListener('toggle', () => syncSummary(), true)
+
+    function filter() {
+      const terms = searchTerms(finder.input.value)
+      let shown = 0
+      for (const node of boxes()) {
+        const e = readEntry(node)
+        node.hidden = terms.length > 0 && !matchesTerms(`${e.name}\n${e.aliases}\n${e.looks}\n${e.outfit}`, terms)
+        if (!node.hidden) shown++
+      }
+      empty.hidden = !terms.length || shown > 0
+      empty.textContent = t`没有找到「${finder.input.value.trim()}」`
+    }
+
     function syncSummary() {
-      const entries = list.querySelectorAll('.roster-entry')
+      const entries = boxes()
       const hasPlayer = [...list.querySelectorAll('[data-field="player"]')].some(input => input.checked)
       summary.textContent = t`角色名册（${entries.length} 人${entries.length && !hasPlayer ? t`，还没有主角` : ''}）`
+      finder.box.hidden = entries.length < 6
+      toggleAll.hidden = entries.length < 2
+      toggleAll.textContent = entries.some(node => node.open) ? t`全部收起` : t`全部展开`
+      if (finder.box.hidden && finder.input.value) {
+        finder.input.value = ''
+        filter()
+      }
     }
 
     const blank = extra => ({ id: newEntryId(), name: '', aliases: '', kind: 'girl', player: false, looks: '', outfit: '', lora: '', loraTrigger: '', loraStrength: 0.8, ref: false, ...extra })
-    const add = entry => {
-      list.append(entryBox(entry))
+    /** One more on the list; false when it is full (ROSTER_MAX on the server). */
+    const add = (entry, options) => {
+      if (boxes().length >= ROSTER_MAX) return false
+      const node = entryBox(entry, options)
+      list.append(node)
       syncSummary()
+      return node
+    }
+    /** A blank sheet to fill in, open and in view. */
+    const addBlank = extra => {
+      const node = add(blank(extra), { open: true })
+      if (!node) return toast(t`名册最多 ${ROSTER_MAX} 人`)
+      if (finder.input.value) {
+        finder.input.value = ''
+        filter()
+      }
+      node.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+      node.querySelector('[data-field="name"]').select()
+    }
+    /** Drafted entries that nobody on the page goes by yet, marked new; how many there were room for. */
+    const addDrafted = entries => {
+      const taken = takenNames()
+      const fresh = entries.filter(e => ![e.name, ...splitNames(e.aliases)].some(name => taken.has(name.trim().toLowerCase())))
+      let added = 0
+      for (const entry of fresh) if (add(entry, { flag: 'new' })) added++
+      return { added, full: added < fresh.length }
     }
     const draft = guard(async () => {
       draftButton.disabled = true
       status.textContent = t`辅助模型在读卡和世界书，可能要一两分钟…`
       try {
         const { roster, model } = await api(`/api/cards/${cardId}/roster/draft`, { method: 'POST', body: {} })
-        const have = new Set(collectRoster($('media-form')).map(e => e.name.trim()))
         const hasPlayer = collectRoster($('media-form')).some(e => e.player)
-        const fresh = roster.filter(e => !have.has(e.name.trim())).map(e => ({ ...e, player: e.player && !hasPlayer, ref: false }))
-        fresh.forEach(add)
+        const { added, full } = addDrafted(roster.map(e => ({ ...e, player: e.player && !hasPlayer, ref: false })))
         box.open = true
-        status.textContent = fresh.length ? t`${model} 起草了 ${fresh.length} 个角色，看过、改好再保存。` : t`${model} 列出的角色名册里都有了。`
+        status.textContent = (added ? t`${model} 起草了 ${added} 个角色（标着「新」），看过、改好再保存。` : t`${model} 列出的角色名册里都有了。`) + (full ? t`名册最多 ${ROSTER_MAX} 人，其余的没加。` : '')
       } catch (error) {
         status.textContent = ''
         throw error
@@ -1651,20 +1820,30 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       }
     })
     const draftButton = el('button', { type: 'button', class: 'btn small', text: t`让辅助模型起草`, title: t`读这张卡的描述和世界书，列出主要角色和主角的长相、衣着`, onclick: draft })
-    // 从对话里补充: whoever joined the story in the open chat's recent turns and is not in the list yet.
+    // 从对话里补充: whoever joined the story in the open chat's recent turns and is
+    // not in the list yet, and the names the story calls those it has by now.
     const chat = getChat()
     const ownChat = chat?.cardId === cardId ? chat : null
     const fromChat = guard(async () => {
       chatButton.disabled = true
       status.textContent = t`辅助模型在读最近几轮对话，可能要一两分钟…`
       try {
-        const names = collectRoster($('media-form')).flatMap(e => [e.name, e.aliases]).filter(Boolean)
-        const { roster, model } = await api(`/api/cards/${cardId}/roster/draft-chat`, { method: 'POST', body: { chatId: ownChat.id, names } })
-        const have = new Set(collectRoster($('media-form')).map(e => e.name.trim()))
-        const fresh = roster.filter(e => !have.has(e.name.trim())).map(e => ({ ...e, player: false, ref: false }))
-        fresh.forEach(add)
+        const cast = collectRoster($('media-form')).map(({ id, name, aliases, player }) => ({ id, name, aliases, player }))
+        const { roster, fixes = [], model } = await api(`/api/cards/${cardId}/roster/draft-chat`, { method: 'POST', body: { chatId: ownChat.id, cast } })
+        let fixed = 0
+        for (const fix of fixes) {
+          const node = boxes().find(item => item.dataset.id === fix.id)
+          if (node && fixers.get(node)?.(fix)) fixed++
+        }
+        const { added, full } = addDrafted(roster.map(e => ({ ...e, player: false, ref: false })))
         box.open = true
-        status.textContent = fresh.length ? t`${model} 从对话里找到 ${fresh.length} 个新角色，看过、改好再保存。` : t`${model} 没在最近几轮里找到名册之外的角色。`
+        if (finder.input.value) {
+          finder.input.value = ''
+          filter()
+        }
+        list.querySelector('.roster-entry[data-flag]:not([data-flag=""])')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+        const found = [added ? t`${added} 个新角色` : '', fixed ? t`${fixed} 个角色的新名字（别称或改名）` : ''].filter(Boolean).join(t`，`)
+        status.textContent = (found ? t`${model} 从对话里找到 ${found}，都标出来了，看过、改好再保存。` : t`${model} 没在最近几轮里找到名册之外的角色，也没有要补的名字。`) + (full ? t`名册最多 ${ROSTER_MAX} 人，其余的没加。` : '')
       } catch (error) {
         status.textContent = ''
         throw error
@@ -1674,19 +1853,24 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     })
     const chatButton = el('button', {
       type: 'button', class: 'btn small', text: t`从对话里补充`, disabled: !ownChat, onclick: fromChat,
-      title: ownChat ? t`读正在打开的对话最近几轮，列出后来出场、名册里还没有的角色` : t`先打开这张卡的一个对话`,
+      title: ownChat ? t`读正在打开的对话最近几轮：列出后来出场、名册里还没有的角色，给已有的角色补上剧情里的外号、改正写错的名字` : t`先打开这张卡的一个对话`,
     })
     box.append(
       el('div', { class: 'roster-actions' }, [
-        el('button', { type: 'button', class: 'btn small', text: t`添加角色`, onclick: () => add(blank()) }),
-        el('button', { type: 'button', class: 'btn small', text: t`添加主角`, onclick: () => add(blank({ player: !collectRoster($('media-form')).some(e => e.player), name: t`主角`, kind: 'boy' })) }),
+        el('button', { type: 'button', class: 'btn small', text: t`添加角色`, onclick: () => addBlank() }),
+        el('button', { type: 'button', class: 'btn small', text: t`添加主角`, onclick: () => addBlank({ player: !collectRoster($('media-form')).some(e => e.player), name: t`主角`, kind: 'boy' }) }),
         draftButton,
         chatButton,
-        status,
       ]),
+      status,
+      el('p', { class: 'hint', text: t`名册里的人，长相按这里写的固定 tag 画，辅助模型只写谁在画面里、穿什么、在做什么。多人同框时每人单独成段，不会串。外貌和衣着用英文 tag。点一个人展开编辑。` }),
+      tools,
+      list,
+      empty,
     )
-    for (const entry of card.roster) list.append(entryBox(entry))
+    for (const entry of card.roster) list.append(entryBox(entry, { open: card.roster.length === 1 }))
     syncSummary()
+    filter()
     return box
   }
 
@@ -1716,6 +1900,23 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
 
   function sourceState(kind, text) {
     return el('span', { class: `source-state ${kind}`, text })
+  }
+
+  /** 国内直连 / 需科学上网 / 本机运行 beside a service's name. */
+  const netTag = net => el('span', { class: `net-tag ${net}`, text: NET_TEXT[net] })
+
+  /** A service's sign-up and key pages (SERVICE_SITES), one line per site; `lead` before them. */
+  function serviceLinks(key, lead = '') {
+    const link = (href, text) => el('a', { href, target: '_blank', rel: 'noopener noreferrer', text })
+    return el('div', { class: 'service-links' }, [
+      lead ? el('span', { class: 'service-lead', text: lead }) : null,
+      ...SERVICE_SITES[key].map(site => el('span', { class: 'service-site' }, [
+        el('span', { class: 'service-name', text: site.name }),
+        netTag(site.net),
+        link(site.site, site.download ? t`下载 ↗` : t`注册账号 ↗`),
+        site.keys ? link(site.keys, t`创建 API Key ↗`) : null,
+      ].filter(Boolean))),
+    ].filter(Boolean))
   }
 
   /**
@@ -1819,6 +2020,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     const speakers = providers.filter(p => p.api !== 'anthropic-messages')
     const openai = el('details', { class: 'voice-source', open: Boolean(media.ttsProvider) }, [
       el('summary', {}, [el('span', { text: t`供应商的朗读接口（OpenAI 兼容 /audio/speech）` }), state('openai')]),
+      serviceLinks('voice:openai', t`常用的朗读接口，在「管理供应商」里添加后在这里选：`),
       el('div', { class: 'grid' }, [
         field(t`供应商`, el('select', { name: 'ttsProvider' }, [option('', speakers.length ? t`不用` : t`先在「供应商」里添加`, media.ttsProvider), ...speakers.map(p => option(p.id, p.name, media.ttsProvider))])),
         field(t`模型`, el('input', { name: 'ttsModel', value: media.ttsModel, list: 'tts-models', spellcheck: 'false', placeholder: 'gpt-4o-mini-tts' })),
@@ -1830,7 +2032,8 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     ])
 
     const fish = el('details', { class: 'voice-source', open: Boolean(voiceKeys.fish?.hasKey) }, [
-      el('summary', {}, [el('span', { text: 'Fish Audio' }), fishBadge.badge]),
+      el('summary', {}, [el('span', { class: 'voice-source-name' }, ['Fish Audio', netTag('direct')]), fishBadge.badge]),
+      serviceLinks('voice:fish'),
       keyField('fish', 'API Key', voiceKeys.fish, t`fish.audio → API Keys 里创建`, fishBadge.update),
       field(t`模型`, el('select', { name: 'fishModel' }, FISH_MODELS.map(([value, text]) => option(value, text, media.fishModel)))),
       field(t`音色（每行一个：音色页链接或 32 位 ID，后面可以空一格写名字）`, el('textarea', { name: 'fishVoices', rows: 3, spellcheck: 'false', placeholder: t`https://fish.audio/m/0123456789abcdef0123456789abcdef 南晚`, text: voiceListText(media.fishVoices) }),
@@ -1839,7 +2042,8 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     ])
 
     const minimax = el('details', { class: 'voice-source', open: Boolean(voiceKeys.minimax?.hasKey) }, [
-      el('summary', {}, [el('span', { text: 'MiniMax' }), minimaxBadge.badge]),
+      el('summary', {}, [el('span', { class: 'voice-source-name' }, ['MiniMax', netTag('direct')]), minimaxBadge.badge]),
+      serviceLinks('voice:minimax'),
       keyField('minimax', 'API Key', voiceKeys.minimax, t`开放平台 → 接口密钥`, minimaxBadge.update),
       el('div', { class: 'grid' }, [
         field(t`站点`, el('select', { name: 'minimaxRegion' }, [option('cn', t`国内站（api.minimaxi.com，直连）`, media.minimaxRegion), option('intl', t`国际站（api.minimax.io，走代理）`, media.minimaxRegion)]), t`密钥只在创建它的站点能用`),
@@ -1871,7 +2075,8 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       geminiModel.focus()
     })
     const gemini = el('details', { class: 'voice-source', open: Boolean(media.geminiTtsProvider) }, [
-      el('summary', {}, [el('span', { text: t`Gemini 朗读（Google）` }), state('gemini')]),
+      el('summary', {}, [el('span', { class: 'voice-source-name' }, [t`Gemini 朗读（Google）`, netTag('proxy')]), state('gemini')]),
+      serviceLinks('voice:gemini'),
       el('div', { class: 'grid' }, [
         field(t`供应商`, geminiProvider, googleSpeakers.length ? t`选用「Gemini」模板建的供应商，和对话共用密钥和代理` : t`先用「Gemini」模板建一个供应商（密钥在 aistudio.google.com 创建）`),
         el('label', {}, [t`模型`, el('span', { class: 'select-with-action' }, [geminiModel, fetchModels]), geminiModelList]),

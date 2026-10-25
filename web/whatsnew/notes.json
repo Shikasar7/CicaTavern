@@ -363,6 +363,34 @@
           }
         }
       ]
+    },
+    {
+      "version": "1.9.3",
+      "date": "2026-10",
+      "items": [
+        {
+          "icon": "🧩",
+          "zh": {
+            "title": "角色卡里的界面能做更多事",
+            "text": "为酒馆助手做的界面（开局页、战斗、小游戏）现在能调用模型（每张卡第一次先问你）、读写世界书（只改这个对话）、保存聊天变量、往对话里加或删消息。\nEJS 模板按提示词模板插件补齐：setvar 写的变量会保存，条目开头的 @@if 等装饰器生效，显示正则里的 <%= getvar(…) %> 会显示成那一楼的数值；检测「提示词模板」的卡会看到它开着。"
+          },
+          "en": {
+            "title": "Card UIs can do more",
+            "text": "UIs built for Tavern Helper (start pages, battles, mini games) can now call the model (each card asks you first), read and write lorebooks (for this chat only), keep chat variables, and add or remove messages.\nEJS templates follow the Prompt Template plugin more fully: setvar writes are kept, decorators such as @@if work, and <%= getvar(…) %> in a display regex shows that message's value; cards that check for Prompt Template find it."
+          }
+        },
+        {
+          "icon": "🩺",
+          "zh": {
+            "title": "错误日志和角色名册",
+            "text": "出了问题时，「设置 → 更多 → 错误日志」（出错的提示条上也有）可以复制或存下一份报告发给开发者，里面没有对话内容，密钥、令牌和用户名都去掉了，只存在你自己的设备上。\n角色名册人多时更好找：收成一行一个、可以搜索；「从对话里补充」认得外号和写错的名字。卡里自带的世界书可以导出或抽成单独的一本。"
+          },
+          "en": {
+            "title": "An error log, and the cast list",
+            "text": "When something goes wrong, Settings → More → Error log (also on the error's notice) copies or saves a report to send to the developer: no chat text, with keys, tokens and your user name taken out, and it stays on your device.\nThe cast list is easier with many characters: one row each, with search; Add from the chat knows nicknames and misspelled names. A card's own lorebook can be exported or copied out as a book of its own."
+          }
+        }
+      ]
     }
   ]
 }

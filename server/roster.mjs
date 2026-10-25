@@ -304,23 +304,43 @@ export function chatMaterial(path, { turns = 8, budget = 20000 } = {}) {
   return pieces.join('\n\n')
 }
 
+/** "念念, 小师妹" → the names one by one, as findEntry splits them. */
+export const splitNames = value => String(value ?? '').split(/[,，、/|]+/).map(name => name.trim()).filter(Boolean)
+
+/** One line of the cast list the helper compares the turns with: its name, then the others it goes by. */
+function castLine(entry, userName) {
+  const others = [...splitNames(entry.aliases), ...(entry.player && userName && userName !== entry.name ? [userName] : [])]
+  return `- ${entry.name}${entry.player ? ' = the player character' : ''}${others.length ? ` (also: ${others.join(', ')})` : ''}`
+}
+
 /**
- * The helper's request for the characters in those turns that the 角色名册
- * does not have yet, in the draft's format (rosterDraftRequest).
- * @param known - every name the list (and the player) already goes by.
+ * 从对话里补充: the helper's request for what these turns show that the 角色名册
+ * lacks: the characters it does not have yet, in the draft's format
+ * (rosterDraftRequest), and for those it has, the names the story calls them
+ * by now (a nickname, a title, a misspelling) or a name it got wrong.
+ * @param cast - the list as the page has it: { name, aliases, player }.
+ * @param userName - the player's name in this chat.
  * @param setting - a little of the card, for looks that fit where and when the story is.
  */
-export function rosterChatRequest(material, { known = [], setting = '' } = {}) {
+export function rosterChatRequest(material, { cast = [], userName = '', setting = '' } = {}) {
   const task = [
-    'TASK: list the characters who take part in these recent turns of the story and are NOT in the cast list yet, for an anime image generator.',
-    `Already in the cast list (skip them under any of their names): ${known.length ? known.join(', ') : '(nobody yet)'}.`,
-    'Leave out the player character (the one the player plays, written as 你 or by the player\'s name), and anyone only mentioned or passing by without a part in the scene.',
-    'Where the turns do not say what someone looks like, give a plausible look that fits their role, age and the setting.',
-    'At most 8 entries; nobody new is a fine answer: [].',
-    'Reply with a JSON array only, no other text:',
-    '[{"name": "Chinese name as in the story (or their role, like 掌柜, if they have no name)", "aliases": "other names, comma-separated", "kind": "girl" | "boy" | "other", "player": false,',
+    'TASK: compare these recent turns of the story with the cast list of an anime image generator.',
+    'Cast list (each name, then the other names it already goes by):',
+    cast.length ? cast.map(entry => castLine(entry, userName)).join('\n') : '(nobody yet)',
+    '',
+    '"new": the characters who take part in these turns and are NOT on the cast list under any name.',
+    '- Someone the turns call by a nickname, a title, a pet name, a form of address or a slightly different spelling who is really someone on the list is not new: give that name under "fix".',
+    '- Leave out the player character (the one the player plays, written as 你 or by the player\'s name), and anyone only mentioned or passing by without a part in the scene.',
+    '- Where the turns do not say what someone looks like, give a plausible look that fits their role, age and the setting. At most 8.',
+    '"fix": for people on the list, only what the turns show:',
+    '- "aliases": the names the turns use for them that the list does not have (nicknames, titles, how others address them, a misspelling of their name).',
+    '- "rename": when the turns keep calling them by another name than the list does (the list has it wrong, or the story renamed them); otherwise "".',
+    'Nothing new and nothing to fix is a fine answer: {"new": [], "fix": []}.',
+    'Reply with one JSON object only, no other text:',
+    '{"new": [{"name": "Chinese name as in the story (or their role, like 掌柜, if they have no name)", "aliases": "other names, comma-separated", "kind": "girl" | "boy" | "other", "player": false,',
     '  "looks": "8-20 English booru tags for what never changes: apparent age, hair colour and style, eye colour, build, skin, distinctive marks",',
-    '  "outfit": "5-15 English booru tags for what they usually wear"}]',
+    '  "outfit": "5-15 English booru tags for what they usually wear"}],',
+    ' "fix": [{"name": "their name exactly as on the cast list", "aliases": "names to add, comma-separated", "rename": ""}]}',
   ].join('\n')
   const context = setting ? `<setting>\n${setting.slice(0, 1500)}\n</setting>\n\n` : ''
   return {
@@ -328,6 +348,77 @@ export function rosterChatRequest(material, { known = [], setting = '' } = {}) {
     messages: [{ role: 'user', content: `${context}<turns>\n${material}\n</turns>\n\n${task}` }],
     maxTokens: 3000,
   }
+}
+
+/**
+ * The helper's answer to rosterChatRequest → { roster, fixes }: the newcomers,
+ * and for the people on the list, `rename` and the `aliases` to add (with the
+ * old name first when renamed, so what was written before still finds them).
+ * A newcomer the list has under one of their names after all becomes that
+ * person's aliases; a name someone else already goes by is given to nobody;
+ * aliases stop where the list's field would cut them (cleanRoster, 120).
+ * @param cast - the list as the page has it: { id, name, aliases, player }.
+ */
+export function parseRosterChat(answer, cast = [], userName = '') {
+  const none = { roster: [], fixes: [] }
+  const value = String(answer ?? '').replace(/<think>[\s\S]*?<\/think>/gi, '')
+  const at = value.search(/[[{]/)
+  if (at < 0) return none
+  let found
+  try {
+    // An array is the newcomers alone.
+    found = value[at] === '[' ? { new: JSON.parse(value.slice(at, value.lastIndexOf(']') + 1)) } : JSON.parse(value.slice(at, value.lastIndexOf('}') + 1))
+  } catch {
+    return none
+  }
+  const list = item => (Array.isArray(item) ? item.filter(x => x && typeof x === 'object') : [])
+  const key = name => name.trim().toLowerCase()
+  // Who each name belongs to: the list's people, then the newcomers as they come.
+  const owner = new Map()
+  for (const entry of cast) for (const name of [entry.name, ...splitNames(entry.aliases), ...(entry.player && userName ? [userName] : [])]) if (!owner.has(key(name))) owner.set(key(name), entry)
+  const changes = new Map()
+  const change = entry => changes.get(entry) ?? changes.set(entry, { rename: '', aliases: [] }).get(entry)
+  const give = (entry, name) => {
+    if (!name || name.length > 40 || owner.has(key(name))) return
+    owner.set(key(name), entry)
+    change(entry).aliases.push(name)
+  }
+  for (const fix of list(found.fix)) {
+    const entry = owner.get(key(text(fix.name, 40)))
+    if (!entry || !cast.includes(entry)) continue
+    const rename = text(fix.rename, 40)
+    if (rename && !entry.player && !owner.has(key(rename))) {
+      owner.set(key(rename), entry)
+      change(entry).rename = rename
+    }
+    for (const name of splitNames(fix.aliases)) give(entry, name)
+  }
+  const roster = []
+  for (const item of cleanRoster(list(found.new).map(raw => ({ ...raw, id: undefined, lora: '', player: false })))) {
+    const names = [item.name, ...splitNames(item.aliases)]
+    const same = names.map(name => owner.get(key(name))).find(entry => cast.includes(entry))
+    if (same) {
+      for (const name of names) give(same, name)
+      continue
+    }
+    // Two newcomers under one name: the first.
+    if (names.some(name => owner.has(key(name)))) continue
+    for (const name of names) owner.set(key(name), item)
+    roster.push(item)
+  }
+  const fixes = []
+  for (const [entry, { rename, aliases }] of changes) {
+    const adding = rename ? [entry.name, ...aliases] : aliases
+    let room = 120 - String(entry.aliases ?? '').trim().length
+    const kept = adding.filter(name => {
+      const cost = name.length + 2
+      if (cost > room) return false
+      room -= cost
+      return true
+    })
+    if (rename || kept.length) fixes.push({ id: entry.id, name: entry.name, rename, aliases: kept })
+  }
+  return { roster, fixes }
 }
 
 /** The helper's JSON (possibly fenced or with chatter around it) → roster entries. */

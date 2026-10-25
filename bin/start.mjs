@@ -29,6 +29,8 @@ const app = createApp({
   onShutdown: () => process.exit(0),
   idleExitMs: idleExitSeconds > 0 ? idleExitSeconds * 1000 : 0,
 })
+// An error nothing caught goes to 设置 → 更多 → 错误日志 as the server goes down.
+app.diagnostics.watchProcess()
 
 try {
   await app.listen({ port, listen })

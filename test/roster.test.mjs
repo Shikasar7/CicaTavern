@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { chatMaterial, cleanFrame, cleanRoster, countTags, draftMaterial, flattenFrame, isFramePrompt, leadOf, naiCharacters, parseFrame, parseRosterDraft, rosterBrief, rosterChatRequest, withSomeone } from '../server/roster.mjs'
+import { chatMaterial, cleanFrame, cleanRoster, countTags, draftMaterial, flattenFrame, isFramePrompt, leadOf, naiCharacters, parseFrame, parseRosterChat, parseRosterDraft, rosterBrief, rosterChatRequest, withSomeone } from '../server/roster.mjs'
 import { imagePromptRequest, naiRequest, referenceModel, withStyle } from '../server/media.mjs'
 
 const ROSTER = cleanRoster([
@@ -143,9 +143,45 @@ test('从对话里补充: the last turns as shown, newest kept when long; the re
   assert.equal(chatMaterial(path), '<reply>\n开场。\n</reply>\n\n<player>\n你好\n</player>\n\n<reply>\n老周撑着船过来。\n</reply>')
   assert.equal(chatMaterial(path, { turns: 1 }), '<reply>\n老周撑着船过来。\n</reply>', 'the newest turns')
   assert.equal(chatMaterial(path, { budget: 30 }), '<reply>\n老周撑着船过来。\n</reply>', 'over the budget: the newest kept')
-  const request = rosterChatRequest('<reply>…</reply>', { known: ['林雪', '主角'], setting: '民国，上海' })
+  const request = rosterChatRequest('<reply>…</reply>', { cast: [{ name: '林雪', aliases: '雪儿, 林警官', player: false }, { name: '主角', aliases: '', player: true }], userName: '阿明', setting: '民国，上海' })
   const asked = request.messages[0].content
   assert.ok(asked.startsWith('<setting>\n民国，上海\n</setting>'))
-  assert.match(asked, /Already in the cast list \(skip them under any of their names\): 林雪, 主角\./)
+  assert.ok(asked.includes('- 林雪 (also: 雪儿, 林警官)\n- 主角 = the player character (also: 阿明)\n'), 'the list with every name it goes by')
+  assert.match(asked, /"fix": \[\{"name"/)
   assert.match(rosterChatRequest('x').messages[0].content, /\(nobody yet\)/)
+})
+
+test('从对话里补充: newcomers, and for the list\'s people the names the story calls them now; nobody gets a name that is taken', () => {
+  const cast = [
+    { id: 'aaaaaa01', name: '林清禾', aliases: '清禾', player: false },
+    { id: 'aaaaaa02', name: '顾念念', aliases: '', player: false },
+    { id: 'aaaaaa03', name: '主角', aliases: '', player: true },
+  ]
+  const found = {
+    new: [
+      { name: '老周', aliases: '船夫', kind: 'boy', looks: 'old man', outfit: 'straw hat' },
+      { name: '小师妹', aliases: '顾念念', kind: 'girl', looks: 'pink hair' },
+      { name: '阿明', kind: 'boy' },
+      { name: '周伯', aliases: '老周', kind: 'boy' },
+    ],
+    fix: [
+      { name: '林清禾', rename: '林青禾', aliases: '青禾, 林姑娘, 清禾' },
+      { name: '主角', rename: '少爷', aliases: '少爷' },
+      { name: '没这个人', aliases: '某人' },
+      { name: '顾念念', aliases: '念念, 林姑娘' },
+    ],
+  }
+  const { roster, fixes } = parseRosterChat(`<think>…</think>\n\`\`\`json\n${JSON.stringify(found)}\n\`\`\``, cast, '阿明')
+  assert.deepEqual(roster.map(e => [e.name, e.player, e.lora]), [['老周', false, '']], 'one under a name the list has is that person; the player is nobody new; two under one name, the first')
+  assert.deepEqual(fixes, [
+    { id: 'aaaaaa01', name: '林清禾', rename: '林青禾', aliases: ['林清禾', '青禾', '林姑娘'] },
+    { id: 'aaaaaa03', name: '主角', rename: '', aliases: ['少爷'] },
+    { id: 'aaaaaa02', name: '顾念念', rename: '', aliases: ['念念', '小师妹'] },
+  ], 'the old name kept when renamed; the player keeps its name; a name another already took goes to nobody')
+
+  assert.deepEqual(parseRosterChat('[{"name":"老周","kind":"boy"}]', cast).roster.map(e => e.name), ['老周'], 'an array is the newcomers alone')
+  assert.deepEqual(parseRosterChat('没有新人。', cast), { roster: [], fixes: [] })
+  const many = Array.from({ length: 30 }, (_, i) => `外号${i}`).join(',')
+  const full = parseRosterChat(JSON.stringify({ fix: [{ name: '顾念念', aliases: many }] }), [{ ...cast[1], aliases: '念念' }])
+  assert.ok(full.fixes[0].aliases.length < 30 && `念念, ${full.fixes[0].aliases.join(', ')}`.length <= 120, 'as many as the field keeps')
 })

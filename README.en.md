@@ -51,7 +51,7 @@ From the author's own long chats (October 2026):
 - **Character cards**: SillyTavern V1/V2/V3 PNG and JSON, with embedded world books, regex scripts and alternate greetings. A new version of a card can replace the old one in place, keeping your chats.
 - **World books**: always-on and keyword entries, with regex keys, secondary keys, probability and insertion position. Standalone world books can be attached to a card, and after import every entry can be searched, switched on or off and edited under View entries (查看条目).
 - **Presets**: a light built-in "Basic preset" with switches for point of view, style, not acting for you, limited knowledge, dark themes, intimacy, choices (tap to send) and a time box, so it plays well without importing anything. You can also import Chat Completion presets, toggle and edit their entries, and pin the ones you use most as quick switches.
-- **MVU variables and status bars**: `[InitVar]`, `<UpdateVariable>` / JSONPatch and the older `_.set()` are supported; EJS templates run in a QuickJS sandbox. HTML UIs inside cards render in isolated iframes, with a compatibility layer for the common Tavern Helper (酒馆助手) functions. The libraries those UIs need, such as jQuery and Vue, load from jsDelivr, so some may be missing offline.
+- **MVU variables and status bars**: `[InitVar]`, `<UpdateVariable>` / JSONPatch and the older `_.set()` are supported; EJS templates run in a QuickJS sandbox (with ST-Prompt-Template's `getwi`, `matchChatMessages` and the like). HTML UIs inside cards render in isolated iframes, with a compatibility layer for the common Tavern Helper (酒馆助手) functions: variables, lorebooks (changes kept for that chat only), calling the model (each card asks first) and sending messages. The libraries those UIs need, such as jQuery and Vue, load from jsDelivr, so some may be missing offline.
 - **SillyTavern chats**: import a .jsonl (drop it into the window or use Import archive) with every turn, every swipe and the MVU variables; a long one can be compacted into a story archive first.
 - **Versions and branches**: regenerate, swipe between versions, branch from any message, roll back, edit any message; a whole chat can be packed up and moved to another device.
 
@@ -103,13 +103,14 @@ If you can't quite say what you want, the creator guides you round by round:
 
 <br clear="right">
 
-## Latest changes [1.9.2]
+## Latest changes [1.9.3]
 
 <p align="center"><img src="docs/screenshots/vn-marks.jpg" alt="The visual novel in 1.9.2: the model marked this line as the steward's, so the name plate and the sprite follow, with Lin Qinghe beside him" width="880"></p>
 
-- **Speaker marks in visual novel mode**: the model marks who says each line and how they look (the marks are not shown), so the name plate, the sprite and the expression follow them instead of a guess from the narration; it can also ask for a shake or a flash. On by default with the built-in preset; with an imported one, turn it on in Sprites → Mark speakers. Switching it costs no cache.
-- **An update mirror in China**: when GitHub cannot be reached for an update, the app turns to a mirror on cnb.cool for the release and the package, with a signature check; it takes effect for updates after this one.
-- **Fixes**: a chat froze when a reply ended on a long run of `**` decorations (since 1.9.1); reading a visual novel reply while it was written kept jumping back to an earlier line; the in-app update could say ready a moment early.
+- **Card UIs can do more (1.9.3)**: start pages, battles and mini games built for Tavern Helper can call the model (each card asks you first, one call at a time), read and write lorebooks (for this chat only), keep chat variables, and add or remove messages; EJS templates follow the Prompt Template plugin more fully: `setvar` writes are kept, decorators work, and `<%= getvar(…) %>` in a display regex shows that message's value.
+- **An error log (1.9.3)**: Settings → More → Error log copies or saves a report to send to the developer, with no chat text and keys and user names taken out; it stays on your device. The cast list folds to one row per character with search, and a card's own lorebook can be exported.
+- **Speaker marks in visual novel mode (1.9.2)**: the model marks who says each line and how they look (the marks are not shown), so the name plate, the sprite and the expression follow them instead of a guess from the narration; it can also ask for a shake or a flash. On by default with the built-in preset; with an imported one, turn it on in Sprites → Mark speakers. Switching it costs no cache.
+- **An update mirror in China (1.9.2)**: when GitHub cannot be reached for an update, the app turns to a mirror on cnb.cool for the release and the package, with a signature check; updates from 1.9.2 on can use it.
 
 The visual novel HUD, new days and memories came in 1.9.1; editing lorebooks, presets, regex and the theme by chat in 1.9.0; visual novel mode in 1.8.0. Download from [Releases](https://github.com/Shikasar7/CicaTavern/releases/latest); 1.4.0 and later can update in the app. Everything that changed is in [CHANGELOG.md](CHANGELOG.md).
 
@@ -210,7 +211,7 @@ The background server's log is `%USERPROFILE%\.cicatavern\logs\server.log`.
 
 ## Privacy
 
-CicaTavern collects no usage data and sends nothing to the developer. Your data stays on your own device.
+CicaTavern collects no usage data and sends nothing to the developer. Your data stays on your own device. So does the error log: the developer only sees it if you copy or save it and send it yourself.
 
 What it connects to:
 
@@ -219,7 +220,7 @@ What it connects to:
   - Update check: GitHub (api.github.com) at most once a day, and the mirror in mainland China, cnb.cool (Tencent), when GitHub hasn't answered within a few seconds. Only the version number is sent; they can see your IP address. The Android app does the same.
   - Body font: the Noto Serif SC font from Google Fonts.
   - Tavern Helper libraries: jQuery, Vue, Tailwind and similar libraries from public CDNs such as jsDelivr, loaded when a card's Tavern Helper UI uses them.
-- **Web content inside cards and presets** may load pictures or fonts from addresses the card's author wrote into it.
+- **Web content inside cards and presets** may load pictures or fonts from addresses the card's author wrote into it. When a card's UI wants to call the model, each card asks you first; once you agree, its requests go to the model provider of that chat.
 
 ## Uninstall
 
@@ -243,6 +244,7 @@ The Android APK is signed locally by the author with their own key; the certific
 - **Port 8790 is in use**: one is probably already running; open http://127.0.0.1:8790/ directly.
 - **Overseas APIs don't connect**: check that the 网络代理 row shows your proxy under "现在走 …" (currently using).
 - **Replies are cut off**: set the maximum output tokens (最大输出 token) in the provider's 高级 (Advanced) section.
+- **Anything else**: open Settings → More → Error log, copy or save it, and send it to the developer with a description of the problem (a GitHub issue or the group chat). It has no chats or card contents, and keys are taken out; for a problem with what a reply says, tick "Include the open chat's last turn".
 
 ## Running from source
 

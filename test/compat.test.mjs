@@ -21,6 +21,15 @@ test('frames load only the libraries their code uses', () => {
   assert.match(libraryTags('<div class="flex items-center gap-2"></div>'), /tailwind/)
 })
 
+test('a frame that loads its page from elsewhere gets what Tavern Helper always has: jQuery, lodash, Vue', () => {
+  const tags = libraryTags(`<body><script>$('body').load('https://raw.githubusercontent.com/a/b/main/dist/ui/index.html')</script></body>`)
+  assert.match(tags, /jquery\.min\.js/)
+  assert.match(tags, /lodash/)
+  assert.match(tags, /vue\.global/)
+  assert.doesNotMatch(tags, /tailwind|fontawesome/, 'only those three')
+  assert.match(libraryTags(`<script>fetch('https://cdn.jsdelivr.net/gh/a/b/ui.html').then(r => r.text())</script>`), /lodash/)
+})
+
 test('min-height in vh is pinned to the page viewport, other vh is left alone', () => {
   assert.equal(replaceViewportHeight('.a{min-height:100vh}'), '.a{min-height:var(--TH-viewport-height)}')
   assert.equal(replaceViewportHeight('<div style="min-height: 50vh">'), '<div style="min-height: calc(var(--TH-viewport-height) * 0.5)">')

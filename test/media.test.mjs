@@ -72,10 +72,10 @@ async function fakeBackends(t) {
         const cast = '[{"name":"林雪","kind":"girl","looks":"short black hair, blue eyes","outfit":"light blue police uniform"},{"name":"主角","kind":"boy","player":true,"looks":"short brown hair"}]'
         return send(200, { model: json.model, choices: [{ message: { content: `好的\n${cast}` } }], usage: { prompt_tokens: 10, completion_tokens: 5 } })
       }
-      // 从对话里补充: one newcomer, and someone the list already has under another name.
-      if (asked.includes('are NOT in the cast list yet')) {
-        const cast = '[{"name":"老周","aliases":"船夫","kind":"boy","looks":"old man, grey beard","outfit":"straw hat"},{"name":"雪儿","aliases":"林雪","kind":"girl","looks":"short black hair"}]'
-        return send(200, { model: json.model, choices: [{ message: { content: cast } }], usage: { prompt_tokens: 10, completion_tokens: 5 } })
+      // 从对话里补充: one newcomer, someone the list already has under another name, and a nickname for her.
+      if (asked.includes('are NOT on the cast list under any name')) {
+        const found = { new: [{ name: '老周', aliases: '船夫', kind: 'boy', looks: 'old man, grey beard', outfit: 'straw hat' }, { name: '雪儿', aliases: '林雪', kind: 'girl', looks: 'short black hair' }], fix: [{ name: '林雪', aliases: '林警官', rename: '' }] }
+        return send(200, { model: json.model, choices: [{ message: { content: JSON.stringify(found) } }], usage: { prompt_tokens: 10, completion_tokens: 5 } })
       }
       if (asked.includes('<cast>')) {
         return send(200, { model: json.model, choices: [{ message: { content: '场景: office, night\n[林雪] saluting, serious | left\n[阿明] nodding | right' } }], usage: { prompt_tokens: 10, completion_tokens: 5 } })
@@ -351,12 +351,16 @@ test('cast: drafted from the card, cast-format prompt, per-character NovelAI pro
   const saved = await media.saveCardMedia(card.id, { roster: draft.roster })
   const [linxue, hero] = saved.roster
 
-  // 从对话里补充: the newcomers in the chat's turns, none the list has under any name, nobody the player.
+  // 从对话里补充: the newcomers in the chat's turns, none the list has under any name, nobody the player;
+  // the names the list's people go by in the story now, for the one on the page.
   const path = [{ role: 'assistant', display: '码头上，船夫老周把缆绳一甩。' }, { role: 'user', text: '上船' }]
-  const found = await media.draftRosterFromChat(card.id, { path, user: chat.names.user }, ['阿明'])
+  const page = [...saved.roster, { id: 'bbbbbb01', name: '阿明', aliases: '', player: false }]
+  const found = await media.draftRosterFromChat(card.id, { path, user: chat.names.user }, page)
   assert.deepEqual(found.roster.map(e => [e.name, e.player]), [['老周', false]])
+  assert.deepEqual(found.fixes, [{ id: linxue.id, name: '林雪', rename: '', aliases: ['林警官', '雪儿'] }])
   const asked = fake.seen.findLast(r => r.url === '/v1/chat/completions').json.messages.at(-1).content
-  assert.match(asked, /Already in the cast list \(skip them under any of their names\): 林雪, 主角, 阿明/)
+  assert.ok(asked.includes('- 林雪\n- 主角 = the player character') && asked.includes('- 阿明\n'), 'the list as the page has it')
+  assert.equal((await media.draftRosterFromChat(card.id, { path, user: chat.names.user })).fixes[0].id, linxue.id, 'the saved list when the page sends none')
   assert.ok(asked.includes('<reply>\n码头上，船夫老周把缆绳一甩。\n</reply>\n\n<player>\n上船\n</player>'), 'the turns, oldest first')
   await assert.rejects(media.draftRosterFromChat(card.id, { path: [], user: '' }), /还没有内容/)
   assert.equal(linxue.ref, false)

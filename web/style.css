@@ -574,6 +574,17 @@ dl.usage dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; 
   font-size: 13px; transition: opacity .2s ease, transform .3s var(--ease);
 }
 @starting-style { .toast { opacity: 0; transform: translate(-50%, 10px); } }
+.toast-link { border: 0; background: none; padding: 0 0 0 4px; color: inherit; font: inherit; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+
+/* 错误日志 (web/diagnostics.js). */
+.dialog.diagnostics { width: min(760px, calc(100vw - 32px)); }
+.dialog.diagnostics .hint { margin: 0 0 12px; }
+.dialog.diagnostics label.check-row { align-items: flex-start; }
+.dialog.diagnostics label.check-row input { margin-top: 3px; flex: none; }
+.dialog.diagnostics textarea.diag-text { width: 100%; box-sizing: border-box; min-height: 260px; height: min(46dvh, 420px); resize: vertical; font: 12px/1.55 ui-monospace, "Cascadia Mono", Consolas, monospace; white-space: pre; overflow: auto; }
+.dialog.diagnostics .diag-actions { margin-top: 12px; flex-wrap: wrap; gap: 8px; align-items: center; }
+.dialog.diagnostics .diag-count { margin: 0; }
+.dialog.diagnostics .grow { flex: 1; }
 
 /* Switch (preset prompt toggles). */
 .switch { appearance: none; flex: none; width: 32px; height: 19px; border-radius: 999px; background: var(--line); position: relative; cursor: pointer; margin: 0; transition: background .2s; }
@@ -933,6 +944,16 @@ button.chip.on { background: var(--accent); border-color: var(--accent); color: 
 .voice-source textarea { font: 12.5px/1.6 var(--mono); resize: vertical; }
 .voice-source .select-with-action input { flex: 1; min-width: 0; }
 .source-state { flex: none; font-size: 11.5px; color: var(--faint); }
+.voice-source-name { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+/* Where to sign up for a picture or voice service, and how it is reached from mainland China. */
+.service-links { display: grid; gap: 4px; margin: 2px 0 10px; font-size: 12px; color: var(--muted); }
+.service-site { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.service-name { color: var(--ink); font-weight: 500; }
+.service-site a { color: var(--accent); text-decoration: none; }
+.service-site a:hover { text-decoration: underline; }
+.net-tag { font-size: 11px; font-weight: 400; line-height: 1.6; padding: 0 6px; border-radius: 999px; white-space: nowrap; background: var(--line-soft); color: var(--muted); }
+.net-tag.direct { background: color-mix(in srgb, var(--ok) 14%, transparent); color: var(--ok); }
+.net-tag.proxy { background: color-mix(in srgb, var(--warn) 14%, transparent); color: var(--warn); }
 .source-state.ok { color: var(--ok); }
 .source-state.warn { color: var(--warn); }
 .voice-actions { margin: -4px 0 10px; }
@@ -1089,8 +1110,36 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 /* ─── Cast (角色名册) in the picture settings ────────────────────── */
 .roster { margin: 10px 0 8px; border-top: 1px solid var(--line-soft); padding-top: 8px; }
 .roster > summary { cursor: pointer; font: 500 14px var(--serif); color: var(--ink); padding: 4px 0; }
-.roster-list { display: grid; gap: 10px; margin: 6px 0 10px; }
-.roster-entry { margin: 0; padding: 10px 12px 4px; border: 1px solid var(--line-soft); border-radius: 12px; background: var(--raised); min-width: 0; }
+/* Everyone as a line that opens to their sheet; side by side where there is room, an open one across. */
+.roster-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr)); gap: 8px; margin: 8px 0 10px; }
+.roster-entry { margin: 0; border: 1px solid var(--line-soft); border-radius: 12px; background: var(--raised); min-width: 0; }
+.roster-entry[open] { grid-column: 1 / -1; }
+.roster-entry[hidden] { display: none; }
+.roster-entry[data-flag="new"], .roster-entry[data-flag="changed"] { border-color: color-mix(in srgb, var(--accent) 50%, var(--line-soft)); }
+.roster-line { display: flex; gap: 10px; align-items: center; padding: 8px 10px; cursor: pointer; list-style: none; min-width: 0; border-radius: 12px; }
+.roster-line::-webkit-details-marker { display: none; }
+.roster-line:hover { background: var(--accent-soft); }
+.roster-line:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.roster-entry[open] > .roster-line { border-bottom: 1px solid var(--line-soft); border-radius: 12px 12px 0 0; }
+.roster-face { flex: none; width: 36px; height: 36px; border-radius: 50%; overflow: hidden; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); font-size: 14px; font-weight: 600; }
+.roster-face img { width: 100%; height: 100%; object-fit: cover; object-position: 50% 15%; }
+.roster-line-who { flex: 1; min-width: 0; display: grid; gap: 1px; }
+.roster-line-name, .roster-line-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.roster-line-name { font-size: 13.5px; font-weight: 600; color: var(--ink); }
+.roster-line-sub { font-size: 12px; color: var(--muted); }
+.roster-line-sub.empty { color: var(--faint); }
+.roster-line-tags { flex: none; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; max-width: 45%; }
+.roster-tag { font-size: 11px; line-height: 1.6; padding: 0 6px; border-radius: 999px; background: var(--line-soft); color: var(--muted); white-space: nowrap; }
+.roster-tag.player { background: var(--accent-soft); color: var(--accent); }
+.roster-tag.new { background: var(--accent); color: var(--accent-ink); }
+.roster-body { padding: 10px 12px 4px; }
+.roster-note { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; margin-bottom: 8px; padding: 6px 10px; border-radius: 8px; background: var(--accent-soft); font-size: 12.5px; color: var(--ink); }
+.roster-note[hidden], .roster-empty[hidden], .roster-tools [hidden] { display: none; }
+.roster-tools { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+.dialog .roster-tools .list-search { flex: 1; margin: 0; }
+.roster-tools > .btn { margin-left: auto; }
+.roster-status { display: block; margin: 2px 0 4px; }
+.roster-status:empty { display: none; }
 .roster-head { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 4px; }
 .roster-thumb {
   flex: none; width: 64px; aspect-ratio: 2 / 3; border-radius: 8px; overflow: hidden; display: grid; place-items: center;
@@ -1103,7 +1152,7 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .roster-row > input[data-field="name"] { flex: 1 1 8em; min-width: 0; }
 .roster-row > select { flex: none; width: auto; }
 .roster-row .check-row { margin: 0; }
-.roster-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 6px; }
+.roster-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 2px 0 6px; }
 .grid.three { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr); }
 .grid.three > label { min-width: 0; }
 .grid.three select, .grid.three input { min-width: 0; max-width: 100%; }

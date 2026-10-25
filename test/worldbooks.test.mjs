@@ -8,12 +8,14 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { createApp } from '../server/http.mjs'
-import { normalizeCard } from '../server/cards.mjs'
+import { normalizeCard, writeCardPng } from '../server/cards.mjs'
 import { activePath, booksForCard, createChat } from '../server/chats.mjs'
 import { createEngine } from '../server/engine.mjs'
 import { normalizeProvider } from '../server/providers.mjs'
 import { createStore } from '../server/store.mjs'
 import { addEntries, editBook, editBookInfo, normalizeBook, scanDepthOf, triggeredEntries, worldFile } from '../server/worldbook.mjs'
+
+const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c636060f80f0000010100005a4d6b8a0000000049454e44ae426082', 'hex')
 
 // A SillyTavern world file, with fields this app does not read.
 const WORLD = {
@@ -214,6 +216,37 @@ test('entries are copied or moved between books, out of a card\'s own one too', 
   assert.equal((await call('/api/worldbooks/transfer', { method: 'POST', body: { from: book.id, to: book.id, uids: ['7'] } })).status, 400)
   assert.equal((await call('/api/worldbooks/transfer', { method: 'POST', body: { from: book.id, to: 'nothere', uids: ['7'] } })).status, 404)
   assert.equal((await call(`/api/worldbooks/${book.id}`)).body.entries.length, 1, 'nothing moved when the target is missing')
+})
+
+test('a card\'s own book exported or taken out as a book of its own: the edits, over the fields its card file has', async t => {
+  const { call, importCard } = await tavern(t)
+  const raw = { spec: 'chara_card_v2', data: { name: '林雪', first_mes: '你好。', character_book: { name: '林雪的设定', entries: [
+    { id: 0, keys: ['夜'], content: '守夜人提灯巡街。', enabled: true, extensions: { depth: 2, group: '城', sticky: 1 } },
+    { id: 1, keys: [], content: '王都终年下雪。', constant: true, enabled: true },
+  ] } } }
+  const card = (await call('/api/cards/import', { method: 'POST', body: { filename: '林雪.png', data: writeCardPng(PNG, raw).toString('base64') } })).body
+  await call(`/api/cards/${card.id}/book`, { method: 'PUT', body: { entries: [{ uid: '0', content: '守夜人提灯巡街，三更换岗。' }] } })
+  await call(`/api/cards/${card.id}/book`, { method: 'PUT', body: { add: { comment: '新的', content: '新条目。' } } })
+
+  const file = (await call(`/api/cards/${card.id}/book/export`)).body
+  assert.equal(file.name, '林雪的设定')
+  assert.deepEqual(Object.keys(file.entries), ['0', '1', '2'])
+  assert.deepEqual([file.entries[0].content, file.entries[0].depth, file.entries[0].group, file.entries[0].sticky], ['守夜人提灯巡街，三更换岗。', 2, '城', 1], 'the edit, over the card file\'s fields')
+  assert.equal(file.entries[1].constant, true)
+  assert.deepEqual([file.entries[2].content, file.entries[2].depth], ['新条目。', 4], 'one made here gets SillyTavern\'s defaults')
+
+  const out = await call(`/api/cards/${card.id}/book/extract`, { method: 'POST', body: { name: '王都设定' } })
+  assert.deepEqual([out.status, out.body.name, out.body.entries, out.body.global], [200, '王都设定', 3, false])
+  assert.ok((await call('/api/worldbooks')).body.some(book => book.id === out.body.id))
+  assert.equal((await call(`/api/worldbooks/${out.body.id}`)).body.complete, true, 'its export carries the fields')
+  assert.equal((await call(`/api/worldbooks/${out.body.id}/export`)).body.entries[0].group, '城')
+  await call(`/api/worldbooks/${out.body.id}`, { method: 'PUT', body: { remove: ['1'] } })
+  assert.equal((await call(`/api/cards/${card.id}/book`)).body.entries.length, 3, 'the card keeps its own')
+  assert.equal((await call(`/api/cards/${card.id}/book/extract`, { method: 'POST', body: {} })).body.name, '林雪的设定', 'named as the card\'s book when not given a name')
+
+  const plain = await importCard('白芷')
+  assert.equal((await call(`/api/cards/${plain.id}/book/export`)).status, 404)
+  assert.equal((await call(`/api/cards/${plain.id}/book/extract`, { method: 'POST', body: {} })).status, 404)
 })
 
 /** An OpenAI-compatible model that answers every turn with the same line. */

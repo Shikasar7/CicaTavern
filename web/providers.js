@@ -75,6 +75,12 @@ const TEMPLATES = [
     note: t`阿里云百炼，密钥在 bailian.console.aliyun.com 创建。qwen-max / qwen-plus 自动指向当前版本。`,
   },
   {
+    name: t`硅基流动`, api: 'openai-completions', baseURL: 'https://api.siliconflow.cn/v1', apiKeyEnv: 'SILICONFLOW_API_KEY', proxy: 'direct',
+    site: 'https://cloud.siliconflow.cn', keys: 'https://cloud.siliconflow.cn/account/ak',
+    models: [{ id: 'deepseek-ai/DeepSeek-V3' }, { id: 'Qwen/Qwen3-235B-A22B' }],
+    note: t`国内直连，密钥在 cloud.siliconflow.cn 创建，模型 ID 写成「厂商/模型」。也能在「配图与朗读 → 朗读来源 → 供应商的朗读接口」里选它朗读（FunAudioLLM/CosyVoice2-0.5B）。`,
+  },
+  {
     name: t`火山方舟 Agent Plan`, api: 'openai-responses', baseURL: 'https://ark.cn-beijing.volces.com/api/plan/v3', apiKeyEnv: 'ARK_API_KEY', proxy: 'direct',
     site: 'https://www.volcengine.com/product/ark', keys: 'https://console.volcengine.com/ark',
     models: [{ id: 'deepseek-v4.1-flash' }, { id: 'glm-5.3-flash' }],

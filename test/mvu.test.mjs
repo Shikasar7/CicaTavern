@@ -106,7 +106,87 @@ test('EJS runs in the QuickJS sandbox: getvar branches, whitespace control, no h
   assert.equal(loop.text, null)
   assert.match(loop.error, /interrupt/i)
   assert.match(compileEjs('a<%% b'), /<%/)
-  assert.equal(renderTemplate('<% setvar("x", 1) %><%= getvar("x", { defaults: "无" }) %>', { variables: {} }).text, '无', 'setvar is a no-op')
+  const variables = { stat_data: { 金钱: 5 } }
+  assert.equal(renderTemplate('<% setvar("stat_data.金钱", 1) %><%= getvar("stat_data.金钱") %>', { variables }).text, '1', 'setvar holds while the turn renders')
+  assert.equal(variables.stat_data.金钱, 5, 'the variables passed in stay as they were (the session hands writes back, see template.test.mjs)')
+})
+
+test('ST-Prompt-Template: getwi pulls entries in (title, pattern, uid, another book, nested), await, chat matching, define and setvar across entries', async () => {
+  const { templateSession } = await import('../server/template.mjs')
+  const books = [
+    {
+      name: '卡书',
+      entries: [
+        { uid: '4', comment: '场景_和室_夜', content: '夜里的和室' },
+        { uid: '1', comment: '场景_和室', content: '和室，<%= getvar("stat_data.时段") %>' },
+        { uid: '2', comment: '驱魔_Boss_雪女(B3)', content: '雪女' },
+        { uid: '3', comment: '嵌套', content: '[<%- await getwi("场景_和室") %>]' },
+      ],
+    },
+    { name: '外书', entries: [{ uid: '9', comment: '外书条目', content: '外' }] },
+  ]
+  const messages = [{ role: 'user', text: '早' }, { role: 'assistant', text: '她留下了遗言' }, { role: 'user', text: '继续' }]
+  const session = templateSession({ variables: { stat_data: { 场景: '和室', 时段: '傍晚' } }, names: { char: 'C', user: 'U' }, books, messages })
+  try {
+    const r = text => session.render(text)
+    assert.deepEqual(r('<%_ { let s = getvar("stat_data.场景"); _%><%- await getwi(null, "场景_" + s) %><%_ } _%>'), { text: '和室，傍晚', error: null }, 'an exact title before a pattern; a block across tags')
+    assert.equal(r('<%- await getwi(null, `^${_.escapeRegExp("驱魔_Boss_雪女(B3)")}$`) %>').text, '雪女', 'a string title is a pattern, as there')
+    assert.equal(r('<%- await getwi("嵌套") %>|<%- await getwi(4) %>|<%- await getwi("外书条目") %>|<%- await getwi("外书", "外书条目") %>|<%- await getwi("没有这条") %>').text, '[和室，傍晚]|夜里的和室|外|外|')
+    assert.equal(
+      r('<%= matchChatMessages(["遗言", "初代"]) %>/<%= matchChatMessages("早") %>/<%= matchChatMessages("早", { start: -3 }) %>/<%= lastUserMessage %>/<%= lastCharMessage %>').text,
+      'true/false/true/继续/她留下了遗言',
+      'the last two messages unless told otherwise',
+    )
+    assert.equal(r('<% console.log("ok"); define("共用", 2); setvar("stat_data.临时", 7) %><%= getvar("stat_data.临时") %>').text, '7')
+    assert.equal(r('<%= 共用 %>/<%= getvar("stat_data.临时") %>').text, '2/7', 'carried to the next entry of the turn')
+    assert.equal(r('<%= _.sum([1, 2]) %>/<%= _.includes(["a"], "a") %>/<%= _.find([{ n: 1 }, { n: 2 }], { n: 2 }).n %>/<%= _.sortBy([3, 1, 2]).join("") %>/<%= _.random(1, 1) %>/<%= _.isEmpty({}) %>').text, '3/true/2/123/1/true')
+    assert.match(r('<% while (true) {} %>').error, /interrupt/i)
+    assert.equal(r('<%= 1 + 1 %>').text, '2', 'a template stopped for time does not stop the next')
+  } finally {
+    session.dispose()
+  }
+})
+
+test('a turn renders a card\'s EJS controllers with its own book and this input; an unplayed chat can switch openings', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'tavern-stpt-'))
+  const app = createApp({ dataRoot: root, proxy: 'off', edition: 'release' })
+  const server = await app.listen({ port: 0 })
+  t.after(async () => {
+    app.network?.stop()
+    server.closeAllConnections?.()
+    server.close()
+    await rm(root, { recursive: true, force: true, maxRetries: 3 })
+  })
+  const base = `http://127.0.0.1:${server.address().port}`
+  const send = (p, body) => fetch(base + p, { method: 'POST', headers: { 'content-type': 'application/json', 'x-agent-tavern': '1' }, body: JSON.stringify(body) })
+  const post = async (p, body) => (await send(p, body)).json()
+  const raw = {
+    spec: 'chara_card_v2',
+    data: {
+      name: '千夏',
+      first_mes: '[欢迎面板]',
+      alternate_greetings: ['蝉鸣。'],
+      character_book: {
+        entries: [
+          { id: 0, comment: '[InitVar]', content: '世界:\n  当前场景: 缘侧', enabled: false },
+          { id: 1, comment: '场景控制器', constant: true, enabled: true, content: '<%_ { const s = getvar("stat_data.世界.当前场景") || "院子"; _%><%- await getwi(null, "场景_" + s) %><%_ } _%><% if (matchChatMessages("西瓜")) { %>（有西瓜）<% } %>' },
+          { id: 2, comment: '场景_缘侧', enabled: false, content: '缘侧的风铃' },
+        ],
+      },
+    },
+  }
+  const card = await post('/api/cards/import', { filename: '千夏.json', data: Buffer.from(JSON.stringify(raw)).toString('base64') })
+  const chat = await post('/api/chats', { cardId: card.id })
+  const preview = await post(`/api/chats/${chat.id}/preview`, { parentId: 'root', input: '吃西瓜' })
+  assert.deepEqual(preview.templateErrors, [])
+  assert.match(preview.prompt, /<动态设定>[\s\S]*缘侧的风铃（有西瓜）[\s\S]*<\/动态设定>/)
+
+  // A welcome page switching the first message, as SillyTavern's swipes do.
+  assert.equal((await post(`/api/chats/${chat.id}/opening`, { index: 1 })).path[0].text, '蝉鸣。')
+  assert.equal((await send(`/api/chats/${chat.id}/opening`, { index: 5 })).status, 400)
+  const { switchOpening } = await import('../server/chats.mjs')
+  const played = { ...chat, nodes: { root: chat.path[0], turn: { id: 'turn', parent: 'root', role: 'user', text: '你好' } } }
+  await assert.rejects(switchOpening({ getCard: async () => ({}) }, played, 1), /已经开始/)
 })
 
 test('state-dependent entries stay out of the frozen prefix and render with current state', () => {

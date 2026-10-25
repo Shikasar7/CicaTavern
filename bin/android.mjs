@@ -60,6 +60,8 @@ if (createApp) {
       edition: 'android',
       accessToken: option('token'),
     })
+    // Errors caught above (the app carries on) also go to 设置 → 更多 → 错误日志.
+    app.diagnostics.watchProcess()
     await app.listen({ port: Number(option('port') ?? 0), listen: 'local' })
     log(`listening on 127.0.0.1:${app.bound().port}`)
   } catch (error) {

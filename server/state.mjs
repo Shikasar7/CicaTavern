@@ -72,6 +72,38 @@ export function applyStateUpdates(state, text) {
   return { state: next, changes: [...new Set(changes)] }
 }
 
+/**
+ * Variable writes from templates (template.mjs diffWrites: replace/remove on
+ * JSON-pointer paths) played back on a copy of `state`. Values land as written:
+ * no `stat_data` prefix to drop and no old-MVU value slot, since the paths come
+ * from the state itself.
+ */
+export function applyWrites(state, writes) {
+  if (!Array.isArray(writes) || !writes.length) return state ?? {}
+  let next = structuredClone(state ?? {})
+  for (const write of writes) {
+    if (!write || typeof write.path !== 'string') continue
+    const keys = splitPath(write.path)
+    if (!keys.length) {
+      if (write.op === 'replace' && write.value && typeof write.value === 'object' && !Array.isArray(write.value)) next = structuredClone(write.value)
+      continue
+    }
+    const last = keys.at(-1)
+    if (write.op === 'remove') {
+      const parent = readRaw(next, keys.slice(0, -1))
+      if (parent !== null && typeof parent === 'object') delete parent[last]
+    } else if (write.op === 'replace') {
+      parentOf(next, keys)[last] = structuredClone(write.value)
+    }
+  }
+  return next
+}
+
+/** The variables template writes touch, as dotted paths (for a turn's stateChanges). */
+export function writeLabels(writes) {
+  return (Array.isArray(writes) ? writes : []).map(write => splitPath(write?.path ?? '').join('.')).filter(Boolean)
+}
+
 /** JSON first; YAML accepts the trailing commas and single quotes models sometimes write. */
 function parseLoose(text) {
   const source = String(text ?? '').trim()

@@ -4,7 +4,7 @@ import { choiceList, statusBar, timeBox } from '/status.js'
 import { BASIC_ID, choicesOf, otherChoices, timeBoxOf } from '/shared/basic.js'
 import { autoStatusSpec } from '/shared/status.js'
 import { BASIC_FIELDS, basicField } from '/basic-options.js'
-import { allowLibraries, broadcastInput, installFrameBridge, parseSlash, storedFrameStorage, storedVariables } from '/compat.js'
+import { allowLibraries, broadcastInput, broadcastState, installFrameBridge, parseSlash, storedFrameStorage, storedVariables } from '/compat.js'
 import { renderUsage } from '/usage.js'
 import { initPresets } from '/presets.js'
 import { initProviders } from '/providers.js'
@@ -165,7 +165,7 @@ async function stream(path, body, onEvent) {
   })
   if (!res.ok || !res.body) {
     const data = await res.json().catch(() => ({}))
-    throw new Error(data.error || t`请求失败（${res.status}）`)
+    throw Object.assign(new Error(data.error || t`请求失败（${res.status}）`), { status: res.status })
   }
   const reader = res.body.pipeThrough(new TextDecoderStream()).getReader()
   let buffer = ''
@@ -184,20 +184,28 @@ async function stream(path, body, onEvent) {
 }
 
 // The toast is a popover: shown again each time, it goes on top of whatever window is open
-// (a modal dialog would otherwise cover it until it closes).
-function toast(message, ms = 4000) {
-  const el = $('toast')
-  el.textContent = message
-  el.hidden = false
-  if (el.showPopover) {
-    if (el.matches(':popover-open')) el.hidePopover()
-    el.showPopover()
+// (a modal dialog would otherwise cover it until it closes). `log`: an error, with a way to its log.
+function toast(message, ms = 4000, { log = false } = {}) {
+  const box = $('toast')
+  const hide = () => {
+    if (box.matches?.(':popover-open')) box.hidePopover()
+    box.hidden = true
+  }
+  box.textContent = message
+  if (log) {
+    box.append(' ', el('button', {
+      type: 'button', class: 'toast-link', text: t`错误日志`,
+      // Only the log opens: a click on the toast itself has its own meaning.
+      onclick: event => { event.stopPropagation(); hide(); openErrorLog() },
+    }))
+  }
+  box.hidden = false
+  if (box.showPopover) {
+    if (box.matches(':popover-open')) box.hidePopover()
+    box.showPopover()
   }
   clearTimeout(toast.timer)
-  toast.timer = setTimeout(() => {
-    if (el.matches?.(':popover-open')) el.hidePopover()
-    el.hidden = true
-  }, ms)
+  toast.timer = setTimeout(hide, ms)
 }
 
 function guard(fn) {
@@ -205,10 +213,45 @@ function guard(fn) {
     try {
       await fn(...args)
     } catch (error) {
-      toast(error.message, 6000)
+      // An answer from the server is in its log already; anything else went wrong in this page.
+      if (!error?.status) reportError('action', error)
+      toast(error.message, 6000, { log: true })
     }
   }
 }
+
+// ─── 错误日志 (server/diagnostics.mjs) ──────────────────────────────────
+// The server logs the errors it answers with; mistakes in this page's own code are sent to it here.
+let reports = 0
+function reportError(kind, error) {
+  // The same mistake over and over: the first ones say enough.
+  if (reports >= 20) return
+  reports++
+  setTimeout(() => reports--, 60_000)
+  fetch('/api/diagnostics/page', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-agent-tavern': '1' },
+    body: JSON.stringify({ kind, message: String(error?.message ?? error ?? '').slice(0, 2000), stack: String(error?.stack ?? '').slice(0, 4000) }),
+  }).catch(() => {})
+}
+addEventListener('error', event => {
+  // This page's own scripts: a card's frame is a window of its own, a browser extension's script is not ours,
+  // and a ResizeObserver running late is the browser's notice, not a mistake.
+  if ((event.filename && !event.filename.startsWith(location.origin)) || (!event.error && /^Script error\.?$|ResizeObserver loop/.test(event.message ?? ''))) return
+  reportError('error', event.error ?? { message: event.message, stack: `${event.filename}:${event.lineno}:${event.colno}` })
+})
+addEventListener('unhandledrejection', event => {
+  if (event.reason?.status) return
+  reportError('promise', event.reason)
+})
+
+/** 设置 → 更多 → 错误日志 (web/diagnostics.js, loaded when first opened). */
+const openErrorLog = guard(async () => {
+  const { openDiagnostics } = await import('/diagnostics.js').catch(() => {
+    throw Object.assign(new Error(t`错误日志要重启后台服务后才能用：关掉所有窗口等一分钟，再从桌面图标打开。`), { status: 404 })
+  })
+  openDiagnostics({ api, el, toast, saveFile, getChat: () => ui.chat })
+})
 
 // ─── Rendering helpers ──────────────────────────────────────────────────
 const escapeHtml = text => text.replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch])
@@ -687,6 +730,12 @@ const importFiles = guard(async files => {
 // ─── Chat ───────────────────────────────────────────────────────────────
 function setChat(chat) {
   ui.chat = chat
+  // A chat opened some other way (a new one, an import): its frames' book names and global variables follow.
+  if (chat && ui.frameInfo?.chatId !== chat.id) {
+    loadFrameInfo(chat.id).then(() => {
+      if (ui.chat?.id === chat.id && document.querySelector('#transcript iframe.card-frame')) renderChat()
+    })
+  }
   if (chat && (!ui.cardDetails.has(chat.cardId) || (chat.presetId && !ui.presetDetails.has(chat.presetId)))) {
     // Render once the card's and preset's regex scripts are known.
     Promise.all([loadCardDetail(chat.cardId), loadPresetDetail(chat.presetId)]).then(() => { if (ui.chat === chat) renderChat() })
@@ -698,7 +747,7 @@ function setChat(chat) {
 }
 
 const openChat = guard(async id => {
-  const view = await api(`/api/chats/${id}`)
+  const [view] = await Promise.all([api(`/api/chats/${id}`), loadFrameInfo(id)])
   followServerTurn(view)
   setChat(view)
   document.body.querySelector('.app').classList.remove('show-left')
@@ -968,7 +1017,7 @@ function renderNode(chat, node, isLastAssistant, depth = 0) {
     tools.push(el('button', { text: filling ? t`补写中…` : t`补写变量`, title: t`按这张卡的变量规则，让模型为这一轮补写变量更新，补完状态立即更新`, disabled: ui.generating, onclick: () => fillUpdate(node.id) }))
   }
   if (node.edited) tools.push(el('span', { class: 'chip', title: t`${new Date(node.edited.at).toLocaleString(locale)} 改过${node.edited.count > 1 ? t` ${node.edited.count} 次` : ''}`, text: t`已修改` }))
-  if (isUser && node.templateErrors?.length) tools.push(el('span', { class: 'chip warn', title: node.templateErrors.join('\n'), text: t`⚠ ${node.templateErrors.length} 条 EJS 模板出错` }))
+  if (node.templateErrors?.length) tools.push(el('span', { class: 'chip warn', title: node.templateErrors.join('\n'), text: t`⚠ ${node.templateErrors.length} 条 EJS 模板出错` }))
   const { shown, time, choices, cardStatus } = replyDisplay(chat, node, isLastAssistant, depth)
   const bar = !isUser && isLastAssistant && !cardStatus ? statusFor(chat, node) : null
   const imported = node.compaction?.imported
@@ -999,7 +1048,7 @@ function replyDisplay(chat, node, isLastAssistant, depth = 0) {
   const isUser = node.role === 'user'
   const scripts = scriptsFor(chat)
   const cardStatus = usesStatusPlaceholder(scripts)
-  let shown = displayOf(node, { scripts, names: chat.names, depth, withStatus: isLastAssistant && cardStatus })
+  let shown = renderedDisplay(chat, node, displayOf(node, { scripts, names: chat.names, depth, withStatus: isLastAssistant && cardStatus }))
   const raw = node.raw ?? node.text
   let choices = !isUser && isLastAssistant ? choicesOf(raw) : []
   // A card's or preset's own options (🩶探索选项🩶：…, <w2g>, a 请选择… list) as the same buttons,
@@ -1009,6 +1058,87 @@ function replyDisplay(chat, node, isLastAssistant, depth = 0) {
     if (other.choices.length) ({ choices, text: shown } = other)
   }
   return { shown, raw, cardStatus, time: isUser ? null : timeBoxOf(raw), choices }
+}
+
+// 楼层渲染: EJS left in what a message shows (a card's display regex writes `<%= getvar(…) %>`) is rendered
+// on the server with that floor's variables, once per text; then only that message is drawn again.
+const displayRenders = new Map() // chat:node:text → rendered text, or null while asked
+const EJS = /<%[\s\S]*?%>/g
+const displayWaiting = new Set() // node ids drawn before their text came back
+let displayRedraw = 0
+
+/** One message drawn again in place; the others, and the card frames in them, keep running. */
+function redrawMessage(nodeId) {
+  const chat = ui.chat
+  const index = chat ? chat.path.findIndex(n => n.id === nodeId) : -1
+  const old = index < 0 ? null : $('transcript').querySelector(`.msg[data-id="${CSS.escape(nodeId)}"]`)
+  if (!old) return
+  const lastAssistant = [...chat.path].reverse().find(n => n.role === 'assistant')
+  patchKeepingFrames(old, renderNode(chat, chat.path[index], chat.path[index] === lastAssistant, chat.path.length - 1 - index))
+}
+
+// A frame that is moved or taken out of the page starts again (its card loses what it was doing), so the
+// frames still in the new drawing (same content, same order) stay where they are and what is around them changes.
+const frameKeysIn = node => node.nodeType !== 1 ? [] : node.matches('iframe.card-frame') ? [node.dataset.key] : [...node.querySelectorAll('iframe.card-frame')].map(frame => frame.dataset.key)
+
+function patchKeepingFrames(old, fresh) {
+  if (old.nodeName !== fresh.nodeName) return old.replaceWith(fresh)
+  for (const { name } of [...old.attributes]) if (!fresh.hasAttribute(name)) old.removeAttribute(name)
+  for (const { name, value } of [...fresh.attributes]) if (old.getAttribute(name) !== value) old.setAttribute(name, value)
+  let cursor = old.firstChild
+  for (const kid of [...fresh.childNodes]) {
+    const keys = frameKeysIn(kid)
+    let match = null
+    for (let at = cursor; keys.length && at && !match; at = at.nextSibling) if (at.nodeName === kid.nodeName && frameKeysIn(at).some(key => keys.includes(key))) match = at
+    if (!match) {
+      old.insertBefore(kid, cursor)
+      continue
+    }
+    while (cursor !== match) { const next = cursor.nextSibling; cursor.remove(); cursor = next }
+    if (match.nodeName !== 'IFRAME') patchKeepingFrames(match, kid)
+    cursor = match.nextSibling
+  }
+  while (cursor) { const next = cursor.nextSibling; cursor.remove(); cursor = next }
+}
+
+function textKey(text) {
+  let h = 0
+  for (let i = 0; i < text.length; i++) h = (h * 31 + text.charCodeAt(i)) | 0
+  return `${text.length}:${h}`
+}
+
+function renderedDisplay(chat, node, shown) {
+  if (!/<%[\s\S]*?%>/.test(shown)) return shown
+  // A reply still being written changes with every chunk: rendered once it is done.
+  if (ui.generating && node.id === chat.path.at(-1)?.id) return shown.replace(EJS, '')
+  const key = `${chat.id}:${node.id}:${textKey(shown)}`
+  displayWaiting.add(node.id)
+  if (displayRenders.has(key)) {
+    const done = displayRenders.get(key)
+    if (done !== null) displayWaiting.delete(node.id)
+    return done ?? heldDisplay(node, shown)
+  }
+  displayRenders.set(key, null)
+  api(`/api/chats/${chat.id}/display-render`, { method: 'POST', body: { nodeId: node.id, texts: [shown] } })
+    .then(({ texts }) => displayRenders.set(key, typeof texts?.[0] === 'string' ? texts[0] : shown.replace(EJS, '')))
+    .catch(() => displayRenders.set(key, shown.replace(EJS, '')))
+    .finally(() => {
+      // Several messages come back together: drawn in one go.
+      clearTimeout(displayRedraw)
+      displayRedraw = setTimeout(() => {
+        if (ui.chat?.id !== chat.id) return displayWaiting.clear()
+        for (const id of [...displayWaiting]) redrawMessage(id)
+        if (vnUi.isOn(ui.chat.cardId)) vnUi.render(ui.chat)
+      }, 30)
+    })
+  return heldDisplay(node, shown)
+}
+
+// Until the render comes back: a message already on screen is drawn without the EJS, so the card frames in it
+// that stay the same keep running; a new one waits (a moment), so its frames start once, with the rendered text.
+function heldDisplay(node, shown) {
+  const onScreen = $('transcript').querySelector(`.msg[data-id="${CSS.escape(node.id)}"] iframe.card-frame`)
+  return onScreen ? shown.replace(EJS, '') : '…'
 }
 
 /** The built-in status bar under a reply, or null (cards that draw their own use their regex). */
@@ -1136,27 +1266,67 @@ function openEditor(chat, node, article) {
 
 // ─── Tavern Helper stand-in for card HTML (web/compat.js) ───────────────
 
-/** What a message's HTML may read: its floor, nearby messages, variables and saved storage. */
+// How much story the frames of the latest messages get to read (getChatMessages over the whole chat).
+const FRAME_HISTORY_CHARS = 300_000
+
+/**
+ * What a message's HTML may read: its floor, the messages (all of them for the
+ * latest two floors, where a card's live UI is; nearby ones elsewhere),
+ * variables, the books this chat uses and saved storage.
+ */
 function frameContextFor(chat, node) {
   const index = chat.path.findIndex(n => n.id === node.id)
   if (index < 0) return null
   const last = chat.path.length - 1
-  const floors = [...new Set([0, index - 1, index, last - 1, last].filter(i => i >= 0))].sort((a, b) => a - b)
+  let floors = [...new Set([0, index - 1, index, last - 1, last].filter(i => i >= 0))]
+  if (index >= last - 1) {
+    // Newest first until the budget, then oldest first again.
+    let used = 0
+    floors = []
+    for (let i = last; i >= 0; i--) {
+      used += (chat.path[i].raw ?? chat.path[i].text ?? '').length
+      if (used > FRAME_HISTORY_CHARS && floors.length > 2) break
+      floors.push(i)
+    }
+  }
+  const card = ui.cards.find(c => c.id === chat.cardId)
+  const info = ui.frameInfo?.chatId === chat.id ? ui.frameInfo : null
   return {
+    app: ui.appVersion ?? '',
     messageId: index,
     lastId: last,
     chatId: chat.id,
     cardId: chat.cardId,
     names: chat.names,
-    vars: { message: node.state ?? {}, latest: chat.state ?? {}, ...storedVariables({ presetId: chat.presetId, cardId: chat.cardId }) },
-    messages: floors.map(i => {
+    card: { avatar: card?.hasAvatar ? `${location.origin}/api/cards/${chat.cardId}/avatar` : '' },
+    persona: { description: info?.persona?.description ?? '' },
+    books: info?.books ?? { own: '', mounted: [], global: [] },
+    vars: {
+      message: node.state ?? {},
+      latest: chat.state ?? {},
+      ...storedVariables({ presetId: chat.presetId, cardId: chat.cardId }),
+      global: info?.globalVars ?? {},
+      chat: chat.frameVars ?? info?.vars ?? {},
+    },
+    messages: floors.sort((a, b) => a - b).map(i => {
       const n = chat.path[i]
       return { message_id: i, name: n.role === 'user' ? chat.names.user : chat.names.char, role: n.role, message: n.raw ?? n.text ?? '', state: n.state ?? {} }
     }),
     storage: storedFrameStorage(),
+    // A chat still on its opening can switch to another of the card's (a welcome page's swipe).
+    openings: last === 0 ? card?.greetings ?? 0 : 0,
     input: $('input').value,
     viewport: { width: innerWidth, height: innerHeight },
   }
+}
+
+/** The books a chat's card frames see by name, the app's global variables and the player's description. */
+async function loadFrameInfo(chatId) {
+  // Asked once per chat, even when it fails: frames then see no book names.
+  ui.frameInfo = { chatId }
+  const info = await api(`/api/chats/${chatId}/frame-info`).catch(() => null)
+  if (info && ui.frameInfo.chatId === chatId) ui.frameInfo = { ...info, chatId }
+  return ui.frameInfo
 }
 
 function setDraft(text, focus = true) {
@@ -1169,15 +1339,30 @@ function setDraft(text, focus = true) {
 
 let lastFrameSend = 0
 
-/** A card asked to send what is in the input box: once per few seconds, never mid-generation. */
+/**
+ * A card asked to send what is in the input box: once per few seconds, never
+ * mid-generation. A slash command it typed there (`/sendas … <fight>`) runs as
+ * a command instead of going to the model as text.
+ */
 async function frameSend() {
   if (!ui.chat || ui.generating) throw new Error(t`正在生成，稍后再试`)
+  const draft = $('input').value.trim()
+  if (draft.startsWith('/')) {
+    setDraft('', false)
+    await runFrameSlash(draft)
+    return
+  }
   if (Date.now() - lastFrameSend < 3000) throw new Error(t`发送太频繁`)
   lastFrameSend = Date.now()
   await send()
 }
 
-/** Slash commands from card HTML: the input-box ones work; the model and chat editing stay out of reach. */
+/**
+ * Slash commands from card HTML: the input-box ones, `/sendas` (a message from
+ * the character, added to the latest reply), `/setentryfield` (this chat's copy
+ * of a book entry) and the chat variables. Anything else is refused, so the card
+ * takes its own way round instead of thinking it worked.
+ */
 async function runFrameSlash(command) {
   let staged = null
   let output = ''
@@ -1190,11 +1375,194 @@ async function runFrameSlash(command) {
       await frameSend()
     } else if (step.name === 'echo') toast(step.text)
     else if (step.name === 'pass') output = step.text
-    else toast(t`界面里的命令 /${step.name} 在这里不支持`)
+    else if (step.name === 'sendas') await frameHandlers.createMessages({ messages: [{ role: 'assistant', text: step.text }] })
+    else if (step.name === 'setentryfield') {
+      const { file = '', uid, field = 'content' } = step.named
+      await frameHandlers.worldbook({ action: 'field', name: file, uid: Number(uid), field, value: step.text })
+    } else if (step.name === 'setvar' || step.name === 'getvar' || step.name === 'addvar') output = await frameChatVar(step)
+    else {
+      toast(t`界面里的命令 /${step.name} 在这里不支持`)
+      throw new Error(t`不支持 /${step.name}`)
+    }
   }
   // `/send` without `/trigger` adds a message in SillyTavern; here it waits in the input box.
   if (staged !== null) setDraft(staged)
   return output
+}
+
+/** `/setvar key=… value`, `/getvar key`, `/addvar key=… n`: the chat variables (Tavern Helper's, the templates' local scope). */
+async function frameChatVar(step) {
+  const vars = { ...(ui.chat?.frameVars ?? ui.frameInfo?.vars ?? {}) }
+  const key = step.named.key ?? step.text.trim()
+  if (step.name === 'getvar') {
+    const value = vars[key]
+    return value === undefined ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value)
+  }
+  const text = step.text
+  vars[key] = step.name === 'addvar' ? (Number(vars[key]) || 0) + (Number(text) || 0) : text
+  await frameHandlers.chatVars({ value: vars })
+  return String(vars[key])
+}
+
+// Model calls card frames make (generate / generateRaw): allowed per card, one at a time, at most ten a minute.
+const GENERATE_KEY = 'agent-tavern:frame-generate'
+const GENERATE_PER_MINUTE = 10
+const frameGenerations = new Map() // generation id → AbortController
+const frameGenerationTimes = []
+
+function generateAllowed(cardId) {
+  try {
+    return (JSON.parse(localStorage.getItem(GENERATE_KEY) || '[]') ?? []).includes(cardId)
+  } catch {
+    return false
+  }
+}
+
+function allowGenerate(cardId) {
+  try {
+    const list = JSON.parse(localStorage.getItem(GENERATE_KEY) || '[]') ?? []
+    if (!list.includes(cardId)) localStorage.setItem(GENERATE_KEY, JSON.stringify([...list, cardId]))
+  } catch {
+    // Private mode: asked again next time.
+  }
+}
+
+/** The page's answers to what card frames ask for (web/compat.js installFrameBridge). */
+const frameHandlers = {
+  // The latest floor's variables (Mvu.replaceMvuData, replaceVariables on the message): saved as 编辑状态 saves
+  // them, without drawing the chat again (the frame that wrote them would start over).
+  async state({ state }) {
+    if (!ui.chat) throw new Error(t`没有打开的对话`)
+    const view = await api(`/api/chats/${ui.chat.id}/state`, { method: 'PUT', body: { state } })
+    ui.chat = view
+    renderSide()
+    broadcastState(view.state ?? state)
+  },
+  async chatVars({ value }) {
+    if (!ui.chat) throw new Error(t`没有打开的对话`)
+    const { vars } = await api(`/api/chats/${ui.chat.id}/frame-vars`, { method: 'PUT', body: { vars: value } })
+    ui.chat.frameVars = vars
+    if (ui.frameInfo?.chatId === ui.chat.id) ui.frameInfo.vars = vars
+  },
+  async globalVars(value) {
+    await api('/api/settings', { method: 'PUT', body: { globalVars: value } })
+    if (ui.frameInfo) ui.frameInfo.globalVars = value
+  },
+  mvuParse: ({ text, state }) => api('/api/mvu/parse', { method: 'POST', body: { text, state } }),
+  // EjsTemplate: rendered at the frame's floor as what messages show is (楼层渲染), or only checked.
+  async ejs({ code, messageId, check }) {
+    if (check) return api('/api/ejs/check', { method: 'POST', body: { code } })
+    const node = ui.chat?.path[Number(messageId)] ?? ui.chat?.path.at(-1)
+    if (!node) throw new Error(t`没有打开的对话`)
+    const { texts, errors } = await api(`/api/chats/${ui.chat.id}/display-render`, { method: 'POST', body: { nodeId: node.id, texts: [code] } })
+    if (errors?.length) throw new Error(errors[0].error)
+    return { text: texts[0] }
+  },
+  async editMessage({ messageId, text }) {
+    const node = ui.chat?.path[messageId]
+    if (!node) throw new Error(t`没有这一楼`)
+    if (ui.generating) throw new Error(t`正在生成，稍后再试`)
+    setChat(await api(`/api/chats/${ui.chat.id}/messages/${node.id}`, { method: 'PUT', body: { text: String(text ?? '') } }))
+  },
+  // The character's messages are added to the end of the latest reply (a subscription session can only carry on
+  // from replies it wrote); the player's go into the input box for the card's /trigger.
+  async createMessages({ messages }) {
+    if (!ui.chat) throw new Error(t`没有打开的对话`)
+    const list = Array.isArray(messages) ? messages : []
+    const said = list.filter(m => m.role === 'user').map(m => String(m.text ?? '')).join('\n\n')
+    const told = list.filter(m => m.role !== 'user').map(m => String(m.text ?? '')).filter(Boolean).join('\n\n')
+    if (told) {
+      const tip = ui.chat.path.at(-1)
+      if (tip?.role !== 'assistant') throw new Error(t`最新一楼不是角色的回复`)
+      if (ui.generating) throw new Error(t`正在生成，稍后再试`)
+      // Drawn again in place: the frame that asked (usually in this very reply) keeps running.
+      ui.chat = await api(`/api/chats/${ui.chat.id}/messages/${tip.id}`, { method: 'PUT', body: { text: `${(tip.raw ?? tip.text ?? '').trimEnd()}\n\n${told}` } })
+      redrawMessage(tip.id)
+      renderSide()
+      if (vnUi.isOn(ui.chat.cardId)) vnUi.render(ui.chat)
+    }
+    if (said) setDraft(said, false)
+  },
+  // Only the last floors, folded away as 回滚 does (「恢复」 brings them back).
+  async deleteMessages({ ids }) {
+    if (!ui.chat || ui.generating) throw new Error(t`正在生成，稍后再试`)
+    const last = ui.chat.path.length - 1
+    const wanted = [...new Set((ids ?? []).map(Number))].sort((a, b) => a - b)
+    if (!wanted.length) return
+    if (wanted.some((id, i) => id !== last - (wanted.length - 1) + i) || wanted[0] < 1) throw new Error(t`只能删掉最后的几楼`)
+    let keep = wanted[0] - 1
+    if (ui.chat.path[keep]?.role === 'user') keep -= 1
+    setChat(await api(`/api/chats/${ui.chat.id}/rollback`, { method: 'POST', body: { nodeId: ui.chat.path[Math.max(0, keep)].id } }))
+  },
+  async worldbook(args) {
+    if (!ui.chat) throw new Error(t`没有打开的对话`)
+    const { entries, prefix } = await api(`/api/chats/${ui.chat.id}/worldbook`, { method: args.action === 'get' ? 'POST' : 'PUT', body: args })
+    if (prefix) toast(t`卡片界面改了世界书的常驻条目（只对这个对话）：下一轮会重新写入一次缓存`)
+    return entries
+  },
+  async generate({ id, raw, config }, { frame, window: source }) {
+    const chat = ui.chat
+    if (!chat) throw new Error(t`没有打开的对话`)
+    if (ui.generating) throw new Error(t`正在生成，稍后再试`)
+    if (frameGenerations.size) throw new Error(t`卡片界面已经在调用模型了`)
+    while (frameGenerationTimes.length && Date.now() - frameGenerationTimes[0] > 60000) frameGenerationTimes.shift()
+    if (frameGenerationTimes.length >= GENERATE_PER_MINUTE) throw new Error(t`调用太频繁`)
+    if (!generateAllowed(chat.cardId)) {
+      const name = ui.cards.find(c => c.id === chat.cardId)?.name ?? ''
+      if (!confirm(t`「${name}」的卡片界面想自己调用模型（比如生成角色信息），每次都按一次对话计费。\n\n允许这张卡这样做吗？之后不再询问。`)) throw new Error(t`用户没有允许这张卡调用模型`)
+      allowGenerate(chat.cardId)
+    }
+    frameGenerationTimes.push(Date.now())
+    const controller = new AbortController()
+    frameGenerations.set(id, controller)
+    const relay = message => source?.postMessage({ agentTavernStream: { frame, id, ...message } }, '*')
+    // The notice stays while it runs; a click on it stops the call (see the toast's listener at start-up).
+    toast(t`卡片界面正在调用模型，点这条提示可以停止`, 600000)
+    let full = ''
+    try {
+      full = await streamFrameGeneration(chat.id, { raw, config }, controller.signal, delta => {
+        full += delta
+        if (config.should_stream) relay({ delta, full })
+      })
+      relay({ full, done: true })
+      toast(t`卡片界面的模型调用完成`, 2000)
+      return full
+    } catch (error) {
+      toast(controller.signal.aborted ? t`已停止卡片界面的模型调用` : error.message, 4000)
+      throw error
+    } finally {
+      frameGenerations.delete(id)
+    }
+  },
+  stopGenerate({ id }) {
+    for (const [key, controller] of frameGenerations) if (!id || key === id) controller.abort()
+  },
+}
+
+/** One frame-requested model call, streamed from the server; resolves with the whole text. */
+async function streamFrameGeneration(chatId, body, signal, onDelta) {
+  const res = await fetch(`/api/chats/${chatId}/frame-generate`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-agent-tavern': '1' }, body: JSON.stringify(body), signal })
+  if (!res.ok || !res.body) throw new Error((await res.json().catch(() => ({}))).error ?? `HTTP ${res.status}`)
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let text = ''
+  for (;;) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    let cut
+    while ((cut = buffer.indexOf('\n\n')) >= 0) {
+      const line = buffer.slice(0, cut).replace(/^data: /, '')
+      buffer = buffer.slice(cut + 2)
+      if (!line.trim()) continue
+      const event = JSON.parse(line)
+      if (event.type === 'delta') onDelta(event.text)
+      else if (event.type === 'done') text = event.text
+      else if (event.type === 'error') throw new Error(event.message)
+    }
+  }
+  return text
 }
 
 function branchFrom(parentId, label) {
@@ -1589,7 +1957,7 @@ async function generate(endpoint, body, echoUserText) {
   }
   if (viewing()) renderChat()
   renderChats()
-  if (failure && failure.status !== 499) toast(viewing() ? failure.message : t`「${title}」：${failure.message}`, 8000)
+  if (failure && failure.status !== 499) toast(viewing() ? failure.message : t`「${title}」：${failure.message}`, 8000, { log: true })
   return false
 }
 
@@ -1875,6 +2243,10 @@ function layOutSettings({ form, card, providers, presets }) {
       summary: () => t`不用配置也会连：${[form.webFonts.checked && t`网络字体`, form.cdnLibraries.checked && t`酒馆助手脚本库`].filter(Boolean).join(t`、`) || t`都关了`}`,
     },
     {
+      id: 'errors', title: t`错误日志`, look: 'shared', action: () => openErrorLog(),
+      summary: () => t`出了问题时导出来发给开发者：版本、设置概要和最近的出错记录`,
+    },
+    {
       id: 'shortcut', title: t`桌面快捷方式`, look: 'shared', action: () => makeShortcut(), hidden: () => !ui.launcher,
       summary: () => t`在桌面放一个 CicaTavern 图标，指向这个文件夹里的 CicaTavern.exe`,
     },
@@ -1903,7 +2275,7 @@ function layOutSettings({ form, card, providers, presets }) {
       { id: 'media', title: t`配图与朗读`, icon: MENU_ICONS.picture, rows: ['media'] },
       { id: 'books', title: t`世界书与状态`, icon: MENU_ICONS.book, rows: ['scan', 'manage-books', cardRow, 'books'] },
       { id: 'link', title: t`连接`, icon: MENU_ICONS.link, rows: ['network', 'access'] },
-      { id: 'more', title: t`更多`, icon: MENU_ICONS.tools, rows: ['interface', 'update', 'privacy', 'shortcut', 'show-prompt', 'rebuild-prompt', 'stop-server'] },
+      { id: 'more', title: t`更多`, icon: MENU_ICONS.tools, rows: ['interface', 'update', 'privacy', 'errors', 'shortcut', 'show-prompt', 'rebuild-prompt', 'stop-server'] },
     ],
     sections,
     note: t`名字、角色设定和文风写进对话开局时的固定前缀，只对之后新开的对话生效；模型、思考、字数和世界书扫描随时生效。`,
@@ -2455,11 +2827,20 @@ function bind() {
   $('card-list').before(cardSearch.box)
   listenForFrameHeights()
   installFrameBridge({
+    ...frameHandlers,
     toast: (_level, text) => toast(text),
     input: text => setDraft(text, false),
     slash: runFrameSlash,
     send: frameSend,
+    opening: async index => {
+      if (!ui.chat || ui.generating) throw new Error(t`正在生成，稍后再试`)
+      setChat(await api(`/api/chats/${ui.chat.id}/opening`, { method: 'POST', body: { index } }))
+    },
     ids: () => ({ presetId: ui.chat?.presetId ?? null, cardId: ui.chat?.cardId ?? null }),
+  })
+  // A card frame's model call shows a notice; clicking it stops the call.
+  $('toast').addEventListener('click', () => {
+    if (frameGenerations.size) frameHandlers.stopGenerate({})
   })
   $('import-input').addEventListener('change', event => {
     const files = [...event.target.files]
@@ -2623,6 +3004,7 @@ async function boot() {
   if (first) await selectCard(first.id)
   else renderChat()
   // After an update: what is new, once (someone with cards already has updated; a new player has not).
+  ui.appVersion = status?.version ?? ''
   whatsNewUi.boot({ version: status?.version, returning: ui.cards.length > 0 })
 }
 

@@ -9,11 +9,12 @@
 // that follows (measured). Material SillyTavern keeps near the end of every
 // request (@depth entries, post-history rules) therefore lives in the prefix's
 // last section, and each turn carries a one-line reminder naming it.
-import { constantEntries, entryText, entryTitle, lateEntries } from './worldbook.mjs'
-import { renderTemplate } from './template.mjs'
+import { constantEntries, entryText, entryTitle, keywordEntries, lateEntries, preloadEntries, templateInitialVariables } from './worldbook.mjs'
+import { renderTemplate, stripTemplates, templateSession } from './template.mjs'
 import { renderPresetPrefix } from './presets.mjs'
 import { basicRules } from './basic.mjs'
-import { replaceVariableMacros, variablesOf } from '../web/shared/vars.js'
+import { hasVariableMacros, replaceVariableMacros } from '../web/shared/vars.js'
+import { applyScripts, PLACEMENT } from '../web/shared/regex.js'
 import { EFFECT_WORDS, FACE_WORDS } from '../web/shared/stage.js'
 
 export function replaceMacros(text, names) {
@@ -37,12 +38,60 @@ export function replaceMacros(text, names) {
 /**
  * Render one worldbook entry against the current state: EJS in the sandbox,
  * then variable macros, then name macros. A template that fails falls back to
- * its text with the EJS removed.
+ * its text with the EJS removed. An entry rendered before keyword matching
+ * (`preprocessed`) is already done.
+ * @param session - the turn's templateSession (its books and messages for getwi
+ *   and matchChatMessages); without one the entry renders in a sandbox of its own.
+ * @param world - the name of the entry's book (the template's `world_info.world`).
  */
-export function renderEntry(entry, { state, names }) {
-  const rendered = renderTemplate(entry.content, { variables: variablesOf(state), names })
+export function renderEntry(entry, { state, names, session = null, world = '' }) {
+  const uid = Number(entry.uid)
+  const data = { world_info: { comment: entry.comment, uid: Number.isFinite(uid) ? uid : entry.uid, world } }
+  const rendered = entry.preprocessed ? { text: entry.content, error: null } : session ? session.render(entry.content, data) : renderTemplate(entry.content, { state, names })
   const text = rendered.text ?? entryText(entry)
-  return { text: replaceMacros(replaceVariableMacros(text, state), names).trim(), error: rendered.error }
+  // Variable macros read the state as the turn's templates have left it.
+  const vars = session && hasVariableMacros(text) ? session.currentState() : state
+  return { text: replaceMacros(replaceVariableMacros(text, vars), names).trim(), error: rendered.error }
+}
+
+/**
+ * A template sandbox for one chat (template.mjs templateSession) with what
+ * ST-Prompt-Template gives templates there: the card and its books, the
+ * chat's names and preset, the story so far as the card's prompt-side regex
+ * leaves each message (at its depth, the last message being 0, as engine
+ * apiMessages sends them), and the @@preload entries run first.
+ * @param messages - [{ role, text }], oldest first, the greeting as floor 0.
+ * @param local / global - the chat's frameVars and the settings' globalVars.
+ */
+export function chatTemplates({ names, card = null, preset = null, books = [], scripts = [], state = {}, local = {}, global = {}, messages = [], runType = 'generate', context = {} }) {
+  const macros = text => replaceMacros(text, names)
+  const last = messages.length - 1
+  return templateSession({
+    state,
+    local,
+    global,
+    initial: () => templateInitialVariables(books, entry => renderTemplate(entry.content, { names }).text ?? entryText(entry)),
+    names,
+    books,
+    messages,
+    messageText: (message, index) => applyScripts(message.text, scripts, { placement: message.role === 'user' ? PLACEMENT.USER_INPUT : PLACEMENT.AI_OUTPUT, target: 'prompt', depth: last - index, macros }),
+    card,
+    preset,
+    preload: preloadEntries(books),
+    matchKeys: text => keywordEntries(books, text),
+    runType,
+    context,
+  })
+}
+
+/**
+ * A text's EJS through `session` (renderText), for prompt material: what it
+ * printed, or the text with its EJS taken out when it fails (the error goes to `errors`).
+ */
+export function templateText(session, text, errors = [], label = '') {
+  const rendered = session.renderText(text)
+  if (rendered.error) errors.push(label ? `${label}: ${rendered.error}` : rendered.error)
+  return rendered.text ?? stripTemplates(text)
 }
 
 const titled = (title, text) => (title ? `【${title}】\n${text}` : text)
@@ -67,9 +116,11 @@ function stateProtocol(card, hasState) {
  * whose paragraphs open the every-turn section; without them the rules read as
  * they did before that preset existed.
  */
-export function buildSystemPrompt({ card, persona, settings, books, hasState, options = null }) {
+export function buildSystemPrompt({ card, persona, settings, books, hasState, options = null, render = text => text }) {
   const names = { char: card.name, user: persona.name || '你' }
   const m = text => replaceMacros(text, names)
+  // The card's and the player's own text may hold templates (rendered once, see buildChatPrompt).
+  const f = text => m(render(text))
   const constants = constantEntries(books)
     .map(entry => {
       const text = m(entryText(entry))
@@ -77,7 +128,7 @@ export function buildSystemPrompt({ card, persona, settings, books, hasState, op
     })
     .filter(Boolean)
     .join('\n\n')
-  const authorSystem = m(card.systemPrompt.replace(/\{\{original\}\}/gi, ''))
+  const authorSystem = f(card.systemPrompt.replace(/\{\{original\}\}/gi, ''))
 
   return [
     `你是一场互动小说的叙述者，同时扮演除玩家以外的所有角色。玩家扮演「${names.user}」。`,
@@ -96,17 +147,17 @@ export function buildSystemPrompt({ card, persona, settings, books, hasState, op
     ].filter(Boolean).join('\n'),
     stateProtocol(card, hasState),
     section('文风与写作要求', m(settings.writingRules)),
-    section(`玩家角色：${names.user}`, m(persona.description)),
+    section(`玩家角色：${names.user}`, f(persona.description)),
     [
       `## 角色卡：${card.name}`,
-      section('描述', m(card.description)).replace(/^## /, '### '),
-      section('性格', m(card.personality)).replace(/^## /, '### '),
-      section('场景', m(card.scenario)).replace(/^## /, '### '),
-      section('对话示例', m(card.mesExample.replace(/<START>/gi, '---'))).replace(/^## /, '### '),
+      section('描述', f(card.description)).replace(/^## /, '### '),
+      section('性格', f(card.personality)).replace(/^## /, '### '),
+      section('场景', f(card.scenario)).replace(/^## /, '### '),
+      section('对话示例', f(card.mesExample.replace(/<START>/gi, '---'))).replace(/^## /, '### '),
     ].filter(Boolean).join('\n\n'),
     section('角色卡作者的指示', authorSystem),
     section('常驻设定', constants),
-    section(EVERY_TURN, [options ? m(basicRules(options)) : '', m(card.postHistoryInstructions), lateText(books, m)].filter(t => t.trim()).join('\n\n')),
+    section(EVERY_TURN, [options ? m(basicRules(options)) : '', f(card.postHistoryInstructions), lateText(books, m)].filter(t => t.trim()).join('\n\n')),
   ].filter(Boolean).join('\n\n')
 }
 
@@ -169,9 +220,13 @@ function asksForOutput(entry) {
  * lead, in its own order, and the card data lands where its markers sit; our
  * notes on the message format follow. Returns the variables the preset's
  * macros set, which every later turn starts from.
+ * @param render - text => text: the EJS in the card's fields, the persona and the
+ *   preset's prompts, rendered once with the chat's opening state (chats.mjs).
+ *   The prefix is frozen, so a template there that reads changing state keeps
+ *   the value it had when the chat started.
  */
-export function buildChatPrompt({ card, persona, settings, books, hasState, preset = null }) {
-  if (!preset || preset.builtin) return { systemPrompt: buildSystemPrompt({ card, persona, settings, books, hasState, options: preset?.options ?? null }), presetVars: {} }
+export function buildChatPrompt({ card, persona, settings, books, hasState, preset = null, render = text => text }) {
+  if (!preset || preset.builtin) return { systemPrompt: buildSystemPrompt({ card, persona, settings, books, hasState, options: preset?.options ?? null, render }), presetVars: {} }
   const names = { char: card.name, user: persona.name || '你' }
   const m = text => replaceMacros(text, names)
   const world = after =>
@@ -180,7 +235,7 @@ export function buildChatPrompt({ card, persona, settings, books, hasState, pres
       .map(entry => m(entryText(entry)))
       .filter(Boolean)
       .join('\n\n')
-  const prefix = renderPresetPrefix(preset, { card, persona, names, worldBefore: world(false), worldAfter: world(true) })
+  const prefix = renderPresetPrefix(preset, { card, persona, names, worldBefore: world(false), worldAfter: world(true), render })
   const notes = [
     '## 本应用的消息格式',
     `玩家扮演「${names.user}」。每条玩家消息由标签块组成：`,

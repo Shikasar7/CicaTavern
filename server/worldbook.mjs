@@ -2,7 +2,7 @@
 // `character_book` shape and SillyTavern's standalone world file shape.
 import YAML from 'yaml'
 import { httpError, newId } from './store.mjs'
-import { hasTemplate, splitDecorators } from './template.mjs'
+import { decoratorsOf, hasTemplate, splitDecorators } from './template.mjs'
 import { hasVariableMacros } from '../web/shared/vars.js'
 import { msg } from './i18n.mjs'
 
@@ -29,7 +29,7 @@ const READ_EXT = new Set(['position', 'selectiveLogic', 'probability', 'useProba
 const camel = key => key.replace(/_([a-z])/g, (_, c) => c.toUpperCase())
 
 /** What SillyTavern keeps of an entry and this app does not read, in world-file names. */
-function extraOf(raw) {
+export function extraOf(raw) {
   const extra = {}
   for (const [key, value] of Object.entries(raw)) if (!READ.has(key)) extra[key] = value
   // character_book keeps SillyTavern's fields under extensions, in snake case.
@@ -63,7 +63,7 @@ function normalizeEntry(raw, index, { keep = false } = {}) {
     wholeWords: (raw.matchWholeWords ?? ext.match_whole_words) === true,
     probability: Number(raw.probability ?? ext.probability ?? 100),
     useProbability: (raw.useProbability ?? ext.useProbability) === true,
-    initvar: INITVAR.test(comment),
+    initvar: INITVAR.test(comment) || decoratorsOf(content).has('@@initial_variables'),
     hasScript: SCRIPT.test(content),
     ...(Object.keys(extra).length ? { extra } : {}),
   }
@@ -92,6 +92,29 @@ export function normalizeBook(input, fallbackName = '世界书', { standalone = 
   // Only `scanDepth`, which this app writes: character_book's scan_depth is not
   // read (SillyTavern does not use it either), so a book plays as it did before.
   return editBookInfo({ ...book, extras: true }, { description: str(input.description), scanDepth: input.scanDepth ?? null })
+}
+
+/**
+ * A card's own book as an imported one (卡里自带 → 导出 / 抽出): its entries as
+ * edited here, each over the SillyTavern fields its card's file has for it
+ * (`raw`, the character_book there: depth, group, sticky…), so the book plays
+ * and exports as the card's did. Entries made here have none.
+ */
+export function standaloneBook(book, raw = null, { name = '' } = {}) {
+  const rawEntries = raw && typeof raw === 'object' ? (Array.isArray(raw.entries) ? raw.entries : Object.values(raw.entries ?? {})) : []
+  const byUid = new Map(rawEntries.filter(e => e && typeof e === 'object').map((e, i) => [String(e.uid ?? e.id ?? i), e]))
+  return {
+    id: newId(),
+    name: cleanBookName(name) || book.name,
+    entries: book.entries.map(entry => {
+      const from = byUid.get(entry.uid)
+      const { extra: kept, ...copy } = structuredClone(entry)
+      const extra = { ...(from ? extraOf(from) : {}), ...(kept ?? {}) }
+      return Object.keys(extra).length ? { ...copy, extra } : copy
+    }),
+    importedAt: new Date().toISOString(),
+    extras: true,
+  }
 }
 
 /** A new empty book (世界书 → 新建, or the target of entries moved out of another). */
@@ -129,30 +152,85 @@ export function entryText(entry) {
   return splitDecorators(entry.content).body.replace(/<%[\s\S]*?%>/g, '').trim()
 }
 
-/** Initial state from `[initvar]`-style entries (JSON or YAML). */
-export function initialState(books) {
+/**
+ * Entries that hold initial variables rather than prompt text: an `[initvar]`-style
+ * title (also ST-Prompt-Template's `[InitialVariables]`) or `@@initial_variables`.
+ * Entries imported before the decorator was read are checked again here.
+ */
+export function isInitvar(entry) {
+  return Boolean(entry.initvar) || decoratorsOf(entry.content).has('@@initial_variables')
+}
+
+/** ST-Prompt-Template's own initial-variable entries (its `initial` scope), not MVU's [InitVar]. */
+const pluginInitvar = entry => /\[InitialVariables\]/i.test(entry.comment) || decoratorsOf(entry.content).has('@@initial_variables')
+
+function readInitvar(entries, render) {
   let state = {}
-  for (const book of books) {
-    for (const entry of book.entries) {
-      // Initvar entries are usually disabled (so they never reach the model) — still read them.
-      if (!entry.initvar) continue
-      try {
-        const parsed = YAML.parse(entryText(entry))
-        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) state = { ...state, ...parsed }
-      } catch {
-        // A malformed initvar entry is ignored; the card still plays without state.
-      }
+  for (const entry of entries) {
+    try {
+      const parsed = YAML.parse(render(entry))
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) state = { ...state, ...parsed }
+    } catch {
+      // A malformed initvar entry is ignored; the card still plays without state.
     }
   }
   return state
 }
 
 /**
+ * Initial state from `[initvar]`-style entries (JSON or YAML).
+ * @param render - entry => its text to parse; by default its EJS is taken out
+ *   (chats.mjs renders it once when a chat starts, as ST-Prompt-Template does).
+ */
+export function initialState(books, render = entryText) {
+  // Initvar entries are usually disabled (so they never reach the model) — still read them.
+  return readInitvar(books.flatMap(book => book.entries.filter(isInitvar)), render)
+}
+
+/** The values ST-Prompt-Template keeps as `initial` variables: from [InitialVariables] / @@initial_variables entries only. */
+export function templateInitialVariables(books, render = entryText) {
+  return readInitvar(books.flatMap(book => book.entries.filter(pluginInitvar)), render)
+}
+
+/**
  * An entry whose text depends on game state (EJS or variable macros) cannot
  * live in the frozen prefix; it is rendered with the current state every turn.
+ * So is one made constant by `@@activate` and one rendered before matching
+ * (`preprocessed`): decorator features stay out of the prefix.
  */
 export function isDynamic(entry) {
-  return hasTemplate(entry.content) || hasVariableMacros(entry.content)
+  return Boolean(entry.preprocessed) || hasTemplate(entry.content) || hasVariableMacros(entry.content) || decoratorsOf(entry.content).has('@@activate')
+}
+
+/**
+ * Sent every turn regardless of keywords: constant, or `@@activate`. `@@dont_activate`
+ * keeps an entry out of every turn (getwi can still read it; activewi with `force` sends it).
+ */
+export function isConstant(entry) {
+  const decorators = decoratorsOf(entry.content)
+  if (decorators.has('@@dont_activate')) return false
+  return entry.constant || decorators.has('@@activate')
+}
+
+/** Never sent as an entry of its own: initial variables, and entries that only run before each turn (`@@only_preload`). */
+const special = entry => isInitvar(entry) || decoratorsOf(entry.content).has('@@only_preload')
+
+/**
+ * Entries run first in each turn's template sandbox, their output dropped, so
+ * their define()s exist for the rest (ST-Prompt-Template's preload, which here
+ * happens every turn): `@@preload` on an enabled entry, `@@only_preload` on any.
+ */
+export function preloadEntries(books) {
+  return sortEntries(books.flatMap(book => book.entries.filter(entry => {
+    const decorators = decoratorsOf(entry.content)
+    if (decorators.has('@@dont_preload')) return false
+    return decorators.has('@@only_preload') || (decorators.has('@@preload') && entry.enabled)
+  })))
+}
+
+/** Entries whose content and keywords are rendered before keyword matching (`@@preprocessing` / a [Preprocessing] title). */
+export function isPreprocessing(entry) {
+  return entry.enabled && !special(entry) && (/\[Preprocessing\]/i.test(entry.comment) || decoratorsOf(entry.content).has('@@preprocessing'))
 }
 
 /**
@@ -165,7 +243,7 @@ export function isLate(entry) {
 }
 
 /** Static constant entries: rendered into a chat's frozen prefix when it starts. */
-export const inPrefix = e => e.enabled && e.constant && !e.initvar && !isDynamic(e)
+export const inPrefix = e => e.enabled && isConstant(e) && !special(e) && !isDynamic(e)
 
 /** Constant entries that never change: they go into the cached prefix. */
 export function constantEntries(books) {
@@ -189,7 +267,7 @@ export function entryTitle(entry) {
 
 /** Constant entries rendered fresh each turn, at the tail. */
 export function dynamicEntries(books) {
-  return sortEntries(books.flatMap(book => book.entries.filter(e => e.enabled && e.constant && !e.initvar && isDynamic(e))))
+  return sortEntries(books.flatMap(book => book.entries.filter(e => e.enabled && isConstant(e) && !special(e) && isDynamic(e))))
 }
 
 function sortEntries(entries) {
@@ -240,7 +318,9 @@ export function triggeredEntries(books, scanText, recentlyInjected) {
   for (const book of books) {
     const text = typeof scanText === 'function' ? scanText(book) : scanText
     for (const entry of book.entries) {
-      if (!entry.enabled || entry.constant || entry.initvar) continue
+      if (!entry.enabled || entry.constant || special(entry)) continue
+      const decorators = decoratorsOf(entry.content)
+      if (decorators.has('@@activate') || decorators.has('@@dont_activate')) continue
       const ref = `${book.id}:${entry.uid}`
       if (recentlyInjected.has(ref)) continue
       if (!entryMatches(entry, text)) continue
@@ -249,6 +329,21 @@ export function triggeredEntries(books, scanText, recentlyInjected) {
     }
   }
   return hits.sort((a, b) => a.entry.order - b.entry.order)
+}
+
+/**
+ * Enabled entries whose keywords `text` matches, constant ones too, as
+ * ST-Prompt-Template's activateWorldInfoByKeywords selects them: [{ book, entry }].
+ */
+export function keywordEntries(books, text) {
+  const found = []
+  for (const book of books) {
+    for (const entry of book.entries) {
+      if (!entry.enabled || special(entry) || decoratorsOf(entry.content).has('@@dont_activate')) continue
+      if (isConstant(entry) || entryMatches(entry, text)) found.push({ book, entry })
+    }
+  }
+  return found
 }
 
 /** "27 entries, 26 in use, 19 of them constant", as the settings show a book. */
@@ -279,7 +374,7 @@ function editEntry(entry, change) {
     const position = Math.trunc(Number(change.position))
     if (position >= 0 && position <= 7) entry.position = position
   }
-  entry.initvar = INITVAR.test(entry.comment)
+  entry.initvar = INITVAR.test(entry.comment) || decoratorsOf(entry.content).has('@@initial_variables')
   entry.hasScript = SCRIPT.test(entry.content)
   return entry
 }

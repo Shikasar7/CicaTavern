@@ -152,9 +152,37 @@ function setterMacros(text) {
   return found
 }
 
-/** Paragraphs: split on blank lines and `---` rules, the way presets lay out blocks. */
+/**
+ * Paragraphs: split on blank lines and `---` rules, the way presets lay out
+ * blocks. A template block (EJS) running across blank lines stays in one piece.
+ */
 function paragraphsOf(content) {
-  return content.replace(/^[ \t]*-{3,}[ \t]*$/gm, '').split(/\n[ \t]*\n/).filter(p => p.trim())
+  const parts = content.replace(/^[ \t]*-{3,}[ \t]*$/gm, '').split(/\n[ \t]*\n/).filter(p => p.trim())
+  if (!content.includes('<%')) return parts
+  const out = []
+  let open = ''
+  for (const part of parts) {
+    open = open ? `${open}\n\n${part}` : part
+    if (templateClosed(open)) {
+      out.push(open)
+      open = ''
+    }
+  }
+  if (open) out.push(open)
+  return out
+}
+
+/** Whether every `<%` in `text` is closed and the code between the tags opens no more brackets than it closes. */
+function templateClosed(text) {
+  const code = [...text.matchAll(/<%(?!%)([\s\S]*?)%>/g)].map(m => m[1]).join('\n')
+  if (/<%(?!%)/.test(text.replace(/<%(?!%)[\s\S]*?%>/g, ''))) return false
+  const bare = code.replace(/(["'`])(?:\\.|(?!\1)[^\\])*\1/g, '')
+  let depth = 0
+  for (const c of bare) {
+    if (c === '{' || c === '(' || c === '[') depth++
+    else if (c === '}' || c === ')' || c === ']') depth--
+  }
+  return depth <= 0
 }
 
 /**
@@ -387,13 +415,17 @@ function historyWrapper(preset, sections) {
  *   `rules` the post-history prompts that read the same every turn (prefix
  *   mode), `vars` the macro variables every later turn starts from.
  */
-export function renderPresetPrefix(preset, { card, persona, names, worldBefore = '', worldAfter = '' }) {
+export function renderPresetPrefix(preset, { card, persona, names, worldBefore = '', worldAfter = '', render = text => text }) {
   const sections = sectionsOf(preset)
   const skip = historyWrapper(preset, sections)
   const vars = {}
-  const ctx = { names, vars, card, persona }
-  const m = text => expandMacros(text, ctx).trim()
-  const format = (template, value, macro) => (value.trim() ? m(template.replace(macro, () => value)) : '')
+  const ctx = { names, vars, card, persona, render }
+  // Templates first, then macros, as a worldbook entry renders (prompt.mjs renderEntry).
+  const m = text => expandMacros(render(text), ctx).trim()
+  const format = (template, value, macro) => {
+    const text = render(value)
+    return text.trim() ? expandMacros(template.replace(macro, () => text), ctx).trim() : ''
+  }
   const markers = {
     personaDescription: () => m(persona.description),
     charDescription: () => m(card.description),
@@ -436,6 +468,7 @@ export function renderPresetPrefix(preset, { card, persona, names, worldBefore =
  * them). Depth injections come first, deepest first, as SillyTavern orders them.
  */
 function renderPost(preset, ctx, side) {
+  const render = ctx.render ?? (text => text)
   const sections = sectionsOf(preset)
   const skip = historyWrapper(preset, sections)
   const turnMode = sentEachTurn(preset)
@@ -445,12 +478,12 @@ function renderPost(preset, ctx, side) {
     if (!p.enabled || skip.has(p.id) || sections[i] !== 'post') return
     let content = p.content
     if (p.id === 'jailbreak' && ctx.card.postHistoryInstructions.trim()) {
-      ctx.original = expandMacros(p.content, ctx).trim()
+      ctx.original = expandMacros(render(p.content), ctx).trim()
       content = ctx.card.postHistoryInstructions
     }
     const texts = []
     for (const para of paragraphsOf(content)) {
-      if ((turnMode || isPerTurn(para)) === (side === 'turn')) texts.push(expandMacros(para, ctx).trim())
+      if ((turnMode || isPerTurn(para)) === (side === 'turn')) texts.push(expandMacros(render(para), ctx).trim())
       // A per-turn paragraph may also set a variable a later prefix paragraph reads (an output
       // order listing {{getvar::…}} blocks): set it now, as SillyTavern's in-order pass would.
       else if (side === 'prefix') for (const setter of setterMacros(para)) expandMacros(setter, ctx)
@@ -464,7 +497,10 @@ function renderPost(preset, ctx, side) {
   return [...injected.map(x => x.text), ...relative].join('\n\n')
 }
 
-/** The preset's part of one turn's message: the paragraphs that change per turn (all post-history ones in turn mode). */
-export function renderPresetTail(preset, { card, persona, names, vars = {}, input = '', lastChar = '' }) {
-  return renderPost(preset, { names, vars: { ...vars }, card, persona, lastUser: input, lastChar }, 'turn')
+/**
+ * The preset's part of one turn's message: the paragraphs that change per turn (all post-history ones in turn mode).
+ * @param render - text => text, their templates through the turn's sandbox.
+ */
+export function renderPresetTail(preset, { card, persona, names, vars = {}, input = '', lastChar = '', render = text => text }) {
+  return renderPost(preset, { names, vars: { ...vars }, card, persona, lastUser: input, lastChar, render }, 'turn')
 }
