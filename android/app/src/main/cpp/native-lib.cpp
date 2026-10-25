@@ -43,9 +43,11 @@ Java_app_cicatavern_NodeRuntime_startNode(JNIEnv *env, jclass, jobjectArray argu
         values.emplace_back(text);
         env->ReleaseStringUTFChars(item, text);
         env->DeleteLocalRef(item);
-        total += values.back().size() + 1;
+        size_t needed = values.back().size() + 1;
+        if (__builtin_add_overflow(total, needed, &total)) return jint(-1);
     }
     char *block = (char *) calloc(total, 1);
+    if (block == nullptr) return jint(-1);
     std::vector<char *> argv;
     char *at = block;
     for (const auto &value : values) {
