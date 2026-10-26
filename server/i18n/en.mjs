@@ -20,7 +20,6 @@ export default {
   "要改哪个分组？": "Which group do you want to change?",
   "无法解析世界书 JSON": "Couldn't parse the lorebook JSON",
   "无法解析预设 JSON": "Couldn't parse the preset JSON",
-  "正在生成，等这轮写完再改名": "Still generating. Wait for this turn to finish before renaming.",
   "状态必须是 JSON 对象": "State must be a JSON object",
   "不允许从这个地址访问": "Access from this address isn't allowed",
   "需要本机给出的链接": "You need the link from the computer running CicaTavern",
@@ -160,6 +159,9 @@ export default {
   "「{0}」太长了": "\"{0}\" is too long",
   "文件里没有可用的正则（要有「查找」的表达式）": "No usable regex in the file (each needs a Find pattern)",
   "基础预设自带的正则不能改": "The built-in preset's own regex can't be changed",
+  "屏蔽词列表的格式不对": "The blocked word list isn't in the right shape",
+  "屏蔽词太多（最多 {0} 个）": "Too many blocked words ({0} at most)",
+  "「{0}」的例外太多（最多 {1} 个）": "\"{0}\" has too many exceptions ({1} at most)",
   "没有这张场景图": "No such scene picture",
   "这个 ComfyUI 工作流要参考图，背景里可能会出现人物": "This ComfyUI workflow needs a reference picture, so a person may show up in the background",
   "{0} · {1} 没有写出场景提示词": "{0} · {1} didn't write a scene prompt",
@@ -362,6 +364,8 @@ export default {
   "这段剧情是用自定义供应商写的，订阅模型读不到它的上下文：选一个供应商的模型再压缩": "This part of the story was written with a custom provider, so a subscription model can't read its context: pick a provider's model, then compact",
   "还没有可以压缩的剧情": "Nothing to compact yet",
   "上次压缩之后不到 {0} 轮，不用再压缩": n => `Fewer than ${pl(n, 'turn', 'turns')} since the last compaction, no need to compact again`,
+  "回滚收起的回合还在这条后面：先恢复它们，或从这里接着写一轮再压缩": "Turns folded by a rollback still follow this one: restore them, or write one more turn from here, then compact",
+  "这条回复已经压缩进剧情存档，不能再补写变量": "This reply is already compacted into the story archive, so its variables can't be filled in",
   "模型没有写出完整的剧情存档，这次没有压缩，可以再试一次": "The model didn't write a complete story archive, so nothing was compacted. You can try again",
   "已停止压缩": "Compaction stopped",
   "这条叙述不存在": "That reply doesn't exist",
@@ -409,6 +413,7 @@ export default {
   "连不上 {0}：检查 Base URL、网络和代理设置。（{1}）": "{0} can't be reached: check the Base URL, your network and the proxy settings. ({1})",
   "LoRA 要填 ComfyUI loras 文件夹里的文件名（.safetensors）": "For LoRA, enter a file name from ComfyUI's loras folder (.safetensors)",
   "这不是酒馆的对话包": "This isn't a CicaTavern chat package",
+  "对话包里的对话树是坏的，导入不了": "The chat in this package is damaged and can't be imported",
   "这台设备上没有角色卡「{0}」，先导入它": "There's no character card \"{0}\" on this device. Import it first",
   "这个对话里没有这张图": "This chat doesn't have that picture",
   "世界书格式无效": "Invalid lorebook format",
@@ -537,6 +542,10 @@ export default {
   "不支持的请求方法：{0}": "Unsupported request method: {0}",
   "要转发的内容太大": "Too much to relay",
   "替卡片界面连接 {0} 没有连上：{1}": "Couldn't reach {0} for the card's UI: {1}",
+  "卡片的正则": "A card's regex",
+  "这条正则运行太久，已经跳过：/{0}/{1}": "This regex ran too long and is skipped: /{0}/{1}",
+  "{0} 是这台电脑或局域网里的地址，要先允许这张卡连接它": "{0} is on this computer or your local network: allow this card to connect to it first",
+  "查不到 {0} 实际指向哪里（网络代理或 TUN 模式接管了域名解析），要先允许这张卡连接它": "Can't tell where {0} really leads (a network proxy or TUN mode handles name lookups): allow this card to connect to it first",
 }
 
 // Whole messages from the modules bin/launch.mjs loads on its own (store.mjs,
@@ -544,6 +553,7 @@ export default {
 // server/i18n.mjs: localize() matches them on the way out.
 export const whole = {
   "无效的 ID": "Invalid ID",
+  "全局变量太大": "The global variables are too big",
   "角色卡不存在": "Character card not found",
   "世界书不存在": "Lorebook not found",
   "预设不存在": "Preset not found",

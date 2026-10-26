@@ -8,7 +8,7 @@
 // output is parsed as data by JSON/YAML parsers and a small literal parser — never evaluated.
 import YAML from 'yaml'
 // Old MVU values are [value, "description"]; reads and writes target the value slot.
-import { isDescribed, splitPath, UPDATE_BLOCK } from '../web/shared/vars.js'
+import { isDescribed, splitPath, UPDATE_BLOCK, writablePath } from '../web/shared/vars.js'
 import { CHOICES_BLOCK, TIME_BOX_BLOCK } from '../web/shared/basic.js'
 
 const HIDDEN_BLOCKS = [
@@ -38,7 +38,7 @@ export function applyStateUpdates(state, text) {
     const patch = parseLoose(match[2])
     if (patch && typeof patch === 'object' && !Array.isArray(patch)) {
       next = mergePatch(next, patch)
-      changes.push(...Object.keys(patch))
+      changes.push(...Object.keys(patch).filter(key => writablePath([key])))
     }
   }
   for (const match of blocks.filter(match => !isState(match))) {
@@ -59,6 +59,7 @@ export function applyStateUpdates(state, text) {
       const [pathArg] = args
       if (typeof pathArg !== 'string') continue
       const keys = statKeys(pathArg)
+      if (!keys.length) continue
       if (call[1] === 'set') {
         setPath(next, keys, args.length >= 3 ? args[2] : args[1])
       } else {
@@ -84,6 +85,7 @@ export function applyWrites(state, writes) {
   for (const write of writes) {
     if (!write || typeof write.path !== 'string') continue
     const keys = splitPath(write.path)
+    if (!writablePath(keys)) continue
     if (!keys.length) {
       if (write.op === 'replace' && write.value && typeof write.value === 'object' && !Array.isArray(write.value)) next = structuredClone(write.value)
       continue
@@ -151,6 +153,7 @@ function applyPatchOp(root, op) {
     case 'copy': {
       if (typeof op.from !== 'string') return null
       const from = statKeys(op.from)
+      if (!from.length) return null
       const value = structuredClone(readRaw(root, from))
       if (value === undefined) return null
       if (op.op === 'move') removePath(root, from)
@@ -161,16 +164,20 @@ function applyPatchOp(root, op) {
   }
 }
 
-/** Path keys relative to the state; a leading `stat_data` (as cards often write) is dropped. */
+/**
+ * Path keys relative to the state; a leading `stat_data` (as cards often write) is dropped. None for a
+ * path that reaches a prototype (`__proto__`…): model output and card scripts must not change the server's objects.
+ */
 function statKeys(path) {
   const keys = splitPath(path)
   if (keys[0] === 'stat_data') keys.shift()
-  return keys
+  return writablePath(keys) ? keys : []
 }
 
 function mergePatch(target, patch) {
   const out = target && typeof target === 'object' && !Array.isArray(target) ? { ...target } : {}
   for (const [key, value] of Object.entries(patch)) {
+    if (!writablePath([key])) continue
     if (value === null) delete out[key]
     else if (typeof value === 'object' && !Array.isArray(value)) out[key] = mergePatch(out[key], value)
     else out[key] = value
@@ -179,10 +186,11 @@ function mergePatch(target, patch) {
 }
 
 
+// The state's own values only, never what objects inherit (toString…).
 function readRaw(object, keys) {
   let cursor = object
   for (const key of keys) {
-    if (cursor === null || typeof cursor !== 'object') return undefined
+    if (cursor === null || typeof cursor !== 'object' || !Object.hasOwn(cursor, key)) return undefined
     cursor = cursor[key]
   }
   return cursor
@@ -230,7 +238,7 @@ function removePath(object, keys) {
   const last = keys.at(-1)
   if (last === undefined) return false
   const parent = readRaw(object, keys.slice(0, -1))
-  if (parent === null || typeof parent !== 'object' || !(last in parent)) return false
+  if (parent === null || typeof parent !== 'object' || !Object.hasOwn(parent, last)) return false
   if (Array.isArray(parent)) parent.splice(Number(last), 1)
   else delete parent[last]
   return true

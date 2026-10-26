@@ -3,7 +3,7 @@
 // does nothing, and the model writes each changed script out (blocks.mjs);
 // every pattern is tried on the chat's latest reply (regex-trial.mjs) so the
 // page can show what it matches and what that becomes before anything is kept.
-import { PLACEMENT, regexFromString } from '../../web/shared/regex.js'
+import { effectFlags, effectOf, PLACEMENT, regexFromString } from '../../web/shared/regex.js'
 import { LONG_TOKENS } from './prompts.mjs'
 import { attr, historyLines, readBlocks } from './blocks.mjs'
 import { ENTRY_BUDGET } from './edit.mjs'
@@ -21,9 +21,9 @@ export const onOf = script => {
   const user = script.placement.includes(PLACEMENT.USER_INPUT)
   return ai && user ? 'both' : ai ? 'ai' : user ? 'user' : 'none'
 }
-export const effectOf = script => (script.markdownOnly ? 'display' : script.promptOnly ? 'prompt' : 'both')
+export { effectOf }
 /** Whether a script changes what the model reads (so the next turn writes the cache once more). */
-export const touchesPrompt = script => Boolean(script) && !script.disabled && !script.markdownOnly && onOf(script) !== 'none'
+export const touchesPrompt = script => Boolean(script) && !script.disabled && effectOf(script) !== 'display' && onOf(script) !== 'none'
 
 /** The ids sent in full: the one asked about, those the request names, then in order within the budget. */
 function shownScripts(scripts, words, target) {
@@ -180,8 +180,7 @@ export function scriptOf(change, current = null) {
     findRegex: change.findAfter ?? change.find,
     replaceString: change.replaceAfter ?? change.replace,
     placement: [...ON[on], ...(current?.placement ?? []).filter(p => p !== PLACEMENT.AI_OUTPUT && p !== PLACEMENT.USER_INPUT)],
-    markdownOnly: effect === 'display',
-    promptOnly: effect === 'prompt',
+    ...effectFlags(effect, current),
     disabled: change.enabled === undefined ? current?.disabled === true : !change.enabled,
   }
 }

@@ -1,12 +1,13 @@
 import { before, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { deflateSync } from 'node:zlib'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { connect } from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { cardSummary, exportCard, importOwnCard, normalizeCard, parseCardFile, readPngText } from '../server/cards.mjs'
 import { normalizeBook, triggeredEntries, initialState, constantEntries } from '../server/worldbook.mjs'
-import { applyStateUpdates, displayText, parseArgs } from '../server/state.mjs'
+import { applyStateUpdates, applyWrites, displayText, parseArgs } from '../server/state.mjs'
 import { buildSystemPrompt, buildTurnPrompt, renderEntry, replaceMacros } from '../server/prompt.mjs'
 import { initTemplates } from '../server/template.mjs'
 import { createStore } from '../server/store.mjs'
@@ -98,6 +99,14 @@ test('worldbook: constants, keyword, regex + AND_ALL secondary, dedupe, initvar'
   const books = [{ ...card.book, id: 'b' }]
   assert.deepEqual(constantEntries(books).map(e => e.comment), ['店名'])
   assert.deepEqual(initialState(books), { 好感度: 10, 位置: '咖啡店' })
+  // One entry per character, as cards split them: each adds its own, as MVU's merge does.
+  const split = normalizeBook({
+    entries: [
+      { keys: [], content: '角色:\n  小雨:\n    好感: 10\n世界:\n  天气: 雨', enabled: false, comment: '[initvar]小雨' },
+      { keys: [], content: '{"角色": {"小雪": {"好感": 5}}, "世界": {"时间": "夜"}}', enabled: false, comment: '[initvar]小雪' },
+    ],
+  })
+  assert.deepEqual(initialState([{ ...split, id: 's' }]), { 角色: { 小雨: { 好感: 10 }, 小雪: { 好感: 5 } }, 世界: { 天气: '雨', 时间: '夜' } })
   const hit = triggeredEntries(books, '我想喝桂花的', new Set())
   assert.deepEqual(hit.map(h => h.entry.comment), ['桂花拿铁'])
   assert.equal(triggeredEntries(books, '桂花', new Set(['b:1'])).length, 0, 'recently injected entries are skipped')
@@ -332,4 +341,160 @@ test('视觉小说格式: asked for in the turn\'s message only, after the prese
   const turn = buildTurnPrompt({ names, input: '你好', presetText: '写短一点', reminder: '照规则', marks: true })
   assert.match(turn, /<\/预设指令>\n\n<对白格式>\n[\s\S]*【名字\|表情】「台词」[\s\S]*平静、微笑、开心、害羞、生气、难过、惊讶、思考[\s\S]*震屏、闪白、跳动、发抖[\s\S]*<\/对白格式>\n\n<本轮提醒>/)
   assert.doesNotMatch(buildTurnPrompt({ names, input: '你好' }), /对白格式/)
+})
+
+test('variable paths never reach a prototype: model replies, card scripts and template writes change the state only', () => {
+  const updates = [
+    '<UpdateVariable><JSONPatch>[{"op":"replace","path":"/__proto__/polluted","value":1}]</JSONPatch></UpdateVariable>',
+    '<UpdateVariable><JSONPatch>[{"op":"add","path":"/stat_data/__proto__/polluted","value":1}]</JSONPatch></UpdateVariable>',
+    '<UpdateVariable>_.set("__proto__.polluted", true);</UpdateVariable>',
+    '<UpdateVariable>_.set("a.constructor.prototype.polluted", true);</UpdateVariable>',
+    '<state>{"__proto__": {"polluted": 1}}</state>',
+    '<UpdateVariable><JSONPatch>[{"op":"remove","path":"/__proto__/toString"}]</JSONPatch></UpdateVariable>',
+  ]
+  for (const text of updates) assert.deepEqual(applyStateUpdates({ a: {} }, text), { state: { a: {} }, changes: [] }, text)
+  assert.deepEqual(applyWrites({}, [{ op: 'replace', path: '/__proto__/polluted', value: 1 }, { op: 'replace', path: '/好感', value: 3 }]), { 好感: 3 })
+  assert.equal({}.polluted, undefined)
+  assert.equal(String({}), '[object Object]')
+  // What objects inherit is not the state's: no change to report.
+  assert.deepEqual(applyStateUpdates({ 好感: 1 }, '<UpdateVariable><JSONPatch>[{"op":"remove","path":"/toString"}]</JSONPatch>_.add("好感", 2);</UpdateVariable>'), { state: { 好感: 3 }, changes: ['好感'] })
+})
+
+test('writes to one file at once each land whole: the file is always one of them', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'tavern-writes-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const store = createStore(root)
+  await store.init()
+  const long = { id: 'c1', title: '长'.repeat(5000), nodes: {} }
+  const short = { id: 'c1', title: '短', nodes: {} }
+  for (let round = 0; round < 40; round++) {
+    await Promise.all([store.saveChat(long), store.saveChat(short), store.saveSettings({ globalVars: { n: round + 1 } }), store.saveSettings({ globalVars: { n: -(round + 1) } })])
+    assert.ok(['短', long.title].includes((await store.getChat('c1')).title), 'one of them, whole')
+    assert.ok([round + 1, -(round + 1)].includes((await store.getSettings()).globalVars.n), 'one of them, whole')
+  }
+})
+
+test('a request whose address is no address at all gets a 400, and the server keeps going', async t => {
+  const dataRoot = await mkdtemp(path.join(tmpdir(), 'tavern-bad-url-'))
+  const app = createApp({ dataRoot, proxy: 'off', edition: 'release' })
+  const server = await app.listen({ port: 0 })
+  t.after(async () => {
+    app.network.stop()
+    server.closeAllConnections?.()
+    server.close()
+    await rm(dataRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  })
+  const { port } = server.address()
+  const raw = target => new Promise((resolve, reject) => {
+    const socket = connect(port, '127.0.0.1', () => socket.write(`GET ${target} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n`))
+    let answer = ''
+    socket.on('data', piece => { answer += piece })
+    socket.on('end', () => resolve(answer))
+    socket.on('error', reject)
+  })
+  for (const target of ['//[', 'http://a:b', 'http://[x']) assert.match(await raw(target), /^HTTP\/1\.1 400/, target)
+  assert.equal((await fetch(`http://127.0.0.1:${port}/api/health`)).status, 200, 'still there')
+})
+
+test('{{roll}} rolls at most a thousand dice; more is left as written', () => {
+  const names = { char: '小雨', user: '阿明' }
+  const started = Date.now()
+  assert.equal(replaceMacros('掷 {{roll:100000000000d6}}', names), '掷 {{roll:100000000000d6}}')
+  assert.equal(replaceMacros('{{roll:3d99999999999999999999}}', names), '{{roll:3d99999999999999999999}}')
+  assert.ok(Date.now() - started < 1000)
+  for (let i = 0; i < 20; i++) {
+    const total = Number(replaceMacros('{{roll:3d6}}', names))
+    assert.ok(total >= 3 && total <= 18, String(total))
+  }
+  assert.equal(replaceMacros('{{roll:d1}}', names), '1')
+})
+
+test('a PNG\'s compressed text is undone only for a card, and only so far', () => {
+  const chunk = (type, data) => {
+    const head = Buffer.alloc(8)
+    head.writeUInt32BE(data.length, 0)
+    head.write(type, 4, 'latin1')
+    return Buffer.concat([head, data, Buffer.alloc(4)])
+  }
+  const itxt = (keyword, text) => chunk('iTXt', Buffer.concat([Buffer.from(`${keyword}\0\x01\0\0\0`, 'latin1'), deflateSync(Buffer.from(text))]))
+  const png = (...chunks) => Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), ...chunks, chunk('IEND', Buffer.alloc(0))])
+  const card = Buffer.from(JSON.stringify({ spec: 'chara_card_v2', data: { name: '小雨' } })).toString('base64')
+  // 200 MB of something else, in a chunk of a few hundred KB: skipped, not undone.
+  const texts = readPngText(png(itxt('junk', 'x'.repeat(200 * 1024 * 1024)), itxt('chara', card)))
+  assert.deepEqual(Object.keys(texts), ['chara'])
+  assert.equal(texts.chara, card)
+  // A card chunk that would grow past 64 MB: refused, not undone.
+  assert.throws(() => readPngText(png(itxt('ccv3', 'y'.repeat(80 * 1024 * 1024)))), error => error.status === 413)
+})
+
+test('the app-wide variables are kept to a size; settings already past it still save the rest', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'tavern-global-vars-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const store = createStore(root)
+  await store.init()
+  const big = { 存档: 'x'.repeat(1_200_000) }
+  await assert.rejects(store.saveSettings({ globalVars: big }), error => error.status === 400)
+  await store.saveSettings({ globalVars: { 好感: 3 } })
+  assert.deepEqual((await store.getSettings()).globalVars, { 好感: 3 })
+  // Written before there was a limit: everything else still saves.
+  await writeFile(path.join(root, 'settings.json'), JSON.stringify({ ...(await store.getSettings()), globalVars: big }))
+  await store.saveSettings({ language: 'English' })
+  const saved = await store.getSettings()
+  assert.equal(saved.language, 'English')
+  assert.equal(saved.globalVars.存档.length, 1_200_000)
+})
+
+test('changes to one chat at once all land: a card\'s variables written while its opening is switched stay', async t => {
+  const dataRoot = await mkdtemp(path.join(tmpdir(), 'tavern-chat-lock-'))
+  const app = createApp({ dataRoot, proxy: 'off', edition: 'release' })
+  const server = await app.listen({ port: 0 })
+  t.after(async () => {
+    app.network.stop()
+    server.closeAllConnections?.()
+    server.close()
+    await rm(dataRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  })
+  const base = `http://127.0.0.1:${server.address().port}`
+  const call = async (pathname, method = 'GET', body) => (await fetch(`${base}${pathname}`, { method, headers: { 'content-type': 'application/json', 'x-agent-tavern': '1' }, body: body ? JSON.stringify(body) : undefined })).json()
+  const card = await call('/api/cards/import', 'POST', { filename: 'c.json', data: Buffer.from(JSON.stringify({ spec: 'chara_card_v2', data: { name: '小雨', first_mes: '开场一', alternate_greetings: ['开场二', '开场三'] } })).toString('base64') })
+  const chat = await call('/api/chats', 'POST', { cardId: card.id })
+  for (let round = 0; round < 15; round++) {
+    // As a welcome page does: its variable first, then the opening, neither waiting for the other.
+    await Promise.all([call(`/api/chats/${chat.id}/frame-vars`, 'PUT', { vars: { choice: `c${round}` } }), call(`/api/chats/${chat.id}/opening`, 'POST', { index: round % 3 })])
+    const saved = await app.store.getChat(chat.id)
+    assert.deepEqual(saved.frameVars, { choice: `c${round}` }, `round ${round}`)
+    assert.equal(saved.nodes.root.text, ['开场一', '开场二', '开场三'][round % 3])
+  }
+})
+
+test('the chat lock: sections on one chat run one after another; one inside another goes straight on', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'tavern-lock-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const store = createStore(root)
+  await store.init()
+  const order = []
+  const slow = (name, ms) => store.withChat('c1', async () => {
+    order.push(`${name}+`)
+    await new Promise(resolve => setTimeout(resolve, ms))
+    order.push(`${name}-`)
+    return name
+  })
+  assert.deepEqual(await Promise.all([slow('a', 30), slow('b', 1), store.withChat('c2', async () => order.push('other') && 'c2')]), ['a', 'b', 'c2'])
+  assert.deepEqual(order.filter(step => step !== 'other'), ['a+', 'a-', 'b+', 'b-'], 'b waited for a')
+  assert.ok(order.indexOf('other') < order.indexOf('a-'), 'another chat did not wait')
+  assert.equal(await store.withChat('c1', () => store.withChat('c1', async () => 'nested')), 'nested')
+  await assert.rejects(store.withChat('c1', async () => { throw new Error('boom') }), /boom/)
+  assert.equal(await store.withChat('c1', async () => 'after a failure'), 'after a failure')
+})
+
+test('settings saved at once all land, and variable writes worked out from the saved ones add up', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'tavern-settings-lock-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const store = createStore(root)
+  await store.init()
+  await Promise.all([store.saveSettings({ language: 'English' }), store.saveSettings({ replyLength: 800 }), store.saveSettings({ scanDepth: 7 })])
+  const saved = await store.getSettings()
+  assert.deepEqual([saved.language, saved.replyLength, saved.scanDepth], ['English', 800, 7])
+  await Promise.all(Array.from({ length: 10 }, (_, i) => store.updateSettings(current => ({ globalVars: { ...current.globalVars, [`v${i}`]: i } }))))
+  assert.equal(Object.keys((await store.getSettings()).globalVars).length, 10)
 })

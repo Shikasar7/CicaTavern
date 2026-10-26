@@ -184,8 +184,10 @@ function prefixHasTemplates(card, preset, persona) {
 /** Template writes to the app-wide variables (the plugin's `global` scope), saved in settings. */
 async function saveGlobalWrites(store, writes) {
   if (!writes?.length) return
-  const settings = await store.getSettings()
-  await store.saveSettings({ globalVars: applyWrites(settings.globalVars ?? {}, writes) })
+  // Too big to keep (store.mjs GLOBAL_VARS_MAX): left unwritten, as a turn's are; the chat opens all the same.
+  await store.updateSettings(settings => ({ globalVars: applyWrites(settings.globalVars ?? {}, writes) })).catch(error => {
+    if (error.status !== 400) throw error
+  })
 }
 
 /**
@@ -492,7 +494,7 @@ function localStamp(date) {
 export function childrenOf(chat, id) {
   return Object.values(chat.nodes)
     .filter(node => node.parent === id)
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    .sort((a, b) => String(a.createdAt ?? '').localeCompare(String(b.createdAt ?? '')))
 }
 
 /** The child a node continues into: its `sel`, else the newest. */
@@ -504,11 +506,14 @@ function nextOf(chat, node) {
 /**
  * Follow `sel` pointers from the root; falls back to the newest child. A node
  * marked `cut` (rolled back to) ends the path; what follows it is kept, folded.
+ * A node met again (a damaged chat file) ends it too.
  */
 export function activePath(chat) {
   const path = []
+  const seen = new Set()
   let node = chat.nodes.root
-  while (node) {
+  while (node && !seen.has(node)) {
+    seen.add(node)
     path.push(node)
     if (node.cut) break
     node = nextOf(chat, node)
@@ -521,7 +526,11 @@ export function foldedTurns(chat) {
   const last = activePath(chat).at(-1)
   if (!last?.cut) return 0
   let turns = 0
-  for (let node = nextOf(chat, last); node; node = node.cut ? null : nextOf(chat, node)) if (node.role === 'user') turns++
+  const seen = new Set([last])
+  for (let node = nextOf(chat, last); node && !seen.has(node); node = node.cut ? null : nextOf(chat, node)) {
+    seen.add(node)
+    if (node.role === 'user') turns++
+  }
   return turns
 }
 
@@ -544,7 +553,7 @@ export function pathTo(chat, id) {
   const path = []
   let node = chat.nodes[id]
   if (!node) throw httpError(404, msg`节点不存在`)
-  while (node) {
+  while (node && !path.includes(node)) {
     path.unshift(node)
     node = node.parent ? chat.nodes[node.parent] : null
   }
@@ -590,9 +599,11 @@ export function dropCompaction(chat, id) {
  * context. Shown and sent from now on; the turn's state and variables stay as
  * they were. A user message's recorded prompt (what was sent: the input plus
  * injected lore and preset text) has the old input swapped for the new one.
- * @returns what changed: { node, before, beforePrompt, behindCompaction }
+ * @param options.sentInput - input => the input as a turn sends it (the card's prompt-side regex, macros).
+ * @returns what changed: { node, before, beforePrompt, behindCompaction, promptMissed }, promptMissed when
+ *   the recorded prompt held the old input nowhere, so the model still reads it as it was.
  */
-export function editMessage(chat, id, text) {
+export function editMessage(chat, id, text, { sentInput = input => input } = {}) {
   const next = String(text ?? '').replace(/\r\n/g, '\n').trim()
   if (!next) throw httpError(400, msg`内容不能为空；整轮不要了可以用「回滚到这里」`)
   const path = activePath(chat)
@@ -604,17 +615,43 @@ export function editMessage(chat, id, text) {
   const beforePrompt = node.prompt
   if (next === before) return { node, before, beforePrompt, unchanged: true }
   node.text = next
+  let promptMissed = false
   if (node.role === 'assistant') {
     node.display = displayText(next)
     delete node.historyTrim
   } else if (typeof node.prompt === 'string') {
-    const at = node.prompt.indexOf(before)
-    if (at >= 0) node.prompt = node.prompt.slice(0, at) + next + node.prompt.slice(at + before.length)
+    const swapped = swapInput(node.prompt, sentInput(before), sentInput(next)) ?? swapInput(node.prompt, before, next)
+    if (swapped === null) promptMissed = true
+    else node.prompt = swapped
   }
   node.edited = { at: new Date().toISOString(), count: (node.edited?.count ?? 0) + 1 }
   // Context before the latest compaction is the recap, not these messages.
   const behindCompaction = path.slice(index + 1).some(n => n.compaction)
-  return { node, before, beforePrompt, behindCompaction }
+  return { node, before, beforePrompt, behindCompaction, promptMissed }
+}
+
+const INPUT_OPEN = '<玩家输入>\n'
+const INPUT_CLOSE = '\n</玩家输入>'
+
+/**
+ * A turn's recorded prompt with the player's input swapped: the body of its
+ * <玩家输入> block (found by the text that was sent, else the last such block)
+ * and the preset's copy of it ({{lastUserMessage}} in <预设指令>), or, for a
+ * prompt without that block, where the old text sits. null when it is in neither.
+ */
+function swapInput(prompt, before, next) {
+  let start = prompt.lastIndexOf(`${INPUT_OPEN}${before}${INPUT_CLOSE}`)
+  let end = start < 0 ? -1 : start + INPUT_OPEN.length + before.length
+  if (start < 0) {
+    start = prompt.lastIndexOf(INPUT_OPEN)
+    end = start < 0 ? -1 : prompt.indexOf(INPUT_CLOSE, start + INPUT_OPEN.length)
+  }
+  if (end < 0) {
+    const at = before ? prompt.indexOf(before) : -1
+    return at < 0 ? null : prompt.slice(0, at) + next + prompt.slice(at + before.length)
+  }
+  const tail = prompt.slice(end).replace(/(<预设指令>\n)([\s\S]*?)(\n<\/预设指令>)/, (whole, open, body, close) => open + (before ? body.split(before).join(next) : body) + close)
+  return prompt.slice(0, start + INPUT_OPEN.length) + next + tail
 }
 
 /** Client view: the active path plus sibling counts for swipe controls. */
@@ -671,7 +708,8 @@ export function chatView(chat) {
     path,
     folded: foldedTurns(chat),
     // Turns a manual compaction would fold into a summary; 0 when there is nothing worth it.
-    compactable: tip.role === 'assistant' && (tip.sdk || tip.api || tip.imported) && sinceCompaction >= MIN_TURNS ? sinceCompaction : 0,
+    // (Not with turns folded behind a rollback: restored, they would follow a summary they never read.)
+    compactable: tip.role === 'assistant' && (tip.sdk || tip.api || tip.imported) && sinceCompaction >= MIN_TURNS && !childrenOf(chat, tip.id).length ? sinceCompaction : 0,
     state: lastAssistant?.state ?? {},
     // The chat variables (Tavern Helper's chat scope, the templates' local scope), for the card's frames.
     frameVars: chat.frameVars ?? {},

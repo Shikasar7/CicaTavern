@@ -825,7 +825,8 @@ function requestBody(provider, modelId, { system, messages, maxTokens: cap, reas
     return {
       model: modelId,
       max_tokens: maxTokens || ANTHROPIC_DEFAULT_MAX,
-      system: [{ type: 'text', text: system, cache_control: cache }],
+      // An empty text block is refused, so a request without a system prompt has no system field.
+      ...(String(system ?? '').trim() ? { system: [{ type: 'text', text: system, cache_control: cache }] } : {}),
       messages: messages.map((m, i) =>
         i === last || m.cache ? { role: m.role, content: [{ type: 'text', text: m.content, cache_control: cache }] } : { role: m.role, content: m.content },
       ),
@@ -838,7 +839,7 @@ function requestBody(provider, modelId, { system, messages, maxTokens: cap, reas
   if (provider.api === 'openai-responses') {
     return {
       model: modelId,
-      instructions: system,
+      ...(String(system ?? '').trim() ? { instructions: system } : {}),
       input: messages.map(m => ({ role: m.role, content: m.content })),
       stream: true,
       store: false,
@@ -850,7 +851,7 @@ function requestBody(provider, modelId, { system, messages, maxTokens: cap, reas
   }
   return {
     model: modelId,
-    messages: [{ role: 'system', content: system }, ...messages.map(m => ({ role: m.role, content: m.content }))],
+    messages: [...(String(system ?? '').trim() ? [{ role: 'system', content: system }] : []), ...messages.map(m => ({ role: m.role, content: m.content }))],
     stream: true,
     stream_options: { include_usage: true },
     ...(maxTokens ? { max_tokens: maxTokens } : {}),
@@ -878,7 +879,9 @@ export async function complete(provider, modelId, request, { proxy = null } = {}
     if (!local) throw httpError(400, msg`供应商「${provider.name}」还没有填 API Key`)
   }
   const pair = `${provider.id}/${modelId}`
-  const reasoning = !NO_REASONING.has(pair) && request.reasoning && Object.keys(reasoningFields(provider.api, modelId, request.reasoning)).length > 0
+  // Kept apart with 联网 on: a relay may refuse thinking only alongside the search tool.
+  const refusedKey = request.webSearch ? `${pair} 联网` : pair
+  const reasoning = !NO_REASONING.has(refusedKey) && request.reasoning && Object.keys(reasoningFields(provider.api, modelId, request.reasoning)).length > 0
   const short = request.maxTokens > 0 && request.maxTokens < THINKING_ROOM
   const attempt = async () => {
     // Room to think on top of a short cap, given up like a preset's length if the model refuses it.
@@ -895,7 +898,8 @@ export async function complete(provider, modelId, request, { proxy = null } = {}
     try {
       await failIfBad(res)
     } catch (error) {
-      if (request.signal?.aborted || error.providerStatus !== 400) throw error
+      if (request.signal?.aborted) throw error
+      if (error.providerStatus !== 400) throw searchHint(error, request)
       // A relay that does not know the 1-hour cache field: send the default lifetime instead.
       const ttlRejected = provider.api === 'anthropic-messages' && provider.cacheTtl === '1h' && /ttl|cache_control|extra inputs/i.test(error.message)
       // A preset's output length above what the model allows: fall back to the provider's own.
@@ -906,9 +910,14 @@ export async function complete(provider, modelId, request, { proxy = null } = {}
       // A model or relay that takes no thinking / effort fields: leave them out, now and later.
       const reasoningRejected = reasoning && REASONING_REFUSED.test(error.message)
       if (!ttlRejected && !capRejected && !reasoningRejected) throw searchHint(contextHint(error), request)
-      if (reasoningRejected) NO_REASONING.add(pair)
       res = await post({ ...(ttlRejected ? { ttl: '5m' } : {}), ...(reasoningRejected ? { withReasoning: false } : {}) }, capRejected ? { ...req, maxTokens: undefined } : req)
-      await failIfBad(res).catch(retryError => { throw contextHint(retryError) })
+      // Refused the same way without them: it was something else (the search tool, say), and thinking stays as it
+      // was. Refused for another reason, or not at all: they were the trouble, and are left out from now on.
+      await failIfBad(res).catch(retryError => {
+        if (reasoningRejected && !REASONING_REFUSED.test(retryError.message)) NO_REASONING.add(refusedKey)
+        throw searchHint(contextHint(retryError), request)
+      })
+      if (reasoningRejected) NO_REASONING.add(refusedKey)
     }
     const result = await protocol.read(provider, request, res)
     return { ...result, truncated: TRUNCATED.test(String(result.stopReason ?? '')) }
@@ -935,9 +944,14 @@ const addUsage = (a, b) => (a && b ? Object.fromEntries(Object.keys(b).map(key =
 // A request longer than the model's context window, as providers word it.
 export const CONTEXT_FULL = /context (window|length)|prompt is too long|too many tokens|maximum context|exceeds? the (model's )?(context|maximum)/i
 
-/** A refusal while 联网 was on: the provider or model may not search. */
+/**
+ * A refusal while 联网 was on: the provider or model may not search (not said for a key, a rate limit or a
+ * full context). Kept on `hint`, which providerError puts after the provider's words however long they are.
+ */
 function searchHint(error, request) {
-  if (request.webSearch && !CONTEXT_FULL.test(error.message)) error.message += msg`（这个对话打开了「联网」：这个供应商或模型可能不支持联网搜索，点输入框左边的地球图标关掉再试。）`
+  const status = error.providerStatus
+  const refusal = status === 400 || status === 404 || status === 422 || status >= 500
+  if (request.webSearch && refusal && !CONTEXT_FULL.test(error.message)) error.hint = msg`（这个对话打开了「联网」：这个供应商或模型可能不支持联网搜索，点输入框左边的地球图标关掉再试。）`
   return error
 }
 
@@ -1036,8 +1050,12 @@ export async function listRemoteModels(provider, { proxy = null, signal } = {}) 
     .sort((a, b) => a.localeCompare(b))
 }
 
-/** Plain-language provider errors. */
+/** Plain-language provider errors, with what to do about one (`hint`, see searchHint) after the provider's words. */
 export function providerError(provider, error) {
+  return `${plainError(provider, error)}${error?.hint ?? ''}`
+}
+
+function plainError(provider, error) {
   const text = String(error?.message ?? error ?? '')
   const status = error?.providerStatus
   const name = provider?.name ?? msg`供应商`

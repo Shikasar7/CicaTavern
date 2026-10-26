@@ -156,8 +156,12 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
   /** The built-in preset's page: its options, and what they add to the prompt. */
   function renderBasic(main, head) {
     const detail = state.detail
+    // Every pick so far: each save sends all of them (the server keeps the options whole), or a second pick
+    // sent the page's first options again and undid the one before.
+    let options = { ...detail.options }
     const pick = guard(async (key, value) => {
-      const settings = await api('/api/settings', { method: 'PUT', body: { basic: { ...detail.options, [key]: value } } })
+      options = { ...options, [key]: value }
+      const settings = await api('/api/settings', { method: 'PUT', body: { basic: options } })
       state.detail = await api(`/api/presets/${BASIC_ID}`)
       onBasicChanged?.(settings)
       if (BASIC_FIELDS.find(f => f.key === key)?.prompt !== false) markStale()

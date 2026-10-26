@@ -1149,7 +1149,9 @@ export function initVn(deps) {
   }
 
   // ─── Pictures drawn for the card (server/scenes.mjs): one at a time per card ──
-  const art = { jobs: new Map(), queue: new Map(), failed: new Set(), error: null }
+  // `tried`: 立绘 drawn by themselves once this session; one that still gives no picture (no plain background to cut
+  // out) is offered again (画立绘), not drawn again and again.
+  const art = { jobs: new Map(), queue: new Map(), failed: new Set(), tried: new Set(), error: null }
 
   /**
    * Draws a scene or a 立绘. One runs per card; the rest wait their turn.
@@ -1180,10 +1182,9 @@ export function initVn(deps) {
       job.done(data)
       if (data.note) toast(data.note, 6000)
     } catch (error) {
-      if (!controller.signal.aborted) {
-        art.failed.add(job.key)
-        art.error = { cardId, key: job.key, label: job.label, message: error.message, job }
-      }
+      // Failed or cancelled (取消): not drawn again by itself; 画一张, 画立绘, 重试 and the library still can.
+      art.failed.add(job.key)
+      if (!controller.signal.aborted) art.error = { cardId, key: job.key, label: job.label, message: error.message, job }
     } finally {
       clearInterval(tick)
       art.jobs.delete(cardId)
@@ -1229,7 +1230,8 @@ export function initVn(deps) {
       parts.push(control(t`画一张`, '', () => drawPlace(cardId, now.place)))
     }
     const missing = cast.missing
-    if (missing && missing.cardId === cardId && prefs.newSprite === 'ask' && !art.jobs.get(cardId)?.key.endsWith(missing.entry.id)) {
+    const offered = missing && (prefs.newSprite === 'ask' || art.tried.has(`sprite:${missing.entry.id}`))
+    if (offered && missing.cardId === cardId && !art.jobs.get(cardId)?.key.endsWith(missing.entry.id)) {
       parts.push(el('span', { text: t`「${missing.entry.name}」还没有立绘` }))
       parts.push(control(t`画立绘`, '', () => drawSprite(cardId, missing.entry)))
     }
@@ -1268,7 +1270,9 @@ export function initVn(deps) {
   async function showScene(chat, where, writing) {
     const list = await scenesOf(chat.cardId)
     if (getChat()?.id !== chat.id || !state.on) return
-    const place = where?.place ?? ''
+    // A place with nothing to tell it by (???, ……) is none: no scene could ever match it, so each picture drawn
+    // for it would start another.
+    const place = normalizePlace(where?.place) ? where.place : ''
     let scene = place ? matchScene(place, list) : null
     const pin = pins()[chat.id]
     if (pin && pin.place === place) scene = list.find(item => item.id === pin.sceneId) ?? scene
@@ -1526,8 +1530,10 @@ export function initVn(deps) {
   function missingSprite(cardId, entry) {
     const member = memberOf(cardId, entry)
     cast.missing = member?.looks ? { cardId, entry } : null
-    if (cast.missing && prefs.newSprite === 'auto' && !art.failed.has(`sprite:${entry.id}`)) {
+    const key = `sprite:${entry.id}`
+    if (cast.missing && prefs.newSprite === 'auto' && !art.failed.has(key) && !art.tried.has(key)) {
       toldOnce('toldSprite', t`说话的角色没有能用的立绘时，会按名单里的长相画一张半身立绘。不想自动画，可以在「立绘」里改成「先问」或「不画」。`)
+      art.tried.add(key)
       drawSprite(cardId, entry)
     }
     drawChip()

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { createStore } from '../server/store.mjs'
 import { chatPackage, importChatPackage, PACKAGE_MAGIC, savePackagePicture } from '../server/transfer.mjs'
+import { activePath, foldedTurns, pathTo } from '../server/chats.mjs'
 
 const PNG = Buffer.from('89504e470d0a1a0a0000000d4948445200000001', 'hex')
 
@@ -78,4 +79,32 @@ test('a package without its card on this device asks for the card; the preset is
   assert.equal(chat.cardId, 'selected', 'falls back to the selected card')
   assert.equal(missingPreset, '捌')
   await assert.rejects(importChatPackage(phone.store, { header: { format: 'x' } }), /不是酒馆的对话包/)
+})
+
+test('a package whose chat tree is broken is refused; one already on disk still opens', async t => {
+  const { store } = await storeAt(t, 'tree')
+  await store.saveCard({ id: 'card', name: '顾念念', data: {} })
+  const at = '2026-10-01T00:00:00.000Z'
+  const header = nodes => ({ format: 'agent-tavern-chat', cardName: '顾念念', chat: { id: 'x', names: { user: '你', char: '顾念念' }, nodes } })
+  for (const [label, nodes] of [
+    ['a loop', { root: { id: 'root', parent: 'b', createdAt: at }, b: { id: 'b', parent: 'root', role: 'user', createdAt: at } }],
+    ['a node calling itself root', { root: { id: 'root', parent: null, createdAt: at }, x: { id: 'root', parent: 'root', createdAt: at } }],
+    ['a parent that is not there', { root: { id: 'root', createdAt: at }, u: { id: 'u', parent: 'gone', role: 'user', createdAt: at } }],
+    ['a loop away from the root', { root: { id: 'root', createdAt: at }, a: { id: 'a', parent: 'b', createdAt: at }, b: { id: 'b', parent: 'a', createdAt: at } }],
+    ['nodes that are not objects', { root: { id: 'root' }, u: 'text' }],
+  ]) {
+    await assert.rejects(importChatPackage(store, { header: header(nodes) }), error => error.status === 400, label)
+  }
+  assert.deepEqual(await store.listChats(), [], 'nothing saved')
+
+  // Times missing: given the import's, so the chat can be shown.
+  const { chat } = await importChatPackage(store, { header: header({ root: { id: 'root', role: 'assistant', text: '开场' }, u1: { id: 'u1', parent: 'root', role: 'user', text: '一' }, u2: { id: 'u2', parent: 'root', role: 'user', text: '二' } }) })
+  assert.equal(typeof chat.nodes.u1.createdAt, 'string')
+  assert.ok(activePath(chat).length >= 2)
+
+  // A chat file damaged some other way still opens: the walk stops where it would go round.
+  const damaged = { id: 'bad', cardId: 'card', names: { user: '你', char: '顾念念' }, nodes: { root: { id: 'root', parent: 'b', sel: 'b', createdAt: at }, b: { id: 'b', parent: 'root', sel: 'root', role: 'user', createdAt: at } } }
+  assert.deepEqual(activePath(damaged).map(node => node.id), ['root', 'b'])
+  assert.deepEqual(pathTo(damaged, 'b').map(node => node.id), ['root', 'b'])
+  assert.equal(foldedTurns(damaged), 0)
 })

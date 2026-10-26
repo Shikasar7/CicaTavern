@@ -476,6 +476,8 @@ select.pill { appearance: none; padding-right: 28px; background-image: linear-gr
 .send.stop svg rect { fill: currentColor; stroke: none; }
 .composer-row, .branch-note { width: 100%; max-width: calc(var(--read) + 48px); margin: 0 auto; display: flex; align-items: center; gap: 8px; padding: 0 18px; }
 .composer-row .muted { flex: 1; color: var(--faint); }
+/* Phones send with the button: Enter / Shift+Enter is a keyboard's hint. */
+@media (hover: none) and (pointer: coarse) { #composer-hint { display: none; } }
 .branch-note { font-size: 12px; color: var(--accent); animation: rise .25s var(--ease); }
 .branch-note button { border: 0; background: none; color: var(--muted); cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
 
@@ -585,6 +587,45 @@ dl.usage dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; 
 .dialog.diagnostics .diag-actions { margin-top: 12px; flex-wrap: wrap; gap: 8px; align-items: center; }
 .dialog.diagnostics .diag-count { margin: 0; }
 .dialog.diagnostics .grow { flex: 1; }
+
+/* 屏蔽词 (web/blockwords.js): the form, the list with a switch per word, the test box. */
+.dialog.blockwords { position: relative; width: min(640px, calc(100vw - 32px)); overflow-y: auto; }
+.dialog.blockwords h2 { padding-right: 36px; }
+.dialog.blockwords .hint { margin: 0 0 10px; }
+.dialog.blockwords textarea { width: 100%; box-sizing: border-box; resize: vertical; }
+.bw-form { padding: 14px 16px 10px; border: 1px solid var(--line-soft); border-radius: 14px; background: var(--surface); margin-bottom: 6px; }
+.dialog .bw-form input:not([type="checkbox"]), .dialog .bw-form textarea { background: var(--raised); }
+.bw-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-bottom: 12px; }
+.bw-label { font-size: 12px; color: var(--muted); min-width: 3.5em; }
+.bw-row input { flex: 1; min-width: 8em; }
+.bw-more { margin-bottom: 10px; }
+.bw-more summary { cursor: pointer; font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+.dialog .bw-more label.check-row { margin: 0 0 8px; }
+.bw-form-note:empty { display: none; }
+.bw-form-note { color: var(--warn, var(--muted)); }
+.dialog h3.bw-head { display: flex; align-items: baseline; gap: 10px; margin-top: 16px; }
+.bw-count { font-weight: 400; color: var(--faint); }
+.bw-list { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 6px; }
+.bw-list li { display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 12px; border: 1px solid var(--line-soft); border-radius: 10px; }
+.bw-list li.active { border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: var(--accent-soft); }
+.bw-list li.off .bw-main { opacity: .5; }
+.bw-list li.bw-empty { color: var(--muted); font-size: 13px; border-style: dashed; }
+.bw-main { flex: 1; min-width: 0; }
+.bw-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; font-size: 14px; overflow-wrap: anywhere; }
+.bw-word { font-weight: 600; }
+.bw-arrow { color: var(--faint); }
+.bw-sub { font-size: 12px; color: var(--muted); margin-top: 2px; overflow-wrap: anywhere; }
+.bw-test { margin-bottom: 12px; }
+.bw-test summary { cursor: pointer; font-size: 13px; color: var(--muted); margin-bottom: 8px; }
+.bw-test textarea { margin-bottom: 8px; }
+/* A phone: each label above its choices, which wrap rather than run past the form. */
+@media (max-width: 520px) {
+  .bw-form { padding: 12px 12px 8px; }
+  .bw-row { gap: 6px 10px; }
+  .bw-label { flex-basis: 100%; }
+  .bw-row .seg { flex-wrap: wrap; max-width: 100%; border-radius: 12px; }
+  .bw-row .seg button { flex: 1 1 auto; padding: 3px 8px; }
+}
 
 /* Switch (preset prompt toggles). */
 .switch { appearance: none; flex: none; width: 32px; height: 19px; border-radius: 999px; background: var(--line); position: relative; cursor: pointer; margin: 0; transition: background .2s; }
@@ -1647,6 +1688,18 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .ce-drawn p { margin: 0 0 6px; font-size: 12.5px; line-height: 1.6; color: var(--ink); }
 .ce-drawn .row { flex-wrap: wrap; gap: 6px; }
 @media (max-width: 780px) { .hero-img.square { height: 112px; } }
+
+/* 卡片界面权限 (card-permissions.js): one row per thing a card's interface may do, its answer at the end. */
+.dialog.card-permissions { width: min(520px, calc(100vw - 24px)); }
+.cp-form > .hint { margin: 0 0 12px; line-height: 1.6; }
+.cp-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; margin: 0 0 6px; border: 1px solid var(--line-soft); border-radius: 10px; }
+.cp-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.cp-title { font-size: 13.5px; color: var(--ink); overflow-wrap: anywhere; }
+.cp-text .hint { margin: 0; font-size: 12px; line-height: 1.55; }
+.cp-text .hint:empty { display: none; }
+.cp-row select { flex: none; }
+.cp-form .row { margin-top: 12px; }
+@media (max-width: 560px) { .cp-row { flex-wrap: wrap; } .cp-row select { width: 100%; } }
 
 /* 这一张怎么画 (draw-choice.js): the 画图方式 and model for one drawing. */
 .dialog.draw-choice { width: min(440px, calc(100vw - 24px)); }

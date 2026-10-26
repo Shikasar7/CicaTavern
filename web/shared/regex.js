@@ -36,11 +36,23 @@ export function regexFromString(input) {
 
 const escapeRegex = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
+/**
+ * What a script changes: 'display', 'prompt' or 'both'. As SillyTavern reads the flags: markdownOnly the
+ * display, promptOnly the prompt, both ticked both; neither edits the message itself, which here is both too.
+ */
+export const effectOf = script => (script.markdownOnly && !script.promptOnly ? 'display' : script.promptOnly && !script.markdownOnly ? 'prompt' : 'both')
+
+/** The flags for an effect; a script's own flags when its effect stays (both ticked stays so, for SillyTavern). */
+export function effectFlags(effect, script = null) {
+  if (script && effectOf(script) === effect) return { markdownOnly: script.markdownOnly === true, promptOnly: script.promptOnly === true }
+  return { markdownOnly: effect === 'display', promptOnly: effect === 'prompt' }
+}
+
 function appliesTo(script, { placement, target, depth }) {
   if (script.disabled || !script.placement.includes(placement)) return false
-  // markdownOnly → display only; promptOnly → prompt only; neither → both.
-  if (target === 'display' && script.promptOnly) return false
-  if (target === 'prompt' && script.markdownOnly) return false
+  const effect = effectOf(script)
+  if (target === 'display' && effect === 'prompt') return false
+  if (target === 'prompt' && effect === 'display') return false
   if (typeof depth === 'number') {
     if (script.minDepth !== null && script.minDepth >= 0 && depth < script.minDepth) return false
     if (script.maxDepth !== null && script.maxDepth >= 0 && depth > script.maxDepth) return false
@@ -68,8 +80,10 @@ export function depthWindow(scripts, { placement, target }) {
  * @param options.target - 'display' or 'prompt'.
  * @param options.depth - 0 for the latest message, counting up towards the start.
  * @param options.macros - text => text, applied to replace strings and (per substituteRegex) patterns.
+ * @param options.replace - (text, regex, replacer) => text, String.prototype.replace by default; the server's runs
+ *   a card's pattern with a bound on its time (server/regex-guard.mjs).
  */
-export function applyScripts(text, scripts, { placement, target, depth, macros = t => t }) {
+export function applyScripts(text, scripts, { placement, target, depth, macros = t => t, replace = (from, regex, replacer) => from.replace(regex, replacer) }) {
   let out = String(text ?? '')
   for (const script of scripts) {
     if (!appliesTo(script, { placement, target, depth })) continue
@@ -79,14 +93,17 @@ export function applyScripts(text, scripts, { placement, target, depth, macros =
     const regex = regexFromString(source)
     if (!regex) continue
     const trims = script.trimStrings.map(t => macros(t))
-    out = out.replace(regex, (...args) => {
+    out = replace(out, regex, (...args) => {
       const hasNamed = typeof args.at(-1) === 'object' && args.at(-1) !== null
       const groups = args.slice(1, hasNamed ? -3 : -2)
       const named = hasNamed ? args.at(-1) : {}
       const trim = value => trims.reduce((acc, t) => acc.split(t).join(''), value ?? '')
+      // As SillyTavern reads it: {{match}} is $0 (the whole match), then one pass over $n and $<name>, so what a match
+      // brings in ("it costs $10") is never read for them again. A group that is missing or empty gives ''.
+      const values = [args[0], ...groups]
       const replaced = script.replaceString
-        .replace(/\{\{match\}\}/gi, () => trim(args[0]))
-        .replace(/\$(\d{1,2})|\$<([^>]+)>/g, (whole, index, name) => (name !== undefined ? trim(named[name]) : trim(groups[Number(index) - 1])))
+        .replace(/\{\{match\}\}/gi, () => '$0')
+        .replace(/\$(\d+)|\$<([^>]+)>/g, (whole, index, name) => trim((name !== undefined ? named[name] : values[Number(index)]) || ''))
       return macros(replaced)
     })
   }

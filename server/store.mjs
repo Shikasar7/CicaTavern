@@ -1,5 +1,6 @@
 // Plain JSON-file storage under one data root. Every write goes through a
 // temp file + rename so a crash mid-write never leaves a half-written JSON.
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
@@ -39,11 +40,61 @@ async function readJson(file, fallback) {
   }
 }
 
-async function writeJson(file, value) {
-  await mkdir(path.dirname(file), { recursive: true })
-  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
-  await writeFile(tmp, JSON.stringify(value, null, 1), 'utf8')
-  await rename(tmp, file)
+// Writes to one file, one after another: two at once would race each other's rename.
+const writing = new Map() // file → its latest write
+
+function writeJson(file, value) {
+  const text = JSON.stringify(value, null, 1)
+  const write = (writing.get(file) ?? Promise.resolve()).catch(() => {}).then(async () => {
+    await mkdir(path.dirname(file), { recursive: true })
+    // A name of its own: two writes in one millisecond once shared one and mixed their bytes.
+    const tmp = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`
+    try {
+      await writeFile(tmp, text, 'utf8')
+      await renameOver(tmp, file)
+    } catch (error) {
+      await rm(tmp, { force: true }).catch(() => {})
+      throw error
+    }
+  })
+  writing.set(file, write)
+  write.finally(() => {
+    if (writing.get(file) === write) writing.delete(file)
+  }).catch(() => {})
+  return write
+}
+
+// Windows refuses a rename onto a file someone is reading (EPERM, EACCES, EBUSY): tried again for a moment.
+const RENAME_REFUSED = new Set(['EPERM', 'EACCES', 'EBUSY'])
+
+async function renameOver(from, to) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await rename(from, to)
+    } catch (error) {
+      if (attempt >= 8 || !RENAME_REFUSED.has(error.code)) throw error
+      await new Promise(resolve => setTimeout(resolve, 20 * attempt))
+    }
+  }
+}
+
+/**
+ * Read-change-save, one at a time per key: two at once, each saving what it read, lost the other's change.
+ * A section already holding the key (a helper it calls) goes straight on, so nesting never waits on itself.
+ */
+function createLocks() {
+  const tails = new Map() // key → the latest section's promise
+  const held = new AsyncLocalStorage() // the keys the running code holds
+  return function locked(key, fn) {
+    const holding = held.getStore()
+    if (holding?.has(key)) return fn()
+    const run = (tails.get(key) ?? Promise.resolve()).catch(() => {}).then(() => held.run(new Set([...(holding ?? []), key]), fn))
+    tails.set(key, run)
+    run.finally(() => {
+      if (tails.get(key) === run) tails.delete(key)
+    }).catch(() => {})
+    return run
+  }
 }
 
 async function listJson(dir) {
@@ -95,6 +146,9 @@ const cleanIds = ids => [...new Set((Array.isArray(ids) ? ids : []).filter(id =>
 
 /** Variables as settings keep them: a plain object. */
 const cleanVars = value => (value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {})
+// The app-wide variables, as JSON, at most: card scripts and templates write them, settings.json is read on most
+// requests, and they go into every template's sandbox (26 MB of them once broke every other card's templates).
+const GLOBAL_VARS_MAX = 1_000_000
 
 /** The 隐私与网络 notice's version: settings.privacyNotice below it means not seen yet. */
 export const PRIVACY_NOTICE = 1
@@ -124,9 +178,14 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
   const bookFile = id => path.join(dirs.books, `${checkId(id)}.json`)
   const chatFile = id => path.join(dirs.chats, `${checkId(id)}.json`)
   const presetFile = id => path.join(dirs.presets, `${checkId(id)}.json`)
+  const locked = createLocks()
 
   return {
     dirs,
+    /** Run `fn` (its getChat … saveChat of chat `id`) with no other such section on that chat meanwhile. */
+    withChat(id, fn) {
+      return locked(`chat:${id}`, fn)
+    },
     async init() {
       for (const dir of Object.values(dirs)) await mkdir(dir, { recursive: true })
     },
@@ -135,28 +194,37 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
       const saved = { ...DEFAULT_SETTINGS, ...(await readJson(path.join(root, 'settings.json'), {})) }
       return lockSettings({ ...saved, basic: cleanBasic(saved.basic), appearance: cleanAppearance(saved.appearance), globalBookIds: cleanIds(saved.globalBookIds), globalVars: cleanVars(saved.globalVars) })
     },
-    async saveSettings(patch, { backdrop } = {}) {
-      const current = await this.getSettings()
-      const next = { ...current }
-      for (const key of Object.keys(DEFAULT_SETTINGS)) {
-        if (patch[key] !== undefined) next[key] = patch[key]
-      }
-      if (next.listen !== 'lan') next.listen = 'local'
-      if (next.subscription !== 'off') next.subscription = 'on'
-      next.proxy = cleanProxySetting(next.proxy)
-      if (!['often', 'rare', 'off'].includes(next.dynamicStrip)) next.dynamicStrip = 'rare'
-      if (!['auto', 'zh', 'en'].includes(next.uiLanguage)) next.uiLanguage = 'auto'
-      next.webFonts = next.webFonts !== false
-      next.cdnLibraries = next.cdnLibraries !== false
-      next.privacyNotice = Math.max(0, Math.floor(Number(next.privacyNotice) || 0))
-      next.basic = cleanBasic(next.basic)
-      next.globalBookIds = cleanIds(next.globalBookIds)
-      next.globalVars = cleanVars(next.globalVars)
-      // The picture's file name only changes with the picture (setBackdrop below).
-      next.appearance = cleanAppearance({ ...current.appearance, ...next.appearance, backdrop: backdrop ?? current.appearance.backdrop })
-      const saved = lockSettings(next)
-      await writeJson(path.join(root, 'settings.json'), saved)
-      return saved
+    /** Settings worked out from the saved ones and saved, with no other save in between (template global writes). */
+    updateSettings(change, options) {
+      return locked('settings', async () => this.saveSettings(await change(await this.getSettings()), options))
+    },
+    // One at a time: each starts from what the last one saved.
+    saveSettings(patch, { backdrop } = {}) {
+      return locked('settings', async () => {
+        // Only a save that writes them: settings already that big still save everything else.
+        if (patch.globalVars !== undefined && JSON.stringify(cleanVars(patch.globalVars)).length > GLOBAL_VARS_MAX) throw httpError(400, '全局变量太大')
+        const current = await this.getSettings()
+        const next = { ...current }
+        for (const key of Object.keys(DEFAULT_SETTINGS)) {
+          if (patch[key] !== undefined) next[key] = patch[key]
+        }
+        if (next.listen !== 'lan') next.listen = 'local'
+        if (next.subscription !== 'off') next.subscription = 'on'
+        next.proxy = cleanProxySetting(next.proxy)
+        if (!['often', 'rare', 'off'].includes(next.dynamicStrip)) next.dynamicStrip = 'rare'
+        if (!['auto', 'zh', 'en'].includes(next.uiLanguage)) next.uiLanguage = 'auto'
+        next.webFonts = next.webFonts !== false
+        next.cdnLibraries = next.cdnLibraries !== false
+        next.privacyNotice = Math.max(0, Math.floor(Number(next.privacyNotice) || 0))
+        next.basic = cleanBasic(next.basic)
+        next.globalBookIds = cleanIds(next.globalBookIds)
+        next.globalVars = cleanVars(next.globalVars)
+        // The picture's file name only changes with the picture (setBackdrop below).
+        next.appearance = cleanAppearance({ ...current.appearance, ...next.appearance, backdrop: backdrop ?? current.appearance.backdrop })
+        const saved = lockSettings(next)
+        await writeJson(path.join(root, 'settings.json'), saved)
+        return saved
+      })
     },
     async ensureAccessToken() {
       const file = path.join(root, 'access.json')
@@ -255,6 +323,15 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
     async saveRegex(scripts) {
       await writeJson(path.join(root, 'regex.json'), { scripts })
       return scripts
+    },
+    /** 屏蔽词 for every chat (blockwords.mjs, which cleans them before they are saved). */
+    async getBlockWords() {
+      const value = await readJson(path.join(root, 'blockwords.json'), {})
+      return Array.isArray(value.words) ? value.words : []
+    },
+    async saveBlockWords(words) {
+      await writeJson(path.join(root, 'blockwords.json'), { words })
+      return words
     },
 
     async listChats(cardId) {

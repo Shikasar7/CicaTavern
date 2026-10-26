@@ -102,6 +102,13 @@ test('scenes: drawn once per place and reused, one at a time per card; edited by
   assert.equal(again.drawn, false)
   assert.equal(fake.seen.filter(r => r.url === '/v1/images/generations').length, drawsBefore)
 
+  // A place with nothing to tell it by (a card's 地点：？？？) is none: no picture, no scene it could never find again.
+  for (const place of ['???', '？？？', '……', ' - ']) {
+    const unknown = await call(`/api/cards/${id}/scenes/draw`, { method: 'POST', body: { place } })
+    assert.equal(unknown.status, 400, place)
+  }
+  assert.equal(fake.seen.filter(r => r.url === '/v1/images/generations').length, drawsBefore)
+
   // Two places at once: the second waits its turn.
   const [a, b] = await Promise.all([
     call(`/api/cards/${id}/scenes/draw`, { method: 'POST', body: { place: '码头' } }),

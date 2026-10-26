@@ -14,6 +14,31 @@ import { BASIC_ID } from './basic.mjs'
 export const PACKAGE_MAGIC = 'AGENT-TAVERN-CHAT 1\n'
 export const PACKAGE_FORMAT = 'agent-tavern-chat'
 const FILE = /^[\w-]{1,64}\.(png|jpg|jpeg|webp)$/
+const NODE_ID = /^[\w-]{1,64}$/
+
+/**
+ * A package's nodes as a tree this app can walk, or null: each id its own key, the root without a parent,
+ * every other parent there, and every node reaching the root (a loop kept the chat list from ever loading).
+ */
+function cleanTree(nodes, now) {
+  if (!nodes || typeof nodes !== 'object' || Array.isArray(nodes)) return null
+  const tree = {}
+  for (const [id, node] of Object.entries(nodes)) {
+    if (!NODE_ID.test(id) || !node || typeof node !== 'object' || Array.isArray(node) || (node.id ?? id) !== id) return null
+    tree[id] = { ...node, id, createdAt: typeof node.createdAt === 'string' ? node.createdAt : now }
+  }
+  if (!tree.root || tree.root.parent) return null
+  const reaches = new Set(['root'])
+  for (const start of Object.values(tree)) {
+    const trail = new Set()
+    for (let node = start; !reaches.has(node.id); node = tree[node.parent]) {
+      if (trail.has(node.id) || typeof node.parent !== 'string' || !tree[node.parent]) return null
+      trail.add(node.id)
+    }
+    for (const id of trail) reaches.add(id)
+  }
+  return tree
+}
 
 const mediaDir = (store, chatId) => path.join(store.dirs.root, 'media', chatId)
 const picturesOf = chat => [...new Set(Object.values(chat.nodes ?? {}).flatMap(node => node.media?.images?.map(image => image.file) ?? []))].filter(file => FILE.test(file))
@@ -62,8 +87,11 @@ export async function importChatPackage(store, { header, cardId = '' }) {
   const providers = await store.getProviders()
   const model = typeof source.model === 'string' && isProviderRef(source.model) && providers.some(p => source.model.startsWith(`${p.id}/`)) ? source.model : null
   const now = new Date().toISOString()
+  const nodes = cleanTree(structuredClone(source.nodes), now)
+  if (!nodes) throw httpError(400, msg`对话包里的对话树是坏的，导入不了`)
   const chat = {
     ...structuredClone(source),
+    nodes,
     id: newId(),
     cardId: card.id,
     presetId: preset?.id ?? null,

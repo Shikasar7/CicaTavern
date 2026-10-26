@@ -240,6 +240,12 @@ test('provider compaction: summary from the rebuilt history, next turn starts fr
   assert.match(summaryRequest.messages.at(-1).content, /暂停扮演/)
   assert.match(activePath(after).at(-1).compaction.summary, /桂花拿铁/)
 
+  // A side request on the compacted reply (an image prompt): the summary and last turns stand in for the history.
+  await engine.askInContext(chat.id, activePath(after).at(-1).id, '写一句配图提示')
+  const side = fake.requests.at(-1).body
+  assert.equal(side.messages.length, 2, 'the system prompt and one message')
+  assert.match(side.messages[1].content, /<前情提要>[\s\S]*桂花拿铁[\s\S]*再来块蛋糕[\s\S]*写一句配图提示$/)
+
   await turn('结账')
   const next = fake.requests.at(-1).body
   assert.equal(next.messages.length, 2, 'only the system prompt and the new message')
@@ -284,6 +290,18 @@ test('Anthropic 1-hour cache: ttl on both breakpoints, resent without it when a 
   assert.deepEqual(retried.body.system[0].cache_control, { type: 'ephemeral' })
   assert.match(activePath(chat).at(-1).text, /第 2 次回复/)
   assert.equal(normalizeProvider({ ...provider, cacheTtl: 'forever' }, provider).cacheTtl, '5m')
+})
+
+test('an empty system prompt is left out in every protocol (Anthropic refuses an empty text block)', async t => {
+  const fake = await fakeProvider(t)
+  const sent = async (api, suffix) => {
+    const provider = normalizeProvider({ name: 'Fake', api, baseURL: fake.baseURL + suffix, apiKey: KEY, models: [{ id: 'm1' }] })
+    await complete(provider, 'm1', { system: ' ', messages: [{ role: 'user', content: '你好' }] })
+    return fake.requests.at(-1).body
+  }
+  assert.equal('system' in (await sent('anthropic-messages', '')), false)
+  assert.equal('instructions' in (await sent('openai-responses', '/v1')), false)
+  assert.deepEqual((await sent('openai-completions', '/v1')).messages.map(m => m.role), ['user'])
 })
 
 test('output limit: the preset max response length, capped, dropped when refused; cut-off replies are marked', async t => {

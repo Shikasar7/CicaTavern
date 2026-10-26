@@ -36,9 +36,24 @@ function stripHidden(text) {
   return out.replace(/\n{3,}/g, '\n\n').trim()
 }
 
+// 屏蔽词 (设置 → 屏蔽词) that change what is shown, with their matcher (web/shared/blockwords.js
+// blockText), handed over by app.js: it loads that file on its own, so a server started before
+// the file existed still serves the page.
+let shownWords = { words: [], block: null }
+
+export function useBlockWords(words, block) {
+  shownWords = { words, block }
+}
+
+/** Text as shown: the 屏蔽词 applied. `partial` for text still streaming. */
+export function blockShown(text, partial = false) {
+  const { words, block } = shownWords
+  return block && words.length ? block(text, words, { target: 'display', partial }) : String(text ?? '')
+}
+
 /** Text streamed so far, with finished bookkeeping blocks removed and an unfinished one hidden. */
 export function streamingText(text) {
-  return stripHidden(String(text ?? '')).replace(OPEN_HIDDEN, '').trimEnd()
+  return blockShown(stripHidden(String(text ?? '')).replace(OPEN_HIDDEN, '').trimEnd(), true)
 }
 
 export function usesStatusPlaceholder(scripts) {
@@ -54,13 +69,14 @@ export function withoutOwnStatus(scripts) {
 }
 
 /**
- * Display text of one message after the card's display regex.
+ * Display text of one message after the 屏蔽词 and the card's display regex.
  * @param node - { role, raw, text, state }.
  * @param depth - 0 for the latest message.
  * @param withStatus - append the MVU status placeholder (the latest reply only).
  */
 export function displayOf(node, { scripts, names, depth, withStatus }) {
-  let text = String(node.raw ?? node.text ?? '')
+  // Before the regex: the words come out of what was written, not out of the HTML a card's regex builds.
+  let text = blockShown(node.raw ?? node.text ?? '')
   if (node.role === 'user' && !scripts.length) return text
   // The status bar always goes after the story: models often write the placeholder first,
   // or before their variable-update block.
@@ -199,6 +215,8 @@ export function htmlFrame(body, context = null) {
   frame.className = 'card-frame'
   frame.dataset.frame = id
   frame.dataset.key = hash(body)
+  // Whose frame it is: the page keeps its localStorage under that card (compat.js storedFrameStorage).
+  if (context?.cardId) frame.dataset.card = context.cardId
   frame.setAttribute('sandbox', 'allow-scripts allow-popups allow-popups-to-escape-sandbox')
   frame.setAttribute('referrerpolicy', 'no-referrer')
   frame.setAttribute('loading', 'lazy')

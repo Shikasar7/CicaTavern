@@ -14,7 +14,8 @@ import { renderTemplate, stripTemplates, templateSession } from './template.mjs'
 import { renderPresetPrefix } from './presets.mjs'
 import { basicRules } from './basic.mjs'
 import { hasVariableMacros, replaceVariableMacros } from '../web/shared/vars.js'
-import { applyScripts, PLACEMENT } from '../web/shared/regex.js'
+import { PLACEMENT } from '../web/shared/regex.js'
+import { applyScripts } from './regex-guard.mjs'
 import { EFFECT_WORDS, FACE_WORDS } from '../web/shared/stage.js'
 
 export function replaceMacros(text, names) {
@@ -28,12 +29,18 @@ export function replaceMacros(text, names) {
       const options = body.includes('::') ? body.split('::') : body.split(',')
       return options[Math.floor(Math.random() * options.length)]?.trim() ?? ''
     })
-    .replace(/\{\{roll:?\s*(\d*)d(\d+)\}\}/gi, (_, count, sides) => {
+    .replace(/\{\{roll:?\s*(\d*)d(\d+)\}\}/gi, (whole, count, sides) => {
+      const dice = Number(count) || 1
+      const faces = Number(sides)
+      // More dice than anyone rolls is left as written: {{roll:100000000000d6}} kept the server busy for most of an hour.
+      if (dice > MAX_DICE || !Number.isSafeInteger(faces) || faces < 1) return whole
       let total = 0
-      for (let i = 0; i < (Number(count) || 1); i++) total += 1 + Math.floor(Math.random() * Number(sides))
+      for (let i = 0; i < dice; i++) total += 1 + Math.floor(Math.random() * faces)
       return String(total)
     })
 }
+
+const MAX_DICE = 1000
 
 /**
  * Render one worldbook entry against the current state: EJS in the sandbox,

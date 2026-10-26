@@ -174,8 +174,25 @@ function paragraphsOf(content) {
 
 /** Whether every `<%` in `text` is closed and the code between the tags opens no more brackets than it closes. */
 function templateClosed(text) {
-  const code = [...text.matchAll(/<%(?!%)([\s\S]*?)%>/g)].map(m => m[1]).join('\n')
-  if (/<%(?!%)/.test(text.replace(/<%(?!%)[\s\S]*?%>/g, ''))) return false
+  // The tags (not `<%%` literals) found by scanning, as /<%(?!%)[\s\S]*?%>/g matches them: that regex took
+  // quadratic time on a preset full of `<%` with no `%>`.
+  const tags = []
+  let rest = ''
+  let at = 0
+  for (let open = text.indexOf('<%'); open >= 0; ) {
+    if (text[open + 2] === '%') {
+      open = text.indexOf('<%', open + 1)
+      continue
+    }
+    const end = text.indexOf('%>', open + 2)
+    if (end < 0) break
+    tags.push(text.slice(open + 2, end))
+    rest += text.slice(at, open)
+    at = end + 2
+    open = text.indexOf('<%', at)
+  }
+  if (/<%(?!%)/.test(rest + text.slice(at))) return false
+  const code = tags.join('\n')
   const bare = code.replace(/(["'`])(?:\\.|(?!\1)[^\\])*\1/g, '')
   let depth = 0
   for (const c of bare) {
@@ -331,6 +348,23 @@ function expandFrom(source, start, ctx, inner) {
   return { text: out, end: inner ? -1 : i }
 }
 
+/**
+ * A card or persona field as its marker puts it: its templates, then its macros ({{char}} and {{user}} in a
+ * description), as SillyTavern's baseChatReplace runs them first. A field's macro inside a field is left as
+ * written (undefined), so a description naming {{description}} cannot go round.
+ */
+function cardField(text, ctx) {
+  const value = String(text ?? '')
+  if (ctx.inField) return undefined
+  if (!value) return ''
+  ctx.inField = true
+  try {
+    return expandMacros((ctx.render ?? (t => t))(value), ctx)
+  } finally {
+    ctx.inField = false
+  }
+}
+
 const WEEKDAYS = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六']
 const pad2 = n => String(n).padStart(2, '0')
 
@@ -374,13 +408,13 @@ function macroValue(body, ctx) {
     case 'lastusermessage': return ctx.lastUser ?? ''
     case 'lastcharmessage': return ctx.lastChar ?? ''
     case 'lastmessage': return ctx.lastUser ?? ctx.lastChar ?? ''
-    case 'description': return ctx.card?.description ?? ''
-    case 'personality': return ctx.card?.personality ?? ''
-    case 'scenario': return ctx.card?.scenario ?? ''
-    case 'persona': return ctx.persona?.description ?? ''
-    case 'mesexamples': return ctx.card?.mesExample ?? ''
-    case 'charprompt': return ctx.card?.systemPrompt ?? ''
-    case 'charjailbreak': return ctx.card?.postHistoryInstructions ?? ''
+    case 'description': return cardField(ctx.card?.description, ctx)
+    case 'personality': return cardField(ctx.card?.personality, ctx)
+    case 'scenario': return cardField(ctx.card?.scenario, ctx)
+    case 'persona': return cardField(ctx.persona?.description, ctx)
+    case 'mesexamples': return cardField(ctx.card?.mesExample, ctx)
+    case 'charprompt': return cardField(ctx.card?.systemPrompt, ctx)
+    case 'charjailbreak': return cardField(ctx.card?.postHistoryInstructions, ctx)
     // By hand, not toLocale*String('zh-CN'): the Android app's Node has no ICU and would answer in English.
     case 'date': return `${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日`
     case 'time': return `${pad2(now.getHours())}:${pad2(now.getMinutes())}`
@@ -395,16 +429,25 @@ function macroValue(body, ctx) {
 // ─── Assembly ───────────────────────────────────────────────────────────
 
 /** A tag opened right before the chat history and closed right after it wraps
- * history we do not inline (the SDK session carries it), so both halves go. */
+ * history we do not inline (the SDK session carries it), so the wrapper goes:
+ * the opening tag to the end of its prompt, the start of the next through the
+ * closing tag. The rest of both prompts (an output order after `</history>`)
+ * stays. @returns Map of prompt id → its content without the wrapper. */
 function historyWrapper(preset, sections) {
   const history = preset.prompts.findIndex(p => p.id === 'chatHistory')
-  if (history < 0) return new Set()
+  if (history < 0) return new Map()
   const before = preset.prompts.slice(0, history).map((p, i) => [p, i]).reverse().find(([p, i]) => p.enabled && sections[i] === 'pre')
   const after = preset.prompts.slice(history + 1).map((p, i) => [p, i + history + 1]).find(([p, i]) => p.enabled && sections[i] === 'post' && !p.absolute)
-  if (!before || !after) return new Set()
-  const opened = [...before[0].content.matchAll(/<([^\s<>/]+)>/g)].map(m => m[1]).filter(tag => !before[0].content.includes(`</${tag}>`))
-  const closes = opened.find(tag => after[0].content.includes(`</${tag}>`) && !after[0].content.includes(`<${tag}>`))
-  return closes ? new Set([before[0].id, after[0].id]) : new Set()
+  if (!before || !after) return new Map()
+  const [open, close] = [before[0].content, after[0].content]
+  const opened = [...open.matchAll(/<([^\s<>/]+)>/g)].map(m => m[1]).filter(tag => !open.includes(`</${tag}>`))
+  const tag = opened.find(tag => close.includes(`</${tag}>`) && !close.includes(`<${tag}>`))
+  if (!tag) return new Map()
+  const end = `</${tag}>`
+  return new Map([
+    [before[0].id, open.slice(0, open.lastIndexOf(`<${tag}>`))],
+    [after[0].id, close.slice(close.indexOf(end) + end.length)],
+  ])
 }
 
 /**
@@ -417,7 +460,7 @@ function historyWrapper(preset, sections) {
  */
 export function renderPresetPrefix(preset, { card, persona, names, worldBefore = '', worldAfter = '', render = text => text }) {
   const sections = sectionsOf(preset)
-  const skip = historyWrapper(preset, sections)
+  const unwrapped = historyWrapper(preset, sections)
   const vars = {}
   const ctx = { names, vars, card, persona, render }
   // Templates first, then macros, as a worldbook entry renders (prompt.mjs renderEntry).
@@ -438,7 +481,7 @@ export function renderPresetPrefix(preset, { card, persona, names, worldBefore =
   const parts = []
   let placedWorld = false
   preset.prompts.forEach((p, i) => {
-    if (!p.enabled || skip.has(p.id)) return
+    if (!p.enabled) return
     if (sections[i] === 'marker') {
       if (p.id.startsWith('worldInfo')) placedWorld = true
       const render = markers[p.id]
@@ -448,9 +491,9 @@ export function renderPresetPrefix(preset, { card, persona, names, worldBefore =
     }
     if (sections[i] !== 'pre') return
     // The card's own main prompt / post-history instructions replace the preset's, as in SillyTavern.
-    let content = p.content
+    let content = unwrapped.get(p.id) ?? p.content
     if (p.id === 'main' && card.systemPrompt.trim()) {
-      ctx.original = m(p.content)
+      ctx.original = m(content)
       content = card.systemPrompt
     }
     const text = m(content)
@@ -470,15 +513,15 @@ export function renderPresetPrefix(preset, { card, persona, names, worldBefore =
 function renderPost(preset, ctx, side) {
   const render = ctx.render ?? (text => text)
   const sections = sectionsOf(preset)
-  const skip = historyWrapper(preset, sections)
+  const unwrapped = historyWrapper(preset, sections)
   const turnMode = sentEachTurn(preset)
   const relative = []
   const injected = []
   preset.prompts.forEach((p, i) => {
-    if (!p.enabled || skip.has(p.id) || sections[i] !== 'post') return
-    let content = p.content
+    if (!p.enabled || sections[i] !== 'post') return
+    let content = unwrapped.get(p.id) ?? p.content
     if (p.id === 'jailbreak' && ctx.card.postHistoryInstructions.trim()) {
-      ctx.original = expandMacros(render(p.content), ctx).trim()
+      ctx.original = expandMacros(render(content), ctx).trim()
       content = ctx.card.postHistoryInstructions
     }
     const texts = []

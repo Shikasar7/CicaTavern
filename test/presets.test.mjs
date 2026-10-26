@@ -114,6 +114,16 @@ test('the prefix follows the preset order, expands markers and carries variables
   assert.equal(tail, '玩家输入：我推门进去')
 })
 
+test('only the wrapper around the chat history goes: what shares its prompts stays', () => {
+  const json = structuredClone(PRESET)
+  json.prompts.find(p => p.identifier === 'open').content = '保持第三人称。\n<历史>\n以下是过往记录'
+  json.prompts.find(p => p.identifier === 'close').content = '</历史>\n\n输出要求：结尾必须写<UpdateVariable>块，并附四个选项。'
+  const prefix = renderPresetPrefix(normalizePreset(json), { card: CARD, persona: PERSONA, names: NAMES })
+  assert.match(prefix.text, /保持第三人称。$/)
+  assert.doesNotMatch(prefix.text, /<历史>|过往记录/)
+  assert.equal(prefix.rules, '注意节奏\n\n输出要求：结尾必须写<UpdateVariable>块，并附四个选项。\n\n白描为主，每轮约800字。')
+})
+
 test('a prompt mixing fixed and per-turn paragraphs is split between prefix and turn', () => {
   const json = structuredClone(PRESET)
   json.prompts.find(p => p.identifier === 'style').content = '白描为主。\n\n---\n本轮骰子：{{roll:d20}}\n\n不要替玩家说话。'
@@ -192,6 +202,13 @@ test('expandMacros: nesting, vars, trim, unknown macros survive', () => {
   assert.equal(expandMacros('上\n\n{{trim}}\n下', ctx), '上下')
   assert.equal(expandMacros('{{// 注释}}{{xbgetvar::x}}', ctx), '{{xbgetvar::x}}')
   assert.match(expandMacros('{{random::甲::乙}}', ctx), /^[甲乙]$/)
+})
+
+test('a card field named by its macro comes with its own macros expanded, once', () => {
+  const card = { ...CARD, description: '{{char}}陪着{{user}}。{{description}}', scenario: '' }
+  const ctx = { names: NAMES, vars: {}, card, persona: { ...PERSONA, description: '{{user}}迷路了' } }
+  assert.equal(expandMacros('设定：{{description}}', ctx), '设定：小雨陪着旅人。{{description}}')
+  assert.equal(expandMacros('[{{persona}}][{{scenario}}]', ctx), '[旅人迷路了][]')
 })
 
 // The author's own presets (test/local-paths.mjs; skipped elsewhere).

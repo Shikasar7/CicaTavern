@@ -10,8 +10,12 @@ import { msg } from './i18n.mjs'
 import { usesMvu } from './mvu.mjs'
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+// The chunks a card lives in, the only compressed ones worth undoing; and as far as one may grow when undone
+// (a 300 KB chunk once grew to 300 MB).
+const CARD_KEYWORDS = new Set(['chara', 'ccv3'])
+const MAX_INFLATED = 64 * 1024 * 1024
 
-/** Read every text chunk of a PNG into { keyword: text }. */
+/** Read every text chunk of a PNG into { keyword: text } (of compressed ones, only a card's). */
 export function readPngText(buffer) {
   if (buffer.length < 8 || !buffer.subarray(0, 8).equals(PNG_SIGNATURE)) throw httpError(400, msg`不是 PNG 文件`)
   const texts = {}
@@ -29,17 +33,27 @@ export function readPngText(buffer) {
       if (sep <= 0) continue
       const keyword = data.toString('latin1', 0, sep)
       const compressed = data[sep + 1] === 1
+      if (compressed && !CARD_KEYWORDS.has(keyword)) continue
       let cursor = sep + 3
       cursor = data.indexOf(0, cursor) + 1 // language tag
       cursor = data.indexOf(0, cursor) + 1 // translated keyword
       if (cursor <= 0) continue
       const body = data.subarray(cursor)
-      texts[keyword] = (compressed ? inflateSync(body) : body).toString('utf8')
+      texts[keyword] = (compressed ? inflated(body) : body).toString('utf8')
     } else if (type === 'IEND') {
       break
     }
   }
   return texts
+}
+
+function inflated(body) {
+  try {
+    return inflateSync(body, { maxOutputLength: MAX_INFLATED })
+  } catch (error) {
+    if (error.code === 'ERR_BUFFER_TOO_LARGE') throw httpError(413, msg`文件太大`)
+    throw error
+  }
 }
 
 // CRC-32 as PNG chunks use it (no zlib.crc32 on the phone's Node 18).

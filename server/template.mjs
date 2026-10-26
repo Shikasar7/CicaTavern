@@ -25,11 +25,14 @@ export async function initTemplates() {
   quickjs ??= await getQuickJS()
 }
 
-const EJS = /<%[\s\S]*?%>/
+// Template tags are found by scanning for `<%` and `%>`, as the lazy /<%[\s\S]*?%>/ would match them: that regex
+// took quadratic time on text full of `<%` with no `%>` (a 256 KB EjsTemplate check held the server for 14 s).
 
 /** Whether a message or prompt text holds EJS (no decorators: those belong to worldbook entries). */
 export function hasEjs(text) {
-  return EJS.test(String(text ?? ''))
+  const source = String(text ?? '')
+  const open = source.indexOf('<%')
+  return open >= 0 && source.indexOf('%>', open + 2) >= 0
 }
 
 export function hasTemplate(text) {
@@ -38,7 +41,17 @@ export function hasTemplate(text) {
 
 /** Text with its EJS taken out: what is kept when a template fails. */
 export function stripTemplates(text) {
-  return String(text ?? '').replace(/<%[\s\S]*?%>/g, '')
+  const source = String(text ?? '')
+  let out = ''
+  let at = 0
+  for (;;) {
+    const open = source.indexOf('<%', at)
+    const close = open < 0 ? -1 : source.indexOf('%>', open + 2)
+    // A `<%` with no `%>` after it: no later one has one either.
+    if (close < 0) return out + source.slice(at)
+    out += source.slice(at, open)
+    at = close + 2
+  }
 }
 
 /**
@@ -80,7 +93,26 @@ export function decoratorsOf(text) {
  * kept as written, as ST-Prompt-Template keeps it when it runs a message.
  */
 export function escapeReasoning(text) {
-  return String(text ?? '').replace(/<(thinking|think|reasoning)>[\s\S]*?<\/\1>/gi, block => block.replace(/<%(?!%)/g, '<%%'))
+  // As /<(thinking|think|reasoning)>[\s\S]*?<\/\1>/gi would find the blocks, without its quadratic time on many
+  // openings and no closing: a tag with no closing after one opening has none after any later one either.
+  const source = String(text ?? '')
+  const unclosed = new Set()
+  const opening = /<(thinking|think|reasoning)>/gi
+  let out = ''
+  let at = 0
+  for (let found = opening.exec(source); found; found = opening.exec(source)) {
+    const name = found[1].toLowerCase()
+    if (unclosed.has(name)) continue
+    const closing = new RegExp(`</${name}>`, 'gi')
+    closing.lastIndex = opening.lastIndex
+    if (!closing.exec(source)) {
+      unclosed.add(name)
+      continue
+    }
+    out += source.slice(at, found.index) + source.slice(found.index, closing.lastIndex).replace(/<%(?!%)/g, '<%%')
+    at = opening.lastIndex = closing.lastIndex
+  }
+  return out + source.slice(at)
 }
 
 /**
@@ -91,7 +123,6 @@ export function escapeReasoning(text) {
  */
 export function compileEjs(template) {
   const code = ['let __out = "";', 'const print = (...a) => { __out += a.join(""); };']
-  const re = /<%(%|#|_|=|-)?([\s\S]*?)([-_])?%>/g
   let last = 0
   let trimNext = null
   const pushText = text => {
@@ -100,12 +131,27 @@ export function compileEjs(template) {
     trimNext = null
     if (text) code.push(`__out += ${JSON.stringify(text)};`)
   }
-  for (const match of template.matchAll(re)) {
-    const [whole, kind, body, closer] = match
-    let text = template.slice(last, match.index)
+  // Each tag as /<%(%|#|_|=|-)?([\s\S]*?)([-_])?%>/g reads it, found by scanning (that regex took quadratic time
+  // on many `<%` with no `%>`): the kind right after `<%` unless only its absence finds a `%>` (`<%%>`), the body up
+  // to the first `%>`, and the `-` or `_` just before it as the closer.
+  for (let open = template.indexOf('<%'); open >= 0; open = template.indexOf('<%', last)) {
+    const next = template[open + 2]
+    let kind = next && '%#_=-'.includes(next) ? next : undefined
+    let start = open + (kind ? 3 : 2)
+    let end = template.indexOf('%>', start)
+    if (end < 0 && kind) {
+      kind = undefined
+      start = open + 2
+      end = template.indexOf('%>', start)
+    }
+    // A `<%` with no `%>` after it: no later one has one either, and the rest is text.
+    if (end < 0) break
+    const closer = end - 1 >= start && (template[end - 1] === '-' || template[end - 1] === '_') ? template[end - 1] : undefined
+    const body = template.slice(start, closer ? end - 1 : end)
+    let text = template.slice(last, open)
     if (kind === '_') text = text.replace(/[ \t]+$/, '')
     pushText(text)
-    last = match.index + whole.length
+    last = end + 2
     if (kind === '%') {
       code.push(`__out += ${JSON.stringify(`<%${body}${closer ?? ''}%>`)};`)
     } else if (kind === '=' || kind === '-') {

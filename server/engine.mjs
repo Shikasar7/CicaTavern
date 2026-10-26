@@ -4,13 +4,14 @@
 // prefix cache hits.
 // Other model references go to an optional backend passed in as `subscription`
 // (this machine's own install: server/subscription/); without one they are refused.
-import { activePath, booksForCard, editMessage as editChatMessage, pathTo, playerOf, presetFor, scriptsOf, selectNode } from './chats.mjs'
+import { activePath, booksForCard, childrenOf, editMessage as editChatMessage, pathTo, playerOf, presetFor, scriptsOf, selectNode } from './chats.mjs'
 import { hasPrefixRules, renderPresetTail } from './presets.mjs'
 import { buildTurnPrompt, chatTemplates, everyTurnReminder, renderEntry, replaceMacros, templateText, webSearchNote } from './prompt.mjs'
 import { applyStateUpdates, applyWrites, displayText, writeLabels } from './state.mjs'
 import { httpError, newId } from './store.mjs'
 import { dynamicEntries, inPrefix, isConstant, isInitvar, isPreprocessing, triggeredEntries } from './worldbook.mjs'
-import { applyScripts, depthWindow, PLACEMENT } from '../web/shared/regex.js'
+import { depthWindow, PLACEMENT } from '../web/shared/regex.js'
+import { applyScripts } from './regex-guard.mjs'
 import { replaceVariableMacros } from '../web/shared/vars.js'
 import { decoratorsOf, hasEjs, hasTemplate, stripTemplates, templateSession } from './template.mjs'
 import { accumulatedDynamic, compactThreshold, dynamicMemory, planDynamic, stripDynamicText } from './dynamic.mjs'
@@ -20,6 +21,8 @@ import { extractSummary, MIN_TURNS, recapBlock, recentExchanges, storyPath, stor
 import { msg } from './i18n.mjs'
 import { extractUpdate, fillInstruction, fillRequest, hasUpdateBlock, usesMvu } from './mvu.mjs'
 import { rawRequest } from './frames.mjs'
+import { blockRequest, blockSent } from './blockwords.mjs'
+import { blockText } from '../web/shared/blockwords.js'
 
 // The preset's per-turn block in a turn's message (buildTurnPrompt).
 const PRESET_BLOCK = /\n*<预设指令>\n[\s\S]*?\n<\/预设指令>/
@@ -47,6 +50,17 @@ function friendlyError(message, subscription) {
   if (said !== text) return said
   if (/overloaded|529/i.test(text)) return msg`模型繁忙，稍后重试。（${text.slice(0, 160)}）`
   return text
+}
+
+/** What a session from compaction point `node` opens with: its summary and the last turns of `story`, as the prompt sends them. */
+function compactionRecap(node, story, names, scripts) {
+  const macros = text => replaceMacros(text, names)
+  return recapBlock(
+    node.compaction.summary,
+    recentExchanges(story, names, ({ role, text, depth }) =>
+      applyScripts(text, scripts, { placement: role === 'user' ? PLACEMENT.USER_INPUT : PLACEMENT.AI_OUTPUT, target: 'prompt', depth: depth + 1, macros }),
+    ),
+  )
 }
 
 /**
@@ -190,14 +204,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     if (templates.session) templateErrors.unshift(...templates.session.preloadErrors())
 
     const plan = planDynamic({ rendered: resolve(renderedDynamic), ...dynamicMemory(path), forceFull })
-    const recap = newSession
-      ? recapBlock(
-          parent.compaction.summary,
-          recentExchanges(story, names, ({ role, text, depth }) =>
-            applyScripts(text, scripts, { placement: role === 'user' ? PLACEMENT.USER_INPUT : PLACEMENT.AI_OUTPUT, target: 'prompt', depth: depth + 1, macros }),
-          ),
-        )
-      : ''
+    const recap = newSession ? compactionRecap(parent, story, names, scripts) : ''
     const prompt = buildTurnPrompt({
       names,
       opening,
@@ -432,12 +439,15 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     return { ...newer, tokens }
   }
 
-  /** One API completion with the 思考 / 努力程度 settings; provider failures become readable 502s. */
+  /**
+   * One API completion with the 思考 / 努力程度 settings; provider failures become readable 502s.
+   * Every request to a provider passes here, so the 屏蔽词 are applied here, last.
+   */
   async function generateApi(target, request, signal, onText) {
-    const { thinking, effort } = await store.getSettings()
+    const [{ thinking, effort }, words] = await Promise.all([store.getSettings(), store.getBlockWords()])
     let result
     try {
-      result = await complete(target.provider, target.modelId, { ...request, reasoning: { thinking, effort }, signal, onDelta: onText }, { proxy: isolation.proxy })
+      result = await complete(target.provider, target.modelId, { ...blockRequest(request, words), reasoning: { thinking, effort }, signal, onDelta: onText }, { proxy: isolation.proxy })
     } catch (error) {
       if (signal.aborted || error.status) throw error
       throw httpError(502, providerError(target.provider, error))
@@ -537,83 +547,87 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         const cap = await replyCap(chat, target.provider)
         outcome = await generateApi(target, { system: chat.systemPrompt, messages: [...history, { role: 'user', content: prepared.prompt }], ...cap, webSearch }, abortController.signal, onText)
       } else {
-        outcome = await subscription.generate(prepared.prompt, run, { onText, onRate: info => emit({ type: 'rate_limit', info }) })
+        // The turn's message as the session will hold it: the 屏蔽词 applied (the system prompt in beforeTurn).
+        const sent = blockSent(prepared.prompt, await store.getBlockWords())
+        outcome = await subscription.generate(sent, run, { onText, onRate: info => emit({ type: 'rate_limit', info }) })
         if (!outcome.sdk) throw httpError(502, msg`模型没有返回正文`)
       }
       const reply = outcome.reply
       if (!reply.trim()) throw httpError(502, msg`模型没有返回正文`)
 
-      // Re-read: another request may have changed selection meanwhile (not the tree).
-      const fresh = await store.getChat(chatId)
-      const now = new Date().toISOString()
-      let globalWrites = []
-      if (!userNode) {
-        userNode = {
+      // Re-read and saved with no other change to the chat in between (a picture drawn, the card's variables):
+      // what came meanwhile stays.
+      return await store.withChat(chatId, async () => {
+        const fresh = await store.getChat(chatId)
+        const now = new Date().toISOString()
+        let globalWrites = []
+        if (!userNode) {
+          userNode = {
+            id: newId(),
+            parent: parent.id,
+            role: 'user',
+            text: prepared.input ?? text,
+            prompt: prepared.prompt,
+            injected: prepared.injected,
+            injectedTitles: prepared.injectedTitles,
+            templateErrors: prepared.templateErrors ?? [],
+            // What the turn's templates wrote to the chat state: a regenerate plays it back, never runs it twice.
+            ...(prepared.templateWrites?.length ? { templateWrites: prepared.templateWrites } : {}),
+            ...(prepared.dynamicState ? { dynamic: prepared.dynamicState } : {}),
+            sel: null,
+            createdAt: now,
+          }
+          fresh.nodes[userNode.id] = userNode
+          // Chat-wide and app-wide variables are outside the tree: written once, when the turn is first taken.
+          if (prepared.localWrites?.length) fresh.frameVars = applyWrites(fresh.frameVars ?? {}, prepared.localWrites)
+          globalWrites = prepared.globalWrites ?? []
+        }
+        const turnWrites = userNode.templateWrites ?? []
+        const updated = applyStateUpdates(applyWrites(parent.state, turnWrites), reply)
+        // The reply's own templates run once and the rendered text is what is kept, shown and
+        // sent back later; what they write lands after the reply's own update blocks.
+        const evaluated = hasEjs(reply) ? await evaluateReply(fresh, userNode, reply, updated.state) : null
+        const replyText = evaluated?.text ?? reply
+        if (evaluated?.writes.local.length) fresh.frameVars = applyWrites(fresh.frameVars ?? {}, evaluated.writes.local)
+        if (evaluated) globalWrites = [...globalWrites, ...evaluated.writes.global]
+        const node = {
           id: newId(),
-          parent: parent.id,
-          role: 'user',
-          text: prepared.input ?? text,
-          prompt: prepared.prompt,
-          injected: prepared.injected,
-          injectedTitles: prepared.injectedTitles,
-          templateErrors: prepared.templateErrors ?? [],
-          // What the turn's templates wrote to the chat state: a regenerate plays it back, never runs it twice.
-          ...(prepared.templateWrites?.length ? { templateWrites: prepared.templateWrites } : {}),
-          ...(prepared.dynamicState ? { dynamic: prepared.dynamicState } : {}),
+          parent: userNode.id,
+          role: 'assistant',
+          text: replyText,
+          display: displayText(replyText),
+          state: applyWrites(updated.state, evaluated?.writes.message),
+          stateChanges: [...new Set([...writeLabels(turnWrites), ...updated.changes, ...writeLabels(evaluated?.writes.message)])],
+          ...(evaluated?.writes.message.length ? { templateWrites: evaluated.writes.message } : {}),
+          ...(evaluated?.errors.length ? { templateErrors: evaluated.errors } : {}),
+          sdk: outcome.sdk ?? null,
+          ...(outcome.api ? { api: outcome.api } : {}),
+          ...(outcome.search ? { search: outcome.search } : {}),
+          model: outcome.model,
+          usage: outcome.tokens,
+          timing: { totalMs: Date.now() - started, firstTokenMs: firstToken || null, forked: fork, ...(target.api ? { api: true } : {}) },
           sel: null,
           createdAt: now,
         }
-        fresh.nodes[userNode.id] = userNode
-        // Chat-wide and app-wide variables are outside the tree: written once, when the turn is first taken.
-        if (prepared.localWrites?.length) fresh.frameVars = applyWrites(fresh.frameVars ?? {}, prepared.localWrites)
-        globalWrites = prepared.globalWrites ?? []
-      }
-      const turnWrites = userNode.templateWrites ?? []
-      const updated = applyStateUpdates(applyWrites(parent.state, turnWrites), reply)
-      // The reply's own templates run once and the rendered text is what is kept, shown and
-      // sent back later; what they write lands after the reply's own update blocks.
-      const evaluated = hasEjs(reply) ? await evaluateReply(fresh, userNode, reply, updated.state) : null
-      const replyText = evaluated?.text ?? reply
-      if (evaluated?.writes.local.length) fresh.frameVars = applyWrites(fresh.frameVars ?? {}, evaluated.writes.local)
-      if (evaluated) globalWrites = [...globalWrites, ...evaluated.writes.global]
-      const node = {
-        id: newId(),
-        parent: userNode.id,
-        role: 'assistant',
-        text: replyText,
-        display: displayText(replyText),
-        state: applyWrites(updated.state, evaluated?.writes.message),
-        stateChanges: [...new Set([...writeLabels(turnWrites), ...updated.changes, ...writeLabels(evaluated?.writes.message)])],
-        ...(evaluated?.writes.message.length ? { templateWrites: evaluated.writes.message } : {}),
-        ...(evaluated?.errors.length ? { templateErrors: evaluated.errors } : {}),
-        sdk: outcome.sdk ?? null,
-        ...(outcome.api ? { api: outcome.api } : {}),
-        ...(outcome.search ? { search: outcome.search } : {}),
-        model: outcome.model,
-        usage: outcome.tokens,
-        timing: { totalMs: Date.now() - started, firstTokenMs: firstToken || null, forked: fork, ...(target.api ? { api: true } : {}) },
-        sel: null,
-        createdAt: now,
-      }
-      fresh.nodes[node.id] = node
-      // Also lifts a rollback on the parent: the new turn is now the visible branch.
-      selectNode(fresh, node.id)
-      if (!target.api) subscription.afterTurn(fresh, outcome)
-      // The session holds the reply as the model wrote it: it gets the rendered one, before
-      // the next turn reads it back (the same rewrite an edit makes, so no cache is lost).
-      if (!target.api && replyText !== reply && node.sdk) {
-        const rewritten = await subscription.editTranscripts({ chat: fresh, node, edit: { node, before: reply }, path: activePath(fresh) })
-        if (!rewritten.sessions) delete node.historyTrim
-      }
-      if (trimmed) fresh.nodes[parent.id].historyTrim = trimmed
-      fresh.stateDirty = false
-      await store.saveChat(fresh)
-      if (globalWrites.length) {
-        const current = await store.getSettings()
-        await store.saveSettings({ globalVars: applyWrites(current.globalVars ?? {}, globalWrites) }).catch(() => {})
-      }
-      await ledger?.recordTurn(fresh, node).catch(() => {})
-      return { chat: fresh, nodeId: node.id }
+        fresh.nodes[node.id] = node
+        // Also lifts a rollback on the parent: the new turn is now the visible branch.
+        selectNode(fresh, node.id)
+        if (!target.api) subscription.afterTurn(fresh, outcome)
+        // The session holds the reply as the model wrote it: it gets the rendered one, before
+        // the next turn reads it back (the same rewrite an edit makes, so no cache is lost).
+        if (!target.api && replyText !== reply && node.sdk) {
+          const rewritten = await subscription.editTranscripts({ chat: fresh, node, edit: { node, before: reply }, path: activePath(fresh) })
+          if (!rewritten.sessions) delete node.historyTrim
+        }
+        if (trimmed) fresh.nodes[parent.id].historyTrim = trimmed
+        fresh.stateDirty = false
+        await store.saveChat(fresh)
+        if (globalWrites.length) {
+          await store.updateSettings(current => ({ globalVars: applyWrites(current.globalVars ?? {}, globalWrites) })).catch(() => {})
+        }
+        await ledger?.recordTurn(fresh, node).catch(() => {})
+        return { chat: fresh, nodeId: node.id }
+      })
     } catch (error) {
       if (resumedInPlace) await subscription.forgetTip(chatId, resumedInPlace)
       if (abortController.signal.aborted) throw httpError(499, msg`已停止生成`)
@@ -658,6 +672,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       const tip = path.at(-1)
       if (tip.role !== 'assistant' || (!tip.sdk && !tip.api && !tip.imported)) throw httpError(400, msg`还没有可以压缩的剧情`)
       if (turnsSinceCompaction(path) < MIN_TURNS) throw httpError(400, msg`上次压缩之后不到 ${MIN_TURNS} 轮，不用再压缩`)
+      // Turns folded behind a rollback would, once restored, carry on from the summary without having read it.
+      if (childrenOf(chat, tip.id).length) throw httpError(400, msg`回滚收起的回合还在这条后面：先恢复它们，或从这里接着写一轮再压缩`)
       const settings = await store.getSettings()
       const target = await compactionTarget(chat, tip, settings)
       const started = Date.now()
@@ -670,9 +686,11 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       const summary = extractSummary(used.reply)
       if (summary.length < 200) throw httpError(502, msg`模型没有写出完整的剧情存档，这次没有压缩，可以再试一次`)
       const now = new Date().toISOString()
-      const fresh = await store.getChat(chatId)
-      fresh.nodes[tip.id].compaction = { summary, turns: storyTurns(path), model: used.model, usage: used.tokens, at: now }
-      await store.saveChat(fresh)
+      const fresh = await store.withChat(chatId, async () => {
+        const latest = await store.getChat(chatId)
+        latest.nodes[tip.id].compaction = { summary, turns: storyTurns(path), model: used.model, usage: used.tokens, at: now }
+        return store.saveChat(latest)
+      })
       const record = { createdAt: now, model: used.model, usage: used.tokens, timing: { totalMs: Date.now() - started, firstTokenMs: null, forked: !target.api } }
       await ledger?.recordTurn(fresh, record).catch(() => {})
       return fresh
@@ -705,6 +723,11 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     if (!ref) return null
     const target = await targetFor(ref, settings)
     const history = await apiMessages(chat, node)
+    // A reply that carries a compaction has no history after it: its summary and last turns stand in, as for the next turn.
+    if (node.compaction) {
+      const [card, preset, globalScripts] = await Promise.all([store.getCard(chat.cardId).catch(() => null), presetFor(store, chat.presetId), store.getRegex()])
+      instruction = `${compactionRecap(node, storyPath(pathTo(chat, node.id)), chat.names, scriptsOf(card, preset, globalScripts))}\n\n${instruction}`
+    }
     const started = Date.now()
     const result = await generateApi(target, { system: chat.systemPrompt, messages: [...history, { role: 'user', content: instruction }], maxTokens }, signal ?? new AbortController().signal, onText)
     const record = { createdAt: new Date().toISOString(), model: result.model, usage: result.tokens, timing: { totalMs: Date.now() - started, firstTokenMs: null, forked: false, api: true } }
@@ -727,9 +750,11 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     const tip = path.at(-1)
     const input = String(config.user_input ?? '').trim()
     const maxTokens = 4000
+    // The card shows what it gets back: the 屏蔽词 that change what is shown apply to it.
+    const shown = async text => blockText(text, await store.getBlockWords(), { target: 'display' })
     if (!raw && tip.role === 'assistant') {
       const asked = await askInContext(chatId, tip.id, input || '继续。', { maxTokens, signal, onText })
-      if (asked) return asked.text
+      if (asked) return shown(asked.text)
     }
     const settings = await store.getSettings()
     const providers = await store.getProviders()
@@ -762,27 +787,36 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     const started = Date.now()
     const result = await generateApi(target, request, signal, onText)
     await ledger?.recordTurn(chat, { createdAt: new Date().toISOString(), model: result.model, usage: result.tokens, timing: { totalMs: Date.now() - started, firstTokenMs: null, forked: false, api: true } }).catch(() => {})
-    return result.reply
+    return shown(result.reply)
   }
 
   /**
    * Edit a message on the active path. An API history is rebuilt from the chat
    * on the next turn; a subscription session keeps its own copy, which the
    * backend updates. From that message on the next turn writes the cache again.
-   * @returns { chat, unchanged?, behindCompaction?, sessions?, missed? }
+   * @returns { chat, unchanged?, behindCompaction?, sessions?, missed?, promptMissed? }
    */
-  async function editMessage(chatId, nodeId, text) {
+  function editMessage(chatId, nodeId, text) {
+    return store.withChat(chatId, () => editMessageNow(chatId, nodeId, text))
+  }
+
+  async function editMessageNow(chatId, nodeId, text) {
     if (running.has(chatId)) throw httpError(409, msg`正在生成，先停止`)
     const chat = await store.getChat(chatId)
     // Templates in the new text run once, as a new message's do; the turn's variables stay as they were.
     const next = hasEjs(text) && chat.nodes[nodeId] ? (await renderAtNode(chat, nodeId, [String(text)], { runType: 'render_permanent' })).texts[0] : text
-    const edit = editChatMessage(chat, nodeId, next)
+    // The input as its turn sent it (buildPrompt: the card's prompt-side regex at depth 0, then macros).
+    const [card, preset, globalScripts] = await Promise.all([store.getCard(chat.cardId).catch(() => null), presetFor(store, chat.presetId), store.getRegex()])
+    const scripts = scriptsOf(card, preset, globalScripts)
+    const macros = input => replaceMacros(input, chat.names)
+    const sentInput = input => macros(applyScripts(input, scripts, { placement: PLACEMENT.USER_INPUT, target: 'prompt', depth: 0, macros }))
+    const edit = editChatMessage(chat, nodeId, next, { sentInput })
     if (edit.unchanged) return { chat, unchanged: true }
     const { sessions, missed } = subscription
       ? await subscription.editTranscripts({ chat, node: edit.node, edit, path: activePath(chat) })
       : { sessions: null, missed: false }
     await store.saveChat(chat)
-    return { chat, behindCompaction: edit.behindCompaction, sessions, missed }
+    return { chat, behindCompaction: edit.behindCompaction, sessions, missed, promptMissed: edit.promptMissed }
   }
 
   /**
@@ -803,6 +837,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       const path = activePath(chat)
       const node = path.at(-1)
       if (!node || node.id !== nodeId || node.role !== 'assistant' || node.id === 'root') throw httpError(400, msg`只能给最新一条回复补写变量`)
+      // Its text is in the summary now, and a compaction point is not edited (editMessage).
+      if (node.compaction) throw httpError(400, msg`这条回复已经压缩进剧情存档，不能再补写变量`)
       if (hasUpdateBlock(node.text)) throw httpError(400, msg`这条回复已经有变量更新了`)
       const [settings, card] = await Promise.all([store.getSettings(), store.getCard(chat.cardId)])
       const books = await booksForCard(store, card, settings, chat)
@@ -831,15 +867,17 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       }
       const block = extractUpdate(answer.text)
       if (!block) throw httpError(502, msg`模型没有写出变量更新块，可以再试一次`)
-      const fresh = await store.getChat(chatId)
-      const edit = editChatMessage(fresh, nodeId, `${fresh.nodes[nodeId].text.trimEnd()}\n\n${block}`)
-      const { state, changes } = applyStateUpdates(before, edit.node.text)
-      // The reply's own template writes land after its update blocks again.
-      edit.node.state = applyWrites(state, edit.node.templateWrites)
-      edit.node.stateChanges = [...new Set([...writeLabels(turn?.templateWrites), ...changes, ...writeLabels(edit.node.templateWrites)])]
-      edit.node.filledUpdate = { at: new Date().toISOString(), model: answer.model ?? null }
-      if (subscription) await subscription.editTranscripts({ chat: fresh, node: edit.node, edit, path: activePath(fresh) })
-      return await store.saveChat(fresh)
+      return await store.withChat(chatId, async () => {
+        const fresh = await store.getChat(chatId)
+        const edit = editChatMessage(fresh, nodeId, `${fresh.nodes[nodeId].text.trimEnd()}\n\n${block}`)
+        const { state, changes } = applyStateUpdates(before, edit.node.text)
+        // The reply's own template writes land after its update blocks again.
+        edit.node.state = applyWrites(state, edit.node.templateWrites)
+        edit.node.stateChanges = [...new Set([...writeLabels(turn?.templateWrites), ...changes, ...writeLabels(edit.node.templateWrites)])]
+        edit.node.filledUpdate = { at: new Date().toISOString(), model: answer.model ?? null }
+        if (subscription) await subscription.editTranscripts({ chat: fresh, node: edit.node, edit, path: activePath(fresh) })
+        return store.saveChat(fresh)
+      })
     } catch (error) {
       if (abortController.signal.aborted) throw httpError(499, msg`已停止补写`)
       throw error
@@ -857,7 +895,30 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     const api = isProviderRef(modelFor(chat, prepared.settings))
     const inPlace = subscription?.inPlace(chat, parent) ?? false
     if (prepared.shouldCompact && (api || inPlace)) prepared = await preparePrompt(chat, parent, String(input ?? ''), { forceFull: true, marks })
-    return { prompt: prepared.prompt, injected: prepared.injectedTitles, templateErrors: prepared.templateErrors }
+    return { prompt: blockSent(prepared.prompt, await store.getBlockWords()), injected: prepared.injectedTitles, templateErrors: prepared.templateErrors }
+  }
+
+  /**
+   * 屏蔽词 changed from `before` to `after`: what chat `chatId` sends differently
+   * on its next turn, so where its cache is written again.
+   * @returns { system, turnsAgo, subscription } — system: the frozen prefix changes (all of
+   *   it is written again); turnsAgo: the history changes from that many turns back (0 the
+   *   latest), null when it stays; subscription: the chat's model keeps its own session,
+   *   whose earlier turns keep what was sent then.
+   */
+  async function blockImpact(chatId, before, after) {
+    const [chat, settings] = await Promise.all([store.getChat(chatId), store.getSettings()])
+    const changed = text => blockSent(text, before) !== blockSent(text, after)
+    const subscription = !isProviderRef(modelFor(chat, settings))
+    const tip = activePath(chat).at(-1)
+    let turnsAgo = null
+    if (!subscription && tip?.role === 'assistant') {
+      const history = await apiMessages(chat, tip)
+      const index = history.findIndex(message => changed(message.content))
+      const turnOf = end => history.slice(0, end + 1).filter(message => message.role === 'user').length
+      if (index >= 0) turnsAgo = turnOf(history.length - 1) - turnOf(index)
+    }
+    return { system: changed(chat.systemPrompt), turnsAgo, subscription }
   }
 
   return {
@@ -867,6 +928,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     frameGenerate,
     fillUpdate,
     previewTurn,
+    blockImpact,
     editMessage,
     renderForDisplay,
     stop(chatId) {

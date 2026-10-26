@@ -783,7 +783,7 @@ export function normalizePlace(text) {
   return String(text ?? '')
     .replace(/[！-～]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xfee0))
     .toLowerCase()
-    .replace(/[\s·・•、，,。.:：;；!！?？'"“”‘’「」『』()（）[\]【】<>《》\-—–_~～|｜/]+/g, '')
+    .replace(/[\s·・•、，,。.…⋯:：;；!！?？'"“”‘’「」『』()（）[\]【】<>《》\-—–_~～|｜/]+/g, '')
 }
 
 export const placeKeys = scene => [scene?.name, ...(Array.isArray(scene?.aliases) ? scene.aliases : [])].map(normalizePlace).filter(Boolean)

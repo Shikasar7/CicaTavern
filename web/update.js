@@ -82,14 +82,15 @@ function notesView(el, markdown) {
  * @param onChange - after the state changes (the settings menu redraws its row).
  * @param isGenerating - true while the open chat is writing.
  */
-export function initUpdate({ api, el, toast, guard, onChange = () => {}, isGenerating = () => false, openNotes = null }) {
+/** @param android - the phone app's bridge with this launch's key (web/app.js), or null. */
+export function initUpdate({ api, el, toast, guard, android = null, onChange = () => {}, isGenerating = () => false, openNotes = null }) {
   let info = null
   let installs = null
   let poll = null
   let checking = false
   const pane = () => document.querySelector('#settings-form [data-section="update"]')
   // The phone app's own download: { step, received, total, error, detail } (ApkUpdate.java).
-  const phone = window.AgentTavernAndroid?.installUpdate ? window.AgentTavernAndroid : null
+  const phone = android
   let apkState = { step: 'idle' }
   if (phone) {
     try {

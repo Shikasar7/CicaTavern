@@ -13,6 +13,7 @@ import android.provider.MediaStore;
 import android.text.TextUtils;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
+import android.webkit.RenderProcessGoneDetail;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
@@ -42,6 +43,9 @@ public class MainActivity extends Activity {
     private static final long START_TIMEOUT_MS = 60_000;
 
     private final Handler main = new Handler(Looper.getMainLooper());
+    // The bridge (window.AgentTavernAndroid) is in every frame of the WebView, card frames too: each call carries
+    // this launch's key, a cookie of the app's own page that an opaque-origin card frame cannot read (web/app.js android).
+    private final String bridgeKey = newKey();
     private WebView web;
     private ValueCallback<Uri[]> pendingChooser;
     private ApkUpdate update;
@@ -52,22 +56,9 @@ public class MainActivity extends Activity {
         // chrome://inspect from a computer the phone has authorised for USB debugging; a personal build.
         WebView.setWebContentsDebuggingEnabled(true);
 
-        web = new WebView(this);
-        WebSettings settings = web.getSettings();
-        settings.setJavaScriptEnabled(true);
-        settings.setDomStorageEnabled(true);
-        settings.setMediaPlaybackRequiresUserGesture(false);
-        // The WebView scales text by the system font size, but the layout is in px:
-        // at a large font size labels overflow their buttons and dialogs. Keep the page's own sizes.
-        settings.setTextZoom(100);
-        settings.setAllowFileAccess(false);
-        settings.setAllowContentAccess(true);
-        web.setWebViewClient(new LocalOnlyClient());
-        web.setWebChromeClient(new Chooser());
         update = new ApkUpdate(this, state -> main.post(() ->
             web.evaluateJavascript("window.dispatchEvent(new CustomEvent('cicatavern-apk', { detail: " + state + " }))", null)));
-        web.addJavascriptInterface(new Bridge(), "AgentTavernAndroid");
-        setContentView(web);
+        newWebView();
         recordCrashes();
 
         // Show what went wrong last time instead of crashing again.
@@ -82,6 +73,26 @@ public class MainActivity extends Activity {
             return;
         }
         start();
+    }
+
+    /** The WebView the app shows, a fresh one in place of any before it (onRenderProcessGone). */
+    private void newWebView() {
+        WebView previous = web;
+        web = new WebView(this);
+        WebSettings settings = web.getSettings();
+        settings.setJavaScriptEnabled(true);
+        settings.setDomStorageEnabled(true);
+        settings.setMediaPlaybackRequiresUserGesture(false);
+        // The WebView scales text by the system font size, but the layout is in px:
+        // at a large font size labels overflow their buttons and dialogs. Keep the page's own sizes.
+        settings.setTextZoom(100);
+        settings.setAllowFileAccess(false);
+        settings.setAllowContentAccess(true);
+        web.setWebViewClient(new LocalOnlyClient());
+        web.setWebChromeClient(new Chooser());
+        web.addJavascriptInterface(new Bridge(), "AgentTavernAndroid");
+        setContentView(web);
+        if (previous != null) previous.destroy();
     }
 
     private void start() {
@@ -175,6 +186,7 @@ public class MainActivity extends Activity {
         CookieManager cookies = CookieManager.getInstance();
         cookies.setAcceptCookie(true);
         cookies.setCookie(base(), "tavern_key=" + NodeRuntime.token + "; Path=/");
+        cookies.setCookie(base(), "cicatavern_bridge=" + bridgeKey + "; Path=/");
         cookies.flush();
         web.loadUrl(base());
     }
@@ -188,7 +200,7 @@ public class MainActivity extends Activity {
         String body = failed ? detail + "\n\n设备：" + NodeRuntime.deviceInfo() : detail;
         String retry = NodeRuntime.isStarted()
             ? "<p>要重试，在最近任务里划掉本应用，再重新打开。</p><p>"
-            : "<p><button onclick='AgentTavernAndroid.retry()'>重试</button>";
+            : "<p><button onclick='AgentTavernAndroid.retry(\"" + bridgeKey + "\")'>重试</button>";
         String html = "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>"
             + "<style>body{font:16px/1.6 system-ui,sans-serif;margin:24px;color:#ddd;background:#111}"
             + "@media(prefers-color-scheme:light){body{color:#222;background:#fafafa}}"
@@ -196,7 +208,7 @@ public class MainActivity extends Activity {
             + "button{font:inherit;padding:8px 18px;margin-right:8px;border-radius:8px;border:1px solid #888;background:transparent;color:inherit}</style>"
             + "<h3>" + TextUtils.htmlEncode(title) + "</h3>"
             + (failed ? retry
-                + "<button onclick='AgentTavernAndroid.copy(document.querySelector(\"pre\").innerText)'>复制报错</button></p>" : "")
+                + "<button onclick='AgentTavernAndroid.copy(\"" + bridgeKey + "\", document.querySelector(\"pre\").innerText)'>复制报错</button></p>" : "")
             + "<pre>" + TextUtils.htmlEncode(body) + "</pre>";
         web.loadDataWithBaseURL(null, html, "text/html", "utf-8", null);
     }
@@ -252,8 +264,33 @@ public class MainActivity extends Activity {
         callback.onReceiveValue(picked);
     }
 
+    /**
+     * The page's renderer crashed or was killed (a card frame that used up its memory, a phone short of memory).
+     * Left to Android, the whole app goes, and the embedded server and a reply being written with it: instead a new
+     * WebView says so, and the app opens again only when asked (a page that kills it every time cannot loop).
+     */
+    private void rendererGone(boolean crashed) {
+        newWebView();
+        String why = crashed ? "页面的渲染进程崩溃了" : "页面的渲染进程被系统回收了（手机内存不够）";
+        String html = "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>"
+            + "<style>body{font:16px/1.6 system-ui,sans-serif;margin:24px;color:#ddd;background:#111}"
+            + "@media(prefers-color-scheme:light){body{color:#222;background:#fafafa}}"
+            + "button{font:inherit;padding:8px 18px;border-radius:8px;border:1px solid #888;background:transparent;color:inherit}</style>"
+            + "<h3>" + TextUtils.htmlEncode(why) + "</h3>"
+            + "<p>后台服务还在运行，对话和正在写的回复都在。可能是某张卡片的界面占满了内存。</p>"
+            + "<p><button onclick='AgentTavernAndroid.reopen(\"" + bridgeKey + "\")'>重新打开</button></p>";
+        web.loadDataWithBaseURL(null, html, "text/html", "utf-8", null);
+    }
+
     /** Only the local server opens inside the app; any other link goes to the browser. */
     private final class LocalOnlyClient extends WebViewClient {
+        @Override
+        public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+            // On the main thread already, and the dead view may not be touched again: replaced at once.
+            if (view == web) rendererGone(detail.didCrash());
+            return true;
+        }
+
         @Override
         public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
             Uri uri = request.getUrl();
@@ -303,18 +340,38 @@ public class MainActivity extends Activity {
         return types.isEmpty() ? null : types.toArray(new String[0]);
     }
 
+    private static String newKey() {
+        byte[] bytes = new byte[16];
+        new java.security.SecureRandom().nextBytes(bytes);
+        StringBuilder hex = new StringBuilder();
+        for (byte b : bytes) hex.append(String.format("%02x", b));
+        return hex.toString();
+    }
+
     /**
      * window.AgentTavernAndroid: story archives go to Downloads (web/app.js saveFile); retry and copy on error pages;
-     * installUpdate / cancelUpdate / updateState for 设置 → 更多 → 更新 (web/update.js, ApkUpdate).
+     * installUpdate / cancelUpdate / updateState for 设置 → 更多 → 更新 (web/update.js, ApkUpdate). Every call
+     * needs this launch's key (bridgeKey); without it nothing happens.
      */
     private final class Bridge {
-        @JavascriptInterface
-        public void retry() {
-            main.post(MainActivity.this::start);
+        private boolean allowed(String key) {
+            return bridgeKey.equals(key);
         }
 
         @JavascriptInterface
-        public void copy(String text) {
+        public void retry(String key) {
+            if (allowed(key)) main.post(MainActivity.this::start);
+        }
+
+        /** After the renderer went (rendererGone): the app again, the server never stopped. */
+        @JavascriptInterface
+        public void reopen(String key) {
+            if (allowed(key)) main.post(MainActivity.this::openApp);
+        }
+
+        @JavascriptInterface
+        public void copy(String key, String text) {
+            if (!allowed(key)) return;
             main.post(() -> {
                 android.content.ClipboardManager clipboard = getSystemService(android.content.ClipboardManager.class);
                 clipboard.setPrimaryClip(ClipData.newPlainText("CicaTavern 报错", text));
@@ -323,22 +380,23 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
-        public boolean installUpdate(String url, String sha256) {
-            return update.start(url, sha256);
+        public boolean installUpdate(String key, String url, String sha256) {
+            return allowed(key) && update.start(url, sha256);
         }
 
         @JavascriptInterface
-        public void cancelUpdate() {
-            update.cancel();
+        public void cancelUpdate(String key) {
+            if (allowed(key)) update.cancel();
         }
 
         @JavascriptInterface
-        public String updateState() {
-            return update.state();
+        public String updateState(String key) {
+            return allowed(key) ? update.state() : "{\"step\":\"idle\"}";
         }
 
         @JavascriptInterface
-        public boolean saveFile(String name, String text) {
+        public boolean saveFile(String key, String name, String text) {
+            if (!allowed(key)) return false;
             ContentValues values = new ContentValues();
             values.put(MediaStore.Downloads.DISPLAY_NAME, name);
             values.put(MediaStore.Downloads.MIME_TYPE, "application/json");

@@ -12,6 +12,10 @@
 import { t, zh } from '/i18n.js'
 import { cleanPath, cleanStatusSpec, rangeOf } from '/shared/status.js'
 import { statusBar } from '/status.js'
+
+// On a phone the keyboard's Enter key starts a new line (it has no Shift+Enter); the button sends.
+const touchKeyboard = matchMedia('(hover: none) and (pointer: coarse)')
+const sendsOnEnter = event => event.key === 'Enter' && !event.shiftKey && !event.isComposing && !touchKeyboard.matches
 const STEPS = [
   ['discuss', t`聊想法`],
   ['plan', t`定方案`],
@@ -112,6 +116,9 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
     shown: '', // what the main area last showed, to re-render only on change
     open: new Set(), // entries shown in full on the polish view
     editing: null, // the piece being edited by hand: entry name, "开场白N", "description" or "notes"
+    // What that editor holds ({ draftId, target, text }), kept until saved or dropped: the column is drawn again
+    // when an entry opens, a picture comes or a rewrite starts, and the typing went with it.
+    editText: null,
     noteFor: null, // the piece a rewrite note is being written for
     noteText: '',
     avatarDesc: null, // the avatar scene as the user edits it; null = the plan's
@@ -134,7 +141,7 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
       placeholder: t`也可以直接说想法，比如：想要她说话带点毒舌`,
       oninput: () => updateFoot(),
       onkeydown: event => {
-        if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+        if (sendsOnEnter(event)) {
           event.preventDefault()
           send()
         }
@@ -315,7 +322,7 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
       placeholder: t`比如：雨夜便利店里遇到的神秘女孩，氛围安静一点`,
       oninput: () => (state.idea = idea.value),
       onkeydown: event => {
-        if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+        if (sendsOnEnter(event)) {
           event.preventDefault()
           start()
         }
@@ -901,11 +908,13 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
     const body = editing
       ? (() => {
           const box = el('textarea', { class: 'piece-edit', rows: Math.min(24, Math.max(6, text.split('\n').length + 2)) })
-          box.value = text
+          const kept = state.editText
+          box.value = kept?.draftId === state.draft?.id && kept.target === target ? kept.text : text
+          box.addEventListener('input', () => (state.editText = { draftId: state.draft?.id, target, text: box.value }))
           return el('div', {}, [
             box,
             el('div', { class: 'row end' }, [
-              el('button', { type: 'button', class: 'btn ghost small', text: t`取消`, onclick: () => { state.editing = null; state.shown = ''; renderMain() } }),
+              el('button', { type: 'button', class: 'btn ghost small', text: t`取消`, onclick: () => { state.editing = null; state.editText = null; state.shown = ''; renderMain() } }),
               el('button', { type: 'button', class: 'btn small primary', text: t`保存修改`, onclick: () => saveEdit(target, box.value) }),
             ]),
           ])
@@ -926,8 +935,8 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
       ? null
       : el('div', { class: 'piece-tools' }, [
           working ? el('span', { class: 'forge-working' }, [el('span', { class: 'dots' }), t`正在重写…`]) : null,
-          el('button', { type: 'button', class: 'btn ghost small', text: t`编辑`, disabled: busy, onclick: () => { state.editing = target; state.noteFor = null; state.shown = ''; renderMain() } }),
-          noRewrite ? null : el('button', { type: 'button', class: 'btn ghost small', text: t`按意见重写`, disabled: busy, onclick: () => { state.noteFor = target; state.noteText = ''; state.editing = null; state.shown = ''; renderMain() } }),
+          el('button', { type: 'button', class: 'btn ghost small', text: t`编辑`, disabled: busy, onclick: () => { state.editing = target; state.editText = null; state.noteFor = null; state.shown = ''; renderMain() } }),
+          noRewrite ? null : el('button', { type: 'button', class: 'btn ghost small', text: t`按意见重写`, disabled: busy, onclick: () => { state.noteFor = target; state.noteText = ''; state.editing = null; state.editText = null; state.shown = ''; renderMain() } }),
         ])
     return el('div', { class: `piece${working ? ' working' : ''}` }, [el('div', { class: 'piece-head' }, [head ?? el('b', { text: title }), tools]), note, body])
   }
@@ -1076,6 +1085,7 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
     const body = target === 'description' ? { description: text } : target === 'notes' ? { creatorNotes: text } : /^开场白\d+$/.test(target) ? { greetings: state.draft.card.greetings.map((g, i) => (zh`开场白${i + 1}` === target ? text : g.text)) } : { entries: [{ name: target, content: text }] }
     const next = await api(`/api/forge/${state.draft.id}/card`, { method: 'PUT', body })
     state.editing = null
+    state.editText = null
     apply(next)
   })
 

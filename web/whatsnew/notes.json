@@ -419,6 +419,45 @@
           }
         }
       ]
+    },
+    {
+      "version": "1.9.5",
+      "date": "2026-10",
+      "items": [
+        {
+          "icon": "🚫",
+          "zh": {
+            "title": "屏蔽词",
+            "text": "「设置 → 写作 → 屏蔽词」，一份列表管所有对话。每个词可以去掉、遮成 * 或换成你自选的词，可以只改显示、只改发给模型的，或者两个都改；「更多」里有区分大小写、整词和例外。\n存下来的原文不变，关掉或删掉就恢复；同一份列表每轮发出的内容一样，照常命中缓存。下面有试一试的框，拿当前对话的最新回复看换完的样子。"
+          },
+          "en": {
+            "title": "Blocked words",
+            "text": "Settings → Writing → Blocked words: one list for every chat. Each word can be removed, masked with * or swapped for one you choose, in what is shown, what is sent to the model, or both; More has case, whole words and exceptions.\nThe stored text never changes, so switching a word off or deleting it brings it back, and the same list sends the same text every turn, so the cache still hits. A try-it box below shows the open chat's latest reply with the list applied."
+          }
+        },
+        {
+          "icon": "🛡️",
+          "zh": {
+            "title": "卡片界面权限",
+            "text": "卡片界面（回复里卡片自带的网页界面）不经你点击、自己把输入框里的内容发出去，以前不会问；现在每张卡第一次这样做时问你一次。在卡片界面里点它的按钮发送算你自己发的，不用问。\n自己调用模型、经 CicaTavern 联网也是每张卡问一次，现在「不允许」也会记住。想改的话，在角色卡菜单里点「卡片界面权限…」。"
+          },
+          "en": {
+            "title": "Card UI permissions",
+            "text": "A card's UI (the web page a card draws in its replies) could send what was in the input box without your click, and nothing asked; now each card asks the first time it does. Sending with one of its buttons is you sending, so that is never asked.\nCalling the model and going online through CicaTavern also ask once per card, and now a no is kept as well. To change an answer, open Card UI permissions… in the card's menu."
+          }
+        },
+        {
+          "icon": "🔧",
+          "zh": {
+            "title": "更稳，也更像 SillyTavern",
+            "text": "修了一批会让服务卡住或退出的情况（会无限回溯的正则、几千亿个骰子、能解压成几百 MB 的图片）和同时保存时互相覆盖、写坏文件的问题；安卓版重启后不再丢页面里存的东西（主题、卡片界面权限），网页崩了也能重新打开。\n多条 initvar、正则里的 $0 和 {{match}}、预设里的 {{description}} 这类卡片字段，现在和 SillyTavern 读法一样。"
+          },
+          "en": {
+            "title": "Steadier, and closer to SillyTavern",
+            "text": "Fixed a set of ways the server could hang or quit (runaway regex, billions of dice, an image that inflates to hundreds of MB) and saves at the same time overwriting each other or breaking a file; the Android app keeps what its page saved (the theme, card UI permissions) across restarts and reopens after its web view crashes.\nSeveral initvar entries, $0 and {{match}} in regex, and card fields such as {{description}} in presets now read as they do in SillyTavern."
+          }
+        }
+      ]
     }
   ]
 }

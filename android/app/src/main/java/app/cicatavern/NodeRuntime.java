@@ -110,7 +110,7 @@ final class NodeRuntime {
             // Node falls back to its own defaults.
         }
 
-        port = freePort();
+        port = stablePort(files);
         token = randomHex(24);
         String[] arguments = {
             "node",
@@ -161,6 +161,33 @@ final class NodeRuntime {
     private static int freePort() throws IOException {
         try (ServerSocket socket = new ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))) {
             return socket.getLocalPort();
+        }
+    }
+
+    /**
+     * The last start's port while it is free, else a new one kept for next time: the page's localStorage (theme,
+     * what was new, card permissions…) belongs to http://127.0.0.1:<port> and was empty after every cold start.
+     */
+    private static int stablePort(File files) throws IOException {
+        File saved = new File(files, "port.txt");
+        try {
+            int previous = Integer.parseInt(readFile(saved));
+            if (previous > 1024 && previous < 65536 && portFree(previous)) return previous;
+        } catch (NumberFormatException ignored) {
+            // None kept yet.
+        }
+        int fresh = freePort();
+        try (OutputStream out = new FileOutputStream(saved)) {
+            out.write(String.valueOf(fresh).getBytes(StandardCharsets.UTF_8));
+        }
+        return fresh;
+    }
+
+    private static boolean portFree(int port) {
+        try (ServerSocket socket = new ServerSocket(port, 1, InetAddress.getByName("127.0.0.1"))) {
+            return true;
+        } catch (IOException e) {
+            return false;
         }
     }
 

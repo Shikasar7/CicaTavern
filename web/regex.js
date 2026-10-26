@@ -5,16 +5,15 @@
 // global ones. Saving one that changes what is sent tells the player the next
 // turn writes the cache once more; display-only scripts never touch it.
 import { t } from '/i18n.js'
-import { applyScripts, PLACEMENT, regexFromString, scriptsInFile } from '/shared/regex.js'
+import { applyScripts, effectFlags, effectOf, PLACEMENT, regexFromString, scriptsInFile } from '/shared/regex.js'
 import { HTML_LIKE } from '/render.js'
 
 const EFFECT_LABEL = { both: t`显示和发送都改`, display: t`只改显示`, prompt: t`只改发给模型的` }
 // A reply to try a script on when the chat has none yet.
 const SAMPLE = t`她把伞收起来，抖了抖水。「进来坐吧。」` + '\n<state>{"好感": 12}</state>' // i18n-ignore: a variable block as cards write it
 
-const effectOf = script => (script.markdownOnly ? 'display' : script.promptOnly ? 'prompt' : 'both')
 /** Whether the script changes what the model reads again (so the cache is written once more). */
-const touchesPrompt = script => Boolean(script) && !script.markdownOnly && (script.placement.includes(PLACEMENT.AI_OUTPUT) || script.placement.includes(PLACEMENT.USER_INPUT))
+const touchesPrompt = script => Boolean(script) && effectOf(script) !== 'display' && (script.placement.includes(PLACEMENT.AI_OUTPUT) || script.placement.includes(PLACEMENT.USER_INPUT))
 const newId = () => (crypto.randomUUID ? crypto.randomUUID() : `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`)
 
 const ON_LABEL = { ai: t`AI 回复`, user: t`用户输入`, both: t`AI 回复和用户输入`, none: t`不作用` }
@@ -145,8 +144,7 @@ export function initRegex({ api, el, toast, guard, context, onChanged, openTalk 
         replaceString: replace.value,
         trimStrings: trims.value.split('\n').filter(Boolean),
         placement: [...(onUser.checked ? [PLACEMENT.USER_INPUT] : []), ...(onAi.checked ? [PLACEMENT.AI_OUTPUT] : []), ...keep],
-        markdownOnly: effect === 'display',
-        promptOnly: effect === 'prompt',
+        ...effectFlags(effect, script),
         minDepth: depth(minDepth),
         maxDepth: depth(maxDepth),
         substituteRegex: Number(macroMode.value),

@@ -8,7 +8,41 @@ import path from 'node:path'
 import { createApp } from '../server/http.mjs'
 import { cleanScripts } from '../server/regex.mjs'
 import { chatScripts, scriptsOf } from '../server/chats.mjs'
-import { isRegexFile, scriptsInFile } from '../web/shared/regex.js'
+import { applyScripts, effectFlags, effectOf, isRegexFile, normalizeScripts, PLACEMENT, scriptsInFile } from '../web/shared/regex.js'
+import { effectOf as forgeEffectOf, scriptOf, touchesPrompt } from '../server/forge/regex-edit.mjs'
+
+test('the display / prompt switches as SillyTavern reads them: both ticked changes both, and stays ticked when kept', () => {
+  const script = flags => normalizeScripts([{ findRegex: '/<thinking>[\\s\\S]*?<\\/thinking>/g', replaceString: '', placement: [PLACEMENT.AI_OUTPUT], ...flags }])
+  const text = 'a<thinking>想法</thinking>b'
+  const run = (scripts, target) => applyScripts(text, scripts, { placement: PLACEMENT.AI_OUTPUT, target })
+  for (const [flags, display, prompt, effect] of [
+    [{ markdownOnly: true, promptOnly: true }, 'ab', 'ab', 'both'],
+    [{ markdownOnly: true }, 'ab', text, 'display'],
+    [{ promptOnly: true }, text, 'ab', 'prompt'],
+    [{}, 'ab', 'ab', 'both'],
+  ]) {
+    const scripts = script(flags)
+    assert.equal(run(scripts, 'display'), display, JSON.stringify(flags))
+    assert.equal(run(scripts, 'prompt'), prompt, JSON.stringify(flags))
+    assert.equal(effectOf(scripts[0]), effect)
+    assert.equal(forgeEffectOf(scripts[0]), effect)
+  }
+  const both = script({ markdownOnly: true, promptOnly: true })[0]
+  assert.equal(touchesPrompt(both), true, 'it changes what the model reads')
+  assert.deepEqual(effectFlags('both', both), { markdownOnly: true, promptOnly: true }, 'kept as SillyTavern had it')
+  assert.deepEqual(effectFlags('display', both), { markdownOnly: true, promptOnly: false })
+  assert.deepEqual(effectFlags('both', script({})[0]), { markdownOnly: false, promptOnly: false })
+  const kept = scriptOf({ on: 'ai', effect: 'both', findAfter: '/x/g', replaceAfter: '' }, both)
+  assert.deepEqual([kept.markdownOnly, kept.promptOnly], [true, true], 'an assistant edit that leaves the effect keeps the switches')
+})
+
+test('replace strings as SillyTavern reads them: $0 and {{match}} the whole match, one pass, missing groups empty', () => {
+  const run = (findRegex, replaceString, text) => applyScripts(text, normalizeScripts([{ findRegex, replaceString, placement: [PLACEMENT.AI_OUTPUT] }]), { placement: PLACEMENT.AI_OUTPUT, target: 'display' })
+  assert.equal(run('/hello/g', '<b>$0</b>', 'say hello'), 'say <b>hello</b>')
+  assert.equal(run('/cost: (.+)/', '[{{match}}]', 'cost: $10'), '[cost: $10]', 'what the match brings in is not read again')
+  assert.equal(run('/(a)(x)?/', '$1-$2-$3', 'a'), 'a--')
+  assert.equal(run('/(?<who>小雨)说/', '$<who>：', '小雨说你好'), '小雨：你好')
+})
 
 const script = (name, extra = {}) => ({ id: '', scriptName: name, findRegex: `/${name}/g`, replaceString: '', placement: [2], ...extra })
 

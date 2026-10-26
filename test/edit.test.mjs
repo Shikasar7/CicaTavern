@@ -41,6 +41,26 @@ test('editMessage swaps a user input inside its recorded prompt, keeping the lor
   assert.equal(c.nodes.u1.prompt, '<lore>江湖</lore>\n<玩家输入>去酒楼</玩家输入>')
 })
 
+test('editMessage finds the input as its turn sent it (regex and macros), and the preset copy of it', () => {
+  const c = chat()
+  c.nodes.u1.text = '{{user}}去客栈'
+  c.nodes.u1.prompt = '<世界书>\n客栈在东街\n</世界书>\n\n<玩家输入>\n【你去客栈】\n</玩家输入>\n\n<预设指令>\n玩家说：【你去客栈】\n</预设指令>'
+  const sentInput = input => `【${input.replace(/\{\{user\}\}/g, '你')}】`
+  const result = editMessage(c, 'u1', '{{user}}去酒楼', { sentInput })
+  assert.equal(c.nodes.u1.prompt, '<世界书>\n客栈在东街\n</世界书>\n\n<玩家输入>\n【你去酒楼】\n</玩家输入>\n\n<预设指令>\n玩家说：【你去酒楼】\n</预设指令>')
+  assert.equal(result.promptMissed, false)
+
+  // A card regex changed since: the last input block is rewritten all the same.
+  c.nodes.u1.prompt = '<玩家输入>\n你去酒楼\n</玩家输入>'
+  editMessage(c, 'u1', '回家', { sentInput })
+  assert.equal(c.nodes.u1.prompt, '<玩家输入>\n【回家】\n</玩家输入>')
+
+  // Nowhere to be found: said, the prompt left as it was.
+  c.nodes.u1.prompt = '别的内容'
+  assert.equal(editMessage(c, 'u1', '出城', { sentInput }).promptMissed, true)
+  assert.equal(c.nodes.u1.prompt, '别的内容')
+})
+
 test('editMessage refuses the opening, empty text and messages off the active path; same text is a no-op', () => {
   const c = chat()
   assert.throws(() => editMessage(c, 'root', 'x'), /开场/)

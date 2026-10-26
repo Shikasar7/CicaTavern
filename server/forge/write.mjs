@@ -7,6 +7,7 @@ import { toBookEntry } from './configure.mjs'
 import { DEFAULT_LANGUAGE, LONG_TOKENS, TALK_TOKENS, englishCard, looseJson, plainWriting, planLanguage, section } from './prompts.mjs'
 import { msg } from '../i18n.mjs'
 import { mvuHelper, statusScripts, statusSpecOf } from './status.mjs'
+import { writablePath } from '../../web/shared/vars.js'
 
 const clip = (value, max) => (typeof value === 'string' ? value.trim().slice(0, max) : '')
 
@@ -276,7 +277,7 @@ function nested(variables, leaf) {
   const root = {}
   for (const variable of variables) {
     const keys = variable.path.split('.').map(k => k.trim()).filter(Boolean)
-    if (!keys.length) continue
+    if (!keys.length || !writablePath(keys)) continue
     let at = root
     for (const key of keys.slice(0, -1)) at = at[key] = at[key] && typeof at[key] === 'object' ? at[key] : {}
     at[keys.at(-1)] = leaf(variable)

@@ -1,10 +1,10 @@
 // Agent Tavern web UI. Plain DOM, no build step.
-import { displayOf, htmlFrame, listenForFrameHeights, nameMacros, segments, streamingText, usesStatusPlaceholder, withoutOwnStatus } from '/render.js'
+import { blockShown, displayOf, htmlFrame, listenForFrameHeights, nameMacros, segments, streamingText, useBlockWords, usesStatusPlaceholder, withoutOwnStatus } from '/render.js'
 import { choiceList, statusBar, timeBox } from '/status.js'
 import { BASIC_ID, choicesOf, otherChoices, timeBoxOf } from '/shared/basic.js'
 import { autoStatusSpec } from '/shared/status.js'
 import { BASIC_FIELDS, basicField } from '/basic-options.js'
-import { allowLibraries, broadcastInput, broadcastState, installFrameBridge, parseSlash, storedFrameStorage, storedVariables } from '/compat.js'
+import { allowLibraries, broadcastInput, broadcastRelay, broadcastState, installFrameBridge, parseSlash, storedFrameStorage, storedVariables } from '/compat.js'
 import { renderUsage } from '/usage.js'
 import { initPresets } from '/presets.js'
 import { initProviders } from '/providers.js'
@@ -21,6 +21,8 @@ import { countText, initBooks, matchesTerms, searchBox, searchTerms } from '/boo
 import { initCardEdit } from '/card-edit.js'
 import { initTalkDialog } from '/talk-dialog.js'
 import { initDrawChoice } from '/draw-choice.js'
+import { initCardPermissions } from '/card-permissions.js'
+import { createFramePermissions } from '/shared/frame-permissions.js'
 import { initVn } from '/vn.js'
 import { markSpeakers } from '/shared/vn.js'
 import { isRegexFile, scriptsInFile } from '/shared/regex.js'
@@ -42,6 +44,7 @@ const ui = {
   chat: null,
   settings: null,
   globalRegex: [], // 正则 → 全局: run before every chat's preset and card scripts
+  blockWords: [], // 屏蔽词: taken out of what is sent and shown (web/shared/blockwords.js)
   persona: null,
   // Work in progress per chat: chatId → { kind: 'turn'|'compact'|'server', text, note, echo }.
   // A turn keeps streaming when you switch chats; switching back redraws it.
@@ -252,6 +255,31 @@ const openErrorLog = guard(async () => {
     throw Object.assign(new Error(t`错误日志要重启后台服务后才能用：关掉所有窗口等一分钟，再从桌面图标打开。`), { status: 404 })
   })
   openDiagnostics({ api, el, toast, saveFile, getChat: () => ui.chat })
+})
+
+/** 屏蔽词 for what the page shows (render.js), with their matcher once there are any. */
+async function showBlockWords(words) {
+  ui.blockWords = words
+  const matcher = words.length ? await import('/shared/blockwords.js').catch(() => null) : null
+  useBlockWords(words, matcher?.blockText ?? null)
+}
+
+/** 设置 → 屏蔽词 (web/blockwords.js, loaded when first opened). */
+const openBlockWords = guard(async () => {
+  const { openBlockWords: open } = await import('/blockwords.js').catch(() => {
+    throw Object.assign(new Error(t`屏蔽词要重启后台服务后才能用：关掉所有窗口等一分钟，再从桌面图标打开。`), { status: 404 })
+  })
+  await open({
+    api, el, toast, guard,
+    getChat: () => ui.chat,
+    subscription: Boolean(ui.features.subscription),
+    onChanged: async words => {
+      await showBlockWords(words)
+      settingsMenu?.refresh()
+      if (ui.chat) renderChat()
+      renderChats()
+    },
+  })
 })
 
 // ─── Rendering helpers ──────────────────────────────────────────────────
@@ -477,7 +505,7 @@ function renderChats() {
       el('li', { class: chat.id === ui.chat?.id ? 'active' : '', onclick: () => openChat(chat.id) }, [
         el('div', { class: 'item-main' }, [
           el('div', { class: 'item-title' }, [chat.title, ui.busy.has(chat.id) ? el('span', { class: 'busy-dot', title: t`正在生成` }) : null]),
-          el('div', { class: 'item-sub', text: t`${ago(chat.updatedAt)}　${chat.turns} 轮　${chat.preview}` }),
+          el('div', { class: 'item-sub', text: t`${ago(chat.updatedAt)}　${chat.turns} 轮　${blockShown(chat.preview)}` }),
         ]),
         document.documentElement.dataset.edition === 'android'
           ? null
@@ -587,6 +615,7 @@ function openCardMenu(card, anchor) {
   const groups = cardGroups()
   popMenu(anchor, [
     { label: t`修改角色卡`, hint: t`改名字、描述、开场白和世界书，也可以说说想怎么改，让向导来改`, onClick: () => cardEditUi.open(card.id) },
+    { label: t`卡片界面权限…`, hint: t`卡片界面自己发送、调用模型、经 CicaTavern 联网：问过一次之后照你的选择来，在这里改`, onClick: () => cardPermissions.open(card) },
     '-',
     { header: t`移到分组` },
     ...groups.map(name => ({ label: name, current: card.group === name, onClick: () => organizeCard(card, { group: name }) })),
@@ -1052,7 +1081,8 @@ function replyDisplay(chat, node, isLastAssistant, depth = 0) {
   const scripts = scriptsFor(chat)
   const cardStatus = usesStatusPlaceholder(scripts)
   let shown = renderedDisplay(chat, node, displayOf(node, { scripts, names: chat.names, depth, withStatus: isLastAssistant && cardStatus }))
-  const raw = node.raw ?? node.text
+  // The time box and choice buttons are shown too: the 屏蔽词 apply to them.
+  const raw = blockShown(node.raw ?? node.text)
   let choices = !isUser && isLastAssistant ? choicesOf(raw) : []
   // A card's or preset's own options (🩶探索选项🩶：…, <w2g>, a 请选择… list) as the same buttons,
   // unless its display regex already drew them.
@@ -1231,7 +1261,9 @@ function openEditor(chat, node, article) {
           ? t`已修改。这条在剧情存档之前，模型现在读的是存档，所以只改了显示`
           : outcome.missed && subscriptionPage
             ? subscriptionPage.EDIT_MISSED
-            : t`已修改。之后每轮按改过的内容发送，下一轮从这条起重新写一次缓存`,
+            : outcome.promptMissed
+              ? t`已修改显示，但在这轮发出的内容里没找到原文，模型之后可能还会看到旧内容；可以从这条之后分支或重新生成`
+              : t`已修改。之后每轮按改过的内容发送，下一轮从这条起重新写一次缓存`,
         6000,
       )
     } finally {
@@ -1315,10 +1347,10 @@ function frameContextFor(chat, node) {
       const n = chat.path[i]
       return { message_id: i, name: n.role === 'user' ? chat.names.user : chat.names.char, role: n.role, message: n.raw ?? n.text ?? '', state: n.state ?? {} }
     }),
-    storage: storedFrameStorage(),
+    storage: storedFrameStorage(chat.cardId),
     // Direct API calls: this app's own address is never relayed; the addresses allowed for this card go through it at once.
     appOrigin: location.origin,
-    relay: relayOrigins(chat.cardId),
+    relay: framePermissions.allowedOrigins(chat.cardId),
     // A chat still on its opening can switch to another of the card's (a welcome page's swipe).
     openings: last === 0 ? card?.greetings ?? 0 : 0,
     input: $('input').value,
@@ -1348,17 +1380,26 @@ let lastFrameSend = 0
 /**
  * A card asked to send what is in the input box: once per few seconds, never
  * mid-generation. A slash command it typed there (`/sendas … <fight>`) runs as
- * a command instead of going to the model as text.
+ * a command instead of going to the model as text. Right after a click in the
+ * card's interface it is the player sending; without one, the card is asked about once.
+ * @param context - who asked (compat.js installFrameBridge): { card, clicked }.
  */
-async function frameSend() {
+async function frameSend(context = {}) {
   if (!ui.chat || ui.generating) throw new Error(t`正在生成，稍后再试`)
   const draft = $('input').value.trim()
   if (draft.startsWith('/')) {
     setDraft('', false)
-    await runFrameSlash(draft)
+    await runFrameSlash(draft, context)
     return
   }
   if (Date.now() - lastFrameSend < 3000) throw new Error(t`发送太频繁`)
+  const cardId = context.card ?? ui.chat.cardId
+  // One click, one send: a command that triggers again after it is asked about like any other.
+  const clicked = context.clicked === true
+  context.clicked = false
+  if (!clicked && !permitted(cardId, 'send', t`「${cardName(cardId)}」的卡片界面想自己把输入框里的内容发出去（你没有点它），每发一次按一轮对话计费。\n\n允许这张卡这样做吗？`)) {
+    throw new Error(t`没有允许这张卡的界面自己发送`)
+  }
   lastFrameSend = Date.now()
   await send()
 }
@@ -1368,8 +1409,9 @@ async function frameSend() {
  * the character, added to the latest reply), `/setentryfield` (this chat's copy
  * of a book entry) and the chat variables. Anything else is refused, so the card
  * takes its own way round instead of thinking it worked.
+ * @param context - who asked, for `/trigger` (frameSend).
  */
-async function runFrameSlash(command) {
+async function runFrameSlash(command, context = {}) {
   let staged = null
   let output = ''
   for (const step of parseSlash(command)) {
@@ -1378,7 +1420,7 @@ async function runFrameSlash(command) {
     else if (step.name === 'trigger') {
       if (staged !== null) setDraft(staged, false)
       staged = null
-      await frameSend()
+      await frameSend(context)
     } else if (step.name === 'echo') toast(step.text)
     else if (step.name === 'pass') output = step.text
     else if (step.name === 'sendas') await frameHandlers.createMessages({ messages: [{ role: 'assistant', text: step.text }] })
@@ -1410,53 +1452,95 @@ async function frameChatVar(step) {
   return String(vars[key])
 }
 
+// What a card's interface may do without a click (send, call the model, reach an address through the app): asked
+// once per card, the answer kept either way; changed in the card's menu (卡片界面权限).
+const framePermissions = createFramePermissions(
+  (() => {
+    try {
+      return localStorage
+    } catch {
+      return null
+    }
+  })(),
+)
+const PERMISSION_NOTE = t`\n\n不管允许还是不允许，之后都不再问；要改的话，在角色卡菜单的「卡片界面权限」里改。`
+const cardName = cardId => ui.cards.find(c => c.id === cardId)?.name ?? ''
+
+/** The player's answer for this card: asked the first time, then kept (a no as well). */
+function permitted(cardId, kind, question, origin) {
+  const decided = framePermissions.decision(cardId, kind, origin)
+  if (decided) return decided === 'allow'
+  const yes = confirm(question + PERMISSION_NOTE)
+  framePermissions.decide(cardId, kind, yes ? 'allow' : 'deny', origin)
+  return yes
+}
+
 // Model calls card frames make (generate / generateRaw): allowed per card, one at a time, at most ten a minute.
-const GENERATE_KEY = 'agent-tavern:frame-generate'
 const GENERATE_PER_MINUTE = 10
 const frameGenerations = new Map() // generation id → AbortController
 const frameGenerationTimes = []
 
-function generateAllowed(cardId) {
-  try {
-    return (JSON.parse(localStorage.getItem(GENERATE_KEY) || '[]') ?? []).includes(cardId)
-  } catch {
-    return false
-  }
-}
-
-function allowGenerate(cardId) {
-  try {
-    const list = JSON.parse(localStorage.getItem(GENERATE_KEY) || '[]') ?? []
-    if (!list.includes(cardId)) localStorage.setItem(GENERATE_KEY, JSON.stringify([...list, cardId]))
-  } catch {
-    // Private mode: asked again next time.
-  }
-}
-
 // A card frame's own API call the browser could not make, made from the app instead (server/relay.mjs): allowed
-// per card and address, asked once; a no lasts until the page is opened again.
-const RELAY_KEY = 'agent-tavern:frame-relay'
-const relayRefused = new Set() // `${cardId} ${origin}`
+// per card and address, asked once. An address on this computer or the local network is allowed as one besides
+// (the server says when an address leads there, whatever its name).
+const relayQuiet = new Set() // cards told no about an address: not asked about others until the page is opened again
 const frameFetches = new Map() // relay id → AbortController
-// This computer or the local network: allowed only when the player knows what answers there.
+// This computer or the local network by its name: warned of in the first question (the server checks every address).
 const LOCAL_HOST = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|\[?::1\]?$|\[?f[cd][0-9a-f]{2}:)/i
 
-function relayOrigins(cardId) {
+function relayTargetOf(url) {
   try {
-    const list = (JSON.parse(localStorage.getItem(RELAY_KEY) || '{}') ?? {})[cardId]
-    return Array.isArray(list) ? list : []
+    return new URL(url)
   } catch {
-    return []
+    throw new Error(t`地址不对`)
   }
 }
 
-function allowRelay(cardId, origin) {
+const relayRefusal = target => new Error(t`没有允许这张卡经 CicaTavern 连接 ${target.origin}`)
+
+/**
+ * Asks once per card and address whether the app may make a card frame's calls there, and keeps the answer; throws
+ * on a no. A card told no is not asked about other addresses until the page is opened again (one card trying
+ * address after address would keep the player answering).
+ */
+function askRelay(cardId, target) {
+  const decided = framePermissions.decision(cardId, 'relay', target.origin)
+  if (decided === 'allow') return
+  if (decided === 'deny' || relayQuiet.has(cardId)) throw relayRefusal(target)
+  const local = LOCAL_HOST.test(target.hostname)
+  const how = local ? t`会直接连过去，不走应用的网络代理；` : t`会走应用的网络代理；`
+  const warning = local ? t`\n\n这是这台电脑或局域网里的地址：只有你知道那里是什么服务时才允许。` : ''
+  if (!permitted(cardId, 'relay', t`「${cardName(cardId)}」的卡片界面要连接 ${target.origin}，浏览器直接连没有连上（多半是对方不让网页直接调用，或者网页够不着这个地址）。\n\n改由 CicaTavern 替它连接吗？${how}卡片界面发出的内容（包括它自己的 API Key）会经过 CicaTavern 发到这个地址。${warning}`, target.origin)) {
+    relayQuiet.add(cardId)
+    throw relayRefusal(target)
+  }
+  // Frames already open learn it too: their next call goes through the app at once.
+  broadcastRelay(framePermissions.allowedOrigins(cardId))
+}
+
+/** Whether the player let this card reach `target` knowing it is on this computer or the local network. */
+const relayLocalAllowed = (cardId, target) =>
+  framePermissions.decision(cardId, 'local', target.origin) === 'allow' || (LOCAL_HOST.test(target.hostname) && framePermissions.decision(cardId, 'relay', target.origin) === 'allow')
+
+/**
+ * The server found `target` on this computer or the local network, or could not tell where it leads
+ * (`unverified`: fake-IP DNS, or a name only the proxy knows): asked once more, as such, and kept.
+ */
+function askRelayLocal(cardId, target, unverified = false) {
+  const name = cardName(cardId)
+  const question = unverified
+    ? t`「${name}」的卡片界面要连接的 ${target.origin}，CicaTavern 查不到它实际指向哪里（网络代理或 TUN 模式接管了域名解析），它也可能是这台电脑或局域网里的服务。\n\n只有你信任这张卡和这个地址时才允许：允许后，这张卡能读到那里的回答。`
+    : t`「${name}」的卡片界面要连接的 ${target.origin} 是这台电脑或局域网里的地址。\n\n只有你知道那里是什么服务时才允许：允许后，这张卡能读到那个服务的回答。`
+  if (!permitted(cardId, 'local', question, target.origin)) throw relayRefusal(target)
+}
+
+/** The API's own headers, which the server sends as data (x-relay-headers) so that none of them acts on this app. */
+function relayedHeaders(res) {
   try {
-    const all = JSON.parse(localStorage.getItem(RELAY_KEY) || '{}') ?? {}
-    all[cardId] = [...new Set([...(Array.isArray(all[cardId]) ? all[cardId] : []), origin])]
-    localStorage.setItem(RELAY_KEY, JSON.stringify(all))
+    const list = JSON.parse(decodeURIComponent(res.headers.get('x-relay-headers') ?? '[]'))
+    return Array.isArray(list) ? list.filter(pair => Array.isArray(pair) && pair.length === 2 && pair.every(part => typeof part === 'string')) : []
   } catch {
-    // Private mode: asked again next time.
+    return []
   }
 }
 
@@ -1540,18 +1624,15 @@ const frameHandlers = {
     if (prefix) toast(t`卡片界面改了世界书的常驻条目（只对这个对话）：下一轮会重新写入一次缓存`)
     return entries
   },
-  async generate({ id, raw, config }, { frame, window: source }) {
+  async generate({ id, raw, config }, { frame, window: source, card }) {
     const chat = ui.chat
     if (!chat) throw new Error(t`没有打开的对话`)
     if (ui.generating) throw new Error(t`正在生成，稍后再试`)
     if (frameGenerations.size) throw new Error(t`卡片界面已经在调用模型了`)
     while (frameGenerationTimes.length && Date.now() - frameGenerationTimes[0] > 60000) frameGenerationTimes.shift()
     if (frameGenerationTimes.length >= GENERATE_PER_MINUTE) throw new Error(t`调用太频繁`)
-    if (!generateAllowed(chat.cardId)) {
-      const name = ui.cards.find(c => c.id === chat.cardId)?.name ?? ''
-      if (!confirm(t`「${name}」的卡片界面想自己调用模型（比如生成角色信息），每次都按一次对话计费。\n\n允许这张卡这样做吗？之后不再询问。`)) throw new Error(t`用户没有允许这张卡调用模型`)
-      allowGenerate(chat.cardId)
-    }
+    const cardId = card ?? chat.cardId
+    if (!permitted(cardId, 'generate', t`「${cardName(cardId)}」的卡片界面想自己调用模型（比如生成角色信息），每次都按一次对话计费。\n\n允许这张卡这样做吗？`)) throw new Error(t`用户没有允许这张卡调用模型`)
     frameGenerationTimes.push(Date.now())
     const controller = new AbortController()
     frameGenerations.set(id, controller)
@@ -1579,40 +1660,36 @@ const frameHandlers = {
   },
   // A frame's own API call that failed in the browser: made from the app once the player allows this card and
   // address, the answer streamed back as it comes (status and headers, then the body).
-  async fetch({ id, url, method, headers, body }, { frame, window: source }) {
+  async fetch({ id, url, method, headers, body }, { frame, window: source, card }) {
     const chat = ui.chat
     if (!chat) throw new Error(t`没有打开的对话`)
-    let target
-    try {
-      target = new URL(url)
-    } catch {
-      throw new Error(t`地址不对`)
-    }
-    const refused = t`没有允许这张卡经 CicaTavern 连接 ${target.origin}`
-    if (!relayOrigins(chat.cardId).includes(target.origin)) {
-      if (relayRefused.has(`${chat.cardId} ${target.origin}`)) throw new Error(refused)
-      const name = ui.cards.find(c => c.id === chat.cardId)?.name ?? ''
-      const local = LOCAL_HOST.test(target.hostname) ? t`\n\n这是这台电脑或局域网里的地址：只有你知道那里是什么服务时才允许。` : ''
-      if (!confirm(t`「${name}」的卡片界面要连接 ${target.origin}，浏览器直接连没有连上（多半是对方不让网页直接调用，或者网页够不着这个地址）。\n\n改由 CicaTavern 替它连接吗？会走应用的网络代理；卡片界面发出的内容（包括它自己的 API Key）会经过 CicaTavern 发到这个地址。之后这张卡连这个地址不再询问。${local}`)) {
-        relayRefused.add(`${chat.cardId} ${target.origin}`)
-        throw new Error(refused)
-      }
-      allowRelay(chat.cardId, target.origin)
-    }
+    const cardId = card ?? chat.cardId
+    const target = relayTargetOf(url)
+    askRelay(cardId, target)
     const controller = new AbortController()
     frameFetches.set(id, controller)
     const send = message => source?.postMessage({ agentTavernFetch: { frame, id, ...message } }, '*')
+    const encoded = body ? base64Of(new Uint8Array(body)) : null
+    const relay = local => fetch('/api/frame-fetch', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-agent-tavern': '1' },
+      body: JSON.stringify({ url: target.href, method, headers, body: encoded, local }),
+      signal: controller.signal,
+    })
+    // Not the API's answer: this app could not make the call.
+    const failure = async res => new Error((await res.json().catch(() => ({}))).error ?? t`请求失败（${res.status}）`)
     try {
-      const res = await fetch('/api/frame-fetch', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-agent-tavern': '1' },
-        body: JSON.stringify({ url: target.href, method, headers, body: body ? base64Of(new Uint8Array(body)) : null }),
-        signal: controller.signal,
-      })
-      // Not the API's answer: this app could not make the call.
-      if (!res.headers.get('x-relay')) throw new Error((await res.json().catch(() => ({}))).error ?? t`请求失败（${res.status}）`)
-      const kept = [...res.headers].filter(([name]) => !/^(x-relay|content-encoding|content-length)/i.test(name))
-      send({ head: { status: res.status, statusText: decodeURIComponent(res.headers.get('x-relay-status-text') ?? ''), headers: kept } })
+      const local = relayLocalAllowed(cardId, target)
+      let res = await relay(local)
+      if (!res.headers.get('x-relay')) {
+        const answer = await res.clone().json().catch(() => ({}))
+        // The address leads to this computer or the local network (whatever its name says): asked as such, then again.
+        if (!answer.local || local) throw await failure(res)
+        askRelayLocal(cardId, target, answer.unverified === true)
+        res = await relay(true)
+        if (!res.headers.get('x-relay')) throw await failure(res)
+      }
+      send({ head: { status: Number(res.headers.get('x-relay-status')) || 502, statusText: decodeURIComponent(res.headers.get('x-relay-status-text') ?? ''), headers: relayedHeaders(res) } })
       const reader = res.body?.getReader()
       for (;;) {
         const { value, done } = reader ? await reader.read() : { done: true }
@@ -1626,6 +1703,16 @@ const frameHandlers = {
   },
   fetchCancel({ id }) {
     frameFetches.get(id)?.abort()
+  },
+  // A frame's call other than GET / HEAD that failed in the browser may have reached the API all the same (a page
+  // is refused the answer after the API took the call), so it is not sent again: the player is asked as for any
+  // other, and the card's next call goes through the app.
+  fetchAllow({ url }, { card }) {
+    const chat = ui.chat
+    if (!chat) throw new Error(t`没有打开的对话`)
+    const target = relayTargetOf(url)
+    askRelay(card ?? chat.cardId, target)
+    return t`已允许这张卡经 CicaTavern 连接 ${target.origin}。这一次的请求可能已经送到对方，所以没有重发：再试一次就会经 CicaTavern 连接。`
   },
 }
 
@@ -1824,12 +1911,27 @@ const dropRecap = guard(async () => {
 
 const STORY_FORMAT = 'agent-tavern-story'
 
+// The phone app's bridge (android MainActivity.Bridge). The WebView puts it in every frame, card frames too, so each
+// call carries this launch's key: a cookie the app sets, which an opaque-origin card frame cannot read.
+const android = (() => {
+  const native = window.AgentTavernAndroid
+  const key = /(?:^|;\s*)cicatavern_bridge=(\w+)/.exec(document.cookie)?.[1]
+  return native && key
+    ? {
+        saveFile: (name, text) => native.saveFile(key, name, text),
+        installUpdate: (url, sha256) => native.installUpdate(key, url, sha256),
+        cancelUpdate: () => native.cancelUpdate(key),
+        updateState: () => native.updateState(key),
+      }
+    : null
+})()
+
 /** Save a JSON file, then toast `message` (one toast, so the Android note is not overwritten). */
 function saveFile(name, text, message = '') {
   const filename = name.replace(/[\\/:*?"<>|]+/g, ' ').trim()
   // The Android WebView ignores <a download>; the app saves to Downloads itself.
-  if (window.AgentTavernAndroid?.saveFile) {
-    const ok = window.AgentTavernAndroid.saveFile(filename, text)
+  if (android) {
+    const ok = android.saveFile(filename, text)
     toast(ok ? t`已保存到「下载」文件夹。${message}` : t`保存失败`, 9000)
     return
   }
@@ -2274,6 +2376,15 @@ function layOutSettings({ form, card, providers, presets }) {
       summary: () => (ui.globalRegex.length ? t`全局 ${ui.globalRegex.length} 条 · 卡和预设自带的也在这里开关` : t`导入或新建全局正则；卡和预设自带的也在这里开关`),
     },
     {
+      id: 'blockwords', title: t`屏蔽词`, look: 'shared', tag: t`所有对话`, action: () => openBlockWords(),
+      summary: () => {
+        const on = ui.blockWords.filter(word => !word.disabled)
+        if (!ui.blockWords.length) return t`把某些词去掉、遮住或换成别的词：发给模型的和显示出来的都管`
+        const count = t`${ui.blockWords.length} 个，开着 ${on.length} 个`
+        return on.length ? `${count} · ${on.slice(0, 4).map(word => word.word).join(t`、`)}${on.length > 4 ? '…' : ''}` : count
+      },
+    },
+    {
       id: 'scan', title: t`扫描与状态`, look: 'shared', tag: t`所有对话`, pane: settingsPages.scan,
       summary: () => t`扫描最近 ${value('scanDepth')} 条 · 隔 ${value('reinjectAfter')} 轮再注入 · 每 ${value('stateRefreshEvery')} 轮重发状态 · ${STRIP[value('dynamicStrip')] ?? ''}`,
     },
@@ -2361,7 +2472,7 @@ function layOutSettings({ form, card, providers, presets }) {
   settingsMenu.mount({
     panels: [
       { id: 'model', title: t`模型`, icon: MENU_ICONS.model, rows: ['model', 'providers'] },
-      { id: 'write', title: t`写作`, icon: MENU_ICONS.write, rows: ['persona', 'style', 'presets', 'regex'] },
+      { id: 'write', title: t`写作`, icon: MENU_ICONS.write, rows: ['persona', 'style', 'presets', 'regex', 'blockwords'] },
       { id: 'media', title: t`配图与朗读`, icon: MENU_ICONS.picture, rows: ['media'] },
       { id: 'books', title: t`世界书与状态`, icon: MENU_ICONS.book, rows: ['scan', 'manage-books', cardRow, 'books'] },
       { id: 'link', title: t`连接`, icon: MENU_ICONS.link, rows: ['network', 'access'] },
@@ -2572,6 +2683,9 @@ const showPrompt = guard(async () => {
 // 创作角色卡's avatar, 修改角色卡's 生成头像); nothing it picks is saved.
 const drawChoice = initDrawChoice({ api, el, guard, openSettings: section => mediaUi.openSettings(section) })
 
+// 卡片界面权限 (角色卡菜单): what a card's interface may do without a click, as answered when it asked.
+const cardPermissions = initCardPermissions({ el, permissions: framePermissions, onRelayChange: cardId => broadcastRelay(framePermissions.allowedOrigins(cardId)) })
+
 const mediaUi = initMedia({
   api,
   el,
@@ -2652,7 +2766,7 @@ const talkUi = initTalkDialog({ api, el, guard, openProviders: () => providersUi
 const regexUi = initRegex({ api, el, toast, guard, context: regexContext, onChanged: regexChanged, openTalk: talkUi.open })
 const themeUi = initTheme({ api, el, toast, guard, getSettings: () => ui.settings, setSettings: settings => { ui.settings = settings }, onReading: () => fitInput(), openTalk: talkUi.open })
 const whatsNewUi = initWhatsNew({ el })
-const updateUi = initUpdate({ api, el, toast, guard, onChange: () => settingsMenu?.refresh(), isGenerating: () => ui.generating, openNotes: () => whatsNewUi.open() })
+const updateUi = initUpdate({ api, el, toast, guard, android, onChange: () => settingsMenu?.refresh(), isGenerating: () => ui.generating, openNotes: () => whatsNewUi.open() })
 
 const forgeUi = initForge({
   api,
@@ -3030,8 +3144,15 @@ function bind() {
     fitInput()
     broadcastInput($('input').value)
   })
+  // A phone's keyboard has no Shift+Enter: there its Enter key starts a new line and the send button
+  // sends. Ctrl+Enter sends everywhere (a tablet with a keyboard).
+  const touchKeyboard = matchMedia('(hover: none) and (pointer: coarse)')
   $('input').addEventListener('keydown', event => {
-    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); send() }
+    if (event.key !== 'Enter' || event.isComposing) return
+    if (event.ctrlKey || event.metaKey || (!event.shiftKey && !touchKeyboard.matches)) {
+      event.preventDefault()
+      send()
+    }
   })
   $('stop').addEventListener('click', stop)
   $('edit-state').addEventListener('click', editState)
@@ -3113,6 +3234,7 @@ async function boot() {
   ui.launcher = Boolean(status?.launcher)
   ui.settings = await api('/api/settings').catch(() => null)
   ui.globalRegex = (await api('/api/regex').catch(() => null))?.scripts ?? []
+  await showBlockWords((await api('/api/blockwords').catch(() => null))?.words ?? [])
   // The style and the picture saved here win over the copy this browser drew at start.
   if (ui.settings) themeUi.apply()
   // The public builds say, once, what they connect to without being configured; nothing of it happens before.

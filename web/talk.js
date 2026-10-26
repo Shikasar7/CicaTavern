@@ -7,6 +7,9 @@
 import { t } from '/i18n.js'
 import { diffLines, foldSame } from '/shared/card-edit.js'
 
+// On a phone the keyboard's Enter key starts a new line (it has no Shift+Enter); the button sends.
+const touchKeyboard = matchMedia('(hover: none) and (pointer: coarse)')
+
 const MANAGE_PROVIDERS = '__manage__'
 
 /**
@@ -49,7 +52,7 @@ export function createTalk({ api, el, guard, openProviders }, spec) {
     rows: 2,
     oninput: () => updateFoot(),
     onkeydown: event => {
-      if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+      if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && !touchKeyboard.matches) {
         event.preventDefault()
         ask()
       }

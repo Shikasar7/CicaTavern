@@ -9,7 +9,7 @@ import path from 'node:path'
 import { normalizeCard } from '../server/cards.mjs'
 import { activePath, chatView, createChat } from '../server/chats.mjs'
 import { createEngine } from '../server/engine.mjs'
-import { complete, normalizeProvider, providerChoices, webSearchKind } from '../server/providers.mjs'
+import { complete, normalizeProvider, providerChoices, providerError, webSearchKind } from '../server/providers.mjs'
 import { createStore } from '../server/store.mjs'
 
 const KEY = 'sk-test-search'
@@ -124,6 +124,83 @@ test('Chat Completions: nothing added where there is no search; OpenRouter-style
   assert.equal(result.search, null)
   const online = await complete(provider, 'm:online', { system: 's', messages: [{ role: 'user', content: '外面怎么样' }] })
   assert.deepEqual(online.search, { count: 0, queries: [], sources: [{ url: 'https://news.example/snow', title: '东京降雪' }] })
+})
+
+/** A Claude relay that refuses what `refuses` names (a request's field), else answers with a short story. */
+async function strictRelay(t, refuses, { maxTokens = Infinity, name = `refuses ${refuses}` } = {}) {
+  const requests = []
+  let status = 400
+  const server = createServer(async (req, res) => {
+    let body = ''
+    for await (const chunk of req) body += chunk
+    const json = JSON.parse(body)
+    requests.push(json)
+    if (json[refuses] !== undefined) {
+      res.writeHead(status, { 'content-type': 'application/json' })
+      return res.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: `${refuses}: Extra inputs are not permitted ${'·'.repeat(300)}` } }))
+    }
+    if (json.max_tokens > maxTokens) {
+      res.writeHead(400, { 'content-type': 'application/json' })
+      return res.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: `max_tokens: ${json.max_tokens} > ${maxTokens}, which is the maximum allowed for this model` } }))
+    }
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    const send = data => res.write(`data: ${JSON.stringify(data)}\n\n`)
+    send({ type: 'message_start', message: { model: json.model, usage: { input_tokens: 10, output_tokens: 1 } } })
+    send({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } })
+    send({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: STORY } })
+    send({ type: 'content_block_stop', index: 0 })
+    send({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 20 } })
+    res.end()
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => server.close())
+  const provider = normalizeProvider({ name, api: 'anthropic-messages', baseURL: `http://127.0.0.1:${server.address().port}`, apiKey: KEY, models: [{ id: 'claude-opus-5-5' }] })
+  return { requests, provider, answerWith: code => { status = code } }
+}
+
+const asked = (extra = {}) => ({ system: 's', messages: [{ role: 'user', content: '外面怎么样' }], reasoning: { thinking: 'adaptive', effort: 'high' }, ...extra })
+
+test('a relay that refuses the search tool: the error says 联网 may be why, and thinking is not given up for it', async t => {
+  const relay = await strictRelay(t, 'tools')
+  const error = await complete(relay.provider, 'claude-opus-5-5', asked({ webSearch: true })).catch(e => e)
+  assert.ok(error instanceof Error)
+  // Its words read like a refused thinking field: tried once without, refused again, so the tool was the cause.
+  assert.equal(relay.requests.length, 2)
+  assert.ok(relay.requests[0].thinking && relay.requests[0].tools)
+  assert.ok(!relay.requests[1].thinking && relay.requests[1].tools)
+  assert.match(providerError(relay.provider, error), /「联网」.*地球图标关掉再试。）$/, 'after the provider\'s words, however long')
+
+  // Without 联网 the model still thinks; with it again, thinking is tried again.
+  assert.equal((await complete(relay.provider, 'claude-opus-5-5', asked())).text, STORY)
+  assert.ok(relay.requests.at(-1).thinking)
+  await complete(relay.provider, 'claude-opus-5-5', asked({ webSearch: true })).catch(() => {})
+  assert.ok(relay.requests.at(-2).thinking)
+
+  // Said for refusals and broken servers, not for a bad key or a rate limit.
+  for (const [code, hinted] of [[500, true], [422, true], [401, false], [429, false]]) {
+    relay.answerWith(code)
+    const failed = await complete(relay.provider, 'claude-opus-5-5', asked({ webSearch: true })).catch(e => e)
+    assert.equal(/「联网」/.test(providerError(relay.provider, failed)), hinted, String(code))
+  }
+})
+
+test('a relay that refuses thinking itself: left out from then on once the call without it went through, with 联网 apart', async t => {
+  const relay = await strictRelay(t, 'thinking')
+  assert.equal((await complete(relay.provider, 'claude-opus-5-5', asked())).text, STORY)
+  assert.deepEqual(relay.requests.map(r => Boolean(r.thinking)), [true, false])
+  await complete(relay.provider, 'claude-opus-5-5', asked())
+  assert.deepEqual(relay.requests.map(r => Boolean(r.thinking)), [true, false, false], 'remembered: no second refusal')
+  // With 联网 the refusal may have been the tool's alone: found out on its own.
+  assert.equal((await complete(relay.provider, 'claude-opus-5-5', asked({ webSearch: true }))).text, STORY)
+  assert.deepEqual(relay.requests.slice(3).map(r => Boolean(r.thinking)), [true, false])
+
+  // Thinking refused, then the call without it refused for its length: thinking was refused all the same, so the
+  // next turn goes without it and gives up the length, instead of failing the same two ways every turn.
+  const capped = await strictRelay(t, 'thinking', { maxTokens: 16000, name: 'refuses thinking, short' })
+  const long = asked({ maxTokens: 32000, softCap: true })
+  await assert.rejects(complete(capped.provider, 'claude-opus-5-5', long), /maximum allowed/)
+  assert.equal((await complete(capped.provider, 'claude-opus-5-5', long)).text, STORY)
+  assert.deepEqual(capped.requests.map(r => [Boolean(r.thinking), r.max_tokens]), [[true, 32000], [false, 32000], [false, 32000], [false, 8192]])
 })
 
 test('a chat with 联网 on: its turns carry the tool and say when to search; the reply keeps its sources; off again, neither', async t => {

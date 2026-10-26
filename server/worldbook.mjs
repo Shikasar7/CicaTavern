@@ -2,9 +2,10 @@
 // `character_book` shape and SillyTavern's standalone world file shape.
 import YAML from 'yaml'
 import { httpError, newId } from './store.mjs'
-import { decoratorsOf, hasTemplate, splitDecorators } from './template.mjs'
+import { decoratorsOf, hasEjs, hasTemplate, splitDecorators, stripTemplates } from './template.mjs'
 import { hasVariableMacros } from '../web/shared/vars.js'
 import { msg } from './i18n.mjs'
+import { guardedTest } from './regex-guard.mjs'
 
 // SillyTavern selectiveLogic values.
 const AND_ANY = 0
@@ -20,7 +21,6 @@ const list = value =>
 
 // MVU-style cards keep the initial variables in an entry, not in the prompt.
 const INITVAR = /initvar|初始变量|\[init/i
-const SCRIPT = /<%[\s\S]*?%>/
 
 // What normalizeEntry reads of an entry. An imported book keeps the rest
 // (depth, group, sticky…) as `extra`, so its export gives SillyTavern them back.
@@ -64,7 +64,7 @@ function normalizeEntry(raw, index, { keep = false } = {}) {
     probability: Number(raw.probability ?? ext.probability ?? 100),
     useProbability: (raw.useProbability ?? ext.useProbability) === true,
     initvar: INITVAR.test(comment) || decoratorsOf(content).has('@@initial_variables'),
-    hasScript: SCRIPT.test(content),
+    hasScript: hasEjs(content),
     ...(Object.keys(extra).length ? { extra } : {}),
   }
 }
@@ -149,7 +149,7 @@ export function editBookInfo(book, change = {}) {
 
 /** Entry text with any EJS removed (used when a template cannot be rendered). */
 export function entryText(entry) {
-  return splitDecorators(entry.content).body.replace(/<%[\s\S]*?%>/g, '').trim()
+  return stripTemplates(splitDecorators(entry.content).body).trim()
 }
 
 /**
@@ -164,12 +164,22 @@ export function isInitvar(entry) {
 /** ST-Prompt-Template's own initial-variable entries (its `initial` scope), not MVU's [InitVar]. */
 const pluginInitvar = entry => /\[InitialVariables\]/i.test(entry.comment) || decoratorsOf(entry.content).has('@@initial_variables')
 
+const isPlainObject = value => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+
+/** `change` over `base`, objects merged all the way down as MVU's _.merge does (a later entry adds, never wipes). */
+function mergeDeep(base, change) {
+  const out = { ...base }
+  for (const [key, value] of Object.entries(change)) out[key] = isPlainObject(value) && isPlainObject(out[key]) ? mergeDeep(out[key], value) : value
+  return out
+}
+
 function readInitvar(entries, render) {
   let state = {}
   for (const entry of entries) {
     try {
       const parsed = YAML.parse(render(entry))
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) state = { ...state, ...parsed }
+      // Cards split them by character (one entry per 角色.小雨, 角色.小雪): each adds its own.
+      if (isPlainObject(parsed)) state = mergeDeep(state, parsed)
     } catch {
       // A malformed initvar entry is ignored; the card still plays without state.
     }
@@ -279,7 +289,8 @@ function keyMatcher(key, entry) {
   if (regex) {
     try {
       const re = new RegExp(regex[1], regex[2])
-      return text => re.test(text)
+      // A card's own pattern: run with a bound on its time.
+      return text => guardedTest(re, text)
     } catch {
       return () => false
     }
@@ -375,7 +386,7 @@ function editEntry(entry, change) {
     if (position >= 0 && position <= 7) entry.position = position
   }
   entry.initvar = INITVAR.test(entry.comment) || decoratorsOf(entry.content).has('@@initial_variables')
-  entry.hasScript = SCRIPT.test(entry.content)
+  entry.hasScript = hasEjs(entry.content)
   return entry
 }
 

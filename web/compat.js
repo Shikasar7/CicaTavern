@@ -100,8 +100,21 @@ function saveVariables(type, ids, value) {
   writeJson(VARS_KEY, all)
 }
 
-export function storedFrameStorage() {
-  return readJson(STORAGE_KEY)
+/**
+ * A card's frames' localStorage as kept in this browser: each card its own ({ cards: { [cardId]: { key: value } } }),
+ * so one card cannot read what another saved (an API key, say). The map all cards once shared goes to none of them.
+ */
+export function storedFrameStorage(cardId) {
+  const own = readJson(STORAGE_KEY).cards?.[cardId]
+  return own && typeof own === 'object' ? own : {}
+}
+
+function saveFrameStorage(cardId, key, value) {
+  const all = readJson(STORAGE_KEY)
+  const own = { ...storedFrameStorage(cardId) }
+  if (value === null) delete own[key]
+  else own[String(key)] = String(value)
+  writeJson(STORAGE_KEY, { ...all, cards: { ...(all.cards ?? {}), [cardId]: own } })
 }
 
 /**
@@ -122,7 +135,11 @@ export function frameShim(ctx) {
  * page, which makes it from the app once the player allows this card and address
  * (web/app.js frameHandlers.fetch) and passes the answer back as it comes:
  * `fetches.get(id)` gets head({ status, statusText, headers }), chunk(bytes), done().
- * Addresses relayed before go that way at once; this app's own address never.
+ * Only GET and HEAD are sent again that way: any other call may have reached the
+ * API before the browser refused the page its answer, so the player is asked
+ * (frameHandlers.fetchAllow) and the call fails saying to try again, which then
+ * goes through the app. Addresses relayed before go that way at once; this app's
+ * own address never.
  * Runs inside the frame. Self-contained: it is serialised with toString().
  * @param deps - { direct (the browser's fetch), post(op, args), call(op, args) → Promise, fetches: Map,
  *   frame, appOrigin, relayed: origins allowed before }
@@ -130,9 +147,12 @@ export function frameShim(ctx) {
 export function frameFetch({ direct, post, call, fetches, frame, appOrigin, relayed: allowed }) {
   const relayed = new Set(Array.isArray(allowed) ? allowed : [])
   const NULL_BODY = [101, 103, 204, 205, 304]
+  // Calls that do nothing twice when sent twice.
+  const RESENT = ['GET', 'HEAD']
   let seq = 0
-  function relay(request, url) {
+  function relay(request, url, signal) {
     return new Promise((resolve, reject) => {
+      if (signal?.aborted) return reject(new DOMException('The user aborted a request.', 'AbortError'))
       const id = `${frame}-${++seq}`
       let stream = null
       let answered = false
@@ -169,17 +189,20 @@ export function frameFetch({ direct, post, call, fetches, frame, appOrigin, rela
         },
         fail,
       })
-      request.signal.addEventListener('abort', () => {
+      signal?.addEventListener('abort', () => {
         post('fetchCancel', { id })
         fail(new DOMException('The user aborted a request.', 'AbortError'))
       }, { once: true })
-      ;(['GET', 'HEAD'].includes(request.method) ? Promise.resolve(null) : request.arrayBuffer())
+      ;(RESENT.includes(request.method) ? Promise.resolve(null) : request.arrayBuffer())
         .then(buffer => call('fetch', { id, url: url.href, method: request.method, headers: [...request.headers], body: buffer }))
         .catch(error => fail(new TypeError(error.message)))
     })
   }
-  return async (input, init) => {
+  const relayedFetch = async (input, init) => {
     const request = new Request(input, init)
+    // The caller's own signal, listened to as it is: a Request's (a clone's above all) follows it through links
+    // Node's fetch keeps weakly, so once the first Request was let go a cancel no longer came through.
+    const signal = init?.signal ?? (input instanceof Request ? input.signal : request.signal)
     let url = null
     try {
       url = new URL(request.url)
@@ -188,15 +211,25 @@ export function frameFetch({ direct, post, call, fetches, frame, appOrigin, rela
     }
     // Not http(s), or this app's own address: as it is.
     if (!/^https?:$/.test(url.protocol) || url.origin === appOrigin) return direct(request)
-    if (relayed.has(url.origin)) return relay(request, url)
-    const spare = request.clone()
+    if (relayed.has(url.origin)) return relay(request, url, signal)
+    const spare = RESENT.includes(request.method) ? request.clone() : null
     try {
       return await direct(request)
     } catch (error) {
-      if (request.signal.aborted || error?.name === 'AbortError') throw error
-      return relay(spare, url)
+      if (signal?.aborted || error?.name === 'AbortError') throw error
+      if (spare) return relay(spare, url, signal)
+      const note = await call('fetchAllow', { url: url.href }).catch(refusal => {
+        throw new TypeError(refusal.message)
+      })
+      relayed.add(url.origin)
+      throw new TypeError(note)
     }
   }
+  // Addresses the player allowed after this frame was made (web/app.js askRelay → broadcastRelay).
+  relayedFetch.allow = origins => {
+    for (const origin of Array.isArray(origins) ? origins : []) if (typeof origin === 'string') relayed.add(origin)
+  }
+  return relayedFetch
 }
 
 /* Runs inside the frame. Self-contained: it is serialised with toString(). `makeFetch` is frameFetch. */
@@ -233,6 +266,8 @@ function shimMain(ctx, makeFetch) {
       }
       if (done) eventEmit('js_generation_ended', full, id).catch(() => {})
     }
+    // Addresses this card may now reach through the app (see fetch below).
+    if (data && Array.isArray(data.agentTavernRelay)) relayedFetch.allow(data.agentTavernRelay)
     // An API call the page made for this frame (see fetch below): its status and headers, the body in pieces, the end.
     if (data && data.agentTavernFetch && data.agentTavernFetch.frame === ctx.frame) {
       const { id, head, chunk, done } = data.agentTavernFetch
@@ -634,7 +669,8 @@ function shimMain(ctx, makeFetch) {
 
   // ── Direct API calls: straight out first, the page as a way round (frameFetch) ──
   const fetches = new Map()
-  window.fetch = makeFetch({ direct: window.fetch.bind(window), post, call, fetches, frame: ctx.frame, appOrigin: ctx.appOrigin, relayed: ctx.relay })
+  const relayedFetch = makeFetch({ direct: window.fetch.bind(window), post, call, fetches, frame: ctx.frame, appOrigin: ctx.appOrigin, relayed: ctx.relay })
+  window.fetch = relayedFetch
 
   // ── MVU ──
   const Mvu = {
@@ -962,15 +998,16 @@ function shimMain(ctx, makeFetch) {
 }
 
 /**
- * Host side: answers frames that are ours. `handlers.slash(command)` runs a
+ * Host side: answers frames that are ours. `handlers.slash(command, context)` runs a
  * slash command (resolves to its output), `handlers.input(text)` fills the
- * input box, `handlers.toast(level, text)` shows a toast, `handlers.opening(index)`
- * switches an unplayed chat to another opening; `ids()` returns the current
- * { presetId, cardId } for saving variables.
+ * input box, `handlers.send(context)` sends it, `handlers.toast(level, text)` shows a
+ * toast, `handlers.opening(index)` switches an unplayed chat to another opening;
+ * `ids()` returns the current { presetId, cardId } for saving variables. `context`
+ * is { frame, window, card, clicked }: who asked, and whether right after a click in it.
  */
 export function installFrameBridge(handlers) {
   // What the frames may ask the page for, each answered with its result (handlers in web/app.js).
-  const ANSWERED = ['state', 'chatVars', 'mvuParse', 'editMessage', 'createMessages', 'deleteMessages', 'worldbook', 'generate', 'stopGenerate', 'ejs', 'fetch', 'fetchCancel']
+  const ANSWERED = ['state', 'chatVars', 'mvuParse', 'editMessage', 'createMessages', 'deleteMessages', 'worldbook', 'generate', 'stopGenerate', 'ejs', 'fetch', 'fetchCancel', 'fetchAllow']
   window.addEventListener('message', async event => {
     const data = event.data
     const id = data?.agentTavernCall
@@ -979,22 +1016,26 @@ export function installFrameBridge(handlers) {
     if (!frame || event.source !== frame.contentWindow) return
     const reply = (ok, value) => data.id && event.source.postMessage({ agentTavernReply: id, id: data.id, ok, value: ok ? value : undefined, error: ok ? undefined : String(value) }, '*')
     const args = data.args ?? {}
+    // Who asks: the frame's id and window, the card it was made for (render.js htmlFrame), never one it names
+    // itself, and whether the player just clicked in it: the click's activation reaches this page and the frame
+    // has the focus (a click on the page's own buttons takes it away). Taken now, before a step such as /setinput
+    // moves the focus. What a card may do without a click is asked per card (web/shared/frame-permissions.js).
+    const clicked = navigator.userActivation?.isActive === true && document.activeElement === frame
+    const context = { frame: id, window: event.source, card: frame.dataset.card || null, clicked }
     try {
       if (data.op === 'toast') handlers.toast(args.level, [args.title, args.text].filter(Boolean).join('：')) // i18n-ignore: a card script's own toast
       else if (data.op === 'input') {
         handlers.input(String(args.text ?? ''))
         reply(true)
       } else if (data.op === 'send') {
-        await handlers.send()
+        await handlers.send(context)
         reply(true)
-      } else if (data.op === 'slash') reply(true, await handlers.slash(String(args.command ?? '')))
+      } else if (data.op === 'slash') reply(true, await handlers.slash(String(args.command ?? ''), context))
       else if (data.op === 'opening') reply(true, await handlers.opening(Number(args.index)))
-      else if (ANSWERED.includes(data.op)) reply(true, await handlers[data.op](args, { frame: id, window: event.source }))
+      else if (ANSWERED.includes(data.op)) reply(true, await handlers[data.op](args, context))
       else if (data.op === 'storage') {
-        const stored = storedFrameStorage()
-        if (args.value === null) delete stored[args.key]
-        else stored[String(args.key)] = String(args.value)
-        writeJson(STORAGE_KEY, stored)
+        // Kept under the card the frame was made for (render.js htmlFrame), never one it names itself.
+        if (frame.dataset.card) saveFrameStorage(frame.dataset.card, args.key, args.value)
       } else if (data.op === 'vars') {
         const value = args.value && typeof args.value === 'object' ? args.value : {}
         // Global variables are the app's (templates share them); preset and character ones stay in this browser.
@@ -1010,6 +1051,11 @@ export function installFrameBridge(handlers) {
 /** Tell every card frame the chat's state changed, so the latest floor's variables and MVU listeners follow. */
 export function broadcastState(state) {
   for (const frame of document.querySelectorAll('iframe.card-frame')) frame.contentWindow?.postMessage({ agentTavernState: { state } }, '*')
+}
+
+/** Tell every card frame the addresses its card may now reach through the app (frameFetch's `allow`). */
+export function broadcastRelay(origins) {
+  for (const frame of document.querySelectorAll('iframe.card-frame')) frame.contentWindow?.postMessage({ agentTavernRelay: origins }, '*')
 }
 
 /** Tell every card frame what the input box now holds, so `#send_textarea.value` reads true. */

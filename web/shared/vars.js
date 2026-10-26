@@ -17,6 +17,12 @@ export function splitPath(path) {
   return text.replace(/\[(\d+)\]/g, '.$1').split('.').filter(Boolean)
 }
 
+// Keys that lead to an object's prototype instead of a variable: a path with one is never written.
+const PROTOTYPE_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+
+/** Whether path keys stay among the variables themselves (none reaches a prototype). */
+export const writablePath = keys => keys.every(key => !PROTOTYPE_KEYS.has(key))
+
 export function getPath(root, path) {
   let cursor = root
   for (const key of splitPath(path)) {

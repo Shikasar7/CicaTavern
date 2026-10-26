@@ -54,6 +54,7 @@ From the author's own long chats (October 2026):
 - **MVU variables and status bars**: `[InitVar]`, `<UpdateVariable>` / JSONPatch and the older `_.set()` are supported; EJS templates run in a QuickJS sandbox (with ST-Prompt-Template's `getwi`, `matchChatMessages` and the like). HTML UIs inside cards render in isolated iframes, with a compatibility layer for the common Tavern Helper (酒馆助手) functions: variables, lorebooks (changes kept for that chat only), calling the model (each card asks first) and sending messages. The libraries those UIs need, such as jQuery and Vue, load from jsDelivr, so some may be missing offline.
 - **SillyTavern chats**: import a .jsonl (drop it into the window or use Import archive) with every turn, every swipe and the MVU variables; a long one can be compacted into a story archive first.
 - **Web search**: the globe left of the input box turns it on per chat. It uses the provider's own search, like SillyTavern's "Enable web search": Claude on the Anthropic interface, the OpenAI Responses interface and OpenRouter models have it. When real-world facts are needed the model searches first and then writes; what it searched for and the pages it cited are listed under the reply. Searches cost extra.
+- **Blocked words**: Settings → Writing → Blocked words removes words, masks them with `*` or swaps them for words you choose, both in what the model is sent (card, preset, lorebooks, history and your messages) and in the replies shown; each word can be switched on or off and kept to one side. Only the copy being sent or shown changes, so switching a word off brings it back; Chinese has no spaces between words, so longer words to leave alone go under Exceptions. After a change, chats that use the word write the cache again from where it appears, and saving tells you from which turn.
 - **Versions and branches**: regenerate, swipe between versions, branch from any message, roll back, edit any message; a whole chat can be packed up and moved to another device.
 
 ### Pictures and read-aloud
@@ -104,16 +105,16 @@ If you can't quite say what you want, the creator guides you round by round:
 
 <br clear="right">
 
-## Latest changes [1.9.4]
+## Latest changes [1.9.5]
 
 <p align="center"><img src="docs/screenshots/vn-marks.jpg" alt="The visual novel in 1.9.2: the model marked this line as the steward's, so the name plate and the sprite follow, with Lin Qinghe beside him" width="880"></p>
 
+- **Blocked words (1.9.5)**: Settings → Writing → Blocked words, one list for every chat: each word can be removed, masked with `*` or swapped for one you choose, in what is shown, what is sent to the model, or both. The stored text never changes, so switching a word off brings it back, and the same list keeps the cache hitting.
+- **Card UI permissions (1.9.5)**: a card's UI sending without your click, calling the model, or going online through CicaTavern asks once per card, and both a yes and a no are kept; change them under Card UI permissions… in the card's menu. Sending with a button in the card's UI is you sending and is never asked. This version also fixes a set of ways the server could hang or lose data, and a few places that differed from SillyTavern (several initvar entries, regex replacements, card field macros in presets).
 - **Web search (1.9.4)**: the globe left of the input box turns it on per chat. When real-world facts are needed, the model searches first and then writes; what it searched for and the pages it cited are listed under the reply. It uses the provider's own search: Claude on the Anthropic interface, the OpenAI Responses interface and OpenRouter models have it. Searches cost extra.
 - **Card UIs reaching their own API (1.9.4)**: when the browser cannot reach an API set in a card's UI ("Failed to fetch"), the app asks once; once you agree, that card reaches that address through CicaTavern and its network proxy.
-- **Card UIs can do more (1.9.3)**: start pages, battles and mini games built for Tavern Helper can call the model (each card asks you first, one call at a time), read and write lorebooks (for this chat only), keep chat variables, and add or remove messages; EJS templates follow the Prompt Template plugin more fully: `setvar` writes are kept, decorators work, and `<%= getvar(…) %>` in a display regex shows that message's value.
-- **An error log (1.9.3)**: Settings → More → Error log copies or saves a report to send to the developer, with no chat text and keys and user names taken out; it stays on your device. The cast list folds to one row per character with search, and a card's own lorebook can be exported.
 
-Speaker marks and the update mirror in China came in 1.9.2; the visual novel HUD, new days and memories in 1.9.1; editing lorebooks, presets, regex and the theme by chat in 1.9.0; visual novel mode in 1.8.0. Download from [Releases](https://github.com/Shikasar7/CicaTavern/releases/latest); 1.4.0 and later can update in the app. Everything that changed is in [CHANGELOG.md](CHANGELOG.md).
+Card UIs calling the model and editing lorebooks, and the error log, came in 1.9.3; speaker marks and the update mirror in China in 1.9.2; the visual novel HUD, new days and memories in 1.9.1; editing lorebooks, presets, regex and the theme by chat in 1.9.0; visual novel mode in 1.8.0. Download from [Releases](https://github.com/Shikasar7/CicaTavern/releases/latest); 1.4.0 and later can update in the app. Everything that changed is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Getting started (Windows)
 
@@ -221,7 +222,7 @@ What it connects to:
   - Update check: GitHub (api.github.com) at most once a day, and the mirror in mainland China, cnb.cool (Tencent), when GitHub hasn't answered within a few seconds. Only the version number is sent; they can see your IP address. The Android app does the same.
   - Body font: the Noto Serif SC font from Google Fonts.
   - Tavern Helper libraries: jQuery, Vue, Tailwind and similar libraries from public CDNs such as jsDelivr, loaded when a card's Tavern Helper UI uses them.
-- **Web content inside cards and presets** may load pictures or fonts from addresses the card's author wrote into it. When a card's UI wants to call the model, each card asks you first; once you agree, its requests go to the model provider of that chat. When a card's UI has its own API settings and the browser can't reach the address you entered, you're asked whether CicaTavern should connect for it instead (once per card and address); once you agree, what it sends goes to that address through CicaTavern.
+- **Web content inside cards and presets** may load pictures or fonts from addresses the card's author wrote into it. When a card's UI wants to call the model, each card asks you first; once you agree, its requests go to the model provider of that chat. When a card's UI has its own API settings and the browser can't reach the address you entered, you're asked whether CicaTavern should connect for it instead (once per card and address); once you agree, what it sends goes to that address through CicaTavern. These answers are kept on your device; change them under Card UI permissions… in the card's menu.
 
 ## Uninstall
 

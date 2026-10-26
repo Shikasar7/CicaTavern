@@ -20,6 +20,7 @@ import path from 'node:path'
 import { complete, fetchBytes, googleRequest, isProviderRef, postJson, providerError, providerRequest, refLabel, resolveRef } from './providers.mjs'
 import { chatMaterial, cleanFrame, cleanLora, cleanRoster, cleanStrength, countTags, draftMaterial, flattenFrame, frameFormat, isFramePrompt, isRosterId, leadOf, naiCharacters, parseFrame, parseRosterChat, parseRosterDraft, rosterBrief, rosterChatRequest, rosterDraftRequest, withSomeone } from './roster.mjs'
 import { httpError, newId } from './store.mjs'
+import { blockRequest } from './blockwords.mjs'
 import { FISH_MODELS } from './voice/cloud.mjs'
 import { KEYED, cleanVoiceKey, cleanVoiceList, createVoices } from './voice/index.mjs'
 import { msg } from './i18n.mjs'
@@ -753,7 +754,8 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
       note = msg`这段剧情是 Claude 订阅写的，借不了它的上下文，这次用辅助模型写。`
     }
     const { provider, modelId } = await helperTarget(chat, media)
-    const request = imagePromptRequest({ card, names: chat.names, reply, input, state: node.state, style: cardMedia.style, promptStyle: media.promptStyle, roster })
+    // The card and the story go to a model here too: with the 屏蔽词, as a turn sends them.
+    const request = blockRequest(imagePromptRequest({ card, names: chat.names, reply, input, state: node.state, style: cardMedia.style, promptStyle: media.promptStyle, roster }), await store.getBlockWords())
     let result
     try {
       result = await complete(provider, modelId, { ...request, signal }, { proxy: proxyNow() })

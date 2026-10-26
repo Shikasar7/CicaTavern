@@ -65,7 +65,8 @@ test('regex: the scripts and the latest reply shown, the answer read script by s
 test('a proposed pattern is tried on the latest reply; one that backtracks for ever is stopped', async () => {
   const tried = await tryScript({ ...scriptOf({ kind: 'newRegex', on: 'ai', effect: 'display', find: '/【([^】]+)】/g', replace: '[$1]' }), disabled: false }, SAMPLE)
   assert.deepEqual(tried, { matches: 1, samples: [{ match: '【今晚别走了】', shown: '[今晚别走了]', sent: '【今晚别走了】' }] })
-  const stuck = await tryScript({ ...scriptOf({ kind: 'newRegex', on: 'ai', effect: 'display', find: '/^(a+)+$/', replace: '' }), disabled: false }, `${'a'.repeat(40)}b`, { timeout: 300 })
+  // Case-insensitive, so not one V8's linear engine runs (server/regex-guard.mjs turns that engine on).
+  const stuck = await tryScript({ ...scriptOf({ kind: 'newRegex', on: 'ai', effect: 'display', find: '/^(a+)+$/i', replace: '' }), disabled: false }, `${'a'.repeat(40)}b`, { timeout: 300 })
   assert.deepEqual(stuck, { error: 'timeout' })
   assert.deepEqual(await tryScript({ ...scriptOf({ kind: 'newRegex', on: 'ai', effect: 'display', find: '/([/', replace: '' }) }, SAMPLE), { error: 'invalid' })
   const changes = await tryChanges([{ id: 'new:0', kind: 'newRegex', on: 'ai', effect: 'display', find: '/雨/g', replace: '雪' }, { id: 'remove:x', kind: 'removeRegex' }], { sample: SAMPLE })

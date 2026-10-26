@@ -142,7 +142,8 @@ export function createScenes(store, { media }) {
     const scenes = await read(cardId)
     const existing = sceneId ? scenes.find(s => s.id === sceneId) : null
     if (sceneId && !existing) throw httpError(404, msg`没有这个场景`)
-    const given = clip(place, 40)
+    // A place with nothing to tell it by (???, ……) is none: a scene named so could never be found again.
+    const given = normalizePlace(place) ? clip(place, 40) : ''
     const story = existing ? '' : clip(passage, 4000)
     const name = existing?.name ?? given
     if (!name && !story) throw httpError(400, msg`要画哪个地点？`)

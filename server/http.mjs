@@ -26,6 +26,8 @@ import { createLedger } from './usage.mjs'
 import { createMedia, drawChoiceOf } from './media.mjs'
 import { createAppearance } from './appearance.mjs'
 import { createRegex } from './regex.mjs'
+import { blockSent, createBlockWords } from './blockwords.mjs'
+import { promptRules } from '../web/shared/blockwords.js'
 import { createScenes } from './scenes.mjs'
 import { createSaves } from './saves.mjs'
 import { KEYED as VOICE_KEYED } from './voice/index.mjs'
@@ -43,6 +45,7 @@ import { replaceMacros } from './prompt.mjs'
 import { accessCookie, hostAllowed, isLoopback, lanAddresses, loginPage, readCookie, tokensEqual } from './access.mjs'
 import { createDiagnostics } from './diagnostics.mjs'
 import { relayRequest } from './relay.mjs'
+import { onSlowPattern } from './regex-guard.mjs'
 
 const WEB_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'web')
 // The Windows launcher (launcher/): in a package, or built at a checkout's root.
@@ -87,6 +90,8 @@ const STATIC = {
   '/talk-dialog.js': ['talk-dialog.js', 'text/javascript; charset=utf-8'],
   '/shared/card-edit.js': ['shared/card-edit.js', 'text/javascript; charset=utf-8'],
   '/draw-choice.js': ['draw-choice.js', 'text/javascript; charset=utf-8'],
+  '/card-permissions.js': ['card-permissions.js', 'text/javascript; charset=utf-8'],
+  '/shared/frame-permissions.js': ['shared/frame-permissions.js', 'text/javascript; charset=utf-8'],
   '/shared/draw.js': ['shared/draw.js', 'text/javascript; charset=utf-8'],
   '/vn.js': ['vn.js', 'text/javascript; charset=utf-8'],
   '/shared/vn.js': ['shared/vn.js', 'text/javascript; charset=utf-8'],
@@ -99,6 +104,8 @@ const STATIC = {
   '/whatsnew.js': ['whatsnew.js', 'text/javascript; charset=utf-8'],
   '/shared/whatsnew.js': ['shared/whatsnew.js', 'text/javascript; charset=utf-8'],
   '/diagnostics.js': ['diagnostics.js', 'text/javascript; charset=utf-8'],
+  '/blockwords.js': ['blockwords.js', 'text/javascript; charset=utf-8'],
+  '/shared/blockwords.js': ['shared/blockwords.js', 'text/javascript; charset=utf-8'],
   '/icon.png': ['icon.png', 'image/png'],
   '/favicon.ico': ['icon.ico', 'image/x-icon'],
   // A phone's home screen (Safari「添加到主屏幕」, Android「安装应用」): see /manifest.webmanifest.
@@ -128,6 +135,15 @@ async function readBody(req) {
     return JSON.parse(text)
   } catch {
     throw httpError(400, msg`请求体不是 JSON`)
+  }
+}
+
+/** The request's address, or null when its target is none at all (`//[`, `http://a:b`): never a throw. */
+function requestUrl(req) {
+  try {
+    return new URL(req.url, 'http://localhost')
+  } catch {
+    return null
   }
 }
 
@@ -217,6 +233,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
   const store = createStore(dataRoot ?? defaultDataRoot(features.dataDir), { subscription: features.subscription, lan: features.lan })
   // 设置 → 更多 → 错误日志.
   const diagnostics = createDiagnostics(store.dirs.root, store, { version: VERSION, edition: features.edition, appName: features.appName })
+  // A card's regex left out for running too long (regex-guard.mjs): said in the error log, so the card's author can be told.
+  onSlowPattern(regex => diagnostics.record({ source: 'process', what: msg`卡片的正则`, message: msg`这条正则运行太久，已经跳过：/${regex.source.slice(0, 300)}/${regex.flags}` }).catch(() => {}))
   const network = createProxy({ override: proxyOverride(proxy), defaultMode: features.defaultProxy })
   // Read on every request, so a changed proxy setting applies at once.
   const isolation = {
@@ -243,6 +261,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
   const media = createMedia(store, { proxy: () => isolation.proxy, askInContext: engine.askInContext, features, ownBackends })
   const appearance = createAppearance(store)
   const regex = createRegex(store)
+  const blockWords = createBlockWords(store)
   const scenes = createScenes(store, { media })
   const saves = createSaves(store)
   const prompts = createPromptLibrary(store)
@@ -341,7 +360,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     const end = res.end
     res.end = (...args) => {
       res.end = end
-      const pathname = new URL(req.url, 'http://local').pathname
+      const pathname = requestUrl(req)?.pathname ?? ''
       const failed = res.statusCode >= 400 && res.statusCode !== 499 && typeof res.errorText === 'string' && pathname.startsWith('/api/') && !pathname.startsWith('/api/diagnostics')
       if (!failed) return end.apply(res, args)
       diagnostics.record({ source: 'request', what: `${req.method} ${pathname}`, status: res.statusCode, message: res.errorText, stack: res.errorStack })
@@ -529,12 +548,14 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     // Loading shows the saved reply: later turns are rolled back (kept as a branch), as 回滚 does.
     ['POST', /^\/api\/cards\/([\w-]+)\/saves\/([\w-]+)\/load$/, async ([id, saveId]) => {
       const save = await saves.get(id, saveId)
-      if (engine.isRunning(save.chatId)) throw httpError(409, msg`正在生成，先停止`)
-      const chat = await store.getChat(save.chatId).catch(() => null)
-      if (!chat?.nodes[save.nodeId]) throw httpError(404, msg`这个存档的那一轮已经删掉了`)
-      if (childrenOf(chat, save.nodeId).length) rollbackTo(chat, save.nodeId)
-      else selectNode(chat, save.nodeId)
-      return { save, chat: chatView(await store.saveChat(chat)) }
+      return store.withChat(save.chatId, async () => {
+        if (engine.isRunning(save.chatId)) throw httpError(409, msg`正在生成，先停止`)
+        const chat = await store.getChat(save.chatId).catch(() => null)
+        if (!chat?.nodes[save.nodeId]) throw httpError(404, msg`这个存档的那一轮已经删掉了`)
+        if (childrenOf(chat, save.nodeId).length) rollbackTo(chat, save.nodeId)
+        else selectNode(chat, save.nodeId)
+        return { save, chat: chatView(await store.saveChat(chat)) }
+      })
     }],
     // 正则管理 (regex.mjs): the global scripts, and the ones a card or a preset carries.
     ['GET', /^\/api\/regex$/, () => regex.list()],
@@ -542,6 +563,16 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['POST', /^\/api\/regex\/import$/, (_, body) => regex.importScripts(body?.scripts)],
     ['PUT', /^\/api\/cards\/([\w-]+)\/regex$/, ([id], body) => regex.saveCardScripts(id, body?.scripts)],
     ['PUT', /^\/api\/presets\/([\w-]+)\/regex$/, ([id], body) => regex.savePresetScripts(id, body?.scripts)],
+    // 屏蔽词 (blockwords.mjs): one list for every chat. A save says whether what is sent
+    // changes and, for the open chat (chatId), from where its cache is written again.
+    ['GET', /^\/api\/blockwords$/, () => blockWords.list()],
+    ['PUT', /^\/api\/blockwords$/, async (_, body) => {
+      const { words, before } = await blockWords.save(body?.words)
+      const prompt = promptRules(before) !== promptRules(words)
+      const chatId = typeof body?.chatId === 'string' ? body.chatId : ''
+      const chat = prompt && chatId ? await engine.blockImpact(chatId, before, words).catch(() => null) : null
+      return { words, impact: { prompt, ...(chat ? { chat: true, ...chat } : {}) } }
+    }],
     // 外观: the picture behind the page (appearance.mjs); style and opacity go through PUT /api/settings { appearance }.
     ['PUT', /^\/api\/appearance\/backdrop$/, (_, body) => appearance.saveBackdrop(body?.image)],
     ['DELETE', /^\/api\/appearance\/backdrop$/, () => appearance.removeBackdrop()],
@@ -595,7 +626,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['POST', /^\/api\/cards\/([\w-]+)\/roster\/portrait$/, ([id], body) => media.drawPortrait(id, body?.entry, AbortSignal.timeout(600000), drawChoiceOf(body))],
     ['PUT', /^\/api\/cards\/([\w-]+)\/roster\/([\w-]+)\/ref$/, ([id, entryId], body) => media.saveRosterRef(id, entryId, body?.image)],
     ['DELETE', /^\/api\/cards\/([\w-]+)\/roster\/([\w-]+)\/ref$/, ([id, entryId]) => media.removeRosterRef(id, entryId)],
-    ['DELETE', /^\/api\/chats\/([\w-]+)\/nodes\/([\w-]+)\/image$/, async ([id, nodeId], _, url) => {
+    ['DELETE', /^\/api\/chats\/([\w-]+)\/nodes\/([\w-]+)\/image$/, ([id, nodeId], _, url) => store.withChat(id, async () => {
       const file = String(url.searchParams.get('file') ?? '')
       const chat = await store.getChat(id)
       const node = chat.nodes[nodeId]
@@ -604,7 +635,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       await media.removeImage(id, file)
       await prompts.forgetPicture(id, file).catch(() => {})
       return chatView(await store.saveChat(chat))
-    }],
+    })],
     // Picture prompt library (prompts.mjs).
     ['GET', /^\/api\/prompts$/, (_, __, url) => prompts.list(String(url.searchParams.get('cardId') ?? ''))],
     ['POST', /^\/api\/prompts$/, (_, body) => prompts.saveManual(body ?? {})],
@@ -846,7 +877,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       const global = body?.global === true
       const { globalBookIds } = await store.getSettings()
       if (globalBookIds.includes(id) !== global) {
-        await store.saveSettings({ globalBookIds: global ? [...globalBookIds, id] : globalBookIds.filter(x => x !== id) })
+        await store.updateSettings(current => ({ globalBookIds: [...current.globalBookIds.filter(x => x !== id), ...(global ? [id] : [])] }))
       }
       return { id, global, prefix: book.entries.some(inPrefix) }
     }],
@@ -918,7 +949,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       await store.deleteBook(id)
       await forge.dropTalk('book', id)
       const { globalBookIds } = await store.getSettings()
-      if (globalBookIds.includes(id)) await store.saveSettings({ globalBookIds: globalBookIds.filter(x => x !== id) })
+      if (globalBookIds.includes(id)) await store.updateSettings(current => ({ globalBookIds: current.globalBookIds.filter(x => x !== id) }))
       const detached = []
       for (const card of await store.listCards()) {
         if (!(card.worldbookIds ?? []).includes(id)) continue
@@ -959,22 +990,18 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['GET', /^\/api\/chats$/, async (_, __, url) => (await store.listChats(url.searchParams.get('cardId'))).map(chatSummary)],
     ['POST', /^\/api\/chats$/, async (_, body) => chatView(await createChat(store, String(body.cardId), Number(body.greetingIndex) || 0))],
     // A card's welcome page switching the first message to another of its openings (before the first turn).
-    ['POST', /^\/api\/chats\/([\w-]+)\/opening$/, async ([id], body) => chatView(await switchOpening(store, await store.getChat(id), Number(body?.index)))],
+    ['POST', /^\/api\/chats\/([\w-]+)\/opening$/, ([id], body) => store.withChat(id, async () => chatView(await switchOpening(store, await store.getChat(id), Number(body?.index))))],
     ['GET', /^\/api\/chats\/([\w-]+)$/, async ([id]) => ({ ...chatView(await store.getChat(id)), running: engine.isRunning(id) })],
-    ['PUT', /^\/api\/chats\/([\w-]+)$/, async ([id], body) => {
+    ['PUT', /^\/api\/chats\/([\w-]+)$/, ([id], body) => store.withChat(id, async () => {
       const chat = await store.getChat(id)
-      if (typeof body.title === 'string' && body.title.trim()) {
-        // A running turn saves its own copy of the chat at the end and would put the old title back.
-        if (engine.isRunning(id)) throw httpError(409, msg`正在生成，等这轮写完再改名`)
-        chat.title = body.title.trim().slice(0, 80)
-      }
+      if (typeof body.title === 'string' && body.title.trim()) chat.title = body.title.trim().slice(0, 80)
       // A chat's own model; empty follows the global default. Caches are per model,
       // so switching costs one full cache write on the next turn.
       if (body.model !== undefined) chat.model = body.model ? modelRef(body.model) : null
       // 联网: the provider searches the web for this chat's turns when the model asks (models that can).
       if (body.webSearch !== undefined) chat.webSearch = Boolean(body.webSearch)
       return { ...chatView(await store.saveChat(chat)), running: engine.isRunning(id) }
-    }],
+    })],
     ['DELETE', /^\/api\/chats\/([\w-]+)$/, async ([id]) => {
       if (engine.isRunning(id)) throw httpError(409, msg`正在生成，先停止`)
       await store.deleteChat(id)
@@ -982,20 +1009,20 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       await media.removeChatMedia(id)
       return { ok: true }
     }],
-    ['POST', /^\/api\/chats\/([\w-]+)\/select$/, async ([id], body) => {
+    ['POST', /^\/api\/chats\/([\w-]+)\/select$/, ([id], body) => store.withChat(id, async () => {
       if (engine.isRunning(id)) throw httpError(409, msg`正在生成，先停止`)
       const chat = await store.getChat(id)
       selectNode(chat, String(body.nodeId))
       return chatView(await store.saveChat(chat))
-    }],
+    })],
     // Rollback hides the later turns (kept as a branch); the next message forks
     // the SDK session at that point, so the cache up to there still hits.
-    ['POST', /^\/api\/chats\/([\w-]+)\/rollback$/, async ([id], body) => {
+    ['POST', /^\/api\/chats\/([\w-]+)\/rollback$/, ([id], body) => store.withChat(id, async () => {
       if (engine.isRunning(id)) throw httpError(409, msg`正在生成，先停止`)
       const chat = await store.getChat(id)
       rollbackTo(chat, String(body.nodeId))
       return chatView(await store.saveChat(chat))
-    }],
+    })],
     // Rewrite one message (shown and sent from now on); see engine.editMessage.
     ['PUT', /^\/api\/chats\/([\w-]+)\/messages\/([\w-]+)$/, async ([id, nodeId], body) => {
       const { chat, ...outcome } = await engine.editMessage(id, nodeId, body.text)
@@ -1009,22 +1036,22 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       await media.copyChatMedia(source.id, chat.id, files)
       return chatView(await store.saveChat(chat))
     }],
-    ['POST', /^\/api\/chats\/([\w-]+)\/restore$/, async ([id]) => {
+    ['POST', /^\/api\/chats\/([\w-]+)\/restore$/, ([id]) => store.withChat(id, async () => {
       if (engine.isRunning(id)) throw httpError(409, msg`正在生成，先停止`)
       const chat = await store.getChat(id)
       restoreFolded(chat)
       return chatView(await store.saveChat(chat))
-    }],
+    })],
     // Manual compaction: one summary call, then the next turn starts a new session (see recap.mjs).
     ['POST', /^\/api\/chats\/([\w-]+)\/compact$/, async ([id]) => ({ ...chatView(await engine.compactChat(id)), running: false })],
     // 补写变量: the latest reply of an MVU card came without its update block.
     ['POST', /^\/api\/chats\/([\w-]+)\/nodes\/([\w-]+)\/fill-update$/, async ([id, nodeId]) => ({ ...chatView(await engine.fillUpdate(id, nodeId)), running: false })],
-    ['PUT', /^\/api\/chats\/([\w-]+)\/compaction$/, async ([id], body) => {
+    ['PUT', /^\/api\/chats\/([\w-]+)\/compaction$/, ([id], body) => store.withChat(id, async () => {
       if (engine.isRunning(id)) throw httpError(409, msg`正在生成，先停止`)
       const chat = await store.getChat(id)
       editCompaction(chat, String(body.nodeId), body.summary)
       return chatView(await store.saveChat(chat))
-    }],
+    })],
     // Story archive: the summary, the last turns verbatim and the variables, to
     // carry a story into a new chat (another card version, another machine).
     ['GET', /^\/api\/chats\/([\w-]+)\/archive$/, async ([id], _, url) => exportStory(await store.getChat(id), url.searchParams.get('nodeId'))],
@@ -1039,22 +1066,22 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       const { chat, turns, chars, pendingInput } = await importSillyTavern(store, String(body.cardId ?? ''), { text: body.text, filename: typeof body.filename === 'string' ? body.filename : '' })
       return { ...chatView(chat), imported: { turns, chars, pendingInput } }
     }],
-    ['DELETE', /^\/api\/chats\/([\w-]+)\/compaction$/, async ([id], _, url) => {
+    ['DELETE', /^\/api\/chats\/([\w-]+)\/compaction$/, ([id], _, url) => store.withChat(id, async () => {
       if (engine.isRunning(id)) throw httpError(409, msg`正在生成，先停止`)
       const chat = await store.getChat(id)
       dropCompaction(chat, String(url.searchParams.get('nodeId')))
       return chatView(await store.saveChat(chat))
-    }],
+    })],
     // Switch a chat's preset (or re-render its prefix after editing the one it
     // uses). Costs one cache write on the next turn.
-    ['POST', /^\/api\/chats\/([\w-]+)\/preset$/, async ([id], body) => {
+    ['POST', /^\/api\/chats\/([\w-]+)\/preset$/, ([id], body) => store.withChat(id, async () => {
       if (engine.isRunning(id)) throw httpError(409, msg`正在生成，先停止`)
       const chat = await store.getChat(id)
       await rebuildPrompt(store, chat, typeof body.presetId === 'string' ? body.presetId : chat.presetId ?? '')
       return { ...chatView(await store.saveChat(chat)), running: false }
-    }],
+    })],
     ['POST', /^\/api\/chats\/([\w-]+)\/stop$/, ([id]) => ({ stopped: engine.stop(id) })],
-    ['PUT', /^\/api\/chats\/([\w-]+)\/state$/, async ([id], body) => {
+    ['PUT', /^\/api\/chats\/([\w-]+)\/state$/, ([id], body) => store.withChat(id, async () => {
       if (engine.isRunning(id)) throw httpError(409, msg`正在生成，先停止`)
       if (!body.state || typeof body.state !== 'object' || Array.isArray(body.state)) throw httpError(400, msg`状态必须是 JSON 对象`)
       const chat = await store.getChat(id)
@@ -1063,7 +1090,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       // The model has not seen this edit; the next turn re-sends the full state.
       chat.stateDirty = true
       return chatView(await store.saveChat(chat))
-    }],
+    })],
     ['POST', /^\/api\/chats\/([\w-]+)\/preview$/, ([id], body) =>
       engine.previewTurn(id, { parentId: String(body.parentId), input: body.input, marks: body.marks === true })],
     // 楼层渲染: { nodeId, texts } → { texts, errors? }, the EJS in what a card's display regex made
@@ -1084,21 +1111,22 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       return { books: bookNames(books, card, settings.globalBookIds ?? []), vars: chat.frameVars ?? {}, globalVars: settings.globalVars ?? {}, persona: { description: playerOf(card, persona, chat.names.user).description ?? '' } }
     }],
     // Tavern Helper's chat variables (the templates' local scope).
-    ['PUT', /^\/api\/chats\/([\w-]+)\/frame-vars$/, async ([id], body) => {
+    ['PUT', /^\/api\/chats\/([\w-]+)\/frame-vars$/, ([id], body) => store.withChat(id, async () => {
       const chat = setFrameVars(await store.getChat(id), body?.vars)
       await store.saveChat(chat)
       return { vars: chat.frameVars }
-    }],
+    })],
     // Mvu.parseMessage: the app's own parser, nothing saved.
     ['POST', /^\/api\/mvu\/parse$/, async (_, body) => ({ state: parseUpdates(body?.state, body?.text) })],
     // A book as Tavern Helper's entries: read ('get'), or written ('replace', or one field as
     // /setentryfield does) as this chat's own changes; the book itself is not touched.
     ['POST', /^\/api\/chats\/([\w-]+)\/worldbook$/, async ([id], body) => frameBook(id, { ...body, action: 'get' })],
-    ['PUT', /^\/api\/chats\/([\w-]+)\/worldbook$/, ([id], body) => frameBook(id, body ?? {})],
+    ['PUT', /^\/api\/chats\/([\w-]+)\/worldbook$/, ([id], body) => store.withChat(id, () => frameBook(id, body ?? {}))],
     ['GET', /^\/api\/chats\/([\w-]+)\/prompt$/, async ([id]) => {
-      const chat = await store.getChat(id)
+      const [chat, words] = await Promise.all([store.getChat(id), store.getBlockWords()])
       const lastUser = [...activePath(chat)].reverse().find(n => n.role === 'user')
-      return { systemPrompt: chat.systemPrompt, lastTurnPrompt: lastUser?.prompt ?? '' }
+      // As the model gets them: with the 屏蔽词.
+      return { systemPrompt: blockSent(chat.systemPrompt, words), lastTurnPrompt: blockSent(lastUser?.prompt ?? '', words) }
     }],
   ]
 
@@ -1172,7 +1200,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
   }
 
   async function serve(req, res) {
-    const url = new URL(req.url, 'http://localhost')
+    const url = requestUrl(req)
+    if (!url) return sendJson(res, 400, { error: msg`地址不对` })
     if (!(await allow(req, res, url))) return
     if (!presence.size) armIdle()
     if (req.method === 'GET' && url.pathname === '/api/presence') return holdPresence(req, res)
@@ -1408,13 +1437,16 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
         return sendJson(res, 200, await media.writeImagePrompt(chat, node, { reply, input }, signal))
       }
       const image = await media.generateImage(chat, nodeId, body.prompt, signal, drawChoiceOf(body))
-      // Re-read: the chat may have moved on while the picture was drawn.
-      const fresh = await store.getChat(chatId)
-      const target = fresh.nodes[nodeId]
-      if (!target) throw httpError(404, msg`这条叙述已经不在了`)
-      target.media = { ...(target.media ?? {}), images: [...(target.media?.images ?? []), image] }
-      await prompts.recordDrawn(fresh, target, image).catch(() => {})
-      return sendJson(res, 200, { image, chat: { ...chatView(await store.saveChat(fresh)), running: engine.isRunning(chatId) } })
+      // Re-read: the chat may have moved on while the picture was drawn (a turn saving meanwhile waits, or goes first).
+      const saved = await store.withChat(chatId, async () => {
+        const fresh = await store.getChat(chatId)
+        const target = fresh.nodes[nodeId]
+        if (!target) throw httpError(404, msg`这条叙述已经不在了`)
+        target.media = { ...(target.media ?? {}), images: [...(target.media?.images ?? []), image] }
+        await prompts.recordDrawn(fresh, target, image).catch(() => {})
+        return store.saveChat(fresh)
+      })
+      return sendJson(res, 200, { image, chat: { ...chatView(saved), running: engine.isRunning(chatId) } })
     }
 
     // 设置 → 更多 → 更新: any page may check; downloading, switching versions and
@@ -1482,7 +1514,13 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       res.on('close', () => {
         if (!res.writableEnded) controller.abort()
       })
-      return relayRequest(body, res, { proxy: isolation.proxy, ownPort: access.port, signal: controller.signal })
+      return relayRequest(body, res, { proxy: isolation.proxy, ownPort: access.port, signal: controller.signal }).catch(error => {
+        // An address on this computer or the local network, or one that cannot be checked, not allowed as such yet:
+        // the page asks the player and tries again, so it is not an error for the log.
+        if (!error.local) throw error
+        res.writeHead(403, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+        res.end(JSON.stringify({ error: localize(error.message), local: true, ...(error.unverified ? { unverified: true } : {}) }))
+      })
     }
 
     const turn = /^\/api\/chats\/([\w-]+)\/(turn|regenerate)$/.exec(url.pathname)
@@ -1529,12 +1567,15 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       access = { mode, port, host }
       const server = createServer((req, res) => {
         holdFailures(req, res)
-        handle(req, res).catch(error => {
-          if (res.headersSent) return res.end()
-          // Not an answer a route chose (httpError): where in this app it went wrong.
-          if (!error.status) res.errorStack = error.stack
-          sendJson(res, error.status ?? 500, { error: error.message })
-        })
+        handle(req, res)
+          .catch(error => {
+            if (res.headersSent) return res.end()
+            // Not an answer a route chose (httpError): where in this app it went wrong.
+            if (!error.status) res.errorStack = error.stack
+            sendJson(res, error.status ?? 500, { error: error.message })
+          })
+          // Answering the error failed too: that request goes, the server stays.
+          .catch(() => res.destroy())
       })
       await new Promise((resolve, reject) => {
         server.once('error', reject)
