@@ -177,16 +177,21 @@ export function scriptOf(change, current = null) {
   return {
     ...(current ?? { id: '', trimStrings: [], substituteRegex: 0, minDepth: null, maxDepth: null }),
     scriptName: change.name ?? current?.scriptName ?? '',
-    findRegex: change.findAfter ?? change.find,
-    replaceString: change.replaceAfter ?? change.replace,
+    // A pattern or replacement the proposal leaves alone stays as the script has it now.
+    findRegex: current && change.findAfter === change.findBefore ? current.findRegex : change.findAfter ?? change.find,
+    replaceString: current && change.replaceAfter === change.replaceBefore ? current.replaceString : change.replaceAfter ?? change.replace,
     placement: [...ON[on], ...(current?.placement ?? []).filter(p => p !== PLACEMENT.AI_OUTPUT && p !== PLACEMENT.USER_INPUT)],
     ...effectFlags(effect, current),
     disabled: change.enabled === undefined ? current?.disabled === true : !change.enabled,
   }
 }
 
-/** Each proposed pattern tried on the latest reply (`context.sample`): what it matches and what that becomes. */
-export async function tryChanges(changes, context, signal) {
+/**
+ * Each proposed pattern tried on the latest reply (`context.sample`): what it
+ * matches and what that becomes, a changed script as it will be once applied
+ * (its trimStrings and substituteRegex kept, with the chat's names).
+ */
+export async function tryChanges(changes, context, signal, subject = null) {
   const sample = context?.sample ?? ''
   if (!sample) return changes
   const out = []
@@ -195,7 +200,9 @@ export async function tryChanges(changes, context, signal) {
       out.push(change)
       continue
     }
-    out.push({ ...change, trial: await tryScript({ ...scriptOf(change), disabled: false }, sample, { signal }) })
+    signal?.throwIfAborted()
+    const current = change.kind === 'regex' ? subject?.scripts?.find(script => script.id === change.sid) ?? null : null
+    out.push({ ...change, trial: await tryScript({ ...scriptOf(change, current), disabled: false }, sample, { signal, names: context.names ?? null }) })
   }
   return out
 }

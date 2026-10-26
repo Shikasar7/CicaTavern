@@ -98,7 +98,7 @@ test('a chat runs the global scripts, then its preset\'s, then its card\'s', asy
 
 test('global scripts, imports, a card\'s switches; the built-in preset\'s stays as it is', async t => {
   const { app, call } = await tavern(t)
-  assert.deepEqual((await call('/api/regex')).body, { scripts: [] })
+  assert.deepEqual((await call('/api/regex')).body, { scripts: [], sets: [] })
   const saved = (await call('/api/regex', { method: 'PUT', body: { scripts: [script('one')] } })).body.scripts
   assert.match(saved[0].id, /^[0-9a-f-]{36}$/)
 

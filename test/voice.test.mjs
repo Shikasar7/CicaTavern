@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { createServer as createTcpServer } from 'node:net'
-import { mkdtemp, readdir, rm } from 'node:fs/promises'
+import { mkdtemp, readdir, rm, utimes } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { cleanMedia, createMedia, mediaDefaults } from '../server/media.mjs'
@@ -10,7 +10,7 @@ import { createApp } from '../server/http.mjs'
 import { normalizeProvider } from '../server/providers.mjs'
 import { createStore } from '../server/store.mjs'
 import { audioOf, audioType, cloudError, createCloudSource, listAccountVoices, requestSpec, unpack, wavFromPcm } from '../server/voice/cloud.mjs'
-import { cleanVoiceList, prepareText } from '../server/voice/index.mjs'
+import { cleanVoiceList, createVoices, prepareText } from '../server/voice/index.mjs'
 import { defaultVoices, speechRequest, takesInstructions } from '../server/voice/openai.mjs'
 
 const MP3 = Buffer.concat([Buffer.from('ID3'), Buffer.from([4, 0, 0, 0, 0, 0, 0]), Buffer.alloc(32, 0x55)])
@@ -129,6 +129,12 @@ test('voice helpers: request formats, decoding, voice lists, emotion handling', 
   assert.equal(audioOf(PCM, { pcmRate: 32000 }).buffer.readUInt32LE(24), 32000)
   assert.throws(() => audioOf(Buffer.from('{"error":"quota"}'), { contentType: 'application/json' }), /不是音频.*quota/)
   assert.deepEqual(audioOf(Buffer.from('anything'), { fallback: 'audio/wav' }).mime, 'audio/wav')
+  // Raw PCM whose first sample looks like an MPEG frame sync is still PCM; only a container header says otherwise.
+  const syncLike = Buffer.concat([Buffer.from([0xff, 0xfb]), PCM])
+  assert.equal(audioOf(syncLike, { contentType: 'audio/L16;rate=24000' }).mime, 'audio/wav')
+  assert.equal(audioOf(syncLike, { pcmRate: 24000 }).mime, 'audio/wav')
+  assert.equal(audioOf(syncLike, { contentType: 'audio/mpeg' }).mime, 'audio/mpeg')
+  assert.equal(audioOf(MP3, { pcmRate: 24000 }).mime, 'audio/mpeg')
 
   // Voice lists from the settings form: links, ids with names, bare ids on one line.
   assert.deepEqual(cleanVoiceList(`https://fish.audio/zh-CN/m/${FISH_VOICE.toUpperCase()}/ 南晚\n${'a'.repeat(32)}\n\n${FISH_VOICE}`, { fish: true }), [
@@ -207,6 +213,37 @@ test('provider voices: /audio/speech with the provider key, emotions as instruct
   const other = normalizeProvider({ name: '别家', api: 'openai-completions', baseURL: 'http://127.0.0.1:9/v1', apiKey: 'x', models: ['m'] }, null, new Set([provider.id]))
   await store.saveProviders([provider, other])
   await assert.rejects(media.speak({ text: '你好', voice: `openai:${other.id}:alloy` }), /不是「配图与朗读」里选的朗读供应商/)
+})
+
+test('the read-aloud cache keeps to its size: the takes played longest ago go first', async t => {
+  const voices = await fakeVoices(t)
+  const root = await mkdtemp(path.join(tmpdir(), 'tavern-voice-cache-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const provider = normalizeProvider({ name: '朗读', api: 'openai-completions', baseURL: `${voices.base}/v1`, apiKey: PROVIDER_KEY, models: ['chat'] })
+  const settings = cleanMedia({ ttsProvider: provider.id }, RELEASE, RELEASE)
+  const tts = createVoices({ root, settings: async () => settings, providers: async () => [provider], urls: voices.urls, features: { xiaoya: false }, cacheMax: MP3.length * 3 })
+  const dir = path.join(root, 'media', 'tts')
+  const ref = `openai:${provider.id}:alloy`
+  const files = async () => (await readdir(dir).catch(() => [])).sort()
+  const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
+  /** Read one line; → the file its take is kept in, when it is a new one. */
+  const take = async text => {
+    const before = new Set(await files())
+    await tts.speak({ text, voice: ref })
+    return (await files()).find(name => !before.has(name))
+  }
+  const named = []
+  for (const text of ['一', '二', '三']) named.push(await take(text))
+  // Last played: 一 300 s ago, 二 200 s, 三 100 s; then 一 is played again, from the cache.
+  const ago = seconds => new Date(Date.now() - seconds * 1000)
+  await Promise.all(named.map((name, i) => utimes(path.join(dir, name), ago(300 - i * 100), ago(300 - i * 100))))
+  await take('一')
+  assert.equal(voices.calls('/v1/audio/speech').length, 3)
+  await wait(50)
+  // A fourth is over the size: the ones played longest ago go, down to four fifths.
+  const fourth = await take('四')
+  for (let i = 0; i < 100 && (await files()).length > 2; i++) await wait(20)
+  assert.deepEqual(await files(), [named[0], fourth].sort())
 })
 
 test('Fish and MiniMax: keys kept server-side, tags only for Fish, hex decoded, errors without the key', async t => {

@@ -74,6 +74,23 @@ test('a proposed pattern is tried on the latest reply; one that backtracks for e
   assert.equal(changes[1].trial, undefined)
 })
 
+test('a changed script is tried as it will be applied: its trim strings, its {{char}}, what it leaves alone', async () => {
+  const subject = { scripts: cleanScripts([{ id: 'say', scriptName: '台词', findRegex: '/{{char}}说：【([^】]+)】/g', replaceString: '「$1」', trimStrings: ['别'], substituteRegex: 1, placement: [2] }]) }
+  const sample = '青禾说：【今晚别走了】'
+  const { changes } = readRegexEdit('<regex id="say"><replace>『$1』</replace></regex>', subject)
+  const [tried] = await tryChanges(changes, { sample, names: { char: '青禾', user: '你' } }, undefined, subject)
+  assert.deepEqual([tried.trial.matches, tried.trial.samples[0].shown], [1, '『今晚走了』'])
+  // The pattern the proposal left alone is the script's as it is now, when applied.
+  subject.scripts[0].findRegex = '/{{char}}说：「([^」]+)」/g'
+  applyRegexChanges(subject, changes, ['regex:say'])
+  assert.deepEqual([subject.scripts[0].findRegex, subject.scripts[0].replaceString], ['/{{char}}说：「([^」]+)」/g', '『$1』'])
+  // Stopped: no more trials.
+  const controller = new AbortController()
+  controller.abort()
+  await assert.rejects(tryChanges(changes, { sample }, controller.signal, subject), { name: 'AbortError' })
+  assert.deepEqual(await tryScript(scriptOf(changes[0], subject.scripts[0]), sample, { signal: controller.signal }), { error: 'failed' })
+})
+
 test('the look: palettes read over the colours on screen, a picture drawn only when chosen', async () => {
   const context = { palette: { light: LIGHT, dark: DARK } }
   const { request } = themeEditRequest({ style: 'lamp', custom: null, backdrop: '' }, { text: '水墨风', context })
@@ -168,6 +185,27 @@ test('regex by talking: tried on the reply sent along, saved, undone; a card kee
   assert.equal((await call('/api/talk/regex/preset-basic')).status, 404, "the built-in preset's script is not changed here")
   await call(`/api/cards/${card.id}`, { method: 'DELETE' })
   assert.equal((await call(`/api/talk/regex/card-${card.id}`)).status, 404)
+})
+
+test('a new request sent while a proposal goes in: one waits for the other, and the session says what happened', async t => {
+  const { call, ask } = await tavern(t)
+  for (let round = 0; round < 3; round++) {
+    await ask('/api/talk/regex/global', { text: `第 ${round} 次：把【】变成框`, context: { sample: SAMPLE } })
+    const [applied, asked] = await Promise.all([
+      call('/api/talk/regex/global/apply', { method: 'POST', body: { ids: ['new:0'] } }),
+      call('/api/talk/regex/global', { method: 'POST', body: { text: '再加个颜色', context: { sample: SAMPLE } } }),
+    ])
+    let session = asked.body
+    for (let i = 0; i < 300 && session.job; i++) {
+      await new Promise(resolve => setTimeout(resolve, 10))
+      session = (await call('/api/talk/regex/global')).body
+    }
+    session = (await call('/api/talk/regex/global')).body
+    assert.ok([200, 409].includes(applied.status) && [200, 409].includes(asked.status))
+    // Taken in: the turn it came from says so, never 没有采用.
+    const taken = session.turns.findLast(turn => turn.outcome?.applied)
+    if (applied.status === 200) assert.ok(taken && !taken.outcome.discarded, 'the apply is on record')
+  }
 })
 
 test('the look by talking: the colours on screen sent along, the custom style saved and undone', async t => {

@@ -10,6 +10,7 @@ import { isProviderRef } from './providers.mjs'
 import { httpError, newId } from './store.mjs'
 import { msg } from './i18n.mjs'
 import { BASIC_ID } from './basic.mjs'
+import { withoutOldImages } from './draw-history.mjs'
 
 export const PACKAGE_MAGIC = 'AGENT-TAVERN-CHAT 1\n'
 export const PACKAGE_FORMAT = 'agent-tavern-chat'
@@ -63,7 +64,8 @@ export async function chatPackage(store, chatId) {
     exportedAt: new Date().toISOString(),
     cardName: card?.name ?? chat.names?.char ?? '',
     presetName: chat.presetName ?? null,
-    chat: { ...chat, tips: {} },
+    // The pictures in use only: their old ones (抽图历史) stay on this device.
+    chat: { ...chat, tips: {}, nodes: withoutOldImages(chat.nodes) },
     media,
   }), 'utf8')
   return Buffer.concat([Buffer.from(`${PACKAGE_MAGIC}${header.length}\n`, 'utf8'), header, ...blobs])

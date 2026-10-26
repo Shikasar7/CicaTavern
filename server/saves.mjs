@@ -9,7 +9,7 @@ import { randomBytes } from 'node:crypto'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { imageKind } from './appearance.mjs'
-import { httpError } from './store.mjs'
+import { httpError, readJsonFile, writeJson } from './store.mjs'
 import { msg } from './i18n.mjs'
 
 export const SAVE_SLOTS = 18
@@ -35,19 +35,15 @@ export function createSaves(store) {
 
   async function read(cardId) {
     await store.getCard(cardId)
-    try {
-      const value = JSON.parse(await readFile(listFile(cardId), 'utf8'))
-      return Array.isArray(value.saves) ? value.saves : []
-    } catch {
-      return []
-    }
+    const value = await readJsonFile(listFile(cardId), null)
+    return Array.isArray(value?.saves) ? value.saves : []
   }
 
-  /** fn(saves) → { saves, result }: alone for this card, the list written after. */
+  /** fn(saves) → { saves, result }: alone for this card, the list written after (whole, never half a file). */
   function change(cardId, fn) {
     const run = (locks.get(cardId) ?? Promise.resolve()).then(async () => {
       const { saves, result } = await fn(await read(cardId))
-      await writeFile(listFile(cardId), JSON.stringify({ saves }, null, 1), 'utf8')
+      await writeJson(listFile(cardId), { saves })
       return result
     })
     locks.set(cardId, run.catch(() => {}))

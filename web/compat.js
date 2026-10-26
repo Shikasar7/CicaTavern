@@ -156,7 +156,16 @@ export function frameFetch({ direct, post, call, fetches, frame, appOrigin, rela
       const id = `${frame}-${++seq}`
       let stream = null
       let answered = false
-      const body = new ReadableStream({ start: controller => { stream = controller }, cancel: () => post('fetchCancel', { id }) })
+      // The card stopped reading: the app is told, and what still arrives is dropped (a closed stream throws).
+      const body = new ReadableStream({
+        start: controller => {
+          stream = controller
+        },
+        cancel: () => {
+          fetches.delete(id)
+          post('fetchCancel', { id })
+        },
+      })
       const fail = error => {
         if (!fetches.has(id)) return
         fetches.delete(id)
@@ -178,7 +187,13 @@ export function frameFetch({ direct, post, call, fetches, frame, appOrigin, rela
             fail(new TypeError(error.message))
           }
         },
-        chunk: bytes => stream.enqueue(bytes),
+        chunk: bytes => {
+          try {
+            stream.enqueue(bytes)
+          } catch {
+            // Cancelled by the reader meanwhile.
+          }
+        },
         done: () => {
           fetches.delete(id)
           try {
@@ -256,6 +271,11 @@ function shimMain(ctx, makeFetch) {
       messageVars.set(ctx.lastId, mvuShape(ctx.vars.latest))
       buckets.chat = chatShape()
       eventEmit('mag_variable_update_ended', messageVars.get(ctx.lastId)).catch(() => {})
+    }
+    // The chat's variables as saved now (another frame, or /setvar from STscript): this frame reads and writes over them.
+    if (data && data.agentTavernChatVars && typeof data.agentTavernChatVars === 'object') {
+      chatExtras = clone(data.agentTavernChatVars.vars || {})
+      buckets.chat = chatShape()
     }
     // A model call this frame asked for (generate): the text so far, then the end.
     if (data && data.agentTavernStream && data.agentTavernStream.frame === ctx.frame) {
@@ -426,6 +446,14 @@ function shimMain(ctx, makeFetch) {
     }
     return buckets[type] ?? (buckets[type] = {})
   }
+  // The top-level keys a write changed: the app saves only those over what is saved now, so keys a turn's
+  // template or another frame wrote after this frame opened are kept (app.js frameHandlers, patchVars).
+  const changesOf = (before, after) => {
+    const set = {}
+    for (const [key, value] of Object.entries(after || {})) if (JSON.stringify(value) !== JSON.stringify((before || {})[key])) set[key] = value
+    const unset = Object.keys(before || {}).filter(key => !Object.prototype.hasOwnProperty.call(after || {}, key))
+    return { set, unset }
+  }
   const write = (option = {}, value) => {
     const type = (option && option.type) || 'chat'
     if (type === 'message') {
@@ -438,16 +466,19 @@ function shimMain(ctx, makeFetch) {
       else if (state) console.warn(`[酒馆] 只有最新一楼的变量会保存，第 ${id} 楼的改动只在这个界面里有效`) // i18n-ignore: for the card's scripts, inside its frame
       return
     }
+    const before = buckets[type]
     buckets[type] = value
     if (type === 'chat') {
       // What the card keeps for this chat, without the state mirrored into it.
       const mirrored = new Set([...MVU_KEYS, ...Object.keys(ctx.vars.latest || {})])
+      const extrasBefore = chatExtras
       chatExtras = Object.fromEntries(Object.entries(value || {}).filter(([key]) => !mirrored.has(key)))
-      post('chatVars', { value: chatExtras })
+      post('chatVars', { value: chatExtras, ...changesOf(extrasBefore, chatExtras) })
       return
     }
     // Kept in this browser between renders.
-    if (type === 'global' || type === 'preset' || type === 'character') post('vars', { type, value })
+    if (type === 'global') post('vars', { type, value, ...changesOf(before, value) })
+    else if (type === 'preset' || type === 'character') post('vars', { type, value })
   }
   const getVariables = option => clone(read(option))
   const replaceVariables = (variables, option) => write(option, clone(variables || {}))
@@ -1021,7 +1052,7 @@ export function installFrameBridge(handlers) {
     // has the focus (a click on the page's own buttons takes it away). Taken now, before a step such as /setinput
     // moves the focus. What a card may do without a click is asked per card (web/shared/frame-permissions.js).
     const clicked = navigator.userActivation?.isActive === true && document.activeElement === frame
-    const context = { frame: id, window: event.source, card: frame.dataset.card || null, clicked }
+    const context = { frame: id, window: event.source, card: frame.dataset.card || null, node: frame.dataset.node || null, clicked }
     try {
       if (data.op === 'toast') handlers.toast(args.level, [args.title, args.text].filter(Boolean).join('：')) // i18n-ignore: a card script's own toast
       else if (data.op === 'input') {
@@ -1038,8 +1069,9 @@ export function installFrameBridge(handlers) {
         if (frame.dataset.card) saveFrameStorage(frame.dataset.card, args.key, args.value)
       } else if (data.op === 'vars') {
         const value = args.value && typeof args.value === 'object' ? args.value : {}
-        // Global variables are the app's (templates share them); preset and character ones stay in this browser.
-        if (args.type === 'global') await handlers.globalVars(value)
+        // Global variables are the app's (templates share them), saved as the keys the frame changed;
+        // preset and character ones stay in this browser.
+        if (args.type === 'global') await handlers.globalVars(value, args.set || args.unset ? { set: args.set, unset: args.unset } : null)
         else saveVariables(args.type, handlers.ids(), value)
       }
     } catch (error) {
@@ -1051,6 +1083,11 @@ export function installFrameBridge(handlers) {
 /** Tell every card frame the chat's state changed, so the latest floor's variables and MVU listeners follow. */
 export function broadcastState(state) {
   for (const frame of document.querySelectorAll('iframe.card-frame')) frame.contentWindow?.postMessage({ agentTavernState: { state } }, '*')
+}
+
+/** Tell every card frame the chat's variables as saved, so a frame's copy has what another wrote (or /setvar). */
+export function broadcastChatVars(vars) {
+  for (const frame of document.querySelectorAll('iframe.card-frame')) frame.contentWindow?.postMessage({ agentTavernChatVars: { vars } }, '*')
 }
 
 /** Tell every card frame the addresses its card may now reach through the app (frameFetch's `allow`). */

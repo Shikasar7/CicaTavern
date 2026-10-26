@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises'
 import { inflateSync } from 'node:zlib'
 import { normalizeBook } from './worldbook.mjs'
 import { httpError, newId } from './store.mjs'
-import { normalizeScripts } from '../web/shared/regex.js'
+import { normalizeScripts, withUniqueIds } from '../web/shared/regex.js'
 import { cleanStatusSpec } from '../web/shared/status.js'
 import { msg } from './i18n.mjs'
 import { usesMvu } from './mvu.mjs'
@@ -133,7 +133,52 @@ export function importOwnCard(json) {
   if (!card || typeof card !== 'object' || typeof card.name !== 'string' || !card.name.trim()) throw httpError(400, msg`角色卡文件不完整`)
   const { media, ...rest } = card
   const avatar = typeof json.avatar === 'string' && json.avatar ? Buffer.from(json.avatar, 'base64') : null
-  return { card: { ...rest, id: newId(), worldbookIds: [], hasAvatar: Boolean(avatar), importedAt: new Date().toISOString() }, avatar }
+  return { card: { ...rest, ...ownCardFields(card), id: newId(), worldbookIds: [], hasAvatar: Boolean(avatar), importedAt: new Date().toISOString() }, avatar }
+}
+
+const strings = value => (Array.isArray(value) ? value.filter(item => typeof item === 'string') : [])
+const isRecord = value => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+
+/**
+ * The fields the app reads, in the shapes it reads them, from an exported card (hand-edited, older or made
+ * elsewhere): a file missing one used to be saved as it was and then broke the whole card list. What a
+ * well-formed export holds comes out the same; the book's entries keep their own fields.
+ */
+function ownCardFields(card) {
+  const book = isRecord(card.book) && Array.isArray(card.book.entries)
+    ? {
+        ...card.book,
+        name: str(card.book.name) || `${str(card.name).trim()} 内嵌世界书`,
+        entries: card.book.entries.filter(isRecord).map((entry, i) => ({
+          ...entry,
+          uid: String(entry.uid ?? i),
+          keys: strings(entry.keys),
+          secondaryKeys: strings(entry.secondaryKeys),
+          content: str(entry.content),
+          comment: str(entry.comment),
+        })),
+      }
+    : null
+  return {
+    name: str(card.name).trim(),
+    description: str(card.description),
+    personality: str(card.personality),
+    scenario: str(card.scenario),
+    firstMes: str(card.firstMes),
+    alternateGreetings: strings(card.alternateGreetings),
+    mesExample: str(card.mesExample),
+    systemPrompt: str(card.systemPrompt),
+    postHistoryInstructions: str(card.postHistoryInstructions),
+    creatorNotes: str(card.creatorNotes),
+    creator: str(card.creator),
+    tags: strings(card.tags).slice(0, 20),
+    book,
+    regexScripts: withUniqueIds(normalizeScripts(card.regexScripts)),
+    depthPrompt: str(card.depthPrompt),
+    helperScripts: Number.isInteger(card.helperScripts) && card.helperScripts > 0 ? card.helperScripts : 0,
+    statusBar: cleanStatusSpec(card.statusBar),
+    userName: str(card.userName).trim().slice(0, 24),
+  }
 }
 
 /** Extract the card JSON from an uploaded file. */
@@ -175,7 +220,7 @@ export function normalizeCard(raw) {
     tags: Array.isArray(data.tags) ? data.tags.filter(t => typeof t === 'string').slice(0, 20) : [],
     spec: str(raw.spec) || 'v1',
     book,
-    regexScripts: normalizeScripts(extensions.regex_scripts),
+    regexScripts: withUniqueIds(normalizeScripts(extensions.regex_scripts)),
     // Character note inserted near the end of the context in SillyTavern; here: the tail of each turn.
     depthPrompt: str(extensions.depth_prompt?.prompt),
     // Tavern Helper scripts are not run; MVU behaviour is built in.

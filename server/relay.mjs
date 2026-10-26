@@ -23,6 +23,9 @@ const DROPPED = /^(host|connection|keep-alive|content-length|transfer-encoding|t
 const DROPPED_BACK = /^(connection|keep-alive|proxy-connection|transfer-encoding|trailer|upgrade|content-length|content-encoding|set-cookie2?)$/i
 const BODY_MAX = 10 * 1024 * 1024
 const TIMEOUT_MS = 10 * 60 * 1000
+// Redirects followed within the allowed host, at most this many in a row (as a browser stops after twenty).
+const REDIRECTS = new Set([301, 302, 303, 307, 308])
+const MAX_REDIRECTS = 5
 // The ports CicaTavern listens on by default.
 const APP_PORTS = ['personal', 'release'].map(name => featuresOf(name).port)
 
@@ -133,27 +136,52 @@ export async function relayRequest(input, res, { proxy = null, ownPort = 0, sign
   }
   // Passed on as it comes: a compressed body would have to be undone twice.
   headers['accept-encoding'] = 'identity'
-  const payload = typeof input?.body === 'string' && input.body ? Buffer.from(input.body, 'base64') : null
+  let payload = typeof input?.body === 'string' && input.body ? Buffer.from(input.body, 'base64') : null
   if (payload && payload.length > BODY_MAX) throw httpError(413, msg`要转发的内容太大`)
   if (payload) headers['content-length'] = String(payload.length)
-  // The checked addresses, connected to directly: always for this computer and the local network (a proxy
-  // cannot reach them), and without a proxy. Through a proxy, the proxy looks the name up itself (a censored
-  // name's local answer may be false), so a name that changes its answer between the two lookups is the proxy's.
-  const pinned = target.addresses && (target.local || !proxy) ? { agent: false, lookup: pinnedLookup(target.addresses) } : { agent: agentFor(url, proxy) }
 
-  const upstream = await new Promise((resolve, reject) => {
-    if (signal?.aborted) return reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
-    const lib = url.protocol === 'https:' ? https : http
-    const req = lib.request(url, { method, headers, ...pinned, timeout: TIMEOUT_MS })
-    signal?.addEventListener('abort', () => req.destroy(Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true })
-    req.on('response', resolve)
-    req.on('timeout', () => req.destroy(new Error(msg`请求超时`)))
-    req.on('error', reject)
-    req.end(payload ?? undefined)
-  }).catch(error => {
-    if (error.name === 'AbortError') throw httpError(499, msg`已取消`)
-    throw httpError(502, msg`替卡片界面连接 ${url.host} 没有连上：${error.message}`)
-  })
+  const send = (hop, verb) => {
+    // The checked addresses, connected to directly: always for this computer and the local network (a proxy
+    // cannot reach them), and without a proxy. Through a proxy, the proxy looks the name up itself (a censored
+    // name's local answer may be false), so a name that changes its answer between the two lookups is the proxy's.
+    const pinned = hop.addresses && (hop.local || !proxy) ? { agent: false, lookup: pinnedLookup(hop.addresses) } : { agent: agentFor(hop.url, proxy) }
+    return new Promise((resolve, reject) => {
+      if (signal?.aborted) return reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
+      const lib = hop.url.protocol === 'https:' ? https : http
+      const req = lib.request(hop.url, { method: verb, headers, ...pinned, timeout: TIMEOUT_MS })
+      signal?.addEventListener('abort', () => req.destroy(Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true })
+      req.on('response', resolve)
+      req.on('timeout', () => req.destroy(new Error(msg`请求超时`)))
+      req.on('error', reject)
+      req.end(payload ?? undefined)
+    }).catch(error => {
+      if (error.name === 'AbortError') throw httpError(499, msg`已取消`)
+      throw httpError(502, msg`替卡片界面连接 ${hop.url.host} 没有连上：${error.message}`)
+    })
+  }
+
+  // Redirects followed as a page's fetch follows them, within the host the player allowed (http to https, another
+  // port), each hop checked and pinned as the first; one to another host goes back to the card as it came.
+  let hop = target
+  let verb = method
+  let upstream = await send(hop, verb)
+  for (let hops = 0; REDIRECTS.has(upstream.statusCode) && upstream.headers.location && hops < MAX_REDIRECTS; hops++) {
+    let next
+    try {
+      next = new URL(upstream.headers.location, hop.url)
+    } catch {
+      break
+    }
+    if (next.hostname !== url.hostname || !/^https?:$/.test(next.protocol)) break
+    upstream.resume()
+    if (upstream.statusCode === 303 ? verb !== 'HEAD' : upstream.statusCode <= 302 && verb === 'POST') {
+      verb = 'GET'
+      payload = null
+      for (const name of ['content-length', 'content-type']) delete headers[name]
+    }
+    hop = await relayTarget(next.href, { ownPort, local: input?.local === true, proxy, ...(resolve ? { resolve } : {}) })
+    upstream = await send(hop, verb)
+  }
 
   const passed = []
   for (let i = 0; i < upstream.rawHeaders.length; i += 2) {

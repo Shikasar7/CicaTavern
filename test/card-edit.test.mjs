@@ -157,6 +157,30 @@ test('applying the chosen changes: the card changes in place, a new entry makes 
   assert.equal(bare.book.entries[0].constant, true)
 })
 
+test('a fenced piece keeps its fences; a body the model only wrapped in one loses them', () => {
+  const card = normalizeCard({ ...RAW, data: { ...RAW.data, first_mes: '```html\n<div>UI</div>\n```' } })
+  const echoed = readEdit('<greeting index="1">```html\n<div>UI</div>\n```</greeting>', card).changes
+  assert.deepEqual(echoed, [], 'the same fenced opening is no change')
+  const [changed] = readEdit('<greeting index="1">```html\n<div>UI v2</div>\n```</greeting>', card).changes
+  assert.equal(changed.after, '```html\n<div>UI v2</div>\n```')
+  // A plain piece answered inside a fence: the fence was the model's.
+  const [wrapped] = readEdit('<field name="personality">```\n冷淡，话少。\n```</field>', card).changes
+  assert.equal(wrapped.after, '冷淡，话少。')
+  // Two blocks of code with words between: not one wrapper, left whole.
+  const [two] = readEdit('<field name="personality">```js\na()\n```\n然后\n```js\nb()\n```</field>', card).changes
+  assert.equal(two.after, '```js\na()\n```\n然后\n```js\nb()\n```')
+})
+
+test('a proposal taken later: an entry edited since keeps the edit unless the proposal rewrites its text', () => {
+  const card = stored()
+  const { changes } = readEdit('<entry uid="1" keys="茶点, 甜点">桂花糕、绿豆酥。</entry>', card)
+  assert.deepEqual(changes.map(c => [c.id, c.keys]), [['entry:1', ['茶点', '甜点']]])
+  card.book.entries[1].content = '桂花糕、绿豆酥、芝麻饼。'
+  applyChanges(card, changes, ['entry:1'])
+  assert.equal(card.book.entries[1].content, '桂花糕、绿豆酥、芝麻饼。')
+  assert.deepEqual(card.book.entries[1].keys, ['茶点', '甜点'])
+})
+
 // ─── Over HTTP, with a model that answers ANSWER ─────────────────────────
 
 async function fakeModel() {

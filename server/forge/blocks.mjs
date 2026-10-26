@@ -14,8 +14,21 @@ export const splitKeys = text => [...new Set(String(text ?? '').split(/[,，、]
 
 const attrsOf = text => Object.fromEntries([...String(text).matchAll(/([\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)].map(([, key, a, b]) => [key.toLowerCase(), a ?? b]))
 
+/** A body wrapped whole in one ``` fence (the model's habit), without it; anything else as it is. */
+function unfence(text) {
+  const match = /^```[\w+-]*[ \t]*\n?([\s\S]*?)\n?```$/.exec(text)
+  return match && !/^```/m.test(match[1]) ? match[1].trim() : text
+}
+
 /**
- * An answer → { reply, blocks: [{ tag, attrs, body }] } for the given tag names.
+ * A block's body for a piece that was `before`: its fences kept when the piece
+ * itself is a fenced block (an HTML front-end opening, a ```yaml entry).
+ */
+export const bodyFor = (block, before) => (/^\s*```/.test(String(before ?? '')) ? block.raw : block.body)
+
+/**
+ * An answer → { reply, blocks: [{ tag, attrs, body, raw }] } for the given tag names
+ * (`raw`: the body with a fence around it kept, see bodyFor).
  * A reply left open runs into the first block; an answer without any tags is all reply.
  */
 export function readBlocks(text, tags) {
@@ -25,9 +38,12 @@ export function readBlocks(text, tags) {
   // A body without fences, or a close tag of another kind the model ended it with.
   const strayClose = new RegExp(`\\s*</(?:${names})\\s*>\\s*$`, 'i')
   const opening = new RegExp(`<(?:${names})\\b`, 'i')
-  const bodyOf = body => String(body).replace(strayClose, '').replace(/^\s*```[a-z]*\s*\n?/i, '').replace(/\n?```\s*$/, '').trim()
+  const bodyOf = body => {
+    const raw = String(body).replace(strayClose, '').trim()
+    return { body: unfence(raw), raw }
+  }
   const reply = (section(source, 'reply') || (opening.test(source) ? '' : source.trim())).split(opening)[0].trim()
-  const blocks = [...source.matchAll(block)].map(([, tag, attrs, body]) => ({ tag: tag.toLowerCase(), attrs: attrsOf(attrs), body: bodyOf(body) }))
+  const blocks = [...source.matchAll(block)].map(([, tag, attrs, body]) => ({ tag: tag.toLowerCase(), attrs: attrsOf(attrs), ...bodyOf(body) }))
   return { reply: reply.slice(0, 2000), blocks }
 }
 

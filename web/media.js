@@ -5,7 +5,7 @@ import { speechChunks } from '/shared/speech.js'
 import { hasMarks, speakerNames, splitLines } from '/shared/vn.js'
 import { createMenu, MENU_ICONS, whoLine } from '/menu.js'
 import { locale, t, zh } from '/i18n.js'
-import { NAI_MODELS } from '/draw-choice.js'
+import { NAI_MODELS, historyStrip, keptItems } from '/draw-choice.js'
 import { GEMINI_IMAGE_MODELS, IMAGE_MODEL } from '/shared/draw.js'
 import { matchesTerms, searchBox, searchTerms } from '/books.js'
 
@@ -41,6 +41,15 @@ const SERVICE_SITES = {
     { name: t`MiniMax 国际站`, site: 'https://platform.minimax.io', keys: 'https://platform.minimax.io/user-center/basic-information/interface-key', net: 'proxy' },
   ],
   'voice:gemini': [GOOGLE_SITE],
+  'stt:provider': [
+    { name: t`硅基流动（SenseVoice，免费）`, site: 'https://cloud.siliconflow.cn', keys: 'https://cloud.siliconflow.cn/account/ak', net: 'direct' },
+    { name: t`Groq（whisper，很快）`, site: 'https://console.groq.com', keys: 'https://console.groq.com/keys', net: 'proxy' },
+    OPENAI_SITE,
+  ],
+  'stt:local': [
+    { name: t`speaches（faster-whisper）`, site: 'https://github.com/speaches-ai/speaches', net: 'local', download: true },
+    { name: 'whisper.cpp', site: 'https://github.com/ggml-org/whisper.cpp', net: 'local', download: true },
+  ],
 }
 const SD_SAMPLERS = ['Euler a', 'Euler', 'DPM++ 2M', 'DPM++ 2M Karras', 'DPM++ SDE Karras', 'DPM++ 2M SDE', 'DDIM', 'UniPC']
 /** A provider holding Google's key (the Gemini template), offered first for Gemini's own models. */
@@ -69,6 +78,11 @@ const PREVIEW_LINE = zh`你好呀，很高兴见到你。今天想听我讲点�
 // Characters per chunk: the bridge's Qwen3 voices keep their intonation over ~100;
 // cloud voices bill per request, so longer; Chrome stops a long utterance after ~15 s.
 const CHUNK_MAX = { bridge: 100, browser: 150, openai: 250, fish: 250, minimax: 300, gemini: 300 }
+// 语音输入 (server/voice/listen.mjs): where a recording is written out.
+const STT_FIELDS = ['sttSource', 'sttProvider', 'sttModel', 'sttUrl', 'sttLocalModel', 'sttLanguage']
+const STT_MODELS = ['FunAudioLLM/SenseVoiceSmall', 'TeleAI/TeleSpeechASR', 'whisper-large-v3-turbo', 'whisper-large-v3', 'gpt-4o-mini-transcribe', 'gpt-4o-transcribe', 'whisper-1', 'voxtral-mini-latest']
+/** The browser's own speech recognition, where it works (not in the phone app's WebView, not on a page on plain http). */
+const canHear = () => Boolean(globalThis.SpeechRecognition ?? globalThis.webkitSpeechRecognition) && document.documentElement.dataset.edition !== 'android' && globalThis.isSecureContext !== false
 
 const browserVoiceList = () => (speech ? speech.getVoices() : [])
 
@@ -104,6 +118,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     jobs: new Map(), // nodeId → { stage, chatId, controller, started, backend } of a picture in the works
     failures: new Map(), // nodeId → { stage, chatId, prompt, message } shown in place of the picture
     fresh: new Set(), // files just drawn: they come into focus once loaded
+    openOld: new Set(), // pictures whose old ones (抽图历史) are shown under them
     // This install's own image backends, as /api/media/settings describes them ({ id, name, ready, need, hint, models, model }).
     ownBackends: [],
   }
@@ -117,9 +132,13 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     } catch {
       state.settings = null
     }
+    announceSettings()
     // How long a piece each voice takes; until it arrives, the voice's prefix says.
     api('/api/media/voices').then(info => { state.voiceInfo = info }, () => {})
   }
+
+  /** The settings loaded or saved: the microphone beside the input box (app.js) follows 语音输入. */
+  const announceSettings = () => document.dispatchEvent(new CustomEvent('cicatavern:media-settings'))
 
   /** The card's settings just saved: the visual novel mode's cast (web/vn.js) follows its 角色名册. */
   function announceCardMedia() {
@@ -179,8 +198,11 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     const failure = state.failures.get(node.id)
     const failed = failure?.chatId === chat.id ? failure : null
     if (!images.length && !job && !failed) return el('div', { class: 'reply-images', 'data-gallery': node.id, hidden: true })
+    // 重画 in the works: its frame stands where the picture is.
+    const inPlace = job?.replace && images.some(image => image.file === job.replace)
     return el('div', { class: 'reply-images', 'data-gallery': node.id }, [
       ...images.map(image => {
+        if (inPlace && image.file === job.replace) return pendingFigure(job)
         const fresh = state.fresh.delete(image.file)
         const img = el('img', { src: `/api/media/${chat.id}/${image.file}`, alt: image.prompt, loading: fresh ? 'eager' : 'lazy', class: fresh ? 'fresh' : null, style: fresh ? `--ratio: ${ratioOf()}` : null, onclick: () => viewImage(chat, node, image) })
         // A new picture develops out of the blurred frame it replaced.
@@ -191,17 +213,44 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
             setTimeout(() => img.classList.remove('fresh', 'loaded'), 1400)
           }, { once: true })
         }
+        const old = image.history?.length ?? 0
+        const open = old > 0 && state.openOld.has(image.file)
         return el('figure', { class: 'reply-image' }, [
           img,
           el('figcaption', {}, [
-            el('button', { type: 'button', text: t`重画`, title: t`同一段提示词再画一张，可以先选画图方式和模型`, disabled: Boolean(job), onclick: () => redraw(node, image.prompt, chat.id) }),
-            el('button', { type: 'button', text: t`改提示词`, disabled: Boolean(job), onclick: () => openImageDialog(node, image.prompt, { chatId: chat.id, note: t`这张图的提示词，改完点「画」。` }) }),
+            el('button', { type: 'button', text: t`重画`, title: t`同一段提示词再画一张换掉这张，可以先选画图方式和模型；这张留在旧图里`, disabled: Boolean(job), onclick: () => redraw(node, image, chat.id) }),
+            el('button', { type: 'button', text: t`改提示词`, disabled: Boolean(job), onclick: () => openImageDialog(node, image.prompt, { chatId: chat.id, note: t`这张图的提示词，改完点「画」：新画的换掉这张，这张留在旧图里。`, replace: image.file }) }),
             el('button', { type: 'button', text: t`删除`, onclick: () => removeImage(node, image) }),
+            old ? el('button', { type: 'button', text: t`旧图 ${old}`, title: t`这张重画之前的几张：点一张换回来`, 'aria-expanded': String(open), onclick: () => toggleOld(node, image) }) : null,
           ]),
+          open ? oldPictures(chat, node, image) : null,
         ])
       }),
-      job ? pendingFigure(job) : failed ? failedFigure(node, failed) : null,
+      job && !inPlace ? pendingFigure(job) : failed ? failedFigure(node, failed) : null,
     ].filter(Boolean))
+  }
+
+  // ─── 抽图历史: the pictures one was drawn over (server/draw-history.mjs) ──
+
+  function toggleOld(node, image) {
+    if (!state.openOld.delete(image.file)) state.openOld.add(image.file)
+    refreshNode(node.id)
+  }
+
+  /** The old ones under a picture: one taken back takes its place (that one becomes an old one), × deletes one. */
+  function oldPictures(chat, node, image) {
+    return historyStrip(el, image.history.map(old => ({ ...old, src: `/api/media/${chat.id}/${old.file}` })), {
+      onPick: guard(async old => {
+        const view = await api(`/api/chats/${chat.id}/nodes/${node.id}/image/use`, { method: 'POST', body: { file: image.file, old: old.file } })
+        state.openOld.add(old.file)
+        adopt(view, node.id)
+        refreshNode(node.id)
+      }),
+      onRemove: guard(async old => {
+        adopt(await api(`/api/chats/${chat.id}/nodes/${node.id}/image?file=${encodeURIComponent(image.file)}&old=${encodeURIComponent(old.file)}`, { method: 'DELETE' }), node.id)
+        refreshNode(node.id)
+      }),
+    })
   }
 
   const SHAPE_RATIO = { square: '1 / 1', portrait: '832 / 1216', landscape: '1216 / 832' }
@@ -252,8 +301,8 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         el('strong', { text: drawing ? t`没画出来` : t`画面提示词没写出来` }),
         el('p', { text: failure.message }),
         el('div', { class: 'failed-actions' }, [
-          el('button', { type: 'button', class: 'btn small', text: t`重试`, onclick: () => (drawing ? draw(node, failure.prompt, failure.chatId) : writePrompt(node)) }),
-          drawing ? el('button', { type: 'button', class: 'btn small ghost', text: t`改提示词`, onclick: () => openImageDialog(node, failure.prompt, { chatId: failure.chatId, note: t`没画出来：${failure.message}`, error: true }) }) : null,
+          el('button', { type: 'button', class: 'btn small', text: t`重试`, onclick: () => (drawing ? draw(node, failure.prompt, failure.chatId, null, failure.replace) : writePrompt(node)) }),
+          drawing ? el('button', { type: 'button', class: 'btn small ghost', text: t`改提示词`, onclick: () => openImageDialog(node, failure.prompt, { chatId: failure.chatId, note: t`没画出来：${failure.message}`, error: true, replace: failure.replace }) }) : null,
           el('button', { type: 'button', class: 'btn small ghost', text: t`关掉`, onclick: dismiss }),
         ]),
       ]),
@@ -303,11 +352,11 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
   /**
    * Run one background step for a reply; the frame and button follow it. A
    * failure stays where the picture would have been, with its reason
-   * (`prompt` is what a retry draws).
+   * (`prompt` is what a retry draws; `replace`, the picture it draws over).
    */
-  async function runJob(node, chatId, stage, work, { prompt = '', reveal = false, backend = '' } = {}) {
+  async function runJob(node, chatId, stage, work, { prompt = '', reveal = false, backend = '', replace = '' } = {}) {
     if (state.jobs.has(node.id)) return null
-    const job = { stage, chatId, controller: new AbortController(), started: Date.now(), backend: backend || backendName() }
+    const job = { stage, chatId, controller: new AbortController(), started: Date.now(), backend: backend || backendName(), replace }
     state.jobs.set(node.id, job)
     state.failures.delete(node.id)
     refreshNode(node.id)
@@ -316,7 +365,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     try {
       return await work(job.controller.signal)
     } catch (error) {
-      if (error.name !== 'AbortError') state.failures.set(node.id, { stage, chatId, prompt, message: error.message })
+      if (error.name !== 'AbortError') state.failures.set(node.id, { stage, chatId, prompt, replace, message: error.message })
       return null
     } finally {
       state.jobs.delete(node.id)
@@ -340,24 +389,30 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     whenNoDialog(() => openImageDialog(node, data.prompt, { chatId, note: t`${data.note ? `${data.note}` : ''}${how}，可以改，也可以「重写」。` }))
   }
 
-  /** @param picked - { body, label } from pickDraw: the 画图方式 and model for this one; none = the settings'. */
-  async function draw(node, prompt, chatId = getChat()?.id, picked = null) {
+  /**
+   * @param picked - { body, label } from pickDraw: the 画图方式 and model for this one; none = the settings'.
+   * @param replace - the picture this one is drawn over (重画): it takes that one's place, which becomes an old one.
+   */
+  async function draw(node, prompt, chatId = getChat()?.id, picked = null, replace = '') {
     if (!chatId) return
     // The picture joins the reply before the frame is taken down, so it takes the frame's place.
     const work = async signal => {
-      const data = await postJson(`/api/chats/${chatId}/nodes/${node.id}/image`, { prompt, ...(picked?.body ?? {}) }, signal)
+      const data = await postJson(`/api/chats/${chatId}/nodes/${node.id}/image`, { prompt, ...(replace ? { replace } : {}), ...(picked?.body ?? {}) }, signal)
       if (data.image?.file) state.fresh.add(data.image.file)
+      // The one drawn over is right there to take back.
+      if (replace && data.image?.file) state.openOld.add(data.image.file)
       adopt(data.chat, node.id)
       return data
     }
-    const data = await runJob(node, chatId, 'draw', work, { prompt, reveal: true, backend: picked?.label })
+    const data = await runJob(node, chatId, 'draw', work, { prompt, reveal: true, backend: picked?.label, replace })
     if (data?.image?.note) toast(data.image.note, 12000)
   }
 
-  /** 重画: the same prompt again, with the 画图方式 and model picked for it. */
-  const redraw = guard(async (node, prompt, chatId) => {
-    const picked = await pickDraw({ title: t`重画这张图`, note: t`同一段提示词再画一张。` })
-    if (picked) await draw(node, prompt, chatId, picked)
+  /** 重画: the same prompt again, with the 画图方式 and model picked for it, in this picture's place. */
+  const redraw = guard(async (node, image, chatId) => {
+    const kept = state.settings?.drawHistory ?? 5
+    const picked = await pickDraw({ title: t`重画这张图`, note: kept ? t`同一段提示词再画一张，换掉这张；这张留在旧图里，随时换回来。` : t`同一段提示词再画一张，换掉这张（设置里旧图留 0 张，这张不留）。` })
+    if (picked) await draw(node, image.prompt, chatId, picked, image.file)
   })
 
   /** Show `open` once no other dialog is up, so a finished prompt never covers one. */
@@ -368,7 +423,8 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
   }
 
   const removeImage = guard(async (node, image) => {
-    if (!confirm(t`删除这张图？`)) return
+    const old = image.history?.length ?? 0
+    if (!confirm(old ? t`删除这张图？它的 ${old} 张旧图也一起删除。` : t`删除这张图？`)) return
     const chat = getChat()
     adopt(await api(`/api/chats/${chat.id}/nodes/${node.id}/image?file=${encodeURIComponent(image.file)}`, { method: 'DELETE' }), node.id)
     refreshNode(node.id)
@@ -386,8 +442,11 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     dialog.showModal()
   }
 
-  /** The prompt is ready: draw it as is, edit it, or have it rewritten (in the background again). */
-  function openImageDialog(node, prompt, { chatId, note, error = false }) {
+  /**
+   * The prompt is ready: draw it as is, edit it, or have it rewritten (in the background again).
+   * @param options.replace - the picture it is drawn over (改提示词 under a picture).
+   */
+  function openImageDialog(node, prompt, { chatId, note, error = false, replace = '' }) {
     const dialog = $('image-dialog')
     const box = $('image-prompt')
     const drawButton = $('image-draw')
@@ -402,7 +461,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       const text = box.value.trim()
       if (!text) return
       dialog.close()
-      draw(node, text, chatId)
+      draw(node, text, chatId, null, replace)
     }
     // This one with another 画图方式 or model; the picker opens over this window.
     pickButton.onclick = guard(async () => {
@@ -411,7 +470,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       const picked = await pickDraw({ title: t`这张图用什么画` })
       if (!picked) return
       dialog.close()
-      draw(node, text, chatId, picked)
+      draw(node, text, chatId, picked, replace)
     })
     // The library and the settings open on top of this window: closing them comes back here.
     $('image-library').onclick = () => openLibrary({ node, chatId })
@@ -584,11 +643,13 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     line: null, // the dialogue span being read on its own
     fresh: false, // skip the server's cached audio (after 重新合成)
     onDone: null, // called once the whole queue has been read (not when stopped or replaced)
+    onStop: null, // called when it ends without being read to the end: failed, refused, stopped or replaced
 
-    start(nodeId, queue, line = null, onDone = null) {
+    start(nodeId, queue, line = null, onDone = null, onStop = null) {
       this.stop()
       this.nodeId = nodeId
       this.onDone = onDone
+      this.onStop = onStop
       this.line = line
       this.fresh = false
       line?.classList.add('reading')
@@ -624,6 +685,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       if (i >= this.queue.length) {
         const done = this.onDone
         this.onDone = null
+        this.onStop = null
         this.stop()
         return done?.()
       }
@@ -635,7 +697,9 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       try {
         url = await this.fetchChunk(i)
       } catch (error) {
-        if (error.name !== 'AbortError' && !signal.aborted) toast(error.message, 8000)
+        // Given up for a newer reading (start, redo): that one is the player's now, so it is left playing.
+        if (signal.aborted) return
+        if (error.name !== 'AbortError') toast(error.message, 8000)
         return this.stop()
       }
       if (signal.aborted || i !== this.index) return
@@ -650,7 +714,10 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         this.play()
       }
       this.render(false)
-      if (!this.paused) this.audio.play().catch(error => {
+      const audio = this.audio
+      if (!this.paused) audio.play().catch(error => {
+        // A play cut short because another reading took over is not this reading failing.
+        if (signal.aborted || this.audio !== audio) return
         toast(t`浏览器没让播放：${error.message}`)
         this.stop()
       })
@@ -724,6 +791,8 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
 
     stop() {
       this.onDone = null
+      const stopped = this.onStop
+      this.onStop = null
       this.controller?.abort()
       this.audio?.pause()
       if (this.mode === 'browser') {
@@ -744,6 +813,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         refreshNode(was)
       }
       this.render(false)
+      stopped?.()
     },
 
     render(loading) {
@@ -841,11 +911,13 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     const voice = voiceOf(speaker)
     const chunks = speechChunks(plain, { narration: Boolean(narratorVoice), tags: true, max: { dialogue: chunkMaxFor(voice), narration: chunkMaxFor(narratorVoice) } })
     if (!chunks.length) return done?.()
+    // done() as well when the voice gives up (it failed, the browser would not play it, 停止): the visual novel's
+    // 自动 waits for it, and would otherwise wait on that line for good.
     player.start(nodeId, chunks.map(chunk => ({
       ...chunk,
       voice: chunk.kind === 'dialogue' ? voice : narratorVoice,
       stable: chunk.kind === 'narration',
-    })), null, done)
+    })), null, done, done)
   }
 
   /** One line of dialogue, clicked in the reply: read on its own in its speaker's voice. */
@@ -958,6 +1030,9 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     ])
     const promptStyle = el('select', { name: 'promptStyle' }, [option('natural', t`自然语言（grok、gpt-image、Flux、NovelAI V5）`, media.promptStyle), option('tags', t`标签（SD / SDXL 工作流、NovelAI）`, media.promptStyle)])
     const autoImage = el('input', { type: 'checkbox', name: 'autoImage', checked: media.autoImage })
+    // 抽图历史: how many old pictures each place keeps (server/draw-history.mjs).
+    const keepNow = String(media.drawHistory ?? 5)
+    const drawHistory = el('select', { name: 'drawHistory' }, [...new Set(['0', '1', '2', '3', '5', '8', '10', '20', keepNow])].sort((a, b) => a - b).map(n => option(n, n === '0' ? t`不留旧图` : t`留 ${n} 张旧图`, keepNow)))
 
     const openaiBox = el('div', {}, [
       serviceLinks('openai', t`常用的图片接口，在「管理供应商」里添加后在这里选：`),
@@ -1166,6 +1241,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       if (VOICE_SOURCES.some(id => sources[id]?.configured) || (bridgeSet && external.ok)) return ''
       return bridgeSet ? t`${BRIDGE_NAME}没开` : t`还没设朗读服务`
     }
+    const dictation = dictationParts({ media, providers, form })
 
     // The dialog as a menu (web/menu.js): 配图 and 朗读, each with what every card
     // shares first (how pictures are drawn, where voices come from), then this
@@ -1205,6 +1281,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
             field(t`辅助模型`, helper, helperChoices.length ? '' : t`还没有供应商的模型`),
             field(t`提示词写法`, promptStyle),
           ]),
+          field(t`重画后留几张旧图`, drawHistory, t`配图、人设图、立绘和表情、场景、头像重画或换图后，每处留最近这么多张旧图，点一张就能换回来；再多的从最旧的删。调小了，每处下次重画时删到这个数。旧图不随对话包和角色卡导出。`),
         ],
       }),
       card && own(t`配图`, {
@@ -1284,6 +1361,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
           ...castVoiceBlock(card.roster, choices, form, () => settingsMenu.show('roster', 'forward')),
         ],
       }),
+      shared(t`语音输入`, { id: 'stt', title: t`录音交给谁转写`, summary: dictation.summary, status: dictation.status, body: dictation.body }),
     ].filter(Boolean)
 
     const who = () => (card ? whoLine(el, { cardId: state.cardId, name: charName, note: t`这张卡自己的` }) : el('p', { class: 'menu-who none', text: t`选一张角色卡后，这里可以给它单独设置。` }))
@@ -1295,6 +1373,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       panels: [
         { id: 'image', title: t`配图`, icon: MENU_ICONS.picture, aside: switchRow(autoImage, t`新回复自动配图`, t`每轮多一次辅助模型调用和一次生图`), rows: ['image', who(), 'card-style', 'roster'] },
         { id: 'voice', title: t`朗读`, icon: MENU_ICONS.voice, aside: switchRow(autoRead, t`新回复自动朗读`), rows: ['voice', who(), 'card-voice'] },
+        { id: 'stt', title: t`语音输入`, icon: MENU_ICONS.mic, rows: ['stt'] },
       ],
       sections,
       note: t`配图和朗读都是点了才做，不进模型的上下文，也不影响缓存。`,
@@ -1555,6 +1634,14 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     const boxes = () => [...list.querySelectorAll('.roster-entry')]
     // Every name someone on the page goes by, lower-cased.
     const takenNames = () => new Set(collectRoster($('media-form')).flatMap(e => [e.name, ...splitNames(e.aliases)]).map(name => name.trim().toLowerCase()).filter(Boolean))
+    // 抽图历史: everyone's old 人设图 (server/draw-history.mjs), read again after each change; each box draws its own row.
+    const kept = { slots: {} }
+    const oldRows = new Map() // entry id → redraws its row
+    const loadKept = () => cardId && api(`/api/cards/${cardId}/history`).then(view => {
+      kept.slots = view.slots ?? {}
+      for (const sync of oldRows.values()) sync()
+    }, () => {})
+    loadKept()
 
     function entryBox(entry, { open = false, flag = '' } = {}) {
       const thumb = el('div', { class: 'roster-thumb', title: t`点击放大` }, entry.ref ? [el('img', { src: refUrl(cardId, entry.id), alt: '' })] : [el('span', { text: t`没有人设图` })])
@@ -1606,7 +1693,25 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         }
         setRef(true)
         toast(t`人设图已上传，保存后生效`)
+        // The one it replaced joins the old ones.
+        loadKept()
       })
+      const oldBox = el('div', { class: 'roster-old' })
+      const syncOld = () => oldBox.replaceChildren(...[historyStrip(el, keptItems(cardId, kept.slots[`roster:${entry.id}`]), {
+        title: t`旧人设图`,
+        onPick: guard(async item => {
+          const view = await api(`/api/cards/${cardId}/history/${item.file}/use`, { method: 'POST' })
+          kept.slots = view.history?.slots ?? kept.slots
+          setRef(true)
+          syncOld()
+        }),
+        onRemove: guard(async item => {
+          kept.slots = (await api(`/api/cards/${cardId}/history/${item.file}`, { method: 'DELETE' })).slots ?? {}
+          syncOld()
+        }),
+      })].filter(Boolean))
+      oldRows.set(entry.id, syncOld)
+      syncOld()
       const file = el('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp', hidden: true })
       file.onchange = () => {
         const chosen = file.files[0]
@@ -1714,6 +1819,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
                 removeRef,
                 file,
               ]),
+              oldBox,
             ]),
           ]),
           el('label', {}, [t`长相（固定不变的：发型发色、眼睛、身形、记号）`, el('textarea', { 'data-field': 'looks', rows: 2, spellcheck: 'false', placeholder: 'black hair, hair bun, white ribbon, dark eyes, dimples, petite', text: entry.looks })]),
@@ -2096,6 +2202,202 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     return { media, keys }
   }
 
+  // ─── Voice input (配图与朗读 → 语音输入) ─────────────────────────────
+  // Where a recording goes to be written out (web/dictation.js records it). Each
+  // choice says where the audio is sent; nothing is recorded before one is picked.
+
+  /** The 语音输入 fields as the form shows them, for 试一试 and saving. */
+  function sttDraft(form) {
+    return Object.fromEntries(STT_FIELDS.filter(name => form.elements[name]).map(name => [name, form.elements[name].value]))
+  }
+
+  let sttTest = null // a 试一试 take, while it listens or is written out: { cancel() }
+
+  /** The 语音输入 page: its body, and its summary and status for the menu row. */
+  function dictationParts({ media, providers, form }) {
+    const option = (value, text, selected) => el('option', { value, text, selected: value === selected })
+    const field = (label, control, hint) => el('label', {}, [label, control, hint ? el('span', { class: 'hint', text: hint }) : null])
+    const value = name => form.elements[name]?.value ?? ''
+    const writers = providers.filter(p => p.api !== 'anthropic-messages')
+    const source = el('select', { name: 'sttSource' }, [
+      media.sttSource ? null : option('', t`还没选`, media.sttSource),
+      option('provider', t`供应商的语音转写接口（云端，不用安装）`, media.sttSource),
+      option('browser', t`浏览器自带的语音识别（不用安装）`, media.sttSource),
+      option('local', t`自己装的 whisper 服务（本机或局域网）`, media.sttSource),
+      option('off', t`不用（不显示麦克风按钮）`, media.sttSource),
+    ].filter(Boolean))
+    const provider = el('select', { name: 'sttProvider' }, [option('', writers.length ? t`选一个供应商` : t`先在「供应商」里添加`, media.sttProvider), ...writers.map(p => option(p.id, p.name, media.sttProvider))])
+    const host = p => {
+      try {
+        return new URL(p.baseURL).host
+      } catch {
+        return p.baseURL
+      }
+    }
+    const providerWhere = el('p', { class: 'hint' })
+    const providerBox = el('div', {}, [
+      serviceLinks('stt:provider', t`有语音转写接口的供应商，在「管理供应商」里添加后在这里选：`),
+      el('div', { class: 'grid' }, [
+        field(t`供应商`, provider),
+        field(t`模型`, el('input', { name: 'sttModel', value: media.sttModel, list: 'stt-models', spellcheck: 'false', placeholder: t`留空自动选` })),
+      ]),
+      el('datalist', { id: 'stt-models' }, STT_MODELS.map(id => el('option', { value: id }))),
+      el('p', { class: 'hint', text: t`模型留空时按供应商选：硅基流动 FunAudioLLM/SenseVoiceSmall（免费），Groq whisper-large-v3-turbo，OpenAI gpt-4o-mini-transcribe，其余 whisper-1。只有对话接口的供应商（DeepSeek、Anthropic 等）转不了。` }),
+      providerWhere,
+    ])
+    const localBox = el('div', {}, [
+      serviceLinks('stt:local', t`在这台电脑或局域网里跑 whisper，不用密钥：`),
+      el('div', { class: 'grid' }, [
+        field(t`服务地址`, el('input', { name: 'sttUrl', value: media.sttUrl, spellcheck: 'false', placeholder: 'http://127.0.0.1:8000/v1' })),
+        field(t`模型`, el('input', { name: 'sttLocalModel', value: media.sttLocalModel, spellcheck: 'false', placeholder: t`服务要求时才填` })),
+      ]),
+      el('p', { class: 'hint', text: t`OpenAI 兼容的服务（speaches、LocalAI 等）填到 /v1，speaches 要填模型，例如 Systran/faster-whisper-small；whisper.cpp 的 server 填到 /inference。录音只发到这个地址，不经过云端；在手机上用时填电脑的局域网地址。` }),
+    ])
+    const browserBox = el('div', {}, [
+      el('p', {
+        class: canHear() ? 'hint' : 'hint warn',
+        text: canHear()
+          ? t`这个浏览器能用：免费、不用设置，边说边出字。`
+          : document.documentElement.dataset.edition === 'android' ? t`手机应用里没有浏览器识别：下面选的供应商会替它转写。` : t`这里用不了浏览器识别（要 Edge、Chrome 或 Safari，用 https 或本机地址打开）：下面选的供应商会替它转写。`,
+      }),
+      el('p', { class: 'hint', text: t`录音不经过酒馆的服务端，由浏览器直接发给它自己的识别服务：Chrome 发给 Google，Edge 发给微软，Safari 发给苹果。` }),
+      el('p', { class: 'hint', text: t`用不了浏览器识别的地方（手机应用、用 http 链接打开的手机浏览器）改用下面选的供应商转写；不选的话，那里点麦克风会先请你选。` }),
+    ])
+    const language = field(t`说的语言`, el('select', { name: 'sttLanguage' }, [
+      option('', t`自动识别`, media.sttLanguage),
+      option('zh', t`中文`, media.sttLanguage),
+      option('en', 'English', media.sttLanguage),
+      option('ja', '日本語', media.sttLanguage), // i18n-ignore: each language by its own name
+      option('ko', '한국어', media.sttLanguage),
+    ]), t`选了语言转得更准、更快；whisper 自动识别时有时会把中文写成繁体。`)
+
+    // 试一试: one take with the form as it is (not saved yet), its text shown here.
+    const heard = el('span', { class: 'hint stt-heard' })
+    const test = el('button', { type: 'button', class: 'btn small', text: t`试一试` })
+    const say = (text, warn = false) => {
+      heard.textContent = text
+      heard.classList.toggle('warn', warn)
+    }
+    const idle = () => {
+      sttTest = null
+      test.textContent = t`试一试`
+      test.disabled = false
+    }
+    test.onclick = async () => {
+      if (sttTest?.stop) return sttTest.stop()
+      let lib
+      try {
+        lib = await import('/dictation.js')
+      } catch {
+        return say(t`语音输入要重启后台服务后才能用：关掉所有窗口等一分钟，再从桌面图标打开。`, true)
+      }
+      let draft = sttDraft(form)
+      // Where the browser has none, the provider beside it is tried, as the microphone button would.
+      if (draft.sttSource === 'browser' && !lib.browserRecognition()) {
+        if (!draft.sttProvider) return say(t`这里用不了浏览器识别：在下面选一个供应商替它转写`, true)
+        draft = { ...draft, sttSource: 'provider' }
+      }
+      if (draft.sttSource === 'browser') {
+        say(t`在听…`)
+        test.textContent = t`说完了`
+        const take = lib.browserTake({
+          language: draft.sttLanguage,
+          onText: text => say(text),
+          finished(text, failure) {
+            idle()
+            say(failure || (text ? t`听到：「${text}」` : t`没听清，再说一次`), Boolean(failure) || !text)
+          },
+        })
+        sttTest = { stop: () => take.stop(), cancel: () => take.cancel() }
+        return
+      }
+      if (!lib.canRecord()) return say(t`这个地址的网页不能用麦克风（要 https 或本机地址），试不了；输入框旁的麦克风会改用手机的录音机`, true)
+      const mic = lib.microphoneTake({ onTick: seconds => say(t`在听… ${Math.floor(seconds)} 秒，说完点「说完了」`), onLimit: () => sttTest?.stop?.() })
+      const controller = new AbortController()
+      sttTest = {
+        stop: async () => {
+          sttTest = { cancel: () => controller.abort() }
+          test.disabled = true
+          test.textContent = t`转写中…`
+          say(t`正在转成文字…`)
+          try {
+            const blob = await mic.stop()
+            if (!blob) return say('')
+            const audio = await lib.prepareAudio(blob)
+            const { text, by } = await lib.transcribe(audio.blob, { media: draft, names: [getChat()?.names?.char].filter(Boolean), signal: controller.signal })
+            say(text ? t`听到：「${text}」（${by}）` : t`没听清，再说一次`, !text)
+          } catch (error) {
+            if (!controller.signal.aborted) say(error.message, true)
+          } finally {
+            idle()
+          }
+        },
+        cancel: () => mic.cancel(),
+      }
+      test.textContent = t`说完了`
+      say(t`正在打开麦克风…`)
+      try {
+        await mic.start()
+      } catch (error) {
+        idle()
+        say(error.message, true)
+      }
+    }
+    const testRow = el('div', { class: 'row voice-actions' }, [test, heard])
+
+    const sync = () => {
+      const picked = source.value
+      // With the browser's recognition, the provider is for where there is none.
+      providerBox.hidden = picked !== 'provider' && picked !== 'browser'
+      localBox.hidden = picked !== 'local'
+      browserBox.hidden = picked !== 'browser'
+      language.hidden = !picked || picked === 'off'
+      testRow.hidden = !picked || picked === 'off'
+      const chosen = writers.find(p => p.id === provider.value)
+      providerWhere.textContent = !chosen
+        ? ''
+        : picked === 'browser'
+          ? t`用不了浏览器识别的地方，录音发给 ${chosen.name}（${host(chosen)}）转成文字。`
+          : t`录音发给 ${chosen.name}（${host(chosen)}）转成文字，用这个供应商的密钥和代理设置。`
+    }
+    source.addEventListener('change', sync)
+    provider.addEventListener('change', sync)
+    sync()
+
+    const need = () => {
+      const picked = value('sttSource')
+      if (!picked) return t`还没选`
+      if (picked === 'provider' && !value('sttProvider')) return t`没选供应商`
+      if (picked === 'local' && !value('sttUrl').trim()) return t`没填地址`
+      return ''
+    }
+    return {
+      body: [
+        field(t`语音输入用`, source, t`供应商和浏览器识别都不用安装任何东西。whisper 服务要你自己装好、开着，CicaTavern 不会替你下载模型。`),
+        browserBox,
+        providerBox,
+        localBox,
+        language,
+        testRow,
+        el('p', { class: 'hint', text: t`点输入框旁的麦克风开始录音，说完再点一下；转出来的文字填进输入框，看过再发，不会自动发送。酒馆不保存录音。` }),
+      ],
+      summary: () => {
+        const picked = value('sttSource')
+        if (!picked) return t`还没选：点这里选录音交给谁转成文字`
+        if (picked === 'off') return t`不用（不显示麦克风按钮）`
+        const chosen = writers.find(p => p.id === value('sttProvider'))
+        if (picked === 'browser') return chosen ? t`浏览器自带的语音识别 · 用不了时改用 ${chosen.name}` : t`浏览器自带的语音识别`
+        if (picked === 'local') return value('sttUrl').trim() ? t`本地 whisper · ${value('sttUrl').trim()}` : t`本地 whisper 服务：还没填地址`
+        return chosen ? `${chosen.name} · ${value('sttModel').trim() || t`自动选模型`}` : t`供应商：还没选`
+      },
+      status: () => {
+        const missing = need()
+        if (missing) return ['need', missing]
+        return value('sttSource') === 'browser' && !canHear() && !value('sttProvider') ? ['warn', t`这里用不了`] : null
+      },
+    }
+  }
+
   let previewing = null // { audio, url } or 'browser'
   function stopPreview() {
     if (previewing === 'browser') speech?.cancel()
@@ -2204,14 +2506,17 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         promptStyle: value('promptStyle'),
         promptSource: value('promptSource'),
         autoImage: checked('autoImage'),
+        ...(form.elements.drawHistory ? { drawHistory: Number(value('drawHistory')) } : {}),
         ttsUrl: value('ttsUrl'),
         ...draftVoices,
         ...Object.fromEntries(Object.entries(keys).map(([id, key]) => [`${id}Key`, key])),
         autoRead: checked('autoRead'),
+        ...sttDraft(form),
       },
     })
     for (const id of VOICE_SOURCES) if (form.elements[`${id}Key`]) form.elements[`${id}Key`].value = ''
     state.settings = media
+    announceSettings()
     state.ownBackends = ownBackends ?? state.ownBackends
     const keyHint = form.querySelector('.tts-key-hint')
     if (keyHint) voiceKeyText(keyHint, voiceKey)
@@ -2234,10 +2539,14 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
   })
 
   $('media-dialog').addEventListener('close', stopPreview)
+  $('media-dialog').addEventListener('close', () => {
+    sttTest?.cancel()
+    sttTest = null
+  })
   $('player-redo').addEventListener('click', () => player.redo())
   $('player-toggle').addEventListener('click', () => player.toggle())
   $('player-stop').addEventListener('click', () => player.stop())
   loadSettings()
 
-  return { openLibrary, toolsFor: mediaTools, gallery, openSettings, setCard, afterTurn, flags, readBeat, fillQuick, stopReading: () => player.stop(), toggleReading: () => player.toggle() }
+  return { settings: () => state.settings, openLibrary, toolsFor: mediaTools, gallery, openSettings, setCard, afterTurn, flags, readBeat, fillQuick, stopReading: () => player.stop(), toggleReading: () => player.toggle() }
 }

@@ -27,7 +27,13 @@ export function rangeOf(text) {
 /** A field's path without MVU's `stat_data` root, dotted. */
 export function cleanPath(path) {
   // `/stat_data/a/b` → `/a/b` (still a JSON pointer), `stat_data.a.b` → `.a.b`.
-  return splitPath(String(path ?? '').trim().replace(/^(\/?)stat_data(?=[./])/, '')).join('.')
+  return joinPath(splitPath(String(path ?? '').trim().replace(/^(\/?)stat_data(?=[./])/, '')))
+}
+
+/** Keys as a path: dotted, or a JSON pointer when a key has a dot, a bracket or a slash in it (`Dr. Chen`, `Lv.`). */
+export function joinPath(keys) {
+  if (!keys.some(key => /[.[\]/~]/.test(key))) return keys.join('.')
+  return `/${keys.map(key => key.replace(/~/g, '~0').replace(/\//g, '~1')).join('/')}`
 }
 
 /** A layout as saved, or null when there is nothing to show. */
@@ -76,7 +82,7 @@ export function autoStatusSpec(state) {
       if (inner && typeof inner === 'object' && !Array.isArray(inner) && keys.length < 1 && Object.keys(inner).length) walk(inner, path)
       else {
         const show = guessShow(key, inner)
-        fields.push(show === 'meter' ? { path: path.join('.'), show, min: 0, max: 100 } : { path: path.join('.'), show })
+        fields.push(show === 'meter' ? { path: joinPath(path), show, min: 0, max: 100 } : { path: joinPath(path), show })
       }
     }
   }

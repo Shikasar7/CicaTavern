@@ -148,6 +148,11 @@ test('the sketch keeps what the user locked and what the model left out', () => 
   assert.deepEqual(after.items.map(i => [i.key, i.value, i.locked]), [['tone', '安静', true], ['lead', '林小雨', false], ['stage', '便利店', false]])
   assert.equal(after.readiness, 80)
   assert.equal(after.title, '雨宿')
+  // Fourteen new items from the model: the locked one still stays, an unlocked one goes to make room.
+  const many = mergeBrief({ items: Array.from({ length: 14 }, (_, i) => ({ key: `k${i}`, label: `项${i}`, value: `值${i}`, by: 'assistant' })) }, before)
+  assert.equal(many.items.length, 14)
+  assert.deepEqual(many.items.filter(i => i.locked).map(i => [i.key, i.value]), [['tone', '安静']])
+  assert.equal(many.items.some(i => i.key === 'k13'), false)
 
   // Who wrote an item is the page's tag, not part of the value; <user> in brackets stays.
   const noted = mergeBrief({ items: [

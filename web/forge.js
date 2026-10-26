@@ -11,6 +11,7 @@
 // The model works in the background; the window polls the draft while it does.
 import { t, zh } from '/i18n.js'
 import { cleanPath, cleanStatusSpec, rangeOf } from '/shared/status.js'
+import { splitPath } from '/shared/vars.js'
 import { statusBar } from '/status.js'
 
 // On a phone the keyboard's Enter key starts a new line (it has no Shift+Enter); the button sends.
@@ -47,7 +48,7 @@ const SHOW_TYPE = { meter: 'number', number: 'number', text: 'string', tags: 'li
 function initialOf(variables) {
   const root = {}
   for (const v of variables) {
-    const keys = cleanPath(v.path).split('.').filter(Boolean)
+    const keys = splitPath(cleanPath(v.path))
     if (!keys.length) continue
     const raw = String(v.initial ?? '').trim()
     let value = raw
@@ -198,6 +199,7 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
     }
     if (before?.id !== draft.id) {
       state.notes = new Map()
+      state.avatarDesc = null
       state.planText = ''
       view.composer.value = ''
       view.planText.value = ''
@@ -520,7 +522,8 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
     view.save.textContent = savedId ? t`更新这张卡` : t`保存为角色卡`
     view.save.disabled = busy
     view.chat.hidden = !savedId
-    view.png.hidden = !savedId
+    // The phone app's WebView saves no download: the link is left out there, as in 修改角色卡.
+    view.png.hidden = !savedId || document.documentElement.dataset.edition === 'android'
     if (savedId) {
       // The saved card as it is now: edits made in 修改角色卡 since are in it.
       view.png.href = `/api/cards/${savedId}/png?v=${encodeURIComponent(card.savedAt ?? '')}`
@@ -547,7 +550,7 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
     if (view.sketch.contains(document.activeElement) && document.activeElement.matches('textarea, input')) return
     state.sketchShown = key
     const ready = brief.readiness
-    const items = brief.items.map((item, index) => sketchItem(item, index))
+    const items = brief.items.map(item => sketchItem(item))
     const title = el('input', { class: 'sketch-title', value: brief.title, placeholder: t`卡的暂定名`, 'aria-label': t`卡的暂定名`, onchange: () => saveBrief({ title: title.value }) })
     // On a phone the sketch folds to its title row; a tap opens it.
     const head = el('div', {
@@ -574,13 +577,13 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
     )
   }
 
-  function sketchItem(item, index) {
+  function sketchItem(item) {
     const value = el('div', { class: 'sketch-value', tabindex: '0', role: 'button', title: t`点一下修改`, text: item.value || t`（空）` })
     const edit = () => {
       const box = el('textarea', { class: 'sketch-edit', rows: 3 })
       box.value = item.value
       const done = save => {
-        if (save && box.value.trim() !== item.value) changeItem(index, { value: box.value.trim(), by: 'user' })
+        if (save && box.value.trim() !== item.value) changeItem(item, { value: box.value.trim(), by: 'user' })
         else renderSketch(true)
       }
       box.addEventListener('blur', () => done(true))
@@ -609,7 +612,7 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
       'aria-label': item.locked ? t`解锁` : t`锁定`,
       'aria-pressed': String(item.locked),
       html: item.locked ? ICON_LOCK : ICON_OPEN,
-      onclick: () => changeItem(index, { locked: !item.locked, by: item.locked ? item.by : 'user' }),
+      onclick: () => changeItem(item, { locked: !item.locked, by: item.locked ? item.by : 'user' }),
     })
     return el('li', { class: item.locked ? 'locked' : '' }, [
       el('div', { class: 'sketch-row' }, [el('span', { class: 'sketch-key', text: item.label }), el('span', { class: `sketch-by ${item.by}`, text: item.by === 'user' ? t`你定的` : t`向导补的` }), lock]),
@@ -617,8 +620,10 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
     ])
   }
 
-  const changeItem = guard(async (index, patch) => {
-    const items = state.draft.brief.items.map((item, i) => (i === index ? { ...item, ...patch } : item))
+  /** One item changed, found by its key in the sketch as it is now (a reply coming in may have reordered it). */
+  const changeItem = guard(async (item, patch) => {
+    const now = state.draft.brief.items
+    const items = now.some(i => i.key === item.key) ? now.map(i => (i.key === item.key ? { ...i, ...patch } : i)) : [...now, { ...item, ...patch }]
     await saveBrief({ items })
   })
 

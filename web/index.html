@@ -160,6 +160,10 @@
             <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7" /><path d="M3 10h14M10 3c2.4 2.3 2.4 11.7 0 14M10 3c-2.4 2.3-2.4 11.7 0 14" /></svg>
           </button>
           <textarea id="input" rows="1" placeholder="写下你的行动、对白，或希望看到的发展" disabled></textarea>
+          <button type="button" class="quick-btn mic-btn" id="dictate" title="语音输入：说话转成文字，填进输入框（不会自动发送）" aria-label="语音输入" aria-pressed="false" hidden>
+            <svg class="mic-icon" viewBox="0 0 20 20" aria-hidden="true"><rect x="7.4" y="2.8" width="5.2" height="9.2" rx="2.6" /><path d="M4.6 9.6a5.4 5.4 0 0 0 10.8 0M10 15v2.4" /></svg>
+            <svg class="mic-stop" viewBox="0 0 20 20" aria-hidden="true"><rect x="6" y="6" width="8" height="8" rx="1.5" /></svg>
+          </button>
           <button type="button" class="send stop" id="stop" title="停止生成" aria-label="停止生成" hidden>
             <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="6" y="6" width="8" height="8" rx="1.5" /></svg>
           </button>
@@ -242,18 +246,17 @@
         </div>
         <p class="hint">随时生效。顶栏可以给每个对话单独选模型。</p>
       </div>
-      <div data-section="persona">
-        <label>你的名字<input name="personaName"></label>
-        <label>你的角色设定<textarea name="personaDescription" rows="5"></textarea></label>
-        <p class="hint">写进对话开局时的固定前缀，只对之后新开的对话生效。</p>
+      <!-- 这张卡用的角色和文风: filled by app.js from the two lists (web/personas.js). -->
+      <div data-section="picks">
+        <div id="card-picks" class="card-picks"></div>
+        <p class="hint">卡没指定就用默认的。只影响这张卡之后新开的对话；当前对话要不要跟着换，保存时会问你。导出角色卡时不会带上。</p>
       </div>
       <div data-section="style">
         <div class="grid">
           <label>写作语言<input name="language"></label>
           <label>每轮回复字数（0 为不限）<input name="replyLength" type="number" min="0" max="8000" step="100"></label>
         </div>
-        <label>文风与写作要求<textarea name="writingRules" rows="6" placeholder="例如：第三人称限知视角，白描为主，少用形容词堆砌；对白口语化。"></textarea></label>
-        <p class="hint">字数随时生效，不影响缓存；语言和文风写进固定前缀，只对之后新开的对话生效。</p>
+        <p class="hint">字数随时生效，不影响缓存；写作语言写进固定前缀，只对之后新开的对话生效。文风要求在「写作 → 文风」里。</p>
       </div>
       <div data-section="scan">
         <div class="grid">
@@ -310,7 +313,7 @@
         <label><span>界面语言<span class="other-lang" id="ui-language-other"></span></span>
           <select name="uiLanguage" id="ui-language"></select>
         </label>
-        <p class="hint">菜单、按钮和提示用的语言，保存后页面刷新一次。故事用什么语言写，在「文风与字数」的「写作语言」里改。</p>
+        <p class="hint">菜单、按钮和提示用的语言，保存后页面刷新一次。故事用什么语言写，在「写作 → 语言与字数」的「写作语言」里改。</p>
       </div>
       <!-- Filled by web/update.js. -->
       <div data-section="update" class="upd-page">
@@ -364,23 +367,50 @@
     </div>
   </dialog>
 
-  <dialog id="regex-dialog" class="dialog presets regex">
+  <dialog id="regex-dialog" class="dialog presets books regex">
     <div class="preset-layout">
       <nav class="preset-nav">
         <div class="preset-nav-head">
           <h2>正则</h2>
-          <span class="row">
-            <button type="button" class="btn small" id="regex-new">新建</button>
-            <label class="btn small" title="导入 SillyTavern 导出的正则（.json），放进全局">导入
+          <span class="row-actions">
+            <button type="button" class="btn small" id="regex-new" title="新建一个正则集：挂到哪些角色卡上，就只对那几张卡生效">新建</button>
+            <label class="btn small" title="导入 SillyTavern 导出的正则（.json），放进选中的这一组（选中的不能改时放进全局）">导入
               <input type="file" id="regex-import" accept=".json,application/json" multiple hidden>
             </label>
           </span>
         </div>
         <div class="regex-groups" id="regex-list"></div>
-        <p class="muted small preset-nav-note">依次运行：全局 → 预设 → 角色卡。只改显示的正则不影响缓存；会改发给模型内容的，改完下一轮会重新写入一次缓存。</p>
+        <p class="muted small preset-nav-note">依次运行：全局 → 预设 → 卡里自带 → 挂到这张卡的正则集（按列表顺序）。只改显示的正则不影响缓存；会改发给模型内容的，改完下一轮会重新写入一次缓存。</p>
       </nav>
       <button type="button" class="btn small ghost preset-back">‹ 全部正则</button>
       <section class="preset-main" id="regex-main"></section>
+      <form method="dialog" class="preset-close"><button class="btn ghost icon" aria-label="关闭">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15" /></svg>
+      </button></form>
+    </div>
+  </dialog>
+
+  <!-- 你的角色 / 文风 (web/personas.js): one window, opened on either list; titles and notes are set there. -->
+  <dialog id="persona-dialog" class="dialog presets books personas">
+    <div class="preset-layout">
+      <nav class="preset-nav">
+        <div class="preset-nav-head">
+          <h2 id="persona-title">你的角色</h2>
+          <span class="row-actions">
+            <button type="button" class="btn small" id="persona-new">新建</button>
+            <label class="btn small" id="persona-import-label">导入
+              <input type="file" id="persona-import" accept=".json,.txt,.md,application/json,text/plain,text/markdown" multiple hidden>
+            </label>
+          </span>
+        </div>
+        <ul class="preset-list" id="persona-list"></ul>
+        <div class="row preset-nav-transfer">
+          <button class="btn small ghost" type="button" id="persona-export-all" title="整个列表存成一个文件，用来搬到另一台设备">导出全部</button>
+        </div>
+        <p class="muted small preset-nav-note" id="persona-note"></p>
+      </nav>
+      <button type="button" class="btn small ghost preset-back">‹ 返回列表</button>
+      <section class="preset-main" id="persona-main"></section>
       <form method="dialog" class="preset-close"><button class="btn ghost icon" aria-label="关闭">
         <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15" /></svg>
       </button></form>

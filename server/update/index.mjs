@@ -42,6 +42,9 @@ const MIRROR_AFTER_MS = 5_000
 const LOCAL = /^http:\/\/(127\.0\.0\.1|localhost|\[::1\])[:/]/
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms).unref?.())
 
+// The steps while an update is being fetched, set up or switched to: nothing else may start meanwhile.
+const UPDATING = ['downloading', 'verifying', 'unpacking', 'restarting']
+
 function failure(status, message) {
   return Object.assign(new Error(message), { status })
 }
@@ -333,6 +336,11 @@ export function createUpdater({
       }
     })()
     await checking
+    // 检查更新 that joined the daily check already running still says it failed, not that this is the latest.
+    if (force) {
+      const saved = await load()
+      if (saved.error) throw failure(502, saved.error)
+    }
     return status()
   }
 
@@ -358,7 +366,7 @@ export function createUpdater({
   async function download({ source } = {}) {
     const reason = notInstallable()
     if (kind !== 'zip' || reason) throw failure(400, reason ?? msg`这个版本不能在应用里安装更新`)
-    if (['downloading', 'verifying', 'unpacking', 'restarting'].includes(job.step)) return status()
+    if (UPDATING.includes(job.step)) return status()
     const state = await load()
     const latest = state.latest
     if (!latest || compareVersions(latest.version, version) <= 0) throw failure(400, msg`没有更新的版本`)
@@ -455,6 +463,8 @@ export function createUpdater({
 
   /** Hand over to bin/update-apply.mjs: it stops this server and starts `target`, or this one again on failure. */
   async function switchTo(target, mode) {
+    // A restart now would stop the download or unpacking halfway and leave its files behind (a second one too).
+    if (UPDATING.includes(job.step)) throw failure(409, msg`正在下载或安装更新，等这一步做完再切换`)
     if (busy()) throw failure(409, msg`正在生成，等它写完再重启`)
     if (!onShutdown) throw failure(400, msg`这个服务不能从页面重启：关掉控制台窗口，再从桌面图标打开`)
     const from = { path: root, version }
@@ -500,7 +510,7 @@ export function createUpdater({
     const { installs: list } = await installs()
     const item = list.find(i => path.resolve(i.path) === path.resolve(String(target ?? '')))
     if (!item) throw failure(404, msg`没有这个旧版本文件夹`)
-    if (['downloading', 'verifying', 'unpacking', 'restarting'].includes(job.step)) throw failure(409, msg`正在更新，等一会儿再删`)
+    if (UPDATING.includes(job.step)) throw failure(409, msg`正在更新，等一会儿再删`)
     await removeInstall(item.path, { root, dataRoot })
     if (item.staged) {
       await save({ staged: null })
@@ -520,7 +530,10 @@ export function createUpdater({
     return status()
   }
 
-  return { kind, status, check: checkNow, setAutoCheck, download, cancel, apply, rollback, installs, remove, acknowledge, skip }
+  /** Whether an update is downloading, being set up or switched to (the idle exit waits for it). */
+  const working = () => UPDATING.includes(job.step)
+
+  return { kind, status, check: checkNow, setAutoCheck, download, cancel, apply, rollback, installs, remove, acknowledge, skip, working }
 }
 
 /** Start bin/update-apply.mjs from this install, detached, so it outlives this server. */

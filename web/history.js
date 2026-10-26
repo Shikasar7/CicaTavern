@@ -207,9 +207,25 @@ export function initHistory({ el, getChat }) {
       }
       highlight(round, terms)
     }
-    if (far || reducedMotion.matches || !('onscrollend' in box)) setTimeout(land, far ? 0 : 380)
-    else box.addEventListener('scrollend', land, { once: true })
+    // Already there (the round is in view at the bottom): no scroll, so no scrollend to wait for.
+    const there = Math.abs(Math.min(target, box.scrollHeight - box.clientHeight) - box.scrollTop) < 1
+    box.removeEventListener('scrollend', pendingLand)
+    clearTimeout(landTimer)
+    if (there) land()
+    else if (far || reducedMotion.matches || !('onscrollend' in box)) landTimer = setTimeout(land, far ? 0 : 380)
+    else {
+      // Only this jump's landing, once: a later jump or a scroll by hand doesn't bring an old one back.
+      pendingLand = () => {
+        clearTimeout(landTimer)
+        box.removeEventListener('scrollend', pendingLand)
+        land()
+      }
+      box.addEventListener('scrollend', pendingLand)
+      landTimer = setTimeout(pendingLand, 1000)
+    }
   }
+  let pendingLand = null
+  let landTimer = null
 
   /** Marks what you searched for inside the round you jumped to, for a few seconds. */
   function highlight(round, terms) {
@@ -280,6 +296,7 @@ export function initHistory({ el, getChat }) {
     state.drag = {
       id: event.pointerId,
       moved: false,
+      onThumb,
       startY: event.clientY,
       grab: onThumb ? event.clientY - thumbTop : (box.clientHeight / state.height) * rect.height / 2,
     }
@@ -310,7 +327,8 @@ export function initHistory({ el, getChat }) {
     state.drag = null
     rail.classList.remove('dragging')
     // A click (no drag) on the track goes to the round under the pointer.
-    if (!drag.moved && event.type === 'pointerup' && event.target !== thumb) {
+    // (Captured, the pointerup is the rail's: where it went down says whether it was the thumb.)
+    if (!drag.moved && event.type === 'pointerup' && !drag.onThumb) {
       const round = roundAtOffset(trackFraction(event.clientY) * state.height)
       if (round) jumpTo(round.n)
     }

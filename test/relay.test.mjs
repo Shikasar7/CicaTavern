@@ -299,6 +299,61 @@ test('a name is looked up once and the call goes to the address checked; one lea
   assert.equal(direct.headers.get('x-relay'), '1')
 })
 
+test('redirects are followed as a page\'s fetch follows them, within the host allowed, each hop checked; another host\'s comes back as it is', async t => {
+  const seen = []
+  const api = createServer(async (req, res) => {
+    let body = ''
+    for await (const piece of req) body += piece
+    seen.push(`${req.method} ${req.url}`)
+    const go = (status, location) => {
+      res.writeHead(status, { location })
+      res.end()
+    }
+    if (req.url === '/moved') return go(301, '/final')
+    if (req.url === '/see-other') return go(303, '/final')
+    if (req.url === '/keep') return go(307, '/final')
+    if (req.url === '/away') return go(302, `http://other.example.test:${api.address().port}/final`)
+    if (req.url === '/loop') return go(302, '/loop')
+    res.writeHead(200, { 'content-type': 'text/plain' })
+    res.end(`${req.method} ${body}`)
+  })
+  await new Promise(resolve => api.listen(0, '127.0.0.1', resolve))
+  t.after(() => {
+    api.closeAllConnections?.()
+    api.close()
+  })
+  const port = api.address().port
+  const resolve = async host => [{ address: '127.0.0.1', family: 4 }]
+  const relay = await relayWith(t, { resolve })
+  const call = async (pathname, method = 'GET', body = null) => {
+    const res = await relay({ url: `http://api.example.test:${port}${pathname}`, method, local: true, body: body && Buffer.from(body).toString('base64') })
+    return { status: res.headers.get('x-relay-status'), text: await res.text() }
+  }
+  assert.deepEqual(await call('/moved'), { status: '200', text: 'GET ' })
+  assert.deepEqual(await call('/see-other', 'POST', 'a=1'), { status: '200', text: 'GET ' }, '303: GET, no body')
+  assert.deepEqual(await call('/keep', 'POST', 'a=1'), { status: '200', text: 'POST a=1' }, '307: the same method and body')
+  assert.equal((await call('/away')).status, '302', 'another host: not followed, the card sees it')
+  assert.equal((await call('/loop')).status, '302', 'a loop ends after a few hops')
+  assert.equal(seen.filter(line => line === 'GET /loop').length, 6)
+})
+
+test('a frame that stops reading a relayed answer: chunks still arriving are dropped, never thrown inside the card', async () => {
+  let entry = null
+  const { fetch, posts } = frameWith({
+    relayed: [API],
+    page: async (_args, item) => {
+      entry = item
+      item.head({ status: 200, statusText: 'OK', headers: [] })
+      item.chunk(new TextEncoder().encode('one'))
+    },
+  })
+  const res = await fetch(`${API}/stream`)
+  await res.body.cancel()
+  assert.deepEqual(posts.at(-1)?.[0], 'fetchCancel')
+  assert.doesNotThrow(() => entry.chunk(new TextEncoder().encode('two')))
+  assert.doesNotThrow(() => entry.done())
+})
+
 test('the app never makes a frame\'s call to a CicaTavern on this machine, nor to anything but http(s); one it cannot reach says why', async t => {
   const { base, relay, dataRoot } = await tavern(t)
   const own = new URL(base)

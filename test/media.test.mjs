@@ -61,7 +61,7 @@ async function fakeBackends(t) {
     const raw = Buffer.concat(chunks)
     const type = req.headers['content-type'] ?? ''
     const json = type.includes('json') && raw.length ? JSON.parse(raw) : null
-    seen.push({ method: req.method, url: req.url, type, json, size: raw.length, auth: req.headers.authorization })
+    seen.push({ method: req.method, url: req.url, type, json, size: raw.length, auth: req.headers.authorization, form: type.includes('multipart') ? raw.toString('latin1') : '' })
     const send = (status, body, contentType = 'application/json') => {
       res.writeHead(status, { 'content-type': contentType })
       res.end(Buffer.isBuffer(body) ? body : JSON.stringify(body))
@@ -620,4 +620,148 @@ test('scenery (视觉小说 backgrounds): landscape, nobody in it, no reference 
   // The helper's tags start with scenery, no humans; the card's style goes first.
   const tagged = await media.drawScenery({ cardId: card.id, place: '码头' })
   assert.match(tagged.prompt, /^watercolor, scenery, no humans, /)
+})
+
+test('reference pictures: someone other than the card\'s character is never drawn from its avatar', async t => {
+  const { fake, store, chat, card, media } = await setup(t)
+  await media.saveCardMedia(card.id, { roster: [
+    { id: 'linxue01', name: '林雪', kind: 'girl', looks: 'short black hair' },
+    { id: 'aming001', name: '阿明', kind: 'boy', looks: 'short hair' },
+    { id: 'laozhou1', name: '老周', kind: 'boy', looks: 'grey beard' },
+  ] })
+  await store.saveSettings({ media: cleanMedia({ imageReference: true }, (await store.getSettings()).media) })
+  const edits = () => fake.seen.filter(r => r.url === '/v1/images/edits').length
+  // The OpenAI images API: her own picture is the avatar; 阿明 has none, so his is drawn without one.
+  await media.generateImage(chat, 'root', '[林雪] saluting')
+  assert.equal(edits(), 1)
+  await media.generateImage(chat, 'root', '[阿明] nodding')
+  assert.equal(edits(), 1, 'a side character is not edited from her face')
+  assert.equal(fake.seen.at(-1).url, '/v1/images/generations')
+  await media.generateImage(chat, 'root', 'a quiet street')
+  assert.equal(edits(), 2, 'nobody named: the avatar still goes along')
+
+  // This install's own backend: two other people get no reference; with her in the group, hers.
+  const calls = []
+  const own = { id: 'local', status: async () => ({ id: 'local', name: '本机', ready: true, models: [] }), draw: async input => (calls.push(input), { buffer: PNG, label: '本机', note: '' }) }
+  const local = createMedia(store, { ownBackends: [own] })
+  await store.saveSettings({ media: local.cleanSettings({ imageBackend: 'local' }, await local.settings()) })
+  await local.generateImage(chat, 'root', '[阿明] talking\n[老周] rowing')
+  assert.equal(calls.at(-1).references.length, 0)
+  await local.generateImage(chat, 'root', '[林雪] talking\n[老周] rowing')
+  assert.equal(calls.at(-1).references.length, 1)
+})
+
+test('ComfyUI: each reference picture is uploaded under a name of its own', async t => {
+  const { fake, store, chat, card, media } = await setup(t)
+  await store.saveSettings({ media: cleanMedia({ imageBackend: 'comfy' }, (await store.getSettings()).media) })
+  await media.saveWorkflow({ 6: { class_type: 'CLIPTextEncode', inputs: { text: '{{prompt}}' } }, 10: { class_type: 'LoadImage', inputs: { image: '{{reference}}' } } })
+  await media.saveCardMedia(card.id, { roster: [{ id: 'linxue01', name: '林雪', kind: 'girl', looks: 'short black hair' }, { id: 'aming001', name: '阿明', kind: 'boy', looks: 'short hair' }] })
+  const other = Buffer.concat([PNG, Buffer.from('another picture')])
+  await media.saveRosterRef(card.id, 'aming001', `data:image/png;base64,${other.toString('base64')}`)
+  await media.generateImage(chat, 'root', '[林雪] saluting')
+  await media.generateImage(chat, 'root', '[阿明] nodding')
+  await media.generateImage(chat, 'root', '[林雪] smiling')
+  const names = fake.seen.filter(r => r.url === '/upload/image').map(r => /filename="([^"]+)"/.exec(r.form)?.[1])
+  assert.match(names[0], new RegExp(`^tavern-${card.id}-[0-9a-f]{16}\\.png$`))
+  assert.notEqual(names[0], names[1], 'two pictures never share a name')
+  assert.equal(names[0], names[2], 'the same picture keeps its name')
+})
+
+/** A server answering each path with `routes[path](req, res)`, every request noted. */
+async function tinyServer(t, routes) {
+  const seen = []
+  const server = createServer(async (req, res) => {
+    const chunks = []
+    for await (const chunk of req) chunks.push(chunk)
+    const raw = Buffer.concat(chunks).toString('utf8')
+    seen.push({ url: req.url, auth: req.headers.authorization, json: raw && req.headers['content-type']?.includes('json') ? JSON.parse(raw) : null })
+    const route = routes[req.url.split('?')[0]]
+    if (route) return route(req, res)
+    res.writeHead(404).end()
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => {
+    server.closeAllConnections()
+    server.close()
+  })
+  return { seen, base: `http://127.0.0.1:${server.address().port}` }
+}
+
+test('an image answer\'s link: a data: URL, or one that redirects on to the picture', async t => {
+  const cdn = await tinyServer(t, { '/out.png': (req, res) => res.writeHead(200, { 'content-type': 'image/png' }).end(PNG) })
+  const answers = []
+  const relay = await tinyServer(t, {
+    '/v1/images/generations': (req, res) => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ data: [answers.shift()] })),
+    '/v1/files/abc': (req, res) => res.writeHead(302, { location: '/v1/files/abc/content' }).end(),
+    '/v1/files/abc/content': (req, res) => res.writeHead(307, { location: `${cdn.base}/out.png` }).end(),
+    '/v1/files/loop': (req, res) => res.writeHead(302, { location: '/v1/files/loop' }).end(),
+  })
+  const root = await mkdtemp(path.join(tmpdir(), 'tavern-media-link-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const store = createStore(root)
+  await store.init()
+  const card = normalizeCard(CARD)
+  await store.saveCard(card)
+  const provider = normalizeProvider({ name: '中转', api: 'openai-completions', baseURL: `${relay.base}/v1`, apiKey: KEY, models: ['img'] })
+  await store.saveProviders([provider])
+  await store.saveSettings({ media: cleanMedia({ imageProvider: provider.id, imageModel: 'img' }) })
+  const chat = await createChat(store, card.id)
+  const media = createMedia(store)
+
+  answers.push({ url: `data:image/png;base64,${PNG.toString('base64')}` })
+  assert.deepEqual(await media.readImage(chat.id, (await media.generateImage(chat, 'root', 'x')).file), PNG)
+  answers.push({ url: '/v1/files/abc' })
+  assert.deepEqual(await media.readImage(chat.id, (await media.generateImage(chat, 'root', 'x')).file), PNG, 'two redirects, onto another host')
+  assert.equal(cdn.seen.at(-1).auth, undefined)
+  answers.push({ url: '/v1/files/loop' })
+  await assert.rejects(media.generateImage(chat, 'root', 'x'), error => error.status === 502 && /302/.test(error.message))
+  answers.push({ url: 'ftp://example.invalid/out.png' })
+  await assert.rejects(media.generateImage(chat, 'root', 'x'), error => error.status === 502 && /http/.test(error.message))
+})
+
+test('a stopped ComfyUI or SD WebUI picture is stopped there too', async t => {
+  let running = false
+  const comfy = await tinyServer(t, {
+    '/prompt': (req, res) => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ prompt_id: 'p9' })),
+    '/history/p9': (req, res) => res.writeHead(200, { 'content-type': 'application/json' }).end('{}'),
+    '/queue': (req, res) => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(running ? { queue_running: [[0, 'p9']], queue_pending: [] } : { queue_running: [[0, 'other']], queue_pending: [[1, 'p9']] })),
+    '/interrupt': (req, res) => res.writeHead(200).end(),
+    // Drawing: never answers on its own.
+    '/sdapi/v1/txt2img': () => {},
+    '/sdapi/v1/interrupt': (req, res) => res.writeHead(200).end(),
+  })
+  const root = await mkdtemp(path.join(tmpdir(), 'tavern-media-stop-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const store = createStore(root)
+  await store.init()
+  const card = normalizeCard(CARD)
+  await store.saveCard(card)
+  await store.saveSettings({ media: cleanMedia({ imageBackend: 'comfy', comfyUrl: comfy.base, sdUrl: comfy.base }) })
+  const chat = await createChat(store, card.id)
+  const media = createMedia(store)
+  await media.saveWorkflow({ 6: { class_type: 'CLIPTextEncode', inputs: { text: '{{prompt}}' } } })
+  const until = async check => {
+    for (let i = 0; i < 100 && !check(); i += 1) await new Promise(resolve => setTimeout(resolve, 20))
+    assert.ok(check())
+  }
+  const stopAfter = async (ms, run) => {
+    const controller = new AbortController()
+    setTimeout(() => controller.abort(), ms)
+    await assert.rejects(run(controller.signal))
+  }
+
+  // Still waiting in the queue: deleted from it, and someone else's running prompt left alone.
+  await stopAfter(200, signal => media.generateImage(chat, 'root', 'x', signal))
+  await until(() => comfy.seen.some(r => r.url === '/queue' && r.json))
+  assert.deepEqual(comfy.seen.find(r => r.url === '/queue' && r.json).json, { delete: ['p9'] })
+  assert.equal(comfy.seen.some(r => r.url === '/interrupt'), false)
+  // Running: interrupted, by its id.
+  running = true
+  await stopAfter(200, signal => media.generateImage(chat, 'root', 'x', signal))
+  await until(() => comfy.seen.some(r => r.url === '/interrupt'))
+  assert.deepEqual(comfy.seen.find(r => r.url === '/interrupt').json, { prompt_id: 'p9' })
+
+  await store.saveSettings({ media: cleanMedia({ imageBackend: 'sdwebui' }, (await store.getSettings()).media) })
+  await stopAfter(200, signal => media.generateImage(chat, 'root', 'x', signal))
+  await until(() => comfy.seen.some(r => r.url === '/sdapi/v1/interrupt'))
 })

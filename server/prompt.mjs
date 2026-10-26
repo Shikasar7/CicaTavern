@@ -56,9 +56,10 @@ export function renderEntry(entry, { state, names, session = null, world = '' })
   const data = { world_info: { comment: entry.comment, uid: Number.isFinite(uid) ? uid : entry.uid, world } }
   const rendered = entry.preprocessed ? { text: entry.content, error: null } : session ? session.render(entry.content, data) : renderTemplate(entry.content, { state, names })
   const text = rendered.text ?? entryText(entry)
-  // Variable macros read the state as the turn's templates have left it.
-  const vars = session && hasVariableMacros(text) ? session.currentState() : state
-  return { text: replaceMacros(replaceVariableMacros(text, vars), names).trim(), error: rendered.error }
+  // Variable macros read the state and the chat's and app's variables as the turn's templates have left them.
+  const used = session && hasVariableMacros(text)
+  const vars = used ? session.currentState() : state
+  return { text: replaceMacros(replaceVariableMacros(text, vars, used ? session.currentVariables() : {}), names).trim(), error: rendered.error }
 }
 
 /**
@@ -121,9 +122,9 @@ function stateProtocol(card, hasState) {
 /**
  * The built-in narrator rules. `options`: the built-in preset's (basic.mjs),
  * whose paragraphs open the every-turn section; without them the rules read as
- * they did before that preset existed.
+ * they did before that preset existed. `style`: the chat's 文风 (its text).
  */
-export function buildSystemPrompt({ card, persona, settings, books, hasState, options = null, render = text => text }) {
+export function buildSystemPrompt({ card, persona, style = '', settings, books, hasState, options = null, render = text => text }) {
   const names = { char: card.name, user: persona.name || '你' }
   const m = text => replaceMacros(text, names)
   // The card's and the player's own text may hold templates (rendered once, see buildChatPrompt).
@@ -153,7 +154,7 @@ export function buildSystemPrompt({ card, persona, settings, books, hasState, op
       `- 使用${settings.language || '简体中文'}写作。`,
     ].filter(Boolean).join('\n'),
     stateProtocol(card, hasState),
-    section('文风与写作要求', m(settings.writingRules)),
+    section('文风与写作要求', m(style)),
     section(`玩家角色：${names.user}`, f(persona.description)),
     [
       `## 角色卡：${card.name}`,
@@ -227,13 +228,14 @@ function asksForOutput(entry) {
  * lead, in its own order, and the card data lands where its markers sit; our
  * notes on the message format follow. Returns the variables the preset's
  * macros set, which every later turn starts from.
+ * @param style - the chat's 文风 (web/shared/personas.js): its text, after the format notes.
  * @param render - text => text: the EJS in the card's fields, the persona and the
  *   preset's prompts, rendered once with the chat's opening state (chats.mjs).
  *   The prefix is frozen, so a template there that reads changing state keeps
  *   the value it had when the chat started.
  */
-export function buildChatPrompt({ card, persona, settings, books, hasState, preset = null, render = text => text }) {
-  if (!preset || preset.builtin) return { systemPrompt: buildSystemPrompt({ card, persona, settings, books, hasState, options: preset?.options ?? null, render }), presetVars: {} }
+export function buildChatPrompt({ card, persona, style = '', settings, books, hasState, preset = null, render = text => text }) {
+  if (!preset || preset.builtin) return { systemPrompt: buildSystemPrompt({ card, persona, style, settings, books, hasState, options: preset?.options ?? null, render }), presetVars: {} }
   const names = { char: card.name, user: persona.name || '你' }
   const m = text => replaceMacros(text, names)
   const world = after =>
@@ -255,7 +257,7 @@ export function buildChatPrompt({ card, persona, settings, books, hasState, pres
     prefix.text,
     notes,
     stateProtocol(card, hasState),
-    section('文风与写作要求', m(settings.writingRules)),
+    section('文风与写作要求', m(style)),
     section(EVERY_TURN, [prefix.rules, lateText(books, m)].filter(t => t.trim()).join('\n\n')),
   ]
     .filter(Boolean)
@@ -281,6 +283,14 @@ export function dialogueFormat() {
 }
 
 /**
+ * The turn's word on 联网 (the provider searches when the model asks): search only for what the
+ * story or the player needs from the real world, and keep the search out of the story.
+ */
+export function webSearchNote() {
+  return '<联网搜索>\n这一轮可以搜索网页。玩家问到、或剧情需要现实世界的信息（时事、真实的地点和人物、作品资料等）时再搜，否则不用搜。搜索前不要写任何文字；搜完照常以故事的口吻写正文，不提搜索，不写网址和引用标注。\n</联网搜索>'
+}
+
+/**
  * The user message for one turn.
  * @param opening - the greeting, only on a chat's first turn (already prompt-processed).
  * @param entries - rendered keyword-triggered entries `{ title, text }`.
@@ -293,14 +303,6 @@ export function dialogueFormat() {
  * @param reminder - one line pointing at the prefix's every-turn rules.
  * @param marks - ask for the 视觉小说格式 (dialogueFormat).
  */
-/**
- * The turn's word on 联网 (the provider searches when the model asks): search only for what the
- * story or the player needs from the real world, and keep the search out of the story.
- */
-export function webSearchNote() {
-  return '<联网搜索>\n这一轮可以搜索网页。玩家问到、或剧情需要现实世界的信息（时事、真实的地点和人物、作品资料等）时再搜，否则不用搜。搜索前不要写任何文字；搜完照常以故事的口吻写正文，不提搜索，不写网址和引用标注。\n</联网搜索>'
-}
-
 export function buildTurnPrompt({ names, opening, recap = '', entries = [], dynamic = [], characterNote = '', stateText, input, replyLength = 0, presetText = '', reminder = '', marks = false }) {
   const parts = []
   const block = (tag, items) => {

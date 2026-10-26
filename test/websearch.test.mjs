@@ -241,4 +241,15 @@ test('a chat with 联网 on: its turns carry the tool and say when to search; th
   assert.equal(plain.tools, undefined)
   assert.doesNotMatch(plain.messages.at(-1).content[0].text, /<联网搜索>/)
   assert.equal(activePath(second).at(-1).search, undefined)
+  // Nor does the searched turn before it say it may search: its note stays out of the history while 联网 is off.
+  const text = m => (typeof m.content === 'string' ? m.content : m.content.map(block => block.text ?? '').join(''))
+  assert.equal(plain.messages.slice(0, -1).some(m => /<联网搜索>/.test(text(m))), false)
+
+  // On again: that turn goes as it was sent, note and all (the history as cached).
+  const again = await store.getChat(chat.id)
+  again.webSearch = true
+  await store.saveChat(again)
+  await turn('那明天呢')
+  const back = fake.requests.at(-1).body
+  assert.match(text(back.messages[0]), /<联网搜索>/)
 })

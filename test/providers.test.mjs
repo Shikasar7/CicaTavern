@@ -477,6 +477,32 @@ test('a provider that refuses the thinking fields gets the turn without them, an
   assert.equal(fake.requests.at(-1).body.thinking, undefined)
 })
 
+test('a relay refusing the 1-hour cache ("Extra inputs are not permitted") keeps thinking: only the cache field goes', async t => {
+  const { fake, turn, store } = await setup(t, 'anthropic-messages', '')
+  const [provider] = await store.getProviders()
+  // A model id of its own (relay-style, the same model): what other tests here learnt about refusals is kept per model.
+  await store.saveProviders([normalizeProvider({ ...provider, cacheTtl: '1h', models: [{ id: 'anthropic/claude-sonnet-5-5' }] }, provider)])
+  await store.saveSettings({ model: `${provider.id}/anthropic/claude-sonnet-5-5`, thinking: 'adaptive', effort: 'high' })
+  fake.flags.rejectTtl = true
+  await turn('你好')
+  const [rejected, retried] = fake.requests.slice(-2)
+  assert.equal(rejected.body.system[0].cache_control.ttl, '1h')
+  assert.deepEqual(retried.body.thinking, { type: 'adaptive' }, 'thinking kept: the cache field explained it')
+  assert.equal(retried.body.system[0].cache_control.ttl, undefined)
+  await turn('再见')
+  assert.deepEqual(fake.requests.at(-1).body.thinking, { type: 'adaptive' }, 'and not left out from then on')
+})
+
+test('a reply paused mid-search (pause_turn) is marked unfinished, apart from one cut at the output limit', async t => {
+  const { fake, turn } = await setup(t, 'anthropic-messages', '')
+  fake.flags.stopReason = 'pause_turn'
+  const { chat } = await turn('查一下')
+  assert.equal(chatView(chat).path.at(-1).truncated, 'paused')
+  fake.flags.stopReason = 'max_tokens'
+  const { chat: cut } = await turn('接着写')
+  assert.equal(chatView(cut).path.at(-1).truncated, true)
+})
+
 test('OpenAI Responses provider: instructions + input, not stored', async t => {
   const { fake, turn } = await setup(t, 'openai-responses')
   await turn('你好')
@@ -562,6 +588,20 @@ test('import from DSH: address, protocol and chat models; no keys; re-import kee
   assert.deepEqual(again.updated, ['Grok 本机', 'arkagentplan'])
   assert.equal(again.list[0].apiKey, KEY, 'a key pasted after the first import survives a re-import')
   assert.throws(() => providersFromDsh({ nothing: true }), /providers/)
+  // A DSH key that is not an id as it is (DeepSeek → deepseek): found again, not added twice.
+  const upper = [{ ...drafts[1], id: 'DeepSeek', name: 'DeepSeek' }]
+  const saved = mergeDshProviders([], upper).list
+  saved[0].apiKey = KEY
+  const reimported = mergeDshProviders(saved, upper)
+  assert.deepEqual([reimported.list.map(p => p.id), reimported.updated, reimported.list[0].apiKey], [['deepseek'], ['DeepSeek'], KEY])
+})
+
+test('a model server without a key: on this machine or the local network it is asked, elsewhere the key is asked for', async () => {
+  const ask = baseURL => complete(normalizeProvider({ name: '本地', api: 'openai-completions', baseURL, models: [{ id: 'm' }] }), 'm', { messages: [{ role: 'user', content: '你好' }], signal: AbortSignal.abort() })
+  for (const lan of ['http://192.168.1.10:1234/v1', 'http://10.0.0.5:11434/v1', 'http://172.20.0.2/v1', 'http://studio.local:1234/v1', 'http://nas:8080/v1', 'http://[fd00::5]:1234/v1']) {
+    await assert.rejects(ask(lan), error => !/API Key/.test(error.message), lan)
+  }
+  for (const far of ['https://api.example.com/v1', 'http://172.32.0.1/v1', 'http://8.8.8.8/v1']) await assert.rejects(ask(far), /还没有填 API Key/, far)
 })
 
 test('image prompt inside the conversation: same prefix as the next turn, so the cache hits', async t => {
@@ -624,7 +664,15 @@ test('provider export and import: keys travel, loopback relays stay behind, defa
   assert.equal(again.list[0].models[0].id, 'deepseek-reasoner')
   assert.equal(again.failed.length, 1)
   assert.match(again.failed[0], /^broken：/)
+  assert.deepEqual(again.keyless, [])
   assert.throws(() => importProviders([], { providers: [] }), /不是酒馆导出的供应商文件/)
+
+  // A file that moves the provider elsewhere without a key: the saved key is not sent there, and the player is told.
+  const moved = importProviders(fresh.list, { ...archive, providers: [{ ...archive.providers[0], apiKey: '', baseURL: 'https://evil.example/v1' }] })
+  assert.deepEqual([moved.list[0].baseURL, moved.list[0].apiKey, moved.keyless], ['https://evil.example/v1', '', ['DeepSeek']])
+  // The same host on another path keeps it; a key in the file is the file's.
+  assert.equal(importProviders(fresh.list, { ...archive, providers: [{ ...archive.providers[0], apiKey: '', baseURL: 'https://api.deepseek.com/beta' }] }).list[0].apiKey, KEY)
+  assert.equal(importProviders(fresh.list, { ...archive, providers: [{ ...archive.providers[0], apiKey: 'sk-other-0000', baseURL: 'https://other.example/v1' }] }).list[0].apiKey, 'sk-other-0000')
 })
 
 test('视觉小说格式: switched on for one turn and off for the next, the history is sent again as it was', async t => {
@@ -640,4 +688,54 @@ test('视觉小说格式: switched on for one turn and off for the next, the his
   const first = activePath(await store.getChat(chat.id)).find(node => node.role === 'user')
   await engine.runTurn(chat.id, { userNodeId: first.id }, () => {})
   assert.match(JSON.stringify(fake.requests.at(-1).body.messages.at(-1)), /<对白格式>/)
+})
+
+test('a reply paused mid-search (pause_turn) goes back as it came, and the model carries on', async t => {
+  const asked = []
+  const server = createServer(async (req, res) => {
+    const chunks = []
+    for await (const chunk of req) chunks.push(chunk)
+    const body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+    asked.push(body)
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    const send = (type, data) => res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`)
+    send('message_start', { message: { model: body.model, usage: { input_tokens: 10, output_tokens: 1 } } })
+    if (asked.length === 1) {
+      send('content_block_start', { index: 0, content_block: { type: 'server_tool_use', id: 'srvtoolu_1', name: 'web_search', input: {} } })
+      send('content_block_delta', { index: 0, delta: { type: 'input_json_delta', partial_json: '{"query":"旧城' } })
+      send('content_block_delta', { index: 0, delta: { type: 'input_json_delta', partial_json: '茶馆"}' } })
+      send('content_block_stop', { index: 0 })
+      send('content_block_start', { index: 1, content_block: { type: 'web_search_tool_result', tool_use_id: 'srvtoolu_1', content: [{ type: 'web_search_result', url: 'https://example.com/a', title: '茶馆', encrypted_content: 'enc' }] } })
+      send('content_block_stop', { index: 1 })
+      send('content_block_start', { index: 2, content_block: { type: 'text', text: '' } })
+      send('content_block_delta', { index: 2, delta: { type: 'text_delta', text: '第一段' } })
+      send('content_block_stop', { index: 2 })
+      send('message_delta', { delta: { stop_reason: 'pause_turn' }, usage: { output_tokens: 5 } })
+    } else {
+      send('content_block_start', { index: 0, content_block: { type: 'text', text: '' } })
+      send('content_block_delta', { index: 0, delta: { type: 'text_delta', text: '第二段' } })
+      send('content_block_stop', { index: 0 })
+      send('message_delta', { delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 6 } })
+    }
+    send('message_stop', {})
+    res.end()
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => server.close())
+  const provider = normalizeProvider({ name: 'Claude', api: 'anthropic-messages', baseURL: `http://127.0.0.1:${server.address().port}`, apiKey: KEY, models: [{ id: 'claude-sonnet-5-5' }] })
+  const seen = []
+  const result = await complete(provider, 'claude-sonnet-5-5', { system: '规则', messages: [{ role: 'user', content: '查一下旧城茶馆' }], webSearch: true, onDelta: text => seen.push(text) })
+  assert.equal(asked.length, 2)
+  const back = asked[1].messages
+  assert.deepEqual(back.map(m => m.role), ['user', 'assistant'])
+  assert.deepEqual(back[1].content.map(b => b.type), ['server_tool_use', 'web_search_tool_result', 'text'])
+  assert.deepEqual(back[1].content[0].input, { query: '旧城茶馆' })
+  assert.equal(back[1].content[1].content[0].encrypted_content, 'enc', 'the search results as they came')
+  assert.ok(back[0].content[0].cache_control, 'the cache breakpoint stays on the conversation')
+  assert.equal(result.text, '第一段第二段')
+  assert.equal(seen.join(''), '第一段第二段')
+  assert.equal(result.stopReason, 'end_turn')
+  assert.equal(result.truncated, false)
+  assert.equal(result.usage.output, 11)
+  assert.deepEqual([result.search.count, result.search.queries], [1, ['旧城茶馆']])
 })

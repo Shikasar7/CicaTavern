@@ -6,7 +6,9 @@
 //
 // 生成头像 draws one for the card (server/media.mjs drawAvatar) with the 画图方式
 // and model picked for it (web/draw-choice.js); it shows beside the buttons to
-// take, draw again or drop, and only taking it changes the card.
+// take, draw again or drop, and only taking it changes the card. Avatars drawn
+// and not taken, and the ones replaced, stay below it to take back (抽图历史,
+// server/draw-history.mjs).
 //
 // Each field saves when it loses focus. The card keeps its id, so its chats,
 // cast, sprites, scenes and picture settings stay. A chat renders the card into
@@ -16,6 +18,7 @@ import { t } from '/i18n.js'
 import { pngOf } from '/forge.js'
 import { CARD_FIELDS } from '/shared/card-edit.js'
 import { createTalk } from '/talk.js'
+import { historyStrip, keptItems } from '/draw-choice.js'
 
 const ICON_CLOSE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>'
 
@@ -51,7 +54,9 @@ export function initCardEdit({ api, el, toast, guard, saveFile, getChat, isGener
     told: false, // the prefix toast was shown (no open chat on this card)
     pane: 'card', // on a phone: 'card' or 'assist'
     saving: Promise.resolve(),
-    drawn: null, // 生成头像: { busy, picked } while drawing, then { image, backend, note, picked } to take or drop
+    drawn: null, // 生成头像: { busy, picked } while drawing, then { image, backend, note, history, picked } to take or drop
+    kept: [], // 抽图历史: the avatars kept (replaced, or drawn and not taken), newest first
+    withRegex: false, // the exports take the 正则集 attached to the card along (?regex=sets)
   }
   const view = {}
 
@@ -93,7 +98,8 @@ export function initCardEdit({ api, el, toast, guard, saveFile, getChat, isGener
   // ─── Data ─────────────────────────────────────────────────────────────
   /** A card view from the server; fromForge is only worked out when the window opens. */
   function absorb(card) {
-    state.card = { ...card, fromForge: card.fromForge ?? state.card?.fromForge ?? false }
+    // regexSets (the 正则集 attached) come with the window's own read, as fromForge does.
+    state.card = { ...card, fromForge: card.fromForge ?? state.card?.fromForge ?? false, regexSets: card.regexSets ?? state.card?.regexSets ?? [] }
     view.sub.textContent = state.card.name
   }
 
@@ -126,7 +132,26 @@ export function initCardEdit({ api, el, toast, guard, saveFile, getChat, isGener
         el('section', { class: 'plan-card' }, [el('header', {}, [el('h4', { text: t`给玩家看的` })]), fieldBlock('creatorNotes', { rows: 3 })]),
       ]),
     )
+    syncKept()
     view.main.scrollTop = top
+  }
+
+  /**
+   * Only the picture part of the top section again (the picture, its buttons, a
+   * drawn one waiting): a field being typed in, the name and tags too, stays.
+   */
+  function renderPicture() {
+    const old = view.main.querySelector('.ce-hero')
+    if (!old) return renderMain()
+    const keptBox = view.keptBox
+    const next = hero(state.card)
+    view.keptBox = keptBox
+    old.querySelector('.hero-frame').replaceWith(next.querySelector('.hero-frame'))
+    old.querySelector('.hero-body > .row').replaceWith(next.querySelector('.hero-body > .row'))
+    old.querySelector('.ce-drawn')?.remove()
+    const drawn = next.querySelector('.ce-drawn')
+    if (drawn) keptBox.before(drawn)
+    syncKept()
   }
 
   function prefixBar() {
@@ -171,10 +196,12 @@ export function initCardEdit({ api, el, toast, guard, saveFile, getChat, isGener
           el('button', { type: 'button', class: 'btn small', text: card.hasAvatar ? t`换头像` : t`上传头像`, disabled: Boolean(drawn?.busy), onclick: () => upload.click() }),
           upload,
           el('button', { type: 'button', class: 'btn small', text: t`生成头像`, title: t`按这张卡的角色画一张方形头像，可以选画图方式和模型`, disabled: Boolean(drawn?.busy), onclick: () => drawAvatar() }),
-          card.hasAvatar && !android ? el('a', { class: 'btn small ghost', href: `/api/cards/${card.id}/png?v=${Date.now()}`, download: `${card.name}.png`, title: t`图片里带着整张卡（包括这里的修改），SillyTavern 可以直接导入`, text: t`导出 PNG` }) : null,
+          card.hasAvatar && !android ? el('a', { class: 'btn small ghost', href: `/api/cards/${card.id}/png?v=${Date.now()}${state.withRegex ? '&regex=sets' : ''}`, download: `${card.name}.png`, title: t`图片里带着整张卡（包括这里的修改），SillyTavern 可以直接导入`, text: t`导出 PNG` }) : null,
           el('button', { type: 'button', class: 'btn small ghost', text: t`导出 JSON`, title: t`SillyTavern 的角色卡 JSON，包括这里的修改`, onclick: () => exportJson() }),
         ]),
+        regexChoice(card),
         drawn?.image ? drawnBox(drawn) : null,
+        (view.keptBox = el('div', { class: 'ce-kept' })),
         el('p', { class: 'hint', text: t`改动直接存进这张卡，对话、角色名册、立绘、场景和配图设置都不变。` }),
         el('p', { class: 'hint', text: card.fromForge ? t`这张卡是「创作角色卡」做的：在那边再点「更新这张卡」，会换回草稿里的内容。` : t`从文件重新导入这张卡（选更新原来的卡）时，会换成文件里的版本，这里的修改不保留。` }),
       ]),
@@ -184,12 +211,12 @@ export function initCardEdit({ api, el, toast, guard, saveFile, getChat, isGener
   /** A drawn avatar waiting: take it, draw again (the same way or another), or drop it. */
   function drawnBox(drawn) {
     return el('div', { class: 'ce-drawn' }, [
-      el('p', { text: [t`左边是新画的头像（${drawn.backend}），还没换上。`, drawn.note].filter(Boolean).join(' ') }),
+      el('p', { text: [t`左边是新画的头像（${drawn.backend}），还没换上。`, drawn.history ? t`再画一张，这张会留在下面。` : '', drawn.note].filter(Boolean).join(' ') }),
       el('div', { class: 'row' }, [
         el('button', { type: 'button', class: 'btn small primary', text: t`用这张`, onclick: () => takeDrawn() }),
         el('button', { type: 'button', class: 'btn small', text: t`再画一张`, onclick: () => drawAvatar(drawn.picked) }),
         el('button', { type: 'button', class: 'btn small ghost', text: t`换个画法…`, onclick: () => drawAvatar() }),
-        el('button', { type: 'button', class: 'btn small ghost', text: t`不要了`, onclick: () => { state.drawn = null; renderMain() } }),
+        el('button', { type: 'button', class: 'btn small ghost', text: t`不要了`, onclick: () => dropDrawn() }),
       ]),
     ])
   }
@@ -239,7 +266,7 @@ export function initCardEdit({ api, el, toast, guard, saveFile, getChat, isGener
         area,
       ])
     })
-    const addRow = el('div', { class: 'row' }, [el('button', { type: 'button', class: 'btn small', text: t`＋ 添加开场白`, onclick: () => addGreeting(areas, addRow) })])
+    const addRow = el('div', { class: 'row' }, [el('button', { type: 'button', class: 'btn small', text: t`＋ 添加开场白`, onclick: () => addGreeting(areas, addRow, saveAll) })])
     return el('section', { class: 'plan-card' }, [
       el('header', {}, [el('h4', { text: t`开场白 · ${card.greetings.filter(g => g.trim()).length} 条` })]),
       el('p', { class: 'hint', text: t`开新对话时选一条。改了不影响已经开始的对话。` }),
@@ -248,12 +275,16 @@ export function initCardEdit({ api, el, toast, guard, saveFile, getChat, isGener
     ])
   }
 
-  /** A box for one more opening, kept once it has text (a blank one is dropped on save). */
-  function addGreeting(areas, addRow) {
+  /**
+   * A box for one more opening, kept once it has text (a blank one is dropped on save).
+   * It joins `areas`, so deleting another opening keeps it.
+   */
+  function addGreeting(areas, addRow, saveAll) {
     if (addRow.previousElementSibling?.classList.contains('ce-new-greeting')) return addRow.previousElementSibling.querySelector('textarea').focus()
     const area = el('textarea', { class: 'ce-text', rows: '5', spellcheck: 'false', placeholder: t`新的开场白`, 'aria-label': t`开场白 ${areas.length + 1}` })
-    area.addEventListener('change', () => save({ greetings: [...areas.map(a => a.value), area.value] }, { redraw: true }))
+    area.addEventListener('change', saveAll)
     addRow.before(el('div', { class: 'ce-field ce-new-greeting' }, [el('div', { class: 'ce-field-head' }, [el('b', { text: t`开场白 ${areas.length + 1}（新）` })]), area]))
+    areas.push(area)
     area.focus()
   }
 
@@ -325,15 +356,49 @@ export function initCardEdit({ api, el, toast, guard, saveFile, getChat, isGener
     toast(t`已重建固定前缀，下一轮生效`)
   }
 
-  /** A picture the page can load as the card's avatar: made PNG, the card written into it on the server. */
-  async function setAvatar(url) {
+  /**
+   * A picture the page can load as the card's avatar: made PNG, the card written into it on the server.
+   * @param history - the kept picture it is (抽图历史): no longer kept once it is the avatar.
+   */
+  async function setAvatar(url, history = '') {
     const image = await pngOf(url)
-    absorb(await queue(() => api(`/api/cards/${state.card.id}/avatar`, { method: 'PUT', body: { image } })))
+    absorb(await queue(() => api(`/api/cards/${state.card.id}/avatar`, { method: 'PUT', body: { image, ...(history ? { history } : {}) } })))
     state.avatarAt = Date.now()
-    renderMain()
+    renderPicture()
     saved(false, t`头像已换`)
     await onCardChanged?.(state.card.id, { avatar: true })
+    // The one replaced is kept now.
+    loadKept()
   }
+
+  // ─── 抽图历史: the card's avatars before (server/draw-history.mjs) ──────
+  /** The kept ones under the picture, but the one drawn and shown above it. */
+  function syncKept() {
+    if (!view.keptBox || !state.card) return
+    const shown = state.drawn?.history
+    const items = keptItems(state.card.id, state.kept.filter(entry => entry.file !== shown))
+    view.keptBox.replaceChildren(...[historyStrip(el, items, { title: t`以前的头像`, onPick: item => takeKept(item), onRemove: item => dropKept(item) })].filter(Boolean))
+  }
+
+  /** Read the kept ones again (a server without them: none). */
+  async function loadKept(id = state.card?.id) {
+    if (!id) return
+    const kept = await api(`/api/cards/${id}/history`).catch(() => null)
+    if (state.card?.id !== id) return
+    state.kept = kept?.slots?.avatar ?? []
+    syncKept()
+  }
+
+  const takeKept = guard(async item => {
+    if (state.drawn?.busy) return
+    await setAvatar(item.src, item.file)
+  })
+
+  const dropKept = guard(async item => {
+    const kept = await api(`/api/cards/${state.card.id}/history/${item.file}`, { method: 'DELETE' })
+    state.kept = kept.slots?.avatar ?? []
+    syncKept()
+  })
 
   const changeAvatar = guard(async file => {
     if (!file) return
@@ -353,7 +418,7 @@ export function initCardEdit({ api, el, toast, guard, saveFile, getChat, isGener
     const id = state.card.id
     const before = state.drawn
     state.drawn = { busy: true, picked }
-    renderMain()
+    renderPicture()
     try {
       const result = await api(`/api/cards/${id}/avatar/draw`, { method: 'POST', body: picked.body })
       if (state.card?.id === id) state.drawn = { ...result, picked }
@@ -361,20 +426,49 @@ export function initCardEdit({ api, el, toast, guard, saveFile, getChat, isGener
       if (state.card?.id === id) state.drawn = before?.image ? before : null
       throw error
     } finally {
-      if (state.card?.id === id) renderMain()
+      // Seconds later: only the picture, so what was typed meanwhile stays.
+      if (state.card?.id === id) renderPicture()
     }
+    // The one shown before is kept: it joins the row below.
+    loadKept(id)
   })
 
   const takeDrawn = guard(async () => {
     if (!state.drawn?.image) return
-    await setAvatar(state.drawn.image)
+    await setAvatar(state.drawn.image, state.drawn.history)
     state.drawn = null
-    renderMain()
+    renderPicture()
   })
+
+  /** 不要了: the drawn one goes, from the kept ones too. */
+  const dropDrawn = guard(async () => {
+    const file = state.drawn?.history
+    state.drawn = null
+    renderPicture()
+    if (!file) return
+    await api(`/api/cards/${state.card.id}/history/${file}`, { method: 'DELETE' })
+    loadKept()
+  })
+
+  /** With 正则集 attached: whether the exports write them into the card, after its own scripts. */
+  function regexChoice(card) {
+    const sets = card.regexSets ?? []
+    if (!sets.length) return null
+    const count = sets.reduce((sum, set) => sum + set.scripts, 0)
+    const box = el('input', { type: 'checkbox', checked: state.withRegex })
+    box.addEventListener('change', () => {
+      state.withRegex = box.checked
+      renderPicture()
+    })
+    return el('label', { class: 'check-row ce-regex-choice', title: t`挂上的正则集：${sets.map(set => set.name).join(t`、`)}` }, [
+      box,
+      el('span', { text: t`导出时带上挂在这张卡上的正则集（${sets.length} 个，${count} 条）：写进卡的局部正则，排在卡自带的后面` }),
+    ])
+  }
 
   const exportJson = guard(async () => {
     await state.saving
-    const json = await api(`/api/cards/${state.card.id}/sillytavern`)
+    const json = await api(`/api/cards/${state.card.id}/sillytavern${state.withRegex && state.card.regexSets?.length ? '?regex=sets' : ''}`)
     saveFile(`${state.card.name}.json`, JSON.stringify(json, null, 2), t`已导出：SillyTavern 的角色卡 JSON，包括这里的修改。`)
   })
 
@@ -470,12 +564,15 @@ export function initCardEdit({ api, el, toast, guard, saveFile, getChat, isGener
         state.stale = false
         state.told = false
         state.drawn = null
+        state.kept = []
+        state.withRegex = false
         talk.reset()
         view.main.scrollTop = 0
       }
       absorb(card)
       showPane(state.pane)
       renderMain()
+      loadKept(cardId)
       talk.load(session)
       if (!dialog.open) dialog.showModal()
       // The talk opens at its latest turn (it has no size until the window shows).

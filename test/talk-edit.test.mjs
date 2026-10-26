@@ -119,6 +119,20 @@ test('a preset: prompts with their place, markers only to switch, new prompts wh
   assert.deepEqual(readPickedPrompts('<read>cot, style, chatHistory, nope</read>', preset), ['cot', 'style'])
 })
 
+test('a book entry made constant after it was edited elsewhere keeps the edit', () => {
+  const book = normalizeBook(BOOK, '旧城')
+  const { changes } = readBookEdit('<entry uid="2" mode="constant">城东的旧码头。</entry>', book)
+  assert.deepEqual(changes.map(c => [c.id, c.mode]), [['entry:2', 'constant']])
+  book.entries.find(e => e.uid === '2').content = '城东的旧码头，渡船停在这里。'
+  applyBookChanges(book, changes, ['entry:2'])
+  const entry = book.entries.find(e => e.uid === '2')
+  assert.deepEqual([entry.constant, entry.content], [true, '城东的旧码头，渡船停在这里。'])
+  // A fenced entry keeps its fences, echoed or changed.
+  book.entries[0].content = '```yaml\nrule: 雨夜\n```'
+  assert.deepEqual(readBookEdit('<entry uid="0">```yaml\nrule: 雨夜\n```</entry>', book).changes, [])
+  assert.equal(readBookEdit('<entry uid="0">```yaml\nrule: 雪夜\n```</entry>', book).changes[0].after, '```yaml\nrule: 雪夜\n```')
+})
+
 // ─── Over HTTP, with a model that answers by what it is asked ─────────────
 
 const BOOK_ANSWER = '<reply>加了船夫。</reply>\n<new_entry name="老周" keys="老周, 船夫" mode="keyword">码头的船夫。</new_entry>\n<entry uid="0">旧城只在雨夜和雪夜开门。</entry>'

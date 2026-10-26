@@ -40,7 +40,11 @@ export function createLedger(store) {
   const file = path.join(store.dirs.root, 'usage.jsonl')
   // The ledger file is created once, from existing chats; concurrent callers share that.
   let ready = null
-  const ensure = () => (ready ??= access(file).catch(() => backfill()))
+  // A backfill that failed (one unreadable chat) is tried again next time, not kept as the answer for good.
+  const ensure = () => (ready ??= access(file).catch(() => backfill()).catch(error => {
+    ready = null
+    throw error
+  }))
 
   async function readAll() {
     await ensure()

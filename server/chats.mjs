@@ -13,6 +13,8 @@ import { msg } from './i18n.mjs'
 import { BASIC_ID, basicPreset } from './basic.mjs'
 import { readSillyTavernChat } from './st-chat.mjs'
 import { markSpeakers } from '../web/shared/vn.js'
+import { chatScriptList } from '../web/shared/regex.js'
+import { cardPick, DEFAULT_ITEM, defaultOf, itemOf, pickFor } from '../web/shared/personas.js'
 import { withChatChanges } from './frames.mjs'
 
 /**
@@ -68,25 +70,80 @@ export async function presetFor(store, presetId) {
   return store.getPreset(presetId).catch(() => null)
 }
 
-/** Regex scripts that apply to a chat: the global ones, then the preset's, then the card's, as in SillyTavern. */
-export function scriptsOf(card, preset, global = []) {
-  return [...global, ...(preset?.regexScripts ?? []), ...(Array.isArray(card?.regexScripts) ? card.regexScripts : [])]
+/**
+ * Regex scripts that apply to a chat: the global ones, then the preset's, then the card's, as in SillyTavern,
+ * then the 正则集 (regex.mjs) attached to the card.
+ */
+export function scriptsOf(card, preset, global = [], sets = []) {
+  return chatScriptList({ global, preset: preset?.regexScripts ?? [], card: Array.isArray(card?.regexScripts) ? card.regexScripts : [], cardId: card?.id ?? '', sets })
 }
 
 /** scriptsOf() for a chat's card and preset as they are now. */
 export async function chatScripts(store, chat) {
-  const [card, preset, global] = await Promise.all([store.getCard(chat.cardId).catch(() => null), presetFor(store, chat.presetId), store.getRegex()])
-  return scriptsOf(card, preset, global)
+  const [card, preset, global, sets] = await Promise.all([store.getCard(chat.cardId).catch(() => null), presetFor(store, chat.presetId), store.getRegex(), store.getRegexSets()])
+  return scriptsOf(card, preset, global, sets)
 }
 
 /**
  * The player in a chat on `card`: `name` (the chat's, or for a new chat the
- * card's own name for the player, else the one in settings) and the settings
+ * card's own name for the player, else the persona's) and the persona's
  * description. A card with a name of its own says who that person is itself,
- * so the settings description, written for someone else, is left out.
+ * so a persona's description, written for someone else, is left out while the
+ * player goes by the card's name (unless the persona has that name too).
  */
 export function playerOf(card, persona, name = card.userName || persona.name || '你') {
-  return { ...persona, name, description: card.userName && name === card.userName ? '' : persona.description }
+  const cardsOwn = Boolean(card.userName) && name === card.userName && persona.name !== card.userName
+  return { ...persona, name, description: cardsOwn ? '' : persona.description }
+}
+
+/**
+ * What a new chat on `card` uses from 你的角色 and 文风 (web/shared/personas.js):
+ * the card's pick, else the default; and the player's name there: a persona
+ * the card picked brings its own, else the card's name for the player, else
+ * the default persona's.
+ */
+export function newChatPicks(card, personas, styles) {
+  const picked = cardPick(personas, card.id)
+  const persona = picked ?? defaultOf(personas)
+  return { persona, style: pickFor(styles, card.id), name: (picked ? persona.name : card.userName || persona.name) || '你' }
+}
+
+/**
+ * The persona and the style a chat uses: the ones it started with or was
+ * switched to (a chat from before the lists: their first item, the one
+ * setting there was), else (deleted since) what a new chat on its card
+ * would use. `name` is the player's name then, null while the chat's persona
+ * is there.
+ */
+export async function chatPicks(store, chat, card) {
+  const [personas, styles] = await Promise.all([store.getPersonas(), store.getStyles()])
+  const own = itemOf(personas, chat.personaId ?? DEFAULT_ITEM)
+  const fresh = newChatPicks(card, personas, styles)
+  return { persona: own ?? fresh.persona, style: itemOf(styles, chat.styleId ?? DEFAULT_ITEM) ?? fresh.style, name: own ? null : fresh.name }
+}
+
+/**
+ * Another persona or style for a chat: `personaId` / `styleId` an item's id,
+ * or '' for what a new chat on its card would use now; left out, it stays. A
+ * persona brings its name as the player's from here on. The prefix is built
+ * again, so the next turn writes the cache once more.
+ */
+export async function switchPicks(store, chat, { personaId, styleId } = {}) {
+  const card = await store.getCard(chat.cardId)
+  const [personas, styles] = await Promise.all([store.getPersonas(), store.getStyles()])
+  const fresh = newChatPicks(card, personas, styles)
+  if (typeof personaId === 'string') {
+    const persona = personaId ? itemOf(personas, personaId) : fresh.persona
+    if (!persona) throw httpError(404, msg`没有这个角色`)
+    chat.personaId = persona.id
+    chat.names = { ...chat.names, user: personaId ? persona.name : fresh.name }
+  }
+  if (typeof styleId === 'string') {
+    const style = styleId ? itemOf(styles, styleId) : fresh.style
+    if (!style) throw httpError(404, msg`没有这个文风`)
+    chat.styleId = style.id
+  }
+  return rebuildPrompt(store, chat)
 }
 
 /**
@@ -96,21 +153,24 @@ export function playerOf(card, persona, name = card.userName || persona.name || 
  */
 export async function rebuildPrompt(store, chat, presetId = chat.presetId ?? '') {
   const card = await store.getCard(chat.cardId)
-  const [persona, settings, chosen, globalScripts] = await Promise.all([store.getPersona(), store.getSettings(), presetFor(store, presetId ?? ''), store.getRegex()])
+  const [picks, settings, chosen, globalScripts, regexSets] = await Promise.all([chatPicks(store, chat, card), store.getSettings(), presetFor(store, presetId ?? ''), store.getRegex(), store.getRegexSets()])
   // A deleted preset, or a chat from before the built-in one: rebuilt with the built-in preset.
   const preset = chosen ?? basicPreset(settings)
   const books = await booksForCard(store, card, settings, chat)
   const hasState = Object.keys(chat.nodes.root.state ?? {}).length > 0
-  // A card renamed in 修改角色卡: {{char}} in later turns follows the prefix.
-  chat.names = { ...chat.names, char: card.name }
+  // A card renamed in 修改角色卡: {{char}} in later turns follows the prefix. So does
+  // the player's name when the chat's persona was deleted and another took its place.
+  chat.names = { ...chat.names, char: card.name, ...(picks.name ? { user: picks.name } : {}) }
+  chat.personaId = picks.persona.id
+  chat.styleId = picks.style.id
   const prefix = prefixTemplates({
-    names: chat.names, card, preset, books, scripts: scriptsOf(card, preset, globalScripts),
+    names: chat.names, card, preset, books, scripts: scriptsOf(card, preset, globalScripts, regexSets),
     state: chat.nodes.root.state ?? {}, local: chat.frameVars ?? {}, global: settings.globalVars ?? {},
     messages: [{ role: 'assistant', text: chat.nodes.root.text ?? '' }],
   })
   let built
   try {
-    built = buildChatPrompt({ card, persona: playerOf(card, persona, chat.names.user), settings, books, hasState, preset, render: prefix.render })
+    built = buildChatPrompt({ card, persona: playerOf(card, picks.persona, chat.names.user), style: picks.style.text, settings, books, hasState, preset, render: prefix.render })
     built.systemPrompt = prefix.resolve(built.systemPrompt)
   } finally {
     prefix.dispose()
@@ -200,10 +260,10 @@ export async function switchOpening(store, chat, index) {
   const card = await store.getCard(chat.cardId)
   const greetings = greetingsOf(card)
   if (!Number.isInteger(index) || index < 0 || index >= greetings.length) throw httpError(400, msg`没有这个开场白`)
-  const [settings, persona, globalScripts] = await Promise.all([store.getSettings(), store.getPersona(), store.getRegex()])
+  const [settings, { persona }, globalScripts, regexSets] = await Promise.all([store.getSettings(), chatPicks(store, chat, card), store.getRegex(), store.getRegexSets()])
   const preset = await presetFor(store, chat.presetId ?? '')
   const books = await booksForCard(store, card, settings, chat)
-  const ctx = { names: chat.names, card, preset, books, scripts: scriptsOf(card, preset, globalScripts), local: chat.frameVars ?? {}, global: settings.globalVars ?? {} }
+  const ctx = { names: chat.names, card, preset, books, scripts: scriptsOf(card, preset, globalScripts, regexSets), local: chat.frameVars ?? {}, global: settings.globalVars ?? {} }
   const opened = openWith(ctx, initialState(books, initvarText(chat.names)), greetings[index])
   Object.assign(chat.nodes.root, { text: opened.text, display: displayText(opened.text), state: opened.state })
   if (opened.errors.length) chat.nodes.root.templateErrors = opened.errors
@@ -245,16 +305,18 @@ function openingInit(state, greeting) {
  * the card's initial one; `open(state, greeting)` makes an opening (openWith).
  * The frozen prefix's templates render once here, with the opening's state;
  * what they and the opening write is kept.
+ * The persona and the style are the card's picks, else the defaults (newChatPicks).
  * @param options.userName - the player's name in this chat, instead of the card's or the persona's.
  */
 async function startChat(store, cardId, makeRoot, { userName = '' } = {}) {
   const card = await store.getCard(cardId)
-  const [persona, settings, globalScripts] = await Promise.all([store.getPersona(), store.getSettings(), store.getRegex()])
+  const [personas, styles, settings, globalScripts, regexSets] = await Promise.all([store.getPersonas(), store.getStyles(), store.getSettings(), store.getRegex(), store.getRegexSets()])
   const preset = await presetFor(store, settings.presetId)
   const books = await booksForCard(store, card, settings)
-  const player = userName ? playerOf(card, persona, userName) : playerOf(card, persona)
+  const picks = newChatPicks(card, personas, styles)
+  const player = playerOf(card, picks.persona, userName || picks.name)
   const names = { char: card.name, user: player.name }
-  const ctx = { names, card, preset, books, scripts: scriptsOf(card, preset, globalScripts), local: {}, global: settings.globalVars ?? {} }
+  const ctx = { names, card, preset, books, scripts: scriptsOf(card, preset, globalScripts, regexSets), local: {}, global: settings.globalVars ?? {} }
   const root = makeRoot({ card, names, state: initialState(books, initvarText(names)), open: (state, greeting) => openWith(ctx, state, greeting) })
   let frameVars = applyWrites({}, root.local)
   const globalVars = applyWrites(settings.globalVars ?? {}, root.global)
@@ -264,7 +326,7 @@ async function startChat(store, cardId, makeRoot, { userName = '' } = {}) {
   let built
   let globalWrites = root.global ?? []
   try {
-    built = buildChatPrompt({ card, persona: player, settings, books, hasState: Object.keys(root.state).length > 0, preset, render: prefix.render })
+    built = buildChatPrompt({ card, persona: player, style: picks.style.text, settings, books, hasState: Object.keys(root.state).length > 0, preset, render: prefix.render })
     built.systemPrompt = prefix.resolve(built.systemPrompt)
     const writes = prefix.writes()
     root.state = applyWrites(root.state, writes.message)
@@ -288,6 +350,9 @@ async function startChat(store, cardId, makeRoot, { userName = '' } = {}) {
     presetName: preset?.name ?? null,
     presetVars: built.presetVars,
     bookIds: books.map(b => b.id),
+    // 你的角色 and 文风 it was started with: kept when the card's picks or the defaults change (chatPicks).
+    personaId: picks.persona.id,
+    styleId: picks.style.id,
     tips: {},
     stateDirty: false,
     // Chat-wide variables: the template `local` scope, Tavern Helper's chat variables.
@@ -703,6 +768,9 @@ export function chatView(chat) {
     webSearch: Boolean(chat.webSearch),
     presetId: chat.presetId ?? null,
     presetName: chat.presetName ?? null,
+    // null: a chat from before 你的角色 and 文风 were lists, on their first item.
+    personaId: chat.personaId ?? null,
+    styleId: chat.styleId ?? null,
     createdAt: chat.createdAt,
     updatedAt: chat.updatedAt,
     path,

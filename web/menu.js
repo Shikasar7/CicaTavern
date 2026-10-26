@@ -11,6 +11,7 @@ import { t } from '/i18n.js'
 export const MENU_ICONS = {
   picture: '<svg viewBox="0 0 20 20"><rect x="3" y="4" width="14" height="12" rx="2.5"/><circle cx="7.6" cy="8.4" r="1.4"/><path d="m3.6 14.6 4.1-4 3.1 3 2.1-2 3.5 3.3"/></svg>',
   voice: '<svg viewBox="0 0 20 20"><path d="M3.5 8.2v3.6h2.8L10 15V5L6.3 8.2z"/><path d="M13.2 7.4a3.6 3.6 0 0 1 0 5.2M15.4 5.2a6.8 6.8 0 0 1 0 9.6"/></svg>',
+  mic: '<svg viewBox="0 0 20 20"><rect x="7.4" y="2.8" width="5.2" height="9.2" rx="2.6"/><path d="M4.6 9.6a5.4 5.4 0 0 0 10.8 0M10 15v2.4"/></svg>',
   model: '<svg viewBox="0 0 20 20"><rect x="5" y="5" width="10" height="10" rx="2.5"/><path d="M8 2.8v2.2M12 2.8v2.2M8 15v2.2M12 15v2.2M2.8 8h2.2M2.8 12h2.2M15 8h2.2M15 12h2.2"/></svg>',
   write: '<svg viewBox="0 0 20 20"><path d="M4 16h3.2l8.4-8.4a1.9 1.9 0 0 0-2.7-2.7L4.5 13.3z"/><path d="m11.8 6 2.7 2.7"/></svg>',
   book: '<svg viewBox="0 0 20 20"><path d="M10 5.6C8.6 4.5 6.6 4 4 4v11c2.6 0 4.6.5 6 1.6 1.4-1.1 3.4-1.6 6-1.6V4c-2.6 0-4.6.5-6 1.6z"/><path d="M10 5.6v11"/></svg>',
@@ -74,6 +75,14 @@ export function createMenu({ dialog, form, el, title: menuTitle, edits = countsA
     const box = dialog.getBoundingClientRect()
     const outside = event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom
     if (outside) show(null, 'back')
+  })
+  // Esc is caught as a key, before it becomes a close request: a second Esc in a row is a close request
+  // the page can't refuse (Chrome's close-watcher rule), and 有改动还没保存 → 取消 would close it anyway.
+  dialog.addEventListener('keydown', event => {
+    // Not one meant for a window opened over this one (its own Esc closes it).
+    if (event.key !== 'Escape' || event.isComposing || event.target.closest?.('dialog') !== dialog) return
+    event.preventDefault()
+    up()
   })
   dialog.addEventListener('cancel', event => {
     event.preventDefault()

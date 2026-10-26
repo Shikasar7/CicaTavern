@@ -73,15 +73,16 @@ export function withoutOwnStatus(scripts) {
  * @param node - { role, raw, text, state }.
  * @param depth - 0 for the latest message.
  * @param withStatus - append the MVU status placeholder (the latest reply only).
+ * @param variables - { local, global }: the chat's and the app's variables, for {{getvar::…}} and the like.
  */
-export function displayOf(node, { scripts, names, depth, withStatus }) {
+export function displayOf(node, { scripts, names, depth, withStatus, variables = {} }) {
   // Before the regex: the words come out of what was written, not out of the HTML a card's regex builds.
   let text = blockShown(node.raw ?? node.text ?? '')
   if (node.role === 'user' && !scripts.length) return text
   // The status bar always goes after the story: models often write the placeholder first,
   // or before their variable-update block.
   if (withStatus || PLACEHOLDER.test(text)) text = `${text.replace(/<StatusPlaceHolderImpl\s*\/>/gi, '').trimEnd()}\n\n<StatusPlaceHolderImpl/>`
-  const macros = text => nameMacros(replaceVariableMacros(text, node.state), names)
+  const macros = text => nameMacros(replaceVariableMacros(text, node.state, variables), names)
   if (scripts.length) {
     const placement = node.role === 'user' ? PLACEMENT.USER_INPUT : PLACEMENT.AI_OUTPUT
     text = applyScripts(text, scripts, { placement, target: 'display', depth, macros })
@@ -185,12 +186,17 @@ function mergeInvisible(parts) {
 // ─── Sandboxed frames ───────────────────────────────────────────────────
 const heights = new Map() // content → last measured height, so re-renders do not jump
 let frameCounter = 0
+// The tallest a card frame is made (a page that keeps growing, 100vh inside 100vh, stops here); taller content scrolls.
+const FRAME_MAX = 4000
 
 function hash(text) {
   let h = 0
   for (let i = 0; i < text.length; i++) h = (h * 31 + text.charCodeAt(i)) | 0
   return `${text.length}:${h}`
 }
+
+// A chunk that is a whole document: <html> first, after a doctype and comments only.
+const FULL_DOCUMENT = /^\s*(?:<!--[\s\S]*?-->\s*)*(?:<!doctype[^>]*>\s*)?(?:<!--[\s\S]*?-->\s*)*<html(?:\s[^>]*)?>/i
 
 /** `context`: what the Tavern Helper stand-in needs (see compat.js); without it the frame gets plain HTML. */
 function frameDocument(body, id, context) {
@@ -201,11 +207,22 @@ function frameDocument(body, id, context) {
   if (context) body = replaceViewportHeight(body)
   // Measure the content, not the document: the document is never shorter than the frame, so a
   // block that collapses (a folded thinking panel, a re-render at a cached height) left a gap.
-  const report = `<script>(()=>{const b=document.body;const height=()=>{let h=b.scrollHeight;for(const el of b.children){const r=el.getBoundingClientRect();if(r.height||r.width)h=Math.max(h,r.bottom+scrollY+(parseFloat(getComputedStyle(el).marginBottom)||0))}return Math.ceil(h)};const post=()=>parent.postMessage({agentTavernFrame:${JSON.stringify(id)},height:height()},'*');addEventListener('load',post);const ro=new ResizeObserver(post);ro.observe(b);for(const el of b.children)ro.observe(el);setTimeout(post,60);setTimeout(post,600)})()<\/script>`
+  // The frame says how tall it is; past FRAME_MAX (the most the page gives it) it scrolls inside itself
+  // instead of cutting the rest off (a long reply wrapped whole by a card's display regex).
+  const report = `<script>(()=>{const b=document.body;const height=()=>{let h=b.scrollHeight;for(const el of b.children){const r=el.getBoundingClientRect();if(r.height||r.width)h=Math.max(h,r.bottom+scrollY+(parseFloat(getComputedStyle(el).marginBottom)||0))}return Math.ceil(h)};const post=()=>{const h=height();document.documentElement.style.overflowY=h>${FRAME_MAX}?'auto':'';parent.postMessage({agentTavernFrame:${JSON.stringify(id)},height:h},'*')};addEventListener('load',post);const ro=new ResizeObserver(post);ro.observe(b);for(const el of b.children)ro.observe(el);setTimeout(post,60);setTimeout(post,600)})()<\/script>`
   const head = `<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><base target="_blank"><style>html,body{margin:0;padding:0;background:transparent;color:${color};font:14px/1.6 system-ui,"Microsoft YaHei",sans-serif;overflow:hidden}</style>${compat}`
-  if (!/<html[\s>]/i.test(body)) return `<!doctype html><html><head>${head}</head><body>${body}${report}</body></html>`
-  // A full document: our head goes first so the stand-in exists before the card's own scripts.
-  const withHead = /<head[\s>]/i.test(body) ? body.replace(/<head[^>]*>/i, m => `${m}${head}`) : body.replace(/<html[^>]*>/i, m => `${m}<head>${head}</head>`)
+  // A full document only when it opens with <html> (after a doctype or comments): one written inside a script's
+  // string (a card's export that opens a window) is not where the stand-in goes.
+  const opening = FULL_DOCUMENT.exec(body)
+  if (!opening) return `<!doctype html><html><head>${head}</head><body>${body}${report}</body></html>`
+  // A full document: our head goes first so the stand-in exists before the card's own scripts,
+  // into its own <head> when that comes before any script or the body.
+  const start = opening[0].length
+  const rest = body.slice(start)
+  const ownHead = /^(?:\s|<!--[\s\S]*?-->)*<head[^>]*>/i.exec(rest)
+  const withHead = ownHead
+    ? body.slice(0, start) + ownHead[0] + head + rest.slice(ownHead[0].length)
+    : `${body.slice(0, start)}<head>${head}</head>${rest}`
   return /<\/body>/i.test(withHead) ? withHead.replace(/<\/body>/i, `${report}</body>`) : `${withHead}${report}`
 }
 
@@ -217,6 +234,8 @@ export function htmlFrame(body, context = null) {
   frame.dataset.key = hash(body)
   // Whose frame it is: the page keeps its localStorage under that card (compat.js storedFrameStorage).
   if (context?.cardId) frame.dataset.card = context.cardId
+  // And whose floor: a card may change its own message or the latest (compat.js setMessage, app.js editMessage).
+  if (context?.nodeId) frame.dataset.node = context.nodeId
   frame.setAttribute('sandbox', 'allow-scripts allow-popups allow-popups-to-escape-sandbox')
   frame.setAttribute('referrerpolicy', 'no-referrer')
   frame.setAttribute('loading', 'lazy')
@@ -230,9 +249,9 @@ export function listenForFrameHeights() {
   window.addEventListener('message', event => {
     const id = event.data?.agentTavernFrame
     if (typeof id !== 'string') return
-    const frame = document.querySelector(`iframe[data-frame="${id}"]`)
+    const frame = document.querySelector(`iframe[data-frame="${CSS.escape(id)}"]`)
     if (!frame || event.source !== frame.contentWindow) return
-    const height = Math.min(Math.max(Number(event.data.height) || 0, 20), 4000)
+    const height = Math.min(Math.max(Number(event.data.height) || 0, 20), FRAME_MAX)
     frame.style.height = `${height}px`
     heights.set(frame.dataset.key, height)
   })

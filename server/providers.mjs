@@ -216,7 +216,9 @@ export function mergeDshProviders(saved, drafts) {
   const added = []
   const updated = []
   for (const draft of drafts) {
-    const index = list.findIndex(p => p.id === draft.id)
+    // Saved under the id normalizeProvider made of it (DSH's DeepSeek → deepseek).
+    const saved = slug(draft.id) || slug(draft.name) || hostSlug(draft.baseURL)
+    const index = list.findIndex(p => p.id === draft.id || p.id === saved)
     if (index >= 0) {
       const previous = list[index]
       list[index] = normalizeProvider({ ...previous, ...draft, apiKey: '' }, previous)
@@ -258,11 +260,21 @@ export function exportProviders(providers, defaultModel) {
   }
 }
 
+const originOf = url => {
+  try {
+    return new URL(String(url ?? '').trim()).origin
+  } catch {
+    return ''
+  }
+}
+
 /**
  * Merge an exportProviders archive into the saved list. The same id replaces
- * the saved provider (a key in the file wins, none keeps the saved one); new
- * ids are added under that id, so the archive's default model still points
- * at them. A provider that fails validation is reported, not fatal.
+ * the saved provider (a key in the file wins, none keeps the saved one, unless
+ * the file moves it to another address: `keyless`, so the key is never sent
+ * where a shared file points); new ids are added under that id, so the
+ * archive's default model still points at them. A provider that fails
+ * validation is reported, not fatal.
  */
 export function importProviders(saved, archive) {
   if (!isObject(archive) || archive.format !== PROVIDERS_FORMAT || !Array.isArray(archive.providers)) {
@@ -272,12 +284,16 @@ export function importProviders(saved, archive) {
   const added = []
   const updated = []
   const failed = []
+  const keyless = []
   for (const input of archive.providers) {
     try {
       const index = list.findIndex(p => p.id === input?.id)
       if (index >= 0) {
-        list[index] = normalizeProvider(input, list[index])
+        const previous = list[index]
+        const moved = !(typeof input.apiKey === 'string' && input.apiKey.trim()) && Boolean(previous.apiKey) && originOf(input.baseURL) !== originOf(previous.baseURL)
+        list[index] = normalizeProvider(moved ? { ...input, clearKey: true } : input, previous)
         updated.push(list[index].name)
+        if (moved) keyless.push(list[index].name)
       } else {
         const provider = normalizeProvider(input, null, new Set(list.map(p => p.id)))
         list.push(provider)
@@ -288,7 +304,7 @@ export function importProviders(saved, archive) {
     }
   }
   const defaultModel = isProviderRef(archive.defaultModel) && list.some(p => archive.defaultModel.startsWith(`${p.id}/`)) ? archive.defaultModel : ''
-  return { list, added, updated, failed, defaultModel }
+  return { list, added, updated, failed, keyless, defaultModel }
 }
 
 export function draftProvider(input, previous = null) {
@@ -422,6 +438,19 @@ function apiKeyOf(provider, env = process.env) {
 
 function isLoopbackHost(hostname) {
   return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]' || hostname === '::1'
+}
+
+/** This machine or the local network: private and link-local addresses, *.local, a name with no dot. */
+function isLocalNetworkHost(hostname) {
+  const host = String(hostname).toLowerCase().replace(/^\[|\]$/g, '')
+  if (isLoopbackHost(host) || host.endsWith('.local') || (!host.includes('.') && !host.includes(':'))) return true
+  const v4 = /^(\d+)\.(\d+)\.\d+\.\d+$/.exec(host)
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])]
+    return a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254)
+  }
+  // IPv6: unique local (fc00::/7) and link-local (fe80::/10).
+  return /^f[cd][0-9a-f]{2}:/.test(host) || /^fe[89ab][0-9a-f]:/.test(host)
 }
 
 const agents = new Map()
@@ -723,16 +752,38 @@ async function anthropicMessages(provider, request, res) {
         cut = text.length
       }
     }
+    const raw = text
     text = afterSearch(text, cut)
     if (text) request.onDelta?.(text)
     takeUsage(json.usage)
     reasoned = (json.content ?? []).some(b => /thinking/.test(b.type ?? ''))
-    return { text, usage: seenUsage ? usage : null, model: json.model ?? null, stopReason: json.stop_reason ?? null, reasoned, search: counted() }
+    return { text, raw, cut, content: Array.isArray(json.content) ? json.content : [], usage: seenUsage ? usage : null, model: json.model ?? null, stopReason: json.stop_reason ?? null, reasoned, search: counted() }
   }
   const toolInput = new Map() // block index → the search's input JSON as it streams
+  // The reply's content blocks rebuilt from the stream (a paused one is sent back as it came: pause_turn).
+  const blocks = []
+  const inputs = new Map() // block index → a tool block's input JSON as it streams
+  const into = (index, change) => {
+    if (blocks[index]) change(blocks[index])
+  }
   for await (const { data } of sse(res)) {
     const json = parseJson(data)
     if (!json) continue
+    if (json.type === 'content_block_start' && json.content_block) {
+      blocks[json.index] = structuredClone(json.content_block)
+      if (/tool_use$/.test(json.content_block.type ?? '')) inputs.set(json.index, '')
+    } else if (json.type === 'content_block_delta') {
+      const d = json.delta ?? {}
+      if (d.type === 'text_delta') into(json.index, b => { b.text = (b.text ?? '') + d.text })
+      else if (d.type === 'thinking_delta') into(json.index, b => { b.thinking = (b.thinking ?? '') + d.thinking })
+      else if (d.type === 'signature_delta') into(json.index, b => { b.signature = d.signature })
+      else if (d.type === 'citations_delta' && d.citation) into(json.index, b => { b.citations = [...(b.citations ?? []), d.citation] })
+      else if (d.type === 'input_json_delta' && inputs.has(json.index)) inputs.set(json.index, inputs.get(json.index) + (d.partial_json ?? ''))
+    } else if (json.type === 'content_block_stop' && inputs.has(json.index)) {
+      const typed = inputs.get(json.index)
+      if (typed) into(json.index, b => { b.input = parseJson(typed) ?? b.input ?? {} })
+      inputs.delete(json.index)
+    }
     if (json.type === 'message_start') {
       model = json.message?.model ?? null
       takeUsage(json.message?.usage)
@@ -763,8 +814,32 @@ async function anthropicMessages(provider, request, res) {
       throw new Error(json.error?.message ?? msg`生成失败`)
     }
   }
-  return { text: afterSearch(text, cut), usage: seenUsage ? usage : null, model, stopReason, reasoned, search: counted() }
+  return { text: afterSearch(text, cut), raw: text, cut, content: blocks.filter(Boolean), usage: seenUsage ? usage : null, model, stopReason, reasoned, search: counted() }
 }
+
+/** A reply that paused (pause_turn) and the rest the model wrote when given it back: one reply. */
+function joinPaused(first, rest) {
+  const raw = first.raw + rest.raw
+  const cut = rest.cut > 0 ? first.raw.length + rest.cut : first.cut
+  const sources = [...(first.search?.sources ?? []), ...(rest.search?.sources ?? [])].filter((s, i, all) => all.findIndex(o => o.url === s.url) === i)
+  const search = first.search || rest.search
+    ? { count: (first.search?.count ?? 0) + (rest.search?.count ?? 0), queries: [...(first.search?.queries ?? []), ...(rest.search?.queries ?? [])].slice(0, 20), sources: sources.slice(0, 12) }
+    : null
+  return {
+    ...rest,
+    text: afterSearch(raw, cut),
+    raw,
+    cut,
+    content: [...first.content, ...rest.content],
+    usage: addUsage(first.usage, rest.usage),
+    model: rest.model ?? first.model,
+    reasoned: first.reasoned || rest.reasoned,
+    search,
+  }
+}
+
+// How many times a reply paused mid-search is given back to carry on before it is kept as it is.
+const PAUSED_ROUNDS = 3
 
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
 
@@ -820,7 +895,8 @@ function requestBody(provider, modelId, { system, messages, maxTokens: cap, reas
     // One breakpoint on the system prompt and one on the newest message: each
     // request reads the previous request's cached prefix and extends it. A message
     // marked `cache` (the newest one later turns will not rewrite) gets a third.
-    const last = messages.length - 1
+    // The newest message of the conversation itself: a paused reply sent back after it (its blocks) has none.
+    const last = messages.findLastIndex(m => !Array.isArray(m.content))
     const cache = ttl === '1h' ? { type: 'ephemeral', ttl: '1h' } : { type: 'ephemeral' }
     return {
       model: modelId,
@@ -828,7 +904,7 @@ function requestBody(provider, modelId, { system, messages, maxTokens: cap, reas
       // An empty text block is refused, so a request without a system prompt has no system field.
       ...(String(system ?? '').trim() ? { system: [{ type: 'text', text: system, cache_control: cache }] } : {}),
       messages: messages.map((m, i) =>
-        i === last || m.cache ? { role: m.role, content: [{ type: 'text', text: m.content, cache_control: cache }] } : { role: m.role, content: m.content },
+        !Array.isArray(m.content) && (i === last || m.cache) ? { role: m.role, content: [{ type: 'text', text: m.content, cache_control: cache }] } : { role: m.role, content: m.content },
       ),
       stream: true,
       ...(search === 'anthropic' ? { tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: SEARCHES_PER_REPLY }] } : {}),
@@ -875,7 +951,8 @@ export async function complete(provider, modelId, request, { proxy = null } = {}
   const protocol = PROTOCOL[provider.api]
   if (!protocol) throw new Error(msg`不支持的接口类型：${provider.api}`)
   if (!apiKeyOf(provider) && !Object.keys(provider.headers ?? {}).length) {
-    const local = isLoopbackHost(new URL(provider.baseURL).hostname)
+    // A model server on this machine or the local network (LM Studio, Ollama on another PC) needs none.
+    const local = isLocalNetworkHost(new URL(provider.baseURL).hostname)
     if (!local) throw httpError(400, msg`供应商「${provider.name}」还没有填 API Key`)
   }
   const pair = `${provider.id}/${modelId}`
@@ -895,6 +972,8 @@ export async function complete(provider, modelId, request, { proxy = null } = {}
         proxy: provider.proxy === 'direct' ? null : proxy,
       })
     let res = await post()
+    // What went out in the end (a refused field left out on the retry below): a paused reply is carried on the same way.
+    let used = { options: {}, body: req }
     try {
       await failIfBad(res)
     } catch (error) {
@@ -910,16 +989,39 @@ export async function complete(provider, modelId, request, { proxy = null } = {}
       // A model or relay that takes no thinking / effort fields: leave them out, now and later.
       const reasoningRejected = reasoning && REASONING_REFUSED.test(error.message)
       if (!ttlRejected && !capRejected && !reasoningRejected) throw searchHint(contextHint(error), request)
-      res = await post({ ...(ttlRejected ? { ttl: '5m' } : {}), ...(reasoningRejected ? { withReasoning: false } : {}) }, capRejected ? { ...req, maxTokens: undefined } : req)
+      const fixed = { ...(ttlRejected ? { ttl: '5m' } : {}) }
+      const body = capRejected ? { ...req, maxTokens: undefined } : req
+      // The 1-hour cache or the output cap explains it on its own ("ttl: Extra inputs are not permitted" reads like a
+      // refused thinking field too): tried first with thinking kept, and thinking left out only if still refused for it.
+      let dropReasoning = reasoningRejected && !ttlRejected && !capRejected
+      res = await post({ ...fixed, ...(dropReasoning ? { withReasoning: false } : {}) }, body)
+      if (reasoningRejected && !dropReasoning) {
+        const stillRefused = await failIfBad(res).then(() => null, refusal => refusal)
+        if (stillRefused && !(stillRefused.providerStatus === 400 && REASONING_REFUSED.test(stillRefused.message))) throw searchHint(contextHint(stillRefused), request)
+        if (stillRefused) {
+          dropReasoning = true
+          res = await post({ ...fixed, withReasoning: false }, body)
+        }
+      }
       // Refused the same way without them: it was something else (the search tool, say), and thinking stays as it
       // was. Refused for another reason, or not at all: they were the trouble, and are left out from now on.
       await failIfBad(res).catch(retryError => {
-        if (reasoningRejected && !REASONING_REFUSED.test(retryError.message)) NO_REASONING.add(refusedKey)
+        if (dropReasoning && !REASONING_REFUSED.test(retryError.message)) NO_REASONING.add(refusedKey)
         throw searchHint(contextHint(retryError), request)
       })
-      if (reasoningRejected) NO_REASONING.add(refusedKey)
+      if (dropReasoning) NO_REASONING.add(refusedKey)
+      used = { options: { ...fixed, ...(dropReasoning ? { withReasoning: false } : {}) }, body }
     }
-    const result = await protocol.read(provider, request, res)
+    let result = await protocol.read(provider, request, res)
+    // 联网 on Anthropic: a reply paused mid-search (pause_turn, after many searches) goes back as it came, and the
+    // model carries on from there; the page has been showing it all along.
+    for (let round = 0; result.stopReason === 'pause_turn' && result.content?.length && round < PAUSED_ROUNDS && !request.signal?.aborted; round++) {
+      const next = await post(used.options, { ...used.body, messages: [...used.body.messages, { role: 'assistant', content: result.content }] })
+      await failIfBad(next).catch(error => {
+        throw searchHint(contextHint(error), request)
+      })
+      result = joinPaused(result, await protocol.read(provider, request, next))
+    }
     return { ...result, truncated: TRUNCATED.test(String(result.stopReason ?? '')) }
   }
   const first = await attempt()
@@ -955,9 +1057,9 @@ function searchHint(error, request) {
   return error
 }
 
-/** Say what to do when the conversation no longer fits. */
+/** Say what to do when the conversation no longer fits: after the provider's words, which are cut short, never cut with them. */
 function contextHint(error) {
-  if (CONTEXT_FULL.test(error.message)) error.message += msg`（这段对话太长，超出了模型一次能读的上下文。点顶栏「压缩上下文」把前面的剧情压成存档，再接着写。）`
+  if (CONTEXT_FULL.test(error.message)) error.hint = msg`（这段对话太长，超出了模型一次能读的上下文。点顶栏「压缩上下文」把前面的剧情压成存档，再接着写。）`
   return error
 }
 
@@ -1024,11 +1126,28 @@ export async function googleRequest(provider, suffix, { body, signal, proxy = nu
   return parseJson(await readText(res, 64 * 1024 * 1024))
 }
 
-/** GET a URL (an image a provider links to, a local service) as bytes. */
+/**
+ * GET a URL (an image a provider links to, a local service) as bytes. A few
+ * redirects are followed (an image link that points on to a CDN); the headers
+ * don't go along to another host.
+ */
 export async function fetchBytes(url, { headers = {}, signal, proxy = null } = {}) {
-  const res = await send(url, { headers, signal, proxy })
-  await failIfBad(res)
-  return { contentType: String(res.headers['content-type'] ?? ''), buffer: await readBuffer(res) }
+  let target = new URL(url)
+  let sent = headers
+  for (let hop = 0; ; hop += 1) {
+    const res = await send(target.href, { headers: sent, signal, proxy })
+    const location = res.headers.location
+    if (res.statusCode >= 300 && res.statusCode < 400 && location && hop < 5) {
+      res.resume()
+      const next = new URL(location, target)
+      if (!/^https?:$/.test(next.protocol)) throw new Error(msg`跳转到了不支持的地址：${next.href.slice(0, 80)}`)
+      if (next.origin !== target.origin) sent = {}
+      target = next
+      continue
+    }
+    await failIfBad(res)
+    return { contentType: String(res.headers['content-type'] ?? ''), buffer: await readBuffer(res) }
+  }
 }
 
 /** POST JSON to a URL (local services such as ComfyUI or the voice bridge). */

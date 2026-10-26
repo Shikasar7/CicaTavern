@@ -1,6 +1,7 @@
 import { test, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, readFileSync } from 'node:fs'
+import { createServer } from 'node:http'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -86,6 +87,11 @@ test('variable macros read stat_data and format structures', () => {
   assert.equal(replaceVariableMacros('{{getvar::stat_data.角色.物品}}', state), '["伞","钥匙"]')
   assert.match(formatValue(state), /系统:\n  时间: 清晨\n角色:\n  好感度: 12\n  物品: 伞、钥匙/)
   assert.equal(replaceVariableMacros('{{get_message_variable::stat_data.不存在}}', state), '')
+  // getvar and the chat forms read the chat's own variables, the global ones the app's; the state after that.
+  const scopes = { local: { 章节: 2 }, global: { 难度: '困难' } }
+  assert.equal(replaceVariableMacros('{{getvar::章节}}/{{get_chat_variable::章节}}/{{get_global_variable::难度}}/{{getvar::stat_data.系统.时间}}', state, scopes), '2/2/困难/清晨')
+  assert.equal(replaceVariableMacros('{{get_message_variable::章节}}', state, scopes), '', 'a message variable is from the state')
+  assert.equal(replaceVariableMacros('{{getvar::章节}}', state), '', 'without them, as before')
 })
 
 test('EJS runs in the QuickJS sandbox: getvar branches, whitespace control, no host access, time limit', () => {
@@ -273,4 +279,41 @@ test('ST-Prompt-Template decorators: @@private is dropped, @@if gates the entry'
   const book = normalizeBook({ entries: [{ keys: [], content: gated, constant: true, comment: '阶段' }] })
   assert.equal(constantEntries([book]).length, 0, 'an @@if entry is dynamic, not part of the frozen prefix')
   assert.equal(dynamicEntries([book]).length, 1)
+})
+
+test('the opening cannot be switched while the first turn is being written', async t => {
+  let release
+  const answered = new Promise(resolve => { release = resolve })
+  const model = createServer(async (req, res) => {
+    for await (const _ of req) { /* the request */ }
+    await answered
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ choices: [{ message: { content: '她抬起头。' }, finish_reason: 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 5 } }))
+  })
+  await new Promise(resolve => model.listen(0, '127.0.0.1', resolve))
+  const root = await mkdtemp(path.join(tmpdir(), 'tavern-opening-'))
+  const app = createApp({ dataRoot: root, proxy: 'off', edition: 'release' })
+  const server = await app.listen({ port: 0 })
+  t.after(async () => {
+    release()
+    model.closeAllConnections()
+    model.close()
+    app.network?.stop()
+    server.closeAllConnections?.()
+    server.close()
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  })
+  const base = `http://127.0.0.1:${server.address().port}`
+  const send = (p, body, method = 'POST') => fetch(base + p, { method, headers: { 'content-type': 'application/json', 'x-agent-tavern': '1' }, body: body === undefined ? undefined : JSON.stringify(body) })
+  const provider = await (await send('/api/providers', { name: '本机', api: 'openai-completions', baseURL: `http://127.0.0.1:${model.address().port}/v1`, apiKey: 'sk-test', models: ['writer'] })).json()
+  await send('/api/settings', { model: `${provider.id}/writer` }, 'PUT')
+  const card = await (await send('/api/cards/import', { filename: 'c.json', data: Buffer.from(JSON.stringify({ spec: 'chara_card_v2', data: { name: '千夏', first_mes: '蝉鸣。', alternate_greetings: ['雨声。'] } })).toString('base64') })).json()
+  const chat = await (await send('/api/chats', { cardId: card.id })).json()
+  const turn = send(`/api/chats/${chat.id}/turn`, { parentId: chat.path.at(-1).id, input: '你好' })
+  for (let i = 0; i < 100 && !(await (await fetch(`${base}/api/chats/${chat.id}`)).json()).running; i++) await new Promise(resolve => setTimeout(resolve, 20))
+  assert.equal((await send(`/api/chats/${chat.id}/opening`, { index: 1 })).status, 409)
+  release()
+  assert.match(await (await turn).text(), /"type":"done"/)
+  const after = await (await fetch(`${base}/api/chats/${chat.id}`)).json()
+  assert.deepEqual(after.path.map(node => node.text ?? ''), ['蝉鸣。', '你好', '她抬起头。'])
 })

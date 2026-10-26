@@ -40,12 +40,18 @@ export function showPrivacyNotice({ el, features, settings, autoCheck, save }) {
       el('p', { class: 'hint', text: t`以后在 设置 → 更多 →「隐私与网络」里随时能改。` }),
       el('div', { class: 'row privacy-actions' }, [ok]),
     )
-    // Esc does not skip it: the choice has to be made once.
+    // Esc does not skip it: the choice has to be made once. Closed any other way (the phone's Back closes the top
+    // dialog, a second Esc in Chrome cannot be stopped), it opens again: the app waits for this answer to start.
+    let confirmed = false
     dialog.addEventListener('cancel', event => event.preventDefault())
+    dialog.addEventListener('close', () => {
+      if (!confirmed) dialog.showModal()
+    })
     ok.addEventListener('click', async () => {
       ok.disabled = true
       try {
         await save({ webFonts: fonts.input.checked, cdnLibraries: libraries.input.checked, autoCheck: updates ? updates.input.checked : undefined })
+        confirmed = true
         dialog.close()
         dialog.remove()
         resolve()

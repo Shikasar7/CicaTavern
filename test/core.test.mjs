@@ -13,6 +13,7 @@ import { initTemplates } from '../server/template.mjs'
 import { createStore } from '../server/store.mjs'
 import { createChat, activePath, selectNode, chatView, foldedTurns, restoreFolded, rollbackTo, forkChat } from '../server/chats.mjs'
 import { createApp } from '../server/http.mjs'
+import { createLedger } from '../server/usage.mjs'
 
 before(() => initTemplates())
 
@@ -112,6 +113,9 @@ test('worldbook: constants, keyword, regex + AND_ALL secondary, dedupe, initvar'
   assert.equal(triggeredEntries(books, '桂花', new Set(['b:1'])).length, 0, 'recently injected entries are skipped')
   assert.equal(triggeredEntries(books, '老板来了', new Set()).length, 0, 'AND_ALL needs the secondary key')
   assert.equal(triggeredEntries(books, '老板生气了', new Set()).length, 1)
+  // A key that is empty (a template that printed nothing) matches no text, not every text.
+  const blank = books.map(book => ({ ...book, entries: book.entries.map(entry => ({ ...entry, keys: [''], secondaryKeys: [], constant: false })) }))
+  assert.equal(triggeredEntries(blank, '任何一句话', new Set()).length, 0)
 })
 
 test('card summary counts its own book: entries, enabled, always-on among the enabled', () => {
@@ -145,8 +149,9 @@ test('state: JSON patch and MVU _.set / _.add are parsed as data, never evaluate
 test('prompt: stable prefix holds card + constants; tail holds per-turn material', () => {
   const card = normalizeCard(SAMPLE_CARD)
   const books = [{ ...card.book, id: 'b' }]
-  const system = buildSystemPrompt({ card, persona: { name: '阿明', description: '常客' }, settings: { language: '简体中文', writingRules: '白描' }, books, hasState: true })
+  const system = buildSystemPrompt({ card, persona: { name: '阿明', description: '常客' }, style: '白描', settings: { language: '简体中文' }, books, hasState: true })
   assert.match(system, /小雨是街角咖啡店的店员/)
+  assert.match(system, /## 文风与写作要求\n白描/)
   assert.match(system, /阿明/)
   assert.match(system, /咖啡店名叫「雨停」/)
   assert.match(system, /<state>/, 'state protocol is included for non-MVU cards with state')
@@ -497,4 +502,14 @@ test('settings saved at once all land, and variable writes worked out from the s
   assert.deepEqual([saved.language, saved.replyLength, saved.scanDepth], ['English', 800, 7])
   await Promise.all(Array.from({ length: 10 }, (_, i) => store.updateSettings(current => ({ globalVars: { ...current.globalVars, [`v${i}`]: i } }))))
   assert.equal(Object.keys((await store.getSettings()).globalVars).length, 10)
+})
+
+test('the usage ledger: a first fill that failed (an unreadable chat) is tried again on the next read', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'tavern-ledger-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  let broken = true
+  const ledger = createLedger({ dirs: { root }, listChats: async () => { if (broken) throw new Error('坏了一个对话'); return [] } })
+  await assert.rejects(ledger.summary(), /坏了一个对话/)
+  broken = false
+  await ledger.summary()
 })

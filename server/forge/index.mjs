@@ -27,7 +27,7 @@ import { cleanCardMedia, drawChoiceOf } from '../media.mjs'
 import { complete, isProviderRef, providerError, refLabel, resolveRef } from '../providers.mjs'
 import { httpError, newId } from '../store.mjs'
 import { chosenUserName, discussRequest, editBrief, editTracking, editUserName, emptyBrief, forgeLanguages, partialReply, planLanguage, planRequest, readDiscussion, readPlan, reviseRequest } from './prompts.mjs'
-import { applyIssues, cardJson, entriesRequest, greetingsRequest, initialState, lintCard, matchWritten, newCard, readIssues, readTagged, retrack, reviewRequest, rewriteRequest, stepDone, userTagged, writeSteps } from './write.mjs'
+import { alignCard, applyIssues, cardJson, entriesRequest, greetingsRequest, initialState, lintCard, matchWritten, newCard, readIssues, readTagged, retrack, reviewRequest, rewriteRequest, stepDone, userTagged, writeSteps } from './write.mjs'
 import { applyChanges, editRequest, ensureBook, readEdit } from './edit.mjs'
 import { applyBookChanges, bookEditRequest, bookTooLong, pickRequest, readBookEdit, readPicked } from './book-edit.mjs'
 import { applyPresetChanges, presetEditRequest, presetPickRequest, presetTooLong, readPickedPrompts, readPresetEdit } from './preset-edit.mjs'
@@ -78,6 +78,8 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
   const avatarFile = id => fileOf(id).replace(/\.json$/, '.avatar')
   // id → { kind, step, controller, partial, startedAt } of the job in progress.
   const jobs = new Map()
+  // Talk sessions a proposal is going into, or a new request is starting on (until its job is in `jobs`).
+  const talkBusy = new Set()
 
   async function load(id) {
     // Asked before reading: a job that ends during the read (it saves its end,
@@ -572,13 +574,18 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
       apply: applyPresetChanges,
       undo: true,
     },
-    // The global scripts (global), a card's (card-<id>) or a preset's (preset-<id>).
+    // The global scripts (global), a 正则集's (set-<id>), a card's (card-<id>) or a preset's (preset-<id>).
     regex: {
       prefix: `${EDIT}regex-`,
       target: /^regex:[\w-]{1,64}$/,
       title: name => msg`修改正则：${name}`,
       async load(id) {
         if (id === 'global') return { subject: { scripts: await store.getRegex() }, name: msg`全局` }
+        if (id.startsWith('set-')) {
+          const set = (await store.getRegexSets()).find(s => s.id === id.slice(4))
+          if (!set) throw httpError(404, msg`正则集不存在`)
+          return { subject: { scripts: set.scripts }, name: set.name, set: set.id }
+        }
         if (id.startsWith('card-')) {
           const card = await store.getCard(id.slice(5))
           return { subject: { scripts: card.regexScripts ?? [] }, name: card.name, holder: card }
@@ -591,12 +598,23 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
       },
       async save(loaded) {
         loaded.subject.scripts = cleanScripts(loaded.subject.scripts)
+        if (loaded.set) {
+          const { scripts } = loaded.subject
+          return store.updateRegexSets(sets => {
+            if (!sets.some(s => s.id === loaded.set)) throw httpError(404, msg`正则集不存在`)
+            return sets.map(s => (s.id === loaded.set ? { ...s, scripts } : s))
+          })
+        }
         if (!loaded.holder) return store.saveRegex(loaded.subject.scripts)
         loaded.holder.regexScripts = loaded.subject.scripts
         return loaded.preset ? store.savePreset(loaded.holder) : store.saveCard(loaded.holder)
       },
       restore: (loaded, snapshot) => snapshot,
-      context: value => (typeof value?.sample === 'string' && value.sample.trim() ? { sample: value.sample.slice(-20000) } : null),
+      context: value => {
+        if (typeof value?.sample !== 'string' || !value.sample.trim()) return null
+        const names = value.names && typeof value.names === 'object' ? { char: clip(value.names.char, 100), user: clip(value.names.user, 100) } : null
+        return { sample: value.sample.slice(-20000), ...(names ? { names } : {}) }
+      },
       request: regexEditRequest,
       read: readRegexEdit,
       finish: tryChanges,
@@ -702,7 +720,9 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
     if (!read.reply && !read.changes.length) throw new Error(msg`${ctx.label} 这次没有回出能读的内容${cutNote(result)}，再试一次，或者换个模型`)
     if (spec.finish) {
       ctx.step('check')
-      read.changes = await spec.finish(read.changes, asked.context, ctx.signal)
+      read.changes = await spec.finish(read.changes, asked.context, ctx.signal, loaded.subject)
+      // Stopped while checking: no proposal, as a stop anywhere else.
+      ctx.signal?.throwIfAborted()
     }
     await ctx.update(fresh => {
       fresh.turns.at(-1).assistant = { raw: result.text, reply: read.reply, changes: read.changes, model: ctx.label, at: new Date().toISOString() }
@@ -723,18 +743,29 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
      */
     async talkAsk(kind, id, { text, target, context } = {}) {
       const spec = subjectOf(kind)
-      const { session } = await loadTalk(kind, id)
-      if (jobs.has(session.id)) throw httpError(409, msg`上一步还在进行，等它写完或先停下`)
       const asked = clip(text, MAX_TEXT)
       if (!asked) throw httpError(400, msg`先写下想怎么改`)
-      const now = new Date().toISOString()
-      const last = session.turns.at(-1)
-      if (last && !last.assistant) session.turns.pop()
-      else if (last?.assistant?.changes.length && !last.outcome) last.outcome = { discarded: true, at: now }
-      const sent = spec.context ? spec.context(context) : null
-      session.turns.push({ user: { text: asked, target: spec.target.test(String(target ?? '')) ? target : '', at: now, ...(sent ? { context: sent } : {}) }, assistant: null, outcome: null })
-      session.turns = session.turns.slice(-MAX_EDIT_TURNS)
-      await run(session, 'edit', ctx => talkWork(ctx, kind, id))
+      const key = talkId(kind, id)
+      // Read after anything queued on the session (a proposal going in) is saved, and nothing else starts until the job does.
+      const session = await serial(key, async () => {
+        if (jobs.has(key)) throw httpError(409, msg`上一步还在进行，等它写完或先停下`)
+        if (talkBusy.has(key)) throw httpError(409, msg`正在采用上一次的修改，等它好了再发`)
+        const { session } = await loadTalk(kind, id)
+        talkBusy.add(key)
+        return session
+      })
+      try {
+        const now = new Date().toISOString()
+        const last = session.turns.at(-1)
+        if (last && !last.assistant) session.turns.pop()
+        else if (last?.assistant?.changes.length && !last.outcome) last.outcome = { discarded: true, at: now }
+        const sent = spec.context ? spec.context(context) : null
+        session.turns.push({ user: { text: asked, target: spec.target.test(String(target ?? '')) ? target : '', at: now, ...(sent ? { context: sent } : {}) }, assistant: null, outcome: null })
+        session.turns = session.turns.slice(-MAX_EDIT_TURNS)
+        await run(session, 'edit', ctx => talkWork(ctx, kind, id))
+      } finally {
+        talkBusy.delete(key)
+      }
       return talkView(session)
     },
 
@@ -759,7 +790,9 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
      */
     async talkApply(kind, id, { ids } = {}) {
       const spec = subjectOf(kind)
-      if (jobs.has(talkId(kind, id))) throw httpError(409, msg`正在写，等它写完再改`)
+      const key = talkId(kind, id)
+      if (jobs.has(key) || talkBusy.has(key)) throw httpError(409, msg`正在写，等它写完再改`)
+      talkBusy.add(key)
       return mutateTalk(kind, id, async (session, loaded) => {
         const turn = session.turns.at(-1)
         const changes = turn?.assistant?.changes ?? []
@@ -773,7 +806,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
         turn.outcome = { applied: chosen, at }
         session.undo = before ? { at, before, after: stamp(loaded.subject), prefix } : null
         return { session: talkView(session), subject: loaded.subject, holder: loaded.holder ?? null, applied, prefix }
-      })
+      }).finally(() => talkBusy.delete(key))
     },
 
     /** Take the last applied proposal back, as long as nothing else changed the subject since. */
@@ -953,6 +986,9 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
         const avatar = draft.card?.avatar ?? null
         const savedCardId = draft.card?.savedCardId ?? null
         draft.card = { ...newCard(draft.plan), avatar, savedCardId }
+      } else {
+        // The plan may have been revised since the card was started: what is written stays, the rest follows the plan.
+        draft.card = alignCard(draft.card, draft.plan)
       }
       return startWrite(draft)
     },

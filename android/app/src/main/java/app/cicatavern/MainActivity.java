@@ -1,10 +1,13 @@
 package app.cicatavern;
 
+import android.Manifest;
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.ClipData;
 import android.content.ContentValues;
 import android.content.Intent;
+import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -13,6 +16,7 @@ import android.provider.MediaStore;
 import android.text.TextUtils;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
+import android.webkit.PermissionRequest;
 import android.webkit.RenderProcessGoneDetail;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
@@ -40,6 +44,7 @@ import java.nio.charset.StandardCharsets;
  */
 public class MainActivity extends Activity {
     private static final int PICK_FILES = 1;
+    private static final int ASK_MICROPHONE = 2;
     private static final long START_TIMEOUT_MS = 60_000;
 
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -48,15 +53,18 @@ public class MainActivity extends Activity {
     private final String bridgeKey = newKey();
     private WebView web;
     private ValueCallback<Uri[]> pendingChooser;
+    // The page's microphone request (语音输入) while Android asks the user for RECORD_AUDIO.
+    private PermissionRequest pendingMicrophone;
     private ApkUpdate update;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        // chrome://inspect from a computer the phone has authorised for USB debugging; a personal build.
-        WebView.setWebContentsDebuggingEnabled(true);
+        // chrome://inspect from a computer the phone has authorised for USB debugging: a debug build only
+        // (assembleDebug, as android/README.md says). The release APK keeps its page, chats and keys to itself.
+        WebView.setWebContentsDebuggingEnabled((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0);
 
-        update = new ApkUpdate(this, state -> main.post(() ->
+        update = ApkUpdate.attach(this, state -> main.post(() ->
             web.evaluateJavascript("window.dispatchEvent(new CustomEvent('cicatavern-apk', { detail: " + state + " }))", null)));
         newWebView();
         recordCrashes();
@@ -231,11 +239,20 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        if (update != null) update.resume();
+        if (update == null) return;
+        update.foreground(true);
+        update.resume();
+    }
+
+    @Override
+    protected void onPause() {
+        if (update != null) update.foreground(false);
+        super.onPause();
     }
 
     @Override
     protected void onDestroy() {
+        if (update != null) update.detach(this);
         if (isFinishing()) stopService(new Intent(this, NodeService.class));
         web.destroy();
         super.onDestroy();
@@ -295,6 +312,8 @@ public class MainActivity extends Activity {
         public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
             Uri uri = request.getUrl();
             if ("127.0.0.1".equals(uri.getHost())) return false;
+            // A card frame moving on by itself, with no tap: dropped, so it can't keep opening other apps.
+            if (!request.isForMainFrame() && !request.hasGesture()) return true;
             try {
                 startActivity(new Intent(Intent.ACTION_VIEW, uri));
             } catch (ActivityNotFoundException ignored) {
@@ -304,7 +323,10 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** <input type=file>: the system picker; images only when the page asks only for images (reference pictures), else any file (card PNGs, JSON). */
+    /**
+     * <input type=file>: the system picker; images only when the page asks only for images (reference pictures), else any file
+     * (card PNGs, JSON). Also the page's microphone requests (onPermissionRequest).
+     */
     private final class Chooser extends WebChromeClient {
         @Override
         public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback, FileChooserParams params) {
@@ -324,6 +346,52 @@ public class MainActivity extends Activity {
             }
             return true;
         }
+
+        /**
+         * 语音输入: the app's own page may record from the microphone once Android has
+         * RECORD_AUDIO (asked for on the first press). The camera, or any other origin
+         * (a card frame), is refused.
+         */
+        @Override
+        public void onPermissionRequest(PermissionRequest request) {
+            Uri origin = request.getOrigin();
+            boolean own = origin != null && "127.0.0.1".equals(origin.getHost()) && origin.getPort() == NodeRuntime.port;
+            String[] wanted = request.getResources();
+            boolean audioOnly = wanted.length > 0;
+            for (String resource : wanted) {
+                if (!PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(resource)) audioOnly = false;
+            }
+            if (!own || !audioOnly) {
+                request.deny();
+                return;
+            }
+            if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                request.grant(wanted);
+                return;
+            }
+            if (pendingMicrophone != null) pendingMicrophone.deny();
+            pendingMicrophone = request;
+            requestPermissions(new String[] {Manifest.permission.RECORD_AUDIO}, ASK_MICROPHONE);
+        }
+
+        @Override
+        public void onPermissionRequestCanceled(PermissionRequest request) {
+            if (request == pendingMicrophone) pendingMicrophone = null;
+        }
+    }
+
+    /** Android's answer about the microphone: the page's request waiting on it is granted or refused (getUserMedia fails). */
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
+        if (requestCode != ASK_MICROPHONE) {
+            super.onRequestPermissionsResult(requestCode, permissions, results);
+            return;
+        }
+        PermissionRequest request = pendingMicrophone;
+        pendingMicrophone = null;
+        if (request == null) return;
+        if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) request.grant(new String[] {PermissionRequest.RESOURCE_AUDIO_CAPTURE});
+        else request.deny();
     }
 
     /** The accept list when every entry is an image MIME type, else null (no filter). */

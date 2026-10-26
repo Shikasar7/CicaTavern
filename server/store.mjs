@@ -8,6 +8,7 @@ import path from 'node:path'
 import { cleanProxySetting } from './proxy.mjs'
 import { cleanBasic } from '../web/shared/basic.js'
 import { cleanAppearance } from '../web/shared/appearance.js'
+import { cleanList, DEFAULT_ITEM, defaultOf } from '../web/shared/personas.js'
 
 /** @param dir - the edition's folder under the home directory (edition.mjs dataDir). */
 export function defaultDataRoot(dir = '.agent-tavern') {
@@ -40,10 +41,34 @@ async function readJson(file, fallback) {
   }
 }
 
+/**
+ * A list a feature keeps in a file of its own (存档, scenes, sprites, the prompt library): `fallback` when there
+ * is none yet. One that no longer parses (cut off by a write that was not atomic) is moved aside to
+ * <file>.bad-<time> and read as `fallback`, as before, but kept to recover by hand instead of being written
+ * over by the next save. Any other read error (Windows: a scanner holding the file) is thrown, so nothing
+ * overwrites the list on the strength of a failed read.
+ */
+export async function readJsonFile(file, fallback) {
+  let text
+  try {
+    text = await readFile(file, 'utf8')
+  } catch (error) {
+    if (error.code === 'ENOENT') return fallback
+    throw error
+  }
+  try {
+    return JSON.parse(text)
+  } catch {
+    await rename(file, `${file}.bad-${Date.now()}`).catch(() => {})
+    return fallback
+  }
+}
+
 // Writes to one file, one after another: two at once would race each other's rename.
 const writing = new Map() // file → its latest write
 
-function writeJson(file, value) {
+/** `value` as JSON into `file` through a temp file and a rename, so a write cut off never leaves half a file. */
+export function writeJson(file, value) {
   const text = JSON.stringify(value, null, 1)
   const write = (writing.get(file) ?? Promise.resolve()).catch(() => {}).then(async () => {
     await mkdir(path.dirname(file), { recursive: true })
@@ -120,7 +145,6 @@ export const DEFAULT_SETTINGS = Object.freeze({
   thinking: 'off',
   language: '简体中文', // the language the model writes the story in
   uiLanguage: 'auto', // the page's own language (界面语言): 'zh' | 'en' | 'auto' = the browser's (server/i18n.mjs)
-  writingRules: '',
   scanDepth: 4,
   reinjectAfter: 6,
   stateRefreshEvery: 5,
@@ -154,6 +178,9 @@ const GLOBAL_VARS_MAX = 1_000_000
 export const PRIVACY_NOTICE = 1
 
 export const DEFAULT_PERSONA = Object.freeze({ name: '你', description: '' })
+
+// 你的角色 and 文风 as lists (web/shared/personas.js), each in a file of its own.
+const LIST_FILES = { persona: 'personas.json', style: 'styles.json' }
 
 /**
  * @param subscription - false in builds without Claude Code (release, Android):
@@ -243,13 +270,44 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
       await writeJson(path.join(root, 'providers.json'), { providers })
       return providers
     },
-    async getPersona() {
-      return { ...DEFAULT_PERSONA, ...(await readJson(path.join(root, 'persona.json'), {})) }
+    /**
+     * 你的角色 or 文风 (`kind` persona | style): { defaultId, items, cards }. Until the list is first saved it is the one
+     * setting there was before (persona.json, settings.writingRules) as its only item, the default; those files are
+     * left as they were.
+     */
+    async getList(kind) {
+      const saved = await readJsonFile(path.join(root, LIST_FILES[kind]), null)
+      if (saved) return cleanList(kind, saved)
+      const before = kind === 'persona'
+        ? { ...DEFAULT_PERSONA, ...(await readJson(path.join(root, 'persona.json'), {})) }
+        : { text: (await readJson(path.join(root, 'settings.json'), {})).writingRules }
+      return cleanList(kind, { defaultId: DEFAULT_ITEM, items: [{ ...before, id: DEFAULT_ITEM }] })
     },
+    /** `change` (the list → the list to keep) over the list as saved, with no other change in between. */
+    updateList(kind, change) {
+      return locked(`list:${kind}`, async () => {
+        const list = cleanList(kind, await change(await this.getList(kind)))
+        await writeJson(path.join(root, LIST_FILES[kind]), list)
+        return list
+      })
+    },
+    getPersonas() {
+      return this.getList('persona')
+    },
+    getStyles() {
+      return this.getList('style')
+    },
+    /** The default persona ({ id, name, title, description }): the player in new chats on cards that picked none. */
+    async getPersona() {
+      return defaultOf(await this.getPersonas())
+    },
+    /** The default persona's name and description changed (the old single setting's route). */
     async savePersona(patch) {
-      const next = { ...(await this.getPersona()), ...pick(patch, ['name', 'description']) }
-      await writeJson(path.join(root, 'persona.json'), next)
-      return next
+      const list = await this.updateList('persona', list => ({
+        ...list,
+        items: list.items.map(item => (item.id === list.defaultId ? { ...item, ...pick(patch, ['name', 'description']) } : item)),
+      }))
+      return defaultOf(list)
     },
 
     async listCards() {
@@ -323,6 +381,19 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
     async saveRegex(scripts) {
       await writeJson(path.join(root, 'regex.json'), { scripts })
       return scripts
+    },
+    /** 正则集: named lists of scripts, each for the cards ticked for it (regex.mjs). In run order. */
+    async getRegexSets() {
+      const value = await readJson(path.join(root, 'regex-sets.json'), {})
+      return Array.isArray(value.sets) ? value.sets : []
+    },
+    /** `change` (the sets → the sets to keep) over the sets as saved, with no other change in between. */
+    updateRegexSets(change) {
+      return locked('regex-sets', async () => {
+        const sets = await change(await this.getRegexSets())
+        await writeJson(path.join(root, 'regex-sets.json'), { sets })
+        return sets
+      })
     },
     /** 屏蔽词 for every chat (blockwords.mjs, which cleans them before they are saved). */
     async getBlockWords() {

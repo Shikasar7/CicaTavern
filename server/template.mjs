@@ -883,6 +883,12 @@ export function templateSession(options = {}) {
     currentState() {
       return sandbox ? sandbox.stores().message : state ?? {}
     },
+    /** The chat-wide and app-wide variables as the templates have left them so far. */
+    currentVariables() {
+      if (!sandbox) return { local: plainObject(options.local), global: plainObject(options.global) }
+      const { local, global } = sandbox.stores()
+      return { local, global }
+    },
     /**
      * What the templates wrote: JSON-pointer replace/remove operations for the
      * chat state (`message`), the chat-wide (`local`) and app-wide (`global`)

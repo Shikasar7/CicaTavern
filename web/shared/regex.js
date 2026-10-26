@@ -3,6 +3,26 @@
 
 export const PLACEMENT = Object.freeze({ USER_INPUT: 1, AI_OUTPUT: 2 })
 
+/**
+ * A card's or preset's scripts each with an id of its own, as the editor finds them by: one missing or already
+ * used (SillyTavern files may have none, or repeat one) gets `script-<place in the list>`, so the same list
+ * gives the same ids. (Saving through server/regex.mjs cleanScripts keeps them.)
+ */
+export function withUniqueIds(scripts) {
+  const taken = new Set(scripts.map(s => s.id).filter(Boolean))
+  const seen = new Set()
+  return scripts.map((script, index) => {
+    if (script.id && !seen.has(script.id)) {
+      seen.add(script.id)
+      return script
+    }
+    let id = `script-${index + 1}`
+    for (let n = 2; taken.has(id) || seen.has(id); n++) id = `script-${index + 1}-${n}`
+    seen.add(id)
+    return { ...script, id }
+  })
+}
+
 /** Keep only the fields the engine reads; drop anything malformed. */
 export function normalizeScripts(list) {
   if (!Array.isArray(list)) return []
@@ -21,7 +41,53 @@ export function normalizeScripts(list) {
       substituteRegex: Number(s.substituteRegex ?? 0),
       minDepth: Number.isFinite(s.minDepth) ? s.minDepth : null,
       maxDepth: Number.isFinite(s.maxDepth) ? s.maxDepth : null,
+      // Not read here (it is for editing a message in SillyTavern), kept so an export gives it back.
+      ...(typeof s.runOnEdit === 'boolean' ? { runOnEdit: s.runOnEdit } : {}),
     }))
+}
+
+/**
+ * The scripts a chat runs, in order: the global ones, its preset's, its card's own, then the 正则集 (regex sets)
+ * attached to its card, in the sets' order — after the card's own, where SillyTavern puts scripts added to a card.
+ * A script an attached set shares with the card (the same id: a card exported with its sets and imported again)
+ * runs once, as the card has it.
+ */
+export function chatScriptList({ global = [], preset = [], card = [], cardId = '', sets = [] }) {
+  const seen = new Set(card.map(s => s.id))
+  const attached = []
+  for (const set of setsOfCard(sets, cardId)) {
+    for (const script of set.scripts ?? []) {
+      if (seen.has(script.id)) continue
+      seen.add(script.id)
+      attached.push(script)
+    }
+  }
+  return [...global, ...preset, ...card, ...attached]
+}
+
+/** The 正则集 attached to a card, in their order. */
+export const setsOfCard = (sets, cardId) => (cardId ? sets.filter(set => Array.isArray(set.cardIds) && set.cardIds.includes(cardId)) : [])
+
+/**
+ * Scripts as SillyTavern exports them, every field it reads: its import refuses one without a name, so a
+ * nameless one is named by its pattern. One script is saved as it is, several as a list (SillyTavern reads both).
+ */
+export function stScripts(scripts) {
+  return scripts.map(s => ({
+    id: s.id,
+    scriptName: s.scriptName || s.findRegex.slice(0, 80),
+    findRegex: s.findRegex,
+    replaceString: s.replaceString,
+    trimStrings: s.trimStrings,
+    placement: s.placement,
+    disabled: s.disabled,
+    markdownOnly: s.markdownOnly,
+    promptOnly: s.promptOnly,
+    runOnEdit: s.runOnEdit ?? false,
+    substituteRegex: s.substituteRegex,
+    minDepth: s.minDepth,
+    maxDepth: s.maxDepth,
+  }))
 }
 
 /** Same parsing rule as SillyTavern: `/pattern/flags`, otherwise the whole string is the pattern. */
@@ -74,6 +140,14 @@ export function depthWindow(scripts, { placement, target }) {
   return deepest
 }
 
+/** A script's pattern with the macros in it filled as its substituteRegex says (1: as they are, 2: escaped); null if it doesn't compile. */
+export function patternOf(script, macros = t => t) {
+  let source = script.findRegex
+  if (script.substituteRegex === 1) source = macros(source)
+  else if (script.substituteRegex === 2) source = source.replace(/\{\{[^}]+\}\}/g, m => escapeRegex(macros(m)))
+  return regexFromString(source)
+}
+
 /**
  * Run every applicable script over `text`, in order.
  * @param options.placement - PLACEMENT.USER_INPUT or PLACEMENT.AI_OUTPUT.
@@ -87,10 +161,7 @@ export function applyScripts(text, scripts, { placement, target, depth, macros =
   let out = String(text ?? '')
   for (const script of scripts) {
     if (!appliesTo(script, { placement, target, depth })) continue
-    let source = script.findRegex
-    if (script.substituteRegex === 1) source = macros(source)
-    else if (script.substituteRegex === 2) source = source.replace(/\{\{[^}]+\}\}/g, m => escapeRegex(macros(m)))
-    const regex = regexFromString(source)
+    const regex = patternOf(script, macros)
     if (!regex) continue
     const trims = script.trimStrings.map(t => macros(t))
     out = replace(out, regex, (...args) => {

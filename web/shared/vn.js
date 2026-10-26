@@ -557,7 +557,7 @@ export function takeMarks(row, { partial = false } = {}) {
  * Text with the marks for the chat: a speaker's mark becomes `wrap(name)`
  * (the page draws it as a name), effects go, a line left empty by them too.
  */
-export function markSpeakers(text, wrap = name => `${name}：`) { // i18n-ignore: the story's own colon
+export function markSpeakers(text, wrap = name => `${name}：`, { partial = false } = {}) { // i18n-ignore: the story's own colon
   const lines = String(text ?? '').split('\n')
   const out = []
   let label = ''
@@ -572,11 +572,17 @@ export function markSpeakers(text, wrap = name => `${name}：`) { // i18n-ignore
     out.push(label + rest.replace(SAY_MARK, (mark, name) => (isEffectKind(name) ? mark : wrap(name.trim()))))
     label = ''
   })
-  // One still being written (or with its quote still to come) at the very end.
+  // One still being written (or with its quote still to come) at the very end. In a finished reply only a speaker's
+  // mark with no line after it goes: a card's own status line there (【好感度：85｜心情：开心】) is the story's.
   const joined = out.join('\n')
-  const cut = joined.replace(OPEN_MARK, '')
+  const cut = partial ? joined.replace(OPEN_MARK, '') : joined.replace(UNCLOSED_MARK, '').replace(DANGLING_MARK, '')
   return cut === joined ? joined : cut.trimEnd()
 }
+
+// At the very end: a mark never closed (half of one), and a whole speaker's mark with nothing after it (a name
+// and a face, no ：inside, as a status line has).
+const UNCLOSED_MARK = /(?:\*\*)?【[^【】\n]{0,40}$/
+const DANGLING_MARK = /(?:\*\*)?【[^【】\n：:]{1,40}[|｜][^【】\n：:]{0,40}】(?:\*\*)?\s*[：:]?\s*$/
 
 /** Text without the marks at all. */
 export const withoutMarks = text => markSpeakers(text, () => '')
@@ -835,6 +841,16 @@ const LABELLED = {
 const WRAP = /^[\s「『【[(（<《*_#>~-]+|[\s」』】\])）>》*_~-]+$/g
 
 /**
+ * Whether a 地点： label at `index` sits where a header has it: the line's start (past brackets or bold marks)
+ * or right after a separator (时间：… ｜ 地点：…), never in a quote or the middle of a sentence (她说约好的地点：…).
+ */
+function atHeader(line, index) {
+  const before = line.slice(0, index)
+  if (/[「『“"‘']/.test(before)) return false
+  return /^[\s【[(（<《*_#>~-]*$/.test(before) || /[|｜·•・/／]\s*(?:当前)?$/.test(before)
+}
+
+/**
  * A header line a card writes at the top of each reply instead of a time box:
  * 「永和十七年八月十五 · 亥时 21:40 · 武当山·后山剑池」, or labelled
  * (时间：… ｜ 地点：…). Only the first few lines are looked at, and a line
@@ -845,7 +861,7 @@ export function headerPlace(text) {
   for (const line of lines) {
     if (line.length > 80) continue
     const label = key => LABELLED[key].exec(line)?.[1]?.replace(WRAP, '').trim() ?? ''
-    if (label('place')) return { time: label('time'), place: label('place'), weather: label('weather') }
+    if (label('place') && atHeader(line, LABELLED.place.exec(line).index)) return { time: label('time'), place: label('place'), weather: label('weather') }
     const parts = line.replace(WRAP, '').split(PART_SPLIT).map(part => part.replace(WRAP, '').replace(/^[^\w一-鿿]+/, '').trim()).filter(Boolean)
     if (parts.length < 2) continue
     const when = parts.filter(part => DATE_PART.test(part) || TIME_PART.test(part))

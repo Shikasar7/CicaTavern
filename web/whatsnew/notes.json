@@ -458,6 +458,57 @@
           }
         }
       ]
+    },
+    {
+      "version": "2.0.0",
+      "date": "2026-10",
+      "items": [
+        {
+          "icon": "🎙️",
+          "zh": {
+            "title": "语音输入",
+            "text": "输入框右边多了一个麦克风：点一下开始说，再点一下转成文字，填进输入框，看过再自己发送。\n不用安装任何东西：可以用供应商的转写接口（硅基流动 SenseVoice 免费），或电脑浏览器自带的识别；也能接自己装的 whisper 服务。在「配图与朗读 → 语音输入」里选，CicaTavern 不保存录音。"
+          },
+          "en": {
+            "title": "Voice input",
+            "text": "A microphone beside the input box: tap to speak, tap again and the words land in the box for you to read and send.\nNothing to install: a provider's transcription API (SiliconFlow's SenseVoice is free) or the desktop browser's own recognition, or a whisper server of your own. Choose in Pictures & voice → Voice input; CicaTavern keeps no recordings."
+          }
+        },
+        {
+          "icon": "🖼️",
+          "zh": {
+            "title": "重画了也能换回来",
+            "text": "配图、人设图、立绘和表情、场景图、卡的头像重画之后，旧的不丢：每处留最近几张，排在下面一行小图，点一张换回来用，不要的点 × 删掉。\n留几张在「配图与朗读 → 画图方式」里改，默认 5 张。"
+          },
+          "en": {
+            "title": "Redraw, then take the old one back",
+            "text": "Illustrations, reference pictures, sprites and expressions, scenes and a card's avatar keep their last few versions after a redraw, in a row of thumbnails below: tap one to use it again, or × to delete it.\nHow many to keep is in Pictures & voice → Drawing (5 by default)."
+          }
+        },
+        {
+          "icon": "🧩",
+          "zh": {
+            "title": "正则集、你的角色和文风，按卡指定",
+            "text": "正则窗口改成和世界书一样，能复制、导出成 SillyTavern 的正则文件；还可以建自己的正则集，只挂到选中的几张卡上。\n「你的角色」和「文风」变成列表，能复制、导入导出 SillyTavern 的格式，每张卡可以各指定一个，没指定的用默认的。"
+          },
+          "en": {
+            "title": "Regex sets, personas and styles, per card",
+            "text": "The regex window now works like the lorebook one, with copies and SillyTavern exports, and you can make regex sets that run only on the cards you attach them to.\nYour personas and writing styles are lists with copies and SillyTavern imports and exports, and each card can pick one of each; the rest use the default."
+          }
+        },
+        {
+          "recap": "1.9",
+          "image": "1.9.0-talk.webp",
+          "zh": {
+            "title": "1.9 加了什么",
+            "text": "对话修改世界书、预设、正则和主题，自定义配色和正文字体；视觉小说的 HUD、换天、回忆和对白标注；卡片界面能调用模型、读写世界书，EJS 模板按提示词模板插件补齐；联网搜索、屏蔽词、错误日志，以及国内更新镜像。"
+          },
+          "en": {
+            "title": "What 1.9 added",
+            "text": "Editing lorebooks, presets, regex and the theme by chat, custom colours and story fonts; the visual novel HUD, new days, memories and speaker marks; card UIs that call the model and edit lorebooks, and EJS templates that follow the Prompt Template plugin; web search, blocked words, an error log, and an update mirror in China."
+          }
+        }
+      ]
     }
   ]
 }

@@ -144,6 +144,20 @@ async function prepare() {
   await writeJsonFile(path.join(toStateDir, 'state.json'), next).catch(error => log(`state.json: ${error.message}`))
 }
 
+/** The installs before `start`, following each previous.json back while they are there (a loop ends it). */
+async function olderInstalls(start) {
+  const found = []
+  const seen = new Set([path.resolve(start), path.resolve(to)])
+  let marker = await readJson(path.join(start, UPDATE_DIR, 'previous.json'), null)
+  while (marker?.path && !seen.has(path.resolve(marker.path)) && found.length < 20) {
+    seen.add(path.resolve(marker.path))
+    if (!existsSync(marker.path)) break
+    found.push(marker.path)
+    marker = await readJson(path.join(marker.path, UPDATE_DIR, 'previous.json'), null)
+  }
+  return found
+}
+
 /** The new install runs: point everything at it. */
 async function commit() {
   let shortcuts = []
@@ -155,8 +169,14 @@ async function commit() {
     log(`shortcuts: ${error.message}`)
   }
   // Double-clicking the old folder's CicaTavern.exe now opens the new one (bin/launch.mjs).
-  await writeJsonFile(path.join(from, UPDATE_DIR, 'superseded.json'), { path: to, version: toVersion, at: new Date().toISOString() }).catch(error => log(`superseded.json: ${error.message}`))
-  if (mode === 'update') await writeJsonFile(path.join(to, UPDATE_DIR, 'previous.json'), { path: from, version: fromVersion }).catch(error => log(`previous.json: ${error.message}`))
+  const mark = { path: to, version: toVersion, at: new Date().toISOString() }
+  await writeJsonFile(path.join(from, UPDATE_DIR, 'superseded.json'), mark).catch(error => log(`superseded.json: ${error.message}`))
+  if (mode === 'update') {
+    await writeJsonFile(path.join(to, UPDATE_DIR, 'previous.json'), { path: from, version: fromVersion }).catch(error => log(`previous.json: ${error.message}`))
+    // The folders before that one too (each previous.json back): an older version's launcher, which follows one
+    // mark only, opens this one, and so does any folder whose next one has been deleted since.
+    for (const older of await olderInstalls(from)) await writeJsonFile(path.join(older, UPDATE_DIR, 'superseded.json'), mark).catch(error => log(`superseded.json (${older}): ${error.message}`))
+  }
   else await rm(path.join(to, UPDATE_DIR, 'superseded.json'), { force: true }).catch(() => {})
   await result(to, { ok: true, shortcuts: shortcuts.length, shortcutError })
   log(`switched to ${to} (${toVersion}); ${shortcuts.length} shortcut(s)`)

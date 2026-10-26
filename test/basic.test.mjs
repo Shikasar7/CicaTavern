@@ -171,6 +171,11 @@ test('status bar layouts: cleaned, laid out from a state, grouped with changes',
   assert.equal(groups[1].rows.find(r => r.path === '主角.背包' && r.show === 'text').text, '桂花糕：2；地图：区域：城南')
   assert.deepEqual(groups[1].rows.find(r => r.show === 'tags' && r.path === '主角.背包').tags, ['桂花糕 ×2', '地图'])
   assert.equal(compactText('字'.repeat(300)).length, 160)
+  // A key with a dot in it (an English state): its path is a JSON pointer, so its value is found.
+  const english = { 'Dr. Chen': { affection: 50, mood: 'calm' }, 'Lv.': 3 }
+  const named = autoStatusSpec(english)
+  assert.deepEqual(named.fields.map(f => f.path), ['/Dr. Chen/affection', '/Dr. Chen/mood', '/Lv.'])
+  assert.deepEqual(statusGroups(named, english).map(g => [g.name, g.rows.map(r => r.value ?? r.text)]), [['Dr. Chen', [50, 'calm']], ['', [3]]])
 })
 
 test('the page leaves out the SillyTavern copy of a card creator bar, both of its scripts', () => {

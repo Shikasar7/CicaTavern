@@ -6,6 +6,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <!-- 设置 → 更多 → 更新 hands the downloaded APK to the system installer (ApkUpdate). -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- 语音输入 (web/dictation.js): the page records through getUserMedia; asked for on the first press. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 
     <!-- No cloud backup: providers.json holds API keys. -->
     <application

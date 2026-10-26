@@ -323,3 +323,26 @@ test('a global book reaches the chats of a card that never mounted it, and is re
   const prompt = (await createChat(store, card.id)).systemPrompt
   assert.equal(prompt.split('王都终年下雪').length - 1, 1, 'and its entry once in the prefix')
 })
+
+test('re-injecting after 0 turns holds nothing back: the entry goes in every turn its keyword does', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'tavern-reinject-'))
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 3 }))
+  const store = createStore(root)
+  await store.init()
+  const provider = normalizeProvider({ name: 'Fake', api: 'openai-completions', baseURL: await fakeModel(t), apiKey: 'sk-test', models: [{ id: 'm1' }] })
+  await store.saveProviders([provider])
+  const lamp = normalizeBook({ name: '灯', entries: { 0: { uid: 0, key: ['灯笼'], content: '灯笼是红的。' } } }, 'x', { standalone: true })
+  await store.saveBook(lamp)
+  await store.saveSettings({ model: `${provider.id}/m1`, subscription: 'off', globalBookIds: [lamp.id], reinjectAfter: 0 })
+  const card = normalizeCard({ spec: 'chara_card_v2', data: { name: '林雪', first_mes: '雪下了一整夜。' } })
+  await store.saveCard(card)
+  const engine = createEngine(store, { proxy: null })
+  const chat = await createChat(store, card.id)
+  const turn = async input => {
+    const tip = activePath(await store.getChat(chat.id)).at(-1)
+    await engine.runTurn(chat.id, { parentId: tip.id, input }, () => {})
+    return activePath(await store.getChat(chat.id)).filter(node => node.role === 'user').at(-1)
+  }
+  assert.deepEqual((await turn('灯笼亮了')).injected, [`${lamp.id}:0`])
+  assert.deepEqual((await turn('灯笼又亮了')).injected, [`${lamp.id}:0`], 'not held back by the turn before')
+})

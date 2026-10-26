@@ -18,7 +18,7 @@ import { EXPRESSIONS } from '../web/shared/stage.js'
 import { imageKind } from './appearance.mjs'
 import { booksForCard } from './chats.mjs'
 import { entryText } from './worldbook.mjs'
-import { httpError, newId } from './store.mjs'
+import { httpError, newId, readJsonFile, writeJson } from './store.mjs'
 import { msg } from './i18n.mjs'
 
 const MAX_BYTES = 12 * 1024 * 1024
@@ -72,8 +72,12 @@ export function placeLore(books, place) {
   return entryText(best).replace(/<\/?place[^>]*>/gi, '').trim().slice(0, 1200)
 }
 
-/** @param media - createMedia(): drawScenery draws a background. */
-export function createScenes(store, { media }) {
+/**
+ * @param media - createMedia(): drawScenery draws a background.
+ * @param history - createDrawHistory() (抽图历史): a picture drawn or uploaded
+ *   over another keeps that one there; without it, it is deleted.
+ */
+export function createScenes(store, { media, history = null }) {
   const listFile = cardId => path.join(store.dirs.cards, cardId, 'scenes.json')
   const dir = cardId => path.join(store.dirs.cards, cardId, 'scenes')
   const spriteFile = cardId => path.join(store.dirs.cards, cardId, 'sprites.json')
@@ -84,19 +88,15 @@ export function createScenes(store, { media }) {
 
   async function read(cardId) {
     await store.getCard(cardId)
-    try {
-      const value = JSON.parse(await readFile(listFile(cardId), 'utf8'))
-      return Array.isArray(value.scenes) ? value.scenes : []
-    } catch {
-      return []
-    }
+    const value = await readJsonFile(listFile(cardId), null)
+    return Array.isArray(value?.scenes) ? value.scenes : []
   }
 
-  /** fn(scenes) → { scenes, result }: run alone for this card, the list saved after. */
+  /** fn(scenes) → { scenes, result }: run alone for this card, the list saved after (whole, never half a file). */
   function change(cardId, fn) {
     const run = (locks.get(cardId) ?? Promise.resolve()).then(async () => {
       const { scenes, result } = await fn(await read(cardId))
-      await writeFile(listFile(cardId), JSON.stringify({ scenes }, null, 1), 'utf8')
+      await writeJson(listFile(cardId), { scenes })
       return result
     })
     locks.set(cardId, run.catch(() => {}))
@@ -115,6 +115,13 @@ export function createScenes(store, { media }) {
 
   const dropFile = async (cardId, file, folder = dir(cardId)) => {
     if (file && FILE.test(file)) await rm(path.join(folder, file), { force: true })
+  }
+
+  /** A picture taken down for a new one: kept in 抽图历史 with what it was drawn with, else deleted. */
+  async function keepOld(cardId, slot, before, folder = dir(cardId)) {
+    if (!before?.file || !FILE.test(before.file)) return
+    if (!history) return dropFile(cardId, before.file, folder)
+    await history.push(cardId, slot, { from: path.join(folder, before.file), at: before.updatedAt ?? before.at, backend: before.backend, source: before.source, prompt: before.prompt })
   }
 
   /** Draws one picture for the card, or answers 409 while another is being drawn. */
@@ -171,7 +178,7 @@ export function createScenes(store, { media }) {
           fresh = { id, ...cleanNames(named, given ? [given] : []), at: now }
         }
         const scene = { ...(before ?? fresh), file, prompt: picture.prompt, backend: picture.backend, source: 'drawn', updatedAt: now }
-        if (before) await dropFile(cardId, before.file)
+        if (before) await keepOld(cardId, `scene:${id}`, before)
         return { scenes: before ? list.map(s => (s.id === id ? scene : s)) : [...list, scene], result: scene }
       })
       return { scene: result, scenes: await read(cardId), drawn: true, ...(picture.note ? { note: picture.note } : {}) }
@@ -206,7 +213,7 @@ export function createScenes(store, { media }) {
       const before = list.find(s => s.id === sceneId)
       if (!before) throw httpError(404, msg`没有这个场景`)
       const file = await writeImage(cardId, sceneId, buffer)
-      await dropFile(cardId, before.file)
+      await keepOld(cardId, `scene:${sceneId}`, before)
       const scene = { ...before, file, source: 'upload', updatedAt: new Date().toISOString() }
       return { scenes: list.map(s => (s.id === sceneId ? scene : s)), result: scene }
     }).then(async scene => ({ scene, ...(await view(cardId)) }))
@@ -217,7 +224,11 @@ export function createScenes(store, { media }) {
       const before = list.find(s => s.id === sceneId)
       if (before) await dropFile(cardId, before.file)
       return { scenes: list.filter(s => s.id !== sceneId), result: null }
-    }).then(() => view(cardId))
+    }).then(async () => {
+      // Its old pictures go with it.
+      await history?.drop(cardId, slot => slot === `scene:${sceneId}`)
+      return view(cardId)
+    })
   }
 
   /** → { data, type }, or null. */
@@ -240,19 +251,15 @@ export function createScenes(store, { media }) {
     const card = await store.getCard(cardId)
     const ids = new Set((card.media?.roster ?? []).map(entry => entry.id))
     const picture = value => FILE.test(value?.file ?? '')
-    try {
-      const value = JSON.parse(await readFile(spriteFile(cardId), 'utf8'))
-      const sprites = Object.fromEntries(Object.entries(value.sprites ?? {}).filter(([id, sprite]) => ids.has(id) && picture(sprite)))
-      const expressions = {}
-      for (const [id, faces] of Object.entries(value.expressions ?? {})) {
-        if (!ids.has(id) || !faces || typeof faces !== 'object') continue
-        const kept = Object.fromEntries(Object.entries(faces).filter(([name, face]) => EXPRESSIONS.includes(name) && name !== 'neutral' && picture(face)))
-        if (Object.keys(kept).length) expressions[id] = kept
-      }
-      return { sprites, expressions }
-    } catch {
-      return { sprites: {}, expressions: {} }
+    const value = await readJsonFile(spriteFile(cardId), null)
+    const sprites = Object.fromEntries(Object.entries(value?.sprites ?? {}).filter(([id, sprite]) => ids.has(id) && picture(sprite)))
+    const expressions = {}
+    for (const [id, faces] of Object.entries(value?.expressions ?? {})) {
+      if (!ids.has(id) || !faces || typeof faces !== 'object') continue
+      const kept = Object.fromEntries(Object.entries(faces).filter(([name, face]) => EXPRESSIONS.includes(name) && name !== 'neutral' && picture(face)))
+      if (Object.keys(kept).length) expressions[id] = kept
     }
+    return { sprites, expressions }
   }
 
   const readSprites = async cardId => (await readSpriteFile(cardId)).sprites
@@ -263,7 +270,7 @@ export function createScenes(store, { media }) {
     const run = (locks.get(key) ?? Promise.resolve()).then(async () => {
       const all = await readSpriteFile(cardId)
       const result = await fn(all)
-      await writeFile(spriteFile(cardId), JSON.stringify(all, null, 1), 'utf8')
+      await writeJson(spriteFile(cardId), all)
       return result
     })
     locks.set(key, run.catch(() => {}))
@@ -282,8 +289,8 @@ export function createScenes(store, { media }) {
   async function putSprite(cardId, entryId, buffer, extra) {
     const file = await writeImage(cardId, entryId, buffer, spriteDir(cardId))
     await changeSprites(cardId, async ({ sprites }) => {
-      await dropFile(cardId, sprites[entryId]?.file, spriteDir(cardId))
-      sprites[entryId] = { file, ...extra, updatedAt: new Date().toISOString() }
+      await keepOld(cardId, `sprite:${entryId}`, sprites[entryId], spriteDir(cardId))
+      sprites[entryId] = { file, updatedAt: new Date().toISOString(), ...extra }
     })
     return spriteView(cardId)
   }
@@ -320,8 +327,8 @@ export function createScenes(store, { media }) {
   async function putExpression(cardId, entryId, expression, buffer, extra) {
     const file = await writeImage(cardId, `${entryId}-${expression}`, buffer, spriteDir(cardId))
     await changeSprites(cardId, async ({ expressions }) => {
-      await dropFile(cardId, expressions[entryId]?.[expression]?.file, spriteDir(cardId))
-      expressions[entryId] = { ...expressions[entryId], [expression]: { file, ...extra, updatedAt: new Date().toISOString() } }
+      await keepOld(cardId, `face:${entryId}:${expression}`, expressions[entryId]?.[expression], spriteDir(cardId))
+      expressions[entryId] = { ...expressions[entryId], [expression]: { file, updatedAt: new Date().toISOString(), ...extra } }
     })
     return spriteView(cardId)
   }
@@ -353,6 +360,34 @@ export function createScenes(store, { media }) {
     return spriteView(cardId)
   }
 
+  /**
+   * 抽图历史: a kept picture (history.take: `entry` says what it was drawn with)
+   * back in its place, the one there now kept instead. → the sprites view for a
+   * 立绘 or expression, the scenes view for a scene.
+   */
+  async function restore(cardId, slot, buffer, entry = {}) {
+    const [kind, id, expression] = String(slot).split(':')
+    const extra = { backend: entry.backend ?? '', source: entry.source || 'drawn', ...(entry.at ? { updatedAt: entry.at } : {}) }
+    if (kind === 'sprite') {
+      await memberOf(cardId, id)
+      return putSprite(cardId, id, buffer, extra)
+    }
+    if (kind === 'face') {
+      await memberOf(cardId, id)
+      return putExpression(cardId, id, expressionName(expression), buffer, extra)
+    }
+    if (kind !== 'scene') throw httpError(400, msg`这张旧图不能在这里换回来`)
+    return change(cardId, async list => {
+      const before = list.find(s => s.id === id)
+      if (!before) throw httpError(404, msg`没有这个场景`)
+      const file = await writeImage(cardId, id, buffer)
+      await keepOld(cardId, slot, before)
+      // An uploaded one had no prompt of its own: the scene keeps its prompt for 重画.
+      const scene = { ...before, file, updatedAt: new Date().toISOString(), ...extra, prompt: entry.prompt || before.prompt }
+      return { scenes: list.map(s => (s.id === id ? scene : s)), result: scene }
+    }).then(async scene => ({ scene, ...(await view(cardId)) }))
+  }
+
   async function readSprite(cardId, file) {
     if (!FILE.test(file)) return null
     try {
@@ -372,20 +407,18 @@ export function createScenes(store, { media }) {
       await write(list)
     }
     const scenes = await read(fromId).catch(() => [])
-    if (scenes.length) await copy(dir(fromId), dir(toId), scenes, list => writeFile(listFile(toId), JSON.stringify({ scenes: list }, null, 1), 'utf8'))
+    if (scenes.length) await copy(dir(fromId), dir(toId), scenes, list => writeJson(listFile(toId), { scenes: list }))
     // Roster entries keep their ids in the new version (inheritCardMedia), so the sprites still belong.
-    let sprites = {}
-    try {
-      sprites = JSON.parse(await readFile(spriteFile(fromId), 'utf8'))
-    } catch {}
+    const sprites = (await readJsonFile(spriteFile(fromId), null).catch(() => null)) ?? {}
     if (Object.keys(sprites.sprites ?? {}).length || Object.keys(sprites.expressions ?? {}).length) {
-      await copy(spriteDir(fromId), spriteDir(toId), sprites, all => writeFile(spriteFile(toId), JSON.stringify({ sprites: all.sprites ?? {}, expressions: all.expressions ?? {} }, null, 1), 'utf8'))
+      await copy(spriteDir(fromId), spriteDir(toId), sprites, all => writeJson(spriteFile(toId), { sprites: all.sprites ?? {}, expressions: all.expressions ?? {} }))
     }
   }
 
   return {
     list: view, draw, add, update, setImage, remove, readPicture, inherit,
     sprites: spriteView, drawSprite, setSprite, removeSprite, readSprite, drawExpression, setExpression, removeExpression,
+    restore,
   }
 }
 

@@ -25,15 +25,23 @@ export function appBrowser(env = process.env) {
   return null
 }
 
+/** Start a program and let it go; `failed` when it cannot start (gone, not allowed), instead of crashing the server. */
+function launch(command, args, failed) {
+  const child = spawn(command, args, { detached: true, stdio: 'ignore' })
+  child.once('error', failed)
+  child.unref()
+}
+
 /** Open the page in its own app window; 'app' or 'browser' says which it got. */
 export function openAppWindow(url) {
-  const browser = appBrowser()
-  if (browser) {
-    spawn(browser, [`--app=${url}`, '--window-size=1280,860'], { detached: true, stdio: 'ignore' }).unref()
-    return 'app'
-  }
   // The default browser: Explorer hands the address to it.
   const opener = process.platform === 'win32' ? 'explorer.exe' : process.platform === 'darwin' ? 'open' : 'xdg-open'
-  spawn(opener, [url], { detached: true, stdio: 'ignore' }).unref()
+  const byHand = error => console.warn(`[CicaTavern] couldn't open a browser (${error.message}): open ${url} by hand`)
+  const browser = appBrowser()
+  if (browser) {
+    launch(browser, [`--app=${url}`, '--window-size=1280,860'], () => launch(opener, [url], byHand))
+    return 'app'
+  }
+  launch(opener, [url], byHand)
   return 'browser'
 }

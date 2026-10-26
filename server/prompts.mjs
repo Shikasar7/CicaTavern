@@ -6,9 +6,9 @@
 // the pictures the library shows are moved into the library first.
 //
 // <data>/prompt-library.json and <data>/prompt-library/<entry>.<ext>.
-import { copyFile, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, rm } from 'node:fs/promises'
 import path from 'node:path'
-import { httpError, newId } from './store.mjs'
+import { httpError, newId, readJsonFile, writeJson } from './store.mjs'
 import { msg } from './i18n.mjs'
 
 const FILE = /^[\w-]{1,64}\.(png|jpg|jpeg|webp)$/
@@ -21,6 +21,7 @@ export function createPromptLibrary(store) {
   const ownDir = path.join(root, 'prompt-library')
   const mediaDir = chatId => path.join(root, 'media', chatId)
   let cache = null
+  let loading = null
   let queue = Promise.resolve()
 
   /** One change at a time: read, change, write. */
@@ -35,23 +36,28 @@ export function createPromptLibrary(store) {
     return run
   }
 
-  async function load() {
-    if (cache) return cache
-    try {
-      cache = JSON.parse(await readFile(file, 'utf8'))
-      if (!Array.isArray(cache.entries)) cache = { entries: [] }
-    } catch {
-      cache = { entries: await seed() }
-      await save(cache)
-    }
-    return cache
+  /**
+   * The library, read once. Seeded from the chats only when there is no file (or one that no longer parses,
+   * moved aside first by readJsonFile); a read that fails otherwise is thrown and tried again next time, never
+   * answered by a seed written over the saved prompts. Calls at once share the one read.
+   */
+  function load() {
+    if (cache) return Promise.resolve(cache)
+    loading ??= (async () => {
+      const saved = await readJsonFile(file, null)
+      if (saved) cache = Array.isArray(saved.entries) ? saved : { entries: [] }
+      else {
+        cache = { entries: await seed() }
+        await save(cache)
+      }
+      return cache
+    })().finally(() => {
+      loading = null
+    })
+    return loading
   }
 
-  async function save(library) {
-    const tmp = `${file}.${process.pid}.tmp`
-    await writeFile(tmp, JSON.stringify(library, null, 2), 'utf8')
-    await rename(tmp, file)
-  }
+  const save = library => writeJson(file, library)
 
   /** Every picture already in the chats, oldest first so the newest wins a duplicate. */
   async function seed() {

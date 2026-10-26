@@ -13,7 +13,9 @@
 //   by default elsewhere); proxied so a phone on the LAN can play it, cached
 //   by source + model + voice + text. Browser voices (Web Speech) never reach
 //   the server.
-import { randomInt } from 'node:crypto'
+// - Voice input (语音输入): a recording turned into text for the input box
+//   (voice/listen.mjs); the audio is never kept.
+import { createHash, randomInt } from 'node:crypto'
 import { copyFile, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { inflateRawSync } from 'node:zlib'
 import path from 'node:path'
@@ -23,7 +25,9 @@ import { httpError, newId } from './store.mjs'
 import { blockRequest } from './blockwords.mjs'
 import { FISH_MODELS } from './voice/cloud.mjs'
 import { KEYED, cleanVoiceKey, cleanVoiceList, createVoices } from './voice/index.mjs'
+import { DEFAULT_LISTEN, cleanListen, createListen, readAudio } from './voice/listen.mjs'
 import { msg } from './i18n.mjs'
+import { HISTORY_DEFAULT, cleanKeep, madeAt } from './draw-history.mjs'
 import { EXPRESSION_LOOK, expressionRequest, parseExpressionLabels } from '../web/shared/stage.js'
 
 export const DEFAULT_MEDIA = Object.freeze({
@@ -65,8 +69,10 @@ export const DEFAULT_MEDIA = Object.freeze({
   geminiTtsModel: 'gemini-2.5-flash-preview-tts',
   geminiTtsVoices: Object.freeze([]), // none listed = Gemini's prebuilt voices
   localModels: Object.freeze({}), // the model picked for each of this install's own image backends (createMedia ownBackends), by id
+  ...DEFAULT_LISTEN, // 语音输入: where a recording is turned into text (voice/listen.mjs)
   autoRead: false,
   autoImage: false,
+  drawHistory: HISTORY_DEFAULT, // 抽图历史: old pictures each place keeps when drawn again (draw-history.mjs), 0 = none
 })
 
 // lora: a file in ComfyUI's models/loras, added to the workflow for this card (ComfyUI only).
@@ -223,11 +229,12 @@ export function cleanMedia(input, previous = DEFAULT_MEDIA, defaults = DEFAULT_M
     value.minimaxModel = source.minimaxModel
   }
   if (source.minimaxRegion === 'cn' || source.minimaxRegion === 'intl') value.minimaxRegion = source.minimaxRegion
+  value.drawHistory = cleanKeep(source.drawHistory, cleanKeep(value.drawHistory))
   for (const key of ['ttsVoices', 'fishVoices', 'minimaxVoices', 'geminiTtsVoices']) {
     if (typeof source[key] === 'string' || Array.isArray(source[key])) value[key] = cleanVoiceList(source[key], { fish: key === 'fishVoices' })
   }
   for (const key of ['imageReference', 'autoRead', 'autoImage', 'naiReference', 'naiRefStyle', 'geminiReference']) if (typeof source[key] === 'boolean') value[key] = source[key]
-  return value
+  return cleanListen(source, value)
 }
 
 export function cleanCardMedia(input, previous = DEFAULT_CARD_MEDIA) {
@@ -663,8 +670,10 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
  * @param ownBackends - this install's own image backends, beside IMAGE_BACKENDS:
  *   { id, status() → { id, name, ready, need, hint, models: [{ id, label }], model },
  *   draw({ prompt, shape, references: [Buffer], model, signal }) → { buffer, label, note } }.
+ * @param history - createDrawHistory() (抽图历史): a reference picture drawn or
+ *   uploaded again keeps the one before, and an avatar drawn is kept until taken.
  */
-export function createMedia(store, { proxy = null, askInContext = null, novelai = {}, voiceUrls = {}, features = null, ownBackends = [] } = {}) {
+export function createMedia(store, { proxy = null, askInContext = null, novelai = {}, voiceUrls = {}, features = null, ownBackends = [], history = null } = {}) {
   const proxyNow = typeof proxy === 'function' ? proxy : () => proxy
   const defaults = mediaDefaults(features)
   const backends = [...IMAGE_BACKENDS, ...ownBackends.map(own => own.id)]
@@ -690,6 +699,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
   }
 
   const voices = createVoices({ root: store.dirs.root, settings, providers: () => store.getProviders(), proxy: proxyNow, features, urls: voiceUrls })
+  const listen = createListen({ providers: () => store.getProviders(), proxy: proxyNow })
 
   const workflowFile = path.join(store.dirs.root, 'comfy-workflow.json')
 
@@ -776,13 +786,23 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     }
   }
 
+  /** Whether the card's avatar is a face for `cast`: nobody is named, or someone in it (not the player) is the card's own character. */
+  async function avatarFits(cardId, cast) {
+    const members = cast?.characters ?? []
+    if (!members.length) return true
+    const card = await store.getCard(cardId).catch(() => null)
+    if (!card?.name) return false
+    return members.some(({ entry }) => !entry.player && [entry.name, ...String(entry.aliases ?? '').split(/[,，、]/)].map(name => name.trim()).some(name => name && card.name.includes(name)))
+  }
+
   async function openaiImage(media, prompt, cardId, signal, cast = null) {
     const providers = await store.getProviders()
     const provider = providers.find(p => p.id === media.imageProvider)
     if (!provider) throw httpError(400, msg`还没选生图的供应商：在「配图与朗读」里选`)
     if (provider.api === 'anthropic-messages') throw httpError(400, msg`${provider.name} 是 Anthropic 接口，没有生图接口`)
     if (!media.imageModel) throw httpError(400, msg`还没填生图模型`)
-    const reference = media.imageReference ? (cast?.lead && (await refFor(cardId, cast.lead))) || (await avatarOf(cardId)) : null
+    // Someone else in the picture is never drawn from the card's avatar.
+    const reference = media.imageReference ? (cast?.lead && (await refFor(cardId, cast.lead))) || ((await avatarFits(cardId, cast)) ? await avatarOf(cardId) : null) : null
     // OpenRouter draws through chat (Gemini and GPT image models answer with a picture).
     if (/openrouter\.ai/i.test(provider.baseURL)) return { buffer: await chatImage(provider, media, prompt, reference, signal), note: '' }
     const size = imageSize('openai', media.imageShape)
@@ -821,11 +841,21 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     }
     const item = json.data?.[0]
     if (item?.b64_json) return { buffer: Buffer.from(item.b64_json, 'base64'), note }
-    if (item?.url) {
-      const url = new URL(item.url, provider.baseURL).href
-      return { buffer: (await fetchBytes(url, { signal, proxy: provider.proxy === 'direct' ? null : proxyNow() })).buffer, note }
-    }
+    if (item?.url) return { buffer: await linkedImage(provider, new URL(item.url, provider.baseURL).href, signal), note }
     throw httpError(502, msg`${provider.name} 没有返回图片${json.error?.message ? msg`：${json.error.message}` : ''}`)
+  }
+
+  /** The picture an image answer links to: a data: URL as it is, an http(s) one downloaded; a failure is the provider's. */
+  async function linkedImage(provider, url, signal) {
+    const data = /^data:image\/[\w.+-]+;base64,(.+)$/s.exec(url)?.[1]
+    if (data) return Buffer.from(data, 'base64')
+    try {
+      if (!/^https?:/.test(url)) throw new Error(msg`图片地址不是 http(s)：${url.slice(0, 80)}`)
+      return (await fetchBytes(url, { signal, proxy: provider.proxy === 'direct' ? null : proxyNow() })).buffer
+    } catch (error) {
+      if (signal?.aborted) throw error
+      throw httpError(502, imageError(provider, error))
+    }
   }
 
   /**
@@ -880,9 +910,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     }
     const message = json.choices?.[0]?.message
     const url = message?.images?.[0]?.image_url?.url ?? ''
-    const data = /^data:image\/[\w.+-]+;base64,(.+)$/s.exec(url)?.[1]
-    if (data) return Buffer.from(data, 'base64')
-    if (/^https?:/.test(url)) return (await fetchBytes(url, { signal, proxy: provider.proxy === 'direct' ? null : proxyNow() })).buffer
+    if (/^(data:image\/|https?:)/.test(url)) return linkedImage(provider, url, signal)
     const said = typeof message?.content === 'string' ? message.content.trim().slice(0, 160) : ''
     throw httpError(502, msg`${provider.name} · ${media.imageModel} 没有返回图片${said ? msg`：${said}` : msg`：选一个能出图的模型（名字里带 image 的）`}`)
   }
@@ -961,7 +989,11 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     try {
       result = await postJson(`${media.sdUrl}/sdapi/v1/txt2img`, body, { signal })
     } catch (error) {
-      if (signal?.aborted) throw error
+      if (signal?.aborted) {
+        // Dropping the request doesn't stop the WebUI drawing: the next picture would wait behind this one.
+        postJson(`${media.sdUrl}/sdapi/v1/interrupt`, {}, { signal: AbortSignal.timeout(5000) }).catch(() => {})
+        throw error
+      }
       if (/ECONNREFUSED/.test(String(error.message ?? error.code))) throw httpError(502, msg`连不上 SD WebUI：先打开 WebUI（启动参数加 --api），再确认地址（默认 http://127.0.0.1:7860）`)
       const hint = error.providerStatus === 404 ? msg`（WebUI 启动参数要加 --api）` : ''
       throw httpError(502, msg`SD WebUI：${String(error.message).slice(0, 200)}${hint}`)
@@ -994,7 +1026,9 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     if (needsReference) {
       const avatar = (cast?.lead && (await refFor(cardId, cast.lead))) || (await avatarOf(cardId))
       if (!avatar) throw httpError(400, msg`工作流要参考图（{{reference}}），这张卡没有头像`)
-      const upload = await postMultipart(`${base}/upload/image`, multipart({ image: { buffer: avatar, filename: `tavern-${cardId}.png`, type: 'image/png' }, overwrite: 'true' }), signal)
+      // Named by the picture: two draws at once never swap each other's reference.
+      const name = `tavern-${cardId}-${createHash('sha256').update(avatar).digest('hex').slice(0, 16)}.png`
+      const upload = await postMultipart(`${base}/upload/image`, multipart({ image: { buffer: avatar, filename: name, type: 'image/png' }, overwrite: 'true' }), signal)
       reference = JSON.parse(upload.toString('utf8')).name
     }
     const filled = fillWorkflow(workflow, { prompt, negative: scenery ? SCENERY_NEGATIVE : '', seed: randomInt(1, 2 ** 31), width, height, reference })
@@ -1008,21 +1042,40 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     const id = queued.prompt_id
     if (!id) throw httpError(502, msg`ComfyUI 没接受这个工作流：${JSON.stringify(queued.node_errors ?? queued.error ?? queued).slice(0, 200)}`)
     const deadline = Date.now() + 10 * 60 * 1000
-    while (Date.now() < deadline) {
-      if (signal?.aborted) throw new Error('aborted')
-      await sleep(1500)
-      const history = JSON.parse((await fetchBytes(`${base}/history/${id}`, { signal })).buffer.toString('utf8'))
-      const entry = history[id]
-      if (!entry) continue
-      if (entry.status?.status_str === 'error') throw httpError(502, msg`ComfyUI 执行出错，去 ComfyUI 界面看看是哪个节点`)
-      const image = Object.values(entry.outputs ?? {}).flatMap(out => out.images ?? []).find(img => img.type === 'output') ?? Object.values(entry.outputs ?? {}).flatMap(out => out.images ?? [])[0]
-      if (image) {
-        const query = new URLSearchParams({ filename: image.filename, subfolder: image.subfolder ?? '', type: image.type ?? 'output' })
-        return (await fetchBytes(`${base}/view?${query}`, { signal })).buffer
+    try {
+      while (Date.now() < deadline) {
+        if (signal?.aborted) throw new Error('aborted')
+        await sleep(1500)
+        const history = JSON.parse((await fetchBytes(`${base}/history/${id}`, { signal })).buffer.toString('utf8'))
+        const entry = history[id]
+        if (!entry) continue
+        if (entry.status?.status_str === 'error') throw httpError(502, msg`ComfyUI 执行出错，去 ComfyUI 界面看看是哪个节点`)
+        const image = Object.values(entry.outputs ?? {}).flatMap(out => out.images ?? []).find(img => img.type === 'output') ?? Object.values(entry.outputs ?? {}).flatMap(out => out.images ?? [])[0]
+        if (image) {
+          const query = new URLSearchParams({ filename: image.filename, subfolder: image.subfolder ?? '', type: image.type ?? 'output' })
+          return (await fetchBytes(`${base}/view?${query}`, { signal })).buffer
+        }
+        if (entry.status?.completed) throw httpError(502, msg`ComfyUI 跑完了，但工作流没有输出图片（要有 SaveImage 或 PreviewImage 节点）`)
       }
-      if (entry.status?.completed) throw httpError(502, msg`ComfyUI 跑完了，但工作流没有输出图片（要有 SaveImage 或 PreviewImage 节点）`)
+    } catch (error) {
+      if (signal?.aborted) dropComfyPrompt(base, id).catch(() => {})
+      throw error
     }
+    dropComfyPrompt(base, id).catch(() => {})
     throw httpError(504, msg`ComfyUI 十分钟还没出图`)
+  }
+
+  /**
+   * A prompt given up on (stopped, or too slow): out of ComfyUI's queue while it
+   * waits, stopped while it runs, so the next picture isn't stuck behind it.
+   * Only this prompt: one running from ComfyUI's own page is left alone.
+   */
+  async function dropComfyPrompt(base, id) {
+    const signal = AbortSignal.timeout(5000)
+    const queue = JSON.parse((await fetchBytes(`${base}/queue`, { signal })).buffer.toString('utf8'))
+    const has = list => (Array.isArray(list) ? list : []).some(item => Array.isArray(item) && item[1] === id)
+    if (has(queue.queue_pending)) await postJson(`${base}/queue`, { delete: [id] }, { signal })
+    else if (has(queue.queue_running)) await postJson(`${base}/interrupt`, { prompt_id: id }, { signal })
   }
 
   async function postMultipart(url, form, signal) {
@@ -1212,7 +1265,10 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     const buffer = Buffer.from(match[2], 'base64')
     if (buffer.length > 15 * 1024 * 1024) throw httpError(400, msg`人设图太大（最多 15MB）`)
     await mkdir(rosterDir(cardId), { recursive: true })
-    await writeFile(refFile(cardId, entryId), buffer)
+    // The one it replaces stays in 抽图历史.
+    const file = refFile(cardId, entryId)
+    if (history && (await rosterRef(cardId, entryId))) await history.push(cardId, `roster:${entryId}`, { from: file, at: await madeAt(file) })
+    await writeFile(file, buffer)
     return { ref: true }
   }
 
@@ -1241,6 +1297,12 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
       // no pictures yet
     }
     await Promise.all(files.filter(file => !keep.has(file)).map(file => rm(path.join(rosterDir(cardId), file), { force: true })))
+    // Their old pictures, 立绘 and expressions too.
+    const ids = new Set(card.media.roster.map(entry => entry.id))
+    await history?.drop(cardId, slot => {
+      const member = /^(?:roster|sprite|face):([\w-]+)/.exec(slot)?.[1]
+      return Boolean(member) && !ids.has(member)
+    })
     return cardMediaView(cardId)
   }
 
@@ -1382,8 +1444,8 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
 
   /**
    * Reference pictures for a picture of `cast`: its members' (four at most), else
-   * with `avatar` the card's avatar, when no cast is named or the lead is the
-   * card's own character.
+   * with `avatar` the card's avatar, when no cast is named or the card's own
+   * character is in it (avatarFits).
    */
   async function castPictures(cardId, cast, { avatar = true } = {}) {
     if (!cardId) return []
@@ -1394,10 +1456,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
       if (ref) pictures.push(ref)
     }
     if (pictures.length || !avatar) return pictures
-    const card = await store.getCard(cardId).catch(() => null)
-    const lead = cast?.lead
-    const own = !lead || [lead.name, ...String(lead.aliases ?? '').split(/[,，、]/)].map(name => name.trim()).some(name => name && card?.name.includes(name))
-    const picture = own ? await avatarOf(cardId) : null
+    const picture = (await avatarFits(cardId, cast)) ? await avatarOf(cardId) : null
     return picture ? [picture] : []
   }
 
@@ -1548,7 +1607,9 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     const { buffer, backend, note } = await render(plain, cardId, cast, cast, '', signal, { references: 'cast' })
     const type = extOf('', buffer) === 'jpg' ? 'jpeg' : extOf('', buffer)
     const how = from === 'draft' ? msg`名册里没有${card.name}的长相，这次由 ${model} 从卡里读出来画。` : from === 'description' ? msg`名册里没有${card.name}的长相，这次照着描述画；在「角色名册」里写好长相会更准。` : ''
-    return { image: `data:image/${type};base64,${buffer.toString('base64')}`, backend, from, note: [note, how].filter(Boolean).join(' ') }
+    // Kept in 抽图历史 until taken (PUT /api/cards/:id/avatar with `history`), so drawing again loses nothing.
+    const kept = await history?.push(cardId, 'avatar', { buffer, backend, source: 'drawn' })
+    return { image: `data:image/${type};base64,${buffer.toString('base64')}`, backend, from, note: [note, how].filter(Boolean).join(' '), ...(kept ? { history: kept.file } : {}) }
   }
 
   /**
@@ -1667,5 +1728,11 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     return voices.accountVoices({ source, draft: await voiceDraft(draft, keys) }, signal)
   }
 
-  return { defaults, settings, cleanSettings, ownBackends: ownBackendViews, naiStatus, setNaiToken, naiCheck, cardMediaView, saveCardMedia, inheritCardMedia, draftRoster, draftRosterFromChat, drawPortrait, drawCardArt, drawAvatar, drawScenery, drawBackdrop, drawSprite, drawExpression, labelExpressions, readRosterRef, saveRosterRef, removeRosterRef, writeImagePrompt, generateImage, readImage, removeImage, removeChatMedia, copyChatMedia, loras, voices: voices.list, personaList: voices.personaList, ttsKeyStatus: voices.ttsKeyStatus, setTtsKey: voices.setTtsKey, voiceKeys: voices.keyStatus, setVoiceKey: voices.setKey, speak, previewVoice, accountVoices, loadWorkflow, saveWorkflow, describeWorkflow }
+  /** 语音输入: one recording as text, with the saved settings or the form's (试一试). Nothing is kept. */
+  async function transcribe({ audio, type, names, media: draft }, signal) {
+    const media = draft && typeof draft === 'object' ? cleanSettings(draft, await settings()) : await settings()
+    return listen.transcribe({ media, audio: readAudio(audio, type), names: Array.isArray(names) ? names : [] }, signal)
+  }
+
+  return { defaults, settings, cleanSettings, ownBackends: ownBackendViews, naiStatus, setNaiToken, naiCheck, cardMediaView, saveCardMedia, inheritCardMedia, draftRoster, draftRosterFromChat, drawPortrait, drawCardArt, drawAvatar, drawScenery, drawBackdrop, drawSprite, drawExpression, labelExpressions, readRosterRef, saveRosterRef, removeRosterRef, writeImagePrompt, generateImage, readImage, removeImage, removeChatMedia, copyChatMedia, loras, voices: voices.list, personaList: voices.personaList, ttsKeyStatus: voices.ttsKeyStatus, setTtsKey: voices.setTtsKey, voiceKeys: voices.keyStatus, setVoiceKey: voices.setKey, speak, previewVoice, accountVoices, transcribe, loadWorkflow, saveWorkflow, describeWorkflow }
 }

@@ -50,17 +50,20 @@ From the author's own long chats (October 2026):
 
 - **Character cards**: SillyTavern V1/V2/V3 PNG and JSON, with embedded world books, regex scripts and alternate greetings. A new version of a card can replace the old one in place, keeping your chats.
 - **World books**: always-on and keyword entries, with regex keys, secondary keys, probability and insertion position. Standalone world books can be attached to a card, and after import every entry can be searched, switched on or off and edited under View entries (查看条目).
+- **Regex**: the regex scripts in cards and presets work as they are. Settings → Writing → Regex also holds global scripts and regex sets: a set works only on the cards you put it on, after the card's own scripts. Each script has a test box, and a whole group or the scripts you select can be exported as SillyTavern regex files, copied, moved or switched on and off together.
 - **Presets**: a light built-in "Basic preset" with switches for point of view, style, not acting for you, limited knowledge, dark themes, intimacy, choices (tap to send) and a time box, so it plays well without importing anything. You can also import Chat Completion presets, toggle and edit their entries, and pin the ones you use most as quick switches.
 - **MVU variables and status bars**: `[InitVar]`, `<UpdateVariable>` / JSONPatch and the older `_.set()` are supported; EJS templates run in a QuickJS sandbox (with ST-Prompt-Template's `getwi`, `matchChatMessages` and the like). HTML UIs inside cards render in isolated iframes, with a compatibility layer for the common Tavern Helper (酒馆助手) functions: variables, lorebooks (changes kept for that chat only), calling the model (each card asks first) and sending messages. The libraries those UIs need, such as jQuery and Vue, load from jsDelivr, so some may be missing offline.
 - **SillyTavern chats**: import a .jsonl (drop it into the window or use Import archive) with every turn, every swipe and the MVU variables; a long one can be compacted into a story archive first.
 - **Web search**: the globe left of the input box turns it on per chat. It uses the provider's own search, like SillyTavern's "Enable web search": Claude on the Anthropic interface, the OpenAI Responses interface and OpenRouter models have it. When real-world facts are needed the model searches first and then writes; what it searched for and the pages it cited are listed under the reply. Searches cost extra.
 - **Blocked words**: Settings → Writing → Blocked words removes words, masks them with `*` or swaps them for words you choose, both in what the model is sent (card, preset, lorebooks, history and your messages) and in the replies shown; each word can be switched on or off and kept to one side. Only the copy being sent or shown changes, so switching a word off brings it back; Chinese has no spaces between words, so longer words to leave alone go under Exceptions. After a change, chats that use the word write the cache again from where it appears, and saving tells you from which turn.
+- **Personas and styles**: Settings → Writing keeps your personas and writing styles as lists you can add to, copy, import and export. Personas move to and from SillyTavern's Persona Management (restore the exported file there, or import its backup here); a style exports as a SillyTavern system prompt, and a plain text file of rules imports as one. Each card can pick its own persona and style, otherwise it uses the defaults; a chat keeps the ones it started with until you click "Use in this chat", and the next turn writes the cache once more. Exported cards never carry your persona.
 - **Versions and branches**: regenerate, swipe between versions, branch from any message, roll back, edit any message; a whole chat can be packed up and moved to another device.
 
 ### Pictures and read-aloud
 
 - **Pictures**: one click, and a helper model writes the image prompt from the scene, the characters' looks and the card's art style; you can review it before drawing. Backends: an OpenAI-compatible image API (gpt-image and others), Gemini's own image models, NovelAI, or a local ComfyUI workflow or SD WebUI / Forge. New replies can be illustrated automatically. Prompts you have drawn are kept in a prompt library.
 - **Read-aloud**: quoted dialogue uses the dialogue voice and everything else the narrator voice; tap a line in the story to hear just that line. Voices can come from cloud services such as Fish Audio, MiniMax, Gemini or any OpenAI-compatible speech API, the browser (free), or a TTS model on your computer or local network; everyone in the cast can have a voice of their own. Audio is cached once read. New replies can be read automatically.
+- **Voice input**: speak into the microphone beside the input box and the words go into the box for you to read before sending. A provider's transcription API (SiliconFlow's SenseVoice is free), whisper on your own computer, or the browser's built-in recognition turns them into text.
 
 ### Visual novel mode
 
@@ -78,6 +81,7 @@ From the author's own long chats (October 2026):
 
 - **Character roster**: each character's fixed face, everyday outfit, a reference picture and a LoRA. When several characters share a picture, each is described separately, so faces don't blend.
 - **Each card's own art style and negative prompt**, added to every picture for that card.
+- **Redraws keep the earlier pictures**: when a picture, reference image, sprite or expression, scene or avatar is redrawn or replaced, each keeps its last few (5 by default; set in Pictures & voice → Image backend) in a row beneath it: click one to bring it back, delete the ones you don't want.
 - **Each card's own dialogue and narrator voices**.
 - Cards made with the card creator get their roster built automatically.
 
@@ -105,16 +109,17 @@ If you can't quite say what you want, the creator guides you round by round:
 
 <br clear="right">
 
-## Latest changes [1.9.5]
+## Latest changes [2.0.0]
 
 <p align="center"><img src="docs/screenshots/vn-marks.jpg" alt="The visual novel in 1.9.2: the model marked this line as the steward's, so the name plate and the sprite follow, with Lin Qinghe beside him" width="880"></p>
 
-- **Blocked words (1.9.5)**: Settings → Writing → Blocked words, one list for every chat: each word can be removed, masked with `*` or swapped for one you choose, in what is shown, what is sent to the model, or both. The stored text never changes, so switching a word off brings it back, and the same list keeps the cache hitting.
-- **Card UI permissions (1.9.5)**: a card's UI sending without your click, calling the model, or going online through CicaTavern asks once per card, and both a yes and a no are kept; change them under Card UI permissions… in the card's menu. Sending with a button in the card's UI is you sending and is never asked. This version also fixes a set of ways the server could hang or lose data, and a few places that differed from SillyTavern (several initvar entries, regex replacements, card field macros in presets).
-- **Web search (1.9.4)**: the globe left of the input box turns it on per chat. When real-world facts are needed, the model searches first and then writes; what it searched for and the pages it cited are listed under the reply. It uses the provider's own search: Claude on the Anthropic interface, the OpenAI Responses interface and OpenRouter models have it. Searches cost extra.
-- **Card UIs reaching their own API (1.9.4)**: when the browser cannot reach an API set in a card's UI ("Failed to fetch"), the app asks once; once you agree, that card reaches that address through CicaTavern and its network proxy.
+- **Voice input**: a microphone beside the input box turns what you say into text in the box, for you to read and send. Nothing to install: a provider's transcription API (SiliconFlow's SenseVoice is free), the desktop browser's own recognition, or a whisper server of your own; CicaTavern keeps no recordings.
+- **Draw history**: illustrations, reference pictures, sprites and expressions, scenes and a card's avatar keep a few old versions after a redraw (5 by default); tap one to use it again, or delete it.
+- **Regex sets**: the regex window works like the lorebook one, with copies and SillyTavern exports, and regex sets can run on chosen cards only.
+- **Personas and writing styles as lists**: copies and SillyTavern imports and exports, and each card can pick one of each.
+- **macOS test build (beta)**: the release page has packages for Apple silicon and Intel. They have not been fully tried on a real Mac yet and are not signed by Apple, so the first time you open the app, go to System Settings → Privacy & Security and click Open Anyway. Reports are welcome.
 
-Card UIs calling the model and editing lorebooks, and the error log, came in 1.9.3; speaker marks and the update mirror in China in 1.9.2; the visual novel HUD, new days and memories in 1.9.1; editing lorebooks, presets, regex and the theme by chat in 1.9.0; visual novel mode in 1.8.0. Download from [Releases](https://github.com/Shikasar7/CicaTavern/releases/latest); 1.4.0 and later can update in the app. Everything that changed is in [CHANGELOG.md](CHANGELOG.md).
+1.9 added web search, blocked words, card UIs that call the model and edit lorebooks, an error log, the visual novel HUD and speaker marks, editing lorebooks and presets by chat, and an update mirror in China; visual novel mode came in 1.8. Download from [Releases](https://github.com/Shikasar7/CicaTavern/releases/latest); 1.4.0 and later can update in the app. Everything that changed is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Getting started (Windows)
 
@@ -183,6 +188,21 @@ In 配图与朗读 (Pictures and voice), choose each card's 对白音色 (dialog
 
 Fish and MiniMax keys are kept in the data folder's `voice-keys.json`; the page only ever sees the last four characters. Audio is cached in the data folder's `media/tts/` and made again when you change the voice or model; if a line sounds wrong, click 重新合成 (Synthesize again) on the progress bar. When a card has no dialogue voice and a local voice bridge is set, the bridge's current voice reads.
 
+## Voice input
+
+The microphone right of the input box: click it and speak, then click it again (or click 完成, Done) when you finish. What you said goes into the input box at the cursor for you to read and edit; it is never sent by itself. While recording, the strip above the input box shows the time and 取消 (Cancel); Esc cancels too, and clicking the microphone while it transcribes cancels that. A recording is at most 3 minutes, and one in which nothing was heard isn't sent.
+
+The first click opens 配图与朗读 → 语音输入 (Pictures and voice → Voice input) to pick who turns recordings into text (the 语音输入 row under 配图与朗读 in 设置, Settings, opens it too). Nothing is recorded before you pick. The first two need nothing installed and work as soon as they're picked; the whisper server is for people who already run one, and CicaTavern never downloads a model for you.
+
+- **A provider's transcription API**: choose a provider you've added; it uses the provider's OpenAI-compatible `/audio/transcriptions`, with the provider's address, key and proxy setting. With no model, one is picked by provider: SiliconFlow `FunAudioLLM/SenseVoiceSmall` (free, reachable from mainland China), Groq `whisper-large-v3-turbo` (fast and cheap), OpenAI `gpt-4o-mini-transcribe`, anything else `whisper-1`. Providers with only a chat API, such as DeepSeek or Anthropic, can't transcribe.
+- **The browser's built-in speech recognition**: in Edge, Chrome and Safari; free, nothing to set up, and the words appear as you speak. Recordings don't pass through CicaTavern: the browser sends them to its own recognition service (see [Privacy](#privacy)). The Android app, Firefox and a phone browser opened through an http link don't have it: pick a provider on the same page too, and those places use it instead.
+- **A whisper server you run yourself** (this machine or the LAN): no key, and recordings never leave your network. For an OpenAI-compatible server ([speaches](https://github.com/speaches-ai/speaches), LocalAI…) give the address up to `/v1`, such as `http://127.0.0.1:8000/v1`; speaches also needs a model (such as `Systran/faster-whisper-small`). For [whisper.cpp](https://github.com/ggml-org/whisper.cpp)'s server, give it up to `/inference`. On a phone, use the computer's LAN address.
+- **Off**: no microphone button.
+
+Picking the spoken language makes transcription more accurate and faster; when detecting, whisper sometimes writes Chinese in traditional characters, and with 中文 (Chinese) picked it is asked for simplified. Each choice has a 试一试 (Try it) button that works before saving. The names of the characters and your own in the chat go along with each recording, so names come out spelled right.
+
+When a phone browser opens CicaTavern through a plain http LAN link, the browser won't let the page use the microphone (that needs https or this machine's own address), so the microphone button uses the phone's own recorder instead: confirm when you've recorded, and it is turned into text. In the Android app, the first click asks whether the app may record audio.
+
 ## Phone access
 
 Set 设置 → 手机访问 (Phone access) to 同一 WiFi 或 Tailscale (Same Wi-Fi or Tailscale) and restart the server; a link with a passcode then appears in the settings. Open it in your phone's browser.
@@ -198,6 +218,7 @@ Play on your phone without the computer: download `CicaTavern-<version>-android-
 - The app runs on the phone by itself, with the same interface and features as on the computer; providers and API keys have to be entered on the phone again.
 - The phone and the computer keep separate data. To move a chat, use 导出存档 (Export save) on one side and import it on the other, or 打包对话 (Pack chat) on the computer.
 - For read-aloud, use a cloud service: there are usually no browser voices in the app.
+- Voice input: there is no browser recognition in the app, so use a provider's transcription API (with browser recognition picked, the provider picked with it under Voice input is used instead) or a whisper server on your computer. The first time you click the microphone, Android asks whether the app may record audio; if you refused, turn the microphone on under the phone's Settings → Apps → CicaTavern → Permissions.
 - Updates: 设置 → 更多 → 更新 shows the new version and its notes; 下载安装包 (Download installer) hands the APK to your browser. Open it when it's done to install over the old version; all data is kept (Android checks that the new APK is signed with the same key as the installed one).
 - How to build it and more: [android/README.md](android/README.md).
 
@@ -217,7 +238,8 @@ CicaTavern collects no usage data and sends nothing to the developer. Your data 
 
 What it connects to:
 
-- **Services you add yourself**: model providers (with web search on, they also run the searches), image backends (OpenAI-compatible APIs, Gemini, NovelAI, ComfyUI, SD WebUI) and voice services (Fish Audio, MiniMax, Gemini and others). They are contacted only after you set them up, and what goes to them is your chat content and the related settings; how each one handles data is covered by its own privacy policy.
+- **Services you add yourself**: model providers (with web search on, they also run the searches), image backends (OpenAI-compatible APIs, Gemini, NovelAI, ComfyUI, SD WebUI), voice services (Fish Audio, MiniMax, Gemini and others) and voice input transcription. They are contacted only after you set them up, and what goes to them is your chat content and the related settings; how each one handles data is covered by its own privacy policy.
+- **Voice input**: nothing is recorded until you click the microphone. The recording, with the character names in the chat, goes to the one you picked under 语音输入 (Voice input) to be turned into text: a provider's transcription API, or your own whisper server (the recording stays in your network). With the browser's built-in speech recognition, the recording doesn't pass through CicaTavern: the browser sends it straight to its own recognition service. Chrome sends it to Google, Edge to Microsoft, Safari to Apple. CicaTavern doesn't keep recordings.
 - **Connections made without being configured.** They are listed at the first start, where each can be switched off; later, change them under 设置 → 更多 → 隐私与网络 (Privacy and network) and 更新 (Update). Nothing on this list happens before you confirm:
   - Update check: GitHub (api.github.com) at most once a day, and the mirror in mainland China, cnb.cool (Tencent), when GitHub hasn't answered within a few seconds. Only the version number is sent; they can see your IP address. The Android app does the same.
   - Body font: the Noto Serif SC font from Google Fonts.

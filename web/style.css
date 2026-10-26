@@ -360,8 +360,8 @@ select.pill { appearance: none; padding-right: 28px; background-image: linear-gr
   box-shadow: 0 0 0 1px var(--line-soft), 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 .face.user { width: 22px; height: 22px; font-size: 11px; box-shadow: 0 0 0 1px var(--line-soft); }
-.msg.streaming .face { animation: breathe 1.6s ease-in-out infinite; }
-@keyframes breathe { 50% { box-shadow: 0 0 0 1px var(--line-soft), 0 0 0 4px color-mix(in srgb, var(--accent) 45%, transparent); } }
+.msg.streaming .face { animation: face-glow 1.6s ease-in-out infinite; }
+@keyframes face-glow { 50% { box-shadow: 0 0 0 1px var(--line-soft), 0 0 0 4px color-mix(in srgb, var(--accent) 45%, transparent); } }
 .msg-head .name { font: 600 13px var(--serif); color: var(--muted); letter-spacing: .06em; }
 .msg.assistant .msg-head .name { color: var(--accent); }
 .msg-body { overflow-wrap: anywhere; }
@@ -448,10 +448,10 @@ select.pill { appearance: none; padding-right: 28px; background-image: linear-gr
 @keyframes fade { from { opacity: 0; } }
 .msg.streaming .story:last-child p:last-child::after, .msg.streaming .msg-body:empty::after {
   content: ""; display: inline-block; width: .45em; height: 1.05em; margin-left: 3px; vertical-align: -.14em;
-  border-radius: 2px; background: var(--lamp); animation: breathe 1.1s ease-in-out infinite;
+  border-radius: 2px; background: var(--lamp); animation: caret-blink 1.1s ease-in-out infinite;
 }
 .msg.streaming .msg-body:empty::after { margin-left: 2em; }
-@keyframes breathe { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
+@keyframes caret-blink { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
 
 /* ─── Composer: a floating slip ──────────────────────────────────── */
 .composer { position: relative; padding: 0 24px 18px; display: flex; flex-direction: column; gap: 6px; }
@@ -640,6 +640,8 @@ dl.usage dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; 
   border: 2px dashed var(--accent); border-radius: 20px; background: color-mix(in srgb, var(--bg) 82%, transparent);
   font: 600 18px var(--serif); color: var(--accent); pointer-events: none; animation: fade .18s ease;
 }
+/* Words written here in CSS: the English page has its own (the i18n check reads these too). */
+:lang(en) .app.dragging::after { content: "Drop to import cards, worldbooks or presets"; }
 
 /* ─── Presets ────────────────────────────────────────────────────── */
 .dialog.presets { width: min(1120px, calc(100vw - 32px)); height: min(820px, calc(100dvh - 32px)); padding: 0; overflow: hidden; }
@@ -711,9 +713,45 @@ dl.usage dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; 
 .quick-btn:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent); }
 .quick-btn:disabled { opacity: .4; cursor: default; }
 .quick-btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }
-.quick-btn + .search-btn { margin-left: -6px; }
+.quick-btn:not([hidden]) + .search-btn { margin-left: -6px; }
 .search-btn[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); }
 .search-btn.unavailable { opacity: .45; }
+/* 语音输入 (web/dictation.js): the microphone beside the box, a stop square while it listens, a ring while it writes out. */
+.mic-btn { position: relative; margin: 0 -2px 2px 0; }
+.mic-btn .mic-stop { display: none; }
+.mic-btn.listening, .mic-btn.listening:hover:not(:disabled) { background: var(--bad); color: #fff; }
+.mic-btn.listening .mic-icon { display: none; }
+.mic-btn.listening .mic-stop { display: block; }
+.mic-btn.listening .mic-stop rect { fill: currentColor; stroke: none; }
+.mic-btn.working { color: var(--accent); }
+.mic-btn.working svg { opacity: .35; }
+.mic-btn.working::after { content: ""; position: absolute; inset: 8px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: spin .8s linear infinite; }
+.dictation {
+  width: 100%; max-width: calc(var(--read) + 48px); margin: 0 auto; display: flex; align-items: center; gap: 10px;
+  padding: 5px 6px 5px 14px; border-radius: 14px; border: 1px solid var(--line-soft); background: color-mix(in srgb, var(--raised) 94%, transparent);
+  box-shadow: var(--shadow-2); font-size: 13px; animation: rise .2s var(--ease);
+}
+.dictation[hidden] { display: none; }
+.dictation-dot {
+  flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--bad);
+  box-shadow: 0 0 0 calc(var(--level, 0) * 7px) color-mix(in srgb, var(--bad) 28%, transparent); transition: box-shadow .1s;
+}
+.dictation:is([data-stage="starting"], [data-stage="writing"]) .dictation-dot { background: var(--accent); box-shadow: none; animation: dictation-wait 1.1s ease-in-out infinite; }
+@keyframes dictation-wait { 50% { opacity: .3; } }
+.dictation-time { flex: none; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.dictation-time:empty { display: none; }
+.dictation-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.dictation .btn { flex: none; }
+.stt-heard { flex: 1; min-width: 0; }
+/* A phone: four buttons beside the box. Tighter, so the short placeholder (app.js) still fits on a 375 px
+   screen; on a narrower one it is cut off rather than making the empty box two lines tall. */
+@media (max-width: 560px) {
+  .composer-box { gap: 4px; padding: 7px 7px 7px 10px; }
+  .composer-box .quick-btn { width: 32px; }
+  .composer-box .mic-btn { margin: 0 -2px 2px -2px; }
+  .composer-box .send { width: 36px; height: 36px; }
+  .composer textarea::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+}
 .search-sources { margin-top: 6px; font-size: 12px; color: var(--muted); }
 .search-sources summary { cursor: pointer; width: fit-content; padding: 1px 8px; border-radius: 999px; background: var(--accent-soft); list-style: none; }
 .search-sources summary::-webkit-details-marker { display: none; }
@@ -846,12 +884,31 @@ button.chip.on { background: var(--accent); border-color: var(--accent); color: 
 .pending-label strong { font: 500 15px var(--serif); color: var(--ink); letter-spacing: .04em; }
 .pending-meta { font-size: 12px; color: var(--faint); }
 .pending-time { font-variant-numeric: tabular-nums; }
-.pending-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: breathe 1.4s ease-in-out infinite; }
+.pending-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: dot-pulse 1.4s ease-in-out infinite; }
 @keyframes mist { to { transform: translate(6%, -4%) rotate(8deg) scale(1.08); } }
-@keyframes breathe { 50% { transform: scale(.55); opacity: .4; } }
+@keyframes dot-pulse { 50% { transform: scale(.55); opacity: .4; } }
 /* The finished picture comes into focus where the frame was. */
 .reply-image img.fresh { aspect-ratio: var(--ratio, auto); object-fit: cover; filter: blur(22px) saturate(.7); opacity: .55; clip-path: inset(0 round 14px); }
 .reply-image img.fresh.loaded { aspect-ratio: auto; filter: none; opacity: 1; transition: filter 1.1s var(--ease), opacity .8s var(--ease); }
+/* 抽图历史: a place's old pictures in a row under it, newest first (web/draw-choice.js historyStrip). */
+.draw-history { display: grid; gap: 4px; min-width: 0; max-width: 100%; }
+.draw-history-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; font-size: 12px; color: var(--muted); }
+.draw-history-hint { color: var(--faint); }
+.draw-history-list { display: flex; gap: 6px; overflow-x: auto; padding: 2px 0 4px; scrollbar-width: thin; overscroll-behavior-x: contain; }
+.draw-history-item { position: relative; margin: 0; flex: none; }
+.draw-history-pick { position: relative; display: block; width: 56px; height: 56px; padding: 0; overflow: hidden; border: 1px solid var(--line-soft); border-radius: 8px; background: var(--line-soft); cursor: pointer; }
+.draw-history .draw-history-pick img, .draw-history .draw-history-pick img:hover { display: block; aspect-ratio: auto; background: none; width: 100%; height: 100%; object-fit: cover; border-radius: 0; box-shadow: none; transform: none; cursor: pointer; }
+.draw-history-pick:hover, .draw-history-pick:focus-visible { border-color: var(--accent); }
+.draw-history-tag { position: absolute; left: 0; right: 0; bottom: 0; font-size: 10px; line-height: 1.5; text-align: center; color: #fff; background: rgb(0 0 0 / .5); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.draw-history-remove {
+  position: absolute; top: 2px; right: 2px; width: 22px; height: 22px; padding: 0; border-radius: 50%; border: 0;
+  background: rgb(0 0 0 / .55); color: #fff; font-size: 14px; line-height: 22px; text-align: center; cursor: pointer; opacity: 0; transition: opacity .15s;
+}
+.draw-history-item:hover .draw-history-remove, .draw-history-item:focus-within .draw-history-remove { opacity: 1; }
+@media (hover: none) { .draw-history-remove { opacity: .85; } }
+.draw-history-remove:hover { background: var(--bad); }
+.roster-old:empty, .ce-kept:empty, .vn-old:empty { display: none; }
+.vn-library-item > .vn-old { padding: 0 10px 10px; }
 /* No picture: the reason, where the picture would have been. */
 .failed-art {
   border-radius: 14px; padding: 14px 16px 12px; border: 1px solid color-mix(in srgb, var(--bad) 35%, var(--line-soft));
@@ -863,6 +920,7 @@ button.chip.on { background: var(--accent); border-color: var(--accent); color: 
 .media-tools { display: inline-flex; gap: 0; }
 .msg-tools button.on { color: var(--accent); background: var(--accent-soft); }
 .msg.speaking .msg-head .name::after { content: "  正在朗读"; font: 12px var(--ui); color: var(--faint); letter-spacing: 0; }
+:lang(en) .msg.speaking .msg-head .name::after { content: "  reading aloud"; }
 /* Reading aloud: a small pill floating over the input's top right, taking no room; the line shows on hover. */
 .player {
   position: absolute; z-index: 3; right: max(24px, calc((100% - var(--read) - 48px) / 2)); bottom: calc(100% + 6px);
@@ -1586,6 +1644,8 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
   .forge-sketch .sketch-head { cursor: pointer; }
   .forge-sketch .sketch-head::after { content: "展开"; font-size: 11.5px; color: var(--muted); margin-left: 8px; }
   .forge-sketch.open .sketch-head::after { content: "收起"; }
+  :lang(en) .forge-sketch .sketch-head::after { content: "Show"; }
+  :lang(en) .forge-sketch.open .sketch-head::after { content: "Hide"; }
   .forge-sketch .sketch-pct { margin-left: auto; }
   .forge-sketch .sketch-bar { margin-bottom: 2px; }
   .forge-count { display: none; }
@@ -1674,6 +1734,8 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .dialog .ce-meta input { font-size: 13px; padding: 5px 8px; min-width: 0; }
 .ce-hero .hint { margin: 0; }
 .ce-hero a.btn { text-decoration: none; }
+.dialog label.ce-regex-choice { margin: 0; align-items: flex-start; gap: 8px; font-size: 12.5px; color: var(--muted); }
+.dialog label.ce-regex-choice input { margin-top: 3px; flex: none; }
 .ce-field { border-top: 1px solid var(--line-soft); padding: 10px 0 8px; }
 .plan-card > header + .ce-field, .plan-card > .hint + .ce-field { border-top: 0; }
 .ce-field-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -1921,19 +1983,17 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
   .theme-row .seg { align-self: flex-start; }
 }
 
-/* 正则 (web/regex.js): the preset window's layout; groups in the list, an editor with a test box. */
+/* 正则 (web/regex.js): the 世界书 window's layout (.dialog.books): the places in the list (global, preset,
+   the card's own, then the 正则集), one place's scripts as rows, each opening an editor with a test box. */
 .regex-groups { flex: 1; min-height: 0; overflow-y: auto; }
 .regex-groups .preset-list { flex: none; overflow: visible; }
-.regex-group + .regex-group { margin-top: 14px; }
-.regex-group-title { display: flex; align-items: baseline; gap: 8px; margin: 0 8px 6px; font: 600 12px/1.4 var(--ui); color: var(--muted); }
-.regex-group-title span { font-weight: 400; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.regex-group-title .btn { margin-left: auto; flex: none; font-weight: 400; padding: 1px 8px; }
-.regex-item { display: flex; align-items: center; gap: 10px; }
-.regex-item .item-main { flex: 1; }
-.regex-item .item-title { font-size: 13.5px; }
-.preset-list li.off .item-main { opacity: .55; }
+.regex-group-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; margin: 16px 8px 6px; font: 600 12px/1.4 var(--ui); color: var(--muted); }
+.regex-group-title span { font-weight: 400; color: var(--faint); }
 .regex-empty { margin: 0 8px; font-size: 12px; color: var(--faint); }
-.regex-form { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 28px 8px; }
+.regex-tools-gap { flex: 1; }
+.regex-form { padding: 6px 10px 12px; }
+/* Not the lorebook entry's text box (.prow-more textarea): these fill the form as its inputs do. */
+.prow-more .regex-form textarea { width: 100%; margin: 0; min-height: 0; }
 .dialog .mono, .regex-form .mono { font-family: var(--mono); font-size: 13px; }
 .regex-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; margin: 0 0 12px; }
 .regex-label { font-size: 12px; color: var(--muted); min-width: 3.5em; }
@@ -1948,12 +2008,32 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .regex-out span { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
 .regex-out pre { margin: 0; padding: 10px 12px; max-height: 12rem; overflow: auto; background: var(--surface); border: 1px solid var(--line-soft); border-radius: 10px; font: 12.5px/1.6 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .hint.bad { color: var(--bad); }
-.regex-actions { padding: 12px 28px 18px; border-top: 1px solid var(--line-soft); }
-/* On a phone the whole pane scrolls: the buttons stay at its foot. */
-#regex-main .regex-actions { position: sticky; bottom: 0; background: var(--raised); }
+.regex-actions { flex-wrap: wrap; padding-top: 10px; border-top: 1px solid var(--line-soft); }
 @media (max-width: 560px) {
-  .regex-form { padding: 14px 16px 8px; }
-  .regex-actions { padding: 12px 16px 16px; }
+  .regex-form { padding: 4px 4px 12px; }
+  .regex-actions { justify-content: flex-start; }
+  .regex-actions .btn.primary { margin-left: auto; }
+}
+/* Phones: switch and name on the first line; where it acts and its effect below. */
+@media (max-width: 780px) {
+  .regex-scripts .prow-line > .prow-size { order: 1; }
+  .regex-scripts .prow-line > .strategy { order: 2; }
+  .regex-scripts .prow-line > .prow-edit { order: 3; margin-left: auto; }
+}
+
+/* 你的角色 / 文风 (web/personas.js): the 世界书 window's layout (.dialog.books); one item's fields as a page,
+   then the cards that pick it. 设置 → 写作 → 这张卡用的角色和文风 (#card-picks): a choice from each list. */
+.persona-form { display: grid; gap: 12px; padding: 16px 28px 4px; }
+.persona-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px 14px; }
+.persona-form .prompt-field { margin: 0; }
+.persona-form .prompt-field .prompt-note { margin: 0; }
+.persona-form textarea { width: 100%; min-height: 12em; resize: vertical; }
+.card-picks-open { gap: 8px; margin-top: 4px; }
+@media (max-width: 780px) {
+  .persona-form { padding: 12px 18px 4px; }
+}
+@media (max-width: 560px) {
+  .persona-row { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* 世界书条目 (web/books.js): the preset window's rows, with an entry's keys and its 常驻/关键词 tag (forge's .strategy). */

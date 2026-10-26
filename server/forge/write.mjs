@@ -233,7 +233,7 @@ export function applyIssues(card, issues) {
     if (!holder) continue
     const key = greeting ? 'text' : 'content'
     if (issue.original && holder[key].includes(issue.original)) {
-      holder[key] = holder[key].replace(issue.original, issue.suggestion)
+      holder[key] = holder[key].replace(issue.original, () => issue.suggestion)
       continue
     }
     const name = greeting ? issue.target : holder.name
@@ -409,6 +409,22 @@ export function newCard(plan) {
     avatar: null,
     savedCardId: null,
   }
+}
+
+/**
+ * A card kept from an earlier plan, in line with the plan as it is now (接着写
+ * after the plan was revised): the plan's entries and openings, each keeping
+ * what was written for it (an entry by name, an opening by place), the ones the
+ * plan no longer has gone, the state entries made again. With anything added or
+ * gone, the check runs again.
+ */
+export function alignCard(card, plan) {
+  const written = new Map(card.entries.filter(e => e.type !== '状态').map(e => [e.name, e.content]))
+  const entries = plan.entries.map(entry => ({ ...entry, content: entry.type === '状态' ? stateContent(entry, plan) : written.get(entry.name) ?? '' }))
+  const greetings = plan.greetings.map((g, i) => ({ title: g.title, text: card.greetings[i]?.text ?? '' }))
+  const kept = list => list.filter(e => e.type !== '状态').map(e => e.name).sort().join('\n')
+  const same = kept(entries) === kept(card.entries) && greetings.length === card.greetings.length
+  return { ...card, entries, greetings, ...(same ? {} : { reviewed: false, fixed: false, pending: {}, checks: [] }) }
 }
 
 /**

@@ -144,7 +144,8 @@ function snapshot(dir) {
  * 'rate' (the API's hourly limit used up) or 'refuse' (a 403 without one);
  * the release's latest.json is there unless noFile. broken: every connection
  * dropped (a network that cannot reach GitHub); slowMs: the API answers that
- * late; downloadStatus: the asset host answers that instead of the file.
+ * late; holdMs: the asset host waits that long first; downloadStatus: it
+ * answers that instead of the file.
  */
 async function fakeGitHub(t, release) {
   const hits = { latest: 0, download: 0, file: 0 }
@@ -193,6 +194,7 @@ async function fakeGitHub(t, release) {
     }
     if (req.url.startsWith('/assets/')) {
       hits.download++
+      if (current.holdMs) await wait(current.holdMs)
       if (current.downloadStatus) {
         res.writeHead(current.downloadStatus)
         return res.end()
@@ -833,6 +835,28 @@ test('update: no restart while a turn is being written', async t => {
   assert.equal(switches.length, 1)
 })
 
+test('update: no switch to another version while an update downloads or unpacks, and the idle exit waits for it', async t => {
+  const zip = await packageZip(t, '1.1.0')
+  const github = await fakeGitHub(t, { version: '1.1.0', zip, holdMs: 1500 })
+  const base = await scratch(t)
+  const root = await makeInstall(path.join(base, packageFolder('1.0.0')), '1.0.0')
+  const previous = await makeInstall(path.join(base, packageFolder('0.9.0')), '0.9.0')
+  await mkdir(path.join(root, 'update'), { recursive: true })
+  await writeFile(path.join(root, 'update', 'previous.json'), JSON.stringify({ path: previous, version: '0.9.0' }))
+  const switches = []
+  const updater = createUpdater({ features: featuresOf('release'), root, feed: github.feed, platform: 'win32', check: async () => {}, onShutdown: () => {}, spawnSwitch: async args => { switches.push(args) } })
+  await updater.check({ force: true })
+  await updater.download()
+  assert.equal((await updater.status()).job.step, 'downloading')
+  assert.equal(updater.working(), true)
+  await assert.rejects(updater.rollback(), /正在下载或安装更新/)
+  assert.equal(switches.length, 0)
+  for (let i = 0; i < 100 && (await updater.status()).job.step !== 'ready'; i++) await wait(50)
+  assert.equal(updater.working(), false)
+  await updater.rollback()
+  assert.equal(switches.length, 1)
+})
+
 // ─── The switch-over (bin/update-apply.mjs) ─────────────────────────────
 
 /** A package that really starts: bin/start.mjs answers /api/health with its version (or exits at once). */
@@ -878,16 +902,23 @@ function killPidFile(dir) {
  * Start A's server, run the switch to B the way the app does, stop A as
  * onShutdown would. A has the real CicaTavern.exe, which moves the shortcut.
  */
-async function runSwitch(t, { broken = false, mode = 'update' } = {}) {
+async function runSwitch(t, { broken = false, mode = 'update', older = false } = {}) {
   const base = realpathSync.native(await mkdtemp(path.join(tmpdir(), 'tavern-switch-')))
   const a = await runnableInstall(path.join(base, packageFolder('1.0.0')), '1.0.0')
   const b = await runnableInstall(path.join(base, packageFolder('1.1.0')), '1.1.0', { broken })
+  // The folder A replaced earlier (A's previous.json), to be pointed at the new one too.
+  const o = path.join(base, packageFolder('0.9.0'))
+  if (older) {
+    await mkdir(path.join(o, 'update'), { recursive: true })
+    await mkdir(path.join(a, 'update'), { recursive: true })
+    await writeFile(path.join(a, 'update', 'previous.json'), JSON.stringify({ path: o, version: '0.9.0' }))
+  }
   const data = path.join(base, 'data')
   const links = path.join(base, 'links')
   await mkdir(links)
   await cp(await launcherExe(), path.join(a, 'CicaTavern.exe'))
   await createShortcut(path.join(a, 'CicaTavern.exe'), { folder: links })
-  await mkdir(path.join(a, 'update'))
+  await mkdir(path.join(a, 'update'), { recursive: true })
   await writeFile(path.join(a, 'update', 'state.json'), JSON.stringify({ autoCheck: false, checkedAt: 123, latest: { version: '1.1.0' }, staged: { version: '1.1.0', path: b } }))
   if (mode === 'rollback') {
     // B (the target) was replaced by A earlier.
@@ -917,12 +948,13 @@ async function runSwitch(t, { broken = false, mode = 'update' } = {}) {
   let timer
   const code = await Promise.race([exited, new Promise(resolve => { timer = setTimeout(() => resolve('timeout'), 40_000) })])
   clearTimeout(timer)
-  return { a, b, port, links, code }
+  return { a, b, o, port, links, code }
 }
 
 test('switch-over: the new version starts, then the shortcuts and the old folder point at it', { skip: !canBuild }, async t => {
-  const { a, b, port, links, code } = await runSwitch(t)
+  const { a, b, o, port, links, code } = await runSwitch(t, { older: true })
   assert.equal(code, 0)
+  assert.equal(JSON.parse(readFileSync(path.join(o, 'update', 'superseded.json'), 'utf8')).path, b, 'the folder before the old one points at the new one as well')
   const health = await (await fetch(`http://127.0.0.1:${port}/api/health`)).json()
   assert.equal(health.version, '1.1.0')
   assert.deepEqual(JSON.parse(readFileSync(path.join(b, 'server.args'), 'utf8')).slice(0, 6), ['--port', String(port), '--edition', 'release', '--idle-exit', '60'])
@@ -966,7 +998,7 @@ test('switch-over back to an older folder: it stops forwarding, and its daily ch
 test('launch.mjs in a replaced folder hands over to the newer one, arguments and all', async t => {
   const base = await scratch(t)
   const a = path.join(base, 'old')
-  for (const rel of ['bin/launch.mjs', 'server/app-window.mjs', 'server/edition.mjs', 'server/store.mjs', 'server/proxy.mjs', 'web/shared/basic.js', 'web/shared/appearance.js', 'server/update/install.mjs', 'server/update/zip.mjs']) {
+  for (const rel of ['bin/launch.mjs', 'server/app-window.mjs', 'server/edition.mjs', 'server/store.mjs', 'server/proxy.mjs', 'web/shared/basic.js', 'web/shared/appearance.js', 'web/shared/personas.js', 'server/update/install.mjs', 'server/update/zip.mjs']) {
     await cp(path.join(REPO_ROOT, rel), path.join(a, rel))
   }
   const b = await makeInstall(path.join(base, 'new'), '1.1.0', {
@@ -977,6 +1009,21 @@ test('launch.mjs in a replaced folder hands over to the newer one, arguments and
   await writeFile(path.join(a, 'update', 'superseded.json'), JSON.stringify({ path: b, version: '1.1.0' }))
   execFileSync(process.execPath, [path.join(a, 'bin', 'launch.mjs'), '--port', '9', '--data', 'D:\\x y', '--no-window'])
   assert.deepEqual(JSON.parse(readFileSync(path.join(b, 'forwarded.json'), 'utf8')), ['--port', '9', '--data', 'D:\\x y', '--no-window', '--no-forward'])
+
+  // Two updates later (A → B → C, each mark naming the next): A opens C, not B in between.
+  await rm(path.join(b, 'forwarded.json'))
+  const c = await makeInstall(path.join(base, 'newest'), '1.2.0', {
+    'bin/launch.mjs': "import { writeFileSync } from 'node:fs'\nwriteFileSync(new URL('../forwarded.json', import.meta.url), JSON.stringify(process.argv.slice(2)))\n",
+  })
+  realNode(c)
+  await mkdir(path.join(b, 'update'), { recursive: true })
+  await writeFile(path.join(b, 'update', 'superseded.json'), JSON.stringify({ path: c, version: '1.2.0' }))
+  // A loop back to A ends the walk at the last folder there.
+  await mkdir(path.join(c, 'update'), { recursive: true })
+  await writeFile(path.join(c, 'update', 'superseded.json'), JSON.stringify({ path: a, version: '1.0.0' }))
+  execFileSync(process.execPath, [path.join(a, 'bin', 'launch.mjs'), '--port', '9', '--no-window'])
+  assert.deepEqual(JSON.parse(readFileSync(path.join(c, 'forwarded.json'), 'utf8')), ['--port', '9', '--no-window', '--no-forward'])
+  assert.equal(existsSync(path.join(b, 'forwarded.json')), false)
 })
 
 const FAKE_LAUNCH = "import { writeFileSync } from 'node:fs'\nwriteFileSync(new URL('../args.json', import.meta.url), JSON.stringify({ args: process.argv.slice(2), node: process.execPath }))\nif (process.argv.includes('--fail')) { console.error('CicaTavern没能启动。日志：x'); process.exit(3) }\n"
@@ -1014,4 +1061,16 @@ test('CicaTavern.exe in a source checkout uses the node.exe on PATH', { skip: !c
   const ran = JSON.parse(readFileSync(path.join(dir, 'args.json'), 'utf8'))
   assert.deepEqual(ran.args, ['--no-window'])
   assert.equal(path.basename(ran.node).toLowerCase(), 'node.exe')
+})
+
+test('update: 检查更新 pressed while the daily check is still running says that check failed, not that this is the latest', async t => {
+  const github = await fakeGitHub(t, { version: '1.1.0', limited: 'refuse', noFile: true, slowMs: 400 })
+  const { call } = await tavern(t, { feed: github.feed })
+  const daily = call('/api/update?auto=1')
+  await wait(100)
+  const pressed = await call('/api/update/check', { method: 'POST', body: {} })
+  assert.equal(pressed.status, 502)
+  assert.ok(pressed.body.error)
+  assert.ok((await daily).body.checkError, 'the daily one keeps its error for the page')
+  assert.equal(github.hits.latest, 1, 'one check, joined')
 })

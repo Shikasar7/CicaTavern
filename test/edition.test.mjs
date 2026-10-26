@@ -114,6 +114,16 @@ test('proxy: system mode prefers Windows settings over stale environment variabl
   const fixed = createProxy({ override: 'none', defaultMode: 'http://127.0.0.1:7897' })
   assert.deepEqual(await fixed.apply('http://10.0.0.2:8080'), { mode: 'none', effective: null, source: null, locked: true })
   assert.equal(createProxy({ defaultMode: 'http://127.0.0.1:7897' }).current(), 'http://127.0.0.1:7897', 'usable before the first apply')
+
+  // Switched off while the system lookup still runs: the lookup that comes back late is not used.
+  let answer
+  const slow = createProxy({ defaultMode: 'none', env: {}, readSystem: () => new Promise(resolve => { answer = resolve }) })
+  const pending = slow.apply('system')
+  assert.deepEqual(await slow.apply('none'), { mode: 'none', effective: null, source: null, locked: false })
+  answer('http://127.0.0.1:7890')
+  await pending
+  assert.equal(slow.describe().effective, null)
+  slow.stop()
 })
 
 test('proxy: changing the setting applies at once', async t => {

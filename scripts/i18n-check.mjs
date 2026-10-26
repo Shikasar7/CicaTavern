@@ -237,6 +237,15 @@ export async function checkTree(root = ROOT) {
       problems.push({ file: 'web/index.html', line: piece.line, text: piece.text, problem: 'no English in web/i18n/en.js' })
     }
   }
+  // Words the stylesheet shows (content: "…"): a Chinese one needs a :lang(en) rule for the same selector.
+  const css = readFileSync(path.join(root, 'web', 'style.css'), 'utf8')
+  const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(m => ({ selector: m[1].replace(/\/\*[\s\S]*?\*\//g, '').trim(), body: m[2], at: m.index }))
+  const selectors = new Set(rules.map(rule => rule.selector))
+  for (const rule of rules) {
+    const shown = /content:\s*"([^"]*)"/.exec(rule.body)?.[1]
+    if (!shown || !hasCjk(shown) || selectors.has(`:lang(en) ${rule.selector}`)) continue
+    problems.push({ file: 'web/style.css', line: css.slice(0, rule.at).split('\n').length, text: shown, problem: 'Chinese in a CSS content with no :lang(en) rule for it' })
+  }
   for (const file of serverScripts(root)) {
     const src = readFileSync(file, 'utf8')
     const own = inlineDictionary(src)

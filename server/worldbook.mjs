@@ -296,6 +296,8 @@ function keyMatcher(key, entry) {
     }
   }
   const needle = entry.caseSensitive ? key : key.toLowerCase()
+  // An empty key would be in every text.
+  if (!needle.trim()) return () => false
   const asciiWord = /^[\w\s]+$/.test(needle)
   if (entry.wholeWords && asciiWord) {
     const re = new RegExp(`\\b${needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, entry.caseSensitive ? '' : 'i')

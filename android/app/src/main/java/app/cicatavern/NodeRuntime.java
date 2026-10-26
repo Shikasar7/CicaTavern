@@ -206,6 +206,11 @@ final class NodeRuntime {
         if (stampFile.exists() && stamp.equals(readFile(stampFile))) return;
         deleteTree(target);
         copyAssets(assets, ASSETS, target);
+        // Written last (copyAssets leaves it out): a copy cut off by a full disk or the app swiped away has no
+        // stamp, so the next start copies it all again instead of running a half-copied web/.
+        try (OutputStream out = new FileOutputStream(stampFile)) {
+            out.write(stamp.getBytes(StandardCharsets.UTF_8));
+        }
     }
 
     private static void copyAssets(AssetManager assets, String path, File target) throws IOException {
@@ -221,7 +226,10 @@ final class NodeRuntime {
             return;
         }
         if (!target.isDirectory() && !target.mkdirs()) throw new IOException("无法创建 " + target);
-        for (String child : children) copyAssets(assets, path + "/" + child, new File(target, child));
+        for (String child : children) {
+            if (path.equals(ASSETS) && child.equals("stamp.txt")) continue;
+            copyAssets(assets, path + "/" + child, new File(target, child));
+        }
     }
 
     private static String readAsset(AssetManager assets, String path) throws IOException {

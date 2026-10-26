@@ -11,7 +11,7 @@
 // under the every-turn rules; only the paragraphs that change per turn
 // ({{lastUserMessage}}, dice, time) go into the turn's message. "turn" mode
 // sends all of them each turn, closest to SillyTavern but growing the history.
-import { normalizeScripts } from '../web/shared/regex.js'
+import { normalizeScripts, withUniqueIds } from '../web/shared/regex.js'
 import { httpError, newId } from './store.mjs'
 import { replaceMacros } from './prompt.mjs'
 import { msg } from './i18n.mjs'
@@ -42,8 +42,42 @@ export function importOwnPreset(json) {
   const valid = preset && typeof preset.name === 'string' && Array.isArray(preset.prompts) &&
     preset.prompts.every(p => p && typeof p.id === 'string' && typeof p.content === 'string')
   if (!valid) throw httpError(400, msg`预设文件不完整`)
-  return { ...preset, id: newId(), importedAt: new Date().toISOString() }
+  // The fields the app reads, in the shapes it reads them (a file missing one used to break every preset
+  // list and each turn); a well-formed export comes out the same. Only the built-in preset is built in:
+  // its options live in the settings.
+  const { builtin, options, ...rest } = preset
+  const num = value => (Number.isFinite(Number(value)) && value !== null && value !== '' ? Number(value) : null)
+  const params = isRecord(preset.params) ? preset.params : {}
+  const formats = isRecord(preset.formats) ? preset.formats : {}
+  return {
+    ...rest,
+    name: preset.name.trim() || '预设',
+    prompts: preset.prompts.map(p => ({
+      ...p,
+      name: str(p.name).trim() || p.id,
+      role: ROLES.has(p.role) ? p.role : 'system',
+      marker: p.marker === true,
+      absolute: p.absolute === true,
+      depth: Number.isFinite(Number(p.depth)) ? Number(p.depth) : 4,
+      enabled: p.enabled !== false,
+    })),
+    formats: {
+      wi: str(formats.wi) || '{0}',
+      scenario: str(formats.scenario) || '{{scenario}}',
+      personality: str(formats.personality) || '{{personality}}',
+      exampleChat: str(formats.exampleChat) || '[Example Chat]',
+    },
+    regexScripts: withUniqueIds(normalizeScripts(preset.regexScripts)),
+    helperScripts: Number.isInteger(preset.helperScripts) && preset.helperScripts > 0 ? preset.helperScripts : 0,
+    params: { temperature: num(params.temperature), topP: num(params.topP), maxTokens: num(params.maxTokens), maxContext: num(params.maxContext) },
+    postMode: POST_MODES.includes(preset.postMode) ? preset.postMode : 'prefix',
+    ...(preset.quick !== undefined ? { quick: Array.isArray(preset.quick) ? preset.quick.filter(id => typeof id === 'string') : [] } : {}),
+    id: newId(),
+    importedAt: new Date().toISOString(),
+  }
 }
+
+const isRecord = value => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 
 function countHelperScripts(value) {
   if (Array.isArray(value)) return value.length
@@ -74,6 +108,8 @@ export function normalizePreset(json, fallbackName = '预设') {
       absolute: Number(raw.injection_position) === 1,
       depth: Number.isFinite(Number(raw.injection_depth)) ? Number(raw.injection_depth) : 4,
       enabled: item.enabled !== false,
+      // ST's 阻止覆盖 (Block overrides): the card's own system prompt / post-history instructions don't replace it.
+      ...(raw.forbid_overrides === true ? { forbidOverrides: true } : {}),
     })
   }
   const num = value => (Number.isFinite(Number(value)) ? Number(value) : null)
@@ -87,7 +123,7 @@ export function normalizePreset(json, fallbackName = '预设') {
       personality: str(json.personality_format) || '{{personality}}',
       exampleChat: str(json.new_example_chat_prompt) || '[Example Chat]',
     },
-    regexScripts: normalizeScripts(json.extensions?.regex_scripts),
+    regexScripts: withUniqueIds(normalizeScripts(json.extensions?.regex_scripts)),
     helperScripts: countHelperScripts(json.extensions?.tavern_helper),
     // Sampling knobs: only maxTokens is used (for provider models, see engine replyCap).
     params: { temperature: num(json.temperature), topP: num(json.top_p), maxTokens: num(json.openai_max_tokens), maxContext: num(json.openai_max_context) },
@@ -228,7 +264,7 @@ export function presetSummary(preset) {
     name: preset.name,
     prompts: preset.prompts.filter(p => !p.marker).length,
     enabled: enabled.length,
-    regexScripts: preset.regexScripts.length,
+    regexScripts: Array.isArray(preset.regexScripts) ? preset.regexScripts.length : 0,
     importedAt: preset.importedAt,
   }
 }
@@ -241,7 +277,7 @@ export function presetDetail(preset) {
     postMode: POST_MODES.includes(preset.postMode) ? preset.postMode : 'prefix',
     helperScripts: preset.helperScripts ?? 0,
     params: preset.params ?? {},
-    regexScriptList: preset.regexScripts,
+    regexScriptList: withUniqueIds(normalizeScripts(preset.regexScripts)),
     quick: preset.quick ?? [],
     prompts: preset.prompts.map((p, i) => ({ ...p, section: sections[i], placement: placements[i] })),
   }
@@ -492,7 +528,7 @@ export function renderPresetPrefix(preset, { card, persona, names, worldBefore =
     if (sections[i] !== 'pre') return
     // The card's own main prompt / post-history instructions replace the preset's, as in SillyTavern.
     let content = unwrapped.get(p.id) ?? p.content
-    if (p.id === 'main' && card.systemPrompt.trim()) {
+    if (p.id === 'main' && card.systemPrompt.trim() && !p.forbidOverrides) {
       ctx.original = m(content)
       content = card.systemPrompt
     }
@@ -520,7 +556,7 @@ function renderPost(preset, ctx, side) {
   preset.prompts.forEach((p, i) => {
     if (!p.enabled || sections[i] !== 'post') return
     let content = unwrapped.get(p.id) ?? p.content
-    if (p.id === 'jailbreak' && ctx.card.postHistoryInstructions.trim()) {
+    if (p.id === 'jailbreak' && ctx.card.postHistoryInstructions.trim() && !p.forbidOverrides) {
       ctx.original = expandMacros(render(content), ctx).trim()
       content = ctx.card.postHistoryInstructions
     }

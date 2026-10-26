@@ -410,7 +410,8 @@ export function initUpdate({ api, el, toast, guard, android = null, onChange = (
         parts.push(
           el('div', { class: 'upd-previous' }, [
             el('div', {}, [el('div', { text: t`上一版 ${info.previous.version}` }), el('div', { class: 'muted small upd-path', text: info.previous.path })]),
-            el('button', { type: 'button', class: 'btn small', text: t`回到上一版`, disabled: info.job?.step === 'restarting', onclick: () => restart('rollback') }),
+            // Not while an update downloads or unpacks: the restart would leave its files half-made (the server refuses too).
+            el('button', { type: 'button', class: 'btn small', text: t`回到上一版`, disabled: ['downloading', 'verifying', 'unpacking', 'restarting'].includes(info.job?.step), onclick: () => restart('rollback') }),
           ]),
         )
       }

@@ -193,6 +193,9 @@ test('card main prompt overrides the preset main, with {{original}}', () => {
   const card = { ...CARD, systemPrompt: '卡作者：{{original}}再加一句' }
   const { text } = renderPresetPrefix(preset, { card, persona: PERSONA, names: NAMES })
   assert.match(text, /^卡作者：你是小雨的叙述者。再加一句/)
+  // 阻止覆盖 on the preset's main prompt: it stays, the card's goes unused.
+  const blocked = normalizePreset({ ...PRESET, prompts: PRESET.prompts.map(p => (p.identifier === 'main' ? { ...p, forbid_overrides: true } : p)) })
+  assert.match(renderPresetPrefix(blocked, { card, persona: PERSONA, names: NAMES }).text, /^你是小雨的叙述者。/)
 })
 
 test('expandMacros: nesting, vars, trim, unknown macros survive', () => {

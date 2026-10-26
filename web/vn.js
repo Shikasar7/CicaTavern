@@ -17,6 +17,7 @@ import { initVnHud } from '/vn-hud.js'
 import { changeNotes } from '/shared/hud.js'
 import { shrink } from '/theme.js'
 import { BASIC_ID } from '/shared/basic.js'
+import { historyStrip, keptItems } from '/draw-choice.js'
 
 const MODE_KEY = 'cicatavern.vnMode'
 const PREFS_KEY = 'cicatavern.vnPrefs'
@@ -573,6 +574,8 @@ export function initVn(deps) {
     const current = before[state.index]
     const furthest = before[state.seen]
     state.key = key
+    // Another chat's pictures don't stay open over this one.
+    if (state.chatId !== chat.id) closeCg()
     state.chatId = chat.id
     state.node = writing ? null : node
     state.steps = steps
@@ -728,6 +731,8 @@ export function initVn(deps) {
     lineBox.innerHTML = renderStory(step.text)
     markSpeech(lineBox)
     spoken.textContent = `${step.speaker ? t`${shownName(step.speaker)}：` : ''}${step.plain}`
+    // Not the last line's 'shown' any more: a line with nothing to read is done at once, and must not take it for its own.
+    state.phase = 'showing'
     readStep()
     const cps = SPEEDS[prefs.speed]
     if (!animate || !cps || reducedMotion() || state.follow) return lineShown()
@@ -766,10 +771,12 @@ export function initVn(deps) {
     if (state.readId === id) return
     state.readId = id
     state.reading = true
+    // Called once the line has been read, or the voice gave up on it (failed, refused, stopped).
     deps.readBeat(state.node?.id ?? 'vn-live', step.text, () => {
-      if (state.readId !== id) return
+      if (state.readId !== id || !state.reading || !state.on) return
       state.reading = false
-      // 自动 waits for the voice, then moves on.
+      // 自动 waits for the voice, then moves on (one timer: a line read at once must not leave one behind).
+      clearTimeout(state.autoTimer)
       if (state.auto && state.phase === 'shown') state.autoTimer = setTimeout(() => state.auto && advance(), 450)
     }, step.speaker)
   }
@@ -996,7 +1003,8 @@ export function initVn(deps) {
     const images = state.node?.media?.images ?? []
     const last = images.at(-1)
     cgButton.hidden = !last
-    if (!last) return closeCg()
+    // Only the corner picture goes: a CG or the 回廊 open from an earlier turn stays until it is closed.
+    if (!last) return void delete cgButton.dataset.src
     const src = `/api/media/${chat.id}/${last.file}`
     if (cgButton.dataset.src === src) return
     cgButton.dataset.src = src
@@ -1626,7 +1634,9 @@ export function initVn(deps) {
       })
       return b
     }))
-    const body = libraryTab === 'sprites' ? await spriteTab(chat, cardId) : await sceneTab(chat, cardId)
+    // 抽图历史 (server/draw-history.mjs): each place's old pictures, under it (a server without them: none).
+    const kept = (await api(`/api/cards/${cardId}/history`).catch(() => null))?.slots ?? {}
+    const body = libraryTab === 'sprites' ? await spriteTab(chat, cardId, kept) : await sceneTab(chat, cardId, kept)
     if (!library) return
     library.replaceChildren(
       el('div', { class: 'vn-library-top' }, [el('h2', { text: libraryTab === 'sprites' ? t`立绘` : t`场景` }), tabs]),
@@ -1635,7 +1645,27 @@ export function initVn(deps) {
     )
   }
 
-  async function sceneTab(chat, cardId) {
+  /** A place's old pictures: one taken back takes its place (`taken` gets the server's view), × deletes one. */
+  function oldRow(cardId, items, title, taken) {
+    return el('div', { class: 'vn-old' }, [historyStrip(el, items, {
+      title,
+      onPick: guard(async item => taken(await api(`/api/cards/${cardId}/history/${item.file}/use`, { method: 'POST' }))),
+      onRemove: guard(async item => {
+        await api(`/api/cards/${cardId}/history/${item.file}`, { method: 'DELETE' })
+        renderLibrary()
+      }),
+    })])
+  }
+
+  /** A 立绘 or expression taken back: the lists, the stage and the library follow. */
+  function spriteTaken(cardId, view) {
+    takeSprites(cardId, view)
+    cast.none.clear()
+    if (getChat()?.cardId === cardId && state.on) drawStage()
+    renderLibrary()
+  }
+
+  async function sceneTab(chat, cardId, kept = {}) {
     const list = await scenesOf(cardId)
     const place = scenes.current?.cardId === cardId ? scenes.current.place : ''
     const shown = scenes.current?.cardId === cardId ? scenes.current.scene : null
@@ -1691,12 +1721,17 @@ export function initVn(deps) {
         thumb,
         el('figcaption', {}, [el('b', { text: scene.name }), scene.aliases.length ? el('span', { class: 'muted small', text: scene.aliases.join(t`、`) }) : null]),
         el('div', { class: 'row' }, tools),
+        oldRow(cardId, keptItems(cardId, kept[`scene:${scene.id}`]), t`旧图`, view => {
+          scenes.lists.set(cardId, view.scenes)
+          if (getChat()?.cardId === cardId && state.on) drawScene(getChat(), null)
+          renderLibrary()
+        }),
       ])
     }) : [el('p', { class: 'muted small', text: t`还没有场景。到了新地点会画一张，也可以在上面上传。` })])
     return [head, grid]
   }
 
-  async function spriteTab(chat, cardId) {
+  async function spriteTab(chat, cardId, kept = {}) {
     const roster = state.roster.get(cardId) ?? []
     const list = await spritesOf(cardId)
     const toggleRow = (text, hint, on, onChange) => {
@@ -1766,14 +1801,15 @@ export function initVn(deps) {
         thumb,
         el('figcaption', {}, [el('b', { text: member.player ? t`${entry.name}（玩家）` : entry.name }), kindLabel]),
         el('div', { class: 'row' }, tools),
-        member.player ? null : pack?.cardId === cardId && pack.memberId === member.id ? packView(cardId, entry, member) : faceRow(cardId, entry, member, Boolean(drawn || member.ref)),
+        oldRow(cardId, keptItems(cardId, kept[`sprite:${member.id}`]), t`旧立绘`, view => spriteTaken(cardId, view)),
+        member.player ? null : pack?.cardId === cardId && pack.memberId === member.id ? packView(cardId, entry, member) : faceRow(cardId, entry, member, Boolean(drawn || member.ref), kept),
       ])
     }))
     return [head, grid]
   }
 
   /** Someone's expressions: each drawn from their 立绘 (or uploaded), and 画一套 for the ones missing. */
-  function faceRow(cardId, entry, member, canDraw) {
+  function faceRow(cardId, entry, member, canDraw, kept = {}) {
     const faces = cast.faces.get(cardId)?.[member.id] ?? {}
     const names = EXPRESSIONS.filter(name => name !== 'neutral')
     const queued = name => art.jobs.get(cardId)?.key === `face:${member.id}:${name}` || (art.queue.get(cardId) ?? []).some(job => job.key === `face:${member.id}:${name}`)
@@ -1809,6 +1845,8 @@ export function initVn(deps) {
         ]),
       ]),
       el('div', { class: 'vn-face-grid' }, cells),
+      // Each expression's old pictures, named, in one row.
+      oldRow(cardId, names.flatMap(name => keptItems(cardId, kept[`face:${member.id}:${name}`], FACE_LABEL[name])), t`旧表情`, view => spriteTaken(cardId, view)),
     ])
   }
 

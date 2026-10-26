@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createServer } from 'node:http'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import zlib from 'node:zlib'
@@ -127,6 +127,10 @@ test('the local check finds stock phrasing but leaves the user\'s own words alon
   const left = applyIssues(card, [{ target: '世界设定', original: '仿佛', suggestion: '' }, { target: '开场白1', original: '没有这句', suggestion: 'x' }])
   assert.equal(card.entries[0].content, '雨夜很长')
   assert.deepEqual([...left.keys()], ['开场白1'])
+  // A suggestion goes in as written: $' and $$ are just characters.
+  const literal = { entries: [{ name: '甲', content: '她笑了——然后走开。' }], greetings: [] }
+  applyIssues(literal, [{ target: '甲', original: '——', suggestion: "$'$$" }])
+  assert.equal(literal.entries[0].content, "她笑了$'$$然后走开。")
   assert.deepEqual(Object.fromEntries(readTagged('<entry name="A 「甲」">一\n</entry><entry name="B">二', 'entry')), { A甲: '一', B: '二' })
 })
 
@@ -307,6 +311,28 @@ test('writing a card: steps in order, a failed step carries on, check and fix, t
   await forge.remove('draftone')
   await assert.rejects(forge.get('draftone'), /不存在/)
   assert.ok(root)
+})
+
+test('carrying on after the plan was revised: the card follows the plan, what was written stays', async t => {
+  const { forge, root, fake } = await setup(t)
+  // Started from a plan with one opening and no 王店长, then the plan got both.
+  const older = normalizePlan({ ...PLAN, characters: PLAN.characters.slice(0, 1), greetings: PLAN.greetings.slice(0, 1) })
+  const card = newCard(older)
+  for (const entry of card.entries) if (!entry.content) entry.content = `旧的${entry.name}`
+  card.greetings[0].text = '旧的开场'
+  Object.assign(card, { reviewed: true, fixed: true })
+  const file = path.join(root, 'forge', 'draftone.json')
+  await writeFile(file, JSON.stringify({ ...JSON.parse(await readFile(file, 'utf8')), card }))
+
+  await forge.write('draftone')
+  const draft = await settled(forge, 'draftone')
+  assert.equal(draft.error, null)
+  assert.equal(draft.stage, 'polish')
+  assert.deepEqual(draft.card.greetings.map(g => g.text.slice(0, 4)), ['旧的开场', '凌晨两点'])
+  assert.equal(draft.card.entries.find(e => e.name === '王店长').content, '王店长的内容')
+  assert.ok(draft.card.entries.some(e => e.content.startsWith('旧的')), 'what was written stays')
+  // Something was added, so the check ran again.
+  assert.ok(fake.seen.some(s => s.system.includes('审稿人')))
 })
 
 test('no image backend: the avatar is upload-only', async t => {

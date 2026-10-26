@@ -2,7 +2,7 @@
 // machine's own addresses (Wi-Fi, Tailscale) but still rejects any other Host,
 // which is what stops a DNS-rebinding page from driving the API. A non-loopback
 // client must present the access token, in the cookie set by the login page.
-import { timingSafeEqual } from 'node:crypto'
+import { createHash, timingSafeEqual } from 'node:crypto'
 import { hostname, networkInterfaces } from 'node:os'
 import { currentLanguage, msg } from './i18n.mjs'
 
@@ -97,8 +97,21 @@ export function tokensEqual(a, b) {
   return timingSafeEqual(left, right)
 }
 
+/**
+ * The access cookie's name, one per server (by its token): a browser keeps cookies by host, not port, so two
+ * servers on one machine (personal and release) would otherwise sign each other's phones out.
+ */
+export function cookieName(token) {
+  return `tavern_key_${createHash('sha256').update(String(token)).digest('hex').slice(0, 8)}`
+}
+
 export function accessCookie(token) {
-  return `tavern_key=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000`
+  return `${cookieName(token)}=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000`
+}
+
+/** Whether a request's cookies hold this server's token: under its own name, or the plain one set before (and by the phone app). */
+export function signedIn(header, token) {
+  return tokensEqual(readCookie(header, cookieName(token)), token) || tokensEqual(readCookie(header, 'tavern_key'), token)
 }
 
 /** Gate page for a phone that does not have the cookie yet. No external requests. */

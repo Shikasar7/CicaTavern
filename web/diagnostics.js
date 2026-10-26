@@ -46,15 +46,20 @@ export function openDiagnostics({ api, el, toast, saveFile, getChat }) {
     return node
   }
 
+  // Only the latest report is shown: ticking 附带… on and off again quickly must not leave the story in it.
+  let loads = 0
   async function load() {
+    const mine = ++loads
     for (const node of buttons) node.disabled = true
     try {
       const report = await api('/api/diagnostics/report', { method: 'POST', body: { page: pageInfo(), chatId: chat?.id ?? '', lastTurn: withTurn.checked } })
+      if (mine !== loads) return
       text = report.text
       area.value = text
       count.textContent = report.count ? t`记录了 ${report.count} 条错误` : t`还没有记录到错误`
       for (const node of buttons) node.disabled = false
     } catch (error) {
+      if (mine !== loads) return
       text = ''
       // A server started before the log existed has no such route.
       area.value = error.status === 404 ? t`要重启后台服务后才能用：关掉所有窗口等一分钟，再从桌面图标打开。` : error.message

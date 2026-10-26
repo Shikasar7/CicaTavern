@@ -129,3 +129,42 @@ export function initDrawChoice({ api, el, guard, openSettings }) {
 
   return { pick }
 }
+
+// ─── 抽图历史 (server/draw-history.mjs) ──────────────────────────────────
+// What a place had before it was drawn or uploaded again: a row of small
+// pictures under it, newest first. A click takes one back (the one there now
+// joins the row), × deletes one. 设置 → 配图 says how many each place keeps.
+
+const SOURCE_TEXT = { drawn: t`画的`, upload: t`上传的`, avatar: t`当过头像` }
+
+/** A card's kept pictures of one place (GET /api/cards/:id/history → slots[slot]) as historyStrip items. */
+export const keptItems = (cardId, entries, label = '') => (entries ?? []).map(entry => ({ ...entry, label, src: `/api/cards/${cardId}/history/${entry.file}` }))
+
+/**
+ * The row, or null when there is nothing kept.
+ * @param items - [{ src, file, at, backend, source, prompt, label }], newest first.
+ * @param options - { onPick(item), onRemove(item) } (each guarded by the caller), `title`.
+ */
+export function historyStrip(el, items, { onPick, onRemove, title = t`旧图` } = {}) {
+  if (!items?.length) return null
+  const when = at => {
+    const date = new Date(at)
+    return Number.isNaN(date.getTime()) ? '' : date.toLocaleString()
+  }
+  return el('div', { class: 'draw-history' }, [
+    el('div', { class: 'draw-history-head' }, [
+      el('span', { class: 'draw-history-title', text: `${title} · ${items.length}` }),
+      el('span', { class: 'draw-history-hint', text: t`点一张换回来，× 删掉` }),
+    ]),
+    el('div', { class: 'draw-history-list' }, items.map(item => {
+      const about = [item.label, SOURCE_TEXT[item.source], item.backend, when(item.at)].filter(Boolean).join(' · ')
+      return el('figure', { class: 'draw-history-item' }, [
+        el('button', { type: 'button', class: 'draw-history-pick', title: about ? t`换回这张：${about}` : t`换回这张`, 'aria-label': item.label ? t`换回这张（${item.label}）` : t`换回这张`, onclick: () => onPick(item) }, [
+          el('img', { src: item.src, alt: '', loading: 'lazy' }),
+          item.label ? el('span', { class: 'draw-history-tag', text: item.label }) : null,
+        ]),
+        el('button', { type: 'button', class: 'draw-history-remove', text: '×', title: t`删掉这张旧图`, 'aria-label': t`删掉这张旧图`, onclick: () => onRemove(item) }),
+      ])
+    })),
+  ])
+}

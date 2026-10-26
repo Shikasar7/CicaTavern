@@ -4,7 +4,7 @@ import { choiceList, statusBar, timeBox } from '/status.js'
 import { BASIC_ID, choicesOf, otherChoices, timeBoxOf } from '/shared/basic.js'
 import { autoStatusSpec } from '/shared/status.js'
 import { BASIC_FIELDS, basicField } from '/basic-options.js'
-import { allowLibraries, broadcastInput, broadcastRelay, broadcastState, installFrameBridge, parseSlash, storedFrameStorage, storedVariables } from '/compat.js'
+import { allowLibraries, broadcastChatVars, broadcastInput, broadcastRelay, broadcastState, installFrameBridge, parseSlash, storedFrameStorage, storedVariables } from '/compat.js'
 import { renderUsage } from '/usage.js'
 import { initPresets } from '/presets.js'
 import { initProviders } from '/providers.js'
@@ -25,7 +25,7 @@ import { initCardPermissions } from '/card-permissions.js'
 import { createFramePermissions } from '/shared/frame-permissions.js'
 import { initVn } from '/vn.js'
 import { markSpeakers } from '/shared/vn.js'
-import { isRegexFile, scriptsInFile } from '/shared/regex.js'
+import { chatScriptList, isRegexFile, scriptsInFile } from '/shared/regex.js'
 import { lang, locale, t, zh } from '/i18n.js'
 import { pickLanguage } from '/shared/i18n.js'
 
@@ -44,8 +44,11 @@ const ui = {
   chat: null,
   settings: null,
   globalRegex: [], // 正则 → 全局: run before every chat's preset and card scripts
+  regexSets: [], // 正则集: run after the card's own scripts in the chats of the cards ticked for them
   blockWords: [], // 屏蔽词: taken out of what is sent and shown (web/shared/blockwords.js)
-  persona: null,
+  persona: null, // the default persona (你的角色), for names before a chat is open
+  personas: null, // 你的角色 and 文风 as lists (web/shared/personas.js), loaded with the settings
+  styles: null,
   // Work in progress per chat: chatId → { kind: 'turn'|'compact'|'server', text, note, echo }.
   // A turn keeps streaming when you switch chats; switching back redraws it.
   busy: new Map(),
@@ -90,6 +93,8 @@ async function loadModels() {
     ui.models = []
   }
   renderModelSelect()
+  // Whether 联网 is there depends on the model's provider: a chat opened before the list came reads it now.
+  renderSearchButton()
 }
 
 function renderModelSelect() {
@@ -120,15 +125,18 @@ const changeChatModel = guard(async () => {
     renderModelSelect()
     return
   }
-  if (ui.chat.compactable >= SUGGEST_COMPACT && model !== (ui.chat.model ?? '')) {
-    const choice = await askSwitch(ui.chat.compactable)
+  // The chat it was picked in: another may be open by the time compacting is done.
+  const chat = ui.chat
+  if (chat.compactable >= SUGGEST_COMPACT && model !== (chat.model ?? '')) {
+    const choice = await askSwitch(chat.compactable)
     const go = choice === 'switch' || (choice === 'compact' && (await runCompaction()))
     if (!go) {
       renderModelSelect()
       return
     }
   }
-  const view = await api(`/api/chats/${ui.chat.id}`, { method: 'PUT', body: { model } })
+  const view = await api(`/api/chats/${chat.id}`, { method: 'PUT', body: { model } })
+  if (ui.chat?.id !== chat.id) return toast(t`「${chat.title}」改用 ${labelOf(view.model || ui.defaultModel)}。`)
   ui.chat = { ...ui.chat, model: view.model }
   renderModelSelect()
   renderSearchButton()
@@ -313,11 +321,13 @@ function inlineTag(closing, name, attrs) {
   return `<${tag === 'font' ? 'span' : tag}${style}>`
 }
 
-function renderStory(text) {
+/** @param options.partial - the reply is still being written: a mark at its end may be half-typed. */
+function renderStory(text, { partial = false } = {}) {
   const folds = []
-  const fold = (label, body) => (body.trim() ? `\n\n@@fold${folds.push({ label, body: body.trim() }) - 1}@@\n\n` : '')
+  // A fold's place is held by a private-use character the text cannot bring in (it is taken out first).
+  const fold = (label, body) => (body.trim() ? `\n\n\uE020${folds.push({ label, body: body.trim() }) - 1}\uE020\n\n` : '')
   // 视觉小说格式: 【名字|表情】 before a line shows as the name (drawn by CSS, so reading aloud skips it); 【效果|…】 goes.
-  const source = markSpeakers(text, name => `${name}`)
+  const source = markSpeakers(String(text ?? '').replace(/\uE020/g, ''), name => `${name}`, { partial })
     // A voice tag right after a line keeps its emotion for reading aloud (marked, then put on the line's span).
     .replace(QUOTE_VOICE, (_, quote, emotion) => (emotion.trim() ? `${quote}${emotion.trim()}` : quote))
     .replace(VOICE_TAG, '')
@@ -342,9 +352,9 @@ function renderStory(text) {
   return html
     .split(/\n{2,}/)
     .map(p => {
-      const folded = /^@@fold(\d+)@@$/.exec(p.trim())
+      const folded = folds[/^\uE020(\d+)\uE020$/.exec(p.trim())?.[1]]
       if (folded) {
-        const { label, body } = folds[folded[1]]
+        const { label, body } = folded
         return `<details class="fold"><summary>${label}</summary><div>${escapeHtml(body).replace(/\n+/g, '<br>')}</div></details>`
       }
       // A line that held only a dropped tag leaves nothing behind; one holding only
@@ -709,13 +719,15 @@ const importFiles = guard(async files => {
   const done = []
   let presets = 0
   let reselect = false
+  // Chat packages go as they do from 导入存档 (read in parts, never sent whole as a card).
+  const packages = files.filter(file => /\.tavernchat$/i.test(file.name))
   for (const file of files) {
+    if (packages.includes(file)) continue
     // A SillyTavern chat: under the selected card (opens it and says so itself).
     if (/\.jsonl$/i.test(file.name)) {
       await importSillyTavernFile(file)
       continue
     }
-    const data = await fileToBase64(file)
     const json = await jsonOf(file)
     if (json?.format === STORY_FORMAT) {
       // Opens the new chat itself.
@@ -723,6 +735,7 @@ const importFiles = guard(async files => {
       if (line) done.push(line)
       continue
     }
+    const data = await fileToBase64(file)
     // A SillyTavern preset, or one exported from this app (agent-tavern-preset).
     if (Array.isArray(json?.prompts) || Array.isArray(json?.preset?.prompts)) {
       const preset = await api('/api/presets/import', { method: 'POST', body: { filename: file.name, data } })
@@ -753,8 +766,10 @@ const importFiles = guard(async files => {
   ui.books = await api('/api/worldbooks')
   await refreshCards()
   if (ui.cardId && reselect) await selectCard(ui.cardId)
-  toast(t`已导入：${done.join(t`，`)}`, 6000)
+  // A SillyTavern chat says so itself, and a refused one adds nothing: no empty 已导入.
+  if (done.length) toast(t`已导入：${done.join(t`，`)}`, 6000)
   if (presets) presetsUi.open()
+  if (packages.length) await importPackages(packages)
 })
 
 // ─── Chat ───────────────────────────────────────────────────────────────
@@ -834,10 +849,10 @@ const startChat = guard(async greetingIndex => {
   $('input').focus()
 })
 
-/** Regex scripts: the global ones, the chat's preset's, then its card's (all cached), as the server applies them. */
+/** Regex scripts: the global ones, the chat's preset's, its card's, then the 正则集 on its card (all cached), as the server applies them. */
 function scriptsFor(chat) {
   const card = ui.cardDetails.get(chat?.cardId)
-  const scripts = [...ui.globalRegex, ...(ui.presetDetails.get(chat?.presetId)?.regexScriptList ?? []), ...(card?.regexScriptList ?? [])]
+  const scripts = chatScriptList({ global: ui.globalRegex, preset: ui.presetDetails.get(chat?.presetId)?.regexScriptList ?? [], card: card?.regexScriptList ?? [], cardId: chat?.cardId, sets: ui.regexSets })
   // A card creator card's bar is drawn here from its layout; its SillyTavern copy stays out.
   return card?.statusBar ? withoutOwnStatus(scripts) : scripts
 }
@@ -919,6 +934,7 @@ function renderChat() {
   renderModelSelect()
   renderQuickButton()
   renderSearchButton()
+  renderDictateButton()
   const presetPill = $('chat-preset')
   presetPill.hidden = !chat
   if (chat) {
@@ -969,7 +985,7 @@ function liveNodes(chat, { animate = false } = {}) {
   }
   const live = el('article', { class: `msg assistant streaming${animate ? ' enter' : ''}` }, [
     el('div', { class: 'msg-head' }, [speakerFace(chat, 'assistant'), el('span', { class: 'name', text: chat.names.char }), el('span', { class: 'live-note', text: job.note })]),
-    el('div', { class: 'msg-body', html: job.text ? renderStory(streamingText(job.text)) : '' }),
+    el('div', { class: 'msg-body', html: job.text ? renderStory(streamingText(job.text), { partial: true }) : '' }),
   ])
   nodes.push(live)
   return nodes
@@ -1039,7 +1055,9 @@ function renderNode(chat, node, isLastAssistant, depth = 0) {
   if (!isUser && node.historyTrim?.removedChars > 0) {
     tools.push(el('span', { class: 'chip', title: t`按角色卡的「仅发送」正则，这条回复在之后的上下文里去掉了这些内容（比如变量更新块），显示不受影响`, text: t`上下文精简 ${fmt(node.historyTrim.removedChars)} 字` }))
   }
-  if (!isUser && node.truncated) {
+  if (!isUser && node.truncated === 'paused') {
+    tools.push(el('span', { class: 'chip warn', title: t`联网搜索时模型中途暂停了（搜了很多次的时候会这样），这条回复没写完。可以重新生成。`, text: t`⚠ 联网搜索中途停了，没写完` }))
+  } else if (!isUser && node.truncated) {
     tools.push(el('span', { class: 'chip warn', title: t`模型写到了单次输出的上限，回复后半段（常见的是变量更新、行动选项这些放在最后的块）没写出来。上限取预设的「最大回复长度」；供应商设置里填了「最大输出」时以那个为准。可以重新生成，或调大上限。`, text: t`⚠ 写到输出上限，被截断` }))
   }
   if (!isUser && isLastAssistant && node.id !== 'root' && !node.compaction && missingUpdate(chat, node)) {
@@ -1080,7 +1098,8 @@ function replyDisplay(chat, node, isLastAssistant, depth = 0) {
   const isUser = node.role === 'user'
   const scripts = scriptsFor(chat)
   const cardStatus = usesStatusPlaceholder(scripts)
-  let shown = renderedDisplay(chat, node, displayOf(node, { scripts, names: chat.names, depth, withStatus: isLastAssistant && cardStatus }))
+  const variables = { local: chat.frameVars ?? {}, global: ui.frameInfo?.chatId === chat.id ? ui.frameInfo.globalVars ?? {} : {} }
+  let shown = renderedDisplay(chat, node, displayOf(node, { scripts, names: chat.names, depth, withStatus: isLastAssistant && cardStatus, variables }))
   // The time box and choice buttons are shown too: the 屏蔽词 apply to them.
   const raw = blockShown(node.raw ?? node.text)
   let choices = !isUser && isLastAssistant ? choicesOf(raw) : []
@@ -1329,11 +1348,13 @@ function frameContextFor(chat, node) {
   return {
     app: ui.appVersion ?? '',
     messageId: index,
+    nodeId: node.id,
     lastId: last,
     chatId: chat.id,
     cardId: chat.cardId,
     names: chat.names,
-    card: { avatar: card?.hasAvatar ? `${location.origin}/api/cards/${chat.cardId}/avatar` : '' },
+    // With the key that lets a frame (no cookie of its own) read the avatar on a phone too.
+    card: { avatar: card?.hasAvatar ? `${location.origin}/api/cards/${chat.cardId}/avatar${info?.avatarKey ? `?fk=${info.avatarKey}` : ''}` : '' },
     persona: { description: info?.persona?.description ?? '' },
     books: info?.books ?? { own: '', mounted: [], global: [] },
     vars: {
@@ -1448,7 +1469,7 @@ async function frameChatVar(step) {
   }
   const text = step.text
   vars[key] = step.name === 'addvar' ? (Number(vars[key]) || 0) + (Number(text) || 0) : text
-  await frameHandlers.chatVars({ value: vars })
+  await frameHandlers.chatVars({ value: vars, set: { [key]: vars[key] } })
   return String(vars[key])
 }
 
@@ -1485,6 +1506,20 @@ const frameGenerationTimes = []
 // (the server says when an address leads there, whatever its name).
 const relayQuiet = new Set() // cards told no about an address: not asked about others until the page is opened again
 const frameFetches = new Map() // relay id → AbortController
+// The frame each relayed call and model call came from: they end with it (the chat drawn again, another opened),
+// as nobody is left to read them, and a model call stops being billed (watchCallFrames).
+const callFrames = new WeakMap() // AbortController → frame id
+
+function watchCallFrames() {
+  const gone = id => !document.querySelector(`iframe[data-frame="${CSS.escape(id)}"]`)
+  new MutationObserver(() => {
+    if (!frameGenerations.size && !frameFetches.size) return
+    for (const controller of [...frameGenerations.values(), ...frameFetches.values()]) {
+      const frame = callFrames.get(controller)
+      if (frame && gone(frame)) controller.abort()
+    }
+  }).observe(document.body, { childList: true, subtree: true })
+}
 // This computer or the local network by its name: warned of in the first question (the server checks every address).
 const LOCAL_HOST = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|\[?::1\]?$|\[?f[cd][0-9a-f]{2}:)/i
 
@@ -1552,25 +1587,38 @@ function base64Of(bytes) {
 }
 
 /** The page's answers to what card frames ask for (web/compat.js installFrameBridge). */
+// A frame's change is saved to the chat it was drawn in; what comes back is shown only while that chat is still
+// the open one (the player may have opened another meanwhile, and the next message would go to the wrong chat).
+const stillOpen = chatId => ui.chat?.id === chatId
+
 const frameHandlers = {
   // The latest floor's variables (Mvu.replaceMvuData, replaceVariables on the message): saved as 编辑状态 saves
   // them, without drawing the chat again (the frame that wrote them would start over).
   async state({ state }) {
     if (!ui.chat) throw new Error(t`没有打开的对话`)
-    const view = await api(`/api/chats/${ui.chat.id}/state`, { method: 'PUT', body: { state } })
+    const chatId = ui.chat.id
+    const view = await api(`/api/chats/${chatId}/state`, { method: 'PUT', body: { state } })
+    if (!stillOpen(chatId)) return
     ui.chat = view
     renderSide()
     broadcastState(view.state ?? state)
   },
-  async chatVars({ value }) {
+  // A frame sends the keys it changed (set / unset), saved over what is saved now: another frame's or a
+  // template's keys stay. Without them (an older frame), the whole value as before.
+  async chatVars({ value, set, unset }) {
     if (!ui.chat) throw new Error(t`没有打开的对话`)
-    const { vars } = await api(`/api/chats/${ui.chat.id}/frame-vars`, { method: 'PUT', body: { vars: value } })
-    ui.chat.frameVars = vars
-    if (ui.frameInfo?.chatId === ui.chat.id) ui.frameInfo.vars = vars
+    const chatId = ui.chat.id
+    const body = set || unset ? { set, unset } : { vars: value }
+    const { vars } = await api(`/api/chats/${chatId}/frame-vars`, { method: 'PUT', body })
+    if (stillOpen(chatId)) {
+      ui.chat.frameVars = vars
+      broadcastChatVars(vars)
+    }
+    if (ui.frameInfo?.chatId === chatId) ui.frameInfo.vars = vars
   },
-  async globalVars(value) {
-    await api('/api/settings', { method: 'PUT', body: { globalVars: value } })
-    if (ui.frameInfo) ui.frameInfo.globalVars = value
+  async globalVars(value, patch = null) {
+    const saved = await api('/api/settings', { method: 'PUT', body: patch ? { globalVarsPatch: patch } : { globalVars: value } })
+    if (ui.frameInfo) ui.frameInfo.globalVars = saved?.globalVars ?? value
   },
   mvuParse: ({ text, state }) => api('/api/mvu/parse', { method: 'POST', body: { text, state } }),
   // EjsTemplate: rendered at the frame's floor as what messages show is (楼层渲染), or only checked.
@@ -1582,11 +1630,15 @@ const frameHandlers = {
     if (errors?.length) throw new Error(errors[0].error)
     return { text: texts[0] }
   },
-  async editMessage({ messageId, text }) {
+  async editMessage({ messageId, text }, context = {}) {
     const node = ui.chat?.path[messageId]
     if (!node) throw new Error(t`没有这一楼`)
+    // Held here too, not only in the frame's own script (which a card can go round): its own floor or the latest.
+    if (messageId !== ui.chat.path.length - 1 && node.id !== context.node) throw new Error(t`只能改这个界面所在的楼层或最新一楼`)
     if (ui.generating) throw new Error(t`正在生成，稍后再试`)
-    setChat(await api(`/api/chats/${ui.chat.id}/messages/${node.id}`, { method: 'PUT', body: { text: String(text ?? '') } }))
+    const chatId = ui.chat.id
+    const view = await api(`/api/chats/${chatId}/messages/${node.id}`, { method: 'PUT', body: { text: String(text ?? '') } })
+    if (stillOpen(chatId)) setChat(view)
   },
   // The character's messages are added to the end of the latest reply (a subscription session can only carry on
   // from replies it wrote); the player's go into the input box for the card's /trigger.
@@ -1600,7 +1652,10 @@ const frameHandlers = {
       if (tip?.role !== 'assistant') throw new Error(t`最新一楼不是角色的回复`)
       if (ui.generating) throw new Error(t`正在生成，稍后再试`)
       // Drawn again in place: the frame that asked (usually in this very reply) keeps running.
-      ui.chat = await api(`/api/chats/${ui.chat.id}/messages/${tip.id}`, { method: 'PUT', body: { text: `${(tip.raw ?? tip.text ?? '').trimEnd()}\n\n${told}` } })
+      const chatId = ui.chat.id
+      const view = await api(`/api/chats/${chatId}/messages/${tip.id}`, { method: 'PUT', body: { text: `${(tip.raw ?? tip.text ?? '').trimEnd()}\n\n${told}` } })
+      if (!stillOpen(chatId)) return
+      ui.chat = view
       redrawMessage(tip.id)
       renderSide()
       if (vnUi.isOn(ui.chat.cardId)) vnUi.render(ui.chat)
@@ -1616,7 +1671,9 @@ const frameHandlers = {
     if (wanted.some((id, i) => id !== last - (wanted.length - 1) + i) || wanted[0] < 1) throw new Error(t`只能删掉最后的几楼`)
     let keep = wanted[0] - 1
     if (ui.chat.path[keep]?.role === 'user') keep -= 1
-    setChat(await api(`/api/chats/${ui.chat.id}/rollback`, { method: 'POST', body: { nodeId: ui.chat.path[Math.max(0, keep)].id } }))
+    const chatId = ui.chat.id
+    const view = await api(`/api/chats/${chatId}/rollback`, { method: 'POST', body: { nodeId: ui.chat.path[Math.max(0, keep)].id } })
+    if (stillOpen(chatId)) setChat(view)
   },
   async worldbook(args) {
     if (!ui.chat) throw new Error(t`没有打开的对话`)
@@ -1636,6 +1693,7 @@ const frameHandlers = {
     frameGenerationTimes.push(Date.now())
     const controller = new AbortController()
     frameGenerations.set(id, controller)
+    callFrames.set(controller, frame)
     const relay = message => source?.postMessage({ agentTavernStream: { frame, id, ...message } }, '*')
     // The notice stays while it runs; a click on it stops the call (see the toast's listener at start-up).
     toast(t`卡片界面正在调用模型，点这条提示可以停止`, 600000)
@@ -1668,6 +1726,7 @@ const frameHandlers = {
     askRelay(cardId, target)
     const controller = new AbortController()
     frameFetches.set(id, controller)
+    callFrames.set(controller, frame)
     const send = message => source?.postMessage({ agentTavernFetch: { frame, id, ...message } }, '*')
     const encoded = body ? base64Of(new Uint8Array(body)) : null
     const relay = local => fetch('/api/frame-fetch', {
@@ -1841,6 +1900,7 @@ async function fillUpdate(nodeId) {
 }
 
 /** Ask the model that wrote the story for an archive. Resolves true when it was saved. */
+/** → the chat compacted (its view), or false. */
 async function runCompaction() {
   const chatId = ui.chat.id
   const title = ui.chat.title
@@ -1858,7 +1918,7 @@ async function runCompaction() {
     } else {
       toast(t`「${title}」已压缩：前 ${info.turns} 轮 → ${fmt(info.chars)} 字剧情存档。`, 6000)
     }
-    return true
+    return view
   } catch (error) {
     toast(error.status === 499 ? t`已停止压缩，什么都没改` : error.message, 8000)
     return false
@@ -1944,8 +2004,8 @@ function saveFile(name, text, message = '') {
   if (message) toast(message, 9000)
 }
 
-async function downloadStory(nodeId) {
-  const archive = await api(`/api/chats/${ui.chat.id}/archive?nodeId=${encodeURIComponent(nodeId)}`)
+async function downloadStory(nodeId, chatId = ui.chat.id) {
+  const archive = await api(`/api/chats/${chatId}/archive?nodeId=${encodeURIComponent(nodeId)}`)
   saveFile(t`${archive.title} 剧情存档.json`, JSON.stringify(archive, null, 2),
     t`已导出：前 ${archive.turns} 轮的剧情存档、最近 ${archive.recent.filter(m => m.role === 'user').length} 轮原文和变量。在角色卡下点「导入存档」就能接着写。`)
 }
@@ -1961,8 +2021,10 @@ const exportStory = guard(async node => {
       t`导出前要先把剧情压缩成存档（上次压缩后新增 ${chat.compactable} 轮）。\n\n` +
       t`会调用一次模型写存档（${labelOf(node.model || chat.model || ui.defaultModel)}，大约花一轮的额度），之后的对话也会接着这份存档写。继续？`
     if (!confirm(ask)) return
-    if (!(await runCompaction())) return
-    return downloadStory(ui.chat.path.at(-1).id)
+    // From the chat compacted, whichever is open by then.
+    const compacted = await runCompaction()
+    if (!compacted) return
+    return downloadStory(compacted.path.at(-1).id, chat.id)
   }
   const index = chat.path.findIndex(n => n.id === node.id)
   if (!chat.path.slice(0, index + 1).some(n => n.compaction)) throw new Error(t`剧情还不到 2 轮，先多写几轮再导出`)
@@ -2095,6 +2157,7 @@ function tipId() {
 async function generate(endpoint, body, echoUserText) {
   const chatId = ui.chat.id
   const title = ui.chat.title
+  const tipBefore = ui.chat.path.at(-1)?.id
   const job = { kind: 'turn', text: '', note: '…', echo: echoUserText }
   ui.busy.set(chatId, job)
   renderChat()
@@ -2107,6 +2170,8 @@ async function generate(endpoint, body, echoUserText) {
   let finished = null
   let finishedNode = null
   let failure = null
+  // The connection went before the turn's end was heard (a phone's screen locked): the server writes on.
+  let dropped = false
   try {
     await stream(`/api/chats/${chatId}/${endpoint}`, body, event => {
       if (event.type === 'start') {
@@ -2119,7 +2184,7 @@ async function generate(endpoint, body, echoUserText) {
         if (viewing()) vnUi.streamed()
         const target = live()?.querySelector('.msg-body')
         if (target) {
-          target.innerHTML = renderStory(streamingText(job.text))
+          target.innerHTML = renderStory(streamingText(job.text), { partial: true })
           const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 160
           if (nearBottom) box.scrollTop = box.scrollHeight
         }
@@ -2135,8 +2200,21 @@ async function generate(endpoint, body, echoUserText) {
     })
   } catch (error) {
     failure = { message: error.message }
+    dropped = !error.status
   }
+  if (!finished && !failure) dropped = true
   ui.busy.delete(chatId)
+  if (dropped) {
+    // What the server has: still writing, or written already. Followed from here, so sending again is not a second turn.
+    const fresh = await api(`/api/chats/${chatId}`).catch(() => null)
+    if (fresh && (fresh.running || fresh.path.at(-1)?.id !== tipBefore)) {
+      followServerTurn(fresh)
+      if (viewing()) setChat(fresh)
+      else renderChats()
+      if (fresh.running) toast(viewing() ? t`连接断开了：这一轮还在后台写，写完会显示出来` : t`「${title}」：连接断开了，这一轮还在后台写`, 6000)
+      return true
+    }
+  }
   if (finished) {
     if (viewing()) {
       setChat(finished)
@@ -2242,16 +2320,15 @@ const saveState = guard(async () => {
 // ─── Settings ───────────────────────────────────────────────────────────
 const openSettings = guard(async () => {
   settingsMenu ??= createMenu({ dialog: $('settings-dialog'), form: $('settings-form'), el, title: t`设置` })
-  ;[ui.settings, ui.persona, ui.books] = await Promise.all([api('/api/settings'), api('/api/persona'), api('/api/worldbooks')])
+  await loadPersonas()
+  ;[ui.settings, ui.personas, ui.styles, ui.books] = await Promise.all([api('/api/settings'), personas && api('/api/personas'), personas && api('/api/styles'), api('/api/worldbooks')])
+  ui.persona = personas ? personas.defaultOf(ui.personas) : await api('/api/persona').catch(() => null)
   if (!ui.models.length) await loadModels()
   const form = $('settings-form')
   $('settings-model').replaceChildren(...modelOptions(ui.defaultModel))
-  form.personaName.value = ui.persona.name
-  form.personaDescription.value = ui.persona.description
-  for (const key of ['model', 'thinking', 'effort', 'language', 'scanDepth', 'reinjectAfter', 'stateRefreshEvery', 'dynamicStrip', 'replyLength', 'writingRules', 'listen']) {
+  for (const key of ['model', 'thinking', 'effort', 'language', 'scanDepth', 'reinjectAfter', 'stateRefreshEvery', 'dynamicStrip', 'replyLength', 'listen']) {
     form[key].value = ui.settings[key] ?? (key === 'listen' ? 'local' : '')
   }
-  showDefaultAsHint(form.personaName, zh`你`, t`你`)
   showDefaultAsHint(form.language, zh`简体中文`, t`简体中文`)
   renderAccess(await api('/api/access').catch(() => null))
   fillProxy(form, ui.settings.proxy, await api('/api/network').catch(() => null))
@@ -2262,6 +2339,7 @@ const openSettings = guard(async () => {
   if (!ui.models.some(m => m.id === form.model.value)) form.model.value = ui.defaultModel ?? ui.models[0]?.id ?? ''
   const card = ui.cards.find(c => c.id === ui.cardId)
   renderBookOptions(card)
+  renderCardPicks(card)
   const [providers, presets] = await Promise.all([api('/api/providers').catch(() => null), api('/api/presets').catch(() => []), updateUi.load()])
   settingsMenu.start()
   layOutSettings({ form, card, providers: providers?.providers ?? [], presets })
@@ -2296,6 +2374,97 @@ function renderBookOptions(card, ticked = new Set(card?.worldbookIds ?? [])) {
         ]))
       : [el('p', { class: 'book-none', text: t`还没有导入独立世界书。想给这张卡多挂一本，先用「导入角色卡、世界书或预设」导入世界书 JSON。` })]),
   )
+}
+
+// 你的角色 / 文风 (web/personas.js), loaded with 设置: a server started before those files existed answers 404
+// for them until it restarts. 设置 still opens then, and those rows say so.
+let personas = null
+let personasUi = null
+const personasMissing = () => Object.assign(new Error(t`你的角色和文风要重启后台服务后才能用：关掉所有窗口等一分钟，再从桌面图标打开。`), { status: 404 })
+
+/** The module and its window, once; null on a server that does not have them yet. */
+async function loadPersonas() {
+  personas ??= await import('/personas.js').catch(() => null)
+  personasUi ??= personas?.initPersonas({
+    api, el, toast, guard, saveFile,
+    getChat: () => ui.chat,
+    getCardId: () => ui.chat?.cardId ?? ui.cardId,
+    getCards: () => ui.cards,
+    isGenerating: () => ui.generating,
+    onChatChanged: chat => setChat(chat),
+    onListChanged: personasChanged,
+  }) ?? null
+  return personasUi
+}
+
+const openPersonas = guard(async kind => {
+  if (!(await loadPersonas())) throw personasMissing()
+  await personasUi.open(kind)
+})
+
+/**
+ * A list saved in the 你的角色 / 文风 window: 设置 → 写作 shows it as it is now, its rows and the card's choices.
+ * A choice made there and not saved yet stays; otherwise a box shows what the card picks now (a tick in that
+ * window included).
+ */
+function personasChanged(kind, list) {
+  const key = kind === 'persona' ? 'personas' : 'styles'
+  const before = ui[key]
+  ui[key] = list
+  if (kind === 'persona') ui.persona = personas.defaultOf(list)
+  if (!$('settings-dialog').open) return
+  const form = $('settings-form')
+  const unsaved = {}
+  for (const [name, of, was] of [['pickPersona', 'persona', ui.personas], ['pickStyle', 'style', ui.styles]]) {
+    const saved = of === kind ? before : was
+    if (form[name] && saved && form[name].value !== (personas.cardPick(saved, ui.cardId)?.id ?? '')) unsaved[name] = form[name].value
+  }
+  renderCardPicks(ui.cards.find(c => c.id === ui.cardId))
+  for (const [name, value] of Object.entries(unsaved)) {
+    if ([...form[name].options].some(option => option.value === value)) form[name].value = value
+  }
+  settingsMenu?.refresh()
+}
+
+/** The name of a 你的角色 or 文风 item as its list shows it (web/personas.js). */
+const pickLabel = (kind, item) => (kind === 'persona' ? personas.personaName(item.name) + (item.title ? ` · ${item.title}` : '') : item.name || t`我的文风`)
+
+/**
+ * 设置 → 写作 → 这张卡用的角色和文风: a choice from each list, the default first. Saved with 保存
+ * (saveCardPicks); what the card picks now is what the boxes start at.
+ */
+function renderCardPicks(card) {
+  const box = $('card-picks')
+  if (!card) return box.replaceChildren(document.createTextNode(t`先选择一张角色卡`))
+  if (!ui.personas) return box.replaceChildren(document.createTextNode(personasMissing().message))
+  const choice = (kind, name, list, title) => {
+    const select = el('select', { name, 'aria-label': title }, [
+      el('option', { value: '', text: t`默认（${pickLabel(kind, personas.defaultOf(list))}）` }),
+      ...list.items.map(item => el('option', { value: item.id, text: pickLabel(kind, item) })),
+    ])
+    select.value = personas.cardPick(list, card.id)?.id ?? ''
+    return el('label', {}, [title, select])
+  }
+  box.replaceChildren(
+    el('div', { class: 'grid' }, [choice('persona', 'pickPersona', ui.personas, t`你的角色`), choice('style', 'pickStyle', ui.styles, t`文风`)]),
+    el('div', { class: 'row card-picks-open' }, [
+      el('button', { type: 'button', class: 'btn small ghost', text: t`管理你的角色…`, onclick: () => openPersonas('persona') }),
+      el('button', { type: 'button', class: 'btn small ghost', text: t`管理文风…`, onclick: () => openPersonas('style') }),
+    ]),
+  )
+}
+
+/** The picks in 设置 → 写作 saved for the chosen card; the open chat on it may switch too. → whether it did. */
+async function saveCardPicks(form) {
+  if (!ui.cardId || !form.pickPersona || !ui.personas) return false
+  const was = { persona: personas.cardPick(ui.personas, ui.cardId)?.id ?? '', style: personas.cardPick(ui.styles, ui.cardId)?.id ?? '' }
+  const now = { persona: form.pickPersona.value, style: form.pickStyle.value }
+  const kinds = ['persona', 'style'].filter(kind => was[kind] !== now[kind])
+  if (!kinds.length) return false
+  const saved = await api(`/api/cards/${ui.cardId}/picks`, { method: 'PUT', body: { personaId: now.persona, styleId: now.style } })
+  ui.personas = saved.persona
+  ui.styles = saved.style
+  return Boolean(await personasUi.offerSwitch(ui.cardId, kinds))
 }
 
 /** The card's own book, which always applies, so it is a line and not a checkbox. */
@@ -2335,6 +2504,13 @@ function openBookEntries(id) {
 let settingsMenu = null
 let settingsPages = null
 
+/** 你的角色 / 文风 in the settings menu: the default, how many, and how many cards picked one. */
+function listSummary(kind, list) {
+  if (!list) return t`重启后台服务后才能用`
+  const picked = Object.keys(list.cards).length
+  return [t`默认：${pickLabel(kind, personas.defaultOf(list))}`, t`共 ${list.items.length} 个`, picked ? t`${picked} 张卡指定了` : t`可以给每张卡指定`].join(' · ')
+}
+
 /** The menu: 模型, 写作, 世界书与状态, 连接, 更多, each row with what it is set to now. */
 function layOutSettings({ form, card, providers, presets }) {
   settingsPages ??= Object.fromEntries([...form.querySelectorAll('[data-section]')].map(page => [page.dataset.section, page]))
@@ -2357,12 +2533,25 @@ function layOutSettings({ form, card, providers, presets }) {
       status: () => (providers.length ? null : ['warn', t`先添加一个`]),
     },
     {
-      id: 'persona', title: t`你的角色`, pane: settingsPages.persona,
-      summary: () => `${value('personaName').trim() || t`你`} · ${value('personaDescription').trim() ? t`有角色设定` : t`没写角色设定`}`,
+      id: 'persona', title: t`你的角色`, action: () => openPersonas('persona'),
+      summary: () => listSummary('persona', ui.personas),
     },
     {
-      id: 'style', title: t`文风与字数`, pane: settingsPages.style,
-      summary: () => [value('language').trim() || t`简体中文`, Number(value('replyLength')) > 0 ? t`每轮约 ${value('replyLength')} 字` : t`字数不限`, value('writingRules').trim() ? t`有文风要求` : t`没写文风要求`].join(' · '),
+      id: 'styles', title: t`文风`, action: () => openPersonas('style'),
+      summary: () => listSummary('style', ui.styles),
+    },
+    {
+      id: 'style', title: t`语言与字数`, pane: settingsPages.style,
+      summary: () => [value('language').trim() || t`简体中文`, Number(value('replyLength')) > 0 ? t`每轮约 ${value('replyLength')} 字` : t`字数不限`].join(' · '),
+    },
+    // Like 挂载的世界书: the row hides without a card, its page stays mounted (#card-picks is filled by id).
+    {
+      id: 'picks', title: t`这张卡用的角色和文风`, pane: settingsPages.picks, crumb: card ? t`写作 · ${card.name}` : undefined, hidden: () => !card,
+      summary: () => {
+        if (!card || !form.pickPersona || !ui.personas) return ''
+        const named = (kind, list, id) => (id ? pickLabel(kind, personas.itemOf(list, id) ?? personas.defaultOf(list)) : t`默认`)
+        return t`角色：${named('persona', ui.personas, value('pickPersona'))} · 文风：${named('style', ui.styles, value('pickStyle'))}`
+      },
     },
     {
       id: 'presets', title: t`预设`, look: 'shared', action: () => presetsUi.open(),
@@ -2373,7 +2562,11 @@ function layOutSettings({ form, card, providers, presets }) {
     },
     {
       id: 'regex', title: t`正则`, look: 'shared', action: () => regexUi.open(),
-      summary: () => (ui.globalRegex.length ? t`全局 ${ui.globalRegex.length} 条 · 卡和预设自带的也在这里开关` : t`导入或新建全局正则；卡和预设自带的也在这里开关`),
+      summary: () => [
+        ui.globalRegex.length ? t`全局 ${ui.globalRegex.length} 条` : t`导入或新建全局正则`,
+        ui.regexSets.length ? t`正则集 ${ui.regexSets.length} 个` : t`可以建正则集挂到指定的卡上`,
+        t`卡和预设自带的也在这里开关`,
+      ].join(' · '),
     },
     {
       id: 'blockwords', title: t`屏蔽词`, look: 'shared', tag: t`所有对话`, action: () => openBlockWords(),
@@ -2431,6 +2624,10 @@ function layOutSettings({ form, card, providers, presets }) {
       summary: () => t`画图方式、朗读来源，每张卡的画风、名册和音色`,
     },
     {
+      id: 'dictation', title: t`语音输入`, action: () => mediaUi.openSettings('stt'),
+      summary: () => t`点输入框旁的麦克风说话，转成文字填进输入框：录音交给谁转写`,
+    },
+    {
       id: 'update', title: t`更新`, look: 'shared', pane: settingsPages.update, hidden: () => !updateUi.enabled(),
       summary: () => updateUi.summary(),
       status: () => updateUi.status(),
@@ -2469,17 +2666,20 @@ function layOutSettings({ form, card, providers, presets }) {
   const cardRow = card
     ? whoLine(el, { cardId: card.hasAvatar ? card.id : '', name: card.name, note: t`这张卡挂的` })
     : el('p', { class: 'menu-who none', text: t`选一张角色卡后，可以给它挂独立世界书。` })
+  const cardPicksRow = card
+    ? whoLine(el, { cardId: card.hasAvatar ? card.id : '', name: card.name, note: t`这张卡指定的` })
+    : el('p', { class: 'menu-who none', text: t`选一张角色卡后，可以给它指定你的角色和文风。` })
   settingsMenu.mount({
     panels: [
       { id: 'model', title: t`模型`, icon: MENU_ICONS.model, rows: ['model', 'providers'] },
-      { id: 'write', title: t`写作`, icon: MENU_ICONS.write, rows: ['persona', 'style', 'presets', 'regex', 'blockwords'] },
-      { id: 'media', title: t`配图与朗读`, icon: MENU_ICONS.picture, rows: ['media'] },
+      { id: 'write', title: t`写作`, icon: MENU_ICONS.write, rows: ['persona', 'styles', 'style', 'presets', 'regex', 'blockwords', cardPicksRow, 'picks'] },
+      { id: 'media', title: t`配图与朗读`, icon: MENU_ICONS.picture, rows: ['media', 'dictation'] },
       { id: 'books', title: t`世界书与状态`, icon: MENU_ICONS.book, rows: ['scan', 'manage-books', cardRow, 'books'] },
       { id: 'link', title: t`连接`, icon: MENU_ICONS.link, rows: ['network', 'access'] },
       { id: 'more', title: t`更多`, icon: MENU_ICONS.tools, rows: ['interface', 'update', 'privacy', 'errors', 'shortcut', 'show-prompt', 'rebuild-prompt', 'stop-server'] },
     ],
     sections,
-    note: t`名字、角色设定和文风写进对话开局时的固定前缀，只对之后新开的对话生效；模型、思考、字数和世界书扫描随时生效。`,
+    note: t`你的角色、文风和写作语言写进对话开局时的固定前缀，只对之后新开的对话生效（已有的对话在各自的窗口里点「用于当前对话」换）；模型、思考、字数和世界书扫描随时生效。`,
     save: { text: t`保存`, onClick: () => saveSettings() },
   })
 }
@@ -2487,8 +2687,7 @@ function layOutSettings({ form, card, providers, presets }) {
 const saveSettings = guard(async () => {
   const form = $('settings-form')
   const num = name => Number(form[name].value) || 0
-  ;[, ui.settings] = await Promise.all([
-    api('/api/persona', { method: 'PUT', body: { name: form.personaName.value.trim() || zh`你`, description: form.personaDescription.value } }),
+  ;[ui.settings] = await Promise.all([
     api('/api/settings', {
       method: 'PUT',
       body: {
@@ -2496,7 +2695,6 @@ const saveSettings = guard(async () => {
         thinking: form.thinking.value,
         effort: form.effort.value,
         language: form.language.value.trim() || zh`简体中文`,
-        writingRules: form.writingRules.value,
         scanDepth: Math.max(1, num('scanDepth')),
         reinjectAfter: num('reinjectAfter'),
         stateRefreshEvery: num('stateRefreshEvery'),
@@ -2512,7 +2710,7 @@ const saveSettings = guard(async () => {
   ])
   fillProxy(form, ui.settings.proxy, await api('/api/network').catch(() => null))
   allowLibraries(ui.settings.cdnLibraries !== false)
-  let applied = false
+  let applied = await saveCardPicks(form)
   if (ui.cardId) {
     const ids = [...form.querySelectorAll('input[name="book"]:checked')].map(i => i.value)
     const before = ui.cards.find(c => c.id === ui.cardId)?.worldbookIds ?? []
@@ -2520,7 +2718,7 @@ const saveSettings = guard(async () => {
     const chatId = ui.chat?.cardId === ui.cardId ? ui.chat.id : undefined
     const saved = await api(`/api/cards/${ui.cardId}/worldbooks`, { method: 'PUT', body: { ids, chatId } })
     await refreshCards()
-    if (changed) applied = await offerMountRebuild(saved.prefixChange)
+    if (changed) applied = (await offerMountRebuild(saved.prefixChange)) || applied
   }
   const access = await api('/api/access').catch(() => null)
   renderAccess(access)
@@ -2748,22 +2946,24 @@ async function regexContext() {
     preset: preset?.name ? { id: presetKey, name: preset.name, builtin: Boolean(preset.builtin), scripts: preset.regexScriptList ?? [] } : null,
     sample: reply.slice(0, 4000),
     macros: text => nameMacros(text, names),
+    names,
   }
 }
 
-/** A scope's scripts were saved: the page draws with them from now on. */
-function regexChanged(scope, id, scripts) {
-  if (scope === 'global') ui.globalRegex = scripts
-  else {
-    const detail = (scope === 'card' ? ui.cardDetails : ui.presetDetails).get(id)
-    if (detail) Object.assign(detail, { regexScriptList: scripts, regexScripts: scripts.length })
+/** Scripts were saved (the global ones, the 正则集, a card's or a preset's own): the page draws with them from now on. */
+function regexChanged({ global, sets, card, preset }) {
+  if (global) ui.globalRegex = global
+  if (sets) ui.regexSets = sets
+  for (const [details, saved] of [[ui.cardDetails, card], [ui.presetDetails, preset]]) {
+    const detail = saved && details.get(saved.id)
+    if (detail) Object.assign(detail, { regexScriptList: saved.scripts, regexScripts: saved.scripts.length })
   }
   if (ui.chat) renderChat()
 }
 
 // 世界书 / 预设 / 正则 / 主题 → 对话修改: the talk on one of them, over the window it came from.
 const talkUi = initTalkDialog({ api, el, guard, openProviders: () => providersUi.open() })
-const regexUi = initRegex({ api, el, toast, guard, context: regexContext, onChanged: regexChanged, openTalk: talkUi.open })
+const regexUi = initRegex({ api, el, toast, guard, saveFile, context: regexContext, getCards: () => ui.cards, onChanged: regexChanged, openTalk: talkUi.open })
 const themeUi = initTheme({ api, el, toast, guard, getSettings: () => ui.settings, setSettings: settings => { ui.settings = settings }, onReading: () => fitInput(), openTalk: talkUi.open })
 const whatsNewUi = initWhatsNew({ el })
 const updateUi = initUpdate({ api, el, toast, guard, android, onChange: () => settingsMenu?.refresh(), isGenerating: () => ui.generating, openNotes: () => whatsNewUi.open() })
@@ -2916,9 +3116,36 @@ const toggleSearch = guard(async () => {
   if (!chat || ui.generating) return
   if (!kind) return toast(t`这个模型用不了联网搜索：Anthropic 接口的 Claude、OpenAI Responses 接口和 OpenRouter 的模型可以。`)
   const view = await api(`/api/chats/${chat.id}`, { method: 'PUT', body: { webSearch: !chat.webSearch } })
+  if (ui.chat?.id !== chat.id) return
   ui.chat = { ...ui.chat, webSearch: view.webSearch }
   renderSearchButton()
   toast(view.webSearch ? t`这个对话打开了联网搜索：${SEARCH_BY[kind]}。开关之后的第一轮会重新写一次缓存。` : t`这个对话关掉了联网搜索。`)
+})
+
+// 语音输入 (web/dictation.js, loaded on the first press): what is said goes into the box, never sent by itself.
+let dictation = null
+
+/** The microphone beside the box: with a chat open, unless 语音输入 is set to 不用. */
+function renderDictateButton() {
+  $('dictate').hidden = !ui.chat || mediaUi.settings()?.sttSource === 'off'
+}
+
+const pressDictate = guard(async () => {
+  if (!dictation) {
+    const { createDictation } = await import('/dictation.js').catch(() => {
+      throw Object.assign(new Error(t`语音输入要重启后台服务后才能用：关掉所有窗口等一分钟，再从桌面图标打开。`), { status: 404 })
+    })
+    dictation ??= createDictation({
+      el, toast,
+      input: $('input'),
+      button: $('dictate'),
+      composer: $('composer'),
+      settings: () => mediaUi.settings(),
+      names: () => [ui.chat?.names?.char, ui.chat?.names?.user].filter(Boolean),
+      openSettings: section => mediaUi.openSettings(section),
+    })
+  }
+  dictation.press()
 })
 
 /** What a reply searched for and the pages it drew on, folded under it. */
@@ -3091,6 +3318,7 @@ function bind() {
   })
   $('card-list').before(cardSearch.box)
   listenForFrameHeights()
+  watchCallFrames()
   installFrameBridge({
     ...frameHandlers,
     toast: (_level, text) => toast(text),
@@ -3099,7 +3327,9 @@ function bind() {
     send: frameSend,
     opening: async index => {
       if (!ui.chat || ui.generating) throw new Error(t`正在生成，稍后再试`)
-      setChat(await api(`/api/chats/${ui.chat.id}/opening`, { method: 'POST', body: { index } }))
+      const chatId = ui.chat.id
+      const view = await api(`/api/chats/${chatId}/opening`, { method: 'POST', body: { index } })
+      if (stillOpen(chatId)) setChat(view)
     },
     ids: () => ({ presetId: ui.chat?.presetId ?? null, cardId: ui.chat?.cardId ?? null }),
   })
@@ -3120,23 +3350,15 @@ function bind() {
     toast(t`已填进输入框，可以改一改再发送`)
   })
   $('new-chat').addEventListener('click', newChat)
+  // Every file picked, each kind its own way (the title says several can go at once).
   $('import-story').addEventListener('change', async event => {
     const files = [...event.target.files]
-    const tavern = files.filter(file => /\.jsonl$/i.test(file.name))
-    if (tavern.length) {
-      event.target.value = ''
-      for (const file of tavern) await importSillyTavernFile(file)
-      return
-    }
-    const packages = files.filter(file => /\.tavernchat$/i.test(file.name) || file.type === 'application/octet-stream')
-    if (packages.length) {
-      event.target.value = ''
-      guard(importPackages)(packages)
-      return
-    }
-    const file = event.target.files[0]
     event.target.value = ''
-    if (file) importStoryFile(file)
+    const tavern = files.filter(file => /\.jsonl$/i.test(file.name))
+    const packages = files.filter(file => !tavern.includes(file) && (/\.tavernchat$/i.test(file.name) || file.type === 'application/octet-stream'))
+    for (const file of tavern) await importSillyTavernFile(file)
+    if (packages.length) await guard(importPackages)(packages)
+    for (const file of files.filter(file => !tavern.includes(file) && !packages.includes(file))) await importStoryFile(file)
   })
   $('recap-export').addEventListener('click', exportRecap)
   $('composer').addEventListener('submit', event => { event.preventDefault(); send() })
@@ -3196,6 +3418,8 @@ function bind() {
   $('compact-chat').addEventListener('click', compactNow)
   $('quick-open').addEventListener('click', openQuick)
   $('search-toggle').addEventListener('click', toggleSearch)
+  $('dictate').addEventListener('click', pressDictate)
+  document.addEventListener('cicatavern:media-settings', renderDictateButton)
   $('quick-apply').addEventListener('click', applyQuick)
   $('recap-save').addEventListener('click', saveRecap)
   $('recap-drop').addEventListener('click', dropRecap)
@@ -3233,7 +3457,9 @@ async function boot() {
   }
   ui.launcher = Boolean(status?.launcher)
   ui.settings = await api('/api/settings').catch(() => null)
-  ui.globalRegex = (await api('/api/regex').catch(() => null))?.scripts ?? []
+  const regex = await api('/api/regex').catch(() => null)
+  ui.globalRegex = regex?.scripts ?? []
+  ui.regexSets = regex?.sets ?? []
   await showBlockWords((await api('/api/blockwords').catch(() => null))?.words ?? [])
   // The style and the picture saved here win over the copy this browser drew at start.
   if (ui.settings) themeUi.apply()

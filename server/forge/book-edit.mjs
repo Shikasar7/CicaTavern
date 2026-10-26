@@ -7,7 +7,7 @@
 // (pickRequest), and those go in full.
 import { editBook, editBookInfo } from '../worldbook.mjs'
 import { LONG_TOKENS, WRITING_RULES } from './prompts.mjs'
-import { attr, historyLines, readBlocks, splitKeys } from './blocks.mjs'
+import { attr, bodyFor, historyLines, readBlocks, splitKeys } from './blocks.mjs'
 import { ENTRY_BUDGET, bookBlock, modeOf, shownEntries } from './edit.mjs'
 
 // Entries the first look at a long book may ask to read.
@@ -109,7 +109,9 @@ export function readBookEdit(text, book, { shown = null, target = '', own = fals
   const { reply, blocks } = readBlocks(text, ['entry', 'new_entry', 'remove_entry', 'book'])
   const changes = new Map()
   let fresh = 0
-  for (const { tag, attrs, body } of blocks) {
+  for (const block of blocks) {
+    const { tag, attrs } = block
+    let { body } = block
     if (tag === 'book') {
       if (own) continue
       const name = String(attrs.name ?? '').replace(/\s+/g, ' ').trim().slice(0, 100)
@@ -129,6 +131,7 @@ export function readBookEdit(text, book, { shown = null, target = '', own = fals
         changes.set(`remove:${entry.uid}`, { id: `remove:${entry.uid}`, kind: 'removeEntry', uid: entry.uid, title: entry.comment, constant: entry.constant, before: entry.content })
         continue
       }
+      body = bodyFor(block, entry.content)
       const change = { id: `entry:${entry.uid}`, kind: 'entry', uid: entry.uid, title: entry.comment, constant: entry.constant, before: entry.content, after: body && body !== entry.content.trim() ? body : entry.content }
       const name = String(attrs.name ?? '').trim().slice(0, 200)
       if (name && name !== entry.comment) change.name = name
@@ -164,7 +167,8 @@ export function applyBookChanges(book, changes, ids) {
     .filter(c => c.kind === 'entry' && exists(c.uid))
     .map(c => ({
       uid: c.uid,
-      content: c.after,
+      // Only what the proposal changes: an edit made to the entry since stays.
+      ...(c.after !== c.before ? { content: c.after } : {}),
       ...(c.name ? { comment: c.name } : {}),
       ...(c.keys ? { keys: c.keys } : {}),
       ...(c.mode ? { constant: c.mode === 'constant' } : {}),

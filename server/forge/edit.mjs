@@ -7,7 +7,7 @@ import { editBook } from '../worldbook.mjs'
 import { newId } from '../store.mjs'
 import { CARD_FIELDS, cleanTags, editCard, greetingList } from '../../web/shared/card-edit.js'
 import { LONG_TOKENS, WRITING_RULES } from './prompts.mjs'
-import { attr, historyLines, readBlocks, splitKeys } from './blocks.mjs'
+import { attr, bodyFor, historyLines, readBlocks, splitKeys } from './blocks.mjs'
 
 // The card's fields as the model knows them: SillyTavern's names.
 export const FIELD_TAGS = Object.freeze({
@@ -155,7 +155,9 @@ export function readEdit(text, card, { shown = null, target = '' } = {}) {
   const entries = card.book?.entries ?? []
   const changes = new Map()
   let fresh = 0
-  for (const { tag, attrs, body } of blocks) {
+  for (const block of blocks) {
+    const { tag, attrs } = block
+    let { body } = block
     if (tag === 'field') {
       const key = FIELD_OF[String(attrs.name ?? '').trim().toLowerCase()]
       if (!key) continue
@@ -166,11 +168,13 @@ export function readEdit(text, card, { shown = null, target = '' } = {}) {
         continue
       }
       const before = String(card[key] ?? '')
+      body = bodyFor(block, before)
       if ((key === 'name' && !body) || body === before.trim()) continue
       changes.set(`field:${key}`, { id: `field:${key}`, kind: 'field', key, before, after: body })
     } else if (tag === 'greeting') {
       const index = Number.parseInt(attrs.index, 10) - 1
       const before = greetings[index] ?? ''
+      body = bodyFor(block, before)
       if (!(index >= 0) || index > greetings.length + 4 || !body || body === before.trim()) continue
       changes.set(`greeting:${index}`, { id: `greeting:${index}`, kind: 'greeting', index, before, after: body })
     } else if (tag === 'entry' || tag === 'remove_entry') {
@@ -180,6 +184,7 @@ export function readEdit(text, card, { shown = null, target = '' } = {}) {
         changes.set(`remove:${entry.uid}`, { id: `remove:${entry.uid}`, kind: 'removeEntry', uid: entry.uid, title: entry.comment, constant: entry.constant, before: entry.content })
         continue
       }
+      body = bodyFor(block, entry.content)
       const change = { id: `entry:${entry.uid}`, kind: 'entry', uid: entry.uid, title: entry.comment, constant: entry.constant, before: entry.content, after: body && body !== entry.content.trim() ? body : entry.content }
       const name = String(attrs.name ?? '').trim().slice(0, 200)
       if (name && name !== entry.comment) change.name = name
@@ -228,7 +233,8 @@ export function applyChanges(card, changes, ids) {
   const book = added.length ? ensureBook(card) : card.book
   if (!book) return { applied, prefix }
   const exists = uid => book.entries.some(e => e.uid === uid)
-  const edits = chosen.filter(c => c.kind === 'entry' && exists(c.uid)).map(c => ({ uid: c.uid, content: c.after, ...(c.name ? { comment: c.name } : {}), ...(c.keys ? { keys: c.keys } : {}) }))
+  // Only what the proposal changes: an edit made to the entry since stays.
+  const edits = chosen.filter(c => c.kind === 'entry' && exists(c.uid)).map(c => ({ uid: c.uid, ...(c.after !== c.before ? { content: c.after } : {}), ...(c.name ? { comment: c.name } : {}), ...(c.keys ? { keys: c.keys } : {}) }))
   const removed = chosen.filter(c => c.kind === 'removeEntry' && exists(c.uid)).map(c => c.uid)
   if (edits.length) prefix = editBook(book, { entries: edits }).prefix || prefix
   for (const change of added) prefix = editBook(book, { add: { comment: change.name, keys: change.keys, content: change.after, constant: change.constant } }).prefix || prefix

@@ -6,7 +6,7 @@
 // the ones it needs to read (presetPickRequest), and those go in full.
 import { editPreset, placementsOf, sectionsOf } from '../presets.mjs'
 import { LONG_TOKENS } from './prompts.mjs'
-import { attr, historyLines, readBlocks } from './blocks.mjs'
+import { attr, bodyFor, historyLines, readBlocks } from './blocks.mjs'
 import { ENTRY_BUDGET } from './edit.mjs'
 
 const PICK_MAX = 40
@@ -147,7 +147,9 @@ export function readPresetEdit(text, preset, { shown = null, target = '' } = {})
   const placeOfId = id => placements[preset.prompts.findIndex(p => p.id === id)]
   const changes = new Map()
   let fresh = 0
-  for (const { tag, attrs, body } of blocks) {
+  for (const block of blocks) {
+    const { tag, attrs } = block
+    let { body } = block
     if (tag === 'new_prompt') {
       if (!body || fresh >= NEW_MAX) continue
       const after = preset.prompts.find(p => p.id === String(attrs.after ?? '').trim())
@@ -174,6 +176,7 @@ export function readPresetEdit(text, preset, { shown = null, target = '' } = {})
     const change = { id: `prompt:${prompt.id}`, kind: 'prompt', pid: prompt.id, title: prompt.marker ? MARKER_TEXT[prompt.id] ?? prompt.name : prompt.name, marker: prompt.marker, place: placeOfId(prompt.id), before: prompt.content, after: prompt.content }
     if (enabled !== null && enabled !== prompt.enabled) change.enabled = enabled
     if (!prompt.marker && (!shown || shown.includes(prompt.id))) {
+      body = bodyFor(block, prompt.content)
       if (body && body !== prompt.content.trim()) change.after = body
       const name = String(attrs.name ?? '').trim().slice(0, 80)
       if (name && name !== prompt.name) change.name = name

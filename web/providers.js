@@ -451,6 +451,7 @@ export function initProviders({ api, el, toast, guard, saveFile, onChanged }) {
     if (report.updated.length) parts.push(t`更新 ${report.updated.length} 个`)
     if (report.defaultModel) parts.push(t`默认模型设为 ${report.defaultModel}`)
     if (report.failed.length) parts.push(t`没导入：${report.failed.join(t`；`)}`)
+    if (report.keyless?.length) parts.push(t`${report.keyless.join(t`、`)} 换了地址，原来的 API Key 没有留下，要重新填`)
     toast(t`${parts.join(t`，`) || t`没有变化`}。导入完可以删掉这个文件，里面有明文密钥。`, 9000)
   }
 

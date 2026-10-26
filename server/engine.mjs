@@ -4,7 +4,7 @@
 // prefix cache hits.
 // Other model references go to an optional backend passed in as `subscription`
 // (this machine's own install: server/subscription/); without one they are refused.
-import { activePath, booksForCard, childrenOf, editMessage as editChatMessage, pathTo, playerOf, presetFor, scriptsOf, selectNode } from './chats.mjs'
+import { activePath, booksForCard, chatPicks, childrenOf, editMessage as editChatMessage, pathTo, playerOf, presetFor, scriptsOf, selectNode } from './chats.mjs'
 import { hasPrefixRules, renderPresetTail } from './presets.mjs'
 import { buildTurnPrompt, chatTemplates, everyTurnReminder, renderEntry, replaceMacros, templateText, webSearchNote } from './prompt.mjs'
 import { applyStateUpdates, applyWrites, displayText, writeLabels } from './state.mjs'
@@ -52,6 +52,9 @@ function friendlyError(message, subscription) {
   return text
 }
 
+// The 联网 note as a new turn's message ends with it (webSearchNote).
+const SEARCH_NOTE = () => `\n\n${webSearchNote()}`
+
 /** What a session from compaction point `node` opens with: its summary and the last turns of `story`, as the prompt sends them. */
 function compactionRecap(node, story, names, scripts) {
   const macros = text => replaceMacros(text, names)
@@ -76,9 +79,13 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     return [...recent, input].join('\n')
   }
 
+  /** Entries injected in the last `turns` user turns (0: none held back) since the last compaction: the session after it never saw the ones before. */
   function recentRefs(path, turns) {
     const refs = new Set()
-    const users = path.filter(node => node.role === 'user').slice(-Math.max(0, turns))
+    const count = Math.max(0, Math.trunc(Number(turns)) || 0)
+    if (!count) return refs
+    const start = path.findLastIndex(node => node.compaction) + 1
+    const users = path.slice(start).filter(node => node.role === 'user').slice(-count)
     for (const node of users) for (const ref of node.injected ?? []) refs.add(ref)
     return refs
   }
@@ -97,9 +104,10 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
   }
 
   async function buildPrompt(chat, parent, input, { forceFull = false, marks = false }, templates) {
-    const [settings, card, preset, persona, globalScripts] = await Promise.all([store.getSettings(), store.getCard(chat.cardId), presetFor(store, chat.presetId), store.getPersona(), store.getRegex()])
+    const [settings, card, preset, globalScripts, regexSets] = await Promise.all([store.getSettings(), store.getCard(chat.cardId), presetFor(store, chat.presetId), store.getRegex(), store.getRegexSets()])
+    const { persona } = await chatPicks(store, chat, card)
     const books = await booksForCard(store, card, settings, chat)
-    const scripts = scriptsOf(card, preset, globalScripts)
+    const scripts = scriptsOf(card, preset, globalScripts, regexSets)
     const names = chat.names
     const macros = text => replaceMacros(text, names)
     const path = pathTo(chat, parent.id)
@@ -138,7 +146,9 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       const key = text => (hasEjs(text) ? templateText(session(), text, templateErrors, entry.comment || entry.uid) : text)
       const { text, error } = renderEntry(entry, { state, names, session: session(), world: book.name })
       if (error) templateErrors.push(`${entry.comment || entry.uid}: ${error}`)
-      return { ...entry, content: text, keys: entry.keys.map(key), secondaryKeys: entry.secondaryKeys.map(key), preprocessed: true }
+      // A key whose template came out empty matches nothing (as in SillyTavern), not every text.
+      const keys = list => list.map(key).map(k => String(k ?? '').trim()).filter(Boolean)
+      return { ...entry, content: text, keys: keys(entry.keys), secondaryKeys: keys(entry.secondaryKeys), preprocessed: true }
     }
     const bookOf = new Map(turnBooks.flatMap(book => book.entries.map(entry => [entry, book])))
     const refOf = (entry, book = bookOf.get(entry)) => `${book?.id}:${entry.uid}`
@@ -177,7 +187,9 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     // A keyword entry whose template (an @@if) printed nothing was not sent, so it is not recorded either.
     const sent = hits.map(hit => ({ ref: hit.ref, entry: hit.entry, item: render(hit.entry) })).filter(hit => hit.item.text)
     const note = card.depthPrompt && hasEjs(card.depthPrompt) ? templateText(session(), card.depthPrompt, templateErrors, msg`角色备注`) : card.depthPrompt
-    const characterNote = note ? replaceMacros(replaceVariableMacros(note, templates.session ? templates.session.currentState() : state), names).trim() : ''
+    const characterNote = note
+      ? replaceMacros(replaceVariableMacros(note, templates.session ? templates.session.currentState() : state, templates.session ? templates.session.currentVariables() : { local: chat.frameVars ?? {}, global: settings.globalVars ?? {} }), names).trim()
+      : ''
     const presetRender = text => (hasEjs(text) ? templateText(session(), text, templateErrors, msg`预设提示词`) : text)
     const presetText = preset
       ? renderPresetTail(preset, { card, persona: playerOf(card, persona, names.user), names, vars: chat.presetVars, input: promptInput, lastChar: parent.display ?? parent.text, render: presetRender })
@@ -244,11 +256,11 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
    * @param extra - more messages after the node ([{ role, text }]).
    */
   async function nodeTemplates(chat, nodeId, state, { extra = [], runType = 'generate', context = {} } = {}) {
-    const [settings, card, preset, globalScripts] = await Promise.all([store.getSettings(), store.getCard(chat.cardId), presetFor(store, chat.presetId), store.getRegex()])
+    const [settings, card, preset, globalScripts, regexSets] = await Promise.all([store.getSettings(), store.getCard(chat.cardId), presetFor(store, chat.presetId), store.getRegex(), store.getRegexSets()])
     const books = await booksForCard(store, card, settings, chat)
     const story = storyPath(pathTo(chat, nodeId))
     return chatTemplates({
-      names: chat.names, card, preset, books, scripts: scriptsOf(card, preset, globalScripts), state,
+      names: chat.names, card, preset, books, scripts: scriptsOf(card, preset, globalScripts, regexSets), state,
       local: chat.frameVars ?? {},
       global: settings.globalVars ?? {},
       messages: [...story.map(node => ({ role: node.role, text: node.text ?? '' })), ...extra],
@@ -354,8 +366,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
    * before it; `stripAll` does that for this turn.
    */
   async function apiMessages(chat, parent, { stripAll = false } = {}) {
-    const [card, preset, globalScripts] = await Promise.all([store.getCard(chat.cardId).catch(() => null), presetFor(store, chat.presetId), store.getRegex()])
-    const scripts = scriptsOf(card, preset, globalScripts)
+    const [card, preset, globalScripts, regexSets] = await Promise.all([store.getCard(chat.cardId).catch(() => null), presetFor(store, chat.presetId), store.getRegex(), store.getRegexSets()])
+    const scripts = scriptsOf(card, preset, globalScripts, regexSets)
     const macros = text => replaceMacros(text, chat.names)
     const path = pathTo(chat, parent.id)
     let start = 0
@@ -375,7 +387,10 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     const window = depthWindow(scripts, { placement: PLACEMENT.AI_OUTPUT, target: 'prompt' })
     const messages = turns.map((node, index) => {
       if (node.role === 'user') {
-        const prompt = node.prompt ?? node.text
+        let prompt = node.prompt ?? node.text
+        // A searched turn keeps its 联网 note while 联网 is on (the history stays as sent, the cache hits); with it
+        // off, the note goes, so no turn reads that it may search (the first turn after switching writes the cache again).
+        if (!chat.webSearch && prompt.endsWith(SEARCH_NOTE())) prompt = prompt.slice(0, -SEARCH_NOTE().length)
         return { role: 'user', content: index < stripBefore ? stripDynamicText(prompt) : prompt }
       }
       const reply = applyScripts(node.text, scripts, { placement: PLACEMENT.AI_OUTPUT, target: 'prompt', depth: turns.length - index, macros })
@@ -455,7 +470,9 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     if (!result.text.trim()) throw httpError(502, msg`${target.provider.name} 没有返回正文${result.stopReason ? msg`（${result.stopReason}）` : ''}`)
     const u = result.usage ?? {}
     const tokens = { input: u.input ?? 0, cacheRead: u.cacheRead ?? 0, cacheWrite: u.cacheWrite ?? 0, cacheWrite1h: 0, cacheWrite5m: u.cacheWrite ?? 0, output: u.output ?? 0, costUsd: null }
-    const api = { provider: target.provider.id, model: result.model ?? target.modelId, ...(result.truncated ? { truncated: true } : {}) }
+    // Cut off: at the output limit, or (联网 on Anthropic) still paused mid-search after being carried on a few times.
+    const cut = result.truncated ? true : result.stopReason === 'pause_turn' ? 'paused' : null
+    const api = { provider: target.provider.id, model: result.model ?? target.modelId, ...(cut ? { truncated: cut } : {}) }
     return { reply: result.text, model: target.model, tokens, sdk: null, api, search: result.search ?? null }
   }
 
@@ -500,7 +517,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       // 联网: the provider's own search, when this chat has it on and the model has one. A new turn's
       // message says when to search (kept with the turn, so a regenerate sends the same).
       const webSearch = Boolean(chat.webSearch && target.api && webSearchKind(target.provider, target.modelId))
-      if (webSearch && !userNode) prepared = { ...prepared, prompt: `${prepared.prompt}\n\n${webSearchNote()}` }
+      const withSearchNote = p => (webSearch && !userNode ? { ...p, prompt: `${p.prompt}${SEARCH_NOTE()}` } : p)
+      prepared = withSearchNote(prepared)
       const newSession = Boolean(parent.compaction)
       // The turn's prompt again with the full variable list, the piled-up copies gone.
       const reprepare = async () => {
@@ -516,7 +534,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         // The history is rebuilt every turn (and applies the card's regex as it goes), so the strip always applies.
         if (!userNode && prepared.shouldCompact) {
           const removedChars = accumulatedDynamic(pathTo(chat, parent.id))
-          prepared = await reprepare()
+          // Built again: the 联网 note with it, as the search tool still goes.
+          prepared = withSearchNote(await reprepare())
           compacted = { changed: true, removedChars }
         }
       } else {
@@ -725,8 +744,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     const history = await apiMessages(chat, node)
     // A reply that carries a compaction has no history after it: its summary and last turns stand in, as for the next turn.
     if (node.compaction) {
-      const [card, preset, globalScripts] = await Promise.all([store.getCard(chat.cardId).catch(() => null), presetFor(store, chat.presetId), store.getRegex()])
-      instruction = `${compactionRecap(node, storyPath(pathTo(chat, node.id)), chat.names, scriptsOf(card, preset, globalScripts))}\n\n${instruction}`
+      const [card, preset, globalScripts, regexSets] = await Promise.all([store.getCard(chat.cardId).catch(() => null), presetFor(store, chat.presetId), store.getRegex(), store.getRegexSets()])
+      instruction = `${compactionRecap(node, storyPath(pathTo(chat, node.id)), chat.names, scriptsOf(card, preset, globalScripts, regexSets))}\n\n${instruction}`
     }
     const started = Date.now()
     const result = await generateApi(target, { system: chat.systemPrompt, messages: [...history, { role: 'user', content: instruction }], maxTokens }, signal ?? new AbortController().signal, onText)
@@ -775,7 +794,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     let request
     if (raw) {
       const card = await store.getCard(chat.cardId)
-      const persona = playerOf(card, await store.getPersona(), chat.names.user)
+      const persona = playerOf(card, (await chatPicks(store, chat, card)).persona, chat.names.user)
       request = { ...rawRequest({ card, persona, history: story, config }), maxTokens }
     } else {
       const messages = story.slice(-20)
@@ -806,8 +825,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     // Templates in the new text run once, as a new message's do; the turn's variables stay as they were.
     const next = hasEjs(text) && chat.nodes[nodeId] ? (await renderAtNode(chat, nodeId, [String(text)], { runType: 'render_permanent' })).texts[0] : text
     // The input as its turn sent it (buildPrompt: the card's prompt-side regex at depth 0, then macros).
-    const [card, preset, globalScripts] = await Promise.all([store.getCard(chat.cardId).catch(() => null), presetFor(store, chat.presetId), store.getRegex()])
-    const scripts = scriptsOf(card, preset, globalScripts)
+    const [card, preset, globalScripts, regexSets] = await Promise.all([store.getCard(chat.cardId).catch(() => null), presetFor(store, chat.presetId), store.getRegex(), store.getRegexSets()])
+    const scripts = scriptsOf(card, preset, globalScripts, regexSets)
     const macros = input => replaceMacros(input, chat.names)
     const sentInput = input => macros(applyScripts(input, scripts, { placement: PLACEMENT.USER_INPUT, target: 'prompt', depth: 0, macros }))
     const edit = editChatMessage(chat, nodeId, next, { sentInput })

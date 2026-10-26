@@ -23,6 +23,19 @@ const PROTOTYPE_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
 /** Whether path keys stay among the variables themselves (none reaches a prototype). */
 export const writablePath = keys => keys.every(key => !PROTOTYPE_KEYS.has(key))
 
+/**
+ * A card UI's change to a variable bucket applied to what is saved now: the top-level keys in `set` take their
+ * values, those in `unset` go, every other key stays as saved (a turn's template or another frame may have
+ * written it since the UI opened). → a new object.
+ */
+export function patchVars(current, patch) {
+  const out = { ...(current && typeof current === 'object' && !Array.isArray(current) ? current : {}) }
+  const set = patch?.set && typeof patch.set === 'object' && !Array.isArray(patch.set) ? patch.set : {}
+  for (const [key, value] of Object.entries(set)) if (!PROTOTYPE_KEYS.has(key)) out[key] = value
+  for (const key of Array.isArray(patch?.unset) ? patch.unset : []) if (typeof key === 'string' && !PROTOTYPE_KEYS.has(key)) delete out[key]
+  return out
+}
+
 export function getPath(root, path) {
   let cursor = root
   for (const key of splitPath(path)) {
@@ -68,18 +81,25 @@ export function formatValue(value, indent = '') {
     .join('\n')
 }
 
-const VAR_MACRO = /\{\{\s*(get|format)_(?:message|chat|global)_variable::([^}]*?)\s*\}\}|\{\{\s*getvar::([^}]*?)\s*\}\}/gi
+const VAR_MACRO = /\{\{\s*(get|format)_(message|chat|global)_variable::([^}]*?)\s*\}\}|\{\{\s*getvar::([^}]*?)\s*\}\}/gi
 
 export function hasVariableMacros(text) {
   VAR_MACRO.lastIndex = 0
   return VAR_MACRO.test(String(text ?? ''))
 }
 
-/** Resolve {{get_message_variable::p}}, {{format_message_variable::p}}, {{getvar::p}}. */
-export function replaceVariableMacros(text, state) {
+/**
+ * Resolve {{get_message_variable::p}}, {{format_message_variable::p}}, {{getvar::p}}
+ * and the chat and global forms. As in SillyTavern, getvar and the chat forms read
+ * the chat's own variables (`local`) and the global forms the app's (`global`);
+ * a path not found there is read from the state ({stat_data}), as before.
+ */
+export function replaceVariableMacros(text, state, { local = null, global = null } = {}) {
   const vars = variablesOf(state)
-  return String(text ?? '').replace(VAR_MACRO, (_, kind, path, getvarPath) => {
-    const value = getPath(vars, path ?? getvarPath)
+  return String(text ?? '').replace(VAR_MACRO, (_, kind, scope, path, getvarPath) => {
+    const where = getvarPath !== undefined || scope?.toLowerCase() === 'chat' ? local : scope?.toLowerCase() === 'global' ? global : null
+    const own = where ? getPath(where, path ?? getvarPath) : undefined
+    const value = own !== undefined ? own : getPath(vars, path ?? getvarPath)
     if (kind?.toLowerCase() === 'format') return formatValue(value)
     const v = unwrap(value)
     return v === undefined || v === null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v)

@@ -271,6 +271,8 @@ function quotaTile(label, value, resetsAt) {
 /** @param subscription - false in the Android app: no quota tiles or quota chart. */
 export function renderUsage(root, data, rateLimit, labelOf, { subscription = true } = {}) {
   const turns = data.turns.map(turn => ({ ...turn, modelLabel: labelOf(turn.model) }))
+  // The turns the hit-rate chart draws (those that reported usage): its x is a place in this list.
+  const hitTurns = turns.filter(turn => turn.hit !== null)
   const today = data.today
   const windows = rateLimit?.unifiedWindows ?? {}
   const five = windows.five_hour?.utilization ?? data.latestRate?.five
@@ -290,8 +292,8 @@ export function renderUsage(root, data, rateLimit, labelOf, { subscription = tru
     percentLines({
       title: t`缓存命中率`,
       sub: t`每轮的缓存读取占输入的比例。换模型、改前缀或隔太久（缓存过期）会让它掉下来。`,
-      series: [{ key: 'hit', label: t`命中率`, color: 'var(--series-1)', points: turns.filter(turn => turn.hit !== null).map((turn, i) => ({ x: i, y: turn.hit, at: turn.at })) }],
-      xLabel: (i, long) => (turns[Math.round(i)] ? (long ? stamp(turns[Math.round(i)].at) : clock(turns[Math.round(i)].at)) : ''),
+      series: [{ key: 'hit', label: t`命中率`, color: 'var(--series-1)', points: hitTurns.map((turn, i) => ({ x: i, y: turn.hit, at: turn.at })) }],
+      xLabel: (i, long) => (hitTurns[Math.round(i)] ? (long ? stamp(hitTurns[Math.round(i)].at) : clock(hitTurns[Math.round(i)].at)) : ''),
       ariaLabel: t`每轮缓存命中率折线图`,
     }),
     !subscription ? null : percentLines({

@@ -216,13 +216,21 @@ const cloudFailure = (label, error, key, options) => httpError(error?.timedOut ?
 export const AUDIO_EXT = Object.freeze({ 'audio/mpeg': 'mp3', 'audio/wav': 'wav', 'audio/ogg': 'ogg', 'audio/flac': 'flac', 'audio/aac': 'aac' })
 const TYPE_ALIASES = { 'audio/mp3': 'audio/mpeg', 'audio/x-wav': 'audio/wav', 'audio/wave': 'audio/wav', 'audio/vnd.wave': 'audio/wav', 'audio/x-flac': 'audio/flac', 'audio/opus': 'audio/ogg' }
 
-/** The audio type from the bytes, else from the Content-Type; null when neither says. */
-export function audioType(buffer, contentType = '') {
+/** The type a container header names (WAV, ID3, Ogg, FLAC), or null: what bare frame bytes cannot be mistaken for. */
+function containerType(buffer) {
   const head = buffer.subarray(0, 12)
   if (head.subarray(0, 4).toString('latin1') === 'RIFF' && head.subarray(8, 12).toString('latin1') === 'WAVE') return 'audio/wav'
   if (head.subarray(0, 3).toString('latin1') === 'ID3') return 'audio/mpeg'
   if (head.subarray(0, 4).toString('latin1') === 'OggS') return 'audio/ogg'
   if (head.subarray(0, 4).toString('latin1') === 'fLaC') return 'audio/flac'
+  return null
+}
+
+/** The audio type from the bytes, else from the Content-Type; null when neither says. */
+export function audioType(buffer, contentType = '') {
+  const head = buffer.subarray(0, 12)
+  const container = containerType(buffer)
+  if (container) return container
   // A frame sync: MPEG audio has a layer, ADTS (AAC) has layer 0.
   if (head[0] === 0xff && (head[1] & 0xe0) === 0xe0) return (head[1] & 0x06) === 0 ? 'audio/aac' : 'audio/mpeg'
   const type = String(contentType).split(';')[0].trim().toLowerCase()
@@ -258,14 +266,15 @@ const PCM_TYPE = /^audio\/(pcm|l16|x-pcm|raw)\b/i
  */
 export function audioOf(buffer, { contentType = '', pcmRate = 0, fallback = '' } = {}) {
   if (!buffer?.length) throw new Error(msg`返回的音频是空的`)
-  const sniffed = audioType(buffer)
   const declared = String(contentType)
-  if (!sniffed && (PCM_TYPE.test(declared) || pcmRate)) {
+  // Said or expected to be raw PCM: only a container header says otherwise. Its first sample can look like an
+  // MPEG frame sync (FF Fx), which was taken for MP3 and played as noise, with no WAV header.
+  if (!containerType(buffer) && (PCM_TYPE.test(declared) || pcmRate)) {
     const rate = Number(/rate=(\d+)/i.exec(declared)?.[1]) || pcmRate || 24000
     const channels = Number(/channels=(\d)/i.exec(declared)?.[1]) || 1
     return { buffer: wavFromPcm(buffer, rate, channels), mime: 'audio/wav' }
   }
-  const mime = sniffed ?? audioType(Buffer.alloc(0), declared) ?? fallback
+  const mime = audioType(buffer) ?? audioType(Buffer.alloc(0), declared) ?? fallback
   if (!mime) {
     // A JSON error with a 200 status is the usual reason.
     const text = buffer.subarray(0, 200).toString('utf8')

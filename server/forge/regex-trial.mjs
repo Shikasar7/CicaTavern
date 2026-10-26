@@ -9,14 +9,16 @@ const TIMEOUT = 2000
 /**
  * → { matches, samples: [{ match, shown, sent }] }, or { error: 'invalid' }
  * (the pattern does not compile), 'timeout' or 'failed'.
+ * @param options.names - { char, user } for a script whose pattern fills them in (substituteRegex).
  */
-export function tryScript(script, text, { signal, timeout = TIMEOUT } = {}) {
+export function tryScript(script, text, { signal, timeout = TIMEOUT, names = null } = {}) {
   if (!regexFromString(script.findRegex)) return Promise.resolve({ error: 'invalid' })
+  if (signal?.aborted) return Promise.resolve({ error: 'failed' })
   const placement = script.placement.includes(PLACEMENT.AI_OUTPUT) || !script.placement.includes(PLACEMENT.USER_INPUT) ? PLACEMENT.AI_OUTPUT : PLACEMENT.USER_INPUT
   return new Promise(resolve => {
     let worker
     try {
-      worker = new Worker(new URL('./regex-trial-worker.mjs', import.meta.url), { workerData: { script, text, placement } })
+      worker = new Worker(new URL('./regex-trial-worker.mjs', import.meta.url), { workerData: { script, text, placement, names } })
     } catch {
       resolve({ error: 'failed' })
       return

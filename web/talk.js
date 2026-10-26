@@ -43,6 +43,7 @@ export function createTalk({ api, el, guard, openProviders }, spec) {
     poll: null,
     shown: '', // what the thread last showed
     modelsShown: '',
+    applying: false, // a proposal is going in: no new request meanwhile
   }
   const view = {}
   view.thread = el('div', { class: 'ce-thread' })
@@ -244,8 +245,8 @@ export function createTalk({ api, el, guard, openProviders }, spec) {
     const busy = Boolean(state.session?.job)
     view.send.hidden = busy
     view.stop.hidden = !busy
-    view.send.disabled = !view.composer.value.trim()
-    view.composer.disabled = busy
+    view.send.disabled = !view.composer.value.trim() || state.applying
+    view.composer.disabled = busy || state.applying
     view.model.disabled = busy
     view.targetChip.hidden = !state.target
     if (state.target) {
@@ -325,10 +326,14 @@ export function createTalk({ api, el, guard, openProviders }, spec) {
     const button = view.applyPicked
     button.disabled = true
     button.textContent = t`正在采用…`
+    state.applying = true
+    updateFoot()
     let result
     try {
       result = await api(`${spec.url()}/apply`, { method: 'POST', body: { ids: [...state.picked] } })
     } finally {
+      state.applying = false
+      updateFoot()
       if (button.isConnected) pickedCount()
     }
     load(result.session)

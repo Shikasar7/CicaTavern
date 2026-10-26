@@ -64,7 +64,7 @@ export function initVnSaves({ api, el, toast, guard, current, snapshot, cardId, 
     main.addEventListener('click', guard(async () => {
       if (action === 'save') {
         if (save && !confirm(t`覆盖「${label}」？`)) return
-        await saveTo(slot)
+        if (!(await saveTo(slot))) return
         toast(t`已存到「${label}」`)
       } else await loadSave(save)
       if (dialog?.open) render()

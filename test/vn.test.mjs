@@ -373,4 +373,15 @@ test('视觉小说格式 in the chat: the mark becomes the name, effects go, not
   assert.equal(vnDays.markSpeakers(own), own)
   assert.equal(vnDays.hasMarks(text), true)
   assert.equal(vnDays.hasMarks(own.split('\n')[0]), false)
+  // A finished reply ending on the card's own status line keeps it; while it streams in, a mark at the end may be half of one.
+  const status = '她笑了。\n【好感度：85｜心情：开心】'
+  assert.equal(vnDays.markSpeakers(status), status)
+  assert.equal(vnDays.markSpeakers(status, undefined, { partial: true }), '她笑了。')
+  assert.equal(vnDays.markSpeakers('她笑了。\n【小雨|微笑】'), '她笑了。', 'a speaker with nothing to say goes')
+})
+
+test('a line of dialogue that says 地点： is no scene header', () => {
+  assert.equal(headerPlace('「明早六点，地点：码头，别迟到。」她说完就走了。'), null)
+  assert.equal(headerPlace('她低声说，地点：旧仓库。'), null)
+  assert.deepEqual(headerPlace('地点：雪山脚下\n她走了。'), { time: '', place: '雪山脚下', weather: '' })
 })

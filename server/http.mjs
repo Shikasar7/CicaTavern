@@ -3,7 +3,7 @@
 // other Host so a DNS-rebinding page cannot drive the API. A phone must present
 // the access token. Mutating requests must carry X-Agent-Tavern (a custom
 // header forces a CORS preflight we never approve).
-import { randomBytes } from 'node:crypto'
+import { createHmac, randomBytes } from 'node:crypto'
 import { createServer } from 'node:http'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
@@ -12,7 +12,7 @@ import path from 'node:path'
 import YAML from 'yaml'
 import { fileURLToPath } from 'node:url'
 import { backfillEntryPositions, cardSummary, cleanGroup, exportCard, greetingsOf, importOwnCard, normalizeCard, organizeCard, parseCardFile, previousVersion, rawOfPicture, sillyTavernCard, unwrapWorkspace, writeCardPng } from './cards.mjs'
-import { chatSummary, chatView, childrenOf, createChat, selectNode, activePath, rebuildPrompt, restoreFolded, rollbackTo, editCompaction, dropCompaction, exportStory, importStory, importSillyTavern, forkChat, mountChange, switchOpening, booksForCard, playerOf } from './chats.mjs'
+import { chatSummary, chatView, childrenOf, createChat, selectNode, activePath, rebuildPrompt, restoreFolded, rollbackTo, editCompaction, dropCompaction, exportStory, importStory, importSillyTavern, forkChat, mountChange, switchOpening, booksForCard, playerOf, chatPicks, newChatPicks, switchPicks } from './chats.mjs'
 import { bookByName, bookNames, fieldChange, parseUpdates, setFrameVars, thEntry, withChatChanges, writeChatBook } from './frames.mjs'
 import { editPreset, exportPreset, importOwnPreset, normalizePreset, presetDetail, presetSummary } from './presets.mjs'
 import { basicDetail } from './basic.mjs'
@@ -24,17 +24,21 @@ import { initTemplates, templateSyntaxError } from './template.mjs'
 import { canonicalModel } from './models.mjs'
 import { createLedger } from './usage.mjs'
 import { createMedia, drawChoiceOf } from './media.mjs'
-import { createAppearance } from './appearance.mjs'
-import { createRegex } from './regex.mjs'
+import { createAppearance, imageKind } from './appearance.mjs'
+import { attachedSummary, createRegex, withAttachedScripts } from './regex.mjs'
+import { createPickLists } from './personas.mjs'
 import { blockSent, createBlockWords } from './blockwords.mjs'
 import { promptRules } from '../web/shared/blockwords.js'
 import { createScenes } from './scenes.mjs'
+import { createDrawHistory, dropImage, dropOldImage, madeAt, oldImageFiles, pickImage, redrawImage } from './draw-history.mjs'
 import { createSaves } from './saves.mjs'
 import { KEYED as VOICE_KEYED } from './voice/index.mjs'
 import { createPromptLibrary } from './prompts.mjs'
 import { createForge } from './forge/index.mjs'
 import { ensureBook } from './forge/edit.mjs'
 import { editCard, greetingList } from '../web/shared/card-edit.js'
+import { patchVars } from '../web/shared/vars.js'
+import { normalizeScripts, withUniqueIds } from '../web/shared/regex.js'
 import { chatPackage, importChatPackage, savePackagePicture } from './transfer.mjs'
 import { createStore, defaultDataRoot, httpError, newId, PRIVACY_NOTICE } from './store.mjs'
 import { currentLanguage, localize, msg, pageIn, requestLanguage, withLanguage } from './i18n.mjs'
@@ -42,7 +46,7 @@ import { createUpdater } from './update/index.mjs'
 import { createShortcut } from './update/install.mjs'
 import { addEntries, bookCounts, editBook, editBookInfo, emptyBook, inPrefix, isDynamic, isInitvar, normalizeBook, standaloneBook, worldFile } from './worldbook.mjs'
 import { replaceMacros } from './prompt.mjs'
-import { accessCookie, hostAllowed, isLoopback, lanAddresses, loginPage, readCookie, tokensEqual } from './access.mjs'
+import { accessCookie, hostAllowed, isLoopback, lanAddresses, loginPage, signedIn, tokensEqual } from './access.mjs'
 import { createDiagnostics } from './diagnostics.mjs'
 import { relayRequest } from './relay.mjs'
 import { onSlowPattern } from './regex-guard.mjs'
@@ -56,6 +60,9 @@ const hasLauncher = () => process.platform === 'win32' && existsSync(LAUNCHER)
 const subscriptionBackend = existsSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'subscription', 'index.mjs'))
   ? await import('./subscription/index.mjs')
   : null
+// /api/personas and /api/styles: the kind of list (web/shared/personas.js KINDS).
+const KIND_OF = { personas: 'persona', styles: 'style' }
+
 const STATIC = {
   '/': ['index.html', 'text/html; charset=utf-8'],
   '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
@@ -79,6 +86,8 @@ const STATIC = {
   '/shared/speech.js': ['shared/speech.js', 'text/javascript; charset=utf-8'],
   '/shared/vars.js': ['shared/vars.js', 'text/javascript; charset=utf-8'],
   '/shared/regex.js': ['shared/regex.js', 'text/javascript; charset=utf-8'],
+  '/shared/personas.js': ['shared/personas.js', 'text/javascript; charset=utf-8'],
+  '/personas.js': ['personas.js', 'text/javascript; charset=utf-8'],
   '/shared/basic.js': ['shared/basic.js', 'text/javascript; charset=utf-8'],
   '/shared/status.js': ['shared/status.js', 'text/javascript; charset=utf-8'],
   '/shared/appearance.js': ['shared/appearance.js', 'text/javascript; charset=utf-8'],
@@ -106,6 +115,7 @@ const STATIC = {
   '/diagnostics.js': ['diagnostics.js', 'text/javascript; charset=utf-8'],
   '/blockwords.js': ['blockwords.js', 'text/javascript; charset=utf-8'],
   '/shared/blockwords.js': ['shared/blockwords.js', 'text/javascript; charset=utf-8'],
+  '/dictation.js': ['dictation.js', 'text/javascript; charset=utf-8'],
   '/icon.png': ['icon.png', 'image/png'],
   '/favicon.ico': ['icon.ico', 'image/x-icon'],
   // A phone's home screen (Safari「添加到主屏幕」, Android「安装应用」): see /manifest.webmanifest.
@@ -121,12 +131,14 @@ const MAX_BODY = 40 * 1024 * 1024
 const modelRef = ref => (isProviderRef(ref) ? ref : canonicalModel(ref))
 const VERSION = appVersion()
 
-async function readBody(req) {
+/** @param max - the most it reads; past it (said up front or arriving) the request is refused, the rest never kept. */
+async function readBody(req, max = MAX_BODY) {
+  if (Number(req.headers['content-length']) > max) throw httpError(413, msg`文件太大`)
   const chunks = []
   let size = 0
   for await (const chunk of req) {
     size += chunk.length
-    if (size > MAX_BODY) throw httpError(413, msg`文件太大`)
+    if (size > max) throw httpError(413, msg`文件太大`)
     chunks.push(chunk)
   }
   const text = Buffer.concat(chunks).toString('utf8')
@@ -201,10 +213,21 @@ const PNG_IMAGE = /^data:image\/png;base64,([A-Za-z0-9+/=\s]+)$/
 const MAX_AVATAR = 15 * 1024 * 1024
 
 /** An uploaded card file (SillyTavern PNG/JSON, or this app's own export) → { card, avatar }. */
+/** [summary] of a stored card or preset, or [] (said in the console) when its file is too damaged to read. */
+function summaryOrNone(summarize, item, kind) {
+  try {
+    return [summarize(item)]
+  } catch (error) {
+    console.warn(`[CicaTavern] ${kind} ${item?.id ?? '?'} left out of the list: ${error.message}`)
+    return []
+  }
+}
+
+/** → { card, avatar, raw }: `raw` the SillyTavern JSON it was read from (null for this app's own export). */
 function readCardUpload(body) {
   const { filename, buffer } = decodeUpload(body)
   const { raw, avatar } = parseCardFile(filename, buffer)
-  return importOwnCard(raw) ?? { card: normalizeCard(raw), avatar }
+  return importOwnCard(raw) ?? { card: normalizeCard(raw), avatar, raw }
 }
 
 /**
@@ -258,11 +281,14 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
   const engine = createEngine(store, isolation, ledger, { subscription })
   // This install's own image backends (server/subscription/), offered beside the usual ones.
   const ownBackends = features.subscription ? subscriptionBackend.imageBackends?.({ store, proxy: () => isolation.proxy }) ?? [] : []
-  const media = createMedia(store, { proxy: () => isolation.proxy, askInContext: engine.askInContext, features, ownBackends })
+  // 抽图历史: the pictures a card's places had before they were drawn again (draw-history.mjs).
+  const drawHistory = createDrawHistory(store, { keep: async () => (await media.settings()).drawHistory })
+  const media = createMedia(store, { proxy: () => isolation.proxy, askInContext: engine.askInContext, features, ownBackends, history: drawHistory })
   const appearance = createAppearance(store)
   const regex = createRegex(store)
+  const picks = createPickLists(store)
   const blockWords = createBlockWords(store)
-  const scenes = createScenes(store, { media })
+  const scenes = createScenes(store, { media, history: drawHistory })
   const saves = createSaves(store)
   const prompts = createPromptLibrary(store)
   const forge = createForge(store, {
@@ -308,7 +334,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     if (!idleExitMs || !onShutdown || presence.size || access.mode === 'lan') return
     idleTimer = setTimeout(() => {
       if (presence.size) return
-      if (engine.busy() || forge.busy()) return armIdle()
+      if (engine.busy() || forge.busy() || updater.working()) return armIdle()
       onShutdown()
     }, idleExitMs)
     idleTimer.unref?.()
@@ -361,7 +387,9 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     res.end = (...args) => {
       res.end = end
       const pathname = requestUrl(req)?.pathname ?? ''
-      const failed = res.statusCode >= 400 && res.statusCode !== 499 && typeof res.errorText === 'string' && pathname.startsWith('/api/') && !pathname.startsWith('/api/diagnostics')
+      // Only requests let in (logFailures, set past the gate): a device without the key, or a website poking at
+      // made-up addresses, can't fill the log and push the real errors out of it.
+      const failed = res.logFailures === true && res.statusCode >= 400 && res.statusCode !== 499 && typeof res.errorText === 'string' && pathname.startsWith('/api/') && !pathname.startsWith('/api/diagnostics')
       if (!failed) return end.apply(res, args)
       diagnostics.record({ source: 'request', what: `${req.method} ${pathname}`, status: res.statusCode, message: res.errorText, stack: res.errorStack })
         .catch(() => {})
@@ -406,6 +434,12 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     const raw = rawOfPicture(card.hasAvatar ? await readFile(store.avatarPath(cardId)).catch(() => null) : null)
     const data = raw?.data && typeof raw.data === 'object' ? raw.data : raw
     return standaloneBook(card.book, data?.character_book ?? null, { name: typeof name === 'string' ? name : '' })
+  }
+
+  /** The card a SillyTavern export writes: with `?regex=sets`, the 正则集 attached to it after its own scripts. */
+  async function exportedCard(cardId, url) {
+    const card = await store.getCard(cardId)
+    return url.searchParams.get('regex') === 'sets' ? withAttachedScripts(card, await store.getRegexSets()) : card
   }
 
   const routes = [
@@ -484,13 +518,13 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       return exportProviders(providers, settings.model)
     }],
     ['POST', /^\/api\/providers\/import$/, async (_, body) => {
-      const { list, added, updated, failed, defaultModel } = importProviders(await store.getProviders(), body.archive)
+      const { list, added, updated, failed, keyless, defaultModel } = importProviders(await store.getProviders(), body.archive)
       await store.saveProviders(list)
       // Take the file's default model unless this side already uses one of its providers.
       const settings = await store.getSettings()
       const current = isProviderRef(settings.model) && list.some(p => settings.model.startsWith(`${p.id}/`))
       if (defaultModel && !current) await store.saveSettings({ model: defaultModel })
-      return { added, updated, failed, defaultModel: current ? '' : defaultModel }
+      return { added, updated, failed, keyless, defaultModel: current ? '' : defaultModel }
     }],
     // DSH's providers (address, protocol, models; keys stay in DSH) from a profile's cordis.patch.yml.
     ['POST', /^\/api\/providers\/import-dsh$/, async (_, body) => {
@@ -521,7 +555,10 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['GET', /^\/api\/settings$/, () => store.getSettings()],
     ['PUT', /^\/api\/settings$/, async (_, body) => {
       const before = (await store.getSettings()).proxy
-      const saved = await store.saveSettings({ ...body, media: undefined })
+      // A card UI's global variables come as the keys it changed (globalVarsPatch), put over those saved now.
+      const saved = body?.globalVarsPatch !== undefined
+        ? await store.updateSettings(current => ({ globalVars: patchVars(current.globalVars, body.globalVarsPatch) }))
+        : await store.saveSettings({ ...body, media: undefined })
       uiLanguage = saved.uiLanguage
       if (saved.proxy !== before) await network.apply(saved.proxy)
       return saved
@@ -539,6 +576,33 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     // 表情差分: the 立绘 with another face, uploaded or (a slow call below) drawn.
     ['PUT', /^\/api\/cards\/([\w-]+)\/sprites\/([\w-]+)\/expressions\/(\w+)$/, ([id, entryId, expression], body) => scenes.setExpression(id, entryId, expression, body?.image)],
     ['DELETE', /^\/api\/cards\/([\w-]+)\/sprites\/([\w-]+)\/expressions\/(\w+)$/, ([id, entryId, expression]) => scenes.removeExpression(id, entryId, expression)],
+    // 抽图历史 (draw-history.mjs): a card's old pictures by place (the pictures are
+    // GET …/history/:file). One taken back takes the place of the one there now,
+    // which is kept instead; the card's own picture is taken back by the page
+    // (PUT /api/cards/:id/avatar with `history`), which makes it a PNG first.
+    ['GET', /^\/api\/cards\/([\w-]+)\/history$/, ([id]) => drawHistory.list(id)],
+    ['POST', /^\/api\/cards\/([\w-]+)\/history\/([\w.-]+)\/use$/, async ([id, file]) => {
+      await store.getCard(id)
+      const found = await drawHistory.find(id, file)
+      if (!found) throw httpError(404, msg`这张旧图已经不在了`)
+      if (found.slot === 'avatar') throw httpError(400, msg`头像在「修改角色卡」里换回来`)
+      const { slot, entry, buffer } = await drawHistory.take(id, file)
+      try {
+        const view = slot.startsWith('roster:')
+          ? await media.saveRosterRef(id, slot.slice('roster:'.length), `data:image/${imageKind(buffer).replace('jpg', 'jpeg')};base64,${buffer.toString('base64')}`)
+          : await scenes.restore(id, slot, buffer, entry)
+        return { ...view, history: await drawHistory.list(id) }
+      } catch (error) {
+        // Not taken back after all: kept again.
+        await drawHistory.push(id, slot, { buffer, ...entry })
+        throw error
+      }
+    }],
+    ['DELETE', /^\/api\/cards\/([\w-]+)\/history\/([\w.-]+)$/, async ([id, file]) => {
+      await store.getCard(id)
+      await drawHistory.remove(id, file)
+      return drawHistory.list(id)
+    }],
     // 存档 (saves.mjs): a card's save slots for the visual novel mode.
     ['GET', /^\/api\/cards\/([\w-]+)\/saves$/, ([id]) => saves.list(id)],
     ['PUT', /^\/api\/cards\/([\w-]+)\/saves\/slot\/(\w+)$/, ([id, slot], body) => saves.put(id, slot, body)],
@@ -557,12 +621,36 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
         return { save, chat: chatView(await store.saveChat(chat)) }
       })
     }],
-    // 正则管理 (regex.mjs): the global scripts, and the ones a card or a preset carries.
+    // 正则管理 (regex.mjs): the global scripts, 正则集 for the cards ticked for them, and the
+    // ones a card or a preset carries. A place is global, set-<id>, card-<id> or preset-<id>.
     ['GET', /^\/api\/regex$/, () => regex.list()],
     ['PUT', /^\/api\/regex$/, (_, body) => regex.save(body?.scripts)],
-    ['POST', /^\/api\/regex\/import$/, (_, body) => regex.importScripts(body?.scripts)],
+    // Into `to` (global when not said), or a new set named `name` (`to` = 'new').
+    ['POST', /^\/api\/regex\/import$/, (_, body) => regex.importScripts(body?.scripts, body?.to, body?.name)],
+    ['POST', /^\/api\/regex\/sets$/, (_, body) => regex.createSet(body ?? {})],
+    ['PUT', /^\/api\/regex\/sets\/([\w-]+)$/, ([id], body) => regex.updateSet(id, body ?? {})],
+    ['POST', /^\/api\/regex\/sets\/([\w-]+)\/copy$/, ([id]) => regex.copySet(id)],
+    // The cards that use a set, ticked at once: `{ ids }` is all of them.
+    ['PUT', /^\/api\/regex\/sets\/([\w-]+)\/cards$/, ([id], body) => regex.setCards(id, body?.ids)],
+    ['DELETE', /^\/api\/regex\/sets\/([\w-]+)$/, async ([id]) => {
+      const result = await regex.deleteSet(id)
+      await forge.dropTalk('regex', `set-${id}`)
+      return result
+    }],
+    // Scripts copied or moved from one place to another, or into a new set (`to` empty).
+    ['POST', /^\/api\/regex\/transfer$/, (_, body) => regex.transfer(body ?? {})],
     ['PUT', /^\/api\/cards\/([\w-]+)\/regex$/, ([id], body) => regex.saveCardScripts(id, body?.scripts)],
     ['PUT', /^\/api\/presets\/([\w-]+)\/regex$/, ([id], body) => regex.savePresetScripts(id, body?.scripts)],
+    // 你的角色 and 文风 (personas.mjs): the lists, an item at a time, and which cards pick which.
+    ['GET', /^\/api\/(personas|styles)$/, ([kinds]) => picks.list(KIND_OF[kinds])],
+    ['POST', /^\/api\/(personas|styles)$/, ([kinds], body) => picks.create(KIND_OF[kinds], body ?? {})],
+    ['POST', /^\/api\/(personas|styles)\/import$/, ([kinds], body) => picks.importFile(KIND_OF[kinds], body ?? {})],
+    ['PUT', /^\/api\/(personas|styles)\/([\w-]+)$/, ([kinds, id], body) => picks.update(KIND_OF[kinds], id, body ?? {})],
+    ['DELETE', /^\/api\/(personas|styles)\/([\w-]+)$/, ([kinds, id]) => picks.remove(KIND_OF[kinds], id)],
+    ['POST', /^\/api\/(personas|styles)\/([\w-]+)\/copy$/, ([kinds, id], body) => picks.copy(KIND_OF[kinds], id, body ?? {})],
+    ['POST', /^\/api\/(personas|styles)\/([\w-]+)\/default$/, ([kinds, id]) => picks.setDefault(KIND_OF[kinds], id)],
+    ['PUT', /^\/api\/(personas|styles)\/([\w-]+)\/cards$/, ([kinds, id], body) => picks.setCards(KIND_OF[kinds], id, body?.ids)],
+    ['PUT', /^\/api\/cards\/([\w-]+)\/picks$/, ([id], body) => picks.setCardPicks(id, body ?? {})],
     // 屏蔽词 (blockwords.mjs): one list for every chat. A save says whether what is sent
     // changes and, for the open chat (chatId), from where its cache is written again.
     ['GET', /^\/api\/blockwords$/, () => blockWords.list()],
@@ -631,9 +719,24 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       const chat = await store.getChat(id)
       const node = chat.nodes[nodeId]
       if (!node?.media?.images) throw httpError(404, msg`没有这张图`)
-      node.media.images = node.media.images.filter(image => image.file !== file)
-      await media.removeImage(id, file)
-      await prompts.forgetPicture(id, file).catch(() => {})
+      // `old`: one of its old pictures (抽图历史); without it, the picture and all of them.
+      const old = url.searchParams.get('old')
+      const result = old ? dropOldImage(node.media.images, file, old) : dropImage(node.media.images, file)
+      if (!result) throw httpError(404, msg`这张旧图已经不在了`)
+      node.media.images = result.images
+      for (const gone of result.dropped) {
+        await media.removeImage(id, gone.file)
+        await prompts.forgetPicture(id, gone.file).catch(() => {})
+      }
+      return chatView(await store.saveChat(chat))
+    })],
+    // 抽图历史: one of a picture's old ones shown again in its place; the one shown now becomes an old one.
+    ['POST', /^\/api\/chats\/([\w-]+)\/nodes\/([\w-]+)\/image\/use$/, ([id, nodeId], body) => store.withChat(id, async () => {
+      const chat = await store.getChat(id)
+      const node = chat.nodes[nodeId]
+      const images = pickImage(node?.media?.images, String(body?.file ?? ''), String(body?.old ?? ''))
+      if (!images) throw httpError(404, msg`这张旧图已经不在了`)
+      node.media.images = images
       return chatView(await store.saveChat(chat))
     })],
     // Picture prompt library (prompts.mjs).
@@ -669,10 +772,12 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['POST', /^\/api\/diagnostics\/report$/, (_, body) => diagnostics.report({ page: body?.page && typeof body.page === 'object' ? body.page : {}, chatId: String(body?.chatId ?? ''), lastTurn: body?.lastTurn === true })],
     ['DELETE', /^\/api\/diagnostics$/, () => diagnostics.clear()],
     ['GET', /^\/api\/access$/, async () => accessView()],
+    // The default persona (its name and description), as when there was one.
     ['GET', /^\/api\/persona$/, () => store.getPersona()],
     ['PUT', /^\/api\/persona$/, (_, body) => store.savePersona(body)],
 
-    ['GET', /^\/api\/cards$/, async () => (await store.listCards()).map(cardSummary)],
+    // A card file that cannot be summed up (damaged, or saved by an older import) is left out, not the whole list.
+    ['GET', /^\/api\/cards$/, async () => (await store.listCards()).flatMap(card => summaryOrNone(cardSummary, card, 'card'))],
     // Which card a file would update: the newest one with the same name apart from its version.
     ['POST', /^\/api\/cards\/inspect$/, async (_, body) => {
       const { card } = readCardUpload(body)
@@ -683,11 +788,23 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     // linked worldbooks stay). Otherwise a new card, which still takes over the settings and
     // reference pictures of an older version of itself, so deleting that one loses nothing.
     ['POST', /^\/api\/cards\/import$/, async (_, body) => {
-      const { card, avatar } = readCardUpload(body)
+      const { card, avatar, raw = null } = readCardUpload(body)
       if (typeof body.replace === 'string' && body.replace) {
         const old = await store.getCard(body.replace)
         Object.assign(card, { id: old.id, media: old.media, worldbookIds: old.worldbookIds ?? [], hasAvatar: Boolean(avatar) || old.hasAvatar, group: old.group ?? '', archived: old.archived === true })
-        await store.saveCard(card, avatar)
+        // A new version from a file without a picture keeps the old picture, with the new version's card data in it:
+        // exports take what the app does not keep (character_version, Tavern Helper scripts…) from there.
+        let picture = avatar
+        if (!picture && old.hasAvatar) {
+          const before = await readFile(store.avatarPath(old.id)).catch(() => null)
+          try {
+            // This app's own export carries no SillyTavern JSON: the old picture's stays the base, as exports read it.
+            picture = before ? writeCardPng(before, sillyTavernCard(card, raw ?? rawOfPicture(before))) : null
+          } catch {
+            picture = null // not a PNG (a picture set by hand): kept as it is
+          }
+        }
+        await store.saveCard(card, picture)
         return { ...cardSummary(card), updated: old.name }
       }
       card.hasAvatar = Boolean(avatar)
@@ -698,19 +815,22 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       if (previous) {
         await media.inheritCardMedia(previous.id, card.id)
         await scenes.inherit(previous.id, card.id)
+        await picks.inheritCard(previous.id, card.id)
         return { ...cardSummary(card), inherited: previous.name }
       }
       return cardSummary(card)
     }],
     ['GET', /^\/api\/cards\/([\w-]+)$/, async ([id]) => {
-      const [card, persona] = await Promise.all([store.getCard(id), store.getPersona()])
-      const names = { char: card.name, user: card.userName || persona.name || '你' }
+      const [card, personas, styles] = await Promise.all([store.getCard(id), store.getPersonas(), store.getStyles()])
+      // The player as a new chat on the card would have them.
+      const names = { char: card.name, user: newChatPicks(card, personas, styles).name }
       return {
         ...cardSummary(card),
         greetingTexts: greetingsOf(card).map(text => replaceMacros(text.replace(/\{\{random[^}]*\}\}/gi, '…'), names)),
         description: card.description,
         scenario: card.scenario,
-        regexScriptList: Array.isArray(card.regexScripts) ? card.regexScripts : [],
+        // With ids the editor can tell apart (normalizeScripts: one missing or repeated in an imported file gets its own).
+        regexScriptList: withUniqueIds(normalizeScripts(card.regexScripts)),
         statusBar: card.statusBar ?? null,
       }
     }],
@@ -723,6 +843,9 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       await forge.dropTalk('card', id)
       await forge.dropTalk('book', `card-${id}`)
       await forge.dropTalk('regex', `card-${id}`)
+      // 正则集 attached to it stay, for the other cards or later; so do the personas and styles it picked.
+      await regex.dropCard(id)
+      await picks.dropCard(id)
       return { ok: true }
     }],
     // 修改角色卡 (web/card-edit.js): the card's fields, edited in place. It keeps its id, so
@@ -732,7 +855,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       const card = await store.getCard(id)
       // A card made in 创作角色卡 goes back to its draft's text when saved from there again.
       const drafts = await forge.list().catch(() => [])
-      return { ...cardEditView(card), fromForge: drafts.some(draft => draft.savedCardId === id) }
+      return { ...cardEditView(card), fromForge: drafts.some(draft => draft.savedCardId === id), regexSets: attachedSummary(await store.getRegexSets(), id) }
     }],
     ['PUT', /^\/api\/cards\/([\w-]+)\/edit$/, async ([id], body) => {
       const card = await store.getCard(id)
@@ -755,16 +878,20 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       const card = await store.getCard(id)
       const old = card.hasAvatar ? await readFile(store.avatarPath(id)).catch(() => null) : null
       const file = writeCardPng(png, sillyTavernCard(card, rawOfPicture(old)))
+      // 抽图历史: a picture taken from there (`history`) is no longer kept there; the one it replaces is.
+      if (typeof body.history === 'string' && body.history) await drawHistory.remove(id, body.history).catch(() => {})
+      if (old) await drawHistory.push(id, 'avatar', { buffer: old, at: await madeAt(store.avatarPath(id)), source: 'avatar' })
       card.hasAvatar = true
       await store.saveCard(card, file)
       return cardEditView(card)
     }],
-    // 修改角色卡 → 生成头像: drawn with the 画图方式 and model picked for it, not saved; the page
-    // shows it, and taking it is PUT /api/cards/:id/avatar like an upload.
+    // 修改角色卡 → 生成头像: drawn with the 画图方式 and model picked for it, kept in 抽图历史 (its
+    // file is `history`); the page shows it, and taking it is PUT /api/cards/:id/avatar like an upload.
     ['POST', /^\/api\/cards\/([\w-]+)\/avatar\/draw$/, ([id], body) => media.drawAvatar(id, AbortSignal.timeout(600000), drawChoiceOf(body))],
     // The card as SillyTavern's JSON, edits included (the PNG is GET /api/cards/:id/png).
-    ['GET', /^\/api\/cards\/([\w-]+)\/sillytavern$/, async ([id]) => {
-      const card = await store.getCard(id)
+    // `?regex=sets`: the 正则集 attached to it go in too, after its own scripts.
+    ['GET', /^\/api\/cards\/([\w-]+)\/sillytavern$/, async ([id], _, url) => {
+      const card = await exportedCard(id, url)
       const picture = card.hasAvatar ? await readFile(store.avatarPath(id)).catch(() => null) : null
       return sillyTavernCard(card, rawOfPicture(picture))
     }],
@@ -960,7 +1087,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       return { ok: true, detached }
     }],
 
-    ['GET', /^\/api\/presets$/, async () => (await store.listPresets()).map(presetSummary)],
+    ['GET', /^\/api\/presets$/, async () => (await store.listPresets()).flatMap(preset => summaryOrNone(presetSummary, preset, 'preset'))],
     ['POST', /^\/api\/presets\/import$/, async (_, body) => {
       const { filename, buffer } = decodeUpload(body)
       let json
@@ -990,7 +1117,11 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['GET', /^\/api\/chats$/, async (_, __, url) => (await store.listChats(url.searchParams.get('cardId'))).map(chatSummary)],
     ['POST', /^\/api\/chats$/, async (_, body) => chatView(await createChat(store, String(body.cardId), Number(body.greetingIndex) || 0))],
     // A card's welcome page switching the first message to another of its openings (before the first turn).
-    ['POST', /^\/api\/chats\/([\w-]+)\/opening$/, ([id], body) => store.withChat(id, async () => chatView(await switchOpening(store, await store.getChat(id), Number(body?.index))))],
+    ['POST', /^\/api\/chats\/([\w-]+)\/opening$/, ([id], body) => {
+      // The first turn being written answers the opening it was sent with.
+      if (engine.isRunning(id)) throw httpError(409, msg`正在生成，先停止`)
+      return store.withChat(id, async () => chatView(await switchOpening(store, await store.getChat(id), Number(body?.index))))
+    }],
     ['GET', /^\/api\/chats\/([\w-]+)$/, async ([id]) => ({ ...chatView(await store.getChat(id)), running: engine.isRunning(id) })],
     ['PUT', /^\/api\/chats\/([\w-]+)$/, ([id], body) => store.withChat(id, async () => {
       const chat = await store.getChat(id)
@@ -1032,7 +1163,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['POST', /^\/api\/chats\/([\w-]+)\/fork$/, async ([id], body) => {
       const source = await store.getChat(id)
       const chat = forkChat(source, String(body.nodeId))
-      const files = Object.values(chat.nodes).flatMap(node => node.media?.images?.map(image => image.file) ?? [])
+      const files = [...Object.values(chat.nodes).flatMap(node => node.media?.images?.map(image => image.file) ?? []), ...oldImageFiles(chat)]
       await media.copyChatMedia(source.id, chat.id, files)
       return chatView(await store.saveChat(chat))
     }],
@@ -1072,6 +1203,14 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       dropCompaction(chat, String(url.searchParams.get('nodeId')))
       return chatView(await store.saveChat(chat))
     })],
+    // Another persona or style for a chat ('' for what its card picks now, else the default): its prefix is
+    // built again, so the next turn writes the cache once more.
+    ['POST', /^\/api\/chats\/([\w-]+)\/picks$/, ([id], body) => store.withChat(id, async () => {
+      if (engine.isRunning(id)) throw httpError(409, msg`正在生成，先停止`)
+      const chat = await store.getChat(id)
+      await switchPicks(store, chat, { personaId: body?.personaId, styleId: body?.styleId })
+      return { ...chatView(await store.saveChat(chat)), running: false }
+    })],
     // Switch a chat's preset (or re-render its prefix after editing the one it
     // uses). Costs one cache write on the next turn.
     ['POST', /^\/api\/chats\/([\w-]+)\/preset$/, ([id], body) => store.withChat(id, async () => {
@@ -1106,13 +1245,15 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     // The names of the books this chat uses, the app's global variables, the player's description.
     ['GET', /^\/api\/chats\/([\w-]+)\/frame-info$/, async ([id]) => {
       const chat = await store.getChat(id)
-      const [card, settings, persona] = await Promise.all([store.getCard(chat.cardId), store.getSettings(), store.getPersona()])
-      const books = await booksForCard(store, card, settings)
-      return { books: bookNames(books, card, settings.globalBookIds ?? []), vars: chat.frameVars ?? {}, globalVars: settings.globalVars ?? {}, persona: { description: playerOf(card, persona, chat.names.user).description ?? '' } }
+      const [card, settings] = await Promise.all([store.getCard(chat.cardId), store.getSettings()])
+      const [books, { persona }] = await Promise.all([booksForCard(store, card, settings), chatPicks(store, chat, card)])
+      return { books: bookNames(books, card, settings.globalBookIds ?? []), vars: chat.frameVars ?? {}, globalVars: settings.globalVars ?? {}, persona: { description: playerOf(card, persona, chat.names.user).description ?? '' }, avatarKey: avatarKey(chat.cardId) }
     }],
-    // Tavern Helper's chat variables (the templates' local scope).
+    // Tavern Helper's chat variables (the templates' local scope): `vars` whole, or a card UI's
+    // { set, unset } over those saved now (patchVars), so two UIs open at once keep each other's keys.
     ['PUT', /^\/api\/chats\/([\w-]+)\/frame-vars$/, ([id], body) => store.withChat(id, async () => {
-      const chat = setFrameVars(await store.getChat(id), body?.vars)
+      const chat = await store.getChat(id)
+      setFrameVars(chat, body?.vars !== undefined ? body.vars : patchVars(chat.frameVars, body))
       await store.saveChat(chat)
       return { vars: chat.frameVars }
     })],
@@ -1149,6 +1290,12 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     }
   }
 
+  // What a card frame reads its card's avatar with: its requests carry no cookie (an opaque origin).
+  // A key per card that opens that avatar and nothing else; the access token never goes into a frame.
+  const frameSecret = randomBytes(16)
+  const avatarKey = cardId => createHmac('sha256', frameSecret).update(String(cardId)).digest('hex').slice(0, 32)
+  const FRAME_AVATAR = /^\/api\/cards\/([\w-]+)\/avatar$/
+
   async function allow(req, res, url) {
     // Only LAN mode accepts this machine's other names; loopback needs no interface lookup.
     const lan = access.mode === 'lan'
@@ -1158,11 +1305,13 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     }
     if (!accessToken && (access.mode !== 'lan' || isLoopback(req.socket.remoteAddress))) return true
     if (req.method === 'GET' && OPEN_FILES.has(url.pathname)) return true
+    const avatarOf = req.method === 'GET' ? FRAME_AVATAR.exec(url.pathname)?.[1] : null
+    if (avatarOf && tokensEqual(url.searchParams.get('fk') ?? '', avatarKey(avatarOf))) return true
     const token = accessToken ?? (await store.ensureAccessToken())
-    const presented = readCookie(req.headers.cookie, 'tavern_key') || String(req.headers['x-agent-tavern-key'] ?? '')
-    if (tokensEqual(presented, token)) return true
+    if (signedIn(req.headers.cookie, token) || tokensEqual(String(req.headers['x-agent-tavern-key'] ?? ''), token)) return true
     if (req.method === 'POST' && url.pathname === '/api/access/unlock') {
-      const body = await readBody(req)
+      // Asked before the token is known: a few bytes are all it takes.
+      const body = await readBody(req, 4096)
       if (!tokensEqual(body.token, token)) {
         sendJson(res, 403, { error: msg`口令不对` })
         return false
@@ -1203,6 +1352,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     const url = requestUrl(req)
     if (!url) return sendJson(res, 400, { error: msg`地址不对` })
     if (!(await allow(req, res, url))) return
+    res.logFailures = true
     if (!presence.size) armIdle()
     if (req.method === 'GET' && url.pathname === '/api/presence') return holdPresence(req, res)
 
@@ -1226,7 +1376,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     const cardPng = /^\/api\/cards\/([\w-]+)\/png$/.exec(url.pathname)
     if (req.method === 'GET' && cardPng) {
       try {
-        const card = await store.getCard(cardPng[1])
+        const card = await exportedCard(cardPng[1], url)
         const picture = await readFile(store.avatarPath(card.id))
         const data = writeCardPng(picture, sillyTavernCard(card, rawOfPicture(picture)))
         res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'no-store', 'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(`${card.name}.png`)}` })
@@ -1250,12 +1400,12 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     // token, so the icon opens straight into the app even where it keeps cookies of its own (iOS).
     if (req.method === 'GET' && url.pathname === '/manifest.webmanifest') {
       const token = access.mode === 'lan' ? accessToken ?? (await store.ensureAccessToken()) : ''
-      const signedIn = Boolean(token) && tokensEqual(readCookie(req.headers.cookie, 'tavern_key'), token)
+      const loggedIn = Boolean(token) && signedIn(req.headers.cookie, token)
       res.writeHead(200, { 'content-type': 'application/manifest+json; charset=utf-8', 'cache-control': 'no-store' })
       return res.end(JSON.stringify({
         name: features.appName,
         short_name: features.appName,
-        start_url: signedIn ? `/#k=${encodeURIComponent(token)}` : '/',
+        start_url: loggedIn ? `/#k=${encodeURIComponent(token)}` : '/',
         scope: '/',
         display: 'standalone',
         background_color: '#eceeea',
@@ -1300,6 +1450,15 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     if (req.method === 'GET' && spritePicture) {
       const found = await scenes.readSprite(spritePicture[1], spritePicture[2])
       if (!found) return sendJson(res, 404, { error: msg`没有这张立绘` })
+      res.writeHead(200, { 'content-type': found.type, 'cache-control': 'max-age=31536000, immutable' })
+      return res.end(found.data)
+    }
+
+    // 抽图历史: a card's old picture (draw-history.mjs); each file has a name of its own.
+    const keptPicture = /^\/api\/cards\/([\w-]+)\/history\/([\w.-]+)$/.exec(url.pathname)
+    if (req.method === 'GET' && keptPicture) {
+      const found = await drawHistory.readPicture(keptPicture[1], keptPicture[2])
+      if (!found) return sendJson(res, 404, { error: msg`这张旧图已经不在了` })
       res.writeHead(200, { 'content-type': found.type, 'cache-control': 'max-age=31536000, immutable' })
       return res.end(found.data)
     }
@@ -1360,7 +1519,11 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       return res.end(data)
     }
 
-    if (req.method !== 'GET' && req.headers['x-agent-tavern'] !== '1') return sendJson(res, 403, { error: msg`缺少请求头` })
+    if (req.method !== 'GET' && req.headers['x-agent-tavern'] !== '1') {
+      // Not the page's own request (another site's form): not an error of the app's.
+      res.logFailures = false
+      return sendJson(res, 403, { error: msg`缺少请求头` })
+    }
 
     const packagePicture = /^\/api\/chats\/([\w-]+)\/media\/([\w.-]+)$/.exec(url.pathname)
     if (req.method === 'PUT' && packagePicture) {
@@ -1402,6 +1565,12 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       const source = typeof body.source === 'string' ? body.source : ''
       return sendJson(res, 200, await media.accountVoices({ source, media: body.media, keys: body.keys }, cancelOnClose()))
     }
+    // 语音输入: a recording (base64 + its type) as text for the input box; with `media`, the settings form's values (试一试).
+    if (req.method === 'POST' && url.pathname === '/api/media/transcribe') {
+      const body = await readBody(req)
+      const names = Array.isArray(body.names) ? body.names.filter(name => typeof name === 'string') : []
+      return sendJson(res, 200, await media.transcribe({ audio: body.audio, type: body.type, names, media: body.media }, cancelOnClose()))
+    }
     const sceneDraw = /^\/api\/cards\/([\w-]+)\/scenes\/draw$/.exec(url.pathname)
     if (req.method === 'POST' && sceneDraw) {
       const body = await readBody(req)
@@ -1437,15 +1606,26 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
         return sendJson(res, 200, await media.writeImagePrompt(chat, node, { reply, input }, signal))
       }
       const image = await media.generateImage(chat, nodeId, body.prompt, signal, drawChoiceOf(body))
+      // 重画 (`replace`): in that picture's place, which becomes one of its old ones (抽图历史);
+      // past what is kept, the oldest go.
+      const replace = typeof body.replace === 'string' ? body.replace : ''
+      const keep = replace ? (await media.settings()).drawHistory : 0
+      let dropped = []
       // Re-read: the chat may have moved on while the picture was drawn (a turn saving meanwhile waits, or goes first).
       const saved = await store.withChat(chatId, async () => {
         const fresh = await store.getChat(chatId)
         const target = fresh.nodes[nodeId]
         if (!target) throw httpError(404, msg`这条叙述已经不在了`)
-        target.media = { ...(target.media ?? {}), images: [...(target.media?.images ?? []), image] }
+        const redrawn = replace ? redrawImage(target.media?.images, replace, image, keep) : null
+        dropped = redrawn?.dropped ?? []
+        target.media = { ...(target.media ?? {}), images: redrawn?.images ?? [...(target.media?.images ?? []), image] }
         await prompts.recordDrawn(fresh, target, image).catch(() => {})
         return store.saveChat(fresh)
       })
+      for (const gone of dropped) {
+        await media.removeImage(chatId, gone.file).catch(() => {})
+        await prompts.forgetPicture(chatId, gone.file).catch(() => {})
+      }
       return sendJson(res, 200, { image, chat: { ...chatView(saved), running: engine.isRunning(chatId) } })
     }
 
@@ -1494,11 +1674,14 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     if (req.method === 'POST' && framed) {
       const body = await readBody(req)
       res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', 'x-accel-buffering': 'no' })
-      const send = event => res.write(`data: ${JSON.stringify(event)}\n\n`)
-      const controller = new AbortController()
-      req.on('close', () => controller.abort())
+      const send = event => {
+        if (!res.destroyed) res.write(`data: ${JSON.stringify(event)}\n\n`)
+      }
+      // The page stopped it (the notice clicked) or went: the model call stops too. Heard on the answer, as
+      // cancelOnClose does: the request has been read to its end by now, so its own 'close' is long past.
+      const signal = cancelOnClose()
       try {
-        const text = await engine.frameGenerate(framed[1], { raw: body.raw === true, config: body.config ?? {} }, controller.signal, delta => send({ type: 'delta', text: delta }))
+        const text = await engine.frameGenerate(framed[1], { raw: body.raw === true, config: body.config ?? {} }, signal, delta => send({ type: 'delta', text: delta }))
         send({ type: 'done', text })
       } catch (error) {
         send({ type: 'error', status: error.status ?? 500, message: localize(error.message) })
@@ -1539,6 +1722,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       const body = method === 'GET' ? {} : await readBody(req)
       return sendJson(res, 200, await handler(match.slice(1), body, url))
     }
+    res.logFailures = false
     sendJson(res, 404, { error: msg`没有这个接口` })
   }
 

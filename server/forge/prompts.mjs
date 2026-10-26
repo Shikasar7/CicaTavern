@@ -239,11 +239,14 @@ export function mergeBrief(raw, previous = emptyBrief()) {
     before.delete(item.key)
   }
   for (const old of before.values()) items.push(old)
+  // Over the limit: unlocked items go from the end, a locked one never does.
+  let room = LIMITS.items - items.filter(item => item.locked).length
+  const kept = items.filter(item => item.locked || room-- > 0)
   const readiness = Number(fresh.readiness)
   return {
     title: clip(fresh.title, 40) || previous.title,
     readiness: Number.isFinite(readiness) ? Math.max(0, Math.min(100, Math.round(readiness))) : previous.readiness,
-    items: items.slice(0, LIMITS.items),
+    items: kept.slice(0, LIMITS.items),
     open: (Array.isArray(fresh.open) ? fresh.open : previous.open).map(o => clip(o, 40)).filter(Boolean).slice(0, LIMITS.open),
   }
 }

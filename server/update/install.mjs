@@ -122,6 +122,20 @@ export async function checkRuntime(nodeExe) {
  * first, checked (edition, version, files, the programs are whole), then renamed.
  * Nothing is left behind on failure. → the new install's folder.
  */
+// Windows: a scanner still reading the files just unpacked refuses the folder's rename for a moment.
+const RENAME_REFUSED = new Set(['EPERM', 'EACCES', 'EBUSY'])
+
+async function renameRetrying(from, to) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await rename(from, to)
+    } catch (error) {
+      if (attempt >= 10 || !RENAME_REFUSED.has(error.code)) throw error
+      await new Promise(resolve => setTimeout(resolve, 100 * attempt))
+    }
+  }
+}
+
 export async function stageInstall(zip, { base, version, check = checkRuntime }) {
   const top = packageFolder(version)
   const partial = path.join(base, `.${top}.partial-${randomBytes(4).toString('hex')}`)
@@ -132,7 +146,7 @@ export async function stageInstall(zip, { base, version, check = checkRuntime })
     if (packed !== version) throw new Error(`更新包里的版本是 ${packed}，不是 ${version}`)
     await check(path.join(partial, 'runtime', 'node.exe'))
     const final = freeFolder(base, top)
-    await rename(partial, final)
+    await renameRetrying(partial, final)
     return final
   } catch (error) {
     await rm(partial, { recursive: true, force: true }).catch(() => {})

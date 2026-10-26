@@ -135,6 +135,11 @@ jobs:
           if draft=$(gh release view "$TAG" --json isDraft -q .isDraft 2>/dev/null); then
             # A published release keeps its files: the in-app updater checks their SHA-256.
             if [ "$draft" != "true" ]; then echo "$TAG is already published; not replacing its zip"; exit 1; fi
+            # Built again (a re-run, the tag moved): the draft's notes, maybe written by hand by now, keep all but the
+            # zip's SHA-256, which the in-app updater checks against the zip uploaded below.
+            gh release view "$TAG" --json body -q .body > "$RUNNER_TEMP/draft.md"
+            sed -E "s/[0-9a-f]{64}(  CicaTavern-${VERSION}-win-x64\.zip)/${ZIP_SHA256}\1/" "$RUNNER_TEMP/draft.md" > "$RUNNER_TEMP/draft-new.md"
+            gh release edit "$TAG" --notes-file "$RUNNER_TEMP/draft-new.md"
           else
             gh release create "$TAG" --draft --verify-tag --title "CicaTavern ${VERSION}" --notes-file "$RUNNER_TEMP/notes.md"
           fi

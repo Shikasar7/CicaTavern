@@ -87,6 +87,8 @@ export function createProxy({ override, defaultMode = 'none', env = process.env,
   let current = mode === 'none' || mode === 'system' ? null : mode
   let source = null // 'windows' | 'env' for the system mode
   let timer = null
+  // Which apply() is the latest: a system lookup still running when the setting changes is not used.
+  let generation = 0
 
   async function resolveSystem() {
     const windows = await readSystem()
@@ -98,13 +100,17 @@ export function createProxy({ override, defaultMode = 'none', env = process.env,
   /** Apply a saved setting (ignored while an override is in force). */
   async function apply(setting) {
     mode = override ?? cleanProxySetting(setting) ?? defaultMode
+    const mine = ++generation
     clearInterval(timer)
     timer = null
     if (mode === 'system') {
-      ;({ url: current, from: source } = await resolveSystem())
+      const found = await resolveSystem()
+      if (mine !== generation) return describe()
+      ;({ url: current, from: source } = found)
       timer = setInterval(async () => {
-        if (mode !== 'system') return
-        ;({ url: current, from: source } = await resolveSystem())
+        if (mode !== 'system' || mine !== generation) return
+        const fresh = await resolveSystem()
+        if (mode === 'system' && mine === generation) ({ url: current, from: source } = fresh)
       }, SYSTEM_REFRESH_MS)
       timer.unref?.()
     } else {

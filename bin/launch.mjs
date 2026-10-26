@@ -24,7 +24,21 @@ const option = name => {
 }
 const here = path.dirname(fileURLToPath(import.meta.url))
 
-const newer = args.includes('--no-forward') ? null : supersededBy(path.join(here, '..'))
+/**
+ * The newest of the folders this one was replaced by, one after another (A → B → C after two updates: each mark
+ * names the next only). A loop or a folder gone ends the walk at the last one there.
+ */
+function newestInstall(root) {
+  const seen = new Set([path.resolve(root)])
+  let found = null
+  for (let next = supersededBy(root); next && !seen.has(path.resolve(next.path)) && seen.size <= 20; next = supersededBy(next.path)) {
+    seen.add(path.resolve(next.path))
+    found = next
+  }
+  return found
+}
+
+const newer = args.includes('--no-forward') ? null : newestInstall(path.join(here, '..'))
 if (newer) {
   const node = path.join(newer.path, 'runtime', 'node.exe')
   const run = spawnSync(existsSync(node) ? node : process.execPath, [path.join(newer.path, 'bin', 'launch.mjs'), ...args, '--no-forward'], { stdio: 'inherit', windowsHide: true })

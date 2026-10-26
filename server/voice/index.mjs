@@ -13,7 +13,7 @@
 // line: 'tags' keeps them, 'instruction' turns them into the request's
 // instructions, 'none' drops them.
 import { createHash } from 'node:crypto'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { httpError } from '../store.mjs'
 import { createBridge } from './bridge.mjs'
@@ -25,6 +25,8 @@ import { msg } from '../i18n.mjs'
 // Services whose key the tavern keeps (voice-keys.json); a provider's key stays in providers.json.
 export const KEYED = ['fish', 'minimax']
 const MAX_TEXT = 500
+// media/tts/ kept at most this big: several hours of speech (keep, pruneCache).
+const TTS_CACHE_MAX = 300 * 1024 * 1024
 // [emotion] tags speechChunks puts before a line (from 小白X voice tags).
 const DELIVERY_TAG = /\[([^\]\n]{1,40})\]\s*/g
 const PREVIEW_TEXT = '你好呀，很高兴见到你。今天想听我讲点什么呢？'
@@ -90,8 +92,9 @@ export function cleanVoiceKey(value) {
  * @param providers - async () → providers.json, keys included.
  * @param proxy - () → the app's proxy now (the setting can change while running).
  * @param urls - test addresses for the cloud services: { fish, minimax: { cn, intl } }.
+ * @param cacheMax - how big media/tts/ may grow (TTS_CACHE_MAX; smaller in tests).
  */
-export function createVoices({ root, settings, providers, proxy = () => null, features = null, urls = {} }) {
+export function createVoices({ root, settings, providers, proxy = () => null, features = null, urls = {}, cacheMax = TTS_CACHE_MAX }) {
   const bridge = createBridge({ root, features })
   // The phone has no 设置 → 网络代理 to point to.
   const proxyMenu = features?.proxy !== false
@@ -180,7 +183,12 @@ export function createVoices({ root, settings, providers, proxy = () => null, fe
   async function cached(key) {
     for (const [mime, ext] of Object.entries(AUDIO_EXT)) {
       try {
-        return { buffer: await readFile(path.join(ttsDir, `${key}.${ext}`)), mime }
+        const file = path.join(ttsDir, `${key}.${ext}`)
+        const buffer = await readFile(file)
+        // Played again: the last the cache lets go of (pruneCache goes by this time).
+        const now = new Date()
+        utimes(file, now, now).catch(() => {})
+        return { buffer, mime }
       } catch {
         // not this type
       }
@@ -193,6 +201,29 @@ export function createVoices({ root, settings, providers, proxy = () => null, fe
     // A take in another format would be found first next time.
     await Promise.all(Object.values(AUDIO_EXT).map(ext => rm(path.join(ttsDir, `${key}.${ext}`), { force: true })))
     await writeFile(cacheFile(key, audio.mime), audio.buffer)
+    cacheBytes = cacheBytes === null ? null : cacheBytes + audio.buffer.length
+    if (cacheBytes === null || cacheBytes > cacheMax) pruning ??= pruneCache().catch(() => {}).finally(() => { pruning = null })
+  }
+
+  // Read-aloud takes are kept up to cacheMax in all; past it the ones played longest ago go, down to four fifths.
+  let cacheBytes = null // as last counted (null: not yet), then grown by each take kept
+  let pruning = null
+  async function pruneCache() {
+    const files = []
+    for (const name of await readdir(ttsDir).catch(() => [])) {
+      const info = await stat(path.join(ttsDir, name)).catch(() => null)
+      if (info?.isFile()) files.push({ name, size: info.size, time: info.mtimeMs })
+    }
+    let total = files.reduce((sum, file) => sum + file.size, 0)
+    if (total > cacheMax) {
+      files.sort((a, b) => a.time - b.time)
+      for (const file of files) {
+        if (total <= cacheMax * 0.8) break
+        await rm(path.join(ttsDir, file.name), { force: true }).catch(() => {})
+        total -= file.size
+      }
+    }
+    cacheBytes = total
   }
 
   /**

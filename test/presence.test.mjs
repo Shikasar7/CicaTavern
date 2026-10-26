@@ -91,3 +91,55 @@ test('the home-screen app: icons and manifest for anyone; its start address carr
   const wrong = await (await fetch(`${base}/manifest.webmanifest`, { headers: { cookie: 'tavern_key=nope' } })).json()
   assert.equal(wrong.start_url, '/')
 })
+
+test('unlocking with the key takes a few bytes: a big body is refused, not held in memory', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'tavern-presence-'))
+  const key = 'k'.repeat(32)
+  const app = createApp({ dataRoot: root, proxy: 'off', edition: 'release', accessToken: key })
+  const server = await app.listen({ port: 0, listen: 'lan', host: '127.0.0.1' })
+  t.after(async () => {
+    app.network.stop()
+    server.closeAllConnections?.()
+    server.close()
+    await rm(root, { recursive: true, force: true })
+  })
+  const unlock = token => fetch(`http://127.0.0.1:${server.address().port}/api/access/unlock`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token }) })
+  assert.equal((await unlock('wrong')).status, 403)
+  const right = await unlock(key)
+  assert.equal(right.status, 200)
+  // Named after this server's key: another server on this machine has a cookie of its own.
+  const cookie = right.headers.get('set-cookie').split(';')[0]
+  assert.match(cookie, /^tavern_key_[0-9a-f]{8}=k{32}$/)
+  const base = `http://127.0.0.1:${server.address().port}`
+  assert.equal((await fetch(`${base}/api/settings`, { headers: { cookie } })).status, 200)
+  assert.equal((await fetch(`${base}/api/settings`, { headers: { cookie: `tavern_key_00000000=other; ${cookie}` } })).status, 200, 'beside another server cookie')
+  assert.equal((await fetch(`${base}/api/settings`, { headers: { cookie: 'tavern_key_00000000=other' } })).status, 401)
+  assert.equal((await unlock('x'.repeat(100_000))).status, 413)
+})
+
+test('a card frame reads its card\'s avatar with the key it is given, with no cookie; nothing else opens with it', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'tavern-presence-'))
+  const key = 'k'.repeat(32)
+  const app = createApp({ dataRoot: root, proxy: 'off', edition: 'release', accessToken: key })
+  const server = await app.listen({ port: 0, listen: 'lan', host: '127.0.0.1' })
+  t.after(async () => {
+    app.network.stop()
+    server.closeAllConnections?.()
+    server.close()
+    await rm(root, { recursive: true, force: true })
+  })
+  const base = `http://127.0.0.1:${server.address().port}`
+  const signedIn = { cookie: `tavern_key=${key}`, 'content-type': 'application/json', 'x-agent-tavern': '1' }
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64')
+  const card = await (await fetch(`${base}/api/cards/import`, { method: 'POST', headers: signedIn, body: JSON.stringify({ filename: 'a.json', data: Buffer.from(JSON.stringify({ spec: 'chara_card_v2', data: { name: '青禾', first_mes: '你好。' } })).toString('base64') }) })).json()
+  const other = await (await fetch(`${base}/api/cards/import`, { method: 'POST', headers: signedIn, body: JSON.stringify({ filename: 'b.json', data: Buffer.from(JSON.stringify({ spec: 'chara_card_v2', data: { name: '阿砚', first_mes: '嗯。' } })).toString('base64') }) })).json()
+  await app.store.saveCard(await app.store.getCard(card.id), png)
+  await app.store.saveCard(await app.store.getCard(other.id), png)
+  const chat = await (await fetch(`${base}/api/chats`, { method: 'POST', headers: signedIn, body: JSON.stringify({ cardId: card.id }) })).json()
+  const { avatarKey } = await (await fetch(`${base}/api/chats/${chat.id}/frame-info`, { headers: signedIn })).json()
+  assert.match(avatarKey, /^[0-9a-f]{32}$/)
+  assert.equal((await fetch(`${base}/api/cards/${card.id}/avatar`)).status, 401, 'no cookie, no key')
+  assert.equal((await fetch(`${base}/api/cards/${card.id}/avatar?fk=${avatarKey}`)).status, 200)
+  assert.equal((await fetch(`${base}/api/cards/${other.id}/avatar?fk=${avatarKey}`)).status, 401, 'another card\'s avatar')
+  assert.equal((await fetch(`${base}/api/cards/${card.id}?fk=${avatarKey}`)).status, 401, 'the card itself')
+})
