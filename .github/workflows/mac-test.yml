@@ -1,0 +1,135 @@
+# macOS test: the release's CicaTavern.app built, tested and opened on GitHub's
+# Macs, with screenshots. Only for the mac-test branch (a push) or by hand; it
+# never makes or changes a Release, a tag or a draft, and needs only read access.
+#
+# On each runner (macOS 26 and 14 on Apple silicon, macOS 15 on Intel):
+#   1. npm ci, npm test with the official Node for the runner's processor;
+#   2. CicaTavern.app for that processor, built, signed ad hoc and zipped exactly
+#      as mac-release.yml does (scripts/mac-build.sh), and the zip's own Node
+#      smoke-tested;
+#   3. scripts/mac-gui-test.sh opens the app from ~/Applications: the window, the
+#      bundled server's /api/status, the page connected to it, screenshots (first
+#      start, the empty main window, the example card in English and in Chinese), a
+#      recording, the app quitting and the server then quitting by itself.
+# The screenshots, recording, logs and zips are this run's artifacts (kept 14
+# days); the run's summary links them.
+name: macOS test (screenshots)
+
+on:
+  push:
+    branches: [mac-test]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: v24.22.0
+  # Node 24's own minimum (its BUILDING.md); launcher/mac/Info.plist says the same.
+  MACOS_MIN: '13.5'
+
+jobs:
+  mac:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            arch: arm64
+            label: macOS 26, Apple silicon
+            slug: macos26-arm64
+            keep-zip: true
+          - runner: macos-14
+            arch: arm64
+            label: macOS 14, Apple silicon
+            slug: macos14-arm64
+            keep-zip: false
+          - runner: macos-15-intel
+            arch: x64
+            label: macOS 15, Intel
+            slug: macos15-x64
+            keep-zip: true
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Version
+        run: echo "VERSION=$(node -p "require('./package.json').version")" >> "$GITHUB_ENV"
+
+      - name: Official Node.js, checked against nodejs.org's SHASUMS256
+        run: |
+          bash scripts/mac-build.sh node "$RUNNER_TEMP/node" "${{ matrix.arch }}"
+          echo "$RUNNER_TEMP/node/node-${NODE_VERSION}-darwin-${{ matrix.arch }}/bin" >> "$GITHUB_PATH"
+
+      - name: npm test
+        run: |
+          node --version
+          node -p "process.platform + ' ' + process.arch"
+          npm ci
+          npm test
+
+      - name: Build CicaTavern.app, sign ad hoc, zip
+        run: bash scripts/mac-build.sh app "${{ matrix.arch }}" "$RUNNER_TEMP/node" "$RUNNER_TEMP/build" "$RUNNER_TEMP/dist"
+
+      - name: Smoke test the packaged Node
+        run: bash scripts/mac-build.sh smoke "$RUNNER_TEMP/dist/CicaTavern-${VERSION}-mac-${{ matrix.arch }}.zip" 8799 "$RUNNER_TEMP/smoke-data"
+
+      - name: Open the app and take screenshots
+        run: bash scripts/mac-gui-test.sh "$RUNNER_TEMP/dist/CicaTavern-${VERSION}-mac-${{ matrix.arch }}.zip" "$RUNNER_TEMP/shots"
+
+      - name: Main screenshot under its own name
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/shots/4-card-chinese.png" ]; then
+            cp "$RUNNER_TEMP/shots/4-card-chinese.png" "$RUNNER_TEMP/CicaTavern-${{ matrix.slug }}.png"
+          fi
+
+      - name: Keep the screenshots, recording and logs
+        if: always()
+        id: shots
+        uses: actions/upload-artifact@v7
+        with:
+          name: mac-test-${{ matrix.slug }}
+          path: ${{ runner.temp }}/shots
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Keep the main screenshot
+        if: always()
+        id: main
+        uses: actions/upload-artifact@v7
+        with:
+          name: CicaTavern-${{ matrix.slug }}.png
+          path: ${{ runner.temp }}/CicaTavern-${{ matrix.slug }}.png
+          archive: false
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Keep the zip (to try on a real Mac)
+        if: matrix.keep-zip
+        id: zip
+        uses: actions/upload-artifact@v7
+        with:
+          name: CicaTavern-${{ env.VERSION }}-mac-${{ matrix.arch }}.zip
+          path: ${{ runner.temp }}/dist/CicaTavern-${{ env.VERSION }}-mac-${{ matrix.arch }}.zip
+          archive: false
+          retention-days: 14
+
+      - name: Summary
+        if: always()
+        run: |
+          steps="$RUNNER_TEMP/shots/steps.log"
+          {
+            echo "### ${{ matrix.label }} (${{ matrix.runner }})"
+            echo ""
+            if grep -q "all checks passed" "$steps" 2> /dev/null; then echo "**All checks passed.**"; else echo "**Not all checks passed: see the job's log.**"; fi
+            echo ""
+            [ -f "$RUNNER_TEMP/shots/system.txt" ] && sed 's/^/    /' "$RUNNER_TEMP/shots/system.txt" && echo ""
+            grep -E "^(window|/api/status|server process|runtime/node|screenshot|quit:|the server quit|Gatekeeper|.*: rejected|.*accepted)" "$steps" 2> /dev/null | sed 's/^/- /' || true
+            echo ""
+            echo "- [Main window screenshot](${{ steps.main.outputs.artifact-url }})"
+            echo "- [All screenshots, the recording and the logs](${{ steps.shots.outputs.artifact-url }})"
+            if [ -n "${{ steps.zip.outputs.artifact-url }}" ]; then echo "- [The zip, to try on a real Mac](${{ steps.zip.outputs.artifact-url }})"; fi
+          } >> "$GITHUB_STEP_SUMMARY"
