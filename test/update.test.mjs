@@ -851,7 +851,7 @@ test('update: no switch to another version while an update downloads or unpacks,
   await mkdir(path.join(root, 'update'), { recursive: true })
   await writeFile(path.join(root, 'update', 'previous.json'), JSON.stringify({ path: previous, version: '0.9.0' }))
   const switches = []
-  const updater = createUpdater({ features: featuresOf('release'), root, feed: github.feed, platform: 'win32', check: async () => {}, onShutdown: () => {}, spawnSwitch: async args => { switches.push(args) } })
+  const updater = createUpdater({ features: featuresOf('release', 'win32'), root, feed: github.feed, platform: 'win32', check: async () => {}, onShutdown: () => {}, spawnSwitch: async args => { switches.push(args) } })
   await updater.check({ force: true })
   await updater.download()
   assert.equal((await updater.status()).job.step, 'downloading')
