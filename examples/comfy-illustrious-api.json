@@ -7,12 +7,12 @@
   "5": {
     "class_type": "EmptyLatentImage",
     "_meta": { "title": "Empty Latent Image" },
-    "inputs": { "width": "{{width}}", "height": "{{height}}", "batch_size": 1 }
+    "inputs": { "width": "%width%", "height": "%height%", "batch_size": 1 }
   },
   "6": {
     "class_type": "CLIPTextEncode",
     "_meta": { "title": "Positive" },
-    "inputs": { "text": "masterpiece, best quality, amazing quality, {{prompt}}", "clip": ["4", 1] }
+    "inputs": { "text": "masterpiece, best quality, amazing quality, %prompt%", "clip": ["4", 1] }
   },
   "7": {
     "class_type": "CLIPTextEncode",
@@ -23,7 +23,7 @@
     "class_type": "KSampler",
     "_meta": { "title": "KSampler" },
     "inputs": {
-      "seed": "{{seed}}",
+      "seed": "%seed%",
       "steps": 25,
       "cfg": 6,
       "sampler_name": "euler_ancestral",

@@ -567,7 +567,7 @@ export default {
   "生图模型": "Image model",
   "ComfyUI 地址": "ComfyUI URL",
   "导入工作流": "Import workflow",
-  "在 ComfyUI 里把正向提示词写成 {{prompt}}，种子、宽、高写成 {{seed}} {{width}} {{height}}，要参考图就在 LoadImage 里写 {{reference}}（会上传这张卡的头像），然后「导出（API）」。": "In ComfyUI, write the positive prompt as {{prompt}} and the seed, width and height as {{seed}} {{width}} {{height}}; for a reference image, write {{reference}} in a LoadImage node (this card's avatar gets uploaded). Then use \"Export (API)\".",
+  "在 ComfyUI 里把正向提示词写成 %prompt%（不要写 {{prompt}}，导出时花括号会被 ComfyUI 去掉），然后「导出（API）」再导入。种子每次自动随机；要用酒馆的宽高和参考图，在 JSON 里把宽、高写成 \"%width%\" \"%height%\"，LoadImage 写 \"%char_avatar%\"（会上传这张卡的头像）。SillyTavern 的 ComfyUI 工作流可以直接导入。": "In ComfyUI, write the positive prompt as %prompt% (not {{prompt}}: ComfyUI drops the braces on export), then use \"Export (API)\" and import that. The seed is random each time. To use the tavern's width, height and reference image, write \"%width%\" \"%height%\" for the size and \"%char_avatar%\" in a LoadImage node in the JSON (this card's avatar gets uploaded). SillyTavern's ComfyUI workflows import as they are.",
   "留空不改": "Leave blank to keep",
   "检查": "Check",
   "正在查 V5 额度…": "Checking the V5 quota…",

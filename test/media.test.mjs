@@ -173,6 +173,20 @@ test('media helpers: settings validation, prompt request, prompt cleanup, workfl
   assert.equal(filled[6].inputs.text, 'masterpiece, a cat')
   assert.throws(() => checkWorkflow({ 1: { class_type: 'X', inputs: {} } }), /\{\{prompt\}\}/)
   assert.throws(() => checkWorkflow({ nodes: [], links: [] }), /API 格式/)
+  // ComfyUI's own "Export (API)" writes {{prompt}} out as "prompt" (its dynamic prompts); SillyTavern's %prompt% comes through.
+  assert.throws(() => checkWorkflow({ 6: { class_type: 'CLIPTextEncode', inputs: { text: 'masterpiece, prompt' } } }), /%prompt%/)
+  const kept = checkWorkflow({
+    3: { class_type: 'KSampler', inputs: { seed: '%seed%', steps: 25 } },
+    6: { class_type: 'CLIPTextEncode', inputs: { text: 'masterpiece, %prompt%' } },
+    7: { class_type: 'CLIPTextEncode', inputs: { text: 'lowres, %negative_prompt%' } },
+    10: { class_type: 'LoadImage', inputs: { image: '%char_avatar%' } },
+  })
+  assert.deepEqual([kept[3].inputs.seed, kept[6].inputs.text, kept[7].inputs.text, kept[10].inputs.image], ['{{seed}}', 'masterpiece, {{prompt}}', 'lowres, {{negative}}', '{{reference}}'])
+  assert.equal(fillWorkflow(kept, { prompt: 'a cat', seed: 42 })[3].inputs.seed, 42)
+  assert.throws(() => checkWorkflow({ 3: { class_type: 'KSampler', inputs: { steps: '%steps%', cfg: '%scale%' } }, 6: { class_type: 'CLIPTextEncode', inputs: { text: '%prompt%' } } }), /%steps% %scale%/)
+  // No {{seed}} (ComfyUI's number fields take none): the samplers' own seeds, a new one each time.
+  const reseeded = fillWorkflow({ 3: { class_type: 'KSampler', inputs: { seed: 7 } }, 9: { class_type: 'SamplerCustom', inputs: { noise_seed: 7 } }, 6: { class_type: 'CLIPTextEncode', inputs: { text: '{{prompt}}' } } }, { prompt: 'a cat', seed: 42 })
+  assert.deepEqual([reseeded[3].inputs.seed, reseeded[9].inputs.noise_seed, reseeded[6].inputs.text], [42, 42, 'a cat'])
 })
 
 test('image prompt from the helper model, then images through the OpenAI images API (plain and with the avatar)', async t => {

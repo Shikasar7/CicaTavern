@@ -2,6 +2,12 @@
 
 CicaTavern 的版本记录。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## 2.0.1 - 2026-10-27
+
+### 修复
+
+- ComfyUI 工作流：在 ComfyUI 里把正向提示词写成 `{{prompt}}` 再「导出（API）」，导出的文件里只剩 `prompt`（ComfyUI 把花括号当成随机提示词的写法），导入时一直说没有占位符。占位符现在用和 SillyTavern 一样的 `%prompt%`（还有 `%negative_prompt%` `%seed%` `%width%` `%height%`，LoadImage 写 `%char_avatar%`），SillyTavern 的 ComfyUI 工作流可以直接导入，以前用 `{{prompt}}` 导入的工作流照旧能用。工作流里有酒馆不会填的占位符（比如 SillyTavern 的 `%model%` `%steps%`）时，导入时说明是哪几个。没写种子占位符的工作流每次画图换一个随机种子，重画不再是同一张。
+
 ## 2.0.0 - 2026-10-27
 
 ### 新增

@@ -5,7 +5,8 @@
 // - Image: an OpenAI-compatible images endpoint of a provider (e.g. a local
 //   grok2api), optionally with the card's avatar as reference, or a ComfyUI
 //   workflow with {{prompt}} / {{negative}} / {{seed}} / {{width}} / {{height}}
-//   / {{reference}} placeholders, or NovelAI's image API (its persistent
+//   / {{reference}} placeholders (imported as SillyTavern's %prompt% and so
+//   on, see checkWorkflow), or NovelAI's image API (its persistent
 //   token kept server-side in novelai.json, never sent to the page).
 // - Voice: the sources in voice/: a provider's /audio/speech, Fish Audio and
 //   MiniMax with the user's own key, or a voice service speaking the xiaoya
@@ -485,27 +486,45 @@ function imageError(provider, error) {
 // ─── ComfyUI ────────────────────────────────────────────────────────────
 
 const NUMERIC = new Set(['{{seed}}', '{{width}}', '{{height}}'])
+// SillyTavern's placeholders, taken in as this app's own. Only these come through ComfyUI's
+// "Export (API)": its dynamic prompts read braces as a random pick ({a|b}), so {{prompt}} goes out as "prompt".
+const PERCENT = { prompt: 'prompt', negative_prompt: 'negative', seed: 'seed', width: 'width', height: 'height', char_avatar: 'reference' }
+
+/** Every string in a workflow through `change` (which may give a number for a whole value). */
+function mapStrings(node, change) {
+  if (typeof node === 'string') return change(node)
+  if (Array.isArray(node)) return node.map(item => mapStrings(item, change))
+  if (node && typeof node === 'object') return Object.fromEntries(Object.entries(node).map(([k, v]) => [k, mapStrings(v, change)]))
+  return node
+}
 
 /** Fill placeholders in an API-format workflow; whole-value numeric ones become numbers. */
 export function fillWorkflow(workflow, values) {
-  const walk = node => {
-    if (typeof node === 'string') {
-      if (NUMERIC.has(node.trim())) return Number(values[node.trim().slice(2, -2)])
-      return node.replace(/\{\{(prompt|negative|seed|width|height|reference)\}\}/g, (_, key) => String(values[key] ?? ''))
-    }
-    if (Array.isArray(node)) return node.map(walk)
-    if (node && typeof node === 'object') return Object.fromEntries(Object.entries(node).map(([k, v]) => [k, walk(v)]))
-    return node
+  const filled = mapStrings(workflow, text => {
+    if (NUMERIC.has(text.trim())) return Number(values[text.trim().slice(2, -2)])
+    return text.replace(/\{\{(prompt|negative|seed|width|height|reference)\}\}/g, (_, key) => String(values[key] ?? ''))
+  })
+  // ComfyUI's number fields take no placeholder: without {{seed}} the samplers' own seeds are
+  // replaced, or every redraw of a picture would be the same one.
+  if (values.seed == null || JSON.stringify(workflow).includes('{{seed}}')) return filled
+  for (const node of Object.values(filled)) {
+    for (const key of ['seed', 'noise_seed']) if (typeof node?.inputs?.[key] === 'number') node.inputs[key] = values.seed
   }
-  return walk(workflow)
+  return filled
 }
 
+/** An imported workflow as kept: API format, SillyTavern's placeholders written as this app's. */
 export function checkWorkflow(json) {
   if (!json || typeof json !== 'object' || Array.isArray(json)) throw httpError(400, msg`工作流必须是 ComfyUI「导出（API）」的 JSON`)
   const nodes = Object.values(json)
   if (!nodes.length || !nodes.every(n => n && typeof n === 'object' && n.class_type)) throw httpError(400, msg`这不是 API 格式的工作流：在 ComfyUI 里用「导出（API）」`)
-  if (!JSON.stringify(json).includes('{{prompt}}')) throw httpError(400, msg`工作流里没有 {{prompt}} 占位符：把正向提示词节点的文本改成 {{prompt}}`)
-  return json
+  const workflow = mapStrings(json, text => text.replace(/%(prompt|negative_prompt|seed|width|height|char_avatar)%/g, (_, key) => `{{${PERCENT[key]}}}`))
+  const text = JSON.stringify(workflow)
+  if (!text.includes('{{prompt}}')) throw httpError(400, msg`工作流里没有 %prompt% 占位符：在 ComfyUI 里把正向提示词改成 %prompt% 再导出。不要写 {{prompt}}，ComfyUI 导出时会把花括号去掉，只剩 prompt。`)
+  // SillyTavern's others (%model%, %steps%…): ComfyUI would refuse the words as values.
+  const unfilled = [...new Set([...text.matchAll(/"(%[a-z_]+%)"/g)].map(m => m[1]))]
+  if (unfilled.length) throw httpError(400, msg`工作流里有酒馆不会填的占位符 ${unfilled.join(' ')}：在 JSON 里改成具体的值（模型文件名、步数等）再导入`)
+  return workflow
 }
 
 // A cast member's reference picture: one person, nothing else to copy from it.
@@ -712,8 +731,9 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
   }
 
   async function saveWorkflow(json) {
-    await writeFile(workflowFile, JSON.stringify(checkWorkflow(json), null, 1), 'utf8')
-    return describeWorkflow(json)
+    const workflow = checkWorkflow(json)
+    await writeFile(workflowFile, JSON.stringify(workflow, null, 1), 'utf8')
+    return describeWorkflow(workflow)
   }
 
   function describeWorkflow(json) {

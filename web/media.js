@@ -1049,7 +1049,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         workflowInput,
         workflowInfo,
       ]),
-      el('p', { class: 'hint', text: t`在 ComfyUI 里把正向提示词写成 {{prompt}}，种子、宽、高写成 {{seed}} {{width}} {{height}}，要参考图就在 LoadImage 里写 {{reference}}（会上传这张卡的头像），然后「导出（API）」。` }),
+      el('p', { class: 'hint', text: t`在 ComfyUI 里把正向提示词写成 %prompt%（不要写 {{prompt}}，导出时花括号会被 ComfyUI 去掉），然后「导出（API）」再导入。种子每次自动随机；要用酒馆的宽高和参考图，在 JSON 里把宽、高写成 "%width%" "%height%"，LoadImage 写 "%char_avatar%"（会上传这张卡的头像）。SillyTavern 的 ComfyUI 工作流可以直接导入。` }),
     ])
     const naiTokenHint = el('span', { class: 'hint nai-token-hint' })
     const showNaiToken = info => naiTokenText(naiTokenHint, info)
@@ -2463,7 +2463,9 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
 
   function workflowText(info) {
     if (!info) return t`还没导入工作流`
-    return t`已导入：${info.nodes} 个节点，占位符 ${info.placeholders.map(p => `{{${p}}}`).join(' ')}`
+    // Shown as written for import (server/media.mjs keeps them as {{prompt}} and so on).
+    const written = { prompt: 'prompt', negative: 'negative_prompt', seed: 'seed', width: 'width', height: 'height', reference: 'char_avatar' }
+    return t`已导入：${info.nodes} 个节点，占位符 ${info.placeholders.map(p => `%${written[p] ?? p}%`).join(' ')}`
   }
 
   const save = guard(async (form, hasCard) => {

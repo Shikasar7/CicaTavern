@@ -109,15 +109,16 @@ If you can't quite say what you want, the creator guides you round by round:
 
 <br clear="right">
 
-## Latest changes [2.0.0]
+## Latest changes [2.0.1]
 
 <p align="center"><img src="docs/screenshots/vn-marks.jpg" alt="The visual novel in 1.9.2: the model marked this line as the steward's, so the name plate and the sprite follow, with Lin Qinghe beside him" width="880"></p>
 
-- **Voice input**: a microphone beside the input box turns what you say into text in the box, for you to read and send. Nothing to install: a provider's transcription API (SiliconFlow's SenseVoice is free), the desktop browser's own recognition, or a whisper server of your own; CicaTavern keeps no recordings.
-- **Draw history**: illustrations, reference pictures, sprites and expressions, scenes and a card's avatar keep a few old versions after a redraw (5 by default); tap one to use it again, or delete it.
-- **Regex sets**: the regex window works like the lorebook one, with copies and SillyTavern exports, and regex sets can run on chosen cards only.
-- **Personas and writing styles as lists**: copies and SillyTavern imports and exports, and each card can pick one of each.
-- **macOS test build (beta)**: the release page has packages for Apple silicon and Intel. They have not been fully tried on a real Mac yet and are not signed by Apple, so the first time you open the app, go to System Settings → Privacy & Security and click Open Anyway. Reports are welcome.
+- **Fix (2.0.1)**: ComfyUI workflows mark the prompt as `%prompt%`, as in SillyTavern, whose ComfyUI workflows now import as they are. A `{{prompt}}` lost its braces in ComfyUI's "Export (API)", so the import kept saying the placeholder was missing.
+- **Voice input** (2.0.0): a microphone beside the input box turns what you say into text in the box, for you to read and send. Nothing to install: a provider's transcription API (SiliconFlow's SenseVoice is free), the desktop browser's own recognition, or a whisper server of your own; CicaTavern keeps no recordings.
+- **Draw history** (2.0.0): illustrations, reference pictures, sprites and expressions, scenes and a card's avatar keep a few old versions after a redraw (5 by default); tap one to use it again, or delete it.
+- **Regex sets** (2.0.0): the regex window works like the lorebook one, with copies and SillyTavern exports, and regex sets can run on chosen cards only.
+- **Personas and writing styles as lists** (2.0.0): copies and SillyTavern imports and exports, and each card can pick one of each.
+- **macOS test build (beta)** (since 2.0.0): the release page has packages for Apple silicon and Intel. They have not been fully tried on a real Mac yet and are not signed by Apple, so the first time you open the app, go to System Settings → Privacy & Security and click Open Anyway. Reports are welcome.
 
 1.9 added web search, blocked words, card UIs that call the model and edit lorebooks, an error log, the visual novel HUD and speaker marks, editing lorebooks and presets by chat, and an update mirror in China; visual novel mode came in 1.8. Download from [Releases](https://github.com/Shikasar7/CicaTavern/releases/latest); 1.4.0 and later can update in the app. Everything that changed is in [CHANGELOG.md](CHANGELOG.md).
 
@@ -158,7 +159,7 @@ Pick a backend under 配图与朗读 (Pictures and voice) → 画图方式 (How 
 
 - **OpenAI-compatible image API**: choose a provider you've added and its image model (gpt-image, grok, SiliconFlow and others); the portrait or a reference picture can be used as a reference. With OpenRouter as the provider, its image models (`google/gemini-…-image` and others) are used.
 - **Gemini's own image models** (Nano Banana): choose the provider made from the "Gemini" template; the model defaults to `gemini-2.5-flash-image`, or try `gemini-3-pro-image-preview`. Reference pictures of cast members in the frame are sent along, so faces stay the same.
-- **ComfyUI**: import a workflow saved with "Export (API)", with placeholders marking the prompt, size and so on. `examples/comfy-illustrious-api.json` is a text-to-image example; change the model name to your own.
+- **ComfyUI**: import a workflow saved with "Export (API)", with placeholders marking the prompt, size and so on: write the positive prompt as `%prompt%`, as in SillyTavern, whose ComfyUI workflows import as they are. `examples/comfy-illustrious-api.json` is a text-to-image example; change the model name to your own.
 - **NovelAI**: enter a persistent token. V4.5 / V5 and character references are supported; the best choice for anime.
 - **SD WebUI / Forge**: AUTOMATIC1111, Forge or reForge on your computer (started with `--api`), drawing with the model loaded there; sampler, steps, CFG and negative prompt can be set, and a cast member's or the card's LoRA goes into the prompt as `<lora:…>`.
 
