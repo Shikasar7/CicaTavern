@@ -9,7 +9,9 @@
 //      this one again.
 // The phone app only checks here: the app itself downloads the APK, checks it
 // and opens the system installer (android ApkUpdate.java), and Android keeps the
-// data when the same signature installs over it.
+// data when the same signature installs over it. The Mac's CicaTavern.app only
+// checks too: its button opens the release page, and the new .app replaces the
+// old one in 应用程序.
 // GitHub's API answers 60 unauthenticated queries an hour per network address,
 // shared by everyone behind it (phone networks, offices); when it says no, the
 // check reads the latest.json the release carries instead.
@@ -113,13 +115,13 @@ function firstAnswer(attempts) {
 const settle = promise => promise.then(info => ({ info }), error => ({ error }))
 
 /**
- * @param features - the edition's; features.updates is 'zip' (Windows package), 'apk' (phone) or null.
+ * @param features - the edition's; features.updates is 'zip' (Windows package), 'apk' (phone), 'mac' (CicaTavern.app) or null.
  * @param proxy - the app's proxy URL right now, or null.
  * @param relaunch - the arguments the restarted server gets: { port, data, edition, idleExit, proxy?, listen? }.
  * @param busy - true while a turn or the card creator is writing (no restart then).
  * @param onShutdown - stops this server once the switch-over has started.
  * Tests replace: root, version, feed, mirror (null: none), publicKey (latest.json's),
- * mirrorAfterMs, now, env, platform, check (the bundled Node's self-test),
+ * mirrorAfterMs, now, env, platform, arch, check (the bundled Node's self-test),
  * spawnSwitch (runs bin/update-apply.mjs).
  */
 export function createUpdater({
@@ -139,6 +141,7 @@ export function createUpdater({
   now = () => Date.now(),
   env = process.env,
   platform = process.platform,
+  arch = process.arch,
   check = checkRuntime,
   spawnSwitch = spawnApply,
 } = {}) {
@@ -151,7 +154,8 @@ export function createUpdater({
   const userAgent = `CicaTavern/${version} (+https://github.com/${repo})`
   // Why this copy cannot install by itself, or null.
   const notInstallable = () => {
-    if (kind !== 'zip') return kind === 'apk' ? null : msg`这个版本不用应用内更新`
+    // The phone and the Mac only check; the page shows where to download.
+    if (kind !== 'zip') return kind === 'apk' || kind === 'mac' ? null : msg`这个版本不用应用内更新`
     if (platform !== 'win32') return msg`应用内更新只支持 Windows 发布包`
     if (!isInstall(root)) return msg`这份 CicaTavern 不是从发布包运行的（比如从源码运行），用 git pull 或到发布页下载更新`
     return null
@@ -163,13 +167,13 @@ export function createUpdater({
   let checking = null
 
   async function stateFolder() {
-    dir ??= await stateDir(root, env)
+    dir ??= await stateDir(root, env, platform)
     return dir
   }
   // A package (or the phone app's own copy, which android/scripts/stage-node.mjs
-  // stamps) keeps its state on disk; a source checkout keeps it in memory rather
-  // than write into the tree.
-  const persist = kind === 'apk' ? existsSync(path.join(root, 'stamp.txt')) : kind === 'zip' && isInstall(root)
+  // stamps, or the Mac package with its runtime/node) keeps its state on disk; a
+  // source checkout keeps it in memory rather than write into the tree.
+  const persist = kind === 'apk' ? existsSync(path.join(root, 'stamp.txt')) : kind === 'mac' ? existsSync(path.join(root, 'runtime', 'node')) : kind === 'zip' && isInstall(root)
   async function load() {
     if (saved) return saved
     saved = { autoCheck: true, checkedAt: 0, latest: null, error: null, skipped: null, staged: null, ...(persist ? await readJson(path.join(await stateFolder(), 'state.json'), {}) : {}) }
@@ -261,7 +265,7 @@ export function createUpdater({
     } catch {
       throw failure(502, msg`GitHub 的回复读不懂`)
     }
-    return releaseInfo(json, { repo, feed, mirror })
+    return releaseInfo(json, { repo, feed, mirror, arch })
   }
 
   /** Why the API said no, from its headers. */
@@ -288,7 +292,7 @@ export function createUpdater({
       const why = signal.aborted ? msg`超时` : String(error?.code ?? error?.message ?? error).slice(0, 80)
       throw failure(502, msg`${reason}。备用的 latest.json 也没读到（${why}），过一会儿再试，或者打开发布页看看`)
     }
-    return releaseInfo(json, { repo, feed, mirror })
+    return releaseInfo(json, { repo, feed, mirror, arch })
   }
 
   /** The mirror's latest release: its latest.json, when the signature beside it holds. */
@@ -314,7 +318,7 @@ export function createUpdater({
     } catch {
       throw failure(502, msg`latest.json 读不懂`)
     }
-    return releaseInfo(json, { repo, feed, mirror, source: 'mirror' })
+    return releaseInfo(json, { repo, feed, mirror, source: 'mirror', arch })
   }
 
   /** Ask GitHub now (force), or when the daily check is due. */
@@ -441,7 +445,7 @@ export function createUpdater({
       if (!sha256) throw new Error(failures.join(' / '))
       await rename(part, zipFile)
       job.step = 'unpacking'
-      const base = await installBase(root, env)
+      const base = await installBase(root, env, platform)
       const folderPath = await stageInstall(await readFile(zipFile), { base, version: latest.version, check })
       await save({ staged: { version: latest.version, path: folderPath, sha256 } })
       done = { step: 'ready', version: latest.version }
@@ -499,7 +503,7 @@ export function createUpdater({
   /** The other package folders next to this one (and the LOCALAPPDATA fallback). */
   async function installs() {
     if (kind !== 'zip' || notInstallable()) return { installs: [] }
-    const bases = [...new Set([path.dirname(root), await installBase(root, env)])]
+    const bases = [...new Set([path.dirname(root), await installBase(root, env, platform)])]
     const list = otherInstalls(root, bases)
     const state = await load()
     const keep = staged(state)?.path

@@ -2777,7 +2777,7 @@ function fillProxy(form, saved, network) {
   const status = $('network-status')
   if (!network) return (status.textContent = '')
   const now = network.effective ? t`现在走 ${network.effective}` : t`现在不走代理`
-  const via = network.mode === 'system' ? (network.source === 'windows' ? t`（Windows 系统代理）` : network.source === 'env' ? t`（环境变量 HTTPS_PROXY）` : t`：系统代理没开`) : ''
+  const via = network.mode === 'system' ? (network.source === 'windows' ? t`（Windows 系统代理）` : network.source === 'macos' ? t`（macOS 系统代理）` : network.source === 'env' ? t`（环境变量 HTTPS_PROXY）` : t`：系统代理没开`) : ''
   status.textContent = locked ? t`${now}。启动时用 --proxy 或 AGENT_TAVERN_PROXY 指定了代理，这里改不了。` : t`${now}${via}。`
 }
 
