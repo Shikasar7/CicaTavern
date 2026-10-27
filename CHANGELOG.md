@@ -2,6 +2,16 @@
 
 CicaTavern 的版本记录。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## 未发布
+
+### 改进
+
+- Mac 版改用 dmg 安装包：打开下载的 `CicaTavern-<版本>-mac-arm64.dmg`（Intel 的是 `-mac-x64.dmg`），窗口里是 CicaTavern 和「应用程序」，中间一个箭头，把它拖过去就装好了；窗口下方也写着第一次打开怎么做（弹窗点「完成」，再到 系统设置 › 隐私与安全性 点「仍要打开」）。zip 还在，「设置 → 更多 → 更新」会指向 dmg。
+
+### 修复
+
+- Mac 版的语音输入用不了麦克风：应用没有声明要用麦克风，窗口也不让页面用。现在第一次点麦克风时，macOS 会问要不要允许 CicaTavern 使用麦克风；只有 CicaTavern 自己的页面能用，卡片界面不能。
+
 ## 2.0.1 - 2026-10-27
 
 ### 修复
