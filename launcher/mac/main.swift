@@ -15,7 +15,9 @@
 // through an open panel; downloads (<a download>, blob: and attachment
 // responses) through a save panel; target=_blank and anything that leaves the
 // local server go to the default browser, while the cards' sandboxed frames
-// (about:srcdoc) load in place. The page itself may use the microphone (语音输入;
+// (about:srcdoc) load in place. A download's panel tells the page afterwards how
+// it went (cicatavern-save: saved, cancelled or failed), so it says 已保存 only
+// once the file is there. The page itself may use the microphone (语音输入;
 // macOS asks once, with Info.plist's NSMicrophoneUsageDescription), the cards'
 // frames may not. Closing the window quits the app, after leaving the page so
 // its /api/presence stream ends and the server's idle countdown starts.
@@ -233,6 +235,7 @@ final class Page: NSObject, WKNavigationDelegate, WKUIDelegate, WKDownloadDelega
         let chosen: (NSApplication.ModalResponse) -> Void = { response in
             guard response == .OK, let url = save.url else {
                 completionHandler(nil)
+                Page.report("cancelled", for: download)
                 return
             }
             // The panel has already asked about replacing; WebKit does not write over a file.
@@ -246,10 +249,20 @@ final class Page: NSObject, WKNavigationDelegate, WKUIDelegate, WKDownloadDelega
         }
     }
 
+    func downloadDidFinish(_ download: WKDownload) {
+        Page.report("saved", for: download)
+    }
+
     func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
+        Page.report("failed", for: download)
         let panel = alert(L("下载没成功：", "The download failed: ") + error.localizedDescription)
         panel.addButton(withTitle: L("好", "OK"))
         present(panel) { _ in }
+    }
+
+    /// How a download went, to the page that started it (web/app.js saveFile waits for it).
+    static func report(_ state: String, for download: WKDownload) {
+        download.webView?.evaluateJavaScript("dispatchEvent(new CustomEvent('cicatavern-save', { detail: { state: '\(state)' } }))")
     }
 }
 
@@ -292,6 +305,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let config = WKWebViewConfiguration()
         // The page plays voices and music when a turn arrives, not only after a click.
         config.mediaTypesRequiringUserActionForPlayback = []
+        // What this app does that a browser does not: its save panel says how a save went (Page.report).
+        config.userContentController.addUserScript(WKUserScript(source: "window.cicatavernNative = Object.freeze({ saves: true })", injectionTime: .atDocumentStart, forMainFrameOnly: true))
         web = WKWebView(frame: .zero, configuration: config)
         web.navigationDelegate = page
         web.uiDelegate = page

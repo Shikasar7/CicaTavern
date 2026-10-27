@@ -197,6 +197,15 @@ async function stream(path, body, onEvent) {
 
 // The toast is a popover: shown again each time, it goes on top of whatever window is open
 // (a modal dialog would otherwise cover it until it closes). `log`: an error, with a way to its log.
+// A toast is in the top layer, but a dialog opened after it goes above it: shown again on top of that dialog.
+new MutationObserver(records => {
+  const box = $('toast')
+  if (!box?.showPopover || box.hidden || !box.matches(':popover-open')) return
+  if (!records.some(record => record.target !== box && record.target.open)) return
+  box.hidePopover()
+  box.showPopover()
+}).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['open'] })
+
 function toast(message, ms = 4000, { log = false } = {}) {
   const box = $('toast')
   const hide = () => {
@@ -2001,6 +2010,15 @@ function saveFile(name, text, message = '') {
   link.click()
   link.remove()
   setTimeout(() => URL.revokeObjectURL(url), 30000)
+  // CicaTavern.app (launcher/mac) asks where to save in its own panel and says afterwards how it went:
+  // nothing is said to be saved before it is, and nothing when the panel was cancelled.
+  if (window.cicatavernNative?.saves) {
+    addEventListener('cicatavern-save', event => {
+      if (event.detail?.state === 'saved') toast(message || t`已保存`, 9000)
+      else if (event.detail?.state === 'failed') toast(t`保存失败`, 9000)
+    }, { once: true })
+    return
+  }
   if (message) toast(message, 9000)
 }
 
@@ -2318,6 +2336,9 @@ const saveState = guard(async () => {
 })
 
 // ─── Settings ───────────────────────────────────────────────────────────
+// The providers the settings menu shows (模型供应商's row): kept current when the providers window changes them.
+const settingsProviders = []
+
 const openSettings = guard(async () => {
   settingsMenu ??= createMenu({ dialog: $('settings-dialog'), form: $('settings-form'), el, title: t`设置` })
   await loadPersonas()
@@ -2342,7 +2363,8 @@ const openSettings = guard(async () => {
   renderCardPicks(card)
   const [providers, presets] = await Promise.all([api('/api/providers').catch(() => null), api('/api/presets').catch(() => []), updateUi.load()])
   settingsMenu.start()
-  layOutSettings({ form, card, providers: providers?.providers ?? [], presets })
+  settingsProviders.splice(0, Infinity, ...(providers?.providers ?? []))
+  layOutSettings({ form, card, providers: settingsProviders, presets })
   $('settings-dialog').showModal()
 })
 
@@ -2710,6 +2732,9 @@ const saveSettings = guard(async () => {
   ])
   fillProxy(form, ui.settings.proxy, await api('/api/network').catch(() => null))
   allowLibraries(ui.settings.cdnLibraries !== false)
+  // 默认（…） in the chat's model picker follows the default just saved.
+  if (ui.settings.model !== undefined) ui.defaultModel = ui.settings.model || null
+  renderModelSelect()
   let applied = await saveCardPicks(form)
   if (ui.cardId) {
     const ids = [...form.querySelectorAll('input[name="book"]:checked')].map(i => i.value)
@@ -2787,6 +2812,9 @@ function renderAccess(info) {
   ui.access = info
   const box = $('access-links')
   if (!box) return
+  // 「添加到主屏幕」 reads "open a link above": there are links only while phones are let in.
+  const homeHint = $('access-home-hint')
+  if (homeHint) homeHint.hidden = info?.running !== 'lan' || !(info.links ?? []).length
   if (!info) {
     box.textContent = ''
     return
@@ -2999,7 +3027,11 @@ const providersUi = initProviders({
     if ($('settings-dialog').open) {
       ui.settings = await api('/api/settings')
       $('settings-model').replaceChildren(...modelOptions(ui.defaultModel))
+      const { providers } = await api('/api/providers').catch(() => ({ providers: null }))
+      if (providers) settingsProviders.splice(0, Infinity, ...providers)
+      settingsMenu?.refresh()
     }
+    renderModelSelect()
     checkAuth()
   },
 })
@@ -3283,8 +3315,12 @@ async function checkAuth() {
 }
 
 function bind() {
-  // On a phone the full placeholder wraps under the one-line box.
-  if (matchMedia('(max-width: 560px)').matches) $('input').placeholder = t`写下行动、对白或想看的发展`
+  // On a phone the full placeholder wraps under the one-line box: the short one there, as the width changes too.
+  const narrow = matchMedia('(max-width: 560px)')
+  const fullPlaceholder = $('input').placeholder
+  const fitPlaceholder = () => { $('input').placeholder = narrow.matches ? t`写下行动、对白或想看的发展` : fullPlaceholder }
+  fitPlaceholder()
+  narrow.addEventListener('change', fitPlaceholder)
   // Phones show a list dialog's list and its selected item one at a time (style.css .show-main).
   for (const layout of document.querySelectorAll('.preset-layout')) {
     // Capture phase: the provider list re-renders inside the item's own click

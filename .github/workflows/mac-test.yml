@@ -89,6 +89,8 @@ jobs:
         run: bash scripts/mac-gui-test.sh "$RUNNER_TEMP/dist/CicaTavern-${VERSION}-mac-${{ matrix.arch }}.zip" "$RUNNER_TEMP/shots"
 
       - name: Open the disk image as a download is opened, and take a screenshot of its window
+        # GitHub's Macs draw the window without its background picture; a real Mac shows it
+        # (checked on macOS 27): the screenshot is for the layout and the icons.
         if: always()
         run: |
           dmg="$RUNNER_TEMP/dist/CicaTavern-${VERSION}-mac-${{ matrix.arch }}.dmg"
