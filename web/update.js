@@ -2,9 +2,10 @@
 // release notes, and on Windows 下载更新 → 重启并更新, 回到上一版 and the old
 // version folders. The phone app downloads the APK itself, checks it and opens
 // the system installer (android ApkUpdate, through window.AgentTavernAndroid);
-// an app without that hands the APK link to the browser. Each package can come
-// from GitHub or the mirror in mainland China (cnb.cool; server/update/release.mjs):
-// the one the check read first, the other a click away.
+// an app without that hands the APK link to the browser. The Mac's button opens
+// the release page. Each package can come from GitHub or the mirror in mainland
+// China (cnb.cool; server/update/release.mjs): the one the check read first, the
+// other a click away.
 // Release notes come from GitHub: they are drawn as text, never as HTML.
 import { locale, t } from '/i18n.js'
 
@@ -310,9 +311,26 @@ export function initUpdate({ api, el, toast, guard, android = null, onChange = (
         el('p', { class: 'hint', text: t`浏览器下载完成后点开安装，覆盖安装会保留所有数据。第一次可能要允许浏览器「安装未知应用」。安卓会核对新安装包和现在这个是同一个签名，不是的话装不上。` }),
       ]
     }
+    // The Mac installs a release's zip itself (into Application Support); without it, or where it cannot, the release page.
+    if (info.kind === 'mac' && (!info.installable || !info.local || !latest.assets?.macZip)) {
+      // CicaTavern.app (launcher/mac/) hands _blank links to the default browser.
+      const mac = latest.assets?.mac
+      return [
+        el('div', { class: 'row' }, [el('a', { class: 'btn primary', href: latest.url, target: '_blank', rel: 'noopener', text: t`打开发布页` })]),
+        el('p', {
+          class: 'hint',
+          text: mac && /\.dmg$/i.test(mac.name)
+            ? t`在发布页下载 ${mac.name}（${mb(mac.size)}）。换版本前先在设置里「停止后台服务」并关掉窗口，再打开下载的 dmg，把 CicaTavern 拖到「应用程序」替换旧的；数据在 ~/.cicatavern，不受影响。第一次打开新版本时，可能要再到 系统设置 → 隐私与安全性 点「仍要打开」。`
+            : mac
+            ? t`在发布页下载 ${mac.name}（${mb(mac.size)}）。换版本前先在设置里「停止后台服务」并关掉窗口，再把解压出的 CicaTavern 拖进「应用程序」替换旧的；数据在 ~/.cicatavern，不受影响。第一次打开新版本时，可能要再到 系统设置 → 隐私与安全性 点「仍要打开」。`
+            : t`这个版本还没有这台 Mac 能用的安装包。`,
+        }),
+      ]
+    }
     if (!info.installable) return [el('p', { class: 'hint', text: info.reason }), open]
     if (!info.local) return [el('p', { class: 'hint', text: t`在电脑上打开 CicaTavern 更新：手机上不能替电脑装新版本。` })]
-    const zip = latest.assets?.zip
+    const onMac = info.kind === 'mac'
+    const zip = onMac ? latest.assets.macZip : latest.assets?.zip
     if (!zip) return [el('p', { class: 'hint', text: t`这个版本没有 Windows 安装包。` }), open]
     if (zip.hashError) return [el('p', { class: 'hint warn', text: zip.hashError }), open]
     const choice = sourceChoice(zip)
@@ -329,7 +347,9 @@ export function initUpdate({ api, el, toast, guard, android = null, onChange = (
         return [el('p', { class: 'hint', text: t`校验通过，正在解压…` })]
       case 'ready':
         return [
-          el('p', { class: 'hint', text: t`已下载并校验（SHA-256 一致），放在 ${info.ready?.path ?? ''}。重启后用新版本，旧版本的文件夹留着，可以回到上一版。` }),
+          el('p', { class: 'hint', text: onMac
+            ? t`已下载并校验（SHA-256 一致），放在 ${info.ready?.path ?? ''}。重启后用新版本，「应用程序」里的 CicaTavern 不用动，以后打开它就是新版本；旧版本留着，可以回到上一版。`
+            : t`已下载并校验（SHA-256 一致），放在 ${info.ready?.path ?? ''}。重启后用新版本，旧版本的文件夹留着，可以回到上一版。` }),
           el('div', { class: 'row' }, [el('button', { type: 'button', class: 'btn primary', text: t`重启并更新到 ${info.ready?.version ?? latest.version}`, onclick: () => restart('update') })]),
         ]
       case 'restarting':
@@ -342,7 +362,9 @@ export function initUpdate({ api, el, toast, guard, android = null, onChange = (
             choice.other ? el('button', { type: 'button', class: 'btn small', text: choice.other.label, onclick: act('/api/update/download', { body: { source: choice.other.from } }) }) : null,
             open,
           ]),
-          el('p', { class: 'hint', text: t`下载后核对发布页公布的 SHA-256，解压到 ${info.root ? info.root.replace(/[\\/][^\\/]+$/, '') : t`现在的文件夹旁边`}，不碰数据目录。` }),
+          el('p', { class: 'hint', text: onMac
+            ? t`下载后核对发布页公布的 SHA-256，放到 ~/Library/Application Support/CicaTavern，不碰「应用程序」里的 CicaTavern 和数据目录。也可以在发布页下载 dmg 重新安装。`
+            : t`下载后核对发布页公布的 SHA-256，解压到 ${info.root ? info.root.replace(/[\\/][^\\/]+$/, '') : t`现在的文件夹旁边`}，不碰数据目录。` }),
         ]
     }
   }
@@ -405,7 +427,7 @@ export function initUpdate({ api, el, toast, guard, android = null, onChange = (
     } else if (latest) {
       parts.push(el('p', { class: 'upd-latest', text: latest.source === 'mirror' ? t`已经是最新版本（国内镜像上最新的是 ${latest.version}）。` : t`已经是最新版本（GitHub 上最新的是 ${latest.version}）。` }))
     }
-    if (info.kind === 'zip' && info.installable && info.local) {
+    if ((info.kind === 'zip' || info.kind === 'mac') && info.installable && info.local) {
       if (info.previous) {
         parts.push(
           el('div', { class: 'upd-previous' }, [
