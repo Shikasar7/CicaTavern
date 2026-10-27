@@ -634,16 +634,32 @@ export function selectNode(chat, id) {
   }
 }
 
+/**
+ * Why the story on `path` cannot be compacted at its tip, or '' when it can: 'none' nothing a
+ * model wrote yet; 'start' fewer than MIN_TURNS turns and never compacted; 'recent' compacted
+ * fewer than that ago; 'folded' fewer than that left in sight in front of a rollback.
+ */
+export function compactBlock(chat, path) {
+  const tip = path.at(-1)
+  if (tip?.role !== 'assistant' || (!tip.sdk && !tip.api && !tip.imported)) return 'none'
+  if (turnsSinceCompaction(path) >= MIN_TURNS) return ''
+  if (childrenOf(chat, tip.id).length) return 'folded'
+  return path.some(node => node.compaction) ? 'recent' : 'start'
+}
+
+/** Turns written from a compaction point after it was made (turns folded behind a rollback came before). */
+const continuedAfter = (chat, node) => childrenOf(chat, node.id).filter(child => !node.compaction?.at || !child.createdAt || child.createdAt > node.compaction.at)
+
 function compactionView(chat, node) {
-  const { summary, turns, model, usage, at, imported } = node.compaction
+  const { summary, turns, model, usage, at, imported, kept } = node.compaction
   // Once a turn has been written from it, the summary is baked into that turn's prompt.
-  return { summary, chars: summary.length, turns, model, usage, at, imported, editable: childrenOf(chat, node.id).length === 0 }
+  return { summary, chars: summary.length, turns, model, usage, at, imported, kept, editable: continuedAfter(chat, node).length === 0 }
 }
 
 function editableCompaction(chat, id) {
   const node = chat.nodes[id]
   if (!node?.compaction) throw httpError(404, msg`这里没有压缩记录`)
-  if (childrenOf(chat, id).length) throw httpError(409, msg`压缩之后已经接着写了，摘要不能再改；可以回滚到更早的地方重新压缩`)
+  if (continuedAfter(chat, node).length) throw httpError(409, msg`压缩之后已经接着写了，摘要不能再改；可以回滚到更早的地方重新压缩`)
   return node
 }
 
@@ -775,9 +791,10 @@ export function chatView(chat) {
     updatedAt: chat.updatedAt,
     path,
     folded: foldedTurns(chat),
-    // Turns a manual compaction would fold into a summary; 0 when there is nothing worth it.
-    // (Not with turns folded behind a rollback: restored, they would follow a summary they never read.)
-    compactable: tip.role === 'assistant' && (tip.sdk || tip.api || tip.imported) && sinceCompaction >= MIN_TURNS && !childrenOf(chat, tip.id).length ? sinceCompaction : 0,
+    // Turns a manual compaction would fold into a summary; 0 when there is nothing worth it, and why
+    // (compactBlock). A subscription session cannot reach turns folded behind a rollback: 'session'.
+    compactable: !compactBlock(chat, active) && !(tip.sdk && childrenOf(chat, tip.id).length) ? sinceCompaction : 0,
+    compactBlock: compactBlock(chat, active) || (tip.sdk && childrenOf(chat, tip.id).length ? 'session' : ''),
     state: lastAssistant?.state ?? {},
     // The chat variables (Tavern Helper's chat scope, the templates' local scope), for the card's frames.
     frameVars: chat.frameVars ?? {},

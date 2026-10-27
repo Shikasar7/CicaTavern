@@ -19,7 +19,7 @@ import { basicDetail } from './basic.mjs'
 import { appVersion, featuresOf } from './edition.mjs'
 import { createProxy, proxyOverride } from './proxy.mjs'
 import { createEngine } from './engine.mjs'
-import { APIS, draftProvider, exportProviders, importProviders, isProviderRef, listRemoteModels, mergeDshProviders, normalizeProvider, providersFromDsh, providerChoices, providerError, publicProvider, refLabel } from './providers.mjs'
+import { APIS, draftProvider, exportProviders, importProviders, isProviderRef, listRemoteModelDetails, mergeDshProviders, normalizeProvider, providersFromDsh, providerChoices, providerError, publicProvider, refLabel } from './providers.mjs'
 import { initTemplates, templateSyntaxError } from './template.mjs'
 import { canonicalModel } from './models.mjs'
 import { createLedger } from './usage.mjs'
@@ -41,6 +41,7 @@ import { patchVars } from '../web/shared/vars.js'
 import { normalizeScripts, withUniqueIds } from '../web/shared/regex.js'
 import { chatPackage, importChatPackage, savePackagePicture } from './transfer.mjs'
 import { createStore, defaultDataRoot, httpError, newId, PRIVACY_NOTICE } from './store.mjs'
+import { contextInfo } from './context.mjs'
 import { currentLanguage, localize, msg, pageIn, requestLanguage, withLanguage } from './i18n.mjs'
 import { createUpdater } from './update/index.mjs'
 import { createShortcut } from './update/install.mjs'
@@ -361,7 +362,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       const { chat, nodeId } = await engine.runTurn(chatId, args, send)
       send({ type: 'done', nodeId, chat: chatView(chat) })
     } catch (error) {
-      send({ type: 'error', status: error.status ?? 500, message: localize(error.message) })
+      send({ type: 'error', status: error.status ?? 500, message: localize(error.message), ...(error.contextFull ? { contextFull: true } : {}) })
       // Stopped by the player (499) is no error. One without a status is this app's own mistake: its stack too.
       // In the log before the stream ends.
       if (error.status !== 499) {
@@ -471,10 +472,12 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
           accountError = String(error?.message ?? error).slice(0, 160)
         }
       }
+      const learned = await store.getModelContext()
+      // Each with its context window and when 自动压缩 would compact there (context.mjs).
       const choices = [
         ...(useSubscription ? subscription.choices().map(m => ({ ...m, group: msg`Claude 订阅`, subscription: true })) : []),
         ...providerChoices(await store.getProviders()),
-      ]
+      ].map(choice => ({ ...choice, context: contextInfo(choice.id, { settings, learned }) }))
       return { choices, defaultModel: modelRef(settings.model), accountError, subscription: useSubscription }
     }],
     ['GET', /^\/api\/usage$/, async (_, __, url) => {
@@ -546,11 +549,16 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['POST', /^\/api\/providers\/models$/, async (_, body) => {
       const providers = await store.getProviders()
       const draft = draftProvider(body, providers.find(p => p.id === body.id) ?? null)
+      let listed
       try {
-        return { models: await listRemoteModels(draft, { proxy: isolation.proxy, signal: AbortSignal.timeout(20000) }) }
+        listed = await listRemoteModelDetails(draft, { proxy: isolation.proxy, signal: AbortSignal.timeout(20000) })
       } catch (error) {
         throw httpError(502, providerError(draft, error))
       }
+      // What the list says of context windows (自动压缩), by this provider's model where it is saved already.
+      const heard = Object.fromEntries(Object.entries(listed.contexts).map(([id, size]) => [body.id ? `${body.id}/${id}` : id, size]))
+      if (Object.keys(heard).length) await store.learnModelContext(heard).catch(() => {})
+      return { models: listed.models }
     }],
     ['GET', /^\/api\/settings$/, () => store.getSettings()],
     ['PUT', /^\/api\/settings$/, async (_, body) => {
@@ -1174,7 +1182,12 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       return chatView(await store.saveChat(chat))
     })],
     // Manual compaction: one summary call, then the next turn starts a new session (see recap.mjs).
-    ['POST', /^\/api\/chats\/([\w-]+)\/compact$/, async ([id]) => ({ ...chatView(await engine.compactChat(id)), running: false })],
+    // With `model`, another model writes the archive; with `keepRecent`, none does (engine.compactAt).
+    ['POST', /^\/api\/chats\/([\w-]+)\/compact$/, async ([id], body) => {
+      const options = { model: typeof body?.model === 'string' ? body.model : '', keepRecent: body?.keepRecent === true }
+      return { ...chatView(await engine.compactChat(id, options)), running: false }
+    }],
+    ['GET', /^\/api\/chats\/([\w-]+)\/compact$/, async ([id]) => ({ parts: engine.compactProgress(id) })],
     // 补写变量: the latest reply of an MVU card came without its update block.
     ['POST', /^\/api\/chats\/([\w-]+)\/nodes\/([\w-]+)\/fill-update$/, async ([id, nodeId]) => ({ ...chatView(await engine.fillUpdate(id, nodeId)), running: false })],
     ['PUT', /^\/api\/chats\/([\w-]+)\/compaction$/, ([id], body) => store.withChat(id, async () => {
@@ -1763,7 +1776,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
             if (res.cancelled) return sendJson(res, 499, { error: error.message })
             // Not an answer a route chose (httpError): where in this app it went wrong.
             if (!error.status) res.errorStack = error.stack
-            sendJson(res, error.status ?? 500, { error: error.message })
+            sendJson(res, error.status ?? 500, { error: error.message, ...(error.contextFull ? { contextFull: true } : {}) })
           })
           // Answering the error failed too: that request goes, the server stays.
           .catch(() => res.destroy())

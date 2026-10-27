@@ -4,7 +4,7 @@
 // prefix cache hits.
 // Other model references go to an optional backend passed in as `subscription`
 // (this machine's own install: server/subscription/); without one they are refused.
-import { activePath, booksForCard, chatPicks, childrenOf, editMessage as editChatMessage, pathTo, playerOf, presetFor, scriptsOf, selectNode } from './chats.mjs'
+import { activePath, booksForCard, chatPicks, childrenOf, compactBlock, editMessage as editChatMessage, pathTo, playerOf, presetFor, scriptsOf, selectNode } from './chats.mjs'
 import { hasPrefixRules, renderPresetTail } from './presets.mjs'
 import { buildTurnPrompt, chatTemplates, everyTurnReminder, renderEntry, replaceMacros, templateText, webSearchNote } from './prompt.mjs'
 import { applyStateUpdates, applyWrites, displayText, writeLabels } from './state.mjs'
@@ -17,7 +17,8 @@ import { decoratorsOf, hasEjs, hasTemplate, stripTemplates, templateSession } fr
 import { accumulatedDynamic, compactThreshold, dynamicMemory, planDynamic, stripDynamicText } from './dynamic.mjs'
 import { complete, CONTEXT_FULL, isProviderRef, providerError, resolveRef, webSearchKind } from './providers.mjs'
 import { canonicalModel } from './models.mjs'
-import { extractSummary, MIN_TURNS, recapBlock, recentExchanges, storyPath, storyTurns, summaryInstruction, turnsSinceCompaction } from './recap.mjs'
+import { extractSummary, keptArchive, looksLikeArchive, MIN_TURNS, recapBlock, recentExchanges, storyPath, storyTurns, summaryInstruction, turnsSinceCompaction } from './recap.mjs'
+import { contextUsed, limitFromError, thresholdFor, windowOf } from './context.mjs'
 import { msg } from './i18n.mjs'
 import { extractUpdate, fillInstruction, fillRequest, hasUpdateBlock, usesMvu } from './mvu.mjs'
 import { rawRequest } from './frames.mjs'
@@ -34,6 +35,15 @@ const MAX_REPLY_TOKENS = 32000
 const FILL_MAX_TOKENS = 4000
 // An imported chat's history is summarised in parts of about this many characters (well inside 200k tokens).
 const IMPORTED_PART_CHARS = 120000
+// A story too long for its model even in halves is read again under this much of the chat's system prompt.
+const LEAN_SYSTEM_CHARS = 6000
+
+/** Why a compaction is not done here, in words (chats.mjs compactBlock). */
+function compactRefusal(block, turns) {
+  if (block === 'folded') return msg`回滚之后这里只剩 ${turns} 轮，不到 ${MIN_TURNS} 轮：先点对话底部的「恢复」放回后面的回合，再压缩`
+  if (block === 'recent') return msg`上次压缩之后不到 ${MIN_TURNS} 轮，不用再压缩`
+  return msg`这段对话还不到 ${MIN_TURNS} 轮，不用压缩`
+}
 // Display-time rendering (renderForDisplay): at most this many texts, this long each and all
 // together, and this long for one request; what is left after the time is returned without its EJS.
 const DISPLAY_TEXTS = 64
@@ -396,6 +406,12 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       const reply = applyScripts(node.text, scripts, { placement: PLACEMENT.AI_OUTPUT, target: 'prompt', depth: turns.length - index, macros })
       return { role: 'assistant', content: reply.trim() || '……' }
     })
+    // A branch written before its parent was compacted (turns folded behind a rollback, then restored)
+    // never had the archive in its first message: it goes there now, or nothing would carry what came before.
+    const opener = messages.findIndex(message => message.role === 'user')
+    if (path[start]?.compaction && opener >= 0 && !messages[opener].content.includes('<前情提要>')) {
+      messages[opener].content = `${compactionRecap(path[start], storyPath(path.slice(0, start + 1)), chat.names, scripts)}\n\n${messages[opener].content}`
+    }
     // 'latest' preset mode: the post-history prompts ride only on the newest message, as in
     // SillyTavern. Older messages lose them, so the newest one changes next turn: the reply
     // before it is the last thing that stays put.
@@ -413,18 +429,17 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
   }
 
   /**
-   * The story archive from an API history. When the whole history no longer fits
-   * the model's context, the older half is archived first and the newer half is
-   * then archived on top of it (halving again as often as needed).
+   * The archive of `history`, in parts when it does not fit the model's context:
+   * the older half is archived first and the newer half then on top of it
+   * (halving again as often as needed). A history longer than `maxChars` is cut
+   * before it is sent (an imported one has no cache to read from, and a refused
+   * request would only be sent again in halves).
    * @param carry - an archive of what came before `history`, or ''
+   * @param options.system - the system prompt to send (the chat's own unless it is itself too much)
+   * @param options.onPart - called as each request goes out, for the page's progress
    */
-  /**
-   * The archive of `history`, in parts when it does not fit: each part's archive
-   * is carried into the next. A history longer than `maxChars` is cut before it
-   * is sent (an imported one has no cache to read from, and a refused request
-   * would only be sent again in halves).
-   */
-  async function summarizeInParts(target, chat, history, signal, carry = '', depth = 0, { maxChars = Infinity } = {}) {
+  async function summarizeInParts(target, chat, history, signal, carry = '', depth = 0, options = {}) {
+    const { maxChars = Infinity, system = chat.systemPrompt, onPart = () => {} } = options
     const instruction = { role: 'user', content: summaryInstruction(chat.names) }
     const lead = carry
       ? [
@@ -436,9 +451,10 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     const tooLong = size > maxChars && history.length >= 4 && depth < 8
     if (!tooLong) {
       try {
-        return await generateApi(target, { system: chat.systemPrompt, messages: [...lead, ...history, instruction] }, signal, () => {})
+        onPart()
+        return await generateApi(target, { system, messages: [...lead, ...history, instruction] }, signal, () => {})
       } catch (error) {
-        if (!CONTEXT_FULL.test(error.message) || history.length < 4 || depth >= 4) throw error
+        if (!error.contextFull || history.length < 4 || depth >= 8) throw error
       }
     }
     // Cut at a user message near the middle: each part reads as a conversation of its own.
@@ -446,10 +462,10 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     while (cut < history.length && history[cut].role !== 'user') cut++
     if (cut >= history.length) cut = history.length - 2
     const plain = history.map(({ role, content }) => ({ role, content }))
-    const older = await summarizeInParts(target, chat, plain.slice(0, cut), signal, carry, depth + 1, { maxChars })
+    const older = await summarizeInParts(target, chat, plain.slice(0, cut), signal, carry, depth + 1, options)
     const archive = extractSummary(older.reply)
-    if (archive.length < 200) throw httpError(502, msg`前半段的剧情存档没有写完整，这次没有压缩，可以再试一次`)
-    const newer = await summarizeInParts(target, chat, plain.slice(cut), signal, archive, depth + 1, { maxChars })
+    if (archive.length < 200 || !looksLikeArchive(older.reply)) throw httpError(502, msg`前半段的剧情存档没有写完整，这次没有压缩，可以再试一次`)
+    const newer = await summarizeInParts(target, chat, plain.slice(cut), signal, archive, depth + 1, options)
     const tokens = Object.fromEntries(Object.entries(newer.tokens).map(([key, value]) => [key, typeof value === 'number' ? value + (older.tokens[key] ?? 0) : value]))
     return { ...newer, tokens }
   }
@@ -465,7 +481,12 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       result = await complete(target.provider, target.modelId, { ...blockRequest(request, words), reasoning: { thinking, effort }, signal, onDelta: onText }, { proxy: isolation.proxy })
     } catch (error) {
       if (signal.aborted || error.status) throw error
-      throw httpError(502, providerError(target.provider, error))
+      // Too long for the model (413 is a request too big for the provider at all): marked for the page
+      // (压缩后重试) and for compaction (in parts); the limit the provider names is kept for 自动压缩.
+      const contextFull = error.providerStatus === 413 || CONTEXT_FULL.test(String(error.message ?? ''))
+      const limit = contextFull ? limitFromError(error.message) : 0
+      if (limit) await store.learnModelContext({ [`${target.provider.id}/${target.modelId}`]: limit }).catch(() => {})
+      throw Object.assign(httpError(502, providerError(target.provider, error)), contextFull ? { contextFull: true } : {})
     }
     if (!result.text.trim()) throw httpError(502, msg`${target.provider.name} 没有返回正文${result.stopReason ? msg`（${result.stopReason}）` : ''}`)
     const u = result.usage ?? {}
@@ -500,13 +521,21 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     // A failed turn on a subscription session resumed in place: the backend forgets its tip.
     let resumedInPlace = null
     try {
-      const chat = await store.getChat(chatId)
+      let chat = await store.getChat(chatId)
       let userNode = userNodeId ? chat.nodes[userNodeId] : null
       if (userNodeId && (!userNode || userNode.role !== 'user')) throw httpError(404, msg`要重新生成的回合不存在`)
-      const parent = chat.nodes[userNode ? userNode.parent : parentId]
+      let parent = chat.nodes[userNode ? userNode.parent : parentId]
       if (!parent || parent.role !== 'assistant') throw httpError(400, msg`只能在一条叙述之后继续`)
       const text = userNode ? userNode.text : String(input ?? '').trim()
       if (!text) throw httpError(400, msg`输入不能为空`)
+      // 自动压缩: a new turn on a story past the threshold starts from its archive.
+      if (!userNode) {
+        const compacted = await compactBeforeTurn(chat, parent, abortController, emit)
+        if (compacted) {
+          chat = compacted
+          parent = chat.nodes[parent.id]
+        }
+      }
 
       // Regenerating reuses the recorded prompt verbatim, so the fork's prefix
       // (and its worldbook injections) matches the original attempt exactly.
@@ -628,6 +657,10 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
           sel: null,
           createdAt: now,
         }
+        // A new version of the reply the story was compacted into carries the archive on (the last
+        // turns after it are sent verbatim, this reply among them), or the compaction would be gone.
+        const replaced = userNodeId ? fresh.nodes[fresh.nodes[userNode.id]?.sel] : null
+        if (replaced?.compaction && !childrenOf(fresh, replaced.id).length) node.compaction = { ...replaced.compaction, at: now }
         fresh.nodes[node.id] = node
         // Also lifts a rollback on the parent: the new turn is now the visible branch.
         selectNode(fresh, node.id)
@@ -676,49 +709,127 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
   }
 
   /**
-   * Summarise the active path into its tip (see recap.mjs). The summary comes
-   * from the model that wrote it where possible (the same provider with the
-   * rebuilt history, or the subscription backend's own session), so the
-   * history is read from cache; the next turn from the tip starts afresh.
+   * Summarise the active path into its tip (compactAt).
+   * @param options - { model, keepRecent } as compactAt takes them
    */
-  async function compactChat(chatId) {
+  async function compactChat(chatId, options = {}) {
     if (running.has(chatId)) throw httpError(409, msg`这个对话正在生成`)
     const abortController = new AbortController()
     running.set(chatId, abortController)
     try {
       const chat = await store.getChat(chatId)
-      const path = activePath(chat)
-      const tip = path.at(-1)
-      if (tip.role !== 'assistant' || (!tip.sdk && !tip.api && !tip.imported)) throw httpError(400, msg`还没有可以压缩的剧情`)
-      if (turnsSinceCompaction(path) < MIN_TURNS) throw httpError(400, msg`上次压缩之后不到 ${MIN_TURNS} 轮，不用再压缩`)
-      // Turns folded behind a rollback would, once restored, carry on from the summary without having read it.
-      if (childrenOf(chat, tip.id).length) throw httpError(400, msg`回滚收起的回合还在这条后面：先恢复它们，或从这里接着写一轮再压缩`)
-      const settings = await store.getSettings()
-      const target = await compactionTarget(chat, tip, settings)
-      const started = Date.now()
-      let used
-      if (target.api) {
-        used = await summarizeInParts(target, chat, await apiMessages(chat, tip), abortController.signal, '', 0, { maxChars: tip.imported ? IMPORTED_PART_CHARS : Infinity })
-      } else {
-        used = await subscription.compact({ chat, tip, settings, abortController, model: target.model })
-      }
-      const summary = extractSummary(used.reply)
-      if (summary.length < 200) throw httpError(502, msg`模型没有写出完整的剧情存档，这次没有压缩，可以再试一次`)
-      const now = new Date().toISOString()
-      const fresh = await store.withChat(chatId, async () => {
-        const latest = await store.getChat(chatId)
-        latest.nodes[tip.id].compaction = { summary, turns: storyTurns(path), model: used.model, usage: used.tokens, at: now }
-        return store.saveChat(latest)
-      })
-      const record = { createdAt: now, model: used.model, usage: used.tokens, timing: { totalMs: Date.now() - started, firstTokenMs: null, forked: !target.api } }
-      await ledger?.recordTurn(fresh, record).catch(() => {})
-      return fresh
+      return await compactAt(chat, activePath(chat).at(-1), abortController, options)
     } catch (error) {
       if (abortController.signal.aborted) throw httpError(499, msg`已停止压缩`)
       if (!error.status) error.message = friendlyError(error.message, subscription)
       throw error
     } finally {
       running.delete(chatId)
+    }
+  }
+
+  // A compaction under way: how many requests it has sent (the page shows 第 N 段 for a story read in parts).
+  const compacting = new Map()
+
+  /**
+   * Summarise the story up to `tip` into it (see recap.mjs) and save the chat. The summary
+   * comes from the model that wrote it where possible (the same provider with the rebuilt
+   * history, or the subscription backend's own session), so the history is read from cache;
+   * the next turn from the tip starts afresh.
+   * @param options.model - another model to write it (one with a longer context, say)
+   * @param options.keepRecent - no model at all: the archive before (if any) and the last turns
+   *   verbatim carry the story on, the way on when no model can read it any more.
+   */
+  async function compactAt(chat, tip, abortController, { model = '', keepRecent = false } = {}) {
+    const path = pathTo(chat, tip.id)
+    const blocked = compactBlock(chat, path)
+    if (blocked === 'none') throw httpError(400, msg`还没有可以压缩的剧情`)
+    if (blocked) throw httpError(400, compactRefusal(blocked, turnsSinceCompaction(path)))
+    const since = turnsSinceCompaction(path)
+    const started = Date.now()
+    const settings = await store.getSettings()
+    let used
+    let target = null
+    try {
+      if (keepRecent) {
+        used = { reply: keptArchive(path, since), model: null, tokens: null }
+      } else {
+        target = model ? await targetFor(model, settings) : await compactionTarget(chat, tip, settings)
+        if (target.api) {
+          used = await archiveByApi(target, chat, tip, abortController.signal, settings)
+        } else {
+          // A subscription session holds the turns after it, which its summary would not reach.
+          if (childrenOf(chat, tip.id).length) throw httpError(400, msg`回滚收起的回合还在这条后面：先恢复它们，或从这里接着写一轮再压缩`)
+          used = await subscription.compact({ chat, tip, settings, abortController, model: target.model })
+        }
+        if (!looksLikeArchive(used.reply)) throw httpError(502, msg`模型没有写出剧情存档（可能接着写了剧情），这次没有压缩，可以再试一次`)
+        if (extractSummary(used.reply).length < 200) throw httpError(502, msg`模型没有写出完整的剧情存档，这次没有压缩，可以再试一次`)
+      }
+    } finally {
+      compacting.delete(chat.id)
+    }
+    const summary = extractSummary(used.reply)
+    const now = new Date().toISOString()
+    const fresh = await store.withChat(chat.id, async () => {
+      const latest = await store.getChat(chat.id)
+      latest.nodes[tip.id].compaction = { summary, turns: storyTurns(path), model: used.model, usage: used.tokens, at: now, ...(keepRecent ? { kept: since } : {}) }
+      return store.saveChat(latest)
+    })
+    if (used.tokens) {
+      const record = { createdAt: now, model: used.model, usage: used.tokens, timing: { totalMs: Date.now() - started, firstTokenMs: null, forked: !target?.api } }
+      await ledger?.recordTurn(fresh, record).catch(() => {})
+    }
+    return fresh
+  }
+
+  /**
+   * The archive from a provider. Too long for its context even in halves, the chat's own system
+   * prompt (the card and its always-on lore) may be most of what is sent: then in parts sized for
+   * the model's window, under the start of that prompt only.
+   */
+  async function archiveByApi(target, chat, tip, signal, settings) {
+    const history = await apiMessages(chat, tip)
+    const onPart = () => compacting.set(chat.id, (compacting.get(chat.id) ?? 0) + 1)
+    try {
+      return await summarizeInParts(target, chat, history, signal, '', 0, { maxChars: tip.imported ? IMPORTED_PART_CHARS : Infinity, onPart })
+    } catch (error) {
+      if (!error.contextFull || signal.aborted) throw error
+      const window = windowOf(`${target.provider.id}/${target.modelId}`, { settings, learned: await store.getModelContext() }).tokens
+      const system = `${chat.systemPrompt.slice(0, LEAN_SYSTEM_CHARS)}\n\n（设定很长，这里只保留了开头部分。）`
+      try {
+        return await summarizeInParts(target, chat, history, signal, '', 0, { maxChars: Math.max(20_000, Math.floor(window * 0.5)), system, onPart })
+      } catch (again) {
+        if (!again.contextFull || signal.aborted) throw again
+        // Not the turn's "compact it" advice: this is the compaction.
+        throw Object.assign(httpError(502, msg`故事太长，${target.provider.name} · ${target.modelId} 分段也读不下：换一个上下文更大的模型来压缩，或者只保留最近两轮`), { contextFull: true })
+      }
+    }
+  }
+
+  /**
+   * 自动压缩: before a new turn, a story past the threshold for the chat's model (context.mjs)
+   * is compacted first. Failing that, the turn goes on as it is (it may still fit); the page
+   * hears either way.
+   * @returns the chat compacted, or null
+   */
+  async function compactBeforeTurn(chat, parent, abortController, emit) {
+    const settings = await store.getSettings()
+    if (!settings.compaction.auto || compactBlock(chat, pathTo(chat, parent.id))) return null
+    const used = contextUsed(parent)
+    const ref = modelFor(chat, settings)
+    const window = windowOf(ref, { settings, learned: await store.getModelContext() }).tokens
+    const threshold = thresholdFor(window, settings.compaction)
+    if (!used || used < threshold) return null
+    emit({ type: 'compacting', used, threshold })
+    try {
+      const compacted = await compactAt(chat, parent, abortController)
+      const info = compacted.nodes[parent.id].compaction
+      emit({ type: 'compacted', turns: info.turns, chars: info.summary.length })
+      return compacted
+    } catch (error) {
+      if (abortController.signal.aborted) throw error
+      emit({ type: 'compact_failed', message: error.status ? error.message : friendlyError(error.message, subscription) })
+      return null
     }
   }
 
@@ -957,6 +1068,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       return true
     },
     isRunning: chatId => running.has(chatId),
+    // Requests a compaction under way has sent (第 N 段), 0 when none is.
+    compactProgress: chatId => compacting.get(chatId) ?? 0,
     busy: () => running.size > 0,
     rateLimit: () => subscription?.rateLimit() ?? null,
     lastInit: () => subscription?.lastInit() ?? null,

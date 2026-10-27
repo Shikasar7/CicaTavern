@@ -164,7 +164,7 @@ async function api(path, { method = 'GET', body } = {}) {
     body: body === undefined ? undefined : JSON.stringify(body),
   })
   const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw Object.assign(new Error(data.error || t`请求失败（${res.status}）`), { status: res.status })
+  if (!res.ok) throw Object.assign(new Error(data.error || t`请求失败（${res.status}）`), { status: res.status, contextFull: data.contextFull === true })
   return data
 }
 
@@ -206,13 +206,24 @@ new MutationObserver(records => {
   box.showPopover()
 }).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['open'] })
 
-function toast(message, ms = 4000, { log = false } = {}) {
+function hideToast() {
   const box = $('toast')
-  const hide = () => {
-    if (box.matches?.(':popover-open')) box.hidePopover()
-    box.hidden = true
-  }
+  clearTimeout(toast.timer)
+  if (box.matches?.(':popover-open')) box.hidePopover()
+  box.hidden = true
+}
+
+/** @param options.action - { text, run }: a button after the message that runs `run` and closes it. */
+function toast(message, ms = 4000, { log = false, action = null } = {}) {
+  const box = $('toast')
+  const hide = hideToast
   box.textContent = message
+  if (action) {
+    box.append(' ', el('button', {
+      type: 'button', class: 'toast-link', text: action.text,
+      onclick: event => { event.stopPropagation(); hide(); action.run() },
+    }))
+  }
   if (log) {
     box.append(' ', el('button', {
       type: 'button', class: 'toast-link', text: t`错误日志`,
@@ -954,10 +965,17 @@ function renderChat() {
   const compact = $('compact-chat')
   compact.hidden = !chat
   if (chat) {
-    compact.disabled = ui.generating || !chat.compactable
-    compact.title = chat.compactable
+    // Not compactable yet it still answers a click (compactNow says why), only dimmed.
+    compact.disabled = ui.generating
+    compact.classList.toggle('idle', !chat.compactable)
+    const meter = contextMeter(chat)
+    $('context-meter').hidden = !meter
+    $('context-meter').textContent = meter?.text ?? ''
+    compact.classList.toggle('near', Boolean(meter?.near))
+    const why = chat.compactable
       ? t`把前面的剧情压缩成一份存档（上次压缩后新增 ${chat.compactable} 轮），之后在新的上下文里接着写`
-      : t`上次压缩之后还不到 2 轮新剧情，不用压缩`
+      : compactBlockText()[chat.compactBlock] ?? t`上次压缩之后还不到 2 轮新剧情，不用压缩`
+    compact.title = meter ? `${why}\n\n${meter.title}` : why
   }
   if (!chat) {
     box.replaceChildren(EMPTY)
@@ -1084,7 +1102,9 @@ function renderNode(chat, node, isLastAssistant, depth = 0) {
         el('span', {
           text: imported
             ? t`从剧情存档接着写：「${imported.title || imported.card || t`导入的故事`}」前 ${node.compaction.turns} 轮 → ${fmt(node.compaction.chars)} 字存档，上面是存档里的最后一轮。`
-            : t`已压缩上下文：前 ${node.compaction.turns} 轮 → ${fmt(node.compaction.chars)} 字剧情存档，之后在新的上下文里接着写。`,
+            : node.compaction.kept
+              ? t`已压缩上下文：只保留了最近两轮原文，之前的 ${node.compaction.kept} 轮没有写进存档（模型读不下全文）。可以在存档里补写要记住的内容。`
+              : t`已压缩上下文：前 ${node.compaction.turns} 轮 → ${fmt(node.compaction.chars)} 字剧情存档，之后在新的上下文里接着写。`,
         }),
         el('button', { type: 'button', class: 'btn small', text: node.compaction.editable ? t`查看 / 修改` : t`查看`, onclick: () => openRecap(node) }),
       ])
@@ -1908,43 +1928,200 @@ async function fillUpdate(nodeId) {
   }
 }
 
-/** Ask the model that wrote the story for an archive. Resolves true when it was saved. */
-/** → the chat compacted (its view), or false. */
-async function runCompaction() {
+/** Token counts as the page says them: 8.6万 / 86K. */
+const tokensText = n => new Intl.NumberFormat(document.documentElement.lang || undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(n)
+
+/** What a reply's turn held in the model's context (server/context.mjs contextUsed). */
+function contextUsed(usage) {
+  if (!usage) return 0
+  const write = Number(usage.cacheWrite) || (Number(usage.cacheWrite5m) || 0) + (Number(usage.cacheWrite1h) || 0)
+  return (Number(usage.input) || 0) + (Number(usage.cacheRead) || 0) + write + (Number(usage.output) || 0)
+}
+
+const windowSource = () => ({ set: t`你填的`, learned: t`供应商给的`, table: t`按官方文档`, guess: t`不认识这个模型，按 12.8 万估计` })
+
+/** Why 压缩 is greyed out (chats.mjs compactBlock). */
+const compactBlockText = () => ({
+  none: t`还没有剧情可以压缩：聊满 2 轮之后才能压缩`,
+  start: t`这段对话还不到 2 轮，不用压缩`,
+  recent: t`上次压缩之后还不到 2 轮新剧情，不用压缩`,
+  folded: t`回滚后这里只剩不到 2 轮：先点对话底部的「恢复」放回后面的回合，再压缩`,
+  session: t`回滚收起的回合还在后面：先点「恢复」，或从这里接着写一轮再压缩`,
+})
+
+/** The 压缩 pill's meter: the last turn's context against the chat model's window and threshold (/api/models). */
+function contextMeter(chat) {
+  const tip = chat.path.at(-1)
+  const info = ui.models.find(m => m.id === (chat.model || ui.defaultModel))?.context
+  if (!info || tip?.role !== 'assistant') return null
+  if (tip.compaction) return { text: t`已压缩`, near: false, title: t`下一轮从剧情存档和最近两轮原文开始。` }
+  const auto = ui.settings?.compaction?.auto !== false
+  const limits = t`这个模型上限 ${tokensText(info.window)}（${windowSource()[info.source] ?? ''}），用到 ${tokensText(info.threshold)} 时${auto ? t`自动压缩` : t`提醒压缩`}。`
+  // Nothing sent yet: the first turn's count comes with its reply.
+  if (tip.id === 'root') return { text: `0/${tokensText(info.window)}`, near: false, title: t`还没有发过：第一轮之后显示实际用了多少（开头就会带上角色卡、预设和常驻世界书）。${limits}` }
+  const used = contextUsed(tip.usage)
+  // A reply with no count (imported from SillyTavern): the window only.
+  if (!used) return { text: `—/${tokensText(info.window)}`, near: false, title: t`这条回复没有用量记录，发下一轮之后显示。${limits}` }
+  return {
+    text: `${tokensText(used)}/${tokensText(info.window)}`,
+    near: used >= info.threshold,
+    title: t`上下文已用 ${tokensText(used)} token（上一轮实际计算的），${limits}`,
+  }
+}
+
+// Reminders already given (自动压缩 off): once per chat and reply.
+const reminded = new Set()
+
+/** 自动压缩 off: past the threshold, say so once, with the button. */
+function remindCompaction(chat) {
+  if (ui.settings?.compaction?.auto !== false || !chat.compactable) return
+  const meter = contextMeter(chat)
+  const key = `${chat.id}/${chat.path.at(-1)?.id}`
+  if (!meter?.near || reminded.has(key)) return
+  reminded.add(key)
+  toast(t`上下文快满了（${meter.text}），建议压缩成剧情存档再接着写。`, 15000, { action: { text: t`压缩`, run: () => compactNow() } })
+}
+
+/** 压缩后重试: the turn was too long for the model; its words are back in the input box. */
+const compactThenSend = guard(async chatId => {
+  if (ui.chat?.id !== chatId || ui.generating) return
+  if ((await runCompaction()) && $('input').value.trim()) await send()
+})
+
+/**
+ * Ask the model that wrote the story for an archive (or `options.model`, or none: keepRecent).
+ * A story read in parts shows which part it is at. A failure offers the ways on (compactFallback).
+ * → the chat compacted (its view), or false.
+ */
+async function runCompaction(options = {}) {
   const chatId = ui.chat.id
   const title = ui.chat.title
   ui.busy.set(chatId, { kind: 'compact' })
   renderChat()
   renderChats()
-  toast(t`正在写剧情存档，长对话大约要半分钟到一分钟……`, 180000)
+  toast(options.keepRecent ? t`正在保留最近两轮……` : t`正在写剧情存档，长对话大约要半分钟到一分钟……`, 180000)
+  let shown = 1
+  const progress = setInterval(async () => {
+    const { parts } = await api(`/api/chats/${chatId}/compact`).catch(() => ({ parts: 0 }))
+    if (parts > shown && ui.busy.get(chatId)?.kind === 'compact') {
+      shown = parts
+      toast(t`正在写剧情存档：故事太长，分段读，第 ${parts} 段……`, 180000)
+    }
+  }, 2500)
   try {
-    const view = await api(`/api/chats/${chatId}/compact`, { method: 'POST', body: {} })
+    const view = await api(`/api/chats/${chatId}/compact`, { method: 'POST', body: options })
     ui.busy.delete(chatId)
     const info = view.path.at(-1).compaction
+    const done = info.kept
+      ? t`已压缩：只保留了最近两轮原文${info.chars > 200 ? t`和之前的存档` : ''}。可以在「查看 / 修改」里补写要记住的内容。`
+      : t`已压缩：前 ${info.turns} 轮 → ${fmt(info.chars)} 字剧情存档。下一轮在新的上下文里接着写。`
     if (ui.chat?.id === chatId) {
       setChat(view)
-      toast(t`已压缩：前 ${info.turns} 轮 → ${fmt(info.chars)} 字剧情存档。下一轮在新的上下文里接着写。`, 6000)
+      toast(done, 7000)
     } else {
-      toast(t`「${title}」已压缩：前 ${info.turns} 轮 → ${fmt(info.chars)} 字剧情存档。`, 6000)
+      toast(t`「${title}」${done}`, 7000)
     }
     return view
   } catch (error) {
-    toast(error.status === 499 ? t`已停止压缩，什么都没改` : error.message, 8000)
+    if (error.status === 499) toast(t`已停止压缩，什么都没改`, 6000)
+    // Refused for a reason it names (too few turns, a rollback): nothing else to try.
+    else if (error.status === 400 || error.status === 409 || ui.chat?.id !== chatId) toast(error.message, 9000)
+    else {
+      ui.busy.delete(chatId)
+      return compactFallback(error, options)
+    }
     return false
   } finally {
+    clearInterval(progress)
     ui.busy.delete(chatId)
     if (ui.chat?.id === chatId) renderChat()
     renderChats()
   }
 }
 
+/**
+ * A compaction that failed: try again, have another model write it (longer windows first),
+ * or keep only the last turns. However long the story, there is always a way on.
+ */
+async function compactFallback(error, tried) {
+  const dialog = $('compact-fail-dialog')
+  const models = ui.models
+    .filter(m => !m.subscription && m.context)
+    .sort((a, b) => b.context.window - a.context.window)
+  // The one that just failed is not the first offered.
+  const failed = tried.model || ui.chat.path.at(-1).model
+  const offered = models.find(m => m.id !== failed)?.id
+  $('compact-fail-text').textContent = error.message
+  $('compact-fail-model').replaceChildren(
+    ...models.map(m => el('option', { value: m.id, text: t`${m.group} · ${m.label}（${tokensText(m.context.window)}）`, selected: m.id === offered })),
+  )
+  $('compact-fail-other').hidden = !models.length
+  // The 正在写剧情存档 note would stay up behind the window.
+  hideToast()
+  dialog.showModal()
+  const choice = await new Promise(resolve => {
+    const onClick = event => {
+      const button = event.target.closest('button[value]')
+      if (button) done(button.value)
+    }
+    const onClose = () => done('cancel')
+    function done(value) {
+      dialog.removeEventListener('click', onClick)
+      dialog.removeEventListener('close', onClose)
+      if (dialog.open) dialog.close()
+      resolve(value)
+    }
+    dialog.addEventListener('click', onClick)
+    dialog.addEventListener('close', onClose)
+  })
+  if (choice === 'retry') return runCompaction(tried)
+  if (choice === 'model') return runCompaction({ model: $('compact-fail-model').value })
+  if (choice === 'keep') return runCompaction({ keepRecent: true })
+  return false
+}
+
+/**
+ * 压缩: the model that wrote the last turn writes the archive (its cache read), unless another
+ * is picked in the window (any provider's model; the server falls back the same way, compactionTarget).
+ */
 const compactNow = guard(async () => {
-  const model = ui.chat.path.at(-1).model
-  const ask =
-    t`把前面的剧情压缩成一份存档？\n\n` +
-    t`会调用一次模型写存档（由写这段剧情的 ${labelOf(model || ui.chat.model || ui.defaultModel)} 来写，大约花一轮的额度）。` +
-    t`之后的对话在新的上下文里接着写。之前的内容不会删除，随时可以回滚到压缩之前。`
-  if (confirm(ask)) await runCompaction()
+  if (!ui.chat.compactable) {
+    toast(compactBlockText()[ui.chat.compactBlock] ?? t`上次压缩之后还不到 2 轮新剧情，不用压缩`, 5000)
+    return
+  }
+  const own = ui.chat.path.at(-1).model || ''
+  const select = $('compact-model')
+  const others = ui.models.filter(m => !m.subscription && m.id !== own)
+  const withWindow = m => (m.context ? t`${m.group} · ${m.label}（${tokensText(m.context.window)}）` : `${m.group} · ${m.label}`)
+  select.replaceChildren(
+    el('option', { value: '', text: own ? t`${labelOf(own)}（写最后一轮的模型，能读缓存）` : t`写这段剧情的模型（默认）` }),
+    ...others.map(m => el('option', { value: m.id, text: withWindow(m) })),
+  )
+  const note = () => {
+    $('compact-model-note').textContent = select.value
+      ? t`换了模型读不了这段剧情的缓存，这一次会比平时的一轮贵一些。`
+      : t`会调用一次模型写存档，大约花一轮的额度。`
+  }
+  select.onchange = note
+  note()
+  const dialog = $('compact-dialog')
+  dialog.showModal()
+  const choice = await new Promise(resolve => {
+    const onClick = event => {
+      const button = event.target.closest('button[value]')
+      if (button) done(button.value)
+    }
+    const onClose = () => done('cancel')
+    function done(value) {
+      dialog.removeEventListener('click', onClick)
+      dialog.removeEventListener('close', onClose)
+      if (dialog.open) dialog.close()
+      resolve(value)
+    }
+    dialog.addEventListener('click', onClick)
+    dialog.addEventListener('close', onClose)
+  })
+  if (choice === 'compact') await runCompaction(select.value ? { model: select.value } : {})
 })
 
 function openRecap(node) {
@@ -2209,6 +2386,15 @@ async function generate(endpoint, body, echoUserText) {
       } else if (event.type === 'rate_limit') {
         ui.rateLimit = event.info
         renderQuota(event.info)
+      } else if (event.type === 'compacting') {
+        // 自动压缩 before the turn (engine.compactBeforeTurn).
+        job.note = t`上下文快满了，先压缩成剧情存档……`
+        const note = live()?.querySelector('.live-note')
+        if (note) note.textContent = job.note
+      } else if (event.type === 'compacted') {
+        if (viewing()) toast(t`上下文到了阈值，已自动压缩：前 ${event.turns} 轮 → ${fmt(event.chars)} 字剧情存档，这一轮从存档接着写。`, 7000)
+      } else if (event.type === 'compact_failed') {
+        if (viewing()) toast(t`自动压缩没成功，这一轮照常发出：${event.message}`, 9000, { log: true })
       } else if (event.type === 'done') {
         finished = event.chat
         finishedNode = event.nodeId
@@ -2237,6 +2423,7 @@ async function generate(endpoint, body, echoUserText) {
     if (viewing()) {
       setChat(finished)
       mediaUi.afterTurn(finishedNode, vnUi.turnFlags(finished.cardId))
+      remindCompaction(finished)
     } else {
       toast(t`「${title}」这一轮写好了`, 5000)
     }
@@ -2245,7 +2432,13 @@ async function generate(endpoint, body, echoUserText) {
   }
   if (viewing()) renderChat()
   renderChats()
-  if (failure && failure.status !== 499) toast(viewing() ? failure.message : t`「${title}」：${failure.message}`, 8000, { log: true })
+  if (failure && failure.status !== 499) {
+    // Too long for the model: compact, and send the same words again (they wait in the input box).
+    const retry = failure.contextFull && endpoint === 'turn' && viewing() && ui.chat.compactable
+      ? { text: t`压缩后重试`, run: () => compactThenSend(chatId) }
+      : null
+    toast(viewing() ? failure.message : t`「${title}」：${failure.message}`, retry ? 15000 : 8000, { log: !retry, action: retry })
+  }
   return false
 }
 
@@ -2351,6 +2544,7 @@ const openSettings = guard(async () => {
     form[key].value = ui.settings[key] ?? (key === 'listen' ? 'local' : '')
   }
   showDefaultAsHint(form.language, zh`简体中文`, t`简体中文`)
+  fillCompaction(form)
   renderAccess(await api('/api/access').catch(() => null))
   fillProxy(form, ui.settings.proxy, await api('/api/network').catch(() => null))
   form.webFonts.checked = ui.settings.webFonts !== false
@@ -2533,6 +2727,34 @@ function listSummary(kind, list) {
   return [t`默认：${pickLabel(kind, personas.defaultOf(list))}`, t`共 ${list.items.length} 个`, picked ? t`${picked} 张卡指定了` : t`可以给每张卡指定`].join(' · ')
 }
 
+/**
+ * 上下文压缩 in the settings: the saved numbers, and the window of the open chat's model (else the
+ * default one): its own number if the player set one, else what /api/models found for it.
+ */
+function fillCompaction(form) {
+  const saved = ui.settings.compaction ?? {}
+  form.compactAuto.checked = saved.auto !== false
+  form.compactPercent.value = saved.percent ?? 70
+  form.compactCap.value = saved.cap === 0 ? 0 : Math.round((saved.cap ?? 150000) / 10000)
+  const ref = ui.chat?.model || ui.defaultModel || ''
+  const choice = ui.models.find(m => m.id === ref)
+  form.compactWindow.dataset.ref = ref
+  form.compactWindow.value = saved.windows?.[ref] ?? ''
+  form.compactWindow.placeholder = choice?.context ? String(choice.context.window) : ''
+  $('compact-window-hint').textContent = choice?.context
+    ? t`${labelOf(ref)}：上下文 ${tokensText(choice.context.window)} token（${windowSource()[choice.context.source] ?? ''}），按现在的设置用到 ${tokensText(choice.context.threshold)} 时压缩。` +
+      (choice.context.source === 'guess' ? t`知道它的上下文的话，填在「当前模型的上下文」里。` : '')
+    : t`还没选模型`
+}
+
+/** settings.compaction from the form; the window typed for the chat's model goes with the others kept. */
+function compactionOf(form, num) {
+  const ref = form.compactWindow.dataset.ref
+  const windows = { ...(ui.settings.compaction?.windows ?? {}) }
+  if (ref) windows[ref] = num('compactWindow')
+  return { auto: form.compactAuto.checked, percent: num('compactPercent') || 70, cap: Math.max(0, num('compactCap')) * 10000, windows }
+}
+
 /** The menu: 模型, 写作, 世界书与状态, 连接, 更多, each row with what it is set to now. */
 function layOutSettings({ form, card, providers, presets }) {
   settingsPages ??= Object.fromEntries([...form.querySelectorAll('[data-section]')].map(page => [page.dataset.section, page]))
@@ -2602,6 +2824,13 @@ function layOutSettings({ form, card, providers, presets }) {
     {
       id: 'scan', title: t`扫描与状态`, look: 'shared', tag: t`所有对话`, pane: settingsPages.scan,
       summary: () => t`扫描最近 ${value('scanDepth')} 条 · 隔 ${value('reinjectAfter')} 轮再注入 · 每 ${value('stateRefreshEvery')} 轮重发状态 · ${STRIP[value('dynamicStrip')] ?? ''}`,
+    },
+    {
+      id: 'compaction', title: t`上下文压缩`, look: 'shared', tag: t`所有对话`, pane: settingsPages.compaction,
+      summary: () => {
+        const cap = Number(value('compactCap'))
+        return [form.compactAuto.checked ? t`到阈值自动压缩` : t`到阈值只提醒`, t`模型上下文的 ${value('compactPercent')}%`, cap ? t`最多 ${cap} 万 token` : t`不设上限`].join(' · ')
+      },
     },
     // The 世界书 window, as beside the card list's heading: every imported book, whatever card is picked.
     {
@@ -2693,7 +2922,7 @@ function layOutSettings({ form, card, providers, presets }) {
     : el('p', { class: 'menu-who none', text: t`选一张角色卡后，可以给它指定你的角色和文风。` })
   settingsMenu.mount({
     panels: [
-      { id: 'model', title: t`模型`, icon: MENU_ICONS.model, rows: ['model', 'providers'] },
+      { id: 'model', title: t`模型`, icon: MENU_ICONS.model, rows: ['model', 'providers', 'compaction'] },
       { id: 'write', title: t`写作`, icon: MENU_ICONS.write, rows: ['persona', 'styles', 'style', 'presets', 'regex', 'blockwords', cardPicksRow, 'picks'] },
       { id: 'media', title: t`配图与朗读`, icon: MENU_ICONS.picture, rows: ['media', 'dictation'] },
       { id: 'books', title: t`世界书与状态`, icon: MENU_ICONS.book, rows: ['scan', 'manage-books', cardRow, 'books'] },
@@ -2721,6 +2950,7 @@ const saveSettings = guard(async () => {
         reinjectAfter: num('reinjectAfter'),
         stateRefreshEvery: num('stateRefreshEvery'),
         dynamicStrip: form.dynamicStrip.value,
+        compaction: compactionOf(form, num),
         replyLength: Math.max(0, num('replyLength')),
         listen: form.listen.value === 'lan' ? 'lan' : 'local',
         webFonts: form.webFonts.checked,
@@ -2734,7 +2964,9 @@ const saveSettings = guard(async () => {
   allowLibraries(ui.settings.cdnLibraries !== false)
   // 默认（…） in the chat's model picker follows the default just saved.
   if (ui.settings.model !== undefined) ui.defaultModel = ui.settings.model || null
-  renderModelSelect()
+  // The models' thresholds follow the 上下文压缩 numbers just saved (the 压缩 pill's meter reads them).
+  await loadModels()
+  if (ui.chat) renderChat()
   let applied = await saveCardPicks(form)
   if (ui.cardId) {
     const ids = [...form.querySelectorAll('input[name="book"]:checked')].map(i => i.value)

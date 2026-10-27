@@ -31,6 +31,37 @@ export function summaryInstruction(names) {
   )
 }
 
+// The parts summaryInstruction asks for, as headings: an archive written without its tags still has them.
+const heading = words => new RegExp(`^\\s*(?:[#>*\\-]+\\s*|\\d+\\s*[.、．)]\\s*|【)?\\**(?:${words})\\**\\s*(?:】|[:：]|$)`, 'im')
+const ARCHIVE_PARTS = [
+  heading('人物|角色|出场人物|Characters?'),
+  heading('经过|关键事件|剧情经过|事件|Events?'),
+  heading('未完的线|伏笔|悬念|Open threads?|Loose ends'),
+  heading('当前场景|当前状况|Current scene'),
+  heading('文风|Style'),
+]
+
+/**
+ * Whether a reply is an archive at all: in its tags, or naming at least three of its parts.
+ * A model that carried on with the story instead writes neither (a strict preset can make it).
+ */
+export function looksLikeArchive(reply) {
+  const text = String(reply ?? '')
+  if (text.includes('<剧情存档>')) return true
+  return ARCHIVE_PARTS.filter(part => part.test(text)).length >= 3
+}
+
+/**
+ * The archive a compaction keeps when no model could read the story (只保留最近两轮): the one
+ * before it, if any, and a note of the turns it leaves out. The last turns go on verbatim as usual.
+ */
+export function keptArchive(path, turns) {
+  const before = path.slice(0, -1).findLast(node => node.compaction)?.compaction.summary
+  return before
+    ? `${before.trim()}\n\n（此后又过了 ${turns} 轮，这部分没有写进存档：模型读不下全文，只保留了最近 ${RECENT_TURNS} 轮原文。）`
+    : `（故事前面的 ${turns} 轮没有写成存档：模型读不下全文，只保留了最近 ${RECENT_TURNS} 轮原文。）`
+}
+
 /** The archive between the tags; tolerates a missing closing tag or none at all. */
 export function extractSummary(reply) {
   let text = String(reply ?? '')

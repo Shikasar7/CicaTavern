@@ -109,10 +109,11 @@ If you can't quite say what you want, the creator guides you round by round:
 
 <br clear="right">
 
-## Latest changes [2.0.2]
+## Latest changes [2.0.3]
 
 <p align="center"><img src="docs/screenshots/vn-marks.jpg" alt="The visual novel in 1.9.2: the model marked this line as the steward's, so the name plate and the sprite follow, with Lin Qinghe beside him" width="880"></p>
 
+- **Context compaction your way (2.0.3)**: the top bar shows how much context a chat uses; the share at which it becomes a story archive, a token cap, and compacting right away or reminding you first are all settings, and the model's limit is found for you. Compact context lets you pick the model that writes the archive, and a story that is too long always has a way on. The macOS beta gets a disk image and in-app updates.
 - **Fixes (2.0.2)**: when the Android app cannot reach a service abroad such as Fish Audio, it says what to do, and a failed connection names its error code; Fish Audio is marked as needing a proxy in mainland China; a few display problems in the settings window, the top bar and dark mode.
 - **Fix (2.0.1)**: ComfyUI workflows mark the prompt as `%prompt%`, as in SillyTavern, whose ComfyUI workflows now import as they are. A `{{prompt}}` lost its braces in ComfyUI's "Export (API)", so the import kept saying the placeholder was missing.
 - **Voice input** (2.0.0): a microphone beside the input box turns what you say into text in the box, for you to read and send. Nothing to install: a provider's transcription API (SiliconFlow's SenseVoice is free), the desktop browser's own recognition, or a whisper server of your own; CicaTavern keeps no recordings.

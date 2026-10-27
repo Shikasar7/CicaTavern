@@ -88,7 +88,7 @@
         </button>
         <div class="topbar-title" id="chat-title">选择一张角色卡开始</div>
         <button class="pill" id="chat-preset" title="这个对话用的预设" hidden></button>
-        <button class="pill" id="compact-chat" title="把前面的剧情压缩成一份存档，之后在新的上下文里接着写" hidden>压缩<span class="wide-only">上下文</span></button>
+        <button class="pill" id="compact-chat" title="把前面的剧情压缩成一份存档，之后在新的上下文里接着写" hidden>压缩<span class="wide-only">上下文</span><span class="ctx-use" id="context-meter" hidden></span></button>
         <select class="pill model-select" id="chat-model" title="这个对话用的模型（缓存按模型区分，切换后下一轮会重新写入缓存）" hidden></select>
         <div class="quota" id="quota" hidden></div>
         <button class="vn-switch" id="vn-toggle" title="视觉小说模式：背景、立绘、一句一句地读（这张卡记住）" aria-pressed="false" hidden>
@@ -272,6 +272,16 @@
           </label>
         </div>
         <p class="hint">动态设定（变量列表）在历史里堆多了会一次性删掉；删的那一轮要重写整段历史的缓存。删得少更省，但上下文长得快些。</p>
+      </div>
+      <div data-section="compaction">
+        <label class="check-row"><input type="checkbox" name="compactAuto"> 上下文到阈值时自动压缩</label>
+        <div class="grid">
+          <label>阈值：模型上下文的百分之几<input name="compactPercent" type="number" min="30" max="95" step="5"></label>
+          <label>阈值最多几万 token（0 为不限）<input name="compactCap" type="number" min="0" max="1000" step="1"></label>
+          <label>当前模型的上下文（token，留空自动）<input name="compactWindow" type="number" min="1000" step="1000"></label>
+        </div>
+        <p class="hint" id="compact-window-hint"></p>
+        <p class="hint">关掉自动压缩后，到阈值时只提醒。压缩会调用一次模型写剧情存档，大约花一轮的额度；原文都留着，随时可以回滚到压缩之前。</p>
       </div>
       <div data-section="books">
         <div id="book-options" class="book-options muted small">先选择一张角色卡</div>
@@ -554,6 +564,39 @@
         <button class="btn" value="cancel">取消</button>
         <button class="btn" value="switch">直接切换</button>
         <button class="btn primary" value="compact">压缩后切换</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="compact-dialog" class="dialog">
+    <form method="dialog">
+      <h2>压缩上下文</h2>
+      <p class="muted small">把前面的剧情压缩成一份存档，之后的对话在新的上下文里接着写。之前的内容不会删除，随时可以回滚到压缩之前。</p>
+      <label>写存档的模型<select id="compact-model"></select></label>
+      <p class="muted small" id="compact-model-note"></p>
+      <div class="row end">
+        <button class="btn" value="cancel">取消</button>
+        <button class="btn primary" value="compact">压缩</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="compact-fail-dialog" class="dialog">
+    <form method="dialog">
+      <h2>压缩没有成功</h2>
+      <p class="muted small" id="compact-fail-text"></p>
+      <div id="compact-fail-other">
+        <p class="small">换一个上下文更大的模型来写存档（读不了缓存，这一次贵一些）：</p>
+        <div class="row">
+          <select id="compact-fail-model"></select>
+          <button class="btn" value="model">用它压缩</button>
+        </div>
+      </div>
+      <p class="muted small">实在压不了：「只保留最近两轮」不调用模型，带着之前的存档（如果有）和最近两轮原文接着写，更早的剧情可以自己在存档里补几句。</p>
+      <div class="row end">
+        <button class="btn" value="cancel">取消</button>
+        <button class="btn" value="keep">只保留最近两轮</button>
+        <button class="btn primary" value="retry">再试一次</button>
       </div>
     </form>
   </dialog>

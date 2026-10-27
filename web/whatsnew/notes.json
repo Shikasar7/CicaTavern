@@ -509,6 +509,23 @@
           }
         }
       ]
+    },
+    {
+      "version": "2.0.3",
+      "date": "2026-10",
+      "items": [
+        {
+          "icon": "🗜️",
+          "zh": {
+            "title": "上下文压缩，更自由也更省心",
+            "text": "顶栏「压缩上下文」旁能看到这段对话用了多少上下文、离上限还有多远。到哪个比例整理成剧情存档、最多多少 token、是直接整理还是先提醒你，都在「设置 → 模型 → 上下文压缩」里按自己的习惯调；模型的上限会自动认出来，也可以自己填。\n点「压缩上下文」时可以挑一个模型来写存档；故事太长、一个模型读不下时，会给出换模型或只保留最近两轮的办法，不会卡住。"
+          },
+          "en": {
+            "title": "Context compaction, your way",
+            "text": "Beside Compact context in the top bar you can see how much of the model's context a chat uses and how far it is from the limit. At what share it is turned into a story archive, the most tokens it may reach, and whether it compacts right away or reminds you first are all yours to set under Settings → Model → Context compaction; the model's limit is found for you, or you can enter it.\nWhen you click Compact context you can pick the model that writes the archive, and a story too long for one model always has a way on: another model, or keeping only the last two turns."
+          }
+        }
+      ]
     }
   ]
 }

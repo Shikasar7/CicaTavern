@@ -1043,8 +1043,28 @@ const THINKING_ROOM = 16000
 /** Two calls' tokens as one. */
 const addUsage = (a, b) => (a && b ? Object.fromEntries(Object.keys(b).map(key => [key, (a[key] ?? 0) + (b[key] ?? 0)])) : b ?? a)
 
-// A request longer than the model's context window, as providers word it.
-export const CONTEXT_FULL = /context (window|length)|prompt is too long|too many tokens|maximum context|exceeds? the (model's )?(context|maximum)/i
+// A request longer than the model's context window, as providers word it (OpenAI, DeepSeek and relays; Anthropic;
+// Gemini; Kimi's token limit; GLM's max length; Qwen's input range; Chinese relays).
+export const CONTEXT_FULL = new RegExp(
+  [
+    'context[ _](window|length)',
+    'prompt is too long',
+    'too many tokens',
+    'maximum context',
+    "exceeds? the (model's )?(context|maximum)",
+    'exceeded model token limit',
+    'exceeds? (the )?max(imum)? (input |context |prompt |message )?length',
+    'range of input length',
+    'input (is )?too long',
+    'input token length too long',
+    'token length exceed model limit',
+    'context_length_exceeded',
+    'prompt ?超长',
+    '上下文.{0,8}(超|过长|太长)',
+    '超(出|过).{0,10}(上下文|最大长度|长度限制)',
+  ].join('|'),
+  'i',
+)
 
 /**
  * A refusal while 联网 was on: the provider or model may not search (not said for a key, a rate limit or a
@@ -1158,15 +1178,31 @@ export async function postJson(url, body, { signal, proxy = null, headers = {} }
 }
 
 /** Model ids the provider lists (GET /models). No model is called. */
-export async function listRemoteModels(provider, { proxy = null, signal } = {}) {
+export async function listRemoteModels(provider, options = {}) {
+  return (await listRemoteModelDetails(provider, options)).models
+}
+
+// Where model lists say how long a model's context is (OpenRouter, Together; Groq; Gemini; Anthropic; LM Studio).
+const CONTEXT_FIELDS = ['context_length', 'context_window', 'inputTokenLimit', 'max_input_tokens', 'max_context_length']
+
+/** The provider's model list: { models: ids, contexts: { id: tokens } } for the models whose entry says. */
+export async function listRemoteModelDetails(provider, { proxy = null, signal } = {}) {
   const target = provider.api === 'anthropic-messages' ? anthropicUrl(provider.baseURL, '/models?limit=1000') : joinUrl(provider.baseURL, '/models')
   const res = await send(target, { headers: headersFor(provider, { accept: 'application/json' }), signal, proxy: provider.proxy === 'direct' ? null : proxy })
   await failIfBad(res)
   const json = parseJson(await readText(res, 4 * 1024 * 1024))
   const list = Array.isArray(json) ? json : json?.data ?? json?.models ?? []
-  return [...new Set(list.map(item => (typeof item === 'string' ? item : item?.id ?? item?.name)).filter(id => typeof id === 'string' && id))]
-    .map(id => id.replace(/^models\//, ''))
-    .sort((a, b) => a.localeCompare(b))
+  const idOf = item => {
+    const id = typeof item === 'string' ? item : item?.id ?? item?.name
+    return typeof id === 'string' && id ? id.replace(/^models\//, '') : ''
+  }
+  const contexts = {}
+  for (const item of list) {
+    const id = idOf(item)
+    const size = id && typeof item === 'object' ? Number([...CONTEXT_FIELDS.map(key => item[key]), item.top_provider?.context_length].find(value => Number(value) > 0)) : 0
+    if (size >= 1_000 && size <= 100_000_000) contexts[id] = Math.floor(size)
+  }
+  return { models: [...new Set(list.map(idOf).filter(Boolean))].sort((a, b) => a.localeCompare(b)), contexts }
 }
 
 /** A system error's code (ECONNRESET, ENOTFOUND…), or '': what to search for when a connection failed. */

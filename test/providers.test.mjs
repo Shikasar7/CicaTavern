@@ -5,11 +5,11 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { normalizeCard } from '../server/cards.mjs'
-import { activePath, chatView, createChat } from '../server/chats.mjs'
+import { activePath, chatView, createChat, restoreFolded, rollbackTo } from '../server/chats.mjs'
 import { createEngine } from '../server/engine.mjs'
 import { testSubscription } from './support/subscription.mjs'
 import { editPreset, normalizePreset } from '../server/presets.mjs'
-import { complete, exportProviders, importProviders, listRemoteModels, normalizeProvider, providerChoices, providerError, publicProvider, reasoningFields } from '../server/providers.mjs'
+import { complete, exportProviders, importProviders, listRemoteModelDetails, listRemoteModels, normalizeProvider, providerChoices, providerError, publicProvider, reasoningFields } from '../server/providers.mjs'
 import { createStore } from '../server/store.mjs'
 import { cleanScripts } from '../server/regex.mjs'
 
@@ -35,7 +35,7 @@ const KEY = 'sk-test-1234567890abcd'
 /** A provider that speaks all three protocols and records each request. */
 async function fakeProvider(t) {
   const requests = []
-  const flags = { rejectTtl: false, rejectReasoning: false, maxOutput: 0, contextLimit: 0, stopReason: 'end_turn' }
+  const flags = { rejectTtl: false, rejectReasoning: false, maxOutput: 0, contextLimit: 0, stopReason: 'end_turn', promptTokens: 100, summaryText: '', contextMessage: '' }
   let count = 0
   const server = createServer(async (req, res) => {
     let body = ''
@@ -58,7 +58,7 @@ async function fakeProvider(t) {
     // A window the prompt plus the output cap must fit into (characters stand in for tokens).
     if (flags.contextLimit && body.length + (json?.max_tokens ?? 0) > flags.contextLimit) {
       res.writeHead(400, { 'content-type': 'application/json' })
-      return res.end(JSON.stringify({ error: { message: 'Context window is full. Reduce conversation history, system prompt, or tools.' } }))
+      return res.end(JSON.stringify({ error: { message: flags.contextMessage || 'Context window is full. Reduce conversation history, system prompt, or tools.' } }))
     }
     if (flags.maxOutput && json?.max_tokens > flags.maxOutput) {
       res.writeHead(400, { 'content-type': 'application/json' })
@@ -66,11 +66,11 @@ async function fakeProvider(t) {
     }
     if (req.method === 'GET' && req.url.startsWith('/v1/models')) {
       res.writeHead(200, { 'content-type': 'application/json' })
-      return res.end(JSON.stringify({ data: [{ id: 'm-b' }, { id: 'm-a' }] }))
+      return res.end(JSON.stringify({ data: [{ id: 'm-b' }, { id: 'm-a', context_length: 64000 }] }))
     }
     const lastUser = JSON.stringify((json.messages ?? json.input).at(-1))
     // 「标签写错」: a state block closed with MVU's tag, as some models write it.
-    const text = lastUser.includes('暂停扮演') ? SUMMARY : lastUser.includes('标签写错') ? `第 ${++count} 次回复${CROSSED}` : `第 ${++count} 次回复<hide>变量${count}</hide>`
+    const text = lastUser.includes('暂停扮演') ? flags.summaryText || SUMMARY : lastUser.includes('标签写错') ? `第 ${++count} 次回复${CROSSED}` : `第 ${++count} 次回复<hide>变量${count}</hide>`
     const half = Math.ceil(text.length / 2)
     res.writeHead(200, { 'content-type': 'text/event-stream' })
     const send = (data, event) => res.write(`${event ? `event: ${event}\n` : ''}data: ${typeof data === 'string' ? data : JSON.stringify(data)}\n\n`)
@@ -78,7 +78,7 @@ async function fakeProvider(t) {
       send({ model: json.model, choices: [{ delta: { role: 'assistant', reasoning_content: '想一想' } }] })
       send({ model: json.model, choices: [{ delta: { content: text.slice(0, half) } }] })
       send({ model: json.model, choices: [{ delta: { content: text.slice(half) }, finish_reason: 'stop' }] })
-      send({ model: json.model, choices: [], usage: { prompt_tokens: 100, completion_tokens: 7, prompt_tokens_details: { cached_tokens: 60 } } })
+      send({ model: json.model, choices: [], usage: { prompt_tokens: flags.promptTokens, completion_tokens: 7, prompt_tokens_details: { cached_tokens: 60 } } })
       send('[DONE]')
     } else if (req.url === '/v1/responses') {
       send({ type: 'response.created', response: { model: json.model } }, 'response.created')
@@ -252,6 +252,111 @@ test('provider compaction: summary from the rebuilt history, next turn starts fr
   assert.match(next.messages[1].content, /<前情提要>[\s\S]*桂花拿铁[\s\S]*结账/)
   await turn('再见')
   assert.equal(fake.requests.at(-1).body.messages.length, 4, 'then it continues from the compaction point')
+})
+
+test('自动压缩: past the threshold for the chat\'s model, a new turn compacts first and starts from the archive; off, it does not', async t => {
+  const { fake, store, turn, provider } = await setup(t, 'openai-completions')
+  const ref = `${provider.id}/m1`
+  // A 2 000-token window: the threshold is its floor, 1 000; each turn reports 1 500 + 7.
+  await store.saveSettings({ compaction: { windows: { [ref]: 2_000 } } })
+  fake.flags.promptTokens = 1_500
+  await turn('点一杯拿铁')
+  const { events: quiet } = await turn('再来块蛋糕')
+  assert.ok(!quiet.some(event => event.type === 'compacting'), 'one turn in: not worth an archive yet')
+  const { chat, events } = await turn('结账')
+  assert.deepEqual(events.filter(event => event.type.startsWith('compact')).map(event => event.type), ['compacting', 'compacted'])
+  const [summary, next] = fake.requests.slice(-2)
+  assert.match(summary.body.messages.at(-1).content, /暂停扮演/)
+  assert.equal(next.body.messages.length, 2, 'the system prompt and the new message, after the archive')
+  assert.match(next.body.messages[1].content, /<前情提要>[\s\S]*桂花拿铁[\s\S]*结账/)
+  assert.ok(activePath(chat).at(-3).compaction, 'the archive is on the reply the turn continued from')
+
+  // Switched off: only the page's reminder.
+  await store.saveSettings({ compaction: { auto: false, windows: { [ref]: 2_000 } } })
+  await turn('再见')
+  const { events: off } = await turn('明天见')
+  assert.ok(!off.some(event => event.type === 'compacting'))
+})
+
+test('compaction checks the archive, keeps the last turns when nothing can read the story, learns a window from an error', async t => {
+  const { fake, store, turn, engine, chat, provider } = await setup(t, 'openai-completions')
+  await turn('一')
+  await turn('二')
+  // A model that carried on with the story instead: no compaction.
+  fake.flags.summaryText = '小雨笑了笑，端起杯子，继续讲她昨天在街角遇见的那只猫。'.repeat(10)
+  await assert.rejects(engine.compactChat(chat.id), /没有写出剧情存档/)
+  assert.ok(!activePath(await store.getChat(chat.id)).some(node => node.compaction))
+  // 只保留最近两轮: no model call, the turns left out noted, the last ones verbatim next turn.
+  const sent = fake.requests.length
+  const kept = await engine.compactChat(chat.id, { keepRecent: true })
+  assert.equal(fake.requests.length, sent)
+  assert.match(activePath(kept).at(-1).compaction.summary, /前面的 2 轮没有写成存档/)
+  assert.equal(chatView(kept).path.at(-1).compaction.kept, 2)
+  fake.flags.summaryText = ''
+  await turn('三')
+  assert.match(fake.requests.at(-1).body.messages[1].content, /<前情提要>[\s\S]*没有写成存档[\s\S]*<最近原文>[\s\S]*二[\s\S]*三/)
+
+  // Too long for the model, and it says how long it can be: kept for 自动压缩, flagged for 压缩后重试.
+  fake.flags.contextLimit = 10
+  fake.flags.contextMessage = "This model's maximum context length is 131072 tokens. However, you requested 140000 tokens."
+  await assert.rejects(turn('四'), error => error.contextFull === true)
+  assert.equal((await store.getModelContext())[`${provider.id}/m1`], 131_072)
+})
+
+test('compaction too long even in halves: read again in parts under the start of the system prompt only', async t => {
+  const { fake, store, turn, engine, chat } = await setup(t, 'openai-completions')
+  for (const input of ['一', '二', '三']) await turn(input)
+  const saved = await store.getChat(chat.id)
+  saved.systemPrompt = `${saved.systemPrompt}\n${'设定'.repeat(15_000)}`
+  await store.saveChat(saved)
+  // Any request with the whole system prompt is refused; one with its start fits.
+  fake.flags.contextLimit = 25_000
+  const after = await engine.compactChat(chat.id)
+  assert.match(activePath(after).at(-1).compaction.summary, /桂花拿铁/)
+  const last = fake.requests.at(-1).body
+  assert.ok(last.messages[0].content.length < 7_000)
+  assert.match(last.messages[0].content, /只保留了开头部分/)
+})
+
+test('compaction and rollbacks: compacted with turns folded behind it, they come back with the archive in front; a new version of the compacted reply keeps it', async t => {
+  const { fake, store, turn, engine, chat } = await setup(t, 'openai-completions')
+  await turn('一')
+  const { chat: two } = await turn('二')
+  const second = activePath(two).at(-1)
+  await turn('三')
+  const rolled = await store.getChat(chat.id)
+  rollbackTo(rolled, second.id)
+  await store.saveChat(rolled)
+  assert.equal(chatView(rolled).compactable, 2)
+  const compacted = await engine.compactChat(chat.id)
+  assert.ok(compacted.nodes[second.id].compaction)
+  const restored = await store.getChat(chat.id)
+  restoreFolded(restored)
+  await store.saveChat(restored)
+  assert.equal(chatView(restored).path.find(node => node.id === second.id).compaction.editable, true, 'nothing written from it since')
+  await turn('四')
+  const messages = fake.requests.at(-1).body.messages
+  assert.match(messages[1].content, /^<前情提要>[\s\S]*桂花拿铁[\s\S]*<\/前情提要>\n\n[\s\S]*三/, 'the folded turn opens with the archive')
+
+  // Too few turns: said as it is.
+  const fresh = await createChat(store, chat.cardId)
+  await engine.runTurn(fresh.id, { parentId: activePath(fresh).at(-1).id, input: '你好' }, () => {})
+  assert.equal(chatView(await store.getChat(fresh.id)).compactBlock, 'start')
+  await assert.rejects(engine.compactChat(fresh.id), /这段对话还不到 2 轮/)
+
+  // A new version of the reply the story was compacted into: the archive goes with it.
+  await turn('五')
+  await turn('六')
+  const tip = activePath(await engine.compactChat(chat.id)).at(-1)
+  await engine.runTurn(chat.id, { userNodeId: tip.parent }, () => {})
+  const redone = activePath(await store.getChat(chat.id)).at(-1)
+  assert.notEqual(redone.id, tip.id)
+  assert.match(redone.compaction.summary, /桂花拿铁/)
+})
+
+test('a provider\'s model list says how long each context is where it can', async t => {
+  const { provider } = await setup(t, 'openai-completions')
+  assert.deepEqual(await listRemoteModelDetails(provider), { models: ['m-a', 'm-b'], contexts: { 'm-a': 64_000 } })
 })
 
 test('Anthropic Messages provider: /v1 added, x-api-key, cache breakpoints, usage', async t => {

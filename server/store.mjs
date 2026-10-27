@@ -9,6 +9,7 @@ import { cleanProxySetting } from './proxy.mjs'
 import { cleanBasic } from '../web/shared/basic.js'
 import { cleanAppearance } from '../web/shared/appearance.js'
 import { cleanList, DEFAULT_ITEM, defaultOf } from '../web/shared/personas.js'
+import { cleanCompaction } from './context.mjs'
 
 /** @param dir - the edition's folder under the home directory (edition.mjs dataDir). */
 export function defaultDataRoot(dir = '.agent-tavern') {
@@ -149,6 +150,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   reinjectAfter: 6,
   stateRefreshEvery: 5,
   dynamicStrip: 'rare', // when piled-up <动态设定> copies are stripped: 'often' | 'rare' | 'off' (dynamic.mjs)
+  compaction: null, // 自动压缩: { auto, percent, cap, windows } (context.mjs cleanCompaction); null = its defaults
   replyLength: 0, // target reply length in characters; 0 = no requirement
   presetId: '', // SillyTavern preset for new chats; empty = the built-in preset (basic.mjs)
   basic: null, // the built-in preset's options (web/shared/basic.js); null = their defaults
@@ -219,7 +221,7 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
 
     async getSettings() {
       const saved = { ...DEFAULT_SETTINGS, ...(await readJson(path.join(root, 'settings.json'), {})) }
-      return lockSettings({ ...saved, basic: cleanBasic(saved.basic), appearance: cleanAppearance(saved.appearance), globalBookIds: cleanIds(saved.globalBookIds), globalVars: cleanVars(saved.globalVars) })
+      return lockSettings({ ...saved, basic: cleanBasic(saved.basic), appearance: cleanAppearance(saved.appearance), globalBookIds: cleanIds(saved.globalBookIds), globalVars: cleanVars(saved.globalVars), compaction: cleanCompaction(saved.compaction) })
     },
     /** Settings worked out from the saved ones and saved, with no other save in between (template global writes). */
     updateSettings(change, options) {
@@ -239,6 +241,7 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
         if (next.subscription !== 'off') next.subscription = 'on'
         next.proxy = cleanProxySetting(next.proxy)
         if (!['often', 'rare', 'off'].includes(next.dynamicStrip)) next.dynamicStrip = 'rare'
+        next.compaction = cleanCompaction(next.compaction)
         if (!['auto', 'zh', 'en'].includes(next.uiLanguage)) next.uiLanguage = 'auto'
         next.webFonts = next.webFonts !== false
         next.cdnLibraries = next.cdnLibraries !== false
@@ -393,6 +396,19 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
         const sets = await change(await this.getRegexSets())
         await writeJson(path.join(root, 'regex-sets.json'), { sets })
         return sets
+      })
+    },
+    /** Context windows heard of (context.mjs): what a provider's model list or a context-full error said, by model. */
+    async getModelContext() {
+      const value = await readJson(path.join(root, 'model-context.json'), {})
+      return value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}
+    },
+    /** `heard`: { ref or model id: tokens }, added to what is kept. */
+    learnModelContext(heard) {
+      return locked('model-context', async () => {
+        const next = { ...(await this.getModelContext()), ...heard }
+        await writeJson(path.join(root, 'model-context.json'), next)
+        return next
       })
     },
     /** 屏蔽词 for every chat (blockwords.mjs, which cleans them before they are saved). */

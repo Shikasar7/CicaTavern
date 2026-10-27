@@ -1,6 +1,6 @@
 {
   "name": "cicatavern",
-  "version": "2.0.2",
+  "version": "2.0.3",
   "private": true,
   "description": "用自己的模型 API 游玩 SillyTavern 角色卡",
   "license": "MIT",

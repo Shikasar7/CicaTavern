@@ -381,7 +381,6 @@ export default {
   "上次压缩之后不到 {0} 轮，不用再压缩": n => `Fewer than ${pl(n, 'turn', 'turns')} since the last compaction, no need to compact again`,
   "回滚收起的回合还在这条后面：先恢复它们，或从这里接着写一轮再压缩": "Turns folded by a rollback still follow this one: restore them, or write one more turn from here, then compact",
   "这条回复已经压缩进剧情存档，不能再补写变量": "This reply is already compacted into the story archive, so its variables can't be filled in",
-  "模型没有写出完整的剧情存档，这次没有压缩，可以再试一次": "The model didn't write a complete story archive, so nothing was compacted. You can try again",
   "已停止压缩": "Compaction stopped",
   "这条叙述不存在": "That reply doesn't exist",
   "正在生成，先停止": "Still generating. Stop it first",
@@ -592,6 +591,11 @@ export default {
   "不是 JSON 文件": "Not a JSON file",
   "文件里没有角色设定：要 SillyTavern 导出的角色备份（personas），或者本应用导出的": "No personas in the file: use a persona backup from SillyTavern, or one exported from this app",
   "文件里没有文风：要 SillyTavern 的系统提示词文件、本应用导出的文风，或者一个文本文件": "No styles in the file: use a SillyTavern system prompt file, styles exported from this app, or a text file",
+  "回滚之后这里只剩 {0} 轮，不到 {1} 轮：先点对话底部的「恢复」放回后面的回合，再压缩": "After the rollback only {0} turns are left here, fewer than {1}: click \"Restore\" at the bottom of the chat to bring the later turns back, then compact",
+  "这段对话还不到 {0} 轮，不用压缩": "This chat has fewer than {0} turns: nothing to compact yet",
+  "模型没有写出完整的剧情存档，这次没有压缩，可以再试一次": "The model didn't write a complete story archive, so nothing was compacted. You can try again",
+  "模型没有写出剧情存档（可能接着写了剧情），这次没有压缩，可以再试一次": "The model didn't write a story archive (it may have gone on with the story), so nothing was compacted. You can try again",
+  "故事太长，{0} · {1} 分段也读不下：换一个上下文更大的模型来压缩，或者只保留最近两轮": "The story is too long for {0} · {1} even in parts: compact with a model that has a longer context, or keep only the last two turns",
 }
 
 // Whole messages from the modules bin/launch.mjs loads on its own (store.mjs,
