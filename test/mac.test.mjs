@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url'
 import { featuresOf } from '../server/edition.mjs'
 import { parseMacProxy, createProxy } from '../server/proxy.mjs'
 import { createUpdater } from '../server/update/index.mjs'
-import { inAppBundle, installBase, isInstall, macFolder, markDir, removeInstall, stageMacInstall, stateDir, userAppData } from '../server/update/install.mjs'
+import { canonical, inAppBundle, installBase, isInstall, macFolder, markDir, removeInstall, stageMacInstall, stateDir, userAppData } from '../server/update/install.mjs'
 import { assetKind, latestFile, releaseInfo } from '../server/update/release.mjs'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -240,7 +240,8 @@ test('the Mac updater: the newer release\'s zip is downloaded, checked, put in A
   assert.deepEqual(listed.map(item => [item.version, item.staged]), [['2.0.2', true]])
   await updater.apply()
   assert.equal(switched.length, 1)
-  assert.deepEqual([switched[0].from.path, switched[0].to.path, switched[0].mode], [root, status.ready.path, 'update'])
+  // The updater speaks of the app's folder by its real path (on a Mac the temp folder /var is /private/var).
+  assert.deepEqual([switched[0].from.path, switched[0].to.path, switched[0].mode], [canonical(root), status.ready.path, 'update'])
   assert.equal(existsSync(path.join(root, 'update')), false, 'nothing written into the app')
 })
 
