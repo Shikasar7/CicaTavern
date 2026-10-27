@@ -525,6 +525,14 @@ test('provider errors, model listing, and no SDK continuation from an API reply'
     assert.match(providerError(provider, error), /API Key 无效/)
     return true
   })
+  // A connection that failed names its code, also when its message does not (a reset in the TLS handshake).
+  const reset = Object.assign(new Error('Client network socket disconnected before secure TLS connection was established'), { code: 'ECONNRESET' })
+  assert.match(providerError(provider, reset), /^连不上 .*（ECONNRESET）$/)
+  await assert.rejects(listRemoteModels({ ...provider, baseURL: 'http://127.0.0.1:9/v1' }), error => {
+    assert.match(providerError(provider, error), /^连不上 .*ECONNREFUSED/)
+    assert.equal(providerError(provider, error).split('ECONNREFUSED').length, 2, 'the code once, not again after the message that has it')
+    return true
+  })
 
   await turn('你好')
   await store.saveSettings({ subscription: 'on' })

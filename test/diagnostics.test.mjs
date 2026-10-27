@@ -159,13 +159,39 @@ test('error log: keys, tokens and passwords are taken out of error texts; the on
   assert.equal(redact('failed with relaykey9876543 and naitok3n_0001 (always)', known), 'failed with [redacted] and [redacted] (always)')
 })
 
-test('error log: made-up addresses and requests without the page\'s header are not logged', async t => {
+test('error log: made-up addresses, requests without the page\'s header and a card without a picture are not logged', async t => {
   const root = await dataFolder(t)
   const { base, call } = await tavern(t, root)
   for (let i = 0; i < 5; i++) assert.equal((await fetch(`${base}/api/x${i}`)).status, 404)
   assert.equal((await fetch(`${base}/api/settings`, { method: 'PUT', body: '{}' })).status, 403)
+  // No picture is no failure: a card imported from JSON has none, and the page still asks for it.
+  assert.equal((await call('/api/cards/nocard/avatar')).status, 404)
   assert.match((await report(call)).text, /还没有记录到错误/)
   // A route's own failure still is.
   assert.equal((await call('/api/cards/import', { method: 'POST', body: { filename: 'card.png', data: 'AAAA' } })).status, 400)
   assert.equal((await report(call)).count, 1)
+})
+
+test('error log: a reading the page stopped is not logged', async t => {
+  const root = await dataFolder(t)
+  const { app, base, call } = await tavern(t, root)
+  // A voice service that never answers; the request to it ends when the tavern gives it up.
+  let upstreamClosed
+  const closed = new Promise(resolve => (upstreamClosed = resolve))
+  const silent = createServer((req, res) => res.on('close', upstreamClosed))
+  await new Promise(resolve => silent.listen(0, '127.0.0.1', resolve))
+  t.after(() => {
+    silent.closeAllConnections?.()
+    silent.close()
+  })
+  const provider = normalizeProvider({ name: 'Voices', api: 'openai-completions', baseURL: `http://127.0.0.1:${silent.address().port}/v1`, apiKey: KEY, models: [{ id: 'm1' }] })
+  await app.store.saveProviders([provider])
+  assert.equal((await call('/api/media/settings', { method: 'PUT', body: { ttsProvider: provider.id, ttsVoices: 'coral' } })).status, 200)
+  const stop = new AbortController()
+  const reading = fetch(`${base}/api/tts`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-agent-tavern': '1' }, body: JSON.stringify({ text: '你好', voice: `openai:${provider.id}:coral` }), signal: stop.signal })
+  setTimeout(() => stop.abort(), 300)
+  await assert.rejects(reading, { name: 'AbortError' })
+  await closed
+  await new Promise(resolve => setTimeout(resolve, 100))
+  assert.match((await report(call)).text, /还没有记录到错误/)
 })

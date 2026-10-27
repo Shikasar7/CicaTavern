@@ -109,10 +109,11 @@ If you can't quite say what you want, the creator guides you round by round:
 
 <br clear="right">
 
-## Latest changes [2.0.1]
+## Latest changes [2.0.2]
 
 <p align="center"><img src="docs/screenshots/vn-marks.jpg" alt="The visual novel in 1.9.2: the model marked this line as the steward's, so the name plate and the sprite follow, with Lin Qinghe beside him" width="880"></p>
 
+- **Fixes (2.0.2)**: when the Android app cannot reach a service abroad such as Fish Audio, it says what to do, and a failed connection names its error code; Fish Audio is marked as needing a proxy in mainland China; a few display problems in the settings window, the top bar and dark mode.
 - **Fix (2.0.1)**: ComfyUI workflows mark the prompt as `%prompt%`, as in SillyTavern, whose ComfyUI workflows now import as they are. A `{{prompt}}` lost its braces in ComfyUI's "Export (API)", so the import kept saying the placeholder was missing.
 - **Voice input** (2.0.0): a microphone beside the input box turns what you say into text in the box, for you to read and send. Nothing to install: a provider's transcription API (SiliconFlow's SenseVoice is free), the desktop browser's own recognition, or a whisper server of your own; CicaTavern keeps no recordings.
 - **Draw history** (2.0.0): illustrations, reference pictures, sprites and expressions, scenes and a card's avatar keep a few old versions after a redraw (5 by default); tap one to use it again, or delete it.

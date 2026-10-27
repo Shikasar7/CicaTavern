@@ -35,7 +35,7 @@ const SERVICE_SITES = {
     { name: 'AUTOMATIC1111', site: 'https://github.com/AUTOMATIC1111/stable-diffusion-webui', net: 'local', download: true },
   ],
   'voice:openai': [{ name: t`硅基流动（CosyVoice）`, site: 'https://cloud.siliconflow.cn', keys: 'https://cloud.siliconflow.cn/account/ak', net: 'direct' }, OPENAI_SITE],
-  'voice:fish': [{ name: 'Fish Audio', site: 'https://fish.audio', keys: 'https://fish.audio/app/api-keys/', net: 'direct' }],
+  'voice:fish': [{ name: 'Fish Audio', site: 'https://fish.audio', keys: 'https://fish.audio/app/api-keys/', net: 'proxy' }],
   'voice:minimax': [
     { name: t`MiniMax 国内站`, site: 'https://platform.minimaxi.com', keys: 'https://platform.minimaxi.com/user-center/basic-information/interface-key', net: 'direct' },
     { name: t`MiniMax 国际站`, site: 'https://platform.minimax.io', keys: 'https://platform.minimax.io/user-center/basic-information/interface-key', net: 'proxy' },
@@ -2138,7 +2138,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     ])
 
     const fish = el('details', { class: 'voice-source', open: Boolean(voiceKeys.fish?.hasKey) }, [
-      el('summary', {}, [el('span', { class: 'voice-source-name' }, ['Fish Audio', netTag('direct')]), fishBadge.badge]),
+      el('summary', {}, [el('span', { class: 'voice-source-name' }, ['Fish Audio', netTag('proxy')]), fishBadge.badge]),
       serviceLinks('voice:fish'),
       keyField('fish', 'API Key', voiceKeys.fish, t`fish.audio → API Keys 里创建`, fishBadge.update),
       field(t`模型`, el('select', { name: 'fishModel' }, FISH_MODELS.map(([value, text]) => option(value, text, media.fishModel)))),

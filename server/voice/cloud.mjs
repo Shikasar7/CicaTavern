@@ -5,7 +5,7 @@
 // voice. Both are asked for MP3, which a phone on the LAN fetches faster than
 // WAV. The audio helpers below are shared by every server-side source: what
 // kind of audio came back, and a WAV header for raw PCM.
-import { fetchBytes, postJson } from '../providers.mjs'
+import { errorCode, fetchBytes, postJson, withCode } from '../providers.mjs'
 import { httpError } from '../store.mjs'
 import { msg } from '../i18n.mjs'
 
@@ -121,6 +121,7 @@ function reachHint(route, proxyMenu = true) {
   if (route === 'proxy') return msg`检查网络，以及「设置 → 网络代理」里的代理是否在运行。`
   if (route === 'home') return msg`检查网络。`
   if (route === 'direct' && proxyMenu) return msg`现在没走代理：要开代理才能上这个网站的话，去「设置 → 网络代理」选「跟随系统代理」或填代理地址。`
+  if (route === 'direct') return msg`手机应用不经过代理设置：这个网站在国内多半要开手机上的加速器才能连（全局模式，或把它加进代理规则；能按应用分流的，要把 CicaTavern 勾上），也可以改用国内能直连的 MiniMax 国内站。`
   return msg`检查网络和代理设置。`
 }
 
@@ -204,8 +205,12 @@ export function cloudError(label, error, key, { route = '', proxyMenu = true } =
   const text = (key ? raw.split(key).join(msg`[密钥已隐藏]`) : raw).replace(/^\d{3} /, '').slice(0, 160)
   if (error?.timedOut) return msg`连不上 ${label}：等了 ${Math.ceil(error.timedOut / 1000)} 秒没有回应。${reachHint(route, proxyMenu)}`
   if (status) return msg`${label} HTTP ${status}：${statusText()[status] ?? msg`服务暂时异常`}${text ? msg`（${text}）` : ''}`
-  if (UNREACHABLE.test(`${error?.code ?? ''} ${raw}`)) return msg`连不上 ${label}：${reachHint(route, proxyMenu)}`
-  return msg`${label}：${text}`
+  // The code says how it failed (refused, no route, reset, no address): for the error log and whoever reads it.
+  if (UNREACHABLE.test(`${errorCode(error)} ${raw}`)) {
+    const words = msg`连不上 ${label}：${reachHint(route, proxyMenu)}`
+    return errorCode(error) ? withCode(words, error) : `${words}${msg`（${text}）`}`
+  }
+  return withCode(msg`${label}：${text}`, error)
 }
 
 /** cloudError as the error to throw: 504 when the service never answered, else 502. */

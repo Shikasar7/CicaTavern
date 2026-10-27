@@ -437,7 +437,7 @@ test('cloud voices give up on a service that never answers (读取音色, 试听
   const home = await quick(list({ service: 'minimax', key: MINIMAX_KEY, region: 'cn', urls: { minimax: { cn: at(silent) } } }))
   assert.match(home.message, /^连不上 MiniMax：等了 1 秒没有回应。检查网络。$/)
   const phone = await quick(list({ urls: { fish: at(silent) } }, { proxyMenu: false }))
-  assert.match(phone.message, /没有回应。检查网络和代理设置。$/)
+  assert.match(phone.message, /没有回应。手机应用不经过代理设置：.*加速器.*MiniMax 国内站。$/)
   // A refused connection says the same at once.
   const down = await quick(list({ urls: { fish: refused } }, { timeoutMs: 20000 }))
   assert.equal(down.status, 502)
@@ -469,7 +469,8 @@ test('cloud voices give up on a service that never answers (读取音色, 试听
   assert.equal((await quick(speak('fish', { fish: at(silent) }, { signal: stopped.signal, timeouts: { list: 20000, speech: 20000 } }))).name, 'AbortError')
   // A connection reset during the TLS handshake names no code in its message.
   const reset = Object.assign(new Error('Client network socket disconnected before secure TLS connection was established'), { code: 'ECONNRESET' })
-  assert.match(cloudError('Fish Audio', reset, FISH_KEY, { route: 'direct' }), /^连不上 Fish Audio：现在没走代理/)
+  assert.match(cloudError('Fish Audio', reset, FISH_KEY, { route: 'direct' }), /^连不上 Fish Audio：现在没走代理.*（ECONNRESET）$/)
+  assert.match(cloudError('Fish Audio', Object.assign(new Error('connect ENETUNREACH 2606:4700::6812:64:443'), { code: 'ENETUNREACH' }), FISH_KEY, { route: 'direct', proxyMenu: false }), /^连不上 Fish Audio：手机应用不经过代理设置.*（ENETUNREACH）$/)
 })
 
 test('voice routing: names the voice service lists go to it first; unprefixed names are its own', async t => {

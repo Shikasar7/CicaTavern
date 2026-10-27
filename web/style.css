@@ -234,7 +234,7 @@ svg { flex: none; }
 .brand-sub { font-size: 12px; color: var(--muted); }
 
 .import {
-  margin: 4px 14px 6px; display: flex; align-items: center; gap: 10px; padding: 11px 14px;
+  margin: 4px 14px 6px; display: flex; align-items: center; gap: 10px; padding: 11px 14px; background: transparent; font: inherit; text-align: start;
   border: 1px dashed color-mix(in srgb, var(--accent) 35%, var(--line)); border-radius: 12px;
   color: var(--muted); cursor: pointer; font-size: 13px; transition: background .2s, color .2s, border-color .2s;
 }
@@ -298,7 +298,7 @@ li:hover .item-del, .item-del:focus-visible { opacity: 1; }
 .item-edit:hover { color: var(--accent); background: var(--accent-soft); }
 @media (hover: none) { .item-edit { opacity: 1; } }
 
-.pane-foot { margin-top: auto; padding: 10px 12px; border-top: 1px solid var(--line-soft); display: flex; gap: 2px; }
+.pane-foot { margin-top: auto; padding: 10px 12px; border-top: 1px solid var(--line-soft); display: flex; flex-wrap: wrap; gap: 2px; }
 .foot-btn {
   flex: 1; border: 0; background: none; padding: 7px 4px; border-radius: 9px; cursor: pointer; color: var(--muted); font-size: 13px;
   transition: background .18s, color .18s;
@@ -321,6 +321,8 @@ li:hover .item-del, .item-del:focus-visible { opacity: 1; }
   transition: border-color .18s, color .18s, background .18s;
 }
 .pill:hover:not(:disabled) { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); color: var(--ink); }
+.topbar .pill { flex-shrink: 0; }
+.topbar #chat-model { flex-shrink: 1; min-width: 110px; }
 select.pill { appearance: none; padding-right: 28px; background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%); background-position: right 14px center, right 10px center; background-size: 4px 4px; background-repeat: no-repeat; }
 .pill.unset { border-style: dashed; }
 .quota { font-size: 12px; color: var(--muted); white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; }

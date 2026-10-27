@@ -517,7 +517,7 @@ function sendPayload(lib, url, { method, headers, payload, signal, proxy }) {
       res.on('close', () => signal?.removeEventListener('abort', onAbort))
       resolve(res)
     })
-    req.on('timeout', () => req.destroy(new Error(msg`请求超时`)))
+    req.on('timeout', () => req.destroy(Object.assign(new Error(msg`请求超时`), { code: 'ETIMEDOUT' })))
     req.on('error', error => {
       signal?.removeEventListener('abort', onAbort)
       reject(error)
@@ -1169,6 +1169,18 @@ export async function listRemoteModels(provider, { proxy = null, signal } = {}) 
     .sort((a, b) => a.localeCompare(b))
 }
 
+/** A system error's code (ECONNRESET, ENOTFOUND…), or '': what to search for when a connection failed. */
+export function errorCode(error) {
+  const code = error?.code ?? error?.cause?.code
+  return typeof code === 'string' && /^E[A-Z0-9_]+$/.test(code) ? code : ''
+}
+
+/** `text` with the error's code after it, unless it says it already. */
+export function withCode(text, error) {
+  const code = errorCode(error)
+  return code && !text.includes(code) ? `${text}${msg`（${code}）`}` : text
+}
+
 /** Plain-language provider errors, with what to do about one (`hint`, see searchHint) after the provider's words. */
 export function providerError(provider, error) {
   return `${plainError(provider, error)}${error?.hint ?? ''}`
@@ -1182,8 +1194,8 @@ function plainError(provider, error) {
   if (status === 404) return msg`${name} 返回 404：检查 Base URL 和接口类型，或者模型 ID 是否写对。（${text.slice(0, 160)}）`
   if (status === 429) return msg`${name} 限流或额度用完了，稍后再试。（${text.slice(0, 160)}）`
   if (status >= 500) return msg`${name} 服务出错，稍后重试。（${text.slice(0, 160)}）`
-  if (/ECONNREFUSED|ENOTFOUND|ETIMEDOUT|ECONNRESET|socket hang up|请求超时|Request timed out/i.test(text)) {
-    return msg`连不上 ${name}：检查 Base URL、网络和代理设置。（${text.slice(0, 160)}）`
+  if (/ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNRESET|EHOSTUNREACH|ENETUNREACH|socket hang up|secure TLS connection|请求超时|Request timed out/i.test(`${errorCode(error)} ${text}`)) {
+    return withCode(msg`连不上 ${name}：检查 Base URL、网络和代理设置。（${text.slice(0, 160)}）`, error)
   }
-  return msg`${name}：${text.slice(0, 240)}`
+  return withCode(msg`${name}：${text.slice(0, 240)}`, error)
 }

@@ -20,7 +20,7 @@ import { createHash, randomInt } from 'node:crypto'
 import { copyFile, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { inflateRawSync } from 'node:zlib'
 import path from 'node:path'
-import { complete, fetchBytes, googleRequest, isProviderRef, postJson, providerError, providerRequest, refLabel, resolveRef } from './providers.mjs'
+import { complete, fetchBytes, googleRequest, isProviderRef, postJson, providerError, providerRequest, refLabel, resolveRef, withCode } from './providers.mjs'
 import { chatMaterial, cleanFrame, cleanLora, cleanRoster, cleanStrength, countTags, draftMaterial, flattenFrame, frameFormat, isFramePrompt, isRosterId, leadOf, naiCharacters, parseFrame, parseRosterChat, parseRosterDraft, rosterBrief, rosterChatRequest, rosterDraftRequest, withSomeone } from './roster.mjs'
 import { httpError, newId } from './store.mjs'
 import { blockRequest } from './blockwords.mjs'
@@ -1014,9 +1014,9 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
         postJson(`${media.sdUrl}/sdapi/v1/interrupt`, {}, { signal: AbortSignal.timeout(5000) }).catch(() => {})
         throw error
       }
-      if (/ECONNREFUSED/.test(String(error.message ?? error.code))) throw httpError(502, msg`连不上 SD WebUI：先打开 WebUI（启动参数加 --api），再确认地址（默认 http://127.0.0.1:7860）`)
+      if (/ECONNREFUSED/.test(String(error.message ?? error.code))) throw httpError(502, withCode(msg`连不上 SD WebUI：先打开 WebUI（启动参数加 --api），再确认地址（默认 http://127.0.0.1:7860）`, error))
       const hint = error.providerStatus === 404 ? msg`（WebUI 启动参数要加 --api）` : ''
-      throw httpError(502, msg`SD WebUI：${String(error.message).slice(0, 200)}${hint}`)
+      throw httpError(502, withCode(msg`SD WebUI：${String(error.message).slice(0, 200)}${hint}`, error))
     }
     let json
     try {
@@ -1113,8 +1113,8 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
 
   function comfyError(error) {
     const text = String(error?.message ?? error)
-    if (/ECONNREFUSED/.test(text)) return msg`连不上 ComfyUI：先打开 ComfyUI，再确认地址（默认 http://127.0.0.1:8188）`
-    return msg`ComfyUI：${text.slice(0, 200)}`
+    if (/ECONNREFUSED/.test(text)) return withCode(msg`连不上 ComfyUI：先打开 ComfyUI，再确认地址（默认 http://127.0.0.1:8188）`, error)
+    return withCode(msg`ComfyUI：${text.slice(0, 200)}`, error)
   }
 
   // The persistent token lives in its own file, so /api/settings never carries it.

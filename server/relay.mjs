@@ -13,7 +13,7 @@ import { BlockList, isIP } from 'node:net'
 import { lanAddresses } from './access.mjs'
 import { featuresOf } from './edition.mjs'
 import { msg } from './i18n.mjs'
-import { agentFor } from './providers.mjs'
+import { agentFor, withCode } from './providers.mjs'
 import { httpError } from './store.mjs'
 
 const METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'])
@@ -98,7 +98,7 @@ export async function relayTarget(raw, { ownPort = 0, local = false, proxy = nul
       addresses = (await resolve(host)).map(entry => ({ address: String(entry.address).toLowerCase(), family: entry.family }))
       if (!addresses.length) throw new Error(`getaddrinfo ENOTFOUND ${host}`)
     } catch (error) {
-      if (!proxy) throw httpError(502, msg`替卡片界面连接 ${url.host} 没有连上：${error.message}`)
+      if (!proxy) throw httpError(502, withCode(msg`替卡片界面连接 ${url.host} 没有连上：${error.message}`, error))
       if (!local) throw unchecked()
       return { url, addresses: null, local: false }
     }
@@ -156,7 +156,7 @@ export async function relayRequest(input, res, { proxy = null, ownPort = 0, sign
       req.end(payload ?? undefined)
     }).catch(error => {
       if (error.name === 'AbortError') throw httpError(499, msg`已取消`)
-      throw httpError(502, msg`替卡片界面连接 ${hop.url.host} 没有连上：${error.message}`)
+      throw httpError(502, withCode(msg`替卡片界面连接 ${hop.url.host} 没有连上：${error.message}`, error))
     })
   }
 

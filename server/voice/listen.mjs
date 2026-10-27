@@ -10,7 +10,7 @@
 // The page sends a 16 kHz mono WAV where it can (every service takes WAV; whisper.cpp
 // takes nothing else), else what the browser recorded. Nothing is kept: the audio
 // goes to the service and is dropped with the request.
-import { providerError, providerRequest } from '../providers.mjs'
+import { providerError, providerRequest, withCode } from '../providers.mjs'
 import { httpError, newId } from '../store.mjs'
 import { msg } from '../i18n.mjs'
 
@@ -157,7 +157,7 @@ export function createListen({ providers, proxy = () => null }) {
         if (signal?.aborted) throw error
         if (error.providerStatus === 404) throw httpError(502, msg`本地转写服务没有 ${new URL(url).pathname} 这个接口：OpenAI 兼容的服务填到 /v1，whisper.cpp 填到 /inference`)
         if (error.providerStatus) throw httpError(502, msg`本地转写服务出错：${String(error.message).slice(0, 200)}`)
-        throw httpError(502, msg`连不上本地转写服务 ${media.sttUrl}：确认它开着、地址和端口没写错（${String(error.message).slice(0, 120)}）`)
+        throw httpError(502, withCode(msg`连不上本地转写服务 ${media.sttUrl}：确认它开着、地址和端口没写错（${String(error.message).slice(0, 120)}）`, error))
       }
       return { text: transcriptText(result), by: new URL(url).host }
     }

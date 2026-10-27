@@ -6,7 +6,7 @@
 // Moved from media.mjs unchanged.
 import { readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { fetchBytes, postJson } from '../providers.mjs'
+import { fetchBytes, postJson, withCode } from '../providers.mjs'
 import { httpError } from '../store.mjs'
 import { msg } from '../i18n.mjs'
 
@@ -53,6 +53,11 @@ export function createBridge({ root, features = null }) {
 
   /** Why the local voice bridge did not answer, in words that say what to do. */
   function voiceTrouble(media, error) {
+    return withCode(voiceWords(media, error), error)
+  }
+
+  /** voiceTrouble without the code. */
+  function voiceWords(media, error) {
     const message = String(error?.message ?? error)
     const down = /ECONNREFUSED|EHOSTUNREACH|ENETUNREACH|ETIMEDOUT|timeout|aborted/i.test(message)
     // Only a tavern asks for a key (401 no or wrong key, 403 an address it does not serve).

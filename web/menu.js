@@ -168,6 +168,7 @@ export function createMenu({ dialog, form, el, title: menuTitle, edits = countsA
   function show(id = null, direction = '') {
     if (!view) return
     const section = sections.find(s => s.id === id && !s.action) ?? null
+    const was = current
     current = section?.id ?? null
     // Once on the menu, every page is one level below it.
     if (!section) entered = null
@@ -180,6 +181,10 @@ export function createMenu({ dialog, form, el, title: menuTitle, edits = countsA
     view.title.textContent = section ? section.title : menuTitle
     if (!section) refresh()
     view.body.scrollTop = 0
+    // The row clicked (or the page left) is hidden now: focus stays in the window, so its next Esc is the
+    // menu's one level up rather than the browser closing the window from the page behind it.
+    const focused = document.activeElement
+    if (!dialog.contains(focused) || focused.closest('[hidden]')) (section ? view.back : view.entries.get(was)?.button)?.focus({ preventScroll: true })
     const shown = section ? view.panes.find(pane => pane.dataset.section === current) : view.home
     if (direction && shown && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
       shown.classList.remove('enter-forward', 'enter-back')

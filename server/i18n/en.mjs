@@ -276,6 +276,7 @@ export default {
   "检查网络，以及「设置 → 网络代理」里的代理是否在运行。": "Check your network, and whether the proxy in \"Settings → Network proxy\" is running.",
   "检查网络。": "Check your network.",
   "现在没走代理：要开代理才能上这个网站的话，去「设置 → 网络代理」选「跟随系统代理」或填代理地址。": "No proxy is in use right now: if this site needs a proxy, go to \"Settings → Network proxy\" and choose \"Use system proxy\" or enter a proxy address.",
+  "手机应用不经过代理设置：这个网站在国内多半要开手机上的加速器才能连（全局模式，或把它加进代理规则；能按应用分流的，要把 CicaTavern 勾上），也可以改用国内能直连的 MiniMax 国内站。": "The phone app does not go through a proxy setting: in mainland China this site usually needs a VPN app on the phone (global mode, or with the site added to its proxy rules; one that routes per app needs CicaTavern ticked), or use MiniMax's China site, which connects directly.",
   "检查网络和代理设置。": "Check your network and proxy settings.",
   "（未训练完）": " (still training)",
   "复刻": "Cloned",

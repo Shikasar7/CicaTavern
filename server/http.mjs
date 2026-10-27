@@ -1382,6 +1382,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
         res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'no-store', 'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(`${card.name}.png`)}` })
         return res.end(data)
       } catch (error) {
+        // A card without a picture is not a failure (the error log keeps out what is merely absent).
+        if (!error.status) res.logFailures = false
         return sendJson(res, error.status ?? 404, { error: error.status ? error.message : msg`没有头像` })
       }
     }
@@ -1392,6 +1394,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
         res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'max-age=3600' })
         return res.end(data)
       } catch {
+        res.logFailures = false // a card without a picture: nothing failed
         return sendJson(res, 404, { error: msg`没有头像` })
       }
     }
@@ -1541,7 +1544,10 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     const cancelOnClose = () => {
       const controller = new AbortController()
       res.on('close', () => {
-        if (!res.writableFinished) controller.abort()
+        if (res.writableFinished) return
+        // Stopped by the page: what the cancelled work throws is no error (499, kept out of the log).
+        res.cancelled = true
+        controller.abort()
       })
       return controller.signal
     }
@@ -1754,6 +1760,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
         handle(req, res)
           .catch(error => {
             if (res.headersSent) return res.end()
+            if (res.cancelled) return sendJson(res, 499, { error: error.message })
             // Not an answer a route chose (httpError): where in this app it went wrong.
             if (!error.status) res.errorStack = error.stack
             sendJson(res, error.status ?? 500, { error: error.message })

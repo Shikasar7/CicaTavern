@@ -7,6 +7,7 @@
 // down ("pthread_mutex_lock called on a destroyed mutex"), before stdout
 // reaches the log. So a failed start is written with appendFileSync, reported
 // through --error-file (the app polls for it), and the process is kept alive.
+import { setDefaultResultOrder } from 'node:dns'
 import { appendFileSync, writeFileSync } from 'node:fs'
 
 const args = process.argv.slice(2)
@@ -45,6 +46,10 @@ process.on('uncaughtException', error => log(`uncaught: ${describe(error)}`))
 process.on('unhandledRejection', error => log(`unhandled: ${describe(error)}`))
 
 log(`node ${process.version} ${process.platform}/${process.arch}, entered JS`)
+
+// IPv4 addresses first. Node takes them in the order Android gives, IPv6 first on a phone that has it, and
+// never falls back as a browser does: a VPN app that routes only IPv4 would see none of those connections.
+setDefaultResultOrder('ipv4first')
 let createApp
 try {
   ;({ createApp } = await import('../server/http.mjs'))

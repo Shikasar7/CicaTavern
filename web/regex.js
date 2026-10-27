@@ -59,7 +59,8 @@ export function initRegex({ api, el, toast, guard, saveFile, context, getCards, 
   function places() {
     return [
       { key: 'global', kind: 'global', name: t`全局`, scripts: state.global, editable: true },
-      ...(state.preset ? [{ key: 'preset', kind: 'preset', name: state.preset.name, scripts: state.preset.scripts, editable: !state.preset.builtin }] : []),
+      // The built-in preset's name is its Chinese data name: shown in the page's language.
+      ...(state.preset ? [{ key: 'preset', kind: 'preset', name: state.preset.builtin ? t`基础预设` : state.preset.name, scripts: state.preset.scripts, editable: !state.preset.builtin }] : []),
       ...(state.card ? [{ key: 'card', kind: 'card', name: state.card.name, scripts: state.card.scripts, editable: true }] : []),
       ...state.sets.map(set => ({ key: `set-${set.id}`, kind: 'set', name: set.name, scripts: set.scripts, editable: true, set })),
     ]
