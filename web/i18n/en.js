@@ -1241,6 +1241,8 @@ export default {
   "这个版本没有 Windows 安装包。": "This version has no Windows package.",
   "正在校验 SHA-256…": "Verifying SHA-256…",
   "校验通过，正在解压…": "Verified. Unpacking…",
+  "已下载并校验（SHA-256 一致），放在 {0}。重启后用新版本，「应用程序」里的 CicaTavern 不用动，以后打开它就是新版本；旧版本留着，可以回到上一版。": "Downloaded and verified (the SHA-256 matches), in {0}. After the restart the new version runs; CicaTavern in Applications stays as it is and opens the new version from then on. The old version stays, so you can go back to it.",
+  "下载后核对发布页公布的 SHA-256，放到 ~/Library/Application Support/CicaTavern，不碰「应用程序」里的 CicaTavern 和数据目录。也可以在发布页下载 dmg 重新安装。": "The download is checked against the SHA-256 on the release page and put in ~/Library/Application Support/CicaTavern; CicaTavern in Applications and your data folder are left alone. You can also download the dmg from the release page and install again.",
   "已下载并校验（SHA-256 一致），放在 {0}。重启后用新版本，旧版本的文件夹留着，可以回到上一版。": "Downloaded and verified (SHA-256 matches), saved in {0}. After a restart the new version runs; the old version's folder stays, so you can go back to it.",
   "重启并更新到 {0}": "Restart and update to {0}",
   "正在重启到 {0}，页面会自动刷新…": "Restarting into {0}; the page will reload by itself…",

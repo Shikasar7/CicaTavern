@@ -182,6 +182,11 @@ export function releaseInfo(json, { repo = REPO, feed = FEED, mirror = MIRROR, s
   const assets = {}
   for (const asset of Array.isArray(json.assets) ? json.assets : []) {
     const kind = assetKind(String(asset?.name ?? ''), arch)
+    // The Mac's zip is also what its in-app update unpacks (macZip).
+    if (kind === 'mac' && /\.zip$/i.test(String(asset.name)) && !assets.macZip && trustedDownload(asset.browser_download_url, { repo, feed, mirror: null })) {
+      const hash = expectedHash(asset, json.body)
+      assets.macZip = { name: asset.name, size: Number(asset.size) || 0, url: asset.browser_download_url, mirrorUrl: null, ...(hash.error ? { hashError: hash.error } : { sha256: hash.sha256, hashFrom: hash.from }) }
+    }
     // A release has the Mac's disk image (what to download) and its zip: the image wins.
     const taken = assets[kind]
     const image = name => /\.dmg$/i.test(String(name))

@@ -32,7 +32,7 @@ import { fileURLToPath } from 'node:url'
 import { appVersion } from '../edition.mjs'
 import { agentFor } from '../providers.mjs'
 import { compareVersions, FEED, LATEST_FILE, LATEST_KEY, latestFileUrl, MIRROR, mirrorLatestUrl, releaseInfo, REPO, SIGNATURE_FILE, trustedDownload, verifyLatest } from './release.mjs'
-import { canonical, checkRuntime, installBase, isInstall, otherInstalls, previousInstall, readJson, removeInstall, stateDir, stageInstall, writeJsonFile } from './install.mjs'
+import { canonical, checkRuntime, inAppBundle, installBase, isInstall, otherInstalls, previousInstall, readJson, removeInstall, stageInstall, stageMacInstall, stateDir, writeJsonFile } from './install.mjs'
 import { localize, msg } from '../i18n.mjs'
 
 const APP_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -122,7 +122,7 @@ const settle = promise => promise.then(info => ({ info }), error => ({ error }))
  * @param onShutdown - stops this server once the switch-over has started.
  * Tests replace: root, version, feed, mirror (null: none), publicKey (latest.json's),
  * mirrorAfterMs, now, env, platform, arch, check (the bundled Node's self-test),
- * spawnSwitch (runs bin/update-apply.mjs).
+ * spawnSwitch (runs bin/update-apply.mjs), unpackMac (ditto: the Mac zip into a folder).
  */
 export function createUpdater({
   features,
@@ -144,6 +144,7 @@ export function createUpdater({
   arch = process.arch,
   check = checkRuntime,
   spawnSwitch = spawnApply,
+  unpackMac,
 } = {}) {
   root = canonical(root)
   const kind = features?.updates ?? null
@@ -153,9 +154,17 @@ export function createUpdater({
   const trusted = href => trustedDownload(href, { repo, feed, mirror })
   const userAgent = `CicaTavern/${version} (+https://github.com/${repo})`
   // Why this copy cannot install by itself, or null.
+  // Installs itself: the Windows package, and the Mac app (its new versions go to Application Support).
+  const installs_ = kind === 'zip' || kind === 'mac'
   const notInstallable = () => {
-    // The phone and the Mac only check; the page shows where to download.
-    if (kind !== 'zip') return kind === 'apk' || kind === 'mac' ? null : msg`这个版本不用应用内更新`
+    // The phone checks; the page hands its APK to the app.
+    if (kind === 'apk') return null
+    if (kind === 'mac') {
+      if (platform !== 'darwin') return msg`应用内更新只支持 Mac 上的 CicaTavern`
+      if (!inAppBundle(root) && !isInstall(root)) return msg`这份 CicaTavern 不是从 CicaTavern.app 运行的（比如从源码运行），用 git pull 或到发布页下载更新`
+      return null
+    }
+    if (kind !== 'zip') return msg`这个版本不用应用内更新`
     if (platform !== 'win32') return msg`应用内更新只支持 Windows 发布包`
     if (!isInstall(root)) return msg`这份 CicaTavern 不是从发布包运行的（比如从源码运行），用 git pull 或到发布页下载更新`
     return null
@@ -198,8 +207,8 @@ export function createUpdater({
     const state = await load()
     const latest = state.latest
     const newer = Boolean(latest && compareVersions(latest.version, version) > 0)
-    const ready = kind === 'zip' ? staged(state) : null
-    const result = persist && kind === 'zip' ? await readJson(path.join(await stateFolder(), 'result.json')) : null
+    const ready = installs_ ? staged(state) : null
+    const result = persist && installs_ ? await readJson(path.join(await stateFolder(), 'result.json')) : null
     return {
       enabled: true,
       kind,
@@ -215,7 +224,7 @@ export function createUpdater({
       skipped: state.skipped,
       job: ready && job.step === 'idle' ? { step: 'ready' } : job,
       ready,
-      previous: persist && kind === 'zip' ? await previousInstall(root) : null,
+      previous: persist && installs_ ? await previousInstall(root) : null,
       result,
     }
   }
@@ -369,14 +378,14 @@ export function createUpdater({
   /** @param source - 'github' or 'mirror' to try that one first. */
   async function download({ source } = {}) {
     const reason = notInstallable()
-    if (kind !== 'zip' || reason) throw failure(400, reason ?? msg`这个版本不能在应用里安装更新`)
+    if (!installs_ || reason) throw failure(400, reason ?? msg`这个版本不能在应用里安装更新`)
     if (UPDATING.includes(job.step)) return status()
     const state = await load()
     const latest = state.latest
     if (!latest || compareVersions(latest.version, version) <= 0) throw failure(400, msg`没有更新的版本`)
     if (staged(state)?.version === latest.version) return status()
-    const asset = latest.assets?.zip
-    if (!asset) throw failure(400, msg`这个版本没有 Windows 安装包`)
+    const asset = kind === 'mac' ? latest.assets?.macZip : latest.assets?.zip
+    if (!asset) throw failure(400, kind === 'mac' ? msg`这个版本没有这台 Mac 能在应用里安装的更新包，到发布页下载 dmg` : msg`这个版本没有 Windows 安装包`)
     if (!asset.sha256) throw failure(400, asset.hashError)
     const order = sources(latest, asset, ['github', 'mirror'].includes(source) ? source : null)
     if (!order.length) throw failure(400, msg`这个版本没有可信的下载地址`)
@@ -446,7 +455,9 @@ export function createUpdater({
       await rename(part, zipFile)
       job.step = 'unpacking'
       const base = await installBase(root, env, platform)
-      const folderPath = await stageInstall(await readFile(zipFile), { base, version: latest.version, check })
+      const folderPath = kind === 'mac'
+        ? await stageMacInstall(zipFile, { base, version: latest.version, check, ...(unpackMac ? { unpack: unpackMac } : {}) })
+        : await stageInstall(await readFile(zipFile), { base, version: latest.version, check })
       await save({ staged: { version: latest.version, path: folderPath, sha256 } })
       done = { step: 'ready', version: latest.version }
     } catch (error) {
@@ -487,14 +498,14 @@ export function createUpdater({
 
   async function apply() {
     const reason = notInstallable()
-    if (kind !== 'zip' || reason) throw failure(400, reason ?? msg`这个版本不能在应用里安装更新`)
+    if (!installs_ || reason) throw failure(400, reason ?? msg`这个版本不能在应用里安装更新`)
     const ready = staged(await load())
     if (!ready) throw failure(400, msg`还没下载好新版本`)
     return switchTo(ready, 'update')
   }
 
   async function rollback() {
-    if (kind !== 'zip' || notInstallable()) throw failure(400, msg`这个版本不能在应用里切换版本`)
+    if (!installs_ || notInstallable()) throw failure(400, msg`这个版本不能在应用里切换版本`)
     const previous = await previousInstall(root)
     if (!previous) throw failure(400, msg`上一版的文件夹已经不在了`)
     return switchTo(previous, 'rollback')
@@ -502,8 +513,10 @@ export function createUpdater({
 
   /** The other package folders next to this one (and the LOCALAPPDATA fallback). */
   async function installs() {
-    if (kind !== 'zip' || notInstallable()) return { installs: [] }
-    const bases = [...new Set([path.dirname(root), await installBase(root, env, platform)])]
+    if (!installs_ || notInstallable()) return { installs: [] }
+    // The Mac app's versions are all in Application Support (beside the app's own folder there is nothing).
+    const beside = inAppBundle(root) ? [] : [path.dirname(root)]
+    const bases = [...new Set([...beside, await installBase(root, env, platform)])]
     const list = otherInstalls(root, bases)
     const state = await load()
     const keep = staged(state)?.path
@@ -524,7 +537,7 @@ export function createUpdater({
   }
 
   async function acknowledge() {
-    if (persist && kind === 'zip') await rm(path.join(await stateFolder(), 'result.json'), { force: true })
+    if (persist && installs_) await rm(path.join(await stateFolder(), 'result.json'), { force: true })
     if (job.step === 'error') job = { step: 'idle' }
     return status()
   }

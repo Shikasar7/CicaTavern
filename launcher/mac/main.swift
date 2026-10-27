@@ -22,6 +22,10 @@
 // frames may not. Closing the window quits the app, after leaving the page so
 // its /api/presence stream ends and the server's idle countdown starts.
 //
+// Opened from Downloads or a disk image (macOS then runs a read-only copy from a
+// hidden place, App Translocation, where updates cannot install), it first offers
+// to move itself into /Applications and starts again from there (MoveToApplications).
+//
 // Built by .github/workflows/mac-release.yml with the Command Line Tools alone:
 //   swiftc -O -swift-version 5 -target arm64-apple-macos13.5 -framework Cocoa -framework WebKit -o CicaTavern main.swift
 // macOS 13.5 is Node 24's own minimum (Node's BUILDING.md); Info.plist says the same.
@@ -266,6 +270,88 @@ final class Page: NSObject, WKNavigationDelegate, WKUIDelegate, WKDownloadDelega
     }
 }
 
+/// The first thing at launch: a copy outside Applications offers to move itself there and start again.
+enum MoveToApplications {
+    private static let declinedKey = "MoveToApplicationsDeclined"
+
+    /// True when the moved copy has been started (this one quits without starting anything).
+    static func offer() -> Bool {
+        let running = Bundle.main.bundleURL.resolvingSymlinksInPath()
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        if running.path.hasPrefix("/Applications/") || running.path.hasPrefix(home + "/Applications/") { return false }
+        if UserDefaults.standard.bool(forKey: declinedKey) { return false }
+        let source = originalURL(of: running)
+        if source.path.hasPrefix("/Applications/") { return false }
+        // Only the copies that cannot stay: a download macOS runs from its hidden place, or one on a disk image.
+        // A copy someone keeps in a folder of their own on purpose is left alone.
+        if source == running && !running.path.hasPrefix("/Volumes/") { return false }
+
+        let ask = NSAlert()
+        ask.messageText = L("要把 CicaTavern 移到「应用程序」文件夹吗？", "Move CicaTavern to the Applications folder?")
+        ask.informativeText = L(
+            "它现在是从「下载」或安装盘里打开的：macOS 会把它放在一个临时位置运行，以后也没法在应用里更新。移过去之后会从「应用程序」重新打开。",
+            "It was opened from Downloads or a disk image, so macOS runs it from a temporary place, and updates cannot install there. It opens again from Applications."
+        )
+        ask.addButton(withTitle: L("移到「应用程序」", "Move to Applications"))
+        ask.addButton(withTitle: L("先不移", "Not now"))
+        ask.showsSuppressionButton = true
+        ask.suppressionButton?.title = L("不再询问", "Don't ask again")
+        NSApp.activate(ignoringOtherApps: true)
+        let answer = ask.runModal()
+        if ask.suppressionButton?.state == .on { UserDefaults.standard.set(true, forKey: declinedKey) }
+        guard answer == .alertFirstButtonReturn else { return false }
+
+        let target = URL(fileURLWithPath: "/Applications").appendingPathComponent(running.lastPathComponent)
+        do {
+            let files = FileManager.default
+            // An older copy there goes to the Trash (it can be put back from there).
+            if files.fileExists(atPath: target.path) { try files.trashItem(at: target, resultingItemURL: nil) }
+            try files.copyItem(at: source, to: target)
+        } catch {
+            let failed = NSAlert()
+            failed.messageText = L("没能移到「应用程序」", "Could not move it to Applications")
+            failed.informativeText = L("可以自己把 CicaTavern 拖进「应用程序」文件夹。", "You can drag CicaTavern into the Applications folder yourself.") + "\n\n" + error.localizedDescription
+            failed.addButton(withTitle: L("好", "OK"))
+            failed.runModal()
+            return false
+        }
+        // The person allowed this copy to open already: the moved one is not quarantined again,
+        // so it is not translocated and opens without asking.
+        let unquarantine = Process()
+        unquarantine.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
+        unquarantine.arguments = ["-dr", "com.apple.quarantine", target.path]
+        try? unquarantine.run()
+        unquarantine.waitUntilExit()
+        // The copy left in Downloads goes to the Trash; one on a disk image stays (it is read-only).
+        if FileManager.default.isWritableFile(atPath: source.deletingLastPathComponent().path) {
+            try? FileManager.default.trashItem(at: source, resultingItemURL: nil)
+        }
+        let open = NSWorkspace.OpenConfiguration()
+        open.createsNewApplicationInstance = true
+        var started = false
+        let wait = DispatchSemaphore(value: 0)
+        NSWorkspace.shared.openApplication(at: target, configuration: open) { app, _ in
+            started = app != nil
+            wait.signal()
+        }
+        _ = wait.wait(timeout: .now() + 10)
+        return started
+    }
+
+    /// Where a translocated copy really is (Security framework's SecTranslocate, looked up at run time), else the URL itself.
+    private static func originalURL(of url: URL) -> URL {
+        guard let handle = dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_LAZY),
+              let isSymbol = dlsym(handle, "SecTranslocateIsTranslocatedURL"),
+              let originalSymbol = dlsym(handle, "SecTranslocateCreateOriginalPathForURL") else { return url }
+        typealias IsTranslocated = @convention(c) (CFURL, UnsafeMutablePointer<DarwinBoolean>, UnsafeMutablePointer<Unmanaged<CFError>?>?) -> DarwinBoolean
+        typealias OriginalPath = @convention(c) (CFURL, UnsafeMutablePointer<Unmanaged<CFError>?>?) -> Unmanaged<CFURL>?
+        var translocated: DarwinBoolean = false
+        guard unsafeBitCast(isSymbol, to: IsTranslocated.self)(url as CFURL, &translocated, nil).boolValue, translocated.boolValue,
+              let original = unsafeBitCast(originalSymbol, to: OriginalPath.self)(url as CFURL, nil) else { return url }
+        return original.takeRetainedValue() as URL
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow!
     private var web: WKWebView!
@@ -277,6 +363,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = mainMenu()
+        if MoveToApplications.offer() {
+            NSApp.terminate(nil)
+            return
+        }
         makeWindow()
         start()
     }

@@ -24,8 +24,10 @@
 #       The zip unpacked again: its signature checks out, and its own Node
 #       starts the server with bin/start.mjs, then with bin/launch.mjs
 #       --no-window (what the app runs); /api/status must give the version,
-#       edition release and the check-only Mac updater; POST /api/shutdown
-#       stops it each time.
+#       edition release and the Mac updater; POST /api/shutdown stops it each
+#       time. Then, as after an in-app update: with a version installed in
+#       Application Support and its mark there, the app's launch.mjs starts
+#       that one (HOME is a scratch folder).
 #
 # Environment: NODE_VERSION (v24.22.0), MACOS_MIN (13.5: Node 24's own
 # minimum, as in launcher/mac/Info.plist), VERSION (package.json's).
@@ -173,6 +175,27 @@ smoke() {
     return 1
   fi
   wait_status
+  shutdown_server
+
+  # An in-app update puts the new version in Application Support and marks it there (never in the app).
+  echo "$(basename "$zip"): a version installed in Application Support is the one the app starts"
+  local home="$check/home"
+  local support="$home/Library/Application Support/CicaTavern"
+  local installed="$support/CicaTavern-${VERSION}-mac"
+  mkdir -p "$support/update"
+  ditto "$folder" "$installed"
+  INSTALLED="$installed" VERSION="$VERSION" node -e 'console.log(JSON.stringify({ path: process.env.INSTALLED, version: process.env.VERSION }))' > "$support/update/superseded.json"
+  if ! (cd "$folder" && HOME="$home" runtime/node bin/launch.mjs --no-window --port "$port" --data "$data"); then
+    cat "$data/logs/server.log" || true
+    return 1
+  fi
+  wait_status
+  if ! pgrep -f "$installed/bin/start.mjs" > /dev/null; then
+    echo "the server did not start from $installed"
+    shutdown_server
+    return 1
+  fi
+  echo "  started from $installed"
   shutdown_server
   rm -rf "$check"
 }

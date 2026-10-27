@@ -1,9 +1,10 @@
 // The macOS build: the staged tree inside CicaTavern.app (scripts/stage-release.mjs
-// --platform mac), the check-only updater, and the system proxy from scutil.
+// --platform mac), the updater (new versions in Application Support), and the system proxy from scutil.
 // Nothing here needs a Mac: the darwin Node is a dummy and scutil's output is canned.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import http from 'node:http'
@@ -13,7 +14,7 @@ import { fileURLToPath } from 'node:url'
 import { featuresOf } from '../server/edition.mjs'
 import { parseMacProxy, createProxy } from '../server/proxy.mjs'
 import { createUpdater } from '../server/update/index.mjs'
-import { inAppBundle, installBase, stateDir, userAppData } from '../server/update/install.mjs'
+import { inAppBundle, installBase, isInstall, macFolder, markDir, removeInstall, stageMacInstall, stateDir, userAppData } from '../server/update/install.mjs'
 import { assetKind, latestFile, releaseInfo } from '../server/update/release.mjs'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -88,7 +89,7 @@ test('stage-release --platform mac: refuses a Node for the other processor, a zi
 
 // ─── Updates: check only ────────────────────────────────────────────────
 
-test('the release on macOS checks for updates but does not install them', () => {
+test('the release on macOS has the Mac updater', () => {
   assert.equal(featuresOf('release', 'darwin').updates, 'mac')
   assert.equal(featuresOf('release', 'win32').updates, 'zip')
   assert.equal(featuresOf('personal', 'darwin').updates, null, 'a git checkout on a Mac has no updater')
@@ -130,7 +131,7 @@ test('the Mac disk image is the "mac" asset when the release has it beside the z
   assert.deepEqual(file.assets.map(asset => asset.name), files, 'latest.json carries both')
 })
 
-test('the Mac updater: installable means "has a download page"; downloading is refused; state stays out of the .app', async t => {
+test('the Mac updater: installable from the app; nothing to download without a newer release; state stays out of the .app', async t => {
   const dir = await scratch(t)
   const root = path.join(dir, 'Applications', 'CicaTavern.app', 'Contents', 'Resources', 'app')
   await mkdir(path.join(root, 'runtime'), { recursive: true })
@@ -146,6 +147,101 @@ test('the Mac updater: installable means "has a download page"; downloading is r
   const state = path.join(home, 'Library', 'Application Support', 'CicaTavern', 'update', 'state.json')
   assert.equal(JSON.parse(readFileSync(state, 'utf8')).autoCheck, false, 'kept in Application Support')
   assert.equal(existsSync(path.join(root, 'update')), false, 'nothing written into the bundle')
+})
+
+/** The programs inside CicaTavern.app (Contents/Resources/app) at `dir`, as a release of `version` has them. */
+async function macPrograms(dir, version) {
+  for (const file of ['bin/launch.mjs', 'bin/start.mjs', 'server/http.mjs', 'runtime/node']) {
+    await mkdir(path.dirname(path.join(dir, file)), { recursive: true })
+    await writeFile(path.join(dir, file), '')
+  }
+  await writeFile(path.join(dir, 'edition.json'), JSON.stringify({ edition: 'release' }))
+  await writeFile(path.join(dir, 'package.json'), JSON.stringify({ version }))
+  return dir
+}
+
+/** A stand-in for ditto: "unpacks" a zip by writing the app it names (its text: the version inside). */
+const fakeDitto = async (zip, out) => macPrograms(path.join(out, 'CicaTavern.app', 'Contents', 'Resources', 'app'), readFileSync(zip, 'utf8'))
+
+test('stageMacInstall: the app\'s programs only, into Application Support; version, files and Node checked; nothing left on failure', async t => {
+  const dir = await scratch(t)
+  const base = path.join(dir, 'support')
+  await mkdir(base, { recursive: true })
+  const zip = path.join(dir, 'CicaTavern-2.0.2-mac-arm64.zip')
+  await writeFile(zip, '2.0.2')
+  let checked = null
+  const folder = await stageMacInstall(zip, { base, version: '2.0.2', check: async node => { checked = node }, unpack: fakeDitto })
+  assert.equal(folder, path.join(base, macFolder('2.0.2')))
+  assert.ok(isInstall(folder))
+  assert.equal(checked, path.join(path.dirname(checked), 'node'))
+  assert.ok(checked.split(path.sep).join('/').endsWith('/CicaTavern.app/Contents/Resources/app/runtime/node') && checked.includes('.partial-'), 'its Node is tried before it is moved into place')
+  await assert.rejects(stageMacInstall(zip, { base, version: '2.0.3', check: async () => {}, unpack: fakeDitto }), /不是 2\.0\.3/)
+  await assert.rejects(stageMacInstall(zip, { base, version: '2.0.2', check: async () => { throw new Error('node 运行不了') }, unpack: fakeDitto }), /运行不了/)
+  await assert.rejects(stageMacInstall(zip, { base, version: '2.0.2', check: async () => {}, unpack: async () => {} }), /不是 Mac 发布版/)
+  assert.deepEqual(readdirSync(base).sort(), [macFolder('2.0.2')], 'no .partial folders left')
+})
+
+test('the Mac app\'s marks live in Application Support; a version in the app is never deleted', async t => {
+  const dir = await scratch(t)
+  const env = { HOME: path.join(dir, 'home') }
+  const root = await macPrograms(path.join(dir, 'Applications', 'CicaTavern.app', 'Contents', 'Resources', 'app'), '2.0.1')
+  assert.equal(markDir(root, env, 'darwin'), path.join(userAppData(env, 'darwin'), 'CicaTavern', 'update'))
+  const installed = await macPrograms(path.join(userAppData(env, 'darwin'), 'CicaTavern', macFolder('2.0.2')), '2.0.2')
+  assert.equal(markDir(installed, env, 'darwin'), path.join(installed, 'update'), 'a version in Application Support keeps its own')
+  await assert.rejects(removeInstall(root, { root: installed }), /CicaTavern\.app 自带的版本/)
+})
+
+test('the Mac updater: the newer release\'s zip is downloaded, checked, put in Application Support and switched to', async t => {
+  const dir = await scratch(t)
+  const home = path.join(dir, 'home')
+  const root = await macPrograms(path.join(dir, 'Applications', 'CicaTavern.app', 'Contents', 'Resources', 'app'), '2.0.1')
+  const arch = 'arm64'
+  const zipBytes = Buffer.from('2.0.2')
+  const sha = createHash('sha256').update(zipBytes).digest('hex')
+  const server = http.createServer((req, res) => {
+    const base = `http://127.0.0.1:${server.address().port}`
+    if (req.url === '/repos/Shikasar7/CicaTavern/releases/latest') {
+      const asset = (name, size) => ({ name, size, browser_download_url: `${base}/Shikasar7/CicaTavern/releases/download/v2.0.2/${name}` })
+      res.writeHead(200, { 'content-type': 'application/json' })
+      return res.end(JSON.stringify({
+        tag_name: 'v2.0.2', name: 'CicaTavern 2.0.2', html_url: `${base}/release`,
+        body: `## 校验\n\n\`\`\`\nSHA-256  ${'d'.repeat(64)}  CicaTavern-2.0.2-mac-arm64.dmg\nSHA-256  ${sha}  CicaTavern-2.0.2-mac-arm64.zip\n\`\`\``,
+        assets: [asset('CicaTavern-2.0.2-mac-arm64.dmg', 9), asset('CicaTavern-2.0.2-mac-arm64.zip', zipBytes.length)],
+      }))
+    }
+    if (req.url === '/Shikasar7/CicaTavern/releases/download/v2.0.2/CicaTavern-2.0.2-mac-arm64.zip') {
+      res.writeHead(200, { 'content-length': zipBytes.length })
+      return res.end(zipBytes)
+    }
+    res.writeHead(404)
+    res.end()
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => server.close())
+  const switched = []
+  const updater = createUpdater({
+    features: featuresOf('release', 'darwin'), root, version: '2.0.1', platform: 'darwin', arch, env: { HOME: home }, mirror: null,
+    feed: `http://127.0.0.1:${server.address().port}/repos/Shikasar7/CicaTavern`,
+    check: async () => {}, unpackMac: fakeDitto, onShutdown: () => {},
+    spawnSwitch: async args => { switched.push(args) },
+  })
+  const checked = await updater.check({ force: true })
+  assert.equal(checked.latest.assets.mac.name, 'CicaTavern-2.0.2-mac-arm64.dmg', 'the page offers the dmg')
+  assert.equal(checked.latest.assets.macZip.sha256, sha, 'the update unpacks the zip')
+  await updater.download()
+  let status
+  for (let i = 0; i < 100 && (status = await updater.status()).job.step !== 'ready' && status.job.step !== 'error'; i++) await new Promise(resolve => setTimeout(resolve, 20))
+  assert.equal(status.job.step, 'ready', status.job.error)
+  const support = path.join(userAppData({ HOME: home }, 'darwin'), 'CicaTavern')
+  assert.equal(status.ready.path, path.join(support, macFolder('2.0.2')))
+  assert.ok(isInstall(status.ready.path))
+  assert.deepEqual(readdirSync(support).filter(name => name.endsWith('.zip') || name.includes('.partial')), [], 'the download and the unpacking are gone')
+  const listed = (await updater.installs()).installs
+  assert.deepEqual(listed.map(item => [item.version, item.staged]), [['2.0.2', true]])
+  await updater.apply()
+  assert.equal(switched.length, 1)
+  assert.deepEqual([switched[0].from.path, switched[0].to.path, switched[0].mode], [root, status.ready.path, 'update'])
+  assert.equal(existsSync(path.join(root, 'update')), false, 'nothing written into the app')
 })
 
 test('the Mac updater: when GitHub limits the API, latest.json gives the zip for this Mac\'s processor', async t => {
