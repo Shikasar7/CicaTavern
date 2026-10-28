@@ -442,8 +442,10 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     viewPicture(`/api/media/${chat.id}/${image.file}`, image.prompt, `${image.backend ?? ''} · ${new Date(image.at).toLocaleString()}`)
   }
 
-  function viewPicture(src, caption, meta) {
+  /** @param options.cutout - a cut-out picture (立绘, 表情): shown on a checkerboard. */
+  function viewPicture(src, caption, meta, { cutout = false } = {}) {
     const dialog = $('image-view')
+    dialog.classList.toggle('cutout', cutout)
     dialog.querySelector('img').src = src
     dialog.querySelector('.image-view-prompt').textContent = caption
     dialog.querySelector('.image-view-meta').textContent = meta
@@ -1010,7 +1012,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     const reference = el('input', { type: 'checkbox', name: 'imageReference', checked: media.imageReference })
     const editModel = el('input', { name: 'imageEditModel', value: media.imageEditModel, list: 'image-models', placeholder: t`同上（和生图模型一样）`, spellcheck: 'false' })
     const comfyUrl = el('input', { name: 'comfyUrl', value: media.comfyUrl, spellcheck: 'false' })
-    const workflowInfo = el('span', { class: 'hint', text: workflowText(workflow), 'data-imported': workflow ? '1' : undefined })
+    const workflowInfo = el('span', { class: 'hint', style: 'white-space: pre-line', text: workflowText(workflow), 'data-imported': workflow ? '1' : undefined })
     const workflowInput = el('input', { type: 'file', accept: '.json,application/json', hidden: true })
     workflowInput.onchange = guard(async () => {
       const file = workflowInput.files[0]
@@ -1049,15 +1051,105 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         el('label', {}, [t`生图模型`, el('span', { class: 'select-with-action' }, [model, fetchModels]), modelList]),
       ]),
     ])
-    const comfyBox = el('div', {}, [
-      serviceLinks('comfy'),
-      field(t`ComfyUI 地址`, comfyUrl),
+    // 简单模式 (server/media.mjs simpleWorkflow): no workflow to import, the model picked from what ComfyUI has.
+    const comfyMode = el('select', { name: 'comfyMode' }, [
+      option('workflow', t`导入的工作流`, media.comfyMode),
+      option('simple', t`简单模式：选个模型就能画，不用导入`, media.comfyMode),
+    ])
+    const comfyTemplate = el('select', { name: 'comfyTemplate' }, [
+      option('checkpoint', t`Checkpoint（SD 1.5、SDXL、Illustrious、Pony）`, media.comfyTemplate),
+      option('unet', t`扩散模型 + 文本编码器（Flux、Krea 2、Qwen-Image、Anima…）`, media.comfyTemplate),
+    ])
+    const comfyLists = { checkpoints: [], unets: [], clips: [], clipTypes: [], vaes: [], samplers: [], schedulers: [] }
+    const comfyList = id => el('datalist', { id })
+    const comfyModelList = comfyList('comfy-models')
+    const comfyClipList = comfyList('comfy-clips')
+    const comfyVaeList = comfyList('comfy-vaes')
+    const comfySamplerList = comfyList('comfy-samplers')
+    const comfySchedulerList = comfyList('comfy-schedulers')
+    const comfyText = (name, list, placeholder = '') => el('input', { name, value: media[name] ?? '', list, placeholder, spellcheck: 'false' })
+    const comfyModel = comfyText('comfyModel', 'comfy-models', t`点「读取模型」从 ComfyUI 里选`)
+    const comfyClipType = el('select', { name: 'comfyClipType' })
+    const fillComfyClipTypes = () => {
+      const now = comfyClipType.value || media.comfyClipType || ''
+      const types = [...new Set([...comfyLists.clipTypes, now].filter(Boolean))]
+      comfyClipType.replaceChildren(option('', t`自动（按模型文件名认）`, now), ...types.map(type => option(type, type, now)))
+    }
+    fillComfyClipTypes()
+    const comfyVae = comfyText('comfyVae', 'comfy-vaes')
+    const comfySteps = el('input', { name: 'comfySteps', type: 'number', min: '1', max: '150', step: '1', value: String(media.comfySteps ?? 24) })
+    const comfyCfg = el('input', { name: 'comfyCfg', type: 'number', min: '0', max: '30', step: '0.5', value: String(media.comfyCfg ?? 6) })
+    const comfySampler = comfyText('comfySampler', 'comfy-samplers')
+    const comfyScheduler = comfyText('comfyScheduler', 'comfy-schedulers')
+    const fillList = (list, names) => list.replaceChildren(...names.map(name => el('option', { value: name })))
+    const fillComfyModels = () => fillList(comfyModelList, comfyTemplate.value === 'unet' ? comfyLists.unets : comfyLists.checkpoints)
+    const readComfyModels = el('button', { type: 'button', class: 'btn small', text: t`读取模型` })
+    readComfyModels.onclick = guard(async () => {
+      Object.assign(comfyLists, await api('/api/media/comfy/models', { method: 'POST', body: { url: comfyUrl.value.trim() } }))
+      fillComfyModels()
+      fillList(comfyClipList, comfyLists.clips)
+      fillList(comfyVaeList, comfyLists.vaes)
+      fillList(comfySamplerList, comfyLists.samplers)
+      fillList(comfySchedulerList, comfyLists.schedulers)
+      fillComfyClipTypes()
+      toast(t`ComfyUI 里有 ${comfyLists.checkpoints.length} 个 Checkpoint、${comfyLists.unets.length} 个扩散模型，点输入框选`)
+      comfyModel.focus()
+    })
+    const comfyUnetFields = el('div', { class: 'grid' }, [
+      field(t`文本编码器`, comfyText('comfyClip', 'comfy-clips')),
+      field(t`第二个文本编码器`, comfyText('comfyClip2', 'comfy-clips', t`只有 Flux 要（clip_l），别的留空`)),
+      field(t`编码器类型`, comfyClipType),
+    ])
+    const comfySimpleBox = el('div', {}, [
+      field(t`模型类型`, comfyTemplate),
+      el('label', {}, [t`模型`, el('span', { class: 'select-with-action' }, [comfyModel, readComfyModels]), comfyModelList]),
+      comfyUnetFields,
+      field('VAE', comfyVae),
+      el('div', { class: 'grid' }, [
+        field(t`步数`, comfySteps),
+        field('CFG', comfyCfg),
+        el('label', {}, [t`采样器`, comfySampler, comfySamplerList]),
+        el('label', {}, [t`调度器`, comfyScheduler, comfySchedulerList]),
+      ]),
+      comfyClipList,
+      comfyVaeList,
+      comfySchedulerList,
+      el('p', { class: 'hint', text: t`列出的是 ComfyUI 现在装着的模型。加速版（Turbo、Lightning、LCM）一般 4–8 步、CFG 1；Flux 和 Krea 2 的 CFG 也是 1。卡和名册角色的 LoRA 照样加，提示词写法 SD 系选「标签」，Flux、Krea 2、Qwen 选「自然语言」。` }),
+    ])
+    // A diffusion model is drawn the way its kind usually is: CFG 1, the simple comfyScheduler.
+    const syncComfyTemplate = () => {
+      const unet = comfyTemplate.value === 'unet'
+      comfyUnetFields.hidden = !unet
+      comfyVae.placeholder = unet ? t`扩散模型要单独选 VAE` : t`留空用模型自带的`
+      fillComfyModels()
+    }
+    comfyTemplate.onchange = () => {
+      const unet = comfyTemplate.value === 'unet'
+      if (comfyCfg.value === (unet ? '6' : '1')) comfyCfg.value = unet ? '1' : '6'
+      if (comfyScheduler.value === (unet ? 'normal' : 'simple')) comfyScheduler.value = unet ? 'simple' : 'normal'
+      syncComfyTemplate()
+    }
+    syncComfyTemplate()
+    const workflowBox = el('div', {}, [
       el('div', { class: 'workflow-row' }, [
         el('button', { type: 'button', class: 'btn small', text: t`导入工作流`, onclick: () => workflowInput.click() }),
         workflowInput,
         workflowInfo,
       ]),
-      el('p', { class: 'hint', text: t`在 ComfyUI 里把正向提示词写成 %prompt%（不要写 {{prompt}}，导出时花括号会被 ComfyUI 去掉），然后「导出（API）」再导入。种子每次自动随机；要用酒馆的宽高和参考图，在 JSON 里把宽、高写成 "%width%" "%height%"，LoadImage 写 "%char_avatar%"（会上传这张卡的头像）。SillyTavern 的 ComfyUI 工作流可以直接导入。` }),
+      el('p', { class: 'hint', text: t`在 ComfyUI 里「导出（API）」再导入就行：酒馆顺着采样器找到正向和负面提示词、宽高，种子每次自动随机。要指定写在哪，把正向提示词写成 %prompt%（不要写 {{prompt}}，导出时花括号会被 ComfyUI 去掉）、负面写 %negative_prompt%；要用参考图，LoadImage 写 "%char_avatar%"（会上传这张卡的头像）。SillyTavern 的 ComfyUI 工作流可以直接导入。` }),
+    ])
+    const syncComfyMode = () => {
+      comfySimpleBox.hidden = comfyMode.value !== 'simple'
+      workflowBox.hidden = comfyMode.value === 'simple'
+    }
+    comfyMode.onchange = syncComfyMode
+    syncComfyMode()
+    const comfyBox = el('div', {}, [
+      serviceLinks('comfy'),
+      field(t`ComfyUI 地址`, comfyUrl),
+      field(t`工作流`, comfyMode),
+      workflowBox,
+      comfySimpleBox,
     ])
     const naiTokenHint = el('span', { class: 'hint nai-token-hint' })
     const showNaiToken = info => naiTokenText(naiTokenHint, info)
@@ -1179,7 +1271,8 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       if (backend.value === 'openai' && !model.value.trim()) return t`没填生图模型`
       if (backend.value === 'gemini' && !geminiProvider.value) return t`没选供应商`
       if (backend.value === 'novelai' && !novelai?.hasToken && !naiToken.value.trim()) return t`没填令牌`
-      if (backend.value === 'comfy' && !workflowInfo.dataset.imported) return t`没导入工作流`
+      if (backend.value === 'comfy' && comfyMode.value === 'simple' && !comfyModel.value.trim()) return t`没选模型`
+      if (backend.value === 'comfy' && comfyMode.value !== 'simple' && !workflowInfo.dataset.imported) return t`没导入工作流`
       const own = ownBackend(backend.value)
       if (own && !own.ready) return own.need
       return ''
@@ -2477,7 +2570,13 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     if (!info) return t`还没导入工作流`
     // Shown as written for import (server/media.mjs keeps them as {{prompt}} and so on).
     const written = { prompt: 'prompt', negative: 'negative_prompt', seed: 'seed', width: 'width', height: 'height', reference: 'char_avatar' }
-    return t`已导入：${info.nodes} 个节点，占位符 ${info.placeholders.map(p => `%${written[p] ?? p}%`).join(' ')}`
+    const lines = [t`已导入：${info.nodes} 个节点，占位符 ${info.placeholders.map(p => `%${written[p] ?? p}%`).join(' ')}`]
+    // What the tavern can change in it (server/media.mjs sizeNodes, withNegative): a server before these says nothing.
+    if (info.size && !info.size.set.length) lines.push(t`找不到酒馆能改的宽高，选的画幅不会生效：把 Empty Latent Image 的宽高改成 %width% 和 %height%，再导出（API）导入`)
+    if (info.size?.other.length) lines.push(t`${info.size.other.slice(0, 3).join(t`、`)} 也定了尺寸，酒馆不改它，画出来可能不是选的画幅`)
+    if (info.unguided) lines.push(t`CFG 是 1（加速版模型常这样），负面提示词不起作用：立绘的「不要背景」只靠正面提示词，抠不干净时可以多画几张`)
+    else if (info.negative === false) lines.push(t`负面提示词加不进去，立绘的「不要背景」用不上：把负面提示词改成 %negative_prompt%，再导出（API）导入`)
+    return lines.join('\n')
   }
 
   const save = guard(async (form, hasCard) => {
@@ -2499,6 +2598,8 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         imageReference: checked('imageReference'),
         imageEditModel: value('imageEditModel'),
         comfyUrl: value('comfyUrl'),
+        ...(form.elements.comfyMode ? Object.fromEntries(['comfyMode', 'comfyTemplate', 'comfyModel', 'comfyClip', 'comfyClip2', 'comfyClipType', 'comfyVae', 'comfySampler', 'comfyScheduler'].map(name => [name, value(name)])) : {}),
+        ...(form.elements.comfySteps ? { comfySteps: Number(value('comfySteps') || 24), comfyCfg: Number(value('comfyCfg') || 0) } : {}),
         geminiImageProvider: value('geminiImageProvider'),
         geminiImageModel: value('geminiImageModel'),
         geminiReference: checked('geminiReference'),
@@ -2562,5 +2663,5 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
   $('player-stop').addEventListener('click', () => player.stop())
   loadSettings()
 
-  return { settings: () => state.settings, openLibrary, toolsFor: mediaTools, gallery, openSettings, setCard, afterTurn, flags, readBeat, fillQuick, stopReading: () => player.stop(), toggleReading: () => player.toggle() }
+  return { settings: () => state.settings, openLibrary, toolsFor: mediaTools, gallery, openSettings, viewPicture, setCard, afterTurn, flags, readBeat, fillQuick, stopReading: () => player.stop(), toggleReading: () => player.toggle() }
 }

@@ -109,10 +109,11 @@ If you can't quite say what you want, the creator guides you round by round:
 
 <br clear="right">
 
-## Latest changes [2.0.5]
+## Latest changes [2.0.6]
 
-<p align="center"><img src="web/whatsnew/2.0.5-sprites.webp" alt="2.0.5: sprites and character pictures drawn upright at the aspect you pick, in the card's style, standing in the visual novel (sample picture)" width="880"></p>
+<p align="center"><img src="web/whatsnew/2.0.6-comfy.webp" alt="2.0.6: ComfyUI's simple mode, no workflow to import, pick one of the models your ComfyUI has and draw" width="880"></p>
 
+- **ComfyUI: pick a model and draw (2.0.6)**: ComfyUI has a simple mode, with no workflow to build, export or import: click Read models and pick one (a checkpoint, or a diffusion model like Flux, Krea 2 or Qwen-Image with its text encoder); workflows exported straight from ComfyUI import too, and portrait no longer comes out wide; the visual novel's sprites, expressions and scenes open full size, with drawing progress shown in their window; old versions can be cleared after an in-app update.
 - **Sprites you can actually use (2.0.5)**: the aspect you pick is the one drawn, so sprites and character pictures come out upright instead of leaning across a wide frame; the card's LoRA and style reach the visual novel's sprites, character pictures and expressions; a change in the cast list reaches the sprite at once; ComfyUI says why when it fails.
 - **Context compaction your way (2.0.3)**: the top bar shows how much context a chat uses; the share at which it becomes a story archive, a token cap, and compacting right away or reminding you first are all settings, and the model's limit is found for you. Compact context lets you pick the model that writes the archive, and a story that is too long always has a way on. The macOS beta gets a disk image and in-app updates.
 - **Fixes (2.0.2)**: when the Android app cannot reach a service abroad such as Fish Audio, it says what to do, and a failed connection names its error code; Fish Audio is marked as needing a proxy in mainland China; a few display problems in the settings window, the top bar and dark mode.

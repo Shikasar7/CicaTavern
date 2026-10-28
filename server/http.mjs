@@ -708,6 +708,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     // The bridge's own path, so a tavern elsewhere (the phone) can use this one as its voice service.
     ['GET', /^\/api\/persona\/list$/, () => media.personaList()],
     ['GET', /^\/api\/media\/loras$/, () => media.loras()],
+    ['POST', /^\/api\/media\/comfy\/models$/, (_, body) => media.comfyModels(body?.url)],
     ['GET', /^\/api\/cards\/([\w-]+)\/media$/, ([id]) => media.cardMediaView(id)],
     ['PUT', /^\/api\/cards\/([\w-]+)\/media$/, ([id], body) => media.saveCardMedia(id, body)],
     ['POST', /^\/api\/cards\/([\w-]+)\/roster\/draft$/, ([id]) => media.draftRoster(id, AbortSignal.timeout(180000))],
@@ -1658,10 +1659,14 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       // The daily check by itself waits for the 隐私与网络 notice; 检查更新 is the user asking.
       if (req.method === 'GET' && action === '/') return view(await (url.searchParams.get('auto') === '1' && (await allowed()) ? updater.check() : updater.status()))
       if (req.method === 'POST' && action === '/check') return view(await updater.check({ force: true }))
-      if (req.method === 'PUT' && action === '/settings') return view(await updater.setAutoCheck(body.autoCheck !== false))
+      if (req.method === 'PUT' && action === '/settings') {
+        // Deleting old folders after an update is this computer's choice, like deleting them by hand.
+        if (body.cleanOld !== undefined && !local) return sendJson(res, 403, { error: msg`只能在这台电脑上更新` })
+        return view(await updater.settings({ autoCheck: body.autoCheck, cleanOld: body.cleanOld }))
+      }
       if (req.method === 'POST' && action === '/ack') return view(await updater.acknowledge())
       if (req.method === 'POST' && action === '/skip') return view(await updater.skip(body.version))
-      const own = { 'GET /installs': () => updater.installs(), 'POST /download': () => updater.download({ source: body.source }), 'POST /cancel': () => updater.cancel(), 'POST /apply': () => updater.apply(), 'POST /rollback': () => updater.rollback(), 'POST /remove': () => updater.remove(body.path) }[`${req.method} ${action}`]
+      const own = { 'GET /installs': () => updater.installs(), 'POST /download': () => updater.download({ source: body.source }), 'POST /cancel': () => updater.cancel(), 'POST /apply': () => updater.apply(), 'POST /rollback': () => updater.rollback(), 'POST /remove': () => updater.remove(body.path), 'POST /clean': () => updater.clean() }[`${req.method} ${action}`]
       if (!own) return sendJson(res, 404, { error: msg`没有这个接口` })
       if (!local) return sendJson(res, 403, { error: msg`只能在这台电脑上更新` })
       return view(await own())

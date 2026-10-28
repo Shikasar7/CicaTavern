@@ -44,6 +44,9 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms).unref?.())
 
 // The steps while an update is being fetched, set up or switched to: nothing else may start meanwhile.
 const UPDATING = ['downloading', 'verifying', 'unpacking', 'restarting']
+// 更新完自动清理旧版本 waits this long after the switch: bin/update-apply.mjs runs from the old folder and exits
+// right after writing result.json, and Windows will not delete a node.exe that is still running.
+const CLEAN_AFTER_MS = 15_000
 
 function failure(status, message) {
   return Object.assign(new Error(message), { status })
@@ -161,6 +164,7 @@ export function createUpdater({
   let job = { step: 'idle' } // downloading | verifying | unpacking | ready | restarting | error
   let controller = null
   let checking = null
+  let cleanTimer = null
 
   async function stateFolder() {
     dir ??= await stateDir(root, env)
@@ -196,6 +200,7 @@ export function createUpdater({
     const newer = Boolean(latest && compareVersions(latest.version, version) > 0)
     const ready = kind === 'zip' ? staged(state) : null
     const result = persist && kind === 'zip' ? await readJson(path.join(await stateFolder(), 'result.json')) : null
+    if (result?.ok && result.mode === 'update') await cleanAfterUpdate(state, result)
     return {
       enabled: true,
       kind,
@@ -204,6 +209,8 @@ export function createUpdater({
       installable: !notInstallable(),
       reason: notInstallable(),
       autoCheck: state.autoCheck !== false,
+      cleanOld: state.cleanOld === true,
+      lastClean: saved.lastClean ?? null,
       checkedAt: state.checkedAt || null,
       checkError: state.error,
       latest,
@@ -344,9 +351,15 @@ export function createUpdater({
     return status()
   }
 
-  async function setAutoCheck(on) {
+  /** 自动检查更新 and 更新完自动清理旧版本; a setting left out stays as it is. */
+  async function settings({ autoCheck, cleanOld } = {}) {
     if (!kind) throw failure(404, msg`这个版本不用应用内更新`)
-    await save({ autoCheck: Boolean(on) })
+    const patch = {}
+    if (autoCheck !== undefined) patch.autoCheck = autoCheck !== false
+    if (cleanOld !== undefined) patch.cleanOld = cleanOld === true
+    // Turned on, it starts with the next update: the folders the last one left stay (先留着 with 以后自动清理).
+    if (patch.cleanOld && persist && kind === 'zip') patch.cleaned = (await readJson(path.join(await stateFolder(), 'result.json')))?.at ?? null
+    await save(patch)
     return status()
   }
 
@@ -519,6 +532,41 @@ export function createUpdater({
     return installs()
   }
 
+  /** 清理旧版本: every package folder older than this one, except one downloaded and not used yet. */
+  async function clean() {
+    if (kind !== 'zip' || notInstallable()) throw failure(400, msg`这个版本不能在应用里清理旧版本`)
+    if (UPDATING.includes(job.step)) throw failure(409, msg`正在更新，等一会儿再删`)
+    const removed = []
+    const failed = []
+    for (const item of (await installs()).installs) {
+      if (item.staged || compareVersions(item.version, version) >= 0) continue
+      try {
+        await removeInstall(item.path, { root, dataRoot })
+        removed.push({ version: item.version, bytes: item.bytes })
+      } catch (error) {
+        failed.push({ version: item.version, path: item.path, error: error.message })
+      }
+    }
+    return { removed, failed, ...(await installs()) }
+  }
+
+  /** 更新完自动清理旧版本: once per update, a little after the switch (CLEAN_AFTER_MS). */
+  async function cleanAfterUpdate(state, result) {
+    if (state.cleanOld !== true || state.cleaned === result.at || notInstallable()) return
+    const wait = CLEAN_AFTER_MS - (now() - Date.parse(result.at))
+    if (wait > 0) {
+      cleanTimer ??= setTimeout(() => {
+        cleanTimer = null
+        status().catch(() => {})
+      }, wait + 200)
+      cleanTimer.unref?.()
+      return
+    }
+    await save({ cleaned: result.at })
+    const { removed, failed } = await clean().catch(error => ({ removed: [], failed: [{ error: error.message }] }))
+    await save({ lastClean: { at: result.at, removed, failed } })
+  }
+
   async function acknowledge() {
     if (persist && kind === 'zip') await rm(path.join(await stateFolder(), 'result.json'), { force: true })
     if (job.step === 'error') job = { step: 'idle' }
@@ -533,7 +581,7 @@ export function createUpdater({
   /** Whether an update is downloading, being set up or switched to (the idle exit waits for it). */
   const working = () => UPDATING.includes(job.step)
 
-  return { kind, status, check: checkNow, setAutoCheck, download, cancel, apply, rollback, installs, remove, acknowledge, skip, working }
+  return { kind, status, check: checkNow, settings, download, cancel, apply, rollback, installs, remove, clean, acknowledge, skip, working }
 }
 
 /** Start bin/update-apply.mjs from this install, detached, so it outlives this server. */

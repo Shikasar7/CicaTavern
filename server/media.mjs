@@ -42,6 +42,18 @@ export const DEFAULT_MEDIA = Object.freeze({
   imageEditModel: '', // model for /images/edits; empty = imageModel (some gateways split generate and edit models)
   promptStyle: 'natural', // 'natural' sentences or comma-separated 'tags' (SD-style workflows)
   comfyUrl: 'http://127.0.0.1:8188',
+  // ComfyUI's 简单模式: no workflow imported, one built from the model picked (simpleWorkflow).
+  comfyMode: 'workflow', // 'workflow' (the imported one) | 'simple'
+  comfyTemplate: 'checkpoint', // 'checkpoint' (SD 1.5, SDXL…) | 'unet' (a diffusion model with its text encoder and VAE apart: Flux, Krea 2, Qwen-Image…)
+  comfyModel: '', // a file in ComfyUI's checkpoints, or in diffusion_models for 'unet'
+  comfyClip: '', // 'unet': the text encoder, and a second one (Flux's clip_l) or ''
+  comfyClip2: '',
+  comfyClipType: '', // 'unet': CLIPLoader's type; '' = told from the model's name (clipTypeOf)
+  comfyVae: '', // '' = the checkpoint's own (needed for 'unet')
+  comfySteps: 24,
+  comfyCfg: 6,
+  comfySampler: 'euler',
+  comfyScheduler: 'normal',
   geminiImageProvider: '', // a provider with Google's key: Gemini's own image models (generateContent)
   geminiImageModel: 'gemini-2.5-flash-image',
   geminiReference: true, // cast members in the frame with a reference picture: sent along, so the faces stay
@@ -216,6 +228,23 @@ export function cleanMedia(input, previous = DEFAULT_MEDIA, defaults = DEFAULT_M
     value[key] = url || defaults[key]
   }
   if (source.naiV5Empty === 'v45' || source.naiV5Empty === 'anlas') value.naiV5Empty = source.naiV5Empty
+  if (source.comfyMode === 'workflow' || source.comfyMode === 'simple') value.comfyMode = source.comfyMode
+  if (source.comfyTemplate === 'checkpoint' || source.comfyTemplate === 'unet') value.comfyTemplate = source.comfyTemplate
+  for (const key of ['comfyModel', 'comfyClip', 'comfyClip2', 'comfyVae']) {
+    if (typeof source[key] !== 'string') continue
+    // ComfyUI's own file names, a subfolder in front at most.
+    const name = source[key].trim()
+    if (name && (name.length > 300 || /\.\.|^[\\/]|[<>"|?*\u0000-\u001f]/.test(name))) throw httpError(400, msg`模型文件名不对：${name.slice(0, 60)}`)
+    value[key] = name
+  }
+  for (const key of ['comfyClipType', 'comfySampler', 'comfyScheduler']) {
+    if (typeof source[key] !== 'string') continue
+    const name = source[key].trim()
+    if (name && !/^[\w.+-]{1,60}$/.test(name)) throw httpError(400, msg`ComfyUI 的选项名不对：${name.slice(0, 60)}`)
+    value[key] = name || (key === 'comfyClipType' ? '' : DEFAULT_MEDIA[key])
+  }
+  if (source.comfySteps !== undefined && Number.isFinite(Number(source.comfySteps))) value.comfySteps = Math.min(150, Math.max(1, Math.round(Number(source.comfySteps))))
+  if (source.comfyCfg !== undefined && Number.isFinite(Number(source.comfyCfg))) value.comfyCfg = Math.min(30, Math.max(0, Math.round(Number(source.comfyCfg) * 10) / 10))
   text('ttsProvider', 40)
   if (typeof source.ttsModel === 'string') {
     const model = source.ttsModel.trim()
@@ -263,10 +292,10 @@ export function withLora(workflow, { name, strength = 0.8 }) {
   const find = test => Object.keys(workflow).find(id => test(workflow[id]))
   const checkpoint = find(node => node?.class_type === 'CheckpointLoaderSimple' || typeof node?.inputs?.ckpt_name === 'string')
   const loaderId = checkpoint ?? find(node => typeof node?.inputs?.unet_name === 'string')
-  if (!loaderId) throw httpError(400, msg`工作流里没有加载模型的节点（Load Checkpoint 或 Load Diffusion Model），加不了 LoRA`)
+  const loraId = String(Math.max(0, ...Object.keys(workflow).map(Number).filter(Number.isFinite)) + 1)
+  if (!loaderId) return withSamplerLora(workflow, { name, strength, loraId })
   // The outputs the LoRA stands in for: MODEL and CLIP of a checkpoint, MODEL of a diffusion model.
   const taken = checkpoint ? [0, 1] : [0]
-  const loraId = String(Math.max(0, ...Object.keys(workflow).map(Number).filter(Number.isFinite)) + 1)
   const out = {}
   for (const [id, node] of Object.entries(workflow)) {
     const inputs = Object.fromEntries(
@@ -280,6 +309,34 @@ export function withLora(workflow, { name, strength = 0.8 }) {
   out[loraId] = checkpoint
     ? { class_type: 'LoraLoader', _meta: { title: 'Card LoRA' }, inputs: { lora_name: name, strength_model: strength, strength_clip: strength, model: [loaderId, 0], clip: [loaderId, 1] } }
     : { class_type: 'LoraLoaderModelOnly', _meta: { title: 'Card LoRA' }, inputs: { lora_name: name, strength_model: strength, model: [loaderId, 0] } }
+  return out
+}
+
+/**
+ * A loader the tavern doesn't know (a custom node pack's, which may load the
+ * model, text encoder and VAE in one): a LoraLoaderModelOnly goes on the model
+ * each sampler (or guider) takes, whatever came before it.
+ */
+function withSamplerLora(workflow, { name, strength, loraId }) {
+  const takesModel = node => Array.isArray(node?.inputs?.model) && ['positive', 'negative', 'conditioning'].some(key => Array.isArray(node.inputs[key]))
+  if (!Object.values(workflow).some(takesModel)) throw httpError(400, msg`工作流里找不到采样器用的模型，加不了 LoRA`)
+  const loras = new Map()
+  let next = Number(loraId)
+  const out = {}
+  for (const [id, node] of Object.entries(workflow)) {
+    if (!takesModel(node)) {
+      out[id] = node
+      continue
+    }
+    // Two samplers on one model (a second pass) share one LoRA.
+    const from = node.inputs.model.join(':')
+    if (!loras.has(from)) {
+      const lora = String(next++)
+      loras.set(from, lora)
+      out[lora] = { class_type: 'LoraLoaderModelOnly', _meta: { title: 'Card LoRA' }, inputs: { lora_name: name, strength_model: strength, model: node.inputs.model } }
+    }
+    out[id] = { ...node, inputs: { ...node.inputs, model: [loras.get(from), 0] } }
+  }
   return out
 }
 
@@ -528,6 +585,8 @@ export function fillWorkflow(workflow, values) {
     if (NUMERIC.has(text.trim())) return Number(values[text.trim().slice(2, -2)])
     return text.replace(/\{\{(prompt|negative|seed|width|height|reference)\}\}/g, (_, key) => String(values[key] ?? ''))
   })
+  // One picture is all that's used: a workflow exported to draw four at a time draws one.
+  for (const node of Object.values(filled)) if (typeof node?.inputs?.batch_size === 'number') node.inputs.batch_size = 1
   // ComfyUI's number fields take no placeholder: without {{seed}} the samplers' own seeds are
   // replaced, or every redraw of a picture would be the same one.
   if (values.seed == null || JSON.stringify(workflow).includes('{{seed}}')) return filled
@@ -542,56 +601,190 @@ export function fillWorkflow(workflow, values) {
 const LATENT_SIZE = [['width', 'height'], ['empty_latent_width', 'empty_latent_height']]
 
 /**
- * A workflow whose size is written in (no {{width}} / {{height}}: the usual
- * export, where the size is a number field) drawn at the shape of
- * `width`×`height`: each latent size in it already that shape is kept, one the
- * other way round is turned, and between square and not it takes that ratio
- * at its own number of pixels (an SD 1.5 workflow stays small), in steps of 64.
+ * The [width, height] a Resolution Selector (ComfyUI's own: an aspect ratio
+ * like "16:9 (Widescreen)" and megapixels) works out, as it does, or null.
+ */
+function pickedSize(node) {
+  const inputs = node?.inputs ?? {}
+  const ratio = /^\s*(\d+)\s*:\s*(\d+)/.exec(typeof inputs.aspect_ratio === 'string' ? inputs.aspect_ratio : '')
+  if (!ratio || typeof inputs.megapixels !== 'number') return null
+  const [w, h] = [Number(ratio[1]), Number(ratio[2])]
+  const multiple = typeof inputs.multiple === 'number' && inputs.multiple > 0 ? inputs.multiple : 8
+  const scale = Math.sqrt((inputs.megapixels * 1024 * 1024) / (w * h))
+  return [Math.round((w * scale) / multiple) * multiple, Math.round((h * scale) / multiple) * multiple]
+}
+
+/**
+ * A number an input stands for: the number, or one linked from a node that
+ * holds just that number (an Int or Primitive constant) or works it out from a
+ * ratio (a Resolution Selector).
+ */
+function numberAt(workflow, value) {
+  if (typeof value === 'number') return value
+  if (!Array.isArray(value)) return null
+  const node = workflow[String(value[0])]
+  const picked = pickedSize(node)
+  if (picked) return picked[value[1]] ?? null
+  const numbers = Object.values(node?.inputs ?? {}).filter(item => typeof item === 'number')
+  return numbers.length === 1 ? numbers[0] : null
+}
+
+const PLACED = /\{\{(width|height)\}\}/
+
+/** The [width, height] input names of a node that sets the latent's size as the tavern can change it, or null. */
+function latentSize(workflow, node) {
+  const inputs = node?.inputs ?? {}
+  for (const [w, h] of LATENT_SIZE) {
+    if (w === 'width' && !/latent/i.test(node?.class_type ?? '')) continue
+    if (numberAt(workflow, inputs[w]) > 0 && numberAt(workflow, inputs[h]) > 0) return [w, h]
+  }
+  return null
+}
+
+/**
+ * Where a workflow's size is set: `set`, the nodes the tavern sizes (latents
+ * with numbers or {{width}}/{{height}}); `other`, the nodes with a size of
+ * their own it leaves alone (a resize after the decode, an aspect-ratio
+ * picker, a size written as text), each as "class id".
+ */
+export function sizeNodes(workflow) {
+  const set = []
+  const other = []
+  // A Resolution Selector feeding a latent the tavern sizes: the latent takes numbers instead, so it no longer decides.
+  const feeding = new Set()
+  for (const node of Object.values(workflow ?? {})) {
+    for (const key of latentSize(workflow, node) ?? []) if (Array.isArray(node.inputs[key])) feeding.add(String(node.inputs[key][0]))
+  }
+  for (const [id, node] of Object.entries(workflow ?? {})) {
+    const inputs = node?.inputs ?? {}
+    const label = `${node?.class_type} ${id}`
+    if (latentSize(workflow, node) || LATENT_SIZE.some(pair => pair.some(key => PLACED.test(String(inputs[key] ?? ''))))) {
+      set.push(label)
+      continue
+    }
+    if (feeding.has(id)) continue
+    // SDXL's text encoder takes sizes too, for its conditioning only.
+    if (/CLIPTextEncode/i.test(node?.class_type ?? '')) continue
+    const sized = (numberAt(workflow, inputs.width) > 0 && numberAt(workflow, inputs.height) > 0) || ['dimensions', 'resolution', 'aspect_ratio'].some(key => typeof inputs[key] === 'string')
+    if (sized) other.push(label)
+  }
+  return { set, other }
+}
+
+/**
+ * A workflow drawn at the shape of `width`×`height`: each latent size written in
+ * as a number (the usual export, or an Int node linked to it) that is already
+ * that shape is kept, one the other way round is turned, and between square and
+ * not it takes that ratio at its own number of pixels (an SD 1.5 workflow stays
+ * small), in steps of 64. Ones written as {{width}} / {{height}} are filled with
+ * the size as it is (fillWorkflow).
  */
 export function fitSize(workflow, width, height) {
-  if (/\{\{(width|height)\}\}/.test(JSON.stringify(workflow))) return workflow
   const ratio = width / height
   const shape = shapeOfRatio(ratio)
   const step = n => Math.max(64, Math.round(n / 64) * 64)
   const out = {}
   for (const [id, node] of Object.entries(workflow)) {
-    const inputs = { ...node?.inputs }
-    for (const [w, h] of LATENT_SIZE) {
-      const sized = (w === 'width' ? /latent/i.test(node?.class_type ?? '') : true) && typeof inputs[w] === 'number' && typeof inputs[h] === 'number' && inputs[w] > 0 && inputs[h] > 0
-      if (!sized) continue
-      const own = shapeOfRatio(inputs[w] / inputs[h])
-      if (own === shape) continue
-      if (own !== 'square' && shape !== 'square') {
-        ;[inputs[w], inputs[h]] = [inputs[h], inputs[w]]
-        continue
-      }
+    const pair = latentSize(workflow, node)
+    if (!pair) {
+      out[id] = node
+      continue
+    }
+    const [w, h] = pair
+    const inputs = { ...node.inputs, [w]: numberAt(workflow, node.inputs[w]), [h]: numberAt(workflow, node.inputs[h]) }
+    const own = shapeOfRatio(inputs[w] / inputs[h])
+    if (own !== shape && own !== 'square' && shape !== 'square') {
+      ;[inputs[w], inputs[h]] = [inputs[h], inputs[w]]
+    } else if (own !== shape) {
       const pixels = inputs[w] * inputs[h]
       inputs[w] = step(Math.sqrt(pixels * ratio))
       inputs[h] = step(Math.sqrt(pixels / ratio))
     }
-    out[id] = node && typeof node === 'object' ? { ...node, inputs } : node
+    out[id] = { ...node, inputs }
   }
   return out
+}
+
+/** A picture's [width, height] from its PNG or JPEG header, or null. */
+export function pictureSize(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 24) return null
+  if (buffer.readUInt32BE(0) === 0x89504e47) return [buffer.readUInt32BE(16), buffer.readUInt32BE(20)]
+  if (buffer[0] !== 0xff || buffer[1] !== 0xd8) return null
+  for (let at = 2; at + 9 < buffer.length;) {
+    if (buffer[at] !== 0xff) return null
+    const marker = buffer[at + 1]
+    // A start-of-frame (not DHT, JPG or DAC) holds the size.
+    if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) return [buffer.readUInt16BE(at + 7), buffer.readUInt16BE(at + 5)]
+    at += 2 + buffer.readUInt16BE(at + 2)
+  }
+  return null
 }
 
 /**
  * A negative prompt for a workflow without {{negative}}: added after the text
  * of each text encoder a sampler takes as its negative (a 立绘's "detailed
- * background", a background's "people"): its text, or both of SDXL's (text_g, text_l).
+ * background", a background's "people"): its text, both of SDXL's (text_g, text_l),
+ * or the negative of a loader that writes the prompts itself.
  */
 export function withNegative(workflow, negative) {
   if (!negative || JSON.stringify(workflow).includes('{{negative}}')) return workflow
-  const ids = new Set(Object.values(workflow).map(node => node?.inputs?.negative).filter(Array.isArray).map(link => String(link[0])))
+  // One text for both: the negative would go into the prompt too.
+  const positive = new Set(promptTargets(workflow, 'positive').map(({ id, key }) => `${id}:${key}`))
   const out = { ...workflow }
-  for (const id of ids) {
-    const node = workflow[id]
-    const inputs = { ...node?.inputs }
-    const keys = ['text', 'text_g', 'text_l'].filter(key => typeof inputs[key] === 'string')
-    if (!keys.length) continue
-    for (const key of keys) inputs[key] = [inputs[key].replace(/[,，\s]+$/, ''), negative].filter(Boolean).join(', ')
-    out[id] = { ...node, inputs }
+  for (const { id, key } of promptTargets(workflow, 'negative')) {
+    if (positive.has(`${id}:${key}`)) continue
+    const inputs = { ...out[id].inputs }
+    inputs[key] = [inputs[key].replace(/[,，\s]+$/, ''), negative].filter(Boolean).join(', ')
+    out[id] = { ...out[id], inputs }
   }
   return out
+}
+
+// Where nodes hold a prompt's words: CLIP encoders (SD's text, SDXL's text_g and text_l,
+// SD3's and Flux's clip_l and t5xxl), and text, string and primitive nodes feeding them.
+const TEXT_KEYS = ['text', 'text_g', 'text_l', 'clip_g', 'clip_l', 't5xxl', 'string', 'prompt', 'value']
+const TEXT_NODE = /text|prompt|string|primitive/i
+
+/**
+ * Where the prompt the samplers take as `role` ('positive' or 'negative') is
+ * written, as [{ id, key }] of literal texts: followed back from each sampler
+ * (or guider) through links, past text nodes feeding the encoder and the
+ * ControlNets or conditioning nodes in between, at most 8 nodes deep. A zeroed
+ * conditioning has none. (DSH Tavern's image plugin reads workflows this way.)
+ */
+function promptTargets(workflow, role) {
+  const found = new Map()
+  for (const node of Object.values(workflow)) {
+    const link = node?.inputs?.[role]
+    if (!Array.isArray(link)) continue
+    const seen = new Set()
+    const queue = [[String(link[0]), 0]]
+    while (queue.length) {
+      const [id, hop] = queue.shift()
+      const at = workflow[id]
+      if (!at || seen.has(id) || hop > 8) continue
+      seen.add(id)
+      const type = String(at.class_type ?? '')
+      if (/ConditioningZeroOut/i.test(type)) continue
+      const inputs = at.inputs ?? {}
+      const follow = value => Array.isArray(value) && queue.push([String(value[0]), hop + 1])
+      // A loader that encodes the prompts itself (the Efficient Loader) holds them as its own positive and negative.
+      if (typeof inputs[role] === 'string') {
+        found.set(`${id}:${role}`, { id, key: role })
+        continue
+      }
+      // A concatenation's first part is usually the separator.
+      const keys = TEXT_NODE.test(type) ? (/StringConcatenate/i.test(type) ? ['string_b'] : TEXT_KEYS).filter(key => key in inputs) : []
+      if (keys.length) {
+        for (const key of keys) typeof inputs[key] === 'string' ? found.set(`${id}:${key}`, { id, key }) : follow(inputs[key])
+        continue
+      }
+      // A ControlNet takes both and passes each on its own way; other conditioning nodes pass on theirs.
+      if (Array.isArray(inputs.positive) && Array.isArray(inputs.negative)) follow(inputs[role])
+      else for (const [key, value] of Object.entries(inputs)) if (/conditioning/i.test(key)) follow(value)
+    }
+  }
+  return [...found.values()]
 }
 
 // What the families are called to the player.
@@ -620,7 +813,7 @@ export function modelFamily(meta, name = '') {
  * the player: a file it does not have named, else the first node's error. '' when
  * the answer says nothing usable.
  */
-export function comfyRefusal(text) {
+export function comfyRefusal(text, { simple = false } = {}) {
   let json
   try {
     json = JSON.parse(String(text ?? ''))
@@ -635,6 +828,8 @@ export function comfyRefusal(text) {
   }
   const { input_name: input, received_value: value } = first.extra_info ?? {}
   if (first.type === 'value_not_in_list' && input === 'lora_name') return msg`ComfyUI 里没有 LoRA「${value}」：到「画风与 LoRA」或角色名册里重新选一个（选的时候 ComfyUI 要开着）`
+  // 简单模式: the file was picked in the settings, not written in a workflow.
+  if (first.type === 'value_not_in_list' && input && simple) return msg`ComfyUI 里没有「${value}」（${input}）：在「配图与朗读」的简单模式里点「读取模型」重新选`
   if (first.type === 'value_not_in_list' && input) return msg`ComfyUI 里没有「${value}」（${node.class_type} 节点 ${id} 的 ${input}）：把工作流里的文件名改成 ComfyUI 里有的，再导入`
   const details = String(first.details ?? '').slice(0, 160)
   return msg`ComfyUI 不接受这个工作流：${node.class_type} 节点 ${id}：${first.message}${details ? msg`（${details}）` : ''}`
@@ -649,12 +844,82 @@ export function comfyFailure(entry) {
   return msg`ComfyUI 执行出错：${failed.node_type} 节点 ${failed.node_id}：${said}${memory}`
 }
 
+// CLIPLoader's type for a diffusion model, by its name: the families whose files say what they are.
+const CLIP_TYPES = [
+  [/flux/i, 'flux'],
+  [/krea/i, 'krea2'],
+  [/qwen/i, 'qwen_image'],
+  [/anima/i, 'stable_diffusion'],
+  [/sd3|stable.?diffusion.?3/i, 'sd3'],
+  [/hidream/i, 'hidream'],
+  [/chroma/i, 'chroma'],
+  [/lumina|neta|z.?image/i, 'lumina2'],
+]
+
+/** The text encoder type a diffusion model takes, told from its file name, or ''. */
+export function clipTypeOf(model) {
+  return CLIP_TYPES.find(([name]) => name.test(String(model ?? '')))?.[1] ?? ''
+}
+
+/**
+ * ComfyUI's 简单模式: the workflow for the model picked in the settings, with
+ * the tavern's placeholders in it, or null when no model is picked. A
+ * checkpoint: its own text encoder and VAE. A diffusion model: its text
+ * encoder (two for Flux: DualCLIPLoader) and VAE loaded apart. One empty
+ * latent serves both: ComfyUI gives it the channels the model takes.
+ */
+export function simpleWorkflow(media) {
+  const model = String(media?.comfyModel ?? '').trim()
+  if (!model) return null
+  const unet = media.comfyTemplate === 'unet'
+  const workflow = {}
+  let modelOut
+  let clipOut
+  let vaeOut
+  if (unet) {
+    if (!media.comfyClip) throw httpError(400, msg`ComfyUI 简单模式还没选文本编码器：在「配图与朗读」里点「读取模型」选一个`)
+    if (!media.comfyVae) throw httpError(400, msg`ComfyUI 简单模式还没选 VAE：在「配图与朗读」里点「读取模型」选一个`)
+    const type = media.comfyClipType || clipTypeOf(model)
+    if (!type) throw httpError(400, msg`认不出「${model}」要哪种文本编码器：在简单模式里选一下编码器类型`)
+    workflow[1] = { class_type: 'UNETLoader', inputs: { unet_name: model, weight_dtype: 'default' } }
+    workflow[2] = media.comfyClip2
+      ? { class_type: 'DualCLIPLoader', inputs: { clip_name1: media.comfyClip, clip_name2: media.comfyClip2, type } }
+      : { class_type: 'CLIPLoader', inputs: { clip_name: media.comfyClip, type } }
+    ;[modelOut, clipOut] = [['1', 0], ['2', 0]]
+  } else {
+    workflow[1] = { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: model } }
+    ;[modelOut, clipOut, vaeOut] = [['1', 0], ['1', 1], ['1', 2]]
+  }
+  if (media.comfyVae) {
+    workflow[3] = { class_type: 'VAELoader', inputs: { vae_name: media.comfyVae } }
+    vaeOut = ['3', 0]
+  }
+  workflow[4] = { class_type: 'CLIPTextEncode', _meta: { title: 'Positive' }, inputs: { text: '{{prompt}}', clip: clipOut } }
+  workflow[5] = { class_type: 'CLIPTextEncode', _meta: { title: 'Negative' }, inputs: { text: '{{negative}}', clip: clipOut } }
+  workflow[6] = { class_type: 'EmptyLatentImage', inputs: { width: '{{width}}', height: '{{height}}', batch_size: 1 } }
+  workflow[7] = {
+    class_type: 'KSampler',
+    inputs: {
+      seed: '{{seed}}', steps: media.comfySteps ?? DEFAULT_MEDIA.comfySteps, cfg: media.comfyCfg ?? DEFAULT_MEDIA.comfyCfg,
+      sampler_name: media.comfySampler || DEFAULT_MEDIA.comfySampler, scheduler: media.comfyScheduler || DEFAULT_MEDIA.comfyScheduler, denoise: 1,
+      model: modelOut, positive: ['4', 0], negative: ['5', 0], latent_image: ['6', 0],
+    },
+  }
+  workflow[8] = { class_type: 'VAEDecode', inputs: { samples: ['7', 0], vae: vaeOut } }
+  workflow[9] = { class_type: 'SaveImage', inputs: { filename_prefix: 'cicatavern', images: ['8', 0] } }
+  return workflow
+}
+
 /** An imported workflow as kept: API format, SillyTavern's placeholders written as this app's. */
 export function checkWorkflow(json) {
   if (!json || typeof json !== 'object' || Array.isArray(json)) throw httpError(400, msg`工作流必须是 ComfyUI「导出（API）」的 JSON`)
   const nodes = Object.values(json)
   if (!nodes.length || !nodes.every(n => n && typeof n === 'object' && n.class_type)) throw httpError(400, msg`这不是 API 格式的工作流：在 ComfyUI 里用「导出（API）」`)
   const workflow = mapStrings(json, text => text.replace(/%(prompt|negative_prompt|seed|width|height|char_avatar)%/g, (_, key) => `{{${PERCENT[key]}}}`))
+  // No %prompt%: the prompt goes where the samplers' positive is written, in place of the words exported with it.
+  if (!JSON.stringify(workflow).includes('{{prompt}}')) {
+    for (const { id, key } of promptTargets(workflow, 'positive')) workflow[id].inputs[key] = '{{prompt}}'
+  }
   const text = JSON.stringify(workflow)
   if (!text.includes('{{prompt}}')) throw httpError(400, msg`工作流里没有 %prompt% 占位符：在 ComfyUI 里把正向提示词改成 %prompt% 再导出。不要写 {{prompt}}，ComfyUI 导出时会把花括号去掉，只剩 prompt。`)
   // SillyTavern's others (%model%, %steps%…): ComfyUI would refuse the words as values.
@@ -875,6 +1140,44 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     }
   }
 
+  /** The workflow pictures are drawn with: the imported one, or in 简单模式 the one built from the model picked. */
+  async function drawingWorkflow(media) {
+    const now = media ?? (await settings())
+    return now.comfyMode === 'simple' ? simpleWorkflow(now) : loadWorkflow()
+  }
+
+  /**
+   * What the connected ComfyUI has for 简单模式 to pick from (its /object_info):
+   * the files for each loader, the text encoder types, samplers and schedulers.
+   * @param url - the address typed in the form, or the saved one.
+   */
+  async function comfyModels(url) {
+    const media = await settings()
+    const base = typeof url === 'string' && url.trim() ? cleanMedia({ comfyUrl: url }, media).comfyUrl : media.comfyUrl
+    const nodes = ['CheckpointLoaderSimple', 'UNETLoader', 'CLIPLoader', 'DualCLIPLoader', 'VAELoader', 'KSampler']
+    let info
+    try {
+      info = Object.assign({}, ...(await Promise.all(nodes.map(async node => JSON.parse((await fetchBytes(`${base}/object_info/${node}`, { signal: AbortSignal.timeout(8000) })).buffer.toString('utf8'))))))
+    } catch (error) {
+      throw httpError(502, msg`连不上 ComfyUI（${base}）：先把它开起来，地址对了再读取。（${String(error?.message ?? error).slice(0, 120)}）`)
+    }
+    // An input's choices: [[...names], {...}] in the classic form, ['COMBO', { options }] in the newer one.
+    const choices = (node, input) => {
+      const entry = info[node]?.input?.required?.[input] ?? info[node]?.input?.optional?.[input]
+      const list = Array.isArray(entry?.[0]) ? entry[0] : entry?.[1]?.options
+      return Array.isArray(list) ? list.map(String) : []
+    }
+    return {
+      checkpoints: choices('CheckpointLoaderSimple', 'ckpt_name'),
+      unets: choices('UNETLoader', 'unet_name'),
+      clips: [...new Set([...choices('CLIPLoader', 'clip_name'), ...choices('DualCLIPLoader', 'clip_name1')])],
+      clipTypes: [...new Set([...choices('CLIPLoader', 'type'), ...choices('DualCLIPLoader', 'type')])],
+      vaes: choices('VAELoader', 'vae_name'),
+      samplers: choices('KSampler', 'sampler_name'),
+      schedulers: choices('KSampler', 'scheduler'),
+    }
+  }
+
   async function saveWorkflow(json) {
     const workflow = checkWorkflow(json)
     await writeFile(workflowFile, JSON.stringify(workflow, null, 1), 'utf8')
@@ -884,9 +1187,22 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
   function describeWorkflow(json) {
     if (!json) return null
     const text = JSON.stringify(json)
+    let lora = ''
+    try {
+      lora = withLora(json, { name: 'x.safetensors' }) && Object.values(json).some(node => typeof node?.inputs?.ckpt_name === 'string') ? 'checkpoint' : 'model'
+    } catch {
+      // nothing to put a LoRA after
+    }
+    // At CFG 1 (turbo and distilled models) the sampler leaves the negative out altogether.
+    const cfgs = Object.values(json).map(node => node?.inputs?.cfg).filter(cfg => typeof cfg === 'number')
     return {
       nodes: Object.keys(json).length,
       placeholders: ['prompt', 'negative', 'seed', 'width', 'height', 'reference'].filter(key => text.includes(`{{${key}}}`)),
+      // What the tavern changes in it: the size (sizeNodes), the negative of a 立绘 or background, a LoRA.
+      size: sizeNodes(json),
+      negative: text.includes('{{negative}}') || JSON.stringify(withNegative(json, 'x')) !== text,
+      unguided: cfgs.length > 0 && cfgs.every(cfg => cfg <= 1),
+      lora,
     }
   }
 
@@ -1182,7 +1498,9 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
    * @returns { buffer, note }
    */
   async function comfyImage(media, prompt, cardId, signal, cast = null, { scenery = false, negative = '', references = 'all' } = {}) {
-    const imported = await loadWorkflow()
+    const simple = media.comfyMode === 'simple'
+    const imported = await drawingWorkflow(media)
+    if (!imported && simple) throw httpError(400, msg`ComfyUI 简单模式还没选模型：在「配图与朗读」里点「读取模型」选一个`)
     if (!imported) throw httpError(400, msg`还没导入 ComfyUI 工作流：在「配图与朗读」里导入「导出（API）」的 JSON`)
     // No card yet (a card being created): no card LoRA.
     const cardMedia = cardId ? cleanCardMedia((await store.getCard(cardId)).media) : DEFAULT_CARD_MEDIA
@@ -1229,10 +1547,10 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
       queued = JSON.parse((await postJson(`${base}/prompt`, { prompt: filled, client_id: 'agent-tavern' }, { signal })).buffer.toString('utf8'))
     } catch (error) {
       if (signal?.aborted) throw error
-      throw httpError(502, (error.providerStatus === 400 && comfyRefusal(error.body)) || comfyError(error))
+      throw httpError(502, (error.providerStatus === 400 && comfyRefusal(error.body, { simple })) || comfyError(error))
     }
     const id = queued.prompt_id
-    if (!id) throw httpError(502, comfyRefusal(JSON.stringify(queued)) || msg`ComfyUI 没接受这个工作流：${JSON.stringify(queued.node_errors ?? queued.error ?? queued).slice(0, 200)}`)
+    if (!id) throw httpError(502, comfyRefusal(JSON.stringify(queued), { simple }) || msg`ComfyUI 没接受这个工作流：${JSON.stringify(queued.node_errors ?? queued.error ?? queued).slice(0, 200)}`)
     // Ten minutes to draw it, not counting the time it waits behind others in ComfyUI's queue (an hour at most).
     const started = Date.now()
     let deadline = started + comfyWait.run
@@ -1255,7 +1573,10 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
         const image = Object.values(entry.outputs ?? {}).flatMap(out => out.images ?? []).find(img => img.type === 'output') ?? Object.values(entry.outputs ?? {}).flatMap(out => out.images ?? [])[0]
         if (image) {
           const query = new URLSearchParams({ filename: image.filename, subfolder: image.subfolder ?? '', type: image.type ?? 'output' })
-          return { buffer: (await fetchBytes(`${base}/view?${query}`, { signal })).buffer, note: notes.join(' ') }
+          const buffer = (await fetchBytes(`${base}/view?${query}`, { signal })).buffer
+          const drawn = pictureSize(buffer)
+          if (drawn && shapeOfRatio(drawn[0] / drawn[1]) !== shapeOfRatio(width / height)) notes.push(wrongShape(drawn, width / height, withOwner))
+          return { buffer, note: notes.join(' ') }
         }
         if (entry.status?.completed) throw httpError(502, msg`ComfyUI 跑完了，但工作流没有输出图片（要有 SaveImage 或 PreviewImage 节点）`)
       }
@@ -1265,6 +1586,15 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     }
     dropComfyPrompt(base, id).catch(() => {})
     throw httpError(504, waiting ? msg`ComfyUI 一小时还没轮到这张：前面排着别的任务，等它们跑完再画` : msg`ComfyUI 十分钟还没出图`)
+  }
+
+  /** Why a picture came out wide when an upright one was asked for (or the other way round): which nodes the tavern did not size. */
+  function wrongShape([w, h], ratio, workflow) {
+    const name = { square: msg`方图`, portrait: msg`竖图`, landscape: msg`横图` }[shapeOfRatio(ratio)]
+    const { set, other } = sizeNodes(workflow)
+    if (other.length) return msg`ComfyUI 画出来是 ${w}×${h}，不是${name}：工作流里 ${other.slice(0, 3).join(msg`、`)} 也定了尺寸，酒馆不改它。在 ComfyUI 里去掉它，或把它的宽高改成 %width% 和 %height%，再导出（API）导入。`
+    if (!set.length) return msg`ComfyUI 画出来是 ${w}×${h}，不是${name}：工作流里找不到酒馆能改的宽高。在 ComfyUI 里把 Empty Latent Image 的宽高改成 %width% 和 %height%，再导出（API）导入。`
+    return msg`ComfyUI 画出来是 ${w}×${h}，不是${name}：酒馆改了 ${set.join(msg`、`)} 的宽高，画出来的尺寸却是别处定的。把工作流（导出 API 的 JSON）发给开发者看看。`
   }
 
   /** Whether a prompt is still waiting its turn in ComfyUI's queue (not when the queue can't be read). */
@@ -1665,7 +1995,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     if (media.imageBackend === 'comfy') {
       const { buffer, note } = await comfyImage(media, flat, cardId, signal, cast, { scenery, negative, references })
       // A workflow built around a reference picture puts the card's picture into the background too.
-      const referenced = scenery && cardId && references !== 'none' && describeWorkflow(await loadWorkflow().catch(() => null))?.placeholders.includes('reference')
+      const referenced = scenery && cardId && references !== 'none' && describeWorkflow(await drawingWorkflow(media).catch(() => null))?.placeholders.includes('reference')
       return { buffer, note: [note, referenced ? msg`这个 ComfyUI 工作流要参考图，背景里可能会出现人物` : ''].filter(Boolean).join(' '), backend: 'ComfyUI' }
     }
     if (media.imageBackend === 'novelai') {
@@ -1756,7 +2086,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     const cast = { scene, characters: [{ entry: lead, action: tags ? [entry.outfit, look.tags].filter(Boolean).join(', ') : `with ${look.words}`, position: '' }], solo: lead, lead }
     const plain = { ...media, imageShape: 'portrait', imageReference: true, geminiReference: true, naiReference: true, naiNegative: [media.naiNegative, SPRITE_NEGATIVE].filter(Boolean).join(', '), sdNegative: [media.sdNegative, SPRITE_NEGATIVE].filter(Boolean).join(', ') }
     const result = await render(plain, cardId, cast, cast, '', signal, { references: 'cast', negative: SPRITE_NEGATIVE })
-    const fresh = media.imageBackend === 'sdwebui' || (media.imageBackend === 'comfy' && !describeWorkflow(await loadWorkflow().catch(() => null))?.placeholders.includes('reference'))
+    const fresh = media.imageBackend === 'sdwebui' || (media.imageBackend === 'comfy' && !describeWorkflow(await drawingWorkflow(media).catch(() => null))?.placeholders.includes('reference'))
     const note = fresh ? msg`这种画图方式不能照着立绘改，表情是按长相重新画的，可能和立绘不太一样。` : ''
     return { ...result, note: [result.note, note].filter(Boolean).join(' ') }
   }
@@ -1974,5 +2304,5 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     return listen.transcribe({ media, audio: readAudio(audio, type), names: Array.isArray(names) ? names : [] }, signal)
   }
 
-  return { defaults, settings, cleanSettings, ownBackends: ownBackendViews, naiStatus, setNaiToken, naiCheck, cardMediaView, saveCardMedia, inheritCardMedia, draftRoster, draftRosterFromChat, drawPortrait, drawCardArt, drawAvatar, drawScenery, drawBackdrop, drawSprite, drawExpression, labelExpressions, readRosterRef, saveRosterRef, removeRosterRef, writeImagePrompt, generateImage, readImage, removeImage, removeChatMedia, copyChatMedia, loras, voices: voices.list, personaList: voices.personaList, ttsKeyStatus: voices.ttsKeyStatus, setTtsKey: voices.setTtsKey, voiceKeys: voices.keyStatus, setVoiceKey: voices.setKey, speak, previewVoice, accountVoices, transcribe, loadWorkflow, saveWorkflow, describeWorkflow }
+  return { defaults, settings, cleanSettings, ownBackends: ownBackendViews, naiStatus, setNaiToken, naiCheck, cardMediaView, saveCardMedia, inheritCardMedia, draftRoster, draftRosterFromChat, drawPortrait, drawCardArt, drawAvatar, drawScenery, drawBackdrop, drawSprite, drawExpression, labelExpressions, readRosterRef, saveRosterRef, removeRosterRef, writeImagePrompt, generateImage, readImage, removeImage, removeChatMedia, copyChatMedia, loras, voices: voices.list, personaList: voices.personaList, ttsKeyStatus: voices.ttsKeyStatus, setTtsKey: voices.setTtsKey, voiceKeys: voices.keyStatus, setVoiceKey: voices.setKey, speak, previewVoice, accountVoices, transcribe, loadWorkflow, saveWorkflow, describeWorkflow, comfyModels }
 }

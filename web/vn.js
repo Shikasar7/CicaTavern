@@ -1177,6 +1177,9 @@ export function initVn(deps) {
   // `tried`: 立绘 drawn by themselves once this session; one that still gives no picture (no plain background to cut
   // out) is offered again (画立绘), not drawn again and again.
   const art = { jobs: new Map(), queue: new Map(), failed: new Set(), tried: new Set(), error: null }
+  // The same news in the library (场景 / 立绘): the window covers the chip under the time box.
+  const libraryStatus = el('div', { class: 'vn-library-status', hidden: true, 'aria-live': 'polite' })
+  let libraryClock = null
 
   /**
    * Draws a scene or a 立绘. One runs per card; the rest wait their turn.
@@ -1263,6 +1266,38 @@ export function initVn(deps) {
     }
     sceneChip.replaceChildren(...parts)
     sceneChip.hidden = !parts.length
+    drawLibraryStatus()
+  }
+
+  /** What is being drawn (or failed) for the library's card. Built again only when that changes, so its buttons stay clickable while the seconds tick. */
+  function drawLibraryStatus() {
+    const cardId = getChat()?.cardId
+    const job = cardId ? art.jobs.get(cardId) : null
+    const waiting = cardId ? (art.queue.get(cardId) ?? []).length : 0
+    const failed = art.error?.cardId === cardId ? art.error : null
+    const line = job ? t`正在画「${job.label}」· ${Math.round((Date.now() - job.started) / 1000)} 秒${waiting ? t`，还有 ${waiting} 张排着` : ''}` : ''
+    const shown = [job?.key, job?.started, waiting, failed?.key, failed?.message].join('|')
+    if (shown === libraryStatus.dataset.shown) {
+      if (libraryClock) libraryClock.textContent = line
+      return
+    }
+    libraryStatus.dataset.shown = shown
+    libraryClock = job ? el('span', { text: line }) : null
+    const parts = []
+    if (job) parts.push(el('span', { class: 'vn-library-spin', 'aria-hidden': 'true' }), libraryClock, act(t`取消`, () => job.controller.abort()))
+    if (failed) {
+      parts.push(el('span', { class: 'bad', text: t`「${failed.label}」没画成：${failed.message}` }))
+      parts.push(act(t`重试`, () => {
+        art.failed.delete(failed.key)
+        enqueue(cardId, failed.job)
+      }))
+      parts.push(act(t`关掉`, () => {
+        art.error = null
+        drawChip()
+      }))
+    }
+    libraryStatus.replaceChildren(...parts)
+    libraryStatus.hidden = !parts.length
   }
 
   // ─── Scenes: a background per place, drawn once per card ──────────
@@ -1639,6 +1674,15 @@ export function initVn(deps) {
     return b
   }
 
+  /** A picture in the library that opens full size (web/media.js's image viewer); `cutout` shows it on a checkerboard. */
+  const zoomable = (img, caption, cutout = true) => {
+    if (!deps.viewPicture) return img
+    img.classList.add('zoomable')
+    img.title = t`点击放大`
+    img.addEventListener('click', () => deps.viewPicture(img.src, caption, '', { cutout }))
+    return img
+  }
+
   /** 到了新地点 / 没有立绘的角色说话时: 自动画, 先问, 不画. */
   function artMode(key, label, after = renderLibrary) {
     const seg = el('div', { class: 'seg' }, Object.entries(NEW_ART).map(([value, text]) => {
@@ -1670,8 +1714,10 @@ export function initVn(deps) {
     const kept = (await api(`/api/cards/${cardId}/history`).catch(() => null))?.slots ?? {}
     const body = libraryTab === 'sprites' ? await spriteTab(chat, cardId, kept) : await sceneTab(chat, cardId, kept)
     if (!library) return
+    drawLibraryStatus()
     library.replaceChildren(
       el('div', { class: 'vn-library-top' }, [el('h2', { text: libraryTab === 'sprites' ? t`立绘` : t`场景` }), tabs]),
+      libraryStatus,
       ...body,
       el('form', { method: 'dialog', class: 'row end' }, [el('button', { class: 'btn', text: t`关闭` })]),
     )
@@ -1723,7 +1769,7 @@ export function initVn(deps) {
       artMode('newScene', t`到了新地点：`),
     ])
     const grid = el('div', { class: 'vn-library-grid' }, list.length ? list.map(scene => {
-      const thumb = scene.file ? el('img', { src: `/api/scenes/${cardId}/${scene.file}`, alt: '', loading: 'lazy' }) : el('div', { class: 'vn-library-empty', text: t`没有图` })
+      const thumb = scene.file ? zoomable(el('img', { src: `/api/scenes/${cardId}/${scene.file}`, alt: '', loading: 'lazy' }), scene.name, false) : el('div', { class: 'vn-library-empty', text: t`没有图` })
       const tools = [
         place && scene !== shown ? act(t`用在这里`, async () => {
           // A scene chosen here wins over a pinned turn's picture.
@@ -1813,8 +1859,8 @@ export function initVn(deps) {
       // A 立绘 there that cannot be cut out says why (the picture shown is then the 人设图, or none).
       const troubleLine = el('span', { class: 'muted small', hidden: true })
       spriteFor(cardId, entry).then(found => {
-        thumb.replaceChildren(found ? el('img', { src: found.src, alt: '' }) : el('span', { class: 'muted small', text: t`没有能用的图` }))
         kindLabel.textContent = found ? { sprite: drawnLabel, ref: t`人设图抠出`, avatar: t`头像抠出` }[found.kind] : ''
+        thumb.replaceChildren(found ? zoomable(el('img', { src: found.src, alt: '' }), t`${entry.name} · ${kindLabel.textContent}`) : el('span', { class: 'muted small', text: t`没有能用的图` }))
         const trouble = found?.kind === 'sprite' ? '' : spriteTrouble(cardId, member.id)
         troubleLine.textContent = trouble ? t`${drawnLabel}用不了：${trouble}` : ''
         troubleLine.hidden = !trouble
@@ -1856,7 +1902,7 @@ export function initVn(deps) {
     const cells = names.map(name => {
       const face = faces[name]
       const picture = el('div', { class: 'vn-face-pic' }, [el('span', { class: 'muted small', text: queued(name) ? '…' : '—' })])
-      if (face) cutPicture(`/api/sprites/${cardId}/${face.file}`).then(src => src && picture.replaceChildren(el('img', { src, alt: '' })))
+      if (face) cutPicture(`/api/sprites/${cardId}/${face.file}`).then(src => src && picture.replaceChildren(zoomable(el('img', { src, alt: '' }), t`${entry.name} · ${FACE_LABEL[name]}`)))
       const tools = el('div', { class: 'vn-face-tools' }, [
         act(face ? t`重画` : t`画`, () => drawFace(cardId, entry, name), { disabled: !canDraw || queued(name), title: canDraw ? '' : t`先画或上传立绘（或在名单里放人设图）` }),
         act(t`传`, async () => {

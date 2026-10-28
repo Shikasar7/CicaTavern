@@ -1,12 +1,13 @@
 // 设置 → 更多 → 更新 (server/update/): the version in use, a newer one with its
 // release notes, and on Windows 下载更新 → 重启并更新, 回到上一版 and the old
-// version folders. The phone app downloads the APK itself, checks it and opens
+// version folders (清理旧版本 after an update, or by itself). The phone app downloads the APK itself, checks it and opens
 // the system installer (android ApkUpdate, through window.AgentTavernAndroid);
 // an app without that hands the APK link to the browser. Each package can come
 // from GitHub or the mirror in mainland China (cnb.cool; server/update/release.mjs):
 // the one the check read first, the other a click away.
 // Release notes come from GitHub: they are drawn as text, never as HTML.
 import { locale, t } from '/i18n.js'
+import { compareVersions } from '/shared/whatsnew.js'
 
 const MB = 1024 * 1024
 const mb = bytes => `${(bytes / MB).toFixed(bytes >= 10 * MB ? 0 : 1)} MB`
@@ -134,6 +135,11 @@ export function initUpdate({ api, el, toast, guard, android = null, onChange = (
     const result = info.result
     if (result?.at && recall(RESULT_KEY) !== result.at) {
       remember(RESULT_KEY, result.at)
+      if (result.ok && result.mode === 'update' && cleansHere()) {
+        if (info.cleanOld) toast(info.lastClean?.at === result.at ? t`已更新到 ${result.to}，旧版本已清理` : t`已更新到 ${result.to}，旧版本会自动清理`, 8000)
+        else if (!(await offerClean(result))) toast(t`已更新到 ${result.to}`, 8000)
+        return
+      }
       toast(result.ok ? `${result.mode === 'rollback' ? t`已回到` : t`已更新到`} ${result.to}` : t`更新没成功：${result.error}`, 8000)
       return
     }
@@ -220,6 +226,75 @@ export function initUpdate({ api, el, toast, guard, android = null, onChange = (
   })
 
   const setAuto = guard(async on => set(await api('/api/update/settings', { method: 'PUT', body: { autoCheck: on } })))
+  const setCleanOld = guard(async on => set(await api('/api/update/settings', { method: 'PUT', body: { cleanOld: on } })))
+
+  const versionsOf = list => (list ?? []).map(item => item.version).join(t`、`)
+  /** Old package folders can be deleted from this page: this computer's own package. */
+  const cleansHere = () => info?.kind === 'zip' && info.installable && info.local
+  /** The folders 清理旧版本 deletes: older than this one, not one downloaded and waiting. */
+  const olderOf = list => (list ?? []).filter(item => !item.staged && compareVersions(item.version, info.version) < 0)
+
+  /** 清理旧版本: what it deleted, and what it could not. */
+  async function cleanNow() {
+    const reply = await api('/api/update/clean', { method: 'POST' })
+    installs = reply.installs
+    await load()
+    const freed = reply.removed.reduce((sum, item) => sum + (item.bytes || 0), 0)
+    if (reply.failed.length) toast(t`有 ${reply.failed.length} 个旧版本没删掉：${reply.failed[0].error}`, 9000)
+    else toast(reply.removed.length ? t`已清理 ${reply.removed.length} 个旧版本，腾出 ${mb(freed)}` : t`没有要清理的旧版本`)
+  }
+  const clean = guard(async () => {
+    const older = olderOf(installs ?? (await api('/api/update/installs')).installs)
+    if (!older.length) return toast(t`没有要清理的旧版本`)
+    if (!confirm(t`删除 ${older.length} 个旧版本的文件夹（${versionsOf(older)}，共 ${mb(older.reduce((sum, item) => sum + (item.bytes || 0), 0))}）？\n\n只删程序文件，数据目录不受影响；删掉之后就不能「回到上一版」了。`)) return
+    await cleanNow()
+  })
+
+  /**
+   * Right after an update: the old versions still there, and whether to delete them now, with
+   * 以后更新完自动清理. False when there is nothing to offer (the toast says the update went through).
+   */
+  async function offerClean(result) {
+    let older
+    try {
+      older = olderOf((await api('/api/update/installs')).installs)
+    } catch {
+      return false
+    }
+    if (!older.length) return false
+    const bytes = older.reduce((sum, item) => sum + (item.bytes || 0), 0)
+    const always = el('input', { type: 'checkbox' })
+    const yes = el('button', { type: 'button', class: 'btn primary', text: t`清理旧版本` })
+    const no = el('button', { type: 'button', class: 'btn', text: t`先留着` })
+    const dialog = el('dialog', { class: 'dialog upd-clean', 'aria-label': t`清理旧版本` }, [
+      el('h2', { text: t`已更新到 ${result.to}` }),
+      el('p', { text: t`旧版本的程序文件还留着：${versionsOf(older)}，共 ${mb(bytes)}。留着可以「回到上一版」；删掉不影响数据，角色卡、对话和设置都在数据目录里。` }),
+      el('label', { class: 'check-row' }, [always, t`以后更新完自动清理（在 设置 → 更多 → 更新 里可以改）`]),
+      el('div', { class: 'row upd-clean-actions' }, [no, yes]),
+    ])
+    const close = () => {
+      dialog.close()
+      dialog.remove()
+    }
+    no.addEventListener('click', guard(async () => {
+      if (always.checked) await setCleanOld(true)
+      close()
+    }))
+    yes.addEventListener('click', guard(async () => {
+      yes.disabled = no.disabled = true
+      try {
+        if (always.checked) await api('/api/update/settings', { method: 'PUT', body: { cleanOld: true } })
+        await cleanNow()
+        close()
+      } finally {
+        yes.disabled = no.disabled = false
+      }
+    }))
+    dialog.addEventListener('close', () => dialog.remove())
+    document.body.append(dialog)
+    dialog.showModal()
+    return true
+  }
 
   function progress(job) {
     const total = job.total || 0
@@ -353,6 +428,16 @@ export function initUpdate({ api, el, toast, guard, android = null, onChange = (
     return el('p', { class: 'muted small', text: t`GitHub 没有及时回应，这次的版本信息来自国内镜像 cnb.cool（已核对签名）。` })
   }
 
+  /** What 更新完自动清理旧版本 did last time. */
+  function cleanLine() {
+    const last = info.lastClean
+    if (!last || !cleansHere()) return null
+    const freed = (last.removed ?? []).reduce((sum, item) => sum + (item.bytes || 0), 0)
+    const done = last.removed?.length ? t`上次更新后自动清理了 ${versionsOf(last.removed)}，腾出 ${mb(freed)}。` : ''
+    const left = last.failed?.length ? t`有 ${last.failed.length} 个没删掉：${last.failed[0].error}` : ''
+    return done || left ? el('p', { class: 'hint', text: done + left }) : null
+  }
+
   function resultLine() {
     const result = info.result
     if (!result) return null
@@ -385,6 +470,13 @@ export function initUpdate({ api, el, toast, guard, android = null, onChange = (
         t`自动检查更新（打开时，每天最多一次，访问 GitHub；没有及时回应时也问国内镜像 cnb.cool）`,
       ]),
       el('p', { class: 'hint', text: info.checkError ? t`上次检查没成功：${info.checkError}` : info.checkedAt ? t`上次检查：${new Date(info.checkedAt).toLocaleString(locale)}` : t`还没检查过` }),
+      cleansHere()
+        ? el('label', { class: 'check-row upd-auto' }, [
+          el('input', { type: 'checkbox', checked: info.cleanOld, onchange: event => setCleanOld(event.target.checked) }),
+          t`更新完自动清理旧版本（删掉后不能「回到上一版」；数据目录不受影响）`,
+        ])
+        : null,
+      cleanLine(),
       resultLine(),
     ]
     if (latest && info.newer) {
@@ -427,6 +519,7 @@ export function initUpdate({ api, el, toast, guard, android = null, onChange = (
             ]))
           : [el('p', { class: 'muted small', text: t`旁边没有别的版本。` })]
         : [el('button', { type: 'button', class: 'btn ghost small', text: t`看看旁边的旧版本文件夹`, onclick: loadInstalls })]
+      if (installs && olderOf(installs).length) others.push(el('button', { type: 'button', class: 'btn small danger upd-clean-all', text: t`清理旧版本（${olderOf(installs).length} 个）`, onclick: clean }))
       parts.push(el('details', { class: 'upd-installs', open: Boolean(installs) }, [el('summary', { text: t`旧版本文件夹` }), ...others]))
     }
     box.replaceChildren(...parts.filter(Boolean))

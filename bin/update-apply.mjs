@@ -131,7 +131,7 @@ async function result(dir, value) {
 
 /**
  * Before the new server starts (it reads its state once): it keeps
- * 自动检查更新 and the last check; back on an older version, the daily check
+ * 自动检查更新, 更新完自动清理旧版本 and the last check; back on an older version, the daily check
  * does not offer the newer one again by itself. Harmless when the start fails.
  */
 async function prepare() {
@@ -139,7 +139,7 @@ async function prepare() {
   const toStateDir = await stateDir(to)
   const toState = await readJson(path.join(toStateDir, 'state.json'), {})
   const next = mode === 'update'
-    ? { ...toState, autoCheck: fromState.autoCheck !== false, checkedAt: fromState.checkedAt ?? 0, latest: fromState.latest ?? null, error: null, staged: null }
+    ? { ...toState, autoCheck: fromState.autoCheck !== false, cleanOld: fromState.cleanOld === true, checkedAt: fromState.checkedAt ?? 0, latest: fromState.latest ?? null, error: null, staged: null }
     : { ...toState, skipped: fromVersion, staged: null }
   await writeJsonFile(path.join(toStateDir, 'state.json'), next).catch(error => log(`state.json: ${error.message}`))
 }

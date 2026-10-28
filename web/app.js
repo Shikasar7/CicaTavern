@@ -3184,6 +3184,7 @@ const vnUi = initVn({
   toggleReading: () => mediaUi.toggleReading(),
   mediaFlags: () => mediaUi.flags(),
   openMedia: section => mediaUi.openSettings(section),
+  viewPicture: (src, caption, meta, options) => mediaUi.viewPicture(src, caption, meta, options),
 })
 
 /**

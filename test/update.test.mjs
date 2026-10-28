@@ -486,6 +486,59 @@ test('old folders: listed beside the running one; never the running one or one h
   assert.ok(existsSync(holdsData))
 })
 
+test('清理旧版本: the older folders go, a newer one stays; after an update it runs by itself when asked, a while later, once', async t => {
+  let clock = Date.parse('2026-10-28T08:00:00Z')
+  const elsewhere = await scratch(t)
+  const { call, base, root } = await tavern(t, { version: '2.0.5', update: { now: () => clock, env: { LOCALAPPDATA: elsewhere } } })
+  const older = await makeInstall(path.join(base, packageFolder('2.0.3')), '2.0.3')
+  const oldest = await makeInstall(path.join(base, packageFolder('2.0.0')), '2.0.0')
+  const newer = await makeInstall(path.join(base, packageFolder('2.0.6')), '2.0.6')
+
+  let status = (await call('/api/update/settings', { method: 'PUT', body: { cleanOld: true } })).body
+  assert.equal(status.cleanOld, true)
+  assert.equal(status.autoCheck, true, 'a setting left out stays as it was')
+  await mkdir(path.join(root, 'update'), { recursive: true })
+  await writeFile(path.join(root, 'update', 'result.json'), JSON.stringify({ ok: true, mode: 'update', from: '2.0.3', to: '2.0.5', at: new Date(clock).toISOString() }))
+  await call('/api/update')
+  assert.ok(existsSync(older), 'not right after the switch: update-apply.mjs may still be running from the old folder')
+  clock += 20_000
+  status = (await call('/api/update')).body
+  assert.equal(existsSync(older), false)
+  assert.equal(existsSync(oldest), false)
+  assert.ok(existsSync(newer), 'a newer version is not an old one')
+  assert.deepEqual(status.lastClean.removed.map(item => item.version).sort(), ['2.0.0', '2.0.3'])
+  assert.ok(status.lastClean.removed.every(item => item.bytes > 0))
+
+  const later = await makeInstall(path.join(base, packageFolder('2.0.4')), '2.0.4')
+  await call('/api/update')
+  assert.ok(existsSync(later), 'once per update')
+  const cleaned = (await call('/api/update/clean', { method: 'POST' })).body
+  assert.deepEqual(cleaned.removed.map(item => item.version), ['2.0.4'])
+  assert.deepEqual(cleaned.failed, [])
+  assert.deepEqual(cleaned.installs.map(item => item.version), ['2.0.6'])
+})
+
+test('清理旧版本 is off by default and never runs after a rollback or a failed update', async t => {
+  let clock = Date.parse('2026-10-28T08:00:00Z')
+  const elsewhere = await scratch(t)
+  const { call, base, root } = await tavern(t, { version: '2.0.5', update: { now: () => clock, env: { LOCALAPPDATA: elsewhere } } })
+  const older = await makeInstall(path.join(base, packageFolder('2.0.3')), '2.0.3')
+  await mkdir(path.join(root, 'update'), { recursive: true })
+  const result = value => writeFile(path.join(root, 'update', 'result.json'), JSON.stringify({ from: '2.0.6', to: '2.0.5', at: new Date(clock - 60_000).toISOString(), ...value }))
+  await result({ ok: true, mode: 'update' })
+  assert.equal((await call('/api/update')).body.cleanOld, false)
+  assert.ok(existsSync(older), 'off by default')
+  await call('/api/update/settings', { method: 'PUT', body: { cleanOld: true } })
+  await call('/api/update')
+  assert.ok(existsSync(older), 'turned on later, it starts with the next update (先留着 with 以后自动清理)')
+  for (const value of [{ ok: true, mode: 'rollback' }, { ok: false, mode: 'update', error: 'x' }]) {
+    clock += 1000
+    await result(value)
+    await call('/api/update')
+    assert.ok(existsSync(older), JSON.stringify(value))
+  }
+})
+
 // ─── The updater through the app ────────────────────────────────────────
 
 test('update: checks once a day by itself, downloads, verifies, unpacks beside; the data folder is untouched', async t => {

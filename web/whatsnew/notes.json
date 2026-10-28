@@ -554,6 +554,45 @@
           }
         }
       ]
+    },
+    {
+      "version": "2.0.6",
+      "date": "2026-10",
+      "items": [
+        {
+          "image": "2.0.6-comfy.webp",
+          "zh": {
+            "title": "ComfyUI 选个模型就能画",
+            "text": "画图方式选 ComfyUI 时多了「简单模式」：不用搭工作流、不用导出导入，点「读取模型」，从 ComfyUI 里装着的模型挑一个就能画。\nCheckpoint（SD 1.5、SDXL、Illustrious）只选模型；Flux、Krea 2、Qwen-Image 这类扩散模型再选文本编码器和 VAE，编码器类型按文件名自动认。画幅、卡的 LoRA、立绘的设置都照样生效。"
+          },
+          "en": {
+            "title": "ComfyUI: pick a model and draw",
+            "text": "ComfyUI now has a simple mode: no workflow to build, export or import. Click Read models and pick one of the models your ComfyUI has.\nA checkpoint (SD 1.5, SDXL, Illustrious) needs just the model; a diffusion model like Flux, Krea 2 or Qwen-Image also takes a text encoder and a VAE, with the encoder type worked out from the file name. Picture shape, the card's LoRA and the sprite settings all still apply."
+          }
+        },
+        {
+          "icon": "🧩",
+          "zh": {
+            "title": "导出的工作流直接能用",
+            "text": "直接从 ComfyUI 导出、没写 %prompt% 的工作流，导入后也会顺着采样器找到提示词的位置，反向提示词和卡的 LoRA 也接得上。\n宽高来自 Int 节点或 Resolution Selector 的工作流，选竖幅也真的画竖幅；尺寸由别的节点决定时，会告诉你该去改哪个节点。"
+          },
+          "en": {
+            "title": "Exported workflows just work",
+            "text": "A workflow exported straight from ComfyUI, with no %prompt% in it, now has its prompt found by following the samplers, and the negative and the card's LoRA go in too.\nWorkflows that take their size from Int nodes or a Resolution Selector draw portrait when you pick portrait; when another node decides the size, you are told which one to change."
+          }
+        },
+        {
+          "icon": "🧹",
+          "zh": {
+            "title": "立绘看得清，旧版本清得掉",
+            "text": "视觉小说的「立绘」「场景」窗口里，立绘、表情和场景图点一下就放大；正在画什么、画了几秒、没画成的原因，都显示在窗口顶部，不会被窗口挡住。\n应用内更新完成后，会问要不要清理旧版本的文件夹，也可以设成以后自动清理；数据目录不受影响。"
+          },
+          "en": {
+            "title": "Sprites up close, old versions cleared",
+            "text": "In the visual novel's Sprites and Scenes window, click a sprite, an expression or a scene to see it full size; what is being drawn, for how long, and why one failed now show at the top of the window instead of behind it.\nAfter an in-app update you are asked whether to delete the old version's folders, and can have it done by itself from then on; your data folder is not touched."
+          }
+        }
+      ]
     }
   ]
 }

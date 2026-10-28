@@ -7,7 +7,7 @@ import path from 'node:path'
 import { baseName, normalizeCard, previousVersion } from '../server/cards.mjs'
 import { createChat } from '../server/chats.mjs'
 import { deflateRawSync } from 'node:zlib'
-import { checkWorkflow, cleanCardMedia, cleanMedia, cleanNaiToken, cleanPrompt, comfyFailure, comfyRefusal, createMedia, fillWorkflow, fitSize, imagePromptRequest, imageSize, loraFor, modelFamily, unzipFirst, withLora, withNegative, withTrigger } from '../server/media.mjs'
+import { checkWorkflow, cleanCardMedia, cleanMedia, cleanNaiToken, cleanPrompt, clipTypeOf, comfyFailure, comfyRefusal, createMedia, fillWorkflow, fitSize, imagePromptRequest, imageSize, loraFor, modelFamily, pictureSize, simpleWorkflow, sizeNodes, unzipFirst, withLora, withNegative, withTrigger } from '../server/media.mjs'
 import { normalizeProvider } from '../server/providers.mjs'
 import { createStore } from '../server/store.mjs'
 
@@ -282,7 +282,7 @@ test('ComfyUI: workflow saved, placeholders filled, avatar uploaded as reference
   assert.deepEqual(withLoraSent[8].inputs.vae, ['4', 2], 'the VAE still comes from the checkpoint')
   assert.equal(withLoraSent[6].inputs.text, 'masterpiece, linxue, 1girl, saluting')
   assert.equal(withTrigger('linxue, smile', 'linxue'), 'linxue, smile')
-  assert.throws(() => withLora({ 1: { class_type: 'KSampler', inputs: {} } }, { name: 'x.safetensors' }), /Load Checkpoint/)
+  assert.throws(() => withLora({ 1: { class_type: 'KSampler', inputs: {} } }, { name: 'x.safetensors' }), /找不到采样器用的模型/)
   assert.throws(() => cleanCardMedia({ lora: '../../secret.safetensors' }), /LoRA/)
   assert.throws(() => cleanCardMedia({ lora: 'notes.txt' }), /LoRA/)
   assert.equal(cleanCardMedia({ loraStrength: 9 }).loraStrength, 2)
@@ -629,7 +629,7 @@ test('scenery (视觉小说 backgrounds): landscape, nobody in it, no reference 
   assert.equal(Object.values(sent).some(node => node.class_type === 'LoraLoader'), false)
   assert.equal(sent[6].inputs.text, 'scenery, no humans, a pier at dusk')
   assert.match(sent[7].inputs.text, /people/)
-  assert.equal(comfy.note, '')
+  assert.doesNotMatch(comfy.note, /人物/, 'no reference picture, so no one in the background')
 
   // The helper's tags start with scenery, no humans; the card's style goes first.
   const tagged = await media.drawScenery({ cardId: card.id, place: '码头' })
@@ -751,7 +751,7 @@ test('fitSize, withNegative and loraFor', () => {
   const efficient = { 1: { class_type: 'Efficient Loader', inputs: { empty_latent_width: 1024, empty_latent_height: 1024 } } }
   assert.deepEqual(fitSize(efficient, 832, 1216)[1].inputs, { empty_latent_width: 832, empty_latent_height: 1216 })
   const placed = { 5: { class_type: 'EmptyLatentImage', inputs: { width: '{{width}}', height: '{{height}}' } } }
-  assert.equal(fitSize(placed, 832, 1216), placed)
+  assert.deepEqual(fitSize(placed, 832, 1216), placed, 'filled with the size as it is')
   assert.deepEqual(fitSize({ 2: { class_type: 'ImageScale', inputs: { width: 512, height: 512 } } }, 832, 1216)[2].inputs, { width: 512, height: 512 }, 'not a latent: left alone')
 
   const sampled = { 3: { class_type: 'KSampler', inputs: { negative: ['7', 0] } }, 7: { class_type: 'CLIPTextEncode', inputs: { text: 'lowres, ' } } }
@@ -902,6 +902,198 @@ test('ComfyUI: a LoRA of another family than the model is said so; SDXL text enc
   const short = createMedia(store, { comfyTimes: { poll: 10, run: 100, queue: 300 } })
   state.pendingUntil = Date.now() + 60_000
   await assert.rejects(short.generateImage(chat, 'root', 'x'), /一小时还没轮到这张/)
+})
+
+/** A PNG's first bytes as ComfyUI sends them: enough for its size to be read. */
+function pngOf(width, height) {
+  const head = Buffer.alloc(33)
+  Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex').copy(head)
+  head.writeUInt32BE(width, 16)
+  head.writeUInt32BE(height, 20)
+  return head
+}
+
+test('ComfyUI 简单模式: a workflow built from the model picked, what ComfyUI has to pick from, drawn with the card LoRA', async t => {
+  // A checkpoint: its own text encoder and VAE, the tavern's placeholders in it.
+  const checkpoint = simpleWorkflow({ ...cleanMedia({ comfyMode: 'simple', comfyModel: 'wai.safetensors' }) })
+  assert.deepEqual(checkpoint[1], { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: 'wai.safetensors' } })
+  assert.deepEqual([checkpoint[8].inputs.vae, checkpoint[3]], [['1', 2], undefined])
+  assert.deepEqual(describeOf(checkpoint), ['prompt', 'negative', 'seed', 'width', 'height'])
+  assert.deepEqual(checkpoint[7].inputs, { seed: '{{seed}}', steps: 24, cfg: 6, sampler_name: 'euler', scheduler: 'normal', denoise: 1, model: ['1', 0], positive: ['4', 0], negative: ['5', 0], latent_image: ['6', 0] })
+  // A diffusion model: encoder and VAE apart, the encoder type told from its name; Flux's two encoders.
+  const krea = simpleWorkflow(cleanMedia({ comfyTemplate: 'unet', comfyModel: 'krea2_turbo_fp8_scaled.safetensors', comfyClip: 'qwen3vl_4b.safetensors', comfyVae: 'qwen_image_vae.safetensors', comfyCfg: 1, comfySteps: 8 }))
+  assert.deepEqual(krea[2], { class_type: 'CLIPLoader', inputs: { clip_name: 'qwen3vl_4b.safetensors', type: 'krea2' } })
+  assert.deepEqual([krea[8].inputs.vae, krea[7].inputs.cfg, krea[7].inputs.steps], [['3', 0], 1, 8])
+  const flux = simpleWorkflow(cleanMedia({ comfyTemplate: 'unet', comfyModel: 'flux1-dev.safetensors', comfyClip: 't5xxl.safetensors', comfyClip2: 'clip_l.safetensors', comfyVae: 'ae.safetensors' }))
+  assert.deepEqual(flux[2].inputs, { clip_name1: 't5xxl.safetensors', clip_name2: 'clip_l.safetensors', type: 'flux' })
+  assert.equal(clipTypeOf('mystery.safetensors'), '')
+  assert.throws(() => simpleWorkflow(cleanMedia({ comfyTemplate: 'unet', comfyModel: 'mystery.safetensors', comfyClip: 'x', comfyVae: 'y' })), /编码器类型/)
+  assert.throws(() => simpleWorkflow(cleanMedia({ comfyTemplate: 'unet', comfyModel: 'flux1-dev.safetensors' })), /文本编码器/)
+  assert.equal(simpleWorkflow(cleanMedia({})), null)
+  assert.throws(() => cleanMedia({ comfyModel: '../../secret.safetensors' }), /模型文件名/)
+  assert.equal(cleanMedia({ comfyModel: 'SDXL\\wai.safetensors' }).comfyModel, 'SDXL\\wai.safetensors')
+  assert.deepEqual([cleanMedia({ comfySteps: 900, comfyCfg: -3 }).comfySteps, cleanMedia({ comfyCfg: -3 }).comfyCfg], [150, 0])
+
+  const { store, chat, media } = await setup(t)
+  const json = (res, body) => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(body))
+  const comfy = await tinyServer(t, {
+    // The classic form ([[names], {}]) and the newer one (['COMBO', { options }]).
+    '/object_info/CheckpointLoaderSimple': (req, res) => json(res, { CheckpointLoaderSimple: { input: { required: { ckpt_name: [['wai.safetensors', 'SDXL\\pony.safetensors'], {}] } } } }),
+    '/object_info/UNETLoader': (req, res) => json(res, { UNETLoader: { input: { required: { unet_name: ['COMBO', { options: ['krea2_turbo.safetensors'] }], weight_dtype: [['default'], {}] } } } }),
+    '/object_info/CLIPLoader': (req, res) => json(res, { CLIPLoader: { input: { required: { clip_name: [['qwen.safetensors'], {}], type: [['stable_diffusion', 'krea2'], {}] } } } }),
+    '/object_info/DualCLIPLoader': (req, res) => json(res, { DualCLIPLoader: { input: { required: { clip_name1: [['qwen.safetensors', 't5xxl.safetensors'], {}], type: [['flux'], {}] } } } }),
+    '/object_info/VAELoader': (req, res) => json(res, { VAELoader: { input: { required: { vae_name: [['ae.safetensors'], {}] } } } }),
+    '/object_info/KSampler': (req, res) => json(res, { KSampler: { input: { required: { sampler_name: [['euler', 'dpmpp_2m'], {}], scheduler: [['normal', 'simple'], {}] } } } }),
+    '/prompt': (req, res) => json(res, { prompt_id: 'p1' }),
+    '/history/p1': (req, res) => json(res, { p1: { status: { completed: true }, outputs: { 9: { images: [{ filename: 'x.png', subfolder: '', type: 'output' }] } } } }),
+    '/view': (req, res) => res.writeHead(200, { 'content-type': 'image/png' }).end(PNG),
+  })
+  assert.deepEqual(await media.comfyModels(comfy.base), {
+    checkpoints: ['wai.safetensors', 'SDXL\\pony.safetensors'],
+    unets: ['krea2_turbo.safetensors'],
+    clips: ['qwen.safetensors', 't5xxl.safetensors'],
+    clipTypes: ['stable_diffusion', 'krea2', 'flux'],
+    vaes: ['ae.safetensors'],
+    samplers: ['euler', 'dpmpp_2m'],
+    schedulers: ['normal', 'simple'],
+  })
+  await assert.rejects(media.comfyModels('http://127.0.0.1:9'), /连不上 ComfyUI/)
+
+  // Simple mode with no model: says so, not "import a workflow".
+  await store.saveSettings({ media: cleanMedia({ imageBackend: 'comfy', comfyUrl: comfy.base, comfyMode: 'simple' }, (await store.getSettings()).media) })
+  await assert.rejects(media.generateImage(chat, 'root', 'a quiet street'), /简单模式还没选模型/)
+  // A model picked: drawn with the built workflow, the card's LoRA after the checkpoint, nothing imported.
+  await store.saveSettings({ media: cleanMedia({ comfyModel: 'wai.safetensors', comfyCfg: 5 }, (await store.getSettings()).media) })
+  const card = await store.getCard(chat.cardId)
+  card.media = cleanCardMedia({ lora: 'linxue.safetensors' })
+  await store.saveCard(card)
+  await media.generateImage(chat, 'root', '1girl, saluting')
+  const sent = comfy.seen.findLast(request => request.url === '/prompt').json.prompt
+  assert.equal(sent[1].inputs.ckpt_name, 'wai.safetensors')
+  assert.equal(sent[10].class_type, 'LoraLoader')
+  assert.deepEqual([sent[7].inputs.cfg, typeof sent[7].inputs.seed, sent[6].inputs.width > 0], [5, 'number', true])
+  assert.match(sent[4].inputs.text, /1girl, saluting/)
+  assert.equal(await media.loadWorkflow(), null, 'the imported workflow is left as it was')
+  // A file ComfyUI doesn't have: pick again in simple mode.
+  const refusal = JSON.stringify({ node_errors: { 1: { class_type: 'CheckpointLoaderSimple', errors: [{ type: 'value_not_in_list', message: 'x', extra_info: { input_name: 'ckpt_name', received_value: 'gone.safetensors' } }] } } })
+  assert.match(comfyRefusal(refusal, { simple: true }), /简单模式里点「读取模型」/)
+})
+
+/** The placeholders a workflow has, as describeWorkflow lists them. */
+function describeOf(workflow) {
+  const text = JSON.stringify(workflow)
+  return ['prompt', 'negative', 'seed', 'width', 'height', 'reference'].filter(key => text.includes(`{{${key}}}`))
+}
+
+test("ComfyUI: a player's own workflow — custom loaders, no %prompt%, prompts behind text and ControlNet nodes, four at a time", () => {
+  // A Krea 2 workflow a player sent: Josia's loader (model, text encoder and VAE in one) and LoRA stack, a zeroed negative.
+  const josia = {
+    72: { class_type: 'JosiaCheckpointPlus', inputs: { main_model: 'Krea2.safetensors', clip_name: 'qwen.safetensors', clip_type: 'krea2', vae_name: 'qwen_image_vae.safetensors' } },
+    84: { class_type: 'JosiaLoraStack', inputs: { lora_count: 1, lora_name_1: 'turbo.safetensors', model: ['72', 0], clip: ['72', 1] } },
+    86: { class_type: 'CLIPTextEncode', inputs: { text: '%prompt%', clip: ['84', 1] } },
+    89: { class_type: 'ConditioningZeroOut', inputs: { conditioning: ['86', 0] } },
+    54: { class_type: 'KSampler', inputs: { seed: 5, cfg: 1, model: ['84', 0], positive: ['86', 0], negative: ['89', 0], latent_image: ['53', 0] } },
+    53: { class_type: 'EmptyLatentImage', inputs: { width: 1024, height: 1024, batch_size: 4 } },
+  }
+  // The card LoRA goes on the model the sampler takes, after their own stack.
+  const lora = withLora(josia, { name: 'linxue.safetensors', strength: 0.8 })
+  assert.deepEqual(lora[90], { class_type: 'LoraLoaderModelOnly', _meta: { title: 'Card LoRA' }, inputs: { lora_name: 'linxue.safetensors', strength_model: 0.8, model: ['84', 0] } })
+  assert.deepEqual(lora[54].inputs.model, ['90', 0])
+  // The zeroed negative has no text to add to: nothing is written into the prompt instead.
+  assert.deepEqual(withNegative(checkWorkflow(josia), 'scenery'), checkWorkflow(josia))
+  assert.equal(fillWorkflow(checkWorkflow(josia), { prompt: 'a girl', seed: 9 })[53].inputs.batch_size, 1)
+
+  // No %prompt%: the words come from a text node feeding the encoder, through a ControlNet; the negative is behind one too.
+  const plain = {
+    4: { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: 'wai.safetensors' } },
+    10: { class_type: 'PrimitiveStringMultiline', _meta: { title: '正向' }, inputs: { value: 'a test girl in a garden' } },
+    6: { class_type: 'CLIPTextEncode', inputs: { text: ['10', 0], clip: ['4', 1] } },
+    7: { class_type: 'CLIPTextEncode', inputs: { text: 'lowres, bad hands', clip: ['4', 1] } },
+    11: { class_type: 'ControlNetApplyAdvanced', inputs: { positive: ['6', 0], negative: ['7', 0], strength: 1, control_net: ['12', 0], image: ['13', 0] } },
+    3: { class_type: 'KSampler', inputs: { seed: 1, model: ['4', 0], positive: ['11', 0], negative: ['11', 1] } },
+  }
+  const imported = checkWorkflow(plain)
+  assert.equal(imported[10].inputs.value, '{{prompt}}')
+  assert.equal(imported[7].inputs.text, 'lowres, bad hands')
+  assert.equal(withNegative(imported, 'scenery')[7].inputs.text, 'lowres, bad hands, scenery')
+  // Flux's encoder and a string joined after a separator.
+  const flux = {
+    6: { class_type: 'CLIPTextEncodeFlux', inputs: { clip_l: 'x', t5xxl: 'x', guidance: 3.5 } },
+    14: { class_type: 'StringConcatenate', inputs: { string_a: 'masterpiece', string_b: 'x', delimiter: ', ' } },
+    7: { class_type: 'CLIPTextEncode', inputs: { text: ['14', 0] } },
+    3: { class_type: 'KSampler', inputs: { positive: ['6', 0], negative: ['7', 0] } },
+  }
+  assert.deepEqual([checkWorkflow(flux)[6].inputs.clip_l, checkWorkflow(flux)[6].inputs.t5xxl], ['{{prompt}}', '{{prompt}}'])
+  assert.equal(withNegative(flux, 'scenery')[14].inputs.string_b, 'x, scenery')
+  // Nothing linked to a sampler's positive: still asked for.
+  assert.throws(() => checkWorkflow({ 1: { class_type: 'KSampler', inputs: {} } }), /%prompt%/)
+})
+
+test('ComfyUI: sizes from linked Int nodes, nodes that set a size the tavern leaves alone, and a picture that came out the wrong shape', async t => {
+  // Width and height linked from Int nodes: written in as numbers, at the shape asked for.
+  const linked = {
+    5: { class_type: 'EmptyLatentImage', inputs: { width: ['12', 0], height: ['13', 0], batch_size: 1 } },
+    12: { class_type: 'PrimitiveInt', inputs: { value: 1344 } },
+    13: { class_type: 'PrimitiveInt', inputs: { value: 768 } },
+  }
+  assert.deepEqual(fitSize(linked, 832, 1216)[5].inputs, { width: 768, height: 1344, batch_size: 1 })
+  // {{width}} on one node no longer keeps the others from being sized.
+  const placed = { 5: { class_type: 'EmptyLatentImage', inputs: { width: '{{width}}', height: '{{height}}' } }, 11: { class_type: 'LatentUpscale', inputs: { width: 1824, height: 1248 } } }
+  assert.deepEqual(fitSize(placed, 832, 1216)[11].inputs, { width: 1248, height: 1824 })
+  // ComfyUI's Resolution Selector set to 16:9: the latent takes its size turned upright, as numbers.
+  const picker = {
+    49: { class_type: 'ResolutionSelector', inputs: { aspect_ratio: '16:9 (Widescreen)', megapixels: 1, multiple: 8 } },
+    53: { class_type: 'EmptyLatentImage', inputs: { width: ['49', 0], height: ['49', 1], batch_size: 1 } },
+  }
+  assert.deepEqual(fitSize(picker, 832, 1216)[53].inputs, { width: 768, height: 1368, batch_size: 1 })
+  assert.deepEqual(fitSize(picker, 1216, 832)[53].inputs, { width: 1368, height: 768, batch_size: 1 })
+  assert.deepEqual(sizeNodes(picker), { set: ['EmptyLatentImage 53'], other: [] })
+  const others = {
+    ...linked,
+    7: { class_type: 'CLIPTextEncodeSDXL', inputs: { width: 1024, height: 1024, text_g: 'x', text_l: 'x' } },
+    20: { class_type: 'ImageScale', inputs: { upscale_method: 'lanczos', width: 1216, height: 832, crop: 'center', image: ['8', 0] } },
+    21: { class_type: 'CR SDXL Aspect Ratio', inputs: { width: 1024, height: 1024, aspect_ratio: '3:2 landscape 1216x832', swap_dimensions: 'Off' } },
+  }
+  assert.deepEqual(sizeNodes(others), { set: ['EmptyLatentImage 5'], other: ['ImageScale 20', 'CR SDXL Aspect Ratio 21'] })
+  // The Efficient Loader writes the prompts itself: the negative goes into its own.
+  const efficient = { 3: { class_type: 'KSampler (Efficient)', inputs: { positive: ['1', 1], negative: ['1', 2] } }, 1: { class_type: 'Efficient Loader', inputs: { positive: '{{prompt}}', negative: 'lowres', empty_latent_width: 1216, empty_latent_height: 832 } } }
+  assert.equal(withNegative(efficient, 'scenery')[1].inputs.negative, 'lowres, scenery')
+  assert.deepEqual(pictureSize(pngOf(1216, 832)), [1216, 832])
+  const jpeg = Buffer.from('ffd8ffe000104a46494600010100000100010000ffc0001108043004c003012200021101031101', 'hex')
+  assert.deepEqual(pictureSize(jpeg), [1216, 1072])
+  assert.equal(pictureSize(Buffer.from('not a picture at all, no')), null)
+
+  const { store, chat, card, media } = await setup(t)
+  const json = (res, body) => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(body))
+  const comfy = await tinyServer(t, {
+    '/prompt': (req, res) => json(res, { prompt_id: 'p1' }),
+    '/history/p1': (req, res) => json(res, { p1: { status: { completed: true }, outputs: { 9: { images: [{ filename: 'x.png', subfolder: '', type: 'output' }] } } } }),
+    '/view': (req, res) => res.writeHead(200, { 'content-type': 'image/png' }).end(pngOf(1216, 832)),
+  })
+  await store.saveSettings({ media: cleanMedia({ imageBackend: 'comfy', comfyUrl: comfy.base }, (await store.getSettings()).media) })
+  // On import: what it can change, and what it can't.
+  const info = await media.saveWorkflow({ ...others, 6: { class_type: 'CLIPTextEncode', inputs: { text: '{{prompt}}' } } })
+  assert.deepEqual(info.size, { set: ['EmptyLatentImage 5'], other: ['ImageScale 20', 'CR SDXL Aspect Ratio 21'] })
+  assert.equal(info.negative, false, 'no sampler takes a negative there')
+  assert.equal(info.unguided, false)
+  await media.saveCardMedia(card.id, { roster: [{ id: 'linxue01', name: '林雪', kind: 'girl', looks: 'short black hair' }] })
+  // A 立绘 asked upright that came out wide says which node decided it.
+  const sprite = await media.drawSprite(card.id, 'linxue01')
+  assert.match(sprite.note, /^ComfyUI 画出来是 1216×832，不是竖图：工作流里 ImageScale 20、CR SDXL Aspect Ratio 21 也定了尺寸/)
+  // Nothing it could size at all.
+  await media.saveWorkflow({ 6: { class_type: 'CLIPTextEncode', inputs: { text: '{{prompt}}' } } })
+  assert.match((await media.drawSprite(card.id, 'linxue01')).note, /找不到酒馆能改的宽高/)
+  // A turbo model at CFG 1 with a zeroed negative: nothing to add a negative to, and it would be left out anyway.
+  const turbo = await media.saveWorkflow({
+    ...picker,
+    6: { class_type: 'CLIPTextEncode', inputs: { text: '{{prompt}}' } },
+    7: { class_type: 'ConditioningZeroOut', inputs: { conditioning: ['6', 0] } },
+    3: { class_type: 'KSampler', inputs: { cfg: 1, positive: ['6', 0], negative: ['7', 0], latent_image: ['53', 0] } },
+  })
+  assert.deepEqual([turbo.size, turbo.negative, turbo.unguided], [{ set: ['EmptyLatentImage 53'], other: [] }, false, true])
+  // Asked wide and drawn wide: nothing to say.
+  await store.saveSettings({ media: cleanMedia({ imageShape: 'landscape' }, (await store.getSettings()).media) })
+  assert.equal((await media.generateImage(chat, 'root', 'a quiet street')).note, undefined)
 })
 
 /** A server answering each path with `routes[path](req, res)`, every request noted. */
