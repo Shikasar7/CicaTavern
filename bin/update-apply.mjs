@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Switch the Windows package from one install folder to another (设置 → 更多 → 更新):
+// Switch the Windows package, or the Mac app's programs, from one install folder to another (设置 → 更多 → 更新):
 //   node bin/update-apply.mjs --from <dir> --to <dir> --version <to's> --from-version <from's>
 //        --mode update|rollback --pid <server pid> --state <dir>
 //        [--relaunch-port <n>] [--relaunch-data <dir>] [--relaunch-edition release]
@@ -12,12 +12,14 @@
 // one does not answer in time, it is stopped and --from starts again with
 // everything as it was. How it went is written to result.json in the updater
 // folder of whichever install runs at the end; the page shows it.
-// The data folder is only passed on to the server (--data); nothing here writes in it.
+// The data folder is only passed on to the server (--data); nothing here writes in it. On a Mac the app's window
+// stays open and its page reconnects; the app's own folder is never written to (its marks go to Application
+// Support: markDir), and there are no shortcuts to point.
 import { spawn } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, openSync, readFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import path from 'node:path'
-import { canonical, readJson, retargetShortcuts, stateDir, UPDATE_DIR, writeJsonFile } from '../server/update/install.mjs'
+import { canonical, markDir, readJson, retargetShortcuts, runtimeNode, stateDir, writeJsonFile } from '../server/update/install.mjs'
 
 const args = process.argv.slice(2)
 const option = name => {
@@ -30,7 +32,7 @@ const toVersion = option('version')
 const fromVersion = option('from-version')
 const mode = option('mode') === 'rollback' ? 'rollback' : 'update'
 const pid = Number(option('pid'))
-const state = option('state') ?? path.join(from, UPDATE_DIR)
+const state = option('state') ?? markDir(from)
 const timeoutMs = Number(option('timeout') ?? 90) * 1000
 const relaunch = Object.fromEntries(args.flatMap((arg, i) => (arg.startsWith('--relaunch-') ? [[arg.slice(11), args[i + 1]]] : [])))
 const port = Number(relaunch.port ?? 8790)
@@ -79,7 +81,7 @@ function startServer(dir) {
   if (dataRoot) pass.push('--data', dataRoot)
   if (relaunch.proxy) pass.push('--proxy', relaunch.proxy)
   if (relaunch.listen) pass.push('--listen', relaunch.listen)
-  const node = path.join(dir, 'runtime', 'node.exe')
+  const node = runtimeNode(dir)
   const child = spawn(existsSync(node) ? node : process.execPath, [path.join(dir, 'bin', 'start.mjs'), ...pass], {
     cwd: dir,
     detached: true,
@@ -148,12 +150,12 @@ async function prepare() {
 async function olderInstalls(start) {
   const found = []
   const seen = new Set([path.resolve(start), path.resolve(to)])
-  let marker = await readJson(path.join(start, UPDATE_DIR, 'previous.json'), null)
+  let marker = await readJson(path.join(markDir(start), 'previous.json'), null)
   while (marker?.path && !seen.has(path.resolve(marker.path)) && found.length < 20) {
     seen.add(path.resolve(marker.path))
     if (!existsSync(marker.path)) break
     found.push(marker.path)
-    marker = await readJson(path.join(marker.path, UPDATE_DIR, 'previous.json'), null)
+    marker = await readJson(path.join(markDir(marker.path), 'previous.json'), null)
   }
   return found
 }
@@ -163,21 +165,21 @@ async function commit() {
   let shortcuts = []
   let shortcutError = null
   try {
-    shortcuts = await retargetShortcuts(from, to, { folders: shortcutFolders })
+    if (process.platform !== 'darwin') shortcuts = await retargetShortcuts(from, to, { folders: shortcutFolders })
   } catch (error) {
     shortcutError = error.message
     log(`shortcuts: ${error.message}`)
   }
-  // Double-clicking the old folder's CicaTavern.exe now opens the new one (bin/launch.mjs).
+  // Double-clicking the old folder's CicaTavern.exe (or opening CicaTavern.app) now opens the new one (bin/launch.mjs).
   const mark = { path: to, version: toVersion, at: new Date().toISOString() }
-  await writeJsonFile(path.join(from, UPDATE_DIR, 'superseded.json'), mark).catch(error => log(`superseded.json: ${error.message}`))
+  await writeJsonFile(path.join(markDir(from), 'superseded.json'), mark).catch(error => log(`superseded.json: ${error.message}`))
   if (mode === 'update') {
-    await writeJsonFile(path.join(to, UPDATE_DIR, 'previous.json'), { path: from, version: fromVersion }).catch(error => log(`previous.json: ${error.message}`))
+    await writeJsonFile(path.join(markDir(to), 'previous.json'), { path: from, version: fromVersion }).catch(error => log(`previous.json: ${error.message}`))
     // The folders before that one too (each previous.json back): an older version's launcher, which follows one
     // mark only, opens this one, and so does any folder whose next one has been deleted since.
-    for (const older of await olderInstalls(from)) await writeJsonFile(path.join(older, UPDATE_DIR, 'superseded.json'), mark).catch(error => log(`superseded.json (${older}): ${error.message}`))
+    for (const older of await olderInstalls(from)) await writeJsonFile(path.join(markDir(older), 'superseded.json'), mark).catch(error => log(`superseded.json (${older}): ${error.message}`))
   }
-  else await rm(path.join(to, UPDATE_DIR, 'superseded.json'), { force: true }).catch(() => {})
+  else await rm(path.join(markDir(to), 'superseded.json'), { force: true }).catch(() => {})
   await result(to, { ok: true, shortcuts: shortcuts.length, shortcutError })
   log(`switched to ${to} (${toVersion}); ${shortcuts.length} shortcut(s)`)
 }
