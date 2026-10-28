@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url'
 import { openAppWindow } from '../server/app-window.mjs'
 import { editionName, featuresOf, packagedEdition } from '../server/edition.mjs'
 import { defaultDataRoot } from '../server/store.mjs'
-import { supersededBy } from '../server/update/install.mjs'
+import { runtimeNode, supersededBy } from '../server/update/install.mjs'
 
 const args = process.argv.slice(2)
 const option = name => {
@@ -40,7 +40,7 @@ function newestInstall(root) {
 
 const newer = args.includes('--no-forward') ? null : newestInstall(path.join(here, '..'))
 if (newer) {
-  const node = path.join(newer.path, 'runtime', 'node.exe')
+  const node = runtimeNode(newer.path)
   const run = spawnSync(existsSync(node) ? node : process.execPath, [path.join(newer.path, 'bin', 'launch.mjs'), ...args, '--no-forward'], { stdio: 'inherit', windowsHide: true })
   process.exit(run.status ?? 1)
 }
