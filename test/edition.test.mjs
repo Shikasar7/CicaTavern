@@ -103,7 +103,7 @@ test('proxy: setting values, overrides and the Windows ProxyServer forms', () =>
 
 test('proxy: system mode prefers Windows settings over stale environment variables', async () => {
   let windows = 'http://127.0.0.1:7897'
-  const network = createProxy({ defaultMode: 'none', env: { HTTP_PROXY: 'http://127.0.0.1:7890' }, readSystem: async () => windows })
+  const network = createProxy({ defaultMode: 'none', env: { HTTP_PROXY: 'http://127.0.0.1:7890' }, readSystem: async () => windows, systemName: 'windows' })
   assert.equal(network.current(), null)
   assert.deepEqual(await network.apply('system'), { mode: 'system', effective: 'http://127.0.0.1:7897', source: 'windows', locked: false })
   windows = null
