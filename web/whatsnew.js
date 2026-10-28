@@ -56,7 +56,7 @@ export function initWhatsNew({ el }) {
     open(due)
   }
 
-  /** The notes of `entries`, else of the running version's series (or the newest there are): 1.8.0, then 1.8.1. */
+  /** The notes of `entries`, else of the running version's series (or the newest there are): 1.8.1, then 1.8.0. */
   async function open(entries) {
     const versions = (await load()).slice().sort((a, b) => compareVersions(b.version, a.version))
     const newest = versions.find(entry => compareVersions(entry.version, current) <= 0) ?? versions[0]

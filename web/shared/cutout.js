@@ -47,6 +47,10 @@ function edgeColour(data, width, height, cleared) {
   let best = null
   for (const entry of counts.values()) if (!best || entry.n > best.n) best = entry
   if (!best || !total) return null
+  // 立绘 and 人设图 are drawn on white: white along a good part of the edge is the background,
+  // even when a figure running off one side has as much of its own colour there (a shirt).
+  const white = [...counts.values()].filter(entry => Math.min(entry.r, entry.g, entry.b) / entry.n >= 224).sort((a, b) => b.n - a.n)[0]
+  if (white && white !== best && white.n / total >= 0.3) best = white
   return { colour: [best.r / best.n, best.g / best.n, best.b / best.n], share: best.n / total }
 }
 
@@ -100,8 +104,11 @@ function clearBars(data, width, height, cleared) {
 /**
  * Clears the background of `image` in place.
  * @param options.tolerance - how far (per channel) a pixel may be from the background colour and still be background.
- * @returns {{ ok: boolean, box: { x, y, width, height }, removed: number }} ok when there was a
- *   plain background to clear and a figure left; box is what is not see-through.
+ * @returns {{ ok: boolean, box: { x, y, width, height }, removed: number, why: string }} ok when there was a
+ *   plain background to clear and a figure left; box is what is not see-through; why, when not ok:
+ *   'busy' (the background is not one plain colour), 'fill' (the figure fills the picture, hardly
+ *   any background to clear), 'faint' (nearly all of it went: the figure is the background's colour),
+ *   'edge' (much is left down both upper sides: a second background colour, or a figure cut off by the frame).
  */
 export function cutOut(image, { tolerance = 28 } = {}) {
   const { data, width, height } = image
@@ -110,11 +117,11 @@ export function cutOut(image, { tolerance = 28 } = {}) {
   // A picture that is already cut out: keep it.
   let seeThrough = 0
   for (let x = 0; x < width; x++) if (data[x * 4 + 3] < 16) seeThrough++
-  if (seeThrough > width / 2) return { ok: true, box: boundsOf(data, width, height), removed: 0 }
+  if (seeThrough > width / 2) return { ok: true, box: boundsOf(data, width, height), removed: 0, why: '' }
   clearBars(data, width, height, cleared)
   const edge = edgeColour(data, width, height, cleared)
   // Not a plain background (a scene behind the character): nothing to clear.
-  if (!edge || edge.share < 0.4) return { ok: false, box: { x: 0, y: 0, width, height }, removed: 0 }
+  if (!edge || edge.share < 0.4) return { ok: false, box: { x: 0, y: 0, width, height }, removed: 0, why: 'busy' }
   const bg = edge.colour
   const queue = new Int32Array(size)
   let head = 0
@@ -162,7 +169,19 @@ export function cutOut(image, { tolerance = 28 } = {}) {
     data[i + 3] = Math.round(255 * Math.max(alpha, 0.25))
   }
   const share = removed / size
-  return { ok: share > 0.08 && share < 0.92, box: boundsOf(data, width, height), removed: share }
+  // Down the upper half of both sides a cut-out 立绘 is see-through; much left there is a second
+  // background colour (a pale panel beside a white one) or a figure cut off by the frame. Real
+  // pictures: clean ones kept at most 16 %, ones with a panel left 45–50 %.
+  let sides = 0
+  let kept = 0
+  for (let y = 0; y < height * 0.55; y++) {
+    for (const x of [0, width - 1]) {
+      sides++
+      if (data[(y * width + x) * 4 + 3] > 128) kept++
+    }
+  }
+  const why = share <= 0.08 ? 'fill' : share >= 0.92 ? 'faint' : kept / sides > 0.3 ? 'edge' : ''
+  return { ok: !why, box: boundsOf(data, width, height), removed: share, why }
 }
 
 /** The smallest box holding every pixel that is not see-through. */

@@ -27,14 +27,15 @@ test('after an update: the versions since the one seen, up to the one running, n
   assert.deepEqual(notesToShow([{ version: '1.8.0', items: [] }], { current: '1.8.0', seen: '1.7.0' }), [])
 })
 
-test('a fix release shows after the release it fixes: the whole series in order, newest series first', () => {
+test('a fix release shows before the release it fixes: the whole series newest first, newest series first', () => {
   const versions = ['1.6.0', '1.7.0', '1.8.0', '1.8.1', '1.8.2'].map(version => ({ version, items: [{ zh: { title: version } }] }))
   const shown = options => notesToShow(versions, options).map(entry => entry.version)
-  assert.deepEqual(shown({ current: '1.8.1', seen: '1.8.0' }), ['1.8.0', '1.8.1'], '1.8.0 again, then 1.8.1 after it')
-  assert.deepEqual(shown({ current: '1.8.1', seen: '1.6.0' }), ['1.8.0', '1.8.1', '1.7.0'])
-  assert.deepEqual(shown({ current: '1.8.1', returning: true }), ['1.8.0', '1.8.1'])
+  assert.deepEqual(shown({ current: '1.8.1', seen: '1.8.0' }), ['1.8.1', '1.8.0'], '1.8.1 first, then 1.8.0 again')
+  assert.deepEqual(shown({ current: '1.8.1', seen: '1.6.0' }), ['1.8.1', '1.8.0', '1.7.0'])
+  assert.deepEqual(shown({ current: '1.8.1', returning: true }), ['1.8.1', '1.8.0'])
   assert.deepEqual(shown({ current: '1.8.1', seen: '1.8.1' }), [])
-  assert.deepEqual(seriesNotes(versions, '1.8.1').map(entry => entry.version), ['1.8.0', '1.8.1'], 'the version badge: up to the one running')
+  assert.deepEqual(seriesNotes(versions, '1.8.2').map(entry => entry.version), ['1.8.2', '1.8.1', '1.8.0'], 'the version badge: newest first')
+  assert.deepEqual(seriesNotes(versions, '1.8.1').map(entry => entry.version), ['1.8.1', '1.8.0'], 'the version badge: up to the one running')
 })
 
 test('a page recapping an earlier series stands for its pages; the picker lists every series', () => {
@@ -43,10 +44,10 @@ test('a page recapping an earlier series stands for its pages; the picker lists 
   const shown = options => notesToShow(versions, options).map(entry => entry.version)
   assert.deepEqual(shown({ current: '1.9.0', seen: '1.6.0' }), ['1.9.0', '1.7.0'], 'not 1.8.0 and 1.8.1 again')
   assert.deepEqual(shown({ current: '1.9.0', seen: '1.8.1' }), ['1.9.0'])
-  assert.deepEqual(shown({ current: '1.8.1', seen: '1.6.0' }), ['1.8.0', '1.8.1', '1.7.0'], 'the recap is not out yet')
+  assert.deepEqual(shown({ current: '1.8.1', seen: '1.6.0' }), ['1.8.1', '1.8.0', '1.7.0'], 'the recap is not out yet')
   assert.deepEqual(shelfOf(versions, '1.9.0'), [{ series: '1.9', version: '1.9.0' }, { series: '1.8', version: '1.8.1' }, { series: '1.7', version: '1.7.0' }])
   assert.deepEqual(shelfOf(versions, '1.8.0'), [{ series: '1.8', version: '1.8.0' }, { series: '1.7', version: '1.7.0' }])
-  assert.deepEqual(seriesNotes(versions, shelfOf(versions, '1.9.0')[1].version).map(entry => entry.version), ['1.8.0', '1.8.1'], 'picking 1.8 reads it whole')
+  assert.deepEqual(seriesNotes(versions, shelfOf(versions, '1.9.0')[1].version).map(entry => entry.version), ['1.8.1', '1.8.0'], 'picking 1.8 reads it whole, newest first')
 })
 
 test('the shipped notes: both languages on every page, every picture there', () => {

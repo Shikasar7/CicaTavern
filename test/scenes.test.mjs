@@ -162,6 +162,8 @@ test('画这一轮的场景 and 立绘: a new scene named by the helper, the pla
   const drawn = (await call(`/api/cards/${id}/sprites/qinghe/draw`, { method: 'POST', body: {} })).body
   assert.match(drawn.sprites.qinghe.file, /^qinghe-[0-9a-f]{6}\.png$/)
   assert.equal(drawn.sprites.qinghe.source, 'drawn')
+  // Kept with the looks it was drawn from, so the page can say when the 名册 has changed them.
+  assert.deepEqual([drawn.sprites.qinghe.looks, drawn.sprites.qinghe.outfit], ['long black hair', ''])
   const prompt = fake.seen.filter(r => r.url === '/v1/images/generations').at(-1).json.prompt
   assert.match(prompt, /white background/)
   assert.match(prompt, /long black hair/)

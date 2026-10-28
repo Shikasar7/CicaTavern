@@ -77,8 +77,9 @@ export const DEFAULT_MEDIA = Object.freeze({
 })
 
 // lora: a file in ComfyUI's models/loras, added to the workflow for this card (ComfyUI only).
-// roster: the cast for pictures (roster.mjs); with one, the card LoRA is for frames where no cast member is named.
-// style / styleNegative: the card's look; NovelAI puts them on every picture of the card (portraits too).
+// roster: the cast for pictures (roster.mjs); a lone member with a LoRA of their own is drawn with theirs instead (loraFor).
+// style / styleNegative: the card's look; NovelAI puts them on every picture of the card, the others get the
+// style in the prompt (portraits and 立绘 too).
 export const DEFAULT_CARD_MEDIA = Object.freeze({ voice: '', narratorVoice: '', style: '', styleNegative: '', lora: '', loraTrigger: '', loraStrength: 0.8, roster: [] })
 
 const SIZE = /^(\d{3,4})x(\d{3,4})$/
@@ -137,11 +138,11 @@ export function imageSize(backend, shape) {
   return (PIXELS[backend] ?? PIXELS.openai)[SHAPES.includes(shape) ? shape : 'square']
 }
 
+const shapeOfRatio = ratio => (ratio > 1.15 ? 'landscape' : ratio < 0.87 ? 'portrait' : 'square')
+
 function shapeOf(size) {
   const match = SIZE.exec(String(size ?? '').trim())
-  if (!match) return null
-  const ratio = Number(match[1]) / Number(match[2])
-  return ratio > 1.15 ? 'landscape' : ratio < 0.87 ? 'portrait' : 'square'
+  return match ? shapeOfRatio(Number(match[1]) / Number(match[2])) : null
 }
 const FILE = /^[\w-]{1,64}\.(png|jpg|jpeg|webp)$/
 
@@ -253,29 +254,48 @@ export function cleanCardMedia(input, previous = DEFAULT_CARD_MEDIA) {
 
 /**
  * The workflow with a LoraLoader after its checkpoint loader: everything that
- * took the checkpoint's MODEL and CLIP now takes them from the LoRA. Works on
- * any imported workflow, so one workflow serves every card.
+ * took the checkpoint's MODEL and CLIP now takes them from the LoRA. A workflow
+ * that loads the diffusion model on its own (Load Diffusion Model, GGUF: Flux and
+ * the like, the text encoders apart) gets a LoraLoaderModelOnly after that loader
+ * instead. Works on any imported workflow, so one workflow serves every card.
  */
 export function withLora(workflow, { name, strength = 0.8 }) {
-  const loaderId = Object.keys(workflow).find(id => workflow[id]?.class_type === 'CheckpointLoaderSimple' || typeof workflow[id]?.inputs?.ckpt_name === 'string')
-  if (!loaderId) throw httpError(400, msg`工作流里没有 Load Checkpoint 节点，加不了 LoRA`)
+  const find = test => Object.keys(workflow).find(id => test(workflow[id]))
+  const checkpoint = find(node => node?.class_type === 'CheckpointLoaderSimple' || typeof node?.inputs?.ckpt_name === 'string')
+  const loaderId = checkpoint ?? find(node => typeof node?.inputs?.unet_name === 'string')
+  if (!loaderId) throw httpError(400, msg`工作流里没有加载模型的节点（Load Checkpoint 或 Load Diffusion Model），加不了 LoRA`)
+  // The outputs the LoRA stands in for: MODEL and CLIP of a checkpoint, MODEL of a diffusion model.
+  const taken = checkpoint ? [0, 1] : [0]
   const loraId = String(Math.max(0, ...Object.keys(workflow).map(Number).filter(Number.isFinite)) + 1)
   const out = {}
   for (const [id, node] of Object.entries(workflow)) {
     const inputs = Object.fromEntries(
       Object.entries(node.inputs ?? {}).map(([key, value]) => [
         key,
-        Array.isArray(value) && String(value[0]) === loaderId && (value[1] === 0 || value[1] === 1) ? [loraId, value[1]] : value,
+        Array.isArray(value) && String(value[0]) === loaderId && taken.includes(value[1]) ? [loraId, value[1]] : value,
       ]),
     )
     out[id] = { ...node, inputs }
   }
-  out[loraId] = {
-    class_type: 'LoraLoader',
-    _meta: { title: 'Card LoRA' },
-    inputs: { lora_name: name, strength_model: strength, strength_clip: strength, model: [loaderId, 0], clip: [loaderId, 1] },
-  }
+  out[loraId] = checkpoint
+    ? { class_type: 'LoraLoader', _meta: { title: 'Card LoRA' }, inputs: { lora_name: name, strength_model: strength, strength_clip: strength, model: [loaderId, 0], clip: [loaderId, 1] } }
+    : { class_type: 'LoraLoaderModelOnly', _meta: { title: 'Card LoRA' }, inputs: { lora_name: name, strength_model: strength, model: [loaderId, 0] } }
   return out
+}
+
+/**
+ * Whose LoRA a picture is drawn with (ComfyUI, SD WebUI): { lora, loraTrigger,
+ * loraStrength } or null. A lone cast member with one of their own: theirs.
+ * Otherwise the card's, as its 画风, in every picture of people (人设图 and 立绘
+ * too), unless it is a cast member's own (a character LoRA: their face would go
+ * on everyone). Several LoRAs in one picture bleed into each other, so never more than one.
+ */
+export function loraFor(cardMedia, cast, { scenery = false } = {}) {
+  if (scenery) return null
+  if (cast?.solo?.lora) return cast.solo
+  if (!cardMedia.lora) return null
+  if (cast && cardMedia.roster.some(entry => entry.lora === cardMedia.lora)) return null
+  return cardMedia
 }
 
 /** The trigger word first, unless the prompt already starts with it. */
@@ -490,6 +510,10 @@ const NUMERIC = new Set(['{{seed}}', '{{width}}', '{{height}}'])
 // "Export (API)": its dynamic prompts read braces as a random pick ({a|b}), so {{prompt}} goes out as "prompt".
 const PERCENT = { prompt: 'prompt', negative_prompt: 'negative', seed: 'seed', width: 'width', height: 'height', char_avatar: 'reference' }
 
+// A plain white 64×64 PNG: the reference picture for a workflow that needs one ({{reference}})
+// when the picture is to copy nobody (a 人设图 drawn from the looks, a page's background).
+const BLANK_REFERENCE = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAATUlEQVR42u3PQQ0AAAgEILV/5zOFDzdoQCepz6aeExAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQELi3cqoDfaKuZM4AAAAASUVORK5CYII=', 'base64')
+
 /** Every string in a workflow through `change` (which may give a number for a whole value). */
 function mapStrings(node, change) {
   if (typeof node === 'string') return change(node)
@@ -513,6 +537,118 @@ export function fillWorkflow(workflow, values) {
   return filled
 }
 
+// Nodes that set the picture's size: empty latents (SD1.5/SDXL, SD3, Flux…) and
+// latent upscales after them; the Efficient Loader keeps it in its own fields.
+const LATENT_SIZE = [['width', 'height'], ['empty_latent_width', 'empty_latent_height']]
+
+/**
+ * A workflow whose size is written in (no {{width}} / {{height}}: the usual
+ * export, where the size is a number field) drawn at the shape of
+ * `width`×`height`: each latent size in it already that shape is kept, one the
+ * other way round is turned, and between square and not it takes that ratio
+ * at its own number of pixels (an SD 1.5 workflow stays small), in steps of 64.
+ */
+export function fitSize(workflow, width, height) {
+  if (/\{\{(width|height)\}\}/.test(JSON.stringify(workflow))) return workflow
+  const ratio = width / height
+  const shape = shapeOfRatio(ratio)
+  const step = n => Math.max(64, Math.round(n / 64) * 64)
+  const out = {}
+  for (const [id, node] of Object.entries(workflow)) {
+    const inputs = { ...node?.inputs }
+    for (const [w, h] of LATENT_SIZE) {
+      const sized = (w === 'width' ? /latent/i.test(node?.class_type ?? '') : true) && typeof inputs[w] === 'number' && typeof inputs[h] === 'number' && inputs[w] > 0 && inputs[h] > 0
+      if (!sized) continue
+      const own = shapeOfRatio(inputs[w] / inputs[h])
+      if (own === shape) continue
+      if (own !== 'square' && shape !== 'square') {
+        ;[inputs[w], inputs[h]] = [inputs[h], inputs[w]]
+        continue
+      }
+      const pixels = inputs[w] * inputs[h]
+      inputs[w] = step(Math.sqrt(pixels * ratio))
+      inputs[h] = step(Math.sqrt(pixels / ratio))
+    }
+    out[id] = node && typeof node === 'object' ? { ...node, inputs } : node
+  }
+  return out
+}
+
+/**
+ * A negative prompt for a workflow without {{negative}}: added after the text
+ * of each text encoder a sampler takes as its negative (a 立绘's "detailed
+ * background", a background's "people"): its text, or both of SDXL's (text_g, text_l).
+ */
+export function withNegative(workflow, negative) {
+  if (!negative || JSON.stringify(workflow).includes('{{negative}}')) return workflow
+  const ids = new Set(Object.values(workflow).map(node => node?.inputs?.negative).filter(Array.isArray).map(link => String(link[0])))
+  const out = { ...workflow }
+  for (const id of ids) {
+    const node = workflow[id]
+    const inputs = { ...node?.inputs }
+    const keys = ['text', 'text_g', 'text_l'].filter(key => typeof inputs[key] === 'string')
+    if (!keys.length) continue
+    for (const key of keys) inputs[key] = [inputs[key].replace(/[,，\s]+$/, ''), negative].filter(Boolean).join(', ')
+    out[id] = { ...node, inputs }
+  }
+  return out
+}
+
+// What the families are called to the player.
+const FAMILY_NAME = { sd1: 'SD 1.5', sd2: 'SD 2', sdxl: 'SDXL', flux: 'Flux' }
+
+/**
+ * A model's family: 'sd1', 'sd2', 'sdxl', 'flux', or '' when it can't be told.
+ * From what the file says of itself (ComfyUI's /view_metadata: kohya's ss_* and
+ * modelspec fields), else from its name (waiIllustriousSDXL, a "…flux…" file).
+ * ComfyUI loads a LoRA of another family without complaint and leaves it out.
+ */
+export function modelFamily(meta, name = '') {
+  const by = text => {
+    const value = String(text ?? '')
+    if (/flux/i.test(value)) return 'flux'
+    if (/sdxl|(^|[^a-z])xl([^a-z]|$)|illustrious|pony|noob|animagine/i.test(value)) return 'sdxl'
+    if (/sd_v2|stable-diffusion-v2/i.test(value)) return 'sd2'
+    if (/sd_v1|stable-diffusion-v1|v1-5|v1\.5|sd-?1\.?5|sd15/i.test(value)) return 'sd1'
+    return ''
+  }
+  return by(meta?.['modelspec.architecture']) || by(meta?.ss_base_model_version) || (meta?.ss_v2 === 'True' ? 'sd2' : '') || by(meta?.ss_sd_model_name) || by(name)
+}
+
+/**
+ * Why ComfyUI refused a workflow (POST /prompt answered 400 with node_errors), for
+ * the player: a file it does not have named, else the first node's error. '' when
+ * the answer says nothing usable.
+ */
+export function comfyRefusal(text) {
+  let json
+  try {
+    json = JSON.parse(String(text ?? ''))
+  } catch {
+    return ''
+  }
+  const [id, node] = Object.entries(json?.node_errors ?? {}).find(([, value]) => value?.errors?.length) ?? []
+  const first = node?.errors?.[0]
+  if (!first) {
+    const error = json?.error
+    return error?.message ? msg`ComfyUI 不接受这个工作流：${[error.message, error.details].filter(Boolean).join('：').slice(0, 200)}` : ''
+  }
+  const { input_name: input, received_value: value } = first.extra_info ?? {}
+  if (first.type === 'value_not_in_list' && input === 'lora_name') return msg`ComfyUI 里没有 LoRA「${value}」：到「画风与 LoRA」或角色名册里重新选一个（选的时候 ComfyUI 要开着）`
+  if (first.type === 'value_not_in_list' && input) return msg`ComfyUI 里没有「${value}」（${node.class_type} 节点 ${id} 的 ${input}）：把工作流里的文件名改成 ComfyUI 里有的，再导入`
+  const details = String(first.details ?? '').slice(0, 160)
+  return msg`ComfyUI 不接受这个工作流：${node.class_type} 节点 ${id}：${first.message}${details ? msg`（${details}）` : ''}`
+}
+
+/** Why a prompt ComfyUI took failed while it ran (its history's execution_error). */
+export function comfyFailure(entry) {
+  const failed = (entry?.status?.messages ?? []).find(message => Array.isArray(message) && message[0] === 'execution_error')?.[1]
+  if (!failed) return msg`ComfyUI 执行出错，去 ComfyUI 界面看看是哪个节点`
+  const said = String(failed.exception_message ?? '').trim().slice(0, 200)
+  const memory = /out of memory|OutOfMemory|allocat/i.test(said) ? msg`（显存不够：画幅小一点，或者先关掉别的占显存的程序）` : ''
+  return msg`ComfyUI 执行出错：${failed.node_type} 节点 ${failed.node_id}：${said}${memory}`
+}
+
 /** An imported workflow as kept: API format, SillyTavern's placeholders written as this app's. */
 export function checkWorkflow(json) {
   if (!json || typeof json !== 'object' || Array.isArray(json)) throw httpError(400, msg`工作流必须是 ComfyUI「导出（API）」的 JSON`)
@@ -527,14 +663,19 @@ export function checkWorkflow(json) {
   return workflow
 }
 
-// A cast member's reference picture: one person, nothing else to copy from it.
+// What pulls a picture off its plain background: a card LoRA trained on close-ups by a window
+// drew 立绘 and 人设图 that way on the real ComfyUI until these were in the negative.
+const OFF_PLAIN = 'detailed background, gradient background, indoors, window, wall, light rays, close-up, head out of frame'
+// A cast member's reference picture: one person, nothing else to copy from it (the visual novel cuts it out too).
 const PORTRAIT_SCENE = 'solo, upper body, looking at viewer, simple background, white background'
+const PORTRAIT_NEGATIVE = 'nsfw, multiple views, text'
+const REFERENCE_NEGATIVE = `${PORTRAIT_NEGATIVE}, ${OFF_PLAIN}`
 // A card's avatar (修改角色卡 → 生成头像): square, the face and shoulders filling it.
 const AVATAR_SCENE = 'solo, portrait, face and shoulders, close-up, looking at viewer, simple background'
 const AVATAR_NEGATIVE = 'nsfw, multiple views, text, full body, lower body'
 // 立绘 for the visual novel mode: the page cuts the white out, so nothing may touch the edges but the body.
 const SPRITE_SCENE = 'solo, upper body, cowboy shot, looking at viewer, standing, simple background, white background, full color'
-const SPRITE_NEGATIVE = 'multiple views, text, scenery, detailed background, gradient background, frame, border, nsfw'
+const SPRITE_NEGATIVE = `multiple views, text, scenery, ${OFF_PLAIN}, frame, border, nsfw`
 
 // ─── NovelAI ────────────────────────────────────────────────────────────
 
@@ -692,7 +833,11 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
  * @param history - createDrawHistory() (抽图历史): a reference picture drawn or
  *   uploaded again keeps the one before, and an avatar drawn is kept until taken.
  */
-export function createMedia(store, { proxy = null, askInContext = null, novelai = {}, voiceUrls = {}, features = null, ownBackends = [], history = null } = {}) {
+export function createMedia(store, { proxy = null, askInContext = null, novelai = {}, voiceUrls = {}, features = null, ownBackends = [], history = null, comfyTimes = {} } = {}) {
+  // ComfyUI: how often a picture is looked for, how long it may run, and how long it may wait its turn behind others.
+  const comfyWait = { poll: 1500, run: 10 * 60 * 1000, queue: 60 * 60 * 1000, ...comfyTimes }
+  // ComfyUI address, LoRA and model → what the picture's note says when they are not of one family ('' when they are).
+  const families = new Map()
   const proxyNow = typeof proxy === 'function' ? proxy : () => proxy
   const defaults = mediaDefaults(features)
   const backends = [...IMAGE_BACKENDS, ...ownBackends.map(own => own.id)]
@@ -990,7 +1135,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
    */
   async function sdwebuiImage(media, prompt, cardId, signal, cast = null, { scenery = false } = {}) {
     const cardMedia = cardId ? cleanCardMedia((await store.getCard(cardId)).media) : DEFAULT_CARD_MEDIA
-    const owner = scenery ? null : cast ? (cast.solo?.lora ? cast.solo : null) : cardMedia.lora ? cardMedia : null
+    const owner = loraFor(cardMedia, cast, { scenery })
     if (owner) prompt = `${withTrigger(prompt, owner.loraTrigger)}, <lora:${owner.lora.replace(/^.*[\\/]/, '').replace(/\.(safetensors|pt|ckpt)$/i, '')}:${owner.loraStrength}>`
     const [width, height] = imageSize('sdwebui', media.imageShape).split('x').map(Number)
     const body = {
@@ -1029,51 +1174,88 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     return Buffer.from(first.replace(/^data:image\/[\w.+-]+;base64,/, ''), 'base64')
   }
 
-  /** @param options.scenery - a background (scenes.mjs): no LoRA, no trigger word, a negative prompt that keeps people out. */
-  async function comfyImage(media, prompt, cardId, signal, cast = null, { scenery = false } = {}) {
+  /**
+   * @param options.scenery - a background (scenes.mjs): no LoRA, no trigger word, a negative prompt that keeps people out.
+   * @param options.negative - more for the negative prompt (a 立绘: no background).
+   * @param options.references - as render takes it: with 'none' (or no card) a
+   *   workflow that needs a reference picture gets a white one, never the old 人设图.
+   * @returns { buffer, note }
+   */
+  async function comfyImage(media, prompt, cardId, signal, cast = null, { scenery = false, negative = '', references = 'all' } = {}) {
     const imported = await loadWorkflow()
     if (!imported) throw httpError(400, msg`还没导入 ComfyUI 工作流：在「配图与朗读」里导入「导出（API）」的 JSON`)
     // No card yet (a card being created): no card LoRA.
     const cardMedia = cardId ? cleanCardMedia((await store.getCard(cardId)).media) : DEFAULT_CARD_MEDIA
-    // Several LoRAs in one picture bleed into each other: a named cast uses only a lone member's own.
-    const owner = scenery ? null : cast ? (cast.solo?.lora ? cast.solo : null) : cardMedia.lora ? cardMedia : null
-    const workflow = owner ? withLora(imported, { name: owner.lora, strength: owner.loraStrength }) : imported
+    let owner = loraFor(cardMedia, cast, { scenery })
+    const notes = []
+    let withOwner = imported
+    if (owner) {
+      try {
+        withOwner = withLora(imported, { name: owner.lora, strength: owner.loraStrength })
+      } catch (error) {
+        // A workflow with no model loader to put it after: drawn as it is rather than not at all.
+        if (error.status !== 400) throw error
+        notes.push(msg`${error.message}，这张没带 LoRA「${owner.lora}」。`)
+        owner = null
+      }
+    }
+    const [width, height] = imageSize('comfy', media.imageShape).split('x').map(Number)
+    const negatives = [scenery ? SCENERY_NEGATIVE : '', negative].filter(Boolean).join(', ')
+    const workflow = withNegative(fitSize(withOwner, width, height), negatives)
     if (owner) prompt = withTrigger(prompt, owner.loraTrigger)
     const base = media.comfyUrl
-    const [width, height] = imageSize('comfy', media.imageShape).split('x').map(Number)
+    if (owner) {
+      const clash = await familyClash(base, owner.lora, imported)
+      if (clash) notes.push(clash)
+    }
     let reference = ''
     const needsReference = JSON.stringify(workflow).includes('{{reference}}')
     if (needsReference) {
-      const avatar = (cast?.lead && (await refFor(cardId, cast.lead))) || (await avatarOf(cardId))
-      if (!avatar) throw httpError(400, msg`工作流要参考图（{{reference}}），这张卡没有头像`)
+      const own = cardId && references !== 'none'
+      let picture = own ? (cast?.lead && (await refFor(cardId, cast.lead))) || (await avatarOf(cardId)) : null
+      if (own && !picture) throw httpError(400, msg`工作流要参考图（{{reference}}），这张卡没有头像`)
+      if (!picture) {
+        picture = BLANK_REFERENCE
+        notes.push(msg`这个 ComfyUI 工作流要参考图；这张不照着谁画，给它的是一张白图。`)
+      }
       // Named by the picture: two draws at once never swap each other's reference.
-      const name = `tavern-${cardId}-${createHash('sha256').update(avatar).digest('hex').slice(0, 16)}.png`
-      const upload = await postMultipart(`${base}/upload/image`, multipart({ image: { buffer: avatar, filename: name, type: 'image/png' }, overwrite: 'true' }), signal)
+      const name = `tavern-${cardId || 'blank'}-${createHash('sha256').update(picture).digest('hex').slice(0, 16)}.png`
+      const upload = await postMultipart(`${base}/upload/image`, multipart({ image: { buffer: picture, filename: name, type: 'image/png' }, overwrite: 'true' }), signal)
       reference = JSON.parse(upload.toString('utf8')).name
     }
-    const filled = fillWorkflow(workflow, { prompt, negative: scenery ? SCENERY_NEGATIVE : '', seed: randomInt(1, 2 ** 31), width, height, reference })
+    const filled = fillWorkflow(workflow, { prompt, negative: negatives, seed: randomInt(1, 2 ** 31), width, height, reference })
     let queued
     try {
       queued = JSON.parse((await postJson(`${base}/prompt`, { prompt: filled, client_id: 'agent-tavern' }, { signal })).buffer.toString('utf8'))
     } catch (error) {
       if (signal?.aborted) throw error
-      throw httpError(502, comfyError(error))
+      throw httpError(502, (error.providerStatus === 400 && comfyRefusal(error.body)) || comfyError(error))
     }
     const id = queued.prompt_id
-    if (!id) throw httpError(502, msg`ComfyUI 没接受这个工作流：${JSON.stringify(queued.node_errors ?? queued.error ?? queued).slice(0, 200)}`)
-    const deadline = Date.now() + 10 * 60 * 1000
+    if (!id) throw httpError(502, comfyRefusal(JSON.stringify(queued)) || msg`ComfyUI 没接受这个工作流：${JSON.stringify(queued.node_errors ?? queued.error ?? queued).slice(0, 200)}`)
+    // Ten minutes to draw it, not counting the time it waits behind others in ComfyUI's queue (an hour at most).
+    const started = Date.now()
+    let deadline = started + comfyWait.run
+    let waiting = false
+    let polls = 0
     try {
       while (Date.now() < deadline) {
         if (signal?.aborted) throw new Error('aborted')
-        await sleep(1500)
+        await sleep(comfyWait.poll)
         const history = JSON.parse((await fetchBytes(`${base}/history/${id}`, { signal })).buffer.toString('utf8'))
         const entry = history[id]
-        if (!entry) continue
-        if (entry.status?.status_str === 'error') throw httpError(502, msg`ComfyUI 执行出错，去 ComfyUI 界面看看是哪个节点`)
+        if (!entry) {
+          if (++polls % 4 === 0) {
+            waiting = await comfyPending(base, id, signal)
+            if (waiting) deadline = Math.min(started + comfyWait.queue, Date.now() + comfyWait.run)
+          }
+          continue
+        }
+        if (entry.status?.status_str === 'error') throw httpError(502, comfyFailure(entry))
         const image = Object.values(entry.outputs ?? {}).flatMap(out => out.images ?? []).find(img => img.type === 'output') ?? Object.values(entry.outputs ?? {}).flatMap(out => out.images ?? [])[0]
         if (image) {
           const query = new URLSearchParams({ filename: image.filename, subfolder: image.subfolder ?? '', type: image.type ?? 'output' })
-          return (await fetchBytes(`${base}/view?${query}`, { signal })).buffer
+          return { buffer: (await fetchBytes(`${base}/view?${query}`, { signal })).buffer, note: notes.join(' ') }
         }
         if (entry.status?.completed) throw httpError(502, msg`ComfyUI 跑完了，但工作流没有输出图片（要有 SaveImage 或 PreviewImage 节点）`)
       }
@@ -1082,7 +1264,42 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
       throw error
     }
     dropComfyPrompt(base, id).catch(() => {})
-    throw httpError(504, msg`ComfyUI 十分钟还没出图`)
+    throw httpError(504, waiting ? msg`ComfyUI 一小时还没轮到这张：前面排着别的任务，等它们跑完再画` : msg`ComfyUI 十分钟还没出图`)
+  }
+
+  /** Whether a prompt is still waiting its turn in ComfyUI's queue (not when the queue can't be read). */
+  async function comfyPending(base, id, signal) {
+    try {
+      const queue = JSON.parse((await fetchBytes(`${base}/queue`, { signal })).buffer.toString('utf8'))
+      return (Array.isArray(queue.queue_pending) ? queue.queue_pending : []).some(item => Array.isArray(item) && item[1] === id)
+    } catch (error) {
+      if (signal?.aborted) throw error
+      return false
+    }
+  }
+
+  /**
+   * The note for a LoRA of another family than the workflow's model (an SD 1.5
+   * LoRA on an SDXL checkpoint), which ComfyUI would leave out without a word.
+   * '' when they match or either can't be told; asked of ComfyUI once per pair.
+   */
+  async function familyClash(base, lora, workflow) {
+    const model = Object.values(workflow).map(node => node?.inputs).find(inputs => typeof inputs?.ckpt_name === 'string' || typeof inputs?.unet_name === 'string')
+    const file = model?.ckpt_name ?? model?.unet_name
+    if (!file) return ''
+    const key = `${base}|${lora}|${file}`
+    if (!families.has(key)) {
+      const metadata = async (folder, name) => {
+        try {
+          return JSON.parse((await fetchBytes(`${base}/view_metadata/${folder}?${new URLSearchParams({ filename: name })}`, { signal: AbortSignal.timeout(5000) })).buffer.toString('utf8')) ?? {}
+        } catch {
+          return {}
+        }
+      }
+      const [ownLora, ownModel] = [modelFamily(await metadata('loras', lora), lora), modelFamily(await metadata(model.ckpt_name ? 'checkpoints' : 'diffusion_models', file), file)]
+      families.set(key, ownLora && ownModel && ownLora !== ownModel ? msg`LoRA「${lora}」是 ${FAMILY_NAME[ownLora]} 的，工作流的底模「${file}」是 ${FAMILY_NAME[ownModel]}：ComfyUI 用不上这个 LoRA，画风不会变。换一个 ${FAMILY_NAME[ownModel]} 的 LoRA。` : '')
+    }
+    return families.get(key)
   }
 
   /**
@@ -1433,8 +1650,10 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
    * @param options.references - what this install's own backends get to keep faces
    *   the same: 'all' (the cast's reference pictures, else the card's avatar
    *   when the picture is of the card's own character), 'cast' (only theirs), 'none'.
+   * @param options.negative - what this picture must not have, for ComfyUI (NovelAI
+   *   and SD WebUI take theirs in naiNegative and sdNegative).
    */
-  async function render(media, cardId, frame, cast, text, signal, { scenery = false, references = 'all' } = {}) {
+  async function render(media, cardId, frame, cast, text, signal, { scenery = false, references = 'all', negative = '' } = {}) {
     // Backends without per-character prompts get the cast written out in one prompt.
     const flat = cast ? flattenFrame(cast, media.promptStyle) : frame ? frame.scene : text
     const own = ownBackends.find(item => item.id === media.imageBackend)
@@ -1444,10 +1663,10 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
       return { buffer, note, backend: label }
     }
     if (media.imageBackend === 'comfy') {
-      const buffer = await comfyImage(media, flat, cardId, signal, cast, { scenery })
+      const { buffer, note } = await comfyImage(media, flat, cardId, signal, cast, { scenery, negative, references })
       // A workflow built around a reference picture puts the card's picture into the background too.
-      const referenced = scenery && describeWorkflow(await loadWorkflow().catch(() => null))?.placeholders.includes('reference')
-      return { buffer, note: referenced ? msg`这个 ComfyUI 工作流要参考图，背景里可能会出现人物` : '', backend: 'ComfyUI' }
+      const referenced = scenery && cardId && references !== 'none' && describeWorkflow(await loadWorkflow().catch(() => null))?.placeholders.includes('reference')
+      return { buffer, note: [note, referenced ? msg`这个 ComfyUI 工作流要参考图，背景里可能会出现人物` : ''].filter(Boolean).join(' '), backend: 'ComfyUI' }
     }
     if (media.imageBackend === 'novelai') {
       const { buffer, label, note } = await naiAlone(() => {
@@ -1486,15 +1705,15 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
    * own. Returned to the page, which pads it like an upload.
    */
   async function drawPortrait(cardId, input, signal, { model = '', backend: method = '' } = {}) {
-    await store.getCard(cardId)
+    const { style } = cleanCardMedia((await store.getCard(cardId)).media)
     const [entry] = cleanRoster([input])
     if (!entry?.looks) throw httpError(400, msg`先写这个角色的长相，再画人设图`)
     const media = await settingsFor({ backend: method, model })
-    const cast = { scene: PORTRAIT_SCENE, characters: [{ entry, action: [entry.outfit, 'standing'].filter(Boolean).join(', '), position: '' }], solo: entry, lead: entry }
-    const plain = { ...media, imageShape: 'portrait', naiReference: false, imageReference: false, geminiReference: false, naiNegative: [media.naiNegative, 'nsfw, multiple views, text'].filter(Boolean).join(', '), sdNegative: [media.sdNegative, 'nsfw, multiple views, text'].filter(Boolean).join(', ') }
-    const { buffer, backend } = await render(plain, cardId, cast, cast, '', signal, { references: 'none' })
+    const cast = { scene: [style, PORTRAIT_SCENE].filter(Boolean).join(', '), characters: [{ entry, action: [entry.outfit, 'standing'].filter(Boolean).join(', '), position: '' }], solo: entry, lead: entry }
+    const plain = { ...media, imageShape: 'portrait', naiReference: false, imageReference: false, geminiReference: false, naiNegative: [media.naiNegative, REFERENCE_NEGATIVE].filter(Boolean).join(', '), sdNegative: [media.sdNegative, REFERENCE_NEGATIVE].filter(Boolean).join(', ') }
+    const { buffer, backend, note } = await render(plain, cardId, cast, cast, '', signal, { references: 'none', negative: REFERENCE_NEGATIVE })
     const type = extOf('', buffer) === 'jpg' ? 'jpeg' : extOf('', buffer)
-    return { image: `data:image/${type};base64,${buffer.toString('base64')}`, backend }
+    return { image: `data:image/${type};base64,${buffer.toString('base64')}`, backend, ...(note ? { note } : {}) }
   }
 
   /**
@@ -1503,14 +1722,14 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
    * → { buffer, backend, note }
    */
   async function drawSprite(cardId, entryId, signal) {
-    const { roster } = cleanCardMedia((await store.getCard(cardId)).media)
+    const { roster, style } = cleanCardMedia((await store.getCard(cardId)).media)
     const entry = roster.find(item => item.id === entryId)
     if (!entry) throw httpError(404, msg`名单里没有这个角色`)
     if (!entry.looks) throw httpError(400, msg`先在「配图 → 角色名单」里写${entry.name}的长相，再画立绘`)
     const media = await settings()
-    const cast = { scene: SPRITE_SCENE, characters: [{ entry, action: [entry.outfit, 'standing'].filter(Boolean).join(', '), position: '' }], solo: entry, lead: entry }
+    const cast = { scene: [style, SPRITE_SCENE].filter(Boolean).join(', '), characters: [{ entry, action: [entry.outfit, 'standing'].filter(Boolean).join(', '), position: '' }], solo: entry, lead: entry }
     const plain = { ...media, imageShape: 'portrait', naiNegative: [media.naiNegative, SPRITE_NEGATIVE].filter(Boolean).join(', '), sdNegative: [media.sdNegative, SPRITE_NEGATIVE].filter(Boolean).join(', ') }
-    return render(plain, cardId, cast, cast, '', signal)
+    return render(plain, cardId, cast, cast, '', signal, { negative: SPRITE_NEGATIVE })
   }
 
   /**
@@ -1522,20 +1741,21 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
   async function drawExpression(cardId, entryId, expression, base, signal) {
     const look = EXPRESSION_LOOK[expression]
     if (!look) throw httpError(404, msg`没有这种表情`)
-    const { roster } = cleanCardMedia((await store.getCard(cardId)).media)
+    const { roster, style } = cleanCardMedia((await store.getCard(cardId)).media)
     const entry = roster.find(item => item.id === entryId)
     if (!entry) throw httpError(404, msg`名单里没有这个角色`)
     const picture = base ?? (await rosterRef(cardId, entryId))
     if (!picture) throw httpError(400, msg`先给${entry.name}画或上传立绘，再画表情`)
     const media = await settings()
     const tags = media.promptStyle === 'tags'
-    const scene = tags
+    const edit = tags
       ? `${SPRITE_SCENE}, same character, same outfit, same pose`
       : `Edit the reference picture of ${entry.name}: keep the same character, face, hair, outfit, pose, framing, art style and the plain white background; change only the facial expression, to ${look.words}`
+    const scene = [style, edit].filter(Boolean).join(', ')
     const lead = { ...entry, picture }
     const cast = { scene, characters: [{ entry: lead, action: tags ? [entry.outfit, look.tags].filter(Boolean).join(', ') : `with ${look.words}`, position: '' }], solo: lead, lead }
     const plain = { ...media, imageShape: 'portrait', imageReference: true, geminiReference: true, naiReference: true, naiNegative: [media.naiNegative, SPRITE_NEGATIVE].filter(Boolean).join(', '), sdNegative: [media.sdNegative, SPRITE_NEGATIVE].filter(Boolean).join(', ') }
-    const result = await render(plain, cardId, cast, cast, '', signal, { references: 'cast' })
+    const result = await render(plain, cardId, cast, cast, '', signal, { references: 'cast', negative: SPRITE_NEGATIVE })
     const fresh = media.imageBackend === 'sdwebui' || (media.imageBackend === 'comfy' && !describeWorkflow(await loadWorkflow().catch(() => null))?.placeholders.includes('reference'))
     const note = fresh ? msg`这种画图方式不能照着立绘改，表情是按长相重新画的，可能和立绘不太一样。` : ''
     return { ...result, note: [result.note, note].filter(Boolean).join(' ') }
@@ -1572,8 +1792,8 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     const media = await settingsFor(choice)
     const scene = typeof input.scene === 'string' && input.scene.trim() ? input.scene.trim().slice(0, 400) : PORTRAIT_SCENE
     const cast = { scene, characters: [{ entry, action: [entry.outfit, 'looking at viewer'].filter(Boolean).join(', '), position: '' }], solo: entry, lead: entry }
-    const plain = { ...media, imageShape: 'portrait', naiReference: false, imageReference: false, geminiReference: false, naiNegative: [media.naiNegative, 'nsfw, multiple views, text'].filter(Boolean).join(', '), sdNegative: [media.sdNegative, 'nsfw, multiple views, text'].filter(Boolean).join(', ') }
-    return render(plain, null, cast, cast, '', signal, { references: 'none' })
+    const plain = { ...media, imageShape: 'portrait', naiReference: false, imageReference: false, geminiReference: false, naiNegative: [media.naiNegative, PORTRAIT_NEGATIVE].filter(Boolean).join(', '), sdNegative: [media.sdNegative, PORTRAIT_NEGATIVE].filter(Boolean).join(', ') }
+    return render(plain, null, cast, cast, '', signal, { references: 'none', negative: PORTRAIT_NEGATIVE })
   }
 
   /**
@@ -1624,7 +1844,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     const { style } = cleanCardMedia(card.media)
     const cast = { scene: [style, AVATAR_SCENE].filter(Boolean).join(', '), characters: [{ entry, action: [entry.outfit, 'looking at viewer'].filter(Boolean).join(', '), position: '' }], solo: entry, lead: entry }
     const plain = { ...media, imageShape: 'square', naiReference: false, imageReference: false, geminiReference: false, naiNegative: [media.naiNegative, AVATAR_NEGATIVE].filter(Boolean).join(', '), sdNegative: [media.sdNegative, AVATAR_NEGATIVE].filter(Boolean).join(', ') }
-    const { buffer, backend, note } = await render(plain, cardId, cast, cast, '', signal, { references: 'cast' })
+    const { buffer, backend, note } = await render(plain, cardId, cast, cast, '', signal, { references: 'cast', negative: AVATAR_NEGATIVE })
     const type = extOf('', buffer) === 'jpg' ? 'jpeg' : extOf('', buffer)
     const how = from === 'draft' ? msg`名册里没有${card.name}的长相，这次由 ${model} 从卡里读出来画。` : from === 'description' ? msg`名册里没有${card.name}的长相，这次照着描述画；在「角色名册」里写好长相会更准。` : ''
     // Kept in 抽图历史 until taken (PUT /api/cards/:id/avatar with `history`), so drawing again loses nothing.

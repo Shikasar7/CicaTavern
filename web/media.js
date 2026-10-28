@@ -145,6 +145,14 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     document.dispatchEvent(new CustomEvent('cicatavern:card-media', { detail: { cardId: state.cardId, media: state.cardMedia } }))
   }
 
+  /** A 人设图 put in, taken back or removed (kept at once, before 保存): the saved cast again, with who has one now. */
+  async function refChanged(cardId) {
+    const media = await api(`/api/cards/${cardId}/media`).catch(() => null)
+    if (!media || state.cardId !== cardId) return
+    state.cardMedia = media
+    announceCardMedia()
+  }
+
   async function setCard(cardId) {
     state.cardId = cardId
     state.cardMedia = cardId ? await api(`/api/cards/${cardId}/media`).catch(() => state.cardMedia) : { voice: '', narratorVoice: '', style: '', styleNegative: '', lora: '', loraTrigger: '', loraStrength: 0.8 }
@@ -1293,10 +1301,10 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
           return [style ? t`画风：${style.length > 28 ? `${style.slice(0, 28)}…` : style}` : t`还没写画风`, lora ? t`LoRA：${lora}` : ''].filter(Boolean).join(' · ')
         },
         body: [
-          field(t`画风（写进画面提示词；NovelAI 每张都加，人设图也是）`, el('textarea', { name: 'style', rows: 2, text: card.style ?? '', placeholder: t`例如 anime style, delicate lineart, soft cel shading, soft lighting` })),
+          field(t`画风（写进画面提示词；人设图、立绘也加，NovelAI 每张都加）`, el('textarea', { name: 'style', rows: 2, text: card.style ?? '', placeholder: t`例如 anime style, delicate lineart, soft cel shading, soft lighting` })),
           field(t`画风负面（只用于 NovelAI，加在负面提示词后面）`, el('input', { name: 'styleNegative', value: card.styleNegative ?? '', placeholder: t`例如 realistic, 3d, chibi` })),
           field(
-            t`整卡 LoRA（只用于 ComfyUI；名册认出人物时改用她自己的）`,
+            t`整卡 LoRA（只用于 ComfyUI；人设图、立绘也用，名册里自带 LoRA 的角色单独出镜时改用她自己的）`,
             el('select', { name: 'lora' }, [
               option('', t`不用`, card.lora),
               ...loraInfo.loras.map(name => option(name, name, card.lora)),
@@ -1695,6 +1703,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         toast(t`人设图已上传，保存后生效`)
         // The one it replaced joins the old ones.
         loadKept()
+        refChanged(cardId)
       })
       const oldBox = el('div', { class: 'roster-old' })
       const syncOld = () => oldBox.replaceChildren(...[historyStrip(el, keptItems(cardId, kept.slots[`roster:${entry.id}`]), {
@@ -1704,6 +1713,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
           kept.slots = view.history?.slots ?? kept.slots
           setRef(true)
           syncOld()
+          refChanged(cardId)
         }),
         onRemove: guard(async item => {
           kept.slots = (await api(`/api/cards/${cardId}/history/${item.file}`, { method: 'DELETE' })).slots ?? {}
@@ -1732,8 +1742,9 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         portrait.disabled = true
         thumb.replaceChildren(el('span', { text: t`正在画…` }))
         try {
-          const { image } = await api(`/api/cards/${cardId}/roster/portrait`, { method: 'POST', body: { entry: current, ...picked.body } })
+          const { image, note } = await api(`/api/cards/${cardId}/roster/portrait`, { method: 'POST', body: { entry: current, ...picked.body } })
           await upload(await (await fetch(image)).blob())
+          if (note) toast(note, 6000)
         } catch (error) {
           setRef(node.dataset.ref === '1')
           throw error
@@ -1745,6 +1756,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       removeRef.onclick = guard(async () => {
         await api(`/api/cards/${cardId}/roster/${entry.id}/ref`, { method: 'DELETE' })
         setRef(false)
+        refChanged(cardId)
       })
       const player = el('input', { type: 'checkbox', 'data-field': 'player', checked: entry.player })
       player.onchange = () => {

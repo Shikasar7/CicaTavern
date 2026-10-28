@@ -554,9 +554,12 @@ function errorMessage(text) {
 
 async function failIfBad(res) {
   if (res.statusCode >= 200 && res.statusCode < 300) return
-  const message = errorMessage(await readText(res, 4096)).slice(0, 300)
+  const text = await readText(res)
+  const message = errorMessage(text).slice(0, 300)
   const error = new Error(`${res.statusCode} ${message || res.statusMessage || ''}`.trim())
   error.providerStatus = res.statusCode
+  // All of it, for a caller that reads more than the message (ComfyUI's node_errors).
+  error.body = text
   throw error
 }
 

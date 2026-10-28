@@ -20,19 +20,19 @@ const shippedUpTo = (versions, current) => (Array.isArray(versions) ? versions :
   .filter(entry => entry?.version && Array.isArray(entry.items) && entry.items.length && compareVersions(entry.version, current) <= 0)
 
 /**
- * A series' notes as they read: the release first, then the fixes after it
- * (1.8.0, 1.8.1), up to the one running.
+ * A series' notes as they read, newest first: the latest fix, then the ones
+ * before it, then the release (1.8.1, 1.8.0), up to the one running.
  */
 export function seriesNotes(versions, version) {
   return shippedUpTo(versions, version)
     .filter(entry => seriesOf(entry.version) === seriesOf(version))
-    .sort((a, b) => compareVersions(a.version, b.version))
+    .sort((a, b) => compareVersions(b.version, a.version))
 }
 
 /**
  * The notes due after an update: every version after the one last seen, up to
- * the one running. A series any of whose versions is due shows whole (an update
- * to 1.8.1 shows 1.8.0's pages, then 1.8.1's), newest series first. Seen
+ * the one running. A series any of whose versions is due shows whole, newest
+ * first (an update to 1.8.1 shows 1.8.1's pages, then 1.8.0's), newest series first. Seen
  * nothing yet: someone who already played (`returning`) gets the running
  * version's series; a new player nothing.
  * @param versions - notes.json's versions ({ version, items }).

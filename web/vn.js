@@ -36,6 +36,14 @@ const SPRITE_SIDE = 1400
 // Where the ones on stage stand (percent across), by how many there are.
 const SLOTS = { 1: [50], 2: [32, 68], 3: [20, 50, 80] }
 const FACE_LABEL = { neutral: t`平静`, smile: t`微笑`, happy: t`开心`, shy: t`害羞`, angry: t`生气`, sad: t`难过`, surprised: t`惊讶`, thinking: t`思考` }
+// Why a 立绘 cannot be cut out (web/shared/cutout.js's why; 'load': not a picture the page can read).
+const WHY_UNUSABLE = {
+  busy: t`背景不是一种纯色，抠不出人物（重画一张，或上传白底的图）`,
+  fill: t`人物占满了画面，几乎没有背景可抠（重画一张）`,
+  faint: t`人物和背景颜色太近，几乎整张都被当成了背景（重画一张）`,
+  edge: t`画面两边还留着一大块（另一种颜色的背景，或者人物被画框切掉了），抠不干净（重画一张）`,
+  load: t`图片读不出来`,
+}
 // A phone (or a phone on its side) has room for two.
 const NARROW = '(max-width: 560px), (orientation: landscape) and (max-height: 520px)'
 
@@ -525,12 +533,21 @@ export function initVn(deps) {
     if (media || !fresh) takeRoster(cardId, media?.roster)
   }
 
-  /** A card's 角色名册 as it is now: the names, the stage and the library follow. */
+  /**
+   * A card's 角色名册 as it is now: the names, the stage and the library follow.
+   * Its 人设图 and picture are cut out again: they keep their address when replaced
+   * (a drawn 立绘 gets a new file name each time).
+   */
   function takeRoster(cardId, roster) {
     state.roster.set(cardId, Array.isArray(roster) ? roster : [])
     cast.none.clear()
+    for (const url of cast.cuts.keys()) if (url.startsWith(`/api/cards/${cardId}/`)) cast.cuts.delete(url)
     if (state.cardId !== cardId) return
-    if (state.on) render(getChat())
+    if (state.on) {
+      render(getChat())
+      // The same line stays on screen: its people in their new pictures.
+      drawStage()
+    }
     if (library?.open) renderLibrary()
   }
   // Saved in 配图与朗读 (web/media.js): the cast here is that one from now on.
@@ -1240,7 +1257,8 @@ export function initVn(deps) {
     const missing = cast.missing
     const offered = missing && (prefs.newSprite === 'ask' || art.tried.has(`sprite:${missing.entry.id}`))
     if (offered && missing.cardId === cardId && !art.jobs.get(cardId)?.key.endsWith(missing.entry.id)) {
-      parts.push(el('span', { text: t`「${missing.entry.name}」还没有立绘` }))
+      const trouble = spriteTrouble(cardId, missing.entry.id)
+      parts.push(el('span', { text: trouble ? t`「${missing.entry.name}」的立绘用不了：${trouble}` : t`「${missing.entry.name}」还没有立绘` }))
       parts.push(control(t`画立绘`, '', () => drawSprite(cardId, missing.entry)))
     }
     sceneChip.replaceChildren(...parts)
@@ -1335,8 +1353,9 @@ export function initVn(deps) {
   }
 
   // ─── 立绘: the ones in the scene, cut out of a plain background ──────
-  // lists: { entryId: 立绘 }; faces: { entryId: { smile: … } } (表情差分); none: names with no picture at all.
-  const cast = { lists: new Map(), faces: new Map(), loading: new Map(), cuts: new Map(), token: 0, missing: null, none: new Map() }
+  // lists: { entryId: 立绘 }; faces: { entryId: { smile: … } } (表情差分); none: names with no picture at all;
+  // why: a picture's address → why it could not be cut out (cutOut's why, or 'load').
+  const cast = { lists: new Map(), faces: new Map(), loading: new Map(), cuts: new Map(), why: new Map(), token: 0, missing: null, none: new Map() }
 
   /** A sprites view from the server (GET, a drawing, an upload) becomes the lists. */
   function takeSprites(cardId, view) {
@@ -1377,7 +1396,10 @@ export function initVn(deps) {
         const blob = await fetch(url).then(res => (res.ok ? res.blob() : null)).catch(() => null)
         if (!blob) return null
         const bitmap = await createImageBitmap(blob).catch(() => null)
-        if (!bitmap) return null
+        if (!bitmap) {
+          cast.why.set(url, 'load')
+          return null
+        }
         const scale = Math.min(1, SPRITE_SIDE / bitmap.height)
         const width = Math.round(bitmap.width * scale)
         const height = Math.round(bitmap.height * scale)
@@ -1387,7 +1409,10 @@ export function initVn(deps) {
         bitmap.close()
         const image = context.getImageData(0, 0, width, height)
         const result = cutOut(image)
-        if (!result.ok) return null
+        if (!result.ok) {
+          cast.why.set(url, result.why)
+          return null
+        }
         context.putImageData(image, 0, 0)
         // Just the figure, so it stands on the bottom edge.
         const { x, y, width: w, height: h } = result.box
@@ -1398,6 +1423,13 @@ export function initVn(deps) {
       })())
     }
     return cast.cuts.get(url)
+  }
+
+  /** Why someone's drawn or uploaded 立绘 is not used (cut out in cutPicture first), '' when it is or there is none. */
+  function spriteTrouble(cardId, entryId) {
+    const sprite = entryId ? cast.lists.get(cardId)?.[entryId] : null
+    const why = sprite ? cast.why.get(`/api/sprites/${cardId}/${sprite.file}`) : ''
+    return why ? WHY_UNUSABLE[why] ?? WHY_UNUSABLE.load : ''
   }
 
   /** The 立绘 that would show for someone: { src, kind } or null. */
@@ -1776,11 +1808,19 @@ export function initVn(deps) {
       const entry = names.find(item => item.id === member.id) ?? { name: member.name, id: member.id, keys: [] }
       const thumb = el('div', { class: 'vn-library-sprite' }, [el('span', { class: 'muted small', text: '…' })])
       const kindLabel = el('span', { class: 'muted small' })
+      const drawn = list[member.id]
+      const drawnLabel = drawn?.source === 'upload' ? t`上传的立绘` : t`画的立绘`
+      // A 立绘 there that cannot be cut out says why (the picture shown is then the 人设图, or none).
+      const troubleLine = el('span', { class: 'muted small', hidden: true })
       spriteFor(cardId, entry).then(found => {
         thumb.replaceChildren(found ? el('img', { src: found.src, alt: '' }) : el('span', { class: 'muted small', text: t`没有能用的图` }))
-        kindLabel.textContent = found ? { sprite: list[member.id]?.source === 'upload' ? t`上传的立绘` : t`画的立绘`, ref: t`人设图抠出`, avatar: t`头像抠出` }[found.kind] : ''
+        kindLabel.textContent = found ? { sprite: drawnLabel, ref: t`人设图抠出`, avatar: t`头像抠出` }[found.kind] : ''
+        const trouble = found?.kind === 'sprite' ? '' : spriteTrouble(cardId, member.id)
+        troubleLine.textContent = trouble ? t`${drawnLabel}用不了：${trouble}` : ''
+        troubleLine.hidden = !trouble
       })
-      const drawn = list[member.id]
+      // Drawn from the looks the 名册 had then (scenes.mjs keeps them): they have changed since.
+      const changed = drawn?.source === 'drawn' && typeof drawn.looks === 'string' && (drawn.looks !== (member.looks ?? '') || drawn.outfit !== (member.outfit ?? ''))
       const busy = art.jobs.get(cardId)?.key === `sprite:${member.id}`
       const tools = [
         act(drawn ? t`重画` : t`画立绘`, () => drawSprite(cardId, entry), { disabled: !member.looks || busy, title: member.looks ? '' : t`先在「配图 → 角色名单」里写长相` }),
@@ -1799,7 +1839,7 @@ export function initVn(deps) {
       ]
       return el('figure', { class: 'vn-library-item' }, [
         thumb,
-        el('figcaption', {}, [el('b', { text: member.player ? t`${entry.name}（玩家）` : entry.name }), kindLabel]),
+        el('figcaption', {}, [el('b', { text: member.player ? t`${entry.name}（玩家）` : entry.name }), kindLabel, troubleLine, changed ? el('span', { class: 'muted small', text: t`名册里的长相改过了，重画会按现在的画` }) : null]),
         el('div', { class: 'row' }, tools),
         oldRow(cardId, keptItems(cardId, kept[`sprite:${member.id}`]), t`旧立绘`, view => spriteTaken(cardId, view)),
         member.player ? null : pack?.cardId === cardId && pack.memberId === member.id ? packView(cardId, entry, member) : faceRow(cardId, entry, member, Boolean(drawn || member.ref), kept),

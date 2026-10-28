@@ -7,7 +7,7 @@ import path from 'node:path'
 import { baseName, normalizeCard, previousVersion } from '../server/cards.mjs'
 import { createChat } from '../server/chats.mjs'
 import { deflateRawSync } from 'node:zlib'
-import { checkWorkflow, cleanCardMedia, cleanMedia, cleanNaiToken, cleanPrompt, createMedia, fillWorkflow, imagePromptRequest, imageSize, unzipFirst, withLora, withTrigger } from '../server/media.mjs'
+import { checkWorkflow, cleanCardMedia, cleanMedia, cleanNaiToken, cleanPrompt, comfyFailure, comfyRefusal, createMedia, fillWorkflow, fitSize, imagePromptRequest, imageSize, loraFor, modelFamily, unzipFirst, withLora, withNegative, withTrigger } from '../server/media.mjs'
 import { normalizeProvider } from '../server/providers.mjs'
 import { createStore } from '../server/store.mjs'
 
@@ -665,6 +665,112 @@ test('reference pictures: someone other than the card\'s character is never draw
   assert.equal(calls.at(-1).references.length, 1)
 })
 
+test("ComfyUI: a workflow with its size written in draws at the 画幅 asked for; 人设图 and 立绘 upright, with the card's LoRA, style and negatives", async t => {
+  const { fake, store, chat, card, media } = await setup(t)
+  await store.saveSettings({ media: cleanMedia({ imageBackend: 'comfy', imageShape: 'landscape', promptStyle: 'tags' }, (await store.getSettings()).media) })
+  // As ComfyUI exports it: the size and the negative are number and text fields, only the prompt a placeholder.
+  await media.saveWorkflow({
+    4: { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: 'base.safetensors' } },
+    5: { class_type: 'EmptyLatentImage', inputs: { width: 1216, height: 832, batch_size: 1 } },
+    6: { class_type: 'CLIPTextEncode', inputs: { text: 'masterpiece, %prompt%', clip: ['4', 1] } },
+    7: { class_type: 'CLIPTextEncode', inputs: { text: 'lowres, bad anatomy', clip: ['4', 1] } },
+    3: { class_type: 'KSampler', inputs: { seed: 1, model: ['4', 0], positive: ['6', 0], negative: ['7', 0], latent_image: ['5', 0] } },
+    11: { class_type: 'LatentUpscale', inputs: { upscale_method: 'nearest-exact', width: 1824, height: 1248, crop: 'disabled', samples: ['3', 0] } },
+    8: { class_type: 'VAEDecode', inputs: { samples: ['11', 0], vae: ['4', 2] } },
+    9: { class_type: 'SaveImage', inputs: { images: ['8', 0] } },
+  })
+  await media.saveCardMedia(card.id, {
+    style: 'watercolor',
+    lora: 'styleA.safetensors',
+    loraTrigger: 'stA',
+    loraStrength: 0.7,
+    roster: [
+      { id: 'linxue01', name: '林雪', kind: 'girl', looks: 'short black hair', outfit: 'police uniform' },
+      { id: 'aming001', name: '阿明', kind: 'boy', looks: 'short brown hair', lora: 'aming.safetensors', loraTrigger: 'aming' },
+    ],
+  })
+  const sent = () => fake.workflowSent()
+  const size = () => [sent()[5].inputs.width, sent()[5].inputs.height]
+  const lora = () => Object.values(sent()).find(node => node.class_type === 'LoraLoader')?.inputs.lora_name ?? null
+
+  // 正文配图 at each 画幅: the workflow's own number of pixels, at the shape picked; the hires pass follows.
+  await media.generateImage(chat, 'root', 'a quiet street')
+  assert.deepEqual(size(), [1216, 832])
+  await store.saveSettings({ media: cleanMedia({ imageShape: 'portrait' }, (await store.getSettings()).media) })
+  await media.generateImage(chat, 'root', 'a quiet street')
+  assert.deepEqual(size(), [832, 1216])
+  assert.deepEqual([sent()[11].inputs.width, sent()[11].inputs.height], [1248, 1824])
+  await store.saveSettings({ media: cleanMedia({ imageShape: 'square' }, (await store.getSettings()).media) })
+  await media.generateImage(chat, 'root', 'a quiet street')
+  assert.deepEqual(size(), [1024, 1024])
+  assert.equal(lora(), 'styleA.safetensors')
+  assert.equal(sent()[7].inputs.text, 'lowres, bad anatomy', 'a picture of the story adds nothing to the negative')
+
+  // A 立绘 of someone without a LoRA of their own: upright whatever the 画幅, the card's LoRA, trigger and style,
+  // and its negative after the workflow's.
+  await store.saveSettings({ media: cleanMedia({ imageShape: 'landscape' }, (await store.getSettings()).media) })
+  await media.drawSprite(card.id, 'linxue01')
+  assert.deepEqual(size(), [832, 1216])
+  assert.equal(lora(), 'styleA.safetensors')
+  assert.match(sent()[6].inputs.text, /^masterpiece, stA, 1girl, watercolor, solo, upper body, .*white background.*short black hair, police uniform/)
+  assert.match(sent()[7].inputs.text, /^lowres, bad anatomy, multiple views, text, scenery, detailed background/)
+  // Someone with their own LoRA: theirs instead.
+  await media.drawSprite(card.id, 'aming001')
+  assert.equal(lora(), 'aming.safetensors')
+  assert.match(sent()[6].inputs.text, /^masterpiece, aming, /)
+  // 人设图 and a 表情: the same.
+  await media.drawPortrait(card.id, { id: 'linxue01', name: '林雪', kind: 'girl', looks: 'short black hair' })
+  assert.deepEqual(size(), [832, 1216])
+  assert.equal(lora(), 'styleA.safetensors')
+  assert.match(sent()[6].inputs.text, /watercolor/)
+  assert.match(sent()[7].inputs.text, /nsfw, multiple views, text, detailed background, gradient background, indoors, window, .*head out of frame$/, 'a 人设图 is cut out too: nothing pulling it off white')
+  await media.drawExpression(card.id, 'linxue01', 'smile', PNG)
+  assert.deepEqual([size(), lora()], [[832, 1216], 'styleA.safetensors'])
+  assert.match(sent()[6].inputs.text, /watercolor/)
+  assert.match(sent()[7].inputs.text, /detailed background/)
+
+  // Two people in a frame: the card's LoRA as its 画风 (none of theirs: they would bleed).
+  await media.generateImage(chat, 'root', '场景: office\n[林雪] saluting\n[阿明] nodding')
+  assert.equal(lora(), 'styleA.safetensors')
+  // A card LoRA that is someone's own is their face: not on anybody else.
+  await media.saveCardMedia(card.id, { ...(await media.cardMediaView(card.id)), lora: 'aming.safetensors', loraTrigger: 'aming' })
+  await media.drawSprite(card.id, 'linxue01')
+  assert.equal(lora(), null)
+  await media.generateImage(chat, 'root', '场景: office\n[林雪] saluting\n[阿明] nodding')
+  assert.equal(lora(), null)
+  await media.drawSprite(card.id, 'aming001')
+  assert.equal(lora(), 'aming.safetensors')
+})
+
+test('fitSize, withNegative and loraFor', () => {
+  // SD 1.5 stays small; the Efficient Loader's own fields; a workflow with placeholders is left as it is.
+  const sd15 = { 5: { class_type: 'EmptyLatentImage', inputs: { width: 512, height: 768, batch_size: 1 } } }
+  assert.deepEqual(fitSize(sd15, 1216, 832)[5].inputs, { width: 768, height: 512, batch_size: 1 })
+  assert.deepEqual(fitSize(sd15, 1024, 1024)[5].inputs, { width: 640, height: 640, batch_size: 1 })
+  assert.deepEqual(fitSize(sd15, 832, 1216)[5].inputs, { width: 512, height: 768, batch_size: 1 }, 'already upright: its own size kept')
+  const efficient = { 1: { class_type: 'Efficient Loader', inputs: { empty_latent_width: 1024, empty_latent_height: 1024 } } }
+  assert.deepEqual(fitSize(efficient, 832, 1216)[1].inputs, { empty_latent_width: 832, empty_latent_height: 1216 })
+  const placed = { 5: { class_type: 'EmptyLatentImage', inputs: { width: '{{width}}', height: '{{height}}' } } }
+  assert.equal(fitSize(placed, 832, 1216), placed)
+  assert.deepEqual(fitSize({ 2: { class_type: 'ImageScale', inputs: { width: 512, height: 512 } } }, 832, 1216)[2].inputs, { width: 512, height: 512 }, 'not a latent: left alone')
+
+  const sampled = { 3: { class_type: 'KSampler', inputs: { negative: ['7', 0] } }, 7: { class_type: 'CLIPTextEncode', inputs: { text: 'lowres, ' } } }
+  assert.equal(withNegative(sampled, 'scenery')[7].inputs.text, 'lowres, scenery')
+  assert.equal(withNegative(sampled, '')[7].inputs.text, 'lowres, ')
+  const own = { ...sampled, 7: { class_type: 'CLIPTextEncode', inputs: { text: '{{negative}}' } } }
+  assert.equal(withNegative(own, 'scenery'), own, '{{negative}} is filled instead')
+
+  const card = cleanCardMedia({ lora: 'style.safetensors', roster: [{ id: 'aaaa0001', name: '甲', looks: 'x' }, { id: 'bbbb0001', name: '乙', looks: 'y', lora: 'yi.safetensors' }] })
+  const [jia, yi] = card.roster
+  const castOf = (...people) => ({ characters: people.map(entry => ({ entry })), solo: people.length === 1 ? people[0] : null })
+  assert.equal(loraFor(card, null).lora, 'style.safetensors')
+  assert.equal(loraFor(card, castOf(jia)).lora, 'style.safetensors')
+  assert.equal(loraFor(card, castOf(yi)).lora, 'yi.safetensors')
+  assert.equal(loraFor(card, castOf(jia, yi)).lora, 'style.safetensors')
+  assert.equal(loraFor(card, castOf(jia), { scenery: true }), null)
+  assert.equal(loraFor({ ...card, lora: 'yi.safetensors' }, castOf(jia)), null)
+})
+
 test('ComfyUI: each reference picture is uploaded under a name of its own', async t => {
   const { fake, store, chat, card, media } = await setup(t)
   await store.saveSettings({ media: cleanMedia({ imageBackend: 'comfy' }, (await store.getSettings()).media) })
@@ -679,6 +785,123 @@ test('ComfyUI: each reference picture is uploaded under a name of its own', asyn
   assert.match(names[0], new RegExp(`^tavern-${card.id}-[0-9a-f]{16}\\.png$`))
   assert.notEqual(names[0], names[1], 'two pictures never share a name')
   assert.equal(names[0], names[2], 'the same picture keeps its name')
+})
+
+test('ComfyUI: a 人设图 or a picture with no card never takes the old 人设图 as reference; a LoRA goes after a diffusion-model loader, or is left out with a note', async t => {
+  const { fake, store, chat, card, media } = await setup(t)
+  await store.saveSettings({ media: cleanMedia({ imageBackend: 'comfy', promptStyle: 'tags' }, (await store.getSettings()).media) })
+  await media.saveWorkflow({ 6: { class_type: 'CLIPTextEncode', inputs: { text: '{{prompt}}' } }, 10: { class_type: 'LoadImage', inputs: { image: '{{reference}}' } } })
+  await media.saveCardMedia(card.id, { roster: [{ id: 'linxue01', name: '林雪', kind: 'girl', looks: 'short black hair' }] })
+  await media.saveRosterRef(card.id, 'linxue01', `data:image/png;base64,${Buffer.concat([PNG, Buffer.from('old portrait')]).toString('base64')}`)
+  const lastUpload = () => fake.seen.filter(r => r.url === '/upload/image').at(-1)
+  // Drawn again from new looks: a white picture goes along, not the 人设图 it replaces, and the page is told.
+  const portrait = await media.drawPortrait(card.id, { id: 'linxue01', name: '林雪', kind: 'girl', looks: 'long silver hair' })
+  assert.equal(lastUpload().form.includes('old portrait'), false)
+  assert.match(/filename="([^"]+)"/.exec(lastUpload().form)[1], new RegExp(`^tavern-${card.id}-[0-9a-f]{16}\\.png$`))
+  assert.match(portrait.note, /白图/)
+  // A picture of her in the story still keeps her face.
+  await media.generateImage(chat, 'root', '[林雪] saluting')
+  assert.ok(lastUpload().form.includes('old portrait'))
+  // No card at all (a page's background, a card being created): drawn, with the white picture.
+  const backdrop = await media.drawBackdrop('a quiet street')
+  assert.match(/filename="([^"]+)"/.exec(lastUpload().form)[1], /^tavern-blank-[0-9a-f]{16}\.png$/)
+  assert.deepEqual(backdrop.buffer, PNG)
+  await media.drawCardArt({ name: '新角色', looks: 'short red hair' })
+
+  // Flux and the like: the model loaded on its own, a model-only LoRA after it; the text encoder untouched.
+  await media.saveCardMedia(card.id, { ...(await media.cardMediaView(card.id)), lora: 'styleA.safetensors', loraTrigger: 'stA' })
+  await media.saveWorkflow({
+    1: { class_type: 'UNETLoader', inputs: { unet_name: 'flux1-dev.safetensors', weight_dtype: 'default' } },
+    2: { class_type: 'DualCLIPLoader', inputs: { clip_name1: 'clip_l.safetensors', clip_name2: 't5xxl.safetensors', type: 'flux' } },
+    6: { class_type: 'CLIPTextEncode', inputs: { text: '{{prompt}}', clip: ['2', 0] } },
+    3: { class_type: 'KSampler', inputs: { model: ['1', 0], positive: ['6', 0] } },
+  })
+  await media.drawSprite(card.id, 'linxue01')
+  const flux = fake.workflowSent()
+  assert.deepEqual(flux[7], { class_type: 'LoraLoaderModelOnly', _meta: { title: 'Card LoRA' }, inputs: { lora_name: 'styleA.safetensors', strength_model: 0.8, model: ['1', 0] } })
+  assert.deepEqual(flux[3].inputs.model, ['7', 0])
+  assert.deepEqual(flux[6].inputs.clip, ['2', 0])
+  assert.match(flux[6].inputs.text, /^stA, /)
+  // Nothing that loads a model: drawn as it is, the LoRA left out and said so.
+  await media.saveWorkflow({ 6: { class_type: 'CLIPTextEncode', inputs: { text: '{{prompt}}' } } })
+  const plain = await media.generateImage(chat, 'root', 'a quiet street')
+  assert.equal(Object.values(fake.workflowSent()).some(node => /Lora/.test(node.class_type)), false)
+  assert.match(plain.note, /没带 LoRA「styleA\.safetensors」/)
+})
+
+test('ComfyUI: why it refused a workflow, or failed running it, is passed on', async t => {
+  // As ComfyUI answers POST /prompt for a LoRA it does not have.
+  const missing = {
+    error: { type: 'prompt_outputs_failed_validation', message: 'Prompt outputs failed validation', details: '', extra_info: {} },
+    node_errors: { 10: { errors: [{ type: 'value_not_in_list', message: 'Value not in list', details: "lora_name: 'gone.safetensors' not in ['linxue.safetensors']", extra_info: { input_name: 'lora_name', received_value: 'gone.safetensors' } }], dependent_outputs: ['9'], class_type: 'LoraLoader' } },
+  }
+  assert.match(comfyRefusal(JSON.stringify(missing)), /^ComfyUI 里没有 LoRA「gone\.safetensors」/)
+  const checkpoint = structuredClone(missing)
+  Object.assign(checkpoint.node_errors[10], { class_type: 'CheckpointLoaderSimple' })
+  Object.assign(checkpoint.node_errors[10].errors[0].extra_info, { input_name: 'ckpt_name', received_value: 'old.safetensors' })
+  assert.equal(comfyRefusal(JSON.stringify(checkpoint)), 'ComfyUI 里没有「old.safetensors」（CheckpointLoaderSimple 节点 10 的 ckpt_name）：把工作流里的文件名改成 ComfyUI 里有的，再导入')
+  assert.equal(comfyRefusal(JSON.stringify({ error: { type: 'prompt_no_outputs', message: 'Prompt has no outputs', details: '' }, node_errors: {} })), 'ComfyUI 不接受这个工作流：Prompt has no outputs')
+  assert.equal(comfyRefusal('<html>'), '')
+  // Its history when a node fails while running.
+  const oom = { status: { status_str: 'error', completed: false, messages: [['execution_start', {}], ['execution_error', { node_id: '3', node_type: 'KSampler', exception_message: 'Allocation on device \n' }]] } }
+  assert.match(comfyFailure(oom), /^ComfyUI 执行出错：KSampler 节点 3：Allocation on device（显存不够/)
+  assert.equal(comfyFailure({ status: { status_str: 'error' } }), 'ComfyUI 执行出错，去 ComfyUI 界面看看是哪个节点')
+
+  const { store, chat, media } = await setup(t)
+  let refuse = true
+  const comfy = await tinyServer(t, {
+    '/prompt': (req, res) => (refuse ? res.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify(missing)) : res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ prompt_id: 'p1' }))),
+    '/history/p1': (req, res) => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ p1: oom })),
+  })
+  await store.saveSettings({ media: cleanMedia({ imageBackend: 'comfy', comfyUrl: comfy.base }, (await store.getSettings()).media) })
+  await media.saveWorkflow({ 6: { class_type: 'CLIPTextEncode', inputs: { text: '{{prompt}}' } } })
+  await assert.rejects(media.generateImage(chat, 'root', 'x'), /ComfyUI 里没有 LoRA「gone\.safetensors」/)
+  refuse = false
+  await assert.rejects(media.generateImage(chat, 'root', 'x'), /KSampler 节点 3：Allocation on device/)
+})
+
+test('ComfyUI: a LoRA of another family than the model is said so; SDXL text encoders take the negative; waiting in the queue is not drawing time', async t => {
+  assert.equal(modelFamily({ 'modelspec.architecture': 'stable-diffusion-xl-v1-base/lora', ss_base_model_version: 'sdxl_base_v1-0' }, 'linxue.safetensors'), 'sdxl')
+  assert.equal(modelFamily({ ss_sd_model_name: 'runwayml/stable-diffusion-v1-5', ss_v2: 'False' }, 'Moxin_Shukezouma11.safetensors'), 'sd1')
+  assert.equal(modelFamily({}, 'waiIllustriousSDXL_v170.safetensors'), 'sdxl')
+  assert.equal(modelFamily({}, 'flux1-dev-fp8.safetensors'), 'flux')
+  assert.equal(modelFamily({}, 'pixel_art.safetensors'), '', 'not told by a name that only happens to hold the letters')
+  const sdxl = { 3: { class_type: 'KSampler', inputs: { negative: ['7', 0] } }, 7: { class_type: 'CLIPTextEncodeSDXL', inputs: { text_g: 'lowres', text_l: 'lowres' } } }
+  assert.deepEqual(withNegative(sdxl, 'scenery')[7].inputs, { text_g: 'lowres, scenery', text_l: 'lowres, scenery' })
+
+  const { store, chat, card, media: plain } = await setup(t)
+  const state = { pendingUntil: 0, doneAt: 0 }
+  const json = (res, body) => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(body))
+  const comfy = await tinyServer(t, {
+    '/view_metadata/loras': (req, res) => json(res, { ss_sd_model_name: 'runwayml/stable-diffusion-v1-5' }),
+    '/view_metadata/checkpoints': (req, res) => res.writeHead(404).end(),
+    '/prompt': (req, res) => json(res, { prompt_id: 'p1' }),
+    '/queue': (req, res) => json(res, { queue_running: [], queue_pending: Date.now() < state.pendingUntil ? [[1, 'p1', {}, {}, []]] : [] }),
+    '/history/p1': (req, res) => json(res, Date.now() >= state.doneAt ? { p1: { status: { completed: true }, outputs: { 9: { images: [{ filename: 'x.png', subfolder: '', type: 'output' }] } } } } : {}),
+    '/view': (req, res) => res.writeHead(200, { 'content-type': 'image/png' }).end(PNG),
+  })
+  await store.saveSettings({ media: cleanMedia({ imageBackend: 'comfy', comfyUrl: comfy.base }, (await store.getSettings()).media) })
+  await plain.saveWorkflow({
+    4: { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: 'waiIllustriousSDXL_v170.safetensors' } },
+    6: { class_type: 'CLIPTextEncode', inputs: { text: '{{prompt}}', clip: ['4', 1] } },
+  })
+  await plain.saveCardMedia(card.id, { lora: 'Moxin_Shukezouma11.safetensors' })
+  const drawn = await plain.generateImage(chat, 'root', 'a quiet street')
+  assert.match(drawn.note, /LoRA「Moxin_Shukezouma11\.safetensors」是 SD 1\.5 的，工作流的底模「waiIllustriousSDXL_v170\.safetensors」是 SDXL/)
+  await plain.generateImage(chat, 'root', 'a quiet street')
+  assert.equal(comfy.seen.filter(r => r.url.startsWith('/view_metadata/loras')).length, 1, 'asked once')
+
+  // A picture that waits its turn longer than it may run is still drawn; one that runs too long is given up.
+  const media = createMedia(store, { comfyTimes: { poll: 10, run: 150, queue: 3000 } })
+  state.pendingUntil = Date.now() + 600
+  state.doneAt = Date.now() + 700
+  assert.deepEqual(await media.readImage(chat.id, (await media.generateImage(chat, 'root', 'x')).file), PNG)
+  state.pendingUntil = 0
+  state.doneAt = Date.now() + 60_000
+  await assert.rejects(media.generateImage(chat, 'root', 'x'), /十分钟还没出图/)
+  const short = createMedia(store, { comfyTimes: { poll: 10, run: 100, queue: 300 } })
+  state.pendingUntil = Date.now() + 60_000
+  await assert.rejects(short.generateImage(chat, 'root', 'x'), /一小时还没轮到这张/)
 })
 
 /** A server answering each path with `routes[path](req, res)`, every request noted. */

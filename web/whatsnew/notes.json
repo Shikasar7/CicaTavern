@@ -526,6 +526,34 @@
           }
         }
       ]
+    },
+    {
+      "version": "2.0.4",
+      "date": "2026-10",
+      "items": [
+        {
+          "image": "2.0.4-sprites.webp",
+          "zh": {
+            "title": "立绘画得出来，也用得上了",
+            "text": "画幅选竖幅就画竖幅：ComfyUI 工作流里写死了尺寸也照选的来，立绘和人设图站直了画，不再斜着挤在横图里。\n卡上的 LoRA 和画风，视觉小说的立绘、人设图、表情也用上，和正文配图一个画风；在名册里换了人设图、改了长相，立绘这边马上跟着变。"
+          },
+          "en": {
+            "title": "Sprites you can actually use",
+            "text": "Pick portrait and you get portrait: even a ComfyUI workflow with its size written in follows the aspect you chose, so sprites and character pictures stand upright instead of leaning across a wide frame.\nThe card's LoRA and style now reach the visual novel's sprites, character pictures and expressions, matching the story's pictures; change someone's picture or looks in the cast list and their sprite follows at once."
+          }
+        },
+        {
+          "icon": "🔧",
+          "zh": {
+            "title": "ComfyUI 出问题时说清楚",
+            "text": "缺 LoRA 或文件、节点运行失败、显存不够、LoRA 和底模不是同一系列，都会直接告诉你原因，不再只是「画图失败」。\nFlux、GGUF 这类只加载模型本体的工作流也能挂卡的 LoRA；排在别的任务后面时最多等一小时。另外，「更新了什么」改成从新到旧排。"
+          },
+          "en": {
+            "title": "ComfyUI says what went wrong",
+            "text": "A missing LoRA or file, a node that failed, running out of video memory, a LoRA from another model family: you are told why, not just \"drawing failed\".\nWorkflows that load only the diffusion model (Flux, GGUF) take the card's LoRA too, and a picture waiting behind other jobs gets an hour. Also, What's new now reads newest first."
+          }
+        }
+      ]
     }
   ]
 }

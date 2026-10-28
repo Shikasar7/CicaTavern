@@ -295,12 +295,16 @@ export function createScenes(store, { media, history = null }) {
     return spriteView(cardId)
   }
 
-  /** A half-body picture of a cast member on a plain background (media.drawSprite). */
+  /**
+   * A half-body picture of a cast member on a plain background (media.drawSprite),
+   * kept with the looks and outfit it was drawn from: the page says when the 名册 has changed them since.
+   */
   async function drawSprite(cardId, entryId, signal) {
     const entry = await memberOf(cardId, entryId)
     return alone(cardId, msg`${entry.name}的立绘`, async () => {
       const picture = await media.drawSprite(cardId, entryId, signal)
-      return { ...(await putSprite(cardId, entryId, picture.buffer, { backend: picture.backend, source: 'drawn' })), ...(picture.note ? { note: picture.note } : {}) }
+      const from = { looks: entry.looks ?? '', outfit: entry.outfit ?? '' }
+      return { ...(await putSprite(cardId, entryId, picture.buffer, { backend: picture.backend, source: 'drawn', ...from })), ...(picture.note ? { note: picture.note } : {}) }
     })
   }
 
