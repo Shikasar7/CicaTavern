@@ -816,7 +816,6 @@ export default {
   "角色定义后": "After character definition",
   "上下文末尾": "End of context",
   "和你聊、写方案用哪个模型": "Which model talks with you and writes the plan",
-  "所有草稿": "All drafts",
   "关闭（草稿会保留）": "Close (your draft is kept)",
   "关闭": "Close",
   "返回": "Back",
@@ -2757,4 +2756,7 @@ export default {
   "上下文快满时自动压缩": "Compact automatically when the context is nearly full",
   "上下文用到百分之几时压缩": "Compact at what percentage of the context",
   "关掉自动压缩后，到了只提醒。压缩会调用一次模型写剧情存档，大约花一轮的额度；原文都留着，随时可以回滚到压缩之前。": "With automatic compaction off, you only get a reminder. Compacting asks the model once to write a story archive, about one turn's cost; the original stays, and you can roll back to before it any time.",
+  "回到开始页：写一张新卡，或打开别的草稿": "Back to the start: write a new card, or open another draft",
+  "新卡 · 草稿": "New card · Drafts",
+  "写一张新卡": "Write a new card",
 }

@@ -138,7 +138,7 @@ const MANAGE_PROVIDERS = '__manage_providers__'
 const ICON_LOCK = '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="4.5" y="9" width="11" height="7.5" rx="2"/><path d="M7 9V6.5a3 3 0 0 1 6 0V9"/></svg>'
 const ICON_OPEN = '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="4.5" y="9" width="11" height="7.5" rx="2"/><path d="M7 9V6.5a3 3 0 0 1 5.6-1.5"/></svg>'
 const ICON_CLOSE = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15"/></svg>'
-const ICON_LIST = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 5h9M7 10h9M7 15h9M4 5h.01M4 10h.01M4 15h.01"/></svg>'
+const ICON_NEW = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg>'
 
 function ago(iso) {
   const min = Math.floor((Date.now() - new Date(iso).getTime()) / 60000)
@@ -212,7 +212,8 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
     view.title = el('span', { class: 'forge-sub' })
     view.steps = el('ol', { class: 'forge-steps' })
     view.model = el('select', { class: 'forge-model', title: t`和你聊、写方案用哪个模型`, onchange: () => changeModel() })
-    view.home = el('button', { type: 'button', class: 'btn ghost icon', title: t`所有草稿`, 'aria-label': t`所有草稿`, html: ICON_LIST, onclick: () => goHome() })
+    // Back to the start: a new card, or another draft. Words, not just an icon: as an icon it went unnoticed.
+    view.home = el('button', { type: 'button', class: 'btn ghost small forge-new', title: t`回到开始页：写一张新卡，或打开别的草稿`, onclick: () => goHome() }, [el('span', { html: ICON_NEW }), el('span', { text: t`新卡 · 草稿` })])
     const close = el('button', { type: 'button', class: 'btn ghost icon', title: t`关闭（草稿会保留）`, 'aria-label': t`关闭`, html: ICON_CLOSE, onclick: () => dialog.close() })
     view.main = el('div', { class: 'forge-main' })
     view.sketch = el('aside', { class: 'forge-sketch' })
@@ -1531,7 +1532,8 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
     const result = await api(`/api/forge/${draft.id}/save`, { method: 'POST', body: { avatar } })
     apply(result.draft)
     await onCardSaved?.(result.card.id)
-    toast(result.updated ? t`「${result.card.name}」已更新，原来的对话都还在。` : t`已保存为角色卡「${result.card.name}」，在左边的角色卡列表里。角色名册（长相、衣着）也一起建好了。`)
+    if (result.updated) toast(t`「${result.card.name}」已更新，原来的对话都还在。`)
+    else toast(t`已保存为角色卡「${result.card.name}」，在左边的角色卡列表里。角色名册（长相、衣着）也一起建好了。`, 8000, { action: { text: t`写一张新卡`, run: () => goHome() } })
   })
 
   const startChat = guard(async () => {

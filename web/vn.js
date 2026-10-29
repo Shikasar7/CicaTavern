@@ -1238,7 +1238,8 @@ export function initVn(deps) {
   // ─── Pictures drawn for the card (server/scenes.mjs): one at a time per card ──
   // `tried`: 立绘 drawn by themselves once this session; one that still gives no picture (no plain background to cut
   // out) is offered again (画立绘), not drawn again and again.
-  const art = { jobs: new Map(), queue: new Map(), failed: new Set(), tried: new Set(), error: null }
+  // preparing: cards 做成视觉小说 / 一键备齐 is getting ready (nothing drawn by itself meanwhile, with the settings' 画图方式).
+  const art = { jobs: new Map(), queue: new Map(), failed: new Set(), tried: new Set(), error: null, preparing: new Set() }
   // The same news in the library (场景 / 立绘): the window covers the chip under the time box.
   const libraryStatus = el('div', { class: 'vn-library-status', hidden: true, 'aria-live': 'polite' })
   let libraryClock = null
@@ -1248,10 +1249,19 @@ export function initVn(deps) {
    * @param job - { key, label, url, body, done(data) }.
    */
   function enqueue(cardId, job) {
-    if (art.jobs.get(cardId)?.key === job.key || (art.queue.get(cardId) ?? []).some(other => other.key === job.key)) return
+    const running = art.jobs.get(cardId)
+    const queue = art.queue.get(cardId) ?? []
+    const waiting = queue.findIndex(other => other.key === job.key)
+    // The same picture asked for again: once is enough, unless this time with a 画图方式 picked for it (一键备齐)
+    // and the one there goes another way (drawn by itself, as the settings say): the picked one takes its place.
+    const same = other => JSON.stringify(other.body ?? {}) === JSON.stringify(job.body ?? {})
+    const there = running?.key === job.key ? running : queue[waiting]
+    if (there && (!job.body?.backend || same(there))) return
     if (art.error?.key === job.key) art.error = null
+    if (waiting >= 0) queue.splice(waiting, 1)
+    if (running?.key === job.key) running.controller.abort()
     if (!art.jobs.has(cardId)) return runJob(cardId, job)
-    art.queue.set(cardId, [...(art.queue.get(cardId) ?? []), job])
+    art.queue.set(cardId, [...queue, job])
     drawChip()
   }
 
@@ -1413,7 +1423,7 @@ export function initVn(deps) {
   }
 
   function autoDraw(cardId, place) {
-    if (art.failed.has(`scene:${place}`)) return
+    if (art.failed.has(`scene:${place}`) || art.preparing.has(cardId)) return
     toldOnce('toldAuto', t`到了新地点，会自动画一张背景。不想自动画，可以在「场景」里改成「先问」或「不画」。`)
     drawPlace(cardId, place)
   }
@@ -1668,7 +1678,7 @@ export function initVn(deps) {
     const member = memberOf(cardId, entry)
     cast.missing = member?.looks ? { cardId, entry } : null
     const key = `sprite:${entry.id}`
-    if (cast.missing && prefs.newSprite === 'auto' && !art.failed.has(key) && !art.tried.has(key)) {
+    if (cast.missing && prefs.newSprite === 'auto' && !art.failed.has(key) && !art.tried.has(key) && !art.preparing.has(cardId)) {
       toldOnce('toldSprite', t`说话的角色没有能用的立绘时，会按名单里的长相画一张半身立绘。不想自动画，可以在「立绘」里改成「先问」或「不画」。`)
       art.tried.add(key)
       drawSprite(cardId, entry)
@@ -1716,8 +1726,18 @@ export function initVn(deps) {
    * @param options.places - place names to give a background (创作角色卡's plan, the place the story is at).
    * @returns how many were queued.
    */
-  async function prepare(cardId, { places = [] } = {}) {
+  async function prepare(cardId, options = {}) {
     if (!cardId) return 0
+    const own = !art.preparing.has(cardId)
+    art.preparing.add(cardId)
+    try {
+      return await prepareSteps(cardId, options)
+    } finally {
+      if (own) art.preparing.delete(cardId)
+    }
+  }
+
+  async function prepareSteps(cardId, { places = [] }) {
     const picked = deps.pickDraw
       ? await deps.pickDraw({ title: t`用什么画立绘、表情和场景`, action: t`下一步`, batch: true, note: t`还没配置画图接口的话，点左下角「设置画图方式…」。` })
       : { body: {}, label: '' }
@@ -2440,10 +2460,16 @@ export function initVn(deps) {
 
   /** 做成视觉小说 (创作角色卡): this card in the mode, the 立绘 window open, and 一键备齐 with the plan's places. */
   async function makeReady(cardId, places = []) {
-    if (!isOn(cardId)) setOn(cardId, true)
-    await offerPreset(getChat())
-    openLibrary('sprites')
-    return prepare(cardId, { places })
+    // From the start: the stage shows the opening as soon as the mode is on, and its speaker has no 立绘 yet.
+    art.preparing.add(cardId)
+    try {
+      if (!isOn(cardId)) setOn(cardId, true)
+      await offerPreset(getChat())
+      openLibrary('sprites')
+      return await prepare(cardId, { places })
+    } finally {
+      art.preparing.delete(cardId)
+    }
   }
 
   return { render, streamed, isOn, turnFlags, marks, makeReady }

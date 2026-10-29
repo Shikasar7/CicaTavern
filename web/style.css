@@ -1471,7 +1471,7 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
    right fills in as choices are made. Options carry their sample line in
    lamplight amber, so choosing reads like listening. */
 .dialog.forge-dialog { width: min(1120px, calc(100vw - 32px)); height: min(860px, calc(100dvh - 32px)); padding: 0; overflow: hidden; }
-.forge { display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; height: 100%; }
+.forge { display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; grid-template-columns: minmax(0, 1fr); height: 100%; }
 .forge-head { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 12px; padding: 12px 12px 12px 22px; border-bottom: 1px solid var(--line-soft); }
 .forge-titles { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
 .dialog .forge-titles h2 { margin: 0; white-space: nowrap; }
@@ -1488,6 +1488,10 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .forge-steps li.now .n { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 /* Always the last column: a header without tabs or steps in the middle kept the close button there. */
 .forge-tools { grid-column: -2 / -1; display: flex; align-items: center; justify-content: flex-end; gap: 2px; min-width: 0; }
+.btn.forge-new { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; border-color: var(--line); margin-right: 4px; }
+.forge-new span { display: inline-flex; }
+.forge-new svg { width: 15px; height: 15px; }
+@media (max-width: 640px) { .btn.forge-new { padding: 6px; } .forge-new span + span { display: none; } }
 .dialog .forge-model { min-width: 0; max-width: 15em; font-size: 12.5px; padding: 5px 8px; margin-right: 4px; }
 .forge-body { display: grid; grid-template-columns: minmax(0, 1fr) 300px; min-height: 0; }
 .forge-body.home { grid-template-columns: minmax(0, 1fr); }
