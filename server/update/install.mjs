@@ -6,16 +6,25 @@
 //                                     bin/launch.mjs here forwards there
 //   <install>/update/previous.json    the folder this one replaced (回到上一版)
 //   <install>/update/result.json      how the last switch went (bin/update-apply.mjs)
+// The Mac's CicaTavern.app only checks for updates; its state.json goes to
+// ~/Library/Application Support/CicaTavern/update, never into the bundle.
 // Nothing here reads or writes the data folder (%USERPROFILE%\.cicatavern).
 import { execFile } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import path from 'node:path'
 import { extractZip } from './zip.mjs'
 
 export const UPDATE_DIR = 'update'
-const REQUIRED = ['edition.json', 'package.json', path.join('bin', 'launch.mjs'), path.join('bin', 'start.mjs'), path.join('server', 'http.mjs'), path.join('runtime', 'node.exe')]
+const REQUIRED = ['edition.json', 'package.json', path.join('bin', 'launch.mjs'), path.join('bin', 'start.mjs'), path.join('server', 'http.mjs')]
+
+/** An install's bundled Node: runtime/node.exe in the Windows package, runtime/node in the Mac app's folder. */
+export function runtimeNode(dir) {
+  const windows = path.join(dir, 'runtime', 'node.exe')
+  return existsSync(windows) ? windows : path.join(dir, 'runtime', 'node')
+}
 
 /**
  * A folder's one spelling (Windows' long names, not 8.3 forms such as RUNNER~1),
@@ -30,7 +39,7 @@ export function canonical(dir) {
   }
 }
 
-/** The zip's top folder, which is also the new install's folder name. */
+/** The zip's top folder, which is also the new install's folder name (a Mac version's folder in Application Support: macFolder). */
 export const packageFolder = version => `CicaTavern-${version}-win-x64`
 
 function readJsonSync(file) {
@@ -58,7 +67,7 @@ export async function writeJsonFile(file, value) {
 
 /** A release package folder: edition.json says release and the files the launcher needs are there. */
 export function isInstall(dir) {
-  if (!dir || !REQUIRED.every(file => existsSync(path.join(dir, file)))) return false
+  if (!dir || !REQUIRED.every(file => existsSync(path.join(dir, file))) || !existsSync(runtimeNode(dir))) return false
   return readJsonSync(path.join(dir, 'edition.json'))?.edition === 'release'
 }
 
@@ -79,18 +88,42 @@ export async function writable(dir) {
   }
 }
 
-/** Where downloads go and new versions are unpacked: beside this install, else under LOCALAPPDATA. */
-export async function installBase(root, env = process.env) {
-  const beside = path.dirname(root)
-  if (await writable(beside)) return beside
-  return path.join(env.LOCALAPPDATA ?? path.join(env.USERPROFILE ?? '', 'AppData', 'Local'), 'Programs', 'CicaTavern')
+/**
+ * The per-user folder for what cannot go next to the install: %LOCALAPPDATA%
+ * on Windows, ~/Library/Application Support on macOS (which has neither
+ * LOCALAPPDATA nor USERPROFILE).
+ */
+export function userAppData(env = process.env, platform = process.platform) {
+  if (platform === 'darwin') return path.join(env.HOME || homedir(), 'Library', 'Application Support')
+  return env.LOCALAPPDATA ?? path.join(env.USERPROFILE ?? '', 'AppData', 'Local')
 }
 
-/** The updater's own files for this install: <install>/update, else under LOCALAPPDATA. */
-export async function stateDir(root, env = process.env) {
+/**
+ * The app folder inside CicaTavern.app (Contents/Resources/app). Nothing is
+ * written there: a changed bundle no longer matches its signature.
+ */
+export const inAppBundle = dir => /\.app[\\/]Contents([\\/]|$)/i.test(path.resolve(dir))
+
+/** Where downloads go and new versions are unpacked: beside this install, else under LOCALAPPDATA (Application Support on a Mac). */
+export async function installBase(root, env = process.env, platform = process.platform) {
+  const beside = path.dirname(root)
+  if (!inAppBundle(root) && (await writable(beside))) return beside
+  return platform === 'darwin' ? path.join(userAppData(env, platform), 'CicaTavern') : path.join(userAppData(env, platform), 'Programs', 'CicaTavern')
+}
+
+/**
+ * Where an install's marks are (superseded.json, previous.json): its update folder, or for the folder inside
+ * CicaTavern.app, which is never written to, the updater folder in Application Support (as stateDir).
+ */
+export function markDir(root, env = process.env, platform = process.platform) {
+  return inAppBundle(root) ? path.join(userAppData(env, platform), 'CicaTavern', UPDATE_DIR) : path.join(root, UPDATE_DIR)
+}
+
+/** The updater's own files for this install: <install>/update, else under LOCALAPPDATA (Application Support on a Mac). */
+export async function stateDir(root, env = process.env, platform = process.platform) {
   const own = path.join(root, UPDATE_DIR)
-  if (await writable(own)) return own
-  return path.join(env.LOCALAPPDATA ?? path.join(env.USERPROFILE ?? '', 'AppData', 'Local'), 'CicaTavern', UPDATE_DIR)
+  if (!inAppBundle(root) && (await writable(own))) return own
+  return path.join(userAppData(env, platform), 'CicaTavern', UPDATE_DIR)
 }
 
 /** base/name, or base/name-2, -3… when it is taken. */
@@ -106,6 +139,13 @@ export function freeFolder(base, name) {
  * them away). Nothing new runs before the restart the user asks for.
  */
 export async function checkRuntime(nodeExe) {
+  // The Mac's: it runs (nothing it unpacked is quarantined, so it does not ask first).
+  if (path.basename(nodeExe) === 'node') {
+    const out = await new Promise((resolve, reject) => execFile(nodeExe, ['--version'], { timeout: 20_000 }, (error, stdout) => (error ? reject(error) : resolve(String(stdout)))))
+      .catch(error => { throw new Error(`新版本的 node 运行不了（${error.code ?? error.message}）`) })
+    if (!/^v\d+\./.test(out.trim())) throw new Error('新版本的 node 不完整')
+    return
+  }
   for (const file of [nodeExe, path.join(path.dirname(path.dirname(nodeExe)), 'CicaTavern.exe')]) {
     let head
     try {
@@ -154,19 +194,50 @@ export async function stageInstall(zip, { base, version, check = checkRuntime })
   }
 }
 
+/** A Mac version's folder in Application Support: the programs from CicaTavern.app/Contents/Resources/app. */
+export const macFolder = version => `CicaTavern-${version}-mac`
+
+/** ditto, which keeps the programs' executable bits and is on every Mac. */
+const ditto = (zip, out) => new Promise((resolve, reject) => execFile('/usr/bin/ditto', ['-x', '-k', zip, out], { timeout: 300_000 }, error => (error ? reject(error) : resolve())))
+
+/**
+ * A verified Mac zip (CicaTavern.app inside) → the new version's folder in base: its programs
+ * (Contents/Resources/app) only, unpacked into a hidden .partial folder first and checked (edition, version,
+ * files, Node runs), then moved. The app in /Applications is not touched. Nothing is left behind on failure.
+ * Tests replace unpack (zip file, folder).
+ */
+export async function stageMacInstall(zipFile, { base, version, check = checkRuntime, unpack = ditto }) {
+  const top = macFolder(version)
+  const partial = path.join(base, `.${top}.partial-${randomBytes(4).toString('hex')}`)
+  try {
+    await mkdir(partial, { recursive: true })
+    await unpack(zipFile, partial)
+    const programs = path.join(partial, 'CicaTavern.app', 'Contents', 'Resources', 'app')
+    if (!isInstall(programs) || !existsSync(path.join(programs, 'runtime', 'node'))) throw new Error('更新包里缺文件，或者不是 Mac 发布版')
+    const packed = installVersion(programs)
+    if (packed !== version) throw new Error(`更新包里的版本是 ${packed}，不是 ${version}`)
+    await check(path.join(programs, 'runtime', 'node'))
+    const final = freeFolder(base, top)
+    await rename(programs, final)
+    return final
+  } finally {
+    await rm(partial, { recursive: true, force: true }).catch(() => {})
+  }
+}
+
 /**
  * The newer install this one was replaced by, when that folder is still a
  * package (bin/launch.mjs forwards there), else null.
  */
 export function supersededBy(root) {
-  const marker = readJsonSync(path.join(root, UPDATE_DIR, 'superseded.json'))
+  const marker = readJsonSync(path.join(markDir(root), 'superseded.json'))
   if (!marker?.path || path.resolve(marker.path) === path.resolve(root) || !isInstall(marker.path)) return null
   return { path: marker.path, version: installVersion(marker.path) }
 }
 
 /** The install this one replaced, when it is still there. */
 export async function previousInstall(root) {
-  const marker = await readJson(path.join(root, UPDATE_DIR, 'previous.json'))
+  const marker = await readJson(path.join(markDir(root), 'previous.json'))
   if (!marker?.path || path.resolve(marker.path) === path.resolve(root) || !isInstall(marker.path)) return null
   return { path: marker.path, version: installVersion(marker.path) }
 }
@@ -218,6 +289,7 @@ export async function removeInstall(dir, { root, dataRoot }) {
   root = canonical(root)
   if (dataRoot) dataRoot = canonical(dataRoot)
   if (!isInstall(dir)) throw Object.assign(new Error('这不是 CicaTavern 的安装文件夹'), { status: 400 })
+  if (inAppBundle(dir)) throw Object.assign(new Error('这是 CicaTavern.app 自带的版本，要删就把 CicaTavern 从「应用程序」移到废纸篓'), { status: 400 })
   if (inside(dir, root) || inside(root, dir)) throw Object.assign(new Error('不能删除正在运行的版本'), { status: 400 })
   if (dataRoot && (inside(dataRoot, dir) || inside(dir, dataRoot))) throw Object.assign(new Error('数据目录在这个文件夹里，不能删除'), { status: 400 })
   try {
