@@ -11,7 +11,7 @@ import { httpError, newId } from './store.mjs'
 import { MIN_TURNS, RECENT_TURNS, STORY_FORMAT, storyPath, storyTurns, turnsSinceCompaction } from './recap.mjs'
 import { msg } from './i18n.mjs'
 import { estimateTokens } from './context.mjs'
-import { BASIC_ID, VN_ID, basicPreset, vnPreset } from './basic.mjs'
+import { BASIC_ID, VN_ID, asksChoices, basicPreset, vnPreset } from './basic.mjs'
 import { readSillyTavernChat } from './st-chat.mjs'
 import { markSpeakers } from '../web/shared/vn.js'
 import { chatScriptList } from '../web/shared/regex.js'
@@ -357,6 +357,8 @@ async function startChat(store, cardId, makeRoot, { userName = '' } = {}) {
     styleId: picks.style.id,
     tips: {},
     stateDirty: false,
+    // Every reply keeps its <choices> in the history (basic.mjs keepsChoices).
+    choicesKept: '',
     // Chat-wide variables: the template `local` scope, Tavern Helper's chat variables.
     ...(Object.keys(frameVars).length ? { frameVars } : {}),
     nodes: {
@@ -770,6 +772,7 @@ export function chatView(chat) {
       media: node.media?.images?.length ? node.media : undefined,
       // Brought in from SillyTavern (importSillyTavern): no model of ours wrote it.
       imported: node.imported || undefined,
+      rewroteChoices: node.rewroteChoices ?? undefined,
       createdAt: node.createdAt,
     }
   })
@@ -800,6 +803,8 @@ export function chatView(chat) {
     state: lastAssistant?.state ?? {},
     // The chat variables (Tavern Helper's chat scope, the templates' local scope), for the card's frames.
     frameVars: chat.frameVars ?? {},
+    // Its preset asks each reply for <choices>: the latest reply can have them written again (重写选项).
+    asksChoices: asksChoices(chat),
     systemPromptChars: chat.systemPrompt.length,
     // What compaction cannot shrink (card, constant worldbook entries, preset): the page warns when it is most of the threshold.
     systemPromptTokens: estimateTokens(chat.systemPrompt),

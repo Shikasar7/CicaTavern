@@ -1198,6 +1198,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['GET', /^\/api\/chats\/([\w-]+)\/compact$/, async ([id]) => ({ parts: engine.compactProgress(id) })],
     // 补写变量: the latest reply of an MVU card came without its update block.
     ['POST', /^\/api\/chats\/([\w-]+)\/nodes\/([\w-]+)\/fill-update$/, async ([id, nodeId]) => ({ ...chatView(await engine.fillUpdate(id, nodeId)), running: false })],
+    ['POST', /^\/api\/chats\/([\w-]+)\/nodes\/([\w-]+)\/rewrite-choices$/, async ([id, nodeId]) => ({ ...chatView(await engine.rewriteChoices(id, nodeId)), running: false })],
     ['PUT', /^\/api\/chats\/([\w-]+)\/compaction$/, ([id], body) => store.withChat(id, async () => {
       if (engine.isRunning(id)) throw httpError(409, msg`正在生成，先停止`)
       const chat = await store.getChat(id)

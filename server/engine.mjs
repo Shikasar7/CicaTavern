@@ -6,6 +6,8 @@
 // (this machine's own install: server/subscription/); without one they are refused.
 import { activePath, booksForCard, chatPicks, childrenOf, compactBlock, editMessage as editChatMessage, pathTo, playerOf, presetFor, scriptsOf, selectNode } from './chats.mjs'
 import { hasPrefixRules, renderPresetTail } from './presets.mjs'
+import { asksChoices, choicesInstruction, choicesRequest, extractChoices, replyScripts, withChoices } from './basic.mjs'
+import { choicesOf } from '../web/shared/basic.js'
 import { buildTurnPrompt, chatTemplates, everyTurnReminder, renderEntry, replaceMacros, templateText, webSearchNote } from './prompt.mjs'
 import { applyStateUpdates, applyWrites, displayText, writeLabels } from './state.mjs'
 import { httpError, newId } from './store.mjs'
@@ -33,6 +35,8 @@ const PRESET_BLOCK = /\n*<预设指令>\n[\s\S]*?\n<\/预设指令>/
 const MAX_REPLY_TOKENS = 32000
 // 补写变量: a big card's update block (many fields, its analysis) fits in this.
 const FILL_MAX_TOKENS = 4000
+// 重写选项: four lines, with room for a thinking model's reasoning.
+const CHOICES_MAX_TOKENS = 2000
 // An imported chat's history is summarised in parts of about this many characters (well inside 200k tokens).
 const IMPORTED_PART_CHARS = 120000
 // A story too long for its model even in halves is read again under this much of the chat's system prompt.
@@ -66,12 +70,12 @@ function friendlyError(message, subscription) {
 const SEARCH_NOTE = () => `\n\n${webSearchNote()}`
 
 /** What a session from compaction point `node` opens with: its summary and the last turns of `story`, as the prompt sends them. */
-function compactionRecap(node, story, names, scripts) {
+function compactionRecap(node, story, names, scripts, chat) {
   const macros = text => replaceMacros(text, names)
   return recapBlock(
     node.compaction.summary,
-    recentExchanges(story, names, ({ role, text, depth }) =>
-      applyScripts(text, scripts, { placement: role === 'user' ? PLACEMENT.USER_INPUT : PLACEMENT.AI_OUTPUT, target: 'prompt', depth: depth + 1, macros }),
+    recentExchanges(story, names, ({ role, text, depth, node: message }) =>
+      applyScripts(text, replyScripts(scripts, chat, message), { placement: role === 'user' ? PLACEMENT.USER_INPUT : PLACEMENT.AI_OUTPUT, target: 'prompt', depth: depth + 1, macros }),
     ),
   )
 }
@@ -226,7 +230,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     if (templates.session) templateErrors.unshift(...templates.session.preloadErrors())
 
     const plan = planDynamic({ rendered: resolve(renderedDynamic), ...dynamicMemory(path), forceFull })
-    const recap = newSession ? compactionRecap(parent, story, names, scripts) : ''
+    const recap = newSession ? compactionRecap(parent, story, names, scripts, chat) : ''
     const prompt = buildTurnPrompt({
       names,
       opening,
@@ -238,7 +242,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       input: resolve(promptInput),
       replyLength: Number(settings.replyLength) || 0,
       presetText: resolve(presetText),
-      reminder: everyTurnReminder(chat.systemPrompt, books, { presetRules: hasPrefixRules(preset), mvu: usesMvu(card, books) }),
+      reminder: everyTurnReminder(chat.systemPrompt, books, { presetRules: hasPrefixRules(preset), mvu: usesMvu(card, books), choices: asksChoices(chat) }),
       marks,
     })
     return {
@@ -403,14 +407,14 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         if (!chat.webSearch && prompt.endsWith(SEARCH_NOTE())) prompt = prompt.slice(0, -SEARCH_NOTE().length)
         return { role: 'user', content: index < stripBefore ? stripDynamicText(prompt) : prompt }
       }
-      const reply = applyScripts(node.text, scripts, { placement: PLACEMENT.AI_OUTPUT, target: 'prompt', depth: turns.length - index, macros })
+      const reply = applyScripts(node.text, replyScripts(scripts, chat, node), { placement: PLACEMENT.AI_OUTPUT, target: 'prompt', depth: turns.length - index, macros })
       return { role: 'assistant', content: reply.trim() || '……' }
     })
     // A branch written before its parent was compacted (turns folded behind a rollback, then restored)
     // never had the archive in its first message: it goes there now, or nothing would carry what came before.
     const opener = messages.findIndex(message => message.role === 'user')
     if (path[start]?.compaction && opener >= 0 && !messages[opener].content.includes('<前情提要>')) {
-      messages[opener].content = `${compactionRecap(path[start], storyPath(path.slice(0, start + 1)), chat.names, scripts)}\n\n${messages[opener].content}`
+      messages[opener].content = `${compactionRecap(path[start], storyPath(path.slice(0, start + 1)), chat.names, scripts, chat)}\n\n${messages[opener].content}`
     }
     // 'latest' preset mode: the post-history prompts ride only on the newest message, as in
     // SillyTavern. Older messages lose them, so the newest one changes next turn: the reply
@@ -664,6 +668,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         // turns after it are sent verbatim, this reply among them), or the compaction would be gone.
         const replaced = userNodeId ? fresh.nodes[fresh.nodes[userNode.id]?.sel] : null
         if (replaced?.compaction && !childrenOf(fresh, replaced.id).length) node.compaction = { ...replaced.compaction, at: now }
+        // A chat from before replies kept their choices: this one and those after it do, the older ones stay as sent.
+        fresh.choicesKept ??= now
         fresh.nodes[node.id] = node
         // Also lifts a rollback on the parent: the new turn is now the visible branch.
         selectNode(fresh, node.id)
@@ -859,7 +865,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     // A reply that carries a compaction has no history after it: its summary and last turns stand in, as for the next turn.
     if (node.compaction) {
       const [card, preset, globalScripts, regexSets] = await Promise.all([store.getCard(chat.cardId).catch(() => null), presetFor(store, chat.presetId), store.getRegex(), store.getRegexSets()])
-      instruction = `${compactionRecap(node, storyPath(pathTo(chat, node.id)), chat.names, scriptsOf(card, preset, globalScripts, regexSets))}\n\n${instruction}`
+      instruction = `${compactionRecap(node, storyPath(pathTo(chat, node.id)), chat.names, scriptsOf(card, preset, globalScripts, regexSets), chat)}\n\n${instruction}`
     }
     const started = Date.now()
     const result = await generateApi(target, { system: chat.systemPrompt, messages: [...history, { role: 'user', content: instruction }], maxTokens }, signal ?? new AbortController().signal, onText)
@@ -1019,6 +1025,59 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     }
   }
 
+  /**
+   * 重写选项: the latest reply's <choices> written again, its story left as it is. Asked inside the
+   * conversation when a provider can answer (the next turn's prefix and history, so the cache hits), else
+   * of the helper model with the last turns. The block takes the old one's place (or goes at the end) as an
+   * edit, so a subscription session reads it too, and the next turn sends it back with the reply
+   * (basic.mjs keepsChoices): the newest reply was never in a cached prefix, so nothing else changes.
+   * @returns the chat.
+   */
+  async function rewriteChoices(chatId, nodeId) {
+    if (running.has(chatId)) throw httpError(409, msg`正在生成，先停止`)
+    const abortController = new AbortController()
+    running.set(chatId, abortController)
+    try {
+      const chat = await store.getChat(chatId)
+      const node = activePath(chat).at(-1)
+      if (!node || node.id !== nodeId || node.role !== 'assistant' || node.id === 'root') throw httpError(400, msg`只能给最新一条回复重写选项`)
+      if (node.compaction) throw httpError(400, msg`这条回复已经压缩进剧情存档，不能再重写选项`)
+      if (!asksChoices(chat)) throw httpError(400, msg`这个对话的预设不写行动选项`)
+      const previous = choicesOf(node.text)
+      const started = Date.now()
+      let answer = await askInContext(chatId, nodeId, choicesInstruction(chat.names.user, previous), { maxTokens: CHOICES_MAX_TOKENS, signal: abortController.signal })
+      if (!answer) {
+        // A subscription session cannot be borrowed: the helper model reads the last turns.
+        const settings = await store.getSettings()
+        const ref = [settings.media?.helperModel, settings.model].find(r => isProviderRef(r))
+        if (!ref) throw httpError(400, msg`重写选项要用供应商的模型（这条回复不是供应商模型写的，借不了它的上下文）：在顶栏选一个供应商的模型，或在「配图与朗读」里选一个辅助模型`)
+        const target = await targetFor(ref, settings)
+        const story = storyPath(activePath(chat)).slice(-6).map(item => ({ role: item.role, text: String(item.role === 'user' ? item.text : item.display ?? item.text ?? '') }))
+        const request = choicesRequest({ names: chat.names, story, previous, language: settings.language || '简体中文', maxTokens: CHOICES_MAX_TOKENS })
+        const result = await generateApi(target, request, abortController.signal, () => {})
+        await ledger?.recordTurn(chat, { createdAt: new Date().toISOString(), model: result.model, usage: result.tokens, timing: { totalMs: Date.now() - started, firstTokenMs: null, forked: false, api: true } }).catch(() => {})
+        answer = { text: result.reply, model: result.model }
+      }
+      const block = extractChoices(answer.text)
+      if (!block) throw httpError(502, msg`模型没有写出选项，可以再试一次`)
+      return await store.withChat(chatId, async () => {
+        const fresh = await store.getChat(chatId)
+        // A chat from before replies kept their choices: from this reply on they do.
+        fresh.choicesKept ??= fresh.nodes[nodeId].createdAt
+        const edit = editChatMessage(fresh, nodeId, withChoices(fresh.nodes[nodeId].text, block))
+        if (edit.unchanged) return fresh
+        edit.node.rewroteChoices = { at: new Date().toISOString(), model: answer.model ?? null }
+        if (subscription) await subscription.editTranscripts({ chat: fresh, node: edit.node, edit, path: activePath(fresh) })
+        return store.saveChat(fresh)
+      })
+    } catch (error) {
+      if (abortController.signal.aborted) throw httpError(499, msg`已停止重写选项`)
+      throw error
+    } finally {
+      running.delete(chatId)
+    }
+  }
+
   /** The exact user message a turn would send, without calling the model. */
   async function previewTurn(chatId, { parentId, input, marks = false }) {
     const chat = await store.getChat(chatId)
@@ -1060,6 +1119,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     askInContext,
     frameGenerate,
     fillUpdate,
+    rewriteChoices,
     previewTurn,
     blockImpact,
     editMessage,

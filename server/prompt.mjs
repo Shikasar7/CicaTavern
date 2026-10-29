@@ -186,7 +186,7 @@ function lateText(books, m) {
  * late entries had their own section keep them elsewhere in the prefix, so the
  * entry titles alone must identify them.
  */
-export function everyTurnReminder(systemPrompt, books, { presetRules = false, mvu = false } = {}) {
+export function everyTurnReminder(systemPrompt, books, { presetRules = false, mvu = false, choices = false } = {}) {
   const late = lateEntries(books)
   const titles = late.map(entry => `【${entryTitle(entry)}】`)
   const hasSection = systemPrompt.includes(`## ${EVERY_TURN}`)
@@ -196,7 +196,9 @@ export function everyTurnReminder(systemPrompt, books, { presetRules = false, mv
   const preset = presetRules && hasSection ? '预设规定的输出格式和顺序（正文之后要求附加的内容块一个都不能省）' : ''
   // An MVU card's update block is what a long chat drops first: named outright.
   const update = mvu ? '结尾完整闭合的 <UpdateVariable> 变量更新块（照卡里的变量规则写，不能省）' : ''
-  const demands = [preset, update].filter(Boolean)
+  // The built-in presets' choices: older replies in the history went without them (basic.mjs), and the model followed those.
+  const options = choices && hasSection ? '结尾 <choices>…</choices> 里的四个行动选项（之前的回复里没有也照写）' : ''
+  const demands = [preset, options, update].filter(Boolean)
   if (!titles.length) return `本轮回复同样要遵守系统提示末尾「${EVERY_TURN}」一节的全部要求${demands.length ? `，尤其是${demands.join('、')}` : ''}。`
   // Many entries (a world's maps, monsters, lore) would bury the few that ask for something
   // in the reply: those are named, the rest counted.

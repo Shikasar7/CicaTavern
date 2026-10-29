@@ -1034,7 +1034,7 @@ function renderChat() {
 /** The turn being written in this chat, as far as it has come (also after switching back). */
 function liveNodes(chat, { animate = false } = {}) {
   const job = ui.busy.get(chat.id)
-  if (!job || job.kind === 'compact' || job.kind === 'fill') return []
+  if (!job || job.kind === 'compact' || job.kind === 'fill' || job.kind === 'choices') return []
   const nodes = []
   if (job.echo) {
     const echo = renderNode(chat, { id: 'pending-user', role: 'user', text: job.echo, siblingCount: 1 }, false)
@@ -1125,7 +1125,8 @@ function renderNode(chat, node, isLastAssistant, depth = 0) {
   }
   if (node.edited) tools.push(el('span', { class: 'chip', title: t`${new Date(node.edited.at).toLocaleString(locale)} 改过${node.edited.count > 1 ? t` ${node.edited.count} 次` : ''}`, text: t`已修改` }))
   if (node.templateErrors?.length) tools.push(el('span', { class: 'chip warn', title: node.templateErrors.join('\n'), text: t`⚠ ${node.templateErrors.length} 条 EJS 模板出错` }))
-  const { shown, time, choices, cardStatus } = replyDisplay(chat, node, isLastAssistant, depth)
+  const { shown, raw, time, choices, cardStatus } = replyDisplay(chat, node, isLastAssistant, depth)
+  if (!isUser && isLastAssistant && chat.asksChoices && node.id !== 'root' && !node.compaction) tools.push(...choicesTools(chat, node, raw, choices))
   const bar = !isUser && isLastAssistant && !cardStatus ? statusFor(chat, node) : null
   const imported = node.compaction?.imported
   const recap = !isUser && node.compaction
@@ -1934,6 +1935,47 @@ function askSwitch(turns) {
 function missingUpdate(chat, node) {
   const card = ui.cards.find(c => c.id === chat.cardId)
   return Boolean(card?.mvu) && !/<UpdateVariable>/i.test(node.raw ?? node.text ?? '')
+}
+
+/**
+ * 重写选项 on the latest reply of a chat whose preset asks for <choices>: 换一组 when it has them, 补写 (with a
+ * warning) when it has none; a card's own options (🩶探索选项🩶…) are its format, left alone.
+ */
+function choicesTools(chat, node, raw, choices) {
+  const own = choicesOf(raw).length > 0
+  if (!own && choices.length) return []
+  const rewriting = ui.busy.get(chat.id)?.kind === 'choices'
+  return [
+    own ? null : el('span', { class: 'chip warn', title: t`模型这一轮没有在结尾写行动选项。「补写选项」让模型只写这四项，正文不动。`, text: t`⚠ 这轮没写选项` }),
+    el('button', {
+      text: rewriting ? t`重写中…` : own ? t`换一组选项` : t`补写选项`,
+      title: t`只重写这一轮结尾的四个行动选项，正文不动。用写这条回复的模型，读的是和下一轮一样的上下文（命中缓存）`,
+      disabled: ui.generating,
+      onclick: () => rewriteChoices(node.id),
+    }),
+  ].filter(Boolean)
+}
+
+/** 重写选项: the model writes the latest reply's four choices again; they replace its own (or are added). */
+async function rewriteChoices(nodeId) {
+  const chatId = ui.chat?.id
+  if (!chatId || ui.generating) return
+  ui.busy.set(chatId, { kind: 'choices' })
+  renderChat()
+  renderChats()
+  toast(t`正在重写选项……`, 120000)
+  try {
+    const view = await api(`/api/chats/${chatId}/nodes/${nodeId}/rewrite-choices`, { method: 'POST', body: {} })
+    ui.busy.delete(chatId)
+    if (ui.chat?.id === chatId) setChat(view)
+    toast(t`已换上新的选项`, 4000)
+  } catch (error) {
+    toast(error.status === 499 ? t`已停止重写，选项没有变` : error.message, 8000)
+  } finally {
+    ui.busy.delete(chatId)
+    if (ui.chat?.id === chatId) renderChat()
+    renderChats()
+  }
 }
 
 /** 补写变量: the model writes the latest reply's missing update block; it is appended and the state follows. */
@@ -3221,6 +3263,7 @@ const vnUi = initVn({
   fill: fillInput,
   fitInput,
   regenerate: userNodeId => regenerate(userNodeId),
+  rewriteChoices: nodeId => rewriteChoices(nodeId),
   selectNode: nodeId => selectNode(nodeId),
   // 读档: the save's chat as the server left it (that reply on screen).
   showChat: view => {

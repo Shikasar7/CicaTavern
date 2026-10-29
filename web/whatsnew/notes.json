@@ -644,6 +644,23 @@
           }
         }
       ]
+    },
+    {
+      "version": "2.1.1",
+      "date": "2026-10",
+      "items": [
+        {
+          "icon": "🔁",
+          "zh": {
+            "title": "行动选项不再消失，还能单独换一组",
+            "text": "以前旧回复的四个选项不发给模型，模型看历史里都没有，写着写着就不写了。现在选项留在历史里，每轮都会写（更新前的回复照旧，缓存不受影响）。\n最新一条回复下面多了「换一组选项」：只重写结尾的四个选项，正文不动；这一轮没写选项时是「补写选项」。视觉小说模式里在「重新生成」旁边。"
+          },
+          "en": {
+            "title": "Choices stay, and can be redrawn alone",
+            "text": "Older replies used to reach the model without their four choices, so with none in the history it stopped writing them. Choices now stay in the history and come every turn (replies from before the update are sent as they were, so the cache still holds).\nThe newest reply has New choices: only the four choices at its end are rewritten, the story stays; a turn without them offers Write choices. In visual novel mode it sits beside Regenerate."
+          }
+        }
+      ]
     }
   ]
 }

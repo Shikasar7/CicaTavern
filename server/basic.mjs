@@ -4,16 +4,18 @@
 // chat's prompt stays the same from turn to turn and is cached. Changing an
 // option takes effect in new chats, or in a chat after 用于当前对话 rebuilds
 // its prefix, as with any preset.
-import { BASIC_ID, VN_ID, cleanBasic, cleanVn } from '../web/shared/basic.js'
+import { BASIC_ID, VN_ID, choicesOf, cleanBasic, cleanVn, isBuiltinPreset } from '../web/shared/basic.js'
 
 export { BASIC_ID, VN_ID }
 
-// Earlier replies' choices are dropped from what the model reads again: they
-// cost tokens every turn and invite copying. The same for every reply, so the
-// history stays byte-identical and cached.
+// Up to 2.1.0 earlier replies' choices were dropped from what the model reads
+// again. With every reply in the history ending without them, the model stopped
+// writing them after a few turns (deepseek by the second). Replies written since
+// keep them; the older ones still lose them, so a chat's history stays as it was
+// sent, byte for byte, and cached (keepsChoices).
 const CHOICES_HIDDEN = {
   id: 'basic-hide-choices',
-  scriptName: '旧回复的行动选项不再发给模型',
+  scriptName: '2.1.0 及以前的回复：行动选项不发给模型',
   findRegex: '/<choices>[\\s\\S]*?<\\/choices>\\s*/gi',
   replaceString: '',
   trimStrings: [],
@@ -25,6 +27,26 @@ const CHOICES_HIDDEN = {
   substituteRegex: 0,
   minDepth: null,
   maxDepth: null,
+}
+
+/**
+ * Whether a reply keeps its choices in what the model reads again. chat.choicesKept: '' in chats started
+ * since (every reply), the time of the first reply written since in older chats, missing until then (none).
+ */
+export function keepsChoices(chat, node) {
+  const from = chat?.choicesKept
+  return typeof from === 'string' && String(node?.createdAt ?? '') >= from
+}
+
+/** The regex scripts for one reply as the model reads it again: CHOICES_HIDDEN only for the old replies. */
+export function replyScripts(scripts, chat, node) {
+  return keepsChoices(chat, node) ? scripts.filter(script => script.id !== CHOICES_HIDDEN.id) : scripts
+}
+
+/** Whether a chat on a built-in preset asks each reply for <choices> (its frozen prompt says so). */
+export function asksChoices(chat) {
+  const builtin = chat?.presetId === '' || isBuiltinPreset(chat?.presetId)
+  return builtin && String(chat?.systemPrompt ?? '').includes('<choices>')
 }
 
 /** The built-in preset as a preset object: no prompts of its own, its options instead. */
@@ -207,4 +229,56 @@ export function basicRules(options) {
   ]
     .filter(Boolean)
     .join('\n\n')
+}
+
+// 重写选项: a reply's four choices written again, its story left as it is (engine.rewriteChoices).
+const CHOICES_FORMAT = ['<choices>', 'A. ……', 'B. ……', 'C. ……', 'D. ……', '</choices>'].join('\n')
+const choicesRule = user => `每项一句话，只写「${user}」的行动或台词，不写结果；四项方向各不相同，至少一项出人意料。`
+const ONLY_CHOICES = '只输出这一个 <choices>…</choices> 块，不要正文、解释或思考过程，也不要续写剧情。'
+const previousChoices = previous => (previous.length ? `原来的选项是：${previous.join('；')}。这次换一组不一样的。` : '')
+
+/** Asked inside the conversation (engine.askInContext): the model has the story and the rules already. */
+export function choicesInstruction(user, previous = []) {
+  return [
+    '（暂停扮演。这一条不是剧情，不要回应剧情，也不要续写。）',
+    `为你上一条回复的结尾重新写行动选项：四个「${user}」接下来可以做的事，格式和平时每轮结尾一样：`,
+    CHOICES_FORMAT,
+    choicesRule(user),
+    previousChoices(previous),
+    ONLY_CHOICES,
+  ].filter(Boolean).join('\n')
+}
+
+/**
+ * For a model that has not seen the chat (a subscription session wrote the reply): the last turns, the same ask.
+ * @param story - [{ role, text }], oldest first, the reply last.
+ */
+export function choicesRequest({ names, story, previous = [], language = '简体中文', maxTokens = 2000 }) {
+  const lines = story.map(item => `【${item.role === 'user' ? names.user : names.char}】\n${item.text.trim()}`).join('\n\n')
+  const recent = lines.length > 12000 ? `…（前略）\n${lines.slice(-12000)}` : lines
+  const system = [
+    `你为一场互动小说写玩家的行动选项。玩家扮演「${names.user}」，用户消息里是故事最近几轮，最后一段是刚写好的这一轮。`,
+    `为这一轮的结尾写四个「${names.user}」接下来可以做的事：`,
+    CHOICES_FORMAT,
+    choicesRule(names.user),
+    previousChoices(previous),
+    `使用${language}写作。${ONLY_CHOICES}`,
+  ].filter(Boolean).join('\n')
+  return { system, messages: [{ role: 'user', content: `<最近剧情>\n${recent}\n</最近剧情>\n\n只输出 <choices>…</choices> 这一个块。` }], maxTokens }
+}
+
+/** The choices in a model's answer as a block written the usual way (A–D), or '' with fewer than two. */
+export function extractChoices(text) {
+  const answer = String(text ?? '')
+  // An answer that left out the tags still counts by its lettered lines.
+  const lettered = () => answer.split('\n').filter(line => /^\s*[A-Da-d]\s*[.、:：)）．]/.test(line)).join('\n')
+  const items = choicesOf(/<choices>/i.test(answer) ? answer : `<choices>\n${lettered()}`)
+  return items.length >= 2 ? ['<choices>', ...items.map((item, i) => `${'ABCD'[i]}. ${item}`), '</choices>'].join('\n') : ''
+}
+
+/** A reply with its choices block swapped for `block`, where it was (at the end when it had none). */
+export function withChoices(text, block) {
+  const source = String(text ?? '')
+  const old = /<choices>[\s\S]*?(?:<\/choices>|$)/i
+  return old.test(source) ? source.replace(old, () => block) : `${source.trimEnd()}\n\n${block}`
 }

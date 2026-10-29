@@ -109,10 +109,11 @@ If you can't quite say what you want, the creator guides you round by round:
 
 <br clear="right">
 
-## Latest changes [2.1.0]
+## Latest changes [2.1.1]
 
 <p align="center"><img src="web/whatsnew/2.1.0-forge.webp" alt="2.1.0: card creation settings combined by category before starting, and values dragged afterwards to see personality stages and events" width="880"></p>
 
+- **Choices stay (2.1.1)**: older replies used to reach the model without their four choices, so it stopped writing them; they now stay in the history and come every turn. The newest reply has New choices, which rewrites only the choices and leaves the story, or Write choices when a turn has none.
 - **Card creation, with finer choices (2.1.0)**: the card settings you pick before starting are grouped and can be combined: one or several leads, a rich world, the characters' gender, gameplay (bond, growth, management, countdown, exploration; pick any), a plain or MVU card, and the status bar style. Not sure yet? Try Give me ideas or Leave it to Cica. Cards are written in the background with a small progress window in the corner, and afterwards you can drag the values on the polish page to see which personality stage and which events apply.
 - **Make it a visual novel (2.1.0)**: from the polish page or a card's ⋯ menu, step by step: pick what to draw with, have the helper model list the cast, and draw sprites, expressions and backgrounds. The new Visual novel preset is mostly dialogue with brief narration, more like a galgame.
 - **Context compaction: just a percentage (2.1.0)**: compact at what share of the context, 70% by default; thinking and the calls in between a web search no longer count as context, and you are told when the card and constant lorebook entries are too big. Some relays drop the system prompt (the card) entirely; that is now noticed and the request sent again.

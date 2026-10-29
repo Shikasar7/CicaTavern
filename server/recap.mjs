@@ -104,7 +104,7 @@ export function turnsSinceCompaction(path) {
 
 /**
  * The last `turns` exchanges ending at `path`'s tip, as prompt text.
- * @param transform - ({ role, text, depth }) => text, the card's prompt-side regex.
+ * @param transform - ({ role, text, depth, node }) => text, the card's prompt-side regex.
  */
 export function recentExchanges(path, names, transform = ({ text }) => text, turns = RECENT_TURNS) {
   // The path alternates opening, user, assistant, …; skip the opening (the summary covers it).
@@ -112,7 +112,7 @@ export function recentExchanges(path, names, transform = ({ text }) => text, tur
   if (tail[0]?.role === 'assistant') tail.shift()
   return tail
     .map((node, index) => {
-      const text = String(transform({ role: node.role, text: node.text, depth: tail.length - 1 - index }) ?? '').trim()
+      const text = String(transform({ role: node.role, text: node.text, depth: tail.length - 1 - index, node }) ?? '').trim()
       return text ? `【${node.role === 'user' ? names.user : names.char}】\n${text}` : ''
     })
     .filter(Boolean)

@@ -118,9 +118,10 @@ async function asPng(file) {
  * @param deps.fillQuick - (box, 'voice'|'image') fills the ▾ menu with the settings the transcript shares.
  * @param deps.mediaFlags - () → { read, image } as the transcript has them, or null before they load.
  * @param deps.openMedia - (section) opens 配图与朗读 there.
+ * @param deps.rewriteChoices - (nodeId) → a promise: the latest reply's <choices> written again (重写选项).
  */
 export function initVn(deps) {
-  const { api, el, toast, guard, renderStory, getChat, live, display, statusFor, frameContext, cardOf, send, fill, fitInput, regenerate, selectNode, isGenerating } = deps
+  const { api, el, toast, guard, renderStory, getChat, live, display, statusFor, frameContext, cardOf, send, fill, fitInput, regenerate, selectNode, isGenerating, rewriteChoices } = deps
   const $ = id => document.getElementById(id)
   const stage = document.querySelector('.stage')
   const root = $('vn')
@@ -937,6 +938,17 @@ export function initVn(deps) {
       const again = control(t`重新生成`, '', () => regenerate(node.parent))
       again.disabled = busy
       tools.push(again)
+    }
+    // 重写选项, as under the reply in the transcript: not over a card's own options.
+    const own = node && /<choices>/i.test(display(getChat(), node, true).raw ?? '')
+    if (node && node.id !== 'root' && !node.compaction && getChat()?.asksChoices && (own || !currentChoices().length)) {
+      const label = own ? t`换一组选项` : t`补写选项`
+      const redo = control(label, t`只重写这一轮结尾的四个行动选项，正文不动`, async () => {
+        await rewriteChoices(node.id)
+        if (state.on && state.phase === 'ended') showEnd()
+      })
+      redo.disabled = busy
+      tools.push(redo)
     }
     tools.push(control(t`✎ 行动`, '', () => compose(true)))
     endRow.replaceChildren(...tools)

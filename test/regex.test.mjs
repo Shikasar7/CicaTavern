@@ -93,7 +93,7 @@ test('a chat runs the global scripts, then its preset\'s, then its card\'s', asy
   const { app, call } = await tavern(t)
   await call('/api/regex', { method: 'PUT', body: { scripts: [script('global')] } })
   const scripts = await chatScripts(app.store, { cardId: 'gone', presetId: 'basic' })
-  assert.deepEqual(scripts.map(s => s.scriptName), ['global', '旧回复的行动选项不再发给模型'])
+  assert.deepEqual(scripts.map(s => s.scriptName), ['global', '2.1.0 及以前的回复：行动选项不发给模型'])
 })
 
 test('global scripts, imports, a card\'s switches; the built-in preset\'s stays as it is', async t => {
