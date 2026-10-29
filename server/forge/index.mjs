@@ -26,15 +26,16 @@ import { cardSummary, normalizeCard, writeCardPng } from '../cards.mjs'
 import { cleanCardMedia, drawChoiceOf } from '../media.mjs'
 import { complete, isProviderRef, providerError, refLabel, resolveRef } from '../providers.mjs'
 import { httpError, newId } from '../store.mjs'
-import { chosenUserName, discussRequest, editBrief, editTracking, editUserName, emptyBrief, forgeLanguages, partialReply, planLanguage, planRequest, readDiscussion, readPlan, reviseRequest } from './prompts.mjs'
-import { alignCard, applyIssues, cardJson, entriesRequest, greetingsRequest, initialState, lintCard, matchWritten, newCard, readIssues, readTagged, retrack, reviewRequest, rewriteRequest, stepDone, userTagged, writeSteps } from './write.mjs'
+import { renderTemplate } from '../template.mjs'
+import { PLAN_ANGLES, chosenUserName, cleanCardOptions, cleanGreetingCount, discussRequest, editBrief, editTracking, editUserName, emptyBrief, forgeLanguages, ideaSeeds, ideasRequest, partialReply, planLanguage, planRequest, readDiscussion, readIdeas, readPlan, reviseRequest, withCardOptions } from './prompts.mjs'
+import { alignCard, applyIssues, cardJson, entriesRequest, greetingsRequest, initialState, lintCard, matchWritten, newCard, previewDynamics, readIssues, readTagged, retrack, reviewRequest, rewriteRequest, stepDone, userTagged, writeSteps } from './write.mjs'
 import { applyChanges, editRequest, ensureBook, readEdit } from './edit.mjs'
 import { applyBookChanges, bookEditRequest, bookTooLong, pickRequest, readBookEdit, readPicked } from './book-edit.mjs'
 import { applyPresetChanges, presetEditRequest, presetPickRequest, presetTooLong, readPickedPrompts, readPresetEdit } from './preset-edit.mjs'
 import { applyRegexChanges, readRegexEdit, regexEditRequest, tryChanges } from './regex-edit.mjs'
 import { cleanThemeContext, readThemeEdit, themeApplier, themeEditRequest } from './theme-edit.mjs'
 import { cleanScripts } from '../regex.mjs'
-import { BASIC_ID } from '../../web/shared/basic.js'
+import { isBuiltinPreset } from '../../web/shared/basic.js'
 import { currentLanguage, msg } from '../i18n.mjs'
 
 const ID = /^[a-zA-Z0-9_-]{1,64}$/
@@ -51,6 +52,8 @@ const FIX_PIECES = 6
 const STEP_TRIES = 2
 
 const clip = (value, max) => (typeof value === 'string' ? value.trim().slice(0, max) : '')
+/** A draft's picks about the card (a draft from before them: its card type, mapped). */
+const optionsOf = draft => cleanCardOptions(draft.options, draft.cardType)
 
 /** The image type of a picture's bytes. */
 function imageType(buffer) {
@@ -168,8 +171,22 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
         assistant: round.assistant ? { reply: round.assistant.reply, questions: round.assistant.questions, model: round.assistant.model, at: round.assistant.at, unreadable: round.assistant.unreadable === true } : null,
       })),
       brief: draft.brief,
+      cardType: draft.cardType ?? '',
+      // The picks made before talking (cast, world, gender, play, format, status bar look).
+      options: optionsOf(draft),
+      greetingCount: draft.greetingCount ?? 0,
       plan: draft.plan,
       planModel: draft.planModel ?? null,
+      // 出三版来挑: what tells the versions apart, for the page to pick one (draft.plan is the one picked).
+      planOptions: (draft.planOptions ?? []).map((option, i) => ({
+        angle: option.angle,
+        picked: i === draft.planPick,
+        name: option.plan.name,
+        summary: option.plan.summary,
+        cast: option.plan.characters.filter(c => c.kind === 'core').map(c => c.name),
+        greetings: option.plan.greetings.map(g => g.title),
+      })),
+      planMissing: draft.planMissing ?? [],
       card: card
         ? {
             entries: card.entries,
@@ -192,7 +209,23 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
 
   function summary(draft) {
     const shown = view(draft)
-    return { id: draft.id, title: shown.title, stage: draft.stage, rounds: draft.rounds.length, updatedAt: draft.updatedAt, busy: jobs.has(draft.id), savedCardId: draft.card?.savedCardId ?? null, avatar: Boolean(draft.card?.avatar) }
+    return { id: draft.id, title: shown.title, stage: draft.stage, rounds: draft.rounds.length, updatedAt: draft.updatedAt, busy: jobs.has(draft.id), job: shown.job ? { kind: shown.job.kind, step: shown.job.step, startedAt: shown.job.startedAt, chars: shown.job.chars } : null, progress: progressOf(shown), error: Boolean(draft.error), savedCardId: draft.card?.savedCardId ?? null, avatar: Boolean(draft.card?.avatar) }
+  }
+
+  /**
+   * How far a running job is, for the page's bars and the chip outside the dialog: writing by its
+   * steps (the one running counted half), a plan by what is written of a usual one (about 8000
+   * characters), talk unknown (null). { done, total, label }.
+   */
+  function progressOf(shown) {
+    if (!shown.job) return null
+    if (shown.job.kind === 'write' && shown.writing?.length) {
+      const done = shown.writing.filter(step => step.state === 'done').length
+      const running = shown.writing.find(step => step.state === 'running')
+      return { done: done + (running ? 0.5 : 0), total: shown.writing.length, label: running?.label ?? '' }
+    }
+    if (shown.job.kind === 'plan') return { done: Math.min(0.95, (shown.job.chars ?? 0) / 8000), total: 1, label: '' }
+    return null
   }
 
   /** The provider model the draft talks to: its own pick, else the default model. */
@@ -232,7 +265,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
         job.partial = ''
         let result
         try {
-          result = await complete(chosen.provider, chosen.modelId, { ...request, signal: job.controller.signal, onDelta: delta => (job.partial += delta) }, { proxy: proxyNow() })
+          result = await complete(chosen.provider, chosen.modelId, { ...request, signal: job.controller.signal, onDelta: delta => (job.partial += delta), onRestart: () => (job.partial = '') }, { proxy: proxyNow() })
         } catch (error) {
           if (job.controller.signal.aborted || error.status) throw error
           throw httpError(502, providerError(chosen.provider, error))
@@ -292,7 +325,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
 
   async function discussWork(ctx, draft) {
     const persona = await store.getPersona()
-    const result = await ctx.call(discussRequest(draft.rounds, draft.brief, ctx.languages, { userName: persona.name }))
+    const result = await ctx.call(discussRequest(draft.rounds, draft.brief, ctx.languages, { userName: persona.name, options: optionsOf(draft) }))
     await ctx.update(fresh => {
       const read = readDiscussion(result.text, fresh.brief)
       if (!read.reply && !read.questions.length) throw new Error(msg`${ctx.label} 这次没有回出能读的内容${cutNote(result)}，再试一次，或者换个模型`)
@@ -309,13 +342,60 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
   async function planWork(ctx, request, language, names = {}) {
     const result = await ctx.call(request)
     await ctx.update(fresh => {
-      const plan = readPlan(result.text, { language, ...names })
+      const plan = withCardOptions(readPlan(result.text, { language, ...names }), optionsOf(fresh))
       if (!plan) throw new Error(msg`${ctx.label} 写的方案读不出来${cutNote(result)}，再试一次，或者换个模型`)
       fresh.plan = plan
       fresh.planModel = ctx.label
       fresh.planPending = null
+      fresh.planOptions = null
+      fresh.planMissing = null
+      fresh.planPick = 0
       fresh.stage = 'plan'
     })
+  }
+
+  /**
+   * 出三版来挑: the plan written three times at once, each from its own angle
+   * (PLAN_ANGLES). The versions that could be read are kept; the first is picked.
+   */
+  /** @param only - the angles to write again (the versions that did not come), added to those there. */
+  async function planOptionsWork(ctx, rounds, brief, options, names, only = null) {
+    const all = Object.keys(PLAN_ANGLES)
+    const angles = only ? all.filter(angle => only.includes(angle)) : all
+    const attempt = angle => ctx.call(planRequest(rounds, brief, ctx.languages, { ...options, angle })).then(
+      result => withCardOptions(readPlan(result.text, { language: ctx.languages.card, ...names }), options.options) ?? new Error(msg`${ctx.label} 写的方案读不出来，再试一次，或者换个模型`),
+      error => (error instanceof Error ? error : new Error(String(error))),
+    )
+    const results = await Promise.all(angles.map(attempt))
+    // A version that failed is asked once more on its own: a provider busy with three calls at once often turns one away.
+    for (const [i, result] of results.entries()) {
+      if (result instanceof Error && !ctx.signal.aborted) results[i] = await attempt(angles[i])
+    }
+    if (ctx.signal.aborted) throw new Error(msg`已经停下了。`)
+    const read = results.map((plan, i) => ({ angle: angles[i], plan })).filter(option => !(option.plan instanceof Error))
+    const failed = results.map((result, i) => ({ angle: angles[i], error: result instanceof Error ? clip(result.message, 300) : '' })).filter(f => f.error)
+    if (!read.length) throw results[0]
+    await ctx.update(fresh => {
+      // The versions that did not come: the page says which and why.
+      fresh.planMissing = failed
+      if (only && fresh.planOptions?.length) {
+        const picked = fresh.planOptions[fresh.planPick]
+        fresh.planOptions = [...fresh.planOptions, ...read].sort((a, b) => all.indexOf(a.angle) - all.indexOf(b.angle))
+        fresh.planPick = Math.max(0, fresh.planOptions.indexOf(picked))
+        return
+      }
+      fresh.planOptions = read
+      fresh.planPick = 0
+      fresh.plan = read[0].plan
+      fresh.planModel = ctx.label
+      fresh.planPending = null
+      fresh.stage = 'plan'
+    })
+  }
+
+  /** The draft's plan changed by hand: the version it was picked from follows, so going back to it keeps the change. */
+  function keepPick(draft) {
+    if (draft.planOptions?.[draft.planPick]) draft.planOptions[draft.planPick].plan = draft.plan
   }
 
   /** What the user picked in a round, checked against that round's questions. */
@@ -389,7 +469,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
     const result = await ctx.call(reviewRequest(card, lintCard(card, plan.verbatim), planLanguage(plan)))
     const issues = readIssues(result.text)
     await ctx.update(fresh => {
-      const left = applyIssues(fresh.card, issues)
+      const left = applyIssues(fresh.card, issues, planLanguage(plan))
       fresh.card.pending = Object.fromEntries(left)
       fresh.card.issuesFound = issues.length
       fresh.card.reviewed = true
@@ -448,11 +528,27 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
     return { name: c.name, kind, looks: c.looks_tags || c.appearance.join(', '), outfit: c.outfit_tags || c.outfit, scene: clip(description, 400) || plan.avatar.tags }
   }
 
-  /** The plan's characters as the card's cast (角色名册), so 配图 knows their looks from the start. */
+  /** The plan's characters as the card's cast (角色名册), so 配图 and the visual novel know their looks from the start. */
   function rosterOf(plan) {
     return plan.characters
       .filter(c => c.looks_tags)
-      .map(c => ({ name: c.name, aliases: c.aliases.join('，'), kind: /女/.test(c.gender) ? 'girl' : /男/.test(c.gender) ? 'boy' : 'other', looks: c.looks_tags, outfit: c.outfit_tags }))
+      .map(c => ({ name: c.name, aliases: c.aliases.join('，'), kind: /女|female|woman|girl/i.test(c.gender) ? 'girl' : /男|male|man|boy/i.test(c.gender) ? 'boy' : 'other', looks: c.looks_tags, outfit: c.outfit_tags }))
+  }
+
+  /**
+   * The cast of a card saved before, with the plan's: someone new is added; someone
+   * already there (by name or alias) keeps everything set in 配图 (looks, LoRA, voice,
+   * 人设图) and only gets what is still empty there.
+   */
+  function mergeRoster(roster = [], plan) {
+    const out = roster.map(entry => ({ ...entry }))
+    const names = entry => [entry.name, ...String(entry.aliases ?? '').split(/[,，、]/)].map(n => n.trim()).filter(Boolean)
+    for (const fresh of rosterOf(plan)) {
+      const known = out.find(entry => !entry.player && names(entry).some(n => names(fresh).includes(n)))
+      if (!known) out.push(fresh)
+      else for (const key of ['aliases', 'looks', 'outfit']) if (!String(known[key] ?? '').trim()) known[key] = fresh[key]
+    }
+    return out
   }
 
   async function requireCard(id) {
@@ -590,7 +686,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
           const card = await store.getCard(id.slice(5))
           return { subject: { scripts: card.regexScripts ?? [] }, name: card.name, holder: card }
         }
-        if (id.startsWith('preset-') && id.slice(7) !== BASIC_ID) {
+        if (id.startsWith('preset-') && !isBuiltinPreset(id.slice(7))) {
           const preset = await store.getPreset(id.slice(7))
           return { subject: { scripts: preset.regexScripts ?? [] }, name: preset.name, holder: preset, preset: true }
         }
@@ -874,11 +970,11 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
     },
 
     /** A new draft from the first idea; the first round starts right away. */
-    async create({ text, model } = {}) {
+    async create({ text, model, cardType, options } = {}) {
       const idea = clip(text, MAX_TEXT)
       if (!idea) throw httpError(400, msg`先说说你想要一张什么样的卡，一句话也行`)
       const now = new Date().toISOString()
-      const draft = { id: newId(), createdAt: now, updatedAt: now, stage: 'discuss', model: clip(model, 200), rounds: [{ user: { text: idea, picks: [], at: now }, assistant: null }], brief: emptyBrief(), plan: null, card: null, job: null, error: null }
+      const draft = { id: newId(), createdAt: now, updatedAt: now, stage: 'discuss', model: clip(model, 200), cardType: '', options: cleanCardOptions(options, cardType), greetingCount: 0, rounds: [{ user: { text: idea, picks: [], at: now }, assistant: null }], brief: emptyBrief(), plan: null, card: null, job: null, error: null }
       await save(draft)
       await run(draft, 'discuss', ctx => discussWork(ctx, draft))
       return view(draft)
@@ -902,7 +998,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
     async retry(id) {
       const draft = await load(id)
       const kind = draft.error?.kind ?? (draft.stage === 'plan' ? 'plan' : 'discuss')
-      if (kind === 'plan') return draft.planPending ? this.revise(id, draft.planPending) : this.plan(id)
+      if (kind === 'plan') return draft.planPending ? this.revise(id, draft.planPending) : this.plan(id, { variants: draft.planVariants === true })
       if (kind === 'write') return startWrite(draft)
       if (kind === 'rewrite' && draft.lastRewrite) return startRewrite(draft, draft.lastRewrite.target, draft.lastRewrite.note)
       if (kind === 'avatar') return startAvatar(draft, draft.lastAvatar?.description, draft.lastAvatar?.choice)
@@ -925,16 +1021,28 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
     },
 
     /** The user's edits: the model to use, the sketch (values, locks, title), the stage to look at. */
-    async update(id, { model, brief, stage, tracking, userName } = {}) {
-      if (((tracking && typeof tracking === 'object') || typeof userName === 'string') && jobs.has(id)) throw httpError(409, msg`上一步还在进行，等它写完或先停下`)
+    async update(id, { model, brief, stage, tracking, userName, cardType, options, greetingCount, planPick } = {}) {
+      if (((tracking && typeof tracking === 'object') || typeof userName === 'string' || planPick !== undefined) && jobs.has(id)) throw httpError(409, msg`上一步还在进行，等它写完或先停下`)
       const draft = await mutate(id, draft => {
         if (typeof model === 'string') draft.model = clip(model, 200)
         if (brief && typeof brief === 'object') draft.brief = editBrief(draft.brief, brief)
+        // What kind of card, and how many openings: the next round and the next plan go by them.
+        if (typeof cardType === 'string') draft.options = cleanCardOptions(null, cardType)
+        if (options && typeof options === 'object') draft.options = cleanCardOptions(options)
+        if (greetingCount !== undefined) draft.greetingCount = cleanGreetingCount(greetingCount)
+        // Another of the three versions: it becomes the plan (a card already started follows it when writing goes on).
+        if (planPick !== undefined) {
+          const option = draft.planOptions?.[Number(planPick)]
+          if (!option) throw httpError(400, msg`没有这一版方案`)
+          draft.planPick = Number(planPick)
+          draft.plan = option.plan
+        }
         // The plan's status bar editor: variables edited by hand, no model call. A card
         // already written gets its state entries again from them.
         if (tracking && typeof tracking === 'object') {
           if (!draft.plan) throw httpError(409, msg`还没有方案`)
           draft.plan = editTracking(draft.plan, tracking)
+          keepPick(draft)
           if (draft.card) draft.card = retrack(draft.card, draft.plan)
         }
         // The player's name, set by hand in the plan ('' = the one in settings). The card
@@ -942,6 +1050,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
         if (typeof userName === 'string') {
           if (!draft.plan) throw httpError(409, msg`还没有方案`)
           draft.plan = editUserName(draft.plan, userName)
+          keepPick(draft)
         }
         // Going back keeps what is ahead: the plan stays while talking, the card while planning.
         const reachable = { discuss: true, plan: Boolean(draft.plan), write: Boolean(draft.card), polish: Boolean(draft.card?.writtenAt) }
@@ -950,15 +1059,47 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
       return view(draft)
     },
 
-    /** Write the talk up as a plan. */
-    async plan(id) {
+    /**
+     * Write the talk up as a plan; `variants` (出三版来挑): three versions at once, to pick one;
+     * `missing`: only the versions that did not come last time, added to the others.
+     */
+    async plan(id, { variants = false, missing = false } = {}) {
       const draft = await load(id)
       if (!draft.rounds.some(r => r.assistant)) throw httpError(409, msg`先聊一轮再出方案`)
       // The last answer may still be waiting for a reply: plan from what was said.
       const rounds = draft.rounds.filter(r => r.assistant || r === draft.rounds.at(-1))
+      const options = { options: optionsOf(draft), greetings: draft.greetingCount }
+      const names = { userName: chosenUserName(draft.brief) }
+      const only = missing === true && draft.planOptions?.length && draft.planMissing?.length ? draft.planMissing.map(m => m.angle) : null
       draft.planPending = null
-      await run(draft, 'plan', ctx => planWork(ctx, planRequest(rounds, draft.brief, ctx.languages), ctx.languages.card, { userName: chosenUserName(draft.brief) }))
+      draft.planVariants = variants === true
+      await run(draft, 'plan', ctx => (variants === true
+        ? planOptionsWork(ctx, rounds, draft.brief, options, names, only)
+        : planWork(ctx, planRequest(rounds, draft.brief, ctx.languages, options), ctx.languages.card, names)))
       return view(draft)
+    },
+
+    /**
+     * A few ideas to start from (给我灵感), outside any draft: `exclude` names the
+     * ones shown before, so another batch brings new ones; `count` 1 for 交给 Cica (one, put in the box).
+     */
+    async ideas({ model, cardType, options, exclude, count = 5 } = {}) {
+      const chosen = await target({ model: clip(model, 200) })
+      const languages = forgeLanguages(currentLanguage(), (await store.getSettings()).language)
+      const shown = (Array.isArray(exclude) ? exclude : []).map(title => clip(title, 30)).filter(Boolean).slice(-40)
+      // An answer that cannot be read (a model now and then leaves the format) is asked for once more.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        let result
+        try {
+          result = await complete(chosen.provider, chosen.modelId, ideasRequest(ideaSeeds(Math.min(5, Math.max(1, Math.floor(Number(count)) || 5))), languages, { options: cleanCardOptions(options, cardType), exclude: shown }), { proxy: proxyNow() })
+        } catch (error) {
+          throw error.status ? error : httpError(502, providerError(chosen.provider, error))
+        }
+        if (ledger && result.usage) await ledger.recordTurn({ id: 'forge-ideas', title: msg`创作：找灵感`, cardId: null }, { model: chosen.ref, usage: result.usage, createdAt: new Date().toISOString() }).catch(() => {})
+        const ideas = readIdeas(result.text)
+        if (ideas.length) return { ideas }
+      }
+      throw httpError(502, msg`${refLabel(chosen.ref, await store.getProviders()) ?? chosen.ref} 这次没给出能读的灵感，再试一次，或者换个模型`)
     },
 
     /** Revise the plan by the user's comments (per section and overall). */
@@ -971,7 +1112,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
       draft.planNotes = [...(draft.planNotes ?? []), { at: new Date().toISOString(), text: general, notes: cleanNotes }].slice(-20)
       draft.planPending = { text: general, notes: cleanNotes }
       const names = { userName: draft.plan.user_role.name ?? '', said: [general, ...cleanNotes.map(n => n.text)].join('\n') }
-      await run(draft, 'plan', ctx => planWork(ctx, reviseRequest(draft.rounds.filter(r => r.assistant), draft.plan, { text: general, notes: cleanNotes }), planLanguage(draft.plan), names))
+      await run(draft, 'plan', ctx => planWork(ctx, reviseRequest(draft.rounds.filter(r => r.assistant), draft.plan, { text: general, notes: cleanNotes }, { options: optionsOf(draft) }), planLanguage(draft.plan), names))
       return view(draft)
     },
 
@@ -994,6 +1135,13 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
     },
 
     /** Rewrite one entry (by name) or opening ("开场白2") by the user's note. */
+    /** 数值预览: the card's stages and events at the values the sliders are at (no model call). */
+    async preview(id, { values } = {}) {
+      const draft = await load(id)
+      if (!draft.plan || !draft.card) throw httpError(409, msg`卡还没有写出来`)
+      return previewDynamics(draft.plan, draft.card, values, renderTemplate)
+    },
+
     async rewrite(id, { target, note } = {}) {
       const draft = await requireCard(id)
       const asked = clip(note, 1000)
@@ -1063,8 +1211,10 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
       const png = writeCardPng(Buffer.from(match[2], 'base64'), raw)
       const card = normalizeCard(raw)
       const old = draft.card.savedCardId ? await store.getCard(draft.card.savedCardId).catch(() => null) : null
-      if (old) Object.assign(card, { id: old.id, media: old.media, worldbookIds: old.worldbookIds ?? [], importedAt: old.importedAt, group: old.group ?? '', archived: old.archived === true })
-      else card.media = cleanCardMedia({ roster: rosterOf(draft.plan) })
+      // The plan's art style becomes the card's 画风 (配图), so its sprites and backgrounds agree; one set in 配图 stays.
+      const style = draft.plan.avatar?.style ?? ''
+      if (old) Object.assign(card, { id: old.id, media: { ...old.media, style: old.media?.style || style, roster: cleanCardMedia({ roster: mergeRoster(old.media?.roster, draft.plan) }).roster }, worldbookIds: old.worldbookIds ?? [], importedAt: old.importedAt, group: old.group ?? '', archived: old.archived === true })
+      else card.media = cleanCardMedia({ style, roster: rosterOf(draft.plan) })
       card.hasAvatar = true
       await store.saveCard(card, png)
       const saved = await mutate(id, fresh => {

@@ -3,10 +3,11 @@
 // starts (or when the preset is applied to it again); 每轮 prompts are rendered
 // into every turn, so toggling those takes effect on the next message.
 import { t } from '/i18n.js'
-import { BASIC_ID } from '/shared/basic.js'
-import { BASIC_FIELDS, basicField } from '/basic-options.js'
+import { BASIC_ID, VN_ID, builtinKey } from '/shared/basic.js'
+import { basicField, fieldsOf } from '/basic-options.js'
 
-// The built-in preset is '' in this list (the default setting); chats name it BASIC_ID.
+// The built-in preset is '' in this list (the default setting); chats name it BASIC_ID. The visual novel
+// preset is VN_ID in both.
 // Chats from before it existed have none (null): they show here too, as not yet applied.
 const listId = chat => (chat?.presetId === BASIC_ID ? '' : chat?.presetId ?? '')
 
@@ -59,7 +60,7 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
     state.defaultId = settings.presetId || ''
     const chat = getChat()
     const wanted = selectId ?? (chat ? listId(chat) : state.defaultId)
-    await select(list.some(p => p.id === wanted) ? wanted : '')
+    await select(wanted === VN_ID || list.some(p => p.id === wanted) ? wanted : '')
     if (!$('preset-dialog').open) $('preset-dialog').showModal()
   }
 
@@ -90,6 +91,7 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
     }
     $('preset-list').replaceChildren(
       item('', t`基础预设`, t`应用自带，轻量，选项可调`),
+      item(VN_ID, t`视觉小说预设`, t`应用自带，对白多、旁白短，适合视觉小说模式`),
       ...state.list.map(p => item(p.id, p.name, t`启用 ${p.enabled}/${p.prompts} 条${p.regexScripts ? t`　正则 ${p.regexScripts}` : ''}`)),
     )
   }
@@ -123,8 +125,10 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
     if (detail.builtin) {
       return [
         el('header', { class: 'preset-head' }, [
-          el('h3', { class: 'preset-title', text: t`基础预设` }),
-          el('div', { class: 'preset-meta', text: t`应用自带的轻量预设：叙述规则加上下面这些选项，固定前缀里约 ${detail.rules.length.toLocaleString()} 字。改了选项对新对话生效，正在进行的对话点「应用到当前对话」。你在设置里写的文风要求照常生效。` }),
+          el('h3', { class: 'preset-title', text: id === VN_ID ? t`视觉小说预设` : t`基础预设` }),
+          el('div', { class: 'preset-meta', text: id === VN_ID
+            ? t`应用自带，按视觉小说、galgame 的写法讲故事：对白为主，旁白和场景描写简明，段落短，适合在文字框里一句一句读。基础预设的选项这里也都有，另存一份，互不影响。固定前缀里约 ${detail.rules.length.toLocaleString()} 字。改了选项对新对话生效，正在进行的对话点「应用到当前对话」。`
+            : t`应用自带的轻量预设：叙述规则加上下面这些选项，固定前缀里约 ${detail.rules.length.toLocaleString()} 字。改了选项对新对话生效，正在进行的对话点「应用到当前对话」。你在设置里写的文风要求照常生效。` }),
           actions,
         ]),
         applyBar,
@@ -159,19 +163,20 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
     // Every pick so far: each save sends all of them (the server keeps the options whole), or a second pick
     // sent the page's first options again and undid the one before.
     let options = { ...detail.options }
+    const fields = fieldsOf(detail.id)
     const pick = guard(async (key, value) => {
       options = { ...options, [key]: value }
-      const settings = await api('/api/settings', { method: 'PUT', body: { basic: options } })
-      state.detail = await api(`/api/presets/${BASIC_ID}`)
+      const settings = await api('/api/settings', { method: 'PUT', body: { [builtinKey(detail.id)]: options } })
+      state.detail = await api(`/api/presets/${detail.id}`)
       onBasicChanged?.(settings)
-      if (BASIC_FIELDS.find(f => f.key === key)?.prompt !== false) markStale()
+      if (fields.find(f => f.key === key)?.prompt !== false) markStale()
       renderHead()
       rules.textContent = state.detail.rules
     })
     const rules = el('pre', { class: 'basic-rules', text: detail.rules })
     main.replaceChildren(...[
       head,
-      el('div', { class: 'basic-options' }, BASIC_FIELDS.map(field => basicField(el, field, detail.options[field.key], { onPick: pick }))),
+      el('div', { class: 'basic-options' }, fields.map(field => basicField(el, field, detail.options[field.key], { onPick: pick }))),
       el('details', { class: 'basic-preview' }, [el('summary', { text: t`这些选项加进提示词的内容` }), rules]),
       state.list.length ? null : el('p', { class: 'basic-import', text: t`想用 SillyTavern 的预设：在它的「AI 响应配置」里导出预设 JSON（或用 SillyTavern/data/default-user/OpenAI Settings 里的文件），点左上角「导入」或拖进窗口。` }),
     ].filter(Boolean))
@@ -517,7 +522,7 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
     state.defaultId = state.selected || ''
     renderNav()
     renderMain()
-    toast(state.selected ? t`新对话默认使用「${state.detail.name}」` : t`新对话默认使用基础预设`)
+    toast(state.selected ? t`新对话默认使用「${state.selected === VN_ID ? t`视觉小说预设` : state.detail.name}」` : t`新对话默认使用基础预设`)
   }
 
   async function applyToChat() {
@@ -528,7 +533,7 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
     onChatChanged(view)
     renderNav()
     renderMain()
-    toast(t`这个对话改用「${view.presetId === BASIC_ID ? t`基础预设` : view.presetName}」。下一轮会重新写入一次缓存。`)
+    toast(t`这个对话改用「${view.presetId === BASIC_ID ? t`基础预设` : view.presetId === VN_ID ? t`视觉小说预设` : view.presetName}」。下一轮会重新写入一次缓存。`)
   }
 
   async function exportPreset() {

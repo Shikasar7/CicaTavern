@@ -11,7 +11,10 @@ export const GUESSED_WINDOW = 128_000
 const RESERVE = 8_000
 const RESERVE_SHARE = 0.15
 
-export const COMPACTION_DEFAULTS = Object.freeze({ auto: true, percent: 70, cap: 150_000, windows: {} })
+// One number decides: the share of the model's window (room is kept below it on its own, RESERVE). A cap in
+// tokens (150 000 by default) came before it: on a 1M model it, not the 70 %, decided, and players read the
+// two as one; settings saved with it drop it (cleanCompaction).
+export const COMPACTION_DEFAULTS = Object.freeze({ auto: true, percent: 70, windows: {} })
 
 const tokens = value => {
   const n = Math.floor(Number(value))
@@ -32,7 +35,6 @@ export function cleanCompaction(value) {
   return {
     auto: source.auto !== false,
     percent: Number.isFinite(percent) ? Math.min(95, Math.max(30, percent)) : COMPACTION_DEFAULTS.percent,
-    cap: source.cap === 0 || source.cap === '0' ? 0 : tokens(source.cap) || COMPACTION_DEFAULTS.cap,
     windows,
   }
 }
@@ -105,21 +107,34 @@ export function windowOf(ref, { settings = {}, learned = {} } = {}) {
   return { tokens: GUESSED_WINDOW, source: 'guess' }
 }
 
-/** When to compact a chat on a model with `window` tokens: the share, under the cap, with room kept free. */
-export function thresholdFor(window, compaction) {
-  const { percent, cap } = cleanCompaction(compaction)
-  const room = Math.max(RESERVE, Math.round(window * RESERVE_SHARE))
-  let at = Math.round((window * percent) / 100)
-  if (cap) at = Math.min(at, cap)
-  return Math.max(1_000, Math.min(at, window - room))
+/**
+ * Tokens a text comes to, roughly: a Chinese or Japanese character about one, other text about four
+ * characters each. For what the page says of a chat's fixed prefix, never for a limit.
+ */
+export function estimateTokens(text) {
+  const s = String(text ?? '')
+  const wide = (s.match(/[\u3000-\u9fff\uac00-\ud7af\uff00-\uffef]/g) ?? []).length
+  return wide + Math.ceil((s.length - wide) / 4)
 }
 
-/** What a model's context holds after `node`, a reply: its turn's whole input and the reply itself. */
+/** When to compact a chat on a model with `window` tokens: the share of it, with room kept free below the window. */
+export function thresholdFor(window, compaction) {
+  const { percent } = cleanCompaction(compaction)
+  const room = Math.max(RESERVE, Math.round(window * RESERVE_SHARE))
+  return Math.max(1_000, Math.min(Math.round((window * percent) / 100), window - room))
+}
+
+/**
+ * What a model's context holds after `node`, a reply: its turn's input and the reply itself. The input is
+ * the last call's (`prompt`; 联网 sends a paused reply back again, and billing adds the calls up), the reply
+ * without the thinking (`thinking`: not sent back next turn). Replies from before both were kept: all of it.
+ */
 export function contextUsed(node) {
   const usage = node?.usage
   if (!usage) return 0
   const write = Number(usage.cacheWrite) || (Number(usage.cacheWrite5m) || 0) + (Number(usage.cacheWrite1h) || 0)
-  return (Number(usage.input) || 0) + (Number(usage.cacheRead) || 0) + write + (Number(usage.output) || 0)
+  const prompt = usage.prompt != null ? Number(usage.prompt) || 0 : (Number(usage.input) || 0) + (Number(usage.cacheRead) || 0) + write
+  return prompt + Math.max(0, (Number(usage.output) || 0) - (Number(usage.thinking) || 0))
 }
 
 /** For the model menu and the page's meter: the window, where it came from, and the threshold. */

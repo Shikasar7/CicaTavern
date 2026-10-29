@@ -145,7 +145,7 @@ export function createScenes(store, { media, history = null }) {
    * @param options.passage - 画这一轮的场景: the helper reads this reply and names the place;
    *   always a new scene, the place given (if any) its alias, so it is the one used there from now on.
    */
-  async function draw(cardId, { place = '', sceneId = '', prompt = '', rewrite = false, passage = '' } = {}, signal) {
+  async function draw(cardId, { place = '', sceneId = '', prompt = '', rewrite = false, passage = '', choice = {} } = {}, signal) {
     const scenes = await read(cardId)
     const existing = sceneId ? scenes.find(s => s.id === sceneId) : null
     if (sceneId && !existing) throw httpError(404, msg`没有这个场景`)
@@ -162,7 +162,7 @@ export function createScenes(store, { media, history = null }) {
     return alone(cardId, name || msg`这一轮的场景`, async () => {
       const card = await store.getCard(cardId)
       const lore = name ? placeLore(await booksForCard(store, card), name) : ''
-      const picture = await media.drawScenery({ cardId, place: name, lore, passage: story, prompt: clip(prompt, 2000) || (existing && !rewrite ? existing.prompt : '') }, signal)
+      const picture = await media.drawScenery({ cardId, place: name, lore, passage: story, prompt: clip(prompt, 2000) || (existing && !rewrite ? existing.prompt : ''), choice }, signal)
       const id = existing?.id ?? newId()
       const file = await writeImage(cardId, id, picture.buffer)
       const now = new Date().toISOString()
@@ -299,10 +299,10 @@ export function createScenes(store, { media, history = null }) {
    * A half-body picture of a cast member on a plain background (media.drawSprite),
    * kept with the looks and outfit it was drawn from: the page says when the 名册 has changed them since.
    */
-  async function drawSprite(cardId, entryId, signal) {
+  async function drawSprite(cardId, entryId, signal, choice = {}) {
     const entry = await memberOf(cardId, entryId)
     return alone(cardId, msg`${entry.name}的立绘`, async () => {
-      const picture = await media.drawSprite(cardId, entryId, signal)
+      const picture = await media.drawSprite(cardId, entryId, signal, choice)
       const from = { looks: entry.looks ?? '', outfit: entry.outfit ?? '' }
       return { ...(await putSprite(cardId, entryId, picture.buffer, { backend: picture.backend, source: 'drawn', ...from })), ...(picture.note ? { note: picture.note } : {}) }
     })
@@ -338,13 +338,13 @@ export function createScenes(store, { media, history = null }) {
   }
 
   /** The 立绘 (else the reference picture) with only the face changed (media.drawExpression). */
-  async function drawExpression(cardId, entryId, expression, signal) {
+  async function drawExpression(cardId, entryId, expression, signal, choice = {}) {
     const entry = await memberOf(cardId, entryId)
     expressionName(expression)
     return alone(cardId, msg`${entry.name}的表情`, async () => {
       const base = (await readSprites(cardId))[entryId]
       const buffer = base ? await readFile(path.join(spriteDir(cardId), base.file)).catch(() => null) : null
-      const picture = await media.drawExpression(cardId, entryId, expression, buffer, signal)
+      const picture = await media.drawExpression(cardId, entryId, expression, buffer, signal, choice)
       return { ...(await putExpression(cardId, entryId, expression, picture.buffer, { backend: picture.backend, source: 'drawn' })), ...(picture.note ? { note: picture.note } : {}) }
     })
   }

@@ -18,9 +18,11 @@ export function defaultShow(variable) {
 
 /** The plan's status bar layout, or null when it tracks nothing (or shows nothing). */
 export function statusSpecOf(plan) {
-  if (!plan?.tracking?.enabled) return null
+  // A plain MVU card (创作角色卡's 格式) keeps its variables but no bar of its own.
+  if (!plan?.tracking?.enabled || plan.status?.ui === false) return null
   return cleanStatusSpec({
     title: plan.tracking.title,
+    theme: plan.status?.theme,
     fields: plan.tracking.variables.map(v => ({ path: v.path, label: v.label, show: v.show || defaultShow(v), ...rangeOf(v.range) })),
   })
 }
@@ -43,7 +45,14 @@ body{margin:0;background:transparent}
 .value{text-align:right;min-width:3.4em;font-variant-numeric:tabular-nums}
 .tags{display:flex;flex-wrap:wrap;gap:4px}
 .tag{font-size:12px;padding:0 9px;border-radius:999px;background:var(--soft);line-height:22px}
-.faint{color:var(--faint)}.on{color:var(--ok)}`
+.faint{color:var(--faint)}.on{color:var(--ok)}
+.theme-paper{--bg:#f6efe0;--line:#dccdae;--ink:#3b2f22;--muted:#7a6a55;--faint:#a8977c;--accent:#8a3b2a;--soft:rgba(138,59,42,.1);--track:#e6dac2;font-family:"Noto Serif SC","Songti SC",STSong,serif}
+@media (prefers-color-scheme:dark){.theme-paper{--bg:#28221a;--line:#3d342a;--ink:#e8dcc6;--muted:#b3a487;--faint:#857760;--accent:#d9876f;--soft:rgba(217,135,111,.13);--track:#3a3127}}
+.theme-neon{--bg:#0f1220;--line:#2b2f55;--ink:#e6e8ff;--muted:#9aa0d8;--faint:#6a70a8;--accent:#3ef0ff;--soft:rgba(62,240,255,.12);--track:#23264a;box-shadow:0 0 14px rgba(62,240,255,.22)}
+.theme-neon .title{text-shadow:0 0 6px rgba(62,240,255,.6)}
+.theme-neon .meter>i{box-shadow:0 0 6px var(--accent)}
+.theme-pastel{--bg:#fff6f8;--line:#f3d6de;--ink:#4a3a40;--muted:#9a7d86;--faint:#c4a7b0;--accent:#e57a9b;--soft:rgba(229,122,155,.13);--track:#f6e3e8;border-radius:18px}
+@media (prefers-color-scheme:dark){.theme-pastel{--bg:#2b2226;--line:#3f3036;--ink:#f1dfe5;--muted:#c09aa7;--faint:#8c6f79;--accent:#f09ab5;--soft:rgba(240,154,181,.13);--track:#3b2d33}}`
 
 const BAR_SCRIPT = `
 const unwrap=v=>Array.isArray(v)&&v.length===2&&typeof v[1]==='string'&&(typeof v[0]==='number'||typeof v[0]==='boolean')?v[0]:v;
@@ -80,7 +89,8 @@ load();`
 /** The status bar as one HTML block for a SillyTavern regex replacement. */
 export function statusBarHtml(spec) {
   const data = JSON.stringify(spec).replace(/</g, '\\u003c')
-  return ['```html', `<div class="bar" id="bar"></div>`, `<style>${BAR_STYLE}</style>`, `<script>const SPEC=${data};${BAR_SCRIPT}</script>`, '```'].join('\n')
+  const theme = spec.theme && spec.theme !== 'plain' ? ` theme-${spec.theme}` : ''
+  return ['```html', `<div class="bar${theme}" id="bar"></div>`, `<style>${BAR_STYLE}</style>`, `<script>const SPEC=${data};${BAR_SCRIPT}</script>`, '```'].join('\n')
 }
 
 const regex = (id, scriptName, findRegex, replaceString, options) => ({

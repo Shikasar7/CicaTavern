@@ -10,13 +10,13 @@ import { t } from '/i18n.js'
 import { htmlFrame, segments, streamingText } from '/render.js'
 import { timeBox } from '/status.js'
 import { advanceDay, latestPlace, matchScene, normalizePlace, opensNextDay, placeIn, sameLine, speakerNames, splitLines, stateTime, storyDay, timeOfDay, timesIn, weatherOf } from '/shared/vn.js'
-import { cutOut } from '/shared/cutout.js'
+import { cutOut, spriteFrame } from '/shared/cutout.js'
 import { EXPRESSIONS, PACK_PICTURE, packFaces, stageAt } from '/shared/stage.js'
 import { initVnSaves } from '/vn-saves.js'
 import { initVnHud } from '/vn-hud.js'
 import { changeNotes } from '/shared/hud.js'
 import { shrink } from '/theme.js'
-import { BASIC_ID } from '/shared/basic.js'
+import { VN_ID, isBuiltinPreset } from '/shared/basic.js'
 import { historyStrip, keptItems } from '/draw-choice.js'
 
 const MODE_KEY = 'cicatavern.vnMode'
@@ -27,6 +27,8 @@ const PINS_KEY = 'cicatavern.vnPins'
 const TRIED_KEY = 'cicatavern.vnTried'
 // 视觉小说格式 (【名字|表情】「…」) switched on or off by hand, per card: { cardId: boolean }.
 const FORMAT_KEY = 'cicatavern.vnFormat'
+// 视觉小说预设 offered on going into the mode: 'never' once the player said 不再提示.
+const PRESET_OFFER_KEY = 'cicatavern.vnPresetOffer'
 const SPEEDS = { slow: 25, normal: 45, fast: 90, instant: 0 }
 const SPEED_LABEL = { slow: t`慢`, normal: t`中`, fast: t`快`, instant: t`瞬间` }
 // A place with no background, a speaker with no 立绘: draw one at once, offer to, or leave it.
@@ -484,8 +486,56 @@ export function initVn(deps) {
     remember(TRIED_KEY, true)
     toggle.classList.remove('fresh')
     const chat = getChat()
-    if (chat) setOn(chat.cardId, !isOn(chat.cardId))
+    if (!chat) return
+    const on = !isOn(chat.cardId)
+    setOn(chat.cardId, on)
+    if (on) offerPreset(chat)
   })
+
+  // Chats offered the preset in this page already: asked once each.
+  const offered = new Set()
+
+  /**
+   * Going into the mode with another preset: offer the 视觉小说预设 (more dialogue, short
+   * narration). Switching rebuilds the chat's prefix (deps.usePreset). Resolves once answered.
+   */
+  function offerPreset(chat) {
+    if (!chat || chat.presetId === VN_ID || offered.has(chat.id) || recall(PRESET_OFFER_KEY, '') === 'never' || !deps.usePreset) return Promise.resolve(false)
+    offered.add(chat.id)
+    return new Promise(resolve => {
+      const box = el('dialog', { class: 'dialog vn-preset-offer' })
+      const done = async answer => {
+        box.close()
+        box.remove()
+        if (answer === 'never') remember(PRESET_OFFER_KEY, 'never')
+        if (answer === 'use') {
+          try {
+            await deps.usePreset(chat.id, VN_ID)
+          } catch (error) {
+            toast(error.message)
+          }
+        }
+        resolve(answer === 'use')
+      }
+      const imported = chat.presetId && !isBuiltinPreset(chat.presetId) ? chat.presetName : ''
+      box.append(
+        el('h2', { text: t`改用视觉小说预设？` }),
+        el('p', { text: t`为了获得更好的体验，可以让这个对话改用视觉小说预设：对白更多，旁白和场景描写简明扼要，段落短，更像视觉小说和 galgame 的写法。对白比重、旁白长短、展开方式这些都能在「预设」里调。` }),
+        el('p', { class: 'muted small', text: imported
+          ? t`现在用的是「${imported}」，换了之后它的条目不再生效，随时可以在「预设」里换回来。会重建这个对话的固定前缀，下一轮重写一次缓存。`
+          : t`会重建这个对话的固定前缀，下一轮重写一次缓存。随时可以在「预设」里换回来。` }),
+        el('div', { class: 'row end' }, [
+          el('button', { type: 'button', class: 'btn ghost', text: t`不再提示`, onclick: () => done('never') }),
+          el('span', { class: 'grow' }),
+          el('button', { type: 'button', class: 'btn', text: t`这次不用`, onclick: () => done('no') }),
+          el('button', { type: 'button', class: 'btn primary', text: t`改用视觉小说预设`, disabled: isGenerating(), onclick: () => done('use') }),
+        ]),
+      )
+      box.addEventListener('cancel', () => done('no'))
+      document.body.append(box)
+      box.showModal()
+    })
+  }
 
   // ─── The text and its steps ────────────────────────────────────────
   /** The latest reply on the path (the greeting counts). */
@@ -1449,8 +1499,8 @@ export function initVn(deps) {
           return null
         }
         context.putImageData(image, 0, 0)
-        // Just the figure, so it stands on the bottom edge.
-        const { x, y, width: w, height: h } = result.box
+        // Just the figure, so it stands on the bottom edge (a whole one from the thighs up, like the rest).
+        const { x, y, width: w, height: h } = spriteFrame(image, result.box)
         const out = Object.assign(document.createElement('canvas'), { width: w, height: h })
         out.getContext('2d').drawImage(canvas, x, y, w, h, 0, 0, w, h)
         const png = await new Promise(resolve => out.toBlob(resolve, 'image/png'))
@@ -1614,25 +1664,97 @@ export function initVn(deps) {
     drawChip()
   }
 
-  function drawSprite(cardId, entry) {
+  /**
+   * @param choice - { backend, model } for this one (做成视觉小说 picks it first), {} = as the settings say.
+   * @param after - run once it is drawn (its 表情 wait for it: one drawn without it fails).
+   */
+  function drawSprite(cardId, entry, choice = {}, after = null) {
     enqueue(cardId, {
       key: `sprite:${entry.id}`,
       label: t`${entry.name}的立绘`,
       url: `/api/cards/${cardId}/sprites/${entry.id}/draw`,
-      body: {},
-      done: data => takeSprites(cardId, data),
+      body: choice,
+      done: data => {
+        takeSprites(cardId, data)
+        after?.()
+      },
     })
   }
 
   /** One 表情 of someone's 立绘, drawn from it (the queue takes them one at a time). */
-  function drawFace(cardId, entry, face) {
+  function drawFace(cardId, entry, face, choice = {}) {
     enqueue(cardId, {
       key: `face:${entry.id}:${face}`,
       label: t`${entry.name}·${FACE_LABEL[face]}`,
       url: `/api/cards/${cardId}/sprites/${entry.id}/expressions/${face}/draw`,
-      body: {},
+      body: choice,
       done: data => takeSprites(cardId, data),
     })
+  }
+
+  /**
+   * 一键备齐 / 做成视觉小说, step by step:
+   *   1. how to draw (deps.pickDraw: any 画图方式 set up, or set one up; for these pictures only);
+   *   2. the 角色名册: with nobody in it with looks, the helper drafts it from the card and it is saved;
+   *   3. a 立绘 for each cast member with looks and none drawn or uploaded;
+   *   4. each one's missing 表情, queued once their 立绘 is there (left out when the method picked
+   *      cannot draw from a picture: they would come out as someone else);
+   *   5. a background for each of `places` with none yet.
+   * Asks before drawing, with the count: every picture costs a drawing.
+   * @param options.places - place names to give a background (创作角色卡's plan, the place the story is at).
+   * @returns how many were queued.
+   */
+  async function prepare(cardId, { places = [] } = {}) {
+    if (!cardId) return 0
+    const picked = deps.pickDraw
+      ? await deps.pickDraw({ title: t`用什么画立绘、表情和场景`, action: t`下一步`, batch: true, note: t`还没配置画图接口的话，点左下角「设置画图方式…」。` })
+      : { body: {}, label: '' }
+    if (!picked) return 0
+    const choice = picked.body ?? {}
+    await loadRoster(cardId, true)
+    let roster = (state.roster.get(cardId) ?? []).filter(member => !member.player && member.looks)
+    if (!roster.length) {
+      if (!confirm(t`这张卡的角色名册里还没有写了长相的角色。让辅助模型读卡，列出角色和长相，存进角色名册（之后可以在「配图 → 角色名册」里改）？`)) return 0
+      toast(t`辅助模型正在读卡列角色名册…`, 60000)
+      const { roster: drafted } = await api(`/api/cards/${cardId}/roster/draft`, { method: 'POST', body: {} })
+      const before = state.roster.get(cardId) ?? []
+      const hasPlayer = before.some(member => member.player)
+      const fresh = drafted.filter(entry => !before.some(member => member.name === entry.name)).map(entry => ({ ...entry, player: entry.player && !hasPlayer }))
+      await api(`/api/cards/${cardId}/media`, { method: 'PUT', body: { roster: [...before, ...fresh] } })
+      await loadRoster(cardId, true)
+      roster = (state.roster.get(cardId) ?? []).filter(member => !member.player && member.looks)
+      toast(roster.length ? t`角色名册列好了：${roster.map(member => member.name).join(t`、`)}` : t`辅助模型没列出写了长相的角色，先在「配图 → 角色名册」里补上`, 6000)
+      if (!roster.length) return 0
+    }
+    const [list, sceneList] = await Promise.all([spritesOf(cardId), scenesOf(cardId)])
+    const faces = cast.faces.get(cardId) ?? {}
+    const chat = getChat()
+    const names = speakerNames({ char: chat?.names?.char, user: chat?.names?.user, roster })
+    const entryOf = member => names.find(item => item.id === member.id) ?? { name: member.name, id: member.id, keys: [] }
+    const missingFaces = member => EXPRESSIONS.filter(name => name !== 'neutral' && !faces[member.id]?.[name])
+    const sprites = roster.filter(member => !list[member.id])
+    const fromPicture = (await api('/api/media/draws-from-picture', { method: 'POST', body: choice }).catch(() => null))?.drawsFromPicture !== false
+    const faceCount = fromPicture ? roster.reduce((n, member) => n + missingFaces(member).length, 0) : 0
+    const backgrounds = [...new Set(places.map(place => String(place ?? '').trim()).filter(Boolean))].filter(place => !matchScene(place, sceneList))
+    const total = sprites.length + faceCount + backgrounds.length
+    const noFaces = fromPicture ? '' : t`选的画图方式不能照着立绘改表情（重画出来会像另一个人），表情先不画：可以换成能参考图片的画图方式，或者导入表情包。`
+    if (!total) {
+      toast(noFaces || t`立绘、表情和场景都已经齐了`, noFaces ? 8000 : undefined)
+      return 0
+    }
+    const counts = [sprites.length ? t`${sprites.length} 张立绘` : '', faceCount ? t`${faceCount} 个表情` : '', backgrounds.length ? t`${backgrounds.length} 张场景` : ''].filter(Boolean).join(t`、`)
+    const how = picked.label ? t`用「${picked.label}」` : t`用设置里的画图方式`
+    if (!confirm([t`${how}画 ${counts}：先画立绘，某个人的立绘画好了才画他的表情；一张一张来，进度显示在「立绘」窗口顶部，可以随时取消。用付费接口时每张都会计费。开始？`, noFaces].filter(Boolean).join('\n\n'))) return 0
+    const queueFaces = member => {
+      if (fromPicture) for (const name of missingFaces(member)) drawFace(cardId, entryOf(member), name, choice)
+    }
+    for (const member of roster) {
+      if (list[member.id]) queueFaces(member)
+      else drawSprite(cardId, entryOf(member), choice, () => queueFaces(member))
+    }
+    for (const place of backgrounds) drawPlace(cardId, place, choice)
+    if (library?.open) renderLibrary()
+    return total
   }
 
   // ─── The library (场景 / 立绘) ───────────────────────────────────────
@@ -1823,6 +1945,15 @@ export function initVn(deps) {
         ? t`表情：按模型在每句对白前标的【名字|表情】换；没标的按引号前后的叙述换（笑了笑→微笑、红了脸→害羞……），认不出就保持上一个。下面每个人可以画一套表情，在立绘上只改脸。`
         : t`表情：每句按引号前后的叙述换（笑了笑→微笑、红了脸→害羞、皱眉→生气……），认不出就保持上一个。下面每个人可以画一套表情，在立绘上只改脸。` }),
       artMode('newSprite', t`没有立绘的角色说话时：`),
+      el('div', { class: 'row' }, [act(t`一键备齐`, () => prepare(cardId, { places: scenes.current?.cardId === cardId && scenes.current.place ? [scenes.current.place] : [] }), { title: t`名单里还没有立绘的人画立绘，再给每个人画齐表情；现在的地点没有背景的话也画一张` })]),
+      // Speakers are told apart by the 名册's names and aliases: one the story calls otherwise has no 立绘.
+      deps.openMedia ? el('div', { class: 'vn-library-tip' }, [
+        el('span', { class: 'muted small', text: t`有角色的立绘显示不出来，或者故事里给角色起了外号、别名：打开角色名册，点「从对话里补充」，按最近的对话更新名册。` }),
+        act(t`打开角色名册`, () => {
+          library.close()
+          deps.openMedia('roster')
+        }),
+      ]) : null,
       toggleRow(t`对白标注`, builtinPreset(chat)
         ? t`让模型给每句对白标上说话人和表情，再加上震屏、闪白这类效果，比按叙述猜准。只加在每轮的消息里，开关不影响缓存。`
         : t`让模型给每句对白标上说话人和表情，比按叙述猜准。这个对话用的是导入的预设，默认不开：两套输出格式可能冲突，打开后看几轮再决定。只加在每轮的消息里，开关不影响缓存。`, formatOn(chat), on => {
@@ -2270,7 +2401,7 @@ export function initVn(deps) {
   // so switching costs no cache. On by default with the built-in preset; an imported preset
   // has its own output format, which the two could fight over, so there it waits to be switched on.
 
-  const builtinPreset = chat => !chat?.presetId || chat.presetId === BASIC_ID
+  const builtinPreset = chat => !chat?.presetId || isBuiltinPreset(chat.presetId)
   const formatSaved = cardId => recall(FORMAT_KEY, {})[cardId]
 
   /** Whether the chat's next turn asks for the format. */
@@ -2295,5 +2426,13 @@ export function initVn(deps) {
     return on
   }
 
-  return { render, streamed, isOn, turnFlags, marks }
+  /** 做成视觉小说 (创作角色卡): this card in the mode, the 立绘 window open, and 一键备齐 with the plan's places. */
+  async function makeReady(cardId, places = []) {
+    if (!isOn(cardId)) setOn(cardId, true)
+    await offerPreset(getChat())
+    openLibrary('sprites')
+    return prepare(cardId, { places })
+  }
+
+  return { render, streamed, isOn, turnFlags, marks, makeReady }
 }

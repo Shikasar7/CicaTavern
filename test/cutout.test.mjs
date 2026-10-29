@@ -1,7 +1,7 @@
 // 立绘 cut-out (web/shared/cutout.js): the plain background goes, the figure and what is inside it stay.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { cutOut } from '../web/shared/cutout.js'
+import { cutOut, spriteFrame } from '../web/shared/cutout.js'
 
 /** A width × height picture filled by paint(x, y) → [r, g, b]. */
 function picture(width, height, paint) {
@@ -84,4 +84,38 @@ test('a second background colour left down a side after the white has gone: not 
   const image = picture(60, 80, (x, y) => (Math.abs(x - 28) < 10 && y > 15 ? ROBE : x >= 42 ? PANEL : WHITE))
   const { ok, why } = cutOut(image)
   assert.deepEqual([ok, why], [false, 'edge'])
+})
+
+test('specks and splashes painted on the white go; the figure and a sword held apart from it stay', () => {
+  const SPLASH = [200, 120, 160]
+  const image = picture(80, 100, (x, y) => {
+    if (y >= 20 && Math.abs(x - 40) <= 12) return ROBE // the figure, down to the bottom edge
+    if (y >= 30 && y < 70 && x >= 58 && x < 62) return ROBE // a sword beside it, not touching
+    if ((x - 15) ** 2 + (y - 15) ** 2 < 6) return SPLASH // a speck in the white
+    if (y >= 85 && x < 8) return SPLASH // a patch at the bottom corner
+    return WHITE
+  })
+  const result = cutOut(image)
+  assert.equal(result.ok, true)
+  assert.equal(alphaAt(image, 15, 15), 0, 'the speck')
+  assert.equal(alphaAt(image, 3, 95), 0, 'the patch at the frame')
+  assert.equal(alphaAt(image, 40, 60), 255, 'the figure')
+  assert.equal(alphaAt(image, 60, 50), 255, 'the sword')
+})
+
+test('a whole figure, head to feet, keeps head to mid-thigh; one from the thighs up stays as it is', () => {
+  // A head (round, `head` wide) on a body `body` wide, standing on the bottom edge of a 100 × 200 picture.
+  const figure = (head, body) => picture(100, 200, (x, y) => {
+    if (y < 10) return WHITE
+    if (y < 10 + head) return Math.abs(x - 50) < head / 2 ? ROBE : WHITE
+    return Math.abs(x - 50) < body / 2 ? ROBE : WHITE
+  })
+  // Head to feet: a head 22 high and wide on a 190-high figure (an eighth of it).
+  const whole = figure(22, 50)
+  const cut = cutOut(whole)
+  assert.deepEqual(spriteFrame(whole, cut.box), { ...cut.box, height: Math.round(cut.box.height * 0.58) })
+  // Thighs up: the head 40 wide, a fifth of the figure, though the figure is as tall and narrow.
+  const half = figure(40, 50)
+  const kept = cutOut(half)
+  assert.deepEqual(spriteFrame(half, kept.box), kept.box)
 })

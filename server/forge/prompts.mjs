@@ -5,7 +5,7 @@
 // here in this app's own words.
 import { configureEntries } from './configure.mjs'
 import { defaultShow } from './status.mjs'
-import { SHOWS, cleanPath } from '../../web/shared/status.js'
+import { SHOWS, STATUS_THEMES, cleanPath } from '../../web/shared/status.js'
 import { msg } from '../i18n.mjs'
 
 // ─── Languages ────────────────────────────────────────────────────────────
@@ -56,6 +56,170 @@ function talkWriting({ reply = DEFAULT_LANGUAGE, card = DEFAULT_LANGUAGE } = {})
 export const TALK_TOKENS = 16000
 export const LONG_TOKENS = 32000
 
+// ─── Kinds of card ────────────────────────────────────────────────────────
+// What the player says the card is, before or while talking: it shapes the
+// questions, the cast the plan calls for and the openings. '' = not said; the
+// guide goes by the talk.
+export const CARD_TYPES = {
+  single: {
+    talk: '一个角色：故事围着一个核心角色和 <user> 的关系展开。',
+    cast: '核心角色 1 个；配角 0 到 3 个，每个都要有在故事里的作用。',
+  },
+  ensemble: {
+    talk: '几个角色（群像）：两到四个核心角色，各有自己想要的东西、和 <user> 的关系，彼此之间也有关系和张力。早一点问清有哪几个人、他们之间是什么关系。',
+    cast: '核心角色 2 到 4 个，各有目的、和 <user> 的关系不同，彼此之间也有关系和张力；配角 0 到 4 个。',
+  },
+  world: {
+    talk: '一个世界（冒险、探索、模拟）：主角是这个世界，模型当叙述者和主持人，<user> 在里面行动。先问清舞台、规则、地点、势力和 <user> 能做什么，再问会遇到的关键人物；人物不必一开始就定死。',
+    cast: '这是一张以世界为主的卡：地点、势力和规则写得具体，至少 3 个地点；核心角色 1 到 2 个关键人物（同伴、引路人或对手）；配角 3 到 8 个，各自属于某个地点或势力，给出能被遇到的理由。扮演准则里写明模型是叙述者，描写 <user> 所到之处和遇到的人，不替 <user> 行动。',
+  },
+  game: {
+    talk: '带玩法的卡（数值、成长、关系阶段）：除了人和故事，要商量清楚玩法：记录哪些会变化的数值、它们怎么涨落、到了什么程度剧情会变。这一类一定要记录数值，不必问要不要，直接问记哪些、怎么变。',
+    cast: '核心角色 1 到 3 个；配角 0 到 4 个。这是一张带玩法的卡：tracking.enabled 为 true，变量 4 到 10 个，check 写清什么事让它怎么变；扮演准则里写明数值到了什么程度剧情或角色态度会变。',
+  },
+}
+
+export const cleanCardType = value => (Object.hasOwn(CARD_TYPES, value) ? value : '')
+
+// What the player picks about the card before talking (创作角色卡's home), in groups that combine:
+// who the story is about, a world of its own, the characters' gender, the kinds of play (each with
+// its numbers), and the format (plain text, MVU variables, MVU with a styled status bar and its look).
+// Each pick adds a line for the guide (talk) and one for the planner (plan).
+export const CARD_CHOICES = {
+  cast: {
+    single: { talk: CARD_TYPES.single.talk, plan: CARD_TYPES.single.cast },
+    ensemble: { talk: CARD_TYPES.ensemble.talk, plan: CARD_TYPES.ensemble.cast },
+  },
+  gender: {
+    female: { talk: '核心角色是女性。', plan: '核心角色都是女性（配角不限）。' },
+    male: { talk: '核心角色是男性。', plan: '核心角色都是男性（配角不限）。' },
+    mixed: { talk: '核心角色男女都有。', plan: '核心角色男女都有。' },
+  },
+  play: {
+    bond: '好感与关系阶段（好感、信任这类关系数值，核心角色的性格随它分阶段）',
+    growth: '成长与能力（等级、修为、技能这类会提升的数值，以及提升的条件）',
+    resources: '经营与资源（金钱、物资、声望这类有收有支的资源和代价）',
+    countdown: '倒计时与事件（剩余天数或期限，到了节点就发生事件）',
+    explore: '探索与线索（地点一个个解锁、线索一条条收集，够了才揭开真相）',
+  },
+  format: {
+    text: { talk: '纯文本卡：不记录数值，不用问状态栏。', plan: 'tracking.enabled 为 false：这张卡不记录数值。' },
+    mvu: { talk: '要记录会变化的数值，显示在状态栏里（文字显示就好）。', plan: 'tracking.enabled 为 true，变量 3 到 10 个。' },
+    'mvu-ui': { talk: '要记录会变化的数值，配一个美化的状态栏。', plan: 'tracking.enabled 为 true，变量 3 到 10 个；每个变量的 show 选最合适的显示方式（meter 进度条、number、text、tags、flag）。' },
+  },
+}
+const WORLD_TALK = '重世界观（冒险、探索、模拟）：世界本身也是主角，模型兼任叙述者和主持人，<user> 在里面行动。先问清舞台、规则、地点、势力和 <user> 能做什么，人物不必一开始就定死。'
+const WORLD_PLAN = '这张卡重世界观：地点、势力和规则写得具体，至少 3 个地点；配角各自属于某个地点或势力，给出能被遇到的理由；扮演准则里写明模型兼任叙述者，描写 <user> 所到之处和遇到的人，不替 <user> 行动。'
+const pick = (value, group) => (Object.hasOwn(CARD_CHOICES[group], value) ? value : '')
+
+/**
+ * The picks as kept with a draft. A draft from before them has a card type: it maps
+ * onto them (几个角色 = a cast of several, 带玩法 = relationship and growth with a styled bar).
+ */
+export function cleanCardOptions(raw, cardType = '') {
+  const legacy = { single: { cast: 'single' }, ensemble: { cast: 'ensemble' }, world: { world: true }, game: { play: ['bond', 'growth'], format: 'mvu-ui' } }[cleanCardType(cardType)] ?? {}
+  const value = raw && typeof raw === 'object' ? raw : legacy
+  const play = (Array.isArray(value.play) ? value.play : []).filter((p, i, all) => Object.hasOwn(CARD_CHOICES.play, p) && all.indexOf(p) === i)
+  const format = pick(value.format, 'format')
+  return {
+    cast: pick(value.cast, 'cast'),
+    world: value.world === true,
+    gender: pick(value.gender, 'gender'),
+    play,
+    format,
+    statusTheme: format === 'mvu-ui' && STATUS_THEMES.includes(value.statusTheme) ? value.statusTheme : format === 'mvu-ui' ? 'plain' : '',
+  }
+}
+
+/** What the picks tell the guide (talk), the planner (plan) and the ideas (story: no format). */
+export function optionLines(options) {
+  const o = cleanCardOptions(options)
+  const playList = o.play.map(p => CARD_CHOICES.play[p]).join('、')
+  const talk = [
+    o.cast && CARD_CHOICES.cast[o.cast].talk,
+    o.world && WORLD_TALK,
+    o.gender && CARD_CHOICES.gender[o.gender].talk,
+    playList && (o.format === 'text'
+      ? `玩法：${playList}。这是纯文本卡，玩法靠叙述体现，不记录数值。`
+      : `玩法：${playList}。要和用户商量清楚记录哪些会变化的数值、怎么涨落、到了什么程度剧情会变；不必问要不要记录。`),
+    o.format && CARD_CHOICES.format[o.format].talk,
+  ].filter(Boolean)
+  const plan = [
+    o.cast ? CARD_CHOICES.cast[o.cast].plan : o.world ? '核心角色 1 到 2 个关键人物（同伴、引路人或对手）；配角 3 到 8 个。' : '',
+    o.world && WORLD_PLAN,
+    o.gender && CARD_CHOICES.gender[o.gender].plan,
+    playList && (o.format === 'text'
+      ? `玩法写进扮演准则，由叙述体现：${playList}。`
+      : `tracking.enabled 为 true，变量围绕这些玩法：${playList}；check 写清什么事让它怎么变；扮演准则写明数值到了什么程度剧情或角色态度会变。`),
+    o.format && CARD_CHOICES.format[o.format].plan,
+  ].filter(Boolean)
+  const story = [o.cast && CARD_CHOICES.cast[o.cast].talk, o.world && WORLD_TALK, o.gender && CARD_CHOICES.gender[o.gender].talk, playList && `玩法：${playList}`].filter(Boolean)
+  return { talk, plan, story }
+}
+
+/**
+ * The plan as the picks have it, whatever the planner wrote: a plain-text card tracks
+ * nothing; the status bar is styled (with the look picked) unless the format says plain MVU.
+ */
+export function withCardOptions(plan, options) {
+  if (!plan) return plan
+  const o = cleanCardOptions(options)
+  const tracking = o.format === 'text' ? { ...plan.tracking, enabled: false } : plan.tracking
+  return { ...plan, tracking, status: { ui: o.format !== 'mvu', theme: o.statusTheme || 'plain' } }
+}
+
+// How many openings the plan asks for: the player's pick, else 2.
+export const MAX_GREETINGS = 6
+export const cleanGreetingCount = value => {
+  const n = Math.round(Number(value))
+  return Number.isFinite(n) && n >= 1 ? Math.min(MAX_GREETINGS, n) : 0
+}
+
+// ─── Inspiration (给我灵感) ───────────────────────────────────────────────
+// A few ideas to start from. Each grows from a seed drawn here, a stage, a bond
+// and a twist, so a batch is spread out rather than five takes on what a model
+// thinks of first.
+const STAGES = ['现代都市的深夜', '海边小镇', '寄宿制高中', '大学社团', '出版社、律所、医院这样的职场', '古代宫廷', '江湖门派', '修仙宗门', '民国上海', '蒸汽朋克城邦', '赛博朋克巨城', '末日废土', '星际航船', '西幻王国', '魔法学院', '雾气笼罩的怪谈小镇', '民俗山村', '灵异事务所', '冒险者公会', '娱乐圈', '电竞战队', '豪门家族', '夜场与地下秩序', '悬案缠身的侦探社', '异世界', '人与异族共居的城市', '夜族统治的城市', '战争前线', '孤岛', '时间循环的小城', '游戏世界', '改写过的童话']
+const BONDS = ['青梅竹马', '死对头', '师徒', '主仆', '契约关系', '上司与下属', '室友', '假扮情侣', '久别重逢', '救命恩人', '监视者与被监视者', '追捕者与逃亡者', '搭档', '网友见面', '一夜偶遇的陌生人', '守护者与被守护者', '敌国人质', '分手多年的前任', '雇主与保镖', '医生与病人', '召唤者与被召唤者', '邻居']
+const TWISTS = ['隐瞒着一个身份', '一段失去的记忆', '入夜后规则就变了', '一个必须遵守的禁忌', '一个倒计时', '一笔没还清的债', '来自未来', '只有你看得见', '以一场误会开局', '人人都在找的东西在你手上', '被卷进一桩案子', '第二人格', '身体互换', '一封没寄出的信', '出于善意的谎言', '一个赌约', '被选中却不想当', '世界正在慢慢消失', '有限的寿命或力量', '一段必须藏起来的关系', '替身与冒名', '一次回到过去的机会', '只有你们知道的秘密', '被困在同一个地方']
+
+/** n seeds, no stage, bond or twist twice in one batch. `random` is for tests. */
+export function ideaSeeds(n = 5, random = Math.random) {
+  const draw = list => {
+    const pool = [...list]
+    return () => pool.splice(Math.floor(random() * pool.length), 1)[0]
+  }
+  const [stage, bond, twist] = [draw(STAGES), draw(BONDS), draw(TWISTS)]
+  return Array.from({ length: n }, () => ({ stage: stage(), bond: bond(), twist: twist() }))
+}
+
+/** The request for a batch of ideas, in the page's language; `exclude` = titles shown before. */
+export function ideasRequest(seeds, { reply = DEFAULT_LANGUAGE } = {}, { cardType = '', options = null, exclude = [] } = {}) {
+  const story = optionLines(cleanCardOptions(options, cardType)).story
+  const system = `你帮想玩角色扮演的人找灵感：给出几张角色卡的点子，每个都让人一看就想玩。
+- 每个点子按给你的一颗种子（舞台、关系、转折）长出来；种子只是起点，可以化用、改写，三样拼在一起别扭时换掉一样，但几个点子之间要明显不同。
+- pitch 一两句，有画面：谁、在哪、和玩家是什么关系、钩子在哪。写具体的人和事，不写空泛的形容。
+- title 是几个字的卡名，具体好记。tags 两三个，写题材和基调。
+${story.length ? `- 每个点子都要符合用户选的：${story.join('')}\n` : ''}- 点子是给玩家看的，会填进他的第一句话里：玩家称作「你」，不写 <user>，也不替玩家定男女（不写他、她、前女友、男友这类）。用${reply}写，不用破折号。
+
+只输出一段 <ideas> 包着的 JSON 数组：
+<ideas>
+[{"title": "卡名", "pitch": "一两句", "tags": ["题材", "基调"]}]
+</ideas>`
+  const lines = seeds.map((s, i) => `${i + 1}. 舞台：${s.stage}；关系：${s.bond}；转折：${s.twist}`)
+  const avoid = exclude.length ? `\n\n这些已经给过了，不要再出一样或很像的：${exclude.join('、')}` : ''
+  return { system, messages: [{ role: 'user', content: `种子：\n${lines.join('\n')}${avoid}\n\n每颗种子一个点子，共 ${seeds.length} 个。` }], maxTokens: TALK_TOKENS, softCap: true }
+}
+
+/** A batch of ideas back: [{ title, pitch, tags }]. */
+export function readIdeas(text) {
+  const raw = looseJson(section(text, 'ideas') || text)
+  return (Array.isArray(raw) ? raw : [])
+    .filter(idea => idea && typeof idea === 'object' && clip(idea.pitch, 300))
+    .slice(0, 8)
+    .map(idea => ({ title: clip(idea.title, 30), pitch: clip(idea.pitch, 300), tags: list(idea.tags, 4, 12) }))
+}
+
 // ─── Talking it through ───────────────────────────────────────────────────
 
 // ─── The player's name ────────────────────────────────────────────────────
@@ -87,7 +251,7 @@ export const chosenUserName = brief => cleanUserName(brief?.items?.find(item => 
 /** Where the player's own tracked values live in a card of this language. */
 export const playerRoot = language => (englishCard(language) ? 'Protagonist' : '主角')
 
-const discussSystem = (languages, settingsName = '') => `你是一位角色卡共创向导。用户想在 SillyTavern 一类的角色扮演应用里玩一张新角色卡，但往往说不清自己真正想要什么。你陪他把一个模糊的念头聊成清晰的设想：用具体、可感的选择帮他发现自己的偏好，而不是替他做决定。
+const discussSystem = (languages, settingsName = '', options = null) => `你是一位角色卡共创向导。用户想在 SillyTavern 一类的角色扮演应用里玩一张新角色卡，但往往说不清自己真正想要什么。你陪他把一个模糊的念头聊成清晰的设想：用具体、可感的选择帮他发现自己的偏好，而不是替他做决定。
 
 做法：
 - 每轮先用一两句话说出你此刻理解的样子，要具体、有画面；再提 2 到 3 个此刻最影响全局的问题，不要一次问很多。
@@ -99,8 +263,9 @@ const discussSystem = (languages, settingsName = '') => `你是一位角色卡�
 - 用户可能选「你来定」：那就由你挑最合适的一项，在回复里说你选了什么、为什么，并在草图里把这一项的 by 写成 "assistant"。
 - 不偷偷替用户拿主意。你自己补出来的设想写进草图时 by 写 "assistant"；用户亲口说的、选的，by 写 "user"，并尽量保留他的原话。谁补的只写在 by 里，value 只写设定本身，不加「谁补的」「随时可改」这类注明，界面会标出来。
 - 草图里 locked 为 true 的项是用户锁定的，不能改动，只能在它的基础上补充。
-- 用大白话交流，不说「世界书」「条目」「MVU」「常驻」这类术语。问状态记录时说成「要不要记录她对你的好感、你的体力这类会变化的数值，显示在每条回复下面的状态栏里」；用户想要的话，再用一个问题和他商量记哪几项、各自怎么变（比如什么事让好感涨、什么事让它掉），选项给出具体的组合。
-- 当核心角色、和 <user> 的关系、舞台、基调都已清楚，readiness 给到 75 以上，并在回复里提一句「可以出方案了，也可以接着细化」。用户可能随时要求出方案，你只管把每一轮聊好。
+- 用大白话交流，不说「世界书」「条目」「MVU」「常驻」这类术语。问状态记录时说成「要不要记录她对你的好感、你的体力这类会变化的数值，显示在每条回复下面的状态栏里」；用户想要的话，再用一个问题和他商量记哪几项、各自怎么变（比如什么事让好感涨、什么事让它掉），选项给出具体的组合。记了关系类的数值，可以再问一句她会不会随着数值变成不同的样子（比如好感低时戒备、高了才依赖），以及有没有到了某个程度就会发生的事（告白、摊牌、秘密揭开）。
+${optionLines(options).talk.length ? `- 用户开始前选好了这些，照着聊，不必再问：${optionLines(options).talk.join('')}
+` : ''}- 当核心角色、和 <user> 的关系、舞台、基调都已清楚，readiness 给到 75 以上，并在回复里提一句「可以出方案了，也可以接着细化」。用户可能随时要求出方案，你只管把每一轮聊好。
 
 ${talkWriting(languages)}
 
@@ -125,7 +290,7 @@ const KINDS = new Set(['single', 'multi', 'taste'])
 const clip = (value, max) => (typeof value === 'string' ? value.trim().slice(0, max) : '')
 
 // The sections an answer is split into. <user> is not one: values name the player that way.
-const SECTIONS = 'reply|questions|brief|plan|issues'
+const SECTIONS = 'reply|questions|brief|plan|issues|ideas'
 
 /**
  * Text between <tag> and </tag>; up to the next section, or the end when the
@@ -175,12 +340,48 @@ export function looseJson(text) {
     const start = body.search(/[[{]/)
     const end = Math.max(body.lastIndexOf('}'), body.lastIndexOf(']'))
     if (start < 0 || end <= start) return null
+    const json = body.slice(start, end + 1).replace(/,\s*([}\]])/g, '$1')
     try {
-      return JSON.parse(body.slice(start, end + 1).replace(/,\s*([}\]])/g, '$1'))
+      return JSON.parse(json)
     } catch {
-      return null
+      try {
+        return JSON.parse(innerQuotes(json))
+      } catch {
+        return null
+      }
     }
   }
+}
+
+/**
+ * Straight quotes inside a string turned into “ ”: models quote a line of dialogue
+ * in a sample or an opening as "…" and the JSON breaks there. A quote ends the
+ * string only where JSON can go on after it (a colon, a bracket, a comma before
+ * the next value, the end).
+ */
+function innerQuotes(json) {
+  let out = ''
+  let quoted = false
+  let inner = 0
+  for (let i = 0; i < json.length; i++) {
+    const char = json[i]
+    if (!quoted) {
+      if (char === '"') {
+        quoted = true
+        inner = 0
+      }
+      out += char
+    } else if (char === '\\') {
+      out += char + (json[i + 1] ?? '')
+      i++
+    } else if (char === '"') {
+      const after = json.slice(i + 1).match(/^\s*(.?)\s*(.?)/)
+      const ends = !after[1] || ':}]'.includes(after[1]) || (after[1] === ',' && /["{[\]}\d\-tfn]/.test(after[2]))
+      if (ends) quoted = false
+      out += ends ? char : inner++ % 2 ? '”' : '“'
+    } else out += char
+  }
+  return out
 }
 
 export function cleanQuestions(raw) {
@@ -286,7 +487,7 @@ export function userTurnText(user, { first = false } = {}) {
  * The request for the next round of talk; languages from forgeLanguages,
  * userName the name in settings (你的名字), for the guide to offer.
  */
-export function discussRequest(rounds, brief, languages, { userName = '' } = {}) {
+export function discussRequest(rounds, brief, languages, { userName = '', cardType = '', options = null } = {}) {
   const messages = []
   rounds.forEach((round, i) => {
     let content = userTurnText(round.user, { first: i === 0 })
@@ -295,7 +496,7 @@ export function discussRequest(rounds, brief, languages, { userName = '' } = {})
     messages.push({ role: 'user', content })
     if (!last && round.assistant) messages.push({ role: 'assistant', content: round.assistant.raw })
   })
-  return { system: discussSystem(languages, settingsNameOf(userName)), messages, maxTokens: TALK_TOKENS, softCap: true }
+  return { system: discussSystem(languages, settingsNameOf(userName), cleanCardOptions(options, cardType)), messages, maxTokens: TALK_TOKENS, softCap: true }
 }
 
 const isQuestions = value => Array.isArray(value) && value.some(q => Array.isArray(q?.options))
@@ -349,30 +550,36 @@ const PLAN_SCHEMA = `{
     "facets": false,
     "voice": "说话方式，口头禅",
     "role": "配角在故事里的作用（npc 才写）",
+    "stage_by": "她的性格随哪个数值分阶段（tracking 里数值变量的 path），不分阶段留空",
+    "stages": [{"name": "阶段名，两三个字", "until": "30", "main": ["这个阶段的主色调"], "accent": ["这个阶段的点缀"], "shift": "到了这个阶段她对 <user> 有什么不同，一句"}],
     "looks_tags": "English booru tags for the unchanging look: apparent age, hair, eyes, build, marks",
     "outfit_tags": "English booru tags for the usual outfit"
   }],
   "style": {"perspective": "第三人称 或 第二人称", "tone": "语言基调", "mood": "情绪氛围", "reference": "参照的作品或文风，可为空", "special": ["特别要求"]},
   "play_rules": ["扮演时的互动规则，可执行的指令，例如不替 <user> 说话做决定"],
   "tracking": {"enabled": false, "title": "状态栏标题，可为空", "variables": [{"path": "林小雨.好感度", "label": "好感", "type": "number", "initial": "20", "range": "0~100", "show": "meter", "check": "什么事会让它怎么变"}]},
-  "greetings": [{"title": "开场的名字", "scene": "时间、地点", "situation": "开场时正在发生什么、悬念在哪", "length": "500~700"}],
-  "avatar": {"character": "头像画的是谁", "description": "中文，外貌、神态、构图", "tags": "English tags for the picture"},
+  "greetings": [{"title": "开场的名字", "start": "从故事的哪一刻开始：时间点、你们的关系到了哪一步", "scene": "时间、地点", "situation": "开场时正在发生什么、悬念在哪", "length": "500~700", "state": {"林小雨.好感度": "这个开场和默认初始值不同的变量才写，没有就是 {}"}}],
+  "events": [{"name": "事件名，几个字", "when": "什么时候会发生，大白话", "keywords": ["对话里提到就触发的词，可为空"], "requires": [{"path": "变量 path", "op": ">=", "value": "60"}], "content": "发生什么、谁会怎么做、之后有什么变化"}],
+  "avatar": {"character": "头像画的是谁", "description": "中文，外貌、神态、构图", "tags": "English tags for the picture", "style": "English, the art style for every picture of this card (avatar, sprites, backgrounds), matching its tone, e.g. anime illustration, soft watercolor shading"},
   "assumptions": ["你补出来、用户没有说过的设定，一条一句"],
   "verbatim": ["用户原话里应当原样保留的句子"]
 }`
 
-const planSystem = language => `你是角色卡策划。根据你和用户的讨论，写出一张 SillyTavern 角色卡的创作方案，之后会按方案逐项写出角色设定、世界书和开场白。
+const planSystem = (language, { options = null, greetings = 0 } = {}) => `你是角色卡策划。根据你和用户的讨论，写出一张 SillyTavern 角色卡的创作方案，之后会按方案逐项写出角色设定、世界书和开场白。
 
 要求：
 - 讨论里定下的一切都要体现在方案里；用户的原话放进 verbatim，并在相关字段里原样使用。
 - 没讨论到但写卡必需的部分，你可以补，但每一处都要写进 assumptions，让用户确认。
-- 核心角色通常 1 个，最多 4 个；配角 0 到 3 个，每个都要有在故事里的作用。
+${optionLines(options).plan.length ? optionLines(options).plan.map(line => `- ${line}`).join('\n') : '- 核心角色通常 1 个，最多 4 个；配角 0 到 3 个，每个都要有在故事里的作用。'}
 - 外貌只写让人认得出的特征，不写放在谁身上都成立的美貌描写。
 - 性格用「底色 + 主色调 + 点缀」来想：底色是最深层、最稳定的那一面，主色调是最常表现出来的，点缀是偶尔露出的。facets 只在角色在不同处境下判若两人时才设为 true。
-- 玩家角色一律写 <user>。不替 <user> 起名字：用户没定名字，user_role.name 就留空；定了名字也只写在 user_role.name，其余地方照样写 <user>。
+- 玩家角色一律写 <user>。用户没说 <user> 是男是女，就不用「他」「她」指代 <user>，也不写出 <user> 的性别（男友、前女友这类称呼同样不用）。不替 <user> 起名字：用户没定名字，user_role.name 就留空；定了名字也只写在 user_role.name，其余地方照样写 <user>。
 - 只有用户想要记录好感、体力、金钱这类会变化的数值时，tracking.enabled 才为 true；变量路径用「角色名.变量名」，<user> 自己的一律用「${playerRoot(language)}.变量名」，不要用 <user>、{{user}} 或他的名字当键名。
 - 这些变量会显示在每条回复下面的状态栏里。label 是状态栏上的短名（2 到 4 个字）；show 是显示方式：meter 进度条（有范围的数值）、number 数字、text 一句话、tags 标签（物品、状态这类列表）、flag 是或否、hidden 只给模型看不显示。状态栏放玩家最在意的 3 到 8 项，其余用 hidden。
-- 开场白默认 2 个，场景各不相同，每个都要有悬念或张力，并让 <user> 一开口就有话可接。
+- 开场白${greetings ? ` ${greetings} 个` : '默认 2 个，用户要别的数目就按他的'}。每个开场是一个不同的起点，不只是换个地点：故事的不同时刻、关系的不同阶段或不同的处境，也可以是另一条故事线（比如已经在一起、刚刚闹翻、多年后重逢）；title 让人一眼看出差别。每个都要有悬念或张力，并让 <user> 一开口就有话可接。
+- 记录数值时，开场的处境和默认初始值对不上（比如关系已经很近），就在这个开场的 state 里写出不同的那几项，键是变量的 path，值照 initial 的写法；对得上就写 {}。
+- 记录了和核心角色关系有关的数值（好感、信任这类）、她会随着关系明显变样时，可以让她的性格分阶段：stage_by 写那个数值变量的 path，stages 2 到 4 个，按数值从低到高排，until 是这个阶段的上限（不含），最后一个阶段不写 until。底色不随阶段变；每个阶段的主色调和点缀写这个阶段最常露出的样子，后一个阶段不是前一个的加强版。用户没要、关系也不会大变时不分阶段，stage_by 留空、stages 写 []。
+- events 写会在特定时机发生的事（告白、冲突爆发、秘密揭开、节日、危机），0 到 6 个，没有自然的事件就写 []。触发有两种，可以同时有：keywords 是对话里提到就触发的词；requires 是数值到了某个程度（只在记录数值时用，op 取 >=、<=、>、<、==、!=、has（列表里有这一项）；一到三个条件，要同时满足，比如「天数 >= 30」加「信任 >= 60」；不用就写 []）。条件要等故事走到那一步才成立，开局的数值不能已经满足它：开局信任 10，就不要写「信任 <= 20」。两种都没有的事件不要写。事件只发生一次，content 写场面和可能的走向，不写死结果，不替 <user> 做决定。
 - 所有专有名词在这里一次定好，之后不再新造。
 
 ${plainWriting(language)}
@@ -394,13 +601,27 @@ export function transcript(rounds) {
 }
 
 /** The plan, in the card's language (languages from forgeLanguages). */
-export function planRequest(rounds, brief, { card = DEFAULT_LANGUAGE } = {}) {
-  const content = `<discussion>\n${transcript(rounds)}\n</discussion>\n\n<sketch>\n${JSON.stringify(brief)}\n</sketch>\n\n按上面的讨论和草图写出创作方案。`
-  return { system: planSystem(card), messages: [{ role: 'user', content }], maxTokens: LONG_TOKENS, softCap: true }
+// Said last as well: weaker models (deepseek-v4.1-flash) answer 写出创作方案 with a Markdown write-up otherwise.
+const PLAN_FORMAT = '\n\n只输出一段 <plan> 包着的 JSON，字段照系统提示里的格式；不写 Markdown 文档、不写别的说明。'
+
+// 出三版来挑: each version takes the talk from its own angle. What was settled stays in all three.
+export const PLAN_ANGLES = {
+  close: '这一版贴着讨论来：没定的部分，按最自然、最合讨论走向的方式补。',
+  bold: '这一版更大胆：讨论里定下的一律不动；没定的部分往出人意料的方向补，冲突更强，设定或身份更有反差，但要合理、好玩。',
+  shift: '这一版换个切入：讨论里定下的一律不动；换一个故事的切入点，核心矛盾、关系的起点或开场处境不同，让玩起来的感觉明显不一样。',
+}
+
+/**
+ * The plan, in the card's language (languages from forgeLanguages).
+ * @param options - cardType and greetings (how many) as the player set them; angle, a PLAN_ANGLES key.
+ */
+export function planRequest(rounds, brief, { card = DEFAULT_LANGUAGE } = {}, { cardType = '', options = null, greetings = 0, angle = '' } = {}) {
+  const content = `<discussion>\n${transcript(rounds)}\n</discussion>\n\n<sketch>\n${JSON.stringify(brief)}\n</sketch>\n\n按上面的讨论和草图写出创作方案。${PLAN_ANGLES[angle] ?? ''}${PLAN_FORMAT}`
+  return { system: planSystem(card, { options: cleanCardOptions(options, cardType), greetings: cleanGreetingCount(greetings) }), messages: [{ role: 'user', content }], maxTokens: LONG_TOKENS, softCap: true }
 }
 
 /** Changes to a plan: the current plan and what the user wants different, in the plan's language. */
-export function reviseRequest(rounds, plan, { text = '', notes = [] } = {}) {
+export function reviseRequest(rounds, plan, { text = '', notes = [] } = {}, { cardType = '', options = null } = {}) {
   const asked = [
     ...notes.filter(n => n.text).map(n => `- 关于「${n.section}」：${n.text}`),
     text ? `- 总体：${text}` : '',
@@ -409,9 +630,9 @@ export function reviseRequest(rounds, plan, { text = '', notes = [] } = {}) {
     `<discussion>\n${transcript(rounds)}\n</discussion>`,
     `<current_plan>\n${JSON.stringify(rawPlan(plan))}\n</current_plan>`,
     `用户对方案的意见：\n${asked.join('\n')}`,
-    '按意见改方案：只改意见涉及的部分，其余保持原样。新补出来的设定同样写进 assumptions。输出完整的新方案。',
+    '按意见改方案：只改意见涉及的部分，其余保持原样。新补出来的设定同样写进 assumptions。输出完整的新方案。' + PLAN_FORMAT,
   ].join('\n\n')
-  return { system: planSystem(planLanguage(plan)), messages: [{ role: 'user', content }], maxTokens: LONG_TOKENS, softCap: true }
+  return { system: planSystem(planLanguage(plan), { options: cleanCardOptions(options, cardType) }), messages: [{ role: 'user', content }], maxTokens: LONG_TOKENS, softCap: true }
 }
 
 // ─── Reading a plan back ──────────────────────────────────────────────────
@@ -442,10 +663,12 @@ const OWN_WORDS = {
     palettePurpose: (name, base, main) => `${name}的性格：底色${base ? `「${base}」` : ''}，主色调${main.map(m => `「${m}」`).join('')}，每一面落到具体场景和行为`,
     facets: name => `${name}_三面性`, facetsPurpose: name => `${name}在不同处境下的几副面孔：触发、状态、语料、身体习惯`,
     rephrase: name => `${name}_二次解释`, rephrasePurpose: name => `纠正对${name}的刻板理解：每种性格真正的意思、何时出现、何时不出现`,
+    stagesPurpose: names => `分阶段：${names.join(' → ')}`,
     initvar: '[InitVar]请勿打开', initvarPurpose: '变量的初始值（不发给模型，开局时读入）',
     variables: '变量列表', variablesPurpose: '每轮把当前变量交给模型',
     updateRules: '[mvu_update]变量更新规则', updateRulesPurpose: '每个变量什么时候、怎么变',
     updateFormat: '[mvu_update]变量输出格式', updateFormatPurpose: '让模型在回复末尾写出变量更新',
+    event: name => `事件_${name}`, eventOnce: '只发生一次：前文已经写过这件事，就把它当作发生过的事，不再重演。',
     perspective: '第三人称', greeting: n => `开场 ${n}`, separator: '；',
   },
   en: {
@@ -458,10 +681,12 @@ const OWN_WORDS = {
     palettePurpose: (name, base, main) => `${name}'s personality: base${base ? ` "${base}"` : ''}, main tones${main.map(m => ` "${m}"`).join('')}, each shown in concrete scenes and behavior`,
     facets: name => `${name}_Facets`, facetsPurpose: name => `${name}'s faces in different situations: trigger, state, lines, physical habits`,
     rephrase: name => `${name}_Clarifications`, rephrasePurpose: name => `correct stock readings of ${name}: what each trait really means, when it shows and when it doesn't`,
+    stagesPurpose: names => `in stages: ${names.join(' → ')}`,
     initvar: '[InitVar] do not open', initvarPurpose: 'the variables\' starting values (not sent to the model; read when a chat starts)',
     variables: 'Variables', variablesPurpose: 'gives the model the current variables every turn',
     updateRules: '[mvu_update] Variable update rules', updateRulesPurpose: 'when and how each variable changes',
     updateFormat: '[mvu_update] Variable output format', updateFormatPurpose: 'has the model write the variable updates at the end of its reply',
+    event: name => `Event_${name}`, eventOnce: 'This happens once: if the story has already shown it, treat it as something that happened and do not play it again.',
     perspective: 'Third person', greeting: n => `Greeting ${n}`, separator: '; ',
   },
 }
@@ -497,6 +722,28 @@ export function cleanVariables(list) {
     .slice(0, 24)
 }
 
+/** An opening's own starting values as the model wrote them: variable path → value, as text. */
+function rawState(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  const out = {}
+  for (const [key, value] of Object.entries(raw).slice(0, 24)) {
+    const path = cleanPath(clip(key, 60).replace(/[{}\s]+/g, ''))
+    const text = Array.isArray(value) ? value.join('、') : value === null || typeof value === 'object' ? '' : String(value)
+    if (path && text.trim()) out[path] = clip(text, 120)
+  }
+  return out
+}
+
+/**
+ * Each opening's own starting values kept to the variables the plan tracks
+ * (none when it tracks nothing): a variable gone takes its value with it.
+ */
+function settleGreetingStates(plan) {
+  const paths = new Set(plan.tracking.enabled ? plan.tracking.variables.map(v => v.path) : [])
+  plan.greetings = plan.greetings.map(g => ({ ...g, state: Object.fromEntries(Object.entries(g.state ?? {}).filter(([path]) => paths.has(path))) }))
+  return plan
+}
+
 /**
  * @param language - 写作语言 when the plan was made (forgeLanguages().card).
  * @param userName - the player's name as the player settled it ('' = the one in
@@ -509,7 +756,8 @@ export function normalizePlan(raw, { language = DEFAULT_LANGUAGE, userName, said
   const words = ownWords(language)
   const world = raw.world && typeof raw.world === 'object' ? raw.world : {}
   const characters = (Array.isArray(raw.characters) ? raw.characters : [])
-    .filter(c => c && typeof c === 'object' && clip(c.name, 24))
+    // The player is no character of the card, and a placeholder (第三方（未命名）) no one yet.
+    .filter(c => c && typeof c === 'object' && clip(c.name, 24) && !PLAYER_KEYS.has(clip(c.name, 24).toLowerCase()) && !/未命名|待定|unnamed|tbd/i.test(c.name))
     .slice(0, 12)
     .map(c => ({
       name: clip(c.name, 24),
@@ -531,6 +779,11 @@ export function normalizePlan(raw, { language = DEFAULT_LANGUAGE, userName, said
       role: clip(c.role, 200),
       looks_tags: clip(c.looks_tags, 400),
       outfit_tags: clip(c.outfit_tags, 300),
+      stage_by: cleanPath(clip(c.stage_by, 60).replace(/[{}\s]+/g, '')),
+      stages: (Array.isArray(c.stages) ? c.stages : [])
+        .filter(s => s && typeof s === 'object' && clip(s.name, 12))
+        .slice(0, 5)
+        .map(s => ({ name: clip(s.name, 12), until: clip(String(s.until ?? ''), 12), main: list(s.main, 2, 40), accent: list(s.accent, 3, 40), shift: clip(s.shift, 200) })),
     }))
   if (!characters.some(c => c.kind === 'core')) {
     if (!characters.length) return null
@@ -571,18 +824,32 @@ export function normalizePlan(raw, { language = DEFAULT_LANGUAGE, userName, said
     tracking: { enabled: tracking.enabled === true && variables.length > 0, title: clip(tracking.title, 30), variables },
     greetings: (Array.isArray(raw.greetings) ? raw.greetings : [])
       .filter(g => g && typeof g === 'object')
-      .slice(0, 4)
-      .map((g, i) => ({ title: clip(g.title, 30) || words.greeting(i + 1), scene: clip(g.scene, 200), situation: clip(g.situation, 400), length: clip(g.length, 20) || '500~700' })),
-    avatar: { character: clip(raw.avatar?.character, 24) || characters[0].name, description: clip(raw.avatar?.description, 400), tags: clip(raw.avatar?.tags, 400) },
+      .slice(0, MAX_GREETINGS)
+      .map((g, i) => ({ title: clip(g.title, 30) || words.greeting(i + 1), start: clip(g.start, 200), scene: clip(g.scene, 200), situation: clip(g.situation, 400), length: clip(g.length, 20) || '500~700', state: rawState(g.state) })),
+    events: (Array.isArray(raw.events) ? raw.events : [])
+      .filter(e => e && typeof e === 'object' && clip(e.name, 20))
+      .slice(0, 6)
+      .map(e => ({
+        name: clip(e.name, 20),
+        when: clip(e.when, 200),
+        keywords: list(e.keywords, 6, 24),
+        requires: requirementsOf(e)
+          .filter(r => r && typeof r === 'object' && clip(r.path, 60))
+          .slice(0, 3)
+          .map(r => ({ path: cleanPath(clip(r.path, 60).replace(/[{}\s]+/g, '')), op: clip(r.op, 4), value: clip(String(r.value ?? ''), 60) })),
+        content: clip(e.content, 600),
+      })),
+    avatar: { character: clip(raw.avatar?.character, 24) || characters[0].name, description: clip(raw.avatar?.description, 400), tags: clip(raw.avatar?.tags, 400), style: clip(raw.avatar?.style, 200) },
     assumptions: list(raw.assumptions, 20, 200),
     verbatim: list(raw.verbatim, 12, 300),
   }
-  if (!plan.greetings.length) plan.greetings.push({ title: words.greeting(1), scene: '', situation: '', length: '500~700' })
+  if (!plan.greetings.length) plan.greetings.push({ title: words.greeting(1), start: '', scene: '', situation: '', length: '500~700', state: {} })
   plan.language = language
   const proposed = cleanUserName(raw.user_role?.name)
   const name = userName === undefined || (proposed && said.includes(proposed)) ? proposed : cleanUserName(userName)
   settleUserName(plan, name, [proposed, ...namedIn(raw.user_role?.identity)])
   if (!plan.characters.length) return null
+  settleGreetingStates(plan)
   plan.entries = planEntries(plan)
   plan.warnings = planWarnings(plan)
   return plan
@@ -640,13 +907,18 @@ function settleUserName(plan, name, others) {
     plan.tracking.title = strip(plan.tracking.title)
   }
   const root = playerRoot(plan.language)
-  const variables = plan.tracking.variables.map(v => {
-    const at = v.path.indexOf('.')
-    const head = at > 0 ? v.path.slice(0, at) : ''
+  // The player's own values sit under 主角, in the variables and in the openings' own values alike.
+  const ownPath = path => {
+    const at = path.indexOf('.')
+    const head = at > 0 ? path.slice(0, at) : ''
     const own = head && (PLAYER_KEYS.has(head.toLowerCase()) || names.includes(head) || player.has(head))
-    return { ...v, path: own ? root + v.path.slice(at) : v.path, label: strip(v.label), check: strip(v.check), initial: strip(v.initial) }
-  })
+    return own ? root + path.slice(at) : path
+  }
+  const variables = plan.tracking.variables.map(v => ({ ...v, path: ownPath(v.path), label: strip(v.label), check: strip(v.check), initial: strip(v.initial) }))
   plan.tracking.variables = cleanVariables(variables)
+  plan.greetings = plan.greetings.map(g => ({ ...g, state: Object.fromEntries(Object.entries(g.state ?? {}).map(([path, value]) => [cleanPath(ownPath(path)), strip(value)])) }))
+  plan.characters = plan.characters.map(c => ({ ...c, stage_by: c.stage_by && cleanPath(ownPath(c.stage_by)) }))
+  plan.events = plan.events.map(e => ({ ...e, requires: requirementsOf(e).map(r => ({ ...r, path: cleanPath(ownPath(r.path)), value: strip(r.value) })) }))
   plan.tracking.enabled = plan.tracking.enabled && plan.tracking.variables.length > 0
   if (!plan.characters.some(c => c.name === plan.avatar.character)) plan.avatar.character = plan.characters.find(c => c.kind === 'core')?.name ?? ''
 }
@@ -656,6 +928,79 @@ export function editUserName(plan, name) {
   return { ...plan, user_role: { ...plan.user_role, name: cleanUserName(name) } }
 }
 
+// ─── Stages and events: what holds up ─────────────────────────────────────
+// Kept in the plan as the model wrote them; whether they are used is asked
+// here, against the variables as they are now (the status bar editor can take
+// one away, and put it back).
+
+const trackedVariable = (plan, path) => (plan.tracking?.enabled ? plan.tracking.variables.find(v => v.path === path) : null)
+
+/**
+ * A core character's stages when they hold up: a tracked number to go by, two
+ * to five stages, each but the last with an upper bound above the one before.
+ * Each stage gets `below` (its bound as a number; none for the last). Else null.
+ */
+export function stagesOf(plan, c) {
+  const variable = trackedVariable(plan, c?.stage_by)
+  const stages = c?.stages ?? []
+  if (variable?.type !== 'number' || stages.length < 2) return null
+  const bounds = stages.slice(0, -1).map(s => Number(s.until))
+  if (bounds.some((b, i) => !Number.isFinite(b) || String(stages[i].until).trim() === '' || (i > 0 && b <= bounds[i - 1]))) return null
+  return { variable, stages: stages.map((s, i) => ({ ...s, below: i < bounds.length ? bounds[i] : null })) }
+}
+
+const OPS = new Set(['>=', '<=', '>', '<', '==', '!=', 'has'])
+
+/** An event's conditions as a list: one condition (as plans had it at first), several, or none. */
+export const requirementsOf = event => (Array.isArray(event?.requires) ? event.requires : event?.requires && typeof event.requires === 'object' ? [event.requires] : [])
+
+/** A tracked variable's starting value, as its type has it. */
+export function typedValue(variable) {
+  const raw = variable.initial
+  if (variable.type === 'number') return Number.isFinite(Number(raw)) && raw !== '' ? Number(raw) : 0
+  if (variable.type === 'boolean') return /^(true|是|有|1)$/i.test(raw)
+  if (variable.type === 'list') return raw ? raw.split(/[、,，]/).map(s => s.trim()).filter(Boolean) : []
+  return raw
+}
+
+/** A condition's value as its variable's type has it. */
+export const conditionValue = ({ variable, value }) => (variable.type === 'number' ? Number(value) : variable.type === 'boolean' ? /^(true|是|有|1)$/i.test(value) : value)
+
+/** Whether a condition holds for a value. */
+function holds(condition, value) {
+  const want = conditionValue(condition)
+  switch (condition.op) {
+    case 'has': return Array.isArray(value) && value.includes(want)
+    case '>=': return value >= want
+    case '<=': return value <= want
+    case '>': return value > want
+    case '<': return value < want
+    case '==': return value === want
+    default: return value !== want
+  }
+}
+
+/** One condition on a tracked value, when it holds up: { variable, op, value }. Else null. */
+function eventCondition(plan, need) {
+  const variable = need && trackedVariable(plan, need.path)
+  if (!variable || !OPS.has(need.op) || !need.value) return null
+  if (variable.type === 'number' && (need.op === 'has' || !Number.isFinite(Number(need.value)))) return null
+  if (variable.type === 'list' ? need.op !== 'has' : need.op === 'has') return null
+  if (variable.type !== 'number' && !['==', '!=', 'has'].includes(need.op)) return null
+  return { variable, op: need.op, value: need.value }
+}
+
+/**
+ * An event's conditions on tracked values that hold up, all to be met; null when
+ * none does, or when they are met from the start (信任 <= 20 with 信任 starting
+ * at 10 would have the event from the first reply on).
+ */
+export function eventConditions(plan, event) {
+  const conditions = requirementsOf(event).map(need => eventCondition(plan, need)).filter(Boolean)
+  if (!conditions.length || conditions.every(c => holds(c, typedValue(c.variable)))) return null
+  return conditions
+}
+
 /**
  * The worldbook the plan calls for, one entry per kind of fact, configured.
  * Built here rather than asked for: the same plan always gets the same entries.
@@ -663,7 +1008,12 @@ export function editUserName(plan, name) {
 export function planEntries(plan) {
   const entries = []
   const words = ownWords(planLanguage(plan))
-  const add = entry => entries.push({ keywords: [], rephrase: false, ...entry })
+  // Entries are written and matched by name: a second one of a name (a place and a faction both 樱井商事) gets a number.
+  const add = entry => {
+    let name = entry.name
+    for (let n = 2; entries.some(e => e.name === name); n++) name = `${entry.name} ${n}`
+    entries.push({ keywords: [], rephrase: false, ...entry, name })
+  }
   const core = plan.characters.filter(c => c.kind === 'core')
   const npcs = plan.characters.filter(c => c.kind === 'npc')
   add({ name: words.world, type: '世界观', part: '', purpose: words.worldPurpose(plan.world.overview.slice(0, 60)) })
@@ -681,11 +1031,21 @@ export function planEntries(plan) {
     const keywords = keywordsOf(c.name, c.aliases)
     const owner = c.name
     add({ name: words.basic(c.name), owner, type: '角色', part: 'basic', keywords, purpose: words.basicPurpose(c.name) })
-    add({ name: words.palette(c.name), owner, type: '角色', part: 'personality', keywords, purpose: words.palettePurpose(c.name, c.personality.base, c.personality.main) })
+    // Staged by a tracked number: the palette and the notes are written a part per stage (write.mjs puts them under EJS).
+    const staged = stagesOf(plan, c) ? { staged: true } : {}
+    const stagesNote = staged.staged ? `${words.separator}${words.stagesPurpose(c.stages.map(s => s.name))}` : ''
+    add({ name: words.palette(c.name), owner, type: '角色', part: 'personality', keywords, purpose: words.palettePurpose(c.name, c.personality.base, c.personality.main) + stagesNote, ...staged })
     if (c.facets) add({ name: words.facets(c.name), owner, type: '角色', part: 'facets', keywords, purpose: words.facetsPurpose(c.name) })
-    add({ name: words.rephrase(c.name), owner, type: '角色', part: 'personality', rephrase: true, keywords, purpose: words.rephrasePurpose(c.name) })
+    add({ name: words.rephrase(c.name), owner, type: '角色', part: 'personality', rephrase: true, keywords, purpose: words.rephrasePurpose(c.name) + stagesNote, ...staged })
   }
   for (const c of npcs) add({ name: c.name, owner: c.name, type: 'NPC', part: '', keywords: keywordsOf(c.name, c.aliases), purpose: c.role || c.identity })
+  // Events: sent when named, or (with a condition on a tracked value) when it holds; one with neither is left out.
+  ;(plan.events ?? []).forEach((event, index) => {
+    const condition = eventConditions(plan, event)
+    const keywords = keywordsOf(event.keywords)
+    if (!condition && !keywords.length) return
+    add({ name: words.event(event.name), type: '事件', part: '', event: index, keywords, purpose: event.when || event.content.slice(0, 80) })
+  })
   if (plan.tracking.enabled) {
     add({ name: words.initvar, type: '状态', part: 'initvar', purpose: words.initvarPurpose })
     add({ name: words.variables, type: '状态', part: 'variables', purpose: words.variablesPurpose })
@@ -704,7 +1064,7 @@ export function editTracking(plan, edit) {
   const before = plan.tracking ?? { enabled: false, title: '', variables: [] }
   const variables = Array.isArray(edit.variables) ? cleanVariables(edit.variables) : before.variables
   const enabled = (typeof edit.enabled === 'boolean' ? edit.enabled : before.enabled) && variables.length > 0
-  const next = { ...plan, tracking: { enabled, title: typeof edit.title === 'string' ? clip(edit.title, 30) : before.title ?? '', variables } }
+  const next = settleGreetingStates({ ...plan, tracking: { enabled, title: typeof edit.title === 'string' ? clip(edit.title, 30) : before.title ?? '', variables } })
   next.entries = planEntries(next)
   next.warnings = planWarnings(next)
   return next

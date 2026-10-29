@@ -274,14 +274,13 @@
         <p class="hint">动态设定（变量列表）在历史里堆多了会一次性删掉；删的那一轮要重写整段历史的缓存。删得少更省，但上下文长得快些。</p>
       </div>
       <div data-section="compaction">
-        <label class="check-row"><input type="checkbox" name="compactAuto"> 上下文到阈值时自动压缩</label>
+        <label class="check-row"><input type="checkbox" name="compactAuto"> 上下文快满时自动压缩</label>
         <div class="grid">
-          <label>阈值：模型上下文的百分之几<input name="compactPercent" type="number" min="30" max="95" step="5"></label>
-          <label>阈值最多几万 token（0 为不限）<input name="compactCap" type="number" min="0" max="1000" step="1"></label>
+          <label>上下文用到百分之几时压缩<input name="compactPercent" type="number" min="30" max="95" step="5"></label>
           <label>当前模型的上下文（token，留空自动）<input name="compactWindow" type="number" min="1000" step="1000"></label>
         </div>
         <p class="hint" id="compact-window-hint"></p>
-        <p class="hint">关掉自动压缩后，到阈值时只提醒。压缩会调用一次模型写剧情存档，大约花一轮的额度；原文都留着，随时可以回滚到压缩之前。</p>
+        <p class="hint">关掉自动压缩后，到了只提醒。压缩会调用一次模型写剧情存档，大约花一轮的额度；原文都留着，随时可以回滚到压缩之前。</p>
       </div>
       <div data-section="books">
         <div id="book-options" class="book-options muted small">先选择一张角色卡</div>

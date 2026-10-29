@@ -420,10 +420,10 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       for (const message of messages) if (message.role === 'user') message.content = message.content.replace(PRESET_BLOCK, '')
     }
     const settled = Math.min(window >= 0 ? turns.length - window - 1 : Infinity, latestOnly ? messages.length - 1 : Infinity)
-    // Only this one mark in the history. Measured on two Claude relays (2026-10-08): with a
-    // second message-level mark besides the newest message they bill the history about twice
-    // and lose the cache between turns; with only the system prompt and the newest message
-    // marked they count and cache normally.
+    // Only this one mark in the history (with the newest message's, two at most). Two Claude relays
+    // (2026-10-08) billed the history about twice with more marks than that; with this one besides the
+    // newest, xcode and modelflare's Claude (2026-10-29, three turns of 15k characters) bill exactly
+    // what they do without it, so it stays: without it a depth window rewrites the history's cache every turn.
     if (Number.isFinite(settled) && settled >= 0) messages[settled].cache = true
     return messages
   }
@@ -490,7 +490,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     }
     if (!result.text.trim()) throw httpError(502, msg`${target.provider.name} 没有返回正文${result.stopReason ? msg`（${result.stopReason}）` : ''}`)
     const u = result.usage ?? {}
-    const tokens = { input: u.input ?? 0, cacheRead: u.cacheRead ?? 0, cacheWrite: u.cacheWrite ?? 0, cacheWrite1h: 0, cacheWrite5m: u.cacheWrite ?? 0, output: u.output ?? 0, costUsd: null }
+    // prompt / thinking: what the context held (the last call's input) and the thinking in output (context.mjs contextUsed).
+    const tokens = { input: u.input ?? 0, cacheRead: u.cacheRead ?? 0, cacheWrite: u.cacheWrite ?? 0, cacheWrite1h: 0, cacheWrite5m: u.cacheWrite ?? 0, output: u.output ?? 0, ...(u.prompt != null ? { prompt: u.prompt } : {}), ...(u.thinking ? { thinking: u.thinking } : {}), costUsd: null }
     // Cut off: at the output limit, or (联网 on Anthropic) still paused mid-search after being carried on a few times.
     const cut = result.truncated ? true : result.stopReason === 'pause_turn' ? 'paused' : null
     const api = { provider: target.provider.id, model: result.model ?? target.modelId, ...(cut ? { truncated: cut } : {}) }
@@ -589,11 +590,13 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         if (!firstToken) firstToken = Date.now() - started
         emit({ type: 'delta', text: delta })
       }
+      // The relay lost the system prompt, seen only at the end: the page drops what it showed, and the answer comes again.
+      const onRestart = () => emit({ type: 'restart' })
       let outcome
       if (target.api) {
         const history = await apiMessages(chat, parent, { stripAll: Boolean(compacted || userNode?.dynamic?.compacted) })
         const cap = await replyCap(chat, target.provider)
-        outcome = await generateApi(target, { system: chat.systemPrompt, messages: [...history, { role: 'user', content: prepared.prompt }], ...cap, webSearch }, abortController.signal, onText)
+        outcome = await generateApi(target, { system: chat.systemPrompt, messages: [...history, { role: 'user', content: prepared.prompt }], ...cap, webSearch, onRestart }, abortController.signal, onText)
       } else {
         // The turn's message as the session will hold it: the 屏蔽词 applied (the system prompt in beforeTurn).
         const sent = blockSent(prepared.prompt, await store.getBlockWords())

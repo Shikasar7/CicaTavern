@@ -87,9 +87,13 @@ export function carryTags(lines) {
  * is called 林雪; a three-character one also by its last two, 顾念念 → 念念,
  * unless the cast lists its aliases), the player's, the cast's with their
  * aliases. The cast's player entry is the player; a cast member with the
- * card's name is the card's character.
- * @returns {{ name: string, keys: string[], kind?: 'girl'|'boy'|'other', char?: true, player?: true, id?: string }[]}
- *   keys of two characters or more; the card's character first.
+ * card's name is the card's character. A name written family name first with a
+ * space (宫凪 枫) is also called by its given name, and two cast members of one
+ * family (宫凪, 宫凪 樱) stay two people.
+ * @returns {{ name: string, keys: string[], marks?: string[], kind?: 'girl'|'boy'|'other', char?: true, player?: true, id?: string }[]}
+ *   keys of two characters or more, which the story's text is searched for; the
+ *   card's character first. `marks`: one-character names and aliases (枫), which
+ *   count only where a name stands alone (【枫|微笑】, a line 枫：).
  */
 export function speakerNames({ char = '', user = '', roster = [] } = {}) {
   const out = []
@@ -97,13 +101,22 @@ export function speakerNames({ char = '', user = '', roster = [] } = {}) {
   const add = (name, aliases = [], extra = {}) => {
     const full = String(name ?? '').trim()
     if (!full) return
-    const short = shortOf(full)
-    const keys = [full, short, ...aliases.map(a => String(a ?? '').trim())].filter(key => key.length >= 2)
-    const same = out.find(entry => entry.name === short || (extra.player && entry.player))
+    let short = shortOf(full)
+    const given = /^[一-鿿ぁ-ヿ]+ ([一-鿿ぁ-ヿ]+)$/.exec(full)?.[1]
+    const all = [full, short, ...(given ? [full.replace(' ', ''), given] : []), ...aliases.map(a => String(a ?? '').trim())].filter(Boolean)
+    const keys = all.filter(key => key.length >= 2)
+    const marks = extra.player ? [] : all.filter(key => key.length === 1)
+    let same = out.find(entry => entry.name === short || (extra.player && entry.player))
+    // A cast member already there under that name is someone else of the same family.
+    if (same && extra.id && same.id && same.id !== extra.id) {
+      short = full
+      same = out.find(entry => entry.name === full)
+    }
     if (same) {
       same.keys = [...new Set([...same.keys, ...keys])]
+      if (marks.length) same.marks = [...new Set([...(same.marks ?? []), ...marks])]
       for (const [key, value] of Object.entries(extra)) same[key] ??= value
-    } else if (keys.length) out.push({ name: short, keys: [...new Set(keys)], ...extra })
+    } else if (keys.length || marks.length) out.push({ name: short, keys: [...new Set(keys)], ...(marks.length ? { marks: [...new Set(marks)] } : {}), ...extra })
   }
   const cast = Array.isArray(roster) ? roster.filter(entry => entry && (entry.name || entry.player)) : []
   const charName = shortOf(String(char ?? '').trim())
@@ -417,7 +430,7 @@ function labelOf(row, names) {
   const colon = /[：:]$/.test(plain)
   const body = plain.replace(/[：:]$/, '')
   if (!body || body.length > 12 || /[“”「」『』"。！？!?]/.test(body)) return null
-  const exact = names.find(entry => entry.keys.includes(body))
+  const exact = names.find(entry => entry.keys.includes(body) || entry.marks?.includes(body))
   if (exact) return { name: exact.name, drop: true }
   if (!colon) return null
   if (nameLike(body)) return { name: body, drop: true }
@@ -593,7 +606,7 @@ export const hasMarks = text => /【[^【】|｜\n]{1,24}[|｜][^【】|｜\n]{0
 /** A mark's name → the cast name it means (an alias, or part of a longer name), else as written. */
 function castName(name, names) {
   const n = String(name).replace(/\*/g, '').trim()
-  const exact = names.find(entry => entry.name === n || entry.keys.includes(n))
+  const exact = names.find(entry => entry.name === n || entry.keys.includes(n) || entry.marks?.includes(n))
   if (exact) return exact.name
   const near = n.length >= 2 ? names.find(entry => !entry.role && entry.keys.some(key => key.length >= 2 && (key.includes(n) || n.includes(key)))) : null
   return near?.name ?? n

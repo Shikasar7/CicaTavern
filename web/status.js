@@ -64,7 +64,7 @@ function statusRow(el, row) {
 export function statusBar(el, spec, state, { previous = null, note = '', collapsible = true } = {}) {
   const groups = statusGroups(spec, state, previous)
   if (!groups.length) return null
-  const box = el('section', { class: 'status-bar' })
+  const box = el('section', { class: spec.theme ? `status-bar theme-${spec.theme}` : 'status-bar' })
   const named = groups.filter(g => g.name).length
   const title = spec.title || (named === 1 && groups.length === 1 ? groups[0].name : '') || t`状态`
   const head = el('div', { class: 'status-head' }, [el('span', { class: 'status-title', text: title }), note ? el('span', { class: 'status-note', text: note }) : null])

@@ -137,6 +137,17 @@ test('an answer whose tags went astray still reads: the questions and the sketch
   assert.equal(broken.questions.length, 0)
   assert.equal(broken.brief.title, '雨宿')
   assert.equal(broken.readable, false)
+  // A line of dialogue quoted with straight quotes inside a sample, as claude-sonnet-5-5 writes them: read, the quotes made “ ”.
+  const quoted = '[{"id": "q1", "title": "你们什么关系？", "kind": "single", "options": [{"label": "对门", "sample": "她站在门外："我今天还会捡到它吗？""}, {"label": "楼下", "sample": ""你听见了吗？""}]}]'
+  const mended = readDiscussion(`<reply>好</reply>
+<questions>
+${quoted}
+</questions>
+<brief>
+${brief}
+</brief>`, empty)
+  assert.equal(mended.readable, true)
+  assert.deepEqual(mended.questions[0].options.map(o => o.sample), ['她站在门外：“我今天还会捡到它吗？”', '“你听见了吗？”'])
   // The plan and the reviewer's notes share the reader.
   assert.equal(section('<plan>{"name": "x"}</brief>', 'plan'), '{"name": "x"}')
   assert.equal(section('<reply>a <user> b</reply>', 'reply'), 'a <user> b')
@@ -296,6 +307,14 @@ test('the plan request carries the talk; a cut-off plan reads as nothing', () =>
   assert.ok(planRequest(rounds, { title: '', readiness: 0, items: [], open: [] }).maxTokens >= 32000)
   assert.equal(readPlan('<plan>{"name": "x", "characters": []}'), null)
   assert.equal(readPlan('不是方案'), null)
+  // The request ends on the format: deepseek-v4.1-flash wrote a Markdown write-up when it ended on 写出创作方案.
+  assert.match(planRequest(rounds, { title: '', readiness: 0, items: [], open: [] }).messages[0].content, /只输出一段 <plan> 包着的 JSON[^\n]*$/)
+  // The player and a placeholder are no characters; with nobody else there is no plan.
+  assert.equal(readPlan('<plan>{"characters": [{"name": "你", "kind": "core"}, {"name": "第三方（未命名）", "kind": "core"}]}</plan>'), null)
+  assert.deepEqual(readPlan('<plan>{"characters": [{"name": "你", "kind": "core"}, {"name": "沈砚秋", "kind": "core"}]}</plan>').characters.map(c => c.name), ['沈砚秋'])
+  // A place and a faction of one name are two entries all the same, told apart by a number.
+  const twice = normalizePlan({ ...PLAN, world: { ...PLAN.world, places: [{ name: '樱井商事' }, { name: '码头' }], factions: [{ name: '樱井商事' }, { name: '合记' }] } })
+  assert.deepEqual(twice.entries.filter(e => e.type === '地理').map(e => e.name), ['樱井商事', '码头', '樱井商事 2', '合记'])
 })
 
 test('the guide talks in the page\'s language; samples, plan and card are in 写作语言', async t => {

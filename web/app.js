@@ -1,9 +1,9 @@
 // Agent Tavern web UI. Plain DOM, no build step.
 import { blockShown, displayOf, htmlFrame, listenForFrameHeights, nameMacros, segments, streamingText, useBlockWords, usesStatusPlaceholder, withoutOwnStatus } from '/render.js'
 import { choiceList, statusBar, timeBox } from '/status.js'
-import { BASIC_ID, choicesOf, otherChoices, timeBoxOf } from '/shared/basic.js'
+import { BASIC_ID, VN_ID, builtinKey, builtinOptions, choicesOf, isBuiltinPreset, otherChoices, timeBoxOf } from '/shared/basic.js'
 import { autoStatusSpec } from '/shared/status.js'
-import { BASIC_FIELDS, basicField } from '/basic-options.js'
+import { basicField, fieldsOf } from '/basic-options.js'
 import { allowLibraries, broadcastChatVars, broadcastInput, broadcastRelay, broadcastState, installFrameBridge, parseSlash, storedFrameStorage, storedVariables } from '/compat.js'
 import { renderUsage } from '/usage.js'
 import { initPresets } from '/presets.js'
@@ -198,16 +198,24 @@ async function stream(path, body, onEvent) {
 // The toast is a popover: shown again each time, it goes on top of whatever window is open
 // (a modal dialog would otherwise cover it until it closes). `log`: an error, with a way to its log.
 // A toast is in the top layer, but a dialog opened after it goes above it: shown again on top of that dialog.
+// Held here, not looked up: it may sit in a dialog that is then taken out of the page.
+const toastBox = $('toast')
+// With a modal dialog open, all outside it is inert, the top layer too: the toast showed there but
+// its 错误日志 could not be clicked. Inside the dialog it can (and back in the page once none is open).
+const toastHost = () => document.querySelector('dialog:modal') ?? document.body
 new MutationObserver(records => {
-  const box = $('toast')
-  if (!box?.showPopover || box.hidden || !box.matches(':popover-open')) return
-  if (!records.some(record => record.target !== box && record.target.open)) return
-  box.hidePopover()
+  const box = toastBox
+  if (!box?.showPopover || box.hidden) return
+  // Its dialog closed or went away while it showed: on to the page (or the dialog under it), still showing.
+  const moved = box.parentElement !== toastHost()
+  if (!moved && !records.some(record => record.type === 'attributes' && record.target !== box && record.target.open)) return
+  if (moved) toastHost().append(box)
+  if (box.matches(':popover-open')) box.hidePopover()
   box.showPopover()
-}).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['open'] })
+}).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['open'] })
 
 function hideToast() {
-  const box = $('toast')
+  const box = toastBox
   clearTimeout(toast.timer)
   if (box.matches?.(':popover-open')) box.hidePopover()
   box.hidden = true
@@ -215,7 +223,7 @@ function hideToast() {
 
 /** @param options.action - { text, run }: a button after the message that runs `run` and closes it. */
 function toast(message, ms = 4000, { log = false, action = null } = {}) {
-  const box = $('toast')
+  const box = toastBox
   const hide = hideToast
   box.textContent = message
   if (action) {
@@ -232,6 +240,8 @@ function toast(message, ms = 4000, { log = false, action = null } = {}) {
     }))
   }
   box.hidden = false
+  const host = toastHost()
+  if (box.parentElement !== host) host.append(box)
   if (box.showPopover) {
     if (box.matches(':popover-open')) box.hidePopover()
     box.showPopover()
@@ -641,10 +651,23 @@ function askGroupName(title, initial = '') {
   return name ? name.slice(0, 30) : ''
 }
 
+/**
+ * 做成视觉小说 (创作角色卡 after saving, or a card's ⋯ menu): a new chat with the card, then the mode,
+ * the preset offer, how to draw, the 角色名册, 立绘 and 表情 (web/vn.js makeReady), and `places` backgrounds.
+ */
+async function makeVisualNovel(id, places = []) {
+  await refreshCards()
+  await selectCard(id)
+  // Done once the chat starts (after the opening is picked, when there are several).
+  ui.vnPending = { cardId: id, places }
+  await newChat()
+}
+
 function openCardMenu(card, anchor) {
   const groups = cardGroups()
   popMenu(anchor, [
     { label: t`修改角色卡`, hint: t`改名字、描述、开场白和世界书，也可以说说想怎么改，让向导来改`, onClick: () => cardEditUi.open(card.id) },
+    { label: t`做成视觉小说`, hint: t`开一个新对话进入视觉小说模式：选画图方式，再备齐角色名册、立绘和表情`, onClick: guard(() => makeVisualNovel(card.id)) },
     { label: t`卡片界面权限…`, hint: t`卡片界面自己发送、调用模型、经 CicaTavern 联网：问过一次之后照你的选择来，在这里改`, onClick: () => cardPermissions.open(card) },
     '-',
     { header: t`移到分组` },
@@ -867,6 +890,10 @@ const startChat = guard(async greetingIndex => {
   await refreshChats()
   setChat(chat)
   $('input').focus()
+  // 做成视觉小说 waited for the opening to be picked.
+  const ready = ui.vnPending
+  ui.vnPending = null
+  if (ready?.cardId === chat.cardId) await vnUi.makeReady(ready.cardId, ready.places)
 })
 
 /** Regex scripts: the global ones, the chat's preset's, its card's, then the 正则集 on its card (all cached), as the server applies them. */
@@ -884,8 +911,8 @@ function scriptsFor(chat) {
 function statusSpecFor(chat, node) {
   const own = ui.cardDetails.get(chat.cardId)?.statusBar
   if (own) return own
-  const builtin = !chat.presetId || chat.presetId === BASIC_ID
-  if (!builtin || ui.settings?.basic?.statusBar === 'off') return null
+  const builtin = !chat.presetId || isBuiltinPreset(chat.presetId)
+  if (!builtin || builtinOptions(ui.settings, chat.presetId).statusBar === 'off') return null
   return autoStatusSpec(node.state ?? {})
 }
 
@@ -958,7 +985,7 @@ function renderChat() {
   const presetPill = $('chat-preset')
   presetPill.hidden = !chat
   if (chat) {
-    presetPill.textContent = usesBasic(chat) ? t`预设：${t`基础预设`}` : chat.presetName ? t`预设：${chat.presetName}` : t`不用预设`
+    presetPill.textContent = usesBasic(chat) ? t`预设：${chat.presetId === VN_ID ? t`视觉小说预设` : t`基础预设`}` : chat.presetName ? t`预设：${chat.presetName}` : t`不用预设`
     presetPill.classList.toggle('unset', !chat.presetName)
     presetPill.disabled = ui.generating
   }
@@ -971,7 +998,11 @@ function renderChat() {
     const meter = contextMeter(chat)
     $('context-meter').hidden = !meter
     $('context-meter').textContent = meter?.text ?? ''
-    compact.classList.toggle('near', Boolean(meter?.near))
+    compact.classList.toggle('near', Boolean(meter?.near || meter?.heavy))
+    if (meter?.heavy && !toldHeavy.has(chat.id)) {
+      toldHeavy.add(chat.id)
+      toast(t`这个对话的固定前缀（角色卡、常驻世界书、预设）约 ${tokensText(chat.systemPromptTokens)} token，压缩压不掉，所以上下文会很快又满。把鼠标放在上面的「压缩上下文」上看详情。`, 9000)
+    }
     const why = chat.compactable
       ? t`把前面的剧情压缩成一份存档（上次压缩后新增 ${chat.compactable} 轮），之后在新的上下文里接着写`
       : compactBlockText()[chat.compactBlock] ?? t`上次压缩之后还不到 2 轮新剧情，不用压缩`
@@ -1931,11 +1962,12 @@ async function fillUpdate(nodeId) {
 /** Token counts as the page says them: 8.6万 / 86K. */
 const tokensText = n => new Intl.NumberFormat(document.documentElement.lang || undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(n)
 
-/** What a reply's turn held in the model's context (server/context.mjs contextUsed). */
+/** What a reply's turn held in the model's context, thinking left out (server/context.mjs contextUsed). */
 function contextUsed(usage) {
   if (!usage) return 0
   const write = Number(usage.cacheWrite) || (Number(usage.cacheWrite5m) || 0) + (Number(usage.cacheWrite1h) || 0)
-  return (Number(usage.input) || 0) + (Number(usage.cacheRead) || 0) + write + (Number(usage.output) || 0)
+  const prompt = usage.prompt != null ? Number(usage.prompt) || 0 : (Number(usage.input) || 0) + (Number(usage.cacheRead) || 0) + write
+  return prompt + Math.max(0, (Number(usage.output) || 0) - (Number(usage.thinking) || 0))
 }
 
 const windowSource = () => ({ set: t`你填的`, learned: t`供应商给的`, table: t`按官方文档`, guess: t`不认识这个模型，按 12.8 万估计` })
@@ -1960,14 +1992,24 @@ function contextMeter(chat) {
   // Nothing sent yet: the first turn's count comes with its reply.
   if (tip.id === 'root') return { text: `0/${tokensText(info.window)}`, near: false, title: t`还没有发过：第一轮之后显示实际用了多少（开头就会带上角色卡、预设和常驻世界书）。${limits}` }
   const used = contextUsed(tip.usage)
+  // The fixed prefix (card, constant worldbook entries, preset) stays through compaction: when it is half the
+  // threshold or more, compacting cannot bring the chat down for long, and the meter says why.
+  const prefix = chat.systemPromptTokens ?? 0
+  const heavy = prefix >= info.threshold * 0.5
+  const fixed = prefix ? t`其中固定前缀（角色卡、常驻世界书、预设）约 ${tokensText(prefix)}，压缩压不掉它。` : ''
+  const advice = heavy ? t`这张卡的固定前缀很大，压缩后也会很快再满：可以把大段的常驻世界书条目改成按关键词触发，或者在「上下文压缩」里把百分比调高。` : ''
   // A reply with no count (imported from SillyTavern): the window only.
-  if (!used) return { text: `—/${tokensText(info.window)}`, near: false, title: t`这条回复没有用量记录，发下一轮之后显示。${limits}` }
+  if (!used) return { text: `—/${tokensText(info.window)}`, near: false, heavy, title: [t`这条回复没有用量记录，发下一轮之后显示。${limits}`, fixed, advice].filter(Boolean).join('\n') }
   return {
     text: `${tokensText(used)}/${tokensText(info.window)}`,
     near: used >= info.threshold,
-    title: t`上下文已用 ${tokensText(used)} token（上一轮实际计算的），${limits}`,
+    heavy,
+    title: [t`上下文已用 ${tokensText(used)} token（上一轮实际计算的，不算思考），${limits}`, fixed, advice].filter(Boolean).join('\n'),
   }
 }
+
+// Chats already told their fixed prefix is most of the threshold: once each in this page.
+const toldHeavy = new Set()
 
 // Reminders already given (自动压缩 off): once per chat and reply.
 const reminded = new Set()
@@ -2374,8 +2416,9 @@ async function generate(endpoint, body, echoUserText) {
         const note = live()?.querySelector('.live-note')
         if (note) note.textContent = job.note
         if (event.compacted?.removedChars && viewing()) toast(t`已清掉历史里堆积的变量列表（${fmt(event.compacted.removedChars)} 字）。这一轮会重写对话历史的缓存，固定前缀还在。`)
-      } else if (event.type === 'delta') {
-        job.text += event.text
+      } else if (event.type === 'delta' || event.type === 'restart') {
+        // restart: the relay lost the system prompt (the card), and the answer is being asked for again.
+        job.text = event.type === 'restart' ? '' : job.text + event.text
         if (viewing()) vnUi.streamed()
         const target = live()?.querySelector('.msg-body')
         if (target) {
@@ -2735,15 +2778,16 @@ function fillCompaction(form) {
   const saved = ui.settings.compaction ?? {}
   form.compactAuto.checked = saved.auto !== false
   form.compactPercent.value = saved.percent ?? 70
-  form.compactCap.value = saved.cap === 0 ? 0 : Math.round((saved.cap ?? 150000) / 10000)
   const ref = ui.chat?.model || ui.defaultModel || ''
   const choice = ui.models.find(m => m.id === ref)
   form.compactWindow.dataset.ref = ref
   form.compactWindow.value = saved.windows?.[ref] ?? ''
   form.compactWindow.placeholder = choice?.context ? String(choice.context.window) : ''
   $('compact-window-hint').textContent = choice?.context
-    ? t`${labelOf(ref)}：上下文 ${tokensText(choice.context.window)} token（${windowSource()[choice.context.source] ?? ''}），按现在的设置用到 ${tokensText(choice.context.threshold)} 时压缩。` +
-      (choice.context.source === 'guess' ? t`知道它的上下文的话，填在「当前模型的上下文」里。` : '')
+    ? t`${labelOf(ref)}：上下文 ${tokensText(choice.context.window)} token（${windowSource()[choice.context.source] ?? ''}），用到 ${tokensText(choice.context.threshold)} 时压缩。上下文越长，每轮发送的越多、花得越多；想省一点就把百分比调低。` +
+      (choice.context.source === 'guess' ? t`知道它的上下文的话，填在「当前模型的上下文」里。` : '') +
+      // What compaction cannot shrink, for the chat open now.
+      (ui.chat?.systemPromptTokens ? t`这个对话的固定前缀（角色卡、常驻世界书、预设）约 ${tokensText(ui.chat.systemPromptTokens)}，压缩压不掉它。` : '')
     : t`还没选模型`
 }
 
@@ -2752,7 +2796,7 @@ function compactionOf(form, num) {
   const ref = form.compactWindow.dataset.ref
   const windows = { ...(ui.settings.compaction?.windows ?? {}) }
   if (ref) windows[ref] = num('compactWindow')
-  return { auto: form.compactAuto.checked, percent: num('compactPercent') || 70, cap: Math.max(0, num('compactCap')) * 10000, windows }
+  return { auto: form.compactAuto.checked, percent: num('compactPercent') || 70, windows }
 }
 
 /** The menu: 模型, 写作, 世界书与状态, 连接, 更多, each row with what it is set to now. */
@@ -2827,10 +2871,7 @@ function layOutSettings({ form, card, providers, presets }) {
     },
     {
       id: 'compaction', title: t`上下文压缩`, look: 'shared', tag: t`所有对话`, pane: settingsPages.compaction,
-      summary: () => {
-        const cap = Number(value('compactCap'))
-        return [form.compactAuto.checked ? t`到阈值自动压缩` : t`到阈值只提醒`, t`模型上下文的 ${value('compactPercent')}%`, cap ? t`最多 ${cap} 万 token` : t`不设上限`].join(' · ')
-      },
+      summary: () => (form.compactAuto.checked ? t`上下文用到 ${value('compactPercent')}% 时自动压缩` : t`上下文用到 ${value('compactPercent')}% 时提醒`),
     },
     // The 世界书 window, as beside the card list's heading: every imported book, whatever card is picked.
     {
@@ -3159,6 +3200,14 @@ const mediaUi = initMedia({
 const historyUi = initHistory({ el, getChat: () => ui.chat })
 const vnUi = initVn({
   api, el, toast, guard, renderStory,
+  // 一键备齐 / 做成视觉小说 ask how to draw first (web/draw-choice.js).
+  pickDraw: drawChoice.pick,
+  // 视觉小说预设, offered on going into the mode: the chat's prefix rebuilt with it.
+  async usePreset(chatId, presetId) {
+    const chat = await api(`/api/chats/${chatId}/preset`, { method: 'POST', body: { presetId } })
+    if (ui.chat?.id === chatId) setChat(chat)
+    toast(t`这个对话改用「${t`视觉小说预设`}」。下一轮会重新写入一次缓存。`)
+  },
   getChat: () => ui.chat,
   isGenerating: () => ui.generating,
   live: () => (ui.chat ? ui.busy.get(ui.chat.id) ?? null : null),
@@ -3247,6 +3296,7 @@ const forgeUi = initForge({
     await selectCard(id)
     await newChat()
   },
+  makeVisualNovel,
 })
 
 const providersUi = initProviders({
@@ -3346,7 +3396,8 @@ function quickEntries() {
   return (detail?.quick ?? []).map(id => detail.prompts?.find(p => p.id === id)).filter(Boolean)
 }
 
-const usesBasic = chat => chat?.presetId === BASIC_ID
+// The built-in presets (基础预设, 视觉小说预设): options of their own instead of entries.
+const usesBasic = chat => isBuiltinPreset(chat?.presetId)
 
 // 联网: the provider searches the web for this chat's turns when the model asks, as SillyTavern's
 // 「Enable web search」 does. Only models whose provider has a search of its own (providers.mjs webSearchKind).
@@ -3444,13 +3495,15 @@ function renderQuickButton() {
 
 /** With the built-in preset the quick switches are its options. */
 function openBasicQuick() {
-  const saved = ui.settings?.basic ?? {}
+  const presetId = ui.chat.presetId
+  const fields = fieldsOf(presetId)
+  const saved = builtinOptions(ui.settings, presetId)
   const changed = new Map()
-  const rebuilds = () => [...changed.keys()].some(key => BASIC_FIELDS.find(f => f.key === key)?.prompt !== false)
+  const rebuilds = () => [...changed.keys()].some(key => fields.find(f => f.key === key)?.prompt !== false)
   const update = () => {
     $('quick-apply').disabled = !changed.size
     $('quick-hint').textContent = !changed.size
-      ? t`基础预设的选项，改动对这个对话和之后的新对话都生效。`
+      ? presetId === VN_ID ? t`视觉小说预设的选项，改动对这个对话和之后的新对话都生效。` : t`基础预设的选项，改动对这个对话和之后的新对话都生效。`
       : rebuilds()
         ? t`应用后会重建这个对话的固定前缀，下一轮重写一次缓存。`
         : t`只影响显示，应用后马上生效。`
@@ -3460,18 +3513,18 @@ function openBasicQuick() {
     else changed.set(key, value)
     update()
   }
-  $('quick-list').replaceChildren(...BASIC_FIELDS.map(field => el('li', {}, basicField(el, field, saved[field.key], { onPick: pick, compact: true }))))
+  $('quick-list').replaceChildren(...fields.map(field => el('li', {}, basicField(el, field, saved[field.key], { onPick: pick, compact: true }))))
   ui.quickChanges = changed
-  ui.quickBasic = { saved, rebuilds }
+  ui.quickBasic = { saved, rebuilds, presetId }
   update()
   $('quick-dialog').showModal()
 }
 
 const applyBasicQuick = async () => {
-  const { saved, rebuilds } = ui.quickBasic
+  const { saved, rebuilds, presetId } = ui.quickBasic
   const rebuild = rebuilds()
-  ui.settings = await api('/api/settings', { method: 'PUT', body: { basic: { ...saved, ...Object.fromEntries(ui.quickChanges) } } })
-  if (rebuild) setChat(await api(`/api/chats/${ui.chat.id}/preset`, { method: 'POST', body: { presetId: BASIC_ID } }))
+  ui.settings = await api('/api/settings', { method: 'PUT', body: { [builtinKey(presetId)]: { ...saved, ...Object.fromEntries(ui.quickChanges) } } })
+  if (rebuild) setChat(await api(`/api/chats/${ui.chat.id}/preset`, { method: 'POST', body: { presetId } }))
   else renderChat()
   $('quick-dialog').close()
   toast(rebuild ? t`已应用。下一轮会重写一次缓存。` : t`已应用。`)
@@ -3603,7 +3656,7 @@ function bind() {
     ids: () => ({ presetId: ui.chat?.presetId ?? null, cardId: ui.chat?.cardId ?? null }),
   })
   // A card frame's model call shows a notice; clicking it stops the call.
-  $('toast').addEventListener('click', () => {
+  toastBox.addEventListener('click', () => {
     if (frameGenerations.size) frameHandlers.stopGenerate({})
   })
   $('import-input').addEventListener('change', event => {
@@ -3654,6 +3707,8 @@ function bind() {
   $('open-presets').addEventListener('click', () => presetsUi.open())
   $('open-books').addEventListener('click', openBookManager)
   $('forge-open').addEventListener('click', () => forgeUi.open())
+  // A card being written when the page loaded (closed, reloaded, another device started it): its chip.
+  forgeUi.watch()
   $('open-providers').addEventListener('click', () => providersUi.open())
   $('provider-add').addEventListener('click', () => providersUi.add())
   $('provider-import-dsh').addEventListener('click', () => providersUi.importDsh())

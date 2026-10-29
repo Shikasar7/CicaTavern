@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { BASIC_DEFAULTS, choicesOf, cleanBasic, timeBoxOf, withoutBasicBlocks } from '../web/shared/basic.js'
+import { BASIC_DEFAULTS, VN_DEFAULTS, VN_ID, choicesOf, cleanBasic, cleanVn, timeBoxOf, withoutBasicBlocks } from '../web/shared/basic.js'
 import { autoStatusSpec, cleanStatusSpec, compactText, statusGroups } from '../web/shared/status.js'
 import { applyScripts, PLACEMENT } from '../web/shared/regex.js'
 import { streamingText, withoutOwnStatus } from '../web/render.js'
@@ -181,4 +181,32 @@ test('status bar layouts: cleaned, laid out from a state, grouped with changes',
 test('the page leaves out the SillyTavern copy of a card creator bar, both of its scripts', () => {
   const scripts = [{ id: 'cicatavern-status-bar' }, { id: 'cicatavern-status-bar-hide' }, { id: 'card-own' }]
   assert.deepEqual(withoutOwnStatus(scripts).map(s => s.id), ['card-own'])
+})
+
+test('the visual novel preset: the built-in options and its own, saved apart, its paragraphs in the prefix', async t => {
+  assert.deepEqual(cleanVn({ dialogue: 'most', person: 'first', narration: 'long' }), { ...VN_DEFAULTS, dialogue: 'most', person: 'first' })
+  // Only it tells the story as a visual novel; the basic preset says nothing of the kind.
+  const vn = basicDetail({ vn: { flavor: 'galgame' } }, VN_ID)
+  assert.equal(vn.id, VN_ID)
+  assert.match(vn.rules, /视觉小说/)
+  assert.match(vn.rules, /以对白推动剧情/)
+  assert.match(vn.rules, /galgame/)
+  assert.doesNotMatch(basicDetail({}).rules, /视觉小说|对白推动/)
+  assert.doesNotMatch(basicRules(cleanVn({ narration: 'normal', scenery: 'normal', paging: 'normal' })), /旁白简明|场景描写点到为止|段落短/)
+  const root = await mkdtemp(path.join(tmpdir(), 'tavern-vn-preset-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const store = createStore(root)
+  await store.init()
+  const card = normalizeCard({ name: '小雨', first_mes: '雨停了。' })
+  await store.saveCard(card)
+  await store.saveSettings({ vn: { dialogue: 'most' }, basic: { choices: 'off' } })
+  const settings = await store.getSettings()
+  assert.equal(settings.vn.dialogue, 'most')
+  assert.equal(settings.vn.choices, 'four', 'the basic preset\'s options stay its own')
+  assert.equal((await presetFor(store, VN_ID)).options.dialogue, 'most')
+  const chat = await createChat(store, card.id)
+  await rebuildPrompt(store, chat, VN_ID)
+  assert.equal(chat.presetId, VN_ID)
+  assert.match(chat.systemPrompt, /几乎全用对白推进/)
+  assert.match(chat.systemPrompt, /<choices>/)
 })

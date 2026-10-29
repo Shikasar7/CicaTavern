@@ -15,7 +15,7 @@ import { backfillEntryPositions, cardSummary, cleanGroup, exportCard, greetingsO
 import { chatSummary, chatView, childrenOf, createChat, selectNode, activePath, rebuildPrompt, restoreFolded, rollbackTo, editCompaction, dropCompaction, exportStory, importStory, importSillyTavern, forkChat, mountChange, switchOpening, booksForCard, playerOf, chatPicks, newChatPicks, switchPicks } from './chats.mjs'
 import { bookByName, bookNames, fieldChange, parseUpdates, setFrameVars, thEntry, withChatChanges, writeChatBook } from './frames.mjs'
 import { editPreset, exportPreset, importOwnPreset, normalizePreset, presetDetail, presetSummary } from './presets.mjs'
-import { basicDetail } from './basic.mjs'
+import { VN_ID, basicDetail } from './basic.mjs'
 import { appVersion, featuresOf } from './edition.mjs'
 import { createProxy, proxyOverride } from './proxy.mjs'
 import { createEngine } from './engine.mjs'
@@ -321,6 +321,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       ownBackends: await media.ownBackends(),
       voiceKey: await media.ttsKeyStatus(),
       voiceKeys: await media.voiceKeys(),
+      // 一键备齐 leaves the 表情 out when they would be drawn anew rather than from the 立绘.
+      drawsFromPicture: await media.drawsFromPicture(settings),
     }
   }
 
@@ -709,6 +711,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['GET', /^\/api\/persona\/list$/, () => media.personaList()],
     ['GET', /^\/api\/media\/loras$/, () => media.loras()],
     ['POST', /^\/api\/media\/comfy\/models$/, (_, body) => media.comfyModels(body?.url)],
+    // 做成视觉小说: whether the 画图方式 picked can draw a 表情 from the 立绘.
+    ['POST', /^\/api\/media\/draws-from-picture$/, async (_, body) => ({ drawsFromPicture: await media.drawsFromPicture(await media.settingsFor(drawChoiceOf(body))) })],
     ['GET', /^\/api\/cards\/([\w-]+)\/media$/, ([id]) => media.cardMediaView(id)],
     ['PUT', /^\/api\/cards\/([\w-]+)\/media$/, ([id], body) => media.saveCardMedia(id, body)],
     ['POST', /^\/api\/cards\/([\w-]+)\/roster\/draft$/, ([id]) => media.draftRoster(id, AbortSignal.timeout(180000))],
@@ -757,16 +761,18 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     // background; the page polls GET /api/forge/:id while one is going.
     ['GET', /^\/api\/forge$/, () => forge.list()],
     ['POST', /^\/api\/forge$/, (_, body) => forge.create(body ?? {})],
+    ['POST', /^\/api\/forge\/ideas$/, (_, body) => forge.ideas(body ?? {})],
     ['GET', /^\/api\/forge\/([\w-]+)$/, ([id]) => forge.get(id)],
     ['PUT', /^\/api\/forge\/([\w-]+)$/, ([id], body) => forge.update(id, body ?? {})],
     ['DELETE', /^\/api\/forge\/([\w-]+)$/, ([id]) => forge.remove(id)],
     ['POST', /^\/api\/forge\/([\w-]+)\/say$/, ([id], body) => forge.say(id, body ?? {})],
     ['POST', /^\/api\/forge\/([\w-]+)\/retry$/, ([id]) => forge.retry(id)],
     ['POST', /^\/api\/forge\/([\w-]+)\/undo$/, ([id]) => forge.undo(id)],
-    ['POST', /^\/api\/forge\/([\w-]+)\/plan$/, ([id]) => forge.plan(id)],
+    ['POST', /^\/api\/forge\/([\w-]+)\/plan$/, ([id], body) => forge.plan(id, body ?? {})],
     ['POST', /^\/api\/forge\/([\w-]+)\/revise$/, ([id], body) => forge.revise(id, body ?? {})],
     ['POST', /^\/api\/forge\/([\w-]+)\/write$/, ([id], body) => forge.write(id, body ?? {})],
     ['POST', /^\/api\/forge\/([\w-]+)\/rewrite$/, ([id], body) => forge.rewrite(id, body ?? {})],
+    ['POST', /^\/api\/forge\/([\w-]+)\/preview$/, ([id], body) => forge.preview(id, body ?? {})],
     ['PUT', /^\/api\/forge\/([\w-]+)\/card$/, ([id], body) => forge.editCard(id, body ?? {})],
     ['POST', /^\/api\/forge\/([\w-]+)\/avatar$/, ([id], body) => forge.drawAvatar(id, body ?? {})],
     ['PUT', /^\/api\/forge\/([\w-]+)\/avatar$/, ([id], body) => forge.uploadAvatar(id, body ?? {})],
@@ -1112,6 +1118,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['GET', /^\/api\/presets\/([\w-]+)\/export$/, async ([id]) => exportPreset(await store.getPreset(id))],
     // The built-in preset: its options live in the settings (PUT /api/settings { basic }).
     ['GET', /^\/api\/presets\/basic$/, async () => basicDetail(await store.getSettings())],
+    ['GET', /^\/api\/presets\/vn$/, async () => basicDetail(await store.getSettings(), VN_ID)],
     ['GET', /^\/api\/presets\/([\w-]+)$/, async ([id]) => presetDetail(await store.getPreset(id))],
     ['PUT', /^\/api\/presets\/([\w-]+)$/, async ([id], body) => presetDetail(await store.savePreset(editPreset(await store.getPreset(id), body)))],
     ['DELETE', /^\/api\/presets\/([\w-]+)$/, async ([id]) => {
@@ -1595,12 +1602,13 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     if (req.method === 'POST' && sceneDraw) {
       const body = await readBody(req)
       const text = name => (typeof body[name] === 'string' ? body[name] : '')
-      return sendJson(res, 200, await scenes.draw(sceneDraw[1], { place: text('place'), sceneId: text('sceneId'), prompt: text('prompt'), rewrite: body.rewrite === true, passage: text('passage') }, cancelOnClose()))
+      return sendJson(res, 200, await scenes.draw(sceneDraw[1], { place: text('place'), sceneId: text('sceneId'), prompt: text('prompt'), rewrite: body.rewrite === true, passage: text('passage'), choice: drawChoiceOf(body) }, cancelOnClose()))
     }
+    // 立绘 and 表情 take a { backend, model } of their own too (做成视觉小说 asks how to draw first).
     const spriteDraw = /^\/api\/cards\/([\w-]+)\/sprites\/([\w-]+)\/draw$/.exec(url.pathname)
     if (req.method === 'POST' && spriteDraw) {
-      await readBody(req)
-      return sendJson(res, 200, await scenes.drawSprite(spriteDraw[1], spriteDraw[2], cancelOnClose()))
+      const body = await readBody(req)
+      return sendJson(res, 200, await scenes.drawSprite(spriteDraw[1], spriteDraw[2], cancelOnClose(), drawChoiceOf(body)))
     }
     // 用辅助模型判断表情 (视觉小说): the helper labels a reply's lines.
     if (req.method === 'POST' && url.pathname === '/api/vn/expressions') {
@@ -1609,8 +1617,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     }
     const expressionDraw = /^\/api\/cards\/([\w-]+)\/sprites\/([\w-]+)\/expressions\/(\w+)\/draw$/.exec(url.pathname)
     if (req.method === 'POST' && expressionDraw) {
-      await readBody(req)
-      return sendJson(res, 200, await scenes.drawExpression(expressionDraw[1], expressionDraw[2], expressionDraw[3], cancelOnClose()))
+      const body = await readBody(req)
+      return sendJson(res, 200, await scenes.drawExpression(expressionDraw[1], expressionDraw[2], expressionDraw[3], cancelOnClose(), drawChoiceOf(body)))
     }
     const imageRoute = /^\/api\/chats\/([\w-]+)\/nodes\/([\w-]+)\/(image-prompt|image)$/.exec(url.pathname)
     if (req.method === 'POST' && imageRoute) {

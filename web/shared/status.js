@@ -37,6 +37,8 @@ export function joinPath(keys) {
 }
 
 /** A layout as saved, or null when there is nothing to show. */
+export const STATUS_THEMES = ['plain', 'paper', 'neon', 'pastel']
+
 export function cleanStatusSpec(raw) {
   if (!raw || typeof raw !== 'object' || !Array.isArray(raw.fields)) return null
   const seen = new Set()
@@ -54,7 +56,9 @@ export function cleanStatusSpec(raw) {
     }
     fields.push(out)
   }
-  return fields.some(f => f.show !== 'hidden') ? { title: str(raw.title, 40), fields } : null
+  // The look picked in 创作角色卡 (paper, neon, pastel); none = the plain one.
+  const theme = STATUS_THEMES.includes(raw.theme) && raw.theme !== 'plain' ? { theme: raw.theme } : {}
+  return fields.some(f => f.show !== 'hidden') ? { title: str(raw.title, 40), fields, ...theme } : null
 }
 
 // Names of 0–100 gauges in MVU cards: 好感度, 信任值, 体力, 欲望, HP… (a guess; other numbers stay numbers).

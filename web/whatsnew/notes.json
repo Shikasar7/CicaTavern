@@ -593,6 +593,57 @@
           }
         }
       ]
+    },
+    {
+      "version": "2.1.0",
+      "date": "2026-10",
+      "items": [
+        {
+          "image": "2.1.0-forge.webp",
+          "zh": {
+            "title": "创作角色卡，选得更细",
+            "text": "开始前的「卡的设定」按类别分组、可以组合：一个或几个主角、重世界观、角色性别、玩法（好感、成长、经营、倒计时、探索，可多选）、纯文本卡或 MVU 卡、状态栏样式。没想好就点「给我灵感」或「交给 Cica」。\n写卡在后台进行，有进度条，右下角小窗随时点回来。写完在打磨页拖动好感、天数这些数值，就能看到此时角色在哪个性格阶段、哪些事件会出现。"
+          },
+          "en": {
+            "title": "Card creation, with finer choices",
+            "text": "The card settings you pick before starting are grouped and can be combined: one or several leads, a rich world, the characters' gender, gameplay (bond, growth, management, countdown, exploration; pick any), a plain or MVU card, and the status bar style. Not sure yet? Try Give me ideas or Leave it to Cica.\nCards are written in the background with a progress bar, and a small window in the corner takes you back. When it is done, drag values like bond or days on the polish page to see which personality stage and which events apply."
+          }
+        },
+        {
+          "icon": "🎬",
+          "zh": {
+            "title": "做成视觉小说",
+            "text": "创作角色卡的打磨页和每张卡的「⋯」菜单里多了「做成视觉小说」：开一个新对话进入视觉小说模式，先选这一批用什么画，再让辅助模型列出角色名册，画立绘、表情和背景，一步步来，画之前说清要画多少张。\n新的「视觉小说预设」对白为主、旁白简明，更像 galgame；进入视觉小说模式时会问要不要改用。立绘取景也更稳：画成全身时只用头到大腿那一段。"
+          },
+          "en": {
+            "title": "Make it a visual novel",
+            "text": "The polish page and each card's ⋯ menu now have Make it a visual novel: a new chat in visual novel mode, then step by step you pick what to draw with, the helper model lists the cast, and sprites, expressions and backgrounds are drawn, with the count told before anything starts.\nThe new Visual novel preset is mostly dialogue with brief narration, more like a galgame, and is offered when you enter visual novel mode. Sprites are framed more reliably too: one drawn head to toe is shown from the thighs up."
+          }
+        },
+        {
+          "icon": "🗜️",
+          "zh": {
+            "title": "上下文压缩只剩一个百分比",
+            "text": "「上下文用到百分之几时压缩」，默认 70%，以前那个「最多几万 token」的上限去掉了。思考和联网中间的几次调用不再算进上下文，用量显示更准；角色卡和常驻世界书太大、压缩压不掉时会提醒你。\n有的中转会把系统提示（角色卡、预设）整个丢掉，模型等于没看到卡：现在能发现，自动换一种方式重发。"
+          },
+          "en": {
+            "title": "Context compaction: just a percentage",
+            "text": "Compact at what percentage of the context, 70% by default; the old cap of so many thousand tokens is gone. Thinking and the calls in between a web search no longer count as context, so usage reads truer, and you are told when the card and constant lorebook entries are too big for compaction to help.\nSome relays drop the system prompt (the card, the preset) entirely, so the model never sees the card: this is now noticed, and the request is sent again another way."
+          }
+        },
+        {
+          "recap": "2.0",
+          "image": "2.0.5-sprites.webp",
+          "zh": {
+            "title": "2.0 加了什么",
+            "text": "语音输入、抽图历史（重画了也能换回来）、正则集和你的角色按卡指定；上下文压缩的用量条和设置；立绘画幅、画风和 LoRA 用到视觉小说；ComfyUI 简单模式，导出的工作流直接能用；应用内更新后清理旧版本，Mac 测试版有了 dmg。"
+          },
+          "en": {
+            "title": "What 2.0 added",
+            "text": "Voice input, a drawing history (redraw and still go back), regex sets and your persona chosen per card; the context usage bar and compaction settings; sprite picture shape, style and LoRA used in the visual novel; ComfyUI simple mode, and exported workflows that just work; clearing old versions after an update, and a dmg for the Mac beta."
+          }
+        }
+      ]
     }
   ]
 }

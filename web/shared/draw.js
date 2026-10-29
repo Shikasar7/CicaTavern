@@ -42,7 +42,11 @@ export function drawChoices({ media = {}, providers = [], workflow = null, novel
       return method(Boolean(provider), 'provider', { provider: provider?.name ?? '', providerId: provider?.id ?? '', model: media.geminiImageModel ?? '', models: unique([media.geminiImageModel, ...GEMINI_IMAGE_MODELS, ...drawing(listed(provider))]) })
     }
     if (id === 'novelai') return method(novelai?.hasToken === true, 'token', { model: media.naiModel ?? '', models: unique([...NAI_MODEL_IDS, media.naiModel]) })
-    if (id === 'comfy') return method(Boolean(workflow), 'workflow')
+    // 简单模式 (a model picked from ComfyUI) draws without an imported workflow.
+    if (id === 'comfy') {
+      const simple = media.comfyMode === 'simple' && Boolean(media.comfyModel)
+      return method(simple || Boolean(workflow), 'workflow', simple ? { simple: true, model: media.comfyModel } : {})
+    }
     return method(saved || Boolean(media.sdUrl && media.sdUrl !== SD_DEFAULT), 'address')
   })
   const owned = own.map(item => {

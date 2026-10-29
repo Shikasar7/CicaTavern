@@ -12,8 +12,8 @@ export const NAI_MODELS = [
   ['nai-diffusion-4-5-full', 'V4.5 Full'],
   ['nai-diffusion-4-5-curated', 'V4.5 Curated'],
 ]
-const METHOD_TEXT = { openai: t`OpenAI 兼容图片接口（gpt-image 等）`, gemini: t`Gemini 原生生图`, novelai: 'NovelAI', comfy: t`ComfyUI 工作流`, sdwebui: 'SD WebUI / Forge' }
-const NEED_TEXT = { provider: t`还没选供应商`, token: t`还没填令牌`, workflow: t`还没导入工作流`, address: t`还没设地址` }
+const METHOD_TEXT = { openai: t`OpenAI 兼容图片接口（gpt-image 等）`, gemini: t`Gemini 原生生图`, novelai: 'NovelAI', comfy: 'ComfyUI', sdwebui: 'SD WebUI / Forge' }
+const NEED_TEXT = { provider: t`还没选供应商`, token: t`还没填令牌`, workflow: t`还没设置：导入工作流，或者在简单模式里选模型`, address: t`还没设地址` }
 const naiName = id => NAI_MODELS.find(([value]) => value === id)?.[1] ?? id
 
 /** "NovelAI · V5 Full", "gpt-image-1": how a picked drawing is named while it runs. */
@@ -42,7 +42,8 @@ export function initDrawChoice({ api, el, guard, openSettings }) {
    * { body, label } (body {} = as the settings say; label for the waiting
    * frame), or null when closed without drawing.
    */
-  async function pick({ title, action = t`画`, note = '' } = {}) {
+  /** @param options.batch - for several pictures (做成视觉小说): the note says so. */
+  async function pick({ title, action = t`画`, note = '', batch = false } = {}) {
     const choices = await load()
     dialog ??= document.body.appendChild(el('dialog', { class: 'dialog draw-choice', 'aria-label': t`这一张怎么画` }))
     const chosen = startingChoice(choices)
@@ -63,7 +64,7 @@ export function initDrawChoice({ api, el, guard, openSettings }) {
           // replaceChildren prints a null as text: leave the empty ones out.
           return modelBox.replaceChildren(...[method.models.length ? el('label', { class: 'dc-field' }, [el('span', { text: t`模型` }), select]) : null, method.hint ? el('p', { class: 'hint', text: method.hint }) : null].filter(Boolean))
         }
-        if (method.id === 'comfy') return modelBox.replaceChildren(el('p', { class: 'hint', text: t`用导入的 ComfyUI 工作流画，模型在工作流里。` }))
+        if (method.id === 'comfy') return modelBox.replaceChildren(el('p', { class: 'hint', text: method.simple ? t`用 ComfyUI 简单模式画，模型是设置里选的 ${method.model}。` : t`用导入的 ComfyUI 工作流画，模型在工作流里。` }))
         if (method.id === 'sdwebui') return modelBox.replaceChildren(el('p', { class: 'hint', text: t`用 SD WebUI 里当前加载的模型画。` }))
         if (method.id === 'novelai') {
           const select = el('select', { 'aria-label': t`模型`, onchange: () => (chosen.model = select.value) }, method.models.map(id => el('option', { value: id, text: id === method.model ? t`${naiName(id)}（设置里的）` : naiName(id), selected: id === chosen.model })))
@@ -105,7 +106,7 @@ export function initDrawChoice({ api, el, guard, openSettings }) {
         note ? el('p', { class: 'hint', text: note }) : null,
         el('fieldset', { class: 'dc-methods' }, [el('legend', { text: t`画图方式` }), ...methods]),
         modelBox,
-        el('p', { class: 'hint', text: t`只用于这一张，不改「配图与朗读」里的设置。` }),
+        el('p', { class: 'hint', text: batch ? t`只用于这一批，不改「配图与朗读」里的设置。` : t`只用于这一张，不改「配图与朗读」里的设置。` }),
         el('div', { class: 'row end' }, [
           el('button', { type: 'button', class: 'btn ghost small dc-setup', text: t`设置画图方式…`, onclick: () => { finish(null); openSettings?.('image') } }),
           el('span', { class: 'grow' }),

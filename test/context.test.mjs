@@ -25,22 +25,26 @@ test('context windows: the table by model id (vendor prefixes ignored), what was
   assert.deepEqual(windowOf('relay/odd-model', { settings, learned: { 'odd-model': 64_000 } }), { tokens: 50_000, source: 'set' })
 })
 
-test('the threshold: 70 % of the window, at most 150K, always with room for one more turn and the archive', () => {
-  assert.equal(thresholdFor(1_000_000, null), 150_000)
+test('the threshold: 70 % of the window, always with room for one more turn and the archive', () => {
+  // One number: a 1M model compacts at 700K (a 150K cap used to decide it, whatever the share said).
+  assert.equal(thresholdFor(1_000_000, null), 700_000)
+  assert.equal(thresholdFor(1_000_000, { percent: 90 }), 850_000, 'the room below the window still kept')
   assert.equal(thresholdFor(128_000, null), 89_600)
   assert.equal(thresholdFor(32_768, null), 22_938)
   // A small window keeps its reserve whatever the share says.
   assert.equal(thresholdFor(16_000, null), 8_000)
   assert.equal(thresholdFor(16_000, { percent: 95 }), 8_000)
-  assert.equal(thresholdFor(1_000_000, { percent: 50, cap: 0 }), 500_000, 'no cap')
-  assert.deepEqual(cleanCompaction(null), { auto: true, percent: 70, cap: 150_000, windows: {} })
-  assert.deepEqual(cleanCompaction({ auto: false, percent: 120, cap: '0', windows: { a: 500, b: '64000' } }), { auto: false, percent: 95, cap: 0, windows: { b: 64_000 } })
+  assert.equal(thresholdFor(1_000_000, { percent: 50, cap: 150_000 }), 500_000, 'a cap saved before is no longer one')
+  assert.deepEqual(cleanCompaction(null), { auto: true, percent: 70, windows: {} })
+  assert.deepEqual(cleanCompaction({ auto: false, percent: 120, cap: 150_000, windows: { a: 500, b: '64000' } }), { auto: false, percent: 95, windows: { b: 64_000 } })
 })
 
 test('what a reply\'s turn held: the whole input, cached or not, and the reply', () => {
   assert.equal(contextUsed({ usage: { input: 40, cacheRead: 60, cacheWrite: 0, output: 7 } }), 107)
   assert.equal(contextUsed({ usage: { input: 5, cacheRead: 70, cacheWrite5m: 20, cacheWrite1h: 10, output: 11 } }), 116)
   assert.equal(contextUsed({}), 0)
+  // The last call's input (联网: a paused reply sent back again is billed twice, held once) and the reply without its thinking.
+  assert.equal(contextUsed({ usage: { input: 900, cacheRead: 180_000, cacheWrite: 0, output: 12_000, prompt: 90_400, thinking: 10_000 } }), 92_400)
 })
 
 test('context-full errors: the wordings providers use, and the limit when they name it', () => {

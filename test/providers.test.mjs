@@ -35,7 +35,7 @@ const KEY = 'sk-test-1234567890abcd'
 /** A provider that speaks all three protocols and records each request. */
 async function fakeProvider(t) {
   const requests = []
-  const flags = { rejectTtl: false, rejectReasoning: false, maxOutput: 0, contextLimit: 0, stopReason: 'end_turn', promptTokens: 100, summaryText: '', contextMessage: '' }
+  const flags = { rejectTtl: false, rejectReasoning: false, maxOutput: 0, contextLimit: 0, stopReason: 'end_turn', promptTokens: 100, summaryText: '', contextMessage: '', dropSystem: false, lateUsage: false, thinking: '' }
   let count = 0
   const server = createServer(async (req, res) => {
     let body = ''
@@ -86,10 +86,18 @@ async function fakeProvider(t) {
       send({ type: 'response.output_text.delta', delta: text.slice(half) }, 'response.output_text.delta')
       send({ type: 'response.completed', response: { model: json.model, status: 'completed', usage: { input_tokens: 50, input_tokens_details: { cached_tokens: 20 }, output_tokens: 9 } } }, 'response.completed')
     } else if (req.url === '/v1/messages') {
-      send({ type: 'message_start', message: { model: json.model, usage: { input_tokens: 5, cache_read_input_tokens: 70, cache_creation_input_tokens: 30, output_tokens: 1 } } }, 'message_start')
+      // dropSystem: a relay that loses the system field (its input then counts the messages alone).
+      // lateUsage: one that counts nothing until message_delta (all zeros at the start).
+      const lost = flags.dropSystem && json.system
+      const counts = lost ? { input_tokens: 20 } : { input_tokens: 5, cache_read_input_tokens: flags.dropSystem ? 4000 : 70, cache_creation_input_tokens: 30 }
+      send({ type: 'message_start', message: { model: json.model, usage: flags.lateUsage ? { input_tokens: 0, output_tokens: 0 } : { ...counts, output_tokens: 1 } } }, 'message_start')
+      if (flags.thinking) {
+        send({ type: 'content_block_start', index: 1, content_block: { type: 'thinking', thinking: '' } }, 'content_block_start')
+        send({ type: 'content_block_delta', index: 1, delta: { type: 'thinking_delta', thinking: flags.thinking } }, 'content_block_delta')
+      }
       send({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: text.slice(0, half) } }, 'content_block_delta')
       send({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: text.slice(half) } }, 'content_block_delta')
-      send({ type: 'message_delta', delta: { stop_reason: flags.stopReason }, usage: { output_tokens: 11 } }, 'message_delta')
+      send({ type: 'message_delta', delta: { stop_reason: flags.stopReason }, usage: { ...(flags.lateUsage ? counts : {}), output_tokens: flags.thinking ? 1000 : 11 } }, 'message_delta')
       send({ type: 'message_stop' }, 'message_stop')
     }
     res.end()
@@ -395,6 +403,73 @@ test('Anthropic 1-hour cache: ttl on both breakpoints, resent without it when a 
   assert.deepEqual(retried.body.system[0].cache_control, { type: 'ephemeral' })
   assert.match(activePath(chat).at(-1).text, /第 2 次回复/)
   assert.equal(normalizeProvider({ ...provider, cacheTtl: 'forever' }, provider).cacheTtl, '5m')
+})
+
+test('Anthropic API with another model behind it: plain system prompt and messages, no breakpoints', async t => {
+  // A relay serving deepseek-v4.1-flash this way dropped the system prompt when the newest message came as marked blocks.
+  const fake = await fakeProvider(t)
+  const provider = normalizeProvider({ name: 'Relay', api: 'anthropic-messages', baseURL: fake.baseURL, apiKey: KEY, models: [{ id: 'deepseek-v4.1-flash' }] })
+  await complete(provider, 'deepseek-v4.1-flash', { system: '暗号是青梅煮酒', messages: [{ role: 'user', content: '暗号是什么？' }] })
+  const body = fake.requests.at(-1).body
+  assert.equal(body.system, '暗号是青梅煮酒')
+  assert.equal(body.messages[0].content, '暗号是什么？')
+})
+
+test('a relay that drops the system prompt: asked again at once with it in the first message, and so from then on', async t => {
+  const fake = await fakeProvider(t)
+  fake.flags.dropSystem = true
+  const provider = normalizeProvider({ name: 'Relay', api: 'anthropic-messages', baseURL: fake.baseURL, apiKey: KEY, models: [{ id: 'claude-x' }] })
+  const system = '你是角色卡共创向导。'.repeat(200)
+  const shown = []
+  const result = await complete(provider, 'claude-x', { system, messages: [{ role: 'user', content: '我的想法：雨夜' }], onDelta: text => shown.push(text) })
+  const [lost, again] = fake.requests.slice(-2)
+  assert.equal(lost.body.system[0].text, system)
+  assert.equal(again.body.system, undefined)
+  const first = again.body.messages[0].content
+  assert.match(typeof first === 'string' ? first : first[0].text, /^<system>\n你是角色卡共创向导。[\s\S]*<\/system>\n\n我的想法：雨夜$/)
+  assert.match(result.text, /次回复/)
+  // Nothing of the lost answer showed: the check comes before any text.
+  assert.equal(shown.join('').split('次回复').length, 2)
+  assert.equal(fake.requests.length, 2)
+  await complete(provider, 'claude-x', { system, messages: [{ role: 'user', content: '再来' }] })
+  assert.equal(fake.requests.length, 3, 'straight to the first message now')
+  assert.equal(fake.requests.at(-1).body.system, undefined)
+})
+
+test('a relay that counts nothing until the end: the lost system prompt shows after the text; asked again when the shown text can be taken back', async t => {
+  const fake = await fakeProvider(t)
+  Object.assign(fake.flags, { dropSystem: true, lateUsage: true })
+  const provider = normalizeProvider({ name: 'Relay', api: 'anthropic-messages', baseURL: fake.baseURL, apiKey: KEY, models: [{ id: 'claude-late' }, { id: 'claude-late-2' }] })
+  const system = '你是角色卡共创向导。'.repeat(200)
+  let shown = ''
+  const restarts = []
+  const result = await complete(provider, 'claude-late', { system, messages: [{ role: 'user', content: '我的想法：雨夜' }], onDelta: text => (shown += text), onRestart: () => { restarts.push(shown); shown = '' } })
+  assert.equal(fake.requests.length, 2)
+  assert.equal(restarts.length, 1)
+  assert.ok(restarts[0].length > 0, 'the lost answer had shown')
+  assert.equal(shown, result.text, 'only the second answer is left on screen')
+  assert.equal(fake.requests.at(-1).body.system, undefined)
+  assert.equal(result.usage.prompt, 4035, 'the context is the second call\'s')
+  assert.equal(result.usage.input, 25, 'both calls are billed')
+  // No way to take it back: the answer stands, and the next request goes with the system prompt in the first message.
+  const kept = await complete(provider, 'claude-late-2', { system, messages: [{ role: 'user', content: '雨夜' }], onDelta: () => {} })
+  assert.equal(fake.requests.length, 3)
+  assert.ok(kept.text)
+  await complete(provider, 'claude-late-2', { system, messages: [{ role: 'user', content: '再来' }] })
+  assert.equal(fake.requests.length, 4)
+  assert.equal(fake.requests.at(-1).body.system, undefined)
+})
+
+test('usage keeps each call\'s prompt and the thinking in output: neither is context next turn', async t => {
+  const fake = await fakeProvider(t)
+  const provider = normalizeProvider({ name: 'Relay', api: 'anthropic-messages', baseURL: fake.baseURL, apiKey: KEY, models: [{ id: 'claude-x' }] })
+  const plain = await complete(provider, 'claude-x', { system: '短', messages: [{ role: 'user', content: '你好' }] })
+  assert.equal(plain.usage.prompt, 105)
+  assert.equal(plain.usage.thinking, undefined)
+  // Thinking nine times the answer's length: about nine tenths of output_tokens.
+  fake.flags.thinking = '想'.repeat(9 * 20)
+  const thought = await complete(provider, 'claude-x', { system: '短', messages: [{ role: 'user', content: '你好' }] })
+  assert.ok(thought.usage.thinking > 800 && thought.usage.thinking < 1000, String(thought.usage.thinking))
 })
 
 test('an empty system prompt is left out in every protocol (Anthropic refuses an empty text block)', async t => {

@@ -27,6 +27,30 @@ test('names: a card name before its subtitle, the player, the cast and their ali
   ])
 })
 
+test('names: a family name first (宫凪 枫) is called by the given name where it stands alone, and a sister stays her own', () => {
+  const cast = speakerNames({
+    char: '宫凪 枫',
+    user: 'Natsu',
+    roster: [
+      { id: 'k', name: '宫凪', kind: 'girl' },
+      { id: 's', name: '宫凪 樱', aliases: '小樱、樱', kind: 'girl' },
+    ],
+  })
+  assert.deepEqual(cast.map(entry => [entry.name, entry.id, entry.keys, entry.marks ?? []]), [
+    ['宫凪', 'k', ['宫凪 枫', '宫凪', '宫凪枫'], ['枫']],
+    ['Natsu', undefined, ['Natsu'], []],
+    ['宫凪 樱', 's', ['宫凪 樱', '宫凪', '宫凪樱', '小樱'], ['樱']],
+  ])
+  const said = text => splitLines(text, { names: cast }).map(b => [b.plain, b.speaker])
+  assert.deepEqual(said('【枫|微笑】「都贴牢了的话，就没有什么可拖延的了。」\n【樱|开心】「姐姐！」'), [
+    ['「都贴牢了的话，就没有什么可拖延的了。」', '宫凪'],
+    ['「姐姐！」', '宫凪 樱'],
+  ])
+  // A one-character alias set in the roster works the same; in running text it is not looked for (枫叶 is no one).
+  const aliased = speakerNames({ char: '神社', roster: [{ id: 'k', name: '宫凪', aliases: '枫' }] })
+  assert.deepEqual(splitLines('枫叶落了一地。\n\n【枫|微笑】「来了。」', { names: aliased }).map(b => b.speaker), [null, '宫凪'])
+})
+
 test('beats: narration alone, a quote with its lead-in, short narration after the last quote stays with it', () => {
   assert.deepEqual(beats('雨下了一整夜。\n\n林青禾推开门：「你来了。」她笑了笑。'), [
     ['narration', '雨下了一整夜。', null],

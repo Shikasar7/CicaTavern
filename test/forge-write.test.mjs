@@ -9,7 +9,7 @@ import YAML from 'yaml'
 import { normalizeCard, parseCardFile, readPngText, writeCardPng } from '../server/cards.mjs'
 import { createForge } from '../server/forge/index.mjs'
 import { cleanVariables, editTracking, normalizePlan } from '../server/forge/prompts.mjs'
-import { applyIssues, cardJson, lintText, newCard, readTagged, retrack, stateContent } from '../server/forge/write.mjs'
+import { applyIssues, cardJson, chineseText, lintText, matchWritten, newCard, readTagged, retrack, stateContent } from '../server/forge/write.mjs'
 import { statusSpecOf } from '../server/forge/status.mjs'
 import { rangeOf } from '../web/shared/status.js'
 import { normalizeProvider } from '../server/providers.mjs'
@@ -126,12 +126,33 @@ test('the local check finds stock phrasing but leaves the user\'s own words alon
   const card = { entries: [{ name: '世界设定', content: '雨夜仿佛很长' }], greetings: [{ text: '门开了' }] }
   const left = applyIssues(card, [{ target: '世界设定', original: '仿佛', suggestion: '' }, { target: '开场白1', original: '没有这句', suggestion: 'x' }])
   assert.equal(card.entries[0].content, '雨夜很长')
+  // A cut leaves no stray comma before the full stop.
+  const seam = { entries: [], greetings: [{ text: '她的声音很轻，像要散掉。' }] }
+  applyIssues(seam, [{ target: '开场白1', original: '像要散掉', suggestion: '' }])
+  assert.equal(seam.greetings[0].text, '她的声音很轻。')
+  // A suggestion that repeats the words next to it leaves them once, in that sentence only; a repeat meant elsewhere stays.
+  const echo = { entries: [{ name: '甲', content: '他走一步，停一步，走一步，停一步。她盯着你，像要看穿什么，眨眼变少。' }], greetings: [] }
+  applyIssues(echo, [{ target: '甲', original: '像要看穿什么', suggestion: '盯着你' }])
+  assert.equal(echo.entries[0].content, '他走一步，停一步，走一步，停一步。她盯着你，眨眼变少。')
+
   assert.deepEqual([...left.keys()], ['开场白1'])
   // A suggestion goes in as written: $' and $$ are just characters.
   const literal = { entries: [{ name: '甲', content: '她笑了——然后走开。' }], greetings: [] }
   applyIssues(literal, [{ target: '甲', original: '——', suggestion: "$'$$" }])
   assert.equal(literal.entries[0].content, "她笑了$'$$然后走开。")
   assert.deepEqual(Object.fromEntries(readTagged('<entry name="A 「甲」">一\n</entry><entry name="B">二', 'entry')), { A甲: '一', B: '二' })
+  // A name with what the entry is for after it still finds its entry; another entry's name with a number does not.
+  const blocks = readTagged('<entry name="角色速览：谁是谁">甲</entry><entry name="樱井商事 2">乙</entry>', 'entry')
+  assert.deepEqual([...matchWritten(blocks, ['角色速览', '樱井商事', '樱井商事 2'])], [['角色速览', '甲'], ['樱井商事 2', '乙']])
+})
+
+test('Chinese text keeps Chinese punctuation; other text, and lines with no Chinese, stay as written', () => {
+  assert.equal(chineseText('她抬起头。\n\n"你怎么进来了。"\n\n手链松了,珠子掉在床上...她问:你是谁?'), '她抬起头。\n\n“你怎么进来了。”\n\n手链松了，珠子掉在床上……她问：你是谁？')
+  assert.equal(chineseText('林晚星.信任值: 10, "range": "0~100"'), '林晚星.信任值: 10, "range": "0~100"')
+  assert.equal(chineseText('"Hello," she said.'), '"Hello," she said.')
+  // No space beside the player's name in Chinese: 「你 推开门」 once the name is 你.
+  assert.equal(chineseText('灯亮了， <user> 站在门前。她看着 <user>，没说话。\n<user> 推开门。\nI saw <user> there.'), '灯亮了，<user>站在门前。她看着<user>，没说话。\n<user>推开门。\nI saw <user> there.')
+  assert.equal(chineseText('他说"好",然后走了', 'English'), '他说"好",然后走了')
 })
 
 test('the card as SillyTavern reads it: V3 with its book in order, wrapped entries, update-hiding regex', () => {

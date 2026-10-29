@@ -16,6 +16,19 @@ export const BASIC_FIELDS = [
   { key: 'statusBar', label: t`状态栏`, hint: t`卡里有变量、但没有自带状态栏时，按变量自动排一个。只影响显示，马上生效。`, values: [['off', t`关`], ['auto', t`自动`]], prompt: false },
 ]
 
+// The visual novel preset (视觉小说预设): its own options first, then the built-in preset's.
+export const VN_FIELDS = [
+  { key: 'dialogue', label: t`对白`, hint: t`对白多一些，角色靠说话表现性格和关系；台本式几乎全是对白。`, values: [['more', t`为主`], ['most', t`台本式`], ['balanced', t`各半`]] },
+  { key: 'narration', label: t`旁白`, hint: t`简明：每段一两句，只写看得见的动作和表情；极简：一句话提示，像游戏文字框。`, values: [['brief', t`简明`], ['minimal', t`极简`], ['normal', t`不限`]] },
+  { key: 'scenery', label: t`场景描写`, hint: t`点到为止：换地点时一两句带过，画面交给背景图，不反复描写环境。`, values: [['brief', t`点到为止`], ['normal', t`不限`]] },
+  { key: 'paging', label: t`段落`, hint: t`短段：一段一个动作或一句台词，在文字框里一句一句点着读更顺。`, values: [['short', t`短段`], ['normal', t`不限`]] },
+  { key: 'flavor', label: t`展开方式`, hint: t`恋爱冒险（galgame）：日常小事件推动关系；文字冒险：线索、悬念和抉择推动剧情。`, values: [['auto', t`跟随卡`], ['galgame', t`恋爱冒险`], ['adventure', t`文字冒险`]] },
+  ...BASIC_FIELDS,
+]
+
+/** A built-in preset's fields: the visual novel one's, else the basic one's. */
+export const fieldsOf = id => (id === 'vn' ? VN_FIELDS : BASIC_FIELDS)
+
 /**
  * One option as a row of buttons. `onPick(key, value)` saves it; the row
  * marks the new value at once.

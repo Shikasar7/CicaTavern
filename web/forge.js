@@ -23,7 +23,80 @@ const STEPS = [
   ['write', t`动笔`],
   ['polish', t`打磨与头像`],
 ]
-const IDEAS = [t`雨夜便利店里遇到的神秘女孩，氛围安静一点`, t`修仙宗门里嘴硬心软的师姐`, t`末日废土上陪我赶路的旧型机器人`, t`民国旧宅的侦探事务所，我是新来的助手`]
+// Examples to start from, by kind of card; 换一批 draws four (from all of them while the kind is not said).
+const EXAMPLES = {
+  single: [
+    t`雨夜便利店里遇到的神秘女孩，氛围安静一点`,
+    t`修仙宗门里嘴硬心软的师姐`,
+    t`末日废土上陪我赶路的旧型机器人`,
+    t`每天同一班末班车上，坐在对面看书的人`,
+    t`被我从河边捡回家、不肯说出来历的少年`,
+    t`古董钟表店里，修了一百年钟的店主`,
+    t`我的新室友，好像不太会当人类`,
+    t`宫里新来的女官，奉命盯着失宠的我`,
+  ],
+  ensemble: [
+    t`民国旧宅的侦探事务所，我是新来的助手`,
+    t`乐队解散前的最后一个夏天，四个人各怀心事`,
+    t`山间温泉旅馆，三姐妹和突然上门的继承人`,
+    t`王立魔法学院的问题班级，我是新来的班主任`,
+    t`一艘深空货船上的五个船员，和一个偷渡客`,
+    t`江湖客栈里的掌柜、厨子和跑堂，都有一段过去`,
+    t`社团活动室里，三个总也凑不齐人的推理社成员`,
+  ],
+  world: [
+    t`浮空群岛之间跑货的飞艇，我是新雇的领航员`,
+    t`一座每晚都会重排街道的城市`,
+    t`灵气复苏后的现代都市，我刚觉醒了没用的能力`,
+    t`深海殖民站断了联络的第七天`,
+    t`妖怪和人类混住的老商店街，我继承了一家杂货铺`,
+    t`王朝末年的边关小城，三方势力都在等一封信`,
+    t`被大雪封住的山中修道院，有人在夜里敲钟`,
+  ],
+  game: [
+    t`三十天里攒够赎身的钱，从花街逃出去`,
+    t`经营一家快倒闭的异世界酒馆，每天结一次账`,
+    t`末日避难所的所长，食物、人心和外面的威胁`,
+    t`从外门杂役开始修炼，有境界、灵石和宗门声望`,
+    t`恋爱模拟：一个学期，四个可以攻略的人`,
+    t`地下城探索：每层一个房间，血量、背包和线索`,
+    t`宫斗：从答应一路往上，宠爱、位份和人脉`,
+  ],
+}
+const examplesFor = kind => (EXAMPLES[kind] ?? Object.values(EXAMPLES).flat())
+/** Four examples of a kind at random, not the ones shown just now where there are enough. */
+function drawExamples(kind, shown = []) {
+  const pool = examplesFor(kind)
+  const fresh = pool.filter(text => !shown.includes(text))
+  const from = fresh.length >= 4 ? fresh : pool
+  return [...from].sort(() => Math.random() - 0.5).slice(0, 4)
+}
+// The picks about the card before talking (server/forge/prompts.mjs CARD_CHOICES), in groups that combine.
+// one: a single value ('' = not said, the guide goes by the talk); many: any of them; flag: on or off.
+const OPTION_GROUPS = [
+  { key: 'cast', kind: 'one', label: t`人物`, values: [['', t`不定`], ['single', t`一个主角`], ['ensemble', t`几个主角（群像）`]], hint: t`群像：两到四个主要角色，各有目的，彼此之间也有关系。` },
+  { key: 'world', kind: 'flag', label: t`世界观`, values: [[false, t`不强调`], [true, t`重世界观`]], hint: t`地点、势力、规则写得具体，模型兼任叙述者，适合冒险、探索、模拟。可以和群像、玩法一起选。` },
+  { key: 'gender', kind: 'one', label: t`角色性别`, values: [['', t`不限`], ['female', t`女性`], ['male', t`男性`], ['mixed', t`男女都有`]], hint: t`核心角色的性别；给我灵感和交给 Cica 也按它来。` },
+  { key: 'play', kind: 'many', label: t`玩法`, values: [['bond', t`好感与关系阶段`], ['growth', t`成长与能力`], ['resources', t`经营与资源`], ['countdown', t`倒计时与事件`], ['explore', t`探索与线索`]], hint: t`可多选。每种玩法记录对应的数值：好感和信任（性格随它分阶段）、等级和修为、金钱和物资、剩余天数、解锁的地点和线索。` },
+  { key: 'format', kind: 'one', label: t`格式`, values: [['', t`向导定`], ['text', t`纯文本卡`], ['mvu', t`MVU 变量卡`], ['mvu-ui', t`MVU + 美化状态栏`]], hint: t`纯文本：不记录数值。MVU：记录数值，每条回复下面有状态栏。美化状态栏：在 SillyTavern 里也显示成好看的面板（要装酒馆助手）。` },
+  { key: 'statusTheme', kind: 'one', label: t`状态栏样式`, values: [['plain', t`简洁`], ['paper', t`古风纸笺`], ['neon', t`赛博霓虹`], ['pastel', t`柔和手账`]], when: options => options.format === 'mvu-ui' },
+]
+const NO_OPTIONS = { cast: '', world: false, gender: '', play: [], format: '', statusTheme: 'plain' }
+/** The examples that fit the picks (EXAMPLES is by the old kinds). */
+const exampleKind = options => (options.play?.length || options.format.startsWith('mvu') ? 'game' : options.world ? 'world' : options.cast || '')
+/** The picks in a few words, for the sketch's folded row. */
+function optionsSummary(options) {
+  const words = OPTION_GROUPS.flatMap(group => {
+    if (group.when && !group.when(options)) return []
+    const value = options[group.key]
+    if (group.kind === 'many') return value.map(v => group.values.find(([key]) => key === v)?.[1]).filter(Boolean)
+    if (group.kind === 'flag') return value ? [group.values[1][1]] : []
+    return value && !(group.key === 'statusTheme' && value === 'plain') ? [group.values.find(([key]) => key === value)?.[1]].filter(Boolean) : []
+  })
+  return words.length ? words.join(t`、`) : t`都交给向导`
+}
+// 出三版来挑: the angle each version takes (server/forge/prompts.mjs PLAN_ANGLES).
+const PLAN_ANGLE = { close: t`贴着聊的来`, bold: t`更大胆`, shift: t`换个切入` }
 // The cliché checks' names (server/forge/write.mjs LINT), which the draft keeps in Chinese.
 const LINT_TEXT = new Map([
   [zh`破折号`, t`破折号`], [zh`模糊词`, t`模糊词`], [zh`表情套话`, t`表情套话`], [zh`声线套话`, t`声线套话`],
@@ -95,10 +168,10 @@ export async function pngOf(url) {
 }
 
 /**
- * @param deps - { api, el, toast, guard, openProviders, onCardSaved, startChatWith,
+ * @param deps - { api, el, toast, guard, openProviders, onCardSaved, startChatWith, makeVisualNovel(cardId, places),
  *   pickDraw(options) (web/draw-choice.js: the 画图方式 and model for the avatar) }
  */
-export function initForge({ api, el, toast, guard, openProviders, onCardSaved, startChatWith, pickDraw }) {
+export function initForge({ api, el, toast, guard, openProviders, onCardSaved, startChatWith, makeVisualNovel, pickDraw, onClosed }) {
   const $ = id => document.getElementById(id)
   const dialog = $('forge-dialog')
   const state = {
@@ -112,6 +185,13 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
     notes: new Map(), // plan section → comment
     planText: '',
     idea: '',
+    options: { ...NO_OPTIONS }, // the home view's picks for a new draft (OPTION_GROUPS)
+    ideas: [], // 给我灵感: the batch shown
+    ideasSeen: [], // titles shown so far, for 换一批 to bring new ones
+    ideasBusy: false,
+    examples: null, // the examples shown before any ideas (drawExamples)
+    cicaBusy: false, // 交给 Cica: one idea being thought of
+    previewValues: {}, // 数值预览: draft id → path → value where the sliders are
     homeModel: '',
     poll: null,
     shown: '', // what the main area last showed, to re-render only on change
@@ -152,6 +232,7 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
     view.pickCount = el('span', { class: 'forge-count' })
     view.undo = el('button', { type: 'button', class: 'btn ghost small', text: t`撤回上一轮`, title: t`去掉你上一次的回答和向导对它的回复`, onclick: () => undo() })
     view.toPlan = el('button', { type: 'button', class: 'btn', text: t`差不多了，出方案`, onclick: () => makePlan() })
+    view.toPlans = el('button', { type: 'button', class: 'btn ghost', text: t`出三版来挑`, title: t`同一段讨论写出三版方案：贴着聊的、更大胆的、换个切入的，挑一版再改。花的额度和时间多一些。`, onclick: () => makePlan(true) })
     view.send = el('button', { type: 'button', class: 'btn primary', text: t`继续聊`, onclick: () => send() })
     view.back = el('button', { type: 'button', class: 'btn ghost', text: t`回去接着聊`, onclick: () => setStage('discuss') })
     view.revise = el('button', { type: 'button', class: 'btn', text: t`按意见修改方案`, onclick: () => revise() })
@@ -160,10 +241,11 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
     view.toPlanBack = el('button', { type: 'button', class: 'btn ghost', text: t`回到方案`, onclick: () => setStage('plan') })
     view.saved = el('span', { class: 'forge-count' })
     view.chat = el('button', { type: 'button', class: 'btn', text: t`开始对话`, onclick: () => startChat() })
+    view.vn = el('button', { type: 'button', class: 'btn', text: t`做成视觉小说`, title: t`保存这张卡，开一个新对话进入视觉小说模式：选画图方式，备齐角色名册、立绘和表情，再给方案里的地点画背景`, onclick: () => startVn() })
     view.png = el('a', { class: 'btn', text: t`导出 PNG`, title: t`图片里带着整张卡，SillyTavern 可以直接导入` })
     view.save = el('button', { type: 'button', class: 'btn primary', text: t`保存为角色卡`, onclick: () => saveCard() })
-    view.polishFoot = el('div', { class: 'forge-foot' }, [el('div', { class: 'forge-actions' }, [view.toPlanBack, el('span', { class: 'grow' }), view.saved, view.png, view.chat, view.save])])
-    view.discussFoot = el('div', { class: 'forge-foot' }, [view.composer, el('div', { class: 'forge-actions' }, [view.pickCount, el('span', { class: 'grow' }), view.undo, view.toPlan, view.send])])
+    view.polishFoot = el('div', { class: 'forge-foot' }, [el('div', { class: 'forge-actions' }, [view.toPlanBack, el('span', { class: 'grow' }), view.saved, view.png, view.vn, view.chat, view.save])])
+    view.discussFoot = el('div', { class: 'forge-foot' }, [view.composer, el('div', { class: 'forge-actions' }, [view.pickCount, el('span', { class: 'grow' }), view.undo, view.toPlans, view.toPlan, view.send])])
     view.planFoot = el('div', { class: 'forge-foot' }, [view.planText, el('div', { class: 'forge-actions' }, [view.back, el('span', { class: 'grow' }), view.rewriteAll, view.revise, view.write])])
     view.body = el('div', { class: 'forge-body' }, [view.main, view.sketch])
     dialog.replaceChildren(
@@ -191,6 +273,8 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
   function apply(draft) {
     const before = state.draft
     state.draft = draft
+    // A job started or going on: watched, so the chip shows once the dialog is closed (however it closes).
+    if (draft.job && !background.timer) watchBackground()
     // A new round, or the same round answered again (换一组问题): new questions, fresh picks.
     const round = `${draft.id}:${draft.rounds.length}:${draft.rounds.at(-1)?.assistant?.at ?? ''}`
     if (state.picksFor !== round) {
@@ -299,6 +383,7 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
     const key = mainKey(draft)
     if (key === state.shown) {
       if (draft?.job && state.busy?.working.isConnected) keepScroll(() => fillBusy(draft.job), draft.stage === 'discuss')
+      if (draft?.job && state.writeClock?.isConnected) state.writeClock.textContent = state.writeClock.dataset.prefix + elapsed(draft.job.startedAt)
       return
     }
     // A different draft or stage starts at its top (the talk at its newest round).
@@ -340,11 +425,45 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
         el('button', { type: 'button', class: 'btn ghost small danger', text: t`删除`, onclick: event => { event.stopPropagation(); removeDraft(d) } }),
       ]),
     )
+    const fill = text => {
+      state.idea = idea.value = text
+      idea.focus()
+    }
+    const kinds = optionsPanel(state.options, next => {
+      const kindBefore = exampleKind(state.options)
+      state.options = next
+      if (exampleKind(next) !== kindBefore) state.examples = null
+      redrawHome()
+    })
+    const ideas = state.ideas.length
+      ? state.ideas.map(item => el('button', { type: 'button', class: 'forge-idea-card', onclick: () => fill(t`${item.title}：${item.pitch}`) }, [
+          el('b', { text: item.title }),
+          el('span', { text: item.pitch }),
+          item.tags.length ? el('span', { class: 'chips' }, item.tags.map(tag => el('span', { class: 'chip quiet', text: tag }))) : null,
+        ]))
+      : [
+          ...(state.examples ??= drawExamples(exampleKind(state.options))).map(text => el('button', { type: 'button', class: 'chip', text, onclick: () => fill(text) })),
+          el('button', { type: 'button', class: 'chip quiet', text: t`换一批`, title: t`从现成的例子里另抽几个`, onclick: () => {
+            state.examples = drawExamples(exampleKind(state.options), state.examples)
+            redrawHome()
+          } }),
+        ]
     return el('div', { class: 'forge-home' }, [
       el('h3', { class: 'forge-hero', text: t`想要一张什么样的卡？` }),
       el('p', { class: 'forge-lead', text: t`一句话就够。说不清楚也没关系：向导会一轮轮给你几个具体的选择，每个选项都附一句试读，凭感觉挑，慢慢就聊清楚了。` }),
+      el('details', { class: 'forge-kind', open: state.optionsOpen !== false, ontoggle: event => (state.optionsOpen = event.target.open) }, [
+        el('summary', {}, [el('span', { text: t`卡的设定` }), el('span', { class: 'hint', text: optionsSummary(state.options) })]),
+        kinds,
+      ]),
       idea,
-      el('div', { class: 'forge-ideas' }, IDEAS.map(text => el('button', { type: 'button', class: 'chip', text, onclick: () => { state.idea = idea.value = text; idea.focus() } }))),
+      el('div', { class: 'forge-ideas-head' }, [
+        el('span', { class: 'hint', text: state.ideas.length ? t`点一个填进上面，可以再改` : t`没想好？` }),
+        el('span', { class: 'row' }, [
+          el('button', { type: 'button', class: 'btn small', disabled: state.ideasBusy, text: state.ideasBusy ? t`正在想…` : state.ideas.length ? t`换一批` : t`给我灵感`, title: t`按随机抽的舞台、关系和转折，想几张卡的点子`, onclick: () => inspire() }),
+          el('button', { type: 'button', class: 'btn small', disabled: state.cicaBusy, text: state.cicaBusy ? t`Cica 在想…` : t`交给 Cica`, title: t`让 Cica 随便想一个，填进上面的输入框，可以再改`, onclick: () => askCica() }),
+        ]),
+      ]),
+      el('div', { class: `forge-ideas${state.ideas.length ? ' cards' : ''}` }, ideas),
       el('div', { class: 'forge-start' }, [el('span', { class: 'hint', text: t`右上角可以换模型。写卡要动脑筋，强一点的模型效果更好。` }), el('button', { type: 'button', class: 'btn primary', text: t`开始聊`, onclick: () => start() })]),
       drafts.length ? el('h4', { class: 'forge-h', text: t`继续创作` }) : null,
       drafts.length ? el('ul', { class: 'forge-drafts' }, drafts) : null,
@@ -396,13 +515,19 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
     const voice = draft.job.kind === 'plan' ? null : el('div', { class: 'forge-voice' })
     const label = document.createTextNode('')
     const working = el('p', { class: 'forge-working' }, [el('span', { class: 'dots' }), label])
-    state.busy = { voice, working, label }
+    // A moving bar and the time it has taken: a plan's bar follows what is written of it, talk just moves.
+    const fill = el('i')
+    const bar = el('div', { class: `forge-progress${draft.job.kind === 'plan' ? '' : ' unknown'}` }, fill)
+    const clock = el('span', { class: 'forge-clock' })
+    state.busy = { voice, working, label, fill, clock, startedAt: draft.job.startedAt }
     fillBusy(draft.job)
-    return el('div', { class: 'forge-say busy' }, [voice, working, el('div', { class: 'forge-say-tools' }, [stop])])
+    return el('div', { class: 'forge-say busy' }, [voice, working, el('div', { class: 'forge-progress-row' }, [bar, clock]), el('div', { class: 'forge-say-tools' }, [stop])])
   }
 
   function fillBusy(job) {
-    const { voice, label } = state.busy
+    const { voice, label, fill, clock } = state.busy
+    if (clock) clock.textContent = elapsed(job.startedAt)
+    if (fill && job.kind === 'plan') fill.style.width = `${Math.round(Math.min(95, 4 + (job.chars ?? 0) / 80))}%`
     if (job.kind === 'plan') {
       const text = t`正在把聊过的内容写成创作方案${job.chars ? t`（已写 ${job.chars} 字）` : ''}，通常要一两分钟。可以关掉窗口，回来再看。`
       if (label.data !== text) label.data = text
@@ -416,6 +541,12 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
     }
     const text = paragraphs.length ? t`在想接下来问什么…` : t`向导在想…`
     if (label.data !== text) label.data = text
+  }
+
+  /** 1:23 since an ISO time. */
+  function elapsed(iso) {
+    const seconds = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000))
+    return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
   }
 
   function errorBlock(error) {
@@ -499,7 +630,7 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
     const asked = draft.rounds.at(-1)?.assistant?.questions.length ?? 0
     view.pickCount.textContent = asked ? t`${picks} / ${asked} 个问题已选` : ''
     view.send.disabled = busy || waiting || (!picks && !view.composer.value.trim())
-    view.toPlan.disabled = busy || !draft.rounds.some(r => r.assistant)
+    view.toPlan.disabled = view.toPlans.disabled = busy || !draft.rounds.some(r => r.assistant)
     view.toPlan.classList.toggle('ready', draft.brief.readiness >= 75)
     view.undo.hidden = draft.rounds.length < 2
     view.undo.disabled = busy
@@ -522,6 +653,7 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
     view.save.textContent = savedId ? t`更新这张卡` : t`保存为角色卡`
     view.save.disabled = busy
     view.chat.hidden = !savedId
+    view.vn.hidden = !makeVisualNovel
     // The phone app's WebView saves no download: the link is left out there, as in 修改角色卡.
     view.png.hidden = !savedId || document.documentElement.dataset.edition === 'android'
     if (savedId) {
@@ -544,7 +676,7 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
     }
     const brief = draft.brief
     // Only when the sketch changed: a rebuild replays every item's fade-in, and polls come every second.
-    const key = JSON.stringify([draft.id, brief])
+    const key = JSON.stringify([draft.id, brief, draft.options, draft.greetingCount, Boolean(draft.job), state.sketchOptionsOpen])
     if (!force && key === state.sketchShown) return
     // Do not pull an item out from under the user while they are editing it.
     if (view.sketch.contains(document.activeElement) && document.activeElement.matches('textarea, input')) return
@@ -571,11 +703,58 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
         el('div', { class: 'sketch-bar' }, [el('i', { style: `width: ${ready}%` })]),
         el('p', { class: 'sketch-hint', text: ready >= 75 ? t`关键的几件事都清楚了：可以出方案，也可以接着细化。` : t`点任何一项可以直接改；锁上的项向导不会再动。` }),
         title,
+        sketchOptions(draft),
         items.length ? el('ul', { class: 'sketch-items' }, items) : el('p', { class: 'sketch-empty', text: t`聊一轮之后，这里会出现舞台、角色、关系这些设定。` }),
         brief.open.length ? el('div', { class: 'sketch-open' }, [el('span', { class: 'sketch-label', text: t`还没定` }), ...brief.open.map(text => el('span', { class: 'chip quiet', text }))]) : null,
       ].filter(Boolean),
     )
   }
+
+  /** The picks about the card and how many openings: the next round and the plan go by them. */
+  function sketchOptions(draft) {
+    const busy = Boolean(draft.job)
+    const options = { ...NO_OPTIONS, ...draft.options }
+    const picks = el('details', { class: 'sketch-picks', open: state.sketchOptionsOpen === true, ontoggle: event => (state.sketchOptionsOpen = event.target.open) }, [
+      el('summary', {}, [el('span', { class: 'sketch-label', text: t`卡的设定` }), el('span', { class: 'hint', text: optionsSummary(options) })]),
+      optionsPanel(options, next => saveOptions({ options: next }), { compact: true, disabled: busy }),
+    ])
+    const count = el('select', { disabled: busy, 'aria-label': t`开场白几个` }, [
+      el('option', { value: '0', text: t`向导定（一般 2 个）` }),
+      ...[1, 2, 3, 4, 5, 6].map(n => el('option', { value: String(n), text: t`${n} 个` })),
+    ])
+    count.value = String(draft.greetingCount ?? 0)
+    count.addEventListener('change', () => saveOptions({ greetingCount: Number(count.value) }))
+    return el('div', { class: 'sketch-opts' }, [
+      picks,
+      el('label', {}, [el('span', { class: 'sketch-label', text: t`开场白` }), count]),
+    ])
+  }
+
+  /**
+   * The picks as rows of buttons, one row per group (OPTION_GROUPS); `onChange(next)` gets
+   * them all with the one changed. The status bar's look shows only with the styled bar.
+   */
+  function optionsPanel(options, onChange, { compact = false, disabled = false } = {}) {
+    const rows = OPTION_GROUPS.filter(group => !group.when || group.when(options)).map(group => {
+      const value = options[group.key]
+      const on = key => (group.kind === 'many' ? value.includes(key) : value === key)
+      const buttons = group.values.map(([key, label]) => el('button', {
+        type: 'button', text: label, disabled, 'aria-pressed': String(on(key)),
+        onclick: () => {
+          const next = group.kind === 'many' ? (on(key) ? value.filter(v => v !== key) : [...value, key]) : key
+          onChange({ ...options, [group.key]: next })
+        },
+      }))
+      return el('div', { class: 'forge-pick' }, [
+        el('span', { class: 'forge-pick-label', text: group.label }),
+        el('div', { class: `seg${group.kind === 'many' ? ' many' : ''}`, role: 'group', 'aria-label': group.label }, buttons),
+        !compact && group.hint ? el('p', { class: 'hint forge-pick-hint', text: group.hint }) : null,
+      ])
+    })
+    return el('div', { class: `forge-picks${compact ? ' compact' : ''}` }, rows)
+  }
+
+  const saveOptions = guard(async patch => apply(await api(`/api/forge/${state.draft.id}`, { method: 'PUT', body: patch })))
 
   function sketchItem(item) {
     const value = el('div', { class: 'sketch-value', tabindex: '0', role: 'button', title: t`点一下修改`, text: item.value || t`（空）` })
@@ -661,25 +840,76 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
         plan.world.history.length ? el('h5', { text: t`往事` }) : null,
         plan.world.history.length ? bullets(plan.world.history.map(h => [h.event, h.impact].filter(Boolean).join(t`：`))) : null,
       ]),
-      section(t`角色`, [...core.map(c => characterCard(c, fields)), ...npcs.map(c => characterCard(c, fields))]),
+      section(t`角色`, [...core.map(c => characterCard(c, fields, plan)), ...npcs.map(c => characterCard(c, fields, plan))]),
+      plan.events?.length ? section(t`事件`, [
+        el('p', { class: 'hint', text: t`到了时机才交给模型的事：对话里提到关键词，或者数值到了某个程度。` }),
+        el('ul', { class: 'plan-list' }, plan.events.map((event, index) => eventRow(plan, event, index))),
+      ]) : null,
       section(t`文风与扮演`, [
         fields([[t`视角`, plan.style.perspective], [t`语言`, plan.style.tone], [t`氛围`, plan.style.mood], [t`参照`, plan.style.reference], [t`特别要求`, plan.style.special]]),
         plan.play_rules.length ? el('h5', { text: t`扮演准则` }) : null,
         plan.play_rules.length ? bullets(plan.play_rules) : null,
       ]),
       section(t`状态栏`, statusEditor(draft)),
-      section(t`开场白`, [el('ol', { class: 'plan-list' }, plan.greetings.map(g => el('li', {}, [el('b', { text: g.title }), el('span', { text: t` ${[g.scene, g.situation].filter(Boolean).join(t`：`)}（${g.length} 字）` })])))]),
+      section(t`开场白`, [
+        plan.tracking.enabled ? el('p', { class: 'hint', text: t`每个开场是一个不同的起点。处境和状态栏初始值对不上的开场，带着自己的开局数值，玩家选这个开场时生效。` }) : null,
+        el('ol', { class: 'plan-list' }, plan.greetings.map(g => el('li', {}, [
+          el('b', { text: g.title }),
+          el('span', { text: t` ${[g.start, g.scene, g.situation].filter(Boolean).join(t`：`)}（${g.length} 字）` }),
+          greetingState(plan, g),
+        ]))),
+      ]),
       section(t`世界书`, [
         el('p', { class: 'hint', text: t`常驻的每轮都在；「提到时」的只在对话里出现关键词时才交给模型，省上下文。这些按规则自动配好。` }),
         el('ul', { class: 'plan-entries' }, plan.entries.map(entryRow)),
       ]),
-      section(t`头像`, [fields([[t`画谁`, plan.avatar.character], [t`样子`, plan.avatar.description]])]),
+      section(t`头像`, [fields([[t`画谁`, plan.avatar.character], [t`样子`, plan.avatar.description], [t`画风`, plan.avatar.style ? t`${plan.avatar.style}（保存时写进「配图 → 画风」，立绘和背景都按它画）` : '']])]),
     ]
     return el('div', { class: 'forge-plan' }, [
       draft.job?.kind === 'plan' ? busyBlock(draft) : draft.error ? errorBlock(draft.error) : null,
       el('p', { class: 'forge-lead', text: t`方案出来了。哪里不合意，就在那一块点「提意见」写一句，写完点下面的「按意见修改方案」；也可以回去接着聊。` }),
+      draft.planOptions.length > 1 ? planOptions(draft) : null,
+      draft.planMissing?.length && !draft.job ? planMissing(draft) : null,
       ...sections,
     ])
+  }
+
+  /** 出三版来挑: the versions side by side; the one picked is the plan shown below. */
+  function planOptions(draft) {
+    const busy = Boolean(draft.job)
+    return el('section', { class: 'plan-card plan-options' }, [
+      el('header', {}, [el('h4', { text: t`${draft.planOptions.length} 版方案` })]),
+      el('p', { class: 'hint', text: t`同一段讨论写出的几版。选一版，下面就显示它的全文；提意见修改、开始写，都用选中的这一版。` }),
+      el('div', { class: 'plan-option-list' }, draft.planOptions.map((option, i) => el('button', {
+        type: 'button', class: `plan-option${option.picked ? ' on' : ''}`, 'aria-pressed': String(option.picked), disabled: busy,
+        onclick: () => !option.picked && pickPlan(i),
+      }, [
+        el('span', { class: 'tag', text: PLAN_ANGLE[option.angle] ?? option.angle }),
+        el('b', { text: option.name }),
+        option.summary ? el('span', { class: 'plan-option-text', text: option.summary }) : null,
+        option.cast.length ? el('span', { class: 'hint', text: t`主要角色：${option.cast.join(t`、`)}` }) : null,
+        el('span', { class: 'hint', text: t`开场：${option.greetings.join(t` / `)}` }),
+      ]))),
+    ])
+  }
+
+  /** Versions of 出三版来挑 that did not come (asked twice): which, why, and a way to ask for them again. */
+  function planMissing(draft) {
+    const which = draft.planMissing.map(m => PLAN_ANGLE[m.angle] ?? m.angle).join(t`、`)
+    return el('div', { class: 'forge-error' }, [
+      el('p', { text: t`「${which}」那版没写出来：${draft.planMissing[0].error}` }),
+      el('div', { class: 'row' }, [el('button', { type: 'button', class: 'btn small', text: t`再写一次`, onclick: guard(async () => apply(await api(`/api/forge/${draft.id}/plan`, { method: 'POST', body: { variants: true, missing: true } }))) })]),
+    ])
+  }
+
+  const pickPlan = guard(async index => apply(await api(`/api/forge/${state.draft.id}`, { method: 'PUT', body: { planPick: index } })))
+
+  /** An opening's own starting values, by their status bar names; nothing when it starts from the defaults. */
+  function greetingState(plan, greeting) {
+    const own = Object.entries(greeting?.state ?? {})
+    if (!plan.tracking.enabled || !own.length) return null
+    const label = path => plan.tracking.variables.find(v => v.path === path)?.label || path
+    return el('span', { class: 'plan-greet-state' }, [el('span', { class: 'hint', text: t`开局数值` }), ...own.map(([path, value]) => el('span', { class: 'chip quiet', text: `${label(path)} ${value}` }))])
   }
 
   /**
@@ -812,7 +1042,39 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
     ]
   }
 
-  function characterCard(c, fields) {
+  /** How a core character's stages read: names, and the range of the tracked value each covers. */
+  function stagesLine(plan, c) {
+    if (!c.stages?.length) return ''
+    const staged = plan.entries.some(e => e.owner === c.name && e.staged)
+    if (!staged) return t`（写了分阶段，但用来分阶段的数值不在状态栏里，这次不分）`
+    const label = plan.tracking.variables.find(v => v.path === c.stage_by)?.label || c.stage_by
+    const parts = c.stages.map((s, i) => {
+      const from = i ? c.stages[i - 1].until : ''
+      const range = s.until && from ? `${from}~${s.until}` : s.until ? `< ${s.until}` : `≥ ${from}`
+      return t`${s.name}（${label} ${range}）${s.main.length ? t`：${s.main.join(t`、`)}` : ''}`
+    })
+    return parts.join(' → ')
+  }
+
+  /** An event in the plan: when it comes in, and whether it made it into the card (it needs a way to come in). */
+  function eventRow(plan, event, index) {
+    const label = path => plan.tracking.variables.find(v => v.path === path)?.label || path
+    const triggers = [
+      event.keywords.length ? t`提到：${event.keywords.join(t`、`)}` : '',
+      ...(Array.isArray(event.requires) ? event.requires : event.requires ? [event.requires] : []).map(r => `${label(r.path)} ${r.op === 'has' ? t`里有` : r.op} ${r.value}`),
+    ].filter(Boolean)
+    const kept = plan.entries.some(e => e.type === zh`事件` && e.event === index)
+    return el('li', {}, [
+      el('b', { text: event.name }),
+      el('span', { text: ` ${event.when}` }),
+      el('span', { class: 'plan-greet-state' }, [
+        ...triggers.map(text => el('span', { class: 'chip quiet', text })),
+        kept ? null : el('span', { class: 'hint', text: t`没有能用的触发条件，不会写进卡里` }),
+      ]),
+    ])
+  }
+
+  function characterCard(c, fields, plan) {
     const p = c.personality
     return el('div', { class: 'plan-char' }, [
       el('div', { class: 'plan-char-head' }, [el('b', { text: c.name }), el('span', { class: `tag${c.kind === 'npc' ? ' off' : ''}`, text: c.kind === 'npc' ? t`配角` : t`核心角色` }), c.aliases.length ? el('span', { class: 'hint', text: t`也叫 ${c.aliases.join(t`、`)}` }) : null]),
@@ -825,6 +1087,7 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
         [t`说话`, c.voice],
         [t`作用`, c.role],
         [t`几副面孔`, c.facets ? t`会写不同处境下判若两人的几面` : ''],
+        [t`分阶段`, stagesLine(plan, c)],
       ]),
     ])
   }
@@ -855,8 +1118,16 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
     })
     const written = draft.card.entries.filter(e => e.content && e.type !== zh`状态`)
     const running = Boolean(job)
+    // The whole of it as one bar: steps done, the one running half; striped while it runs.
+    const done = draft.writing.filter(step => step.state === 'done').length + (running ? 0.5 : 0)
+    const share = draft.writing.length ? Math.round((done / draft.writing.length) * 100) : 0
+    const overall = el('div', { class: 'forge-progress-row' }, [
+      el('div', { class: `forge-progress${running ? ' running' : ''}`, role: 'progressbar', 'aria-valuenow': String(share), 'aria-valuemin': '0', 'aria-valuemax': '100' }, el('i', { style: `width: ${share}%` })),
+      (state.writeClock = el('span', { class: 'forge-clock', 'data-prefix': running ? t`第 ${Math.min(draft.writing.length, Math.floor(done) + 1)}/${draft.writing.length} 步 · ` : '', text: running ? t`第 ${Math.min(draft.writing.length, Math.floor(done) + 1)}/${draft.writing.length} 步 · ` + elapsed(job.startedAt) : t`${Math.floor(done)}/${draft.writing.length} 步` })),
+    ])
     return el('div', { class: 'forge-write' }, [
       el('h3', { class: 'forge-hero', text: running ? t`正在写这张卡` : draft.error ? t`写到一半停下了` : t`还差几步` }),
+      overall,
       el('p', { class: 'forge-lead', text: running ? t`按方案一步步写：先写世界和角色，后面的参照前面的保持一致；最后检查一遍套话和前后矛盾。可以关掉窗口，回来再看。` : t`已经写好的部分都留着，从停下的地方接着写。` }),
       el('ol', { class: 'write-steps' }, steps),
       draft.error ? el('div', { class: 'forge-error' }, [el('p', { text: draft.error.message })]) : null,
@@ -891,18 +1162,124 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
         : el('p', { class: 'hint', text: card.issuesFound ? t`检查过了：向导挑出 ${card.issuesFound} 处毛病，已经改好。` : t`检查过了，没有发现常见的套话。` }),
       el('section', { class: 'plan-card' }, [
         el('header', {}, [el('h4', { text: t`开场白` })]),
-        ...card.greetings.map((g, i) => pieceBlock({ target: zh`开场白${i + 1}`, title: g.title || t`开场 ${i + 1}`, text: g.text, reading: true, working: working(zh`开场白${i + 1}`), busy })),
+        ...card.greetings.map((g, i) => {
+          const own = greetingState(draft.plan, draft.plan.greetings[i])
+          const title = g.title || t`开场 ${i + 1}`
+          return pieceBlock({ target: zh`开场白${i + 1}`, title, text: g.text, reading: true, working: working(zh`开场白${i + 1}`), busy, head: own ? el('span', { class: 'piece-title' }, [el('b', { text: title }), own]) : null })
+        }),
       ]),
       el('section', { class: 'plan-card' }, [
         el('header', {}, [el('h4', { text: t`世界书 · ${card.entries.length} 条` })]),
         el('p', { class: 'hint', text: t`按发给模型的顺序排列。点条目名展开；状态记录的几条由程序生成。` }),
         ...byOrder.map(entry => entryBlock(entry, { busy, working: working(entry.name) })),
       ]),
+      valuesPreview(draft),
+      rosterPreview(draft.plan),
       el('section', { class: 'plan-card' }, [
         el('header', {}, [el('h4', { text: t`卡片信息` })]),
         pieceBlock({ target: 'description', title: t`角色描述（发给模型，几行速览）`, text: card.description, busy, noRewrite: true }),
         pieceBlock({ target: 'notes', title: t`创作者备注（给玩家看，不发给模型）`, text: card.creatorNotes, busy, noRewrite: true }),
       ]),
+    ])
+  }
+
+  /**
+   * 数值预览: sliders for the tracked numbers (and switches for yes/no values); at
+   * each position the server renders the card's EJS as SillyTavern would and says
+   * which stage each character is in, which events are in, and what the staged
+   * entries read. No model call; the values are not saved anywhere.
+   */
+  function valuesPreview(draft) {
+    const variables = draft.plan.tracking?.enabled ? draft.plan.tracking.variables.filter(v => v.type === 'number' || v.type === 'boolean') : []
+    const dynamic = draft.card.entries.some(e => e.staged || e.type === zh`事件`)
+    if (!variables.length || !dynamic) return null
+    const values = (state.previewValues[draft.id] ??= {})
+    const out = el('div', { class: 'values-out', 'aria-live': 'polite' })
+    let asked = 0
+    let timer = null
+    const show = async () => {
+      const ask = ++asked
+      const result = await api(`/api/forge/${draft.id}/preview`, { method: 'POST', body: { values } }).catch(error => ({ error }))
+      if (ask !== asked || !out.isConnected) return
+      if (result.error) return out.replaceChildren(el('p', { class: 'hint', text: result.error.message }))
+      out.replaceChildren(...previewResult(result))
+    }
+    const later = () => {
+      clearTimeout(timer)
+      timer = setTimeout(show, 150)
+    }
+    const controls = variables.map(v => {
+      if (v.type === 'boolean') {
+        const box = el('input', { type: 'checkbox', checked: values[v.path] ?? /^(true|是|有|1)$/i.test(v.initial), onchange: () => { values[v.path] = box.checked; later() } })
+        return el('label', { class: 'values-row' }, [el('span', { class: 'values-label', text: v.label || v.path }), box])
+      }
+      const [min, max] = rangeOf(v)
+      const start = values[v.path] ?? (Number.isFinite(Number(v.initial)) && v.initial !== '' ? Number(v.initial) : min)
+      const number = el('span', { class: 'values-number', text: String(start) })
+      const slider = el('input', { type: 'range', min, max, step: max - min > 20 ? 1 : 'any', value: start, 'aria-label': v.label || v.path, oninput: () => {
+        values[v.path] = Number(slider.value)
+        number.textContent = slider.value
+        later()
+      } })
+      return el('label', { class: 'values-row' }, [el('span', { class: 'values-label', text: v.label || v.path }), slider, number])
+    })
+    const reset = el('button', { type: 'button', class: 'btn ghost small', text: t`回到初始值`, onclick: () => {
+      state.previewValues[draft.id] = {}
+      state.shown = ''
+      renderMain()
+    } })
+    show()
+    return el('section', { class: 'plan-card values-preview' }, [
+      el('header', {}, [el('h4', { text: t`数值预览` }), reset]),
+      el('p', { class: 'hint', text: t`拖动看看数值到了不同程度时，模型拿到的是哪个性格阶段、哪些事件。只是预览，不改卡，也不调模型。` }),
+      el('div', { class: 'values-controls' }, controls),
+      out,
+    ])
+  }
+
+  /** A tracked number's range from its 「0~100」 (or 0 to 100 when it says none). */
+  function rangeOf(variable) {
+    const found = /(-?\d+(?:\.\d+)?)\s*(?:~|～|-|—|到|至)\s*(-?\d+(?:\.\d+)?)/.exec(variable.range ?? '')
+    const [min, max] = found ? [Number(found[1]), Number(found[2])] : [0, 100]
+    const start = Number(variable.initial)
+    return max > min ? [Math.min(min, Number.isFinite(start) ? start : min), Math.max(max, Number.isFinite(start) ? start : max)] : [0, 100]
+  }
+
+  function previewResult({ characters, events, entries }) {
+    const parts = []
+    if (characters.length) {
+      parts.push(el('ul', { class: 'values-stages' }, characters.map(c => el('li', {}, [
+        el('b', { text: c.name }),
+        el('span', { class: 'tag', text: c.stage }),
+        el('span', { class: 'hint', text: [c.main.length ? t`主色调 ${c.main.join(t`、`)}` : '', c.accent.length ? t`点缀 ${c.accent.join(t`、`)}` : ''].filter(Boolean).join(t`；`) }),
+      ]))))
+    }
+    if (events.length) {
+      parts.push(el('div', { class: 'values-events' }, [
+        el('span', { class: 'hint', text: t`事件` }),
+        ...events.map(e => el('span', {
+          class: `chip${e.on ? '' : ' quiet off'}`,
+          text: e.name,
+          title: e.conditional
+            ? e.on ? (e.keywords.length ? t`条件满足：对话里提到「${e.keywords.join(t`、`)}」时出现` : t`条件满足：每轮都在`) : t`条件还不满足，不会出现`
+            : t`没有数值条件：对话里提到「${e.keywords.join(t`、`)}」时出现`,
+        })),
+      ]))
+    }
+    for (const entry of entries) {
+      parts.push(el('details', { class: 'values-entry' }, [el('summary', { text: t`${entry.name}（此时发给模型的样子）` }), el('pre', { text: entry.text })]))
+    }
+    return parts
+  }
+
+  /** Who goes into 配图 → 角色名单 when the card is saved, and how they look there. */
+  function rosterPreview(plan) {
+    const cast = plan.characters.filter(c => c.looks_tags)
+    if (!cast.length) return null
+    return el('section', { class: 'plan-card' }, [
+      el('header', {}, [el('h4', { text: t`角色名单` })]),
+      el('p', { class: 'hint', text: t`保存时写进「配图 → 角色名单」：配图和视觉小说的立绘按这里的长相画。再次保存时，新角色会加进去，名单里已有的人，你在配图里改过的地方不会被覆盖。` }),
+      el('dl', { class: 'plan-fields' }, cast.flatMap(c => [el('dt', { text: c.name }), el('dd', { text: [c.looks_tags, c.outfit_tags].filter(Boolean).join(' · ') })])),
     ])
   }
 
@@ -1025,9 +1402,46 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
       toast(t`先说说你想要一张什么样的卡，一句话也行`)
       return
     }
-    const draft = await api('/api/forge', { method: 'POST', body: { text, model: state.homeModel } })
+    const draft = await api('/api/forge', { method: 'POST', body: { text, model: state.homeModel, options: state.options } })
     state.idea = ''
+    state.ideas = []
     apply(draft)
+  })
+
+  /** The home view again, with what was typed (it lives in state.idea). */
+  function redrawHome() {
+    if (state.draft) return
+    state.shown = ''
+    renderMain()
+  }
+
+  // 给我灵感 / 换一批: a few ideas from the model, none of the ones shown before.
+  const inspire = guard(async () => {
+    state.ideasBusy = true
+    redrawHome()
+    try {
+      const { ideas } = await api('/api/forge/ideas', { method: 'POST', body: { model: state.homeModel, options: state.options, exclude: state.ideasSeen } })
+      state.ideas = ideas
+      state.ideasSeen = [...state.ideasSeen, ...ideas.map(item => item.title)].slice(-40)
+    } finally {
+      state.ideasBusy = false
+      redrawHome()
+    }
+  })
+
+  // 交给 Cica: one idea, put in the box as if picked, ready to start.
+  const askCica = guard(async () => {
+    state.cicaBusy = true
+    redrawHome()
+    try {
+      const { ideas } = await api('/api/forge/ideas', { method: 'POST', body: { model: state.homeModel, options: state.options, exclude: state.ideasSeen, count: 1 } })
+      const [item] = ideas
+      state.idea = t`${item.title}：${item.pitch}`
+      state.ideasSeen = [...state.ideasSeen, item.title].slice(-40)
+    } finally {
+      state.cicaBusy = false
+      redrawHome()
+    }
   })
 
   const send = guard(async () => {
@@ -1039,14 +1453,14 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
     apply(next)
   })
 
-  const makePlan = guard(async () => {
+  const makePlan = guard(async (variants = false) => {
     const draft = state.draft
     if (draft.brief.readiness < 50 && !confirm(t`关键的设定还没聊清楚，现在出方案，向导会补很多它自己的设想。还是现在出？`)) return
     // Words typed but not sent still count.
     if (view.composer.value.trim() || picksList().length) {
       if (!confirm(t`输入框里还有没发出去的话。先出方案的话，这些不会算进去。继续？`)) return
     }
-    apply(await api(`/api/forge/${draft.id}/plan`, { method: 'POST' }))
+    apply(await api(`/api/forge/${draft.id}/plan`, { method: 'POST', body: { variants } }))
   })
 
   const revise = guard(async () => {
@@ -1127,6 +1541,17 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
     await startChatWith?.(id)
   })
 
+  // 做成视觉小说: a new chat with the card, in the mode, and its pictures drawn (the plan's places get backgrounds).
+  const startVn = guard(async () => {
+    // Not saved yet: saved first (the visual novel plays the saved card).
+    if (!state.draft?.card?.savedCardId) await saveCard()
+    const id = state.draft?.card?.savedCardId
+    if (!id) return
+    const places = (state.draft.plan?.world?.places ?? []).map(place => place.name)
+    dialog.close()
+    await makeVisualNovel?.(id, places)
+  })
+
   const setStage = guard(async stage => {
     if (!state.draft || stage === state.draft.stage || !STAGE_TEXT[stage]) return
     apply(await api(`/api/forge/${state.draft.id}`, { method: 'PUT', body: { stage } }))
@@ -1165,20 +1590,103 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
     render()
   })
 
-  dialog.addEventListener('close', () => clearTimeout(state.poll))
+  // ─── The chip outside the dialog: drafts being written in the background ───
+  // Jobs run on the server whatever the page does. With the dialog closed, a chip in the corner
+  // says what is being written and how far (polled every few seconds), then that it is done;
+  // a click opens that draft.
+  const chip = el('div', { class: 'forge-chip', hidden: true, role: 'status' })
+  document.body.append(chip)
+  const background = { timer: null, running: new Map(), done: null }
+
+  async function watchBackground() {
+    clearTimeout(background.timer)
+    background.timer = null
+    // With the dialog open the page itself shows the job: look again in a while, in case it is closed.
+    if (dialog.open) {
+      chip.hidden = true
+      if (state.draft?.job) {
+        background.running.set(state.draft.id, state.draft.title)
+        background.timer = setTimeout(watchBackground, 3000)
+      }
+      return
+    }
+    const list = await api('/api/forge').catch(() => null)
+    if (!list || dialog.open) return
+    const running = list.filter(d => d.busy)
+    // One that was running and is no longer: done, or stopped by an error.
+    for (const [id, title] of background.running) {
+      if (running.some(d => d.id === id)) continue
+      const now = list.find(d => d.id === id)
+      background.done = { id, title: now?.title ?? title, failed: Boolean(now?.error) }
+    }
+    background.running = new Map(running.map(d => [d.id, d.title]))
+    drawChip(running)
+    if (running.length) background.timer = setTimeout(watchBackground, 3000)
+    else background.timer = null
+  }
+
+  function drawChip(running) {
+    const open = id => {
+      background.done = null
+      chip.hidden = true
+      openAt(id)
+    }
+    if (running.length) {
+      const d = running[0]
+      const p = d.progress
+      const share = p ? Math.round((p.done / p.total) * 100) : null
+      const step = d.job?.kind === 'write' ? p?.label || t`写卡` : d.job?.kind === 'plan' ? t`写方案` : d.job?.kind === 'discuss' ? t`向导在想` : t`进行中`
+      chip.replaceChildren(
+        el('button', { type: 'button', class: 'forge-chip-main', title: t`点开看进度`, onclick: () => open(d.id) }, [
+          el('span', { class: 'dots' }),
+          el('span', { class: 'forge-chip-text', text: t`正在创作「${d.title}」· ${step}${share !== null ? ` · ${share}%` : ''} · ${d.job ? elapsed(d.job.startedAt) : ''}${running.length > 1 ? t`（还有 ${running.length - 1} 张）` : ''}` }),
+        ]),
+        el('div', { class: `forge-progress${share === null ? ' unknown' : ' running'}` }, el('i', share === null ? {} : { style: `width: ${share}%` })),
+      )
+      chip.className = 'forge-chip'
+      chip.hidden = false
+      return
+    }
+    if (background.done) {
+      const { id, title, failed } = background.done
+      chip.replaceChildren(
+        el('button', { type: 'button', class: 'forge-chip-main', onclick: () => open(id) }, [el('span', { class: 'forge-chip-text', text: failed ? t`「${title}」写到一半停下了，点开看看` : t`「${title}」这一步完成了，点开看看` })]),
+        el('button', { type: 'button', class: 'forge-chip-close', 'aria-label': t`关掉`, text: '×', onclick: () => { background.done = null; chip.hidden = true } }),
+      )
+      chip.className = `forge-chip ${failed ? 'failed' : 'done'}`
+      chip.hidden = false
+      return
+    }
+    chip.hidden = true
+  }
+
+  // Closed while something is being written: it goes on on the server, and the chip follows it.
+  dialog.addEventListener('close', () => {
+    clearTimeout(state.poll)
+    watchBackground()
+    onClosed?.()
+  })
   // Esc while editing a sketch item only ends the edit (handled there).
 
-  return {
-    async open() {
+  const forge = {
+    /** @param id - a draft to open at once (the chip for a job running in the background). */
+    async open(id = '') {
+      clearTimeout(background.timer)
+      chip.hidden = true
       if (!view.main) layout()
       await loadModels()
       const persona = await api('/api/persona').catch(() => null)
       state.settingsName = /^(你|you)?$/i.test(String(persona?.name ?? '').trim()) ? '' : persona.name.trim()
       if (!dialog.open) dialog.showModal()
-      if (state.draft) {
+      if (id) await openDraft(id)
+      else if (state.draft) {
         state.shown = ''
         await openDraft(state.draft.id)
       } else await goHome()
     },
+    /** Look for drafts being written (the page has just loaded: a job may have gone on without it). */
+    watch: () => watchBackground(),
   }
+  const openAt = guard(id => forge.open(id))
+  return forge
 }

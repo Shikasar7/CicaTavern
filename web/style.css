@@ -434,6 +434,13 @@ select.pill { appearance: none; padding-right: 28px; background-image: linear-gr
 .status-delta.down { color: var(--bad); }
 .status-tags { display: flex; flex-wrap: wrap; gap: 4px; padding: 2px 0; }
 .status-tag { font-size: 12px; padding: 0 9px; border-radius: 999px; background: var(--accent-soft); line-height: 22px; }
+/* 状态栏样式 picked in 创作角色卡 (server/forge/status.mjs has the same looks for SillyTavern). */
+.status-bar.theme-paper { --surface: #f6efe0; --line-soft: #dccdae; --ink: #3b2f22; --muted: #7a6a55; --accent: #8a3b2a; --accent-soft: rgba(138,59,42,.1); --meter-track: #e6dac2; font-family: "Noto Serif SC", "Songti SC", STSong, serif; }
+.status-bar.theme-neon { --surface: #0f1220; --line-soft: #2b2f55; --ink: #e6e8ff; --muted: #9aa0d8; --accent: #3ef0ff; --accent-soft: rgba(62,240,255,.12); --meter-track: #23264a; box-shadow: 0 0 14px rgba(62,240,255,.22); }
+.status-bar.theme-neon .status-title { text-shadow: 0 0 6px rgba(62,240,255,.6); }
+.status-bar.theme-neon .status-meter > i { box-shadow: 0 0 6px var(--accent); }
+.status-bar.theme-pastel { --surface: #fff6f8; --line-soft: #f3d6de; --ink: #4a3a40; --muted: #9a7d86; --accent: #e57a9b; --accent-soft: rgba(229,122,155,.13); --meter-track: #f6e3e8; border-radius: 18px; }
+
 .status-none, .status-flag { color: var(--faint); }
 .status-flag.on { color: var(--ok); }
 .choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 14px 0 4px; }
@@ -1479,7 +1486,8 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .forge-steps li.done .n { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
 .forge-steps li.now button { color: var(--accent); background: var(--accent-soft); font-weight: 600; }
 .forge-steps li.now .n { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
-.forge-tools { display: flex; align-items: center; justify-content: flex-end; gap: 2px; min-width: 0; }
+/* Always the last column: a header without tabs or steps in the middle kept the close button there. */
+.forge-tools { grid-column: -2 / -1; display: flex; align-items: center; justify-content: flex-end; gap: 2px; min-width: 0; }
 .dialog .forge-model { min-width: 0; max-width: 15em; font-size: 12.5px; padding: 5px 8px; margin-right: 4px; }
 .forge-body { display: grid; grid-template-columns: minmax(0, 1fr) 300px; min-height: 0; }
 .forge-body.home { grid-template-columns: minmax(0, 1fr); }
@@ -1514,6 +1522,27 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .forge-say-tools { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .forge-by { font-size: 11.5px; color: var(--faint); }
 .forge-working { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; margin: 4px 0; line-height: 1.6; }
+/* Progress while the card creator works, in the dialog and in the chip outside it */
+.forge-progress-row { display: flex; align-items: center; gap: 10px; margin: 6px 0 10px; }
+.forge-progress { position: relative; flex: 1; height: 6px; border-radius: 3px; background: var(--meter-track); overflow: hidden; }
+.forge-progress > i { display: block; height: 100%; width: 0; border-radius: 3px; background: var(--accent); transition: width .6s var(--ease); }
+.forge-progress.running > i { background-image: linear-gradient(45deg, rgba(255,255,255,.28) 25%, transparent 25%, transparent 50%, rgba(255,255,255,.28) 50%, rgba(255,255,255,.28) 75%, transparent 75%); background-size: 16px 16px; animation: forge-stripes .8s linear infinite; }
+.forge-progress.unknown > i { position: absolute; width: 35%; animation: forge-slide 1.4s ease-in-out infinite; }
+@keyframes forge-stripes { to { background-position: 16px 0; } }
+@keyframes forge-slide { 0% { left: -35%; } 100% { left: 100%; } }
+@media (prefers-reduced-motion: reduce) { .forge-progress.running > i, .forge-progress.unknown > i { animation: none; } .forge-progress.unknown > i { left: 0; width: 100%; opacity: .45; } }
+.forge-clock { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.forge-chip { position: fixed; right: 16px; bottom: 96px; z-index: 15; display: flex; flex-direction: column; gap: 6px; max-width: min(360px, calc(100vw - 32px)); padding: 9px 12px 10px; border: 1px solid var(--line-soft); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow-3); font-size: 12.5px; }
+.forge-chip[hidden] { display: none; }
+.forge-chip.done, .forge-chip.failed { flex-direction: row; align-items: center; }
+.forge-chip.done { border-color: color-mix(in srgb, var(--ok, #2f7a55) 45%, var(--line-soft)); }
+.forge-chip.failed { border-color: color-mix(in srgb, var(--bad) 45%, var(--line-soft)); }
+.forge-chip-main { display: flex; align-items: center; gap: 8px; border: 0; background: none; padding: 0; color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
+.forge-chip-text { overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.forge-chip-close { border: 0; background: none; color: var(--muted); font-size: 16px; cursor: pointer; padding: 0 2px; }
+.forge-chip .forge-progress { flex: none; height: 4px; }
+.forge-chip .dots { flex: none; width: 24px; height: 6px; background: radial-gradient(circle, var(--accent) 2.5px, transparent 3px) 0 0 / 8px 6px repeat-x; animation: pulse 1.2s ease-in-out infinite; }
+
 .forge .dots { flex: none; width: 24px; height: 6px; background: radial-gradient(circle, var(--accent) 2.5px, transparent 3px) 0 0 / 8px 6px repeat-x; animation: pulse 1.2s ease-in-out infinite; }
 .forge-error { border: 1px solid color-mix(in srgb, var(--bad) 35%, var(--line)); background: color-mix(in srgb, var(--bad) 6%, var(--surface)); border-radius: 12px; padding: 10px 14px; font-size: 13px; }
 .forge-error p { margin: 0 0 8px; color: var(--bad); }
@@ -1550,6 +1579,9 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .sketch-hint { font-size: 11.5px; color: var(--faint); margin: 0 0 10px; line-height: 1.55; }
 .dialog .sketch-title { width: 100%; font: 600 16px var(--serif); margin-bottom: 10px; background: transparent; border-color: transparent; padding: 4px 6px; }
 .dialog .sketch-title:hover { border-color: var(--line); }
+.sketch-opts { display: flex; flex-wrap: wrap; gap: 8px 14px; margin: 0 0 12px; }
+.sketch-opts label { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; }
+.sketch-opts select { font-size: 12.5px; padding: 3px 6px; }
 .sketch-items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .sketch-items li { background: var(--raised); border: 1px solid var(--line-soft); border-radius: 10px; padding: 7px 10px 8px; animation: fade .3s; }
 .sketch-items li.locked { border-color: color-mix(in srgb, var(--accent) 40%, var(--line-soft)); }
@@ -1576,6 +1608,29 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .forge-ideas { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 18px; }
 /* An idea is a sentence: in English it can be wider than a phone. */
 .forge-ideas button.chip { white-space: normal; text-align: left; max-width: 100%; }
+/* 这是一张: the kind of card, above the idea. */
+/* 卡的设定: the picks in groups (web/forge.js OPTION_GROUPS) */
+.forge-kind { margin: 0 0 12px; border: 1px solid var(--line-soft); border-radius: 14px; background: var(--surface); padding: 4px 14px; }
+.forge-kind > summary { display: flex; align-items: baseline; gap: 10px; padding: 8px 0; cursor: pointer; font-weight: 600; font-size: 13.5px; }
+.forge-kind > summary .hint { font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.forge-picks { display: grid; gap: 2px; padding: 2px 0 10px; }
+.forge-pick { display: grid; grid-template-columns: 5.5em minmax(0, 1fr); align-items: center; gap: 2px 12px; padding: 6px 0; border-top: 1px solid var(--line-soft); }
+.forge-pick-label { font-size: 12.5px; color: var(--muted); }
+.forge-pick .seg { flex-wrap: wrap; justify-self: start; border-radius: 14px; }
+.forge-pick .seg.many button[aria-pressed="true"]::before { content: "✓ "; }
+.forge-pick-hint { grid-column: 2; margin: 2px 0 0; font-size: 11.5px; }
+.forge-picks.compact .forge-pick { grid-template-columns: minmax(0, 1fr); padding: 5px 0; }
+.forge-picks.compact .seg button { font-size: 12px; padding: 3px 8px; }
+.sketch-picks { width: 100%; }
+.sketch-picks > summary { display: flex; flex-direction: column; gap: 2px; cursor: pointer; }
+.sketch-picks > summary .hint { font-size: 12px; }
+/* 给我灵感: ideas the model came up with, a card each. */
+.forge-ideas-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 12px 0 0; }
+.forge-ideas.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+.forge-idea-card { display: flex; flex-direction: column; gap: 4px; text-align: left; padding: 10px 12px; border: 1px solid var(--line-soft); border-radius: 12px; background: var(--surface); color: var(--ink); cursor: pointer; font: 13px/1.6 var(--ui); transition: border-color .15s, background .15s; }
+.forge-idea-card:hover { border-color: var(--accent); background: var(--accent-soft); }
+.forge-idea-card b { font: 600 14px var(--serif); }
+.forge-idea-card .chips { margin-top: 2px; }
 .forge-start { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .forge-h { margin: 32px 0 6px; font-size: 12px; color: var(--faint); font-weight: 600; }
 .forge-drafts { list-style: none; margin: 0; padding: 0; }
@@ -1705,6 +1760,29 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 @keyframes sweep { to { background-position: -200% 0; } }
 .piece-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .piece-head > b { font-size: 13.5px; }
+.piece-title { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.piece-title > b { font-size: 13.5px; }
+/* 出三版来挑: the versions side by side; the picked one is the plan below. */
+.plan-option-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; }
+.plan-option { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; text-align: left; padding: 10px 12px; border: 1px solid var(--line-soft); border-radius: 12px; background: var(--surface); color: var(--ink); cursor: pointer; font: 13px/1.6 var(--ui); }
+.plan-option:hover:not(:disabled) { border-color: var(--accent); }
+.plan-option.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); cursor: default; }
+.plan-option b { font: 600 14px var(--serif); }
+.plan-option-text { color: var(--muted); }
+.plan-greet-state { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-left: 6px; }
+/* 数值预览 (创作角色卡 → 打磨) */
+.values-preview header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.values-controls { display: grid; gap: 6px; margin: 8px 0 12px; }
+.dialog label.values-row { display: grid; grid-template-columns: minmax(4em, 9em) minmax(0, 1fr) 3.5em; align-items: center; gap: 10px; margin: 0; font-size: 13px; color: var(--ink); }
+.values-row input[type=checkbox] { justify-self: start; }
+.values-label { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.values-number { font-variant-numeric: tabular-nums; text-align: right; }
+.values-out { display: grid; gap: 8px; }
+.values-stages { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.values-stages li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; }
+.values-events { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.values-events .chip.off { opacity: .55; text-decoration: line-through; }
+.values-entry pre { margin: 6px 0 0; padding: 10px 12px; max-height: 18rem; overflow-y: auto; background: var(--surface); border: 1px solid var(--line-soft); border-radius: 10px; font: 12px/1.7 var(--ui); white-space: pre-wrap; color: var(--ink); }
 .piece-tools { margin-left: auto; display: flex; align-items: center; gap: 2px; }
 .piece-read { font: 14.5px/1.95 var(--serif); margin-top: 6px; color: var(--ink); }
 .piece-read p { margin: 0 0 .55em; }
@@ -2550,6 +2628,9 @@ label.cast-voice, .dialog label.cast-voice { display: grid; grid-template-column
 .vn-scene-chip .bad { color: var(--bad); }
 
 .vn-library { width: min(820px, calc(100vw - 32px)); }
+.vn-preset-offer { width: min(520px, calc(100vw - 32px)); }
+.vn-preset-offer .grow { flex: 1; }
+.vn-library-tip { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px; margin: 4px 0; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--surface); }
 .vn-library-head { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
 .vn-library-head p { margin: 0; color: var(--muted); font-size: 13px; }
 .vn-library-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }

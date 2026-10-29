@@ -36,6 +36,10 @@ test('what the picker offers: the methods set up, each with its models; the rest
   assert.equal(drawChoices({ media: { ...media, sdUrl: 'http://192.168.1.5:7860' }, providers }).find(c => c.id === 'sdwebui').ready, true)
   assert.equal(drawChoices({ media: { ...media, imageProvider: 'ant' }, providers }).find(c => c.id === 'openai').need, 'provider', 'an Anthropic provider draws nothing')
   assert.deepEqual(drawChoices({ media, providers, workflow: { nodes: 9 }, novelai: { hasToken: true } }).filter(c => c.ready).map(c => c.id), ['openai', 'gemini', 'novelai', 'comfy'])
+  // ComfyUI's 简单模式 with a model picked draws without a workflow (做成视觉小说 refused it as not set up).
+  const simple = drawChoices({ media: { ...media, comfyMode: 'simple', comfyModel: 'krea2_turbo_fp8_scaled.safetensors' }, providers }).find(c => c.id === 'comfy')
+  assert.deepEqual([simple.ready, simple.simple, simple.model], [true, true, 'krea2_turbo_fp8_scaled.safetensors'])
+  assert.equal(drawChoices({ media: { ...media, comfyMode: 'simple', comfyModel: '' }, providers }).find(c => c.id === 'comfy').ready, false, 'no model picked yet')
 
   // Starting where the settings are; a request says only what differs from them.
   assert.deepEqual(startingChoice(choices), { backend: 'openai', model: 'gpt-image-1' })

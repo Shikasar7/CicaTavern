@@ -10,7 +10,8 @@ import { hasEjs, renderTemplate } from './template.mjs'
 import { httpError, newId } from './store.mjs'
 import { MIN_TURNS, RECENT_TURNS, STORY_FORMAT, storyPath, storyTurns, turnsSinceCompaction } from './recap.mjs'
 import { msg } from './i18n.mjs'
-import { BASIC_ID, basicPreset } from './basic.mjs'
+import { estimateTokens } from './context.mjs'
+import { BASIC_ID, VN_ID, basicPreset, vnPreset } from './basic.mjs'
 import { readSillyTavernChat } from './st-chat.mjs'
 import { markSpeakers } from '../web/shared/vn.js'
 import { chatScriptList } from '../web/shared/regex.js'
@@ -66,6 +67,7 @@ export async function mountChange(store, chat, card) {
  */
 export async function presetFor(store, presetId) {
   if (presetId === '' || presetId === BASIC_ID) return basicPreset(await store.getSettings())
+  if (presetId === VN_ID) return vnPreset(await store.getSettings())
   if (!presetId) return null
   return store.getPreset(presetId).catch(() => null)
 }
@@ -799,6 +801,8 @@ export function chatView(chat) {
     // The chat variables (Tavern Helper's chat scope, the templates' local scope), for the card's frames.
     frameVars: chat.frameVars ?? {},
     systemPromptChars: chat.systemPrompt.length,
+    // What compaction cannot shrink (card, constant worldbook entries, preset): the page warns when it is most of the threshold.
+    systemPromptTokens: estimateTokens(chat.systemPrompt),
   }
 }
 

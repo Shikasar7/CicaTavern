@@ -940,7 +940,14 @@ const AVATAR_SCENE = 'solo, portrait, face and shoulders, close-up, looking at v
 const AVATAR_NEGATIVE = 'nsfw, multiple views, text, full body, lower body'
 // 立绘 for the visual novel mode: the page cuts the white out, so nothing may touch the edges but the body.
 const SPRITE_SCENE = 'solo, upper body, cowboy shot, looking at viewer, standing, simple background, white background, full color'
+// The same for models that read sentences (Krea 2, Flux, Qwen-Image): they take the tags loosely and paint splashes
+// on the white, and a workflow at CFG 1 has no negative prompt to stop them.
+// The framing first: read in order, it went unheeded at the end (whole figures, small on the stage).
+const SPRITE_SCENE_NATURAL = `A half-body character sprite framed from the mid-thighs up, the legs cut off by the bottom edge and the feet out of frame, ${SPRITE_SCENE.replace(', standing', '')}, isolated on a flat, clean, pure white background with nothing else on it`
 const SPRITE_NEGATIVE = `multiple views, text, scenery, ${OFF_PLAIN}, frame, border, nsfw`
+// A 立绘 ends at the thighs: shoes and socks in the outfit (and "standing" to a model reading sentences) draw the whole figure.
+const FOOTWEAR = /\b(boots?|shoes?|sneakers?|heels?|sandals?|loafers?|slippers?|socks?|footwear|barefoot)\b|靴|鞋|袜|赤脚|光脚/i
+export const spriteOutfit = outfit => String(outfit ?? '').split(/[,，、;；]/).map(part => part.trim()).filter(part => part && !FOOTWEAR.test(part)).join(', ')
 
 // ─── NovelAI ────────────────────────────────────────────────────────────
 
@@ -2051,13 +2058,15 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
    * with their reference picture as configured (so it stays the same face).
    * → { buffer, backend, note }
    */
-  async function drawSprite(cardId, entryId, signal) {
+  /** @param choice - { backend, model } for this one (做成视觉小说 asks first), else as the settings say. */
+  async function drawSprite(cardId, entryId, signal, choice = {}) {
     const { roster, style } = cleanCardMedia((await store.getCard(cardId)).media)
     const entry = roster.find(item => item.id === entryId)
     if (!entry) throw httpError(404, msg`名单里没有这个角色`)
     if (!entry.looks) throw httpError(400, msg`先在「配图 → 角色名单」里写${entry.name}的长相，再画立绘`)
-    const media = await settings()
-    const cast = { scene: [style, SPRITE_SCENE].filter(Boolean).join(', '), characters: [{ entry, action: [entry.outfit, 'standing'].filter(Boolean).join(', '), position: '' }], solo: entry, lead: entry }
+    const media = await settingsFor(choice)
+    const tags = media.promptStyle === 'tags'
+    const cast = { scene: [style, tags ? SPRITE_SCENE : SPRITE_SCENE_NATURAL].filter(Boolean).join(', '), characters: [{ entry, action: [spriteOutfit(entry.outfit), tags ? 'standing' : ''].filter(Boolean).join(', '), position: '' }], solo: entry, lead: entry }
     const plain = { ...media, imageShape: 'portrait', naiNegative: [media.naiNegative, SPRITE_NEGATIVE].filter(Boolean).join(', '), sdNegative: [media.sdNegative, SPRITE_NEGATIVE].filter(Boolean).join(', ') }
     return render(plain, cardId, cast, cast, '', signal, { negative: SPRITE_NEGATIVE })
   }
@@ -2068,7 +2077,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
    * face is to change. SD WebUI and a ComfyUI workflow without a reference
    * picture draw it anew from the looks. → { buffer, backend, note }
    */
-  async function drawExpression(cardId, entryId, expression, base, signal) {
+  async function drawExpression(cardId, entryId, expression, base, signal, choice = {}) {
     const look = EXPRESSION_LOOK[expression]
     if (!look) throw httpError(404, msg`没有这种表情`)
     const { roster, style } = cleanCardMedia((await store.getCard(cardId)).media)
@@ -2076,19 +2085,34 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     if (!entry) throw httpError(404, msg`名单里没有这个角色`)
     const picture = base ?? (await rosterRef(cardId, entryId))
     if (!picture) throw httpError(400, msg`先给${entry.name}画或上传立绘，再画表情`)
-    const media = await settings()
+    const media = await settingsFor(choice)
     const tags = media.promptStyle === 'tags'
+    // Drawn anew (no editing from the 立绘): as the 立绘 was, its outfit and framing, the face changed.
+    // Asked to edit a picture it never got, Krea 2 drew close-ups in outfits of its own.
+    const fresh = !(await drawsFromPicture(media))
     const edit = tags
       ? `${SPRITE_SCENE}, same character, same outfit, same pose`
-      : `Edit the reference picture of ${entry.name}: keep the same character, face, hair, outfit, pose, framing, art style and the plain white background; change only the facial expression, to ${look.words}`
+      : fresh
+        ? SPRITE_SCENE_NATURAL
+        : `Edit the reference picture of ${entry.name}: keep the same character, face, hair, outfit, pose, framing, art style and the plain white background; change only the facial expression, to ${look.words}`
     const scene = [style, edit].filter(Boolean).join(', ')
     const lead = { ...entry, picture }
-    const cast = { scene, characters: [{ entry: lead, action: tags ? [entry.outfit, look.tags].filter(Boolean).join(', ') : `with ${look.words}`, position: '' }], solo: lead, lead }
+    const action = tags ? [spriteOutfit(entry.outfit), look.tags].filter(Boolean).join(', ') : fresh ? [spriteOutfit(entry.outfit), `with ${look.words}`].filter(Boolean).join(', ') : `with ${look.words}`
+    const cast = { scene, characters: [{ entry: lead, action, position: '' }], solo: lead, lead }
     const plain = { ...media, imageShape: 'portrait', imageReference: true, geminiReference: true, naiReference: true, naiNegative: [media.naiNegative, SPRITE_NEGATIVE].filter(Boolean).join(', '), sdNegative: [media.sdNegative, SPRITE_NEGATIVE].filter(Boolean).join(', ') }
     const result = await render(plain, cardId, cast, cast, '', signal, { references: 'cast', negative: SPRITE_NEGATIVE })
-    const fresh = media.imageBackend === 'sdwebui' || (media.imageBackend === 'comfy' && !describeWorkflow(await drawingWorkflow(media).catch(() => null))?.placeholders.includes('reference'))
     const note = fresh ? msg`这种画图方式不能照着立绘改，表情是按长相重新画的，可能和立绘不太一样。` : ''
     return { ...result, note: [result.note, note].filter(Boolean).join(' ') }
+  }
+
+  /**
+   * Whether the 画图方式 set up can draw from a picture (a 表情 edited from the 立绘):
+   * not SD WebUI, nor a ComfyUI workflow without a %reference% (the simple mode has none).
+   */
+  async function drawsFromPicture(media) {
+    if (media.imageBackend === 'sdwebui') return false
+    if (media.imageBackend !== 'comfy') return true
+    return Boolean(describeWorkflow(await drawingWorkflow(media).catch(() => null))?.placeholders.includes('reference'))
   }
 
   /**
@@ -2188,8 +2212,8 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
    * reference pictures, no LoRA. Without a helper, a plain prompt for sentence
    * style; tag style needs one. → { buffer, prompt, backend, note }
    */
-  async function drawScenery({ cardId, place, lore = '', prompt = '', passage = '' }, signal) {
-    const media = await settings()
+  async function drawScenery({ cardId, place, lore = '', prompt = '', passage = '', choice = {} }, signal) {
+    const media = await settingsFor(choice)
     const card = await store.getCard(cardId)
     const cardMedia = cleanCardMedia(card.media)
     let text = String(prompt ?? '').trim()
@@ -2304,5 +2328,5 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     return listen.transcribe({ media, audio: readAudio(audio, type), names: Array.isArray(names) ? names : [] }, signal)
   }
 
-  return { defaults, settings, cleanSettings, ownBackends: ownBackendViews, naiStatus, setNaiToken, naiCheck, cardMediaView, saveCardMedia, inheritCardMedia, draftRoster, draftRosterFromChat, drawPortrait, drawCardArt, drawAvatar, drawScenery, drawBackdrop, drawSprite, drawExpression, labelExpressions, readRosterRef, saveRosterRef, removeRosterRef, writeImagePrompt, generateImage, readImage, removeImage, removeChatMedia, copyChatMedia, loras, voices: voices.list, personaList: voices.personaList, ttsKeyStatus: voices.ttsKeyStatus, setTtsKey: voices.setTtsKey, voiceKeys: voices.keyStatus, setVoiceKey: voices.setKey, speak, previewVoice, accountVoices, transcribe, loadWorkflow, saveWorkflow, describeWorkflow, comfyModels }
+  return { defaults, settings, cleanSettings, ownBackends: ownBackendViews, naiStatus, setNaiToken, naiCheck, cardMediaView, saveCardMedia, inheritCardMedia, draftRoster, draftRosterFromChat, drawPortrait, drawCardArt, drawAvatar, drawScenery, drawBackdrop, drawSprite, drawExpression, drawsFromPicture, settingsFor, labelExpressions, readRosterRef, saveRosterRef, removeRosterRef, writeImagePrompt, generateImage, readImage, removeImage, removeChatMedia, copyChatMedia, loras, voices: voices.list, personaList: voices.personaList, ttsKeyStatus: voices.ttsKeyStatus, setTtsKey: voices.setTtsKey, voiceKeys: voices.keyStatus, setVoiceKey: voices.setKey, speak, previewVoice, accountVoices, transcribe, loadWorkflow, saveWorkflow, describeWorkflow, comfyModels }
 }

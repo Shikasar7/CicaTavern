@@ -168,6 +168,7 @@ export function cutOut(image, { tolerance = 28 } = {}) {
     if (alpha >= 1) continue
     data[i + 3] = Math.round(255 * Math.max(alpha, 0.25))
   }
+  removed += dropStrays(data, width, height)
   const share = removed / size
   // Down the upper half of both sides a cut-out 立绘 is see-through; much left there is a second
   // background colour (a pale panel beside a white one) or a figure cut off by the frame. Real
@@ -182,6 +183,87 @@ export function cutOut(image, { tolerance = 28 } = {}) {
   }
   const why = share <= 0.08 ? 'fill' : share >= 0.92 ? 'faint' : kept / sides > 0.3 ? 'edge' : ''
   return { ok: !why, box: boundsOf(data, width, height), removed: share, why }
+}
+
+/**
+ * What is left apart from the figure made see-through: specks and splashes a model
+ * painted on the white (Krea 2 does, at CFG 1 where no negative prompt holds), and
+ * patches at the frame's sides and bottom. The largest piece is the figure; another
+ * stays when it is big beside it (a sword held apart from the body). Returns how many
+ * pixels went.
+ */
+function dropStrays(data, width, height) {
+  const size = width * height
+  const piece = new Int32Array(size).fill(-1)
+  const pieces = []
+  const stack = new Int32Array(size)
+  for (let start = 0; start < size; start++) {
+    if (piece[start] !== -1 || data[start * 4 + 3] < 16) continue
+    const id = pieces.length
+    const info = { area: 0, rim: false, pixels: [] }
+    let top = 0
+    stack[top++] = start
+    piece[start] = id
+    while (top) {
+      const p = stack[--top]
+      info.area++
+      info.pixels.push(p)
+      const x = p % width
+      const y = (p - x) / width
+      if (x === 0 || x === width - 1 || y === height - 1) info.rim = true
+      // Eight neighbours: a thin strand of hair still holds to the head.
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const nx = x + dx
+          const ny = y + dy
+          if ((!dx && !dy) || nx < 0 || ny < 0 || nx >= width || ny >= height) continue
+          const q = ny * width + nx
+          if (piece[q] !== -1 || data[q * 4 + 3] < 16) continue
+          piece[q] = id
+          stack[top++] = q
+        }
+      }
+    }
+    pieces.push(info)
+  }
+  if (pieces.length < 2) return 0
+  const largest = Math.max(...pieces.map(p => p.area))
+  let gone = 0
+  for (const info of pieces) {
+    if (info.area === largest) continue
+    // Big beside the figure and clear of the frame: part of it.
+    if (info.area >= largest * (info.rim ? 0.5 : 0.06)) continue
+    for (const p of info.pixels) data[p * 4 + 3] = 0
+    gone += info.area
+  }
+  return gone
+}
+
+/**
+ * The part of a cut-out figure that stands on the stage: a 立绘 is the figure from the thighs up. A whole
+ * figure, head to feet (models draw one even when asked for the thighs up), keeps its upper part, head to
+ * mid-thigh, so it stands as big as the others; its 表情, drawn from it, keep the same part.
+ * Told by the head: the top tenth of a whole figure is its head, about an eighth of its height wide;
+ * from the thighs up it is a fifth or more. Real 立绘 (2026-10-29): whole figures 0.11–0.13, thighs up
+ * 0.165–0.23. Their shape does not tell them (3.0–4.1 tall to wide against 2.45–3.2), nor the feet
+ * (models stand them on the bottom edge).
+ * @param image - the picture cutOut cleared
+ * @param box - cutOut's box
+ */
+export function spriteFrame(image, box) {
+  const { data, width } = image
+  let head = 0
+  for (let y = box.y; y < box.y + box.height * 0.1; y++) {
+    let left = -1
+    let right = -1
+    for (let x = box.x; x < box.x + box.width; x++) {
+      if (data[(y * width + x) * 4 + 3] <= 128) continue
+      if (left < 0) left = x
+      right = x
+    }
+    if (left >= 0) head = Math.max(head, right - left + 1)
+  }
+  return head && head / box.height < 0.145 ? { ...box, height: Math.round(box.height * 0.58) } : box
 }
 
 /** The smallest box holding every pixel that is not see-through. */

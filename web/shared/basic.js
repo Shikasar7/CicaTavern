@@ -38,13 +38,47 @@ export const BASIC_DEFAULTS = Object.freeze({
 })
 
 /** Saved options with unknown keys dropped and unknown values back at their default. */
-export function cleanBasic(value) {
+export function cleanBasic(value, options = BASIC_OPTIONS, defaults = BASIC_DEFAULTS) {
   const out = {}
-  for (const [key, values] of Object.entries(BASIC_OPTIONS)) {
-    out[key] = values.includes(value?.[key]) ? value[key] : BASIC_DEFAULTS[key]
+  for (const [key, values] of Object.entries(options)) {
+    out[key] = values.includes(value?.[key]) ? value[key] : defaults[key]
   }
   return out
 }
+
+// The visual novel preset (视觉小说预设): the built-in preset's options, saved apart
+// (settings.vn), and its own on how the story is told: more dialogue, short narration,
+// scenery left to the background picture, a beat per paragraph for the text box.
+export const VN_ID = 'vn'
+
+export const VN_OPTIONS = Object.freeze({
+  ...BASIC_OPTIONS,
+  dialogue: ['more', 'most', 'balanced'],
+  narration: ['brief', 'minimal', 'normal'],
+  scenery: ['brief', 'normal'],
+  paging: ['short', 'normal'],
+  flavor: ['auto', 'galgame', 'adventure'],
+})
+
+export const VN_DEFAULTS = Object.freeze({
+  ...BASIC_DEFAULTS,
+  dialogue: 'more',
+  narration: 'brief',
+  scenery: 'brief',
+  paging: 'short',
+  flavor: 'auto',
+})
+
+export const cleanVn = value => cleanBasic(value, VN_OPTIONS, VN_DEFAULTS)
+
+/** The built-in presets: the basic one and the visual novel one. */
+export const isBuiltinPreset = id => id === BASIC_ID || id === VN_ID
+
+/** Where a built-in preset's options are saved in the settings. */
+export const builtinKey = id => (id === VN_ID ? 'vn' : 'basic')
+
+/** A built-in preset's options as saved. */
+export const builtinOptions = (settings, id) => (id === VN_ID ? cleanVn(settings?.vn) : cleanBasic(settings?.basic))
 
 // A time box the model closed with another tag, or not at all, ends with its line;
 // choices the model did not close yet (still streaming, or cut off) run to the end.

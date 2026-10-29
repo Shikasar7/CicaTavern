@@ -196,7 +196,7 @@ export default {
   "没选正则": "No regex scripts selected",
   "已经在这一组里了": "They're already in this group",
   "文件里没有可用的正则（要有「查找」的表达式）": "No usable regex in the file (each needs a Find pattern)",
-  "基础预设自带的正则不能改": "The built-in preset's own regex can't be changed",
+  "内置预设自带的正则不能改": "A built-in preset's own regex can't be changed",
   "屏蔽词列表的格式不对": "The blocked word list isn't in the right shape",
   "屏蔽词太多（最多 {0} 个）": "Too many blocked words ({0} at most)",
   "「{0}」的例外太多（最多 {1} 个）": "\"{0}\" has too many exceptions ({1} at most)",
@@ -621,6 +621,12 @@ export default {
   "模型没有写出完整的剧情存档，这次没有压缩，可以再试一次": "The model didn't write a complete story archive, so nothing was compacted. You can try again",
   "模型没有写出剧情存档（可能接着写了剧情），这次没有压缩，可以再试一次": "The model didn't write a story archive (it may have gone on with the story), so nothing was compacted. You can try again",
   "故事太长，{0} · {1} 分段也读不下：换一个上下文更大的模型来压缩，或者只保留最近两轮": "The story is too long for {0} · {1} even in parts: compact with a model that has a longer context, or keep only the last two turns",
+  "{0} 写的方案读不出来，再试一次，或者换个模型": "The plans {0} wrote couldn't be read. Try again, or switch to another model.",
+  "没有这一版方案": "There is no such plan",
+  "创作：找灵感": "Create: ideas",
+  "{0} 这次没给出能读的灵感，再试一次，或者换个模型": "{0} gave no readable ideas this time. Try again, or switch to another model.",
+  "事件": "Events",
+  "卡还没有写出来": "The card hasn't been written yet",
 }
 
 // Whole messages from the modules bin/launch.mjs loads on its own (store.mjs,
@@ -658,5 +664,4 @@ export const whole = {
   "解压后太大": "too large once unpacked",
   "顶层应该只有一个文件夹": "there should be just one top folder",
   "顶层文件夹是 {0}，应该是 {1}": "the top folder is {0}, it should be {1}",
-
 }

@@ -6,7 +6,7 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { cleanProxySetting } from './proxy.mjs'
-import { cleanBasic } from '../web/shared/basic.js'
+import { cleanBasic, cleanVn } from '../web/shared/basic.js'
 import { cleanAppearance } from '../web/shared/appearance.js'
 import { cleanList, DEFAULT_ITEM, defaultOf } from '../web/shared/personas.js'
 import { cleanCompaction } from './context.mjs'
@@ -154,6 +154,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   replyLength: 0, // target reply length in characters; 0 = no requirement
   presetId: '', // SillyTavern preset for new chats; empty = the built-in preset (basic.mjs)
   basic: null, // the built-in preset's options (web/shared/basic.js); null = their defaults
+  vn: null, // the visual novel preset's (视觉小说预设, the same file); null = its defaults
   listen: 'local', // 'local' or 'lan'; applied on the next start
   subscription: 'on', // 'off' hides the Claude subscription models (API providers only)
   proxy: null, // 'none' | 'system' | an http(s) URL; null = the edition's default (proxy.mjs)
@@ -221,7 +222,7 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
 
     async getSettings() {
       const saved = { ...DEFAULT_SETTINGS, ...(await readJson(path.join(root, 'settings.json'), {})) }
-      return lockSettings({ ...saved, basic: cleanBasic(saved.basic), appearance: cleanAppearance(saved.appearance), globalBookIds: cleanIds(saved.globalBookIds), globalVars: cleanVars(saved.globalVars), compaction: cleanCompaction(saved.compaction) })
+      return lockSettings({ ...saved, basic: cleanBasic(saved.basic), vn: cleanVn(saved.vn), appearance: cleanAppearance(saved.appearance), globalBookIds: cleanIds(saved.globalBookIds), globalVars: cleanVars(saved.globalVars), compaction: cleanCompaction(saved.compaction) })
     },
     /** Settings worked out from the saved ones and saved, with no other save in between (template global writes). */
     updateSettings(change, options) {
@@ -247,6 +248,7 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
         next.cdnLibraries = next.cdnLibraries !== false
         next.privacyNotice = Math.max(0, Math.floor(Number(next.privacyNotice) || 0))
         next.basic = cleanBasic(next.basic)
+        next.vn = cleanVn(next.vn)
         next.globalBookIds = cleanIds(next.globalBookIds)
         next.globalVars = cleanVars(next.globalVars)
         // The picture's file name only changes with the picture (setBackdrop below).

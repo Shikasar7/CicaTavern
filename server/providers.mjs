@@ -12,6 +12,7 @@ import https from 'node:https'
 import { modelInfo } from './models.mjs'
 import { httpError } from './store.mjs'
 import { msg } from './i18n.mjs'
+import { estimateTokens } from './context.mjs'
 
 // A getter: the label is in the language of the page that asks.
 export const APIS = {
@@ -593,14 +594,25 @@ function parseJson(text) {
 }
 
 // ─── Protocols ──────────────────────────────────────────────────────────
-// Each returns { text, usage: { input, cacheRead, cacheWrite, output }, model, stopReason, reasoned }.
-// `input` counts uncached prompt tokens only, as in the SDK usage.
+// Each returns { text, usage: { input, cacheRead, cacheWrite, output, thinking? }, model, stopReason, reasoned }.
+// `input` counts uncached prompt tokens only, as in the SDK usage. `thinking`: the part of `output` the model
+// spent thinking (not sent back next turn, so not context): given by OpenAI-style APIs, worked out for Anthropic.
 
 function openaiUsage(usage) {
   if (!usage) return null
   const prompt = usage.prompt_tokens ?? usage.input_tokens ?? 0
   const cached = usage.prompt_tokens_details?.cached_tokens ?? usage.input_tokens_details?.cached_tokens ?? usage.prompt_cache_hit_tokens ?? 0
-  return { input: Math.max(0, prompt - cached), cacheRead: cached, cacheWrite: 0, output: usage.completion_tokens ?? usage.output_tokens ?? 0 }
+  const thinking = (usage.completion_tokens_details ?? usage.output_tokens_details)?.reasoning_tokens ?? 0
+  return { input: Math.max(0, prompt - cached), cacheRead: cached, cacheWrite: 0, output: usage.completion_tokens ?? usage.output_tokens ?? 0, ...(thinking > 0 ? { thinking } : {}) }
+}
+
+/**
+ * Anthropic counts thinking in output_tokens: its share, by the thinking text's length against the
+ * answer's (a summarized or hidden thinking reads short, so this errs on keeping tokens as context).
+ */
+function withThinking(usage, thought, said) {
+  if (!usage || !thought) return usage
+  return { ...usage, thinking: Math.round((usage.output ?? 0) * (thought / (thought + Math.max(1, said)))) }
 }
 
 // `reasoned`: the model thought before answering (its thinking is not part of `text`).
@@ -757,10 +769,12 @@ async function anthropicMessages(provider, request, res) {
     }
     const raw = text
     text = afterSearch(text, cut)
-    if (text) request.onDelta?.(text)
     takeUsage(json.usage)
+    checkSystemArrived(request, usage)
+    if (text) request.onDelta?.(text)
     reasoned = (json.content ?? []).some(b => /thinking/.test(b.type ?? ''))
-    return { text, raw, cut, content: Array.isArray(json.content) ? json.content : [], usage: seenUsage ? usage : null, model: json.model ?? null, stopReason: json.stop_reason ?? null, reasoned, search: counted() }
+    const thought = (json.content ?? []).reduce((n, b) => n + String(b.thinking ?? '').length, 0)
+    return { text, raw, cut, content: Array.isArray(json.content) ? json.content : [], usage: seenUsage ? withThinking(usage, thought, raw.length) : null, model: json.model ?? null, stopReason: json.stop_reason ?? null, reasoned, search: counted() }
   }
   const toolInput = new Map() // block index → the search's input JSON as it streams
   // The reply's content blocks rebuilt from the stream (a paused one is sent back as it came: pause_turn).
@@ -790,6 +804,7 @@ async function anthropicMessages(provider, request, res) {
     if (json.type === 'message_start') {
       model = json.message?.model ?? null
       takeUsage(json.message?.usage)
+      checkSystemArrived(request, usage)
     } else if (json.type === 'content_block_delta' && json.delta?.type === 'text_delta') {
       text += json.delta.text
       request.onDelta?.(json.delta.text)
@@ -817,7 +832,10 @@ async function anthropicMessages(provider, request, res) {
       throw new Error(json.error?.message ?? msg`生成失败`)
     }
   }
-  return { text: afterSearch(text, cut), raw: text, cut, content: blocks.filter(Boolean), usage: seenUsage ? usage : null, model, stopReason, reasoned, search: counted() }
+  const thought = blocks.reduce((n, b) => n + String(b?.thinking ?? '').length, 0)
+  // A relay that counts nothing until the end (message_start all zeros) shows the lost system prompt only now, the text out.
+  const systemDropped = Boolean(request.expectPrompt) && checkSystemArrived(request, usage, { late: true })
+  return { text: afterSearch(text, cut), raw: text, cut, content: blocks.filter(Boolean), usage: seenUsage ? withThinking(usage, thought, text.length) : null, model, stopReason, reasoned, search: counted(), ...(systemDropped ? { systemDropped } : {}) }
 }
 
 /** A reply that paused (pause_turn) and the rest the model wrote when given it back: one reply. */
@@ -883,6 +901,9 @@ export function reasoningFields(api, modelId, { thinking, effort } = {}) {
 const NO_REASONING = new Set()
 const REASONING_REFUSED = /thinking|effort|reasoning|output_config|extra inputs|unknown (field|param)|unrecognized|not (supported|permitted|allowed)|unsupported/i
 
+// Models that are not Claude, as relays name them behind the Anthropic API.
+const OTHER_MODELS = /deepseek|kimi|moonshot|qwen|qwq|glm|zhipu|gemini|gemma|gpt|o[134]-|grok|minimax|doubao|seed|step|mimo|hunyuan|ernie|baichuan|yi-|llama|mistral|mixtral|command/i
+
 function requestBody(provider, modelId, { system, messages, maxTokens: cap, reasoning, webSearch }, { ttl = provider.cacheTtl, withReasoning = true } = {}) {
   // A request may cap its own output (short helper calls); otherwise the provider's setting.
   const maxTokens = cap || provider.maxTokens
@@ -901,13 +922,16 @@ function requestBody(provider, modelId, { system, messages, maxTokens: cap, reas
     // The newest message of the conversation itself: a paused reply sent back after it (its blocks) has none.
     const last = messages.findLastIndex(m => !Array.isArray(m.content))
     const cache = ttl === '1h' ? { type: 'ephemeral', ttl: '1h' } : { type: 'ephemeral' }
+    // Only Claude takes the breakpoints. Relays that put other models (DeepSeek, Kimi…) behind this
+    // API cache by themselves, and some drop the system prompt when a message comes as marked blocks.
+    const marked = !OTHER_MODELS.test(modelId)
     return {
       model: modelId,
       max_tokens: maxTokens || ANTHROPIC_DEFAULT_MAX,
       // An empty text block is refused, so a request without a system prompt has no system field.
-      ...(String(system ?? '').trim() ? { system: [{ type: 'text', text: system, cache_control: cache }] } : {}),
+      ...(String(system ?? '').trim() ? { system: marked ? [{ type: 'text', text: system, cache_control: cache }] : system } : {}),
       messages: messages.map((m, i) =>
-        !Array.isArray(m.content) && (i === last || m.cache) ? { role: m.role, content: [{ type: 'text', text: m.content, cache_control: cache }] } : { role: m.role, content: m.content },
+        marked && !Array.isArray(m.content) && (i === last || m.cache) ? { role: m.role, content: [{ type: 'text', text: m.content, cache_control: cache }] } : { role: m.role, content: m.content },
       ),
       stream: true,
       ...(search === 'anthropic' ? { tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: SEARCHES_PER_REPLY }] } : {}),
@@ -950,9 +974,13 @@ const PROTOCOL = {
  * @param request - { system, messages: [{ role: 'user'|'assistant', content }], maxTokens?, signal, onDelta }
  * @param proxy - the app's proxy URL, or null; ignored when the provider is set to direct.
  */
-export async function complete(provider, modelId, request, { proxy = null } = {}) {
+export async function complete(provider, modelId, original, { proxy = null } = {}) {
   const protocol = PROTOCOL[provider.api]
   if (!protocol) throw new Error(msg`不支持的接口类型：${provider.api}`)
+  const dropped = SYSTEM_DROPPED.has(`${provider.id}/${modelId}`)
+  // A relay seen dropping this model's system prompt: it goes in the first message from then on. Otherwise how
+  // much input a long system prompt must come to, at the least (Anthropic says it before any text: readers check).
+  const request = dropped ? systemInMessages(original) : provider.api === 'anthropic-messages' && String(original.system ?? '').length >= 1500 ? { ...original, expectPrompt: Math.round(estimateTokens(original.system) * 0.6) } : original
   if (!apiKeyOf(provider) && !Object.keys(provider.headers ?? {}).length) {
     // A model server on this machine or the local network (LM Studio, Ollama on another PC) needs none.
     const local = isLocalNetworkHost(new URL(provider.baseURL).hostname)
@@ -1015,7 +1043,7 @@ export async function complete(provider, modelId, request, { proxy = null } = {}
       if (dropReasoning) NO_REASONING.add(refusedKey)
       used = { options: { ...fixed, ...(dropReasoning ? { withReasoning: false } : {}) }, body }
     }
-    let result = await protocol.read(provider, request, res)
+    let result = withPrompt(await protocol.read(provider, request, res))
     // 联网 on Anthropic: a reply paused mid-search (pause_turn, after many searches) goes back as it came, and the
     // model carries on from there; the page has been showing it all along.
     for (let round = 0; result.stopReason === 'pause_turn' && result.content?.length && round < PAUSED_ROUNDS && !request.signal?.aborted; round++) {
@@ -1023,11 +1051,30 @@ export async function complete(provider, modelId, request, { proxy = null } = {}
       await failIfBad(next).catch(error => {
         throw searchHint(contextHint(error), request)
       })
-      result = joinPaused(result, await protocol.read(provider, request, next))
+      result = joinPaused(result, withPrompt(await protocol.read(provider, request, next)))
     }
     return { ...result, truncated: TRUNCATED.test(String(result.stopReason ?? '')) }
   }
-  const first = await attempt()
+  let first
+  try {
+    first = await attempt()
+  } catch (error) {
+    // The system prompt never arrived (a relay passing some requests to an upstream that drops it, modelflare's
+    // Claude for one): asked again at once with it in the first message, and so for this model from now on.
+    if (!error.systemDropped || dropped || original.signal?.aborted) throw error
+    SYSTEM_DROPPED.add(pair)
+    return complete(provider, modelId, original, { proxy })
+  }
+  // Found out at the end, the answer already shown: asked again when the caller can take back what it showed
+  // (`onRestart`) or showed nothing; otherwise this answer stands and the next one goes the other way.
+  if (first.systemDropped && !dropped) {
+    SYSTEM_DROPPED.add(pair)
+    if ((!original.onDelta || original.onRestart) && !original.signal?.aborted) {
+      original.onRestart?.()
+      const again = await complete(provider, modelId, original, { proxy })
+      return { ...again, usage: addUsage(first.usage, again.usage) }
+    }
+  }
   if (!short || THINKERS.has(pair) || !first.truncated || !first.reasoned) return first
   // Its thinking used up a short cap: room for it from now on, and once more
   // now when nothing of the answer came (a started one is already on screen).
@@ -1037,14 +1084,49 @@ export async function complete(provider, modelId, request, { proxy = null } = {}
   return { ...second, usage: addUsage(first.usage, second.usage) }
 }
 
+// Provider + model pairs whose system prompt a relay has dropped: sent in the first message instead (systemInMessages).
+const SYSTEM_DROPPED = new Set()
+
+/** The request with its system prompt at the head of the first user message (a relay that drops the system field). */
+function systemInMessages(request) {
+  const system = String(request.system ?? '').trim()
+  if (!system) return request
+  const head = `<system>\n${system}\n</system>\n\n`
+  const at = request.messages.findIndex(m => m.role === 'user')
+  if (at < 0) return request
+  const messages = request.messages.map((m, i) => (i !== at ? m : { ...m, content: Array.isArray(m.content) ? [{ type: 'text', text: head }, ...m.content] : head + m.content }))
+  return { ...request, system: '', messages }
+}
+
+/**
+ * An answer whose input is far less than its system prompt alone: the prompt never got there. Thrown before any
+ * text shows; `late` (the stream over) says so instead.
+ */
+function checkSystemArrived(request, usage, { late = false } = {}) {
+  if (!request.expectPrompt || !usage) return false
+  const prompt = (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0)
+  const lost = prompt > 0 && prompt < request.expectPrompt
+  if (lost && !late) throw Object.assign(new Error('system prompt dropped'), { systemDropped: true })
+  return lost
+}
+
 // Models that think before answering count the thinking against the output cap
 // (DeepSeek's flash thinks by default), so a short cap can run out before the
 // answer starts. A pair seen doing that gets this much more on short caps.
 const THINKERS = new Set()
 const THINKING_ROOM = 16000
 
-/** Two calls' tokens as one. */
-const addUsage = (a, b) => (a && b ? Object.fromEntries(Object.keys(b).map(key => [key, (a[key] ?? 0) + (b[key] ?? 0)])) : b ?? a)
+/**
+ * Two calls' tokens as one, for billing. `prompt` stays the last call's: what the context held is what
+ * that one was sent (a paused reply sent back again, or asked once more, is no context twice over).
+ */
+const addUsage = (a, b) => (a && b ? Object.fromEntries([...new Set([...Object.keys(a), ...Object.keys(b)])].map(key => [key, key === 'prompt' ? b[key] ?? a[key] : (a[key] ?? 0) + (b[key] ?? 0)])) : b ?? a)
+
+/** One call's result with its own prompt size kept (`prompt`: uncached, cached and newly cached input together). */
+function withPrompt(result) {
+  const u = result?.usage
+  return u ? { ...result, usage: { ...u, prompt: (u.input ?? 0) + (u.cacheRead ?? 0) + (u.cacheWrite ?? 0) } } : result
+}
 
 // A request longer than the model's context window, as providers word it (OpenAI, DeepSeek and relays; Anthropic;
 // Gemini; Kimi's token limit; GLM's max length; Qwen's input range; Chinese relays).

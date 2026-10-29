@@ -8,7 +8,7 @@
 // so the next turn writes the cache once more; display-only ones never do.
 import { randomUUID } from 'node:crypto'
 import { chatScriptList, normalizeScripts, setsOfCard } from '../web/shared/regex.js'
-import { BASIC_ID } from '../web/shared/basic.js'
+import { isBuiltinPreset } from '../web/shared/basic.js'
 import { httpError, newId } from './store.mjs'
 import { msg } from './i18n.mjs'
 
@@ -106,7 +106,7 @@ export function createRegex(store) {
       }
     }
     if (key.startsWith('preset-')) {
-      if (key.slice(7) === BASIC_ID) throw httpError(400, msg`基础预设自带的正则不能改`)
+      if (isBuiltinPreset(key.slice(7))) throw httpError(400, msg`内置预设自带的正则不能改`)
       const preset = await store.getPreset(key.slice(7))
       return {
         key,
