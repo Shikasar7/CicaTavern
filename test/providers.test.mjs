@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
+import { createVerify, generateKeyPairSync } from 'node:crypto'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -9,7 +10,7 @@ import { activePath, chatView, createChat, restoreFolded, rollbackTo } from '../
 import { createEngine } from '../server/engine.mjs'
 import { testSubscription } from './support/subscription.mjs'
 import { editPreset, normalizePreset } from '../server/presets.mjs'
-import { complete, exportProviders, importProviders, listRemoteModelDetails, listRemoteModels, normalizeProvider, providerChoices, providerError, publicProvider, reasoningFields } from '../server/providers.mjs'
+import { complete, exportProviders, googleRequest, importProviders, isGoogle, listRemoteModelDetails, listRemoteModels, normalizeProvider, providerChoices, providerError, publicProvider, reasoningFields } from '../server/providers.mjs'
 import { createStore } from '../server/store.mjs'
 import { cleanScripts } from '../server/regex.mjs'
 
@@ -814,7 +815,7 @@ test('image prompt inside the conversation: same prefix as the next turn, so the
   assert.deepEqual(side.messages.slice(0, -1), next.messages.slice(0, -1), 'identical prefix: system, both exchanges')
 
   // The opening is not in the history, so it rides along in the instruction.
-  assert.match(contextImageInstruction({ promptStyle: 'tags', style: '水彩', passage: '欢迎光临～' }), /<latest_passage>\n欢迎光临～[\s\S]*画面里一定要有人[\s\S]*画风：水彩[\s\S]*逗号分隔/)
+  assert.match(contextImageInstruction({ promptStyle: 'tags', style: '水彩', passage: '欢迎光临～' }), /<latest_passage>\n欢迎光临～[\s\S]*画面里一定要有人[\s\S]*画风会自动加上[^\n]*水彩[\s\S]*逗号分隔/)
 
   // A chat on the subscription cannot lend its context: the helper model takes over.
   const saved = await store.getChat(chat.id)
@@ -926,4 +927,149 @@ test('a reply paused mid-search (pause_turn) goes back as it came, and the model
   assert.equal(result.truncated, false)
   assert.equal(result.usage.output, 11)
   assert.deepEqual([result.search.count, result.search.queries], [1, ['旧城茶馆']])
+})
+
+test('Vertex AI: a service account JSON key or gcloud login file, traded for an access token that is kept until it runs out', async t => {
+  const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
+  const seen = { tokens: 0, chat: [], google: [], lists: [] }
+  const server = createServer(async (req, res) => {
+    let body = ''
+    for await (const chunk of req) body += chunk
+    const json = (data, status = 200) => {
+      res.writeHead(status, { 'content-type': 'application/json' })
+      res.end(JSON.stringify(data))
+    }
+    if (req.url === '/token') {
+      const form = new URLSearchParams(body)
+      // gcloud's login file: its refresh token.
+      if (form.get('grant_type') === 'refresh_token') {
+        if (form.get('refresh_token') !== '1//rt-demo' || form.get('client_id') !== 'cid.apps.googleusercontent.com' || form.get('client_secret') !== 'cs') return json({ error: 'invalid_grant', error_description: 'Token has been expired or revoked.' }, 400)
+        seen.tokens += 1
+        return json({ access_token: `ya29.token-${seen.tokens}`, expires_in: 3599 })
+      }
+      // The assertion must be a JWT signed with the service account's key, for this address.
+      const assertion = form.get('assertion')
+      const [head, claims, signature] = assertion.split('.')
+      const valid = createVerify('RSA-SHA256').update(`${head}.${claims}`).verify(publicKey, signature, 'base64url')
+      const payload = JSON.parse(Buffer.from(claims, 'base64url').toString())
+      if (!valid || payload.iss !== 'tavern@demo-proj.iam.gserviceaccount.com' || !payload.aud.endsWith('/token')) return json({ error: 'invalid_grant' }, 400)
+      seen.tokens += 1
+      return json({ access_token: `ya29.token-${seen.tokens}`, expires_in: 3599, token_type: 'Bearer' })
+    }
+    if (req.headers.authorization !== `Bearer ya29.token-${seen.tokens}`) return json({ error: { message: 'unauthenticated' } }, 401)
+    if (req.url.startsWith('/v1beta1/publishers/google/models')) {
+      seen.lists.push({ url: req.url, project: req.headers['x-goog-user-project'] })
+      return json(req.url.includes('pageToken')
+        ? { publisherModels: [{ name: 'publishers/google/models/gemini-3.1-pro-preview' }, { name: 'publishers/google/models/imagen-4.0' }, { name: 'publishers/google/models/gemini-3.5-transcribe-live' }] }
+        : { publisherModels: [{ name: 'publishers/google/models/gemini-4-argon' }, { name: 'publishers/google/models/gemini-2.5-flash-image' }], nextPageToken: 'p2' })
+    }
+    if (req.url.includes('/publishers/google/models/')) {
+      seen.google.push(req.url)
+      return json({ candidates: [{ content: { parts: [{ text: 'ok' }] } }] })
+    }
+    seen.chat.push({ url: req.url, body: JSON.parse(body) })
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: '你好' }, finish_reason: 'stop' }] })}\n\n`)
+    res.end('data: [DONE]\n\n')
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => server.close())
+  const origin = `http://127.0.0.1:${server.address().port}`
+  const keyFile = JSON.stringify({
+    type: 'service_account',
+    project_id: 'demo-proj',
+    private_key_id: 'abc',
+    private_key: privateKey.export({ type: 'pkcs8', format: 'pem' }),
+    client_email: 'tavern@demo-proj.iam.gserviceaccount.com',
+    token_uri: `${origin}/token`,
+  }, null, 2)
+
+  const provider = normalizeProvider({ name: 'Vertex AI', api: 'openai-completions', baseURL: `${origin}/v1/projects/PROJECT_ID/locations/global/endpoints/openapi`, apiKey: keyFile, models: [{ id: 'google/gemini-4-argon' }] })
+  assert.equal(provider.baseURL, `${origin}/v1/projects/demo-proj/locations/global/endpoints/openapi`, 'the project comes from the key')
+  assert.doesNotMatch(provider.apiKey, /\n/, 'kept on one line')
+  assert.equal(JSON.parse(provider.apiKey).private_key_id, undefined, 'only what a token needs')
+  assert.equal(publicProvider(provider).keyHint, 'tavern@demo-proj.iam.gserviceaccount.com')
+  assert.throws(() => normalizeProvider({ name: 'x', api: 'openai-completions', baseURL: origin, apiKey: '{"type": "authorized_user"}', models: ['m'] }), /服务账号/)
+
+  const reply = await complete(provider, 'google/gemini-4-argon', { system: 's', messages: [{ role: 'user', content: '在吗' }] })
+  assert.equal(reply.text, '你好')
+  assert.equal(seen.chat[0].url, '/v1/projects/demo-proj/locations/global/endpoints/openapi/chat/completions')
+  assert.equal(seen.chat[0].body.model, 'google/gemini-4-argon')
+  await complete(provider, 'google/gemini-4-argon', { system: 's', messages: [{ role: 'user', content: '再来' }] })
+  assert.equal(seen.tokens, 1, 'one token for both turns')
+
+  // Gemini pictures and speech: Vertex's own generateContent, with the same token.
+  assert.equal(isGoogle({ ...provider, baseURL: 'https://aiplatform.googleapis.com/v1/projects/p/locations/global/endpoints/openapi' }), true)
+  await googleRequest(provider, '/models/gemini-2.5-flash-image:generateContent', { body: { contents: [] } })
+  assert.deepEqual(seen.google, ['/v1/projects/demo-proj/locations/global/publishers/google/models/gemini-2.5-flash-image:generateContent'])
+
+  const listed = await listRemoteModelDetails(provider)
+  assert.deepEqual(listed.models, ['google/gemini-3.1-pro-preview', 'google/gemini-4-argon'], 'Gemini chat models from every page, as google/<model>')
+  assert.equal(seen.lists.length, 2)
+  assert.equal(seen.lists[0].project, 'demo-proj', 'its address names no project: the header says which one')
+
+  // An organization that allows no keys: the file `gcloud auth application-default login` writes. It names no project.
+  const login = JSON.stringify({ client_id: 'cid.apps.googleusercontent.com', client_secret: 'cs', refresh_token: '1//rt-demo', type: 'authorized_user', universe_domain: 'googleapis.com', token_uri: `${origin}/token` })
+  const template = { name: 'Vertex AI', api: 'openai-completions', baseURL: `${origin}/v1/projects/PROJECT_ID/locations/global/endpoints/openapi`, apiKey: login, models: [{ id: 'google/gemini-4-argon' }] }
+  assert.throws(() => normalizeProvider(template), /PROJECT_ID/, 'the project has to be written in')
+  const byLogin = normalizeProvider({ ...template, baseURL: template.baseURL.replace('PROJECT_ID', 'my-proj') })
+  assert.match(publicProvider(byLogin).keyHint, /gcloud/)
+  assert.equal(normalizeProvider({ ...template, apiKey: JSON.stringify({ ...JSON.parse(login), quota_project_id: 'quota-proj' }) }).baseURL, `${origin}/v1/projects/quota-proj/locations/global/endpoints/openapi`, 'or comes from the quota project')
+  const before = seen.tokens
+  assert.equal((await complete(byLogin, 'google/gemini-4-argon', { system: 's', messages: [{ role: 'user', content: '在吗' }] })).text, '你好')
+  assert.equal(seen.tokens, before + 1)
+  assert.equal(seen.chat.at(-1).url, '/v1/projects/my-proj/locations/global/endpoints/openapi/chat/completions')
+  const revoked = normalizeProvider({ ...template, baseURL: byLogin.baseURL, apiKey: login.replace('rt-demo', 'rt-old') })
+  await assert.rejects(complete(revoked, 'google/gemini-4-argon', { system: 's', messages: [{ role: 'user', content: 'x' }] }), /expired or revoked[\s\S]*application-default login/)
+})
+
+test('a busy Vertex AI (429) is asked again after a wait, twice at most; other providers are not', async t => {
+  let busy = 0
+  let delay = '0.05s'
+  const hits = []
+  const server = createServer(async (req, res) => {
+    for await (const chunk of req) void chunk
+    hits.push(req.url)
+    if (busy > 0) {
+      busy -= 1
+      res.writeHead(429, { 'content-type': 'application/json' })
+      return res.end(JSON.stringify([{ error: { code: 429, message: 'Resource exhausted. Please try again later.', status: 'RESOURCE_EXHAUSTED', details: [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: delay }] } }]))
+    }
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: '你好' }, finish_reason: 'stop' }] })}\n\n`)
+    res.end('data: [DONE]\n\n')
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => server.close())
+  const origin = `http://127.0.0.1:${server.address().port}`
+  const vertex = normalizeProvider({ name: 'Vertex AI', api: 'openai-completions', baseURL: `${origin}/v1/projects/demo/locations/global/endpoints/openapi`, apiKey: 'k', models: [{ id: 'google/gemini-4-argon' }] })
+  const relay = normalizeProvider({ name: 'relay', api: 'openai-completions', baseURL: `${origin}/v1`, apiKey: 'k', models: [{ id: 'm' }] })
+  const retries = []
+  const ask = provider => complete(provider, provider.models[0].id, { system: 's', messages: [{ role: 'user', content: 'hi' }], onRetry: info => retries.push(info) })
+  const again = () => {
+    retries.length = 0
+    hits.length = 0
+  }
+
+  busy = 2
+  assert.equal((await ask(vertex)).text, '你好', 'answered on the third try')
+  assert.deepEqual(retries.map(r => [r.attempt, r.of, r.wait]), [[1, 2, 50], [2, 2, 50]], 'as long as Google said each time')
+  assert.equal(hits.length, 3)
+
+  again()
+  busy = 3
+  await assert.rejects(ask(vertex), error => error.providerStatus === 429 && /Resource exhausted/.test(error.message) && /已经自动重试了 2 次/.test(error.hint))
+  assert.equal(hits.length, 3, 'given up after two retries')
+
+  again()
+  busy = 1
+  delay = '60s'
+  await assert.rejects(ask(vertex), error => error.providerStatus === 429 && !error.hint)
+  assert.deepEqual([hits.length, retries.length], [1, 0], 'Google asking for longer than we wait: given up at once')
+
+  again()
+  busy = 1
+  delay = '0.05s'
+  await assert.rejects(ask(relay), error => error.providerStatus === 429 && !error.hint)
+  assert.deepEqual([hits.length, retries.length], [1, 0], 'another provider: not asked again')
 })

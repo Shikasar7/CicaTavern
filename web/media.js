@@ -6,11 +6,15 @@ import { hasMarks, speakerNames, splitLines } from '/shared/vn.js'
 import { createMenu, MENU_ICONS, whoLine } from '/menu.js'
 import { locale, t, zh } from '/i18n.js'
 import { NAI_MODELS, historyStrip, keptItems } from '/draw-choice.js'
-import { GEMINI_IMAGE_MODELS, IMAGE_MODEL } from '/shared/draw.js'
+import { GEMINI_IMAGE_MODELS, IMAGE_MODEL, STYLE_PRESETS, stylePresetOf } from '/shared/draw.js'
 import { matchesTerms, searchBox, searchTerms } from '/books.js'
 
 const SHAPES = [['square', t`方图`], ['portrait', t`竖图`], ['landscape', t`横图`]]
 const IMAGE_BACKEND_TEXT = { openai: t`图片接口`, gemini: 'Gemini', comfy: 'ComfyUI', sdwebui: 'SD WebUI', novelai: 'NovelAI' }
+// The 画风预设 by id (web/shared/draw.js STYLE_PRESETS has their words).
+const STYLE_PRESET_NAMES = { anime: t`日系动画`, galgame: t`精致 CG（galgame）`, impasto: t`厚涂`, watercolor: t`水彩`, ink: t`国风水墨`, semireal: t`半写实`, photo: t`写实照片`, retro: t`90 年代复古动画`, render3d: t`3D 渲染` }
+// 写提示词的额外要求: as long as the server keeps them (server/media.mjs RULES_MAX).
+const RULES_MAX = { media: 4000, card: 2000 }
 // The image backends as offered, the usual first.
 const imageBackends = () => [
   ['openai', t`OpenAI 兼容图片接口（gpt-image 等）`],
@@ -53,7 +57,7 @@ const SERVICE_SITES = {
 }
 const SD_SAMPLERS = ['Euler a', 'Euler', 'DPM++ 2M', 'DPM++ 2M Karras', 'DPM++ SDE Karras', 'DPM++ 2M SDE', 'DDIM', 'UniPC']
 /** A provider holding Google's key (the Gemini template), offered first for Gemini's own models. */
-const isGoogle = p => /generativelanguage\.googleapis\.com|\/v1beta\/openai\/?$/i.test(p?.baseURL ?? '')
+const isGoogle = p => /generativelanguage\.googleapis\.com|aiplatform\.googleapis\.com|\/v1beta\/openai\/?$/i.test(p?.baseURL ?? '')
 // A voice service on this machine or the LAN (小雅, or the tavern on a PC):
 // local TTS models, as against the cloud services.
 const BRIDGE_NAME = t`本地语音桥接`
@@ -114,7 +118,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
   const state = {
     settings: null,
     cardId: null,
-    cardMedia: { voice: '', narratorVoice: '', style: '', styleNegative: '', lora: '', loraTrigger: '', loraStrength: 0.8 },
+    cardMedia: { voice: '', narratorVoice: '', style: '', styleNegative: '', promptRules: '', lora: '', loraTrigger: '', loraStrength: 0.8 },
     jobs: new Map(), // nodeId → { stage, chatId, controller, started, backend } of a picture in the works
     failures: new Map(), // nodeId → { stage, chatId, prompt, message } shown in place of the picture
     fresh: new Set(), // files just drawn: they come into focus once loaded
@@ -155,7 +159,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
 
   async function setCard(cardId) {
     state.cardId = cardId
-    state.cardMedia = cardId ? await api(`/api/cards/${cardId}/media`).catch(() => state.cardMedia) : { voice: '', narratorVoice: '', style: '', styleNegative: '', lora: '', loraTrigger: '', loraStrength: 0.8 }
+    state.cardMedia = cardId ? await api(`/api/cards/${cardId}/media`).catch(() => state.cardMedia) : { voice: '', narratorVoice: '', style: '', styleNegative: '', promptRules: '', lora: '', loraTrigger: '', loraStrength: 0.8 }
   }
 
   const article = nodeId => document.querySelector(`.msg[data-id="${CSS.escape(nodeId)}"]`)
@@ -992,6 +996,23 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     const form = $('media-form')
     const option = (value, text, selected) => el('option', { value, text, selected: value === selected })
     const field = (label, control, hint) => el('label', {}, [label, control, hint ? el('span', { class: 'hint', text: hint }) : null])
+    // 写提示词的额外要求: typed, or read from a .md / .txt (a shared prompt skill: its front matter left out).
+    function rulesField(name, value, max, placeholder) {
+      const box = el('textarea', { name, rows: 4, maxlength: String(max), text: value, placeholder, spellcheck: 'false' })
+      const input = el('input', { type: 'file', accept: '.md,.txt,.markdown,text/plain,text/markdown', hidden: true })
+      input.onchange = guard(async () => {
+        const file = input.files[0]
+        input.value = ''
+        if (!file) return
+        const text = (await file.text()).replace(/^﻿/, '').replace(/^---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/, '').trim()
+        if (!text) throw new Error(t`「${file.name}」是空的`)
+        box.value = text.slice(0, max)
+        box.dispatchEvent(new Event('input', { bubbles: true }))
+        toast(text.length > max ? t`文件太长，只读入了前 ${max} 个字，保存后生效` : t`已读入「${file.name}」，保存后生效`)
+      })
+      const read = el('button', { type: 'button', class: 'btn small', text: t`从文件读入`, onclick: () => input.click() })
+      return { box, tools: el('div', { class: 'row', style: 'margin: -4px 0 14px' }, [read, input]) }
+    }
 
     // Pictures
     const backend = el('select', { name: 'imageBackend' }, [...imageBackends(), ...state.ownBackends.map(own => [own.id, own.name])].map(([value, text]) => option(value, text, media.imageBackend)))
@@ -1039,6 +1060,8 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       option('chat', t`接着对话写（同一个模型，命中缓存，更贴合剧情）`, media.promptSource),
     ])
     const promptStyle = el('select', { name: 'promptStyle' }, [option('natural', t`自然语言（grok、gpt-image、Flux、NovelAI V5）`, media.promptStyle), option('tags', t`标签（SD / SDXL 工作流、NovelAI）`, media.promptStyle)])
+    const promptDetail = el('select', { name: 'promptDetail' }, [option('brief', t`简洁`, media.promptDetail), option('standard', t`标准`, media.promptDetail), option('detailed', t`详细`, media.promptDetail)])
+    const promptRules = rulesField('promptRules', media.promptRules ?? '', RULES_MAX.media, t`例如：\n- 开头加上 masterpiece, best quality\n- 多写光影和镜头，少写表情\n- 不要出现血和伤口`)
     const autoImage = el('input', { type: 'checkbox', name: 'autoImage', checked: media.autoImage })
     // 抽图历史: how many old pictures each place keeps (server/draw-history.mjs).
     const keepNow = String(media.drawHistory ?? 5)
@@ -1352,6 +1375,32 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     const voiceName = (value, empty) => (value ? voiceText.get(value) ?? value.replace(BROWSER, '') : empty)
     const roster = card ? rosterEditor(card, loraInfo, getChat()?.names?.user ?? '') : null
     if (roster) roster.open = true
+    // The card's 画风, a 画风预设 to fill it with, and its own 写提示词的额外要求.
+    const styleBox = el('textarea', { name: 'style', rows: 2, text: card?.style ?? '', placeholder: t`例如 anime style, delicate lineart, soft cel shading, soft lighting` })
+    const presetNow = stylePresetOf(card?.style)?.id ?? ''
+    const stylePick = el('select', {}, [option('', t`自己写`, presetNow), ...STYLE_PRESETS.map(preset => option(preset.id, STYLE_PRESET_NAMES[preset.id], presetNow))])
+    const cardRules = rulesField('cardPromptRules', card?.promptRules ?? '', RULES_MAX.card, t`例如：她总戴着红色发带；故事在下雨的江南小镇，画面多用青灰色`)
+    const presetWords = preset => (promptStyle.value === 'tags' ? preset.tags : preset.natural)
+    const setStyle = words => {
+      styleBox.value = words
+      styleBox.dispatchEvent(new Event('input', { bubbles: true }))
+    }
+    stylePick.onchange = () => {
+      const preset = STYLE_PRESETS.find(item => item.id === stylePick.value)
+      if (!preset) return
+      // A 画风负面 the user wrote stays; an empty one or another preset's takes this one's.
+      const negative = form.elements.styleNegative
+      if (negative && (!negative.value.trim() || STYLE_PRESETS.some(item => item.negative === negative.value.trim()))) negative.value = preset.negative
+      setStyle(presetWords(preset))
+    }
+    styleBox.addEventListener('input', () => {
+      stylePick.value = stylePresetOf(styleBox.value)?.id ?? ''
+    })
+    // A preset's words follow the 提示词写法: tags for tag prompts, a phrase for sentences.
+    promptStyle.addEventListener('change', () => {
+      const preset = stylePresetOf(styleBox.value)
+      if (preset && styleBox.value.trim() !== presetWords(preset)) setStyle(presetWords(preset))
+    })
     const shared = (feature, rest) => ({ look: 'shared', tag: t`所有卡通用`, crumb: t`${feature} · 所有卡通用`, ...rest })
     const own = (feature, rest) => ({ look: 'own', crumb: `${feature} · ${charName || t`这张卡`}`, ...rest })
     const sections = [
@@ -1377,12 +1426,31 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
           sdBox,
           naiBox,
           ...ownBoxes,
-          field(t`画面提示词怎么写`, promptSource, t`「接着对话写」把固定前缀和这段对话原样发给写这段剧情的模型，再追加一句要提示词：几乎全部命中缓存，人物现在穿什么、在哪都对得上，但用的是对话模型的价格和速度。订阅模型写的剧情借不了，会自动改用辅助模型。`),
+          field(t`重画后留几张旧图`, drawHistory, t`配图、人设图、立绘和表情、场景、头像重画或换图后，每处留最近这么多张旧图，点一张就能换回来；再多的从最旧的删。调小了，每处下次重画时删到这个数。旧图不随对话包和角色卡导出。`),
+        ],
+      }),
+      shared(t`配图`, {
+        id: 'prompt',
+        title: t`画面提示词`,
+        summary: () =>
+          [
+            promptSource.value === 'chat' ? t`接着对话写` : helper.selectedOptions[0]?.text.split(' · ').at(-1),
+            promptStyle.selectedOptions[0]?.text.split(t`（`)[0],
+            promptDetail.selectedOptions[0]?.text,
+            promptRules.box.value.trim() ? t`有额外要求` : '',
+          ]
+            .filter(Boolean)
+            .join(' · '),
+        body: [
+          field(t`画面提示词怎么写`, promptSource, t`「接着对话写」把固定前缀和这段对话原样发给写这段剧情的模型，再追加一句要提示词：几乎全部命中缓存，人物现在穿什么、在哪都对得上，但用的是对话模型的价格和速度。` + (document.documentElement.dataset.edition === 'personal' ? t`订阅模型写的剧情借不了，会自动改用辅助模型。` : '')),
           el('div', { class: 'grid' }, [
             field(t`辅助模型`, helper, helperChoices.length ? '' : t`还没有供应商的模型`),
             field(t`提示词写法`, promptStyle),
+            field(t`详细程度`, promptDetail),
           ]),
-          field(t`重画后留几张旧图`, drawHistory, t`配图、人设图、立绘和表情、场景、头像重画或换图后，每处留最近这么多张旧图，点一张就能换回来；再多的从最旧的删。调小了，每处下次重画时删到这个数。旧图不随对话包和角色卡导出。`),
+          el('p', { class: 'hint', text: t`详细程度：简洁几十个词，只写人、动作、地点和景别；标准六十到一百词；详细一百多词，写满衣服细节、手、背景物件和光线，适合 Flux、Krea 2、gpt-image 这类读句子的模型。标签太多 SD 系反而容易乱，一般用标准。` }),
+          field(t`写提示词的额外要求（所有卡通用）`, promptRules.box, t`写给写提示词的模型看：用什么词、先写什么、什么不要写，和默认写法不一样的地方以这里为准。也可以从 .md / .txt 读入，比如别人分享的生图提示词 skill。只用于对话配图；每张卡还能在「画风与 LoRA」里再加。`),
+          promptRules.tools,
         ],
       }),
       card && own(t`配图`, {
@@ -1391,11 +1459,16 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         summary: () => {
           const style = form.elements.style?.value.trim() ?? ''
           const lora = form.elements.lora?.value ?? ''
-          return [style ? t`画风：${style.length > 28 ? `${style.slice(0, 28)}…` : style}` : t`还没写画风`, lora ? t`LoRA：${lora}` : ''].filter(Boolean).join(' · ')
+          const preset = stylePresetOf(style)
+          const styleText = preset ? STYLE_PRESET_NAMES[preset.id] : style.length > 28 ? `${style.slice(0, 28)}…` : style
+          return [style ? t`画风：${styleText}` : t`还没写画风`, lora ? t`LoRA：${lora}` : '', cardRules.box.value.trim() ? t`有额外要求` : ''].filter(Boolean).join(' · ')
         },
         body: [
-          field(t`画风（写进画面提示词；人设图、立绘也加，NovelAI 每张都加）`, el('textarea', { name: 'style', rows: 2, text: card.style ?? '', placeholder: t`例如 anime style, delicate lineart, soft cel shading, soft lighting` })),
+          field(t`画风预设`, stylePick, t`选一个就把下面的画风换成它的词（照「提示词写法」用标签或句子），画风负面空着时也填上；换完还能改，自己写的画风照样用。`),
+          field(t`画风（写进画面提示词；人设图、立绘也加，NovelAI、ComfyUI、SD WebUI 每张都加）`, styleBox),
           field(t`画风负面（只用于 NovelAI，加在负面提示词后面）`, el('input', { name: 'styleNegative', value: card.styleNegative ?? '', placeholder: t`例如 realistic, 3d, chibi` })),
+          field(t`这张卡写提示词的额外要求（加在所有卡通用的后面）`, cardRules.box),
+          cardRules.tools,
           field(
             t`整卡 LoRA（只用于 ComfyUI；人设图、立绘也用，名册里自带 LoRA 的角色单独出镜时改用她自己的）`,
             el('select', { name: 'lora' }, [
@@ -1472,7 +1545,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     }
     settingsMenu.mount({
       panels: [
-        { id: 'image', title: t`配图`, icon: MENU_ICONS.picture, aside: switchRow(autoImage, t`新回复自动配图`, t`每轮多一次辅助模型调用和一次生图`), rows: ['image', who(), 'card-style', 'roster'] },
+        { id: 'image', title: t`配图`, icon: MENU_ICONS.picture, aside: switchRow(autoImage, t`新回复自动配图`, t`每轮多一次辅助模型调用和一次生图`), rows: ['image', 'prompt', who(), 'card-style', 'roster'] },
         { id: 'voice', title: t`朗读`, icon: MENU_ICONS.voice, aside: switchRow(autoRead, t`新回复自动朗读`), rows: ['voice', who(), 'card-voice'] },
         { id: 'stt', title: t`语音输入`, icon: MENU_ICONS.mic, rows: ['stt'] },
       ],
@@ -2619,6 +2692,8 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         ...(state.ownBackends.length ? { localModels: Object.fromEntries(state.ownBackends.filter(own => form.elements[`localModel:${own.id}`]).map(own => [own.id, value(`localModel:${own.id}`)])) } : {}),
         helperModel: value('helperModel'),
         promptStyle: value('promptStyle'),
+        promptDetail: value('promptDetail'),
+        promptRules: value('promptRules'),
         promptSource: value('promptSource'),
         autoImage: checked('autoImage'),
         ...(form.elements.drawHistory ? { drawHistory: Number(value('drawHistory')) } : {}),
@@ -2643,7 +2718,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     if (hasCard && state.cardId) {
       state.cardMedia = await api(`/api/cards/${state.cardId}/media`, {
         method: 'PUT',
-        body: { voice: value('voice'), narratorVoice: value('narratorVoice'), style: value('style'), styleNegative: value('styleNegative'), lora: value('lora'), loraTrigger: value('loraTrigger'), loraStrength: Number(value('loraStrength') || 0.8), roster: collectRoster(form) },
+        body: { voice: value('voice'), narratorVoice: value('narratorVoice'), style: value('style'), styleNegative: value('styleNegative'), promptRules: value('cardPromptRules'), lora: value('lora'), loraTrigger: value('loraTrigger'), loraStrength: Number(value('loraStrength') || 0.8), roster: collectRoster(form) },
       })
       announceCardMedia()
     }

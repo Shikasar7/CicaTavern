@@ -127,12 +127,13 @@ function rawZip(entries) {
   return Buffer.concat([...locals, directory, end])
 }
 
-/** Every file under a folder with its hash: the data folder before and after. */
+/** Every file under a folder with its hash: the data folder before and after (its logs/ aside: the error log notes the update itself). */
 function snapshot(dir) {
   const out = {}
   for (const entry of readdirSync(dir, { recursive: true, withFileTypes: true })) {
     if (!entry.isFile()) continue
     const file = path.join(entry.parentPath, entry.name)
+    if (path.relative(dir, file).split(path.sep)[0] === 'logs') continue
     out[path.relative(dir, file)] = sha256(readFileSync(file))
   }
   return out

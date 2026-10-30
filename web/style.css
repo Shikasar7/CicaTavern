@@ -1970,6 +1970,26 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .card-list li.nested { margin-left: 8px; }
 .card-list li.archived .avatar, .card-list li.archived .item-main { opacity: .62; }
 .item-more { font-size: 15px; line-height: 1; letter-spacing: .05em; }
+/* 置顶 and 收藏 marks after a card's name, the 只看收藏 star next to the search box, and 拖拽排序. */
+.card-list .item-title { display: flex; align-items: center; gap: 5px; }
+.item-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.card-mark { flex: none; display: inline-flex; line-height: 1; }
+.card-mark.pin { color: var(--muted); }
+.card-mark.pin svg { width: 13px; height: 13px; fill: currentColor; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+.card-mark.star { color: #e0a526; font-size: 12px; }
+.card-search-row { flex: none; display: flex; align-items: center; gap: 6px; margin: 2px 14px 8px; }
+.card-search-row .list-search { flex: 1; min-width: 0; margin: 0; }
+.fav-filter {
+  flex: none; width: 34px; height: 34px; border: 1px solid var(--line-soft); border-radius: 10px; cursor: pointer;
+  background: color-mix(in srgb, var(--surface) 75%, transparent); color: var(--faint); font-size: 16px; line-height: 1;
+  transition: color .15s, border-color .15s, background .15s;
+}
+.fav-filter:hover { color: var(--muted); border-color: var(--line); }
+.fav-filter[aria-pressed="true"] { color: #e0a526; border-color: color-mix(in srgb, #e0a526 55%, transparent); background: color-mix(in srgb, #e0a526 12%, var(--surface)); }
+.card-list li[data-id] { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.card-list.sorting, .card-list.sorting li { cursor: grabbing; }
+.card-list li.dragging { background: var(--surface); box-shadow: var(--shadow-2); outline: 1.5px solid var(--accent); outline-offset: -1.5px; transform: scale(1.02); z-index: 2; transition: none; }
+.card-list.sorting li:not(.dragging):hover { background: none; }
 
 .pop-menu { position: fixed; z-index: 60; min-width: 176px; max-width: 260px; max-height: 70vh; overflow-y: auto; padding: 6px; background: var(--raised); border: 1px solid var(--line-soft); border-radius: 12px; box-shadow: var(--shadow-2); animation: fade .12s ease; }
 .pop-menu button { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 7px 10px; border-radius: 8px; font: inherit; font-size: 13px; color: var(--ink); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

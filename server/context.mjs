@@ -58,8 +58,8 @@ const KNOWN = [
   [/^gpt-4\.1/, 1_047_576],
   [/^gpt-4o/, 128_000],
   [/^o3/, 200_000],
-  // Google (ai.google.dev, models).
-  [/^gemini-(3|2\.5)/, 1_048_576],
+  // Google (ai.google.dev, models; Gemini 4 Argon from its Vertex AI model card, 2026-10-30).
+  [/^gemini-(4|3|2\.5)/, 1_048_576],
   // Moonshot (platform.kimi.ai): K3 1M, K2 256K.
   [/^kimi-k3/, 1_048_576],
   [/^kimi-k2/, 262_144],

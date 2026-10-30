@@ -1,8 +1,10 @@
 // 错误日志 (设置 → 更多 → 错误日志): what went wrong lately, kept in
-// <data>/logs/errors.jsonl, and a report the player reads, then copies or saves
-// to send to the developer. The app sends it nowhere. Errors and the setup
-// only: no story, card text or prompts, unless the player ticks the open
-// chat's last turn in. Keys, tokens, passwords, and the folders of this
+// <data>/logs/errors.jsonl, what the player did and the warnings on the way in
+// <data>/logs/activity.jsonl, and a report the player reads, then copies or saves
+// to send to the developer. The app sends it nowhere. Errors, the provider's own
+// answer to a failed request, the requests that changed something (their address
+// and the names of the fields sent, not what was in them) and the setup: no
+// story, card text or prompts, unless the player ticks the open chat's last turn in. Keys, tokens, passwords, and the folders of this
 // computer's user and of the app are taken out on the way in, and the keys
 // saved in the data folder again in the report.
 import { appendFileSync, mkdirSync } from 'node:fs'
@@ -19,6 +21,11 @@ const APP_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
 const KEEP = 200
 const SHOWN = 50
 const MESSAGE_MAX = 2000
+// The provider's own answer to a failed request, as it came.
+const DETAIL_MAX = 4000
+// Operations and warnings kept, and shown in a report.
+const ACTIVITY_KEEP = 400
+const ACTIVITY_SHOWN = 80
 const STACK_MAX = 4000
 const STACK_LINES = 8
 // The same error again within this long, among this many latest entries, counts on that entry instead of adding one.
@@ -118,16 +125,28 @@ function cleanEntry(entry) {
     message: text(entry.message, MESSAGE_MAX),
     ...(stack ? { stack } : {}),
     ...(entry.model ? { model: text(entry.model, 200) } : {}),
+    ...(entry.detail ? { detail: text(entry.detail, DETAIL_MAX) } : {}),
+  }
+}
+
+/** An operation or a warning as kept: `what` happened, `detail` (fields, model, tokens…). */
+function cleanActivity(entry) {
+  const text = (value, max) => clip(redact(typeof value === 'string' ? value : value == null ? '' : String(value)), max)
+  return {
+    at: new Date().toISOString(),
+    level: entry.level === 'warn' ? 'warn' : 'action',
+    what: text(entry.what, 200),
+    ...(entry.detail ? { detail: text(entry.detail, 600) } : {}),
   }
 }
 
 /**
- * @param root - the data folder (its logs/ holds errors.jsonl).
- * @param store - for the report's setup and the last turn.
- * @param about - { version, edition, appName }.
+ * A JSON-lines file kept to its newest `keep` entries. The same entry again soon, among the
+ * latest few, counts on that one and moves it up to the newest.
+ * @param valid - whether a line read back is an entry.
+ * @param same - whether two entries are the same thing again.
  */
-export function createDiagnostics(root, store, { version, edition, appName }) {
-  const file = path.join(root, 'logs', 'errors.jsonl')
+function journal(file, keep, valid, same) {
   let entries = null // oldest first
   let writing = Promise.resolve()
 
@@ -139,12 +158,12 @@ export function createDiagnostics(root, store, { version, edition, appName }) {
       if (!line.trim()) continue
       try {
         const entry = JSON.parse(line)
-        if (entry && typeof entry.at === 'string' && typeof entry.message === 'string') read.push(entry)
+        if (entry && typeof entry.at === 'string' && valid(entry)) read.push(entry)
       } catch {
         // A line cut short by a crash.
       }
     }
-    entries ??= read.slice(-KEEP)
+    entries ??= read.slice(-keep)
     return entries
   }
 
@@ -157,31 +176,58 @@ export function createDiagnostics(root, store, { version, edition, appName }) {
     return writing
   }
 
-  /**
-   * Adds an entry ({ source, what, status, message, stack, model }). The same error again
-   * soon, among the latest few, counts on that one and moves it up to the newest.
-   */
-  async function record(entry) {
-    const next = cleanEntry(entry)
+  async function add(next) {
     const list = await load()
-    const index = list.findLastIndex((old, i) => i >= list.length - REPEAT_LOOK && old.source === next.source && old.what === next.what && old.status === next.status && old.message === next.message && Date.now() - Date.parse(old.last ?? old.at) < REPEAT_MS)
+    const index = list.findLastIndex((old, i) => i >= list.length - REPEAT_LOOK && same(old, next) && Date.now() - Date.parse(old.last ?? old.at) < REPEAT_MS)
     if (index >= 0) {
-      const [same] = list.splice(index, 1)
-      list.push({ ...same, count: (same.count ?? 1) + 1, last: next.at })
+      const [found] = list.splice(index, 1)
+      list.push({ ...found, count: (found.count ?? 1) + 1, last: next.at })
     } else {
       list.push(next)
-      if (list.length > KEEP) list.splice(0, list.length - KEEP)
+      if (list.length > keep) list.splice(0, list.length - keep)
     }
     return save()
   }
 
+  /** Written at once (the process is going down). */
+  function addNow(next) {
+    mkdirSync(path.dirname(file), { recursive: true })
+    appendFileSync(file, `${JSON.stringify(next)}\n`)
+    entries?.push(next)
+  }
+
+  async function clear() {
+    entries = []
+    await save()
+  }
+
+  return { load, add, addNow, clear }
+}
+
+/**
+ * @param root - the data folder (its logs/ holds errors.jsonl).
+ * @param store - for the report's setup and the last turn.
+ * @param about - { version, edition, appName }.
+ */
+export function createDiagnostics(root, store, { version, edition, appName }) {
+  const errors = journal(path.join(root, 'logs', 'errors.jsonl'), KEEP, entry => typeof entry.message === 'string',
+    (old, next) => old.source === next.source && old.what === next.what && old.status === next.status && old.message === next.message)
+  const activity = journal(path.join(root, 'logs', 'activity.jsonl'), ACTIVITY_KEEP, entry => typeof entry.what === 'string',
+    (old, next) => old.level === next.level && old.what === next.what && old.detail === next.detail)
+
+  /** Adds an error ({ source, what, status, message, stack, model, detail: the provider's own answer }). */
+  const record = entry => errors.add(cleanEntry(entry))
+
+  /**
+   * Adds an operation the player made or a warning ({ level: 'action' | 'warn', what, detail }):
+   * what led up to an error, for the developer to do the same.
+   */
+  const note = entry => activity.add(cleanActivity(entry))
+
   /** The process is going down (or, on the phone, carrying on past) an error nothing caught: written at once. */
   function recordNow(entry) {
     try {
-      const next = cleanEntry(entry)
-      mkdirSync(path.dirname(file), { recursive: true })
-      appendFileSync(file, `${JSON.stringify(next)}\n`)
-      entries?.push(next)
+      errors.addNow(cleanEntry(entry))
     } catch {
       // Nowhere else to write.
     }
@@ -199,8 +245,7 @@ export function createDiagnostics(root, store, { version, edition, appName }) {
   }
 
   async function clear() {
-    entries = []
-    await save()
+    await Promise.all([errors.clear(), activity.clear()])
     return { count: 0 }
   }
 
@@ -219,7 +264,14 @@ export function createDiagnostics(root, store, { version, edition, appName }) {
     const stack = (entry.stack ?? '').split('\n').map(line => line.trim()).filter(Boolean)
     // The stack's first line repeats the message.
     if (stack[0] && entry.message && stack[0].includes(entry.message)) stack.shift()
-    return [head, ...entry.message.split('\n').map(line => `  ${line}`), ...stack.slice(0, STACK_LINES).map(line => `    ${line}`)].join('\n')
+    const detail = entry.detail ? [`  ${msg`原始返回：`}`, ...entry.detail.split('\n').map(line => `    ${line}`)] : []
+    return [head, ...entry.message.split('\n').map(line => `  ${line}`), ...detail, ...stack.slice(0, STACK_LINES).map(line => `    ${line}`)].join('\n')
+  }
+
+  /** One operation or warning for the report, on one line. */
+  function activityLine(entry) {
+    const times = entry.count > 1 ? `  ${msg`共 ${entry.count} 次，第一次 ${stamp(new Date(entry.at))}`}` : ''
+    return `${stamp(new Date(entry.last ?? entry.at))}  ${entry.level === 'warn' ? msg`[警告] ` : ''}${entry.what}${entry.detail ? `  ${entry.detail}` : ''}${times}`
   }
 
   /**
@@ -228,7 +280,7 @@ export function createDiagnostics(root, store, { version, edition, appName }) {
    * @param chatId - the open chat; `lastTurn` adds its last input and reply.
    */
   async function report({ page = {}, chatId = '', lastTurn = false } = {}) {
-    const [settings, providers, list, known] = await Promise.all([store.getSettings(), store.getProviders(), load(), savedSecrets(root)])
+    const [settings, providers, list, done, known] = await Promise.all([store.getSettings(), store.getProviders(), errors.load(), activity.load(), savedSecrets(root)])
     const label = ref => (ref ? refLabel(ref, providers) ?? ref : msg`没选`)
     const proxy = settings.proxy === 'none' ? msg`不用` : settings.proxy === 'system' || !settings.proxy ? msg`跟随系统` : msg`手动设置`
     const [cards, chats, presets, books] = await Promise.all([count(store.dirs.cards), count(store.dirs.chats), count(store.dirs.presets), count(store.dirs.books)])
@@ -262,6 +314,13 @@ export function createDiagnostics(root, store, { version, edition, appName }) {
       for (const entry of newest.slice(0, SHOWN)) lines.push(entryLines(entry), '')
       if (newest.length > SHOWN) lines.push(msg`更早的 ${newest.length - SHOWN} 条没有列出。`, '')
     }
+    const steps = [...done].reverse()
+    if (steps.length) {
+      if (lines.at(-1) !== '') lines.push('')
+      lines.push(msg`最近的操作和警告（${steps.length} 条，新的在前）：`, '')
+      for (const entry of steps.slice(0, ACTIVITY_SHOWN)) lines.push(activityLine(entry))
+      if (steps.length > ACTIVITY_SHOWN) lines.push(msg`更早的 ${steps.length - ACTIVITY_SHOWN} 条没有列出。`)
+    }
     const text = redact(lines.join('\n').trimEnd(), known)
     if (!lastTurn || !chatId) return { text, count: list.length }
     // The player's own story, as they chose to send it: only the keys saved here come out.
@@ -286,5 +345,5 @@ export function createDiagnostics(root, store, { version, edition, appName }) {
     return { text: `${text}\n\n${withoutKnown(turn.join('\n'), known)}`, count: list.length }
   }
 
-  return { record, recordNow, watchProcess, clear, report, list: async () => [...(await load())] }
+  return { record, note, recordNow, watchProcess, clear, report, list: async () => [...(await errors.load())], activity: async () => [...(await activity.load())] }
 }

@@ -44,6 +44,12 @@ const TEMPLATES = [
     note: t`Google 的 OpenAI 兼容接口，密钥在 aistudio.google.com 创建，需要走代理。`,
   },
   {
+    name: 'Vertex AI', api: 'openai-completions', baseURL: 'https://aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/global/endpoints/openapi', apiKeyEnv: '', proxy: 'global',
+    site: 'https://console.cloud.google.com/vertex-ai', keys: 'https://console.cloud.google.com/iam-admin/serviceaccounts',
+    models: [{ id: 'google/gemini-4-argon' }, { id: 'google/gemini-3.1-pro-preview' }],
+    note: t`Google Cloud 的 Vertex AI，新账号的 300 美元赠金可以用在这里（AI Studio 的 Gemini 密钥用不了赠金）。先在控制台启用 Vertex AI API，再把一个 JSON 凭据选进来：服务账号的 JSON 密钥（「IAM → 服务账号」新建一个，角色选「Vertex AI 用户」，在它的「密钥」页添加 JSON 密钥），项目 ID 从文件里读；组织不让建密钥时，装好 Google Cloud CLI 后运行 gcloud auth application-default login，选它生成的 application_default_credentials.json（Windows 在 %APPDATA% 下的 gcloud 文件夹里），再把地址里的 PROJECT_ID 换成项目 ID。模型 ID 写成「google/模型」，需要走代理。`,
+  },
+  {
     name: 'OpenRouter', api: 'openai-completions', baseURL: 'https://openrouter.ai/api/v1', apiKeyEnv: 'OPENROUTER_API_KEY', proxy: 'global',
     site: 'https://openrouter.ai', keys: 'https://openrouter.ai/settings/keys',
     headers: { 'HTTP-Referer': 'http://localhost', 'X-Title': 'Agent Tavern' },
@@ -103,7 +109,8 @@ const TEMPLATES = [
 ]
 /** The template whose address this is, for its sign-up links. */
 function templateFor(baseURL) {
-  const clean = url => String(url ?? '').trim().replace(/\/+$/, '').toLowerCase()
+  // Vertex AI's address has the project in it (the template's PROJECT_ID until it is saved).
+  const clean = url => String(url ?? '').trim().replace(/\/+$/, '').toLowerCase().replace(/\/projects\/[^/]+\//, '/projects/project_id/')
   return TEMPLATES.find(tpl => tpl.site && clean(tpl.baseURL) === clean(baseURL))
 }
 const TEMPLATE_CHECK = t`模型 ID 更新得很快，填好 Key 后点「从接口获取模型列表」核对一遍。`
@@ -228,16 +235,57 @@ export function initProviders({ api, el, toast, guard, saveFile, onChanged }) {
     syncCache()
     const keyNote = p.hasKey ? t`已保存（${p.keyHint}），留空不改` : t`粘贴 API Key`
     const apiKey = el('input', { name: 'apiKey', type: 'password', placeholder: keyNote, autocomplete: 'new-password', spellcheck: 'false' })
+    // Vertex AI takes a service account's JSON key, not an API key: picked as a file (or pasted whole).
+    const keyFile = el('input', { type: 'file', accept: '.json,application/json', hidden: true })
+    const keyFileRow = el('div', { class: 'row' }, [
+      el('button', { type: 'button', class: 'btn small', text: t`选择 JSON 凭据文件`, onclick: () => keyFile.click() }),
+      el('span', { class: 'hint', text: t`Vertex AI 用 JSON 凭据（服务账号密钥或 gcloud 登录文件），不是 API Key` }),
+      keyFile,
+    ])
+    keyFile.addEventListener('change', guard(async () => {
+      const file = keyFile.files[0]
+      keyFile.value = ''
+      if (!file) return
+      let json
+      try {
+        json = JSON.parse(await file.text())
+      } catch {
+        throw new Error(t`这个文件不是 JSON`)
+      }
+      const account = json?.type === 'service_account' && json.client_email && json.private_key
+      const login = json?.type === 'authorized_user' && json.refresh_token
+      if (!account && !login) throw new Error(t`这不是 Google 的 JSON 凭据：要服务账号的 JSON 密钥，或者 gcloud auth application-default login 生成的 application_default_credentials.json`)
+      apiKey.value = JSON.stringify(json)
+      const done = isNew ? t`添加` : t`保存`
+      // gcloud's login file names no project (unless a quota project was set): it goes in the address by hand.
+      const at = baseURL.value.indexOf('PROJECT_ID')
+      if (login && !json.quota_project_id && at >= 0) {
+        baseURL.focus()
+        baseURL.setSelectionRange(at, at + 'PROJECT_ID'.length)
+        toast(t`已读入 gcloud 登录凭据。把地址里选中的 PROJECT_ID 换成你的项目 ID，再点「${done}」`, 9000)
+      } else {
+        toast(account ? t`已读入服务账号 ${json.client_email}，点「${done}」后生效` : t`已读入 gcloud 登录凭据，点「${done}」后生效`)
+      }
+    }))
+    const syncVertex = () => {
+      const vertex = /aiplatform\.googleapis\.com/i.test(baseURL.value)
+      keyFileRow.hidden = !vertex
+      if (!p.hasKey) apiKey.placeholder = vertex ? t`粘贴 JSON 凭据，或点下面选文件` : t`粘贴 API Key`
+    }
+    baseURL.addEventListener('input', syncVertex)
+    syncVertex()
     const clearKey = el('input', { type: 'checkbox', name: 'clearKey' })
     // Where to sign up and make a key, for the service the address belongs to.
     const keyLinks = el('p', { class: 'hint key-links' })
     const syncLinks = () => {
       const template = templateFor(baseURL.value)
       const link = (href, text) => el('a', { href, target: '_blank', rel: 'noopener noreferrer', text })
+      // Vertex AI's key is a service account's.
+      const account = /aiplatform\.googleapis\.com/i.test(template?.baseURL ?? '')
       keyLinks.replaceChildren(...(template ? [
-        template.keys ? t`还没有 API Key？` : t`还没装？`,
+        template.keys ? (account ? t`还没有凭据？` : t`还没有 API Key？`) : t`还没装？`,
         link(template.site, template.keys ? t`注册账号 ↗` : t`下载 ↗`),
-        ...(template.keys ? [link(template.keys, t`创建 API Key ↗`)] : []),
+        ...(template.keys ? [link(template.keys, account ? t`创建服务账号 ↗` : t`创建 API Key ↗`)] : []),
       ] : []))
       keyLinks.hidden = !template
     }
@@ -333,6 +381,7 @@ export function initProviders({ api, el, toast, guard, saveFile, onChanged }) {
       apiSelect.dispatchEvent(new Event('change'))
       baseURL.value = template.baseURL
       syncLinks()
+      syncVertex()
       keyEnv.value = template.apiKeyEnv
       proxy.value = template.proxy
       cacheTtl.value = template.cacheTtl ?? '5m'
@@ -386,6 +435,7 @@ export function initProviders({ api, el, toast, guard, saveFile, onChanged }) {
         field('API Key', apiKey),
         field(t`或者读取环境变量`, keyEnv, p.apiKeyEnv && !p.envKeySet ? t`酒馆的进程里没有这个变量` : ''),
       ]),
+      keyFileRow,
       keyLinks,
       ...(p.hasKey ? [el('label', { class: 'check-row' }, [clearKey, el('span', { text: t`清除已保存的密钥` })])] : []),
       field(t`网络`, proxy),

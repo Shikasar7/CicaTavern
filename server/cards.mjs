@@ -390,6 +390,8 @@ export function cardSummary(card) {
     importedAt: card.importedAt,
     group: card.group ?? '',
     archived: card.archived === true,
+    pinned: card.pinned === true,
+    favorite: card.favorite === true,
   }
 }
 
@@ -400,12 +402,26 @@ export function cleanGroup(value) {
   return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, GROUP_MAX) : ''
 }
 
-/** Where a card sits in the list: its group and whether it is archived. Returns the changed card. */
-export function organizeCard(card, { group, archived } = {}) {
+/** Where a card sits in the list: its group, whether it is archived, pinned (置顶) or a favorite (收藏). Returns the changed card. */
+export function organizeCard(card, { group, archived, pinned, favorite } = {}) {
   if (group !== undefined) card.group = cleanGroup(group)
+  if (pinned !== undefined) card.pinned = pinned === true
+  if (favorite !== undefined) card.favorite = favorite === true
   if (archived !== undefined) {
     card.archived = archived === true
     card.archivedAt = card.archived ? new Date().toISOString() : undefined
   }
   return card
+}
+
+/**
+ * Cards in the list's own order (拖拽排序, `order` the ids as dragged): the ones not in it yet, newly
+ * imported, first, newest on top as they come; then the rest as ordered. Pinned cards and groups are
+ * the page's to sort out; this order holds inside each.
+ */
+export function orderCards(cards, order) {
+  const at = new Map(order.map((id, i) => [id, i]))
+  const fresh = cards.filter(card => !at.has(card.id))
+  const placed = cards.filter(card => at.has(card.id)).sort((a, b) => at.get(a.id) - at.get(b.id))
+  return [...fresh, ...placed]
 }

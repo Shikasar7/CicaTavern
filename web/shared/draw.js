@@ -88,3 +88,71 @@ export function choiceBody(choice, choices) {
   if (model && model !== method.model) body.model = model
   return body
 }
+
+// ─── 画风预设 ───────────────────────────────────────────────────────────
+// What 「画风与 LoRA」 offers to fill a card's 画风 with (web/media.js names
+// them): words for tag prompts (Danbooru tags anime models and NovelAI know) and
+// for sentence prompts (Flux, Krea 2, gpt-image, Gemini), and a 画风负面 for
+// NovelAI. The 画风 stays the card's own text afterwards: editable, any words.
+export const STYLE_PRESETS = Object.freeze([
+  {
+    id: 'anime',
+    tags: 'anime coloring, anime screencap, cel shading, clean lineart, vibrant colors',
+    natural: 'Japanese anime style, clean lineart, flat cel shading, vibrant colors',
+    negative: 'realistic, photorealistic, 3d',
+  },
+  {
+    id: 'galgame',
+    tags: 'official art, game cg, detailed illustration, delicate lineart, soft shading, bloom',
+    natural: 'polished visual novel CG illustration, delicate lineart, soft shading, gentle bloom, detailed background',
+    negative: 'sketch, monochrome, 3d',
+  },
+  {
+    id: 'impasto',
+    tags: 'impasto, painterly, thick brushstrokes, oil painting (medium), rich colors, dramatic lighting',
+    natural: 'painterly digital illustration with thick impasto brushstrokes, rich colors and dramatic lighting',
+    negative: 'flat color, cel shading, lineart',
+  },
+  {
+    id: 'watercolor',
+    tags: 'watercolor (medium), traditional media, soft colors, pastel colors, paper texture',
+    natural: 'soft watercolor painting on textured paper, translucent washes, gentle pastel colors, loose edges',
+    negative: '3d, photorealistic, cel shading',
+  },
+  {
+    id: 'ink',
+    tags: 'chinese style, ink wash painting, traditional chinese painting, muted colors, elegant',
+    natural: 'Chinese ink wash painting with fine gongbi linework, muted mineral colors and generous empty space',
+    negative: '3d, photorealistic, neon lights',
+  },
+  {
+    id: 'semireal',
+    tags: 'semi-realistic, realistic shading, detailed face, digital painting, soft lighting',
+    natural: 'semi-realistic digital painting, anime-inspired faces with realistic lighting and soft rendering',
+    negative: 'chibi, flat color, sketch',
+  },
+  {
+    id: 'photo',
+    tags: 'photorealistic, realistic, photo (medium), cinematic lighting, depth of field, film grain',
+    natural: 'photorealistic cinematic photograph, natural skin texture, shallow depth of field, soft film grain',
+    negative: 'anime, cartoon, illustration, lineart',
+  },
+  {
+    id: 'retro',
+    tags: '1990s (style), retro artstyle, anime screencap, muted colors, film grain',
+    natural: '1990s retro anime style, hand-painted cel look, muted colors, slight film grain',
+    negative: '3d, photorealistic',
+  },
+  {
+    id: 'render3d',
+    tags: '3d, blender (medium), cgi, stylized, soft global illumination',
+    natural: 'stylized 3D render, soft global illumination, smooth materials, cinematic composition',
+    negative: '2d, sketch, lineart',
+  },
+])
+
+/** The preset a 画风 text was filled from (either wording), or null for the card's own words. */
+export function stylePresetOf(style) {
+  const text = String(style ?? '').trim()
+  return text ? STYLE_PRESETS.find(preset => preset.tags === text || preset.natural === text) ?? null : null
+}

@@ -469,31 +469,41 @@ function saveFolded() {
   }
 }
 
-function cardItem(card, nested = false) {
-  return el('li', { class: [card.id === ui.cardId ? 'active' : '', nested ? 'nested' : '', card.archived ? 'archived' : ''].filter(Boolean).join(' '), onclick: () => selectCard(card.id) }, [
+// section: the part of the list the card sits in (置顶, ungrouped, a group, the archive), which dragging stays inside.
+function cardItem(card, section, nested = false) {
+  // A pinned card out of its group says which one it belongs to.
+  const where = section === 'pinned' && card.group ? `${card.group} · ` : ''
+  return el('li', { class: [card.id === ui.cardId ? 'active' : '', nested ? 'nested' : '', card.archived ? 'archived' : ''].filter(Boolean).join(' '), 'data-id': card.id, 'data-section': section, onclick: () => selectCard(card.id) }, [
     avatarFor(card),
     el('div', { class: 'item-main' }, [
-      el('div', { class: 'item-title', text: card.name }),
-      el('div', { class: 'item-sub', text: t`${card.greetings} 个开场 · ${card.bookEntries} 条内嵌世界书${card.worldbookIds.length ? t` · 挂载 ${card.worldbookIds.length} 本` : ''}` }),
+      el('div', { class: 'item-title' }, [
+        el('span', { class: 'item-name', text: card.name }),
+        card.pinned && !card.archived ? el('span', { class: 'card-mark pin', title: t`已置顶`, 'aria-label': t`已置顶`, html: PIN_ICON }) : null,
+        card.favorite ? el('span', { class: 'card-mark star', title: t`已收藏`, 'aria-label': t`已收藏`, text: '★' }) : null,
+      ]),
+      el('div', { class: 'item-sub', text: where + t`${card.greetings} 个开场 · ${card.bookEntries} 条内嵌世界书${card.worldbookIds.length ? t` · 挂载 ${card.worldbookIds.length} 本` : ''}` }),
     ]),
-    el('button', { type: 'button', class: 'item-del item-edit item-more', title: t`修改、分组、归档、删除`, 'aria-label': t`「${card.name}」：修改、分组、归档、删除`, text: '⋯', onclick: event => { event.stopPropagation(); openCardMenu(card, event.currentTarget) } }),
+    el('button', { type: 'button', class: 'item-del item-edit item-more', title: t`置顶、收藏、修改、导出、分组、归档、删除`, 'aria-label': t`「${card.name}」：置顶、收藏、修改、导出、分组、归档、删除`, text: '⋯', onclick: event => { event.stopPropagation(); openCardMenu(card, event.currentTarget) } }),
   ])
 }
 
-function groupHead(name, cards, folded, { archive = false } = {}) {
+const PIN_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10.2 2.2 13.8 5.8 11.6 7.1 9.5 11.4 4.6 6.5 8.9 4.4Z" /><path d="M7 9 3 13" /></svg>'
+
+// cards: the ones listed under it; menuCards: all of the group's (pinned ones too), for its ⋯.
+function groupHead(name, cards, folded, { archive = false, menuCards = cards } = {}) {
   const holdsCurrent = folded && cards.some(card => card.id === ui.cardId)
   return el('li', { class: `group-head${archive ? ' archive' : ''}`, role: 'button', tabindex: '0', 'aria-expanded': String(!folded), title: folded ? t`展开` : t`收起`, onclick: () => toggleGroup(name, archive), onkeydown: event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleGroup(name, archive) } } }, [
     el('span', { class: 'group-chevron', 'aria-hidden': 'true', text: '▸' }),
     el('span', { class: 'group-name', text: name }),
     holdsCurrent ? el('span', { class: 'group-current', title: t`正在用的角色卡在这一组里` }) : null,
     el('span', { class: 'group-count', text: String(cards.length) }),
-    archive ? null : el('button', { type: 'button', class: 'item-del item-edit item-more', title: t`重命名、解散或整组归档`, 'aria-label': t`分组「${name}」：重命名、解散或整组归档`, text: '⋯', onclick: event => { event.stopPropagation(); openGroupMenu(name, cards, event.currentTarget) } }),
+    archive ? null : el('button', { type: 'button', class: 'item-del item-edit item-more', title: t`重命名、解散或整组归档`, 'aria-label': t`分组「${name}」：重命名、解散或整组归档`, text: '⋯', onclick: event => { event.stopPropagation(); openGroupMenu(name, menuCards, event.currentTarget) } }),
   ])
 }
 
 function toggleGroup(name, archive) {
-  // While searching every group is open; folding waits until the box is cleared.
-  if (searchTerms(cardQuery).length) return
+  // While searching (or showing only favorites) every group is open; folding waits until that ends.
+  if (searchTerms(cardQuery).length || favoritesOnly) return
   if (archive) ui.archiveOpen = !ui.archiveOpen
   else {
     foldedGroups.has(name) ? foldedGroups.delete(name) : foldedGroups.add(name)
@@ -511,28 +521,43 @@ const cardGroups = () => [...new Set(ui.cards.filter(card => card.group).map(car
 let cardQuery = ''
 const cardText = card => [card.name, card.group, card.creator, ...(card.tags ?? [])].filter(Boolean).join('\n')
 
+// 只看收藏 (the star next to the search box), remembered on this device like folded groups.
+const FAVORITES_KEY = 'cicatavern.favoritesOnly'
+let favoritesOnly = (() => {
+  try {
+    return localStorage.getItem(FAVORITES_KEY) === '1'
+  } catch {
+    return false
+  }
+})()
+
+// ui.cards comes in the list's own order (拖拽排序); pinned cards (置顶) go above everything but the
+// archive, out of their groups, and each part keeps that order.
 function renderCards() {
   const list = $('card-list')
   const terms = searchTerms(cardQuery)
-  const found = terms.length ? ui.cards.filter(card => matchesTerms(cardText(card), terms)) : ui.cards
+  const filtering = terms.length > 0 || favoritesOnly
+  const found = ui.cards.filter(card => (!favoritesOnly || card.favorite) && (!terms.length || matchesTerms(cardText(card), terms)))
   const live = found.filter(card => !card.archived)
   const archived = found.filter(card => card.archived)
-  const items = live.filter(card => !card.group).map(card => cardItem(card))
+  const items = live.filter(card => card.pinned).map(card => cardItem(card, 'pinned'))
+  items.push(...live.filter(card => !card.pinned && !card.group).map(card => cardItem(card, 'loose')))
   for (const name of cardGroups()) {
-    const cards = live.filter(card => card.group === name)
+    const cards = live.filter(card => !card.pinned && card.group === name)
     if (!cards.length) continue
-    const folded = !terms.length && foldedGroups.has(name)
-    items.push(groupHead(name, cards, folded))
-    if (!folded) items.push(...cards.map(card => cardItem(card, true)))
+    const folded = !filtering && foldedGroups.has(name)
+    items.push(groupHead(name, cards, folded, { menuCards: live.filter(card => card.group === name) }))
+    if (!folded) items.push(...cards.map(card => cardItem(card, `group:${name}`, true)))
   }
   if (archived.length) {
-    const open = terms.length > 0 || ui.archiveOpen
+    const open = filtering || ui.archiveOpen
     items.push(groupHead(t`已归档`, archived, !open, { archive: true }))
-    if (open) items.push(...archived.map(card => cardItem(card, true)))
+    if (open) items.push(...archived.map(card => cardItem(card, 'archived', true)))
   }
   list.replaceChildren(...items)
   if (ui.cards.length === 0) list.append(el('li', { class: 'muted small', text: t`还没有角色卡` }))
-  else if (!found.length) list.append(el('li', { class: 'muted small', text: t`没有找到「${cardQuery.trim()}」` }))
+  else if (!found.length && terms.length) list.append(el('li', { class: 'muted small', text: favoritesOnly ? t`收藏里没有找到「${cardQuery.trim()}」` : t`没有找到「${cardQuery.trim()}」` }))
+  else if (!found.length) list.append(el('li', { class: 'muted small', text: t`还没有收藏的角色卡：在卡片的 ⋯ 里点「收藏」` }))
   $('new-chat').disabled = !ui.cardId
   $('import-story').disabled = !ui.cardId
   $('import-story-label').setAttribute('aria-disabled', String(!ui.cardId))
@@ -646,6 +671,145 @@ const organizeCard = guard(async (card, change, done) => {
   if (done) toast(done)
 })
 
+// ─── 拖拽排序: a card dragged up or down the list ───────────────────────
+// A mouse drags on a press and a move; a finger holds still a moment first, so a quick swipe still
+// scrolls the list. A card moves within its part of the list (置顶, ungrouped, a group, the archive).
+// While searching or showing only favorites, the cards shown swap places among themselves and the
+// hidden ones stay where they were. The order is the server's (PUT /api/cards/order), the same on every device.
+function initCardDrag(list) {
+  let drag = null // { li, section, before: the section's ids as it was }
+  let hold = null // a finger down, not yet held long enough: { x, y, timer }
+  let lastY = 0
+  let scroller = 0
+  const cardLi = target => (target.closest('button') ? null : target.closest('li[data-id]'))
+  const inSection = section => [...list.querySelectorAll('li[data-id]')].filter(li => li.dataset.section === section)
+
+  function start(li, y) {
+    drag = { li, section: li.dataset.section, before: inSection(li.dataset.section).map(n => n.dataset.id) }
+    li.classList.add('dragging')
+    list.classList.add('sorting')
+    lastY = y
+    // Held near the list's top or bottom edge, it scrolls along.
+    scroller = setInterval(() => {
+      const box = list.getBoundingClientRect()
+      const step = lastY < box.top + 32 ? -8 : lastY > box.bottom - 32 ? 8 : 0
+      if (!step) return
+      list.scrollTop += step
+      move(lastY)
+    }, 16)
+  }
+  function move(y) {
+    lastY = y
+    const others = inSection(drag.section).filter(n => n !== drag.li)
+    if (!others.length) return
+    const next = others.find(n => {
+      const box = n.getBoundingClientRect()
+      return y < box.top + box.height / 2
+    })
+    if (next) {
+      if (drag.li.nextElementSibling !== next) next.before(drag.li)
+    } else if (others.at(-1).nextElementSibling !== drag.li) others.at(-1).after(drag.li)
+  }
+  function end(commit) {
+    clearInterval(scroller)
+    const { li, section, before } = drag
+    drag = null
+    li.classList.remove('dragging')
+    list.classList.remove('sorting')
+    // The click that ends a drag does not open the card.
+    const swallow = event => { event.stopPropagation(); event.preventDefault() }
+    addEventListener('click', swallow, { capture: true, once: true })
+    setTimeout(() => removeEventListener('click', swallow, { capture: true }), 300)
+    const after = inSection(section).map(n => n.dataset.id)
+    if (commit && li.isConnected && after.join() !== before.join()) saveCardOrder(before, after)
+    else renderCards()
+  }
+
+  list.addEventListener('pointerdown', event => {
+    if (event.pointerType !== 'mouse' || event.button !== 0 || drag) return
+    const li = cardLi(event.target)
+    if (!li) return
+    const x0 = event.clientX
+    const y0 = event.clientY
+    const onMove = moved => {
+      if (!drag) {
+        if (Math.hypot(moved.clientX - x0, moved.clientY - y0) < 6) return
+        start(li, moved.clientY)
+      }
+      moved.preventDefault()
+      move(moved.clientY)
+    }
+    const off = () => {
+      removeEventListener('pointermove', onMove)
+      removeEventListener('pointerup', onUp)
+      removeEventListener('pointercancel', onCancel)
+    }
+    const onUp = () => { off(); if (drag) end(true) }
+    const onCancel = () => { off(); if (drag) end(false) }
+    addEventListener('pointermove', onMove)
+    addEventListener('pointerup', onUp)
+    addEventListener('pointercancel', onCancel)
+  })
+  // The avatar is a picture: the browser's own picture dragging would end ours.
+  list.addEventListener('dragstart', event => event.preventDefault())
+
+  const letGo = () => {
+    clearTimeout(hold?.timer)
+    hold = null
+  }
+  list.addEventListener('touchstart', event => {
+    letGo()
+    if (event.touches.length !== 1 || drag) return
+    const li = cardLi(event.target)
+    if (!li) return
+    const { clientX: x, clientY: y } = event.touches[0]
+    hold = { x, y, timer: setTimeout(() => {
+      hold = null
+      navigator.vibrate?.(10)
+      start(li, y)
+    }, 380) }
+  }, { passive: true })
+  list.addEventListener('touchmove', event => {
+    const touch = event.touches[0]
+    if (hold && Math.hypot(touch.clientX - hold.x, touch.clientY - hold.y) > 8) letGo()
+    if (!drag) return
+    // Already scrolling (the finger moved just as the hold ended): the list scrolls, nothing moves.
+    if (!event.cancelable) return end(false)
+    event.preventDefault()
+    move(touch.clientY)
+  }, { passive: false })
+  list.addEventListener('touchend', event => {
+    letGo()
+    if (!drag) return
+    event.preventDefault()
+    end(true)
+  })
+  list.addEventListener('touchcancel', () => {
+    letGo()
+    if (drag) end(false)
+  })
+  // A long press would open the WebView's own menu or pick the text.
+  list.addEventListener('contextmenu', event => {
+    if (drag || hold) event.preventDefault()
+  })
+}
+
+// before: the dragged part's ids as they were (the cards shown); after: as dropped. They take the
+// same places among all the cards, so the ones not shown keep theirs.
+const saveCardOrder = guard(async (before, after) => {
+  const places = new Set(before)
+  const queue = [...after]
+  const byId = new Map(ui.cards.map(card => [card.id, card]))
+  ui.cards = ui.cards.map(card => (places.has(card.id) ? byId.get(queue.shift()) : card))
+  renderCards()
+  try {
+    await api('/api/cards/order', { method: 'PUT', body: { ids: ui.cards.map(card => card.id) } })
+  } catch (error) {
+    await refreshCards()
+    throw error
+  }
+})
+
 function askGroupName(title, initial = '') {
   const name = prompt(title, initial)?.replace(/\s+/g, ' ').trim()
   return name ? name.slice(0, 30) : ''
@@ -666,9 +830,20 @@ async function makeVisualNovel(id, places = []) {
 function openCardMenu(card, anchor) {
   const groups = cardGroups()
   popMenu(anchor, [
+    // An archived card stays in the archive; its pin only counts again once it is back.
+    card.archived && !card.pinned ? null : { label: card.pinned ? t`取消置顶` : t`置顶`, hint: card.pinned ? '' : t`放到列表最上面，不管在哪个分组`, onClick: () => organizeCard(card, { pinned: !card.pinned }) },
+    { label: card.favorite ? t`取消收藏` : t`收藏`, hint: card.favorite ? '' : t`卡片上显示星标；搜索框旁的 ☆ 可以只看收藏的卡`, onClick: () => organizeCard(card, { favorite: !card.favorite }) },
+    '-',
     { label: t`修改角色卡`, hint: t`改名字、描述、开场白和世界书，也可以说说想怎么改，让向导来改`, onClick: () => cardEditUi.open(card.id) },
     { label: t`做成视觉小说`, hint: t`开一个新对话进入视觉小说模式：选画图方式，再备齐角色名册、立绘和表情`, onClick: guard(() => makeVisualNovel(card.id)) },
     { label: t`卡片界面权限…`, hint: t`卡片界面自己发送、调用模型、经 CicaTavern 联网：问过一次之后照你的选择来，在这里改`, onClick: () => cardPermissions.open(card) },
+    '-',
+    { header: t`导出角色卡` },
+    // The Android WebView ignores <a download>, and its bridge saves text only (saveFile).
+    card.hasAvatar && document.documentElement.dataset.edition !== 'android'
+      ? { label: t`PNG 图片`, hint: t`图片里带着整张卡（包括修改过的地方），SillyTavern 可以直接导入`, onClick: () => exportCardPng(card) }
+      : null,
+    { label: t`JSON 文件`, hint: t`SillyTavern 的角色卡 JSON，包括修改过的地方`, onClick: () => exportCardJson(card) },
     '-',
     { header: t`移到分组` },
     ...groups.map(name => ({ label: name, current: card.group === name, onClick: () => organizeCard(card, { group: name }) })),
@@ -682,6 +857,19 @@ function openCardMenu(card, anchor) {
     { label: t`删除角色卡…`, danger: true, onClick: () => deleteCard(card) },
   ].filter(Boolean))
 }
+
+// 导出角色卡 (the card's ⋯): the card's own regex only; 修改角色卡 can add the attached 正则集.
+function exportCardPng(card) {
+  const link = el('a', { href: `/api/cards/${card.id}/png?v=${Date.now()}`, download: `${card.name}.png` })
+  document.body.append(link)
+  link.click()
+  link.remove()
+}
+
+const exportCardJson = guard(async card => {
+  const json = await api(`/api/cards/${card.id}/sillytavern`)
+  saveFile(`${card.name}.json`, JSON.stringify(json, null, 2), t`已导出：SillyTavern 的角色卡 JSON。`)
+})
 
 const renameGroup = guard(async (from, to, done) => {
   await api('/api/cards/groups', { method: 'POST', body: { from, to } })
@@ -2458,7 +2646,19 @@ async function generate(endpoint, body, echoUserText) {
         const note = live()?.querySelector('.live-note')
         if (note) note.textContent = job.note
         if (event.compacted?.removedChars && viewing()) toast(t`已清掉历史里堆积的变量列表（${fmt(event.compacted.removedChars)} 字）。这一轮会重写对话历史的缓存，固定前缀还在。`)
+      } else if (event.type === 'retrying') {
+        // A busy provider (Vertex AI's 429), asked again after a wait; the note goes back when the answer comes.
+        job.noteBefore ??= job.note
+        job.note = t`${event.provider} 繁忙，${Math.ceil(event.wait / 1000)} 秒后自动重试（第 ${event.attempt}/${event.of} 次）……`
+        const note = live()?.querySelector('.live-note')
+        if (note) note.textContent = job.note
       } else if (event.type === 'delta' || event.type === 'restart') {
+        if (job.noteBefore != null && event.type === 'delta') {
+          job.note = job.noteBefore
+          job.noteBefore = null
+          const note = live()?.querySelector('.live-note')
+          if (note) note.textContent = job.note
+        }
         // restart: the relay lost the system prompt (the card), and the answer is being asked for again.
         job.text = event.type === 'restart' ? '' : job.text + event.text
         if (viewing()) vnUi.streamed()
@@ -3681,7 +3881,24 @@ function bind() {
       renderCards()
     },
   })
-  $('card-list').before(cardSearch.box)
+  const favoritesButton = el('button', { type: 'button', class: 'fav-filter', title: t`只看收藏的角色卡`, 'aria-label': t`只看收藏的角色卡` })
+  const showFavorites = () => {
+    favoritesButton.setAttribute('aria-pressed', String(favoritesOnly))
+    favoritesButton.textContent = favoritesOnly ? '★' : '☆'
+  }
+  favoritesButton.addEventListener('click', () => {
+    favoritesOnly = !favoritesOnly
+    try {
+      localStorage.setItem(FAVORITES_KEY, favoritesOnly ? '1' : '0')
+    } catch {
+      // Private windows: for this page only.
+    }
+    showFavorites()
+    renderCards()
+  })
+  showFavorites()
+  $('card-list').before(el('div', { class: 'card-search-row' }, [cardSearch.box, favoritesButton]))
+  initCardDrag($('card-list'))
   listenForFrameHeights()
   watchCallFrames()
   installFrameBridge({

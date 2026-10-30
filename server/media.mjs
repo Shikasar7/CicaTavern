@@ -41,6 +41,8 @@ export const DEFAULT_MEDIA = Object.freeze({
   imageReference: false, // send the card avatar through /images/edits
   imageEditModel: '', // model for /images/edits; empty = imageModel (some gateways split generate and edit models)
   promptStyle: 'natural', // 'natural' sentences or comma-separated 'tags' (SD-style workflows)
+  promptDetail: 'standard', // 提示词详细程度: how long the helper writes it, 'brief' | 'standard' | 'detailed' (PROMPT_LENGTH)
+  promptRules: '', // 写提示词的额外要求, every card's (a card adds its own, DEFAULT_CARD_MEDIA): told to whoever writes a picture's prompt
   comfyUrl: 'http://127.0.0.1:8188',
   // ComfyUI's 简单模式: no workflow imported, one built from the model picked (simpleWorkflow).
   comfyMode: 'workflow', // 'workflow' (the imported one) | 'simple'
@@ -90,9 +92,12 @@ export const DEFAULT_MEDIA = Object.freeze({
 
 // lora: a file in ComfyUI's models/loras, added to the workflow for this card (ComfyUI only).
 // roster: the cast for pictures (roster.mjs); a lone member with a LoRA of their own is drawn with theirs instead (loraFor).
-// style / styleNegative: the card's look; NovelAI puts them on every picture of the card, the others get the
-// style in the prompt (portraits and 立绘 too).
-export const DEFAULT_CARD_MEDIA = Object.freeze({ voice: '', narratorVoice: '', style: '', styleNegative: '', lora: '', loraTrigger: '', loraStrength: 0.8, roster: [] })
+// style / styleNegative: the card's look; NovelAI puts them on every picture of the card, ComfyUI and SD WebUI
+// the style (styleFirst), the others get the style in the prompt (portraits and 立绘 too).
+// promptRules: this card's 写提示词的额外要求, after every card's (media.promptRules).
+export const DEFAULT_CARD_MEDIA = Object.freeze({ voice: '', narratorVoice: '', style: '', styleNegative: '', promptRules: '', lora: '', loraTrigger: '', loraStrength: 0.8, roster: [] })
+export const PROMPT_DETAILS = ['brief', 'standard', 'detailed']
+const RULES_MAX = { media: 4000, card: 2000 }
 
 const SIZE = /^(\d{3,4})x(\d{3,4})$/
 const SHAPES = ['square', 'portrait', 'landscape']
@@ -142,8 +147,23 @@ export function drawChoiceOf(body) {
   return { backend: pick('backend'), model: pick('model') }
 }
 
-/** The images API's answer format: gpt-image models always answer in base64 and refuse to be asked. */
-export const imageFormat = model => (/^(openai\/)?(gpt-image|chatgpt-image)/i.test(String(model ?? '')) ? {} : { response_format: 'b64_json' })
+// MOSS-Image on the MOSI platform (api.mosi.cn): generations only, no edits.
+const MOSS_IMAGE = /^moss-image/i
+
+/**
+ * The images API's answer format: gpt-image models always answer in base64 and
+ * refuse to be asked; MOSS-Image answers only with a link (b64_json is refused)
+ * and puts a visible watermark on unless told not to.
+ */
+export const imageFormat = model => {
+  const name = String(model ?? '')
+  if (/^(openai\/)?(gpt-image|chatgpt-image)/i.test(name)) return {}
+  if (MOSS_IMAGE.test(name)) return { response_format: 'url', output_watermark: { enabled: false } }
+  return { response_format: 'b64_json' }
+}
+
+/** Whether an images API model can take a reference picture (/images/edits). */
+export const editsImages = model => !MOSS_IMAGE.test(String(model ?? ''))
 
 /** Pixel size for a backend and shape. */
 export function imageSize(backend, shape) {
@@ -220,6 +240,8 @@ export function cleanMedia(input, previous = DEFAULT_MEDIA, defaults = DEFAULT_M
   if (SHAPES.includes(source.imageShape)) value.imageShape = source.imageShape
   else if (shapeOf(source.imageSize)) value.imageShape = shapeOf(source.imageSize)
   if (source.promptStyle === 'natural' || source.promptStyle === 'tags') value.promptStyle = source.promptStyle
+  if (PROMPT_DETAILS.includes(source.promptDetail)) value.promptDetail = source.promptDetail
+  if (typeof source.promptRules === 'string') value.promptRules = cleanRules(source.promptRules, RULES_MAX.media)
   if (source.promptSource === 'helper' || source.promptSource === 'chat') value.promptSource = source.promptSource
   for (const key of ['comfyUrl', 'sdUrl', 'ttsUrl']) {
     if (typeof source[key] !== 'string') continue
@@ -274,6 +296,7 @@ export function cleanCardMedia(input, previous = DEFAULT_CARD_MEDIA) {
   for (const key of ['voice', 'narratorVoice']) if (typeof input?.[key] === 'string') value[key] = input[key].trim().slice(0, 250)
   if (typeof input?.style === 'string') value.style = input.style.trim().slice(0, 600)
   if (typeof input?.styleNegative === 'string') value.styleNegative = input.styleNegative.trim().slice(0, 600)
+  if (typeof input?.promptRules === 'string') value.promptRules = cleanRules(input.promptRules, RULES_MAX.card)
   if (typeof input?.lora === 'string') value.lora = cleanLora(input.lora)
   if (typeof input?.loraTrigger === 'string') value.loraTrigger = input.loraTrigger.trim().slice(0, 80)
   if (input?.loraStrength !== undefined) value.loraStrength = cleanStrength(input.loraStrength, value.loraStrength)
@@ -369,37 +392,92 @@ const clip = (text, max) => {
 }
 
 // The helper only describes one frame; a short cap keeps it fast and stops it
-// from drifting into continuing the story.
+// from drifting into continuing the story. 详细 gets room for its longer answer.
 export const PROMPT_MAX_TOKENS = 400
 // A cast-format prompt has a line per person.
 const CAST_MAX_TOKENS = 700
-const PROMPT_MAX_WORDS = { natural: 90, tags: 70 }
+const MAX_TOKENS = { brief: 1, standard: 1, detailed: 1.6 }
+const promptDetailOf = detail => (PROMPT_DETAILS.includes(detail) ? detail : 'standard')
+
+// What the helper is asked for at each 提示词详细程度, and where cleanPrompt cuts a rambling answer.
+const PROMPT_LENGTH = {
+  brief: { tags: '15-30', words: '25-45', maxTags: 40, maxWords: 60 },
+  standard: { tags: '30-50', words: '60-100', maxTags: 70, maxWords: 120 },
+  detailed: { tags: '50-80', words: '120-180', maxTags: 100, maxWords: 220 },
+}
+const DETAIL_HINT = {
+  brief: 'Keep it short: only who, what they do, where, and the framing.',
+  standard: '',
+  detailed: 'Be thorough: clothing details and accessories, hands and what they hold, background objects, the direction and colour of the light, atmosphere, depth of field.',
+}
+
+/** The format line for a plain (no cast) prompt. */
+function plainFormat(promptStyle, detail) {
+  const length = PROMPT_LENGTH[promptDetailOf(detail)]
+  return promptStyle === 'tags'
+    ? `Format: ${length.tags} comma-separated English tags, no sentences.`
+    : `Format: one English paragraph of ${length.words} words.`
+}
+
+/**
+ * How a good prompt is put together, for the format asked: what anime models
+ * know as tags, what sentence models need first. Image models know nobody by
+ * name, and the words that come first weigh the most.
+ */
+function promptCraft({ promptStyle, cast, style }) {
+  const tags = promptStyle === 'tags'
+  return [
+    cast
+      ? ''
+      : tags
+        ? 'Use Danbooru-style tags as anime models know them, lowercase, one idea per tag (e.g. 1girl, solo, long hair, blue eyes, school uniform, smile, looking at viewer, cowboy shot, from below, indoors, sunset, depth of field). Order: head count (1girl, 2girls, 1boy…), then each person\'s hair, eyes, outfit, expression, pose and action, then the place and its objects, time of day, lighting, framing and camera angle.'
+        : 'Write what a camera sees, most important first: the framing (close-up, upper body, full body or wide shot) and camera angle, then each person (apparent age, hair, eyes, what they wear right now), their pose, action, hands and expression, then the setting and its objects, time of day, the light and the mood. Plain concrete words; no sounds, thoughts, backstory or metaphors.',
+    'Choose a framing that fits the moment: close for emotion, wider for action and places.',
+    cast ? '' : 'Never use character names: the image model does not know who they are. Describe them instead.',
+    style ? (tags ? 'Leave out the art style in <art_style>: it is added on its own.' : `Start the ${cast ? '场景 line' : 'prompt'} with the art style in <art_style>, word for word.`) : '',
+  ].filter(Boolean)
+}
+
+/**
+ * The user's own rules for writing the prompt (every card's, then this card's),
+ * last so they win over the defaults; the reply still has to be a prompt.
+ */
+export function promptRulesOf(media, cardMedia) {
+  return [media?.promptRules, cardMedia?.promptRules].map(rules => String(rules ?? '').trim()).filter(Boolean).join('\n\n')
+}
+
+/** 写提示词的额外要求 as typed or read from a file: line breaks kept, at most `max` characters. */
+export function cleanRules(text, max) {
+  return String(text ?? '').replace(/\r\n?/g, '\n').replace(/\u0000/g, '').trim().slice(0, max)
+}
 
 /**
  * The request to the helper model. `reply` is the text as displayed (status
  * bars removed). The task is stated in the system prompt and again after the
  * material: some gateways drop the system part, and a model that sees only a
  * story passage tends to continue it.
+ * @param detail - 提示词详细程度 (PROMPT_DETAILS). @param rules - the user's own rules (promptRulesOf).
  */
-export function imagePromptRequest({ card, names, reply, input, state, style, promptStyle, roster = [] }) {
-  const tags = promptStyle === 'tags'
+export function imagePromptRequest({ card, names, reply, input, state, style, promptStyle, roster = [], detail = 'standard', rules = '' }) {
+  detail = promptDetailOf(detail)
   const cast = roster.length > 0
-  const format = cast
-    ? frameFormat(promptStyle)
-    : tags
-    ? 'Format: 30-60 comma-separated English tags (subject count, each character\'s hair, eyes, outfit, expression, pose, then setting, lighting, camera). No sentences.'
-    : 'Format: one English paragraph of 40-80 words: who is in the frame and how they look (hair, eyes, outfit), expression and pose, setting, lighting, camera angle.'
+  const format = cast ? frameFormat(promptStyle, detail) : plainFormat(promptStyle, detail)
   const task = [
     'TASK: write an image-generation prompt for ONE frame of the scene above. Do not continue or summarise the story, no dialogue, no narration, no Chinese.',
     cast
       ? 'Pick the most vivid moment of <latest_passage>. No text, captions or speech bubbles in the picture.'
-      : 'Pick the most vivid moment of <latest_passage>. Keep the character\'s looks consistent with <character>. No text, captions or speech bubbles in the picture.',
+      : 'Pick the most vivid moment of <latest_passage>. Keep the character\'s looks consistent with <character> and with what the story changed (clothes, wounds, where they are). No text, captions or speech bubbles in the picture.',
     cast
       ? `Somebody is always in the picture: at least one cast member, ${names.char} or another one rather than the player alone where the moment allows. Never an empty room or a close-up of objects only.`
       : `Somebody is always in the picture, normally ${names.char}. Never an empty room or a close-up of objects only.`,
+    ...promptCraft({ promptStyle, cast, style }),
+    DETAIL_HINT[detail],
     format,
+    rules ? `The user's own rules for these prompts (they win where they differ from the above, but the reply is still the prompt only):\n<user_rules>\n${rules}\n</user_rules>` : '',
     'Reply with the prompt only.',
-  ].join('\n')
+  ]
+    .filter(Boolean)
+    .join('\n')
   const scene = state && Object.keys(state).length ? clip(JSON.stringify(state), 800) : ''
   const content = [
     `<character name="${names.char}">\n${clip(card.description, 1500)}\n</character>`,
@@ -416,14 +494,28 @@ export function imagePromptRequest({ card, names, reply, input, state, style, pr
   return {
     system: `You write prompts for an image generator. You never write story text.\n${format}`,
     messages: [{ role: 'user', content }],
-    maxTokens: cast ? CAST_MAX_TOKENS : PROMPT_MAX_TOKENS,
+    maxTokens: promptMaxTokens(cast, detail),
   }
 }
+
+export const promptMaxTokens = (cast, detail) => Math.round((cast ? CAST_MAX_TOKENS : PROMPT_MAX_TOKENS) * MAX_TOKENS[promptDetailOf(detail)])
 
 /** A prompt without the card's style written into it. */
 export function unstyled(prompt, style) {
   if (!style) return prompt
   return String(prompt ?? '').split(style).join('').replace(/^[,，\s]+/, '').replace(/([,，]\s*){2,}/g, ', ')
+}
+
+/**
+ * The card's style first in the prompt a backend gets, whatever the prompt
+ * style: for ComfyUI and SD WebUI, which take the words as written (a sentence
+ * prompt only had the style as far as the helper model wrote it in, and a prompt
+ * typed by hand not at all). Taken out where it was written in, so it isn't there twice.
+ */
+export function styleFirst(prompt, style) {
+  if (!style) return prompt
+  const rest = unstyled(prompt, style).replace(/^[.。,，\s]+/, '').trim()
+  return rest ? `${style}, ${rest}` : style
 }
 
 /** The card's style tags first (tag prompts only); in a cast-format prompt, first in its 场景 line. */
@@ -503,7 +595,7 @@ export function ensureScenery(prompt, promptStyle = 'natural') {
  * Strip quotes, labels, code fences and thinking a model may wrap the prompt
  * in, keep the first paragraph, and cut a rambling answer at a word limit.
  */
-export function cleanPrompt(text, promptStyle = 'natural') {
+export function cleanPrompt(text, promptStyle = 'natural', detail = 'standard') {
   let value = String(text ?? '')
     .replace(/<think>[\s\S]*?<\/think>/gi, '')
     .replace(/```\w*/g, '')
@@ -511,7 +603,8 @@ export function cleanPrompt(text, promptStyle = 'natural') {
     .replace(/^\s*(?:here is|here's)[^:\n]*:\s*/i, '')
     .replace(/^\s*(?:image prompt|positive prompt|prompt|tags)\s*[:：]\s*/i, '')
   value = value.split(/\n\s*\n/)[0].replace(/\s*\n\s*/g, ' ').replace(/^["“'\s]+|["”'\s]+$/g, '').trim()
-  const limit = PROMPT_MAX_WORDS[promptStyle] ?? PROMPT_MAX_WORDS.natural
+  const length = PROMPT_LENGTH[promptDetailOf(detail)]
+  const limit = promptStyle === 'tags' ? length.maxTags : length.maxWords
   if (promptStyle === 'tags') {
     const parts = value.split(/\s*,\s*/).filter(Boolean)
     return parts.slice(0, limit).join(', ')
@@ -528,13 +621,22 @@ export function cleanPrompt(text, promptStyle = 'natural') {
  * card, the world and the whole story, so this only says what to write.
  * `passage` is given when the reply is not in the history (the opening).
  */
-export function contextImageInstruction({ promptStyle, style, passage, roster = [], userName = '' }) {
+export function contextImageInstruction({ promptStyle, style, passage, roster = [], userName = '', detail = 'standard', rules = '' }) {
+  detail = promptDetailOf(detail)
   const cast = roster.length > 0
+  const tags = promptStyle === 'tags'
+  const length = PROMPT_LENGTH[detail]
   const format = cast
-    ? `出场人物（只用这些名字，方括号原样写）：\n${rosterBrief(roster, userName)}\n${frameFormat(promptStyle)}`
-    : promptStyle === 'tags'
-      ? '格式：30–60 个英文标签，用逗号分隔（人数、每个人的发型发色、眼睛、服装、表情、动作，然后场景、光线、镜头），不写句子。'
-      : '格式：一段 40–80 个英文单词的描述：画面里有谁、长什么样（发型发色、眼睛、服装）、表情和动作、场景、光线、镜头角度。'
+    ? `出场人物（只用这些名字，方括号原样写）：\n${rosterBrief(roster, userName)}\n${frameFormat(promptStyle, detail)}`
+    : tags
+      ? `格式：${length.tags} 个英文标签，用逗号分隔，不写句子。用动漫模型认得的 Danbooru 标签，小写，一个标签一件事（如 1girl, solo, long hair, school uniform, looking at viewer, cowboy shot, from below, sunset）。顺序：人数（1girl、2girls、1boy…），每个人的发型发色、眼睛、服装、表情、姿势动作，然后地点和物件、时间、光线、景别和镜头角度。`
+      : `格式：一段 ${length.words} 个英文单词的描述，按镜头看到的写，重要的在前：景别（特写、半身、全身、远景）和镜头角度，每个人的大致年龄、发型发色、眼睛、现在穿的衣服，姿势、动作、手上拿着什么、表情，然后场景和物件、时间、光线、氛围。用具体的词，不写声音、心理、来历和比喻。`
+  const craft = [
+    '景别跟着瞬间选：情绪用近景，动作和场面用远一点的镜头。',
+    cast ? '' : '不要写角色的名字（生图模型不认识他们），写出长相来代替。',
+    style ? (tags ? `画风会自动加上，不要写进去：${style}` : `${cast ? '场景行' : '提示词'}以这段画风开头，原样照抄：${style}`) : '',
+    { brief: '写短一点：只写谁、在做什么、在哪、景别。', standard: '', detailed: '写细一点：衣服的细节和饰品、手和手里的东西、背景里的物件、光从哪来是什么颜色、氛围、景深。' }[detail],
+  ]
   return [
     '（暂停扮演。这一条不是剧情，不要回应剧情，也不要续写。）',
     passage ? `<latest_passage>\n${clip(passage, 1800)}\n</latest_passage>\n` : '',
@@ -542,8 +644,9 @@ export function contextImageInstruction({ promptStyle, style, passage, roster = 
       ? `为${passage ? '上面这段' : '你上一条回复里'}最有画面感的一个瞬间，写给生图模型用的英文提示词。人物长相会自动补上，你只写谁在画面里、现在穿什么（换过的衣服、受的伤都要对）、在做什么、什么表情、站在哪。画面里不要出现文字、字幕或对话气泡。`
       : `为${passage ? '上面这段' : '你上一条回复里'}最有画面感的一个瞬间，写一段给生图模型用的英文提示词。人物外貌以角色设定和剧情里的最新状态为准（换过的衣服、受的伤、所在的地方都要对）。画面里不要出现文字、字幕或对话气泡。`,
     cast ? '画面里一定要有人：至少一个出场人物，能选的话画角色本人或其他人，不要只有玩家。不要画空场景，也不要只画物品特写。' : '画面里一定要有人，通常是角色本人。不要画空场景，也不要只画物品特写。',
-    style ? `画风：${style}` : '',
+    ...craft,
     format,
+    rules ? `用户自己定的写法（和上面不一样的地方以这里为准，但仍然只输出提示词）：\n<user_rules>\n${rules}\n</user_rules>` : '',
     '只输出提示词本身，不要标题、解释或思考过程。',
   ]
     .filter(Boolean)
@@ -1226,17 +1329,19 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     const card = await store.getCard(chat.cardId)
     const cardMedia = cleanCardMedia(card.media)
     const roster = cardMedia.roster
+    const detail = media.promptDetail
+    const rules = promptRulesOf(media, cardMedia)
     // A cast answers in its own format; an answer that ignored it is still usable as a plain prompt.
     // Either way somebody from the cast is in it when the answer left everyone out.
     const clean = text => {
-      const prompt = (roster.length && cleanFrame(text)) || cleanPrompt(text, media.promptStyle)
+      const prompt = (roster.length && cleanFrame(text, detail)) || cleanPrompt(text, media.promptStyle, detail)
       return withSomeone(prompt, roster, chat.names.user, card.name, media.promptStyle)
     }
     let note = ''
     if (media.promptSource === 'chat' && askInContext) {
       const providers = await store.getProviders()
-      const instruction = contextImageInstruction({ promptStyle: media.promptStyle, style: cardMedia.style, passage: node.parent ? '' : reply, roster, userName: chat.names.user })
-      const answer = await askInContext(chat.id, node.id, instruction, { maxTokens: roster.length ? CAST_MAX_TOKENS : PROMPT_MAX_TOKENS, signal })
+      const instruction = contextImageInstruction({ promptStyle: media.promptStyle, style: cardMedia.style, passage: node.parent ? '' : reply, roster, userName: chat.names.user, detail, rules })
+      const answer = await askInContext(chat.id, node.id, instruction, { maxTokens: promptMaxTokens(roster.length > 0, detail), signal })
       if (answer) {
         const prompt = clean(answer.text)
         if (!prompt) throw httpError(502, msg`对话模型没有写出提示词，可以「重写」，或改用辅助模型`)
@@ -1253,7 +1358,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     }
     const { provider, modelId } = await helperTarget(chat, media)
     // The card and the story go to a model here too: with the 屏蔽词, as a turn sends them.
-    const request = blockRequest(imagePromptRequest({ card, names: chat.names, reply, input, state: node.state, style: cardMedia.style, promptStyle: media.promptStyle, roster }), await store.getBlockWords())
+    const request = blockRequest(imagePromptRequest({ card, names: chat.names, reply, input, state: node.state, style: cardMedia.style, promptStyle: media.promptStyle, roster, detail, rules }), await store.getBlockWords())
     let result
     try {
       result = await complete(provider, modelId, { ...request, signal }, { proxy: proxyNow() })
@@ -1289,8 +1394,8 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     if (!provider) throw httpError(400, msg`还没选生图的供应商：在「配图与朗读」里选`)
     if (provider.api === 'anthropic-messages') throw httpError(400, msg`${provider.name} 是 Anthropic 接口，没有生图接口`)
     if (!media.imageModel) throw httpError(400, msg`还没填生图模型`)
-    // Someone else in the picture is never drawn from the card's avatar.
-    const reference = media.imageReference ? (cast?.lead && (await refFor(cardId, cast.lead))) || ((await avatarFits(cardId, cast)) ? await avatarOf(cardId) : null) : null
+    // Someone else in the picture is never drawn from the card's avatar. A model with no edits endpoint draws without one.
+    const reference = media.imageReference && editsImages(media.imageEditModel || media.imageModel) ? (cast?.lead && (await refFor(cardId, cast.lead))) || ((await avatarFits(cardId, cast)) ? await avatarOf(cardId) : null) : null
     // OpenRouter draws through chat (Gemini and GPT image models answer with a picture).
     if (/openrouter\.ai/i.test(provider.baseURL)) return { buffer: await chatImage(provider, media, prompt, reference, signal), note: '' }
     const size = imageSize('openai', media.imageShape)
@@ -1459,6 +1564,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
   async function sdwebuiImage(media, prompt, cardId, signal, cast = null, { scenery = false } = {}) {
     const cardMedia = cardId ? cleanCardMedia((await store.getCard(cardId)).media) : DEFAULT_CARD_MEDIA
     const owner = loraFor(cardMedia, cast, { scenery })
+    prompt = styleFirst(prompt, cardMedia.style)
     if (owner) prompt = `${withTrigger(prompt, owner.loraTrigger)}, <lora:${owner.lora.replace(/^.*[\\/]/, '').replace(/\.(safetensors|pt|ckpt)$/i, '')}:${owner.loraStrength}>`
     const [width, height] = imageSize('sdwebui', media.imageShape).split('x').map(Number)
     const body = {
@@ -1527,6 +1633,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     const [width, height] = imageSize('comfy', media.imageShape).split('x').map(Number)
     const negatives = [scenery ? SCENERY_NEGATIVE : '', negative].filter(Boolean).join(', ')
     const workflow = withNegative(fitSize(withOwner, width, height), negatives)
+    prompt = styleFirst(prompt, cardMedia.style)
     if (owner) prompt = withTrigger(prompt, owner.loraTrigger)
     const base = media.comfyUrl
     if (owner) {

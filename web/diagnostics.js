@@ -74,12 +74,12 @@ export function openDiagnostics({ api, el, toast, saveFile, getChat }) {
   const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}${pad(now.getMinutes())}`
   dialog.replaceChildren(
     el('h2', { text: t`错误日志` }),
-    el('p', { class: 'hint', text: t`出了问题时，把下面这份日志发给开发者（QQ 群、GitHub 或私信），能更快找到原因。日志只存在这台设备上，应用不会自己发出去；下面就是要发的全部内容，可以先看一遍。里面没有对话和角色卡的内容，密钥、令牌和电脑的用户名已经去掉。` }),
+    el('p', { class: 'hint', text: t`出了问题时，把下面这份日志发给开发者（QQ 群、GitHub 或私信），能更快找到原因。日志只存在这台设备上，应用不会自己发出去；下面就是要发的全部内容，可以先看一遍。里面有最近的错误和操作记录（改了哪些设置、点了哪些操作，不记内容），没有对话和角色卡的内容，密钥、令牌和电脑的用户名已经去掉。` }),
     el('label', { class: 'check-row' }, [withTurn, el('span', { text: chat ? t`附带当前对话的最后一轮（你的输入和模型的原始输出）：回复的格式、视觉小说里认错人这类问题用得上` : t`附带当前对话的最后一轮（先打开一个对话）` })]),
     area,
     el('div', { class: 'row end diag-actions' }, [
       button(t`清空记录`, async () => {
-        if (!confirm(t`清空这台设备上记录的错误？清空后，之前的错误就导不出来了。`)) return
+        if (!confirm(t`清空这台设备上记录的错误和操作？清空后，之前的记录就导不出来了。`)) return
         await api('/api/diagnostics', { method: 'DELETE' }).catch(error => toast(error.message))
         load()
       }),

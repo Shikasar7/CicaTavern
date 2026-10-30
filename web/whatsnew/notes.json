@@ -661,6 +661,57 @@
           }
         }
       ]
+    },
+    {
+      "version": "2.2.0",
+      "date": "2026-10",
+      "items": [
+        {
+          "image": "2.2.0-cards.webp",
+          "zh": {
+            "title": "角色卡自己排，配图按你的写法",
+            "text": "卡片「⋯」菜单里能「置顶」和「收藏」：置顶的排在最上面，搜索框旁的 ☆ 只看收藏的卡；按住卡片上下拖动，自己排顺序（手机上长按再拖）。电脑和手机看到的一样。\n「配图与朗读」多了「画面提示词」一页，「画风与 LoRA」里有九种画风预设，选一个就换上对应的画风词。"
+          },
+          "en": {
+            "title": "Cards in your order, pictures your way",
+            "text": "A card's ⋯ menu can pin it or favorite it: pinned cards sit at the top, and the ☆ beside the search box shows only favorites. Drag cards up and down to put them in your own order (on a phone, press and hold first). The computer and the phone see the same list.\nPictures and voice has a new Picture prompts page, and Art style and LoRA has nine art style presets: pick one and its style words go in."
+          }
+        },
+        {
+          "icon": "🎨",
+          "zh": {
+            "title": "配图提示词：额外要求、详细程度",
+            "text": "「写提示词的额外要求」是写给写提示词的模型看的规则，比如「多写光影和镜头」「不要出现血」；可以直接写，也可以读入别人分享的 .md / .txt 生图 skill。全局一份，每张卡还能再加自己的。\n详细程度分简洁、标准、详细三档。默认写法也改好了：先定景别和镜头，不写角色名字；ComfyUI 和 SD WebUI 每张图都带上卡的画风。"
+          },
+          "en": {
+            "title": "Picture prompts: your rules, your level of detail",
+            "text": "Extra rules are read by the model that writes picture prompts, like \"more light and camera work\" or \"no blood\"; type them, or read in a .md / .txt image prompt skill someone shared. One set for every card, and each card can add its own.\nPick concise, standard or detailed. The default instructions are better too: shot and camera angle first, no character names; ComfyUI and SD WebUI put the card's art style in every picture."
+          }
+        },
+        {
+          "icon": "☁️",
+          "zh": {
+            "title": "Vertex AI，和一些修复",
+            "text": "模型供应商新增「Vertex AI」模板：用 Google Cloud 的 JSON 凭据，新账号的赠金能用在这里；繁忙时自动等几秒重试，最多 2 次。\nMOSI 的 MOSS-Image 能画了；卡片「⋯」菜单里能直接导出角色卡；模型的内容审查拦下回复时，会说清是谁拦的、能怎么办；错误日志附上供应商的原始返回和最近的操作。"
+          },
+          "en": {
+            "title": "Vertex AI, and some fixes",
+            "text": "A new Vertex AI provider template takes a Google Cloud JSON credential, so a new account's free-trial credit can be used; when it is busy it waits a few seconds and tries again, twice at most.\nMOSI's MOSS-Image draws; a card's ⋯ menu exports it straight away; when a model's content check stops a reply, you are told whose check it was and what to do; the error log keeps the provider's whole answer and your latest operations."
+          }
+        },
+        {
+          "recap": "2.1",
+          "image": "2.1.0-forge.webp",
+          "zh": {
+            "title": "2.1 加了什么",
+            "text": "创作角色卡的设定按类别组合，后台写卡，写完拖动数值看性格阶段和事件；做成视觉小说，一步步备齐名册、立绘、表情和背景，还有视觉小说预设；上下文压缩只剩一个百分比；行动选项留在历史里，最新一条能「换一组选项」。"
+          },
+          "en": {
+            "title": "What 2.1 added",
+            "text": "Card creation settings combined by category, cards written in the background, and values dragged afterwards to see personality stages and events; Make it a visual novel, with the cast, sprites, expressions and backgrounds prepared step by step, and a visual novel preset; context compaction as one percentage; choices kept in the history, with New choices on the newest reply."
+          }
+        }
+      ]
     }
   ]
 }

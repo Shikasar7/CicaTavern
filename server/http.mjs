@@ -11,7 +11,7 @@ import { homedir } from 'node:os'
 import path from 'node:path'
 import YAML from 'yaml'
 import { fileURLToPath } from 'node:url'
-import { backfillEntryPositions, cardSummary, cleanGroup, exportCard, greetingsOf, importOwnCard, normalizeCard, organizeCard, parseCardFile, previousVersion, rawOfPicture, sillyTavernCard, unwrapWorkspace, writeCardPng } from './cards.mjs'
+import { backfillEntryPositions, cardSummary, cleanGroup, exportCard, greetingsOf, importOwnCard, normalizeCard, orderCards, organizeCard, parseCardFile, previousVersion, rawOfPicture, sillyTavernCard, unwrapWorkspace, writeCardPng } from './cards.mjs'
 import { chatSummary, chatView, childrenOf, createChat, selectNode, activePath, rebuildPrompt, restoreFolded, rollbackTo, editCompaction, dropCompaction, exportStory, importStory, importSillyTavern, forkChat, mountChange, switchOpening, booksForCard, playerOf, chatPicks, newChatPicks, switchPicks } from './chats.mjs'
 import { bookByName, bookNames, fieldChange, parseUpdates, setFrameVars, thEntry, withChatChanges, writeChatBook } from './frames.mjs'
 import { editPreset, exportPreset, importOwnPreset, normalizePreset, presetDetail, presetSummary } from './presets.mjs'
@@ -144,11 +144,34 @@ async function readBody(req, max = MAX_BODY) {
   }
   const text = Buffer.concat(chunks).toString('utf8')
   if (!text) return {}
+  let body
   try {
-    return JSON.parse(text)
+    body = JSON.parse(text)
   } catch {
     throw httpError(400, msg`请求体不是 JSON`)
   }
+  // The operations log (错误日志) says which fields a change sent (and the short values of settings), not the content.
+  if (body && typeof body === 'object' && !Array.isArray(body)) req.loggedBody = body
+  return body
+}
+
+// Requests that change nothing worth retracing, or come too often to read (a card frame's own
+// writes, previews, checks, read-aloud): left out of the operations log. Turns are logged by streamTurn.
+const UNLOGGED = /^\/api\/(diagnostics|presence|tts|frame-fetch|ejs\/check|mvu\/parse|vn\/expressions|cards\/inspect|providers\/models|media\/(voices\/|transcribe|novelai\/check|comfy\/models|draws-from-picture)|chats\/[\w-]+\/(turn|regenerate|preview|display-render|frame-vars|stop)$)/
+// Settings whose short values are worth seeing (which model, which proxy mode), not only that they changed.
+const VALUES_SHOWN = /^\/api\/(settings|media\/settings|update\/settings)$/
+
+/** The fields a change sent, as the operations log shows them: names, and the short plain values of settings. */
+function sentFields(pathname, body) {
+  const names = body ? Object.keys(body) : []
+  if (!names.length) return ''
+  const shown = name => {
+    const value = body?.[name]
+    const plain = typeof value === 'boolean' || typeof value === 'number' || (typeof value === 'string' && value.length <= 60 && !/\n/.test(value))
+    if (/key|token|secret|pass|auth|cookie/i.test(name)) return name
+    return VALUES_SHOWN.test(pathname) && plain ? `${name}=${value}` : name
+  }
+  return `[${names.slice(0, 20).map(shown).join(', ')}${names.length > 20 ? ', …' : ''}]`
 }
 
 /** The request's address, or null when its target is none at all (`//[`, `http://a:b`): never a throw. */
@@ -215,11 +238,12 @@ const MAX_AVATAR = 15 * 1024 * 1024
 
 /** An uploaded card file (SillyTavern PNG/JSON, or this app's own export) → { card, avatar }. */
 /** [summary] of a stored card or preset, or [] (said in the console) when its file is too damaged to read. */
-function summaryOrNone(summarize, item, kind) {
+function summaryOrNone(summarize, item, kind, warn = () => {}) {
   try {
     return [summarize(item)]
   } catch (error) {
     console.warn(`[CicaTavern] ${kind} ${item?.id ?? '?'} left out of the list: ${error.message}`)
+    warn(`${kind} ${item?.id ?? '?'}`, error.message)
     return []
   }
 }
@@ -259,6 +283,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
   const diagnostics = createDiagnostics(store.dirs.root, store, { version: VERSION, edition: features.edition, appName: features.appName })
   // A card's regex left out for running too long (regex-guard.mjs): said in the error log, so the card's author can be told.
   onSlowPattern(regex => diagnostics.record({ source: 'process', what: msg`卡片的正则`, message: msg`这条正则运行太久，已经跳过：/${regex.source.slice(0, 300)}/${regex.flags}` }).catch(() => {}))
+  // A card or preset whose file is too damaged to list.
+  const leftOut = (what, why) => diagnostics.note({ level: 'warn', what: msg`列表里跳过了读不了的 ${what}`, detail: why }).catch(() => {})
   const network = createProxy({ override: proxyOverride(proxy), defaultMode: features.defaultProxy })
   // Read on every request, so a changed proxy setting applies at once.
   const isolation = {
@@ -360,18 +386,34 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
   async function streamTurn(res, chatId, args) {
     res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', 'x-accel-buffering': 'no' })
     const send = event => res.write(`data: ${JSON.stringify(event)}\n\n`)
+    const what = `${args.userNodeId ? msg`重新生成` : msg`生成回复`} · ${chatId}`
     try {
       const { chat, nodeId } = await engine.runTurn(chatId, args, send)
       send({ type: 'done', nodeId, chat: chatView(chat) })
+      await noteTurn(what, chat, chat.nodes[nodeId]).catch(() => {})
     } catch (error) {
       send({ type: 'error', status: error.status ?? 500, message: localize(error.message), ...(error.contextFull ? { contextFull: true } : {}) })
       // Stopped by the player (499) is no error. One without a status is this app's own mistake: its stack too.
       // In the log before the stream ends.
       if (error.status !== 499) {
-        await diagnostics.record({ source: 'turn', status: error.status ?? 500, message: localize(error.message), stack: error.status ? '' : error.stack, model: await turnModel(chatId) }).catch(() => {})
+        await diagnostics.record({ source: 'turn', status: error.status ?? 500, message: localize(error.message), stack: error.status ? '' : error.stack, model: await turnModel(chatId), detail: error.detail }).catch(() => {})
       }
+      await diagnostics.note({ what, detail: error.status === 499 ? msg`已停止` : msg`出错 ${error.status ?? 500}` }).catch(() => {})
     }
     res.end()
+  }
+
+  /** A turn that went through, in the operations log: model, time, tokens; a warning for what went wrong in it. */
+  async function noteTurn(what, chat, node) {
+    if (!node) return
+    const usage = node.usage ?? {}
+    const seconds = node.timing?.totalMs ? `${(node.timing.totalMs / 1000).toFixed(1)} s` : ''
+    const tokens = msg`输入 ${(usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0)}（缓存 ${usage.cacheRead ?? 0}） · 输出 ${usage.output ?? 0}`
+    await diagnostics.note({ what, detail: [node.model, seconds, tokens].filter(Boolean).join(' · ') })
+    if (node.api?.truncated) await diagnostics.note({ level: 'warn', what, detail: node.api.truncated === 'paused' ? msg`联网搜索还没结束，回复停在了中途` : msg`回复写到了输出上限，后面被截断（末尾的选项、变量块可能缺了）` })
+    // A cut-off reply already says its update block may be missing.
+    else if (await engine.missesUpdate(chat, node)) await diagnostics.note({ level: 'warn', what, detail: msg`这张 MVU 卡的回复没写变量更新块（<UpdateVariable>），状态没跟着这一轮变（回复下方有「补写变量」）` })
+    if (node.templateErrors?.length) await diagnostics.note({ level: 'warn', what, detail: msg`回复里的 EJS 模板出错：${node.templateErrors.map(String).join(' / ').slice(0, 400)}` })
   }
 
   /** The model a chat's turns go to, as the model menu names it. */
@@ -383,7 +425,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
 
   /**
    * An API request that failed goes to the error log (not the log's own routes, nor one the page
-   * cancelled) before its answer goes out: whoever has the answer finds it in the log.
+   * cancelled) before its answer goes out: whoever has the answer finds it in the log. One that
+   * changed something goes to the operations log, so the steps before an error can be retraced.
    */
   function holdFailures(req, res) {
     const end = res.end
@@ -392,9 +435,13 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       const pathname = requestUrl(req)?.pathname ?? ''
       // Only requests let in (logFailures, set past the gate): a device without the key, or a website poking at
       // made-up addresses, can't fill the log and push the real errors out of it.
+      const counted = res.logFailures === true && pathname.startsWith('/api/') && !UNLOGGED.test(pathname)
+      if (counted && req.method !== 'GET' && res.statusCode < 400) {
+        diagnostics.note({ what: `${req.method} ${pathname}`, detail: sentFields(pathname, req.loggedBody) }).catch(() => {})
+      }
       const failed = res.logFailures === true && res.statusCode >= 400 && res.statusCode !== 499 && typeof res.errorText === 'string' && pathname.startsWith('/api/') && !pathname.startsWith('/api/diagnostics')
       if (!failed) return end.apply(res, args)
-      diagnostics.record({ source: 'request', what: `${req.method} ${pathname}`, status: res.statusCode, message: res.errorText, stack: res.errorStack })
+      diagnostics.record({ source: 'request', what: `${req.method} ${pathname}`, status: res.statusCode, message: res.errorText, stack: res.errorStack, detail: res.errorDetail })
         .catch(() => {})
         .finally(() => {
           if (!res.writableEnded) end.apply(res, args)
@@ -792,7 +839,14 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['PUT', /^\/api\/persona$/, (_, body) => store.savePersona(body)],
 
     // A card file that cannot be summed up (damaged, or saved by an older import) is left out, not the whole list.
-    ['GET', /^\/api\/cards$/, async () => (await store.listCards()).flatMap(card => summaryOrNone(cardSummary, card, 'card'))],
+    // In the list's own order (拖拽排序; cards.mjs orderCards).
+    ['GET', /^\/api\/cards$/, async () => orderCards(await store.listCards(), await store.getCardOrder()).flatMap(card => summaryOrNone(cardSummary, card, 'card', leftOut))],
+    // 拖拽排序: `{ ids }`, every card in the new order; the ones left out (deleted since) drop away.
+    ['PUT', /^\/api\/cards\/order$/, async (_, body) => {
+      if (!Array.isArray(body?.ids)) throw httpError(400, msg`要怎么排？`)
+      const known = new Set((await store.listCards()).map(card => card.id))
+      return { ids: await store.saveCardOrder(body.ids.filter(id => known.has(id))) }
+    }],
     // Which card a file would update: the newest one with the same name apart from its version.
     ['POST', /^\/api\/cards\/inspect$/, async (_, body) => {
       const { card } = readCardUpload(body)
@@ -806,7 +860,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       const { card, avatar, raw = null } = readCardUpload(body)
       if (typeof body.replace === 'string' && body.replace) {
         const old = await store.getCard(body.replace)
-        Object.assign(card, { id: old.id, media: old.media, worldbookIds: old.worldbookIds ?? [], hasAvatar: Boolean(avatar) || old.hasAvatar, group: old.group ?? '', archived: old.archived === true })
+        Object.assign(card, { id: old.id, media: old.media, worldbookIds: old.worldbookIds ?? [], hasAvatar: Boolean(avatar) || old.hasAvatar, group: old.group ?? '', archived: old.archived === true, pinned: old.pinned === true, favorite: old.favorite === true })
         // A new version from a file without a picture keeps the old picture, with the new version's card data in it:
         // exports take what the app does not keep (character_version, Tavern Helper scripts…) from there.
         let picture = avatar
@@ -944,9 +998,9 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       const holder = kind === 'book' && done.holder ? { card: cardSummary(done.holder) } : {}
       return { session: done.session, applied: done.applied ?? 0, prefix: done.prefix, [kind === 'theme' ? 'settings' : kind]: await views[kind](), ...holder }
     }],
-    // Groups and the archive: where a card sits in the list. Nothing else about it changes.
+    // Groups, the archive, 置顶 and 收藏: where a card sits in the list. Nothing else about it changes.
     ['PUT', /^\/api\/cards\/([\w-]+)\/organize$/, async ([id], body) => {
-      const card = organizeCard(await store.getCard(id), { group: body?.group, archived: body?.archived })
+      const card = organizeCard(await store.getCard(id), { group: body?.group, archived: body?.archived, pinned: body?.pinned, favorite: body?.favorite })
       await store.saveCard(card)
       return cardSummary(card)
     }],
@@ -1102,7 +1156,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       return { ok: true, detached }
     }],
 
-    ['GET', /^\/api\/presets$/, async () => (await store.listPresets()).flatMap(preset => summaryOrNone(presetSummary, preset, 'preset'))],
+    ['GET', /^\/api\/presets$/, async () => (await store.listPresets()).flatMap(preset => summaryOrNone(presetSummary, preset, 'preset', leftOut))],
     ['POST', /^\/api\/presets\/import$/, async (_, body) => {
       const { filename, buffer } = decodeUpload(body)
       let json
@@ -1790,6 +1844,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
             if (res.cancelled) return sendJson(res, 499, { error: error.message })
             // Not an answer a route chose (httpError): where in this app it went wrong.
             if (!error.status) res.errorStack = error.stack
+            if (error.detail) res.errorDetail = error.detail
             sendJson(res, error.status ?? 500, { error: error.message, ...(error.contextFull ? { contextFull: true } : {}) })
           })
           // Answering the error failed too: that request goes, the server stays.
@@ -1800,6 +1855,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
         server.listen(port, host, resolve)
       })
       access.port = server.address().port
+      // Where a run begins, in the operations log: what came after happened in this version and mode.
+      diagnostics.note({ what: msg`后台服务启动`, detail: `${VERSION} · ${features.edition} · ${mode === 'lan' ? msg`手机访问开` : msg`只限本机`}` }).catch(() => {})
       // Covers a launch whose window never connects.
       armIdle()
       return server

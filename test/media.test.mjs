@@ -164,7 +164,7 @@ test('media helpers: settings validation, prompt request, prompt cleanup, workfl
   assert.equal(cleanPrompt('Prompt: "a cat"'), 'a cat')
   assert.equal(cleanPrompt('<think>hmm</think>Here is the prompt:\n\na girl saluting\n\nThis captures the moment when…'), 'a girl saluting', 'thinking, preamble and commentary go')
   const rambling = cleanPrompt(`${'word '.repeat(60)}end. ${'more '.repeat(60)}`)
-  assert.ok(rambling.split(' ').length <= 90)
+  assert.ok(rambling.split(' ').length <= 120)
   assert.equal(cleanPrompt('a, b, c, d', 'tags'), 'a, b, c, d')
 
   const filled = fillWorkflow({ 3: { class_type: 'KSampler', inputs: { seed: '{{seed}}', width: '{{width}}' } }, 6: { class_type: 'CLIPTextEncode', inputs: { text: 'masterpiece, {{prompt}}' } } }, { prompt: 'a cat', seed: 42, width: 832 })
@@ -614,7 +614,7 @@ test('scenery (视觉小说 backgrounds): landscape, nobody in it, no reference 
   assert.match(asked, /no people/i)
   assert.match(drawn.prompt, /No people\.$/)
 
-  // ComfyUI with a card LoRA: no LoRA or trigger for a background; the negative keeps people out.
+  // ComfyUI with a card LoRA: no LoRA or trigger for a background, but the card's style; the negative keeps people out.
   await store.saveSettings({ media: cleanMedia({ imageBackend: 'comfy', promptStyle: 'tags' }, (await store.getSettings()).media) })
   await media.saveWorkflow({
     4: { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: 'base.safetensors' } },
@@ -627,7 +627,7 @@ test('scenery (视觉小说 backgrounds): landscape, nobody in it, no reference 
   const comfy = await media.drawScenery({ cardId: card.id, place: '码头', prompt: 'scenery, no humans, a pier at dusk' })
   const sent = fake.workflowSent()
   assert.equal(Object.values(sent).some(node => node.class_type === 'LoraLoader'), false)
-  assert.equal(sent[6].inputs.text, 'scenery, no humans, a pier at dusk')
+  assert.equal(sent[6].inputs.text, 'watercolor, scenery, no humans, a pier at dusk')
   assert.match(sent[7].inputs.text, /people/)
   assert.doesNotMatch(comfy.note, /人物/, 'no reference picture, so no one in the background')
 
@@ -712,7 +712,7 @@ test("ComfyUI: a workflow with its size written in draws at the 画幅 asked for
   await media.drawSprite(card.id, 'linxue01')
   assert.deepEqual(size(), [832, 1216])
   assert.equal(lora(), 'styleA.safetensors')
-  assert.match(sent()[6].inputs.text, /^masterpiece, stA, 1girl, watercolor, solo, upper body, .*white background.*short black hair, police uniform/)
+  assert.match(sent()[6].inputs.text, /^masterpiece, stA, watercolor, 1girl, solo, upper body, .*white background.*short black hair, police uniform/)
   assert.match(sent()[7].inputs.text, /^lowres, bad anatomy, multiple views, text, scenery, detailed background/)
   // Someone with their own LoRA: theirs instead.
   await media.drawSprite(card.id, 'aming001')

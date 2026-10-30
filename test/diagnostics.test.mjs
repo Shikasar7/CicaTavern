@@ -195,3 +195,80 @@ test('error log: a reading the page stopped is not logged', async t => {
   await new Promise(resolve => setTimeout(resolve, 100))
   assert.match((await report(call)).text, /还没有记录到错误/)
 })
+
+/** A model that answers with no text, its content check having blocked the prompt (as relays pass Gemini's on). */
+async function blockingModel(t) {
+  const server = createServer((req, res) => {
+    req.resume()
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ model: 'gemini-x', choices: [{ index: 0, message: { role: 'assistant', content: '' }, finish_reason: 'content_filter: PROHIBITED_CONTENT' }], usage: { prompt_tokens: 812, completion_tokens: 0 } }))
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => server.close())
+  return `http://127.0.0.1:${server.address().port}/v1`
+}
+
+test('error log: a reply the model\'s content check blocked says so, with the provider\'s answer kept; the operations before it are listed', async t => {
+  const root = await dataFolder(t)
+  const { app, base, call } = await tavern(t, root)
+  const provider = normalizeProvider({ name: 'Gemini', api: 'openai-completions', baseURL: await blockingModel(t), apiKey: KEY, models: [{ id: 'gemini-x' }] })
+  await app.store.saveProviders([provider])
+  assert.equal((await call('/api/settings', { method: 'PUT', body: { model: `${provider.id}/gemini-x`, thinking: 'off' } })).status, 200)
+  const card = (await call('/api/cards/import', { method: 'POST', body: { filename: 'card.json', data: Buffer.from(JSON.stringify({ spec: 'chara_card_v2', data: { name: '林雪', first_mes: '雪下了一整夜。' } })).toString('base64') } })).body
+  const chat = (await call('/api/chats', { method: 'POST', body: { cardId: card.id } })).body
+  const res = await fetch(`${base}/api/chats/${chat.id}/turn`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-agent-tavern': '1' }, body: JSON.stringify({ parentId: chat.path.at(-1).id, input: '我推门进去。' }) })
+  const said = await res.text()
+  assert.match(said, /Gemini 的内容审查拦下了这次请求（content_filter: PROHIBITED_CONTENT）/, 'the toast says what blocked it')
+  assert.match(said, /设置里关不掉/)
+
+  const { text } = await report(call)
+  assert.match(text, /内容审查拦下了这次请求[^\n]*\n {2}原始返回：\n {4}\{"stopReason":"content_filter: PROHIBITED_CONTENT","model":"gemini-x"/, 'the provider\'s own answer under the message')
+  // The steps before it, newest first: the turn, the chat, the card, the setting (with its short values).
+  const steps = text.slice(text.indexOf('最近的操作和警告'))
+  assert.match(steps, new RegExp(`生成回复 · ${chat.id}  出错 502`))
+  assert.match(steps, /POST \/api\/chats {2}\[cardId\]/)
+  assert.match(steps, /POST \/api\/cards\/import {2}\[filename, data\]/)
+  assert.match(steps, /PUT \/api\/settings {2}\[model=\S+\/gemini-x, thinking=off\]/)
+  assert.match(steps, /后台服务启动/)
+  assert.ok(steps.indexOf('生成回复') < steps.indexOf('POST /api/chats') && steps.indexOf('/api/cards/import') < steps.indexOf('PUT /api/settings'))
+  assert.ok(!steps.includes('我推门进去') && !steps.includes('林雪'), 'what was sent stays out')
+  assert.ok(!text.includes(KEY))
+})
+
+/** A model that answers each request with the next of `replies`. */
+async function replyingModel(t, replies) {
+  const server = createServer((req, res) => {
+    req.resume()
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ model: 'gemini-x', choices: [{ index: 0, message: { role: 'assistant', content: replies.shift() }, finish_reason: 'stop' }], usage: { prompt_tokens: 100, completion_tokens: 20 } }))
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => server.close())
+  return `http://127.0.0.1:${server.address().port}/v1`
+}
+
+test('operations log: an MVU card\'s reply without its update block is a warning; one with it is not', async t => {
+  const root = await dataFolder(t)
+  const { app, base, call } = await tavern(t, root)
+  const replies = ['她抬头看了你一眼。', '她笑了。\n<UpdateVariable>\n_.set(\'好感\', 0, 5);\n</UpdateVariable>']
+  const provider = normalizeProvider({ name: 'Gemini', api: 'openai-completions', baseURL: await replyingModel(t, replies), apiKey: KEY, models: [{ id: 'gemini-x' }] })
+  await app.store.saveProviders([provider])
+  await call('/api/settings', { method: 'PUT', body: { model: `${provider.id}/gemini-x`, thinking: 'off' } })
+  const data = { name: '林雪', first_mes: '雪下了一整夜。', system_prompt: '每轮结尾用 <UpdateVariable> 块和 _.set() 更新变量。' }
+  const card = (await call('/api/cards/import', { method: 'POST', body: { filename: 'card.json', data: Buffer.from(JSON.stringify({ spec: 'chara_card_v2', data })).toString('base64') } })).body
+  let chat = (await call('/api/chats', { method: 'POST', body: { cardId: card.id } })).body
+  const turn = async input => {
+    const res = await fetch(`${base}/api/chats/${chat.id}/turn`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-agent-tavern': '1' }, body: JSON.stringify({ parentId: chat.path.at(-1).id, input }) })
+    assert.match(await res.text(), /"type":"done"/)
+    chat = (await call(`/api/chats/${chat.id}`)).body
+  }
+
+  await turn('我推门进去。')
+  const steps = text => text.slice(text.indexOf('最近的操作和警告'))
+  const first = steps((await report(call)).text)
+  assert.match(first, new RegExp(`\\[警告\\] 生成回复 · ${chat.id}  这张 MVU 卡的回复没写变量更新块`))
+
+  await turn('我坐下。')
+  const second = steps((await report(call)).text)
+  assert.equal(second.match(/没写变量更新块/g)?.length, 1, 'the reply with its block adds no warning')
+})

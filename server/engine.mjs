@@ -33,6 +33,19 @@ const PRESET_BLOCK = /\n*<预设指令>\n[\s\S]*?\n<\/预设指令>/
 // Output tokens a story turn may ask for at most (presets often say 65535): enough for any
 // reply with its thinking and status blocks, and within what current Claude models accept.
 const MAX_REPLY_TOKENS = 32000
+// Why a model answered with no text, as providers pass it on (Gemini's blockReason / finishReason, an
+// OpenAI-style content_filter): its own content check kept the reply back, not this app or the API.
+const PROHIBITED = /PROHIBITED_CONTENT|BLOCKLIST|SPII/i
+const RECITATION = /RECITATION/i
+const FILTERED = /SAFETY|content_filter|content_policy/i
+
+/** What to tell the player when the model's content check kept the reply back, or null when it was not that. */
+function filteredReply(name, reason) {
+  if (PROHIBITED.test(reason)) return msg`${name} 的内容审查拦下了这次请求（${reason}）。这是 Gemini 服务端的审查，设置里关不掉，换 API Key 或中转也一样。可以换用别的模型；或者回滚最近几轮、改掉角色卡和预设里可能触发它的内容再试（最常见的是露骨内容里出现了年龄小或看起来年幼的角色）。`
+  if (RECITATION.test(reason)) return msg`${name} 认为回复和已有的受版权保护的文字太像，没有给出（${reason}）。重试一次，或者换个说法。`
+  if (FILTERED.test(reason)) return msg`${name} 的安全过滤拦下了这次回复（${reason}）。可以重试、改写最近的输入，或者换用别的模型。`
+  return null
+}
 // 补写变量: a big card's update block (many fields, its analysis) fits in this.
 const FILL_MAX_TOKENS = 4000
 // 重写选项: four lines, with room for a thinking model's reasoning.
@@ -490,9 +503,16 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       const contextFull = error.providerStatus === 413 || CONTEXT_FULL.test(String(error.message ?? ''))
       const limit = contextFull ? limitFromError(error.message) : 0
       if (limit) await store.learnModelContext({ [`${target.provider.id}/${target.modelId}`]: limit }).catch(() => {})
-      throw Object.assign(httpError(502, providerError(target.provider, error)), contextFull ? { contextFull: true } : {})
+      const text = String(error.message ?? '')
+      const blocked = PROHIBITED.test(text) ? filteredReply(target.provider.name, text.match(PROHIBITED)[0]) : null
+      // detail: the provider's answer whole, for the error log (the message quotes only its start).
+      throw Object.assign(httpError(502, blocked ?? providerError(target.provider, error)), { detail: error.body || text }, contextFull ? { contextFull: true } : {})
     }
-    if (!result.text.trim()) throw httpError(502, msg`${target.provider.name} 没有返回正文${result.stopReason ? msg`（${result.stopReason}）` : ''}`)
+    if (!result.text.trim()) {
+      const reason = String(result.stopReason ?? '')
+      const said = filteredReply(target.provider.name, reason) ?? msg`${target.provider.name} 没有返回正文${reason ? msg`（${reason}）` : ''}`
+      throw Object.assign(httpError(502, said), { detail: JSON.stringify({ stopReason: result.stopReason ?? null, model: result.model ?? target.modelId, usage: result.usage ?? null }) })
+    }
     const u = result.usage ?? {}
     // prompt / thinking: what the context held (the last call's input) and the thinking in output (context.mjs contextUsed).
     const tokens = { input: u.input ?? 0, cacheRead: u.cacheRead ?? 0, cacheWrite: u.cacheWrite ?? 0, cacheWrite1h: 0, cacheWrite5m: u.cacheWrite ?? 0, output: u.output ?? 0, ...(u.prompt != null ? { prompt: u.prompt } : {}), ...(u.thinking ? { thinking: u.thinking } : {}), costUsd: null }
@@ -596,11 +616,13 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       }
       // The relay lost the system prompt, seen only at the end: the page drops what it showed, and the answer comes again.
       const onRestart = () => emit({ type: 'restart' })
+      // A busy provider (Vertex AI's 429) asked again after a wait: the page says so meanwhile.
+      const onRetry = info => emit({ type: 'retrying', provider: target.provider?.name, ...info })
       let outcome
       if (target.api) {
         const history = await apiMessages(chat, parent, { stripAll: Boolean(compacted || userNode?.dynamic?.compacted) })
         const cap = await replyCap(chat, target.provider)
-        outcome = await generateApi(target, { system: chat.systemPrompt, messages: [...history, { role: 'user', content: prepared.prompt }], ...cap, webSearch, onRestart }, abortController.signal, onText)
+        outcome = await generateApi(target, { system: chat.systemPrompt, messages: [...history, { role: 'user', content: prepared.prompt }], ...cap, webSearch, onRestart, onRetry }, abortController.signal, onText)
       } else {
         // The turn's message as the session will hold it: the 屏蔽词 applied (the system prompt in beforeTurn).
         const sent = blockSent(prepared.prompt, await store.getBlockWords())
@@ -958,6 +980,13 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     return { chat, behindCompaction: edit.behindCompaction, sessions, missed, promptMissed: edit.promptMissed }
   }
 
+  /** Whether a reply of an MVU card came without its <UpdateVariable> block (what 补写变量 is for). */
+  async function missesUpdate(chat, node) {
+    if (!node || node.role !== 'assistant' || hasUpdateBlock(node.text)) return false
+    const [settings, card] = await Promise.all([store.getSettings(), store.getCard(chat.cardId)])
+    return usesMvu(card, await booksForCard(store, card, settings, chat))
+  }
+
   /**
    * 补写变量: the latest reply of an MVU card came without its <UpdateVariable>
    * block. Asked inside the conversation when a provider wrote it (the same
@@ -1119,6 +1148,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     askInContext,
     frameGenerate,
     fillUpdate,
+    missesUpdate,
     rewriteChoices,
     previewTurn,
     blockImpact,

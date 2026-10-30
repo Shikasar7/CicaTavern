@@ -189,13 +189,22 @@ export function rosterBrief(roster, userName) {
     .join('\n')
 }
 
+// How long each line of a cast-format prompt is, by 提示词详细程度 (media.promptDetail).
+const FRAME_LENGTH = {
+  brief: { sceneTags: '8-15', personTags: '6-12', sceneWords: 'one short English sentence', personWords: 'one short English sentence', scene: 40, person: 30 },
+  standard: { sceneTags: '15-30', personTags: '10-25', sceneWords: 'one or two English sentences', personWords: 'one English sentence', scene: 70, person: 50 },
+  detailed: { sceneTags: '25-45', personTags: '20-35', sceneWords: 'two or three English sentences', personWords: 'one or two English sentences', scene: 110, person: 80 },
+}
+const frameLength = detail => FRAME_LENGTH[detail] ?? FRAME_LENGTH.standard
+
 /** Format rules for a cast-format prompt (English for the image model, labels as given). */
-export function frameFormat(promptStyle) {
+export function frameFormat(promptStyle, detail = 'standard') {
   const tags = promptStyle === 'tags'
+  const length = frameLength(detail)
   return [
     'Format, one item per line:',
-    `场景: ${tags ? '15-30 comma-separated English tags' : 'one English sentence'} for the setting, composition, camera angle, lighting and mood. No people here.`,
-    `[Name] ${tags ? '10-25 comma-separated English tags' : 'one English sentence'}: what they are wearing right now (the usual outfit unless the story changed it), pose, action, expression | left, center or right`,
+    `场景: ${tags ? `${length.sceneTags} comma-separated English tags` : length.sceneWords} for the shot (close-up, upper body, cowboy shot, full body or wide shot), camera angle, the setting and its objects, time of day, lighting and mood. No people here.`,
+    `[Name] ${tags ? `${length.personTags} comma-separated English tags` : length.personWords}: what they are wearing right now (the usual outfit unless the story changed it), pose, action, hands and what they hold, expression, where they look | left, center or right`,
     'One [Name] line for each cast member visible in the frame: at least one, at most 4, names exactly as in the cast list; leave out the rest.',
     'Never describe their hair, eyes, face or body: that is filled in automatically. Refer to other people as him, her or the girl, never by name.',
     'Anyone visible who is not in the cast goes into the 场景 line, briefly.',
@@ -203,7 +212,7 @@ export function frameFormat(promptStyle) {
 }
 
 /** Strip wrapping and keep the cast-format lines; null when the answer is not in that format. */
-export function cleanFrame(answer) {
+export function cleanFrame(answer, detail = 'standard') {
   const lines = String(answer ?? '')
     .replace(/<think>[\s\S]*?<\/think>/gi, '')
     .replace(/```\w*/g, '')
@@ -214,7 +223,8 @@ export function cleanFrame(answer) {
   const scene = lines.filter(line => SCENE_LABEL.test(line)).slice(0, 1)
   const people = lines.filter(line => CHARACTER_LINE.test(line)).slice(0, FRAME_MAX)
   const clip = (line, words) => line.split(/\s+/).slice(0, words).join(' ')
-  return [...scene.map(line => clip(line, 70)), ...people.map(line => clip(line, 50))].join('\n')
+  const length = frameLength(detail)
+  return [...scene.map(line => clip(line, length.scene)), ...people.map(line => clip(line, length.person))].join('\n')
 }
 
 // Somebody described without a [Name] line: a head count, or a person word in the scene.

@@ -13,6 +13,7 @@ import { modelInfo } from './models.mjs'
 import { httpError } from './store.mjs'
 import { msg } from './i18n.mjs'
 import { estimateTokens } from './context.mjs'
+import { accessToken, compactCredential, googleCredential } from './google-auth.mjs'
 
 // A getter: the label is in the language of the page that asks.
 export const APIS = {
@@ -109,6 +110,20 @@ function cleanHeaders(value) {
   return headers
 }
 
+/** A typed key: a Google JSON credential (Vertex AI) is kept whole, on one line. */
+function cleanKey(value) {
+  const typed = typeof value === 'string' ? value.trim() : ''
+  if (typed.startsWith('{')) return compactCredential(typed)
+  if (/\s/.test(typed)) throw httpError(400, msg`API Key 里不能有空格或换行`)
+  return typed
+}
+
+/** Vertex AI's address names the Google Cloud project: the template's PROJECT_ID is filled in from the JSON credential. */
+function withProject(baseURL, key) {
+  const projectId = googleCredential(key)?.projectId
+  return projectId ? baseURL.replace('/projects/PROJECT_ID/', `/projects/${encodeURIComponent(projectId)}/`) : baseURL
+}
+
 /**
  * Validate a provider from the settings form. A blank `apiKey` keeps the saved
  * key (the form never receives it); `clearKey` removes it.
@@ -119,8 +134,7 @@ export function normalizeProvider(input, previous = null, taken = new Set()) {
   if (!name) throw httpError(400, msg`请填写供应商名称`)
   const api = String(input.api ?? '')
   if (!APIS[api]) throw httpError(400, msg`不支持的接口类型`)
-  const typedKey = typeof input.apiKey === 'string' ? input.apiKey.trim() : ''
-  if (/\s/.test(typedKey)) throw httpError(400, msg`API Key 里不能有空格或换行`)
+  const typedKey = cleanKey(input.apiKey)
   const apiKeyEnv = String(input.apiKeyEnv ?? '').trim()
   if (apiKeyEnv && !ENV_NAME.test(apiKeyEnv)) throw httpError(400, msg`环境变量名只能用字母、数字和下划线`)
   const temperature = input.temperature === '' || input.temperature == null ? null : Number(input.temperature)
@@ -129,13 +143,16 @@ export function normalizeProvider(input, previous = null, taken = new Set()) {
   if (extraBody !== null && !isObject(extraBody)) throw httpError(400, msg`额外请求参数必须是 JSON 对象`)
   const models = cleanModels(input.models)
   if (!models.length) throw httpError(400, msg`至少填一个模型 ID`)
-  const baseURL = cleanBaseUrl(input.baseURL)
+  const apiKey = typedKey || (input.clearKey ? '' : previous?.apiKey ?? '')
+  const baseURL = withProject(cleanBaseUrl(input.baseURL), apiKey)
+  // gcloud's own login file names no project.
+  if (baseURL.includes('/projects/PROJECT_ID/')) throw httpError(400, msg`把 Base URL 里的 PROJECT_ID 换成你的 Google Cloud 项目 ID（控制台顶部项目选择器里的「ID」）`)
   return {
     id: previous?.id ?? uniqueId(slug(input.id) || slug(name) || hostSlug(baseURL) || 'provider', taken),
     name,
     api,
     baseURL,
-    apiKey: typedKey || (input.clearKey ? '' : previous?.apiKey ?? ''),
+    apiKey,
     apiKeyEnv,
     proxy: input.proxy === 'direct' ? 'direct' : 'global',
     headers: cleanHeaders(input.headers),
@@ -313,17 +330,26 @@ export function draftProvider(input, previous = null) {
   const api = String(input.api ?? previous?.api ?? '')
   if (!APIS[api]) throw httpError(400, '不支持的接口类型')
   const apiKeyEnv = String(input.apiKeyEnv ?? '').trim()
+  const apiKey = cleanKey(input.apiKey) || previous?.apiKey || ''
   return {
     id: previous?.id ?? 'draft',
     name: String(input.name ?? '').trim() || previous?.name || '供应商',
     api,
-    baseURL: cleanBaseUrl(input.baseURL ?? previous?.baseURL),
-    apiKey: (typeof input.apiKey === 'string' && input.apiKey.trim()) || previous?.apiKey || '',
+    baseURL: withProject(cleanBaseUrl(input.baseURL ?? previous?.baseURL), apiKey),
+    apiKey,
     apiKeyEnv: ENV_NAME.test(apiKeyEnv) ? apiKeyEnv : '',
     proxy: input.proxy === 'direct' ? 'direct' : 'global',
     headers: cleanHeaders(input.headers),
     models: [],
   }
+}
+
+/** A service account's address (…@<project>.iam.gserviceaccount.com) is no secret; gcloud's login names nobody. */
+function keyHint(apiKey) {
+  const cred = googleCredential(apiKey)
+  if (cred?.kind === 'service_account') return cred.email
+  if (cred) return msg`gcloud 登录凭据`
+  return `…${apiKey.slice(-4)}`
 }
 
 /** What the browser may see: no key, only whether one is set. */
@@ -332,7 +358,7 @@ export function publicProvider(provider, env = process.env) {
   return {
     ...rest,
     hasKey: Boolean(apiKey),
-    keyHint: apiKey ? `…${apiKey.slice(-4)}` : '',
+    keyHint: apiKey ? keyHint(apiKey) : '',
     envKeySet: Boolean(provider.apiKeyEnv && env[provider.apiKeyEnv]),
   }
 }
@@ -476,8 +502,21 @@ function anthropicUrl(base, suffix) {
   return /\/v1$/.test(base) ? joinUrl(base, suffix) : joinUrl(base, `/v1${suffix}`)
 }
 
-function headersFor(provider, extra = {}) {
+/** Trade a signed JWT for a token at Google's address (google-auth.mjs), through the provider's proxy. */
+async function postForm(url, form, { proxy = null, signal } = {}) {
+  const payload = Buffer.from(form, 'utf8')
+  const res = await send(url, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', 'content-length': payload.length }, rawBody: payload, signal, proxy })
+  return { status: res.statusCode, text: await readText(res) }
+}
+
+/** What goes after `Bearer`: the key, or for a Google JSON credential (Vertex AI) an access token made from it. */
+async function bearerOf(provider, { proxy = null, signal } = {}) {
   const key = apiKeyOf(provider)
+  return googleCredential(key) ? accessToken(key, postForm, { proxy: provider.proxy === 'direct' ? null : proxy, signal }) : key
+}
+
+async function headersFor(provider, extra = {}, options = {}) {
+  const key = await bearerOf(provider, options)
   const headers = { 'user-agent': 'agent-tavern/0.2.0', ...extra }
   if (provider.api === 'anthropic-messages') {
     headers['anthropic-version'] = ANTHROPIC_VERSION
@@ -555,10 +594,12 @@ function errorMessage(text) {
 
 async function failIfBad(res) {
   if (res.statusCode >= 200 && res.statusCode < 300) return
-  const text = await readText(res)
+  // Read already when it was looked at for a retry (a busy Vertex AI).
+  const text = res.bodyText ?? (await readText(res))
   const message = errorMessage(text).slice(0, 300)
   const error = new Error(`${res.statusCode} ${message || res.statusMessage || ''}`.trim())
   error.providerStatus = res.statusCode
+  if (res.busyRetried) error.hint = msg`（已经自动重试了 ${res.busyRetried} 次：这个模型这会儿比较挤，过一会再试，或者先换个模型。）`
   // All of it, for a caller that reads more than the message (ComfyUI's node_errors).
   error.body = text
   throw error
@@ -994,14 +1035,28 @@ export async function complete(provider, modelId, original, { proxy = null } = {
   const attempt = async () => {
     // Room to think on top of a short cap, given up like a preset's length if the model refuses it.
     const req = short && THINKERS.has(pair) ? { ...request, maxTokens: request.maxTokens + THINKING_ROOM, softCap: true } : request
-    const post = (options, body = req) =>
-      send(protocol.path(provider.baseURL), {
-        method: 'POST',
-        headers: headersFor(provider, { accept: 'text/event-stream' }),
-        body: requestBody(provider, modelId, body, { withReasoning: reasoning, ...options }),
-        signal: request.signal,
-        proxy: provider.proxy === 'direct' ? null : proxy,
-      })
+    const post = async (options, body = req) => {
+      for (let retry = 0; ; retry++) {
+        const res = await send(protocol.path(provider.baseURL), {
+          method: 'POST',
+          headers: await headersFor(provider, { accept: 'text/event-stream' }, { proxy, signal: request.signal }),
+          body: requestBody(provider, modelId, body, { withReasoning: reasoning, ...options }),
+          signal: request.signal,
+          proxy: provider.proxy === 'direct' ? null : proxy,
+        })
+        // Vertex AI's shared capacity full at that moment (429 Resource exhausted): Google's advice is to wait and
+        // ask again, a little longer each time. Nothing of the answer has come yet, so asking again repeats nothing.
+        if (res.statusCode !== 429 || !isVertex(provider)) return res
+        res.bodyText = await readText(res)
+        const wait = retry < BUSY_RETRIES ? busyWait(res, retry) : null
+        if (wait === null) {
+          res.busyRetried = retry
+          return res
+        }
+        request.onRetry?.({ attempt: retry + 1, of: BUSY_RETRIES, wait })
+        await pause(wait, request.signal)
+      }
+    }
     let res = await post()
     // What went out in the end (a refused field left out on the retry below): a paused reply is carried on the same way.
     let used = { options: {}, body: req }
@@ -1082,6 +1137,39 @@ export async function complete(provider, modelId, original, { proxy = null } = {
   if (first.text.trim() || request.signal?.aborted) return first
   const second = await attempt()
   return { ...second, usage: addUsage(first.usage, second.usage) }
+}
+
+// A busy Vertex AI (429): asked again this many times, after about this long each (a second of chance on top, so
+// replies sent together do not come back together), or as long as Google says when that is no more than BUSY_MAX_MS.
+const BUSY_RETRIES = 2
+const BUSY_WAITS_MS = [2000, 5000]
+const BUSY_MAX_MS = 20_000
+
+const isVertex = provider => /\/endpoints\/openapi\/?$/i.test(provider.baseURL)
+
+/** How long to wait before asking a busy Vertex AI again, or null to give up (Google asks for longer than we wait). */
+function busyWait(res, retry) {
+  const header = Number(res.headers?.['retry-after'])
+  const said = /"retryDelay"\s*:\s*"([\d.]+)s"/.exec(res.bodyText ?? '')?.[1]
+  const asked = header > 0 ? header * 1000 : said ? Number(said) * 1000 : null
+  if (asked !== null) return asked <= BUSY_MAX_MS ? asked : null
+  return BUSY_WAITS_MS[retry] + Math.round(Math.random() * 1000)
+}
+
+/** Wait, cut short by a stop. */
+function pause(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(abortError())
+    const stop = () => {
+      clearTimeout(timer)
+      reject(abortError())
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', stop)
+      resolve()
+    }, ms)
+    signal?.addEventListener('abort', stop, { once: true })
+  })
 }
 
 // Provider + model pairs whose system prompt a relay has dropped: sent in the first message instead (systemInMessages).
@@ -1192,7 +1280,7 @@ export async function providerRequest(provider, suffix, { method = 'POST', body,
   const raw = body && Buffer.isBuffer(body.buffer)
   const res = await send(url, {
     method,
-    headers: headersFor(provider, raw ? { 'content-type': body.contentType, 'content-length': body.buffer.length } : {}),
+    headers: await headersFor(provider, raw ? { 'content-type': body.contentType, 'content-length': body.buffer.length } : {}, { proxy, signal }),
     rawBody: raw ? body.buffer : undefined,
     body: raw ? undefined : body,
     signal,
@@ -1209,20 +1297,24 @@ export async function providerRequest(provider, suffix, { method = 'POST', body,
  */
 export function googleBase(provider) {
   const base = String(provider?.baseURL ?? '').replace(/\/+$/, '')
+  // Vertex AI: …/projects/<project>/locations/<place>/endpoints/openapi → …/publishers/google (its models).
+  if (/\/endpoints\/openapi$/i.test(base)) return base.replace(/\/endpoints\/openapi$/i, '/publishers/google')
   if (/\/openai$/i.test(base)) return base.replace(/\/openai$/i, '')
   if (/generativelanguage\.googleapis\.com/i.test(base)) return 'https://generativelanguage.googleapis.com/v1beta'
   return base
 }
 
-/** A provider whose key is Google's (the Gemini template, or a relay of it). */
-export const isGoogle = provider => Boolean(provider) && provider.api !== 'anthropic-messages' && (/generativelanguage\.googleapis\.com/i.test(provider.baseURL) || /\/v1beta\/openai\/?$/i.test(provider.baseURL))
+/** A provider whose key is Google's (the Gemini or Vertex AI template, or a relay of Gemini's). */
+export const isGoogle = provider => Boolean(provider) && provider.api !== 'anthropic-messages' && (/generativelanguage\.googleapis\.com|aiplatform\.googleapis\.com/i.test(provider.baseURL) || /\/v1beta\/openai\/?$/i.test(provider.baseURL))
 
 /** POST to Google's own API (`/models/<model>:generateContent`) with the provider's key → the parsed JSON. */
 export async function googleRequest(provider, suffix, { body, signal, proxy = null } = {}) {
   const key = apiKeyOf(provider)
+  // Vertex AI takes a token made from its credential; Gemini's API its key.
+  const auth = googleCredential(key) ? { authorization: `Bearer ${await bearerOf(provider, { proxy, signal })}` } : key ? { 'x-goog-api-key': key } : {}
   const res = await send(joinUrl(googleBase(provider), suffix), {
     method: 'POST',
-    headers: { 'user-agent': 'agent-tavern/0.2.0', ...(key ? { 'x-goog-api-key': key } : {}), ...provider.headers },
+    headers: { 'user-agent': 'agent-tavern/0.2.0', ...auth, ...provider.headers },
     body,
     signal,
     proxy: provider.proxy === 'direct' ? null : proxy,
@@ -1272,8 +1364,9 @@ const CONTEXT_FIELDS = ['context_length', 'context_window', 'inputTokenLimit', '
 
 /** The provider's model list: { models: ids, contexts: { id: tokens } } for the models whose entry says. */
 export async function listRemoteModelDetails(provider, { proxy = null, signal } = {}) {
+  if (/\/endpoints\/openapi\/?$/i.test(provider.baseURL)) return vertexModels(provider, { proxy, signal })
   const target = provider.api === 'anthropic-messages' ? anthropicUrl(provider.baseURL, '/models?limit=1000') : joinUrl(provider.baseURL, '/models')
-  const res = await send(target, { headers: headersFor(provider, { accept: 'application/json' }), signal, proxy: provider.proxy === 'direct' ? null : proxy })
+  const res = await send(target, { headers: await headersFor(provider, { accept: 'application/json' }, { proxy, signal }), signal, proxy: provider.proxy === 'direct' ? null : proxy })
   await failIfBad(res)
   const json = parseJson(await readText(res, 4 * 1024 * 1024))
   const list = Array.isArray(json) ? json : json?.data ?? json?.models ?? []
@@ -1288,6 +1381,31 @@ export async function listRemoteModelDetails(provider, { proxy = null, signal } 
     if (size >= 1_000 && size <= 100_000_000) contexts[id] = Math.floor(size)
   }
   return { models: [...new Set(list.map(idOf).filter(Boolean))].sort((a, b) => a.localeCompare(b)), contexts }
+}
+
+/**
+ * Vertex AI's OpenAI-compatible address lists no models: Google's own models come from its Model Garden
+ * (publishers/google), Gemini only, written the way that address takes them (google/<model>).
+ */
+async function vertexModels(provider, { proxy = null, signal } = {}) {
+  // The Model Garden's address names no project: gcloud's login has to say which one the call counts against.
+  const project = /\/projects\/([^/]+)\//.exec(provider.baseURL)?.[1]
+  const headers = await headersFor(provider, { accept: 'application/json', ...(project && project !== 'PROJECT_ID' ? { 'x-goog-user-project': decodeURIComponent(project) } : {}) }, { proxy, signal })
+  const ids = new Set()
+  let page = ''
+  for (let n = 0; n < 10; n++) {
+    const target = `${new URL(provider.baseURL).origin}/v1beta1/publishers/google/models?pageSize=200${page ? `&pageToken=${encodeURIComponent(page)}` : ''}`
+    const res = await send(target, { headers, signal, proxy: provider.proxy === 'direct' ? null : proxy })
+    await failIfBad(res)
+    const json = parseJson(await readText(res, 8 * 1024 * 1024))
+    for (const item of json?.publisherModels ?? []) {
+      const id = String(item?.name ?? '').replace(/^publishers\/google\/models\//, '')
+      if (/^gemini-/i.test(id) && !NOT_CHAT.test(id) && !/transcribe|translate|-live/i.test(id)) ids.add(`google/${id}`)
+    }
+    page = typeof json?.nextPageToken === 'string' ? json.nextPageToken : ''
+    if (!page) break
+  }
+  return { models: [...ids].sort((a, b) => a.localeCompare(b)), contexts: {} }
 }
 
 /** A system error's code (ECONNRESET, ENOTFOUND…), or '': what to search for when a connection failed. */

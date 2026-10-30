@@ -400,6 +400,18 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
         return sets
       })
     },
+    /** The card list's own order (拖拽排序): card ids, first on top; cards not in it are newer and go above (cards.mjs orderCards). */
+    async getCardOrder() {
+      const value = await readJson(path.join(root, 'card-order.json'), {})
+      return Array.isArray(value.ids) ? value.ids.filter(id => typeof id === 'string' && SAFE_ID.test(id)) : []
+    },
+    saveCardOrder(ids) {
+      return locked('card-order', async () => {
+        const kept = [...new Set(ids)].filter(id => typeof id === 'string' && SAFE_ID.test(id))
+        await writeJson(path.join(root, 'card-order.json'), { ids: kept })
+        return kept
+      })
+    },
     /** Context windows heard of (context.mjs): what a provider's model list or a context-full error said, by model. */
     async getModelContext() {
       const value = await readJson(path.join(root, 'model-context.json'), {})
