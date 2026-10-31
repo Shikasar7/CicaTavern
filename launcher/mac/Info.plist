@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  CicaTavern.app/Contents/Info.plist. .github/workflows/mac-release.yml sets
+  CFBundleShortVersionString and CFBundleVersion from package.json (plutil);
+  CicaTavern.icns is made there from docs/brand/icon-1024.png.
+  LSMinimumSystemVersion is Node 24's own minimum (Node's BUILDING.md: macOS 13.5),
+  the same as the launcher's swiftc -target.
+-->
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>zh-Hans</string>
+		<string>en</string>
+	</array>
+	<key>CFBundleAllowMixedLocalizations</key>
+	<true/>
+	<key>CFBundleExecutable</key>
+	<string>CicaTavern</string>
+	<key>CFBundleIconFile</key>
+	<string>CicaTavern</string>
+	<key>CFBundleIdentifier</key>
+	<string>app.cicatavern.mac</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>CicaTavern</string>
+	<key>CFBundleDisplayName</key>
+	<string>CicaTavern</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>0.0.0</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.5</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.entertainment</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>MIT License · Shikasar7</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSSupportsAutomaticTermination</key>
+	<false/>
+	<key>NSSupportsSuddenTermination</key>
+	<false/>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>语音输入：点输入框旁的麦克风时，录下你说的话转成文字。CicaTavern 不保存录音。Voice input: when you tap the microphone beside the input box, what you say is recorded and turned into text. CicaTavern keeps no recordings.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>语音输入选了「浏览器自带的识别」时，用 macOS 的语音识别把你说的话转成文字。Voice input with the browser's own recognition uses macOS speech recognition to turn what you say into text.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>CicaTavern 在这台 Mac 上运行自己的服务；打开「手机访问」后，同一网络里的手机会连到这台 Mac。CicaTavern runs its own server on this Mac; with phone access on, phones on the same network connect to it.</string>
+</dict>
+</plist>
