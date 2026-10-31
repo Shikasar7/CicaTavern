@@ -21,12 +21,13 @@ const shippedUpTo = (versions, current) => (Array.isArray(versions) ? versions :
 
 /**
  * A series' notes as they read, newest first: the latest fix, then the ones
- * before it, then the release (1.8.1, 1.8.0), up to the one running.
+ * before it, then the release (1.8.1, 1.8.0), up to the one running. A small
+ * fix marked `"after": true` reads after the rest instead (2.2.0, then 2.2.1).
  */
 export function seriesNotes(versions, version) {
   return shippedUpTo(versions, version)
     .filter(entry => seriesOf(entry.version) === seriesOf(version))
-    .sort((a, b) => compareVersions(b.version, a.version))
+    .sort((a, b) => Boolean(a.after) - Boolean(b.after) || (a.after ? compareVersions(a.version, b.version) : compareVersions(b.version, a.version)))
 }
 
 /**

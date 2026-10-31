@@ -712,6 +712,24 @@
           }
         }
       ]
+    },
+    {
+      "version": "2.2.1",
+      "date": "2026-10",
+      "after": true,
+      "items": [
+        {
+          "icon": "📱",
+          "zh": {
+            "title": "旧手机上的两个问题修好了",
+            "text": "有些安卓手机的系统 WebView 版本较旧，在上面「创作角色卡」的页面划不动，提示条报「dialog:modal is not a valid selector」后一直挂着不消失。现在两处都改好了，旧 WebView 上也能正常滚动、提示到时间自己消失。"
+          },
+          "en": {
+            "title": "Two problems on older phones, fixed",
+            "text": "On Android phones with an older system WebView, the Create a card page would not scroll, and a toast saying \"dialog:modal is not a valid selector\" stayed on screen for good. Both are fixed: the page scrolls and toasts go away on time there too."
+          }
+        }
+      ]
     }
   ]
 }

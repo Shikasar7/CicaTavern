@@ -512,7 +512,7 @@ dl.usage dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; 
 /* ─── Dialogs ────────────────────────────────────────────────────── */
 .dialog {
   border: 1px solid var(--line-soft); border-radius: 18px; background: var(--raised); color: var(--ink);
-  padding: 24px; width: min(560px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); box-shadow: var(--shadow-3);
+  padding: 24px; width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px); box-shadow: var(--shadow-3);
   opacity: 0; transform: translateY(10px) scale(.985);
   transition: opacity .2s ease, transform .28s var(--ease), overlay .28s allow-discrete, display .28s allow-discrete;
 }
@@ -597,7 +597,7 @@ dl.usage dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; 
 .dialog.diagnostics .hint { margin: 0 0 12px; }
 .dialog.diagnostics label.check-row { align-items: flex-start; }
 .dialog.diagnostics label.check-row input { margin-top: 3px; flex: none; }
-.dialog.diagnostics textarea.diag-text { width: 100%; box-sizing: border-box; min-height: 260px; height: min(46dvh, 420px); resize: vertical; font: 12px/1.55 ui-monospace, "Cascadia Mono", Consolas, monospace; white-space: pre; overflow: auto; }
+.dialog.diagnostics textarea.diag-text { width: 100%; box-sizing: border-box; min-height: 260px; height: min(46vh, 420px); height: min(46dvh, 420px); resize: vertical; font: 12px/1.55 ui-monospace, "Cascadia Mono", Consolas, monospace; white-space: pre; overflow: auto; }
 .dialog.diagnostics .diag-actions { margin-top: 12px; flex-wrap: wrap; gap: 8px; align-items: center; }
 .dialog.diagnostics .diag-count { margin: 0; }
 .dialog.diagnostics .grow { flex: 1; }
@@ -658,7 +658,7 @@ dl.usage dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; 
 :lang(en) .app.dragging::after { content: "Drop to import cards, worldbooks or presets"; }
 
 /* ─── Presets ────────────────────────────────────────────────────── */
-.dialog.presets { width: min(1120px, calc(100vw - 32px)); height: min(820px, calc(100dvh - 32px)); padding: 0; overflow: hidden; }
+.dialog.presets { width: min(1120px, calc(100vw - 32px)); height: min(820px, calc(100vh - 32px)); height: min(820px, calc(100dvh - 32px)); padding: 0; overflow: hidden; }
 .preset-layout { display: grid; grid-template-columns: 270px minmax(0, 1fr); height: 100%; position: relative; }
 .preset-nav { background: var(--pane); border-right: 1px solid var(--line-soft); display: flex; flex-direction: column; min-height: 0; padding: 22px 12px 14px; }
 .preset-nav-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 0 8px 12px; }
@@ -975,7 +975,7 @@ button.chip.on { background: var(--accent); border-color: var(--accent); color: 
    on its own page or another window; the title row and the save row stay in
    place while the middle scrolls. */
 .menu-dialog { padding: 0; overflow: hidden; }
-.menu-form { display: flex; flex-direction: column; max-height: calc(100dvh - 34px); }
+.menu-form { display: flex; flex-direction: column; max-height: calc(100vh - 34px); max-height: calc(100dvh - 34px); }
 .menu-head { display: flex; align-items: center; gap: 6px; min-height: 64px; padding: 14px 22px 12px; border-bottom: 1px solid var(--line-soft); }
 .menu-titles { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .menu-titles h2 { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1217,8 +1217,8 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
   .prow-line > .prow-name { flex: 1 1 calc(100% - 56px); white-space: normal; overflow-wrap: anywhere; }
 }
 @media (max-width: 560px) {
-  .dialog { width: calc(100vw - 16px); max-height: calc(100dvh - 16px); padding: 18px; }
-  .dialog.presets { width: calc(100vw - 16px); height: calc(100dvh - 16px); padding: 0; }
+  .dialog { width: calc(100vw - 16px); max-height: calc(100vh - 16px); max-height: calc(100dvh - 16px); padding: 18px; }
+  .dialog.presets { width: calc(100vw - 16px); height: calc(100vh - 16px); height: calc(100dvh - 16px); padding: 0; }
 }
 
 /* Phones: each usage-table row becomes a small card, the name on top and the
@@ -1290,7 +1290,7 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 /* ─── Picture prompt library ─────────────────────────────────────── */
 #image-dialog .row.between { flex-wrap: wrap; row-gap: 8px; }
 .dialog.library { width: min(860px, calc(100vw - 32px)); }
-.dialog.library form { display: flex; flex-direction: column; gap: 12px; max-height: calc(100dvh - 80px); }
+.dialog.library form { display: flex; flex-direction: column; gap: 12px; max-height: calc(100vh - 80px); max-height: calc(100dvh - 80px); }
 .library-head h2 { margin-bottom: 2px; }
 .library-head p { margin: 0; }
 .library-tools { display: flex; gap: 10px; align-items: center; }
@@ -1470,7 +1470,7 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
    Talk on the left in the guide's book voice; the sketch of the card on the
    right fills in as choices are made. Options carry their sample line in
    lamplight amber, so choosing reads like listening. */
-.dialog.forge-dialog { width: min(1120px, calc(100vw - 32px)); height: min(860px, calc(100dvh - 32px)); padding: 0; overflow: hidden; }
+.dialog.forge-dialog { width: min(1120px, calc(100vw - 32px)); height: min(860px, calc(100vh - 32px)); height: min(860px, calc(100dvh - 32px)); padding: 0; overflow: hidden; }
 .forge { display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; grid-template-columns: minmax(0, 1fr); height: 100%; }
 .forge-head { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 12px; padding: 12px 12px 12px 22px; border-bottom: 1px solid var(--line-soft); }
 .forge-titles { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
@@ -1699,14 +1699,14 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .plan-note[hidden] { display: none; }
 
 @media (max-width: 780px) {
-  .dialog.forge-dialog { width: 100vw; height: 100dvh; max-height: 100dvh; max-width: 100vw; border-radius: 0; }
+  .dialog.forge-dialog { width: 100vw; height: 100vh; height: 100dvh; max-height: 100vh; max-height: 100dvh; max-width: 100vw; border-radius: 0; }
   .forge-head { grid-template-columns: minmax(0, 1fr) auto; padding: 10px 8px 8px 14px; gap: 6px 8px; }
   .forge-sub { display: none; }
   .forge-steps { grid-column: 1 / -1; grid-row: 2; overflow-x: auto; }
   .forge-steps button { padding: 4px 8px 4px 4px; font-size: 12px; }
   .dialog .forge-model { max-width: 9.5em; }
   .forge-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
-  .forge-sketch { order: -1; border-left: 0; border-bottom: 1px solid var(--line-soft); max-height: 46dvh; padding: 10px 14px 8px; }
+  .forge-sketch { order: -1; border-left: 0; border-bottom: 1px solid var(--line-soft); max-height: 46vh; max-height: 46dvh; padding: 10px 14px 8px; }
   .forge-sketch:not(.open) > :not(.sketch-head, .sketch-bar) { display: none; }
   .forge-sketch .sketch-head { cursor: pointer; }
   .forge-sketch .sketch-head::after { content: "展开"; font-size: 11.5px; color: var(--muted); margin-left: 8px; }

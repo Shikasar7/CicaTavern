@@ -109,14 +109,15 @@ If you can't quite say what you want, the creator guides you round by round:
 
 <br clear="right">
 
-## Latest changes [2.2.0]
+## Latest changes [2.2.1]
 
 <p align="center"><img src="web/whatsnew/2.2.0-cards.webp" alt="2.2.0: cards pinned, favorited and dragged into your own order; picture prompts written your way, with a level of detail and art style presets" width="880"></p>
 
 - **Pin, favorite and reorder cards**: a card's ⋯ menu can pin it to the top or favorite it, and the ☆ beside the search box shows only favorites; drag cards up and down to put them in your own order (on a phone, press and hold first). The computer and the phone see the same list.
 - **Picture prompts, your way**: Pictures and voice has a new Picture prompts page: extra rules for the model that writes the prompts (or read in a .md / .txt image prompt skill someone shared), one set for every card plus each card's own, and a level of detail: concise, standard or detailed. Art style and LoRA has nine art style presets: anime, polished CG, painterly, watercolour, Chinese ink, semi-realistic, photo, 90s retro anime and 3D render. The default instructions are better too: shot and camera angle first, no character names, and Danbooru tag order for tags.
 - **Vertex AI**: a new provider template that takes a Google Cloud JSON credential (a service account key, or the file gcloud's login writes), so a new account's free-trial credit can be used; when it is busy it waits a few seconds and tries again, twice at most.
-- **Fixes**: ComfyUI and SD WebUI put the card's art style in every picture; MOSI's MOSS-Image draws. Also: export a card straight from its ⋯ menu; when a model's content check stops a reply, you are told whose check it was and what to do; the error log keeps the provider's whole answer and your latest operations.
+- **Fixes (2.2.1)**: on Android phones with an older system WebView, Create a card scrolls again, and the "dialog:modal" toast no longer stays on screen.
+- **Fixes (2.2.0)**: ComfyUI and SD WebUI put the card's art style in every picture; MOSI's MOSS-Image draws. Also: export a card straight from its ⋯ menu; when a model's content check stops a reply, you are told whose check it was and what to do; the error log keeps the provider's whole answer and your latest operations.
 - **macOS test build (beta)**: the Mac app is now signed with an Apple Developer ID and notarized, so there is no Open Anyway in Privacy & Security the first time. The release page has only dmg installers for the Mac (Apple silicon and Intel), which the in-app update uses too; Macs on 2.0.3 to 2.1.1 need to download the dmg and replace the app by hand this once.
 
 2.1 added grouped card creation settings, background writing and a values preview, making a card a visual novel with its own preset, and New choices; 2.0 added voice input, a drawing history, regex sets and personas chosen per card, the context usage bar, ComfyUI simple mode and clearing old versions after an update; 1.9 added web search, blocked words, card UIs that call the model and edit lorebooks, an error log, the visual novel HUD and speaker marks, and an update mirror in China; visual novel mode came in 1.8. Download from [Releases](https://github.com/Shikasar7/CicaTavern/releases/latest); 1.4.0 and later can update in the app. Everything that changed is in [CHANGELOG.md](CHANGELOG.md).

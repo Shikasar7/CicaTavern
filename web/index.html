@@ -17,6 +17,14 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600&display=swap">
   <link rel="stylesheet" href="/style.css">
+  <!-- Used throughout, missing from old Android system WebViews (before Chrome 92 / 97). -->
+  <script>{
+    const add = (proto, name, value) => proto[name] || Object.defineProperty(proto, name, { value, writable: true, configurable: true })
+    for (const proto of [Array.prototype, String.prototype]) add(proto, 'at', function (i) { i = Math.trunc(i) || 0; return this[i < 0 ? this.length + i : i] })
+    add(Array.prototype, 'findLastIndex', function (fn, self) { for (let i = this.length - 1; i >= 0; i--) if (fn.call(self, this[i], i, this)) return i; return -1 })
+    add(Array.prototype, 'findLast', function (fn, self) { const i = this.findLastIndex(fn, self); return i < 0 ? undefined : this[i] })
+    if (window.crypto) add(crypto, 'randomUUID', () => '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, c => (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)))
+  }</script>
   <!-- The look this browser saw last (theme.js), drawn before the page appears; the settings confirm it once loaded. -->
   <script>try {
     const root = document.documentElement, t = localStorage.getItem('theme'), a = JSON.parse(localStorage.getItem('appearance') || 'null')

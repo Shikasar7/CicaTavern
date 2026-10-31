@@ -2,6 +2,13 @@
 
 CicaTavern 的版本记录。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## 2.2.1 - 2026-10-31
+
+### 修复
+
+- **旧版安卓 WebView 上「创作角色卡」划不动**：有些手机的系统 WebView 比较旧（低于 Chrome 108），不认窗口高度用的 `dvh` 单位，手机上「创作角色卡」窗口没了高度上限，里面的内容滚不动。现在每处都先写一个旧 WebView 认得的高度。
+- **旧版安卓 WebView 上提示条一直挂着**：系统 WebView 低于 Chrome 105 时，弹出提示会报「'dialog:modal' is not a valid selector」，这条报错本身又以提示条显示出来、不会消失。现在先判断 WebView 支不支持再用，提示条在旧手机上也能正常显示、到时间消失。另外补上了旧 WebView 缺的几个基础函数（`.at`、`findLast`、`crypto.randomUUID`）。
+
 ## 2.2.0 - 2026-10-31
 
 ### 新增

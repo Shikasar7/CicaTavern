@@ -38,6 +38,13 @@ test('a fix release shows before the release it fixes: the whole series newest f
   assert.deepEqual(seriesNotes(versions, '1.8.1').map(entry => entry.version), ['1.8.1', '1.8.0'], 'the version badge: up to the one running')
 })
 
+test('a small fix marked "after" reads after the rest of its series', () => {
+  const versions = [{ version: '2.1.1' }, { version: '2.2.0' }, { version: '2.2.1', after: true }, { version: '2.2.2', after: true }]
+    .map(entry => ({ ...entry, items: [{ zh: { title: entry.version } }] }))
+  assert.deepEqual(notesToShow(versions, { current: '2.2.1', seen: '2.2.0' }).map(entry => entry.version), ['2.2.0', '2.2.1'])
+  assert.deepEqual(seriesNotes(versions, '2.2.2').map(entry => entry.version), ['2.2.0', '2.2.1', '2.2.2'])
+})
+
 test('a page recapping an earlier series stands for its pages; the picker lists every series', () => {
   const versions = ['1.7.0', '1.8.0', '1.8.1', '1.9.0'].map(version => ({ version, items: [{ zh: { title: version } }] }))
   versions[3].items.push({ recap: '1.8', zh: { title: '1.8 recap' } })

@@ -202,7 +202,9 @@ async function stream(path, body, onEvent) {
 const toastBox = $('toast')
 // With a modal dialog open, all outside it is inert, the top layer too: the toast showed there but
 // its 错误日志 could not be clicked. Inside the dialog it can (and back in the page once none is open).
-const toastHost = () => document.querySelector('dialog:modal') ?? document.body
+// An old WebView (Android phones whose system WebView is before Chrome 105) throws on `:modal`: any open dialog there.
+const modalDialog = CSS.supports('selector(:modal)') ? 'dialog:modal' : 'dialog[open]'
+const toastHost = () => document.querySelector(modalDialog) ?? document.body
 new MutationObserver(records => {
   const box = toastBox
   if (!box?.showPopover || box.hidden) return
@@ -217,7 +219,8 @@ new MutationObserver(records => {
 function hideToast() {
   const box = toastBox
   clearTimeout(toast.timer)
-  if (box.matches?.(':popover-open')) box.hidePopover()
+  // `:popover-open` throws where there are no popovers (before Chrome 114).
+  if (box.hidePopover && box.matches(':popover-open')) box.hidePopover()
   box.hidden = true
 }
 
