@@ -110,7 +110,7 @@ function cleanHeaders(value) {
   return headers
 }
 
-/** A typed key: a Google JSON credential (Vertex AI) is kept whole, on one line. */
+/** A typed key: a Google JSON credential (Agent Platform) is kept whole, on one line. */
 function cleanKey(value) {
   const typed = typeof value === 'string' ? value.trim() : ''
   if (typed.startsWith('{')) return compactCredential(typed)
@@ -340,7 +340,8 @@ export function draftProvider(input, previous = null) {
     apiKeyEnv: ENV_NAME.test(apiKeyEnv) ? apiKeyEnv : '',
     proxy: input.proxy === 'direct' ? 'direct' : 'global',
     headers: cleanHeaders(input.headers),
-    models: [],
+    // Agent Platform with an API key checks the connection with the first one.
+    models: cleanModels(input.models ?? previous?.models),
   }
 }
 
@@ -509,7 +510,7 @@ async function postForm(url, form, { proxy = null, signal } = {}) {
   return { status: res.statusCode, text: await readText(res) }
 }
 
-/** What goes after `Bearer`: the key, or for a Google JSON credential (Vertex AI) an access token made from it. */
+/** What goes after `Bearer`: the key, or for a Google JSON credential (Agent Platform) an access token made from it. */
 async function bearerOf(provider, { proxy = null, signal } = {}) {
   const key = apiKeyOf(provider)
   return googleCredential(key) ? accessToken(key, postForm, { proxy: provider.proxy === 'direct' ? null : proxy, signal }) : key
@@ -521,11 +522,19 @@ async function headersFor(provider, extra = {}, options = {}) {
   if (provider.api === 'anthropic-messages') {
     headers['anthropic-version'] = ANTHROPIC_VERSION
     if (key) headers['x-api-key'] = key
+  } else if (key && agentPlatformKey(provider)) {
+    headers['x-goog-api-key'] = key
   } else if (key) {
     headers.authorization = `Bearer ${key}`
   }
   return { ...headers, ...provider.headers }
 }
+
+/**
+ * Agent Platform (Vertex AI) with an API key rather than a JSON credential: its OpenAI-compatible
+ * address takes the key in Google's own header and turns it away after `Bearer`.
+ */
+const agentPlatformKey = provider => isVertex(provider) && Boolean(apiKeyOf(provider)) && !googleCredential(apiKeyOf(provider))
 
 /** One request; resolves with the response once headers arrive. */
 function send(target, { method = 'GET', headers, body, rawBody, signal, proxy }) {
@@ -544,14 +553,14 @@ function send(target, { method = 'GET', headers, body, rawBody, signal, proxy })
 
 function sendPayload(lib, url, { method, headers, payload, signal, proxy }) {
   return new Promise((resolve, reject) => {
-    if (signal?.aborted) return reject(abortError())
+    if (signal?.aborted) return reject(abortError(signal))
     const req = lib.request(url, {
       method,
       agent: agentFor(url, proxy),
       headers,
       timeout: TIMEOUT_MS,
     })
-    const onAbort = () => req.destroy(abortError())
+    const onAbort = () => req.destroy(abortError(signal))
     signal?.addEventListener('abort', onAbort, { once: true })
     req.on('response', res => {
       res.on('close', () => signal?.removeEventListener('abort', onAbort))
@@ -566,9 +575,12 @@ function sendPayload(lib, url, { method, headers, payload, signal, proxy }) {
   })
 }
 
-function abortError() {
-  const error = new Error('aborted')
+/** A stopped request; one stopped by its time running out (AbortSignal.timeout) says so, like a socket timeout. */
+function abortError(signal) {
+  const timedOut = signal?.reason?.name === 'TimeoutError'
+  const error = new Error(timedOut ? msg`请求超时` : 'aborted')
   error.name = 'AbortError'
+  if (timedOut) error.code = 'ETIMEDOUT'
   return error
 }
 
@@ -1159,10 +1171,10 @@ function busyWait(res, retry) {
 /** Wait, cut short by a stop. */
 function pause(ms, signal) {
   return new Promise((resolve, reject) => {
-    if (signal?.aborted) return reject(abortError())
+    if (signal?.aborted) return reject(abortError(signal))
     const stop = () => {
       clearTimeout(timer)
-      reject(abortError())
+      reject(abortError(signal))
     }
     const timer = setTimeout(() => {
       signal?.removeEventListener('abort', stop)
@@ -1388,6 +1400,9 @@ export async function listRemoteModelDetails(provider, { proxy = null, signal } 
  * (publishers/google), Gemini only, written the way that address takes them (google/<model>).
  */
 async function vertexModels(provider, { proxy = null, signal } = {}) {
+  // The Model Garden takes no API key: the models written in and the ones Google offered when this was written are
+  // each tried by counting a word's tokens (free); those the project can use are the list.
+  if (agentPlatformKey(provider)) return triedModels(provider, { proxy, signal })
   // The Model Garden's address names no project: gcloud's login has to say which one the call counts against.
   const project = /\/projects\/([^/]+)\//.exec(provider.baseURL)?.[1]
   const headers = await headersFor(provider, { accept: 'application/json', ...(project && project !== 'PROJECT_ID' ? { 'x-goog-user-project': decodeURIComponent(project) } : {}) }, { proxy, signal })
@@ -1406,6 +1421,42 @@ async function vertexModels(provider, { proxy = null, signal } = {}) {
     if (!page) break
   }
   return { models: [...ids].sort((a, b) => a.localeCompare(b)), contexts: {} }
+}
+
+// Agent Platform's Gemini models as its Model Garden listed them (2026-11), tried when only an API key is there to ask with.
+const AGENT_PLATFORM_MODELS = [
+  'gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite',
+  'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'gemini-omni-1.1-flash-preview', 'gemini-nano-banana-2.1',
+]
+
+/**
+ * Agent Platform with an API key: the models written in, then the known ones, each asked to count a word's tokens;
+ * the ones that answer are listed. One the project has no access to says 404; when none answers, the first model's
+ * error says why (the key, the project, the network).
+ */
+async function triedModels(provider, { proxy = null, signal } = {}) {
+  const written = (provider.models ?? []).map(model => String(model.id ?? '').replace(/^google\//, '')).filter(Boolean)
+  if (!written.length) throw httpError(400, msg`先在「模型」里填一个模型 ID（比如 google/gemini-3.1-pro-preview），用它检查连接`)
+  const candidates = [...new Set([...written, ...AGENT_PLATFORM_MODELS])]
+  const results = new Array(candidates.length)
+  let next = 0
+  const worker = async () => {
+    while (next < candidates.length) {
+      const i = next++
+      try {
+        await googleRequest(provider, `/models/${encodeURIComponent(candidates[i])}:countTokens`, { body: { contents: [{ role: 'user', parts: [{ text: 'hi' }] }] }, proxy, signal })
+        results[i] = { ok: true }
+      } catch (error) {
+        results[i] = { error }
+        // The key or the project turned away, or no connection: the same for every model, so no more are asked.
+        if (error.providerStatus !== 404) next = candidates.length
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: 6 }, worker))
+  const models = candidates.filter((_, i) => results[i]?.ok).map(id => `google/${id}`)
+  if (!models.length) throw results.find(result => result?.error && result.error.providerStatus !== 404)?.error ?? results[0].error
+  return { models: models.sort((a, b) => a.localeCompare(b)), contexts: {} }
 }
 
 /** A system error's code (ECONNRESET, ENOTFOUND…), or '': what to search for when a connection failed. */
@@ -1429,6 +1480,8 @@ function plainError(provider, error) {
   const text = String(error?.message ?? error ?? '')
   const status = error?.providerStatus
   const name = provider?.name ?? msg`供应商`
+  // Agent Platform's address names the project by its ID; a project's name (or someone else's project) is turned away.
+  if (status === 403 && /Permission denied on resource project/i.test(text)) return msg`${name} 不认地址里的项目：Base URL 里要填 Google Cloud 项目 ID（控制台顶部项目选择器里的「ID」，不是项目名称），并且 API Key 属于这个项目。（${text.slice(0, 160)}）`
   if (status === 401 || status === 403) return msg`${name} 拒绝了请求：API Key 无效或没有权限。（${text.slice(0, 160)}）`
   if (status === 404) return msg`${name} 返回 404：检查 Base URL 和接口类型，或者模型 ID 是否写对。（${text.slice(0, 160)}）`
   if (status === 429) return msg`${name} 限流或额度用完了，稍后再试。（${text.slice(0, 160)}）`

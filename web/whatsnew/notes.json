@@ -730,6 +730,24 @@
           }
         }
       ]
+    },
+    {
+      "version": "2.2.2",
+      "date": "2026-11",
+      "after": true,
+      "items": [
+        {
+          "icon": "🔑",
+          "zh": {
+            "title": "Gemini Agent Platform 能用 API Key 了",
+            "text": "「Gemini Agent Platform」（原 Vertex AI）模板现在可以直接粘贴 Agent Platform 的 API Key，不用再弄 JSON 凭据，Google Cloud 新账号的赠金照样能用；「从接口获取模型列表」会把常见的 Gemini 模型逐个试一遍（不花钱），列出你的项目能用的。另外，连不上供应商时不再只显示「aborted」，会说是超时、提示检查网络和代理。"
+          },
+          "en": {
+            "title": "Gemini Agent Platform takes an API key",
+            "text": "The Gemini Agent Platform template (formerly Vertex AI) now takes an Agent Platform API key pasted straight in, no JSON credential needed, and a new Google Cloud account's credit still works; Fetch model list tries the common Gemini models one by one (free) and lists the ones your project can use. Also, a provider that cannot be reached no longer just says \"aborted\": it says it timed out and to check the network and proxy."
+          }
+        }
+      ]
     }
   ]
 }

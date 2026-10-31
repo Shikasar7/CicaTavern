@@ -4,7 +4,7 @@
 
 # CicaTavern
 
-**Agent 式的 SillyTavern 角色卡酒馆。** 导入酒馆的角色卡、世界书和预设，用**你自己的模型 API**（DeepSeek、OpenRouter、Anthropic、OpenAI、Gemini、Vertex AI、Kimi、智谱、通义、火山方舟、本机 Ollama 等）跑剧情：
+**Agent 式的 SillyTavern 角色卡酒馆。** 导入酒馆的角色卡、世界书和预设，用**你自己的模型 API**（DeepSeek、OpenRouter、Anthropic、OpenAI、Gemini、Gemini Agent Platform（原 Vertex AI）、Kimi、智谱、通义、火山方舟、本机 Ollama 等）跑剧情：
 
 - **缓存命中高**：提示词按缓存来设计，长对话里每轮的大部分内容都按便宜得多的缓存价计费，出字也快。
 - **兼容酒馆格式**：角色卡、世界书、预设、正则、MVU 变量、卡片里的状态栏界面，导进来就能玩。
@@ -107,13 +107,14 @@ Windows 解压即用，也有安卓版；界面有简体中文和英文。数据
 
 <br clear="right">
 
-## 最新版本变动[2.2.1]
+## 最新版本变动[2.2.2]
 
 <p align="center"><img src="web/whatsnew/2.2.0-cards.webp" alt="2.2.0：角色卡可以置顶、收藏、拖拽排序；配图提示词可以自己定写法，选详细程度和画风预设" width="880"></p>
 
 - **角色卡置顶、收藏、拖拽排序**：卡片「⋯」菜单里可以「置顶」和「收藏」，置顶的排在最上面，搜索框旁的 ☆ 只看收藏的卡；按住卡片上下拖动自己排顺序（手机上长按再拖）。电脑和手机看到的一样。
 - **配图的提示词可以自己定写法**：「配图与朗读」新增「画面提示词」一页：写给写提示词的模型的额外要求（也可以读入别人分享的 .md / .txt 生图 skill），全局一份、每张卡再加自己的；详细程度分简洁、标准、详细三档。「画风与 LoRA」里加了九种画风预设：日系动画、精致 CG、厚涂、水彩、国风水墨、半写实、写实照片、90 年代复古动画、3D 渲染。默认写法也改好了：先定景别和镜头，不写角色名字，标签写法用 Danbooru 的顺序。
-- **Vertex AI**：模型供应商新增「Vertex AI」模板，用 Google Cloud 的 JSON 凭据（服务账号密钥，或 gcloud 登录生成的文件），Google Cloud 新账号的赠金可以用在这里；繁忙时自动等几秒重试，最多 2 次。
+- **Gemini Agent Platform（原 Vertex AI）**：模型供应商的「Gemini Agent Platform」模板，2.2.2 起可以直接填 Agent Platform 的 API Key，也可以用 Google Cloud 的 JSON 凭据，新账号的赠金可以用在这里；用 API Key 时「从接口获取模型列表」会逐个试常见的 Gemini 模型，列出能用的。繁忙时自动等几秒重试，最多 2 次。
+- **修复（2.2.2）**：连不上供应商时不再只显示「aborted」，会说是超时、提示检查网络和代理。
 - **修复（2.2.1）**：系统 WebView 较旧的安卓手机上，「创作角色卡」划不动、提示条报「dialog:modal」后一直挂着，都修好了。
 - **修复（2.2.0）**：ComfyUI 和 SD WebUI 每张图都带上卡的画风；MOSI 的 MOSS-Image 能画了。另外，卡片「⋯」菜单里能直接导出角色卡；模型的内容审查拦下回复时说清是谁拦的、能怎么办；错误日志附上供应商的原始返回和最近的操作。
 - **macOS 测试版（beta）**：Mac 版现在用 Apple 开发者证书签名并经过公证，第一次打开不用再去「隐私与安全性」点「仍要打开」。发布页上 Mac 只有 dmg（Apple 芯片、Intel 各一个），应用内更新也用它；2.0.3 到 2.1.1 的 Mac 版这次要手动下载 dmg 替换一次。
@@ -124,7 +125,7 @@ Windows 解压即用，也有安卓版；界面有简体中文和英文。数据
 
 1. 解压到任意位置（路径里有中文也可以）。
 2. 双击 **「CicaTavern.exe」**：后台启动服务，并打开一个应用窗口（用 Edge 或 Chrome，没有地址栏）。第一次打开会先说明它会连哪些地方（见[隐私](#隐私)）。想要桌面图标：设置 → 更多 →「桌面快捷方式」。
-3. 第一次用：顶栏模型选择最下面的「管理模型供应商…」→「添加」→「从模板开始」，选一家，粘贴 API Key，再点「从接口获取模型列表」检查连接。然后在 设置 里选默认模型。Vertex AI（Google Cloud）不用 API Key，用 JSON 凭据（服务账号的 JSON 密钥，或 gcloud 登录生成的文件）：模板说明里写了怎么弄，点「选择 JSON 凭据文件」选进来就行，Google Cloud 新账号的赠金可以用在这里。
+3. 第一次用：顶栏模型选择最下面的「管理模型供应商…」→「添加」→「从模板开始」，选一家，粘贴 API Key，再点「从接口获取模型列表」检查连接。然后在 设置 里选默认模型。Google 有两个模板：「Gemini API」用 AI Studio 的密钥；「Gemini Agent Platform」（Google Cloud，原 Vertex AI，新账号的赠金能用在这里）用 Agent Platform 的 API Key，把地址里的 PROJECT_ID 换成项目 ID，组织不让建 API 密钥时也可以用 JSON 凭据（服务账号的 JSON 密钥，或 gcloud 登录生成的文件），点「选择 JSON 凭据文件」选进来。模板说明里写了怎么弄。
 4. 左上「导入角色卡、世界书或预设」，选 SillyTavern 的 PNG / JSON 角色卡，点「新对话」开始。
 
 自带 Node 运行环境（`runtime/node.exe`），不用另外安装任何东西。所有页面关掉约一分钟后，后台服务会自动退出；也可以在 设置 →「停止后台服务」立刻停止。
@@ -156,7 +157,7 @@ Windows 解压即用，也有安卓版；界面有简体中文和英文。数据
 在「配图与朗读 → 画图方式」里选一种：
 
 - **OpenAI 兼容图片接口**：选一个已经添加的供应商和它的图片模型（gpt-image、grok、硅基流动等），可以拿头像或人设图当参考。供应商是 OpenRouter 时，用它的出图模型（`google/gemini-…-image` 等）。
-- **Gemini 原生生图**（Nano Banana）：选用「Gemini」或「Vertex AI」模板建的供应商，模型默认 `gemini-2.5-flash-image`，也可以换 `gemini-3-pro-image-preview`。画面里的名册角色有人设图时一起发过去照着画，长相更稳。
+- **Gemini 原生生图**（Nano Banana）：选用 Google 的模板（Gemini API 或 Gemini Agent Platform）建的供应商，模型默认 `gemini-2.5-flash-image`，也可以换 `gemini-3-pro-image-preview`。画面里的名册角色有人设图时一起发过去照着画，长相更稳。
 - **ComfyUI**：导入「导出（API）」格式的工作流 JSON，里面用占位符标出提示词、尺寸等：正向提示词写 `%prompt%`，和 SillyTavern 的写法一样，它的 ComfyUI 工作流可以直接导入。`examples/comfy-illustrious-api.json` 是一个文生图示例，模型名换成你自己的。
 - **NovelAI**：填持久令牌，支持 V4.5 / V5 和角色参考，画二次元最合适。
 - **SD WebUI / Forge**：本机的 AUTOMATIC1111、Forge、reForge（启动参数加 `--api`），用 WebUI 里当前加载的模型；可设采样器、步数、CFG 和负面提示词，名册角色或这张卡的 LoRA 写成 `<lora:…>` 加进提示词。
@@ -174,7 +175,7 @@ Windows 解压即用，也有安卓版；界面有简体中文和英文。数据
 - **供应商的朗读接口**：选一个已经添加的供应商，填模型和音色。用它的 OpenAI 兼容 `/audio/speech`，地址、密钥和代理设置都沿用供应商的。OpenAI 用 `gpt-4o-mini-tts`（会按回复里的情绪调整语气）；硅基流动用 `FunAudioLLM/CosyVoice2-0.5B`，音色框留空就列出它的预置音色。本机的 Kokoro、GPT-SoVITS 这类 OpenAI 兼容封装也走这里，但它们是本地模型，不收费。
 - **Fish Audio**：填 API Key（离开输入框或按回车就保存），把喜欢的音色页链接（`fish.audio/m/…`）贴进音色框，后面可以空一格写名字；自己克隆的音色点「从账户读取音色」。回复里的情绪会放在台词前当语气标签。
 - **MiniMax**：填 API Key，选国内站或国际站（密钥只在创建它的站点能用）。音色框留空就用系统音色；复刻或设计的音色点「从账户读取音色」，或写 voice_id。
-- **Gemini 朗读**：选用「Gemini」或「Vertex AI」模板建的供应商（和对话共用密钥和代理），模型默认 `gemini-2.5-flash-preview-tts`。音色框留空就列出 Google 的 30 个预置音色（Kore、Leda、Puck、Charon…），中文也能读；回复里的情绪变成「用…的语气说」放在台词前。
+- **Gemini 朗读**：选用 Google 的模板（Gemini API 或 Gemini Agent Platform）建的供应商（和对话共用密钥和代理），模型默认 `gemini-2.5-flash-preview-tts`。音色框留空就列出 Google 的 30 个预置音色（Kore、Leda、Puck、Charon…），中文也能读；回复里的情绪变成「用…的语气说」放在台词前。
 
 **浏览器**（这台设备自带，免费，默认就能用）
 

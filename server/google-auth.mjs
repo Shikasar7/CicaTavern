@@ -1,7 +1,8 @@
-// Google Cloud credentials, for Vertex AI (the Vertex AI template). Its
-// OpenAI-compatible address takes no API key, only an OAuth access token that
-// lasts an hour; the provider keeps a JSON credential instead and a token is
-// made from it here, kept until a few minutes before it runs out. Two kinds:
+// Google Cloud credentials, for Agent Platform (once Vertex AI; the 「Gemini Agent
+// Platform 应用默认凭据」 template). Without an API key its OpenAI-compatible address
+// takes an OAuth access token that lasts an hour; the provider keeps a JSON
+// credential instead and a token is made from it here, kept until a few minutes
+// before it runs out. Two kinds:
 // - a service account's JSON key: a signed JWT traded at Google's token address;
 // - the file `gcloud auth application-default login` writes (authorized_user),
 //   for organizations that allow neither API keys nor service account keys:

@@ -10,7 +10,7 @@ import { activePath, chatView, createChat, restoreFolded, rollbackTo } from '../
 import { createEngine } from '../server/engine.mjs'
 import { testSubscription } from './support/subscription.mjs'
 import { editPreset, normalizePreset } from '../server/presets.mjs'
-import { complete, exportProviders, googleRequest, importProviders, isGoogle, listRemoteModelDetails, listRemoteModels, normalizeProvider, providerChoices, providerError, publicProvider, reasoningFields } from '../server/providers.mjs'
+import { complete, draftProvider, exportProviders, googleRequest, importProviders, isGoogle, listRemoteModelDetails, listRemoteModels, normalizeProvider, providerChoices, providerError, publicProvider, reasoningFields } from '../server/providers.mjs'
 import { createStore } from '../server/store.mjs'
 import { cleanScripts } from '../server/regex.mjs'
 
@@ -714,6 +714,21 @@ test('provider errors, model listing, and no SDK continuation from an API reply'
     assert.equal(providerError(provider, error).split('ECONNREFUSED').length, 2, 'the code once, not again after the message that has it')
     return true
   })
+  // No answer before the time is up (a proxy that is off): can't connect, not a bare "aborted".
+  const silent = createServer(() => {})
+  await new Promise(resolve => silent.listen(0, '127.0.0.1', resolve))
+  t.after(() => silent.close())
+  t.after(() => silent.closeAllConnections())
+  await assert.rejects(listRemoteModels({ ...provider, baseURL: `http://127.0.0.1:${silent.address().port}/v1` }, { signal: AbortSignal.timeout(200) }), error => {
+    assert.match(providerError(provider, error), /^连不上 .*请求超时/)
+    return true
+  })
+  const stopped = new AbortController()
+  stopped.abort()
+  await assert.rejects(listRemoteModels(provider, { signal: stopped.signal }), error => {
+    assert.match(providerError(provider, error), /aborted$/, 'stopped by hand: still just stopped')
+    return true
+  })
 
   await turn('你好')
   await store.saveSettings({ subscription: 'on' })
@@ -1021,6 +1036,49 @@ test('Vertex AI: a service account JSON key or gcloud login file, traded for an 
   assert.equal(seen.chat.at(-1).url, '/v1/projects/my-proj/locations/global/endpoints/openapi/chat/completions')
   const revoked = normalizeProvider({ ...template, baseURL: byLogin.baseURL, apiKey: login.replace('rt-demo', 'rt-old') })
   await assert.rejects(complete(revoked, 'google/gemini-4-argon', { system: 's', messages: [{ role: 'user', content: 'x' }] }), /expired or revoked[\s\S]*application-default login/)
+})
+
+test('Agent Platform with an API key: sent in x-goog-api-key, models found by counting tokens, a wrong project said so', async t => {
+  const seen = []
+  const server = createServer(async (req, res) => {
+    let body = ''
+    for await (const chunk of req) body += chunk
+    seen.push({ url: req.url, key: req.headers['x-goog-api-key'], bearer: req.headers.authorization })
+    const json = (status, value) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(value))
+    if (req.url.includes('/projects/300Free/')) return json(403, { error: { code: 403, message: 'Permission denied on resource project 300Free.', status: 'PERMISSION_DENIED' } })
+    // The project has three models, one of them only written in by hand.
+    if (req.url.endsWith(':countTokens')) return /\/(gemini-4-argon|gemini-3\.8-flash|gemini-own-tune):countTokens$/.test(req.url) ? json(200, { totalTokens: 1 }) : json(404, { error: { code: 404, message: 'Publisher model was not found or your project does not have access to it.' } })
+    if (req.url.includes('/publishers/google/models/')) return json(200, { candidates: [{ content: { parts: [{ text: 'ok' }] } }] })
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: '你好' }, finish_reason: 'stop' }] })}\n\n`)
+    res.end('data: [DONE]\n\n')
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => server.close())
+  const origin = `http://127.0.0.1:${server.address().port}`
+  const at = project => normalizeProvider({ name: 'Gemini Agent Platform API', api: 'openai-completions', baseURL: `${origin}/v1/projects/${project}/locations/global/endpoints/openapi`, apiKey: 'AQ.key', models: [{ id: 'google/gemini-3.8-flash' }] })
+  const provider = at('demo-proj')
+
+  assert.equal((await complete(provider, 'google/gemini-3.8-flash', { system: 's', messages: [{ role: 'user', content: 'hi' }] })).text, '你好')
+  assert.deepEqual(seen.at(-1), { url: '/v1/projects/demo-proj/locations/global/endpoints/openapi/chat/completions', key: 'AQ.key', bearer: undefined }, 'the key in Google\'s header, not after Bearer')
+  seen.length = 0
+  // The Model Garden takes no API key: the models written in and the known ones, each counted (free).
+  assert.deepEqual(await listRemoteModels(provider), ['google/gemini-3.8-flash', 'google/gemini-4-argon'])
+  assert.equal(seen[0].url, '/v1/projects/demo-proj/locations/global/publishers/google/models/gemini-3.8-flash:countTokens', 'the one written in first')
+  assert.ok(seen.length > 5 && seen.every(hit => hit.url.endsWith(':countTokens') && hit.key === 'AQ.key'))
+  // As the settings form asks (「从接口获取模型列表」): the models written in so far come along, one not on the known list too.
+  const form = { name: provider.name, api: provider.api, baseURL: provider.baseURL, models: [{ id: 'google/gemini-own-tune' }] }
+  assert.deepEqual(await listRemoteModels(draftProvider(form, provider)), ['google/gemini-3.8-flash', 'google/gemini-4-argon', 'google/gemini-own-tune'])
+  await assert.rejects(listRemoteModels(draftProvider({ ...form, models: [] }, { ...provider, models: [] })), error => error.status === 400 && /先在「模型」里填一个模型 ID/.test(error.message))
+  await googleRequest(provider, '/models/gemini-3.8-flash:generateContent', { body: {} })
+  assert.equal(seen.at(-1).key, 'AQ.key', 'pictures and speech: the same key')
+  seen.length = 0
+  await assert.rejects(listRemoteModels(at('300Free')), error => {
+    assert.match(providerError(provider, error), /不认地址里的项目：.*不是项目名称/)
+    return true
+  })
+  assert.ok(seen.length <= 6, 'the project turned away: no more models asked than were under way')
+  assert.throws(() => at('PROJECT_ID'), /PROJECT_ID/, 'the template\'s placeholder left in the address')
 })
 
 test('a busy Vertex AI (429) is asked again after a wait, twice at most; other providers are not', async t => {

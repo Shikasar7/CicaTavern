@@ -452,6 +452,8 @@ export default {
   "（这段对话太长，超出了模型一次能读的上下文。点顶栏「压缩上下文」把前面的剧情压成存档，再接着写。）": " (This chat is longer than the model can read at once. Click \"Compact context\" in the top bar to compact the story so far into an archive, then continue.)",
   "响应太大": "Response too large",
   "供应商": "The provider",
+  "{0} 不认地址里的项目：Base URL 里要填 Google Cloud 项目 ID（控制台顶部项目选择器里的「ID」，不是项目名称），并且 API Key 属于这个项目。（{1}）": "{0} does not accept the project in the address: the Base URL needs the Google Cloud project ID (the \"ID\" in the project picker at the top of the console, not the project name), and the API key must belong to that project. ({1})",
+  "先在「模型」里填一个模型 ID（比如 google/gemini-3.1-pro-preview），用它检查连接": "Write a model ID under Models first (google/gemini-3.1-pro-preview, say): the connection is checked with it",
   "{0} 拒绝了请求：API Key 无效或没有权限。（{1}）": "{0} rejected the request: the API key is invalid or lacks permission. ({1})",
   "{0} 返回 404：检查 Base URL 和接口类型，或者模型 ID 是否写对。（{1}）": "{0} returned 404: check the Base URL and API type, and that the model ID is spelled correctly. ({1})",
   "{0} 限流或额度用完了，稍后再试。（{1}）": "{0} is rate-limiting requests, or the quota has run out. Try again later. ({1})",

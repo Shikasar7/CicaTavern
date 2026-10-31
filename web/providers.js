@@ -38,16 +38,25 @@ const TEMPLATES = [
     note: t`密钥在 platform.deepseek.com 创建，国内直连。前缀不变时自动命中缓存，很便宜。`,
   },
   {
-    name: 'Gemini', api: 'openai-completions', baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai', apiKeyEnv: 'GEMINI_API_KEY', proxy: 'global',
+    name: 'Gemini API', api: 'openai-completions', baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai', apiKeyEnv: 'GEMINI_API_KEY', proxy: 'global',
     site: 'https://aistudio.google.com', keys: 'https://aistudio.google.com/apikey',
     models: [{ id: 'gemini-3.1-pro-preview' }, { id: 'gemini-3-flash-preview' }],
-    note: t`Google 的 OpenAI 兼容接口，密钥在 aistudio.google.com 创建，需要走代理。`,
+    note: t`Google AI Studio 的 Gemini API（OpenAI 兼容接口），密钥在 aistudio.google.com 创建，需要走代理。`,
   },
+  // Agent Platform (once Vertex AI): an API key, or a JSON credential where an organization allows none (accounts: where
+  // that is made). check: what to say of the model list, in place of the usual line.
   {
-    name: 'Vertex AI', api: 'openai-completions', baseURL: 'https://aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/global/endpoints/openapi', apiKeyEnv: '', proxy: 'global',
-    site: 'https://console.cloud.google.com/vertex-ai', keys: 'https://console.cloud.google.com/iam-admin/serviceaccounts',
+    name: 'Gemini Agent Platform', api: 'openai-completions', baseURL: 'https://aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/global/endpoints/openapi', apiKeyEnv: '', proxy: 'global',
+    site: 'https://console.cloud.google.com/vertex-ai', keys: 'https://console.cloud.google.com/apis/credentials', accounts: 'https://console.cloud.google.com/iam-admin/serviceaccounts',
     models: [{ id: 'google/gemini-4-argon' }, { id: 'google/gemini-3.1-pro-preview' }],
-    note: t`Google Cloud 的 Vertex AI，新账号的 300 美元赠金可以用在这里（AI Studio 的 Gemini 密钥用不了赠金）。先在控制台启用 Vertex AI API，再把一个 JSON 凭据选进来：服务账号的 JSON 密钥（「IAM → 服务账号」新建一个，角色选「Vertex AI 用户」，在它的「密钥」页添加 JSON 密钥），项目 ID 从文件里读；组织不让建密钥时，装好 Google Cloud CLI 后运行 gcloud auth application-default login，选它生成的 application_default_credentials.json（Windows 在 %APPDATA% 下的 gcloud 文件夹里），再把地址里的 PROJECT_ID 换成项目 ID。模型 ID 写成「google/模型」，需要走代理。`,
+    // One line each (the note keeps its line breaks).
+    note: [
+      t`Google Cloud 的 Agent Platform（原 Vertex AI）。新账号的 300 美元赠金能用在这里，AI Studio 的密钥不行。需要走代理，模型 ID 写成「google/模型」。`,
+      t`先在控制台启用 Agent Platform API，再二选一：`,
+      t`① API Key（推荐）：在「API 和服务 → 凭据」创建，粘贴进来；把地址里的 PROJECT_ID 换成项目 ID（项目选择器里的「ID」，不是项目名称）。`,
+      t`② JSON 凭据（组织不让建 API Key 时）：服务账号的 JSON 密钥（「IAM → 服务账号」新建，角色选「Vertex AI 用户」，在「密钥」页添加），项目 ID 自动读取；或者 gcloud auth application-default login 生成的 application_default_credentials.json（Windows 在 %APPDATA% 下的 gcloud 文件夹里），地址里的 PROJECT_ID 要手动换。`,
+    ].join('\n'),
+    check: t`获取模型列表：用 API Key 时会把常见的 Gemini 模型逐个试一遍（不花钱），列出这个项目能用的；更新的模型手动填。`,
   },
   {
     name: 'OpenRouter', api: 'openai-completions', baseURL: 'https://openrouter.ai/api/v1', apiKeyEnv: 'OPENROUTER_API_KEY', proxy: 'global',
@@ -109,7 +118,7 @@ const TEMPLATES = [
 ]
 /** The template whose address this is, for its sign-up links. */
 function templateFor(baseURL) {
-  // Vertex AI's address has the project in it (the template's PROJECT_ID until it is saved).
+  // Agent Platform's address has the project in it (the template's PROJECT_ID until it is saved).
   const clean = url => String(url ?? '').trim().replace(/\/+$/, '').toLowerCase().replace(/\/projects\/[^/]+\//, '/projects/project_id/')
   return TEMPLATES.find(tpl => tpl.site && clean(tpl.baseURL) === clean(baseURL))
 }
@@ -235,11 +244,11 @@ export function initProviders({ api, el, toast, guard, saveFile, onChanged }) {
     syncCache()
     const keyNote = p.hasKey ? t`已保存（${p.keyHint}），留空不改` : t`粘贴 API Key`
     const apiKey = el('input', { name: 'apiKey', type: 'password', placeholder: keyNote, autocomplete: 'new-password', spellcheck: 'false' })
-    // Vertex AI takes a service account's JSON key, not an API key: picked as a file (or pasted whole).
+    // Agent Platform takes an API key or a JSON credential (a service account's key, gcloud's login file): picked as a file (or pasted whole).
     const keyFile = el('input', { type: 'file', accept: '.json,application/json', hidden: true })
     const keyFileRow = el('div', { class: 'row' }, [
       el('button', { type: 'button', class: 'btn small', text: t`选择 JSON 凭据文件`, onclick: () => keyFile.click() }),
-      el('span', { class: 'hint', text: t`Vertex AI 用 JSON 凭据（服务账号密钥或 gcloud 登录文件），不是 API Key` }),
+      el('span', { class: 'hint', text: t`Agent Platform 可以填 API Key，也可以选 JSON 凭据（服务账号密钥或 gcloud 登录文件）` }),
       keyFile,
     ])
     keyFile.addEventListener('change', guard(async () => {
@@ -270,7 +279,7 @@ export function initProviders({ api, el, toast, guard, saveFile, onChanged }) {
     const syncVertex = () => {
       const vertex = /aiplatform\.googleapis\.com/i.test(baseURL.value)
       keyFileRow.hidden = !vertex
-      if (!p.hasKey) apiKey.placeholder = vertex ? t`粘贴 JSON 凭据，或点下面选文件` : t`粘贴 API Key`
+      if (!p.hasKey) apiKey.placeholder = vertex ? t`粘贴 API Key 或 JSON 凭据，或点下面选文件` : t`粘贴 API Key`
     }
     baseURL.addEventListener('input', syncVertex)
     syncVertex()
@@ -280,12 +289,12 @@ export function initProviders({ api, el, toast, guard, saveFile, onChanged }) {
     const syncLinks = () => {
       const template = templateFor(baseURL.value)
       const link = (href, text) => el('a', { href, target: '_blank', rel: 'noopener noreferrer', text })
-      // Vertex AI's key is a service account's.
-      const account = /aiplatform\.googleapis\.com/i.test(template?.baseURL ?? '')
       keyLinks.replaceChildren(...(template ? [
-        template.keys ? (account ? t`还没有凭据？` : t`还没有 API Key？`) : t`还没装？`,
+        template.keys ? t`还没有 API Key？` : t`还没装？`,
         link(template.site, template.keys ? t`注册账号 ↗` : t`下载 ↗`),
-        ...(template.keys ? [link(template.keys, account ? t`创建服务账号 ↗` : t`创建 API Key ↗`)] : []),
+        ...(template.keys ? [link(template.keys, t`创建 API Key ↗`)] : []),
+        // Agent Platform's JSON credential is a service account's.
+        ...(template.accounts ? [link(template.accounts, t`创建服务账号 ↗`)] : []),
       ] : []))
       keyLinks.hidden = !template
     }
@@ -394,7 +403,7 @@ export function initProviders({ api, el, toast, guard, saveFile, onChanged }) {
         other.classList.toggle('on', other === chip)
         other.setAttribute('aria-pressed', String(other === chip))
       }
-      templateNote.textContent = `${template.note} ${template.listModels === false ? TEMPLATE_NO_LIST : TEMPLATE_CHECK}`
+      templateNote.textContent = `${template.note}\n${template.check ?? (template.listModels === false ? TEMPLATE_NO_LIST : TEMPLATE_CHECK)}`
       templateNote.hidden = false
       apiKey.focus()
     }

@@ -2,6 +2,16 @@
 
 CicaTavern 的版本记录。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## 2.2.2 - 2026-11-01
+
+### 新增
+
+- **Gemini Agent Platform 能用 API Key**：Vertex AI 改名为 Gemini Enterprise Agent Platform 后，模板也改名为「Gemini Agent Platform」，除了 JSON 凭据，现在也能直接填 Agent Platform 的 API Key（地址里的 PROJECT_ID 换成项目 ID）。Google 的模型目录不认 API Key，所以用 key 时「从接口获取模型列表」会把已填的和常见的 Gemini 模型逐个数一次 token（不花钱），列出这个项目能用的。地址里写成项目名称时，会提示要填项目 ID。原来的「Gemini」模板改名为「Gemini API」（AI Studio 的密钥），模板说明分行写清楚了。
+
+### 修复
+
+- **连不上供应商时只显示「aborted」**：20 秒没有回应的请求现在说「连不上 X：检查 Base URL、网络和代理设置（请求超时）」。自己点停止的不受影响。
+
 ## 2.2.1 - 2026-10-31
 
 ### 修复
