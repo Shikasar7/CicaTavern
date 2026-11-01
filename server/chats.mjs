@@ -767,6 +767,8 @@ export function chatView(chat) {
       truncated: node.api?.truncated || undefined,
       // 联网: what the reply searched for and the pages it drew on.
       search: node.search ?? undefined,
+      // 显示思考过程: the model's own thinking before this reply (not part of the story, never sent back).
+      reasoning: node.reasoning || undefined,
       stateChanges: node.stateChanges ?? undefined,
       compaction: node.compaction ? compactionView(chat, node) : undefined,
       media: node.media?.images?.length ? node.media : undefined,

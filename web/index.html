@@ -252,6 +252,8 @@
             <span class="hint">Anthropic 接口发 effort，OpenAI 接口发 reasoning effort。模型或中转不认时自动去掉重发。</span>
           </label>
         </div>
+        <label class="check-row"><input type="checkbox" name="showReasoning"> 显示模型的思考过程</label>
+        <p class="hint">打开后，模型的思考过程折叠显示在回复上方，生成时可以展开看。GLM、DeepSeek、Kimi、OpenRouter、Claude（Anthropic 接口）本来就会发回来；Gemini 和 OpenAI（Responses 接口）只在要的时候给一份思考摘要，打开后会向它们要（有的中转不给）。只是显示，不会发回给模型，也不算进正文。模型没发思考过程时什么也不显示；努力程度是 low 时，有的模型（比如 GLM）遇到简单的回合会不思考。</p>
         <p class="hint">随时生效。顶栏可以给每个对话单独选模型。</p>
       </div>
       <!-- 这张卡用的角色和文风: filled by app.js from the two lists (web/personas.js). -->

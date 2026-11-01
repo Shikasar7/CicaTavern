@@ -10,11 +10,12 @@ import YAML from 'yaml'
 // Old MVU values are [value, "description"]; reads and writes target the value slot.
 import { isDescribed, splitPath, UPDATE_BLOCK, writablePath } from '../web/shared/vars.js'
 import { CHOICES_BLOCK, TIME_BOX_BLOCK } from '../web/shared/basic.js'
+import { FOLD_TAG } from '../web/shared/vn.js'
 
 const HIDDEN_BLOCKS = [
   UPDATE_BLOCK,
-  /<thinking>[\s\S]*?<\/thinking>/gi,
-  /<think>[\s\S]*?<\/think>/gi,
+  // Reasoning in its own tag (<thinking>, <思考>…): folded on the page, not story for summaries or pictures.
+  new RegExp(`<(${FOLD_TAG})>[\\s\\S]*?</\\1>`, 'gi'),
   /<StatusPlaceHolderImpl\s*\/>/gi,
   // The built-in preset's time box and choices (web/shared/basic.js): the page draws them itself.
   TIME_BOX_BLOCK,

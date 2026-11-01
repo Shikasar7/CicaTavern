@@ -109,13 +109,15 @@ If you can't quite say what you want, the creator guides you round by round:
 
 <br clear="right">
 
-## Latest changes [2.2.2]
+## Latest changes [2.2.3]
 
 <p align="center"><img src="web/whatsnew/2.2.0-cards.webp" alt="2.2.0: cards pinned, favorited and dragged into your own order; picture prompts written your way, with a level of detail and art style presets" width="880"></p>
 
 - **Pin, favorite and reorder cards**: a card's ⋯ menu can pin it to the top or favorite it, and the ☆ beside the search box shows only favorites; drag cards up and down to put them in your own order (on a phone, press and hold first). The computer and the phone see the same list.
 - **Picture prompts, your way**: Pictures and voice has a new Picture prompts page: extra rules for the model that writes the prompts (or read in a .md / .txt image prompt skill someone shared), one set for every card plus each card's own, and a level of detail: concise, standard or detailed. Art style and LoRA has nine art style presets: anime, polished CG, painterly, watercolour, Chinese ink, semi-realistic, photo, 90s retro anime and 3D render. The default instructions are better too: shot and camera angle first, no character names, and Danbooru tag order for tags.
 - **Gemini Agent Platform (formerly Vertex AI)**: the Gemini Agent Platform provider template takes an Agent Platform API key from 2.2.2 on, or a Google Cloud JSON credential, so a new account's free-trial credit can be used; with an API key, Fetch model list tries the common Gemini models and lists the ones that work. When it is busy it waits a few seconds and tries again, twice at most.
+- **See the model think (2.2.3)**: turned on in Settings → Model, the thinking of GLM, DeepSeek, Kimi, Claude, Gemini, OpenAI and others shows folded above each reply, open while it is written; it is only shown, never sent back to the model. `<thinking>`, `<思考>`, `<思维链>` and `<CoT>` in the story fold too.
+- **Phone and computer in step (2.2.3)**: playing from a phone connected to the computer, a turn sent on one shows as being written on the other at once and appears when done, with no reopening.
 - **Fixes (2.2.2)**: a provider that cannot be reached no longer just says "aborted": it says it timed out and to check the network and proxy.
 - **Fixes (2.2.1)**: on Android phones with an older system WebView, Create a card scrolls again, and the "dialog:modal" toast no longer stays on screen.
 - **Fixes (2.2.0)**: ComfyUI and SD WebUI put the card's art style in every picture; MOSI's MOSS-Image draws. Also: export a card straight from its ⋯ menu; when a model's content check stops a reply, you are told whose check it was and what to do; the error log keeps the provider's whole answer and your latest operations.

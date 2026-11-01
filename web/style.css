@@ -1154,6 +1154,10 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .story details.fold summary { cursor: pointer; padding: 6px 12px; list-style-position: inside; user-select: none; }
 .story details.fold summary:hover { color: var(--accent); }
 .story details.fold > div { padding: 0 12px 10px; max-height: 40vh; overflow: auto; line-height: 1.7; }
+/* 显示思考过程: the model's own thinking, above the reply, as plain text. */
+.msg-reasoning { margin: 2px 0 .5em; }
+.msg-reasoning details.fold { margin: 0; font-size: 13.5px; }
+.msg-reasoning .reasoning-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .story center { display: block; text-align: center; }
 .story .choice {display: flex; align-items: baseline; gap: 10px; width: 100%; margin: 6px 0; padding: 8px 12px; text-indent: 0; text-align: left; font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--line-soft); border-radius: 10px; cursor: pointer; transition: border-color .15s, background .15s; }
 .story .choice:hover { border-color: var(--accent); background: var(--accent-soft); }

@@ -83,6 +83,11 @@ async function fakeProvider(t) {
       send('[DONE]')
     } else if (req.url === '/v1/responses') {
       send({ type: 'response.created', response: { model: json.model } }, 'response.created')
+      if (flags.thinking) {
+        send({ type: 'response.output_item.added', item: { type: 'reasoning' } }, 'response.output_item.added')
+        send({ type: 'response.reasoning_summary_part.added' }, 'response.reasoning_summary_part.added')
+        send({ type: 'response.reasoning_summary_text.delta', delta: flags.thinking }, 'response.reasoning_summary_text.delta')
+      }
       send({ type: 'response.output_text.delta', delta: text.slice(0, half) }, 'response.output_text.delta')
       send({ type: 'response.output_text.delta', delta: text.slice(half) }, 'response.output_text.delta')
       send({ type: 'response.completed', response: { model: json.model, status: 'completed', usage: { input_tokens: 50, input_tokens_details: { cached_tokens: 20 }, output_tokens: 9 } } }, 'response.completed')
@@ -682,6 +687,112 @@ test('a reply paused mid-search (pause_turn) is marked unfinished, apart from on
   fake.flags.stopReason = 'max_tokens'
   const { chat: cut } = await turn('接着写')
   assert.equal(chatView(cut).path.at(-1).truncated, true)
+})
+
+test('显示思考过程: the model\'s own thinking streams to the page and stays with the reply, never sent back; off, none of it', async t => {
+  for (const [api, suffix] of [['openai-completions', '/v1'], ['anthropic-messages', ''], ['openai-responses', '/v1']]) {
+    const { fake, turn, store } = await setup(t, api, suffix)
+    fake.flags.thinking = '先想想她会说什么'
+    // The completions fake always thinks 想一想 (reasoning_content); the others think what the flag says.
+    const thought = api === 'openai-completions' ? '想一想' : '先想想她会说什么'
+    const off = await turn('你好')
+    assert.equal(off.events.some(e => e.type === 'reasoning'), false, api)
+    assert.equal(activePath(off.chat).at(-1).reasoning, undefined, api)
+
+    await store.saveSettings({ showReasoning: true })
+    const on = await turn('再见')
+    assert.equal(on.events.filter(e => e.type === 'reasoning').map(e => e.text).join(''), thought, api)
+    assert.ok(on.events.findIndex(e => e.type === 'reasoning') < on.events.findIndex(e => e.type === 'delta'), `${api}: the thinking comes before the answer`)
+    const tip = activePath(on.chat).at(-1)
+    assert.equal(tip.reasoning, thought, api)
+    assert.equal(tip.text, '第 2 次回复<hide>变量2</hide>', `${api}: the story text has none of it`)
+    assert.equal(chatView(on.chat).path.at(-1).reasoning, thought, `${api}: the page gets it`)
+
+    await turn('第三轮')
+    assert.ok(!JSON.stringify(fake.requests.at(-1).body).includes(thought), `${api}: never sent back to the model`)
+  }
+})
+
+test('显示思考过程 asks Gemini and OpenAI Responses for their thinking (only when shown), takes Gemini\'s thoughts out of the text, and asks for less when refused', async t => {
+  const bodies = []
+  // refuse: what the fake Gemini refuses ('level' = thinking_level, 'thoughts' = include_thoughts at all).
+  let refuse = new Set()
+  const server = createServer(async (req, res) => {
+    let raw = ''
+    for await (const chunk of req) raw += chunk
+    const body = JSON.parse(raw)
+    bodies.push({ url: req.url, body })
+    const config = body.extra_body?.google?.thinking_config
+    const refused = (refuse.has('level') && config?.thinking_level) || (refuse.has('thoughts') && config)
+    if (refused) {
+      res.writeHead(400, { 'content-type': 'application/json' })
+      return res.end(JSON.stringify({ error: { message: config.thinking_level && refuse.has('level') ? 'Invalid JSON payload: unknown name "thinking_level"' : 'include_thoughts is not supported' } }))
+    }
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    const send = data => res.write(`data: ${JSON.stringify(data)}\n\n`)
+    if (req.url.endsWith('/responses')) {
+      send({ type: 'response.output_item.added', item: { type: 'reasoning' } })
+      send({ type: 'response.reasoning_summary_part.added' })
+      send({ type: 'response.reasoning_summary_text.delta', delta: '**Weighing it**' })
+      send({ type: 'response.reasoning_summary_part.added' })
+      send({ type: 'response.reasoning_summary_text.delta', delta: 'Settled.' })
+      send({ type: 'response.output_text.delta', delta: '答案。' })
+      send({ type: 'response.completed', response: { status: 'completed', usage: { input_tokens: 5, output_tokens: 9 } } })
+    } else {
+      if (config?.include_thoughts) send({ choices: [{ delta: { role: 'assistant', content: '**Focusing**\n\nLet me see.', extra_content: { google: { thought: true } } } }] })
+      send({ choices: [{ delta: { role: 'assistant', content: '答', extra_content: { google: { thought_signature: 'sig' } } } }] })
+      send({ choices: [{ delta: { content: '案。' }, finish_reason: 'stop' }] })
+      res.write('data: [DONE]\n\n')
+    }
+    res.end()
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => server.close())
+  const base = `http://127.0.0.1:${server.address().port}`
+  const gemini = normalizeProvider({ name: 'Gemini', api: 'openai-completions', baseURL: `${base}/v1beta/openai`, apiKey: KEY, models: [{ id: 'gemini-3.8-flash' }] })
+  const run = (provider, model, effort, show = true) => {
+    const thinking = []
+    return complete(provider, model, { messages: [{ role: 'user', content: '你好' }], reasoning: { thinking: 'adaptive', effort }, signal: AbortSignal.timeout(5000), ...(show ? { onReasoning: d => thinking.push(d) } : {}) })
+      .then(result => ({ ...result, thinking: thinking.join('') }))
+  }
+
+  // Off: Gemini gets the plain effort, and nothing more.
+  const off = await run(gemini, 'gemini-3.8-flash', 'medium', false)
+  assert.equal(bodies.at(-1).body.reasoning_effort, 'medium')
+  assert.equal(bodies.at(-1).body.extra_body, undefined)
+  assert.equal(off.text, '答案。')
+
+  // On: the thoughts asked for, the effort as their level (never both), and kept out of the text.
+  const on = await run(gemini, 'gemini-3.8-flash', 'xhigh')
+  assert.deepEqual(bodies.at(-1).body.extra_body, { google: { thinking_config: { include_thoughts: true, thinking_level: 'high' } } })
+  assert.equal(bodies.at(-1).body.reasoning_effort, undefined)
+  assert.equal(on.text, '答案。')
+  assert.equal(on.reasoning, '**Focusing**\n\nLet me see.')
+  assert.equal(on.thinking, on.reasoning)
+
+  // A model that refuses the level: asked again without it, and so from then on; one refusing the thoughts: plain.
+  refuse = new Set(['level'])
+  const noLevel = await run(gemini, 'gemini-2.5-pro', 'low')
+  assert.deepEqual(bodies.slice(-2).map(b => b.body.extra_body?.google?.thinking_config), [{ include_thoughts: true, thinking_level: 'low' }, { include_thoughts: true }])
+  assert.equal(noLevel.reasoning, '**Focusing**\n\nLet me see.')
+  await run(gemini, 'gemini-2.5-pro', 'low')
+  assert.deepEqual(bodies.at(-1).body.extra_body.google.thinking_config, { include_thoughts: true }, 'the level is not tried again')
+  refuse = new Set(['thoughts'])
+  const plain = await run(gemini, 'gemini-2.0-flash', 'low')
+  assert.deepEqual(bodies.slice(-3).map(b => Boolean(b.body.extra_body)), [true, true, false])
+  assert.equal(bodies.at(-1).body.reasoning_effort, 'low', 'back to the plain effort')
+  assert.equal(plain.text, '答案。')
+  assert.equal(plain.reasoning, '')
+
+  // OpenAI Responses: a summary asked for beside the effort, its parts a paragraph each.
+  const responses = normalizeProvider({ name: 'OpenAI', api: 'openai-responses', baseURL: `${base}/v1`, apiKey: KEY, models: [{ id: 'gpt-x' }] })
+  await run(responses, 'gpt-x', 'medium', false)
+  assert.deepEqual(bodies.at(-1).body.reasoning, { effort: 'medium' })
+  const summary = await run(responses, 'gpt-x', 'medium')
+  assert.deepEqual(bodies.at(-1).body.reasoning, { effort: 'medium', summary: 'auto' })
+  assert.equal(summary.reasoning, '**Weighing it**\n\nSettled.')
+  assert.equal(summary.thinking, summary.reasoning)
+  assert.equal(summary.text, '答案。')
 })
 
 test('OpenAI Responses provider: instructions + input, not stored', async t => {

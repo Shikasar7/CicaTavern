@@ -24,7 +24,7 @@ import { initDrawChoice } from '/draw-choice.js'
 import { initCardPermissions } from '/card-permissions.js'
 import { createFramePermissions } from '/shared/frame-permissions.js'
 import { initVn } from '/vn.js'
-import { markSpeakers } from '/shared/vn.js'
+import { FOLD_TAG, markSpeakers } from '/shared/vn.js'
 import { chatScriptList, isRegexFile, scriptsInFile } from '/shared/regex.js'
 import { lang, locale, t, zh } from '/i18n.js'
 import { pickLanguage } from '/shared/i18n.js'
@@ -339,8 +339,7 @@ const CHOICE_LINE = /^(\s*)([1-9])\uFE0F?\u20E3\s*(\S.*)$/gm
 const INLINE_TAGS = new Set(['b', 'strong', 'i', 'em', 'u', 's', 'del', 'ins', 'sub', 'sup', 'mark', 'big', 'center', 'q', 'code', 'ruby', 'rt', 'rp', 'br', 'hr', 'font', 'span'])
 const STORY_TAG = /<(\/?)([A-Za-z][\w~:.-]*)([^<>]*)>/g
 const SAFE_COLOR = /^(#[0-9a-f]{3,8}|[a-z]{3,20}|rgba?\([\d\s.,%]+\))$/i
-// Reasoning a model writes in its own tag, with no regex to hide it: folded, not spread over the page.
-const FOLD_TAG = '[\\w~-]*(?:think|draft|reasoning)[\\w~-]*'
+// Reasoning a model writes in its own tag (shared/vn.js FOLD_TAG), with no regex to hide it: folded, not spread over the page.
 const FOLD_BLOCK = new RegExp(`<(${FOLD_TAG})>([\\s\\S]*?)</\\1>`, 'gi')
 const FOLD_OPEN = new RegExp(`<(${FOLD_TAG})>(?![\\s\\S]*</\\1>)([\\s\\S]*)$`, 'i')
 
@@ -1145,6 +1144,34 @@ async function loadCardDetail(cardId) {
   }
 }
 
+/**
+ * 显示思考过程: the model's own thinking before a reply, folded above it. Open while the model is
+ * still thinking (`thinking`); its text as plain text, kept apart from the story and never sent back.
+ */
+function reasoningFold(text, { thinking = false } = {}) {
+  return el('div', { class: 'story msg-reasoning' }, el('details', { class: 'fold', open: thinking }, [
+    el('summary', { text: thinking ? t`思考中…` : t`思考过程` }),
+    el('div', { class: 'reasoning-text', text }),
+  ]))
+}
+
+/** The streaming reply's thinking as far as it has come: the fold made on its first words, then filled in. */
+function showLiveReasoning(article, job) {
+  if (!article) return
+  let fold = article.querySelector('.msg-reasoning')
+  if (!job.reasoning) return fold?.remove()
+  if (!fold) {
+    fold = reasoningFold('', { thinking: true })
+    article.querySelector('.msg-body')?.before(fold)
+  }
+  const box = fold.querySelector('.reasoning-text')
+  const following = box.scrollHeight - box.scrollTop - box.clientHeight < 40
+  box.textContent = job.reasoning
+  if (following) box.scrollTop = box.scrollHeight
+  // The answer has begun: it is the thinking that came before it now.
+  if (job.text) fold.querySelector('summary').textContent = t`思考过程`
+}
+
 /** Message body: story text as markdown-lite, HTML in sandboxed frames, code as <pre>. */
 function messageBody(text, frameContext = null) {
   const body = el('div', { class: 'msg-body' })
@@ -1234,16 +1261,17 @@ function liveNodes(chat, { animate = false } = {}) {
   }
   const live = el('article', { class: `msg assistant streaming${animate ? ' enter' : ''}` }, [
     el('div', { class: 'msg-head' }, [speakerFace(chat, 'assistant'), el('span', { class: 'name', text: chat.names.char }), el('span', { class: 'live-note', text: job.note })]),
+    job.reasoning ? reasoningFold(job.reasoning, { thinking: !job.text }) : null,
     el('div', { class: 'msg-body', html: job.text ? renderStory(streamingText(job.text), { partial: true }) : '' }),
   ])
   nodes.push(live)
   return nodes
 }
 
-/** Opened a chat the server is still writing (started from an earlier page): wait for it. */
+/** Opened a chat the server is still writing (started from an earlier page or another device): wait for it. */
 function followServerTurn(view) {
   if (!view.running || ui.busy.has(view.id)) return
-  ui.busy.set(view.id, { kind: 'server', text: '', note: t`正在生成（之前的页面发起的，写完会自动显示）` })
+  ui.busy.set(view.id, { kind: 'server', text: '', note: t`正在生成（另一个页面或设备发起的，写完会自动显示）` })
   const poll = async () => {
     const fresh = await api(`/api/chats/${view.id}`).catch(() => null)
     if (fresh?.running) return setTimeout(poll, 2000)
@@ -1252,6 +1280,54 @@ function followServerTurn(view) {
     else renderChats()
   }
   setTimeout(poll, 2000)
+}
+
+// ─── Changes made elsewhere ────────────────────────────────────────────
+// The server says on the presence stream which chat or card was saved, by this page or another (a phone on the
+// local network playing the same story): the list and the open chat are read again, a moment later, and redrawn
+// only when they did change. Not while this page is writing, editing a message or showing a dialog: then later.
+const changes = { cards: false, chats: false, chat: false, timer: 0 }
+
+function noteChange(change) {
+  if (change.kind === 'card') changes.cards = true
+  if (change.kind === 'chat' && (!change.cardId || change.cardId === ui.cardId)) changes.chats = true
+  if (change.kind === 'chat' && change.id === ui.chat?.id) changes.chat = true
+  clearTimeout(changes.timer)
+  changes.timer = setTimeout(applyChanges, 700)
+}
+
+/** Everything this page shows, read again: after a while away (the page hidden, the stream cut). */
+function noteAllChanged() {
+  noteChange({ kind: 'card' })
+  if (ui.chat) noteChange({ kind: 'chat', id: ui.chat.id })
+}
+
+async function applyChanges() {
+  const chat = ui.chat
+  const waiting = document.hidden || document.querySelector('dialog[open], #transcript .msg.editing') || (chat && ui.busy.has(chat.id))
+  if (waiting) {
+    // Hidden: looked at again when it shows (visibilitychange); otherwise in a little while.
+    if (!document.hidden) changes.timer = setTimeout(applyChanges, 3000)
+    return
+  }
+  const { cards, chats } = changes
+  const open = changes.chat
+  Object.assign(changes, { cards: false, chats: false, chat: false })
+  try {
+    if (cards) await refreshCards()
+    if (chats || cards) await refreshChats()
+    if (!open || !chat || ui.chat !== chat) return
+    const view = await api(`/api/chats/${chat.id}`).catch(() => null)
+    if (!view || ui.chat !== chat || ui.busy.has(chat.id)) return
+    if (view.updatedAt === chat.updatedAt && !view.running) return
+    // Where the reader is stays put, unless the story went on (a new turn shows at the bottom).
+    const box = $('transcript')
+    const top = box.scrollTop
+    const sameTip = view.path.at(-1)?.id === chat.path.at(-1)?.id
+    followServerTurn(view)
+    setChat(view)
+    if (sameTip) box.scrollTop = top
+  } catch {}
 }
 
 /** A small portrait before the speaker's name: the card's avatar for the character, your initial for you. */
@@ -1335,6 +1411,7 @@ function renderNode(chat, node, isLastAssistant, depth = 0) {
   return el('article', { class: `msg ${isUser ? 'user' : 'assistant'}${isLastAssistant ? ' latest' : ''}`, 'data-id': node.id }, [
     el('div', { class: 'msg-head' }, [speakerFace(chat, node.role), el('span', { class: 'name', text: name }), node.id === 'root' ? el('span', { text: imported ? t`剧情存档` : t`开场` }) : null]),
     time ? timeBox(el, time) : null,
+    !isUser && node.reasoning && ui.settings?.showReasoning ? reasoningFold(node.reasoning) : null,
     messageBody(shown, frameContextFor(chat, node)),
     isUser ? null : mediaUi.gallery(chat, node),
     bar,
@@ -2664,13 +2741,21 @@ async function generate(endpoint, body, echoUserText) {
         }
         // restart: the relay lost the system prompt (the card), and the answer is being asked for again.
         job.text = event.type === 'restart' ? '' : job.text + event.text
+        if (event.type === 'restart') job.reasoning = ''
         if (viewing()) vnUi.streamed()
         const target = live()?.querySelector('.msg-body')
         if (target) {
           target.innerHTML = renderStory(streamingText(job.text), { partial: true })
+          showLiveReasoning(live(), job)
           const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 160
           if (nearBottom) box.scrollTop = box.scrollHeight
         }
+      } else if (event.type === 'reasoning') {
+        // 显示思考过程: the model's own thinking, before its answer.
+        job.reasoning = (job.reasoning ?? '') + event.text
+        const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 160
+        showLiveReasoning(live(), job)
+        if (nearBottom && live()) box.scrollTop = box.scrollHeight
       } else if (event.type === 'rate_limit') {
         ui.rateLimit = event.info
         renderQuota(event.info)
@@ -2835,6 +2920,7 @@ const openSettings = guard(async () => {
   fillCompaction(form)
   renderAccess(await api('/api/access').catch(() => null))
   fillProxy(form, ui.settings.proxy, await api('/api/network').catch(() => null))
+  form.showReasoning.checked = ui.settings.showReasoning === true
   form.webFonts.checked = ui.settings.webFonts !== false
   form.cdnLibraries.checked = ui.settings.cdnLibraries !== false
   fillInterfaceLanguage(form)
@@ -3231,6 +3317,7 @@ const saveSettings = guard(async () => {
         model: form.model.value,
         thinking: form.thinking.value,
         effort: form.effort.value,
+        showReasoning: form.showReasoning.checked,
         language: form.language.value.trim() || zh`简体中文`,
         scanDepth: Math.max(1, num('scanDepth')),
         reinjectAfter: num('reinjectAfter'),
@@ -3395,8 +3482,27 @@ const rebuildPrompt = guard(async () => {
 // minute after the last of these closes.
 let presence = null
 function holdPresence() {
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) noteAllChanged()
+  })
   if (!window.EventSource) return
   presence = new EventSource('/api/presence')
+  presence.onmessage = event => {
+    const change = (() => {
+      try {
+        return JSON.parse(event.data)
+      } catch {
+        return null
+      }
+    })()
+    if (change?.type === 'changed') noteChange(change)
+  }
+  // Back after the stream was cut (the server restarted, the phone slept): what changed meanwhile was not heard.
+  let opened = false
+  presence.onopen = () => {
+    if (opened) noteAllChanged()
+    opened = true
+  }
 }
 
 // CicaTavern.exe makes the shortcut itself (IShellLink); the server only asks it to.

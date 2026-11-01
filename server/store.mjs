@@ -144,6 +144,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   model: 'sonnet',
   effort: 'low',
   thinking: 'off',
+  showReasoning: false, // 显示思考过程: the model's own thinking, when its API gives it, shown folded above each reply
   language: '简体中文', // the language the model writes the story in
   uiLanguage: 'auto', // the page's own language (界面语言): 'zh' | 'en' | 'auto' = the browser's (server/i18n.mjs)
   scanDepth: 4,
@@ -209,9 +210,23 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
   const chatFile = id => path.join(dirs.chats, `${checkId(id)}.json`)
   const presetFile = id => path.join(dirs.presets, `${checkId(id)}.json`)
   const locked = createLocks()
+  // Told of each chat and card saved or deleted (http.mjs passes it on to the open pages: a phone's turn shows on the computer).
+  const listeners = new Set()
+  const changed = change => {
+    for (const listener of listeners) {
+      try {
+        listener(change)
+      } catch {}
+    }
+  }
 
   return {
     dirs,
+    /** Call `listener({ kind: 'chat' | 'card', id, cardId?, deleted? })` on each change; returns the way to stop. */
+    onChange(listener) {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
     /** Run `fn` (its getChat … saveChat of chat `id`) with no other such section on that chat meanwhile. */
     withChat(id, fn) {
       return locked(`chat:${id}`, fn)
@@ -244,6 +259,7 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
         if (!['often', 'rare', 'off'].includes(next.dynamicStrip)) next.dynamicStrip = 'rare'
         next.compaction = cleanCompaction(next.compaction)
         if (!['auto', 'zh', 'en'].includes(next.uiLanguage)) next.uiLanguage = 'auto'
+        next.showReasoning = next.showReasoning === true
         next.webFonts = next.webFonts !== false
         next.cdnLibraries = next.cdnLibraries !== false
         next.privacyNotice = Math.max(0, Math.floor(Number(next.privacyNotice) || 0))
@@ -338,6 +354,7 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
     async saveCard(card, avatar) {
       await writeJson(cardFile(card.id), card)
       if (avatar) await writeFile(path.join(dirs.cards, card.id, 'avatar.png'), avatar)
+      changed({ kind: 'card', id: card.id })
       return card
     },
     avatarPath(id) {
@@ -345,6 +362,7 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
     },
     async deleteCard(id) {
       await rm(path.join(dirs.cards, checkId(id)), { recursive: true, force: true })
+      changed({ kind: 'card', id, deleted: true })
     },
 
     async listBooks() {
@@ -449,10 +467,12 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
     async saveChat(chat) {
       chat.updatedAt = new Date().toISOString()
       await writeJson(chatFile(chat.id), chat)
+      changed({ kind: 'chat', id: chat.id, cardId: chat.cardId })
       return chat
     },
     async deleteChat(id) {
       await rm(chatFile(id), { force: true })
+      changed({ kind: 'chat', id, deleted: true })
     },
   }
 }

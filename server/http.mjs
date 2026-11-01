@@ -369,6 +369,14 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     idleTimer.unref?.()
   }
 
+  // What changed in a chat or card, from this page or another (a phone on the local network): every
+  // open page hears of it on its presence stream and reads it again if it shows it. Ids only, no content.
+  function tellPages(change) {
+    const line = `data: ${JSON.stringify({ type: 'changed', ...change })}\n\n`
+    for (const res of presence) res.write(line)
+  }
+  store.onChange(tellPages)
+
   function holdPresence(req, res) {
     res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', 'x-accel-buffering': 'no' })
     res.write('retry: 3000\n\n')
@@ -385,7 +393,11 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
   /** Stream one generation as server-sent events. */
   async function streamTurn(res, chatId, args) {
     res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', 'x-accel-buffering': 'no' })
-    const send = event => res.write(`data: ${JSON.stringify(event)}\n\n`)
+    const send = event => {
+      // Other pages showing this chat say it is being written (and show the turn once it is saved).
+      if (event.type === 'start') tellPages({ kind: 'chat', id: chatId, running: true })
+      res.write(`data: ${JSON.stringify(event)}\n\n`)
+    }
     const what = `${args.userNodeId ? msg`重新生成` : msg`生成回复`} · ${chatId}`
     try {
       const { chat, nodeId } = await engine.runTurn(chatId, args, send)

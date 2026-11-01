@@ -5,8 +5,10 @@
 import { timeBoxOf } from './basic.js'
 import { EFFECT_KINDS, faceOf, markEffects } from './stage.js'
 
-// Reasoning in its own tag (web/app.js folds it): not part of the story.
-const FOLD_TAG = '[\\w~-]*(?:think|draft|reasoning)[\\w~-]*'
+// Reasoning in its own tag (web/app.js folds it, server/state.mjs leaves it out of the story text):
+// <thinking>, <think>, <cot_reasoning>, <draft>, <CoT>, <思考>, <思考过程>, <思维链>, <推理>… Matched
+// without case; a tag name only, for <(…)>…</\1>.
+export const FOLD_TAG = '[\\w~-]*(?:think|draft|reasoning)[\\w~-]*|cot(?:[_~-][\\w~-]*)?|[\\w~-]*[_~-]cot|思考(?:过程)?|思维链?|推理(?:过程)?|草稿' // i18n-ignore: a pattern
 const FOLD_BLOCK = new RegExp(`<(${FOLD_TAG})>[\\s\\S]*?</\\1>`, 'gi')
 const FOLD_OPEN = new RegExp(`<(${FOLD_TAG})>(?![\\s\\S]*</\\1>)[\\s\\S]*$`, 'i')
 

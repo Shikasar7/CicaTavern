@@ -492,10 +492,12 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
    * Every request to a provider passes here, so the 屏蔽词 are applied here, last.
    */
   async function generateApi(target, request, signal, onText) {
-    const [{ thinking, effort }, words] = await Promise.all([store.getSettings(), store.getBlockWords()])
+    const [{ thinking, effort, showReasoning }, words] = await Promise.all([store.getSettings(), store.getBlockWords()])
+    // 显示思考过程: a story turn's native thinking (request.onReasoning) goes to the page and stays with the reply.
+    const onReasoning = showReasoning ? request.onReasoning : undefined
     let result
     try {
-      result = await complete(target.provider, target.modelId, { ...blockRequest(request, words), reasoning: { thinking, effort }, signal, onDelta: onText }, { proxy: isolation.proxy })
+      result = await complete(target.provider, target.modelId, { ...blockRequest(request, words), reasoning: { thinking, effort }, signal, onDelta: onText, onReasoning }, { proxy: isolation.proxy })
     } catch (error) {
       if (signal.aborted || error.status) throw error
       // Too long for the model (413 is a request too big for the provider at all): marked for the page
@@ -519,7 +521,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     // Cut off: at the output limit, or (联网 on Anthropic) still paused mid-search after being carried on a few times.
     const cut = result.truncated ? true : result.stopReason === 'pause_turn' ? 'paused' : null
     const api = { provider: target.provider.id, model: result.model ?? target.modelId, ...(cut ? { truncated: cut } : {}) }
-    return { reply: result.text, model: target.model, tokens, sdk: null, api, search: result.search ?? null }
+    const reasoning = onReasoning ? String(result.reasoning ?? '').trim() : ''
+    return { reply: result.text, model: target.model, tokens, sdk: null, api, search: result.search ?? null, ...(reasoning ? { reasoning } : {}) }
   }
 
   /**
@@ -616,13 +619,15 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       }
       // The relay lost the system prompt, seen only at the end: the page drops what it showed, and the answer comes again.
       const onRestart = () => emit({ type: 'restart' })
+      // The model's own thinking as it comes (显示思考过程 on): shown above the reply, never sent back to the model.
+      const onReasoning = delta => emit({ type: 'reasoning', text: delta })
       // A busy provider (Vertex AI's 429) asked again after a wait: the page says so meanwhile.
       const onRetry = info => emit({ type: 'retrying', provider: target.provider?.name, ...info })
       let outcome
       if (target.api) {
         const history = await apiMessages(chat, parent, { stripAll: Boolean(compacted || userNode?.dynamic?.compacted) })
         const cap = await replyCap(chat, target.provider)
-        outcome = await generateApi(target, { system: chat.systemPrompt, messages: [...history, { role: 'user', content: prepared.prompt }], ...cap, webSearch, onRestart, onRetry }, abortController.signal, onText)
+        outcome = await generateApi(target, { system: chat.systemPrompt, messages: [...history, { role: 'user', content: prepared.prompt }], ...cap, webSearch, onRestart, onRetry, onReasoning }, abortController.signal, onText)
       } else {
         // The turn's message as the session will hold it: the 屏蔽词 applied (the system prompt in beforeTurn).
         const sent = blockSent(prepared.prompt, await store.getBlockWords())
@@ -680,6 +685,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
           sdk: outcome.sdk ?? null,
           ...(outcome.api ? { api: outcome.api } : {}),
           ...(outcome.search ? { search: outcome.search } : {}),
+          ...(outcome.reasoning ? { reasoning: outcome.reasoning } : {}),
           model: outcome.model,
           usage: outcome.tokens,
           timing: { totalMs: Date.now() - started, firstTokenMs: firstToken || null, forked: fork, ...(target.api ? { api: true } : {}) },

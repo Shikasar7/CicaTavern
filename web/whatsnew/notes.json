@@ -748,6 +748,35 @@
           }
         }
       ]
+    },
+    {
+      "version": "2.2.3",
+      "date": "2026-11",
+      "after": true,
+      "items": [
+        {
+          "icon": "💭",
+          "zh": {
+            "title": "能看模型的思考过程了",
+            "text": "「设置 → 模型」里打开「显示模型的思考过程」，GLM、DeepSeek、Kimi、Claude 等模型的思考会折叠显示在回复上方，生成时可以展开看；Gemini 和 OpenAI 打开后也会去要一份思考摘要。只是显示，不会发回给模型。模型写在正文里的 <thinking>、<思考>、<思维链>、<CoT> 也改成折叠，点开就能看。"
+          },
+          "en": {
+            "title": "See the model think",
+            "text": "Turn on Show the model's thinking in Settings → Model: the thinking of GLM, DeepSeek, Kimi, Claude and others shows folded above each reply, and you can open it while the reply is written; Gemini and OpenAI are asked for a summary of theirs. It is only shown, never sent back to the model. Reasoning a model writes in the story itself (<thinking>, <CoT>, and the same tags in Chinese) folds too, a tap away."
+          }
+        },
+        {
+          "icon": "🔄",
+          "zh": {
+            "title": "手机和电脑一起开着，两边自动同步",
+            "text": "用手机连电脑玩的时候，手机上发的一轮，电脑上的页面马上显示「正在生成」，写完自动出现，不用再关掉重开；反过来也一样。改标题、导入角色卡这些也会同步过去。"
+          },
+          "en": {
+            "title": "Phone and computer stay in step",
+            "text": "Playing from a phone connected to the computer, a turn sent on the phone shows as being written on the computer at once and appears when it is done, with no closing and reopening; the other way round too. Renamed chats and imported cards follow as well."
+          }
+        }
+      ]
     }
   ]
 }

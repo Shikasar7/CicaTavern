@@ -144,6 +144,8 @@ test('state: JSON patch and MVU _.set / _.add are parsed as data, never evaluate
   assert.deepEqual(b.state, { 角色: { 小雨: { 好感: [15, '好感度'] } }, 金钱: 15 })
   assert.deepEqual(parseArgs(`'a', [1, "b"], {k: true}`), ['a', [1, 'b'], { k: true }])
   assert.equal(displayText(`你好<think>想</think>\n\n\n<state>{}</state>`), '你好')
+  // Reasoning in any of its tags is not story (folded on the page); a tag that only looks like one stays.
+  assert.equal(displayText('<思考>先想想</思考>她笑了。<CoT>x</CoT><思维链>y</思维链><cot_plan>z</cot_plan><mascot>猫</mascot>'), '她笑了。<mascot>猫</mascot>')
 })
 
 test('prompt: stable prefix holds card + constants; tail holds per-turn material', () => {

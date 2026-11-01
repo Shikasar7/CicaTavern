@@ -36,6 +36,45 @@ test('the launcher server exits only after every page has been gone for the idle
   assert.equal(stopped(), 1)
 })
 
+test('every open page hears which chat or card changed (a phone\'s turn shows on the computer): ids only', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'tavern-presence-'))
+  const app = createApp({ dataRoot: root, proxy: 'off', idleExitMs: 0 })
+  const server = await app.listen({ port: 0 })
+  t.after(async () => {
+    server.closeAllConnections?.()
+    server.close()
+    await rm(root, { recursive: true, force: true })
+  })
+  const base = `http://127.0.0.1:${server.address().port}`
+  const page = new AbortController()
+  t.after(() => page.abort())
+  const heard = []
+  const res = await fetch(`${base}/api/presence`, { signal: page.signal })
+  ;(async () => {
+    const decoder = new TextDecoder()
+    let buffer = ''
+    try {
+      for await (const chunk of res.body) {
+        buffer += decoder.decode(chunk, { stream: true })
+        for (let end; (end = buffer.indexOf('\n\n')) >= 0; buffer = buffer.slice(end + 2)) {
+          const data = buffer.slice(0, end).split('\n').find(line => line.startsWith('data: '))
+          if (data) heard.push(JSON.parse(data.slice(6)))
+        }
+      }
+    } catch {}
+  })()
+  await wait(50)
+  const headers = { 'content-type': 'application/json', 'x-agent-tavern': '1' }
+  const card = await (await fetch(`${base}/api/cards/import`, { method: 'POST', headers, body: JSON.stringify({ filename: 'a.json', data: Buffer.from(JSON.stringify({ spec: 'chara_card_v2', data: { name: '青禾', first_mes: '你好。' } })).toString('base64') }) })).json()
+  const chat = await (await fetch(`${base}/api/chats`, { method: 'POST', headers, body: JSON.stringify({ cardId: card.id }) })).json()
+  await fetch(`${base}/api/chats/${chat.id}`, { method: 'DELETE', headers })
+  await wait(100)
+  assert.ok(heard.some(c => c.type === 'changed' && c.kind === 'card' && c.id === card.id), 'the card')
+  assert.ok(heard.some(c => c.type === 'changed' && c.kind === 'chat' && c.id === chat.id && c.cardId === card.id), 'the chat, with its card')
+  assert.ok(heard.some(c => c.kind === 'chat' && c.id === chat.id && c.deleted), 'the chat deleted')
+  assert.ok(heard.every(c => Object.keys(c).every(key => ['type', 'kind', 'id', 'cardId', 'deleted', 'running'].includes(key))), 'nothing of the content')
+})
+
 test('a console server never exits on its own', async t => {
   const { base, stopped } = await start(t, { idleExitMs: 0 })
   const page = new AbortController()

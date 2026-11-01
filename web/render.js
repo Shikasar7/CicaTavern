@@ -11,14 +11,13 @@ const PLACEHOLDER = /<StatusPlaceHolderImpl\s*\/>/i
 const HIDDEN = [
   // Closed with another update block's tag, or left open at the end, still hidden.
   UPDATE_BLOCK,
-  /<thinking>[\s\S]*?<\/thinking>/gi,
-  /<think>[\s\S]*?<\/think>/gi,
   /<StatusPlaceHolderImpl\s*\/>/gi,
   // The built-in preset's time box and choices: the page draws them (status.js), not as text.
   TIME_BOX_BLOCK,
   CHOICES_BLOCK,
 ]
-const OPEN_HIDDEN = /<(state|update(?:variable)?|thinking|think|time_box|choices)>(?![\s\S]*<\/\1>)[\s\S]*$/i
+// Reasoning tags (<thinking>, <思考>…) are not among them: app.js folds those (思考中… while one is still open).
+const OPEN_HIDDEN = /<(state|update(?:variable)?|time_box|choices)>(?![\s\S]*<\/\1>)[\s\S]*$/i
 const FENCE = /```([\w-]*)[^\n]*\n?([\s\S]*?)```/g
 // A chunk with any of these is shown in a frame of its own, styles kept (regex.js's trial shows it the same way).
 export const HTML_LIKE = /<(!doctype|html|head|body|style|script|div|table|section|details|svg|canvas|link|iframe|form|button)\b/i

@@ -647,7 +647,7 @@ function parseJson(text) {
 }
 
 // ─── Protocols ──────────────────────────────────────────────────────────
-// Each returns { text, usage: { input, cacheRead, cacheWrite, output, thinking? }, model, stopReason, reasoned }.
+// Each returns { text, usage: { input, cacheRead, cacheWrite, output, thinking? }, model, stopReason, reasoned, reasoning }.
 // `input` counts uncached prompt tokens only, as in the SDK usage. `thinking`: the part of `output` the model
 // spent thinking (not sent back next turn, so not context): given by OpenAI-style APIs, worked out for Anthropic.
 
@@ -668,7 +668,9 @@ function withThinking(usage, thought, said) {
   return { ...usage, thinking: Math.round((usage.output ?? 0) * (thought / (thought + Math.max(1, said)))) }
 }
 
-// `reasoned`: the model thought before answering (its thinking is not part of `text`).
+// `reasoned`: the model thought before answering (its thinking is not part of `text`). `reasoning`: that thinking
+// as the API gave it (GLM / DeepSeek reasoning_content, OpenRouter reasoning, Anthropic's thinking, a Responses
+// summary), '' when it gave none; streamed to `request.onReasoning` as it comes.
 const thoughtTokens = usage => (usage?.completion_tokens_details ?? usage?.output_tokens_details)?.reasoning_tokens > 0
 
 // OpenRouter's web plugin answers with url_citation annotations (on the message, or on a delta).
@@ -685,15 +687,18 @@ async function openaiCompletions(provider, request, res) {
   let model = null
   let stopReason = null
   let reasoned = false
+  let reasoning = ''
   const search = searchLog()
   if (!/event-stream/.test(res.headers['content-type'] ?? '')) {
     const json = parseJson(await readText(res, 8 * 1024 * 1024)) ?? {}
     const message = json.choices?.[0]?.message
     text = message?.content ?? ''
+    reasoning = thoughtText(message)
+    if (reasoning) request.onReasoning?.(reasoning)
     if (text) request.onDelta?.(text)
-    reasoned = Boolean(message?.reasoning_content || message?.reasoning) || thoughtTokens(json.usage)
+    reasoned = Boolean(reasoning) || thoughtTokens(json.usage)
     urlCitations(search, message?.annotations)
-    return { text, usage: openaiUsage(json.usage), model: json.model ?? null, stopReason: json.choices?.[0]?.finish_reason ?? null, reasoned, search: search.result() }
+    return { text, usage: openaiUsage(json.usage), model: json.model ?? null, stopReason: json.choices?.[0]?.finish_reason ?? null, reasoned, reasoning, search: search.result() }
   }
   for await (const { data } of sse(res)) {
     if (data === '[DONE]') break
@@ -704,17 +709,33 @@ async function openaiCompletions(provider, request, res) {
     if (json.usage) usage = openaiUsage(json.usage)
     if (thoughtTokens(json.usage)) reasoned = true
     const choice = json.choices?.[0]
-    if (choice?.delta?.reasoning_content || choice?.delta?.reasoning) reasoned = true
+    const thought = thoughtText(choice?.delta)
+    if (thought) {
+      reasoned = true
+      reasoning += thought
+      request.onReasoning?.(thought)
+    }
     urlCitations(search, choice?.delta?.annotations)
-    const delta = choice?.delta?.content
+    const delta = isThought(choice?.delta) ? null : choice?.delta?.content
     if (typeof delta === 'string' && delta) {
       text += delta
       request.onDelta?.(delta)
     }
     if (choice?.finish_reason) stopReason = choice.finish_reason
   }
-  return { text, usage, model, stopReason, reasoned, search: search.result() }
+  return { text, usage, model, stopReason, reasoned, reasoning, search: search.result() }
 }
+
+/**
+ * The thinking in an OpenAI-style message or delta: reasoning_content (GLM, DeepSeek, Kimi…), reasoning
+ * (OpenRouter), or Gemini's thoughts (include_thoughts), which come as content marked as one.
+ */
+function thoughtText(part) {
+  const said = isThought(part) ? part.content : part?.reasoning_content ?? part?.reasoning
+  return typeof said === 'string' ? said : ''
+}
+
+const isThought = part => part?.extra_content?.google?.thought === true
 
 /** The searches in a Responses output: web_search_call items (what was asked) and the pages the text cites. */
 function responsesSearch(search, output) {
@@ -733,10 +754,18 @@ async function openaiResponses(provider, request, res) {
   let model = null
   let stopReason = null
   let reasoned = false
+  let reasoning = ''
   const search = searchLog()
   let cut = 0
   if (!/event-stream/.test(res.headers['content-type'] ?? '')) {
     const json = parseJson(await readText(res, 8 * 1024 * 1024)) ?? {}
+    // The reasoning items' summaries (or their full text, where a model gives it).
+    reasoning = (json.output ?? [])
+      .filter(item => item?.type === 'reasoning')
+      .flatMap(item => [...(item.summary ?? []), ...(item.content ?? [])].map(part => String(part?.text ?? '')))
+      .filter(Boolean)
+      .join('\n\n')
+    if (reasoning) request.onReasoning?.(reasoning)
     for (const item of json.output ?? []) {
       if (item.type === 'web_search_call') {
         search.searched()
@@ -748,7 +777,7 @@ async function openaiResponses(provider, request, res) {
     text = afterSearch(text, cut)
     if (text) request.onDelta?.(text)
     reasoned = (json.output ?? []).some(item => item.type === 'reasoning') || thoughtTokens(json.usage)
-    return { text, usage: openaiUsage(json.usage), model: json.model ?? null, stopReason: json.status ?? null, reasoned, search: search.result() }
+    return { text, usage: openaiUsage(json.usage), model: json.model ?? null, stopReason: json.status ?? null, reasoned, reasoning, search: search.result() }
   }
   for await (const { data } of sse(res)) {
     const json = parseJson(data)
@@ -773,9 +802,17 @@ async function openaiResponses(provider, request, res) {
       model = json.response?.model ?? model
     } else if (/^response\.reasoning/.test(json.type ?? '') || json.item?.type === 'reasoning') {
       reasoned = true
+      // A summary part after another one starts a paragraph of its own.
+      if (json.type === 'response.reasoning_summary_part.added' && reasoning) {
+        reasoning += '\n\n'
+        request.onReasoning?.('\n\n')
+      } else if (/^response\.reasoning(_summary)?_text\.delta$/.test(json.type) && typeof json.delta === 'string') {
+        reasoning += json.delta
+        request.onReasoning?.(json.delta)
+      }
     }
   }
-  return { text: afterSearch(text, cut), usage, model, stopReason, reasoned, search: search.result() }
+  return { text: afterSearch(text, cut), usage, model, stopReason, reasoned, reasoning, search: search.result() }
 }
 
 /** A web_search_tool_result block's pages (an error result has none). */
@@ -826,8 +863,9 @@ async function anthropicMessages(provider, request, res) {
     checkSystemArrived(request, usage)
     if (text) request.onDelta?.(text)
     reasoned = (json.content ?? []).some(b => /thinking/.test(b.type ?? ''))
-    const thought = (json.content ?? []).reduce((n, b) => n + String(b.thinking ?? '').length, 0)
-    return { text, raw, cut, content: Array.isArray(json.content) ? json.content : [], usage: seenUsage ? withThinking(usage, thought, raw.length) : null, model: json.model ?? null, stopReason: json.stop_reason ?? null, reasoned, search: counted() }
+    const reasoning = thinkingText(json.content)
+    if (reasoning) request.onReasoning?.(reasoning)
+    return { text, raw, cut, content: Array.isArray(json.content) ? json.content : [], usage: seenUsage ? withThinking(usage, reasoning.length, raw.length) : null, model: json.model ?? null, stopReason: json.stop_reason ?? null, reasoned, reasoning, search: counted() }
   }
   const toolInput = new Map() // block index → the search's input JSON as it streams
   // The reply's content blocks rebuilt from the stream (a paused one is sent back as it came: pause_turn).
@@ -845,7 +883,12 @@ async function anthropicMessages(provider, request, res) {
     } else if (json.type === 'content_block_delta') {
       const d = json.delta ?? {}
       if (d.type === 'text_delta') into(json.index, b => { b.text = (b.text ?? '') + d.text })
-      else if (d.type === 'thinking_delta') into(json.index, b => { b.thinking = (b.thinking ?? '') + d.thinking })
+      else if (d.type === 'thinking_delta') {
+        // A later thinking block (after a search) starts a paragraph of its own on the page.
+        const fresh = !blocks[json.index]?.thinking && thinkingText(blocks.slice(0, json.index))
+        if (typeof d.thinking === 'string' && d.thinking) request.onReasoning?.(fresh ? `\n\n${d.thinking}` : d.thinking)
+        into(json.index, b => { b.thinking = (b.thinking ?? '') + d.thinking })
+      }
       else if (d.type === 'signature_delta') into(json.index, b => { b.signature = d.signature })
       else if (d.type === 'citations_delta' && d.citation) into(json.index, b => { b.citations = [...(b.citations ?? []), d.citation] })
       else if (d.type === 'input_json_delta' && inputs.has(json.index)) inputs.set(json.index, inputs.get(json.index) + (d.partial_json ?? ''))
@@ -885,10 +928,15 @@ async function anthropicMessages(provider, request, res) {
       throw new Error(json.error?.message ?? msg`生成失败`)
     }
   }
-  const thought = blocks.reduce((n, b) => n + String(b?.thinking ?? '').length, 0)
+  const reasoning = thinkingText(blocks)
   // A relay that counts nothing until the end (message_start all zeros) shows the lost system prompt only now, the text out.
   const systemDropped = Boolean(request.expectPrompt) && checkSystemArrived(request, usage, { late: true })
-  return { text: afterSearch(text, cut), raw: text, cut, content: blocks.filter(Boolean), usage: seenUsage ? withThinking(usage, thought, text.length) : null, model, stopReason, reasoned, search: counted(), ...(systemDropped ? { systemDropped } : {}) }
+  return { text: afterSearch(text, cut), raw: text, cut, content: blocks.filter(Boolean), usage: seenUsage ? withThinking(usage, reasoning.length, text.length) : null, model, stopReason, reasoned, reasoning, search: counted(), ...(systemDropped ? { systemDropped } : {}) }
+}
+
+/** The thinking blocks' text in Anthropic content, a paragraph each (a redacted one has none). */
+function thinkingText(content) {
+  return (Array.isArray(content) ? content : []).map(b => String(b?.thinking ?? '')).filter(Boolean).join('\n\n')
 }
 
 /** A reply that paused (pause_turn) and the rest the model wrote when given it back: one reply. */
@@ -908,6 +956,7 @@ function joinPaused(first, rest) {
     usage: addUsage(first.usage, rest.usage),
     model: rest.model ?? first.model,
     reasoned: first.reasoned || rest.reasoned,
+    reasoning: [first.reasoning, rest.reasoning].filter(Boolean).join('\n\n'),
     search,
   }
 }
@@ -950,6 +999,28 @@ export function reasoningFields(api, modelId, { thinking, effort } = {}) {
   return api === 'openai-responses' ? { reasoning: { effort: level } } : { reasoning_effort: level }
 }
 
+// Gemini's thinking_level for each 努力程度 (Gemini 3; it has nothing above high).
+const GEMINI_LEVELS = { low: 'low', medium: 'medium', high: 'high', xhigh: 'high', max: 'high' }
+
+/**
+ * 显示思考过程 where the API gives the thinking only when asked, over the reasoning fields: a summary
+ * on OpenAI's Responses API, Gemini's thoughts on its OpenAI-compatible API. Gemini takes no
+ * reasoning_effort beside its thinking_config, so the effort goes in as its thinking_level, or not at
+ * all (`mode` 'nolevel', for a model that refused the level). null when there is nothing to ask.
+ */
+function thoughtFields(provider, fields, effort, mode) {
+  if (provider.api === 'openai-responses') return { ...fields, reasoning: { ...fields.reasoning, summary: 'auto' } }
+  if (provider.api !== 'openai-completions' || !isGoogle(provider)) return null
+  const { reasoning_effort: _, ...rest } = fields
+  const level = mode !== 'nolevel' && GEMINI_LEVELS[effort]
+  return { ...rest, extra_body: { google: { thinking_config: { include_thoughts: true, ...(level ? { thinking_level: level } : {}) } } } }
+}
+
+// Provider + model pairs that refused what 显示思考过程 asks for: 'nolevel' (a Gemini without thinking_level)
+// or 'off' (asked for nothing more from then on).
+const THOUGHTS = new Map()
+const THOUGHTS_REFUSED = /summar|thinking_config|thinking_level|include_thoughts|extra_body|thought/i
+
 // Provider + model pairs that refused the reasoning fields once: sent without them from then on.
 const NO_REASONING = new Set()
 const REASONING_REFUSED = /thinking|effort|reasoning|output_config|extra inputs|unknown (field|param)|unrecognized|not (supported|permitted|allowed)|unsupported/i
@@ -957,16 +1028,17 @@ const REASONING_REFUSED = /thinking|effort|reasoning|output_config|extra inputs|
 // Models that are not Claude, as relays name them behind the Anthropic API.
 const OTHER_MODELS = /deepseek|kimi|moonshot|qwen|qwq|glm|zhipu|gemini|gemma|gpt|o[134]-|grok|minimax|doubao|seed|step|mimo|hunyuan|ernie|baichuan|yi-|llama|mistral|mixtral|command/i
 
-function requestBody(provider, modelId, { system, messages, maxTokens: cap, reasoning, webSearch }, { ttl = provider.cacheTtl, withReasoning = true } = {}) {
+function requestBody(provider, modelId, { system, messages, maxTokens: cap, reasoning, webSearch }, { ttl = provider.cacheTtl, withReasoning = true, thoughts = null } = {}) {
   // A request may cap its own output (short helper calls); otherwise the provider's setting.
   const maxTokens = cap || provider.maxTokens
   // 联网: OpenRouter searches for the `:online` variant; Anthropic and Responses get the search tool.
   const search = webSearch ? webSearchKind(provider, modelId) : null
   if (search === 'openrouter' && !/:online$/.test(modelId)) modelId = `${modelId}:online`
+  const fields = withReasoning && reasoning ? reasoningFields(provider.api, modelId, reasoning) : {}
   const common = {
     ...(provider.temperature !== null && provider.temperature !== undefined ? { temperature: provider.temperature } : {}),
-    // The app's thinking settings; the provider's own extra parameters below win over them.
-    ...(withReasoning && reasoning ? reasoningFields(provider.api, modelId, reasoning) : {}),
+    // The app's thinking settings (and the thinking asked for, `thoughts`); the provider's own extra parameters below win over them.
+    ...((thoughts && withReasoning && reasoning ? thoughtFields(provider, fields, reasoning.effort, thoughts) : null) ?? fields),
   }
   if (provider.api === 'anthropic-messages') {
     // One breakpoint on the system prompt and one on the newest message: each
@@ -1045,6 +1117,8 @@ export async function complete(provider, modelId, original, { proxy = null } = {
   const reasoning = !NO_REASONING.has(refusedKey) && request.reasoning && Object.keys(reasoningFields(provider.api, modelId, request.reasoning)).length > 0
   const short = request.maxTokens > 0 && request.maxTokens < THINKING_ROOM
   const attempt = async () => {
+    // 显示思考过程 on (the caller takes the thinking): asked for where it must be, as far as this pair allows.
+    const thoughts = request.onReasoning && THOUGHTS.get(refusedKey) !== 'off' ? THOUGHTS.get(refusedKey) ?? 'full' : null
     // Room to think on top of a short cap, given up like a preset's length if the model refuses it.
     const req = short && THINKERS.has(pair) ? { ...request, maxTokens: request.maxTokens + THINKING_ROOM, softCap: true } : request
     const post = async (options, body = req) => {
@@ -1052,7 +1126,7 @@ export async function complete(provider, modelId, original, { proxy = null } = {
         const res = await send(protocol.path(provider.baseURL), {
           method: 'POST',
           headers: await headersFor(provider, { accept: 'text/event-stream' }, { proxy, signal: request.signal }),
-          body: requestBody(provider, modelId, body, { withReasoning: reasoning, ...options }),
+          body: requestBody(provider, modelId, body, { withReasoning: reasoning, thoughts, ...options }),
           signal: request.signal,
           proxy: provider.proxy === 'direct' ? null : proxy,
         })
@@ -1077,6 +1151,12 @@ export async function complete(provider, modelId, original, { proxy = null } = {
     } catch (error) {
       if (request.signal?.aborted) throw error
       if (error.providerStatus !== 400) throw searchHint(error, request)
+      // The thinking asked for is refused (a Gemini without thinking_level, an OpenAI organization not verified
+      // for summaries): asked again with less (a Gemini without the level first), and so from then on.
+      if (thoughts && THOUGHTS_REFUSED.test(error.message)) {
+        THOUGHTS.set(refusedKey, thoughts === 'full' && isGoogle(provider) ? 'nolevel' : 'off')
+        return attempt()
+      }
       // A relay that does not know the 1-hour cache field: send the default lifetime instead.
       const ttlRejected = provider.api === 'anthropic-messages' && provider.cacheTtl === '1h' && /ttl|cache_control|extra inputs/i.test(error.message)
       // A preset's output length above what the model allows: fall back to the provider's own.
@@ -1147,6 +1227,8 @@ export async function complete(provider, modelId, original, { proxy = null } = {
   // now when nothing of the answer came (a started one is already on screen).
   THINKERS.add(pair)
   if (first.text.trim() || request.signal?.aborted) return first
+  // The thinking the page showed goes with it: the second answer brings its own.
+  if (first.reasoning) original.onRestart?.()
   const second = await attempt()
   return { ...second, usage: addUsage(first.usage, second.usage) }
 }
