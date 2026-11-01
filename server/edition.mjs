@@ -22,6 +22,7 @@ export const PERSONAL_PROXY = 'http://127.0.0.1:7897'
 // next to it. proxy: the 网络代理 setting needs Node 24 (http.Agent proxyEnv);
 // the phone's Node is 18. updates: what 设置 → 更多 → 更新 does (server/update/):
 // 'zip' installs the Windows package, 'apk' points to the phone app's download,
+// 'mac' (the release on macOS, see featuresOf) only points to the release page,
 // null for this machine's own install (a git checkout). privacyNotice: the public
 // builds list, once, the connections nobody configured (隐私与网络).
 const EDITIONS = {
@@ -38,10 +39,16 @@ export function editionName(value) {
   return Object.hasOwn(EDITIONS, name) ? name : 'personal'
 }
 
-/** { edition, subscription, lan, dshImport, xiaoya, proxy, defaultProxy, appName, dataDir, port, updates, privacyNotice } */
-export function featuresOf(edition) {
+/**
+ * { edition, subscription, lan, dshImport, xiaoya, proxy, defaultProxy, appName, dataDir, port, updates, privacyNotice }
+ * The release on macOS (CicaTavern.app) checks for updates but cannot install
+ * them itself: the new .app is a download the user puts in 应用程序.
+ */
+export function featuresOf(edition, platform = process.platform) {
   const name = editionName(edition)
-  return { edition: name, ...EDITIONS[name] }
+  const features = { edition: name, ...EDITIONS[name] }
+  if (name === 'release' && platform === 'darwin') features.updates = 'mac'
+  return features
 }
 
 /** The edition a packaged build was made for (edition.json), or undefined. */
