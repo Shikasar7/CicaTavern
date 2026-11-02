@@ -11,6 +11,9 @@
 #   5. scripts/stage-release.mjs packs the zip; it goes to a DRAFT Release for the
 #      tag. The maintainer adds the APK (built and signed locally with the
 #      maintainer's own key) and the notes, then publishes.
+#      The macOS workflow (mac-release.yml) adds its zips to the same draft;
+#      whichever gets there first creates it, and the concurrency group lets one
+#      job at a time touch it.
 #
 # Runs when a version tag (v1.4.0) is pushed, or by hand for an existing tag.
 name: Windows release
@@ -35,6 +38,10 @@ env:
 jobs:
   windows:
     runs-on: windows-latest
+    # One job at a time makes or adds to the tag's draft Release (mac-release.yml uses the same group).
+    concurrency:
+      group: draft-release-${{ inputs.tag || github.ref_name }}
+      cancel-in-progress: false
     env:
       SIGNING: ${{ secrets.SIGNPATH_API_TOKEN != '' && vars.SIGNPATH_ORGANIZATION_ID != '' }}
     steps:
@@ -131,16 +138,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          sed -e "s/{{VERSION}}/${VERSION}/g" -e "s/{{NODE_VERSION}}/${NODE_VERSION}/g" -e "s/{{ZIP_SHA256}}/${ZIP_SHA256}/g" -e "s/{{SIGNED}}/$([ "$SIGNING" = true ] && echo '已签名（SignPath Foundation）' || echo '未签名')/g" docs/release-notes-template.md > "$RUNNER_TEMP/notes.md"
+          fill() {
+            sed -e "s/{{VERSION}}/${VERSION}/g" -e "s/{{NODE_VERSION}}/${NODE_VERSION}/g" -e "s/{{ZIP_SHA256}}/${ZIP_SHA256}/g" -e "s/{{SIGNED}}/$([ "$SIGNING" = true ] && echo '已签名（SignPath Foundation）' || echo '未签名')/g"
+          }
           if draft=$(gh release view "$TAG" --json isDraft -q .isDraft 2>/dev/null); then
             # A published release keeps its files: the in-app updater checks their SHA-256.
             if [ "$draft" != "true" ]; then echo "$TAG is already published; not replacing its zip"; exit 1; fi
-            # Built again (a re-run, the tag moved): the draft's notes, maybe written by hand by now, keep all but the
-            # zip's SHA-256, which the in-app updater checks against the zip uploaded below.
-            gh release view "$TAG" --json body -q .body > "$RUNNER_TEMP/draft.md"
+            # The macOS workflow may have made it (fill in the Windows lines of its notes), or this one did
+            # before (a re-run, the tag moved): the draft's notes, maybe written by hand by now, keep all but
+            # the zip's SHA-256, which the in-app updater checks against the zip uploaded below.
+            gh release view "$TAG" --json body -q .body | fill > "$RUNNER_TEMP/draft.md"
             sed -E "s/[0-9a-f]{64}(  CicaTavern-${VERSION}-win-x64\.zip)/${ZIP_SHA256}\1/" "$RUNNER_TEMP/draft.md" > "$RUNNER_TEMP/draft-new.md"
             gh release edit "$TAG" --notes-file "$RUNNER_TEMP/draft-new.md"
           else
+            fill < docs/release-notes-template.md > "$RUNNER_TEMP/notes.md"
             gh release create "$TAG" --draft --verify-tag --title "CicaTavern ${VERSION}" --notes-file "$RUNNER_TEMP/notes.md"
           fi
           gh release upload "$TAG" "$ZIP" --clobber
