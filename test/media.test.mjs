@@ -521,8 +521,8 @@ test('voice: voices listed, speech proxied and cached, a dead bridge explained',
   assert.equal(ttsCalls(), 7, 'new model: synthesised again')
 
   await store.saveSettings({ media: cleanMedia({ ttsUrl: 'http://127.0.0.1:9' }, (await store.getSettings()).media) })
-  assert.match((await media.voices()).sources[0].error, /小雅一键启动/)
-  await assert.rejects(media.speak({ text: '别的话', voice: 'jok' }), /小雅一键启动/)
+  assert.match((await media.voices()).sources[0].error, /一键启动/)
+  await assert.rejects(media.speak({ text: '别的话', voice: 'jok' }), /一键启动/)
 })
 
 test('speech chunks: quoted speech vs narration, cleanup, ~100-character blocks', async () => {

@@ -515,3 +515,18 @@ test('the usage ledger: a first fill that failed (an unreadable chat) is tried a
   broken = false
   await ledger.summary()
 })
+
+test('the usage ledger: a model without a price has no equivalent cost (—), not $0, and is left out of the totals', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'tavern-ledger-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const at = Date.now()
+  const turn = (model, extra = {}) => ({ type: 'turn', at, chatId: 'c1', chatTitle: '茶馆', model, input: 1_000_000, cacheRead: 0, cacheWrite: 0, output: 0, ...extra })
+  // A line from before this change wrote 0 for a model without a price.
+  await writeFile(path.join(root, 'usage.jsonl'), [turn('claude-sonnet-5-5', { cost: 2 }), turn('my-relay:glm-4.6', { cost: null }), turn('deepseek-chat', { cost: 0 })].map(line => `${JSON.stringify(line)}\n`).join(''))
+  const ledger = createLedger({ dirs: { root }, listChats: async () => [] })
+  const data = await ledger.summary()
+  assert.deepEqual([data.today.turns, data.today.priced, data.today.cost], [3, 1, 2])
+  assert.equal(data.byModel.find(row => row.model === 'my-relay:glm-4.6').cost, null)
+  assert.equal(data.byModel.find(row => row.model === 'deepseek-chat').cost, null)
+  assert.deepEqual(data.turns.map(row => row.cost), [2, null, null])
+})

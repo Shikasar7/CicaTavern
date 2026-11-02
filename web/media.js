@@ -58,7 +58,7 @@ const SERVICE_SITES = {
 const SD_SAMPLERS = ['Euler a', 'Euler', 'DPM++ 2M', 'DPM++ 2M Karras', 'DPM++ SDE Karras', 'DPM++ 2M SDE', 'DDIM', 'UniPC']
 /** A provider holding Google's key (the Gemini template), offered first for Gemini's own models. */
 const isGoogle = p => /generativelanguage\.googleapis\.com|aiplatform\.googleapis\.com|\/v1beta\/openai\/?$/i.test(p?.baseURL ?? '')
-// A voice service on this machine or the LAN (小雅, or the tavern on a PC):
+// A voice service on this machine or the LAN (a local voice bridge, or the tavern on a PC):
 // local TTS models, as against the cloud services.
 const BRIDGE_NAME = t`本地语音桥接`
 
@@ -947,10 +947,15 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     player.start(nodeId, chunks.map(chunk => ({ ...chunk, voice, stable: false })), span)
   }
 
+  // A tap that clears a selection (on a phone, tapping away after selecting) is not one either.
+  let selectedAtPress = false
+  document.addEventListener('pointerdown', () => {
+    selectedAtPress = Boolean(String(getSelection?.() ?? '').trim())
+  }, true)
   document.addEventListener('click', event => {
     const span = event.target.closest?.('#transcript .msg[data-id] .story .q')
     // Selecting text or picking an option is not a request to hear it.
-    if (!span || span.closest('.choice') || String(getSelection?.() ?? '').trim()) return
+    if (!span || span.closest('.choice') || selectedAtPress || String(getSelection?.() ?? '').trim()) return
     readLine(span)
   })
 
@@ -1250,14 +1255,14 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     const geminiBox = el('div', {}, [
       serviceLinks('gemini'),
       el('div', { class: 'grid' }, [
-        field(t`供应商`, geminiProvider, googleProviders.length ? '' : t`先用「Gemini」模板建一个供应商（密钥在 aistudio.google.com 创建）`),
+        field(t`供应商`, geminiProvider, googleProviders.length ? '' : t`先用「Gemini API」或「Gemini Agent Platform」模板建一个供应商（Gemini API 的密钥在 aistudio.google.com 创建）`),
         el('label', {}, [t`生图模型`, el('span', { class: 'select-with-action' }, [geminiModel, fetchGemini]), geminiModels]),
       ]),
       el('label', { class: 'check-row' }, [
         el('input', { type: 'checkbox', name: 'geminiReference', checked: media.geminiReference }),
         el('span', { text: t`画面里的名册角色有人设图时，一起发过去照着画（最多三个人，长相更稳）` }),
       ]),
-      el('p', { class: 'hint', text: t`走 Google 自己的接口，和对话共用「Gemini」供应商的密钥和代理。gemini-2.5-flash-image 快、便宜；gemini-3-pro-image-preview 画得更细。提示词写法选「自然语言」。` }),
+      el('p', { class: 'hint', text: t`走 Google 自己的接口，和对话共用这个 Google 供应商的密钥和代理。gemini-2.5-flash-image 快、便宜；gemini-3-pro-image-preview 画得更细。提示词写法选「自然语言」。` }),
     ])
     // Stable Diffusion WebUI / Forge: the model loaded there draws.
     const sdSamplers = el('datalist', { id: 'sd-samplers' }, SD_SAMPLERS.map(id => el('option', { value: id })))
@@ -1310,7 +1315,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
 
     // Voice. Three kinds of source, kept apart in every label: the browser's own
     // voices (this device, free), a local voice bridge (TTS models on this
-    // machine or the LAN, such as 小雅, or the tavern on a PC), and cloud
+    // machine or the LAN, such as a local voice bridge, or the tavern on a PC), and cloud
     // services (keys, billed per character).
     // Only this machine's own install assumes the xiaoya bridge; elsewhere the browser reads unless a source is set up.
     const xiaoya = document.documentElement.dataset.featureXiaoya !== 'false'
@@ -1329,18 +1334,18 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     const anyCloud = cloud.length || VOICE_SOURCES.some(id => sources[id]?.voices?.length)
     const narratorHint = anyCloud
       ? xiaoya && cloud.length
-        ? t`经小雅转发的云端音色用小雅「云端 API 设置」里的密钥和模型。云端音色都按字数计费，旁白字多，用本地模型或浏览器音色更省`
+        ? t`经语音桥接转发的云端音色，用桥接自己「云端 API 设置」里的密钥和模型。云端音色都按字数计费，旁白字多，用本地模型或浏览器音色更省`
         : t`云端音色按字数计费；旁白字多，用本地模型或浏览器音色更省`
       : chinese.length ? t`浏览器音色是这台设备自带的，免费；换一台设备可能没有同一个，会改用它的默认中文音色。` : undefined
     const tagHint = cloud.some(v => v.tags) || sources.fish?.voices?.length || sources.openai?.emotion === 'instruction'
       ? t`回复里 [voice:情绪:台词] 的情绪：Fish 放在台词前当语气标签，gpt-4o-mini-tts 当语气说明，其余音色不读`
       : undefined
     const ttsHint = xiaoya
-      ? t`本机填小雅的地址（http://127.0.0.1:8765），用它跑的本地 TTS 模型，或它转发的云端音色。手机上没有小雅：把电脑上酒馆「设置 → 手机访问」里的链接整条粘贴进来，同一个 Wi-Fi 下借电脑朗读（电脑上的云端密钥留在电脑上）。`
+      ? t`本机填语音桥接的地址（比如 http://127.0.0.1:8765），用它跑的本地 TTS 模型，或它转发的云端音色。手机上没有语音桥接：把电脑上酒馆「设置 → 手机访问」里的链接整条粘贴进来，同一个 Wi-Fi 下借电脑朗读（电脑上的云端密钥留在电脑上）。`
       : t`本机或局域网里跑 TTS 模型的服务（兼容 POST /api/tts 和 GET /api/persona/list）。也可以把另一台电脑上酒馆「设置 → 手机访问」里的链接整条粘贴进来，借那台电脑设好的音色（密钥留在那台电脑上）。`
     const sourceBoxes = voiceSourceBoxes({ media, voiceKeys, providers, sources, form })
     const externalBox = el('details', { class: 'voice-source', open: xiaoya || service }, [
-      el('summary', {}, [el('span', { text: xiaoya ? t`${BRIDGE_NAME}（小雅 / 电脑上的酒馆）` : t`${BRIDGE_NAME}（高级）` }), sourceState(service ? (external.ok ? 'ok' : 'warn') : 'off', service ? (external.ok ? t`已连上` : t`连不上`) : t`没填`)]),
+      el('summary', {}, [el('span', { text: xiaoya ? t`${BRIDGE_NAME}（本机 / 电脑上的酒馆）` : t`${BRIDGE_NAME}（高级）` }), sourceState(service ? (external.ok ? 'ok' : 'warn') : 'off', service ? (external.ok ? t`已连上` : t`连不上`) : t`没填`)]),
       field(t`桥接地址`, ttsUrl, ttsHint),
       ttsStatus,
       ttsKeyHint,
@@ -1470,7 +1475,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
           field(t`这张卡写提示词的额外要求（加在所有卡通用的后面）`, cardRules.box),
           cardRules.tools,
           field(
-            t`整卡 LoRA（只用于 ComfyUI；人设图、立绘也用，名册里自带 LoRA 的角色单独出镜时改用她自己的）`,
+            t`整卡 LoRA（ComfyUI 和 SD WebUI 用；人设图、立绘也用，名册里自带 LoRA 的角色单独出镜时改用她自己的）`,
             el('select', { name: 'lora' }, [
               option('', t`不用`, card.lora),
               ...loraInfo.loras.map(name => option(name, name, card.lora)),
@@ -2362,7 +2367,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       el('summary', {}, [el('span', { class: 'voice-source-name' }, [t`Gemini 朗读（Google）`, netTag('proxy')]), state('gemini')]),
       serviceLinks('voice:gemini'),
       el('div', { class: 'grid' }, [
-        field(t`供应商`, geminiProvider, googleSpeakers.length ? t`选用「Gemini」模板建的供应商，和对话共用密钥和代理` : t`先用「Gemini」模板建一个供应商（密钥在 aistudio.google.com 创建）`),
+        field(t`供应商`, geminiProvider, googleSpeakers.length ? t`选用「Gemini API」或「Gemini Agent Platform」模板建的供应商，和对话共用密钥和代理` : t`先用「Gemini API」或「Gemini Agent Platform」模板建一个供应商（Gemini API 的密钥在 aistudio.google.com 创建）`),
         el('label', {}, [t`模型`, el('span', { class: 'select-with-action' }, [geminiModel, fetchModels]), geminiModelList]),
       ]),
       field(t`音色（每行一个：音色名，后面可以空一格写说明）`, el('textarea', { name: 'geminiTtsVoices', rows: 3, spellcheck: 'false', placeholder: t`留空列出全部 30 个预置音色，例如\nKore 女主\nPuck 男主`, text: voiceListText(media.geminiTtsVoices) }),

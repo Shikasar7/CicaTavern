@@ -859,6 +859,12 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       const known = new Set((await store.listCards()).map(card => card.id))
       return { ids: await store.saveCardOrder(body.ids.filter(id => known.has(id))) }
     }],
+    // 拖动分组: `{ names }`, the groups in the new order.
+    ['GET', /^\/api\/cards\/group-order$/, async () => ({ names: await store.getGroupOrder() })],
+    ['PUT', /^\/api\/cards\/group-order$/, async (_, body) => {
+      if (!Array.isArray(body?.names)) throw httpError(400, msg`要怎么排？`)
+      return { names: await store.saveGroupOrder(body.names.map(cleanGroup)) }
+    }],
     // Which card a file would update: the newest one with the same name apart from its version.
     ['POST', /^\/api\/cards\/inspect$/, async (_, body) => {
       const { card } = readCardUpload(body)
@@ -1028,6 +1034,9 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
         await store.saveCard(card)
         moved++
       }
+      // Renamed, the group keeps its place (merged into another, the higher of the two); dissolved, it leaves the order.
+      const order = await store.getGroupOrder()
+      if (order.includes(from)) await store.saveGroupOrder(order.map(name => (name === from ? to : name)))
       return { moved }
     }],
     ['PUT', /^\/api\/cards\/([\w-]+)\/worldbooks$/, async ([id], body) => {

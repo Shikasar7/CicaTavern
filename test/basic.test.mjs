@@ -101,7 +101,9 @@ test('old choices leave what the model reads again; the time box stays', () => {
 test('reading the time box and the choices, however the model numbers them', () => {
   assert.deepEqual(timeBoxOf('<time_box> 10月19日 周一 傍晚6:20 ｜ 旧城茶馆二楼|小雨 </time_box>正文'), ['10月19日 周一 傍晚6:20', '旧城茶馆二楼', '小雨'])
   assert.equal(timeBoxOf('没有时间框'), null)
-  assert.deepEqual(choicesOf('<choices>\nA. 接过茶\nB、提议送她\n- C：装作没看见\n4) 告辞\n5. 第五个\n</choices>'), ['接过茶', '提议送她', '装作没看见', '告辞'])
+  assert.deepEqual(choicesOf('<choices>\nA. 接过茶\nB、提议送她\n- C：装作没看见\n4) 告辞\n5. 第五个\n</choices>'), ['接过茶', '提议送她', '装作没看见', '告辞', '第五个'])
+  // Up to nine (A–I, 1–9): the visual novel's number keys reach each one.
+  assert.deepEqual(choicesOf(`<choices>\n${'ABCDEFGHIJ'.split('').map(l => `${l}. 选${l}`).join('\n')}\n</choices>`), 'ABCDEFGHI'.split('').map(l => `选${l}`))
   assert.deepEqual(choicesOf('<choices>\n问她\n走开\n</choices>'), ['问她', '走开'])
   assert.deepEqual(choicesOf('<choices>\nA. 还在写'), ['还在写'])
   assert.deepEqual(choicesOf('正文'), [])

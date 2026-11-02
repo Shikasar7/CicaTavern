@@ -1,6 +1,6 @@
 // 创作角色卡: what changes as the story goes. A personality in stages by a
 // tracked value, events that come in when named or when a value holds, both put
-// under EJS by the code; and the cast written into 配图 → 角色名单.
+// under EJS by the code; and the cast written into 配图与朗读 → 角色名册.
 import assert from 'node:assert/strict'
 import test, { before } from 'node:test'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -156,7 +156,7 @@ test('the card says it needs ST-Prompt-Template only when it uses EJS', () => {
   assert.doesNotMatch(cardJson(plain, plainCard).data.creator_notes, /ST-Prompt-Template/)
 })
 
-test('the cast goes into 配图 → 角色名单; saved again, someone new is added and what was set there stays', async t => {
+test('the cast goes into 配图与朗读 → 角色名册; saved again, someone new is added and what was set there stays', async t => {
   const root = await mkdtemp(path.join(tmpdir(), 'forge-cast-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   const store = createStore(root)

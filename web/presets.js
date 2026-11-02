@@ -14,8 +14,15 @@ const listId = chat => (chat?.presetId === BASIC_ID ? '' : chat?.presetId ?? '')
 // What each placement of the prompts after the chat history means for the player.
 const POST_MODE_NOTES = {
   prefix: t`按原顺序放进固定前缀的末尾，每轮附一句提醒；只有骰子、引用玩家输入这类每轮变化的段落随消息发送。缓存最省，但离回复远，选项、状态这类正文后的块容易被漏掉。`,
-  latest: t`和 SillyTavern 一样：每轮跟在最新一条消息后面，之前几轮的不再重发。选项、格式要求最不容易被漏；每轮多写一条玩家消息的缓存，很便宜。只对自定义供应商生效，Claude 订阅下同「每轮都留」。改了之后下一轮会重写一次缓存。历史会变，要在历史里多打一个缓存点：一些低价 Claude 中转处理不好，会多算 token、缓存时有时无，用这类中转时选「每轮都留」。`,
+  latest: t`和 SillyTavern 一样：每轮跟在最新一条消息后面，之前几轮的不再重发。选项、格式要求最不容易被漏；每轮多写一条玩家消息的缓存，很便宜。改了之后下一轮会重写一次缓存。历史会变，要在历史里多打一个缓存点：一些低价 Claude 中转处理不好，会多算 token、缓存时有时无，用这类中转时选「每轮都留」。`,
   turn: t`全部每轮随玩家消息发送，发过的留在历史里，每轮都会让上下文变长。历史不变，只在最新一条上打缓存点，各家中转都能稳定命中。`,
+}
+
+// Only where the subscription exists (the personal edition): what 同酒馆 does there.
+const SUBSCRIPTION_NOTE = t`只对自定义供应商生效，Claude 订阅下同「每轮都留」。`
+const modeNote = mode => {
+  const note = POST_MODE_NOTES[mode] ?? POST_MODE_NOTES.prefix
+  return mode === 'latest' && document.documentElement.dataset.featureSubscription === 'true' ? `${note}${SUBSCRIPTION_NOTE}` : note
 }
 
 const MARKER_LABEL = {
@@ -202,7 +209,7 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
         el('button', { type: 'button', class: 'btn small', text: t`＋ 新增条目`, onclick: guard(addPrompt) }),
         el('span', { class: 'seg-label', text: t`聊天记录之后的条目` }),
         mode,
-        el('p', { class: 'seg-note', text: POST_MODE_NOTES[detail.postMode] ?? POST_MODE_NOTES.prefix }),
+        el('p', { class: 'seg-note', text: modeNote(detail.postMode) }),
       ]),
       el('ul', { class: 'prompt-list', id: 'prompt-list' }, detail.prompts.map(promptRow)),
     )

@@ -1515,7 +1515,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
    */
   async function geminiImage(media, prompt, cardId, signal, cast = null, { scenery = false } = {}) {
     const provider = (await store.getProviders()).find(p => p.id === media.geminiImageProvider)
-    if (!provider) throw httpError(400, msg`还没选 Gemini 生图用的供应商：在「配图与朗读 → 画图方式」里选用「Gemini」模板建的那个`)
+    if (!provider) throw httpError(400, msg`还没选 Gemini 生图用的供应商：在「配图与朗读 → 画图方式」里选用「Gemini API」或「Gemini Agent Platform」模板建的那个`)
     if (provider.api === 'anthropic-messages') throw httpError(400, msg`${provider.name} 是 Anthropic 接口，没有生图接口`)
     const model = media.geminiImageModel || DEFAULT_MEDIA.geminiImageModel
     const parts = []
@@ -2170,7 +2170,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     const { roster, style } = cleanCardMedia((await store.getCard(cardId)).media)
     const entry = roster.find(item => item.id === entryId)
     if (!entry) throw httpError(404, msg`名单里没有这个角色`)
-    if (!entry.looks) throw httpError(400, msg`先在「配图 → 角色名单」里写${entry.name}的长相，再画立绘`)
+    if (!entry.looks) throw httpError(400, msg`先在「配图与朗读 → 角色名册」里写${entry.name}的长相，再画立绘`)
     const media = await settingsFor(choice)
     const tags = media.promptStyle === 'tags'
     const cast = { scene: [style, tags ? SPRITE_SCENE : SPRITE_SCENE_NATURAL].filter(Boolean).join(', '), characters: [{ entry, action: [spriteOutfit(entry.outfit), tags ? 'standing' : ''].filter(Boolean).join(', '), position: '' }], solo: entry, lead: entry }

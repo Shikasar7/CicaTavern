@@ -27,14 +27,24 @@ function windowsOf(info) {
   return { five: typeof five === 'number' ? five : null, seven: typeof seven === 'number' ? seven : null }
 }
 
+/**
+ * The turn's equivalent cost, or null for a model without a price (most models
+ * besides Claude): those are left out, not counted as free. Older lines wrote 0 for them.
+ */
+const costOf = t => (t.cost == null || (t.cost === 0 && estimateCost(t.model, t) === null) ? null : t.cost)
+
 function add(target, t) {
   target.turns += 1
   for (const k of ['input', 'cacheRead', 'cacheWrite', 'output']) target[k] += t[k] ?? 0
-  target.cost += t.cost ?? 0
+  const cost = costOf(t)
+  if (cost === null) return
+  target.cost += cost
+  target.priced += 1
 }
 
-const empty = () => ({ turns: 0, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, cost: 0 })
-const finish = s => ({ ...s, hit: hitRate(s), cost: Math.round(s.cost * 10000) / 10000 })
+// priced: the turns with a cost; with none, cost is null (shown as —).
+const empty = () => ({ turns: 0, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, cost: 0, priced: 0 })
+const finish = s => ({ ...s, hit: hitRate(s), cost: s.priced ? Math.round(s.cost * 10000) / 10000 : null })
 
 export function createLedger(store) {
   const file = path.join(store.dirs.root, 'usage.jsonl')
@@ -84,7 +94,7 @@ export function createLedger(store) {
       cacheRead: u.cacheRead ?? 0,
       cacheWrite: u.cacheWrite ?? 0,
       output: u.output ?? 0,
-      cost: u.costUsd ?? estimateCost(node.model, u) ?? 0,
+      cost: u.costUsd ?? estimateCost(node.model, u),
       firstTokenMs: node.timing?.firstTokenMs ?? null,
       totalMs: node.timing?.totalMs ?? null,
       forked: node.timing?.forked === true,
@@ -135,10 +145,10 @@ export function createLedger(store) {
         days,
         today: finish(todayTotals),
         period: { ...finish(periodTotals), medianFirstTokenMs: firstTokens.length ? firstTokens[Math.floor(firstTokens.length / 2)] : null },
-        turns: turns.slice(-40).map(t => ({ ...t, chatTitle: titles.get(t.chatId) ?? t.chatTitle, hit: hitRate(t) })),
+        turns: turns.slice(-40).map(t => ({ ...t, cost: costOf(t), chatTitle: titles.get(t.chatId) ?? t.chatTitle, hit: hitRate(t) })),
         daily: [...daily.values()].map(finish),
         byModel: [...byModel.values()].map(finish).sort((a, b) => b.turns - a.turns),
-        byChat: [...byChat.values()].map(finish).sort((a, b) => b.cost - a.cost).slice(0, 12),
+        byChat: [...byChat.values()].map(finish).sort((a, b) => (b.cost ?? 0) - (a.cost ?? 0)).slice(0, 12),
         rate: rates.map(r => ({ at: r.at, five: r.five, seven: r.seven })),
         latestRate: rates.at(-1) ?? null,
       }

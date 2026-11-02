@@ -357,9 +357,9 @@ test('从账户读取音色: Fish pages, MiniMax groups, merged into the form li
   // The form's list as it stands, with the saved key; a short last page ends the paging.
   await media.setVoiceKey('fish', FISH_KEY)
   fake.fishModels = fake.fishModels.slice(0, 2)
-  const again = await media.accountVoices({ source: 'fish', media: { fishVoices: `${FISH_VOICE} 南晚\n${other} 小雅` } })
+  const again = await media.accountVoices({ source: 'fish', media: { fishVoices: `${FISH_VOICE} 南晚\n${other} 青禾` } })
   assert.equal(fishCalls().length, 3)
-  assert.deepEqual([again.voices, again.added, again.changed, again.full], [[{ id: FISH_VOICE, name: '南晚' }, { id: other, name: '小雅' }], 0, false, false])
+  assert.deepEqual([again.voices, again.added, again.changed, again.full], [[{ id: FISH_VOICE, name: '南晚' }, { id: other, name: '青禾' }], 0, false, false])
   // An account with no voices of its own answers too, and leaves the list as it was.
   fake.fishModels = []
   const none = await media.accountVoices({ source: 'fish' })
@@ -426,11 +426,11 @@ test('cloud voices give up on a service that never answers (读取音色, 试听
 
   const direct = await quick(list({ urls: { fish: at(silent) } }))
   assert.equal(direct.status, 504)
-  assert.match(direct.message, /^连不上 Fish Audio：等了 1 秒没有回应。现在没走代理：要开代理才能上这个网站的话，去「设置 → 网络代理」选「跟随系统代理」或填代理地址。$/)
+  assert.match(direct.message, /^连不上 Fish Audio：等了 1 秒没有回应。现在没走代理：要开代理才能上这个网站的话，去「设置 → 连接 → 网络代理」选「跟随系统代理」或填代理地址。$/)
   assert.doesNotMatch(direct.message, new RegExp(FISH_KEY))
   // Through a proxy: check that it runs (a loopback address is reached without it here).
   const proxied = await quick(list({ urls: { fish: at(silent) } }, { proxy: 'http://127.0.0.1:1' }))
-  assert.match(proxied.message, /没有回应。检查网络，以及「设置 → 网络代理」里的代理是否在运行/)
+  assert.match(proxied.message, /没有回应。检查网络，以及「设置 → 连接 → 网络代理」里的代理是否在运行/)
   // A body that never ends is given up on too.
   assert.equal((await quick(list({ urls: { fish: at(stalled) } }))).status, 504)
   // MiniMax's mainland site is direct on purpose: no proxy advice. The phone has no proxy menu.
@@ -460,7 +460,7 @@ test('cloud voices give up on a service that never answers (读取音色, 试听
   assert.equal((await quick(speak('fish', { fish: at(stalled) }))).status, 504)
   // MiniMax's international site goes through the proxy when there is one.
   const abroad = await quick(speak('minimax', { minimax: { intl: at(silent) } }, { region: 'intl', proxy: 'http://127.0.0.1:1' }))
-  assert.match(abroad.message, /^连不上 MiniMax：等了 1 秒没有回应。检查网络，以及「设置 → 网络代理」里的代理是否在运行。$/)
+  assert.match(abroad.message, /^连不上 MiniMax：等了 1 秒没有回应。检查网络，以及「设置 → 连接 → 网络代理」里的代理是否在运行。$/)
   const refusedSpeech = await quick(speak('fish', { fish: refused }, { timeouts: { list: 20000, speech: 20000 } }))
   assert.equal(refusedSpeech.status, 502)
   assert.match(refusedSpeech.message, /^连不上 Fish Audio：现在没走代理/)

@@ -8,7 +8,7 @@
 
 - **High cache hit rates**: prompts are built around the provider's cache, so in a long story most of every turn is billed at the much cheaper cached rate, and replies start faster.
 - **SillyTavern-compatible**: character cards, world books, presets, regex scripts, MVU variables and the status-bar UIs inside cards work as imported.
-- **Pictures and read-aloud built in**: illustrate a scene with one click; dialogue and narration each get their own voice, and you can tap any line to hear it.
+- **Pictures and read-aloud built in**: illustrate a scene with one click; dialogue and narration each get their own voice, and you can tap a line of dialogue to hear it.
 - **Visual novel mode**: turn the story into a game screen with one switch — scene backgrounds, the speaker's sprite, a name plate, one line at a time, and the choices in the middle of the picture.
 - **Characters keep their look**: every character's face, outfit, reference picture and voice are kept, so they stay the same person however many pictures you make.
 - **A guided card creator**: not sure what you want yet? The creator asks you step by step and writes a complete card at the end.
@@ -62,7 +62,7 @@ From the author's own long chats (October 2026):
 ### Pictures and read-aloud
 
 - **Pictures**: one click, and a helper model writes the image prompt from the scene, the characters' looks and the card's art style; you can review it before drawing. Backends: an OpenAI-compatible image API (gpt-image and others), Gemini's own image models, NovelAI, or a local ComfyUI workflow or SD WebUI / Forge. New replies can be illustrated automatically. Prompts you have drawn are kept in a prompt library.
-- **Read-aloud**: quoted dialogue uses the dialogue voice and everything else the narrator voice; tap a line in the story to hear just that line. Voices can come from cloud services such as Fish Audio, MiniMax, Gemini or any OpenAI-compatible speech API, the browser (free), or a TTS model on your computer or local network; everyone in the cast can have a voice of their own. Audio is cached once read. New replies can be read automatically.
+- **Read-aloud**: quoted dialogue uses the dialogue voice and everything else the narrator voice; tap a quoted line in the story to hear just that line. Voices can come from cloud services such as Fish Audio, MiniMax, Gemini or any OpenAI-compatible speech API, the browser (free), or a TTS model on your computer or local network; everyone in the cast can have a voice of their own. Audio is cached once read. New replies can be read automatically.
 - **Voice input**: speak into the microphone beside the input box and the words go into the box for you to read before sending. A provider's transcription API (SiliconFlow's SenseVoice is free), whisper on your own computer, or the browser's built-in recognition turns them into text.
 
 ### Visual novel mode
@@ -109,13 +109,15 @@ If you can't quite say what you want, the creator guides you round by round:
 
 <br clear="right">
 
-## Latest changes [2.2.3]
+## Latest changes [2.2.4]
 
 <p align="center"><img src="web/whatsnew/2.2.0-cards.webp" alt="2.2.0: cards pinned, favorited and dragged into your own order; picture prompts written your way, with a level of detail and art style presets" width="880"></p>
 
 - **Pin, favorite and reorder cards**: a card's ⋯ menu can pin it to the top or favorite it, and the ☆ beside the search box shows only favorites; drag cards up and down to put them in your own order (on a phone, press and hold first). The computer and the phone see the same list.
 - **Picture prompts, your way**: Pictures and voice has a new Picture prompts page: extra rules for the model that writes the prompts (or read in a .md / .txt image prompt skill someone shared), one set for every card plus each card's own, and a level of detail: concise, standard or detailed. Art style and LoRA has nine art style presets: anime, polished CG, painterly, watercolour, Chinese ink, semi-realistic, photo, 90s retro anime and 3D render. The default instructions are better too: shot and camera angle first, no character names, and Danbooru tag order for tags.
 - **Gemini Agent Platform (formerly Vertex AI)**: the Gemini Agent Platform provider template takes an Agent Platform API key from 2.2.2 on, or a Google Cloud JSON credential, so a new account's free-trial credit can be used; with an API key, Fetch model list tries the common Gemini models and lists the ones that work. When it is busy it waits a few seconds and tries again, twice at most.
+- **Copy a message, pick several options (2.2.4)**: every message has Copy, for its text as shown (for a reply, only the story, the status or the options if you like); a long press on a phone no longer selects the top bar, the round or the input box. Tapping an option adds it to the input box, so several can go together, and up to nine options show.
+- **Smoother dragging, groups in order (2.2.4)**: the other cards slide out of the way, and on a phone the card follows your finger; group titles drag too; on a computer, drop a card on a folder to export it as a file.
 - **See the model think (2.2.3)**: turned on in Settings → Model, the thinking of GLM, DeepSeek, Kimi, Claude, Gemini, OpenAI and others shows folded above each reply, open while it is written; it is only shown, never sent back to the model. `<thinking>`, `<思考>`, `<思维链>` and `<CoT>` in the story fold too.
 - **Phone and computer in step (2.2.3)**: playing from a phone connected to the computer, a turn sent on one shows as being written on the other at once and appears when done, with no reopening.
 - **Fixes (2.2.2)**: a provider that cannot be reached no longer just says "aborted": it says it timed out and to check the network and proxy.
@@ -132,7 +134,7 @@ If you can't quite say what you want, the creator guides you round by round:
 3. First use: at the bottom of the model picker in the top bar, choose 管理模型供应商… (Manage providers) → 添加 (Add) → 从模板开始 (Start from a template), pick a provider, paste your API key, and click 从接口获取模型列表 (Fetch model list) to check the connection. Then choose a default model in 设置 (Settings). Google has two templates: "Gemini API" takes an AI Studio key; "Gemini Agent Platform" (Google Cloud, formerly Vertex AI; a new account's free-trial credit works there) takes an Agent Platform API key, with PROJECT_ID in the address replaced by your project ID, or, where an organization allows no API keys, a JSON credential (a service account's JSON key, or the file gcloud's login writes), picked with 选择 JSON 凭据文件 (Choose a JSON credential file). The template note says how.
 4. Top left, 导入角色卡、世界书或预设 (Import card, world book or preset): choose a SillyTavern PNG or JSON card, then 新对话 (New chat).
 
-The Node runtime comes with it (`runtime/node.exe`); nothing else needs installing. About a minute after every page is closed, the background server exits by itself; 设置 → 停止后台服务 (Stop the background server) stops it at once.
+The Node runtime comes with it (`runtime/node.exe`); nothing else needs installing. About a minute after every page is closed, the background server exits by itself; 设置 → 更多 → 停止后台服务 (Stop the background server) stops it at once.
 
 **CicaTavern.exe is not code-signed.** Windows may say "Windows protected your PC" the first time: click **More info → Run anyway**. It won't ask again, and versions downloaded by the in-app updater don't ask either (see [Code signing](#code-signing)). CicaTavern.exe is a very small program (source in `launcher/`) that does two things: runs `runtime\node.exe bin\launch.mjs` without a console window, and creates the desktop shortcut through Windows' own interface. `runtime\node.exe` is the official, signed Node.js. There are no script launchers in the package. To see the server's output, start it with 排查问题（带控制台）.cmd (troubleshooting, with a console).
 
@@ -148,7 +150,7 @@ Your data lives in `%USERPROFILE%\.cicatavern\`, outside the program folder, so 
 
 ## Proxy
 
-If you need a proxy for overseas APIs (OpenRouter, Anthropic, OpenAI, Gemini and so on), choose one under 设置 (Settings) → 网络代理 (Network proxy):
+If you need a proxy for overseas APIs (OpenRouter, Anthropic, OpenAI, Gemini and so on), choose one under 设置 (Settings) → 连接 (Connection) → 网络代理 (Network proxy):
 
 - **不用代理** (No proxy, the default)
 - **跟随系统代理** (Follow the system proxy): reads Windows' proxy setting, which is what tools like Clash or v2rayN set in "system proxy" mode. It is re-read every minute, so switching your proxy tool on or off needs no restart.
@@ -209,7 +211,7 @@ When a phone browser opens CicaTavern through a plain http LAN link, the browser
 
 ## Phone access
 
-Set 设置 → 手机访问 (Phone access) to 同一 WiFi 或 Tailscale (Same Wi-Fi or Tailscale) and restart the server; a link with a passcode then appears in the settings. Open it in your phone's browser.
+Set 设置 → 连接 → 手机访问 (Phone access) to 同一 WiFi 或 Tailscale (Same Wi-Fi or Tailscale) and restart the server; a link with a passcode then appears in the settings. Open it in your phone's browser.
 
 - Only this computer's own addresses are accepted, so other web pages can't call the API.
 - **Don't forward the port to the internet**: anyone with the link can spend your model credit. Use Tailscale when you're out.
@@ -220,10 +222,10 @@ Set 设置 → 手机访问 (Phone access) to 同一 WiFi 或 Tailscale (Same Wi
 Play on your phone without the computer: download `CicaTavern-<version>-android-arm64.apk` from the Releases page, allow "install unknown apps" on the phone, and install it. It needs a 64-bit phone with Android 10 or later (nearly every phone from the last few years).
 
 - The app runs on the phone by itself, with the same interface and features as on the computer; providers and API keys have to be entered on the phone again.
-- The phone and the computer keep separate data. To move a chat, use 导出存档 (Export save) on one side and import it on the other, or 打包对话 (Pack chat) on the computer.
+- The phone and the computer keep separate data. To move a chat, use 导出存档 (Export save) on one side and import it on the other, or click a chat's ⇩ in the chat list on the computer (it packs the whole chat) and import that with 导入存档 on the phone.
 - For read-aloud, use a cloud service: there are usually no browser voices in the app.
 - Voice input: there is no browser recognition in the app, so use a provider's transcription API (with browser recognition picked, the provider picked with it under Voice input is used instead) or a whisper server on your computer. The first time you click the microphone, Android asks whether the app may record audio; if you refused, turn the microphone on under the phone's Settings → Apps → CicaTavern → Permissions.
-- Updates: 设置 → 更多 → 更新 shows the new version and its notes; 下载安装包 (Download installer) hands the APK to your browser. Open it when it's done to install over the old version; all data is kept (Android checks that the new APK is signed with the same key as the installed one).
+- Updates: 设置 → 更多 → 更新 shows the new version and its notes; 下载并安装 (Download and install) downloads it in the app, checks it against the SHA-256 and signature on the release page, and opens the system installer to install over the old version; all data is kept. The first update asks you to allow CicaTavern to "install unknown apps".
 - How to build it and more: [android/README.md](android/README.md).
 
 ## Data

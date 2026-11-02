@@ -94,7 +94,7 @@ function errorCode(error) {
 /** A network error in words: what to try. */
 function networkTrouble(error) {
   if (error?.name === 'AbortError') return msg`已取消`
-  return msg`连不上 GitHub（${errorCode(error)}）。在国内通常要在 设置 → 网络代理 里设代理。`
+  return msg`连不上 GitHub（${errorCode(error)}）。在国内通常要在 设置 → 连接 → 网络代理 里设代理。`
 }
 
 /** Where a download comes from, in words. */
@@ -256,7 +256,7 @@ export function createUpdater({
         headers: { accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28', 'user-agent': userAgent },
       })
     } catch (error) {
-      throw failure(502, signal.aborted ? msg`连 GitHub 超时。在国内通常要在 设置 → 网络代理 里设代理。` : networkTrouble(error))
+      throw failure(502, signal.aborted ? msg`连 GitHub 超时。在国内通常要在 设置 → 连接 → 网络代理 里设代理。` : networkTrouble(error))
     }
     const text = await readText(res)
     if (res.statusCode === 404) throw failure(502, msg`还没有发布任何版本`)

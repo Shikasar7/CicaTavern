@@ -1,0 +1,85 @@
+# 常见问题
+
+不属于某一个功能的问题。具体功能见 [features.md](features.md)，报错见 [errors.md](errors.md)。
+
+## 第一次用要做什么 {#faq-getting-started}
+
+- 也叫：新手、入门、怎么开始、上手、教程、第一次打开
+
+1. 添加模型供应商：顶栏的模型选择最下面「管理模型供应商…」→「添加」→「从模板开始」，选一家，粘贴 API Key，再点「从接口获取模型列表」检查能不能连上（见 [添加模型供应商](features.md#provider-add)）。
+2. 在 设置 → 模型 → 默认模型 里选一个模型。
+3. 左上「导入角色卡、世界书或预设」，选 SillyTavern 的 PNG 或 JSON 角色卡（见 [导入角色卡](features.md#card-import)）。
+4. 点「新对话」，有多个开场白时选一个，就可以开始了。
+
+没有现成的卡，也可以用「创作角色卡」让向导一步步帮你写一张（见 [创作角色卡](features.md#forge-start)）。海外的模型连不上时，先看 [网络代理](features.md#proxy-settings)。
+
+## 和 SillyTavern 有什么不同 {#faq-vs-sillytavern}
+
+- 也叫：酒馆、ST、SillyTavern、区别、能不能代替酒馆、为什么用这个
+
+CicaTavern 读的是 SillyTavern 的格式：角色卡、世界书、预设、正则、MVU 变量和卡片里的状态栏界面导进来就能用，SillyTavern 的对话记录也能导入（见 [导入 SillyTavern 的对话记录](features.md#chat-import-sillytavern)）。不同的地方：
+
+- **按缓存设计提示词**：角色卡、预设、你的角色和文风在开局时写成一个固定前缀，之后每轮只往后追加，所以缓存命中高、长对话便宜、出字快。代价是改了这些设置，只对新对话生效，已有的对话要手动应用（见 [改了设置没生效](#faq-settings-not-applied)）。
+- **Agent 式**：生成在后台进行，切走也会写完；配图、压缩上下文、创作角色卡由模型分工完成。
+- **自带**一键配图、朗读、视觉小说模式、固定的角色形象，不用另装插件。
+- **不能装 SillyTavern 的扩展插件**。为酒馆助手写的卡片界面和脚本大多能用（见 [卡片界面](features.md#card-ui-frames)、[酒馆助手脚本](features.md#card-helper-scripts)）。
+
+## 能不能几张角色卡一起群聊 {#faq-group-chat}
+
+- 也叫：群聊、多人、多角色、几个角色一起、group chat
+
+目前没有 SillyTavern 那种把几张角色卡拉进同一个对话的群聊。一张卡里本来就写了多个角色（多角色卡）可以正常玩；配图时会按「角色名册」里每个人的长相分别画，不串脸（见 [角色名册](features.md#roster)）。
+
+## 国内不用代理能用吗 {#faq-china-direct}
+
+- 也叫：不翻墙、不挂梯子、国内能用吗、直连、没有代理
+
+能。模板里的 DeepSeek、Kimi、智谱、通义、火山方舟、硅基流动这些国内服务默认直连，不需要代理。OpenRouter、Anthropic、OpenAI、Gemini、Grok 这类海外服务通常要代理，在 设置 → 连接 → 网络代理 里设（见 [网络代理](features.md#proxy-settings)）。检查更新时连不上 GitHub 会自动改用国内镜像。
+
+## 苹果手机能玩吗 {#faq-iphone}
+
+- 也叫：iPhone、iOS、苹果、iPad、有没有苹果版
+
+没有 iPhone 应用。iPhone 和 iPad 可以连电脑上的 CicaTavern 玩：电脑上打开 设置 → 连接 → 手机访问，用 Safari 打开带口令的链接，再「添加到主屏幕」，之后像 App 一样全屏打开（见 [手机访问](features.md#lan-access)）。用的是电脑上的模型和数据，玩的时候电脑要开着。苹果电脑有 Mac 版（测试版）。
+
+## 手机和电脑的存档通不通 {#faq-phone-pc-data}
+
+- 也叫：同步、手机电脑一起用、换设备、存档迁移、两边数据
+
+- **手机浏览器连电脑（手机访问）**：用的就是电脑上的数据，两边看到的是同一份，同时开着会自动同步。
+- **安卓版**：在手机上独立运行，数据和电脑互不相通，供应商和 API Key 也要在手机上再填一次。要把一段对话搬过去，用「导出存档」或对话包，再在另一边导入（见 [导出剧情存档](features.md#chat-story-export)、[对话包](features.md#chat-package)）。
+
+## 改了人设、文风或预设没生效 {#faq-settings-not-applied}
+
+- 也叫：设置不生效、改了没用、没变化、怎么应用、要重开对话吗
+
+你的角色、文风、写作语言、预设和角色卡内容写在对话开局时的固定前缀里（这样缓存命中才高），所以改了以后**只对新开的对话生效**。已有的对话：
+
+- 换你的角色或文风：在对应窗口里点「用于当前对话」（见 [换当前对话的角色或文风](features.md#writing-use-in-chat)）。
+- 改了预设：见 [改了预设为什么没生效](features.md#preset-apply)。
+- 改了角色卡：见 [改了角色卡，进行中的对话怎么用上](features.md#card-edit-prefix)。
+- 都不行时：设置 → 更多 → 重建当前对话的前缀（见 [重建当前对话的前缀](features.md#prefix-rebuild)）。重建后这一轮要重新写缓存，会贵一点。
+
+## 聊久了会不会越来越贵、越来越慢 {#faq-long-chat}
+
+- 也叫：上下文太长、越聊越慢、费钱、token 太多、记不住前面
+
+长对话每轮的大部分内容都能命中缓存，按便宜得多的缓存价计费（各家供应商支持的情况见 [哪些供应商能命中缓存](features.md#prompt-cache-providers)）。上下文快满时会自动压缩：模型把前面的剧情写成一份剧情存档，换个干净的上下文接着写（见 [压缩上下文](features.md#context-compact)）。每轮花了多少、命中了多少缓存，在「用量」页和右栏能看到（见 [用量与缓存](features.md#usage-dashboard)）。
+
+## 更新会不会丢存档 {#faq-update-keep-data}
+
+- 也叫：更新丢数据、升级、存档还在吗、覆盖安装
+
+不会。电脑版的数据在用户主目录的 `.cicatavern` 文件夹里，不在程序文件夹里，应用内更新、回到上一版、删除旧版本都不碰它。安卓版覆盖安装新版本，数据都保留。保险起见，大版本更新前可以把 `.cicatavern` 文件夹整个备份一份（见 [备份和换电脑](features.md#data-backup-move)）。
+
+## 怎么看自己用的是哪个版本 {#faq-my-version}
+
+- 也叫：版本号、哪个版本、当前版本、是不是最新
+
+设置 → 更多 → 更新，上面写着「现在的版本」，有新版本时也会显示。最新版本和每版改了什么见 [versions.md](versions.md)。在群里问问题时，先说清版本号和平台（Windows、Mac、安卓、手机浏览器），能更快找到原因。
+
+## API Key 安全吗 {#faq-api-key-safety}
+
+- 也叫：密钥泄露、Key 被盗、截图、分享设置
+
+API Key 只存在你自己的设备上（数据文件夹里的供应商设置，明文保存），CicaTavern 不会发给开发者。要注意的是：不要把数据文件夹或「导出（含密钥）」的文件发给别人；在群里截图问问题时把 Key 打码；不要把 CicaTavern 的端口映射到公网，拿到链接的人能用你的模型额度。错误日志里的 Key 已经去掉，可以放心发。

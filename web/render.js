@@ -197,6 +197,48 @@ function hash(text) {
 // A chunk that is a whole document: <html> first, after a doctype and comments only.
 const FULL_DOCUMENT = /^\s*(?:<!--[\s\S]*?-->\s*)*(?:<!doctype[^>]*>\s*)?(?:<!--[\s\S]*?-->\s*)*<html(?:\s[^>]*)?>/i
 
+/**
+ * The text of a frame's page, a line per block, for 复制 (app.js copyMenu): what is drawn and what is folded away
+ * (a status bar's closed <details>), not its scripts, styles or what it hides. Runs inside the frame too (frameDocument
+ * puts its source there), so it uses nothing from outside itself.
+ */
+export function readableText(root) {
+  const BLOCK = /^(ADDRESS|ARTICLE|ASIDE|BLOCKQUOTE|DD|DETAILS|DIV|DL|DT|FIELDSET|FIGCAPTION|FIGURE|FOOTER|FORM|H[1-6]|HEADER|HR|LI|MAIN|NAV|OL|P|PRE|SECTION|SUMMARY|TABLE|TR|UL)$/
+  const SKIP = /^(SCRIPT|STYLE|TEMPLATE|NOSCRIPT|SVG|CANVAS|IFRAME|BUTTON|SELECT|TEXTAREA)$/i
+  // Laid out (a frame, the page): blocks as drawn, and a flex or grid row's items side by side on one line. Parsed
+  // only (a frame not loaded yet): blocks by their tags.
+  const view = root.ownerDocument && root.ownerDocument.defaultView
+  let out = ''
+  const walk = (node, inRow) => {
+    if (node.nodeType === 3) out += node.nodeValue
+    if (node.nodeType !== 1 || SKIP.test(node.tagName) || node.hidden) return
+    const style = view ? view.getComputedStyle(node) : null
+    if (style && style.display === 'none') return
+    if (node.tagName === 'BR') out += '\n'
+    const block = !inRow && (style ? /^(block|flex|grid|list-item|table|table-row|table-caption|flow-root)$/.test(style.display) : BLOCK.test(node.tagName))
+    const row = Boolean(style) && /flex|grid/.test(style.display) && !/column/.test(style.flexDirection)
+    const start = out.length
+    if (block) out += '\n'
+    let seen = false
+    let last = null
+    for (const child of node.childNodes) {
+      // A row that wraps: a new line where an item starts below the one before it.
+      if (row && child.nodeType === 1) {
+        const box = child.getBoundingClientRect()
+        if (seen) out += last && box.height && box.top >= last.bottom - 1 ? '\n' : ' '
+        seen = true
+        if (box.height) last = box
+      }
+      walk(child, row)
+    }
+    if (/^T[DH]$/.test(node.tagName)) out += ' '
+    // An empty block (a meter's bar) breaks no line.
+    if (block) out = out.slice(start).trim() ? `${out}\n` : out.slice(0, start)
+  }
+  walk(root, false)
+  return out.split('\n').map(line => line.replace(/\s+/g, ' ').trim()).filter(Boolean).join('\n')
+}
+
 /** `context`: what the Tavern Helper stand-in needs (see compat.js); without it the frame gets plain HTML. */
 function frameDocument(body, id, context) {
   const css = getComputedStyle(document.documentElement)
@@ -208,7 +250,7 @@ function frameDocument(body, id, context) {
   // block that collapses (a folded thinking panel, a re-render at a cached height) left a gap.
   // The frame says how tall it is; past FRAME_MAX (the most the page gives it) it scrolls inside itself
   // instead of cutting the rest off (a long reply wrapped whole by a card's display regex).
-  const report = `<script>(()=>{const b=document.body;const height=()=>{let h=b.scrollHeight;for(const el of b.children){const r=el.getBoundingClientRect();if(r.height||r.width)h=Math.max(h,r.bottom+scrollY+(parseFloat(getComputedStyle(el).marginBottom)||0))}return Math.ceil(h)};const post=()=>{const h=height();document.documentElement.style.overflowY=h>${FRAME_MAX}?'auto':'';parent.postMessage({agentTavernFrame:${JSON.stringify(id)},height:h},'*')};addEventListener('load',post);const ro=new ResizeObserver(post);ro.observe(b);for(const el of b.children)ro.observe(el);setTimeout(post,60);setTimeout(post,600)})()<\/script>`
+  const report = `<script>(()=>{const b=document.body;const height=()=>{let h=b.scrollHeight;for(const el of b.children){const r=el.getBoundingClientRect();if(r.height||r.width)h=Math.max(h,r.bottom+scrollY+(parseFloat(getComputedStyle(el).marginBottom)||0))}return Math.ceil(h)};const post=()=>{const h=height();document.documentElement.style.overflowY=h>${FRAME_MAX}?'auto':'';parent.postMessage({agentTavernFrame:${JSON.stringify(id)},height:h},'*')};addEventListener('load',post);const ro=new ResizeObserver(post);ro.observe(b);for(const el of b.children)ro.observe(el);setTimeout(post,60);setTimeout(post,600);addEventListener('message',e=>{if(e.data&&e.data.agentTavernText===${JSON.stringify(id)})parent.postMessage({agentTavernFrame:${JSON.stringify(id)},text:(${readableText})(b)},'*')})})()<\/script>`
   const head = `<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><base target="_blank"><style>html,body{margin:0;padding:0;background:transparent;color:${color};font:14px/1.6 system-ui,"Microsoft YaHei",sans-serif;overflow:hidden}</style>${compat}`
   // A full document only when it opens with <html> (after a doctype or comments): one written inside a script's
   // string (a card's export that opens a window) is not where the stand-in goes.
@@ -243,13 +285,34 @@ export function htmlFrame(body, context = null) {
   return frame
 }
 
-/** Resize frames from their height reports; ignore messages that did not come from one of our frames. */
+const textAsked = new Map() // frame id → resolve, while 复制 waits for its text
+
+/**
+ * A frame's text as it shows (its scripts may have drawn it from the variables), asked of the frame itself; read from
+ * its HTML when it does not answer in time (not loaded yet: the frames load lazily).
+ */
+export function frameText(frame, wait = 800) {
+  const id = frame.dataset.frame
+  return new Promise(resolve => {
+    const timer = setTimeout(() => answer(readableText(new DOMParser().parseFromString(frame.srcdoc, 'text/html').body)), wait)
+    const answer = text => {
+      clearTimeout(timer)
+      textAsked.delete(id)
+      resolve(text)
+    }
+    textAsked.set(id, answer)
+    frame.contentWindow?.postMessage({ agentTavernText: id }, '*')
+  })
+}
+
+/** Resize frames from their height reports (and hand over the text 复制 asked for); ignore messages that did not come from one of our frames. */
 export function listenForFrameHeights() {
   window.addEventListener('message', event => {
     const id = event.data?.agentTavernFrame
     if (typeof id !== 'string') return
     const frame = document.querySelector(`iframe[data-frame="${CSS.escape(id)}"]`)
     if (!frame || event.source !== frame.contentWindow) return
+    if (typeof event.data.text === 'string') return textAsked.get(id)?.(event.data.text)
     const height = Math.min(Math.max(Number(event.data.height) || 0, 20), FRAME_MAX)
     frame.style.height = `${height}px`
     heights.set(frame.dataset.key, height)

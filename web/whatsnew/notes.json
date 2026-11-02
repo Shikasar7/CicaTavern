@@ -777,6 +777,35 @@
           }
         }
       ]
+    },
+    {
+      "version": "2.2.4",
+      "date": "2026-11",
+      "after": true,
+      "items": [
+        {
+          "icon": "📋",
+          "zh": {
+            "title": "复制消息，选项可以多选",
+            "text": "每条消息下面多了「复制」：复制显示出来的文字，不带名字和按钮；回复还可以只复制正文、状态或选项。手机上长按选字也不会再把顶栏、轮数和输入框选进去。\n行动选项点一下是加进输入框，可以点好几个一起发，再点一次去掉；卡写了五个以上选项也都显示出来。"
+          },
+          "en": {
+            "title": "Copy a message; pick several options",
+            "text": "Every message has Copy: its text as shown, without the name or buttons; for a reply, all of it or only the story, the status or the options. Selecting by long press on a phone no longer takes in the top bar, the round or the input box.\nTapping an option now adds it to the input box, so several can go together (tap again to take it out), and cards with more than four options show them all."
+          }
+        },
+        {
+          "icon": "🗂️",
+          "zh": {
+            "title": "拖卡更顺手，分组也能排",
+            "text": "拖动角色卡时旁边的卡会平滑让开，手机上长按后卡片浮起来跟着手指走。分组标题也能拖，整组一起换位置。电脑上把卡拖到桌面或文件夹里松开，就直接导出成文件。\n「创作角色卡」保存的卡会写上作者：你的名字 + CicaTavern。"
+          },
+          "en": {
+            "title": "Smoother dragging; groups in your order",
+            "text": "Dragging a card, the others slide out of its way; on a phone it lifts after a long press and follows your finger. Group titles drag too, taking their cards along. On a computer, drop a card on the desktop or a folder and it is exported there as a file.\nCards saved from Create a card carry an author: your name + CicaTavern."
+          }
+        }
+      ]
     }
   ]
 }

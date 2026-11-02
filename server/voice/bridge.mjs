@@ -38,7 +38,7 @@ export function createBridge({ root, features = null }) {
     const key = String(value ?? '').trim()
     if (!key) await rm(ttsKeyFile, { force: true })
     else {
-      if (!/^[\w-]{8,200}$/.test(key)) throw httpError(400, msg`访问口令不对：把电脑上酒馆「局域网访问」里的链接整条粘贴过来`)
+      if (!/^[\w-]{8,200}$/.test(key)) throw httpError(400, msg`访问口令不对：把电脑上酒馆「设置 → 手机访问」里的链接整条粘贴过来`)
       await writeFile(ttsKeyFile, JSON.stringify({ key }), 'utf8')
     }
     return ttsKeyStatus()
@@ -64,7 +64,7 @@ export function createBridge({ root, features = null }) {
     if (/^40[13]\b/.test(message)) return msg`电脑上的酒馆不让访问：把它「手机访问」里的链接整条粘贴到「桥接地址」（链接里带着口令）`
     if (isLocalUrl(media.ttsUrl)) {
       if (!down) return msg`本地语音桥接：${message.replace(/^\d{3} /, '').slice(0, 200)}`
-      return features?.xiaoya === false ? msg`本地语音桥接（${media.ttsUrl}）没开` : msg`本地语音桥接（小雅）没开：先运行「小雅一键启动」（或只启动语音桥接）`
+      return features?.xiaoya === false ? msg`本地语音桥接（${media.ttsUrl}）没开` : msg`本地语音桥接没开：先用它的一键启动打开（或只启动语音桥接）`
     }
     if (down) return msg`连不上 ${media.ttsUrl}：电脑上的酒馆开着吗？手机和电脑在同一个 Wi-Fi 吗？`
     return msg`本地语音桥接（${media.ttsUrl}）：${message.replace(/^\d{3} /, '').slice(0, 200)}`

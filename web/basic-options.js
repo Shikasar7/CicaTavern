@@ -5,7 +5,7 @@ import { t } from '/i18n.js'
 /** `prompt: false`: only changes what the page shows, nothing the model reads. */
 export const BASIC_FIELDS = [
   { key: 'person', label: t`人称`, hint: t`第一人称用角色的口吻「我」来写，适合单人角色卡。`, values: [['greeting', t`跟随开场白`], ['second', t`第二人称`], ['third', t`第三人称`], ['first', t`第一人称`]] },
-  { key: 'style', label: t`文风`, hint: t`更细的要求写在 设置 → 文风与字数，会和这里一起生效。`, values: [['natural', t`自然`], ['plain', t`白描`], ['cinematic', t`电影感`], ['delicate', t`细腻`], ['light', t`轻小说`], ['classical', t`古风`], ['webnovel', t`网文`]] },
+  { key: 'style', label: t`文风`, hint: t`更细的要求写在 设置 → 写作 → 文风，会和这里一起生效。`, values: [['natural', t`自然`], ['plain', t`白描`], ['cinematic', t`电影感`], ['delicate', t`细腻`], ['light', t`轻小说`], ['classical', t`古风`], ['webnovel', t`网文`]] },
   { key: 'impersonation', label: t`防抢话`, hint: t`标准：不替你说话、做决定；严格：写到该你回应的地方就停。`, values: [['off', t`关`], ['standard', t`标准`], ['strict', t`严格`]] },
   { key: 'knowledge', label: t`防全知`, hint: t`角色只知道自己能知道的事，猜不到你没说出口的想法。`, values: [['off', t`关`], ['on', t`开`]] },
   { key: 'themes', label: t`题材尺度`, hint: t`放开：暴力、犯罪、背叛这类黑暗题材按剧情正面去写，反派可以真的坏，不跳出故事说教。模型自己的底线仍然有效。`, values: [['standard', t`常规`], ['open', t`放开`]] },

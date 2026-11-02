@@ -298,7 +298,7 @@ export function initCardEdit({ api, el, toast, guard, saveFile, getChat, isGener
         el('span', { text: own }),
         el('button', { type: 'button', class: 'btn small', text: card.bookEntries ? t`查看和编辑条目` : t`新建第一个条目`, onclick: () => editBook() }),
       ]),
-      card.worldbookIds.length ? el('p', { class: 'hint', text: t`另外挂了 ${card.worldbookIds.length} 本独立世界书，在「设置 → 挂载的世界书」里管理。` }) : null,
+      card.worldbookIds.length ? el('p', { class: 'hint', text: t`另外挂了 ${card.worldbookIds.length} 本独立世界书，在「设置 → 世界书与状态 → 挂载的世界书」里管理。` }) : null,
       el('p', { class: 'hint', text: t`人物、地点和设定的条目也可以在「对话修改」里让向导加，比如：加一个青梅竹马的 NPC 条目。` }),
     ])
   }

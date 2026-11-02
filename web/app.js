@@ -1,7 +1,7 @@
 // Agent Tavern web UI. Plain DOM, no build step.
-import { blockShown, displayOf, htmlFrame, listenForFrameHeights, nameMacros, segments, streamingText, useBlockWords, usesStatusPlaceholder, withoutOwnStatus } from '/render.js'
+import { blockShown, displayOf, frameText, htmlFrame, listenForFrameHeights, readableText, nameMacros, segments, streamingText, useBlockWords, usesStatusPlaceholder, withoutOwnStatus } from '/render.js'
 import { choiceList, statusBar, timeBox } from '/status.js'
-import { BASIC_ID, VN_ID, builtinKey, builtinOptions, choicesOf, isBuiltinPreset, otherChoices, timeBoxOf } from '/shared/basic.js'
+import { BASIC_ID, VN_ID, builtinKey, builtinOptions, choiceLetter, choicesOf, isBuiltinPreset, otherChoices, timeBoxOf } from '/shared/basic.js'
 import { autoStatusSpec } from '/shared/status.js'
 import { basicField, fieldsOf } from '/basic-options.js'
 import { allowLibraries, broadcastChatVars, broadcastInput, broadcastRelay, broadcastState, installFrameBridge, parseSlash, storedFrameStorage, storedVariables } from '/compat.js'
@@ -204,8 +204,20 @@ const toastBox = $('toast')
 // its 错误日志 could not be clicked. Inside the dialog it can (and back in the page once none is open).
 // An old WebView (Android phones whose system WebView is before Chrome 105) throws on `:modal`: any open dialog there.
 const modalDialog = CSS.supports('selector(:modal)') ? 'dialog:modal' : 'dialog[open]'
-const toastHost = () => document.querySelector(modalDialog) ?? document.body
+// The one opened last is on top: only it takes clicks (配图与朗读 over 设置). The page order says nothing of
+// which opened when, so they are kept in the order they opened.
+let openedDialogs = [...document.querySelectorAll('dialog[open]')]
+const toastHost = () => {
+  openedDialogs = openedDialogs.filter(dialog => dialog.isConnected && dialog.open)
+  for (const dialog of document.querySelectorAll('dialog[open]')) if (!openedDialogs.includes(dialog)) openedDialogs.push(dialog)
+  // Not findLast: old WebViews (before Chrome 97) have none.
+  return [...openedDialogs].reverse().find(dialog => dialog.matches(modalDialog)) ?? document.body
+}
 new MutationObserver(records => {
+  for (const { target } of records) {
+    if (target.localName !== 'dialog' || !target.open) continue
+    openedDialogs = [...openedDialogs.filter(dialog => dialog !== target), target]
+  }
   const box = toastBox
   if (!box?.showPopover || box.hidden) return
   // Its dialog closed or went away while it showed: on to the page (or the dialog under it), still showing.
@@ -429,7 +441,8 @@ const avatarVersions = new Map()
 
 function avatarFor(card) {
   const version = avatarVersions.get(card?.id)
-  if (card?.hasAvatar) return el('img', { class: 'avatar', src: `/api/cards/${card.id}/avatar${version ? `?v=${version}` : ''}`, alt: '' })
+  // Not a picture of its own to drag: the card it is on is dragged (拖拽排序).
+  if (card?.hasAvatar) return el('img', { class: 'avatar', src: `/api/cards/${card.id}/avatar${version ? `?v=${version}` : ''}`, alt: '', draggable: 'false' })
   return el('span', { class: 'avatar', text: (card?.name ?? '?').slice(0, 1) })
 }
 
@@ -472,10 +485,14 @@ function saveFolded() {
 }
 
 // section: the part of the list the card sits in (置顶, ungrouped, a group, the archive), which dragging stays inside.
+// The browser's own drag (拖拽排序 with a mouse, out to a folder) only where a mouse is the pointer: on a phone a long
+// press would start it too, in place of the card following the finger.
+const mouseDrag = () => matchMedia('(pointer: fine)').matches
+
 function cardItem(card, section, nested = false) {
   // A pinned card out of its group says which one it belongs to.
   const where = section === 'pinned' && card.group ? `${card.group} · ` : ''
-  return el('li', { class: [card.id === ui.cardId ? 'active' : '', nested ? 'nested' : '', card.archived ? 'archived' : ''].filter(Boolean).join(' '), 'data-id': card.id, 'data-section': section, onclick: () => selectCard(card.id) }, [
+  return el('li', { class: [card.id === ui.cardId ? 'active' : '', nested ? 'nested' : '', card.archived ? 'archived' : ''].filter(Boolean).join(' '), 'data-id': card.id, 'data-section': section, draggable: mouseDrag() ? 'true' : null, onclick: () => selectCard(card.id) }, [
     avatarFor(card),
     el('div', { class: 'item-main' }, [
       el('div', { class: 'item-title' }, [
@@ -492,9 +509,9 @@ function cardItem(card, section, nested = false) {
 const PIN_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10.2 2.2 13.8 5.8 11.6 7.1 9.5 11.4 4.6 6.5 8.9 4.4Z" /><path d="M7 9 3 13" /></svg>'
 
 // cards: the ones listed under it; menuCards: all of the group's (pinned ones too), for its ⋯.
-function groupHead(name, cards, folded, { archive = false, menuCards = cards } = {}) {
+function groupHead(name, cards, folded, { archive = false, menuCards = cards, draggable = false } = {}) {
   const holdsCurrent = folded && cards.some(card => card.id === ui.cardId)
-  return el('li', { class: `group-head${archive ? ' archive' : ''}`, role: 'button', tabindex: '0', 'aria-expanded': String(!folded), title: folded ? t`展开` : t`收起`, onclick: () => toggleGroup(name, archive), onkeydown: event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleGroup(name, archive) } } }, [
+  return el('li', { class: `group-head${archive ? ' archive' : ''}`, 'data-group': archive ? null : name, draggable: draggable && mouseDrag() ? 'true' : null, role: 'button', tabindex: '0', 'aria-expanded': String(!folded), title: folded ? t`展开` : t`收起`, onclick: () => toggleGroup(name, archive), onkeydown: event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleGroup(name, archive) } } }, [
     el('span', { class: 'group-chevron', 'aria-hidden': 'true', text: '▸' }),
     el('span', { class: 'group-name', text: name }),
     holdsCurrent ? el('span', { class: 'group-current', title: t`正在用的角色卡在这一组里` }) : null,
@@ -515,7 +532,11 @@ function toggleGroup(name, archive) {
 }
 
 /** Names of the groups in use, in a stable order. */
-const cardGroups = () => [...new Set(ui.cards.filter(card => card.group).map(card => card.group))].sort((a, b) => a.localeCompare(b, 'zh-CN'))
+// In the order they were dragged into (拖动分组); the others after them, by name.
+const cardGroups = () => {
+  const at = new Map((ui.groupOrder ?? []).map((name, i) => [name, i]))
+  return [...new Set(ui.cards.filter(card => card.group).map(card => card.group))].sort((a, b) => (at.get(a) ?? Infinity) - (at.get(b) ?? Infinity) || a.localeCompare(b, 'zh-CN'))
+}
 
 // 搜索角色卡 (the box above the list): only the cards whose name, tags, group or
 // author have every word show, in every group and the archive opened for it;
@@ -548,7 +569,7 @@ function renderCards() {
     const cards = live.filter(card => !card.pinned && card.group === name)
     if (!cards.length) continue
     const folded = !filtering && foldedGroups.has(name)
-    items.push(groupHead(name, cards, folded, { menuCards: live.filter(card => card.group === name) }))
+    items.push(groupHead(name, cards, folded, { menuCards: live.filter(card => card.group === name), draggable: !filtering }))
     if (!folded) items.push(...cards.map(card => cardItem(card, `group:${name}`, true)))
   }
   if (archived.length) {
@@ -586,7 +607,10 @@ function renderChats() {
 }
 
 async function refreshCards() {
-  ui.cards = await api('/api/cards')
+  // A server older than 拖动分组 has no group order: the groups go by name.
+  const [cards, groups] = await Promise.all([api('/api/cards'), api('/api/cards/group-order').catch(() => ({ names: [] }))])
+  ui.cards = cards
+  ui.groupOrder = groups.names
   if (ui.cardId && !ui.cards.some(c => c.id === ui.cardId)) ui.cardId = null
   renderCards()
 }
@@ -619,7 +643,7 @@ function showCardInfo(card) {
     card.creator && t`作者：${card.creator}`,
     card.tags?.length && t`标签：${card.tags.join(t`、`)}`,
     card.creatorNotes,
-    card.regexScripts ? t`正则脚本 ${card.regexScripts} 条（已生效；设置 → 正则 里可以开关和修改）` : '',
+    card.regexScripts ? t`正则脚本 ${card.regexScripts} 条（已生效；设置 → 写作 → 正则 里可以开关和修改）` : '',
     card.helperScripts ? t`酒馆助手脚本 ${card.helperScripts} 个（不执行；MVU 变量更新已内置）` : '',
   ].filter(Boolean).join('\n\n') || '—'
 }
@@ -673,126 +697,195 @@ const organizeCard = guard(async (card, change, done) => {
   if (done) toast(done)
 })
 
-// ─── 拖拽排序: a card dragged up or down the list ───────────────────────
-// A mouse drags on a press and a move; a finger holds still a moment first, so a quick swipe still
-// scrolls the list. A card moves within its part of the list (置顶, ungrouped, a group, the archive).
-// While searching or showing only favorites, the cards shown swap places among themselves and the
-// hidden ones stay where they were. The order is the server's (PUT /api/cards/order), the same on every device.
+// ─── 拖拽排序: cards and groups dragged up or down the list ──────────────
+// A card moves within its part of the list (置顶, ungrouped, a group, the archive); a group, its title with its cards,
+// among the groups. The others slide out of the way as it goes. While searching or showing only favorites, the cards
+// shown swap places among themselves and the hidden ones stay where they were; the groups stay put.
+// A mouse drags the browser's way, so a card let go over a folder outside the window is saved there as a file, as
+// 导出角色卡 would (Chrome and Edge); in the list it leaves a faint place where it will land. A finger holds still a
+// moment first, so a quick swipe still scrolls the list; the card then lifts and follows it.
+// The orders are the server's (PUT /api/cards/order, /api/cards/group-order), the same on every device.
 function initCardDrag(list) {
-  let drag = null // { li, section, before: the section's ids as it was }
+  const SLIDE = 200 // ms: the others making room, the dropped one settling (style.css .card-list.sorting)
+  let sort = null // { units: [[li…]…], boxes, from, to, size, follow, y0, scroll0, y, dy, scroller }
+  let settling = false
   let hold = null // a finger down, not yet held long enough: { x, y, timer }
-  let lastY = 0
-  let scroller = 0
-  const cardLi = target => (target.closest('button') ? null : target.closest('li[data-id]'))
-  const inSection = section => [...list.querySelectorAll('li[data-id]')].filter(li => li.dataset.section === section)
+  const filtering = () => searchTerms(cardQuery).length > 0 || favoritesOnly
+  const kindOf = li => (li?.matches('li[data-id]') ? 'card' : li?.matches('li.group-head[data-group]') && !filtering() ? 'group' : null)
+  const handle = target => (target.closest('button') ? null : target.closest('li[data-id], li.group-head[data-group]'))
 
-  function start(li, y) {
-    drag = { li, section: li.dataset.section, before: inSection(li.dataset.section).map(n => n.dataset.id) }
-    li.classList.add('dragging')
+  /** What moves together: a card alone, among its part's cards; a group with its cards, among the groups. */
+  function unitsFor(li) {
+    const cards = [...list.querySelectorAll('li[data-id]')]
+    if (kindOf(li) === 'card') return cards.filter(n => n.dataset.section === li.dataset.section).map(n => [n])
+    return [...list.querySelectorAll('li.group-head[data-group]')].map(head => [head, ...cards.filter(n => n.dataset.section === `group:${head.dataset.group}`)])
+  }
+  const lis = () => sort.units.flat()
+
+  function begin(li, y, follow) {
+    const units = unitsFor(li)
+    const from = units.findIndex(unit => unit[0] === li)
+    if (from < 0) return
+    // Where each sits in the list's own coordinates (scrolling moves them all alike).
+    const scroll = list.scrollTop
+    const boxes = units.map(unit => ({ top: unit[0].getBoundingClientRect().top + scroll, bottom: unit.at(-1).getBoundingClientRect().bottom + scroll }))
+    const own = boxes[from]
+    const gap = boxes[from + 1] ? boxes[from + 1].top - own.bottom : boxes[from - 1] ? own.top - boxes[from - 1].bottom : 0
+    sort = { units, boxes, from, to: from, size: own.bottom - own.top + gap, follow, y0: y, scroll0: scroll, y, dy: 0 }
     list.classList.add('sorting')
-    lastY = y
-    // Held near the list's top or bottom edge, it scrolls along.
-    scroller = setInterval(() => {
+    for (const n of units[from]) n.classList.add(follow ? 'lifted' : 'held')
+    // Near the list's top or bottom edge, it scrolls along.
+    sort.scroller = setInterval(() => {
       const box = list.getBoundingClientRect()
-      const step = lastY < box.top + 32 ? -8 : lastY > box.bottom - 32 ? 8 : 0
+      const step = sort.y < box.top + 36 ? -9 : sort.y > box.bottom - 36 ? 9 : 0
       if (!step) return
       list.scrollTop += step
-      move(lastY)
+      place(sort.y)
     }, 16)
   }
-  function move(y) {
-    lastY = y
-    const others = inSection(drag.section).filter(n => n !== drag.li)
-    if (!others.length) return
-    const next = others.find(n => {
-      const box = n.getBoundingClientRect()
-      return y < box.top + box.height / 2
+
+  /** Where it would land: by its middle as it follows the finger, by the pointer as the browser drags it. */
+  function place(y) {
+    sort.y = y
+    const { boxes, from, follow } = sort
+    const scroll = list.scrollTop
+    sort.dy = y - sort.y0 + scroll - sort.scroll0
+    const at = follow ? (boxes[from].top + boxes[from].bottom) / 2 + sort.dy : y + scroll
+    target(boxes.filter((box, i) => i !== from && (box.top + box.bottom) / 2 < at).length)
+  }
+
+  const slot = to => {
+    const { boxes, from } = sort
+    return to > from ? boxes[to].bottom - boxes[from].bottom : to < from ? boxes[to].top - boxes[from].top : 0
+  }
+  function target(to) {
+    const { units, from, size } = sort
+    sort.to = to
+    units.forEach((unit, i) => {
+      const shift = i === from ? (sort.follow ? sort.dy : slot(to)) : i > from && i <= to ? -size : i < from && i >= to ? size : 0
+      for (const n of unit) n.style.transform = shift ? `translateY(${shift}px)` : ''
     })
-    if (next) {
-      if (drag.li.nextElementSibling !== next) next.before(drag.li)
-    } else if (others.at(-1).nextElementSibling !== drag.li) others.at(-1).after(drag.li)
-  }
-  function end(commit) {
-    clearInterval(scroller)
-    const { li, section, before } = drag
-    drag = null
-    li.classList.remove('dragging')
-    list.classList.remove('sorting')
-    // The click that ends a drag does not open the card.
-    const swallow = event => { event.stopPropagation(); event.preventDefault() }
-    addEventListener('click', swallow, { capture: true, once: true })
-    setTimeout(() => removeEventListener('click', swallow, { capture: true }), 300)
-    const after = inSection(section).map(n => n.dataset.id)
-    if (commit && li.isConnected && after.join() !== before.join()) saveCardOrder(before, after)
-    else renderCards()
   }
 
-  list.addEventListener('pointerdown', event => {
-    if (event.pointerType !== 'mouse' || event.button !== 0 || drag) return
-    const li = cardLi(event.target)
-    if (!li) return
-    const x0 = event.clientX
-    const y0 = event.clientY
-    const onMove = moved => {
-      if (!drag) {
-        if (Math.hypot(moved.clientX - x0, moved.clientY - y0) < 6) return
-        start(li, moved.clientY)
+  function finish(commit) {
+    const s = sort
+    sort = null
+    clearInterval(s.scroller)
+    const own = s.units[s.from]
+    const moved = commit && s.to !== s.from
+    const order = s.units.filter((_, i) => i !== s.from)
+    order.splice(s.to, 0, own)
+    if (moved) {
+      // Into its place for real: the others already show where they end up; it settles from where it is.
+      const all = s.units.flat()
+      for (const n of all) {
+        n.style.transition = 'none'
+        n.style.transform = ''
       }
-      moved.preventDefault()
-      move(moved.clientY)
+      const after = order[s.to - 1]?.at(-1)
+      if (after) after.after(...own)
+      else order[1][0].before(...own)
+      const from = s.follow ? s.dy - slot(s.to) : 0
+      for (const n of own) n.style.transform = from ? `translateY(${from}px)` : ''
+      void list.offsetHeight
+      for (const n of all) n.style.transition = ''
     }
-    const off = () => {
-      removeEventListener('pointermove', onMove)
-      removeEventListener('pointerup', onUp)
-      removeEventListener('pointercancel', onCancel)
-    }
-    const onUp = () => { off(); if (drag) end(true) }
-    const onCancel = () => { off(); if (drag) end(false) }
-    addEventListener('pointermove', onMove)
-    addEventListener('pointerup', onUp)
-    addEventListener('pointercancel', onCancel)
-  })
-  // The avatar is a picture: the browser's own picture dragging would end ours.
-  list.addEventListener('dragstart', event => event.preventDefault())
+    for (const n of own) n.classList.remove('lifted', 'held')
+    for (const n of s.units.flat()) n.style.transform = ''
+    settling = true
+    setTimeout(() => {
+      settling = false
+      list.classList.remove('sorting')
+      if (!moved) return
+      if (own[0].matches('li[data-id]')) saveCardOrder(s.units.map(unit => unit[0].dataset.id), order.map(unit => unit[0].dataset.id))
+      else saveGroupOrder(order.map(unit => unit[0].dataset.group))
+    }, SLIDE)
+  }
 
+  // The mouse: the browser's drag and drop.
+  list.addEventListener('dragstart', event => {
+    const li = event.target.closest?.('li[draggable="true"]')
+    const kind = kindOf(li)
+    if (!kind || sort || settling) return event.preventDefault()
+    const transfer = event.dataTransfer
+    transfer.effectAllowed = kind === 'card' ? 'copyMove' : 'move'
+    transfer.setData('application/x-cicatavern', kind)
+    const card = kind === 'card' && ui.cards.find(c => c.id === li.dataset.id)
+    if (card) {
+      // Let go over a folder: the file 导出角色卡 saves (PNG with its picture, else SillyTavern's JSON).
+      const name = card.name.replace(/[\\/:*?"<>|\s]+/g, ' ').trim() || 'card'
+      transfer.setData('DownloadURL', card.hasAvatar ? `image/png:${name}.png:${location.origin}/api/cards/${card.id}/png` : `application/json:${name}.json:${location.origin}/api/cards/${card.id}/sillytavern`)
+    }
+    // What the pointer carries: the card (or the group's title) raised off the list.
+    const box = li.getBoundingClientRect()
+    const ghost = el('ul', { class: 'card-list drag-ghost' }, li.cloneNode(true))
+    ghost.firstChild.classList.remove('active', 'held')
+    ghost.firstChild.style.width = `${box.width}px`
+    document.body.append(ghost)
+    transfer.setDragImage(ghost, event.clientX - box.left + 10, event.clientY - box.top + 10)
+    setTimeout(() => ghost.remove())
+    begin(li, event.clientY, false)
+  })
+  list.addEventListener('dragover', event => {
+    if (!sort || sort.follow) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'move'
+    place(event.clientY)
+  })
+  // Over the rest of the window, or out of it, it would not land in the list: its place goes back.
+  const home = () => { if (sort && !sort.follow && sort.to !== sort.from) target(sort.from) }
+  document.addEventListener('dragover', event => { if (!list.contains(event.target)) home() })
+  document.addEventListener('dragleave', event => { if (!event.relatedTarget) home() })
+  list.addEventListener('drop', event => {
+    if (!sort || sort.follow) return
+    event.preventDefault()
+    place(event.clientY)
+    finish(true)
+  })
+  list.addEventListener('dragend', () => {
+    if (sort && !sort.follow) finish(false)
+  })
+
+  // A finger: hold, then drag.
   const letGo = () => {
     clearTimeout(hold?.timer)
     hold = null
   }
   list.addEventListener('touchstart', event => {
     letGo()
-    if (event.touches.length !== 1 || drag) return
-    const li = cardLi(event.target)
-    if (!li) return
+    if (event.touches.length !== 1 || sort || settling) return
+    const li = handle(event.target)
+    if (!kindOf(li)) return
     const { clientX: x, clientY: y } = event.touches[0]
     hold = { x, y, timer: setTimeout(() => {
       hold = null
       navigator.vibrate?.(10)
-      start(li, y)
+      begin(li, y, true)
     }, 380) }
   }, { passive: true })
   list.addEventListener('touchmove', event => {
     const touch = event.touches[0]
     if (hold && Math.hypot(touch.clientX - hold.x, touch.clientY - hold.y) > 8) letGo()
-    if (!drag) return
+    if (!sort?.follow) return
     // Already scrolling (the finger moved just as the hold ended): the list scrolls, nothing moves.
-    if (!event.cancelable) return end(false)
+    if (!event.cancelable) return finish(false)
     event.preventDefault()
-    move(touch.clientY)
+    place(touch.clientY)
   }, { passive: false })
   list.addEventListener('touchend', event => {
     letGo()
-    if (!drag) return
+    if (!sort?.follow) return
+    // The tap that ends it does not open the card or fold the group.
     event.preventDefault()
-    end(true)
+    finish(true)
   })
   list.addEventListener('touchcancel', () => {
     letGo()
-    if (drag) end(false)
+    if (sort?.follow) finish(false)
   })
   // A long press would open the WebView's own menu or pick the text.
   list.addEventListener('contextmenu', event => {
-    if (drag || hold) event.preventDefault()
+    if (sort || hold) event.preventDefault()
   })
 }
 
@@ -806,6 +899,20 @@ const saveCardOrder = guard(async (before, after) => {
   renderCards()
   try {
     await api('/api/cards/order', { method: 'PUT', body: { ids: ui.cards.map(card => card.id) } })
+  } catch (error) {
+    await refreshCards()
+    throw error
+  }
+})
+
+/** 拖动分组: the groups shown, in their new order; the ones not shown (all their cards pinned or archived) keep their places. */
+const saveGroupOrder = guard(async shown => {
+  const moved = new Set(shown)
+  const queue = [...shown]
+  ui.groupOrder = cardGroups().map(name => (moved.has(name) ? queue.shift() : name))
+  renderCards()
+  try {
+    await api('/api/cards/group-order', { method: 'PUT', body: { names: ui.groupOrder } })
   } catch (error) {
     await refreshCards()
     throw error
@@ -1120,6 +1227,24 @@ function fillInput(text) {
   input.setSelectionRange(text.length, text.length)
 }
 
+/** 点选项: added to what the input box holds, on a line of its own, so several can go together; picked again, it comes out. */
+function pickChoice(text) {
+  const input = $('input')
+  const lines = input.value.split('\n')
+  const at = lines.findIndex(line => line.trim() === text)
+  input.value = at >= 0 ? lines.filter((_, i) => i !== at).join('\n').trim() : input.value.trim() ? `${input.value.trimEnd()}\n${text}` : text
+  fitInput()
+  input.focus()
+  input.setSelectionRange(input.value.length, input.value.length)
+  markPicked()
+}
+
+/** The choices whose line is in the input box show it. */
+function markPicked() {
+  const lines = new Set($('input').value.split('\n').map(line => line.trim()))
+  for (const item of document.querySelectorAll('#transcript .choice-item')) item.classList.toggle('picked', lines.has(item.querySelector('.choice-text')?.textContent ?? ''))
+}
+
 function sendChoice(text) {
   $('input').value = text
   fitInput()
@@ -1243,6 +1368,7 @@ function renderChat() {
     )
   }
   box.replaceChildren(...nodes, ...liveNodes(chat))
+  markPicked()
   renderBranchNote()
   box.scrollTop = box.scrollHeight
   historyUi.refresh()
@@ -1339,11 +1465,81 @@ function speakerFace(chat, role) {
   return el('span', { class: 'face', 'aria-hidden': 'true', text: (chat.names.char || '?').slice(0, 1) })
 }
 
+// ─── 复制: a message's text without the name and buttons ─────────────────
+// Selecting a long reply on a phone runs on past the transcript (the scroller jumps); this copies it whole, or a part.
+
+/** Copies through the clipboard API, or (a phone on the local network: not a secure page) the old way. */
+async function copyText(text) {
+  let copied = false
+  try {
+    await navigator.clipboard.writeText(text)
+    copied = true
+  } catch {
+    const area = document.body.appendChild(el('textarea', { readonly: true, style: 'position: fixed; top: 0; opacity: 0; pointer-events: none' }))
+    area.value = text
+    area.select()
+    try {
+      copied = document.execCommand('copy')
+    } catch {}
+    area.remove()
+  }
+  toast(copied ? t`已复制` : t`复制失败，请长按文字选择`)
+}
+
+const shownText = element => element.innerText.trim()
+
+/** A reply's parts as it shows them, in order: the time box, the story, the card's frames, the status bar, the options. */
+function replyParts(article, choices) {
+  const parts = []
+  for (const child of article.children) {
+    // Line by line, without the bar's own buttons (收起).
+    if (child.classList.contains('time-box') || child.classList.contains('status-bar')) parts.push({ kind: 'status', text: async () => readableText(child) })
+    if (child.classList.contains('msg-body')) {
+      for (const part of child.children) {
+        if (part.classList.contains('card-frame')) parts.push({ kind: 'status', text: () => frameText(part) })
+        // A ``` block: where many cards that write their status into the story put it.
+        else if (part.matches('pre.code')) parts.push({ kind: 'status', text: async () => shownText(part) })
+        else if (!part.classList.contains('muted')) parts.push({ kind: 'story', text: async () => shownText(part) })
+      }
+    }
+  }
+  if (choices.length) parts.push({ kind: 'choices', text: async () => choices.map((choice, i) => `${choiceLetter(i)}. ${choice}`).join('\n') })
+  return parts
+}
+
+/**
+ * 复制 under a message: a user's message straight away; a reply all of it, or only its story, status or options.
+ * Status is what the page can tell apart (the time box, the status bar, a card's panels, ``` blocks); one a card writes
+ * as plain story lines stays in the story, and the menu says so.
+ */
+function copyMenu(anchor, node, choices) {
+  const article = anchor.closest('.msg')
+  const reply = node.role !== 'user'
+  const parts = reply ? replyParts(article, choices) : [{ kind: 'story', text: async () => shownText(article.querySelector('.msg-body')) }]
+  const copy = kind => async () => {
+    const texts = await Promise.all(parts.filter(part => !kind || part.kind === kind).map(part => part.text()))
+    copyText(texts.filter(Boolean).join('\n\n') || node.text)
+  }
+  const kinds = new Set(parts.map(part => part.kind))
+  const entries = [{ label: t`全部`, onClick: copy(null) }]
+  if (reply) {
+    if (kinds.has('story') && kinds.size > 1) entries.push({ label: t`仅正文`, onClick: copy('story') })
+    if (kinds.has('status')) entries.push({ label: t`仅状态`, hint: t`时间地点、状态栏、角色卡画的面板和代码块`, onClick: copy('status') })
+    if (kinds.has('choices')) entries.push({ label: t`仅选项`, onClick: copy('choices') })
+  }
+  const input = $('input').value.trim()
+  if (input) entries.push('-', { label: t`输入框里的内容`, onClick: () => copyText(input) })
+  if (!reply && !input) return copy(null)()
+  const note = reply && !kinds.has('status') ? ['-', { header: t`没认出状态栏：写在正文里的状态分不出来，要的话复制「全部」` }] : []
+  popMenu(anchor, [{ header: t`复制` }, ...entries, ...note])
+}
+
 function renderNode(chat, node, isLastAssistant, depth = 0) {
   const isUser = node.role === 'user'
   // The default persona name is the Chinese 你 (for the model); an English page says You.
   const name = isUser ? (chat.names.user === zh`你` ? t`你` : chat.names.user) : chat.names.char
   const tools = []
+  const { shown, raw, time, choices, cardStatus } = replyDisplay(chat, node, isLastAssistant, depth)
   if (node.siblingCount > 1) {
     tools.push(
       el('button', { title: t`上一个版本`, text: '‹', disabled: node.siblingIndex === 0 || ui.generating, onclick: () => selectNode(node.siblingIds[node.siblingIndex - 1]) }),
@@ -1354,6 +1550,7 @@ function renderNode(chat, node, isLastAssistant, depth = 0) {
   if (node.id !== 'root' && node.id !== 'pending-user' && !node.compaction) {
     tools.push(el('button', { text: t`修改`, title: t`直接改这条消息的原文，模型之后看到的也是改过的；不重新生成`, disabled: ui.generating, onclick: event => openEditor(chat, node, event.currentTarget.closest('.msg')) }))
   }
+  if (node.id !== 'pending-user') tools.push(el('button', { text: t`复制`, title: isUser ? t`复制这条消息的文字` : t`复制这条回复：全部，或只要正文、状态、选项`, onclick: event => copyMenu(event.currentTarget, node, choices) }))
   if (!isUser && node.id !== 'root' && isLastAssistant) {
     tools.push(el('button', { text: t`重新生成`, disabled: ui.generating, onclick: () => regenerate(node.parent) }))
   }
@@ -1392,7 +1589,6 @@ function renderNode(chat, node, isLastAssistant, depth = 0) {
   }
   if (node.edited) tools.push(el('span', { class: 'chip', title: t`${new Date(node.edited.at).toLocaleString(locale)} 改过${node.edited.count > 1 ? t` ${node.edited.count} 次` : ''}`, text: t`已修改` }))
   if (node.templateErrors?.length) tools.push(el('span', { class: 'chip warn', title: node.templateErrors.join('\n'), text: t`⚠ ${node.templateErrors.length} 条 EJS 模板出错` }))
-  const { shown, raw, time, choices, cardStatus } = replyDisplay(chat, node, isLastAssistant, depth)
   if (!isUser && isLastAssistant && chat.asksChoices && node.id !== 'root' && !node.compaction) tools.push(...choicesTools(chat, node, raw, choices))
   const bar = !isUser && isLastAssistant && !cardStatus ? statusFor(chat, node) : null
   const imported = node.compaction?.imported
@@ -1415,7 +1611,7 @@ function renderNode(chat, node, isLastAssistant, depth = 0) {
     messageBody(shown, frameContextFor(chat, node)),
     isUser ? null : mediaUi.gallery(chat, node),
     bar,
-    choices.length ? choiceList(el, choices, { onFill: fillInput, onSend: sendChoice, disabled: ui.generating }) : null,
+    choices.length ? choiceList(el, choices, { onFill: pickChoice, onSend: sendChoice, disabled: ui.generating }) : null,
     tools.length ? el('div', { class: 'msg-tools' }, tools) : null,
     !isUser && node.search ? searchSources(node.search) : null,
     recap,
@@ -4055,6 +4251,7 @@ function bind() {
   $('composer').addEventListener('submit', event => { event.preventDefault(); send() })
   $('input').addEventListener('input', () => {
     fitInput()
+    markPicked()
     broadcastInput($('input').value)
   })
   // A phone's keyboard has no Shift+Enter: there its Enter key starts a new line and the send button
@@ -4176,7 +4373,7 @@ async function boot() {
   allowLibraries(ui.settings?.cdnLibraries !== false)
   if (ui.features.subscription) {
     subscriptionPage = await import('/subscription.js').catch(() => null)
-    document.querySelector('.brand-sub').textContent = t`个人版 · 可用 Claude 订阅`
+    document.querySelector('.brand-sub').textContent = t`开发版`
   }
   const appName = ui.features.appName ?? 'CicaTavern'
   document.querySelector('.brand-name').textContent = appName

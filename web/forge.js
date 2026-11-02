@@ -1273,13 +1273,13 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
     return parts
   }
 
-  /** Who goes into 配图 → 角色名单 when the card is saved, and how they look there. */
+  /** Who goes into 配图与朗读 → 角色名册 when the card is saved, and how they look there. */
   function rosterPreview(plan) {
     const cast = plan.characters.filter(c => c.looks_tags)
     if (!cast.length) return null
     return el('section', { class: 'plan-card' }, [
-      el('header', {}, [el('h4', { text: t`角色名单` })]),
-      el('p', { class: 'hint', text: t`保存时写进「配图 → 角色名单」：配图和视觉小说的立绘按这里的长相画。再次保存时，新角色会加进去，名单里已有的人，你在配图里改过的地方不会被覆盖。` }),
+      el('header', {}, [el('h4', { text: t`角色名册` })]),
+      el('p', { class: 'hint', text: t`保存时写进「配图与朗读 → 角色名册」：配图和视觉小说的立绘按这里的长相画。再次保存时，新角色会加进去，名册里已有的人，你在配图里改过的地方不会被覆盖。` }),
       el('dl', { class: 'plan-fields' }, cast.flatMap(c => [el('dt', { text: c.name }), el('dd', { text: [c.looks_tags, c.outfit_tags].filter(Boolean).join(' · ') })])),
     ])
   }

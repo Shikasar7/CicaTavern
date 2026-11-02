@@ -118,9 +118,9 @@ const routeOf = (service, region, proxy) => (proxy ? 'proxy' : service === 'mini
 
 /** Where to look when a service cannot be reached. proxyMenu: this app has 设置 → 网络代理 (the phone does not). */
 function reachHint(route, proxyMenu = true) {
-  if (route === 'proxy') return msg`检查网络，以及「设置 → 网络代理」里的代理是否在运行。`
+  if (route === 'proxy') return msg`检查网络，以及「设置 → 连接 → 网络代理」里的代理是否在运行。`
   if (route === 'home') return msg`检查网络。`
-  if (route === 'direct' && proxyMenu) return msg`现在没走代理：要开代理才能上这个网站的话，去「设置 → 网络代理」选「跟随系统代理」或填代理地址。`
+  if (route === 'direct' && proxyMenu) return msg`现在没走代理：要开代理才能上这个网站的话，去「设置 → 连接 → 网络代理」选「跟随系统代理」或填代理地址。`
   if (route === 'direct') return msg`手机应用不经过代理设置：这个网站在国内多半要开手机上的加速器才能连（全局模式，或把它加进代理规则；能按应用分流的，要把 CicaTavern 勾上），也可以改用国内能直连的 MiniMax 国内站。`
   return msg`检查网络和代理设置。`
 }

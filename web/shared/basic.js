@@ -88,7 +88,11 @@ const CHOICES = /<choices>([\s\S]*?)(?:<\/choices>|$)/i
 /** Both blocks, for hiding them from the story text. */
 export const TIME_BOX_BLOCK = new RegExp(TIME_BOX_SOURCE, 'gim')
 export const CHOICES_BLOCK = /<choices>[\s\S]*?(?:<\/choices>|$)/gi
-const ITEM = /^\s*(?:[-*•]\s*)?(?:[A-Da-d]|[1-4]|[①②③④])\s*[.、:：)）．]\s*/
+const ITEM = /^\s*(?:[-*•]\s*)?(?:[A-Ia-i]|[1-9]|[①-⑨])\s*[.、:：)）．]\s*/
+/** The most choices a reply shows: A–I, so the visual novel's number keys reach each one. */
+export const MAX_CHOICES = 9
+/** A choice's letter: A, B, C… */
+export const choiceLetter = i => String.fromCharCode(65 + i)
 
 /** The time box's parts (time, place, weather…), or null when the reply has none. */
 export function timeBoxOf(text) {
@@ -99,7 +103,7 @@ export function timeBoxOf(text) {
 }
 
 /**
- * The reply's choices (at most four), or [] when it has none. A block the model
+ * The reply's choices (at most MAX_CHOICES), or [] when it has none. A block the model
  * did not close yet (still streaming) counts too.
  */
 export function choicesOf(text) {
@@ -107,7 +111,7 @@ export function choicesOf(text) {
   if (!match) return []
   const lines = match[1].split('\n').map(line => line.trim()).filter(Boolean)
   const marked = lines.filter(line => ITEM.test(line))
-  return (marked.length ? marked : lines).map(line => line.replace(ITEM, '').trim()).filter(Boolean).slice(0, 4)
+  return (marked.length ? marked : lines).map(line => line.replace(ITEM, '').trim()).filter(Boolean).slice(0, MAX_CHOICES)
 }
 
 /** Remove both blocks (the page draws them on its own). */
@@ -122,11 +126,11 @@ export function withoutBasicBlocks(text) {
 //   <w2g> / <options> / <选项> blocks (A：… B：…);
 //   labelled lines: 「🩶堕落选项🩶：……」 (two or more, at the end);
 //   a heading such as 「请选择你的下一步行动：」 followed by two or more items;
-//   two or more A–D lines at the very end.
+//   three or more A–I lines at the very end.
 // Only the end of a reply is read: a list in the middle of the story stays story.
 
 const BLOCK = /<(w2g|options|选项)>([\s\S]*?)<\/\1>/i
-const LETTER = /^\s*(?:[-*•]\s*)?([A-Da-d]|[1-6]|[①②③④⑤⑥])\s*[.、:：)）．]\s*/
+const LETTER = /^\s*(?:[-*•]\s*)?([A-Ia-i]|[1-9]|[①-⑨])\s*[.、:：)）．]\s*/
 // No \p{…} here: the phone's Node (no ICU) cannot compile it, and the server loads this file.
 // Letters are Latin and CJK; emoji the pictograph and symbol blocks.
 const WORD = 'A-Za-z\\u3400-\\u4DBF\\u4E00-\\u9FFF\\uF900-\\uFAFF'
@@ -138,12 +142,12 @@ const LABELLED = new RegExp(`^\\s*[^${WORD}0-9\\s]*\\s*([${WORD}]{1,8}?)选项\\
 const HEADING = new RegExp(`^\\s*(?:[#>*\\-—\\s]|[${EMOJI}\\uFE0F\\u200D])*[^。！？!?\\n]{0,16}(选择|选项|行动|下一步|接下来)[^。！？!?\\n]{0,16}[：:]\\s*(?:\\*\\*)?\\s*$`, 'u') // i18n-ignore: a pattern
 const BULLET = new RegExp(`^\\s*(?:[-*•·]|[${EMOJI}][${EMOJI}\\uFE0F\\u200D]*)\\s*`, 'u')
 const DIVIDER = /^\s*(?:[-—─━=*_~]\s*){3,}$/
-const MAX = 4
+const MAX = MAX_CHOICES
 const TAIL = 24
 
 const tidy = text => text.replace(/\*\*/g, '').replace(/\s+/g, ' ').trim()
 
-/** One block's items: A–D lines when it has them, else every line. */
+/** One block's items: A–I lines when it has them, else every line. */
 function blockItems(body) {
   const lines = body.split('\n').map(line => line.trim()).filter(Boolean)
   const marked = lines.filter(line => LETTER.test(line))
@@ -190,7 +194,7 @@ export function otherChoices(text) {
       start = i
       continue
     }
-    if ((!kind || kind === 'letter') && LETTER.test(line) && /^[A-Da-d]/.test(line.trim().replace(/^[-*•]\s*/, ''))) {
+    if ((!kind || kind === 'letter') && LETTER.test(line) && /^[A-Ia-i]/.test(line.trim().replace(/^[-*•]\s*/, ''))) {
       kind = 'letter'
       items.unshift(tidy(line.replace(LETTER, '')))
       start = i
@@ -198,7 +202,7 @@ export function otherChoices(text) {
     }
     break
   }
-  // Bullets are only choices under a heading saying so; labelled and A–D lines stand on their own.
+  // Bullets are only choices under a heading saying so; labelled and A–I lines stand on their own.
   const headed = start < lines.length && HEADING.test(lines[start])
   const ok = items.length >= 2 && (kind === 'label' || (kind === 'letter' && items.length >= 3) || headed)
   if (!ok) return { choices: [], text: source }

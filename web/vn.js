@@ -2004,8 +2004,8 @@ export function initVn(deps) {
     ])
     if (!roster.some(member => !member.player)) {
       return [head, el('div', { class: 'vn-library-head' }, [
-        el('p', { text: t`这张卡还没有角色名单。在「配图 → 角色名单」里列出角色和长相（可以让辅助模型从卡里列），每个角色就能有立绘；没有名单时，卡的头像是白底的也能直接用。` }),
-        deps.openMedia ? el('div', { class: 'row' }, [act(t`打开角色名单`, () => {
+        el('p', { text: t`这张卡还没有角色名册。在「配图与朗读 → 角色名册」里列出角色和长相（可以让辅助模型从卡里列），每个角色就能有立绘；没有名册时，卡的头像是白底的也能直接用。` }),
+        deps.openMedia ? el('div', { class: 'row' }, [act(t`打开角色名册`, () => {
           library.close()
           deps.openMedia('roster')
         })]) : null,
@@ -2032,7 +2032,7 @@ export function initVn(deps) {
       const changed = drawn?.source === 'drawn' && typeof drawn.looks === 'string' && (drawn.looks !== (member.looks ?? '') || drawn.outfit !== (member.outfit ?? ''))
       const busy = art.jobs.get(cardId)?.key === `sprite:${member.id}`
       const tools = [
-        act(drawn ? t`重画` : t`画立绘`, () => drawSprite(cardId, entry), { disabled: !member.looks || busy, title: member.looks ? '' : t`先在「配图 → 角色名单」里写长相` }),
+        act(drawn ? t`重画` : t`画立绘`, () => drawSprite(cardId, entry), { disabled: !member.looks || busy, title: member.looks ? '' : t`先在「配图与朗读 → 角色名册」里写长相` }),
         act(t`上传`, async () => {
           const file = await pickPicture()
           if (!file) return

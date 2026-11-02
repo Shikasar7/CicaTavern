@@ -658,8 +658,12 @@ export const usesEjs = (plan, card) => card.entries.some(entry => /<%|^@@if /m.t
 const UPDATE_BLOCK = '/<(update(?:variable)?)>[\\s\\S]*?<\\/\\1>/gi'
 const regexScript = (name, options) => ({ id: name, scriptName: name, findRegex: UPDATE_BLOCK, replaceString: '', trimStrings: [], placement: [2], disabled: false, markdownOnly: false, promptOnly: false, runOnEdit: true, substituteRegex: 0, minDepth: null, maxDepth: null, ...options })
 
-/** The finished card as SillyTavern's V3 JSON. */
-export function cardJson(plan, card) {
+/**
+ * The finished card as SillyTavern's V3 JSON.
+ * @param options.author - the player's name in settings (你的角色): the card's author is it + CicaTavern; the
+ *   default name (你) is no one's, and leaves CicaTavern alone.
+ */
+export function cardJson(plan, card, { author = '' } = {}) {
   const entries = [...card.entries].sort((a, b) => a.order - b.order).map((entry, i) => toBookEntry({ ...entry, content: wrapped(entry, plan) }, i))
   const greetings = card.greetings.map((_, i) => greetingText(plan, card, i)).filter(Boolean)
   const words = stateWords(plan)
@@ -681,7 +685,7 @@ export function cardJson(plan, card) {
     post_history_instructions: '',
     alternate_greetings: greetings.slice(1),
     tags: ['CicaTavern'],
-    creator: '',
+    creator: author && author !== '你' ? `${author} + CicaTavern` : 'CicaTavern', // i18n-ignore: the default name as saved
     character_version: '1.0',
     extensions: {
       talkativeness: '0.5',

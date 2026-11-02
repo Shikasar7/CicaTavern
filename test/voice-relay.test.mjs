@@ -75,5 +75,5 @@ test('voice relay: the phone reads through the PC tavern with its LAN link', asy
   assert.match((await phone.call('/api/media/voices')).body.sources[0].error, /手机访问/)
   const moved = await phone.call('/api/media/settings', { method: 'PUT', body: { ttsUrl: 'http://127.0.0.1:9' } })
   assert.equal(moved.body.voiceKey.hasKey, false)
-  assert.match((await phone.call('/api/media/voices')).body.sources[0].error, /小雅一键启动/)
+  assert.match((await phone.call('/api/media/voices')).body.sources[0].error, /一键启动/)
 })

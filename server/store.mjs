@@ -430,6 +430,20 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
         return kept
       })
     },
+    /** The groups' own order (拖动分组): names, first on top; groups not in it go after, by name (web/app.js cardGroups). */
+    async getGroupOrder() {
+      const value = await readJson(path.join(root, 'group-order.json'), {})
+      return Array.isArray(value.names) ? value.names.filter(name => typeof name === 'string' && name) : []
+    },
+    saveGroupOrder(names) {
+      return locked('group-order', async () => {
+        const kept = [...new Set(names)].filter(name => typeof name === 'string' && name)
+        await writeJson(path.join(root, 'group-order.json'), { names: kept })
+        // The other open pages read the list again.
+        changed({ kind: 'card' })
+        return kept
+      })
+    },
     /** Context windows heard of (context.mjs): what a provider's model list or a context-full error said, by model. */
     async getModelContext() {
       const value = await readJson(path.join(root, 'model-context.json'), {})

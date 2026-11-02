@@ -44,7 +44,7 @@ test('editions: capabilities by name, unknown names are the personal install', (
   assert.deepEqual(['personal', 'release', 'android'].map(e => featuresOf(e).appName), ['CicaTavern', 'CicaTavern', 'CicaTavern'])
   assert.deepEqual([featuresOf('personal').dataDir, featuresOf('personal').port], ['.agent-tavern', 8791])
   assert.equal(featuresOf('release').defaultProxy, 'none')
-  assert.equal(featuresOf('personal').defaultProxy, 'http://127.0.0.1:7897')
+  assert.equal(featuresOf('personal').defaultProxy, 'system')
   assert.deepEqual([featuresOf("release").appName, featuresOf("release").dataDir, featuresOf("release").port], ["CicaTavern", ".cicatavern", 8790])
   assert.equal(featuresOf("personal").port, 8791)
 })
@@ -102,18 +102,18 @@ test('proxy: setting values, overrides and the Windows ProxyServer forms', () =>
 })
 
 test('proxy: system mode prefers Windows settings over stale environment variables', async () => {
-  let windows = 'http://127.0.0.1:7897'
+  let windows = 'http://127.0.0.1:7891'
   const network = createProxy({ defaultMode: 'none', env: { HTTP_PROXY: 'http://127.0.0.1:7890' }, readSystem: async () => windows })
   assert.equal(network.current(), null)
-  assert.deepEqual(await network.apply('system'), { mode: 'system', effective: 'http://127.0.0.1:7897', source: 'windows', locked: false })
+  assert.deepEqual(await network.apply('system'), { mode: 'system', effective: 'http://127.0.0.1:7891', source: 'windows', locked: false })
   windows = null
   assert.deepEqual(await network.apply('system'), { mode: 'system', effective: 'http://127.0.0.1:7890', source: 'env', locked: false })
   assert.equal((await network.apply(null)).effective, null, 'unset: the edition default')
   network.stop()
 
-  const fixed = createProxy({ override: 'none', defaultMode: 'http://127.0.0.1:7897' })
+  const fixed = createProxy({ override: 'none', defaultMode: 'http://127.0.0.1:7890' })
   assert.deepEqual(await fixed.apply('http://10.0.0.2:8080'), { mode: 'none', effective: null, source: null, locked: true })
-  assert.equal(createProxy({ defaultMode: 'http://127.0.0.1:7897' }).current(), 'http://127.0.0.1:7897', 'usable before the first apply')
+  assert.equal(createProxy({ defaultMode: 'http://127.0.0.1:7890' }).current(), 'http://127.0.0.1:7890', 'usable before the first apply')
 
   // Switched off while the system lookup still runs: the lookup that comes back late is not used.
   let answer

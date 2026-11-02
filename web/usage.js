@@ -39,7 +39,8 @@ export function compact(n) {
 }
 const full = n => (Number(n) || 0).toLocaleString(locale)
 const pct = v => (v === null || v === undefined ? '—' : `${Math.round(v * 100)}%`)
-const money = v => (v >= 1 ? `$${v.toFixed(2)}` : `$${(v ?? 0).toFixed(3)}`)
+// null: no price for the model (most besides Claude).
+const money = v => (v === null || v === undefined ? '—' : v >= 1 ? `$${v.toFixed(2)}` : `$${v.toFixed(3)}`)
 const clock = ms => new Date(ms).toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' })
 const stamp = ms => new Date(ms).toLocaleString(locale, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 
@@ -283,7 +284,7 @@ export function renderUsage(root, data, rateLimit, labelOf, { subscription = tru
     h('div', { class: 'tiles' }, [
       tile(t`今日 token`, compact(today.input + today.cacheRead + today.cacheWrite + today.output), t`${today.turns} 轮 · 输出 ${compact(today.output)}`),
       tile(t`今日缓存命中率`, pct(today.hit), t`缓存读取 ${compact(today.cacheRead)}`),
-      tile(t`今日等价成本`, money(today.cost), subscription ? t`按 API 单价估算，订阅不按此计费` : t`按 Anthropic API 公开单价估算，实际以供应商账单为准`),
+      tile(t`今日等价成本`, money(today.cost), subscription ? t`按 API 单价估算，订阅不按此计费` : today.priced < today.turns ? t`只算 Claude 模型，另外 ${today.turns - today.priced} 轮的模型没有单价` : t`按 Anthropic API 公开单价估算，实际以供应商账单为准`),
       tile(t`首字中位数（${data.days} 天）`, period.medianFirstTokenMs ? t`${(period.medianFirstTokenMs / 1000).toFixed(1)} 秒` : '—', t`${period.turns} 轮 · 命中 ${pct(period.hit)}`),
       subscription ? quotaTile(t`5 小时额度`, five, windows.five_hour?.resetsAt) : null,
       subscription ? quotaTile(t`7 天额度`, seven, windows.seven_day?.resetsAt) : null,
@@ -310,6 +311,6 @@ export function renderUsage(root, data, rateLimit, labelOf, { subscription = tru
       h('div', { class: 'chart-card' }, [h('div', { class: 'chart-title', text: t`按模型` }), table([t`模型`, ...SUM_HEADERS], data.byModel.map(r => [labelOf(r.model), ...sumCells(r)]))]),
       h('div', { class: 'chart-card' }, [h('div', { class: 'chart-title', text: t`按对话（等价成本前 12）` }), table([t`对话`, ...SUM_HEADERS], data.byChat.map(r => [`${r.title}${r.deleted ? t`（已删除）` : ''}`, ...sumCells(r)]))]),
     ]),
-    h('div', { class: 'usage-note', text: t`等价成本按 Anthropic API 公开单价估算（缓存写入按 5 分钟 / 1 小时两档计价），仅用于比较${subscription ? t`；订阅额度的实际消耗以上面的额度使用率为准` : ''}。` }),
+    h('div', { class: 'usage-note', text: t`等价成本按 Anthropic API 公开单价估算（缓存写入按 5 分钟 / 1 小时两档计价），仅用于比较；其他模型没有单价，显示「—」${subscription ? t`；订阅额度的实际消耗以上面的额度使用率为准` : ''}。` }),
   ].filter(Boolean))
 }

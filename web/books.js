@@ -339,7 +339,7 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
         field(t`名称`, name),
         field(t`扫描深度`, depth),
       ]),
-      el('p', { class: 'prompt-note', text: t`扫描深度：在最近几条消息里找这本书的关键词，空着跟随「设置 → 扫描与状态」。只影响这本的关键词条目，下一轮就生效。` }),
+      el('p', { class: 'prompt-note', text: t`扫描深度：在最近几条消息里找这本书的关键词，空着跟随「设置 → 世界书与状态 → 扫描与状态」。只影响这本的关键词条目，下一轮就生效。` }),
       field(t`备注`, note, 'wide'),
       el('div', { class: 'book-match' }, [
         el('span', { class: 'book-match-label', text: t`整本的关键词` }),

@@ -62,7 +62,7 @@ export function createGeminiSource() {
     async synth({ voice, text }, ctx) {
       const { media, proxy, signal } = ctx
       const provider = providerOf(ctx)
-      if (!provider) throw httpError(400, msg`还没选 Gemini 朗读用的供应商：在「配图与朗读 → 朗读来源」里选用「Gemini」模板建的那个`)
+      if (!provider) throw httpError(400, msg`还没选 Gemini 朗读用的供应商：在「配图与朗读 → 朗读来源」里选用「Gemini API」或「Gemini Agent Platform」模板建的那个`)
       const model = media.geminiTtsModel
       let json
       try {
@@ -76,7 +76,7 @@ export function createGeminiSource() {
         })
       } catch (error) {
         if (signal?.aborted) throw error
-        const hint = error.providerStatus === 404 ? msg`（模型名不对，或者「${provider.name}」不是 Google 的地址${isGoogle(provider) ? '' : msg`：要选用「Gemini」模板建的供应商`}）` : ''
+        const hint = error.providerStatus === 404 ? msg`（模型名不对，或者「${provider.name}」不是 Google 的地址${isGoogle(provider) ? '' : msg`：要选用「Gemini API」或「Gemini Agent Platform」模板建的供应商`}）` : ''
         throw httpError(502, `${providerError(provider, error)}${hint}`)
       }
       const part = json?.candidates?.[0]?.content?.parts?.find(p => p.inlineData?.data || p.inline_data?.data)

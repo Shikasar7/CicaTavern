@@ -79,3 +79,32 @@ test('置顶, 收藏 and the dragged order are kept by the server, across a rest
   assert.deepEqual((await list()).map(card => [card.name, card.pinned, card.favorite]), [['丁', false, false], ['甲', true, false], ['乙', false, true]])
   assert.equal(d.pinned, false)
 })
+
+test('the groups dragged into an order keep it, through a rename; a dissolved group leaves it', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'tavern-groups-'))
+  const app = createApp({ dataRoot: root, proxy: 'off' })
+  const server = await app.listen({ port: 0 })
+  t.after(async () => {
+    server.close()
+    await rm(root, { recursive: true, force: true })
+  })
+  const base = `http://127.0.0.1:${server.address().port}`
+  const send = async (method, url, body) => {
+    const res = await fetch(`${base}${url}`, { method, headers: { 'content-type': 'application/json', 'x-agent-tavern': '1' }, body: JSON.stringify(body) })
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error)
+    return json
+  }
+  const raw = JSON.parse(await readFile(EXAMPLE, 'utf8'))
+  for (const group of ['武侠', '校园', '科幻']) {
+    const card = await send('POST', '/api/cards/import', { filename: 'c.json', data: Buffer.from(JSON.stringify(raw)).toString('base64') })
+    await send('PUT', `/api/cards/${card.id}/organize`, { group })
+  }
+  assert.deepEqual((await send('GET', '/api/cards/group-order')).names, [])
+  assert.deepEqual((await send('PUT', '/api/cards/group-order', { names: ['科幻', ' 武侠 ', '科幻', '', 3] })).names, ['科幻', '武侠'])
+  await send('POST', '/api/cards/groups', { from: '科幻', to: '星际' })
+  assert.deepEqual((await send('GET', '/api/cards/group-order')).names, ['星际', '武侠'])
+  await send('POST', '/api/cards/groups', { from: '星际', to: '' })
+  assert.deepEqual((await send('GET', '/api/cards/group-order')).names, ['武侠'])
+  await assert.rejects(send('PUT', '/api/cards/group-order', { names: 'x' }), /怎么排/)
+})

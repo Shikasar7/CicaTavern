@@ -14,9 +14,6 @@ import { fileURLToPath } from 'node:url'
 
 const APP_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
 
-/** The proxy this machine's own install has always used. */
-export const PERSONAL_PROXY = 'http://127.0.0.1:7897'
-
 // Every edition is CicaTavern now. This machine's own install keeps the data
 // folder and port it had as Agent 酒馆; the release has its own, so it can sit
 // next to it. proxy: the 网络代理 setting needs Node 24 (http.Agent proxyEnv);
@@ -25,7 +22,7 @@ export const PERSONAL_PROXY = 'http://127.0.0.1:7897'
 // null for this machine's own install (a git checkout). privacyNotice: the public
 // builds list, once, the connections nobody configured (隐私与网络).
 const EDITIONS = {
-  personal: { subscription: true, lan: true, dshImport: true, xiaoya: true, proxy: true, defaultProxy: PERSONAL_PROXY, appName: 'CicaTavern', dataDir: '.agent-tavern', port: 8791, updates: null, privacyNotice: false },
+  personal: { subscription: true, lan: true, dshImport: true, xiaoya: true, proxy: true, defaultProxy: 'system', appName: 'CicaTavern', dataDir: '.agent-tavern', port: 8791, updates: null, privacyNotice: false },
   release: { subscription: false, lan: true, dshImport: false, xiaoya: false, proxy: true, defaultProxy: 'none', appName: 'CicaTavern', dataDir: '.cicatavern', port: 8790, updates: 'zip', privacyNotice: true },
   android: { subscription: false, lan: false, dshImport: false, xiaoya: false, proxy: false, defaultProxy: 'none', appName: 'CicaTavern', dataDir: '.cicatavern', port: 0, updates: 'apk', privacyNotice: true },
 }

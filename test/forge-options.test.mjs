@@ -176,6 +176,10 @@ test('each opening its own start: values of its own, kept to what is tracked, in
   card.greetings = [{ title: 'a', text: '雨下起来了。' }, { title: 'b', text: '她收了伞。' }]
   const json = cardJson(plan, card)
   assert.equal(json.data.first_mes, '雨下起来了。')
+  // The author: the player's name in settings + CicaTavern; the default name is no one's.
+  assert.equal(json.data.creator, 'CicaTavern')
+  assert.equal(cardJson(plan, card, { author: '你' }).data.creator, 'CicaTavern')
+  assert.equal(cardJson(plan, card, { author: '阿蝉' }).data.creator, '阿蝉 + CicaTavern')
   const second = json.data.alternate_greetings[0]
   const block = /<UpdateVariable>\n<initvar>\n([\s\S]*)\n<\/initvar>\n<\/UpdateVariable>$/.exec(second)
   assert.deepEqual(YAML.parse(block[1]), { 林小雨: { 好感度: 70 }, 主角: { 体力: 40 } })

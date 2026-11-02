@@ -490,7 +490,7 @@ export function initProviders({ api, el, toast, guard, saveFile, onChanged }) {
     if (!confirm(t`导出的文件里有明文 API Key。只在自己的设备之间传，导入后删掉，不要发给别人。继续吗？`)) return
     const { archive, skipped } = await api('/api/providers/export', { method: 'POST', body: {} })
     const note = skipped.length ? t`跳过了指向本机的：${skipped.join(t`、`)}。` : ''
-    saveFile(t`Agent酒馆-供应商-含密钥-${archive.exportedAt.slice(0, 10)}.json`, JSON.stringify(archive, null, 2), t`导出了 ${archive.providers.length} 个供应商。${note}`)
+    saveFile(t`供应商-含密钥-${archive.exportedAt.slice(0, 10)}.json`, JSON.stringify(archive, null, 2), t`导出了 ${archive.providers.length} 个供应商。${note}`)
   }
 
   async function importFile(file) {

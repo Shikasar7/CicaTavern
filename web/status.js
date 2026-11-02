@@ -93,14 +93,14 @@ export function statusBar(el, spec, state, { previous = null, note = '', collaps
 }
 
 /**
- * The four choices under the latest reply. Tapping one puts it in the input box
- * to edit; its arrow sends it as it is.
+ * The choices under the latest reply. Tapping one adds it to the input box (several
+ * can go together; tapped again, it comes out); its arrow sends it as it is.
  */
 export function choiceList(el, items, { onFill, onSend, disabled = false }) {
   return el('div', { class: 'choices', role: 'group', 'aria-label': t`行动选项` }, items.map((text, i) => {
-    const letter = 'ABCD'[i]
+    const letter = String.fromCharCode(65 + i)
     return el('div', { class: 'choice-item' }, [
-      el('button', { type: 'button', class: 'choice-fill', disabled, title: t`填进输入框，可以改了再发`, onclick: () => onFill(text) }, [
+      el('button', { type: 'button', class: 'choice-fill', disabled, title: t`加进输入框，可以选好几个（再点一次去掉），改好再发`, onclick: () => onFill(text) }, [
         el('span', { class: 'choice-letter', text: letter }),
         el('span', { class: 'choice-text', text }),
       ]),

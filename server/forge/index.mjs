@@ -1207,7 +1207,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
       if (!draft.card.greetings.some(g => g.text)) throw httpError(409, msg`开场白还没写`)
       const match = IMAGE.exec(String(avatar ?? ''))
       if (!match || match[1] !== 'png') throw httpError(400, msg`头像要转成 PNG 再保存`)
-      const raw = cardJson(draft.plan, draft.card)
+      const raw = cardJson(draft.plan, draft.card, { author: (await store.getPersona()).name })
       const png = writeCardPng(Buffer.from(match[2], 'base64'), raw)
       const card = normalizeCard(raw)
       const old = draft.card.savedCardId ? await store.getCard(draft.card.savedCardId).catch(() => null) : null

@@ -4,7 +4,7 @@
 // chat's prompt stays the same from turn to turn and is cached. Changing an
 // option takes effect in new chats, or in a chat after 用于当前对话 rebuilds
 // its prefix, as with any preset.
-import { BASIC_ID, VN_ID, choicesOf, cleanBasic, cleanVn, isBuiltinPreset } from '../web/shared/basic.js'
+import { BASIC_ID, VN_ID, choiceLetter, choicesOf, cleanBasic, cleanVn, isBuiltinPreset } from '../web/shared/basic.js'
 
 export { BASIC_ID, VN_ID }
 
@@ -267,13 +267,13 @@ export function choicesRequest({ names, story, previous = [], language = '简体
   return { system, messages: [{ role: 'user', content: `<最近剧情>\n${recent}\n</最近剧情>\n\n只输出 <choices>…</choices> 这一个块。` }], maxTokens }
 }
 
-/** The choices in a model's answer as a block written the usual way (A–D), or '' with fewer than two. */
+/** The choices in a model's answer as a block written the usual way (A, B, C…), or '' with fewer than two. */
 export function extractChoices(text) {
   const answer = String(text ?? '')
   // An answer that left out the tags still counts by its lettered lines.
-  const lettered = () => answer.split('\n').filter(line => /^\s*[A-Da-d]\s*[.、:：)）．]/.test(line)).join('\n')
+  const lettered = () => answer.split('\n').filter(line => /^\s*[A-Ia-i]\s*[.、:：)）．]/.test(line)).join('\n')
   const items = choicesOf(/<choices>/i.test(answer) ? answer : `<choices>\n${lettered()}`)
-  return items.length >= 2 ? ['<choices>', ...items.map((item, i) => `${'ABCD'[i]}. ${item}`), '</choices>'].join('\n') : ''
+  return items.length >= 2 ? ['<choices>', ...items.map((item, i) => `${choiceLetter(i)}. ${item}`), '</choices>'].join('\n') : ''
 }
 
 /** A reply with its choices block swapped for `block`, where it was (at the end when it had none). */
