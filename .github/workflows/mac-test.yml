@@ -1,6 +1,8 @@
 # macOS test: the release's CicaTavern.app built, tested and opened on GitHub's
-# Macs, with screenshots. Only for the mac-test branch (a push) or by hand; it
-# never makes or changes a Release, a tag or a draft, and needs only read access.
+# Macs, with screenshots. Only by hand (Actions → Run workflow, on mac-test): the
+# packages are built, signed and notarized on the author's Mac, and a run on every
+# push only waited for an approval that never came, each one listed as a deployment.
+# It never makes or changes a Release, a tag or a draft, and needs only read access.
 #
 # Intel only (macOS 15): the Apple silicon packages are built and tested on the
 # author's own Mac (scripts/mac-local-build.mjs, from this same branch). On the runner:
@@ -21,8 +23,6 @@
 name: macOS test (screenshots)
 
 on:
-  push:
-    branches: [mac-test]
   workflow_dispatch:
 
 permissions:
