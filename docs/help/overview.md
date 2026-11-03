@@ -21,7 +21,7 @@ CicaTavern 是 Agent 式的 SillyTavern 角色卡酒馆：导入 SillyTavern 的
 
 - 也叫：下载地址、安装包、最新版、更新、国内下载、镜像
 
-最新版本是 **2.2.4**（2026-11-03）。下载：
+最新版本是 **2.3.0**（2026-11-03）。下载：
 
 - GitHub 发布页：https://github.com/Shikasar7/CicaTavern/releases/latest
 - 国内镜像（同样的文件）：https://cnb.cool/cicatavern/CicaTavern/-/releases
@@ -41,7 +41,7 @@ CicaTavern 是 Agent 式的 SillyTavern 角色卡酒馆：导入 SillyTavern 的
 
 - 也叫：要钱吗、免费吗、收费、开源、会不会上传我的对话、隐私
 
-CicaTavern 本身免费、开源（MIT 许可证）。模型、画图、朗读用的是你自己添加的服务，费用按你自己的账号计。CicaTavern 不收集使用数据，也不往开发者那里发任何东西；只连你自己配置的服务，以及检查更新、字体、卡片界面用到的公共库这几处（第一次打开时会列出来，可以关掉）。
+CicaTavern 本身免费、开源（AGPL-3.0 许可证，2.2.4 及以前的版本是 MIT）。模型、画图、朗读用的是你自己添加的服务，费用按你自己的账号计。CicaTavern 不收集使用数据，也不往开发者那里发任何东西；只连你自己配置的服务，以及检查更新、字体、卡片界面用到的公共库这几处（第一次打开时会列出来，可以关掉）。
 
 ## 遇到问题怎么反馈 {#overview-help}
 

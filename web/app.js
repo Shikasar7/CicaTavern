@@ -1332,6 +1332,7 @@ function renderChat() {
     presetPill.classList.toggle('unset', !chat.presetName)
     presetPill.disabled = ui.generating
   }
+  renderMemoryPill()
   const compact = $('compact-chat')
   compact.hidden = !chat
   if (chat) {
@@ -1445,7 +1446,7 @@ async function applyChanges() {
     if (!open || !chat || ui.chat !== chat) return
     const view = await api(`/api/chats/${chat.id}`).catch(() => null)
     if (!view || ui.chat !== chat || ui.busy.has(chat.id)) return
-    if (view.updatedAt === chat.updatedAt && !view.running) return
+    if (view.updatedAt === chat.updatedAt && !view.running && Boolean(view.tidying) === Boolean(chat.tidying) && view.memoryError === chat.memoryError) return
     // Where the reader is stays put, unless the story went on (a new turn shows at the bottom).
     const box = $('transcript')
     const top = box.scrollTop
@@ -1560,6 +1561,28 @@ function renderNode(chat, node, isLastAssistant, depth = 0) {
   if (!isUser && (node.id !== 'root' || node.compaction)) {
     tools.push(el('button', { text: t`分支到新对话`, title: t`开一个新对话，只带上到这一条为止的剧情（之后的对话和其他版本都不带），原对话不变`, disabled: ui.generating, onclick: () => forkChat(node.id) }))
   }
+  // 隐藏这一轮: replies after the last compaction (the model reads the ones before only as its archive).
+  const at = chat.path.findIndex(n => n.id === node.id)
+  if (!isUser && node.id !== 'root' && node.id !== 'pending-user' && !node.compaction && at > chat.path.findLastIndex(n => n.compaction)) {
+    tools.push(
+      el('button', {
+        text: node.hidden ? t`取消隐藏` : t`隐藏这一轮`,
+        title: node.hidden
+          ? t`这一轮重新发给模型`
+          : t`这一轮（你的输入和这条回复）留在对话里，但之后不再发给模型，比如一直触发模型内容审查的一轮。变量不会回退；隐藏中间的回合，下一轮会重新写一次缓存。重新生成这条回复后，新版本照常发送`,
+        disabled: ui.generating,
+        onclick: () => hideRound(node.id, !node.hidden),
+      }),
+    )
+  }
+  if (!isUser && node.hidden) tools.push(el('span', { class: 'chip', title: t`这一轮（你的输入和这条回复）不发给模型，只留在对话里`, text: t`已隐藏：不发给模型` }))
+  // 长期记忆: the 记忆簿 entries this round's message brought back (a line of their own, below); the tidy after the latest reply.
+  const recalled = !isUser ? chat.path[at - 1]?.recalled : null
+  if (!isUser && isLastAssistant && chat.tidying) {
+    tools.push(el('span', { class: 'chip quiet', text: t`整理记忆中…` }), el('button', { text: t`停止整理`, onclick: () => cancelTidy() }))
+  } else if (!isUser && isLastAssistant && chat.memoryError) {
+    tools.push(el('button', { type: 'button', class: 'chip warn', title: chat.memoryError, text: t`⚠ 整理记忆没成功`, onclick: () => openMemory() }))
+  }
   if (!isUser && !isLastAssistant) {
     tools.push(el('button', { text: t`回滚到这里`, title: t`收起之后的对话，状态也回到这一轮；随时可以恢复`, disabled: ui.generating, onclick: () => rollbackTo(node.id) }))
     tools.push(el('button', { text: t`从这里分支`, disabled: ui.generating, onclick: () => branchFrom(node.id, t`从「${node.text.slice(0, 16)}…」之后分支`) }))
@@ -1604,8 +1627,14 @@ function renderNode(chat, node, isLastAssistant, depth = 0) {
         el('button', { type: 'button', class: 'btn small', text: node.compaction.editable ? t`查看 / 修改` : t`查看`, onclick: () => openRecap(node) }),
       ])
     : null
-  return el('article', { class: `msg ${isUser ? 'user' : 'assistant'}${isLastAssistant ? ' latest' : ''}`, 'data-id': node.id }, [
-    el('div', { class: 'msg-head' }, [speakerFace(chat, node.role), el('span', { class: 'name', text: name }), node.id === 'root' ? el('span', { text: imported ? t`剧情存档` : t`开场` }) : null]),
+  return el('article', { class: `msg ${isUser ? 'user' : 'assistant'}${isLastAssistant ? ' latest' : ''}${node.hidden ? ' hidden-round' : ''}`, 'data-id': node.id }, [
+    el('div', { class: 'msg-head' }, [
+      speakerFace(chat, node.role),
+      el('span', { class: 'name', text: name }),
+      node.id === 'root' ? el('span', { text: imported ? t`剧情存档` : t`开场` }) : null,
+      // Seen without hovering (the round's buttons show only then): this round is not sent.
+      node.hidden && !isUser ? el('span', { class: 'chip hidden-tag', title: t`这一轮（你的输入和这条回复）不发给模型，只留在对话里`, text: t`已隐藏` }) : null,
+    ]),
     time ? timeBox(el, time) : null,
     !isUser && node.reasoning && ui.settings?.showReasoning ? reasoningFold(node.reasoning) : null,
     messageBody(shown, frameContextFor(chat, node)),
@@ -1613,8 +1642,26 @@ function renderNode(chat, node, isLastAssistant, depth = 0) {
     bar,
     choices.length ? choiceList(el, choices, { onFill: pickChoice, onSend: sendChoice, disabled: ui.generating }) : null,
     tools.length ? el('div', { class: 'msg-tools' }, tools) : null,
+    recalled?.length ? recallLine(node.id, recalled) : null,
     !isUser && node.search ? searchSources(node.search) : null,
     recap,
+  ])
+}
+
+// When each reply's 想起 line first showed on this page: its entrance plays once. The transcript is drawn
+// again often (a refresh right after opening, say), so a line drawn anew picks the entrance up where it was.
+const recallShown = new Map()
+const RECALL_ENTRANCE_S = 2.5
+
+/** 想起 under a reply: the 记忆簿 entries its round brought back, surfacing one by one the first time; a click opens the book. */
+function recallLine(nodeId, titles) {
+  if (!recallShown.has(nodeId)) recallShown.set(nodeId, performance.now())
+  const elapsed = (performance.now() - recallShown.get(nodeId)) / 1000
+  const surfacing = elapsed < RECALL_ENTRANCE_S
+  return el('button', { type: 'button', class: `recall-line${surfacing ? ' surfacing' : ''}`, style: surfacing ? `--t: ${(-elapsed).toFixed(2)}s` : undefined, title: t`长期记忆：这一轮从记忆簿里想起了这些，附在发给模型的消息里。点开记忆簿`, onclick: () => openMemory() }, [
+    el('span', { class: 'recall-mark', 'aria-hidden': 'true', text: '✦' }),
+    el('span', { class: 'recall-label', text: t`想起` }),
+    ...titles.map((title, i) => el('span', { class: 'recall-item', style: `--i: ${i}`, text: title })),
   ])
 }
 
@@ -2354,6 +2401,15 @@ const rollbackTo = guard(async nodeId => {
   toast(t`已回滚，收起了 ${ui.chat.folded} 轮`)
 })
 
+// 隐藏这一轮 (chats.mjs hideRound): the round stays where it is, dimmed, and so does the reader.
+const hideRound = guard(async (nodeId, hidden) => {
+  const box = $('transcript')
+  const keep = box.scrollTop
+  setChat(await api(`/api/chats/${ui.chat.id}/hide`, { method: 'POST', body: { nodeId, hidden } }))
+  box.scrollTop = keep
+  toast(hidden ? t`这一轮已隐藏，之后不再发给模型` : t`已取消隐藏，之后照常发给模型`)
+})
+
 const forkChat = guard(async nodeId => {
   const chat = await api(`/api/chats/${ui.chat.id}/fork`, { method: 'POST', body: { nodeId } })
   await refreshChats()
@@ -2364,6 +2420,152 @@ const forkChat = guard(async nodeId => {
 const restoreFolded = guard(async () => {
   setChat(await api(`/api/chats/${ui.chat.id}/restore`, { method: 'POST', body: {} }))
   toast(t`已恢复`)
+})
+
+// ─── 长期记忆（Beta）: the 记忆簿 (server/memory.mjs) ────────────────────────
+
+const MEMORY_KINDS = () => ({ person: t`人物`, event: t`事件`, thing: t`物品与地点`, promise: t`约定与伏笔` })
+const memoryUi = { view: null, editing: null }
+
+/** The topbar's 记忆 pill: with 长期记忆 on, how many entries the open chat's book has, and a tidy under way. */
+function renderMemoryPill() {
+  const pill = $('memory-book')
+  const chat = ui.chat
+  pill.hidden = !chat || !ui.settings?.memory?.enabled
+  if (pill.hidden) return
+  pill.classList.toggle('busy', Boolean(chat.tidying))
+  $('memory-count').hidden = !chat.memoryEntries
+  $('memory-count').textContent = String(chat.memoryEntries ?? '')
+  pill.title = chat.tidying ? t`长期记忆（Beta）：正在整理记忆簿` : t`长期记忆（Beta）：记忆簿里有 ${chat.memoryEntries ?? 0} 条`
+}
+
+const openMemory = guard(async () => {
+  if (!ui.chat) return
+  memoryUi.view = await api(`/api/chats/${ui.chat.id}/memory`)
+  memoryUi.editing = null
+  renderMemory()
+  if (!$('memory-dialog').open) $('memory-dialog').showModal()
+})
+
+const memoryTurns = entry => (entry.from === undefined ? '' : entry.to > entry.from ? t`第 ${entry.from}–${entry.to} 轮` : t`第 ${entry.from} 轮`)
+
+function renderMemory() {
+  const view = memoryUi.view
+  const by = { compaction: t`压缩时`, tidy: t`边玩边整理`, edit: t`手动`, import: t`导入的存档` }
+  const meta = []
+  if (!view.settings.enabled) meta.push(t`长期记忆没开：在「设置 → 长期记忆」里打开后，压缩上下文时会记下记忆簿，之后提到时想起来`)
+  meta.push(view.entries.length ? t`共 ${view.entries.length} 条` : t`还没有条目`)
+  if (view.turns) meta.push(t`${by[view.by] ?? ''}记到第 ${view.turns} 轮`)
+  meta.push(view.compactedTurns ? t`最近一次压缩到第 ${view.compactedTurns} 轮：那之前的条目，提到时会想起来` : t`还没压缩过：原文都在上下文里，条目先只记不发`)
+  $('memory-meta').textContent = meta.join(' · ')
+  const status = $('memory-status')
+  status.hidden = !view.tidying && !view.memoryError
+  status.className = `small${view.memoryError && !view.tidying ? ' warn' : ''}`
+  status.textContent = view.tidying ? t`正在整理记忆…` : view.memoryError ? t`上次整理没成功：${view.memoryError}` : ''
+  $('memory-tidy').disabled = Boolean(view.tidying) || !view.settings.enabled
+  $('memory-export').disabled = !view.entries.length
+  const kinds = MEMORY_KINDS()
+  const groups = Object.keys(kinds).map(kind => {
+    const entries = view.entries.filter(entry => entry.kind === kind)
+    const adding = memoryUi.editing === 'new' && kind === 'person' ? [memoryEditor({ id: 'new', kind: 'person', title: '', keys: [], text: '' })] : []
+    if (!entries.length && !adding.length) return null
+    return el('section', { class: 'memory-group' }, [el('h3', { text: `${kinds[kind]} · ${entries.length}` }), ...adding, ...entries.map(memoryCard)])
+  })
+  const empty = !view.entries.length && memoryUi.editing !== 'new' ? el('p', { class: 'muted small', text: t`压缩上下文之后，这里会列出模型记下的人物、事件、物品与地点、约定与伏笔。也可以自己新增。` }) : null
+  $('memory-list').replaceChildren(...[empty, ...groups].filter(Boolean))
+}
+
+function memoryCard(entry) {
+  if (memoryUi.editing === entry.id) return memoryEditor(entry)
+  const entries = memoryUi.view.entries
+  const small = (text, title, onclick, extra = {}) => el('button', { type: 'button', class: 'btn small ghost', text, title, onclick, ...extra })
+  return el('article', { class: `memory-entry${entry.pinned ? ' pinned' : ''}` }, [
+    el('div', { class: 'memory-head' }, [
+      el('strong', { text: entry.title }),
+      entry.pinned ? el('span', { class: 'chip', text: t`固定` }) : null,
+      entry.edited ? el('span', { class: 'chip quiet', title: t`你改过或新增的条目：之后模型整理时不会覆盖它`, text: t`你改过` }) : null,
+      el('span', { class: 'spacer' }),
+      entry.from !== undefined ? small(memoryTurns(entry), t`跳到这一轮的原文`, () => jumpToTurn(entry.sourceId), { disabled: !entry.sourceId }) : null,
+      small(entry.pinned ? t`取消固定` : t`固定`, t`固定的条目压缩之后第一轮就带上，不用等提到`, () => saveMemoryEntries(entries.map(e => (e.id === entry.id ? { ...e, pinned: !e.pinned } : e)))),
+      small(t`修改`, '', () => { memoryUi.editing = entry.id; renderMemory() }),
+      small(t`删除`, '', () => { if (confirm(t`删除「${entry.title}」？`)) saveMemoryEntries(entries.filter(e => e.id !== entry.id)) }),
+    ]),
+    entry.keys.length ? el('div', { class: 'chips' }, entry.keys.map(key => el('span', { class: 'chip quiet', text: key }))) : null,
+    // {{user}} and {{char}} as the names; the entry keeps them, so an edit shows what is stored.
+    el('p', { class: 'memory-text', text: entry.text.replace(/\{\{user\}\}/gi, ui.chat?.names.user ?? '{{user}}').replace(/\{\{char\}\}/gi, ui.chat?.names.char ?? '{{char}}') }),
+  ])
+}
+
+function memoryEditor(entry) {
+  const kinds = MEMORY_KINDS()
+  const kind = el('select', {}, Object.entries(kinds).map(([value, label]) => el('option', { value, text: label })))
+  kind.value = entry.kind
+  const title = el('input', { value: entry.title, maxlength: '40', placeholder: t`标题，比如人名或一件事的名字` })
+  const keys = el('input', { value: entry.keys.join(', '), placeholder: t`关键词，用逗号隔开：人名、别名、称呼、地名、物品名` })
+  const text = el('textarea', { rows: '4', maxlength: '600', placeholder: t`具体的事实：发生了什么、说过的话、约定、物品去向…` })
+  text.value = entry.text
+  const save = () => {
+    const changed = { ...entry, kind: kind.value, title: title.value.trim(), keys: keys.value.split(/[,，、;；]/).map(key => key.trim()).filter(Boolean), text: text.value.trim(), edited: true }
+    if (!changed.title || !changed.text) return toast(t`标题和正文都要写`)
+    const entries = memoryUi.view.entries
+    saveMemoryEntries(entry.id === 'new' ? [...entries, { ...changed, id: undefined }] : entries.map(e => (e.id === entry.id ? changed : e)))
+  }
+  return el('article', { class: 'memory-entry editing' }, [
+    el('div', { class: 'row' }, [kind, title]),
+    keys,
+    text,
+    el('div', { class: 'row end' }, [
+      el('button', { type: 'button', class: 'btn small ghost', text: t`取消`, onclick: () => { memoryUi.editing = null; renderMemory() } }),
+      el('button', { type: 'button', class: 'btn small primary', text: t`保存`, onclick: save }),
+    ]),
+  ])
+}
+
+const saveMemoryEntries = guard(async entries => {
+  memoryUi.view = await api(`/api/chats/${ui.chat.id}/memory`, { method: 'PUT', body: { entries } })
+  memoryUi.editing = null
+  ui.chat.memoryEntries = memoryUi.view.entries.length
+  renderMemory()
+  renderMemoryPill()
+})
+
+/** 记忆簿 → 第 N 轮: the window closes on the player message of that turn. */
+function jumpToTurn(nodeId) {
+  const article = nodeId && $('transcript').querySelector(`[data-id="${nodeId}"]`)
+  if (!article) return toast(t`这一轮不在当前显示的对话里`)
+  $('memory-dialog').close()
+  // Once the window has given the focus back (that scrolls to where it was), in one go: usually far up the story.
+  requestAnimationFrame(() => {
+    $('transcript').scrollTo({ top: Math.max(0, article.offsetTop - 12), behavior: 'instant' })
+    article.classList.remove('found')
+    void article.offsetWidth
+    article.classList.add('found')
+  })
+}
+
+const tidyMemoryNow = guard(async () => {
+  memoryUi.view = { ...memoryUi.view, tidying: true, memoryError: null }
+  renderMemory()
+  try {
+    const view = await api(`/api/chats/${ui.chat.id}/memory/tidy`, { method: 'POST', body: {} })
+    memoryUi.view = view
+    toast(view.wrote ? t`记忆簿已更新` : t`上次记下之后还没有新的剧情`)
+  } finally {
+    memoryUi.view = await api(`/api/chats/${ui.chat.id}/memory`).catch(() => memoryUi.view)
+    ui.chat.memoryEntries = memoryUi.view.entries.length
+    renderMemory()
+    renderMemoryPill()
+  }
+})
+
+const cancelTidy = guard(async () => {
+  await api(`/api/chats/${ui.chat.id}/memory/cancel`, { method: 'POST', body: {} })
+  toast(t`已停止整理`)
+})
+
+const exportMemory = guard(async () => {
+  const book = await api(`/api/chats/${ui.chat.id}/memory/worldbook`)
+  saveFile(`${book.name}.json`, JSON.stringify(book, null, 2), t`已导出记忆簿：可以在世界书里导入，或导入 SillyTavern`)
 })
 
 // ─── Context compaction (server/recap.mjs) ──────────────────────────────
@@ -3114,6 +3316,7 @@ const openSettings = guard(async () => {
   }
   showDefaultAsHint(form.language, zh`简体中文`, t`简体中文`)
   fillCompaction(form)
+  fillMemory(form)
   renderAccess(await api('/api/access').catch(() => null))
   fillProxy(form, ui.settings.proxy, await api('/api/network').catch(() => null))
   form.showReasoning.checked = ui.settings.showReasoning === true
@@ -3318,6 +3521,28 @@ function fillCompaction(form) {
     : t`还没选模型`
 }
 
+/** 长期记忆（Beta） in the settings: the saved switches; the tidy's options only count with it on. */
+function fillMemory(form) {
+  const saved = ui.settings.memory ?? {}
+  form.memoryOn.checked = saved.enabled === true
+  form.memoryTidy.checked = saved.tidy?.enabled === true
+  form.memoryEvery.value = saved.tidy?.every ?? 10
+  form.memoryModel.value = saved.tidy?.model ?? 'helper'
+  form.memoryBudget.value = saved.budget ?? 1500
+  const sync = () => {
+    form.memoryTidy.disabled = form.memoryBudget.disabled = !form.memoryOn.checked
+    form.memoryEvery.disabled = form.memoryModel.disabled = !form.memoryOn.checked || !form.memoryTidy.checked
+  }
+  form.memoryOn.onchange = form.memoryTidy.onchange = sync
+  sync()
+}
+
+const memorySettingsOf = (form, num) => ({
+  enabled: form.memoryOn.checked,
+  tidy: { enabled: form.memoryTidy.checked, every: num('memoryEvery') || 10, model: form.memoryModel.value },
+  budget: num('memoryBudget') || 1500,
+})
+
 /** settings.compaction from the form; the window typed for the chat's model goes with the others kept. */
 function compactionOf(form, num) {
   const ref = form.compactWindow.dataset.ref
@@ -3399,6 +3624,10 @@ function layOutSettings({ form, card, providers, presets }) {
     {
       id: 'compaction', title: t`上下文压缩`, look: 'shared', tag: t`所有对话`, pane: settingsPages.compaction,
       summary: () => (form.compactAuto.checked ? t`上下文用到 ${value('compactPercent')}% 时自动压缩` : t`上下文用到 ${value('compactPercent')}% 时提醒`),
+    },
+    {
+      id: 'memory', title: t`长期记忆（Beta）`, look: 'shared', tag: t`所有对话`, pane: settingsPages.memory,
+      summary: () => (!form.memoryOn.checked ? t`关：压缩后丢掉的细节，提到时想不起来` : form.memoryTidy.checked ? t`开 · 压缩时记下，每 ${value('memoryEvery')} 轮再整理一次` : t`开 · 压缩时记下记忆簿`),
     },
     // The 世界书 window, as beside the card list's heading: every imported book, whatever card is picked.
     {
@@ -3490,7 +3719,7 @@ function layOutSettings({ form, card, providers, presets }) {
     : el('p', { class: 'menu-who none', text: t`选一张角色卡后，可以给它指定你的角色和文风。` })
   settingsMenu.mount({
     panels: [
-      { id: 'model', title: t`模型`, icon: MENU_ICONS.model, rows: ['model', 'providers', 'compaction'] },
+      { id: 'model', title: t`模型`, icon: MENU_ICONS.model, rows: ['model', 'providers', 'compaction', 'memory'] },
       { id: 'write', title: t`写作`, icon: MENU_ICONS.write, rows: ['persona', 'styles', 'style', 'presets', 'regex', 'blockwords', cardPicksRow, 'picks'] },
       { id: 'media', title: t`配图与朗读`, icon: MENU_ICONS.picture, rows: ['media', 'dictation'] },
       { id: 'books', title: t`世界书与状态`, icon: MENU_ICONS.book, rows: ['scan', 'manage-books', cardRow, 'books'] },
@@ -3520,6 +3749,7 @@ const saveSettings = guard(async () => {
         stateRefreshEvery: num('stateRefreshEvery'),
         dynamicStrip: form.dynamicStrip.value,
         compaction: compactionOf(form, num),
+        memory: memorySettingsOf(form, num),
         replyLength: Math.max(0, num('replyLength')),
         listen: form.listen.value === 'lan' ? 'lan' : 'local',
         webFonts: form.webFonts.checked,
@@ -3531,6 +3761,7 @@ const saveSettings = guard(async () => {
   ])
   fillProxy(form, ui.settings.proxy, await api('/api/network').catch(() => null))
   allowLibraries(ui.settings.cdnLibraries !== false)
+  renderMemoryPill()
   // 默认（…） in the chat's model picker follows the default just saved.
   if (ui.settings.model !== undefined) ui.defaultModel = ui.settings.model || null
   // The models' thresholds follow the 上下文压缩 numbers just saved (the 压缩 pill's meter reads them).
@@ -4312,6 +4543,10 @@ function bind() {
   document.addEventListener('cicatavern:media-settings', renderDictateButton)
   $('quick-apply').addEventListener('click', applyQuick)
   $('recap-save').addEventListener('click', saveRecap)
+  $('memory-book').addEventListener('click', () => openMemory())
+  $('memory-add').addEventListener('click', () => { memoryUi.editing = 'new'; renderMemory() })
+  $('memory-tidy').addEventListener('click', tidyMemoryNow)
+  $('memory-export').addEventListener('click', exportMemory)
   $('recap-drop').addEventListener('click', dropRecap)
   $('toggle-left').addEventListener('click', () => document.querySelector('.app').classList.toggle('show-left'))
   $('toggle-right').addEventListener('click', () => document.querySelector('.app').classList.toggle('show-right'))

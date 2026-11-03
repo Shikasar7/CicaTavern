@@ -23,7 +23,34 @@ export const FIELD_TAGS = Object.freeze({
   creator: 'creator',
   tags: 'tags',
 })
-const FIELD_OF = Object.fromEntries(Object.entries(FIELD_TAGS).flatMap(([key, tag]) => [[tag, key], [key.toLowerCase(), key]]))
+// Also the names a model writes when it does not keep to the list: the page's labels, hyphens or spaces.
+const FIELD_ALIASES = {
+  name: ['名字', '名称', '角色名'],
+  description: ['描述', '角色描述', '人物描述', '设定'],
+  personality: ['性格', '性格摘要'],
+  scenario: ['场景'],
+  mesExample: ['对话示例', '示例对话', 'example_dialogue'],
+  systemPrompt: ['系统提示词'],
+  postHistoryInstructions: ['历史后指令', '后置指令', 'jailbreak'],
+  depthPrompt: ['角色备注', '深度提示词', 'character_note'],
+  creatorNotes: ['创作者备注', '作者备注'],
+  creator: ['作者', '创作者'],
+  tags: ['标签'],
+}
+const fieldName = name => String(name ?? '').trim().toLowerCase().replace(/[-\s]+/g, '_')
+const FIELD_OF = Object.fromEntries(
+  Object.entries(FIELD_TAGS).flatMap(([key, tag]) => [[tag, key], [key.toLowerCase(), key], ...(FIELD_ALIASES[key] ?? []).map(alias => [fieldName(alias), key])]),
+)
+// A field block that is really an opening: SillyTavern's name for the first one.
+const FIRST_MES = new Set(['first_mes', 'firstmes', 'greeting', '开场白', '第一条消息'])
+// How an initial-variables entry is told apart once it is in the book (worldbook.mjs).
+const INITVAR_NAME = /initvar|初始变量|\[init/i
+
+/** A body whose tags the model wrote escaped (&lt;UpdateVariable&gt;) as the tags, unless the piece had escapes itself. */
+function unescaped(body, before = '') {
+  if (!/&lt;|&gt;/.test(body) || /[<>]/.test(body) || /&lt;|&gt;/.test(before)) return body
+  return body.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+}
 
 // Entry text sent in full, at most; past it, entries go by name and can't be changed this time.
 export const ENTRY_BUDGET = 60000
@@ -97,6 +124,10 @@ const editSystem = reply => `你是角色卡编辑。用户在 SillyTavern 一�
 - 改一处，前后要对得上：人设改了，对话示例、开场白和条目里明显冲突的句子一起改。用户没提到、也不冲突的内容一字不动。
 - 新条目是写给模型看的设定：简洁、具体，只写模型不知道的东西。关键词用故事里真会出现的叫法（名字、外号），至少两个字。人物、地点、物品用 keyword（提到时才发送）；只有每轮都要遵守的规则才用 constant。
 - mode 为 initvar 的条目是初始变量，enabled="false" 的条目没在用：用户没要求就不要动。
+- 要加变量（好感度一类的数值、状态栏、改成 MVU 卡）时，这个应用会自己记录变量、显示状态栏、需要时把当前变量发给模型，只要写两样：
+  1. 初始变量：<new_entry name="[initvar]初始变量" mode="initvar">，正文用 YAML 写出每个变量和初始值；卡里已经有 initvar 条目就改那一条。
+  2. 更新规则：一条 mode="constant" 的条目，写每个变量的含义、范围、什么时候怎么变，并要求每次回复末尾写一个 <UpdateVariable> 块，一行一个 _.set('变量路径', 旧值, 新值);//原因（数字增减也可以写 _.add('变量路径', 增量);），没有变化就不写。只能用 <UpdateVariable> 这个标签和 _.set、_.add 这两种写法。
+  不用另写状态栏界面、正则或脚本，也不用 {{getvar}}、{{get_message_variable}} 这类宏。
 - 要求含糊时，按最可能的意思改，在 <reply> 里说你是怎么理解的。不需要改或者做不到的，在 <reply> 里说明，不输出改动。
 ${WRITING_RULES.filter(rule => !rule.includes('<user>')).map(rule => `- ${rule}`).join('\n')}
 
@@ -144,23 +175,47 @@ const TAGS = ['field', 'greeting', 'entry', 'new_entry', 'remove_entry']
  *   { id, kind: 'field', key, before, after }            (tags as "a, b")
  *   { id, kind: 'greeting', index, before, after }        (index past the last one: a new opening)
  *   { id, kind: 'entry', uid, title, constant, before, after, name?, keys? }
- *   { id, kind: 'newEntry', name, keys, constant, after }
+ *   { id, kind: 'newEntry', name, keys, constant, initvar?, after }
  *   { id, kind: 'removeEntry', uid, title, constant, before }
  * Pieces the same as before, entries not sent in full (`shown`), and with a
- * `target` anything else, are left out.
+ * `target` anything else, are left out; `dropped` (only when there are any)
+ * says which blocks could not be taken and why: [{ reason, name }], reason
+ * 'unshown' (an entry not sent in full) or 'unknown' (a field this card has no
+ * such name for).
  */
 export function readEdit(text, card, { shown = null, target = '' } = {}) {
   const { reply, blocks } = readBlocks(text, TAGS)
   const greetings = greetingList(card)
   const entries = card.book?.entries ?? []
   const changes = new Map()
+  const dropped = []
   let fresh = 0
+  // A new entry, from <new_entry> or an <entry> naming none of the card's: mode="initvar" makes it the
+  // initial variables (named so the book tells it apart), never a keyword entry with no keywords.
+  const newEntry = (attrs, body) => {
+    body = unescaped(body)
+    const mode = String(attrs.mode ?? '')
+    const initvar = /initvar|初始变量/i.test(mode)
+    let name = String(attrs.name ?? '').trim().slice(0, 200) || body.replace(/\s+/g, ' ').slice(0, 24)
+    if (initvar && !INITVAR_NAME.test(name)) name = `[initvar]${name}`.slice(0, 200)
+    const id = `new:${fresh++}`
+    changes.set(id, { id, kind: 'newEntry', name, keys: initvar ? [] : splitKeys(attrs.keys), constant: !initvar && /constant|常驻/i.test(mode), ...(initvar ? { initvar: true } : {}), after: body })
+  }
   for (const block of blocks) {
     const { tag, attrs } = block
     let { body } = block
+    if (tag === 'field' && FIRST_MES.has(fieldName(attrs.name))) {
+      const before = greetings[0] ?? ''
+      body = unescaped(bodyFor(block, before), before)
+      if (body && body !== before.trim()) changes.set('greeting:0', { id: 'greeting:0', kind: 'greeting', index: 0, before, after: body })
+      continue
+    }
     if (tag === 'field') {
-      const key = FIELD_OF[String(attrs.name ?? '').trim().toLowerCase()]
-      if (!key) continue
+      const key = FIELD_OF[fieldName(attrs.name)]
+      if (!key) {
+        if (block.body) dropped.push({ reason: 'unknown', name: String(attrs.name ?? '') })
+        continue
+      }
       if (key === 'tags') {
         const before = (card.tags ?? []).join(', ')
         const after = cleanTags(body).join(', ')
@@ -168,23 +223,31 @@ export function readEdit(text, card, { shown = null, target = '' } = {}) {
         continue
       }
       const before = String(card[key] ?? '')
-      body = bodyFor(block, before)
+      body = unescaped(bodyFor(block, before), before)
       if ((key === 'name' && !body) || body === before.trim()) continue
       changes.set(`field:${key}`, { id: `field:${key}`, kind: 'field', key, before, after: body })
     } else if (tag === 'greeting') {
       const index = Number.parseInt(attrs.index, 10) - 1
       const before = greetings[index] ?? ''
-      body = bodyFor(block, before)
+      body = unescaped(bodyFor(block, before), before)
       if (!(index >= 0) || index > greetings.length + 4 || !body || body === before.trim()) continue
       changes.set(`greeting:${index}`, { id: `greeting:${index}`, kind: 'greeting', index, before, after: body })
     } else if (tag === 'entry' || tag === 'remove_entry') {
       const entry = entries.find(e => e.uid === String(attrs.uid ?? '').trim())
-      if (!entry || (shown && !shown.includes(entry.uid))) continue
+      // An entry the card does not have, written out in full: what the model meant was a new one.
+      if (!entry) {
+        if (tag === 'entry' && body) newEntry(attrs, body)
+        continue
+      }
+      if (shown && !shown.includes(entry.uid)) {
+        dropped.push({ reason: 'unshown', name: entry.comment || entry.uid })
+        continue
+      }
       if (tag === 'remove_entry') {
         changes.set(`remove:${entry.uid}`, { id: `remove:${entry.uid}`, kind: 'removeEntry', uid: entry.uid, title: entry.comment, constant: entry.constant, before: entry.content })
         continue
       }
-      body = bodyFor(block, entry.content)
+      body = unescaped(bodyFor(block, entry.content), entry.content)
       const change = { id: `entry:${entry.uid}`, kind: 'entry', uid: entry.uid, title: entry.comment, constant: entry.constant, before: entry.content, after: body && body !== entry.content.trim() ? body : entry.content }
       const name = String(attrs.name ?? '').trim().slice(0, 200)
       if (name && name !== entry.comment) change.name = name
@@ -192,14 +255,11 @@ export function readEdit(text, card, { shown = null, target = '' } = {}) {
       if (keys && JSON.stringify(keys) !== JSON.stringify(entry.keys)) change.keys = keys
       if (change.after !== entry.content || change.name || change.keys) changes.set(change.id, change)
     } else if (tag === 'new_entry') {
-      if (!body) continue
-      const name = String(attrs.name ?? '').trim().slice(0, 200) || body.replace(/\s+/g, ' ').slice(0, 24)
-      const id = `new:${fresh++}`
-      changes.set(id, { id, kind: 'newEntry', name, keys: splitKeys(attrs.keys), constant: /constant|常驻/i.test(String(attrs.mode ?? '')), after: body })
+      if (body) newEntry(attrs, body)
     }
   }
   const list = [...changes.values()]
-  return { reply, changes: target ? list.filter(change => change.id === target) : list }
+  return { reply, changes: target ? list.filter(change => change.id === target) : list, ...(dropped.length ? { dropped } : {}) }
 }
 
 // ─── Applying ─────────────────────────────────────────────────────────────
@@ -237,7 +297,8 @@ export function applyChanges(card, changes, ids) {
   const edits = chosen.filter(c => c.kind === 'entry' && exists(c.uid)).map(c => ({ uid: c.uid, ...(c.after !== c.before ? { content: c.after } : {}), ...(c.name ? { comment: c.name } : {}), ...(c.keys ? { keys: c.keys } : {}) }))
   const removed = chosen.filter(c => c.kind === 'removeEntry' && exists(c.uid)).map(c => c.uid)
   if (edits.length) prefix = editBook(book, { entries: edits }).prefix || prefix
-  for (const change of added) prefix = editBook(book, { add: { comment: change.name, keys: change.keys, content: change.after, constant: change.constant } }).prefix || prefix
+  // New initial variables reach an open chat when it is applied there (chats.mjs rebuildPrompt fills them in).
+  for (const change of added) prefix = editBook(book, { add: { comment: change.name, keys: change.keys, content: change.after, constant: change.constant } }).prefix || change.initvar === true || prefix
   if (removed.length) prefix = editBook(book, { remove: removed }).prefix || prefix
   return { applied: applied + edits.length + added.length + removed.length, prefix }
 }

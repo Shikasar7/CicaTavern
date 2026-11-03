@@ -24,7 +24,7 @@ BEGIN
             VALUE "FileDescription", "CicaTavern"
             VALUE "FileVersion", VER_STRING
             VALUE "InternalName", "CicaTavern"
-            VALUE "LegalCopyright", "Copyright (c) 2026 Shikasar7. MIT License."
+            VALUE "LegalCopyright", "Copyright (c) 2026 Shikasar7. AGPL-3.0 License."
             VALUE "OriginalFilename", "CicaTavern.exe"
             VALUE "ProductName", "CicaTavern"
             VALUE "ProductVersion", VER_STRING

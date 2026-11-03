@@ -39,6 +39,24 @@ export function cleanCompaction(value) {
   }
 }
 
+export const MEMORY_DEFAULTS = Object.freeze({ enabled: false, tidy: Object.freeze({ enabled: false, every: 10, model: 'helper' }), budget: 1500 })
+const clamp = (value, low, high) => Math.min(high, Math.max(low, value))
+
+/** settings.memory (长期记忆, memory.mjs) as kept: both switches off unless switched on, every 5–30 turns, a budget of 300–6000 characters. */
+export function cleanMemory(value) {
+  const saved = value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  const tidy = saved.tidy !== null && typeof saved.tidy === 'object' ? saved.tidy : {}
+  return {
+    enabled: saved.enabled === true,
+    tidy: {
+      enabled: tidy.enabled === true,
+      every: clamp(Math.round(Number(tidy.every) || MEMORY_DEFAULTS.tidy.every), 5, 30),
+      model: tidy.model === 'chat' ? 'chat' : 'helper',
+    },
+    budget: clamp(Math.round(Number(saved.budget) || MEMORY_DEFAULTS.budget), 300, 6000),
+  }
+}
+
 // Context windows as the vendors' own model pages gave them on 2026-10-27 (the maximum input where
 // that is lower), matched against the model id in lower case with any "vendor/" prefix left off.
 // The first match wins, so narrower patterns come first. A model not here is guessed (GUESSED_WINDOW).

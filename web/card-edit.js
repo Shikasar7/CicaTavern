@@ -498,13 +498,14 @@ export function initCardEdit({ api, el, toast, guard, saveFile, getChat, isGener
       return [t`不发给模型`, 'off', '']
     }
     if (change.kind === 'greeting') return [t`新对话`, 'off', t`开新对话时选`]
+    if (change.initvar) return [t`初始变量`, 'on', t`新对话从这些值开始；已有的对话点「应用到当前对话」后补上`]
     return change.constant ? [t`常驻`, 'on', t`写进对话开局时的固定前缀`] : [t`关键词`, 'key', t`最近的对话提到关键词时随消息发送`]
   }
 
   function changeNotes(change) {
     const notes = []
     if (change.kind === 'entry' && change.name) notes.push(t`名称：${change.title || t`未命名条目`} → ${change.name}`)
-    if (change.kind === 'newEntry' || change.keys) notes.push(t`关键词：${(change.keys ?? []).join(t`、`) || t`（无）`}`)
+    if ((change.kind === 'newEntry' && !change.initvar) || change.keys) notes.push(t`关键词：${(change.keys ?? []).join(t`、`) || t`（无）`}`)
     if (change.kind === 'newEntry' && change.constant) notes.push(t`常驻：写进对话开局时的固定前缀`)
     return notes
   }

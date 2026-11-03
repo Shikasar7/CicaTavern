@@ -11,6 +11,7 @@ import path from 'node:path'
 import { createApp } from '../server/http.mjs'
 import { normalizeCard, rawOfPicture, sillyTavernCard, writeCardPng } from '../server/cards.mjs'
 import { applyChanges, editRequest, readEdit, shownEntries } from '../server/forge/edit.mjs'
+import { claimsChanges, missingNote } from '../server/forge/blocks.mjs'
 import { cleanTags, diffLines, editCard, foldSame, greetingList, inlineDiff } from '../web/shared/card-edit.js'
 
 const RAW = {
@@ -181,24 +182,25 @@ test('a proposal taken later: an entry edited since keeps the edit unless the pr
   assert.deepEqual(card.book.entries[1].keys, ['茶点', '甜点'])
 })
 
-// ─── Over HTTP, with a model that answers ANSWER ─────────────────────────
+// ─── Over HTTP, with a model that answers ANSWER (or `answers` in turn, the last one from then on) ───
 
-async function fakeModel() {
+async function fakeModel(answers = [ANSWER]) {
   const seen = []
   const server = createServer(async (req, res) => {
     const chunks = []
     for await (const chunk of req) chunks.push(chunk)
     seen.push(JSON.parse(Buffer.concat(chunks).toString('utf8')))
     res.writeHead(200, { 'content-type': 'application/json' })
-    res.end(JSON.stringify({ choices: [{ message: { content: ANSWER }, finish_reason: 'stop' }], usage: { prompt_tokens: 120, completion_tokens: 60 } }))
+    const content = answers[Math.min(seen.length, answers.length) - 1]
+    res.end(JSON.stringify({ choices: [{ message: { content }, finish_reason: 'stop' }], usage: { prompt_tokens: 120, completion_tokens: 60 } }))
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   return { base: `http://127.0.0.1:${server.address().port}`, seen, close: () => server.close() }
 }
 
-async function tavern(t) {
+async function tavern(t, answers) {
   const dataRoot = await mkdtemp(path.join(tmpdir(), 'tavern-card-edit-'))
-  const model = await fakeModel()
+  const model = await fakeModel(answers)
   const app = createApp({ dataRoot, proxy: 'off', edition: 'release' })
   const server = await app.listen({ port: 0 })
   t.after(async () => {
@@ -319,4 +321,105 @@ test('a card without a book of its own gets one when its first entry is added', 
   const added = (await call(`/api/cards/${bare.id}/book`, { method: 'PUT', body: { add: { comment: '新条目' } } })).body
   assert.equal(added.card.bookEntries, 1)
   assert.equal((await call(`/api/cards/${bare.id}/book`)).body.entries[0].comment, '新条目')
+})
+
+test('reading leniently: full-width or missing quotes, the page\'s field names, an <entry> the card lacks as a new one', () => {
+  const card = stored()
+  const answer = `<reply>改好了。</reply>
+<field name=“性格”>冷淡。</field>
+<field name=scenario>夜里，茶馆打烊了。</field>
+<field name="first_mes">「打烊了。」</field>
+<entry uid="7" name="阿砚" keys="阿砚">青禾的青梅竹马。</entry>
+<entry uid="1" keys="茶点">桂花糕。</entry>
+<field name="背景故事">x</field>`
+  const { changes, dropped } = readEdit(answer, card, { shown: ['0'] })
+  assert.deepEqual(changes.map(c => c.id), ['field:personality', 'field:scenario', 'greeting:0', 'new:0'])
+  assert.equal(changes.find(c => c.id === 'new:0').name, '阿砚')
+  assert.deepEqual(changes.find(c => c.id === 'new:0').keys, ['阿砚'])
+  assert.deepEqual(dropped, [{ reason: 'unshown', name: '茶点' }, { reason: 'unknown', name: '背景故事' }])
+})
+
+test('an initial-variables entry asked for by mode: named so the book knows it, no keywords, and an open chat is told', () => {
+  const card = stored()
+  const { changes } = readEdit('<reply>加了变量。</reply><new_entry name="好感度" keys="好感" mode="initvar">好感度: 10</new_entry><new_entry name="[InitVar]状态" mode="initvar">心情: 平静</new_entry>', card)
+  assert.deepEqual(changes.map(c => [c.name, c.keys, c.constant, c.initvar]), [['[initvar]好感度', [], false, true], ['[InitVar]状态', [], false, true]])
+  assert.deepEqual(applyChanges(card, changes, ['new:0']), { applied: 1, prefix: true }, 'initial variables reach an open chat when it is applied')
+  assert.equal(card.book.entries.at(-1).initvar, true)
+})
+
+test('an answer that says it changed things and wrote none out is caught; a plain "nothing to change" is not', () => {
+  const card = stored()
+  assert.equal(claimsChanges(readEdit('<reply>我已经把她改成冷淡的性格，并加了初始变量。</reply>', card)), true)
+  assert.equal(claimsChanges(readEdit('<reply>这张卡已经是这样了，不需要改。</reply>', card)), false)
+  assert.equal(claimsChanges(readEdit('<reply>改了性格。</reply><field name="personality">冷淡。</field>', card)), false)
+  const unshown = readEdit('<reply>改了茶点。</reply><entry uid="1">桂花糕。</entry>', card, { shown: ['0'] })
+  assert.equal(claimsChanges(unshown), true)
+  assert.match(missingNote(unshown), /条目「茶点」这次没有附上全文/)
+  assert.match(missingNote(readEdit('<reply>已修改。</reply>', card)), /改动没有写在规定的标签里/)
+})
+
+test('asked once more when the answer promised changes it did not write; still none, and the page hears why', async t => {
+  const promised = '<reply>我已经把她改冷淡了，也加了青梅竹马。</reply>'
+  const { call, model } = await tavern(t, [promised, ANSWER])
+  const card = (await call('/api/cards/import', { method: 'POST', body: { filename: 'c.json', data: Buffer.from(JSON.stringify(RAW)).toString('base64') } })).body
+  const wait = async () => {
+    let session = (await call(`/api/cards/${card.id}/assistant`)).body
+    for (let i = 0; i < 200 && session.job; i++) {
+      await new Promise(resolve => setTimeout(resolve, 10))
+      session = (await call(`/api/cards/${card.id}/assistant`)).body
+    }
+    return session
+  }
+  await call(`/api/cards/${card.id}/assistant`, { method: 'POST', body: { text: '让她冷淡一点' } })
+  const fixed = (await wait()).turns.at(-1).assistant
+  assert.equal(model.seen.length, 2)
+  assert.match(model.seen[1].messages.at(-1).content, /【格式提醒】/)
+  assert.equal(model.seen[1].messages.at(-2).content, promised, 'the answer it gave goes back with the reminder')
+  assert.equal(fixed.changes.length, 5)
+  assert.equal(fixed.missed, undefined)
+})
+
+test('a chat begun without variables gets the card\'s new initial variables when its prefix is rebuilt; one with variables keeps its own', async t => {
+  const { app, call } = await tavern(t)
+  const card = (await call('/api/cards/import', { method: 'POST', body: { filename: 'c.json', data: Buffer.from(JSON.stringify(RAW)).toString('base64') } })).body
+  const chat = (await call('/api/chats', { method: 'POST', body: { cardId: card.id } })).body
+  assert.deepEqual(chat.state, {}, 'begun without variables')
+  await call(`/api/cards/${card.id}/book`, { method: 'PUT', body: { add: { comment: '[initvar]初始变量', content: '好感度: 10\n心情: 平静' } } })
+  const rebuilt = (await call(`/api/chats/${chat.id}/preset`, { method: 'POST', body: {} })).body
+  assert.deepEqual(rebuilt.state, { 好感度: 10, 心情: '平静' })
+  const stored = await app.store.getChat(chat.id)
+  assert.deepEqual(stored.nodes.root.state, { 好感度: 10, 心情: '平静' })
+
+  // Variables the chat has are left alone, even ones the card's start would set differently.
+  stored.nodes.root.state = { 好感度: 50 }
+  await app.store.saveChat(stored)
+  await call(`/api/chats/${chat.id}/preset`, { method: 'POST', body: {} })
+  assert.deepEqual((await app.store.getChat(chat.id)).nodes.root.state, { 好感度: 50 })
+})
+
+test('still nothing after asking once more: no changes, and the turn says the answer missed them', async t => {
+  const { call, model } = await tavern(t, ['<reply>已经改好了。</reply>'])
+  const card = (await call('/api/cards/import', { method: 'POST', body: { filename: 'c.json', data: Buffer.from(JSON.stringify(RAW)).toString('base64') } })).body
+  await call(`/api/cards/${card.id}/assistant`, { method: 'POST', body: { text: '改成 MVU 卡' } })
+  let session = (await call(`/api/cards/${card.id}/assistant`)).body
+  for (let i = 0; i < 200 && session.job; i++) {
+    await new Promise(resolve => setTimeout(resolve, 10))
+    session = (await call(`/api/cards/${card.id}/assistant`)).body
+  }
+  const turn = session.turns.at(-1).assistant
+  assert.equal(model.seen.length, 2, 'asked once more, not again and again')
+  assert.deepEqual([turn.changes, turn.missed], [[], { dropped: [] }])
+  assert.equal(turn.reply, '已经改好了。')
+  // The next request reads that nothing changed, not that it was done.
+  await call(`/api/cards/${card.id}/assistant`, { method: 'POST', body: { text: '再试试' } })
+  for (let i = 0; i < 200 && (await call(`/api/cards/${card.id}/assistant`)).body.job; i++) await new Promise(resolve => setTimeout(resolve, 10))
+  assert.match(model.seen[2].messages.at(-1).content, /已经改好了。（这次没有写出改动，内容没有变）/)
+})
+
+test('tags a model wrote escaped in a piece come out as tags, unless the piece had escapes of its own', () => {
+  const card = stored()
+  const { changes } = readEdit('<reply>加了规则。</reply><new_entry name="规则" mode="constant">每轮末尾写 &lt;UpdateVariable&gt; 块。</new_entry>', card)
+  assert.equal(changes[0].after, '每轮末尾写 <UpdateVariable> 块。')
+  card.description = '写成 &lt;b&gt; 的样子。'
+  assert.equal(readEdit('<field name="description">写成 &lt;i&gt; 的样子。</field>', card).changes[0].after, '写成 &lt;i&gt; 的样子。')
 })

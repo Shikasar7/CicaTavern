@@ -393,6 +393,38 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 - 原因：压缩之后已经写了新的回合，存档已经用进去了，不能再改；或者把存档内容清空了。
 - 解决：想换一份存档，在压缩点「回滚到这里」再压缩一次。存档不能是空的。
 
+## 这一轮不能隐藏 {#err-hide-round}
+
+- 也叫：隐藏不了、隐藏失败、不能隐藏
+- 原文：这一轮在上次压缩之前，模型现在只读剧情存档，隐藏它不起作用；要去掉内容，可以修改存档
+- 原文：压缩点所在的这一轮不能隐藏：之后接着写的都从这里开始
+- 原文：开场不能隐藏，只能隐藏之后的回合
+- 原文：这一轮不在当前对话里
+- 原文：最后一轮已隐藏：先取消隐藏，或接着写一轮再压缩
+- 英文：This round is from before the last compaction: the model only reads the story archive now, so hiding it does nothing. To take something out, edit the archive
+- 英文：The round the context was compacted at can't be hidden: everything after it continues from there
+- 英文：The opening can't be hidden, only the rounds after it
+- 英文：That round isn't in this chat
+- 英文：The last round is hidden: unhide it, or write one more turn, then compact
+- 出现在：点「隐藏这一轮」时；最后一轮隐藏着时压缩上下文
+- 原因：压缩之前的回合模型已经只读剧情存档，压缩点和开场白是后面的剧情接着写的起点；最后一轮隐藏着时，压缩会把它算进来。
+- 解决：压缩之前的内容在存档里改（「查看 / 修改」）；压缩前先取消最后一轮的隐藏，或者接着写一轮。
+
+## 整理记忆没成功 {#err-memory-tidy}
+
+- 也叫：整理记忆失败、记忆簿没更新、边玩边整理失败、没有写出记忆条目
+- 原文：边玩边整理要用供应商的模型：在「配图与朗读」里选一个辅助模型，或在顶栏选一个供应商的模型
+- 原文：{0} · {1} 没有写出记忆条目，下次到了间隔再试
+- 原文：还没有可以整理的剧情
+- 原文：正在整理记忆
+- 英文：Tidying memory needs a provider's model: pick a helper model under Pictures & voice, or a provider's model in the top bar
+- 英文：{0} · {1} wrote no memory entries; it tries again at the next interval
+- 英文：There's no story to tidy yet
+- 英文：Already tidying memory
+- 出现在：边玩边整理之后（最新回复下的「⚠ 整理记忆没成功」，记忆簿里写着原因）；记忆簿里点「现在整理」时
+- 原因：没有能用的供应商模型；模型没按格式写出记忆条目（推理型模型可能把输出额度花在了思考上）；对话里还没有剧情；上一次整理还没完。
+- 解决：在「配图与朗读」里选一个辅助模型（不带推理的快模型最合适）；到下一个间隔会自动再试，也可以在记忆簿里点「现在整理」。
+
 ## 打开了联网时报错 {#err-web-search}
 
 - 也叫：联网搜索、web search、地球图标

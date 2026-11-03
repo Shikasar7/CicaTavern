@@ -664,6 +664,19 @@ export default {
   "Google 没有发令牌（{0} {1}）：gcloud 的登录可能过期了，重新运行 gcloud auth application-default login，再把新生成的文件选进来": "Google didn't give a token ({0} {1}): gcloud's login may have expired; run gcloud auth application-default login again and pick the new file",
   "把 Base URL 里的 PROJECT_ID 换成你的 Google Cloud 项目 ID（控制台顶部项目选择器里的「ID」）": "Replace PROJECT_ID in the Base URL with your Google Cloud project ID (the ID in the project picker at the top of the console)",
   "gcloud 登录凭据": "gcloud login credential",
+  // ─── 隐藏这一轮, 长期记忆（Beta） ─────────────────────────────────────
+  "这一轮不在当前对话里": "That round isn't in this chat",
+  "开场不能隐藏，只能隐藏之后的回合": "The opening can't be hidden, only the rounds after it",
+  "压缩点所在的这一轮不能隐藏：之后接着写的都从这里开始": "The round the context was compacted at can't be hidden: everything after it continues from there",
+  "这一轮在上次压缩之前，模型现在只读剧情存档，隐藏它不起作用；要去掉内容，可以修改存档": "This round is from before the last compaction: the model only reads the story archive now, so hiding it does nothing. To take something out, edit the archive",
+  "订阅模型的会话里已经有这一轮，不能隐藏；可以用「修改」改掉这一轮的内容": "The subscription model's session already holds this round, so it can't be hidden; use Edit to change what it says",
+  "记忆条目格式无效": "Invalid memory entries",
+  "最后一轮已隐藏：先取消隐藏，或接着写一轮再压缩": "The last round is hidden: unhide it, or write one more turn, then compact",
+  "边玩边整理要用供应商的模型：在「配图与朗读」里选一个辅助模型，或在顶栏选一个供应商的模型": "Tidying memory needs a provider's model: pick a helper model under Pictures & voice, or a provider's model in the top bar",
+  "{0} · {1} 没有写出记忆条目，下次到了间隔再试": "{0} · {1} wrote no memory entries; it tries again at the next interval",
+  "还没有可以整理的剧情": "There's no story to tidy yet",
+  "正在整理记忆": "Already tidying memory",
+  "{0} · 记忆簿": "{0} · memory book",
 }
 
 // Whole messages from the modules bin/launch.mjs loads on its own (store.mjs,

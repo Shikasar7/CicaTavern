@@ -8,7 +8,7 @@ import { activePath, booksForCard, chatPicks, childrenOf, compactBlock, editMess
 import { hasPrefixRules, renderPresetTail } from './presets.mjs'
 import { asksChoices, choicesInstruction, choicesRequest, extractChoices, replyScripts, withChoices } from './basic.mjs'
 import { choicesOf } from '../web/shared/basic.js'
-import { buildTurnPrompt, chatTemplates, everyTurnReminder, renderEntry, replaceMacros, templateText, webSearchNote } from './prompt.mjs'
+import { buildTurnPrompt, chatTemplates, everyTurnReminder, openingBlock, renderEntry, replaceMacros, templateText, webSearchNote } from './prompt.mjs'
 import { applyStateUpdates, applyWrites, displayText, writeLabels } from './state.mjs'
 import { httpError, newId } from './store.mjs'
 import { dynamicEntries, inPrefix, isConstant, isInitvar, isPreprocessing, triggeredEntries } from './worldbook.mjs'
@@ -19,13 +19,14 @@ import { decoratorsOf, hasEjs, hasTemplate, stripTemplates, templateSession } fr
 import { accumulatedDynamic, compactThreshold, dynamicMemory, planDynamic, stripDynamicText } from './dynamic.mjs'
 import { complete, CONTEXT_FULL, isProviderRef, providerError, resolveRef, webSearchKind } from './providers.mjs'
 import { canonicalModel } from './models.mjs'
-import { extractSummary, keptArchive, looksLikeArchive, MIN_TURNS, recapBlock, recentExchanges, storyPath, storyTurns, summaryInstruction, turnsSinceCompaction } from './recap.mjs'
+import { extractSummary, keptArchive, looksLikeArchive, MIN_TURNS, recapBlock, recentExchanges, storyPath, storyTurns, summaryInstruction, turnsSinceCompaction, withoutHidden } from './recap.mjs'
 import { contextUsed, limitFromError, thresholdFor, windowOf } from './context.mjs'
 import { msg } from './i18n.mjs'
 import { extractUpdate, fillInstruction, fillRequest, hasUpdateBlock, usesMvu } from './mvu.mjs'
 import { rawRequest } from './frames.mjs'
 import { blockRequest, blockSent } from './blockwords.mjs'
 import { blockText } from '../web/shared/blockwords.js'
+import { memoryOf, memoryOnlyInstruction, memoryRequest, memoryText, mergeEntries, parseEntries, placeEntries, recallEntries, recalledSince, snapshotOf, TIDY_FIRST_MAX, tidyInContext, tidyRequest, turnTexts } from './memory.mjs'
 
 // The preset's per-turn block in a turn's message (buildTurnPrompt).
 const PRESET_BLOCK = /\n*<预设指令>\n[\s\S]*?\n<\/预设指令>/
@@ -118,6 +119,25 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
   }
 
   /**
+   * 长期记忆（Beta）: the 记忆簿 entries this turn brings back (memory.mjs recallEntries). Only what the
+   * latest compaction on `path` folded away, and once until the next one: the message carrying an
+   * entry stays in the context.
+   */
+  function recallFor(path, input, settings, newSession) {
+    const compacted = path.findLast(node => node.compaction)
+    const snapshot = compacted ? memoryOf(path) : null
+    if (!snapshot) return []
+    const seen = withoutHidden(storyPath(path))
+    return recallEntries(snapshot, {
+      compactedTurns: Number(compacted.compaction.turns) || 0,
+      recalled: newSession ? new Set() : recalledSince(path),
+      scanText: scanWindow(seen, settings.scanDepth, input),
+      focusText: `${input}\n${seen.at(-1)?.text ?? ''}`,
+      budget: settings.memory.budget,
+    })
+  }
+
+  /**
    * @param marks - ask for the 视觉小说格式 this turn (the page's visual novel mode has it on).
    * The turn's templates share one sandbox, let go of when the prompt is built.
    */
@@ -138,9 +158,15 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     const names = chat.names
     const macros = text => replaceMacros(text, names)
     const path = pathTo(chat, parent.id)
+    // What the model reads: the path without its hidden rounds (隐藏这一轮).
+    const seen = withoutHidden(path)
+    // Where that context starts: the opening, or the latest compaction point. This turn opens
+    // it when it is the first after it, or every turn since was hidden.
+    const start = Math.max(0, path.findLastIndex(node => node.compaction))
+    const opens = !withoutHidden(path.slice(start + 1)).some(node => node.role === 'user')
     // Continuing from a compaction point opens a new session that has seen only
     // the frozen prefix: everything the history used to carry is sent again.
-    const newSession = Boolean(parent.compaction)
+    const newSession = Boolean(path[start].compaction) && opens
     if (newSession) forceFull = true
     const state = parent.state ?? {}
     const templateErrors = []
@@ -189,10 +215,10 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     const windows = new Map()
     const scanFor = book => {
       const depth = book.scanDepth || settings.scanDepth
-      if (!windows.has(depth)) windows.set(depth, scanWindow(story, depth, said))
+      if (!windows.has(depth)) windows.set(depth, scanWindow(withoutHidden(story), depth, said))
       return windows.get(depth)
     }
-    const hits = triggeredEntries(turnBooks, scanFor, newSession ? new Set() : recentRefs(path, settings.reinjectAfter))
+    const hits = triggeredEntries(turnBooks, scanFor, newSession ? new Set() : recentRefs(seen, settings.reinjectAfter))
     const dynamic = dynamicEntries(turnBooks)
     // A card that feeds its own variables through a dynamic entry
     // ({{format_message_variable::stat_data}}) does not need our state block too.
@@ -203,7 +229,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       Object.keys(state).length > 0 &&
       (userTurns === 0 || newSession || chat.stateDirty || (settings.stateRefreshEvery > 0 && userTurns % settings.stateRefreshEvery === 0))
     // Prompt-side regex (e.g. hiding the status-bar placeholder or MVU blocks from the model).
-    const opening = parent.id === 'root' && !newSession ? applyScripts(parent.text, scripts, { placement: PLACEMENT.AI_OUTPUT, target: 'prompt', depth: 0, macros }) : ''
+    const opening = opens && !newSession ? applyScripts(path[0].text, scripts, { placement: PLACEMENT.AI_OUTPUT, target: 'prompt', depth: 0, macros }) : ''
     const promptInput = applyScripts(said, scripts, { placement: PLACEMENT.USER_INPUT, target: 'prompt', depth: 0, macros })
 
     const renderedDynamic = dynamic
@@ -219,7 +245,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       : ''
     const presetRender = text => (hasEjs(text) ? templateText(session(), text, templateErrors, msg`预设提示词`) : text)
     const presetText = preset
-      ? renderPresetTail(preset, { card, persona: playerOf(card, persona, names.user), names, vars: chat.presetVars, input: promptInput, lastChar: parent.display ?? parent.text, render: presetRender })
+      ? renderPresetTail(preset, { card, persona: playerOf(card, persona, names.user), names, vars: chat.presetVars, input: promptInput, lastChar: seen.at(-1).display ?? seen.at(-1).text, render: presetRender })
       : ''
     // Entries the templates asked for (activewi) join the keyword hits, rendered in the same sandbox.
     const taken = new Set([...hits.map(hit => hit.ref), ...dynamic.map(entry => refOf(entry))])
@@ -242,13 +268,15 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     const writes = templates.session?.writes() ?? { message: [], local: [], global: [], state }
     if (templates.session) templateErrors.unshift(...templates.session.preloadErrors())
 
-    const plan = planDynamic({ rendered: resolve(renderedDynamic), ...dynamicMemory(path), forceFull })
-    const recap = newSession ? compactionRecap(parent, story, names, scripts, chat) : ''
+    const plan = planDynamic({ rendered: resolve(renderedDynamic), ...dynamicMemory(seen), forceFull })
+    const recap = newSession ? compactionRecap(path[start], storyPath(path.slice(0, start + 1)), names, scripts, chat) : ''
+    const recalled = settings.memory?.enabled ? recallFor(path, said, settings, newSession) : []
     const prompt = buildTurnPrompt({
       names,
       opening,
       recap,
       entries: sent.map(hit => ({ ...hit.item, text: resolve(hit.item.text) })),
+      memory: memoryText(recalled),
       dynamic: plan.text ? [{ title: '', text: plan.text }] : [],
       characterNote: resolve(characterNote),
       stateText: refreshState ? JSON.stringify(writes.state, null, 1) : '',
@@ -265,6 +293,9 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       input: resolve(said),
       injected: sent.map(hit => hit.ref),
       injectedTitles: sent.map(hit => hit.entry.comment || hit.entry.keys[0] || hit.entry.uid),
+      // 长期记忆: the entries the turn's <往事> brought back.
+      recalled: recalled.map(entry => entry.id),
+      recalledTitles: recalled.map(entry => entry.title),
       templateErrors,
       // What the templates wrote: the chat state (kept on the user node), chat-wide and app-wide variables.
       templateWrites: writes.message,
@@ -272,7 +303,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       globalWrites: writes.global,
       // A new session holds no earlier <动态设定>, so the pile-up count restarts here.
       dynamicState: newSession ? { ...plan.state, compacted: true } : plan.state,
-      shouldCompact: !forceFull && Boolean(renderedDynamic) && accumulatedDynamic(path) >= compactThreshold(path, settings.dynamicStrip),
+      shouldCompact: !forceFull && Boolean(renderedDynamic) && accumulatedDynamic(seen) >= compactThreshold(seen, settings.dynamicStrip),
     }
   }
 
@@ -401,7 +432,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     path.forEach((node, index) => {
       if (node.compaction) start = index
     })
-    const turns = path.slice(start + 1)
+    // Hidden rounds (隐藏这一轮) are left out before anything counts depth or places a cache mark.
+    const turns = withoutHidden(path.slice(start + 1))
     let stripBefore = 0
     turns.forEach((node, index) => {
       if (node.role === 'user' && node.dynamic?.compacted) stripBefore = index
@@ -425,9 +457,13 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     })
     // A branch written before its parent was compacted (turns folded behind a rollback, then restored)
     // never had the archive in its first message: it goes there now, or nothing would carry what came before.
+    // So does the first turn sent when the one that carried the archive or the opening was hidden.
     const opener = messages.findIndex(message => message.role === 'user')
     if (path[start]?.compaction && opener >= 0 && !messages[opener].content.includes('<前情提要>')) {
       messages[opener].content = `${compactionRecap(path[start], storyPath(path.slice(0, start + 1)), chat.names, scripts, chat)}\n\n${messages[opener].content}`
+    } else if (opener >= 0 && turns[0] !== path[start + 1] && path[start + 1]?.prompt?.includes('<开场>')) {
+      const opening = applyScripts(path[start].text, scripts, { placement: PLACEMENT.AI_OUTPUT, target: 'prompt', depth: 0, macros })
+      messages[opener].content = `${openingBlock(opening, chat.names)}\n\n${messages[opener].content}`
     }
     // 'latest' preset mode: the post-history prompts ride only on the newest message, as in
     // SillyTavern. Older messages lose them, so the newest one changes next turn: the reply
@@ -456,8 +492,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
    * @param options.onPart - called as each request goes out, for the page's progress
    */
   async function summarizeInParts(target, chat, history, signal, carry = '', depth = 0, options = {}) {
-    const { maxChars = Infinity, system = chat.systemPrompt, onPart = () => {} } = options
-    const instruction = { role: 'user', content: summaryInstruction(chat.names) }
+    const { maxChars = Infinity, system = chat.systemPrompt, onPart = () => {}, extra = '' } = options
+    const instruction = { role: 'user', content: summaryInstruction(chat.names, extra) }
     const lead = carry
       ? [
           { role: 'user', content: `<前情提要>\n下面是这段故事更早部分的剧情存档，之后是接着发生的原文。写存档时把这份前情一并写进去。\n<剧情存档>\n${carry}\n</剧情存档>\n</前情提要>` },
@@ -484,7 +520,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     if (archive.length < 200 || !looksLikeArchive(older.reply)) throw httpError(502, msg`前半段的剧情存档没有写完整，这次没有压缩，可以再试一次`)
     const newer = await summarizeInParts(target, chat, plain.slice(cut), signal, archive, depth + 1, options)
     const tokens = Object.fromEntries(Object.entries(newer.tokens).map(([key, value]) => [key, typeof value === 'number' ? value + (older.tokens[key] ?? 0) : value]))
-    return { ...newer, tokens }
+    // Every part's reply, oldest first: each may carry the 记忆条目 of its part.
+    return { ...newer, tokens, replies: [...(older.replies ?? [older.reply]), ...(newer.replies ?? [newer.reply])] }
   }
 
   /**
@@ -652,6 +689,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
             prompt: prepared.prompt,
             injected: prepared.injected,
             injectedTitles: prepared.injectedTitles,
+            ...(prepared.recalled?.length ? { recalled: prepared.recalled, recalledTitles: prepared.recalledTitles } : {}),
             templateErrors: prepared.templateErrors ?? [],
             // What the turn's templates wrote to the chat state: a regenerate plays it back, never runs it twice.
             ...(prepared.templateWrites?.length ? { templateWrites: prepared.templateWrites } : {}),
@@ -781,6 +819,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     const path = pathTo(chat, tip.id)
     const blocked = compactBlock(chat, path)
     if (blocked === 'none') throw httpError(400, msg`还没有可以压缩的剧情`)
+    if (tip.hidden) throw httpError(400, msg`最后一轮已隐藏：先取消隐藏，或接着写一轮再压缩`)
     if (blocked) throw httpError(400, compactRefusal(blocked, turnsSinceCompaction(path)))
     const since = turnsSinceCompaction(path)
     const started = Date.now()
@@ -793,7 +832,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       } else {
         target = model ? await targetFor(model, settings) : await compactionTarget(chat, tip, settings)
         if (target.api) {
-          used = await archiveByApi(target, chat, tip, abortController.signal, settings)
+          const extra = settings.memory?.enabled ? memoryRequest(chat.names, memoryOf(path)?.entries ?? []) : ''
+          used = await archiveByApi(target, chat, tip, abortController.signal, settings, extra)
         } else {
           // A subscription session holds the turns after it, which its summary would not reach.
           if (childrenOf(chat, tip.id).length) throw httpError(400, msg`回滚收起的回合还在这条后面：先恢复它们，或从这里接着写一轮再压缩`)
@@ -806,10 +846,12 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       compacting.delete(chat.id)
     }
     const summary = extractSummary(used.reply)
+    // 长期记忆: the entries go with the archive; a failure there leaves the compaction as it is.
+    const memory = settings.memory?.enabled && !keepRecent ? await compactionMemory(chat, path, used, target, abortController.signal).catch(() => null) : null
     const now = new Date().toISOString()
     const fresh = await store.withChat(chat.id, async () => {
       const latest = await store.getChat(chat.id)
-      latest.nodes[tip.id].compaction = { summary, turns: storyTurns(path), model: used.model, usage: used.tokens, at: now, ...(keepRecent ? { kept: since } : {}) }
+      latest.nodes[tip.id].compaction = { summary, turns: storyTurns(path), model: used.model, usage: used.tokens, at: now, ...(keepRecent ? { kept: since } : {}), ...(memory ? { memory } : {}) }
       return store.saveChat(latest)
     })
     if (used.tokens) {
@@ -824,22 +866,123 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
    * prompt (the card and its always-on lore) may be most of what is sent: then in parts sized for
    * the model's window, under the start of that prompt only.
    */
-  async function archiveByApi(target, chat, tip, signal, settings) {
+  async function archiveByApi(target, chat, tip, signal, settings, extra = '') {
     const history = await apiMessages(chat, tip)
     const onPart = () => compacting.set(chat.id, (compacting.get(chat.id) ?? 0) + 1)
     try {
-      return await summarizeInParts(target, chat, history, signal, '', 0, { maxChars: tip.imported ? IMPORTED_PART_CHARS : Infinity, onPart })
+      return await summarizeInParts(target, chat, history, signal, '', 0, { maxChars: tip.imported ? IMPORTED_PART_CHARS : Infinity, onPart, extra })
     } catch (error) {
       if (!error.contextFull || signal.aborted) throw error
       const window = windowOf(`${target.provider.id}/${target.modelId}`, { settings, learned: await store.getModelContext() }).tokens
       const system = `${chat.systemPrompt.slice(0, LEAN_SYSTEM_CHARS)}\n\n（设定很长，这里只保留了开头部分。）`
       try {
-        return await summarizeInParts(target, chat, history, signal, '', 0, { maxChars: Math.max(20_000, Math.floor(window * 0.5)), system, onPart })
+        return await summarizeInParts(target, chat, history, signal, '', 0, { maxChars: Math.max(20_000, Math.floor(window * 0.5)), system, onPart, extra })
       } catch (again) {
         if (!again.contextFull || signal.aborted) throw again
         // Not the turn's "compact it" advice: this is the compaction.
         throw Object.assign(httpError(502, msg`故事太长，${target.provider.name} · ${target.modelId} 分段也读不下：换一个上下文更大的模型来压缩，或者只保留最近两轮`), { contextFull: true })
       }
+    }
+  }
+
+  /** A model call outside the story, for the usage ledger. */
+  const sideRecord = (result, started) => ({ createdAt: new Date().toISOString(), model: result.model, usage: result.tokens, timing: { totalMs: Date.now() - started, firstTokenMs: null, forked: false, api: true } })
+
+  /**
+   * 长期记忆: the 记忆簿 after a compaction of `path`, from the 记忆条目 its archive came with; written
+   * without them, they are asked for on their own (the same history, read from cache). null when
+   * none came.
+   */
+  async function compactionMemory(chat, path, used, target, signal) {
+    const before = memoryOf(path)
+    const entries = before?.entries ?? []
+    let notes = (used.replies ?? [used.reply]).map(parseEntries).filter(Boolean)
+    if (!notes.length && target?.api) {
+      const started = Date.now()
+      const history = await apiMessages(chat, path.at(-1))
+      const again = await generateApi(target, { system: chat.systemPrompt, messages: [...history, { role: 'user', content: memoryOnlyInstruction(chat.names, entries) }] }, signal, () => {})
+      await ledger?.recordTurn(chat, sideRecord(again, started)).catch(() => {})
+      const note = parseEntries(again.reply)
+      if (note) notes = [note]
+    }
+    if (!notes.length) return null
+    const total = storyTurns(path)
+    const place = placeEntries(turnTexts(path), { from: Math.min((before?.turns ?? 0) + 1, total), to: total })
+    const book = notes.reduce((book, note) => mergeEntries(book, note, { locate: place }), entries)
+    return snapshotOf(book, { turns: total, model: used.model, by: 'compaction' })
+  }
+
+  // 边玩边整理 under way, by chat: { controller, nodeId }; and the last one's failure, by chat.
+  const tidying = new Map()
+  const tidyErrors = new Map()
+
+  /** The model a tidy uses (settings.memory.tidy.model): the helper, or the chat's own reading its history from cache. */
+  async function tidyTarget(chat, node, settings) {
+    const providers = await store.getProviders()
+    const usable = ref => isProviderRef(ref) && providers.some(p => p.id === ref.slice(0, ref.indexOf('/')))
+    if (settings.memory.tidy.model === 'chat') {
+      const own = node.api && usable(node.model) ? node.model : usable(modelFor(chat, settings)) ? modelFor(chat, settings) : null
+      if (own) return { target: await targetFor(own, settings), inContext: true }
+    }
+    const ref = [settings.media?.helperModel, modelFor(chat, settings), settings.model].find(usable)
+    if (!ref) throw httpError(400, msg`边玩边整理要用供应商的模型：在「配图与朗读」里选一个辅助模型，或在顶栏选一个供应商的模型`)
+    return { target: await targetFor(ref, settings), inContext: false }
+  }
+
+  /**
+   * 边玩边整理 (长期记忆): the turns since the 记忆簿 was last written, up to reply `nodeId`, noted down
+   * once there are `every` of them (`force`: one is enough), as a snapshot on that reply. Runs on its
+   * own (the turn is in already); a reply that is gone by then gets nothing.
+   * @returns whether it wrote one; failures are kept for the page (tidyError), never thrown.
+   */
+  async function tidyMemory(chatId, nodeId, { force = false, onStart = () => {} } = {}) {
+    if (tidying.has(chatId)) return false
+    const controller = new AbortController()
+    tidying.set(chatId, { controller, nodeId })
+    let started = false
+    try {
+      const settings = await store.getSettings()
+      if (!settings.memory.enabled || (!force && !settings.memory.tidy.enabled)) return false
+      const chat = await store.getChat(chatId)
+      const node = chat.nodes[nodeId]
+      if (node?.role !== 'assistant') return false
+      const path = pathTo(chat, nodeId)
+      const snapshot = memoryOf(path)
+      const total = storyTurns(path)
+      const since = Math.min(snapshot?.turns ?? 0, total)
+      if (total - since < (force ? 1 : settings.memory.tidy.every)) return false
+      const turns = turnTexts(path).filter(item => item.turn > since).slice(-TIDY_FIRST_MAX)
+      if (!turns.length) return false
+      started = true
+      tidyErrors.delete(chatId)
+      onStart()
+      const entries = snapshot?.entries ?? []
+      const { target, inContext } = await tidyTarget(chat, node, settings)
+      const request = inContext
+        ? { system: chat.systemPrompt, messages: [...(await apiMessages(chat, node)), { role: 'user', content: tidyInContext(chat.names, entries, turns.length, turns[0].user) }] }
+        : (({ system, user }) => ({ system, messages: [{ role: 'user', content: user }] }))(tidyRequest(chat.names, entries, turns))
+      const begun = Date.now()
+      const result = await generateApi(target, request, controller.signal, () => {})
+      await ledger?.recordTurn(chat, sideRecord(result, begun)).catch(() => {})
+      const notes = parseEntries(result.reply)
+      if (!notes) throw httpError(502, msg`${target.provider.name} · ${target.modelId} 没有写出记忆条目，下次到了间隔再试`)
+      return await store.withChat(chatId, async () => {
+        const fresh = await store.getChat(chatId).catch(() => null)
+        const reply = fresh?.nodes[nodeId]
+        if (!reply) return false
+        const freshPath = pathTo(fresh, nodeId)
+        // On what is there now: the player may have edited the book meanwhile.
+        const base = memoryOf(freshPath)?.entries ?? []
+        const place = placeEntries(turnTexts(freshPath), { from: turns[0].turn, to: turns.at(-1).turn })
+        reply.memory = snapshotOf(mergeEntries(base, notes, { locate: place }), { turns: total, model: result.model, by: 'tidy' })
+        await store.saveChat(fresh)
+        return true
+      })
+    } catch (error) {
+      if (!controller.signal.aborted && started) tidyErrors.set(chatId, friendlyError(error.message, subscription))
+      return false
+    } finally {
+      tidying.delete(chatId)
     }
   }
 
@@ -851,7 +994,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
    */
   async function compactBeforeTurn(chat, parent, abortController, emit) {
     const settings = await store.getSettings()
-    if (!settings.compaction.auto || compactBlock(chat, pathTo(chat, parent.id))) return null
+    if (!settings.compaction.auto || parent.hidden || compactBlock(chat, pathTo(chat, parent.id))) return null
     const used = contextUsed(parent)
     const ref = modelFor(chat, settings)
     const window = windowOf(ref, { settings, learned: await store.getModelContext() }).tokens
@@ -1167,6 +1310,15 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       return true
     },
     isRunning: chatId => running.has(chatId),
+    tidyMemory,
+    // 边玩边整理 under way, its last failure, and stopping it.
+    isTidying: chatId => tidying.has(chatId),
+    tidyError: chatId => tidyErrors.get(chatId) ?? null,
+    cancelTidy(chatId) {
+      const job = tidying.get(chatId)
+      job?.controller.abort()
+      return Boolean(job)
+    },
     // Requests a compaction under way has sent (第 N 段), 0 when none is.
     compactProgress: chatId => compacting.get(chatId) ?? 0,
     busy: () => running.size > 0,

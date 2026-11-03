@@ -806,6 +806,46 @@
           }
         }
       ]
+    },
+    {
+      "version": "2.3.0",
+      "date": "2026-11",
+      "items": [
+        {
+          "image": "2.3.0-memory.webp",
+          "zh": {
+            "title": "长期记忆（Beta），还能隐藏一轮",
+            "text": "设置 → 模型 → 长期记忆（Beta）打开后，压缩上下文时会把人物、事件、物品与地点、约定与伏笔记进这个对话的「记忆簿」；之后哪一轮提到它们，就把相关的几条附在这一轮发给模型，回复下面写着「想起：…」。顶栏「记忆」可以查看、修改、固定；也可以开「边玩边整理」，每隔几轮在后台记一次。\n回复下面多了「隐藏这一轮」：这一轮留在对话里，但不再发给模型。某一轮让内容审查一直拦着后面的请求时，隐藏它就能接着玩。"
+          },
+          "en": {
+            "title": "Long-term memory (Beta), and hiding a round",
+            "text": "Turn on Settings → Model → Long-term memory (Beta), and compacting the context also writes the people, events, things and places, and promises and foreshadowing into the chat's memory book; when a later round mentions them, the matching entries go along with that round, and the reply says Recalled: …. Open Memory in the top bar to read, edit or pin them, or switch on Tidy while playing to note things down every few rounds.\nReplies have Hide this round: the round stays in the chat but is no longer sent to the model. When one round keeps a content check refusing everything after it, hide it and play on."
+          }
+        },
+        {
+          "icon": "🛠️",
+          "zh": {
+            "title": "对话修改改卡更靠谱",
+            "text": "模型说「改好了」却没写出改动时，向导会追问一次；还是没有，就说清原因，可以「再问一次」。让它「改成 MVU 卡」时，会建好初始变量和更新规则，进行中的对话「应用到当前对话」后也补上变量。\n另外：有些卡的开场界面报错「Cannot read properties of undefined」修好了；从这一版起，CicaTavern 的许可证改为 AGPL-3.0，自己使用不受影响。"
+          },
+          "en": {
+            "title": "Changing a card by talking, more dependable",
+            "text": "When the model says it made changes but wrote none out, it is asked once more; still nothing, and you are told why and can ask again. Asked to make a card an MVU card, it sets up the initial variables and the update rules, and a chat under way gets the variables when you apply the change to it.\nAlso: the error some cards' opening screens showed (Cannot read properties of undefined) is fixed, and from this version CicaTavern is licensed under the AGPL-3.0; using it yourself is not affected."
+          }
+        },
+        {
+          "recap": "2.2",
+          "image": "2.2.0-cards.webp",
+          "zh": {
+            "title": "2.2 加了什么",
+            "text": "角色卡置顶、收藏、拖动排序，分组也能排，电脑上能把卡拖出窗口导出；配图提示词可以自己定写法和画风预设；Gemini Agent Platform；显示模型的思考过程；手机和电脑自动同步；消息可以复制，行动选项可以多选。"
+          },
+          "en": {
+            "title": "What 2.2 added",
+            "text": "Cards pinned, favorited and dragged into your own order, groups too, and dragged out of the window to export; picture prompts written your way, with art style presets; Gemini Agent Platform; the model's thinking shown; phone and computer kept in sync; messages copied, and several choices picked at once."
+          }
+        }
+      ]
     }
   ]
 }

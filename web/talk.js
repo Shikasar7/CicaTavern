@@ -187,7 +187,7 @@ export function createTalk({ api, el, guard, openProviders }, spec) {
       reply ? el('div', { class: 'forge-voice' }, reply.split(/\n+/).filter(Boolean).map(p => el('p', { text: p }))) : null,
       el('div', { class: 'forge-by', text: model }),
       changes.length ? el('div', { class: `ce-changes${waiting ? '' : ' done'}` }, changes.map(change => changeBlock(change, { waiting, applied: applied.has(change.id) }))) : null,
-      !changes.length ? el('p', { class: 'ce-outcome', text: t`这次没有提出改动。` }) : null,
+      !changes.length ? missedNote(turn, last) : null,
       waiting
         ? el('div', { class: 'forge-actions ce-decide' }, [
             el('button', { type: 'button', class: 'btn ghost small', text: t`放弃`, onclick: () => discard() }),
@@ -200,6 +200,23 @@ export function createTalk({ api, el, guard, openProviders }, spec) {
               undo ? el('button', { type: 'button', class: 'btn ghost small', text: t`撤销这次修改`, title: t`改回采用之前的样子`, onclick: () => undoApplied() }) : null,
             ])
           : null,
+    ])
+  }
+
+  /**
+   * An answer with nothing to take in. When it said it changed things (the server asked it once more and
+   * still got none), say why, so a reply reading "done" is not taken for done; the latest can be asked again.
+   */
+  function missedNote(turn, last) {
+    const missed = turn.assistant.missed
+    if (!missed) return el('p', { class: 'ce-outcome', text: t`这次没有提出改动。` })
+    const unshown = missed.dropped.filter(item => item.reason === 'unshown').map(item => t`「${item.name}」`)
+    const text = unshown.length
+      ? t`没有改动可以采用：模型想改的${unshown.join('')}这次没有附上全文，改不了。可以只改那一处（点它旁边的「按意见改」），或者换个说法。`
+      : t`没有改动可以采用：模型说改了，但没有按格式写出改动的内容（追问过一次），所以什么都没有变。可以再问一次，或者换个模型。`
+    return el('div', { class: 'ce-outcome-row' }, [
+      el('p', { class: 'ce-outcome warn', text }),
+      last && !unshown.length ? el('button', { type: 'button', class: 'btn ghost small', text: t`再问一次`, disabled: Boolean(state.session.job), onclick: () => askAgain(turn) }) : null,
     ])
   }
 
@@ -307,6 +324,14 @@ export function createTalk({ api, el, guard, openProviders }, spec) {
   })
 
   const retry = guard(async () => load(await api(`${spec.url()}/retry`, { method: 'POST' })))
+
+  // The same request again, as a new turn (the one before came back without changes).
+  const askAgain = guard(async turn => {
+    if (state.session?.job) return
+    await spec.beforeAsk?.()
+    load(await api(spec.url(), { method: 'POST', body: { text: turn.user.text, target: turn.user.target ?? '', context: (await spec.context?.()) ?? null } }))
+    scroll()
+  })
 
   const stopJob = guard(async () => {
     await api(`${spec.url()}/stop`, { method: 'POST' })

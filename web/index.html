@@ -97,6 +97,7 @@
         <div class="topbar-title" id="chat-title">选择一张角色卡开始</div>
         <button class="pill" id="chat-preset" title="这个对话用的预设" hidden></button>
         <button class="pill" id="compact-chat" title="把前面的剧情压缩成一份存档，之后在新的上下文里接着写" hidden>压缩<span class="wide-only">上下文</span><span class="ctx-use" id="context-meter" hidden></span></button>
+        <button class="pill" id="memory-book" title="长期记忆（Beta）：记忆簿" hidden>记忆<span class="ctx-use" id="memory-count" hidden></span></button>
         <select class="pill model-select" id="chat-model" title="这个对话用的模型（缓存按模型区分，切换后下一轮会重新写入缓存）" hidden></select>
         <div class="quota" id="quota" hidden></div>
         <button class="vn-switch" id="vn-toggle" title="视觉小说模式：背景、立绘、一句一句地读（这张卡记住）" aria-pressed="false" hidden>
@@ -291,6 +292,22 @@
         </div>
         <p class="hint" id="compact-window-hint"></p>
         <p class="hint">关掉自动压缩后，到了只提醒。压缩会调用一次模型写剧情存档，大约花一轮的额度；原文都留着，随时可以回滚到压缩之前。</p>
+      </div>
+      <div data-section="memory">
+        <label class="check-row"><input type="checkbox" name="memoryOn"> 长期记忆（Beta）：压缩时把剧情记成记忆簿，之后提到时想起来</label>
+        <label class="check-row"><input type="checkbox" name="memoryTidy"> 边玩边整理：每隔几轮让模型把新剧情记下来</label>
+        <div class="grid">
+          <label>每几轮整理一次<input name="memoryEvery" type="number" min="5" max="30"></label>
+          <label>整理用的模型
+            <select name="memoryModel">
+              <option value="helper">辅助模型：只看最近这几轮，省钱</option>
+              <option value="chat">对话模型：带着整段剧情看，记得更准</option>
+            </select>
+          </label>
+          <label>每轮最多想起多少字<input name="memoryBudget" type="number" min="300" max="6000" step="100"></label>
+        </div>
+        <p class="hint">Beta：还在试验，默认关。压缩上下文时，写剧情存档的同一次调用顺带把人物、事件、物品与地点、约定与伏笔记成一条条（多写约 1–3k token）。之后哪一轮提到它们（关键词、别名或相近的说法），就把相关的几条附在这一轮的消息里，不动固定前缀，缓存照常命中。只想起已经压缩掉的部分；记忆簿在顶栏「记忆」里，可以查看、修改、固定和删除。</p>
+        <p class="hint">边玩边整理每次多一次模型调用。整理用的模型：「辅助模型」是「配图与朗读」里选的那个（没选时用对话模型），只把最近这几轮原文和记忆簿交给它，花得少，但它不知道更早的剧情，前因后果偶尔记偏；「对话模型」就是你正在聊天的模型，带着整段对话一起看（大部分按缓存价计费），能联系前后文，记得更准，故事越长每次花得越多。第一次压缩之前整理出的条目只记不发：那时原文都还在上下文里。</p>
       </div>
       <div data-section="books">
         <div id="book-options" class="book-options muted small">先选择一张角色卡</div>
@@ -549,6 +566,21 @@
         <button class="btn" type="button" id="recap-export" title="把这份存档、最近几轮原文和变量存成文件，可以在别的对话或别的版本的角色卡里接着写">导出存档</button>
         <button class="btn" value="cancel">关闭</button>
         <button class="btn primary" type="button" id="recap-save">保存修改</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="memory-dialog" class="dialog wide">
+    <form method="dialog" id="memory-form">
+      <h2>记忆簿 <span class="chip">Beta</span></h2>
+      <p class="muted small" id="memory-meta"></p>
+      <p class="small" id="memory-status" hidden></p>
+      <div id="memory-list" class="memory-list"></div>
+      <div class="row end">
+        <button class="btn ghost" type="button" id="memory-export" title="存成 SillyTavern 世界书（JSON），可以导入别的对话或 SillyTavern">导出成世界书</button>
+        <button class="btn ghost" type="button" id="memory-tidy" title="现在就把上次记下之后的新剧情整理进记忆簿（一次模型调用）">现在整理</button>
+        <button class="btn" type="button" id="memory-add">新增条目</button>
+        <button class="btn" value="cancel">关闭</button>
       </div>
     </form>
   </dialog>

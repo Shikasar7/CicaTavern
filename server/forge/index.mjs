@@ -30,6 +30,7 @@ import { renderTemplate } from '../template.mjs'
 import { PLAN_ANGLES, chosenUserName, cleanCardOptions, cleanGreetingCount, discussRequest, editBrief, editTracking, editUserName, emptyBrief, forgeLanguages, ideaSeeds, ideasRequest, partialReply, planLanguage, planRequest, readDiscussion, readIdeas, readPlan, reviseRequest, withCardOptions } from './prompts.mjs'
 import { alignCard, applyIssues, cardJson, entriesRequest, greetingsRequest, initialState, lintCard, matchWritten, newCard, previewDynamics, readIssues, readTagged, retrack, reviewRequest, rewriteRequest, stepDone, userTagged, writeSteps } from './write.mjs'
 import { applyChanges, editRequest, ensureBook, readEdit } from './edit.mjs'
+import { claimsChanges, missingNote } from './blocks.mjs'
 import { applyBookChanges, bookEditRequest, bookTooLong, pickRequest, readBookEdit, readPicked } from './book-edit.mjs'
 import { applyPresetChanges, presetEditRequest, presetPickRequest, presetTooLong, readPickedPrompts, readPresetEdit } from './preset-edit.mjs'
 import { applyRegexChanges, readRegexEdit, regexEditRequest, tryChanges } from './regex-edit.mjs'
@@ -787,7 +788,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
       model: session.model,
       turns: session.turns.map(turn => ({
         user: { text: turn.user.text, target: turn.user.target, at: turn.user.at },
-        assistant: turn.assistant ? { reply: turn.assistant.reply, changes: turn.assistant.changes, model: turn.assistant.model, at: turn.assistant.at } : null,
+        assistant: turn.assistant ? { reply: turn.assistant.reply, changes: turn.assistant.changes, model: turn.assistant.model, at: turn.assistant.at, missed: turn.assistant.missed } : null,
         outcome: turn.outcome ?? null,
       })),
       job: job ? { kind: job.kind, step: job.step, startedAt: job.startedAt, partial: partialReply(job.partial), chars: job.partial.length } : null,
@@ -811,9 +812,18 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
     }
     ctx.step('edit')
     const { request, shown } = spec.request(loaded.subject, asked)
-    const result = await ctx.call(request)
-    const read = spec.read(result.text, loaded.subject, { shown, target: turn.user.target, own: loaded.own === true, context: asked.context })
+    const readAnswer = answer => spec.read(answer.text, loaded.subject, { shown, target: turn.user.target, own: loaded.own === true, context: asked.context })
+    let result = await ctx.call(request)
+    let read = readAnswer(result)
     if (!read.reply && !read.changes.length) throw new Error(msg`${ctx.label} 这次没有回出能读的内容${cutNote(result)}，再试一次，或者换个模型`)
+    // It said it changed things and wrote out nothing that can be taken (or pieces it may not change): asked once more.
+    if (claimsChanges(read)) {
+      ctx.step('again')
+      const again = await ctx.call({ ...request, messages: [...request.messages, { role: 'assistant', content: result.text }, { role: 'user', content: missingNote(read) }] })
+      const reread = readAnswer(again)
+      if (reread.changes.length) [result, read] = [again, reread]
+    }
+    const missed = claimsChanges(read)
     if (spec.finish) {
       ctx.step('check')
       read.changes = await spec.finish(read.changes, asked.context, ctx.signal, loaded.subject)
@@ -821,7 +831,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, draw 
       ctx.signal?.throwIfAborted()
     }
     await ctx.update(fresh => {
-      fresh.turns.at(-1).assistant = { raw: result.text, reply: read.reply, changes: read.changes, model: ctx.label, at: new Date().toISOString() }
+      fresh.turns.at(-1).assistant = { raw: result.text, reply: read.reply, changes: read.changes, model: ctx.label, at: new Date().toISOString(), ...(missed ? { missed: { dropped: read.dropped ?? [] } } : {}) }
     })
   }
 

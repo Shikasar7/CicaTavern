@@ -9,7 +9,7 @@ import { cleanProxySetting } from './proxy.mjs'
 import { cleanBasic, cleanVn } from '../web/shared/basic.js'
 import { cleanAppearance } from '../web/shared/appearance.js'
 import { cleanList, DEFAULT_ITEM, defaultOf } from '../web/shared/personas.js'
-import { cleanCompaction } from './context.mjs'
+import { cleanCompaction, cleanMemory } from './context.mjs'
 
 /** @param dir - the edition's folder under the home directory (edition.mjs dataDir). */
 export function defaultDataRoot(dir = '.agent-tavern') {
@@ -152,6 +152,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   stateRefreshEvery: 5,
   dynamicStrip: 'rare', // when piled-up <动态设定> copies are stripped: 'often' | 'rare' | 'off' (dynamic.mjs)
   compaction: null, // 自动压缩: { auto, percent, cap, windows } (context.mjs cleanCompaction); null = its defaults
+  memory: null, // 长期记忆（Beta）: { enabled, tidy: { enabled, every, model }, budget } (memory.mjs cleanMemory); null = all off
   replyLength: 0, // target reply length in characters; 0 = no requirement
   presetId: '', // SillyTavern preset for new chats; empty = the built-in preset (basic.mjs)
   basic: null, // the built-in preset's options (web/shared/basic.js); null = their defaults
@@ -237,7 +238,7 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
 
     async getSettings() {
       const saved = { ...DEFAULT_SETTINGS, ...(await readJson(path.join(root, 'settings.json'), {})) }
-      return lockSettings({ ...saved, basic: cleanBasic(saved.basic), vn: cleanVn(saved.vn), appearance: cleanAppearance(saved.appearance), globalBookIds: cleanIds(saved.globalBookIds), globalVars: cleanVars(saved.globalVars), compaction: cleanCompaction(saved.compaction) })
+      return lockSettings({ ...saved, basic: cleanBasic(saved.basic), vn: cleanVn(saved.vn), appearance: cleanAppearance(saved.appearance), globalBookIds: cleanIds(saved.globalBookIds), globalVars: cleanVars(saved.globalVars), compaction: cleanCompaction(saved.compaction), memory: cleanMemory(saved.memory) })
     },
     /** Settings worked out from the saved ones and saved, with no other save in between (template global writes). */
     updateSettings(change, options) {
@@ -258,6 +259,7 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
         next.proxy = cleanProxySetting(next.proxy)
         if (!['often', 'rare', 'off'].includes(next.dynamicStrip)) next.dynamicStrip = 'rare'
         next.compaction = cleanCompaction(next.compaction)
+        next.memory = cleanMemory(next.memory)
         if (!['auto', 'zh', 'en'].includes(next.uiLanguage)) next.uiLanguage = 'auto'
         next.showReasoning = next.showReasoning === true
         next.webFonts = next.webFonts !== false

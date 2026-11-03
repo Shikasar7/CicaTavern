@@ -12,7 +12,8 @@ import path from 'node:path'
 import YAML from 'yaml'
 import { fileURLToPath } from 'node:url'
 import { backfillEntryPositions, cardSummary, cleanGroup, exportCard, greetingsOf, importOwnCard, normalizeCard, orderCards, organizeCard, parseCardFile, previousVersion, rawOfPicture, sillyTavernCard, unwrapWorkspace, writeCardPng } from './cards.mjs'
-import { chatSummary, chatView, childrenOf, createChat, selectNode, activePath, rebuildPrompt, restoreFolded, rollbackTo, editCompaction, dropCompaction, exportStory, importStory, importSillyTavern, forkChat, mountChange, switchOpening, booksForCard, playerOf, chatPicks, newChatPicks, switchPicks } from './chats.mjs'
+import { memoryWorldFile } from './memory.mjs'
+import { chatSummary, chatView, childrenOf, createChat, selectNode, activePath, rebuildPrompt, restoreFolded, rollbackTo, hideRound, memoryView, saveMemory, editCompaction, dropCompaction, exportStory, importStory, importSillyTavern, forkChat, mountChange, switchOpening, booksForCard, playerOf, chatPicks, newChatPicks, switchPicks } from './chats.mjs'
 import { bookByName, bookNames, fieldChange, parseUpdates, setFrameVars, thEntry, withChatChanges, writeChatBook } from './frames.mjs'
 import { editPreset, exportPreset, importOwnPreset, normalizePreset, presetDetail, presetSummary } from './presets.mjs'
 import { VN_ID, basicDetail } from './basic.mjs'
@@ -390,6 +391,18 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     })
   }
 
+  /** 边玩边整理 for a chat view: under way, or why the last one failed. */
+  function tidyState(id) {
+    const error = engine.tidyError(id)
+    return { ...(engine.isTidying(id) ? { tidying: true } : {}), ...(error ? { memoryError: error } : {}) }
+  }
+
+  /** The 记忆簿 window's view: the book, the 长期记忆 settings, a tidy under way. */
+  async function memoryReply(id, chat) {
+    const settings = await store.getSettings()
+    return { ...memoryView(chat), settings: settings.memory, ...tidyState(id) }
+  }
+
   /** Stream one generation as server-sent events. */
   async function streamTurn(res, chatId, args) {
     res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', 'x-accel-buffering': 'no' })
@@ -403,6 +416,11 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       const { chat, nodeId } = await engine.runTurn(chatId, args, send)
       send({ type: 'done', nodeId, chat: chatView(chat) })
       await noteTurn(what, chat, chat.nodes[nodeId]).catch(() => {})
+      // 边玩边整理 (长期记忆), on its own once the turn is in: the pages hear when it starts and when it ends.
+      let tidyStarted = false
+      engine
+        .tidyMemory(chatId, nodeId, { onStart: () => { tidyStarted = true; tellPages({ kind: 'chat', id: chatId }) } })
+        .then(() => { if (tidyStarted) tellPages({ kind: 'chat', id: chatId }) })
     } catch (error) {
       send({ type: 'error', status: error.status ?? 500, message: localize(error.message), ...(error.contextFull ? { contextFull: true } : {}) })
       // Stopped by the player (499) is no error. One without a status is this app's own mistake: its stack too.
@@ -1213,7 +1231,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       if (engine.isRunning(id)) throw httpError(409, msg`正在生成，先停止`)
       return store.withChat(id, async () => chatView(await switchOpening(store, await store.getChat(id), Number(body?.index))))
     }],
-    ['GET', /^\/api\/chats\/([\w-]+)$/, async ([id]) => ({ ...chatView(await store.getChat(id)), running: engine.isRunning(id) })],
+    ['GET', /^\/api\/chats\/([\w-]+)$/, async ([id]) => ({ ...chatView(await store.getChat(id)), running: engine.isRunning(id), ...tidyState(id) })],
     ['PUT', /^\/api\/chats\/([\w-]+)$/, ([id], body) => store.withChat(id, async () => {
       const chat = await store.getChat(id)
       if (typeof body.title === 'string' && body.title.trim()) chat.title = body.title.trim().slice(0, 80)
@@ -1243,6 +1261,39 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       if (engine.isRunning(id)) throw httpError(409, msg`正在生成，先停止`)
       const chat = await store.getChat(id)
       rollbackTo(chat, String(body.nodeId))
+      return chatView(await store.saveChat(chat))
+    })],
+    // 长期记忆（Beta）: the 记忆簿 in force on the chat's active path (chats.mjs memoryView), the player's edits
+    // to it, a tidy now (engine.tidyMemory, `force`), stopping one, and the book as a SillyTavern world file.
+    ['GET', /^\/api\/chats\/([\w-]+)\/memory$/, async ([id]) => memoryReply(id, await store.getChat(id))],
+    ['PUT', /^\/api\/chats\/([\w-]+)\/memory$/, async ([id], body) => {
+      const chat = await store.withChat(id, async () => {
+        const chat = await store.getChat(id)
+        saveMemory(chat, body?.entries)
+        return store.saveChat(chat)
+      })
+      return memoryReply(id, chat)
+    }],
+    ['POST', /^\/api\/chats\/([\w-]+)\/memory\/tidy$/, async ([id]) => {
+      const chat = await store.getChat(id)
+      const reply = activePath(chat).findLast(node => node.role === 'assistant')
+      if (!reply || reply.id === 'root') throw httpError(400, msg`还没有可以整理的剧情`)
+      if (engine.isTidying(id)) throw httpError(409, msg`正在整理记忆`)
+      const wrote = await engine.tidyMemory(id, reply.id, { force: true, onStart: () => tellPages({ kind: 'chat', id }) })
+      const error = engine.tidyError(id)
+      if (!wrote && error) throw httpError(502, error)
+      return { ...(await memoryReply(id, await store.getChat(id))), wrote }
+    }],
+    ['POST', /^\/api\/chats\/([\w-]+)\/memory\/cancel$/, async ([id]) => ({ cancelled: engine.cancelTidy(id) })],
+    ['GET', /^\/api\/chats\/([\w-]+)\/memory\/worldbook$/, async ([id]) => {
+      const chat = await store.getChat(id)
+      return memoryWorldFile(memoryView(chat).entries.map(({ sourceId, ...entry }) => entry), msg`${chat.title} · 记忆簿`)
+    }],
+    // 隐藏这一轮: a round kept and shown but no longer sent (chats.mjs hideRound); `hidden: false` sends it again.
+    ['POST', /^\/api\/chats\/([\w-]+)\/hide$/, ([id], body) => store.withChat(id, async () => {
+      if (engine.isRunning(id)) throw httpError(409, msg`正在生成，先停止`)
+      const chat = await store.getChat(id)
+      hideRound(chat, String(body.nodeId), body.hidden !== false)
       return chatView(await store.saveChat(chat))
     })],
     // Rewrite one message (shown and sent from now on); see engine.editMessage.

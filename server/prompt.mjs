@@ -305,16 +305,24 @@ export function webSearchNote() {
  * @param reminder - one line pointing at the prefix's every-turn rules.
  * @param marks - ask for the 视觉小说格式 (dialogueFormat).
  */
-export function buildTurnPrompt({ names, opening, recap = '', entries = [], dynamic = [], characterNote = '', stateText, input, replyLength = 0, presetText = '', reminder = '', marks = false }) {
+/** The opening as the first turn's message carries it. */
+export function openingBlock(opening, names) {
+  return `<开场>\n以下是故事的开场，已作为第一段正文展示给玩家：\n${replaceMacros(opening, names)}\n</开场>`
+}
+
+export function buildTurnPrompt({ names, opening, recap = '', entries = [], memory = '', dynamic = [], characterNote = '', stateText, input, replyLength = 0, presetText = '', reminder = '', marks = false }) {
   const parts = []
   const block = (tag, items) => {
     const body = items.filter(item => item.text).map(item => titled(item.title, item.text)).join('\n\n')
     if (body) parts.push(`<${tag}>\n${body}\n</${tag}>`)
   }
-  if (opening) parts.push(`<开场>\n以下是故事的开场，已作为第一段正文展示给玩家：\n${replaceMacros(opening, names)}\n</开场>`)
+  if (opening) parts.push(openingBlock(opening, names))
   // After a manual compaction: the summary and last few turns open the new session.
   if (recap) parts.push(recap)
   block('世界书', entries)
+  // 长期记忆（Beta）: what the compaction folded away, recalled for this turn (memory.mjs).
+  // Entries keep {{user}} / {{char}} as the model wrote them: the names go in here, as for the lore.
+  if (memory) parts.push(`<往事>\n${replaceMacros(memory, names)}\n</往事>`)
   block('动态设定', dynamic)
   if (stateText) parts.push(`<当前状态>\n${stateText}\n</当前状态>`)
   if (characterNote) parts.push(`<角色备注>\n${characterNote}\n</角色备注>`)

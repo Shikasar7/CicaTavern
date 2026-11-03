@@ -13,8 +13,9 @@ export const RECENT_TURNS = 2
 /** Fewer turns than this since the last compaction: not worth a summary call. */
 export const MIN_TURNS = 2
 
-export function summaryInstruction(names) {
-  return replaceMacros(
+/** @param extra - more to write after the archive (长期记忆's entries, memory.mjs memoryRequest), or ''. */
+export function summaryInstruction(names, extra = '') {
+  const text = replaceMacros(
     `【暂停扮演：剧情存档】
 这一条不是剧情，是系统请求，请不要续写故事。
 故事要换到新的上下文里继续，之前的对话记录会被这份存档代替。请为接着写的作者写一份剧情存档，包括：
@@ -29,6 +30,7 @@ export function summaryInstruction(names) {
 只输出存档本身，放在 <剧情存档> 和 </剧情存档> 之间。`,
     names,
   )
+  return extra ? `${text.replace(/只输出存档本身，(放在 <剧情存档> 和 <\/剧情存档> 之间。)$/, '先写存档，$1')}\n\n${extra}` : text
 }
 
 // The parts summaryInstruction asks for, as headings: an archive written without its tags still has them.
@@ -72,6 +74,7 @@ export function extractSummary(reply) {
     if (close >= 0) text = text.slice(0, close)
   }
   return text
+    .replace(/<记忆条目>[\s\S]*$/, '')
     .replace(/<UpdateVariable>[\s\S]*?<\/UpdateVariable>/gi, '')
     .replace(/<StatusPlaceHolderImpl\s*\/>/gi, '')
     .trim()
@@ -85,6 +88,15 @@ export function storyPath(path) {
   const recent = path[0]?.compaction?.recent
   if (!Array.isArray(recent) || !recent.length) return path
   return [{ id: 'opening', role: 'assistant', text: '' }, ...recent.map(({ role, text }) => ({ role, text })), ...path]
+}
+
+/**
+ * `path` without its hidden rounds (隐藏这一轮): each reply marked `hidden` and the player's
+ * message before it. What the model reads; the chat keeps and shows them.
+ */
+export function withoutHidden(path) {
+  if (!path.some(node => node.hidden)) return path
+  return path.filter((node, index) => !node.hidden && !(node.role === 'user' && path[index + 1]?.hidden))
 }
 
 /** User turns the story on `path` has had, counting those before an import. */
@@ -107,8 +119,8 @@ export function turnsSinceCompaction(path) {
  * @param transform - ({ role, text, depth, node }) => text, the card's prompt-side regex.
  */
 export function recentExchanges(path, names, transform = ({ text }) => text, turns = RECENT_TURNS) {
-  // The path alternates opening, user, assistant, …; skip the opening (the summary covers it).
-  const tail = path.slice(1).slice(-turns * 2)
+  // The path alternates opening, user, assistant, …; skip the opening (the summary covers it), and hidden rounds.
+  const tail = withoutHidden(path.slice(1)).slice(-turns * 2)
   if (tail[0]?.role === 'assistant') tail.shift()
   return tail
     .map((node, index) => {

@@ -8,7 +8,7 @@ import { constantEntries, entryText, initialState, lateEntries } from './worldbo
 import { applyStateUpdates, applyWrites, displayText } from './state.mjs'
 import { hasEjs, renderTemplate } from './template.mjs'
 import { httpError, newId } from './store.mjs'
-import { MIN_TURNS, RECENT_TURNS, STORY_FORMAT, storyPath, storyTurns, turnsSinceCompaction } from './recap.mjs'
+import { MIN_TURNS, RECENT_TURNS, STORY_FORMAT, storyPath, storyTurns, turnsSinceCompaction, withoutHidden } from './recap.mjs'
 import { msg } from './i18n.mjs'
 import { estimateTokens } from './context.mjs'
 import { BASIC_ID, VN_ID, asksChoices, basicPreset, vnPreset } from './basic.mjs'
@@ -17,6 +17,7 @@ import { markSpeakers } from '../web/shared/vn.js'
 import { chatScriptList } from '../web/shared/regex.js'
 import { cardPick, DEFAULT_ITEM, defaultOf, itemOf, pickFor } from '../web/shared/personas.js'
 import { withChatChanges } from './frames.mjs'
+import { cleanEntry, MAX_ENTRIES, memoryOf, snapshotOf } from './memory.mjs'
 
 /**
  * A chat's books: the card's own, the imported ones it has mounted, then the
@@ -159,12 +160,22 @@ export async function rebuildPrompt(store, chat, presetId = chat.presetId ?? '')
   // A deleted preset, or a chat from before the built-in one: rebuilt with the built-in preset.
   const preset = chosen ?? basicPreset(settings)
   const books = await booksForCard(store, card, settings, chat)
-  const hasState = Object.keys(chat.nodes.root.state ?? {}).length > 0
   // A card renamed in 修改角色卡: {{char}} in later turns follows the prefix. So does
   // the player's name when the chat's persona was deleted and another took its place.
   chat.names = { ...chat.names, char: card.name, ...(picks.name ? { user: picks.name } : {}) }
   chat.personaId = picks.persona.id
   chat.styleId = picks.style.id
+  // A chat begun without variables on a card that has them now (修改角色卡 made it an MVU card): they start
+  // here, at its opening and at its latest reply. A chat that had variables keeps them as they are.
+  if (!Object.keys(chat.nodes.root.state ?? {}).length) {
+    const initial = initialState(books, initvarText(chat.names))
+    if (Object.keys(initial).length) {
+      const tip = activePath(chat).findLast(node => node.role === 'assistant')
+      chat.nodes.root.state = initial
+      if (tip && tip !== chat.nodes.root) tip.state = mergeState(initial, tip.state ?? {})
+    }
+  }
+  const hasState = Object.keys(chat.nodes.root.state ?? {}).length > 0
   const prefix = prefixTemplates({
     names: chat.names, card, preset, books, scripts: scriptsOf(card, preset, globalScripts, regexSets),
     state: chat.nodes.root.state ?? {}, local: chat.frameVars ?? {}, global: settings.globalVars ?? {},
@@ -404,7 +415,7 @@ export function exportStory(chat, nodeId) {
   const at = path.findLastIndex(node => node.compaction)
   if (at < 0) throw httpError(400, msg`还没有剧情存档：先压缩一次再导出`)
   const since = path.slice(at + 1).filter(node => node.role === 'user').length
-  const tail = storyPath(path).slice(1).slice(-Math.max(RECENT_TURNS, since) * 2)
+  const tail = withoutHidden(storyPath(path).slice(1)).slice(-Math.max(RECENT_TURNS, since) * 2)
   if (tail[0]?.role === 'assistant') tail.shift()
   const compaction = path[at].compaction
   return {
@@ -420,6 +431,8 @@ export function exportStory(chat, nodeId) {
     // Oldest first; the last one is the reply the story continues from.
     recent: tail.map(node => ({ role: node.role, text: node.text })),
     state: tip.state ?? {},
+    // 长期记忆: the 记忆簿 in force there (its turns numbered as this story's are).
+    ...(memoryOf(path)?.entries.length ? { memory: memoryOf(path).entries } : {}),
   }
 }
 
@@ -441,6 +454,7 @@ export function readStory(archive) {
     title: typeof archive.title === 'string' ? archive.title.replace(/(（导入）| \(imported\))$/, '').slice(0, 60) : '',
     card: typeof archive.card === 'string' ? archive.card : '',
     exportedAt: typeof archive.exportedAt === 'string' ? archive.exportedAt : null,
+    memory: (Array.isArray(archive.memory) ? archive.memory : []).map(entry => cleanEntry(entry)).filter(Boolean).slice(0, MAX_ENTRIES),
   }
 }
 
@@ -463,6 +477,7 @@ export async function importStory(store, cardId, archive) {
       at: new Date().toISOString(),
       imported: { card: story.card, title: story.title, exportedAt: story.exportedAt },
       recent: story.recent.slice(0, -1),
+      ...(story.memory.length ? { memory: snapshotOf(story.memory, { turns: story.turns, by: 'import' }) } : {}),
     },
   }))
 }
@@ -610,6 +625,29 @@ export function rollbackTo(chat, id) {
   selectNode(chat, id)
   if (!childrenOf(chat, id).length) throw httpError(400, msg`这已经是最后一轮`)
   node.cut = true
+}
+
+/**
+ * 隐藏这一轮: reply `id` and the player's message before it stay in the chat but are no longer
+ * sent (withoutHidden), e.g. a round the model's content check keeps tripping over. The mark is
+ * on this version of the reply: a new one (重新生成) is sent again. The variables stay as they are.
+ * Only after the last compaction: the turns before it reach the model as its archive alone.
+ */
+export function hideRound(chat, id, hidden = true) {
+  const path = activePath(chat)
+  const index = path.findIndex(node => node.id === id)
+  if (index < 0) throw httpError(404, msg`这一轮不在当前对话里`)
+  const node = path[index]
+  if (node.role !== 'assistant' || node.id === 'root') throw httpError(400, msg`开场不能隐藏，只能隐藏之后的回合`)
+  if (node.compaction) throw httpError(400, msg`压缩点所在的这一轮不能隐藏：之后接着写的都从这里开始`)
+  const compactedAt = path.findLastIndex(n => n.compaction)
+  if (index < compactedAt) throw httpError(400, msg`这一轮在上次压缩之前，模型现在只读剧情存档，隐藏它不起作用；要去掉内容，可以修改存档`)
+  if (path.slice(compactedAt + 1).some(n => n.sdk)) throw httpError(400, msg`订阅模型的会话里已经有这一轮，不能隐藏；可以用「修改」改掉这一轮的内容`)
+  if (Boolean(node.hidden) === Boolean(hidden)) return
+  if (hidden) node.hidden = true
+  else delete node.hidden
+  // The model missed (or now sees again) whatever the round changed: the next turn sends the variables in full.
+  chat.stateDirty = true
 }
 
 /** Undo a rollback: show the folded turns again. */
@@ -775,8 +813,15 @@ export function chatView(chat) {
       // Brought in from SillyTavern (importSillyTavern): no model of ours wrote it.
       imported: node.imported || undefined,
       rewroteChoices: node.rewroteChoices ?? undefined,
+      // 隐藏这一轮: on the reply, and on the player's message of the same round.
+      hidden: node.hidden || undefined,
+      // 长期记忆: the 记忆簿 entries the turn brought back (on the player's message).
+      recalled: node.recalledTitles?.length ? node.recalledTitles : undefined,
       createdAt: node.createdAt,
     }
+  })
+  path.forEach((node, index) => {
+    if (node.role === 'user' && path[index + 1]?.hidden) node.hidden = true
   })
   const active = activePath(chat)
   const lastAssistant = [...active].reverse().find(n => n.role === 'assistant')
@@ -810,6 +855,50 @@ export function chatView(chat) {
     systemPromptChars: chat.systemPrompt.length,
     // What compaction cannot shrink (card, constant worldbook entries, preset): the page warns when it is most of the threshold.
     systemPromptTokens: estimateTokens(chat.systemPrompt),
+    // 长期记忆: how many entries the 记忆簿 in force has.
+    memoryEntries: memoryOf(active)?.entries.length ?? 0,
+  }
+}
+
+/**
+ * 记忆簿 as the page shows it: the snapshot in force on the active path, each entry with the
+ * player message of its first turn (to jump to), and up to where the latest compaction reaches.
+ */
+export function memoryView(chat) {
+  const path = activePath(chat)
+  const snapshot = memoryOf(path)
+  let turn = path[0]?.compaction?.imported ? Number(path[0].compaction.turns) || 0 : 0
+  const ids = {}
+  for (const node of path) if (node.role === 'user') ids[++turn] = node.id
+  const compacted = path.findLast(node => node.compaction)
+  return {
+    entries: (snapshot?.entries ?? []).map(entry => ({ ...entry, sourceId: ids[entry.from] ?? null })),
+    turns: snapshot?.turns ?? 0,
+    at: snapshot?.at ?? null,
+    by: snapshot?.by ?? null,
+    model: snapshot?.model ?? null,
+    storyTurns: turn,
+    compactedTurns: Number(compacted?.compaction.turns) || 0,
+  }
+}
+
+/**
+ * The player's 记忆簿 (edited, added, removed, pinned) written over the snapshot in force on the
+ * active path; with none yet, a new one on the last reply.
+ */
+export function saveMemory(chat, entries) {
+  if (!Array.isArray(entries)) throw httpError(400, msg`记忆条目格式无效`)
+  const clean = entries.map(entry => cleanEntry(entry)).filter(Boolean).slice(0, MAX_ENTRIES)
+  const path = activePath(chat)
+  const snapshot = memoryOf(path)
+  const now = new Date().toISOString()
+  if (snapshot) {
+    const node = chat.nodes[snapshot.nodeId]
+    const kept = snapshot.onCompaction ? node.compaction.memory : node.memory
+    Object.assign(kept, { entries: clean, at: now })
+  } else {
+    const reply = path.findLast(node => node.role === 'assistant')
+    reply.memory = snapshotOf(clean, { turns: 0, by: 'edit' })
   }
 }
 

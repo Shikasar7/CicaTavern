@@ -57,7 +57,8 @@ From the author's own long chats (October 2026):
 - **Web search**: the globe left of the input box turns it on per chat. It uses the provider's own search, like SillyTavern's "Enable web search": Claude on the Anthropic interface, the OpenAI Responses interface and OpenRouter models have it. When real-world facts are needed the model searches first and then writes; what it searched for and the pages it cited are listed under the reply. Searches cost extra.
 - **Blocked words**: Settings → Writing → Blocked words removes words, masks them with `*` or swaps them for words you choose, both in what the model is sent (card, preset, lorebooks, history and your messages) and in the replies shown; each word can be switched on or off and kept to one side. Only the copy being sent or shown changes, so switching a word off brings it back; Chinese has no spaces between words, so longer words to leave alone go under Exceptions. After a change, chats that use the word write the cache again from where it appears, and saving tells you from which turn.
 - **Personas and styles**: Settings → Writing keeps your personas and writing styles as lists you can add to, copy, import and export. Personas move to and from SillyTavern's Persona Management (restore the exported file there, or import its backup here); a style exports as a SillyTavern system prompt, and a plain text file of rules imports as one. Each card can pick its own persona and style, otherwise it uses the defaults; a chat keeps the ones it started with until you click "Use in this chat", and the next turn writes the cache once more. Exported cards never carry your persona.
-- **Versions and branches**: regenerate, swipe between versions, branch from any message, roll back, edit any message; a whole chat can be packed up and moved to another device.
+- **Versions and branches**: regenerate, swipe between versions, branch from any message, roll back, edit any message; a whole chat can be packed up and moved to another device. A round the model's content check keeps stopping can be hidden: it stays in the chat but is no longer sent.
+- **Long-term memory (Beta)**: when the context is compacted, people, events, things & places and promises & loose ends are noted down in a memory book, and the few that come up again go with that turn's message, leaving the fixed prefix alone; it can also tidy every few turns as you play. The memory book can be viewed, edited, pinned and exported as a SillyTavern lorebook. Off by default.
 
 ### Pictures and read-aloud
 
@@ -109,23 +110,18 @@ If you can't quite say what you want, the creator guides you round by round:
 
 <br clear="right">
 
-## Latest changes [2.2.4]
+## Latest changes [2.3.0]
 
-<p align="center"><img src="web/whatsnew/2.2.0-cards.webp" alt="2.2.0: cards pinned, favorited and dragged into your own order; picture prompts written your way, with a level of detail and art style presets" width="880"></p>
+<p align="center"><img src="web/whatsnew/2.3.0-memory.webp" alt="2.3.0: long-term memory (beta) — mentioning the pier recalls a promise noted long before; the memory book; hiding a round" width="880"></p>
 
-- **Pin, favorite and reorder cards**: a card's ⋯ menu can pin it to the top or favorite it, and the ☆ beside the search box shows only favorites; drag cards up and down to put them in your own order (on a phone, press and hold first). The computer and the phone see the same list.
-- **Picture prompts, your way**: Pictures and voice has a new Picture prompts page: extra rules for the model that writes the prompts (or read in a .md / .txt image prompt skill someone shared), one set for every card plus each card's own, and a level of detail: concise, standard or detailed. Art style and LoRA has nine art style presets: anime, polished CG, painterly, watercolour, Chinese ink, semi-realistic, photo, 90s retro anime and 3D render. The default instructions are better too: shot and camera angle first, no character names, and Danbooru tag order for tags.
-- **Gemini Agent Platform (formerly Vertex AI)**: the Gemini Agent Platform provider template takes an Agent Platform API key from 2.2.2 on, or a Google Cloud JSON credential, so a new account's free-trial credit can be used; with an API key, Fetch model list tries the common Gemini models and lists the ones that work. When it is busy it waits a few seconds and tries again, twice at most.
-- **Copy a message, pick several options (2.2.4)**: every message has Copy, for its text as shown (for a reply, only the story, the status or the options if you like); a long press on a phone no longer selects the top bar, the round or the input box. Tapping an option adds it to the input box, so several can go together, and up to nine options show.
-- **Smoother dragging, groups in order (2.2.4)**: the other cards slide out of the way, and on a phone the card follows your finger; group titles drag too; on a computer, drop a card on a folder to export it as a file.
-- **See the model think (2.2.3)**: turned on in Settings → Model, the thinking of GLM, DeepSeek, Kimi, Claude, Gemini, OpenAI and others shows folded above each reply, open while it is written; it is only shown, never sent back to the model. `<thinking>`, `<思考>`, `<思维链>` and `<CoT>` in the story fold too.
-- **Phone and computer in step (2.2.3)**: playing from a phone connected to the computer, a turn sent on one shows as being written on the other at once and appears when done, with no reopening.
-- **Fixes (2.2.2)**: a provider that cannot be reached no longer just says "aborted": it says it timed out and to check the network and proxy.
-- **Fixes (2.2.1)**: on Android phones with an older system WebView, Create a card scrolls again, and the "dialog:modal" toast no longer stays on screen.
-- **Fixes (2.2.0)**: ComfyUI and SD WebUI put the card's art style in every picture; MOSI's MOSS-Image draws. Also: export a card straight from its ⋯ menu; when a model's content check stops a reply, you are told whose check it was and what to do; the error log keeps the provider's whole answer and your latest operations.
-- **macOS test build (beta)**: the Mac app is now signed with an Apple Developer ID and notarized, so there is no Open Anyway in Privacy & Security the first time. The release page has only dmg installers for the Mac (Apple silicon and Intel), which the in-app update uses too; Macs on 2.0.3 to 2.1.1 need to download the dmg and replace the app by hand this once.
+- **Long-term memory (Beta)**: Settings → Model → Long-term memory (Beta), off by default. When the context is compacted, the same call that writes the story archive also notes the people, events, things and places, and promises and foreshadowing as separate entries in the chat's memory book; when a later round mentions them (by a keyword, an alias or similar wording), the matching entries go along with that round's message, and the reply says Recalled: …. They ride in that round's message only, so the frozen prefix stays as it is and the cache keeps hitting. Memory in the top bar reads, edits, pins, deletes and exports them as a world book, and Tidy while playing can note things down in the background every few rounds. The memory book follows branches, and Export archive carries it.
+- **Hide this round**: replies have Hide this round: the round stays in the chat, faded, but is no longer sent to the model, and you can unhide it any time. When one round keeps a content check refusing everything after it, hide it and play on; the latest round can be hidden too.
+- **Changing a card by talking, more dependable**: when the model says it made changes but wrote none out, it is asked once more; still nothing, and you are told why and can ask again. Asked to make a card an MVU card, it sets up the initial variables and the update rules, and a chat under way gets the variables when you apply the change to it.
+- **Fixes**: the error some cards' opening screens showed (Cannot read properties of undefined (reading '…')).
+- **Now licensed under the AGPL-3.0**: from this version on; see License below. Using it yourself is not affected.
+- **macOS test build (beta)**: the Mac app is signed with an Apple Developer ID and notarized; the release page has only dmg installers for the Mac (Apple silicon and Intel), which the in-app update uses too.
 
-2.1 added grouped card creation settings, background writing and a values preview, making a card a visual novel with its own preset, and New choices; 2.0 added voice input, a drawing history, regex sets and personas chosen per card, the context usage bar, ComfyUI simple mode and clearing old versions after an update; 1.9 added web search, blocked words, card UIs that call the model and edit lorebooks, an error log, the visual novel HUD and speaker marks, and an update mirror in China; visual novel mode came in 1.8. Download from [Releases](https://github.com/Shikasar7/CicaTavern/releases/latest); 1.4.0 and later can update in the app. Everything that changed is in [CHANGELOG.md](CHANGELOG.md).
+2.2 added pinned, favorited and reordered cards and groups, dragging cards out to export them, picture prompts written your way with art style presets, Gemini Agent Platform, the model's thinking shown, phone and computer kept in step, and copying messages and picking several choices; 2.1 added grouped card creation settings, background writing and a values preview, making a card a visual novel with its own preset, and New choices; 2.0 added voice input, a drawing history, regex sets and personas chosen per card, the context usage bar, ComfyUI simple mode and clearing old versions after an update; 1.9 added web search, blocked words, card UIs that call the model and edit lorebooks, an error log, the visual novel HUD and speaker marks, and an update mirror in China; visual novel mode came in 1.8. Download from [Releases](https://github.com/Shikasar7/CicaTavern/releases/latest); 1.4.0 and later can update in the app. Everything that changed is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Getting started (Windows)
 
@@ -286,6 +282,15 @@ npm start          # start and open http://127.0.0.1:8790/
 npm test
 npm run package    # build the Windows package into dist/ (with the current node.exe; CicaTavern.exe is compiled with MSVC, which needs the Visual Studio Build Tools C++ workload)
 ```
+
+## License
+
+CicaTavern is licensed under the [GNU AGPL-3.0](LICENSE), copyright Shikasar7.
+
+- Downloading and using it is free and unrestricted, commercial use included.
+- You may modify and redistribute it, but a modified version must also be released under the AGPL-3.0 with its complete source; running a modified CicaTavern on a server for others to use also means offering them the source.
+- Versions 2.2.4 and earlier were released under the MIT license, which still applies to them.
+- Before contributing code, please read [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Notes
 

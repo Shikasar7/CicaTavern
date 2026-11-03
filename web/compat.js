@@ -870,11 +870,15 @@ function shimMain(ctx, makeFetch) {
   // Floor ids as indexes, as SillyTavern's chat array has them (floors not handed to this frame stay empty).
   const chat = []
   for (const m of ctx.messages || []) chat[m.message_id] = { name: m.name, is_user: m.role === 'user', is_system: false, mes: m.message }
+  // Cards read `characters[characterId]`; characterId is this card's id here, not an index, so the card sits under both.
+  const characters = [helper.getCharData()]
+  if (ctx.cardId) characters[ctx.cardId] = characters[0]
   const SillyTavern = {
     name1: ctx.names.user,
     name2: ctx.names.char,
     chatId: ctx.chatId,
     characterId: ctx.cardId,
+    characters,
     chat,
     chatMetadata: {},
     getCurrentChatId: () => ctx.chatId,

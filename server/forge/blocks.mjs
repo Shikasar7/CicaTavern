@@ -12,7 +12,11 @@ export const attr = value => String(value ?? '').replace(/"/g, "'").replace(/\s+
 /** Keywords as the model writes them: "a, b、c" → ['a', 'b', 'c']. */
 export const splitKeys = text => [...new Set(String(text ?? '').split(/[,，、]/).map(key => key.trim()).filter(Boolean))].slice(0, 100)
 
-const attrsOf = text => Object.fromEntries([...String(text).matchAll(/([\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)].map(([, key, a, b]) => [key.toLowerCase(), a ?? b]))
+// Quoted as asked, in full-width quotes (a model writing Chinese slips into them), or not quoted at all.
+const attrsOf = text =>
+  Object.fromEntries(
+    [...String(text).matchAll(/([\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|“([^”]*)”|‘([^’]*)’|「([^」]*)」|([^\s"'>/]+))/g)].map(([, key, ...values]) => [key.toLowerCase(), values.find(value => value !== undefined)]),
+  )
 
 /** A body wrapped whole in one ``` fence (the model's habit), without it; anything else as it is. */
 function unfence(text) {
@@ -47,6 +51,32 @@ export function readBlocks(text, tags) {
   return { reply: reply.slice(0, 2000), blocks }
 }
 
+// A reply that says it changed something, and one that says there was nothing to change.
+const CLAIMS = /已经?(把|将|给|为|改|加|添|新增|删|写|补|调整|替换|更新|设置|做)|我(把|将|给|为)|改(成|为|好|了)|加(了|上|入)|添加|新增|新建|写(了|入|进)|补(充|上)|调整(了|为)|删(除|掉|了)|替换|更新(了|为)|\b(added|changed|updated|rewrote|removed|replaced|created)\b/i
+const DECLINES = /不需要|无需|不用改|没有改|没改|无法|做不到|不能改|不建议|不必|\b(no changes?|not needed|cannot|can't)\b/i
+
+/**
+ * Whether an answer read as `read` ({ reply, changes, dropped? }) promised changes it did not
+ * deliver: blocks that could not be taken, or a reply saying it changed things and no block at all.
+ */
+export function claimsChanges(read) {
+  if (read.changes.length) return false
+  if (read.dropped?.length) return true
+  const reply = String(read.reply ?? '')
+  return CLAIMS.test(reply) && !DECLINES.test(reply)
+}
+
+/** The follow-up asked once after such an answer: what went wrong, and to answer again in the format. */
+export function missingNote(read) {
+  const named = reason => (read.dropped ?? []).filter(item => item.reason === reason).map(item => `「${item.name}」`).join('')
+  const why = [
+    named('unshown') ? `条目${named('unshown')}这次没有附上全文，不能改，不要再输出它们（要补的内容可以写成新条目）` : '',
+    named('unknown') ? `字段名${named('unknown')}不在可用的名字里` : '',
+  ].filter(Boolean)
+  return `【格式提醒】上面的回答说做了修改，但里面没有能采用的改动${why.length ? `：${why.join('；')}` : '：改动没有写在规定的标签里'}，所以什么都没有改。
+请重新回答：先写 <reply>，再按要求的格式把每一处改动的完整内容写在对应的标签里，标签外不写别的。确实不需要改的话，只写 <reply> 说明原因。`
+}
+
 /** Earlier turns as the next request tells them: what was asked, what was answered, what the user took. */
 export function historyLines(turns, max = 6) {
   return turns
@@ -56,7 +86,8 @@ export function historyLines(turns, max = 6) {
 }
 
 function outcomeText(turn) {
-  if (!turn.assistant?.changes.length) return ''
+  // Said so plainly: a reply that told of changes it never wrote out would otherwise read as done.
+  if (!turn.assistant?.changes.length) return turn.assistant ? '（这次没有写出改动，内容没有变）' : ''
   if (turn.outcome?.undone) return '（用户采用后又撤销了）'
   if (turn.outcome?.discarded) return '（用户没有采用）'
   if (turn.outcome?.applied) return `（用户采用了其中 ${turn.outcome.applied.length} 处）`
