@@ -1242,3 +1242,10 @@ test('a busy Vertex AI (429) is asked again after a wait, twice at most; other p
   await assert.rejects(ask(relay), error => error.providerStatus === 429 && !error.hint)
   assert.deepEqual([hits.length, retries.length], [1, 0], 'another provider: not asked again')
 })
+
+test('a space typed or pasted inside the Base URL is dropped, not sent as %20', () => {
+  const draft = draftProvider({ api: 'openai-completions', baseURL: ' https://relay.example.com/ v1 /', apiKey: ' sk-test ' })
+  assert.equal(draft.baseURL, 'https://relay.example.com/v1')
+  assert.equal(draft.apiKey, 'sk-test')
+  assert.throws(() => draftProvider({ api: 'openai-completions', baseURL: 'https://relay.example.com/v1', apiKey: 'sk-te st' }), /API Key 里不能有空格/)
+})

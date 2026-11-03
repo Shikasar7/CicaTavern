@@ -111,7 +111,10 @@ test('a card UI saves the global and chat variable keys it changed, over what wa
   const vars = body => call(`/api/chats/${chat.id}/frame-vars`, { method: 'PUT', body })
   await vars({ set: { 背包: ['剑'] } })
   assert.deepEqual((await vars({ set: { 地图: 'A' }, unset: [] })).body.vars, { 背包: ['剑'], 地图: 'A' }, 'two UIs keep each other\'s keys')
-  assert.deepEqual((await vars({ vars: { 只有这个: 1 } })).body.vars, { 只有这个: 1 }, 'a whole value still replaces, as before')
+  const whole = (await vars({ vars: { 只有这个: 1 } })).body
+  assert.deepEqual(whole.vars, { 只有这个: 1 }, 'a whole value still replaces, as before')
+  // The page keeps its copy current with it: its own save is no change made elsewhere (which redraws the chat).
+  assert.equal(whole.updatedAt, (await call(`/api/chats/${chat.id}`)).body.updatedAt)
 })
 
 test('a card updated in place from JSON keeps its picture, with the new version\'s data in it for exports', async t => {

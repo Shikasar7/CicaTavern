@@ -70,7 +70,8 @@ function uniqueId(base, taken) {
 }
 
 function cleanBaseUrl(value) {
-  const text = String(value ?? '').trim().replace(/\/+$/, '')
+  // No address has a space in it: one typed or pasted in the middle would be sent as %20, to a path that is not there.
+  const text = String(value ?? '').replace(/\s+/g, '').replace(/\/+$/, '')
   let url
   try {
     url = new URL(text)

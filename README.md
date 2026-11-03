@@ -111,10 +111,12 @@ If you can't quite say what you want, the creator guides you round by round:
 
 <br clear="right">
 
-## Latest changes [2.3.0]
+## Latest changes [2.3.1]
 
 <p align="center"><img src="web/whatsnew/2.3.0-memory.webp" alt="2.3.0: long-term memory (beta) — mentioning the pier recalls a promise noted long before; the memory book; hiding a round" width="880"></p>
 
+- **2.3.1: long chats stay smooth**: in a chat of two or three hundred rounds, messages out of view are no longer laid out, so a reply streaming in costs next to nothing to show, and long chats open several times faster. The rail beside the story spreads out only the ten or so rounds you are reading and folds the rest into a band at each end, unfolding as you scroll.
+- **2.3.1: card interfaces run more SillyTavern commands**: dozens of them, like /setvar, /if, /while, /sys, /cut, /gen and /buttons, with pipes and closures; a command this app lacks skips that step and the rest runs. Also fixed: the delete button of a chat not showing on phones, a Base URL with spaces inside not connecting, opening screens failing on /sys, and the whole chat flashing after a card interface saved its variables.
 - **Long-term memory (Beta)**: Settings → Model → Long-term memory (Beta), off by default. When the context is compacted, the same call that writes the story archive also notes the people, events, things and places, and promises and foreshadowing as separate entries in the chat's memory book; when a later round mentions them (by a keyword, an alias or similar wording), the matching entries go along with that round's message, and the reply says Recalled: …. They ride in that round's message only, so the frozen prefix stays as it is and the cache keeps hitting. Memory in the top bar reads, edits, pins, deletes and exports them as a world book, and Tidy while playing can note things down in the background every few rounds. The memory book follows branches, and Export archive carries it.
 - **Hide this round**: replies have Hide this round: the round stays in the chat, faded, but is no longer sent to the model, and you can unhide it any time. When one round keeps a content check refusing everything after it, hide it and play on; the latest round can be hidden too.
 - **Changing a card by talking, more dependable**: when the model says it made changes but wrote none out, it is asked once more; still nothing, and you are told why and can ask again. Asked to make a card an MVU card, it sets up the initial variables and the update rules, and a chat under way gets the variables when you apply the change to it.
@@ -408,10 +410,12 @@ Windows 解压即用，也有安卓版；界面有简体中文和英文。数据
 
 <br clear="right">
 
-## 最新版本变动[2.3.0]
+## 最新版本变动[2.3.1]
 
 <p align="center"><img src="web/whatsnew/2.3.0-memory.webp" alt="2.3.0：长期记忆（Beta）——提到「码头」时想起以前记下的约定；记忆簿；隐藏这一轮" width="880"></p>
 
+- **2.3.1：长对话不卡了**：两三百轮的对话，看不见的消息不再参与排版，模型一边写、页面一边重排的开销降到几乎为零，打开长对话也快了好几倍。正文右边的刻度条只铺开正在看的十轮左右，其余收进两头的细纹带，往上翻时一路展开。
+- **2.3.1：卡片界面能用更多 SillyTavern 命令**：/setvar、/if、/while、/sys、/cut、/gen、/buttons 等几十个，带管道和闭包；这里没有的命令跳过那一步、其余照常。另外修了手机上对话的删除按钮看不见、Base URL 中间多空格连不上、开局页 /sys 报不支持、卡片界面存变量后整个对话闪一下。
 - **长期记忆（Beta）**：设置 → 模型 → 长期记忆（Beta），默认关。压缩上下文时，写剧情存档的同一次调用顺带把人物、事件、物品与地点、约定与伏笔记成一条条，存进这个对话的「记忆簿」；之后哪一轮提到它们（关键词、别名或相近的说法），就把相关的几条附在这一轮的消息里，回复下面写着「想起：…」。只附在这一轮的消息里，不动固定前缀，缓存照常命中。顶栏「记忆」可以查看、修改、固定、删除、导出成世界书；可选「边玩边整理」，每隔几轮在后台记一次。记忆簿跟着分支走，「导出存档」也会带上。
 - **隐藏这一轮**：回复下面多了「隐藏这一轮」，这一轮留在对话里、变淡显示，但不再发给模型，随时可以取消。某一轮让模型的内容审查一直拦着后面的请求时，隐藏它就能接着玩，最新一轮也可以。
 - **对话修改角色卡更靠谱**：模型说「改好了」却没写出改动时，向导会追问一次；还是没有，就说清原因，可以「再问一次」。让它「改成 MVU 卡」时，会建好初始变量和更新规则，进行中的对话「应用到当前对话」后也补上变量。

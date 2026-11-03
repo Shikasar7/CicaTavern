@@ -6,6 +6,12 @@ import { t } from '/i18n.js'
 const $ = id => document.getElementById(id)
 const LONG_JUMP = 6 // viewports; farther than this jumps instead of gliding
 const HIGHLIGHT_MS = 8000
+// A long chat's rail spreads out only the rounds around the view (at the end, the latest); the rest
+// fold into a band at each end, which shrinks or grows as you go, so the thumb still reaches both ends.
+const FOLD_FROM = 16 // rounds; fewer than this, all spread out
+const RECENT = 10 // rounds spread out at a time
+const LEAD = 0.5 // of them above the top of the view, the rest below
+const REFLOW_MS = 400
 
 export function initHistory({ el, getChat }) {
   const box = $('transcript')
@@ -14,6 +20,8 @@ export function initHistory({ el, getChat }) {
   const ticks = $('rail-ticks')
   const thumb = $('rail-thumb')
   const bubble = $('rail-bubble')
+  const folds = [el('i', { class: 'rail-fold', hidden: '' }), el('i', { class: 'rail-fold', hidden: '' })]
+  track.prepend(...folds)
   const where = $('whereabouts')
   const panel = $('history')
   const query = $('history-query')
@@ -31,6 +39,9 @@ export function initHistory({ el, getChat }) {
     shown: [], // rows currently in the list: { n, jump? }
     terms: [],
     height: 0,
+    win: null, // { lo }: the rail's spread-out rounds start there, counted in rounds; null, all spread out
+    stops: [], // the rail's scale: [page offset, track fraction] pairs, straight between
+    reflowTimer: 0,
     hitTimer: 0,
     awakeTimer: 0,
     drag: null,
@@ -109,6 +120,93 @@ export function initHistory({ el, getChat }) {
   function measure() {
     for (const round of state.rounds) round.top = round.nodes[0].offsetTop
     state.height = box.scrollHeight
+    state.stops = scale()
+  }
+
+  /** A point counted in rounds (2.5: halfway through the third one) as a page offset. */
+  function offsetOf(at) {
+    const { rounds } = state
+    const i = Math.min(Math.max(Math.floor(at), 0), rounds.length - 1)
+    const next = rounds[i + 1]?.top ?? state.height
+    return rounds[i].top + Math.min(Math.max(at - i, 0), 1) * (next - rounds[i].top)
+  }
+
+  /** A page offset counted in rounds. */
+  function roundsAt(offset) {
+    const { rounds } = state
+    let [lo, hi] = [0, rounds.length - 1]
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1
+      if (rounds[mid].top <= offset) lo = mid
+      else hi = mid - 1
+    }
+    const next = rounds[lo + 1]?.top ?? state.height
+    return lo + Math.min(Math.max((offset - rounds[lo].top) / Math.max(next - rounds[lo].top, 1), 0), 1)
+  }
+
+  /**
+   * All spread out, the rail is the page by height, as a scrollbar is. Folded, it goes by rounds: the
+   * spread-out ones share most of it, the folded ones a band at each end, the band above as big as its
+   * share of them, so the bands trade size as you go and the thumb only ever moves the way you scroll.
+   */
+  function scale() {
+    const { rounds, win } = state
+    if (!win) return [[0, 0], [state.height || 1, 1]]
+    const { folded, bands } = bandsOf(rounds.length)
+    const above = (bands * win.lo) / folded
+    return [[0, 0], [win.lo, above], [win.lo + RECENT, 1 - bands + above], [rounds.length, 1]]
+  }
+  function bandsOf(n) {
+    const folded = n - RECENT
+    return { folded, bands: Math.min(0.3, 0.06 + folded * 0.002) }
+  }
+
+  /**
+   * Folded, where the thumb's top is depends only on where the view's top is, the same way down
+   * from start to end: this is the way back, the page offset for a thumb top, for dragging it.
+   */
+  function dragTo(fraction) {
+    if (!state.win || fraction <= 0) return toPage(fraction)
+    const n = state.rounds.length
+    const { folded, bands } = bandsOf(n)
+    const spread = 1 - bands
+    const head = LEAD * spread
+    if (fraction <= head) return offsetOf((fraction / spread) * RECENT)
+    if (fraction >= head + bands) return offsetOf(n - RECENT + ((fraction - bands) / spread) * RECENT)
+    return offsetOf(RECENT * LEAD + ((fraction - head) / bands) * folded)
+  }
+
+  /** Along the rail's scale, from page (offset or rounds) to rail (0–1), or back. */
+  function along(value, back = false) {
+    const [x, y] = back ? [1, 0] : [0, 1]
+    const stops = state.stops
+    for (let i = 1; i < stops.length; i++) {
+      const a = stops[i - 1]
+      const b = stops[i]
+      if (value > b[x] && i < stops.length - 1) continue
+      if (b[x] <= a[x]) return b[y]
+      return a[y] + ((Math.min(Math.max(value, a[x]), b[x]) - a[x]) / (b[x] - a[x])) * (b[y] - a[y])
+    }
+    return 0
+  }
+  /** Where a page offset sits on the rail (0–1), and where on the page a point of the rail is. */
+  const toTrack = offset => along(state.win ? roundsAt(offset) : offset)
+  const toPage = fraction => (fraction <= 0 ? 0 : state.win ? offsetOf(along(fraction, true)) : along(fraction, true))
+
+  /**
+   * Which rounds the rail spreads out: RECENT of them around the top of the view (where the thumb's top
+   * is), moving with it as you scroll, so the ones above unfold as you come to them; at the end, the latest ones.
+   * Says how far (in rounds) that moved.
+   */
+  function settleWindow() {
+    const n = state.rounds.length
+    const before = state.win?.lo ?? -1
+    if (n < FOLD_FROM) state.win = null
+    else {
+      state.win = { lo: Math.min(Math.max(roundsAt(box.scrollTop) - RECENT * LEAD, 0), n - RECENT) }
+    }
+    state.stops = scale()
+    return Math.abs((state.win?.lo ?? -1) - before)
   }
 
   /** The round under the reading line, a third of the way down the view. */
@@ -134,24 +232,53 @@ export function initHistory({ el, getChat }) {
     rail.hidden = !scrollable()
     rail.parentElement.classList.toggle('railed', !rail.hidden)
     if (rail.hidden) return
-    const decade = state.rounds.length > 24
-    ticks.replaceChildren(
-      ...state.rounds.map(round =>
-        el('i', {
-          class: `tick${decade && round.n % 10 === 0 ? ' decade' : ''}`,
-          'data-n': round.n,
-          style: `top:${((round.top / state.height) * 100).toFixed(3)}%`,
-        }),
-      ),
-    )
+    // Kept while the rounds are the same, so a tick glides when the rail unfolds.
+    const key = state.rounds.map(round => round.n).join()
+    if (ticks.dataset.key !== key) {
+      ticks.dataset.key = key
+      const decade = state.rounds.length > 24
+      ticks.replaceChildren(...state.rounds.map(round => el('i', { class: `tick${decade && round.n % 10 === 0 ? ' decade' : ''}`, 'data-n': round.n })))
+    }
+    settleWindow()
+    placeTicks()
     paintRail()
+  }
+
+  function placeTicks() {
+    const n = state.rounds.length
+    const lo = state.win?.lo ?? 0
+    const hi = state.win ? lo + RECENT : n
+    // In a band only every tenth round (or fiftieth, hundredth, as it fills) keeps a mark.
+    const every = n <= 130 ? 10 : n <= 610 ? 50 : 100
+    state.rounds.forEach((round, index) => {
+      const tick = ticks.children[index]
+      const folded = index < lo - 0.01 || index > hi + 0.01
+      tick.style.top = `${(toTrack(round.top) * 100).toFixed(3)}%`
+      tick.classList.toggle('folded', folded)
+      tick.classList.toggle('mark', folded && round.n % every === 0)
+    })
+    const [head, tail] = folds
+    const from = toTrack(offsetOf(lo)) * 100
+    const to = state.win ? toTrack(offsetOf(hi)) * 100 : 100
+    head.hidden = from < 0.5
+    tail.hidden = to > 99.5
+    head.style.cssText = `top:0;height:${from.toFixed(3)}%`
+    tail.style.cssText = `top:${to.toFixed(3)}%;height:${(100 - to).toFixed(3)}%`
+  }
+
+  /** The rail unfolding or folding: ticks, bands and thumb glide to their new places for a moment. */
+  function reflow() {
+    if (reducedMotion.matches) return placeTicks()
+    rail.classList.add('reflow')
+    placeTicks()
+    clearTimeout(state.reflowTimer)
+    state.reflowTimer = setTimeout(() => rail.classList.remove('reflow'), REFLOW_MS)
   }
 
   function paintRail() {
     if (rail.hidden) return
-    const h = state.height || 1
-    const top = (box.scrollTop / h) * 100
-    const size = Math.max((box.clientHeight / h) * 100, 4)
+    const top = toTrack(box.scrollTop) * 100
+    const size = Math.max(toTrack(box.scrollTop + box.clientHeight) * 100 - top, 4)
     thumb.style.top = `${Math.min(top, 100 - size)}%`
     thumb.style.height = `${size}%`
     for (const tick of ticks.children) tick.classList.toggle('here', Number(tick.dataset.n) === state.current)
@@ -166,6 +293,12 @@ export function initHistory({ el, getChat }) {
       if (box.scrollHeight !== state.height) layoutRail()
       const round = readingRound()
       state.current = round?.n ?? 0
+      if (!rail.hidden) {
+        // Gliding along as you scroll; a jump far away glides there (a drag keeps up with the finger).
+        const moved = settleWindow()
+        if (moved > 2 && !state.drag) reflow()
+        else if (moved) placeTicks()
+      }
       paintRail()
       paintWhere()
     })
@@ -200,6 +333,9 @@ export function initHistory({ el, getChat }) {
     const far = Math.abs(target - box.scrollTop) > box.clientHeight * LONG_JUMP
     box.scrollTo({ top: target, behavior: far || reducedMotion.matches ? 'instant' : 'smooth' })
     const land = () => {
+      // Messages out of view were laid out at a guessed height: where the round really is now.
+      const off = round.nodes[0].offsetTop - 12 - box.scrollTop
+      if (Math.abs(off) > 4) box.scrollTop += off
       for (const article of round.nodes) {
         article.classList.remove('found')
         void article.offsetWidth
@@ -282,7 +418,7 @@ export function initHistory({ el, getChat }) {
     if (state.drag) return
     if (event.pointerType !== 'mouse') return
     measure()
-    showBubble(event.clientY, roundAtOffset(trackFraction(event.clientY) * state.height))
+    showBubble(event.clientY, roundAtOffset(toPage(trackFraction(event.clientY))))
   })
   rail.addEventListener('pointerleave', () => { if (!state.drag) hideBubble() })
 
@@ -291,14 +427,13 @@ export function initHistory({ el, getChat }) {
     event.preventDefault()
     measure()
     const onThumb = event.target === thumb
-    const rect = track.getBoundingClientRect()
     const thumbTop = thumb.getBoundingClientRect().top
     state.drag = {
       id: event.pointerId,
       moved: false,
       onThumb,
       startY: event.clientY,
-      grab: onThumb ? event.clientY - thumbTop : (box.clientHeight / state.height) * rect.height / 2,
+      grab: onThumb ? event.clientY - thumbTop : thumb.offsetHeight / 2,
     }
     rail.setPointerCapture(event.pointerId)
     rail.classList.add('dragging', 'awake')
@@ -308,7 +443,7 @@ export function initHistory({ el, getChat }) {
   function scrub(y) {
     const rect = track.getBoundingClientRect()
     const fraction = Math.min(1, Math.max(0, (y - state.drag.grab - rect.top) / rect.height))
-    box.scrollTop = fraction * state.height
+    box.scrollTop = dragTo(fraction)
     const centre = box.scrollTop + box.clientHeight * 0.33
     showBubble(y, roundAtOffset(centre))
   }
@@ -329,7 +464,7 @@ export function initHistory({ el, getChat }) {
     // A click (no drag) on the track goes to the round under the pointer.
     // (Captured, the pointerup is the rail's: where it went down says whether it was the thumb.)
     if (!drag.moved && event.type === 'pointerup' && !drag.onThumb) {
-      const round = roundAtOffset(trackFraction(event.clientY) * state.height)
+      const round = roundAtOffset(toPage(trackFraction(event.clientY)))
       if (round) jumpTo(round.n)
     }
     if (event.pointerType !== 'mouse') hideBubble()

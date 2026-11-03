@@ -592,6 +592,8 @@ export default {
   "回复写到了输出上限，后面被截断（末尾的选项、变量块可能缺了）": "The reply hit the output limit and was cut off (choices or variable blocks at the end may be missing)",
   "这张 MVU 卡的回复没写变量更新块（<UpdateVariable>），状态没跟着这一轮变（回复下方有「补写变量」）": "The reply of this MVU card came without its variable update block (<UpdateVariable>), so the state did not change with this turn (the reply has a Write variables button below it)",
   "回复里的 EJS 模板出错：{0}": "An EJS template in the reply failed: {0}",
+  "卡片界面的命令": "Card interface command",
+  "没有这个命令，跳过了：{0}": "No such command, skipped: {0}",
   "后台服务启动": "Background server started",
   "手机访问开": "phone access on",
   "只限本机": "this computer only",

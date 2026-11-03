@@ -71,6 +71,7 @@ const STATIC = {
   '/style.css': ['style.css', 'text/css; charset=utf-8'],
   '/render.js': ['render.js', 'text/javascript; charset=utf-8'],
   '/compat.js': ['compat.js', 'text/javascript; charset=utf-8'],
+  '/stscript.js': ['stscript.js', 'text/javascript; charset=utf-8'],
   '/usage.js': ['usage.js', 'text/javascript; charset=utf-8'],
   '/presets.js': ['presets.js', 'text/javascript; charset=utf-8'],
   '/providers.js': ['providers.js', 'text/javascript; charset=utf-8'],
@@ -858,6 +859,11 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     // 错误日志: the page's own mistakes come in; the report goes out only as the player copies or saves it.
     ['GET', /^\/api\/diagnostics$/, async () => ({ count: (await diagnostics.list()).length })],
     ['POST', /^\/api\/diagnostics\/page$/, async (_, body) => {
+      // A warning (a card's interface used a command this app does not have) goes with the operations, not the errors.
+      if (body?.level === 'warn') {
+        await diagnostics.note({ level: 'warn', what: body.kind === 'slash' ? msg`卡片界面的命令` : String(body.kind ?? '').slice(0, 40), detail: msg`没有这个命令，跳过了：${String(body.message ?? '').slice(0, 200)}` })
+        return { ok: true }
+      }
       await diagnostics.record({ source: 'page', what: String(body?.kind ?? 'error').slice(0, 40), message: String(body?.message ?? ''), stack: String(body?.stack ?? '') })
       return { ok: true }
     }],
@@ -1403,7 +1409,9 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       const chat = await store.getChat(id)
       setFrameVars(chat, body?.vars !== undefined ? body.vars : patchVars(chat.frameVars, body))
       await store.saveChat(chat)
-      return { vars: chat.frameVars }
+      // The save's time too: the page that wrote them keeps its copy of the chat current, and does not take its own
+      // save for a change made elsewhere (and draw the chat again, restarting the frame that wrote them).
+      return { vars: chat.frameVars, updatedAt: chat.updatedAt }
     })],
     // Mvu.parseMessage: the app's own parser, nothing saved.
     ['POST', /^\/api\/mvu\/parse$/, async (_, body) => ({ state: parseUpdates(body?.state, body?.text) })],

@@ -1103,25 +1103,3 @@ export function broadcastRelay(origins) {
 export function broadcastInput(text) {
   for (const frame of document.querySelectorAll('iframe.card-frame')) frame.contentWindow?.postMessage({ agentTavernInput: String(text) }, '*')
 }
-
-/**
- * Split a STscript pipe into commands: `/send hi|/trigger` → [{ name: 'send', text: 'hi' }, …].
- * Named arguments (`key=value`) before the text are collected into `named`.
- */
-export function parseSlash(command) {
-  const out = []
-  for (const part of String(command).split(/\|(?=\s*\/)/)) {
-    const match = /^\s*\/(\S+)\s*([\s\S]*)$/.exec(part)
-    if (!match) continue
-    let text = match[2]
-    const named = {}
-    for (;;) {
-      const arg = /^(\w+)=("([^"]*)"|\S+)\s*/.exec(text)
-      if (!arg) break
-      named[arg[1]] = arg[3] ?? arg[2]
-      text = text.slice(arg[0].length)
-    }
-    out.push({ name: match[1].toLowerCase(), text: text.trim(), named })
-  }
-  return out
-}

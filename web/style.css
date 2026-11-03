@@ -296,7 +296,13 @@ li:hover .item-del, .item-del:focus-visible { opacity: 1; }
 .item-del:hover { color: var(--bad); background: color-mix(in srgb, var(--bad) 10%, transparent); }
 .item-edit { margin-right: -6px; }
 .item-edit:hover { color: var(--accent); background: var(--accent-soft); }
-@media (hover: none) { .item-edit { opacity: 1; } }
+/* Touch: nothing to hover, so a row's buttons always show (delete too), a shade darker and a finger wide. */
+@media (hover: none) {
+  .item-del { opacity: 1; color: var(--muted); min-width: 36px; min-height: 36px; }
+  .item-del:not(.item-edit) { color: color-mix(in srgb, var(--bad) 70%, var(--muted)); }
+  .item-del.item-more { font-size: 19px; }
+  .card-list li.group-head .item-more { min-height: 28px; }
+}
 
 .pane-foot { margin-top: auto; padding: 10px 12px; border-top: 1px solid var(--line-soft); display: flex; flex-wrap: wrap; gap: 2px; }
 .foot-btn {
@@ -1389,6 +1395,9 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .reader { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; }
 .transcript { position: relative; }
 .msg { position: relative; }
+/* A long chat: a message out of view skips layout and painting (keeping its last height), so a reply
+   streaming in doesn't lay out every message above it again. The clip margin keeps glows and shadows. */
+.transcript > .msg { content-visibility: auto; contain-intrinsic-size: auto 320px; overflow-clip-margin: 16px; }
 .round-tag { margin-left: auto; font-size: 11.5px; color: var(--faint); letter-spacing: .04em; font-variant-numeric: tabular-nums; }
 
 /* Jumped-to round: a wash that settles, and the searched words lit for a while. */
@@ -1413,6 +1422,12 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .tick.decade { width: 9px; opacity: .9; }
 .tick.here { width: 12px; height: 2px; margin-top: -.5px; background: var(--accent); opacity: 1; }
 .tick.hit { width: 14px; height: 2px; margin-top: -.5px; background: var(--lamp); opacity: 1; }
+/* A long chat's folded rounds: a hatched band at the end of the rail, a mark every so many rounds. */
+.rail-fold { position: absolute; right: 5px; width: 5px; border-radius: 3px; opacity: .55; pointer-events: none; background: repeating-linear-gradient(to bottom, var(--faint) 0 1px, transparent 1px 3px); }
+.tick.folded { opacity: 0; }
+.tick.folded.mark { width: 9px; opacity: .7; }
+.tick.folded:is(.here, .hit) { opacity: 1; }
+.rail.reflow :is(.tick, .rail-fold, .rail-thumb) { transition: top .38s var(--ease), height .38s var(--ease), opacity .3s, width .2s var(--ease), background .2s; }
 .rail-thumb {
   position: absolute; right: 4px; width: 7px; min-height: 14px; border-radius: 4px;
   background: color-mix(in srgb, var(--accent) 14%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
@@ -1435,6 +1450,7 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
   .rail.dragging .rail-thumb { width: 10px; right: 4px; background: var(--accent); }
   .rail-track::before { right: 9px; }
   .tick { right: 9px; }
+  .rail-fold { right: 7px; }
   .rail-bubble { right: 38px; }
 }
 
@@ -2095,6 +2111,12 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .upd-clean .check-row { margin: 0 0 8px; }
 .upd-clean-actions { justify-content: flex-end; gap: 8px; margin-top: 8px; }
 .upd-clean-all { margin-top: 8px; }
+
+/* A card interface's /popup, /input and /buttons (app.js slashDialog). */
+.slash-dialog { max-width: 480px; }
+.slash-dialog p { font-size: 14px; line-height: 1.7; margin: 0 0 12px; white-space: pre-wrap; }
+.slash-dialog input { width: 100%; margin-bottom: 12px; }
+.slash-dialog-actions { justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
 
 /* 主题 (web/theme.js) */
 .theme-dialog { width: min(520px, calc(100vw - 32px)); }

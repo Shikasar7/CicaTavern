@@ -1,16 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { frameShim, libraryTags, parseSlash, replaceViewportHeight } from '../web/compat.js'
+import { frameShim, libraryTags, replaceViewportHeight } from '../web/compat.js'
 import { editPreset } from '../server/presets.mjs'
-
-test('slash pipes split into commands with named arguments', () => {
-  assert.deepEqual(parseSlash('/send 你好|/trigger'), [
-    { name: 'send', text: '你好', named: {} },
-    { name: 'trigger', text: '', named: {} },
-  ])
-  assert.deepEqual(parseSlash('/setinput A|B 两个选项'), [{ name: 'setinput', text: 'A|B 两个选项', named: {} }], 'a pipe not followed by a command stays in the text')
-  assert.deepEqual(parseSlash('/echo severity=warning title="提 示" 注意'), [{ name: 'echo', text: '注意', named: { severity: 'warning', title: '提 示' } }])
-})
 
 test('frames load only the libraries their code uses', () => {
   assert.equal(libraryTags('<div>plain</div>'), '')

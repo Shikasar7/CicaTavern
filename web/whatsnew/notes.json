@@ -846,6 +846,35 @@
           }
         }
       ]
+    },
+    {
+      "version": "2.3.1",
+      "date": "2026-11",
+      "after": true,
+      "items": [
+        {
+          "icon": "🧭",
+          "zh": {
+            "title": "长对话不卡了，刻度条也不挤",
+            "text": "两三百轮的对话，模型一边写、页面一边重排的开销降到几乎为零，打开长对话也快了好几倍。\n正文右边的刻度条只把你正在看的十轮左右铺开，更早和更晚的收进两头的细纹带里；往上翻时上面的刻度一路展开，拖动也能一直拖到第一轮。手机上对话的删除按钮、角色卡的 ⋯ 现在都看得见了。"
+          },
+          "en": {
+            "title": "Long chats stay smooth, and the rail stays readable",
+            "text": "In a chat of two or three hundred rounds, laying out the page while a reply streams in now costs next to nothing, and long chats open several times faster.\nThe rail beside the story spreads out only the ten or so rounds you are reading; earlier and later ones fold into a band at each end, unfolding as you scroll, and a drag still reaches the first round. On a phone, the delete button of a chat and the ⋯ of a card now show."
+          }
+        },
+        {
+          "icon": "🧩",
+          "zh": {
+            "title": "卡片界面能用更多酒馆命令",
+            "text": "卡片界面发的 SillyTavern 命令（/setvar、/if、/sys、/gen、/buttons 等几十个，带管道和闭包）现在都能跑；这里没有的命令跳过那一步、其余照常，并提示一次。开局页「/sys 开局信息 | /trigger」这类写法能正常开始剧情了。\n另外：Base URL 中间多打了空格时会自动去掉。"
+          },
+          "en": {
+            "title": "Card interfaces run more SillyTavern commands",
+            "text": "The SillyTavern commands a card interface sends (dozens of them, like /setvar, /if, /sys, /gen and /buttons, with pipes and closures) now run; a command this app lacks skips that step, the rest runs, and you are told once. Opening screens that start the story with /sys and /trigger work now.\nAlso: spaces typed inside a Base URL are taken out."
+          }
+        }
+      ]
     }
   ]
 }

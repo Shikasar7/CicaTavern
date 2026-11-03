@@ -4,7 +4,7 @@ import { choiceList, statusBar, timeBox } from '/status.js'
 import { BASIC_ID, VN_ID, builtinKey, builtinOptions, choiceLetter, choicesOf, isBuiltinPreset, otherChoices, timeBoxOf } from '/shared/basic.js'
 import { autoStatusSpec } from '/shared/status.js'
 import { basicField, fieldsOf } from '/basic-options.js'
-import { allowLibraries, broadcastChatVars, broadcastInput, broadcastRelay, broadcastState, installFrameBridge, parseSlash, storedFrameStorage, storedVariables } from '/compat.js'
+import { allowLibraries, broadcastChatVars, broadcastInput, broadcastRelay, broadcastState, installFrameBridge, storedFrameStorage, storedVariables } from '/compat.js'
 import { renderUsage } from '/usage.js'
 import { initPresets } from '/presets.js'
 import { initProviders } from '/providers.js'
@@ -1985,65 +1985,264 @@ async function frameSend(context = {}) {
     await runFrameSlash(draft, context)
     return
   }
+  frameMaySend(context)
+  await send()
+}
+
+/**
+ * Whether a card's interface may start a turn now (send, /trigger, /regenerate): once per few seconds; right after
+ * a click in it, it is the player; without one, the card is asked about once. One click, one turn.
+ */
+function frameMaySend(context) {
   if (Date.now() - lastFrameSend < 3000) throw new Error(t`发送太频繁`)
   const cardId = context.card ?? ui.chat.cardId
-  // One click, one send: a command that triggers again after it is asked about like any other.
   const clicked = context.clicked === true
   context.clicked = false
   if (!clicked && !permitted(cardId, 'send', t`「${cardName(cardId)}」的卡片界面想自己把输入框里的内容发出去（你没有点它），每发一次按一轮对话计费。\n\n允许这张卡这样做吗？`)) {
     throw new Error(t`没有允许这张卡的界面自己发送`)
   }
   lastFrameSend = Date.now()
-  await send()
 }
 
+// Commands a card's interface used that this app does not have: told once a page, noted in 错误日志 once.
+const slashSkipped = new Set()
+
 /**
- * Slash commands from card HTML: the input-box ones, `/sendas` (a message from
- * the character, added to the latest reply), `/setentryfield` (this chat's copy
- * of a book entry) and the chat variables. Anything else is refused, so the card
- * takes its own way round instead of thinking it worked.
- * @param context - who asked, for `/trigger` (frameSend).
+ * STscript from card HTML (triggerSlash, or a `/…` sent from the input box), run by web/stscript.js; what reaches
+ * the chat is answered here. `/send`, `/sys` and `/narrator` wait in the input box until `/trigger` sends them as
+ * the player's message; `/sendas` adds to the latest reply; `/cut`, `/del`, `/hide` take the last floors; the chat
+ * and global variables are the frames' own. A command this app does not have is skipped, the rest of the script runs.
+ * @param context - who asked (compat.js installFrameBridge): { frame, card, node, clicked }.
  */
 async function runFrameSlash(command, context = {}) {
+  const { runScript } = await import('/stscript.js').catch(() => {
+    throw new Error(t`卡片界面的命令要重启后台服务后才能用：关掉所有窗口等一分钟，再从桌面图标打开。`)
+  })
   let staged = null
-  let output = ''
-  for (const step of parseSlash(command)) {
-    if (step.name === 'setinput') setDraft(step.text)
-    else if (step.name === 'send') staged = step.text
-    else if (step.name === 'trigger') {
-      if (staged !== null) setDraft(staged, false)
-      staged = null
-      await frameSend(context)
-    } else if (step.name === 'echo') toast(step.text)
-    else if (step.name === 'pass') output = step.text
-    else if (step.name === 'sendas') await frameHandlers.createMessages({ messages: [{ role: 'assistant', text: step.text }] })
-    else if (step.name === 'setentryfield') {
-      const { file = '', uid, field = 'content' } = step.named
-      await frameHandlers.worldbook({ action: 'field', name: file, uid: Number(uid), field, value: step.text })
-    } else if (step.name === 'setvar' || step.name === 'getvar' || step.name === 'addvar') output = await frameChatVar(step)
-    else {
-      toast(t`界面里的命令 /${step.name} 在这里不支持`)
-      throw new Error(t`不支持 /${step.name}`)
-    }
-  }
+  const chatVars = () => ({ ...(ui.chat?.frameVars ?? ui.frameInfo?.vars ?? {}) })
+  const globals = async () => (ui.chat && ui.frameInfo?.chatId !== ui.chat.id ? await loadFrameInfo(ui.chat.id) : ui.frameInfo)?.globalVars ?? {}
+  const output = await runScript(command, {
+    getVar: key => chatVars()[key],
+    setVar: (key, value) => frameHandlers.chatVars({ value: { ...chatVars(), [key]: value }, set: { [key]: value } }),
+    deleteVar: key => {
+      const value = chatVars()
+      delete value[key]
+      return frameHandlers.chatVars({ value, unset: [key] })
+    },
+    getGlobal: async key => (await globals())[key],
+    setGlobal: (key, value) => frameHandlers.globalVars(null, { set: { [key]: value } }),
+    deleteGlobal: key => frameHandlers.globalVars(null, { unset: [key] }),
+    macro: slashMacro,
+    toast: text => toast(text),
+    sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
+    unknown: name => skipSlash(name),
+    command: async (name, { named, text }) => {
+      switch (name) {
+        case 'setinput':
+          setDraft(text)
+          return ''
+        // A narrator's line (`/sys`) has no place of its own here: it goes as the player's message, as `/send` does
+        // (a character-creation page's 「开局信息 | /trigger」 starts the story with it).
+        case 'send':
+        case 'sys':
+        case 'narrator':
+          staged = text
+          return ''
+        case 'trigger':
+          if (staged !== null) setDraft(staged, false)
+          staged = null
+          await frameSend(context)
+          return ''
+        // A note that stays out of what the model reads: shown, not kept.
+        case 'comment':
+          if (text) toast(text, 6000)
+          return ''
+        case 'sendas':
+          await frameHandlers.createMessages({ messages: [{ role: 'assistant', text }] })
+          return ''
+        case 'regenerate': {
+          if (!ui.chat || ui.generating) throw new Error(t`正在生成，稍后再试`)
+          const [user, tip] = ui.chat.path.slice(-2)
+          if (tip?.role !== 'assistant' || user?.role !== 'user') throw new Error(t`没有可以重新生成的回复`)
+          frameMaySend(context)
+          await regenerate(user.id)
+          return ''
+        }
+        case 'stop':
+          frameHandlers.stopGenerate({})
+          if (ui.generating) await stop()
+          return ''
+        // `/cut 3`, `/cut 2-4`: the last floors, as deleteMessages takes them. The opening stays (a chat starts from
+        // it): a creation page cutting its own floor before it starts the story leaves it in place.
+        case 'cut': {
+          const ids = floorsOf(text).filter(id => id > 0)
+          if (ids.length) await frameHandlers.deleteMessages({ ids })
+          return ''
+        }
+        case 'del': {
+          const last = (ui.chat?.path.length ?? 1) - 1
+          const count = Math.min(Math.max(0, Math.floor(Number(text) || 1)), last)
+          if (count) await frameHandlers.deleteMessages({ ids: Array.from({ length: count }, (_, i) => last - count + 1 + i) })
+          return ''
+        }
+        case 'hide':
+        case 'unhide':
+          await hideFloors(floorsOf(text), name === 'hide')
+          return ''
+        case 'messages':
+        case 'message': {
+          const names = !/^(off|false)$/i.test(String(named.names ?? 'on'))
+          return floorsOf(text || `${(ui.chat?.path.length ?? 1) - 1}`)
+            .map(id => ui.chat?.path[id])
+            .filter(Boolean)
+            .map(node => {
+              const said = String(node.role === 'user' ? node.text ?? '' : node.display ?? node.text ?? '').trim()
+              return names ? `${node.role === 'user' ? ui.chat.names.user : ui.chat.names.char}: ${said}` : said
+            })
+            .join('\n\n')
+        }
+        case 'getchatname':
+          return ui.chat?.title ?? ''
+        // The model, as Tavern Helper's generate / generateRaw: asked about per card, the answer back as the pipe.
+        case 'gen':
+        case 'genraw': {
+          const raw = name === 'genraw'
+          const system = String(named.system ?? '')
+          const config = raw ? { user_input: text, ordered_prompts: system ? [{ role: 'system', content: system }, 'user_input'] : ['user_input'] } : { user_input: text }
+          return asText(await frameHandlers.generate({ id: `slash-${Date.now()}`, raw, config }, { frame: context.frame, window: null, card: context.card }))
+        }
+        case 'setentryfield':
+          await frameHandlers.worldbook({ action: 'field', name: String(named.file ?? ''), uid: Number(named.uid), field: String(named.field ?? 'content'), value: text })
+          return ''
+        case 'getentryfield':
+        case 'findentry': {
+          const entries = (await frameHandlers.worldbook({ action: 'get', name: String(named.file ?? '') })) ?? []
+          const field = String(named.field ?? (name === 'findentry' ? 'key' : 'content'))
+          const valueOf = entry => (field === 'key' ? entry.strategy?.keys?.join(', ') : field === 'comment' ? entry.name : entry[field])
+          if (name === 'getentryfield') return asText(valueOf(entries.find(entry => String(entry.uid) === String(named.uid ?? text)) ?? {}))
+          const found = entries.find(entry => asText(valueOf(entry)).toLowerCase().includes(text.toLowerCase()))
+          return found ? String(found.uid) : ''
+        }
+        case 'popup':
+          await slashDialog({ text, buttons: [t`好`] })
+          return ''
+        case 'input': {
+          const answer = await slashDialog({ text, input: String(named.default ?? ''), buttons: [t`取消`, t`确定`] })
+          return answer?.button === 1 ? answer.input : ''
+        }
+        case 'buttons': {
+          let labels = []
+          try {
+            labels = JSON.parse(String(named.labels ?? '[]'))
+          } catch {
+            labels = String(named.labels ?? '').split(',')
+          }
+          labels = labels.map(label => asText(label).trim()).filter(Boolean)
+          if (!labels.length) return ''
+          const answer = await slashDialog({ text, buttons: labels })
+          return answer ? labels[answer.button] : ''
+        }
+      }
+      return undefined
+    },
+  })
   // `/send` without `/trigger` adds a message in SillyTavern; here it waits in the input box.
   if (staged !== null) setDraft(staged)
   return output
 }
 
-/** `/setvar key=… value`, `/getvar key`, `/addvar key=… n`: the chat variables (Tavern Helper's, the templates' local scope). */
-async function frameChatVar(step) {
-  const vars = { ...(ui.chat?.frameVars ?? ui.frameInfo?.vars ?? {}) }
-  const key = step.named.key ?? step.text.trim()
-  if (step.name === 'getvar') {
-    const value = vars[key]
-    return value === undefined ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value)
+/** `3`, `2-4`, `1 3 5`: floor numbers, at most a thousand. */
+function floorsOf(text) {
+  const ids = []
+  for (const [, from, to] of String(text).matchAll(/(\d+)(?:\s*-\s*(\d+))?/g)) {
+    for (let id = Number(from); id <= Math.min(Number(to ?? from), Number(from) + 1000); id++) ids.push(id)
   }
-  const text = step.text
-  vars[key] = step.name === 'addvar' ? (Number(vars[key]) || 0) + (Number(text) || 0) : text
-  await frameHandlers.chatVars({ value: vars, set: { [key]: vars[key] } })
-  return String(vars[key])
+  return ids
 }
+
+/** /hide, /unhide: the rounds those floors are in, as 隐藏这一轮 does (a player's message goes with its reply). */
+async function hideFloors(ids, hidden) {
+  const chat = ui.chat
+  if (!chat || ui.generating) throw new Error(t`正在生成，稍后再试`)
+  const replies = new Set()
+  for (const id of ids) {
+    const node = chat.path[id]
+    const reply = node?.role === 'user' ? chat.path[id + 1] : node
+    if (reply?.role === 'assistant' && reply.id !== 'root' && !reply.compaction && Boolean(reply.hidden) !== hidden) replies.add(reply.id)
+  }
+  let view = null
+  for (const nodeId of replies) view = await api(`/api/chats/${chat.id}/hide`, { method: 'POST', body: { nodeId, hidden } })
+  if (view && stillOpen(chat.id)) setChat(view)
+}
+
+/** `{{user}}`, `{{char}}`, `{{input}}`, `{{lastMessage}}`… in a card's script; undefined leaves one as written. */
+function slashMacro(name) {
+  const chat = ui.chat
+  const path = chat?.path ?? []
+  const said = node => String(node?.role === 'user' ? node?.text ?? '' : node?.display ?? node?.text ?? '')
+  switch (name.toLowerCase()) {
+    case 'user':
+      return chat?.names.user ?? ''
+    case 'char':
+      return chat?.names.char ?? ''
+    case 'input':
+      return $('input').value
+    case 'lastmessage':
+      return said(path.at(-1))
+    case 'lastmessageid':
+      return String(Math.max(0, path.length - 1))
+    case 'lastusermessage':
+      return said(path.findLast(node => node.role === 'user'))
+    case 'lastcharmessage':
+      return said(path.findLast(node => node.role === 'assistant'))
+  }
+  return undefined
+}
+
+/** A command this app does not have: once a page, a notice and a line in 错误日志's operations (which card, which command). */
+function skipSlash(name) {
+  if (slashSkipped.has(name)) return
+  slashSkipped.add(name)
+  toast(t`卡片界面用了 /${name}，CicaTavern 没有这个命令，跳过了这一步（其余照常执行）`, 6000)
+  fetch('/api/diagnostics/page', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-agent-tavern': '1' },
+    body: JSON.stringify({ level: 'warn', kind: 'slash', message: `/${name}` }),
+  }).catch(() => {})
+}
+
+/** /popup, /input, /buttons: a small dialog; resolves to { button, input } (the button's index), or null when closed. */
+function slashDialog({ text, input = null, buttons }) {
+  return new Promise(resolve => {
+    const field = input === null ? null : el('input', { type: 'text', value: input })
+    const dialog = el('dialog', { class: 'dialog slash-dialog' }, [
+      el('p', { text }),
+      field,
+      el('div', { class: 'row slash-dialog-actions' }, buttons.map((label, index) => el('button', {
+        type: 'button',
+        class: index === buttons.length - 1 ? 'btn primary' : 'btn',
+        text: label,
+        // The answer on the click: a dialog's close event does not come while the page is hidden.
+        onclick: () => finish({ button: index, input: field?.value ?? '' }),
+      }))),
+    ])
+    let done = false
+    const finish = answer => {
+      if (done) return
+      done = true
+      dialog.close()
+      dialog.remove()
+      resolve(answer)
+    }
+    dialog.addEventListener('cancel', () => finish(null))
+    document.body.append(dialog)
+    dialog.showModal()
+    field?.focus()
+  })
+}
+
+/** A value as STscript's pipe holds it. */
+const asText = value => (value === undefined || value === null ? '' : typeof value === 'string' ? value : typeof value === 'object' ? JSON.stringify(value) : String(value))
 
 // What a card's interface may do without a click (send, call the model, reach an address through the app): asked
 // once per card, the answer kept either way; changed in the card's menu (卡片界面权限).
@@ -2181,9 +2380,10 @@ const frameHandlers = {
     if (!ui.chat) throw new Error(t`没有打开的对话`)
     const chatId = ui.chat.id
     const body = set || unset ? { set, unset } : { vars: value }
-    const { vars } = await api(`/api/chats/${chatId}/frame-vars`, { method: 'PUT', body })
+    const { vars, updatedAt } = await api(`/api/chats/${chatId}/frame-vars`, { method: 'PUT', body })
     if (stillOpen(chatId)) {
       ui.chat.frameVars = vars
+      if (updatedAt) ui.chat.updatedAt = updatedAt
       broadcastChatVars(vars)
     }
     if (ui.frameInfo?.chatId === chatId) ui.frameInfo.vars = vars

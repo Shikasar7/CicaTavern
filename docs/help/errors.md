@@ -486,16 +486,14 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 ## 卡片界面里的报错 {#err-card-ui}
 
 - 也叫：状态栏报错、前端报错、酒馆助手、卡的界面弹红框
-- 原文：界面里的命令 /{0} 在这里不支持
-- 原文：不支持 /{0}
+- 原文：卡片界面用了 /{0}，CicaTavern 没有这个命令，跳过了这一步（其余照常执行）
 - 原文：界面保存的变量太大
 - 原文：不支持修改条目的「{0}」
 - 原文：要渲染的内容太长
 - 原文：要检查的模板太长
 - 原文：对话已经开始，不能再换开场白
 - 原文：地址不对
-- 英文：The UI command /{0} isn't supported here
-- 英文：/{0} is not supported
+- 英文：The card interface used /{0}, which CicaTavern does not have: that step was skipped (the rest ran as usual)
 - 英文：The variables the card's UI saved are too large
 - 英文：Changing an entry's “{0}” is not supported
 - 英文：The texts to render are too long
@@ -503,7 +501,7 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 - 英文：The chat has already started; its opening can't be switched now
 - 英文：That address isn't valid
 - 出现在：角色卡自带的网页界面（状态栏、开场页、面板）
-- 原因：卡的界面脚本请 CicaTavern 做了一件它不支持或不允许的事：用了这里没有的斜杠命令、存的变量超过 20 万字、改世界书条目的某个字段、对话开始后还要换开场白，或者给了一个写错的网址。
+- 原因：卡的界面脚本请 CicaTavern 做了一件它不支持或不允许的事：用了这里没有的斜杠命令（这一步跳过，其余照常执行）、存的变量超过 20 万字、改世界书条目的某个字段、对话开始后还要换开场白，或者给了一个写错的网址。
 - 解决：这是卡的界面和 CicaTavern 的兼容问题，正文对话一般不受影响。开场白要在发出第一句之前换；其他的可以把报错发给卡作者或开发者。
 
 ## 视觉小说里不能存档 {#err-vn-save}
