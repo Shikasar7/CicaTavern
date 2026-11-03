@@ -8,6 +8,7 @@
 **An agent-style player for SillyTavern character cards.** Import the character cards, world books and presets you already use, and play them with **your own model API** (DeepSeek, OpenRouter, Anthropic, OpenAI, Gemini, Gemini Agent Platform (formerly Vertex AI), Kimi, Zhipu, Qwen, Volcano Engine Ark, a local Ollama, and more):
 
 - **High cache hit rates**: prompts are built around the provider's cache, so in a long story most of every turn is billed at the much cheaper cached rate, and replies start faster.
+- **Long-term memory**: what the context compacted away is kept in a memory book and recalled when the story brings it up again, without breaking the cache or needing any extra API.
 - **SillyTavern-compatible**: character cards, world books, presets, regex scripts, MVU variables and the status-bar UIs inside cards work as imported.
 - **Pictures and read-aloud built in**: illustrate a scene with one click; dialogue and narration each get their own voice, and you can tap a line of dialogue to hear it.
 - **Visual novel mode**: turn the story into a game screen with one switch — scene backgrounds, the speaker's sprite, a name plate, one line at a time, and the choices in the middle of the picture.
@@ -47,6 +48,31 @@ From the author's own long chats (October 2026):
 
 <sub>The two Claude rows come from the author's personal build, which sends the same prompt structure through Claude Code; with the Anthropic API, CicaTavern sets cache breakpoints the same way. Real hit rates also depend on the provider: some third-party relays count caching differently and hit less. Every turn's cache hit and cost are shown in the right panel and in the usage panel (用量).</sub>
 
+### Long-term memory (Beta): what was compacted comes back when it matters
+
+<p align="center"><img src="web/whatsnew/2.3.0-memory.webp" alt="Long-term memory: mentioning the pier recalls the promise made in rounds 5–6; the memory book keeps people, events and promises as separate entries" width="880"></p>
+
+A long story has to compact its context sooner or later: the story so far becomes a story archive, and after a few rounds of that the oldest details blur. A promise made long ago, a side character's name, where some object came from: the model no longer knows. Long-term memory writes those details down as separate entries and puts them back in front of the model when the story brings them up again.
+
+```mermaid
+flowchart LR
+  A["Compacting the context"] -->|"written in the same call"| M[("Memory book<br>people · events · things & places · promises & foreshadowing")]
+  B["Tidy while playing<br>every few rounds, in the background"] --> M
+  U["You, in the memory book<br>edit · pin · delete · add"] --> M
+  M -->|"who and what this round mentions"| R{"Recall<br>keywords · aliases · rare character pairs"}
+  R -->|"up to 8 entries, about 1500 characters"| T["Past events in this round's message<br>the reply says Recalled: …"]
+```
+
+- **Writing it costs next to nothing**: the entries are written by the same call that writes the story archive, so the input is still read from the cache and only a thousand or two output tokens are added; when they don't come, they are asked for once on their own, and failing that the compaction still goes ahead. They are plain lines, not JSON, so cheap models write them reliably.
+- **The cache stays intact**: recalled entries are only appended to this round's message; the fixed prefix doesn't change by a character, so the cache keeps hitting. Only what has been compacted away is recalled: what is still in the context the model can already see.
+- **No vector database, no embedding API**: entries are found by title, keyword and alias first; when the wording differs, rare pairs of Chinese characters fill in: only pairs that few entries share count, and enough of them must match. It is all plain JavaScript with no new dependencies, so it works with a single provider and on Android too.
+- **A budget, not a flood**: up to 8 entries and about 1500 characters a round (adjustable); pinned entries go first, no kind takes more than half, and an entry already sent since the last compaction isn't sent again.
+- **It follows branches**: the memory book is stored as snapshots on the chat tree's nodes, and the latest one on the current line is the one in effect, so regenerating, branching and rolling back return it to how it was at that point without any extra syncing.
+- **You decide**: Memory in the top bar opens the book to edit, pin, delete and add entries or jump to the round they came from; entries you edited are never overwritten by the model. It exports as a SillyTavern lorebook, and Export archive carries it.
+- **Variables keep the numbers**: affection, money and item counts stay with MVU variables; memory keeps what happened and who was there.
+
+Turn it on in Settings → Model → Long-term memory (Beta); it is off by default. Tidy while playing can use the helper model (only the latest rounds, cheaper) or the chat model (the whole story in view, more accurate).
+
 ### Works with SillyTavern cards, world books and presets
 
 - **Character cards**: SillyTavern V1/V2/V3 PNG and JSON, with embedded world books, regex scripts and alternate greetings. A new version of a card can replace the old one in place, keeping your chats.
@@ -59,7 +85,6 @@ From the author's own long chats (October 2026):
 - **Blocked words**: Settings → Writing → Blocked words removes words, masks them with `*` or swaps them for words you choose, both in what the model is sent (card, preset, lorebooks, history and your messages) and in the replies shown; each word can be switched on or off and kept to one side. Only the copy being sent or shown changes, so switching a word off brings it back; Chinese has no spaces between words, so longer words to leave alone go under Exceptions. After a change, chats that use the word write the cache again from where it appears, and saving tells you from which turn.
 - **Personas and styles**: Settings → Writing keeps your personas and writing styles as lists you can add to, copy, import and export. Personas move to and from SillyTavern's Persona Management (restore the exported file there, or import its backup here); a style exports as a SillyTavern system prompt, and a plain text file of rules imports as one. Each card can pick its own persona and style, otherwise it uses the defaults; a chat keeps the ones it started with until you click "Use in this chat", and the next turn writes the cache once more. Exported cards never carry your persona.
 - **Versions and branches**: regenerate, swipe between versions, branch from any message, roll back, edit any message; a whole chat can be packed up and moved to another device. A round the model's content check keeps stopping can be hidden: it stays in the chat but is no longer sent.
-- **Long-term memory (Beta)**: when the context is compacted, people, events, things & places and promises & loose ends are noted down in a memory book, and the few that come up again go with that turn's message, leaving the fixed prefix alone; it can also tidy every few turns as you play. The memory book can be viewed, edited, pinned and exported as a SillyTavern lorebook. Off by default.
 
 ### Pictures and read-aloud
 
@@ -112,8 +137,6 @@ If you can't quite say what you want, the creator guides you round by round:
 <br clear="right">
 
 ## Latest changes [2.3.1]
-
-<p align="center"><img src="web/whatsnew/2.3.0-memory.webp" alt="2.3.0: long-term memory (beta) — mentioning the pier recalls a promise noted long before; the memory book; hiding a round" width="880"></p>
 
 - **2.3.1: long chats stay smooth**: in a chat of two or three hundred rounds, messages out of view are no longer laid out, so a reply streaming in costs next to nothing to show, and long chats open several times faster. The rail beside the story spreads out only the ten or so rounds you are reading and folds the rest into a band at each end, unfolding as you scroll.
 - **2.3.1: card interfaces run more SillyTavern commands**: dozens of them, like /setvar, /if, /while, /sys, /cut, /gen and /buttons, with pipes and closures; a command this app lacks skips that step and the rest runs. Also fixed: the delete button of a chat not showing on phones, a Base URL with spaces inside not connecting, opening screens failing on /sys, and the whole chat flashing after a card interface saved its variables.
@@ -309,6 +332,7 @@ CicaTavern is licensed under the [GNU AGPL-3.0](LICENSE), copyright Shikasar7.
 **Agent 式的 SillyTavern 角色卡酒馆。** 导入酒馆的角色卡、世界书和预设，用**你自己的模型 API**（DeepSeek、OpenRouter、Anthropic、OpenAI、Gemini、Gemini Agent Platform（原 Vertex AI）、Kimi、智谱、通义、火山方舟、本机 Ollama 等）跑剧情：
 
 - **缓存命中高**：提示词按缓存来设计，长对话里每轮的大部分内容都按便宜得多的缓存价计费，出字也快。
+- **长期记忆**：压缩掉的旧剧情记成「记忆簿」，剧情再提到时自动想起；不破坏缓存，也不需要额外的接口。
 - **兼容酒馆格式**：角色卡、世界书、预设、正则、MVU 变量、卡片里的状态栏界面，导进来就能玩。
 - **自带配图和一键朗读**：一键为剧情配图；对白和旁白各用一种音色，点一句对白就能听这一句。
 - **视觉小说模式**：一键把剧情变成游戏画面——场景背景、说话人的立绘、名字栏，一句一句地读，选项在画面中央弹出。
@@ -346,6 +370,31 @@ Windows 解压即用，也有安卓版；界面有简体中文和英文。数据
 
 <sub>Claude 的两行来自作者自用的版本：它通过 Claude Code 发送同样结构的提示词。CicaTavern 用 Anthropic API 时，按同样的结构打缓存断点。实际命中率还取决于供应商，一些第三方中转站计算缓存的方式不同，命中会低一些。每一轮的缓存命中和费用都能在右侧栏和「用量」面板里看到。</sub>
 
+### 长期记忆（Beta）：压缩掉的剧情，提到时会想起来
+
+<p align="center"><img src="web/whatsnew/2.3.0-memory.webp" alt="长期记忆：提到「码头」时想起第 5–6 轮许下的看灯之约；记忆簿把人物、事件、约定记成一条条" width="880"></p>
+
+长对话迟早要压缩上下文：前面的剧情压成一份剧情存档，压过几次，越早的细节越模糊。很久以前许下的约定、配角的名字、某件东西的来历，模型就不记得了。长期记忆把这些细节记成一条条，等剧情又提到它们时，再放回模型眼前。
+
+```mermaid
+flowchart LR
+  A["压缩上下文"] -->|"同一次调用顺带写"| M[("记忆簿<br>人物 · 事件 · 物品与地点 · 约定与伏笔")]
+  B["边玩边整理<br>每隔几轮，在后台"] --> M
+  U["你在记忆簿里<br>修改 · 固定 · 删除 · 新增"] --> M
+  M -->|"这一轮提到了谁、什么"| R{"召回<br>关键词 · 别名 · 少见字对"}
+  R -->|"最多 8 条、约 1500 字"| T["这一轮消息里的「往事」<br>回复下面写着「想起：…」"]
+```
+
+- **写进去几乎不多花钱**：记忆条目在写剧情存档的同一次调用里顺带写出，输入照常读缓存，只多一两千 token 的输出；没写出来时单独补问一次，再不行也不影响压缩本身。格式是逐行文字而不是 JSON，便宜的模型也写得稳。
+- **不破坏缓存**：想起的条目只追加在这一轮的消息里，固定前缀一个字不动，缓存照常命中。只想起已经压缩掉的部分，还在上下文里的原文模型本来就看得到，不重复发。
+- **不需要向量库，也不需要 embedding 接口**：先按标题、关键词和别名找；换了说法对不上时，再用「少见汉字二元组」兜底：只算在记忆簿里很少出现的字对，共享得够多才算相关。全部是纯 JS，没有新依赖，只有一家供应商、或者在安卓上也照样能用。
+- **有预算，不刷屏**：每轮最多 8 条、约 1500 字（可以调）；固定的条目优先，同一类最多占一半，同一次压缩之后已经发过的不再重发。
+- **跟着分支走**：记忆簿按快照存在对话树的节点上，生效的是这条线上最近的那一份，所以重新生成、分支、回滚都会回到那一楼的样子，不需要额外同步。
+- **你说了算**：顶栏「记忆」打开记忆簿，可以修改、固定、删除、新增、跳到出处那一轮；你改过的条目模型不会覆盖。能导出成 SillyTavern 世界书，「导出存档」也会带上它。
+- **和变量分工**：好感、金钱、物品数量这些数值交给 MVU 变量，记忆只记发生过的事和人。
+
+在「设置 → 模型 → 长期记忆（Beta）」打开，默认关。「边玩边整理」可以选辅助模型（只看最近几轮，省钱）或对话模型（带着整段剧情看，记得更准）。
+
 ### 兼容酒馆的角色卡、世界书和预设
 
 - **角色卡**：SillyTavern V1/V2/V3 的 PNG 和 JSON，含内嵌世界书、正则脚本、多个开场白；新版本的卡可以原地更新，对话都保留。
@@ -358,7 +407,6 @@ Windows 解压即用，也有安卓版；界面有简体中文和英文。数据
 - **屏蔽词**：「设置 → 写作 → 屏蔽词」，把某些词去掉、遮成 `*` 或换成你自选的词，发给模型的（角色卡、预设、世界书、历史和你的输入）和显示出来的回复都管，每个词可以单独开关、只管其中一边。只在发送和显示时换，原文不变，关掉就恢复；中文没有词边界，不想动的长词写进「例外」。改动后用到这个词的对话从它出现的地方起重新写一次缓存，保存时会说清楚影响到哪一轮。
 - **你的角色和文风**：「设置 → 写作」里各是一个列表，可以新建、复制、导入、导出。角色和 SillyTavern 的角色管理互通（导出的文件在那边「恢复」，那边备份出来的也能导进来），文风导出成 SillyTavern 的系统提示词，也能导入一个写着要求的文本文件。每张卡可以指定用哪个角色、哪个文风，没指定用默认的；对话开局时定下来，之后要换就在窗口里点「用于当前对话」，下一轮重新写一次缓存。导出角色卡时不会带上你的角色。
 - **版本与分支**：重新生成、切换版本、从任意一条分支、回滚、修改任意一条消息；对话可以整段打包，搬到另一台设备上。某一轮让模型的内容审查一直拦着时，可以「隐藏这一轮」：留在对话里，不再发给模型。
-- **长期记忆（Beta）**：压缩上下文时顺带把人物、事件、物品与地点、约定与伏笔记成「记忆簿」，之后提到时把相关的几条附在这一轮的消息里，不动固定前缀；也可以每隔几轮边玩边整理。记忆簿能查看、修改、固定，导出成 SillyTavern 世界书。默认关。
 
 ### 自带配图和一键朗读
 
@@ -411,8 +459,6 @@ Windows 解压即用，也有安卓版；界面有简体中文和英文。数据
 <br clear="right">
 
 ## 最新版本变动[2.3.1]
-
-<p align="center"><img src="web/whatsnew/2.3.0-memory.webp" alt="2.3.0：长期记忆（Beta）——提到「码头」时想起以前记下的约定；记忆簿；隐藏这一轮" width="880"></p>
 
 - **2.3.1：长对话不卡了**：两三百轮的对话，看不见的消息不再参与排版，模型一边写、页面一边重排的开销降到几乎为零，打开长对话也快了好几倍。正文右边的刻度条只铺开正在看的十轮左右，其余收进两头的细纹带，往上翻时一路展开。
 - **2.3.1：卡片界面能用更多 SillyTavern 命令**：/setvar、/if、/while、/sys、/cut、/gen、/buttons 等几十个，带管道和闭包；这里没有的命令跳过那一步、其余照常。另外修了手机上对话的删除按钮看不见、Base URL 中间多空格连不上、开局页 /sys 报不支持、卡片界面存变量后整个对话闪一下。

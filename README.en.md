@@ -7,6 +7,7 @@
 **An agent-style player for SillyTavern character cards.** Import the character cards, world books and presets you already use, and play them with **your own model API** (DeepSeek, OpenRouter, Anthropic, OpenAI, Gemini, Gemini Agent Platform (formerly Vertex AI), Kimi, Zhipu, Qwen, Volcano Engine Ark, a local Ollama, and more):
 
 - **High cache hit rates**: prompts are built around the provider's cache, so in a long story most of every turn is billed at the much cheaper cached rate, and replies start faster.
+- **Long-term memory**: what the context compacted away is kept in a memory book and recalled when the story brings it up again, without breaking the cache or needing any extra API.
 - **SillyTavern-compatible**: character cards, world books, presets, regex scripts, MVU variables and the status-bar UIs inside cards work as imported.
 - **Pictures and read-aloud built in**: illustrate a scene with one click; dialogue and narration each get their own voice, and you can tap a line of dialogue to hear it.
 - **Visual novel mode**: turn the story into a game screen with one switch — scene backgrounds, the speaker's sprite, a name plate, one line at a time, and the choices in the middle of the picture.
@@ -46,6 +47,31 @@ From the author's own long chats (October 2026):
 
 <sub>The two Claude rows come from the author's personal build, which sends the same prompt structure through Claude Code; with the Anthropic API, CicaTavern sets cache breakpoints the same way. Real hit rates also depend on the provider: some third-party relays count caching differently and hit less. Every turn's cache hit and cost are shown in the right panel and in the usage panel (用量).</sub>
 
+### Long-term memory (Beta): what was compacted comes back when it matters
+
+<p align="center"><img src="web/whatsnew/2.3.0-memory.webp" alt="Long-term memory: mentioning the pier recalls the promise made in rounds 5–6; the memory book keeps people, events and promises as separate entries" width="880"></p>
+
+A long story has to compact its context sooner or later: the story so far becomes a story archive, and after a few rounds of that the oldest details blur. A promise made long ago, a side character's name, where some object came from: the model no longer knows. Long-term memory writes those details down as separate entries and puts them back in front of the model when the story brings them up again.
+
+```mermaid
+flowchart LR
+  A["Compacting the context"] -->|"written in the same call"| M[("Memory book<br>people · events · things & places · promises & foreshadowing")]
+  B["Tidy while playing<br>every few rounds, in the background"] --> M
+  U["You, in the memory book<br>edit · pin · delete · add"] --> M
+  M -->|"who and what this round mentions"| R{"Recall<br>keywords · aliases · rare character pairs"}
+  R -->|"up to 8 entries, about 1500 characters"| T["Past events in this round's message<br>the reply says Recalled: …"]
+```
+
+- **Writing it costs next to nothing**: the entries are written by the same call that writes the story archive, so the input is still read from the cache and only a thousand or two output tokens are added; when they don't come, they are asked for once on their own, and failing that the compaction still goes ahead. They are plain lines, not JSON, so cheap models write them reliably.
+- **The cache stays intact**: recalled entries are only appended to this round's message; the fixed prefix doesn't change by a character, so the cache keeps hitting. Only what has been compacted away is recalled: what is still in the context the model can already see.
+- **No vector database, no embedding API**: entries are found by title, keyword and alias first; when the wording differs, rare pairs of Chinese characters fill in: only pairs that few entries share count, and enough of them must match. It is all plain JavaScript with no new dependencies, so it works with a single provider and on Android too.
+- **A budget, not a flood**: up to 8 entries and about 1500 characters a round (adjustable); pinned entries go first, no kind takes more than half, and an entry already sent since the last compaction isn't sent again.
+- **It follows branches**: the memory book is stored as snapshots on the chat tree's nodes, and the latest one on the current line is the one in effect, so regenerating, branching and rolling back return it to how it was at that point without any extra syncing.
+- **You decide**: Memory in the top bar opens the book to edit, pin, delete and add entries or jump to the round they came from; entries you edited are never overwritten by the model. It exports as a SillyTavern lorebook, and Export archive carries it.
+- **Variables keep the numbers**: affection, money and item counts stay with MVU variables; memory keeps what happened and who was there.
+
+Turn it on in Settings → Model → Long-term memory (Beta); it is off by default. Tidy while playing can use the helper model (only the latest rounds, cheaper) or the chat model (the whole story in view, more accurate).
+
 ### Works with SillyTavern cards, world books and presets
 
 - **Character cards**: SillyTavern V1/V2/V3 PNG and JSON, with embedded world books, regex scripts and alternate greetings. A new version of a card can replace the old one in place, keeping your chats.
@@ -58,7 +84,6 @@ From the author's own long chats (October 2026):
 - **Blocked words**: Settings → Writing → Blocked words removes words, masks them with `*` or swaps them for words you choose, both in what the model is sent (card, preset, lorebooks, history and your messages) and in the replies shown; each word can be switched on or off and kept to one side. Only the copy being sent or shown changes, so switching a word off brings it back; Chinese has no spaces between words, so longer words to leave alone go under Exceptions. After a change, chats that use the word write the cache again from where it appears, and saving tells you from which turn.
 - **Personas and styles**: Settings → Writing keeps your personas and writing styles as lists you can add to, copy, import and export. Personas move to and from SillyTavern's Persona Management (restore the exported file there, or import its backup here); a style exports as a SillyTavern system prompt, and a plain text file of rules imports as one. Each card can pick its own persona and style, otherwise it uses the defaults; a chat keeps the ones it started with until you click "Use in this chat", and the next turn writes the cache once more. Exported cards never carry your persona.
 - **Versions and branches**: regenerate, swipe between versions, branch from any message, roll back, edit any message; a whole chat can be packed up and moved to another device. A round the model's content check keeps stopping can be hidden: it stays in the chat but is no longer sent.
-- **Long-term memory (Beta)**: when the context is compacted, people, events, things & places and promises & loose ends are noted down in a memory book, and the few that come up again go with that turn's message, leaving the fixed prefix alone; it can also tidy every few turns as you play. The memory book can be viewed, edited, pinned and exported as a SillyTavern lorebook. Off by default.
 
 ### Pictures and read-aloud
 
@@ -111,8 +136,6 @@ If you can't quite say what you want, the creator guides you round by round:
 <br clear="right">
 
 ## Latest changes [2.3.1]
-
-<p align="center"><img src="web/whatsnew/2.3.0-memory.webp" alt="2.3.0: long-term memory (beta) — mentioning the pier recalls a promise noted long before; the memory book; hiding a round" width="880"></p>
 
 - **2.3.1: long chats stay smooth**: in a chat of two or three hundred rounds, messages out of view are no longer laid out, so a reply streaming in costs next to nothing to show, and long chats open several times faster. The rail beside the story spreads out only the ten or so rounds you are reading and folds the rest into a band at each end, unfolding as you scroll.
 - **2.3.1: card interfaces run more SillyTavern commands**: dozens of them, like /setvar, /if, /while, /sys, /cut, /gen and /buttons, with pipes and closures; a command this app lacks skips that step and the rest runs. Also fixed: the delete button of a chat not showing on phones, a Base URL with spaces inside not connecting, opening screens failing on /sys, and the whole chat flashing after a card interface saved its variables.
