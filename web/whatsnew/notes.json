@@ -875,6 +875,35 @@
           }
         }
       ]
+    },
+    {
+      "version": "2.3.2",
+      "date": "2026-11",
+      "after": true,
+      "items": [
+        {
+          "icon": "🎯",
+          "zh": {
+            "title": "正文不再往回弹，打开就是上次聊的",
+            "text": "上一版切换对话、写完新回合后，正文会停在最新几轮之前，这一版修好了：现在都会停在最底部。划动换版本、改消息时也留在原来那一行。\n打开应用时进的是最近聊过的那段对话，不再是一张说不清的卡。"
+          },
+          "en": {
+            "title": "The story stays put, and you start where you left off",
+            "text": "In the last version, switching chats or finishing a new turn could leave you a few rounds above the latest one. That is fixed: you land at the very bottom, and swiping or editing a message keeps you on the same line.\nThe app now opens on the chat you last played, not on some card you can't place."
+          }
+        },
+        {
+          "icon": "🔌",
+          "zh": {
+            "title": "Gemini 原生接口、MOSS 朗读、安卓导出",
+            "text": "供应商多了「Gemini 原生」接口，和 SillyTavern 选 Google AI Studio 时走的是同一个，「Gemini API」模板默认用它。朗读来源加了国内直连的 MOSS。\n安卓应用能把对话包和角色卡 PNG 存进「下载」文件夹了。报错也说得更清楚：模型繁忙、被限流、额度用完各写各的，并说明是不是你这边的问题。"
+          },
+          "en": {
+            "title": "Native Gemini, MOSS voices, exports on Android",
+            "text": "Providers can now use the native Gemini API, the same one SillyTavern uses for Google AI Studio, and the Gemini API template starts on it. MOSS joins the voice sources.\nThe Android app saves chat packages and card PNGs to Downloads. Errors are clearer too: a busy model, a rate limit and a used-up quota each say so, and say whether the trouble is on your side."
+          }
+        }
+      ]
     }
   ]
 }

@@ -10,7 +10,7 @@ import { activePath, chatView, createChat, restoreFolded, rollbackTo } from '../
 import { createEngine } from '../server/engine.mjs'
 import { testSubscription } from './support/subscription.mjs'
 import { editPreset, normalizePreset } from '../server/presets.mjs'
-import { complete, draftProvider, exportProviders, googleRequest, importProviders, isGoogle, listRemoteModelDetails, listRemoteModels, normalizeProvider, providerChoices, providerError, publicProvider, reasoningFields } from '../server/providers.mjs'
+import { complete, draftProvider, exportProviders, googleRequest, importProviders, isGoogle, listRemoteModelDetails, listRemoteModels, normalizeProvider, providerChoices, providerError, publicProvider, reasoningFields, retryWait } from '../server/providers.mjs'
 import { createStore } from '../server/store.mjs'
 import { cleanScripts } from '../server/regex.mjs'
 
@@ -825,15 +825,17 @@ test('provider errors, model listing, and no SDK continuation from an API reply'
     assert.equal(providerError(provider, error).split('ECONNREFUSED').length, 2, 'the code once, not again after the message that has it')
     return true
   })
-  // No answer before the time is up (a proxy that is off): can't connect, not a bare "aborted".
+  // Reached, then no answer before the time is up: the provider not answering, not the network and not a bare "aborted".
   const silent = createServer(() => {})
   await new Promise(resolve => silent.listen(0, '127.0.0.1', resolve))
   t.after(() => silent.close())
   t.after(() => silent.closeAllConnections())
   await assert.rejects(listRemoteModels({ ...provider, baseURL: `http://127.0.0.1:${silent.address().port}/v1` }, { signal: AbortSignal.timeout(200) }), error => {
-    assert.match(providerError(provider, error), /^连不上 .*请求超时/)
+    assert.match(providerError(provider, error), /^Fake 连上了，但一直没开始回答（请求超时）/)
     return true
   })
+  // Never reached at all: can't connect.
+  assert.match(providerError(provider, Object.assign(new Error('请求超时'), { code: 'ETIMEDOUT', reached: false })), /^连不上 Fake：检查 Base URL、网络和代理设置。（请求超时）/)
   const stopped = new AbortController()
   stopped.abort()
   await assert.rejects(listRemoteModels(provider, { signal: stopped.signal }), error => {
@@ -1248,4 +1250,130 @@ test('a space typed or pasted inside the Base URL is dropped, not sent as %20', 
   assert.equal(draft.baseURL, 'https://relay.example.com/v1')
   assert.equal(draft.apiKey, 'sk-test')
   assert.throws(() => draftProvider({ api: 'openai-completions', baseURL: 'https://relay.example.com/v1', apiKey: 'sk-te st' }), /API Key 里不能有空格/)
+})
+
+test('busy and rate-limited providers say which: too busy (503), a limit for the minute or the day (429) with the wait, money run out', async t => {
+  const answers = []
+  const server = createServer(async (req, res) => {
+    for await (const _ of req);
+    const [status, body] = answers.shift()
+    res.writeHead(status, { 'content-type': 'application/json' })
+    res.end(JSON.stringify(body))
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => server.close())
+  const provider = normalizeProvider({ name: 'Gemini4', api: 'openai-completions', baseURL: `http://127.0.0.1:${server.address().port}/v1beta/openai`, apiKey: 'k', models: ['gemini-3.8-flash'] })
+  // Gemini's own answers, as they come (an array around the error).
+  const quota = (description, wait) => [429, [{ error: { code: 429, message: `You exceeded your current quota, please check your plan and billing details. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-3.8-flash, description: ${description}\nPlease retry in ${wait}.`, status: 'RESOURCE_EXHAUSTED' } }]]
+  const said = async answer => {
+    answers.push(answer)
+    const error = await listRemoteModels(provider).catch(error => error)
+    return providerError(provider, error)
+  }
+  assert.match(await said(quota('Generate content requests per day limit exceeded on Free Tier.', '17h56m59.495020099s')), /^Gemini4 这个 Key 今天的额度用完了（429），约 17 小时 57 分钟后恢复。换一个 Key/)
+  assert.match(await said(quota('Generate content input tokens per minute limit exceeded on Free Tier.', '33.491647751s')), /^Gemini4 一分钟内用得太多，被限流了（429），约 34 秒后可以再发。别连着重试/)
+  assert.match(await said([503, [{ error: { code: 503, message: 'This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.', status: 'UNAVAILABLE' } }]]), /^Gemini4 那边的模型现在太忙了（503，对方服务器繁忙，不是你的网络或设置的问题）/)
+  assert.match(await said([429, { error: { message: 'You exceeded your current quota, please check your plan and billing details.', type: 'insufficient_quota' } }]), /^Gemini4 的额度或余额用完了（429）/)
+  assert.match(await said([429, { error: { message: 'Too Many Requests' } }]), /^Gemini4 现在请求太频繁，被限流了（429）/)
+  assert.match(await said([500, { error: { message: 'Internal error' } }]), /^Gemini4 的服务器出错了（500，是对方的问题，不是你的设置）/)
+
+  assert.deepEqual([retryWait('Please try again in 1m30s.'), retryWait('"retryDelay": "64619s"'), retryWait('retry in 0.4s'), retryWait('no wait here')], ['2 分钟', '17 小时 57 分钟', '1 秒', ''])
+})
+
+test("Gemini's own API: system instruction, turns taking turns, thinking level and thoughts, loosest filters, Google Search, usage and stop reasons", async t => {
+  const seen = []
+  let answer = 'ok'
+  const server = createServer(async (req, res) => {
+    const chunks = []
+    for await (const chunk of req) chunks.push(chunk)
+    const body = chunks.length ? JSON.parse(Buffer.concat(chunks)) : null
+    seen.push({ method: req.method, url: req.url, headers: req.headers, body })
+    if (req.headers['x-goog-api-key'] !== 'gemini-key') {
+      res.writeHead(400, { 'content-type': 'application/json' })
+      return res.end(JSON.stringify({ error: { code: 400, message: 'API key not valid. Please pass a valid API key.', status: 'INVALID_ARGUMENT' } }))
+    }
+    if (req.method === 'GET') {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      return res.end(JSON.stringify({ models: [{ name: 'models/gemini-3.8-flash', inputTokenLimit: 1048576 }, { name: 'models/gemini-2.5-flash', inputTokenLimit: 1048576 }] }))
+    }
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    const send = piece => res.write(`data: ${JSON.stringify(piece)}\r\n\r\n`)
+    if (answer === 'blocked') {
+      send({ promptFeedback: { blockReason: 'PROHIBITED_CONTENT' }, usageMetadata: { promptTokenCount: 50, totalTokenCount: 50 } })
+      return res.end()
+    }
+    send({ candidates: [{ content: { role: 'model', parts: [{ text: '先想想雨夜。', thought: true }] } }], modelVersion: 'gemini-3.8-flash-001' })
+    send({ candidates: [{ content: { role: 'model', parts: [{ text: '雨下得' }] } }] })
+    send({
+      candidates: [{
+        content: { role: 'model', parts: [{ text: '很大。' }] },
+        finishReason: answer === 'cut' ? 'MAX_TOKENS' : 'STOP',
+        groundingMetadata: { webSearchQueries: ['今晚 东京 天气'], groundingChunks: [{ web: { uri: 'https://weather.example/tokyo', title: '东京天气' } }] },
+      }],
+      usageMetadata: { promptTokenCount: 120, cachedContentTokenCount: 100, candidatesTokenCount: 6, thoughtsTokenCount: 30, totalTokenCount: 156 },
+    })
+    res.end()
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => server.close())
+  const base = `http://127.0.0.1:${server.address().port}`
+  const provider = normalizeProvider({ name: 'Gemini 原生', api: 'google-generative', baseURL: `${base}/v1beta`, apiKey: 'gemini-key', models: ['gemini-3.8-flash'] })
+  assert.equal(isGoogle(provider), true)
+
+  const listed = await listRemoteModelDetails(provider)
+  assert.deepEqual(listed.models, ['gemini-2.5-flash', 'gemini-3.8-flash'])
+  assert.equal(listed.contexts['gemini-3.8-flash'], 1048576)
+  assert.equal(seen[0].url, '/v1beta/models?pageSize=1000')
+  assert.equal(seen[0].headers.authorization, undefined, 'the key in Google\'s own header, not a bearer token')
+
+  const shown = []
+  const thought = []
+  const result = await complete(provider, 'gemini-3.8-flash', {
+    system: '你是雨夜茶馆的掌柜。',
+    messages: [{ role: 'user', content: '开场' }, { role: 'assistant', content: '雨夜。' }, { role: 'user', content: '推门进去。' }, { role: 'user', content: '（看看窗外）' }],
+    reasoning: { thinking: 'adaptive', effort: 'low' },
+    webSearch: true,
+    onDelta: d => shown.push(d),
+    onReasoning: d => thought.push(d),
+  })
+  const call = seen.at(-1)
+  assert.equal(call.url, '/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse')
+  assert.deepEqual(call.body.systemInstruction, { parts: [{ text: '你是雨夜茶馆的掌柜。' }] })
+  assert.deepEqual(call.body.contents, [
+    { role: 'user', parts: [{ text: '开场' }] },
+    { role: 'model', parts: [{ text: '雨夜。' }] },
+    { role: 'user', parts: [{ text: '推门进去。\n\n（看看窗外）' }] },
+  ], 'one side\'s turns in a row go as one')
+  assert.deepEqual(call.body.generationConfig.thinkingConfig, { includeThoughts: true, thinkingLevel: 'low' })
+  assert.ok(call.body.safetySettings.length >= 4 && call.body.safetySettings.every(s => s.threshold === 'BLOCK_NONE'))
+  assert.deepEqual(call.body.tools, [{ google_search: {} }])
+  assert.equal(call.body.model, undefined)
+  assert.equal(result.text, '雨下得很大。')
+  assert.deepEqual(shown, ['雨下得', '很大。'])
+  assert.deepEqual([result.reasoning, thought, result.reasoned], ['先想想雨夜。', ['先想想雨夜。'], true])
+  assert.deepEqual([result.usage.input, result.usage.cacheRead, result.usage.output, result.usage.thinking, result.usage.prompt], [20, 100, 36, 30, 120])
+  assert.equal(result.model, 'gemini-3.8-flash-001')
+  assert.equal(result.truncated, false)
+  assert.deepEqual(result.search.queries, ['今晚 东京 天气'])
+  assert.deepEqual(result.search.sources, [{ url: 'https://weather.example/tokyo', title: '东京天气' }])
+
+  // Gemini 2.x thinks to a budget; no thinking shown, no search: none asked for. A Base URL for the OpenAI-compatible
+  // address (…/v1beta/openai) reaches the same place.
+  answer = 'cut'
+  const older = { ...provider, baseURL: `${base}/v1beta/openai` }
+  const cut = await complete(older, 'models/gemini-2.5-flash', { messages: [{ role: 'user', content: '你好' }], reasoning: { effort: 'medium' }, maxTokens: 100 })
+  const second = seen.at(-1)
+  assert.equal(second.url, '/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse')
+  assert.deepEqual(second.body.generationConfig, { maxOutputTokens: 100, thinkingConfig: { thinkingBudget: 8192 } })
+  assert.equal(second.body.systemInstruction, undefined)
+  assert.equal(second.body.tools, undefined)
+  assert.equal(cut.truncated, true)
+
+  // A prompt its server-side check refused: no text, and why, for the engine to explain.
+  answer = 'blocked'
+  const blocked = await complete(provider, 'gemini-3.8-flash', { messages: [{ role: 'user', content: '……' }] })
+  assert.deepEqual([blocked.text, blocked.stopReason], ['', 'PROHIBITED_CONTENT'])
+
+  const wrong = await complete({ ...provider, apiKey: 'wrong' }, 'gemini-3.8-flash', { messages: [{ role: 'user', content: '你好' }] }).catch(error => error)
+  assert.match(providerError(provider, wrong), /^Gemini 原生：400 API key not valid/)
 })

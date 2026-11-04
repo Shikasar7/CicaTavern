@@ -91,22 +91,33 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 
 ## 限流或额度用完了 {#err-provider-rate-limit}
 
-- 也叫：429、Too Many Requests、rate limit、quota、insufficient_quota、额度不足、太挤了
-- 原文：{0} 限流或额度用完了，稍后再试。（{1}）
+- 也叫：429、Too Many Requests、rate limit、quota、insufficient_quota、RESOURCE_EXHAUSTED、额度不足、每天的额度、免费层、Free Tier、太挤了
+- 原文：{0} 这个 Key 今天的额度用完了（429），约 {1}后恢复。换一个 Key，或者给它开通付费。（{2}）
+- 原文：{0} 这个 Key 今天的额度用完了（429）。换一个 Key，或者给它开通付费。（{1}）
+- 原文：{0} 一分钟内用得太多，被限流了（429），约 {1}后可以再发。别连着重试；每轮发得太长（上下文很大）也容易撞上，可以先压缩上下文。（{2}）
+- 原文：{0} 一分钟内用得太多，被限流了（429），稍等一下再发。别连着重试；每轮发得太长（上下文很大）也容易撞上，可以先压缩上下文。（{1}）
+- 原文：{0} 的额度或余额用完了（429）。去供应商那里充值，或者换一个 Key。（{1}）
+- 原文：{0} 现在请求太频繁，被限流了（429）。稍后再试，或者先换个模型。（{1}）
 - 原文：（已经自动重试了 {0} 次：这个模型这会儿比较挤，过一会再试，或者先换个模型。）
-- 英文：{0} is rate-limiting requests, or the quota has run out. Try again later. ({1})
+- 英文：{0}: this key's quota for today has run out (429); it comes back in about {1}. Use another key, or turn on billing for it. ({2})
+- 英文：{0}: this key's quota for today has run out (429). Use another key, or turn on billing for it. ({1})
+- 英文：{0} is limiting requests: too much in one minute (429). You can send again in about {1}. Don't retry over and over; very long turns (a large context) hit this limit too, so compacting the context helps. ({2})
+- 英文：{0}: the quota or balance has run out (429). Top up with the provider, or use another key. ({1})
+- 英文：{0} is limiting requests: too many right now (429). Try again later, or switch to another model for now. ({1})
 - 英文：(Already retried {0} times automatically: this model is busy right now. Try again in a while, or switch to another model for now.)
 - 出现在：发出一轮对话、配图时
-- 原因：供应商返回了 429：一分钟内请求太多、免费额度或账户余额用完，或者这个模型这会儿太忙。
-- 解决：等一会儿再试，或者先换个模型。括号里写着 quota、insufficient、余额的，是钱或额度用完了，去供应商网站充值或换个密钥。
+- 原因：供应商返回了 429，不是你的网络问题。2.3.2 起按供应商的原话分开说：「今天的额度用完了」是这个 Key 当天能用的次数到了上限（Gemini 免费层每个模型每天只有很少几十次），会写多久后恢复；「一分钟内用得太多」是每分钟的请求次数或输入 token 到了上限，上下文很大时（几万 token 一轮）连着重试两三次就会撞上；「额度或余额用完了」是账户没钱或额度用尽；「请求太频繁」是供应商没说是哪种。
+- 解决：今天的额度用完了就换一个 Key 或等它恢复，常用的话给 Key 所在的项目开通付费；一分钟的限流就等括号前写的时间再发，别连着点重试，上下文很大时先「压缩」；余额用完就去供应商网站充值。
 
-## 供应商服务出错 {#err-provider-server-error}
+## 供应商服务出错或太忙 {#err-provider-server-error}
 
-- 也叫：500、502、503、504、Internal Server Error、Bad Gateway、overloaded
-- 原文：{0} 服务出错，稍后重试。（{1}）
-- 英文：{0} had a server error. Try again in a moment. ({1})
+- 也叫：500、502、503、504、529、Internal Server Error、Bad Gateway、overloaded、high demand、UNAVAILABLE、模型繁忙
+- 原文：{0} 那边的模型现在太忙了（{1}，对方服务器繁忙，不是你的网络或设置的问题）。过几分钟再试，或者先换个模型。（{2}）
+- 原文：{0} 的服务器出错了（{1}，是对方的问题，不是你的设置）。稍后重试，或者先换个模型。（{2}）
+- 英文：{0}'s model is too busy right now ({1}: their servers are overloaded; it isn't your network or settings). Try again in a few minutes, or switch to another model for now. ({2})
+- 英文：{0} had a server error ({1}: a problem on their side, not your settings). Try again in a moment, or switch to another model for now. ({2})
 - 出现在：发出一轮对话、配图、朗读时
-- 原因：供应商那边出了问题（返回 5xx）：服务过载、维护，或者中转站自己的上游出错。不是你的设置问题。
+- 原因：供应商那边出了问题（返回 5xx）。「太忙了」是 503、529 或原话里写着 high demand、overloaded：这个模型这会儿用的人太多，Gemini 免费层高峰时经常这样。其余是服务出错、维护，或者中转站自己的上游出错。都不是你的网络或设置问题。
 - 解决：过几分钟重试，或者先换一个模型、换一家供应商。中转站经常这样的，可以问问中转站的群。
 
 ## 供应商返回了别的错误（余额不足、参数不对） {#err-provider-other}
@@ -191,12 +202,14 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 - 也叫：连接超时、timeout、ETIMEDOUT、ECONNRESET、ECONNREFUSED、ENOTFOUND、socket hang up、aborted、海外接口连不上
 - 平台：Windows、Mac、安卓
 - 原文：连不上 {0}：检查 Base URL、网络和代理设置。（{1}）
+- 原文：{0} 连上了，但一直没开始回答（请求超时）：多半是对方太忙、在排队，或者模型思考得太久。稍后再试、调低「努力程度」，或者先换个模型。
 - 原文：请求超时
 - 英文：{0} can't be reached: check the Base URL, your network and the proxy settings. ({1})
+- 英文：{0} was reached but never started answering (request timed out): most likely it is too busy or queueing, or the model is thinking for too long. Try again later, lower the effort, or switch to another model for now.
 - 英文：Request timed out
 - 出现在：发出一轮对话、「从接口获取模型列表」、配图时
 - 原因：请求没到达供应商，或者等了很久没回应。括号里是具体情况：「请求超时」是一直没回应，ECONNREFUSED 是地址那头没有服务，ENOTFOUND 是域名查不到（地址写错或网络不通），ECONNRESET、socket hang up 多是被网络或代理掐断。OpenAI、Anthropic、Gemini、OpenRouter 等海外服务在国内通常要走代理。
-- 解决：先确认 Base URL 没写错，再看网络和代理。
+- 解决：先确认 Base URL 没写错，再看网络和代理。写着「连上了，但一直没开始回答」的不是网络问题（2.3.2 起分开说）：请求已经到了供应商，它太久（对话 10 分钟、获取模型列表 20 秒）没有开始回答，多半是太忙、在排队，或者思考设得太深，稍后再试、调低「努力程度」或者换个模型。
 
 1. 电脑版：设置 → 连接 → 网络代理，选「跟随系统代理」或「指定代理地址」，并确认代理软件开着。下面会显示「现在走 …」，看是不是你的代理。
 2. 供应商「网络」一栏设成「直连」的不走代理：国内服务（DeepSeek、Kimi、智谱等）用直连，海外服务要选「跟随酒馆的代理设置」。
@@ -678,7 +691,7 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 - 英文：Browser speech error: {0}
 - 出现在：点朗读、试听时
 - 原因：选的是浏览器自带的音色，但这个浏览器（或安卓应用里的系统网页组件）没有朗读功能，或者朗读时出错。安卓版里一般没有浏览器音色。
-- 解决：在 设置 → 配图与朗读 的「朗读来源」里设一个云端服务（Fish Audio、MiniMax、Gemini 或供应商的朗读接口）；电脑上可以换 Edge 或 Chrome 打开。
+- 解决：在 设置 → 配图与朗读 的「朗读来源」里设一个云端服务（Fish Audio、MiniMax、MOSS、Gemini 或供应商的朗读接口）；电脑上可以换 Edge 或 Chrome 打开。
 
 ## 朗读失败、试听失败 {#err-tts-failed}
 
@@ -690,11 +703,11 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 - 英文：(this provider may not have an /audio/speech endpoint, or the model name is wrong)
 - 出现在：点朗读、试听时
 - 原因：朗读服务回了错误但没说原因（括号里是状态码），或者选的供应商没有朗读接口。大多数中转站和国内模型服务没有 /audio/speech。
-- 解决：换一个有朗读接口的供应商（比如 OpenAI 官方），或者改用 Fish Audio、MiniMax、Gemini 朗读。
+- 解决：换一个有朗读接口的供应商（比如 OpenAI 官方），或者改用 Fish Audio、MiniMax、MOSS、Gemini 朗读。
 
 ## 云端朗读服务报错 {#err-cloud-voice}
 
-- 也叫：Fish Audio、MiniMax、HTTP 401、HTTP 402、额度不足
+- 也叫：Fish Audio、MiniMax、MOSS、HTTP 401、HTTP 402、额度不足
 - 原文：{0} HTTP {1}：{2}{3}
 - 原文：密钥无效或已过期
 - 原文：额度不足
@@ -722,15 +735,15 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 - 原文：连不上 {0}：{1}
 - 原文：检查网络，以及「设置 → 网络代理」里的代理是否在运行。
 - 原文：现在没走代理：要开代理才能上这个网站的话，去「设置 → 网络代理」选「跟随系统代理」或填代理地址。
-- 原文：手机应用不经过代理设置：这个网站在国内多半要开手机上的加速器才能连（全局模式，或把它加进代理规则；能按应用分流的，要把 CicaTavern 勾上），也可以改用国内能直连的 MiniMax 国内站。
+- 原文：手机应用不经过代理设置：这个网站在国内多半要开手机上的加速器才能连（全局模式，或把它加进代理规则；能按应用分流的，要把 CicaTavern 勾上），也可以改用国内能直连的 MiniMax 国内站或 MOSS。
 - 英文：Can't connect to {0}: no response after {1} seconds. {2}
 - 英文：Can't connect to {0}: {1}
 - 英文：Check your network, and whether the proxy in "Settings → Network proxy" is running.
 - 英文：No proxy is in use right now: if this site needs a proxy, go to "Settings → Network proxy" and choose "Use system proxy" or enter a proxy address.
-- 英文：The phone app does not go through a proxy setting: in mainland China this site usually needs a VPN app on the phone (global mode, or with the site added to its proxy rules; one that routes per app needs CicaTavern ticked), or use MiniMax's China site, which connects directly.
+- 英文：The phone app does not go through a proxy setting: in mainland China this site usually needs a VPN app on the phone (global mode, or with the site added to its proxy rules; one that routes per app needs CicaTavern ticked), or use MiniMax's China site or MOSS, which connect directly.
 - 出现在：朗读、试听时
 - 原因：Fish Audio、MiniMax 国际站、Gemini 等在国内通常要走代理，没开代理或代理没在运行就连不上。
-- 解决：电脑版在 设置 → 连接 → 网络代理 里设好代理；安卓版开手机上的加速器；或者改用国内能直连的 MiniMax 国内站。
+- 解决：电脑版在 设置 → 连接 → 网络代理 里设好代理；安卓版开手机上的加速器；或者改用国内能直连的 MiniMax 国内站或 MOSS。
 
 ## MiniMax 朗读报错 {#err-minimax}
 

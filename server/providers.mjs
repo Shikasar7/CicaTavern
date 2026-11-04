@@ -22,6 +22,9 @@ export const APIS = {
   },
   'openai-responses': 'OpenAI Responses',
   'anthropic-messages': 'Anthropic Messages',
+  get 'google-generative'() {
+    return msg`Gemini 原生（generateContent）`
+  },
 }
 
 const PROVIDER_ID = /^[a-z0-9][a-z0-9_-]{0,31}$/
@@ -177,7 +180,7 @@ export function normalizeProvider(input, previous = null, taken = new Set()) {
 // Image and video generators are listed beside chat models; they cannot narrate.
 const NOT_CHAT = /imagine|seedance|video|image|embedding|tts|whisper/i
 // Mainland services: route around the proxy.
-const DIRECT_HOSTS = /(^|\.)(volces\.com|stepfun\.com|deepseek\.com|moonshot\.cn|bigmodel\.cn|aliyuncs\.com|minimaxi\.com|baidubce\.com)$/i
+const DIRECT_HOSTS = /(^|\.)(volces\.com|stepfun\.com|deepseek\.com|moonshot\.cn|bigmodel\.cn|aliyuncs\.com|minimaxi\.com|baidubce\.com|mosi\.cn)$/i
 
 function findProviderMap(node) {
   if (!node || typeof node !== 'object') return null
@@ -393,7 +396,8 @@ export function providerChoices(providers) {
  * 联网: the web search a provider runs itself, as SillyTavern's 「Enable web search」 turns it on.
  * 'openrouter': OpenRouter's web plugin (the `:online` variant of the model, on any interface);
  * 'anthropic': Anthropic's web_search tool, for Claude models; 'openai': the Responses API's
- * web_search tool. null: none we know of (plain Chat Completions has no common field for it).
+ * web_search tool; 'google': Google Search on Gemini's own API. null: none we know of (plain Chat
+ * Completions has no common field for it).
  */
 export function webSearchKind(provider, modelId = '') {
   let host = ''
@@ -405,6 +409,7 @@ export function webSearchKind(provider, modelId = '') {
   if (/(^|\.)openrouter\.ai$/i.test(host)) return 'openrouter'
   if (provider.api === 'anthropic-messages') return /claude/i.test(String(modelId)) ? 'anthropic' : null
   if (provider.api === 'openai-responses') return 'openai'
+  if (provider.api === 'google-generative') return 'google'
   return null
 }
 
@@ -523,7 +528,7 @@ async function headersFor(provider, extra = {}, options = {}) {
   if (provider.api === 'anthropic-messages') {
     headers['anthropic-version'] = ANTHROPIC_VERSION
     if (key) headers['x-api-key'] = key
-  } else if (key && agentPlatformKey(provider)) {
+  } else if (key && (agentPlatformKey(provider) || (provider.api === 'google-generative' && !googleCredential(apiKeyOf(provider))))) {
     headers['x-goog-api-key'] = key
   } else if (key) {
     headers.authorization = `Bearer ${key}`
@@ -561,13 +566,22 @@ function sendPayload(lib, url, { method, headers, payload, signal, proxy }) {
       headers,
       timeout: TIMEOUT_MS,
     })
-    const onAbort = () => req.destroy(abortError(signal))
+    // Whether the provider itself was reached: TLS with it done (through a proxy's tunnel too), or a plain
+    // connection made without a proxy. A time running out after that is the provider not answering.
+    let reached = false
+    req.on('socket', socket => {
+      if (url.protocol !== 'https:' && proxy) return
+      if (!socket.connecting) reached = true
+      else socket.once(url.protocol === 'https:' ? 'secureConnect' : 'connect', () => { reached = true })
+    })
+    const onAbort = () => req.destroy(Object.assign(abortError(signal), { reached }))
     signal?.addEventListener('abort', onAbort, { once: true })
     req.on('response', res => {
+      reached = true
       res.on('close', () => signal?.removeEventListener('abort', onAbort))
       resolve(res)
     })
-    req.on('timeout', () => req.destroy(Object.assign(new Error(msg`请求超时`), { code: 'ETIMEDOUT' })))
+    req.on('timeout', () => req.destroy(Object.assign(new Error(msg`请求超时`), { code: 'ETIMEDOUT', reached })))
     req.on('error', error => {
       signal?.removeEventListener('abort', onAbort)
       reject(error)
@@ -596,7 +610,9 @@ async function readText(res, limit = 64 * 1024) {
 
 function errorMessage(text) {
   try {
-    const json = JSON.parse(text)
+    const parsed = JSON.parse(text)
+    // Gemini's OpenAI-compatible address wraps its error in an array.
+    const json = Array.isArray(parsed) && parsed.length === 1 ? parsed[0] : parsed
     const message = json.error?.message ?? json.error ?? json.message ?? json.detail
     if (message) return typeof message === 'string' ? message : JSON.stringify(message)
   } catch {
@@ -723,6 +739,60 @@ async function openaiCompletions(provider, request, res) {
       request.onDelta?.(delta)
     }
     if (choice?.finish_reason) stopReason = choice.finish_reason
+  }
+  return { text, usage, model, stopReason, reasoned, reasoning, search: search.result() }
+}
+
+/** Gemini's usageMetadata: its thinking (thoughtsTokenCount) is counted apart from the answer, so added in as output. */
+function geminiUsage(meta) {
+  if (!meta) return null
+  const cached = meta.cachedContentTokenCount ?? 0
+  const thinking = meta.thoughtsTokenCount ?? 0
+  return { input: Math.max(0, (meta.promptTokenCount ?? 0) - cached), cacheRead: cached, cacheWrite: 0, output: (meta.candidatesTokenCount ?? 0) + thinking, ...(thinking > 0 ? { thinking } : {}) }
+}
+
+/**
+ * Gemini's own API (streamGenerateContent?alt=sse): parts of the answer, the thoughts asked for (marked
+ * `thought`), Google Search's queries and pages, and why it stopped. A prompt it refused says so in
+ * promptFeedback.blockReason; MAX_TOKENS is called max_tokens here, as a cut-off answer is elsewhere.
+ */
+async function geminiGenerate(provider, request, res) {
+  let text = ''
+  let usage = null
+  let model = null
+  let stopReason = null
+  let reasoned = false
+  let reasoning = ''
+  const search = searchLog()
+  const take = json => {
+    if (json?.error) throw new Error(errorMessage(JSON.stringify(json)))
+    model ??= json?.modelVersion ?? null
+    if (json?.usageMetadata) usage = geminiUsage(json.usageMetadata)
+    if (json?.promptFeedback?.blockReason) stopReason = json.promptFeedback.blockReason
+    const candidate = json?.candidates?.[0]
+    for (const part of candidate?.content?.parts ?? []) {
+      if (typeof part?.text !== 'string' || !part.text) continue
+      if (part.thought) {
+        reasoned = true
+        reasoning += part.text
+        request.onReasoning?.(part.text)
+      } else {
+        text += part.text
+        request.onDelta?.(part.text)
+      }
+    }
+    const grounding = candidate?.groundingMetadata
+    for (const query of grounding?.webSearchQueries ?? []) search.asked(query)
+    for (const chunk of grounding?.groundingChunks ?? []) search.found(chunk?.web?.uri, chunk?.web?.title)
+    if (candidate?.finishReason) stopReason = candidate.finishReason === 'MAX_TOKENS' ? 'max_tokens' : candidate.finishReason
+    if (usage?.thinking) reasoned = true
+  }
+  if (/event-stream/.test(res.headers['content-type'] ?? '')) {
+    for await (const { data } of sse(res)) take(parseJson(data))
+  } else {
+    // Without alt=sse (a relay that drops it) the whole answer comes as an array of the same pieces.
+    const json = parseJson(await readText(res, 8 * 1024 * 1024))
+    for (const piece of Array.isArray(json) ? json : [json ?? {}]) take(piece)
   }
   return { text, usage, model, stopReason, reasoned, reasoning, search: search.result() }
 }
@@ -1026,6 +1096,46 @@ const THOUGHTS_REFUSED = /summar|thinking_config|thinking_level|include_thoughts
 const NO_REASONING = new Set()
 const REASONING_REFUSED = /thinking|effort|reasoning|output_config|extra inputs|unknown (field|param)|unrecognized|not (supported|permitted|allowed)|unsupported/i
 
+// Gemini's own API takes the safety thresholds its OpenAI-compatible address cannot: none of its filters held lower
+// than their loosest (its server-side check, PROHIBITED_CONTENT, still runs whatever these say).
+const GEMINI_SAFETY = ['HARM_CATEGORY_HARASSMENT', 'HARM_CATEGORY_HATE_SPEECH', 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'HARM_CATEGORY_DANGEROUS_CONTENT'].map(category => ({ category, threshold: 'BLOCK_NONE' }))
+// Gemini 2.x thinks to a token budget, where Gemini 3 takes a level.
+const GEMINI_BUDGETS = { low: 1024, medium: 8192, high: 24576, xhigh: 24576, max: 24576 }
+
+/** The model as Gemini's own API names it in the address, without the `models/` its list puts before it. */
+const geminiModel = modelId => String(modelId).replace(/^models\//, '')
+
+/**
+ * A request to Gemini's own API: the system prompt as systemInstruction, the turns as contents (one side's
+ * turns in a row joined, as it wants them taking turns), the thinking in its own words (`thoughts`: the
+ * thinking asked to be shown; 'nolevel', a model that refused the level), its filters at their loosest.
+ */
+function geminiBody(provider, modelId, { system, messages, maxTokens, effort, thoughts, search }) {
+  const contents = []
+  for (const m of messages) {
+    const role = m.role === 'assistant' ? 'model' : 'user'
+    const said = typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
+    const last = contents.at(-1)
+    if (last?.role === role) last.parts[0].text += `\n\n${said}`
+    else contents.push({ role, parts: [{ text: said }] })
+  }
+  const level = effort && thoughts !== 'nolevel' ? (/gemini-2\./i.test(modelId) ? { thinkingBudget: GEMINI_BUDGETS[effort] } : { thinkingLevel: GEMINI_LEVELS[effort] }) : {}
+  const thinkingConfig = { ...(thoughts ? { includeThoughts: true } : {}), ...level }
+  const generationConfig = {
+    ...(maxTokens ? { maxOutputTokens: maxTokens } : {}),
+    ...(provider.temperature !== null && provider.temperature !== undefined ? { temperature: provider.temperature } : {}),
+    ...(Object.keys(thinkingConfig).length ? { thinkingConfig } : {}),
+  }
+  return {
+    ...(String(system ?? '').trim() ? { systemInstruction: { parts: [{ text: system }] } } : {}),
+    contents,
+    ...(Object.keys(generationConfig).length ? { generationConfig } : {}),
+    safetySettings: GEMINI_SAFETY,
+    ...(search === 'google' ? { tools: [{ google_search: {} }] } : {}),
+    ...(provider.extraBody ?? {}),
+  }
+}
+
 // Models that are not Claude, as relays name them behind the Anthropic API.
 const OTHER_MODELS = /deepseek|kimi|moonshot|qwen|qwq|glm|zhipu|gemini|gemma|gpt|o[134]-|grok|minimax|doubao|seed|step|mimo|hunyuan|ernie|baichuan|yi-|llama|mistral|mixtral|command/i
 
@@ -1035,6 +1145,10 @@ function requestBody(provider, modelId, { system, messages, maxTokens: cap, reas
   // 联网: OpenRouter searches for the `:online` variant; Anthropic and Responses get the search tool.
   const search = webSearch ? webSearchKind(provider, modelId) : null
   if (search === 'openrouter' && !/:online$/.test(modelId)) modelId = `${modelId}:online`
+  if (provider.api === 'google-generative') {
+    const effort = withReasoning && GEMINI_LEVELS[reasoning?.effort] ? reasoning.effort : null
+    return geminiBody(provider, modelId, { system, messages, maxTokens, effort, thoughts: withReasoning ? thoughts : null, search })
+  }
   const fields = withReasoning && reasoning ? reasoningFields(provider.api, modelId, reasoning) : {}
   const common = {
     ...(provider.temperature !== null && provider.temperature !== undefined ? { temperature: provider.temperature } : {}),
@@ -1090,9 +1204,11 @@ function requestBody(provider, modelId, { system, messages, maxTokens: cap, reas
 }
 
 const PROTOCOL = {
-  'openai-completions': { path: base => joinUrl(base, '/chat/completions'), read: openaiCompletions },
-  'openai-responses': { path: base => joinUrl(base, '/responses'), read: openaiResponses },
-  'anthropic-messages': { path: base => anthropicUrl(base, '/messages'), read: anthropicMessages },
+  'openai-completions': { path: provider => joinUrl(provider.baseURL, '/chat/completions'), read: openaiCompletions },
+  'openai-responses': { path: provider => joinUrl(provider.baseURL, '/responses'), read: openaiResponses },
+  'anthropic-messages': { path: provider => anthropicUrl(provider.baseURL, '/messages'), read: anthropicMessages },
+  // The model is in the address; a Base URL written for the OpenAI-compatible address (…/v1beta/openai) works as well.
+  'google-generative': { path: (provider, modelId) => `${joinUrl(googleBase(provider), `/models/${encodeURIComponent(geminiModel(modelId))}:streamGenerateContent`)}?alt=sse`, read: geminiGenerate },
 }
 
 /**
@@ -1124,7 +1240,7 @@ export async function complete(provider, modelId, original, { proxy = null } = {
     const req = short && THINKERS.has(pair) ? { ...request, maxTokens: request.maxTokens + THINKING_ROOM, softCap: true } : request
     const post = async (options, body = req) => {
       for (let retry = 0; ; retry++) {
-        const res = await send(protocol.path(provider.baseURL), {
+        const res = await send(protocol.path(provider, modelId), {
           method: 'POST',
           headers: await headersFor(provider, { accept: 'text/event-stream' }, { proxy, signal: request.signal }),
           body: requestBody(provider, modelId, body, { withReasoning: reasoning, thoughts, ...options }),
@@ -1399,8 +1515,8 @@ export function googleBase(provider) {
   return base
 }
 
-/** A provider whose key is Google's (the Gemini or Vertex AI template, or a relay of Gemini's). */
-export const isGoogle = provider => Boolean(provider) && provider.api !== 'anthropic-messages' && (/generativelanguage\.googleapis\.com|aiplatform\.googleapis\.com/i.test(provider.baseURL) || /\/v1beta\/openai\/?$/i.test(provider.baseURL))
+/** A provider whose key is Google's (the Gemini or Vertex AI template, a relay of Gemini's, or Gemini's own API). */
+export const isGoogle = provider => Boolean(provider) && provider.api !== 'anthropic-messages' && (provider.api === 'google-generative' || /generativelanguage\.googleapis\.com|aiplatform\.googleapis\.com/i.test(provider.baseURL) || /\/v1beta\/openai\/?$/i.test(provider.baseURL))
 
 /** POST to Google's own API (`/models/<model>:generateContent`) with the provider's key → the parsed JSON. */
 export async function googleRequest(provider, suffix, { body, signal, proxy = null } = {}) {
@@ -1460,7 +1576,7 @@ const CONTEXT_FIELDS = ['context_length', 'context_window', 'inputTokenLimit', '
 /** The provider's model list: { models: ids, contexts: { id: tokens } } for the models whose entry says. */
 export async function listRemoteModelDetails(provider, { proxy = null, signal } = {}) {
   if (/\/endpoints\/openapi\/?$/i.test(provider.baseURL)) return vertexModels(provider, { proxy, signal })
-  const target = provider.api === 'anthropic-messages' ? anthropicUrl(provider.baseURL, '/models?limit=1000') : joinUrl(provider.baseURL, '/models')
+  const target = provider.api === 'anthropic-messages' ? anthropicUrl(provider.baseURL, '/models?limit=1000') : provider.api === 'google-generative' ? joinUrl(googleBase(provider), '/models?pageSize=1000') : joinUrl(provider.baseURL, '/models')
   const res = await send(target, { headers: await headersFor(provider, { accept: 'application/json' }, { proxy, signal }), signal, proxy: provider.proxy === 'direct' ? null : proxy })
   await failIfBad(res)
   const json = parseJson(await readText(res, 4 * 1024 * 1024))
@@ -1559,6 +1675,30 @@ export function providerError(provider, error) {
   return `${plainError(provider, error)}${error?.hint ?? ''}`
 }
 
+/** How long the provider says to wait ("Please retry in 17h56m59s", "try again in 20s", "retryDelay": "33s"), in words, or ''. */
+export function retryWait(text) {
+  const said = /(?:retry|try again) (?:in|after) ((?:\d+h)?(?:\d+m(?!s))?(?:[\d.]+s)?)\b/i.exec(text)?.[1] ?? ''
+  const parts = /^(?:(\d+)h)?(?:(\d+)m)?(?:([\d.]+)s)?$/.exec(said)
+  let seconds = parts && said ? Number(parts[1] ?? 0) * 3600 + Number(parts[2] ?? 0) * 60 + Number(parts[3] ?? 0) : 0
+  if (!seconds) seconds = Number(/"retryDelay":\s*"(\d+)s"/.exec(text)?.[1] ?? 0)
+  if (!seconds) return ''
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.round((seconds % 3600) / 60)
+  if (hours) return minutes ? msg`${hours} 小时 ${minutes} 分钟` : msg`${hours} 小时`
+  if (seconds >= 90) return msg`${Math.round(seconds / 60)} 分钟`
+  return msg`${Math.ceil(seconds)} 秒`
+}
+
+/** A 429 in plain words: a limit for the day, one for the minute, money run out, or too many requests. */
+function rateLimited(name, text, full = text) {
+  const wait = retryWait(full)
+  const quote = text.slice(0, 160)
+  if (/per ?day|perday|daily/i.test(full)) return wait ? msg`${name} 这个 Key 今天的额度用完了（429），约 ${wait}后恢复。换一个 Key，或者给它开通付费。（${quote}）` : msg`${name} 这个 Key 今天的额度用完了（429）。换一个 Key，或者给它开通付费。（${quote}）`
+  if (/per ?minute|perminute|per min\b/i.test(full)) return wait ? msg`${name} 一分钟内用得太多，被限流了（429），约 ${wait}后可以再发。别连着重试；每轮发得太长（上下文很大）也容易撞上，可以先压缩上下文。（${quote}）` : msg`${name} 一分钟内用得太多，被限流了（429），稍等一下再发。别连着重试；每轮发得太长（上下文很大）也容易撞上，可以先压缩上下文。（${quote}）`
+  if (/insufficient|balance|余额|credit|billing|exceeded your current quota/i.test(full)) return msg`${name} 的额度或余额用完了（429）。去供应商那里充值，或者换一个 Key。（${quote}）`
+  return msg`${name} 现在请求太频繁，被限流了（429）。稍后再试，或者先换个模型。（${quote}）`
+}
+
 function plainError(provider, error) {
   const text = String(error?.message ?? error ?? '')
   const status = error?.providerStatus
@@ -1567,8 +1707,14 @@ function plainError(provider, error) {
   if (status === 403 && /Permission denied on resource project/i.test(text)) return msg`${name} 不认地址里的项目：Base URL 里要填 Google Cloud 项目 ID（控制台顶部项目选择器里的「ID」，不是项目名称），并且 API Key 属于这个项目。（${text.slice(0, 160)}）`
   if (status === 401 || status === 403) return msg`${name} 拒绝了请求：API Key 无效或没有权限。（${text.slice(0, 160)}）`
   if (status === 404) return msg`${name} 返回 404：检查 Base URL 和接口类型，或者模型 ID 是否写对。（${text.slice(0, 160)}）`
-  if (status === 429) return msg`${name} 限流或额度用完了，稍后再试。（${text.slice(0, 160)}）`
-  if (status >= 500) return msg`${name} 服务出错，稍后重试。（${text.slice(0, 160)}）`
+  // What kind of limit, and the wait, may be past the part of the answer the message keeps.
+  if (status === 429) return rateLimited(name, text, `${text} ${error?.body ?? ''}`)
+  if (status === 503 || status === 529 || (status >= 500 && /overloaded|high demand|UNAVAILABLE|capacity/i.test(text))) return msg`${name} 那边的模型现在太忙了（${status}，对方服务器繁忙，不是你的网络或设置的问题）。过几分钟再试，或者先换个模型。（${text.slice(0, 160)}）`
+  if (status >= 500) return msg`${name} 的服务器出错了（${status}，是对方的问题，不是你的设置）。稍后重试，或者先换个模型。（${text.slice(0, 160)}）`
+  // Reached, then nothing for as long as it may take: the provider busy or queueing, not the network.
+  if (error?.reached && (errorCode(error) === 'ETIMEDOUT' || /请求超时|Request timed out/i.test(text))) {
+    return withCode(msg`${name} 连上了，但一直没开始回答（请求超时）：多半是对方太忙、在排队，或者模型思考得太久。稍后再试、调低「努力程度」，或者先换个模型。`, error)
+  }
   if (/ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNRESET|EHOSTUNREACH|ENETUNREACH|socket hang up|secure TLS connection|请求超时|Request timed out/i.test(`${errorCode(error)} ${text}`)) {
     return withCode(msg`连不上 ${name}：检查 Base URL、网络和代理设置。（${text.slice(0, 160)}）`, error)
   }

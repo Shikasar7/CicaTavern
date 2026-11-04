@@ -189,6 +189,35 @@ public class MainActivity extends Activity {
         return "http://127.0.0.1:" + NodeRuntime.port + "/";
     }
 
+    /** GET a path of the app's own server into a new file in Downloads; a failure leaves no half-written file behind. */
+    private boolean copyToDownloads(String path, String name, String mime) {
+        HttpURLConnection connection = null;
+        Uri uri = null;
+        try {
+            connection = (HttpURLConnection) new URL(base() + path.substring(1)).openConnection();
+            connection.setConnectTimeout(5000);
+            connection.setReadTimeout(120000);
+            connection.setRequestProperty("Cookie", "tavern_key=" + NodeRuntime.token);
+            if (connection.getResponseCode() != 200) return false;
+            ContentValues values = new ContentValues();
+            values.put(MediaStore.Downloads.DISPLAY_NAME, name);
+            values.put(MediaStore.Downloads.MIME_TYPE, TextUtils.isEmpty(mime) ? "application/octet-stream" : mime);
+            uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+            if (uri == null) return false;
+            try (InputStream in = connection.getInputStream(); OutputStream out = getContentResolver().openOutputStream(uri)) {
+                if (out == null) throw new IOException("no output stream");
+                byte[] buffer = new byte[64 * 1024];
+                for (int n; (n = in.read(buffer)) > 0; ) out.write(buffer, 0, n);
+            }
+            return true;
+        } catch (Exception e) {
+            if (uri != null) getContentResolver().delete(uri, null, null);
+            return false;
+        } finally {
+            if (connection != null) connection.disconnect();
+        }
+    }
+
     private void openApp() {
         NodeRuntime.markReady(getApplicationContext());
         CookieManager cookies = CookieManager.getInstance();
@@ -417,7 +446,8 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * window.AgentTavernAndroid: story archives go to Downloads (web/app.js saveFile); retry and copy on error pages;
+     * window.AgentTavernAndroid: story archives go to Downloads (web/app.js saveFile), and binary files of the app's own
+     * server (a chat package, a card's PNG: saveDownload); retry and copy on error pages;
      * installUpdate / cancelUpdate / updateState for 设置 → 更多 → 更新 (web/update.js, ApkUpdate). Every call
      * needs this launch's key (bridgeKey); without it nothing happens.
      */
@@ -460,6 +490,20 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public String updateState(String key) {
             return allowed(key) ? update.state() : "{\"step\":\"idle\"}";
+        }
+
+        /**
+         * A file from the app's own server (only its /api/ paths) into Downloads, in the background: the WebView ignores
+         * <a download>, and saveFile carries text only. A toast says how it went.
+         */
+        @JavascriptInterface
+        public boolean saveDownload(String key, String path, String name, String mime) {
+            if (!allowed(key) || path == null || !path.startsWith("/api/") || TextUtils.isEmpty(name)) return false;
+            new Thread(() -> {
+                boolean ok = copyToDownloads(path, name, mime);
+                runOnUiThread(() -> android.widget.Toast.makeText(MainActivity.this, (ok ? "已保存到「下载」：" : "保存失败：") + name, android.widget.Toast.LENGTH_LONG).show());
+            }, "save-download").start();
+            return true;
         }
 
         @JavascriptInterface

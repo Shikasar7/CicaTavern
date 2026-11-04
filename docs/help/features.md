@@ -158,7 +158,7 @@
 - [重画、改提示词和旧图](#draw-redraw)：每张配图下面有：（在哪：聊天页 → 回复下方的配图 → 重画 / 改提示词 / 删除 / 旧图）
 - [新回复自动配图、自动朗读](#media-auto)：两个开关，打开后点底部「保存」：（在哪：设置 → 配图与朗读 → 「配图」栏标题旁的「新回复自动配图」；「朗读」栏标题旁的「新回复自动朗读」）
 - [画图方式](#draw-methods)：「画图用」里选一种，所有卡通用：（在哪：设置 → 配图与朗读 → 画图方式）
-- [OpenAI 兼容图片接口](#draw-openai)：1. 先在「管理供应商」里添加供应商（OpenAI、xAI、硅基流动、OpenRouter 或中转…（在哪：设置 → 配图与朗读 → 画图方式 → 画图用「OpenAI 兼容图片接口（gpt-image 等）」）
+- [OpenAI 兼容图片接口](#draw-openai)：1. 先在「管理供应商」里添加供应商（OpenAI、xAI、OpenRouter、MOSS（MOS…（在哪：设置 → 配图与朗读 → 画图方式 → 画图用「OpenAI 兼容图片接口（gpt-image 等）」）
 - [MOSS-Image（MOSI 开放平台）](#draw-moss)：用 MOSI 开放平台的 MOSS-Image 画图：（在哪：设置 → 配图与朗读 → 画图方式 → 画图用「OpenAI 兼容图片接口（gpt-image 等）」）
 - [Gemini 原生生图（Nano Banana）](#draw-gemini)：走 Google 自己的接口，和对话共用 Google 供应商的密钥和代理（在哪：设置 → 配图与朗读 → 画图方式 → 画图用「Gemini 原生生图」）
 - [NovelAI](#draw-novelai)：画二次元最合适，要 NovelAI 的订阅（在哪：设置 → 配图与朗读 → 画图方式 → 画图用「NovelAI」）
@@ -189,6 +189,7 @@
 - [供应商的朗读接口（OpenAI 兼容）](#tts-provider)：用一个已经添加的供应商的 OpenAI 兼容 /audio/speech，地址、密钥和代理设置都沿…（在哪：设置 → 配图与朗读 → 朗读来源 → 供应商的朗读接口（OpenAI 兼容 /audio/speech））
 - [Fish Audio](#tts-fish)：1. 在 fish.audio 的 API Keys 里创建密钥，填进「API Key」：离开输入…（在哪：设置 → 配图与朗读 → 朗读来源 → Fish Audio）
 - [MiniMax 朗读](#tts-minimax)：1. 在 MiniMax 开放平台的「接口密钥」里创建密钥，填进「API Key」（离开输入框或按…（在哪：设置 → 配图与朗读 → 朗读来源 → MiniMax）
+- [MOSS 朗读](#tts-moss)：1. 在 MOSS 开放平台（platform.moss.cn）的「API Keys」里创建密钥，…（在哪：设置 → 配图与朗读 → 朗读来源 → MOSS）
 - [Gemini 朗读](#tts-gemini)：用 Google 的朗读模型，和对话共用 Google 供应商的密钥和代理（在哪：设置 → 配图与朗读 → 朗读来源 → Gemini 朗读（Google））
 - [本地语音桥接](#tts-bridge)：接本机或局域网里自己跑的 TTS 模型，不经过云端（在哪：设置 → 配图与朗读 → 朗读来源 → 本地语音桥接（高级））
 - [语音输入](#stt-dictation)：点输入框右边的麦克风开始说，说完再点一下（或点「完成」），说的话转成文字填进输入框的光标处（在哪：聊天页 → 输入框右边的麦克风；设置 → 配图与朗读 → 语音输入）
@@ -232,7 +233,7 @@
 - [思考和努力程度](#model-thinking)：「思考」有「关闭（最快）」和「自适应」两档，默认关闭（在哪：设置 → 模型 → 默认模型 → 思考 / 努力程度）
 - [添加模型供应商](#provider-add)：CicaTavern 用你自己的模型 API 跑剧情，第一次用要先加一个供应商：（在哪：设置 → 模型 → 模型供应商 → 添加；对话顶栏的模型选择 → 管理模型供应商…；设置 → 模型 → 默认模型 → 供应商）
 - [供应商模板一览](#provider-templates)：模板有：Anthropic、OpenAI、DeepSeek、Gemini API、Gemini A…（在哪：设置 → 模型 → 模型供应商 → 添加 → 从模板开始）
-- [接口类型和 Base URL](#provider-api-type)：「接口类型」有三种：（在哪：设置 → 模型 → 模型供应商 → 接口类型 / Base URL）
+- [接口类型和 Base URL](#provider-api-type)：「接口类型」有四种：（在哪：设置 → 模型 → 模型供应商 → 接口类型 / Base URL）
 - [填 API Key](#provider-api-key)：把服务商控制台里创建的 Key 粘贴进「API Key」，中间不能有空格或换行（在哪：设置 → 模型 → 模型供应商 → API Key）
 - [从接口获取模型列表（测试连接）](#provider-model-list)：供应商窗口没有单独的「测试」按钮：「从接口获取模型列表」就是检查连接（在哪：设置 → 模型 → 模型供应商 → 从接口获取模型列表）
 - [供应商的网络：直连还是走代理](#provider-network)：每个供应商的「网络」有两种：「跟随酒馆的代理设置」和「直连（国内服务、本机中转）」（在哪：设置 → 模型 → 模型供应商 → 网络）
@@ -245,7 +246,7 @@
 - [OpenRouter](#provider-openrouter)：一个密钥用各家模型，密钥在 openrouter.ai 创建，需要走代理（在哪：设置 → 模型 → 模型供应商 → 添加 → 从模板开始 → OpenRouter / OpenRouter · Claude）
 - [Anthropic（Claude 官方 API）](#provider-anthropic)：Claude 的官方 API，按量计费，密钥在 console.anthropic.com 创建，…（在哪：设置 → 模型 → 模型供应商 → 添加 → 从模板开始 → Anthropic）
 - [OpenAI](#provider-openai)：ChatGPT 的官方 API，密钥在 platform.openai.com 创建；ChatGP…（在哪：设置 → 模型 → 模型供应商 → 添加 → 从模板开始 → OpenAI）
-- [Gemini API（AI Studio）](#provider-gemini)：Google AI Studio 的 Gemini API，用它的 OpenAI 兼容接口，密钥在…（在哪：设置 → 模型 → 模型供应商 → 添加 → 从模板开始 → Gemini API）
+- [Gemini API（AI Studio）](#provider-gemini)：Google AI Studio 的 Gemini API，密钥在 aistudio.google…（在哪：设置 → 模型 → 模型供应商 → 添加 → 从模板开始 → Gemini API）
 - [Gemini Agent Platform（原 Vertex AI）](#provider-gemini-agent-platform)：Google Cloud 的 Agent Platform（原 Vertex AI）（在哪：设置 → 模型 → 模型供应商 → 添加 → 从模板开始 → Gemini Agent Platform）
 - [Kimi（月之暗面）](#provider-kimi)：密钥在 platform.moonshot.cn 创建，国内直连（在哪：设置 → 模型 → 模型供应商 → 添加 → 从模板开始 → Kimi）
 - [智谱 GLM](#provider-zhipu)：密钥在 bigmodel.cn 创建，国内直连（在哪：设置 → 模型 → 模型供应商 → 添加 → 从模板开始 → 智谱 GLM）
@@ -748,7 +749,7 @@ PNG 角色卡的图片就是它的头像，显示在角色卡列表、回复上�
 
 - 也叫：打包对话、对话包、tavernchat、搬对话、换电脑、备份对话、电脑传手机
 - 在哪：左栏 → 「对话」列表 → 对话那一行的 ⇩；另一台设备上用「导入存档」导入
-- 平台：Windows、Mac、手机浏览器（安卓应用里能导入，不能打包）
+- 平台：Windows、Mac、安卓、手机浏览器（安卓应用 2.3.2 起也能打包，以前只能导入）
 - 版本：1.0.0 起
 
 点对话那一行的 ⇩，把整段对话（每一轮、每个分支）连同全部配图存成一个 .tavernchat 文件。到另一台设备上，点「导入存档」选它，或直接拖进窗口。
@@ -757,7 +758,7 @@ PNG 角色卡的图片就是它的头像，显示在角色卡列表、回复上�
 - 对话用的预设在那台设备上没有时，提示先导入它再到预设里选上。
 - 用的模型那台设备上没有对应的供应商时，改用默认模型。
 - 配图一张张上传，提示条显示进度。
-- 安卓应用里没有 ⇩：手机上的对话想搬到电脑，用「导出存档」；或手机用浏览器连电脑玩，数据本来就在电脑上。
+- 安卓应用里点 ⇩，对话包存进手机的「下载」文件夹（2.3.2 起；以前的安卓应用没有 ⇩，手机上的对话想搬到电脑只能用「导出存档」）。
 
 ## 导入 SillyTavern 的对话记录 {#chat-import-sillytavern}
 
@@ -2279,7 +2280,7 @@ SillyTavern 把聊天记录之后的条目（输出格式、破限这类）每�
 - 平台：Windows、Mac、手机浏览器
 - 版本：1.2.0 起
 
-「导出 PNG」：图片里带着整张卡（V3 格式），SillyTavern 可以直接导入。导出的是保存后的卡，在「修改角色卡」里改过的也在里面。安卓应用里没有这个按钮：到卡片的「⋯」→「导出角色卡」→「JSON 文件」导出。
+「导出 PNG」：图片里带着整张卡（V3 格式），SillyTavern 可以直接导入。导出的是保存后的卡，在「修改角色卡」里改过的也在里面。安卓应用 2.3.2 起也有这个按钮，PNG 存进手机的「下载」文件夹；以前的安卓应用到卡片的「⋯」→「导出角色卡」→「JSON 文件」导出。
 
 在 SillyTavern 里：
 
@@ -2453,7 +2454,7 @@ SillyTavern 把聊天记录之后的条目（输出格式、破限这类）每�
 
 「画图用」里选一种，所有卡通用：
 
-- 「OpenAI 兼容图片接口（gpt-image 等）」：gpt-image、grok、硅基流动、OpenRouter、MOSS-Image 等。
+- 「OpenAI 兼容图片接口（gpt-image 等）」：gpt-image、grok、OpenRouter、MOSS-Image 等。
 - 「Gemini 原生生图（Nano Banana，能照人设图画，需科学上网）」
 - 「NovelAI（二次元推荐，需科学上网）」
 - 「ComfyUI 工作流（本地）」：导入工作流，或简单模式选个模型。
@@ -2467,12 +2468,12 @@ SillyTavern 把聊天记录之后的条目（输出格式、破限这类）每�
 
 ## OpenAI 兼容图片接口 {#draw-openai}
 
-- 也叫：gpt-image、DALL·E、grok 画图、grok-imagine、硅基流动画图、OpenRouter 画图、中转站画图、images 接口
+- 也叫：gpt-image、DALL·E、grok 画图、grok-imagine、OpenRouter 画图、MOSS 画图、中转站画图、images 接口
 - 在哪：设置 → 配图与朗读 → 画图方式 → 画图用「OpenAI 兼容图片接口（gpt-image 等）」
 - 平台：Windows、Mac、安卓、手机浏览器
 - 版本：1.0.0 起
 
-1. 先在「管理供应商」里添加供应商（OpenAI、xAI、硅基流动、OpenRouter 或中转站都行；用 Anthropic 接口的供应商不在列表里）。
+1. 先在「管理供应商」里添加供应商（OpenAI、xAI、OpenRouter、MOSS（MOSI 开放平台）或中转站都行；用 Anthropic 接口和 Gemini 原生接口的供应商不在列表里）。画图方式下面列着这几家的注册和密钥链接，标着「国内直连」或「需科学上网」。
 2. 在这里选「供应商」，填「生图模型」，点「获取」列出它的生图模型。地址、密钥和代理设置都沿用供应商的。
 
 - 供应商是 OpenRouter 时，用它的出图模型（google/gemini-…-image 等）。
@@ -2866,7 +2867,7 @@ SillyTavern 把聊天记录之后的条目（输出格式、破限这类）每�
 
 音色有三种来源，在这里设一次，每张卡就能选：
 
-- 「云端服务」（要密钥，按字数计费，用你自己的账号）：供应商的朗读接口（OpenAI 兼容）、Fish Audio、MiniMax、Gemini 朗读。声音最自然。
+- 「云端服务」（要密钥，按字数计费，用你自己的账号）：供应商的朗读接口（OpenAI 兼容）、Fish Audio、MiniMax、MOSS、Gemini 朗读。声音最自然。
 - 「浏览器」（这台设备自带，免费）：不用设置，默认就能用。
 - 「本地语音桥接」（本机或局域网里的 TTS 模型，不经过云端）。
 
@@ -2933,6 +2934,19 @@ Fish 的接口在海外，需科学上网：电脑上在「设置 → 连接 →
 4. 「音色」：每行一个 voice_id，后面可以空一格写名字。留空用系统音色（少女、御姐、精英青年…）；复刻或设计的音色点「从账户读取音色」。
 
 按字数计费。国内站可以直连，安卓应用（没有网络代理设置）用国内站最省事。
+
+## MOSS 朗读 {#tts-moss}
+
+- 也叫：MOSS、MOSI、模思、moss-tts、moss-tts-1.5-flash、MOSS Create、音色库、voice_id
+- 在哪：设置 → 配图与朗读 → 朗读来源 → MOSS
+- 平台：Windows、Mac、安卓、手机浏览器
+- 版本：2.3.2 起
+
+1. 在 MOSS 开放平台（platform.moss.cn）的「API Keys」里创建密钥，填进「API Key」（离开输入框或按回车就保存，只存在本机）。
+2. 「模型」：moss-tts-1.5-flash（快，台词里可以写 [pause 0.8s] 这样的停顿）或 moss-tts-1.0-pro。
+3. 「音色」：每行一个 voice_id，后面可以空一格写名字。留空用音色库里的几个音色（周周、温柔女友声、潇洒仙侠男主…）；更多音色在 MOSS Create 的音色库（create.moss.cn/voice/library），在音色卡片上点复制图标拿到 ID；自己克隆或设计的音色点「从账户读取音色」。
+
+按用量扣 MOSS 的积分。国内直连，不走代理，安卓应用也能直接用。
 
 ## Gemini 朗读 {#tts-gemini}
 
@@ -3552,16 +3566,17 @@ API Key 下面有「注册账号 ↗」「创建 API Key ↗」（本地工具�
 
 ## 接口类型和 Base URL {#provider-api-type}
 
-- 也叫：base url、接口地址、API 地址、endpoint、端点、协议、OpenAI 格式、Claude 格式、/v1
+- 也叫：base url、接口地址、API 地址、endpoint、端点、协议、OpenAI 格式、Claude 格式、Gemini 原生、generateContent、/v1
 - 在哪：设置 → 模型 → 模型供应商 → 接口类型 / Base URL
 - 平台：Windows、Mac、安卓、手机浏览器
 - 版本：1.0.0 起
 
-「接口类型」有三种：
+「接口类型」有四种：
 
 - 「OpenAI 兼容（Chat Completions）」：最常见，DeepSeek、Kimi、智谱、OpenRouter、多数中转和本机服务都是。Base URL 写到 /v1 为止，请求发到 …/chat/completions。
 - 「OpenAI Responses」：OpenAI 官方和火山方舟 Agent Plan 用。写到 /v1 为止，请求发到 …/responses，不在对方服务器保存对话。
 - 「Anthropic Messages」：Anthropic 官方、OpenRouter · Claude 和支持 Claude 格式的中转。可以省略 /v1，请求发到 …/v1/messages，自动加缓存断点。
+- 「Gemini 原生（generateContent）」（2.3.2 起）：Google AI Studio 的 Gemini API 和照搬它格式的中转。写到 /v1beta 为止（写成 OpenAI 兼容的 …/v1beta/openai 也行），请求发到 …/models/模型:streamGenerateContent。安全过滤设为最宽松，「联网」用 Google 搜索。这种供应商没有 OpenAI 那套生图、朗读和转写接口，「配图与朗读」里只在 Gemini 生图和 Gemini 朗读中列出。
 
 Base URL 只能是 http 或 https 地址，里面不要带账号密码（密钥填在 API Key 里）。地址或接口类型填错时，获取模型列表或发消息多半报 404。用 Claude 时尽量选 Anthropic 接口：能打缓存断点，长对话便宜很多。
 
@@ -3716,9 +3731,11 @@ ChatGPT 的官方 API，密钥在 platform.openai.com 创建；ChatGPT 会员不
 - 也叫：Gemini、谷歌、Google、Google AI Studio、aistudio、Gemini key
 - 在哪：设置 → 模型 → 模型供应商 → 添加 → 从模板开始 → Gemini API
 - 平台：Windows、Mac、安卓、手机浏览器
-- 版本：1.0.0 起（2.2.2 起叫「Gemini API」）
+- 版本：1.0.0 起（2.2.2 起叫「Gemini API」，2.3.2 起用原生接口）
 
-Google AI Studio 的 Gemini API，用它的 OpenAI 兼容接口，密钥在 aistudio.google.com 创建，需要走代理。预填 gemini-3.1-pro-preview、gemini-3-flash-preview。
+Google AI Studio 的 Gemini API，密钥在 aistudio.google.com 创建，需要走代理。预填 gemini-3.1-pro-preview、gemini-3-flash-preview。
+
+2.3.2 起模板用 Gemini 的原生接口（和 SillyTavern 选「Google AI Studio」时一样），以前用的是它的 OpenAI 兼容接口。两者用同一个密钥、同一份额度，但原生接口能把安全过滤设到最宽松，联网用 Google 搜索；有人用兼容接口一直报 503（模型繁忙）而别的酒馆正常，也可以换原生接口试试。以前建的供应商在编辑里把「接口类型」改成「Gemini 原生（generateContent）」就行，Base URL 不用动。
 
 打开「显示模型的思考过程」后会向 Gemini 要思考，这时「努力程度」换成它自己的思考档位。Gemini 回复被拦下、报 PROHIBITED_CONTENT 时，是 Google 服务端的审查，设置里关不掉，换 Key 也一样。这个供应商也能用在「配图与朗读」的 Gemini 原生生图和 Gemini 朗读里。
 

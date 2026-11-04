@@ -595,9 +595,15 @@ function renderChats() {
           el('div', { class: 'item-title' }, [chat.title, ui.busy.has(chat.id) ? el('span', { class: 'busy-dot', title: t`正在生成` }) : null]),
           el('div', { class: 'item-sub', text: t`${ago(chat.updatedAt)}　${chat.turns} 轮　${blockShown(chat.preview)}` }),
         ]),
-        document.documentElement.dataset.edition === 'android'
+        document.documentElement.dataset.edition === 'android' && !android?.saveDownload
           ? null
-          : el('a', { class: 'item-del item-edit', title: t`打包整段对话（每一轮、每个分支和配图），在另一台设备上用「导入存档」导入`, text: '⇩', href: `/api/chats/${chat.id}/package`, download: '', onclick: event => event.stopPropagation() }),
+          : el('a', { class: 'item-del item-edit', title: t`打包整段对话（每一轮、每个分支和配图），在另一台设备上用「导入存档」导入`, text: '⇩', href: `/api/chats/${chat.id}/package`, download: '', onclick: event => {
+              event.stopPropagation()
+              // The phone app saves it itself, under the name the server gives it.
+              if (!android?.saveDownload) return
+              event.preventDefault()
+              savedToDownloads(android.saveDownload(`/api/chats/${chat.id}/package`, fileName(`${chat.title || chat.id}.tavernchat`), 'application/octet-stream'))
+            } }),
         el('button', { class: 'item-del item-edit', title: t`重命名`, text: '✎', onclick: event => { event.stopPropagation(); renameChat(chat) } }),
         el('button', { class: 'item-del', title: t`删除对话`, text: '✕', onclick: event => { event.stopPropagation(); deleteChat(chat) } }),
       ]),
@@ -948,8 +954,8 @@ function openCardMenu(card, anchor) {
     { label: t`卡片界面权限…`, hint: t`卡片界面自己发送、调用模型、经 CicaTavern 联网：问过一次之后照你的选择来，在这里改`, onClick: () => cardPermissions.open(card) },
     '-',
     { header: t`导出角色卡` },
-    // The Android WebView ignores <a download>, and its bridge saves text only (saveFile).
-    card.hasAvatar && document.documentElement.dataset.edition !== 'android'
+    // The Android WebView ignores <a download>: the app saves it itself (saveDownload), in an app that can.
+    card.hasAvatar && (document.documentElement.dataset.edition !== 'android' || android?.saveDownload)
       ? { label: t`PNG 图片`, hint: t`图片里带着整张卡（包括修改过的地方），SillyTavern 可以直接导入`, onClick: () => exportCardPng(card) }
       : null,
     { label: t`JSON 文件`, hint: t`SillyTavern 的角色卡 JSON，包括修改过的地方`, onClick: () => exportCardJson(card) },
@@ -969,6 +975,7 @@ function openCardMenu(card, anchor) {
 
 // 导出角色卡 (the card's ⋯): the card's own regex only; 修改角色卡 can add the attached 正则集.
 function exportCardPng(card) {
+  if (android?.saveDownload) return savedToDownloads(android.saveDownload(`/api/cards/${card.id}/png?v=${Date.now()}`, fileName(`${card.name}.png`), 'image/png'))
   const link = el('a', { href: `/api/cards/${card.id}/png?v=${Date.now()}`, download: `${card.name}.png` })
   document.body.append(link)
   link.click()
@@ -1371,9 +1378,48 @@ function renderChat() {
   box.replaceChildren(...nodes, ...liveNodes(chat))
   markPicked()
   renderBranchNote()
-  box.scrollTop = box.scrollHeight
+  settleScroll(() => { box.scrollTop = box.scrollHeight })
   historyUi.refresh()
   vnUi.render(chat)
+}
+
+// Messages out of view are laid out at a guessed height (style.css) and take their real one a frame or so
+// after they come near the screen, so a place in the transcript holds only once that is over. Until then
+// place() puts the reader there again; a hand on the transcript ends it.
+let settling = 0
+function settleScroll(place) {
+  const box = $('transcript')
+  const mine = ++settling
+  let height = -1
+  let calm = 0
+  let frames = 0
+  const step = () => {
+    if (mine !== settling) return
+    place()
+    calm = box.scrollHeight === height ? calm + 1 : 0
+    height = box.scrollHeight
+    if (calm < 3 && ++frames < 60) requestAnimationFrame(step)
+  }
+  step()
+}
+for (const type of ['wheel', 'touchstart', 'pointerdown', 'keydown']) $('transcript').addEventListener(type, () => { settling++ }, { passive: true })
+
+/**
+ * Where the reader is, for after the transcript is drawn again: the top message and how far it sits from the
+ * top of the screen (an offset in the page means nothing then, the heights above it are guesses again).
+ * A message that was swapped for another version is found by its place in the list.
+ */
+function rememberPlace() {
+  const box = $('transcript')
+  const screenTop = () => box.getBoundingClientRect().top
+  const index = [...box.children].findIndex(node => node.getBoundingClientRect().bottom > screenTop())
+  if (index < 0) return () => {}
+  const { id } = box.children[index].dataset
+  const offset = box.children[index].getBoundingClientRect().top - screenTop()
+  return () => settleScroll(() => {
+    const node = (id && box.querySelector(`.msg[data-id="${CSS.escape(id)}"]`)) || box.children[index]
+    if (node) box.scrollTop += node.getBoundingClientRect().top - screenTop() - offset
+  })
 }
 
 /** The turn being written in this chat, as far as it has come (also after switching back). */
@@ -1448,12 +1494,11 @@ async function applyChanges() {
     if (!view || ui.chat !== chat || ui.busy.has(chat.id)) return
     if (view.updatedAt === chat.updatedAt && !view.running && Boolean(view.tidying) === Boolean(chat.tidying) && view.memoryError === chat.memoryError) return
     // Where the reader is stays put, unless the story went on (a new turn shows at the bottom).
-    const box = $('transcript')
-    const top = box.scrollTop
+    const back = rememberPlace()
     const sameTip = view.path.at(-1)?.id === chat.path.at(-1)?.id
     followServerTurn(view)
     setChat(view)
-    if (sameTip) box.scrollTop = top
+    if (sameTip) back()
   } catch {}
 }
 
@@ -1840,13 +1885,12 @@ function openEditor(chat, node, article) {
     if (text === original.trim()) return close()
     saveButton.disabled = true
     try {
-      const box = $('transcript')
-      const keep = box.scrollTop
+      const back = rememberPlace()
       const view = await api(`/api/chats/${chat.id}/messages/${node.id}`, { method: 'PUT', body: { text } })
       const outcome = view.edit ?? {}
       setChat(view)
-      box.scrollTop = keep
-      box.querySelector(`[data-id="${node.id}"]`)?.classList.add('swap')
+      back()
+      $('transcript').querySelector(`[data-id="${node.id}"]`)?.classList.add('swap')
       toast(
         outcome.behindCompaction
           ? t`已修改。这条在剧情存档之前，模型现在读的是存档，所以只改了显示`
@@ -2587,12 +2631,11 @@ function renderBranchNote() {
 }
 
 const selectNode = guard(async nodeId => {
-  const box = $('transcript')
-  const keep = box.scrollTop
+  const back = rememberPlace()
   setChat(await api(`/api/chats/${ui.chat.id}/select`, { method: 'POST', body: { nodeId } }))
   // Swiping keeps the reader where they were and fades the new version in.
-  box.scrollTop = keep
-  box.querySelector(`[data-id="${nodeId}"]`)?.classList.add('swap')
+  back()
+  $('transcript').querySelector(`[data-id="${nodeId}"]`)?.classList.add('swap')
 })
 
 const rollbackTo = guard(async nodeId => {
@@ -2603,10 +2646,9 @@ const rollbackTo = guard(async nodeId => {
 
 // 隐藏这一轮 (chats.mjs hideRound): the round stays where it is, dimmed, and so does the reader.
 const hideRound = guard(async (nodeId, hidden) => {
-  const box = $('transcript')
-  const keep = box.scrollTop
+  const back = rememberPlace()
   setChat(await api(`/api/chats/${ui.chat.id}/hide`, { method: 'POST', body: { nodeId, hidden } }))
-  box.scrollTop = keep
+  back()
   toast(hidden ? t`这一轮已隐藏，之后不再发给模型` : t`已取消隐藏，之后照常发给模型`)
 })
 
@@ -3115,12 +3157,27 @@ const android = (() => {
   return native && key
     ? {
         saveFile: (name, text) => native.saveFile(key, name, text),
+        // A binary file from this server into Downloads (a chat package, a card's PNG); the app says how it went. null in an app from before it.
+        saveDownload: native.saveDownload ? (path, name, mime) => native.saveDownload(key, path, name, mime) : null,
         installUpdate: (url, sha256) => native.installUpdate(key, url, sha256),
         cancelUpdate: () => native.cancelUpdate(key),
         updateState: () => native.updateState(key),
       }
     : null
 })()
+
+/** A file name without the characters a file system refuses. */
+const fileName = name => name.replace(/[\\/:*?"<>|]+/g, ' ').trim()
+
+/** In the phone app: (path, name, mime) → a file of this server into Downloads, for pages a <a download> does nothing in; else null. */
+function phoneDownload() {
+  return android?.saveDownload ? (path, name, mime) => savedToDownloads(android.saveDownload(path, fileName(name), mime)) : null
+}
+
+/** The phone app took a file to save (saveDownload): it says itself when it is in Downloads. */
+function savedToDownloads(started) {
+  toast(started ? t`正在保存到「下载」文件夹…` : t`保存失败`, 4000)
+}
 
 /** Save a JSON file, then toast `message` (one toast, so the Android note is not overwritten). */
 function saveFile(name, text, message = '') {
@@ -4163,6 +4220,8 @@ const drawChoice = initDrawChoice({ api, el, guard, openSettings: section => med
 // 卡片界面权限 (角色卡菜单): what a card's interface may do without a click, as answered when it asked.
 const cardPermissions = initCardPermissions({ el, permissions: framePermissions, onRelayChange: cardId => broadcastRelay(framePermissions.allowedOrigins(cardId)) })
 
+// Filled in once the visual novel is set up (below); the media code may call it before.
+const vnHooks = { picturesChanged: () => {} }
 const mediaUi = initMedia({
   api,
   el,
@@ -4173,6 +4232,8 @@ const mediaUi = initMedia({
   openProviders: () => providersUi.open(),
   saveFile,
   pickDraw: drawChoice.pick,
+  // A reply's picture in the works shows in the visual novel's corner, where the reply itself is out of sight.
+  onPictures: () => vnHooks.picturesChanged(),
 })
 
 const historyUi = initHistory({ el, getChat: () => ui.chat })
@@ -4212,8 +4273,10 @@ const vnUi = initVn({
   toggleReading: () => mediaUi.toggleReading(),
   mediaFlags: () => mediaUi.flags(),
   openMedia: section => mediaUi.openSettings(section),
+  pictureWork: chatId => mediaUi.pictureWork(chatId),
   viewPicture: (src, caption, meta, options) => mediaUi.viewPicture(src, caption, meta, options),
 })
+vnHooks.picturesChanged = vnUi.picturesChanged
 
 /**
  * What the regex window shows besides the global scripts: the open chat's card
@@ -4261,6 +4324,7 @@ const forgeUi = initForge({
   api,
   el,
   toast,
+  saveDownload: phoneDownload(),
   guard,
   openProviders: () => providersUi.open(),
   pickDraw: drawChoice.pick,
@@ -4344,7 +4408,7 @@ const booksUi = initBooks({
 
 // 修改角色卡 (the card list's ⋯): the card's fields, its picture and its own book, and 对话修改.
 const cardEditUi = initCardEdit({
-  api, el, toast, guard, saveFile,
+  api, el, toast, guard, saveFile, saveDownload: phoneDownload(),
   pickDraw: drawChoice.pick,
   getChat: () => ui.chat,
   isGenerating: () => ui.generating,
@@ -4823,10 +4887,12 @@ async function boot() {
   // The daily update check runs on the server; this only asks how it went.
   updateUi.boot()
   ui.books = await api('/api/worldbooks').catch(() => [])
-  await refreshCards()
-  // Start on the newest card still in the list; archived ones wait until asked for.
-  const first = ui.cards.find(card => !card.archived)
-  if (first) await selectCard(first.id)
+  const [chats] = await Promise.all([api('/api/chats').catch(() => []), refreshCards()])
+  // Start where the story last went on (selectCard opens that card's latest chat); archived cards wait until
+  // asked for. With no chat anywhere yet, on the top card of the list as it shows.
+  const open = new Set(ui.cards.filter(card => !card.archived).map(card => card.id))
+  const first = chats.find(chat => open.has(chat.cardId))?.cardId ?? $('card-list').querySelector('li[data-id]')?.dataset.id ?? [...open][0]
+  if (first) await selectCard(first)
   else renderChat()
   // After an update: what is new, once (someone with cards already has updated; a new player has not).
   ui.appVersion = status?.version ?? ''

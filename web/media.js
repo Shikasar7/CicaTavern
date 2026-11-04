@@ -30,7 +30,13 @@ const NET_TEXT = { direct: t`国内直连`, proxy: t`需科学上网`, local: t`
 const GOOGLE_SITE = { name: 'Google AI Studio', site: 'https://aistudio.google.com', keys: 'https://aistudio.google.com/apikey', net: 'proxy' }
 const OPENAI_SITE = { name: 'OpenAI', site: 'https://platform.openai.com', keys: 'https://platform.openai.com/api-keys', net: 'proxy' }
 const SERVICE_SITES = {
-  openai: [{ ...OPENAI_SITE, name: t`OpenAI（gpt-image）` }, { name: t`xAI（grok-imagine）`, site: 'https://x.ai/api', keys: 'https://console.x.ai', net: 'proxy' }],
+  // Only the services drawn with here for sure (MOSS-Image is fetched its own way, OpenRouter draws through chat).
+  openai: [
+    { ...OPENAI_SITE, name: t`OpenAI（gpt-image）` },
+    { name: t`MOSS 开放平台（moss-image，地址 api.mosi.cn/v1）`, site: 'https://platform.moss.cn', keys: 'https://platform.moss.cn/app/api-keys', net: 'direct' },
+    { name: t`xAI（grok-imagine）`, site: 'https://x.ai/api', keys: 'https://console.x.ai', net: 'proxy' },
+    { name: t`OpenRouter（Gemini、GPT 的出图模型）`, site: 'https://openrouter.ai', keys: 'https://openrouter.ai/settings/keys', net: 'proxy' },
+  ],
   gemini: [GOOGLE_SITE],
   novelai: [{ name: 'NovelAI', site: 'https://novelai.net', net: 'proxy' }],
   comfy: [{ name: 'ComfyUI', site: 'https://www.comfy.org/download', net: 'local', download: true }],
@@ -44,6 +50,7 @@ const SERVICE_SITES = {
     { name: t`MiniMax 国内站`, site: 'https://platform.minimaxi.com', keys: 'https://platform.minimaxi.com/user-center/basic-information/interface-key', net: 'direct' },
     { name: t`MiniMax 国际站`, site: 'https://platform.minimax.io', keys: 'https://platform.minimax.io/user-center/basic-information/interface-key', net: 'proxy' },
   ],
+  'voice:moss': [{ name: t`MOSS 开放平台`, site: 'https://platform.moss.cn', keys: 'https://platform.moss.cn/app/api-keys', net: 'direct' }],
   'voice:gemini': [GOOGLE_SITE],
   'stt:provider': [
     { name: t`硅基流动（SenseVoice，免费）`, site: 'https://cloud.siliconflow.cn', keys: 'https://cloud.siliconflow.cn/account/ak', net: 'direct' },
@@ -57,7 +64,9 @@ const SERVICE_SITES = {
 }
 const SD_SAMPLERS = ['Euler a', 'Euler', 'DPM++ 2M', 'DPM++ 2M Karras', 'DPM++ SDE Karras', 'DPM++ 2M SDE', 'DDIM', 'UniPC']
 /** A provider holding Google's key (the Gemini template), offered first for Gemini's own models. */
-const isGoogle = p => /generativelanguage\.googleapis\.com|aiplatform\.googleapis\.com|\/v1beta\/openai\/?$/i.test(p?.baseURL ?? '')
+const isGoogle = p => p?.api === 'google-generative' || /generativelanguage\.googleapis\.com|aiplatform\.googleapis\.com|\/v1beta\/openai\/?$/i.test(p?.baseURL ?? '')
+// Gemini's own API has no OpenAI-style images, speech or transcription endpoints: its images and speech go through Google's.
+const openaiStyle = p => p.api !== 'anthropic-messages' && p.api !== 'google-generative'
 // A voice service on this machine or the LAN (a local voice bridge, or the tavern on a PC):
 // local TTS models, as against the cloud services.
 const BRIDGE_NAME = t`本地语音桥接`
@@ -72,16 +81,19 @@ const speech = typeof speechSynthesis !== 'undefined' && typeof SpeechSynthesisU
 speech?.getVoices()
 
 // Voice sources on the server (server/voice/): a card names a voice as `<source>:<id>`.
-const VOICE_SOURCES = ['openai', 'fish', 'minimax', 'gemini']
-const VOICE_FIELDS = ['ttsProvider', 'ttsModel', 'ttsVoices', 'fishModel', 'fishVoices', 'minimaxModel', 'minimaxRegion', 'minimaxVoices', 'geminiTtsProvider', 'geminiTtsModel', 'geminiTtsVoices']
+const VOICE_SOURCES = ['openai', 'fish', 'minimax', 'moss', 'gemini']
+const VOICE_FIELDS = ['ttsProvider', 'ttsModel', 'ttsVoices', 'fishModel', 'fishVoices', 'minimaxModel', 'minimaxRegion', 'minimaxVoices', 'mossModel', 'mossVoices', 'geminiTtsProvider', 'geminiTtsModel', 'geminiTtsVoices']
 const TTS_MODELS = ['gpt-4o-mini-tts', 'tts-1', 'tts-1-hd', 'FunAudioLLM/CosyVoice2-0.5B']
 const FISH_MODELS = [['drama-3', t`drama-3（情绪最足，按用量计费）`], ['s2.1-pro', 's2.1-pro'], ['s2.1-pro-free', t`s2.1-pro-free（免费，合理使用）`], ['s2-pro', 's2-pro']]
 const MINIMAX_MODELS = ['speech-2.8-hd', 'speech-2.8-turbo', 'speech-2.6-hd']
+const MOSS_MODELS = [['moss-tts-1.5-flash', t`moss-tts-1.5-flash（快，能写 [pause 0.8s] 停顿）`], ['moss-tts-1.0-pro', 'moss-tts-1.0-pro']]
+/** MOSS's models, with one the settings name that is not among them (a snapshot ID) kept. */
+const mossModels = current => (MOSS_MODELS.some(([id]) => id === current) || !current ? MOSS_MODELS : [...MOSS_MODELS, [current, current]])
 // Read in the story's language, which the voices are for.
 const PREVIEW_LINE = zh`你好呀，很高兴见到你。今天想听我讲点什么呢？`
 // Characters per chunk: the bridge's Qwen3 voices keep their intonation over ~100;
 // cloud voices bill per request, so longer; Chrome stops a long utterance after ~15 s.
-const CHUNK_MAX = { bridge: 100, browser: 150, openai: 250, fish: 250, minimax: 300, gemini: 300 }
+const CHUNK_MAX = { bridge: 100, browser: 150, openai: 250, fish: 250, minimax: 300, moss: 300, gemini: 300 }
 // 语音输入 (server/voice/listen.mjs): where a recording is written out.
 const STT_FIELDS = ['sttSource', 'sttProvider', 'sttModel', 'sttUrl', 'sttLocalModel', 'sttLanguage']
 const STT_MODELS = ['FunAudioLLM/SenseVoiceSmall', 'TeleAI/TeleSpeechASR', 'whisper-large-v3-turbo', 'whisper-large-v3', 'gpt-4o-mini-transcribe', 'gpt-4o-transcribe', 'whisper-1', 'voxtral-mini-latest']
@@ -111,7 +123,7 @@ function browserVoice(ref) {
  * @param deps - { api, el, toast, guard, getChat, getModels, openProviders, saveFile,
  *   pickDraw(options) (web/draw-choice.js: the 画图方式 and model for one picture) }
  */
-export function initMedia({ api, el, toast, guard, getChat, getModels, openProviders, saveFile, pickDraw }) {
+export function initMedia({ api, el, toast, guard, getChat, getModels, openProviders, saveFile, pickDraw, onPictures = () => {} }) {
   const $ = id => document.getElementById(id)
   // The settings window (配图与朗读) as a menu of parts (web/menu.js).
   const settingsMenu = createMenu({ dialog: $('media-dialog'), form: $('media-form'), el, title: t`配图与朗读` })
@@ -313,12 +325,35 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         el('strong', { text: drawing ? t`没画出来` : t`画面提示词没写出来` }),
         el('p', { text: failure.message }),
         el('div', { class: 'failed-actions' }, [
-          el('button', { type: 'button', class: 'btn small', text: t`重试`, onclick: () => (drawing ? draw(node, failure.prompt, failure.chatId, null, failure.replace) : writePrompt(node)) }),
+          el('button', { type: 'button', class: 'btn small', text: t`重试`, onclick: () => retry(node, failure) }),
           drawing ? el('button', { type: 'button', class: 'btn small ghost', text: t`改提示词`, onclick: () => openImageDialog(node, failure.prompt, { chatId: failure.chatId, note: t`没画出来：${failure.message}`, error: true, replace: failure.replace }) }) : null,
           el('button', { type: 'button', class: 'btn small ghost', text: t`关掉`, onclick: dismiss }),
         ]),
       ]),
     ])
+  }
+
+  const retry = (node, failure) => (failure.stage === 'draw' ? draw(node, failure.prompt, failure.chatId, null, failure.replace) : writePrompt(node))
+
+  /**
+   * The chat's pictures in the works and the ones that did not come, for where the replies are out of sight
+   * (the visual novel's corner): what each is at, since when, and the ways forward.
+   */
+  function pictureWork(chatId) {
+    const nodeOf = nodeId => getChat()?.path.find(n => n.id === nodeId)
+    const jobs = [...state.jobs].filter(([, job]) => job.chatId === chatId)
+      .map(([, job]) => ({ drawing: job.stage === 'draw', started: job.started, backend: job.backend, cancel: () => job.controller.abort() }))
+    const failures = [...state.failures].filter(([nodeId, failure]) => failure.chatId === chatId && nodeOf(nodeId))
+      .map(([nodeId, failure]) => ({
+        drawing: failure.stage === 'draw',
+        message: failure.message,
+        retry: () => retry(nodeOf(nodeId), failure),
+        dismiss: () => {
+          state.failures.delete(nodeId)
+          refreshNode(nodeId)
+        },
+      }))
+    return { jobs, failures }
   }
 
   // One clock for every frame in the works.
@@ -328,6 +363,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
   }, 1000)
 
   function refreshNode(nodeId) {
+    onPictures()
     const chat = getChat()
     const node = chat?.path.find(n => n.id === nodeId)
     const box = article(nodeId)
@@ -1022,7 +1058,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     // Pictures
     const backend = el('select', { name: 'imageBackend' }, [...imageBackends(), ...state.ownBackends.map(own => [own.id, own.name])].map(([value, text]) => option(value, text, media.imageBackend)))
     const imageProviders = providers.filter(p => p.api !== 'anthropic-messages')
-    const provider = el('select', { name: 'imageProvider' }, [option('', imageProviders.length ? t`选一个供应商` : t`先在「供应商」里添加`, media.imageProvider), ...imageProviders.map(p => option(p.id, p.name, media.imageProvider))])
+    const provider = el('select', { name: 'imageProvider' }, [option('', imageProviders.length ? t`选一个供应商` : t`先在「供应商」里添加`, media.imageProvider), ...imageProviders.filter(openaiStyle).map(p => option(p.id, p.name, media.imageProvider))])
     const modelList = el('datalist', { id: 'image-models' })
     const model = el('input', { name: 'imageModel', value: media.imageModel, list: 'image-models', placeholder: t`例如 grok-imagine-image-2.0`, spellcheck: 'false' })
     const fetchModels = el('button', { type: 'button', class: 'btn small', text: t`获取` })
@@ -1503,7 +1539,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         id: 'voice',
         title: t`朗读来源`,
         summary: () => {
-          if (voiceNeed()) return speech ? t`现在只能用浏览器音色：设一个云端服务（Fish Audio、MiniMax、Gemini 或供应商的朗读接口），声音自然得多` : t`还没有能用的音色：点这里设一个云端服务`
+          if (voiceNeed()) return speech ? t`现在只能用浏览器音色：设一个云端服务（Fish Audio、MiniMax、MOSS、Gemini 或供应商的朗读接口），声音自然得多` : t`还没有能用的音色：点这里设一个云端服务`
           const parts = []
           for (const id of VOICE_SOURCES) if (sources[id]?.configured) parts.push(t`${sources[id].label} ${sources[id].voices.length} 个音色`)
           if (speech) parts.push(t`浏览器 ${chinese.length} 个音色`)
@@ -1722,6 +1758,10 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       const list = MINIMAX_MODELS.includes(media.minimaxModel) ? MINIMAX_MODELS : [...MINIMAX_MODELS, media.minimaxModel]
       const select = el('select', { onchange: () => saveMedia({ minimaxModel: select.value }, true) }, list.map(id => option(id, id, media.minimaxModel)))
       models.push(row(t`朗读模型（MiniMax）`, select))
+    }
+    if (sources.moss?.configured) {
+      const select = el('select', { onchange: () => saveMedia({ mossModel: select.value }, true) }, mossModels(media.mossModel).map(([value, text]) => option(value, text, media.mossModel)))
+      models.push(row(t`朗读模型（MOSS）`, select))
     }
     if (sources.gemini?.configured) {
       const input = el('input', { value: media.geminiTtsModel ?? '', list: 'quick-gemini-tts', spellcheck: 'false', onchange: () => saveMedia({ geminiTtsModel: input.value.trim() }, true) })
@@ -2305,13 +2345,14 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     }
     const fishBadge = keyBadge('fish')
     const minimaxBadge = keyBadge('minimax')
+    const mossBadge = keyBadge('moss')
 
     const speakers = providers.filter(p => p.api !== 'anthropic-messages')
     const openai = el('details', { class: 'voice-source', open: Boolean(media.ttsProvider) }, [
       el('summary', {}, [el('span', { text: t`供应商的朗读接口（OpenAI 兼容 /audio/speech）` }), state('openai')]),
       serviceLinks('voice:openai', t`常用的朗读接口，在「管理供应商」里添加后在这里选：`),
       el('div', { class: 'grid' }, [
-        field(t`供应商`, el('select', { name: 'ttsProvider' }, [option('', speakers.length ? t`不用` : t`先在「供应商」里添加`, media.ttsProvider), ...speakers.map(p => option(p.id, p.name, media.ttsProvider))])),
+        field(t`供应商`, el('select', { name: 'ttsProvider' }, [option('', speakers.length ? t`不用` : t`先在「供应商」里添加`, media.ttsProvider), ...speakers.filter(openaiStyle).map(p => option(p.id, p.name, media.ttsProvider))])),
         field(t`模型`, el('input', { name: 'ttsModel', value: media.ttsModel, list: 'tts-models', spellcheck: 'false', placeholder: 'gpt-4o-mini-tts' })),
       ]),
       el('datalist', { id: 'tts-models' }, TTS_MODELS.map(id => el('option', { value: id }))),
@@ -2346,6 +2387,16 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       el('div', { class: 'row voice-actions' }, [listen('minimax'), fromAccount('minimax')]),
     ])
 
+    const moss = el('details', { class: 'voice-source', open: Boolean(voiceKeys.moss?.hasKey) }, [
+      el('summary', {}, [el('span', { class: 'voice-source-name' }, ['MOSS', netTag('direct')]), mossBadge.badge]),
+      serviceLinks('voice:moss'),
+      keyField('moss', 'API Key', voiceKeys.moss, t`开放平台 → API Keys`, mossBadge.update),
+      field(t`模型`, el('select', { name: 'mossModel' }, mossModels(media.mossModel).map(([value, text]) => option(value, text, media.mossModel)))),
+      field(t`音色（每行一个：voice_id，后面可以空一格写名字）`, el('textarea', { name: 'mossVoices', rows: 3, spellcheck: 'false', placeholder: t`留空用音色库里的几个音色（周周、温柔女友声、潇洒仙侠男主…）`, text: voiceListText(media.mossVoices) }),
+        t`更多音色在 MOSS Create 的音色库（create.moss.cn/voice/library）：在音色卡片上点复制图标，把 ID 贴在这里；自己克隆或设计的音色点「从账户读取音色」。按用量扣积分。`),
+      el('div', { class: 'row voice-actions' }, [listen('moss'), fromAccount('moss')]),
+    ])
+
     // Gemini's speech models through a provider holding Google's key (the one chat uses).
     const googleSpeakers = speakers.filter(isGoogle)
     const geminiModelList = el('datalist', { id: 'gemini-tts-models' }, GEMINI_TTS_MODELS.map(id => el('option', { value: id })))
@@ -2374,7 +2425,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         t`预置音色有 Kore、Leda、Aoede（女声）、Puck、Charon、Fenrir（男声）等 30 个，中文也能读。回复里的情绪会变成「用…的语气说」放在台词前。按用量计费，走「设置」里的代理。`),
       el('div', { class: 'row voice-actions' }, [listen('gemini')]),
     ])
-    return [openai, fish, minimax, gemini]
+    return [openai, fish, minimax, moss, gemini]
   }
 
   /** The voice settings and typed keys as the form shows them, for 试听 and saving. */
@@ -2401,7 +2452,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     const option = (value, text, selected) => el('option', { value, text, selected: value === selected })
     const field = (label, control, hint) => el('label', {}, [label, control, hint ? el('span', { class: 'hint', text: hint }) : null])
     const value = name => form.elements[name]?.value ?? ''
-    const writers = providers.filter(p => p.api !== 'anthropic-messages')
+    const writers = providers.filter(openaiStyle)
     const source = el('select', { name: 'sttSource' }, [
       media.sttSource ? null : option('', t`还没选`, media.sttSource),
       option('provider', t`供应商的语音转写接口（云端，不用安装）`, media.sttSource),
@@ -2743,5 +2794,5 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
   $('player-stop').addEventListener('click', () => player.stop())
   loadSettings()
 
-  return { settings: () => state.settings, openLibrary, toolsFor: mediaTools, gallery, openSettings, viewPicture, setCard, afterTurn, flags, readBeat, fillQuick, stopReading: () => player.stop(), toggleReading: () => player.toggle() }
+  return { settings: () => state.settings, pictureWork, openLibrary, toolsFor: mediaTools, gallery, openSettings, viewPicture, setCard, afterTurn, flags, readBeat, fillQuick, stopReading: () => player.stop(), toggleReading: () => player.toggle() }
 }

@@ -1,8 +1,8 @@
-// Cloud speech services called with the user's own key: Fish Audio and
-// MiniMax. requestSpec() and listAccountVoices() are ported from xiaoya-voice's
-// bridge/cloud_tts.py (request_spec / unpack_audio / list_account_voices):
-// service → URL, headers, body, never falling back to another service or
-// voice. Both are asked for MP3, which a phone on the LAN fetches faster than
+// Cloud speech services called with the user's own key: Fish Audio, MiniMax
+// and MOSS (the MOSI platform's moss-tts). requestSpec() and listAccountVoices()
+// are ported from xiaoya-voice's bridge/cloud_tts.py (request_spec / unpack_audio /
+// list_account_voices): service → URL, headers, body, never falling back to another
+// service or voice. All are asked for MP3, which a phone on the LAN fetches faster than
 // WAV. The audio helpers below are shared by every server-side source: what
 // kind of audio came back, and a WAV header for raw PCM.
 import { errorCode, fetchBytes, postJson, withCode } from '../providers.mjs'
@@ -12,12 +12,16 @@ import { msg } from '../i18n.mjs'
 export const FISH_URL = 'https://api.fish.audio'
 // 国内站 / 国际站: a key works on the site it was made on only.
 export const MINIMAX_URLS = Object.freeze({ cn: 'https://api.minimaxi.com', intl: 'https://api.minimax.io' })
+// The MOSI platform (platform.moss.cn), in mainland China: reached directly.
+export const MOSS_URL = 'https://api.mosi.cn'
 
 // Fish answers an unknown model with its default one instead of an error: only these are sent.
 export const FISH_MODELS = ['drama-3', 's2.1-pro', 's2.1-pro-free', 's2-pro']
 // The one Fish model that is free (fair use); the others bill the account, which answers 402 when it is empty.
 export const FISH_FREE_MODEL = 's2.1-pro-free'
 export const MINIMAX_MODELS = ['speech-2.8-hd', 'speech-2.8-turbo', 'speech-2.6-hd']
+// moss-tts-1.5-flash takes [pause 0.8s] in the text; 1.0-pro does not.
+export const MOSS_MODELS = ['moss-tts-1.5-flash', 'moss-tts-1.0-pro']
 // MiniMax's system voices, offered while no voice of the account is listed.
 // Names are getters: in the language of the page that asks (server/i18n.mjs).
 export const MINIMAX_VOICES = Object.freeze([
@@ -30,10 +34,25 @@ export const MINIMAX_VOICES = Object.freeze([
   ['male-qn-badao', () => msg`霸道青年`],
   ['male-qn-daxuesheng', () => msg`青年大学生`],
 ].map(([id, name]) => Object.freeze({ id, get name() { return name() } })))
+// Voices from the MOSS Create voice library (create.moss.cn/voice/library), offered while none are listed;
+// 周周 is the one MOSI's own examples use.
+export const MOSS_VOICES = Object.freeze([
+  ['94aa4989-c7e9-5007-ae42-ab401823e6c9', () => msg`周周（女声）`],
+  ['beba366f-e9bf-45e9-882f-7ecc5261145e', () => msg`温柔女友声`],
+  ['806c9695-6160-404e-8722-4f788d935af3', () => msg`轻快灵动女声`],
+  ['d683998f-d9ea-4216-a018-e58cdc42db73', () => msg`温柔专业青女`],
+  ['b3adf22d-e173-4b3c-a2e4-d11e5e6699c9', () => msg`冷静古风御姐`],
+  ['fe85a513-9bf3-4ef7-aa0b-8b2d11e4db93', () => msg`少年感人声（男）`],
+  ['b1dde58c-3610-460e-b318-af08821dcfc6', () => msg`冷静理性温柔帅哥`],
+  ['d14533d5-f27c-40c4-99fb-5ff4c7ffd8c1', () => msg`潇洒仙侠男主`],
+  ['be117169-bc14-40bd-a63c-0763066d9af9', () => msg`智慧独白老人`],
+  ['5e2e4b81-3f26-4c58-afe4-eb8ed342393f', () => msg`旁白（男声）`],
+].map(([id, name]) => Object.freeze({ id, get name() { return name() } })))
 
 export const CLOUD = Object.freeze({
   fish: { label: 'Fish Audio', emotion: 'tags', chunkMax: 250 },
   minimax: { label: 'MiniMax', emotion: 'none', chunkMax: 300 },
+  moss: { label: 'MOSS', emotion: 'none', chunkMax: 300 },
 })
 
 const minimaxBase = (region, urls) => urls.minimax?.[region] ?? MINIMAX_URLS[region] ?? MINIMAX_URLS.cn
@@ -68,6 +87,14 @@ export function requestSpec({ service, key, model, voice, region = 'cn', urls = 
         voice_setting: { voice_id: voice, speed: 1, vol: 1, pitch: 0 },
         audio_setting: { sample_rate: 32000, bitrate: 128000, format: 'mp3', channel: 1 },
       },
+    }
+  }
+  if (service === 'moss') {
+    // Without delivery_method it answers with the audio itself.
+    return {
+      url: `${urls.moss ?? MOSS_URL}/v1/audio/speech`,
+      headers: { authorization: `Bearer ${key}` },
+      body: { model, input: text, voice_id: voice, response_format: 'mp3' },
     }
   }
   throw httpError(400, msg`不认识的语音服务：${service}`)
@@ -113,15 +140,18 @@ const FISH_PAGE = 100
 // 300 characters, then the MP3) in well under half a minute.
 export const TIMEOUTS = Object.freeze({ list: 20_000, speech: 60_000 })
 
-/** How a request travels: 'proxy', 'direct' (no proxy set) or 'home' (MiniMax's mainland site, direct on purpose). */
-const routeOf = (service, region, proxy) => (proxy ? 'proxy' : service === 'minimax' && region === 'cn' ? 'home' : 'direct')
+/** A service in mainland China, reached without the proxy: MiniMax's mainland site, MOSS. */
+const atHome = (service, region) => service === 'moss' || (service === 'minimax' && region === 'cn')
+
+/** How a request travels: 'proxy', 'direct' (no proxy set) or 'home' (a service at home, direct on purpose). */
+const routeOf = (service, region, proxy) => (proxy ? 'proxy' : atHome(service, region) ? 'home' : 'direct')
 
 /** Where to look when a service cannot be reached. proxyMenu: this app has 设置 → 网络代理 (the phone does not). */
 function reachHint(route, proxyMenu = true) {
   if (route === 'proxy') return msg`检查网络，以及「设置 → 连接 → 网络代理」里的代理是否在运行。`
   if (route === 'home') return msg`检查网络。`
   if (route === 'direct' && proxyMenu) return msg`现在没走代理：要开代理才能上这个网站的话，去「设置 → 连接 → 网络代理」选「跟随系统代理」或填代理地址。`
-  if (route === 'direct') return msg`手机应用不经过代理设置：这个网站在国内多半要开手机上的加速器才能连（全局模式，或把它加进代理规则；能按应用分流的，要把 CicaTavern 勾上），也可以改用国内能直连的 MiniMax 国内站。`
+  if (route === 'direct') return msg`手机应用不经过代理设置：这个网站在国内多半要开手机上的加速器才能连（全局模式，或把它加进代理规则；能按应用分流的，要把 CicaTavern 勾上），也可以改用国内能直连的 MiniMax 国内站或 MOSS。`
   return msg`检查网络和代理设置。`
 }
 
@@ -170,6 +200,19 @@ export async function listAccountVoices({ service, key, region = 'cn', urls = {}
           found.push({ id: String(model._id), name: `${String(model.title ?? '').trim().slice(0, 30)}${unready}` })
         }
         if (items.length < FISH_PAGE || json.has_more === false) break
+      }
+      return
+    }
+    if (service === 'moss') {
+      let after = ''
+      for (let page = 0; page < 10; page++) {
+        const { buffer } = await fetchBytes(`${urls.moss ?? MOSS_URL}/v1/audio/voices?limit=150${after ? `&after=${encodeURIComponent(after)}` : ''}`, options)
+        const json = parseReply(buffer, label)
+        for (const voice of Array.isArray(json?.data) ? json.data : []) {
+          if (voice?.id) found.push({ id: String(voice.id), name: String(voice.name ?? '').trim().slice(0, 30) })
+        }
+        after = json?.has_more && typeof json.next_cursor === 'string' ? json.next_cursor : ''
+        if (!after) break
       }
       return
     }
@@ -300,11 +343,13 @@ export function audioOf(buffer, { contentType = '', pcmRate = 0, fallback = '' }
  */
 export function createCloudSource(service, { urls = {}, proxyMenu = true, timeouts = TIMEOUTS } = {}) {
   const { label, emotion, chunkMax } = CLOUD[service]
-  const settingsOf = media => (service === 'fish'
-    ? { model: media.fishModel, voices: media.fishVoices ?? [], region: '' }
-    : { model: media.minimaxModel, voices: media.minimaxVoices?.length ? media.minimaxVoices : MINIMAX_VOICES, region: media.minimaxRegion })
-  // Fish and MiniMax's international site are abroad; MiniMax's mainland site is reached directly.
-  const via = (region, proxy) => (service === 'minimax' && region === 'cn' ? null : proxy())
+  const settingsOf = media => {
+    if (service === 'fish') return { model: media.fishModel, voices: media.fishVoices ?? [], region: '' }
+    if (service === 'moss') return { model: media.mossModel, voices: media.mossVoices?.length ? media.mossVoices : MOSS_VOICES, region: '' }
+    return { model: media.minimaxModel, voices: media.minimaxVoices?.length ? media.minimaxVoices : MINIMAX_VOICES, region: media.minimaxRegion }
+  }
+  // Fish and MiniMax's international site are abroad; MiniMax's mainland site and MOSS are reached directly.
+  const via = (region, proxy) => (atHome(service, region) ? null : proxy())
   return {
     id: service,
     label,

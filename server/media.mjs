@@ -9,7 +9,7 @@
 //   on, see checkWorkflow), or NovelAI's image API (its persistent
 //   token kept server-side in novelai.json, never sent to the page).
 // - Voice: the sources in voice/: a provider's /audio/speech, Fish Audio and
-//   MiniMax with the user's own key, or a voice service speaking the xiaoya
+//   MiniMax and MOSS with the user's own key, or a voice service speaking the xiaoya
 //   bridge's protocol (the local bridge on this machine's own install, nothing
 //   by default elsewhere); proxied so a phone on the LAN can play it, cached
 //   by source + model + voice + text. Browser voices (Web Speech) never reach
@@ -80,6 +80,8 @@ export const DEFAULT_MEDIA = Object.freeze({
   minimaxModel: 'speech-2.8-hd',
   minimaxRegion: 'cn', // 'cn' 国内站 | 'intl' 国际站
   minimaxVoices: Object.freeze([]), // none listed = MiniMax's system voices
+  mossModel: 'moss-tts-1.5-flash',
+  mossVoices: Object.freeze([]), // none listed = some voices of the MOSS Create library
   geminiTtsProvider: '', // a provider with Google's key: Gemini's speech models (voices gemini:<name>)
   geminiTtsModel: 'gemini-2.5-flash-preview-tts',
   geminiTtsVoices: Object.freeze([]), // none listed = Gemini's prebuilt voices
@@ -282,8 +284,12 @@ export function cleanMedia(input, previous = DEFAULT_MEDIA, defaults = DEFAULT_M
     value.minimaxModel = source.minimaxModel
   }
   if (source.minimaxRegion === 'cn' || source.minimaxRegion === 'intl') value.minimaxRegion = source.minimaxRegion
+  if (typeof source.mossModel === 'string') {
+    if (!/^moss-tts-[\w.-]{1,40}$/.test(source.mossModel)) throw httpError(400, msg`MOSS 朗读模型名不对（例如 moss-tts-1.5-flash）`)
+    value.mossModel = source.mossModel
+  }
   value.drawHistory = cleanKeep(source.drawHistory, cleanKeep(value.drawHistory))
-  for (const key of ['ttsVoices', 'fishVoices', 'minimaxVoices', 'geminiTtsVoices']) {
+  for (const key of ['ttsVoices', 'fishVoices', 'minimaxVoices', 'mossVoices', 'geminiTtsVoices']) {
     if (typeof source[key] === 'string' || Array.isArray(source[key])) value[key] = cleanVoiceList(source[key], { fish: key === 'fishVoices' })
   }
   for (const key of ['imageReference', 'autoRead', 'autoImage', 'naiReference', 'naiRefStyle', 'geminiReference']) if (typeof source[key] === 'boolean') value[key] = source[key]
@@ -1199,7 +1205,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
  *   function read on every request (the setting can change while running).
  * @param askInContext - engine.askInContext, for prompts written inside the conversation.
  * @param novelai - NovelAI base URLs (tests point them at a fake server).
- * @param voiceUrls - cloud speech addresses, the same way: { fish, minimax: { cn, intl } }.
+ * @param voiceUrls - cloud speech addresses, the same way: { fish, minimax: { cn, intl }, moss }.
  * @param features - the edition's capabilities (edition.mjs); without the
  *   xiaoya bridge assumed, no voice service is configured by default.
  * @param ownBackends - this install's own image backends, beside IMAGE_BACKENDS:

@@ -171,7 +171,7 @@ export async function pngOf(url) {
  * @param deps - { api, el, toast, guard, openProviders, onCardSaved, startChatWith, makeVisualNovel(cardId, places),
  *   pickDraw(options) (web/draw-choice.js: the 画图方式 and model for the avatar) }
  */
-export function initForge({ api, el, toast, guard, openProviders, onCardSaved, startChatWith, makeVisualNovel, pickDraw, onClosed }) {
+export function initForge({ api, el, toast, guard, saveDownload = null, openProviders, onCardSaved, startChatWith, makeVisualNovel, pickDraw, onClosed }) {
   const $ = id => document.getElementById(id)
   const dialog = $('forge-dialog')
   const state = {
@@ -243,7 +243,13 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
     view.saved = el('span', { class: 'forge-count' })
     view.chat = el('button', { type: 'button', class: 'btn', text: t`开始对话`, onclick: () => startChat() })
     view.vn = el('button', { type: 'button', class: 'btn', text: t`做成视觉小说`, title: t`保存这张卡，开一个新对话进入视觉小说模式：选画图方式，备齐角色名册、立绘和表情，再给方案里的地点画背景`, onclick: () => startVn() })
-    view.png = el('a', { class: 'btn', text: t`导出 PNG`, title: t`图片里带着整张卡，SillyTavern 可以直接导入` })
+    view.png = el('a', { class: 'btn', text: t`导出 PNG`, title: t`图片里带着整张卡，SillyTavern 可以直接导入`, onclick: event => {
+      // The phone app saves it itself (saveDownload).
+      if (!saveDownload) return
+      event.preventDefault()
+      const link = new URL(view.png.href)
+      saveDownload(link.pathname + link.search, view.png.download, 'image/png')
+    } })
     view.save = el('button', { type: 'button', class: 'btn primary', text: t`保存为角色卡`, onclick: () => saveCard() })
     view.polishFoot = el('div', { class: 'forge-foot' }, [el('div', { class: 'forge-actions' }, [view.toPlanBack, el('span', { class: 'grow' }), view.saved, view.png, view.vn, view.chat, view.save])])
     view.discussFoot = el('div', { class: 'forge-foot' }, [view.composer, el('div', { class: 'forge-actions' }, [view.pickCount, el('span', { class: 'grow' }), view.undo, view.toPlans, view.toPlan, view.send])])
@@ -656,7 +662,7 @@ export function initForge({ api, el, toast, guard, openProviders, onCardSaved, s
     view.chat.hidden = !savedId
     view.vn.hidden = !makeVisualNovel
     // The phone app's WebView saves no download: the link is left out there, as in 修改角色卡.
-    view.png.hidden = !savedId || document.documentElement.dataset.edition === 'android'
+    view.png.hidden = !savedId || (document.documentElement.dataset.edition === 'android' && !saveDownload)
     if (savedId) {
       // The saved card as it is now: edits made in 修改角色卡 since are in it.
       view.png.href = `/api/cards/${savedId}/png?v=${encodeURIComponent(card.savedAt ?? '')}`

@@ -2,6 +2,7 @@
 //   openai:<provider id>:<voice>  a provider's /audio/speech (openai.mjs)
 //   fish:<reference_id>           Fish Audio (cloud.mjs)
 //   minimax:<voice_id>            MiniMax (cloud.mjs)
+//   moss:<voice_id>               MOSS, the MOSI platform's moss-tts (cloud.mjs)
 //   gemini:<voice name>           Gemini's speech models via a provider with Google's key (gemini.mjs)
 //   bridge:<name>, or no prefix   an external voice service (bridge.mjs)
 // browser:<name> is spoken by the page and never reaches the server.
@@ -23,7 +24,7 @@ import { createOpenaiSource, instructionsFor } from './openai.mjs'
 import { msg } from '../i18n.mjs'
 
 // Services whose key the tavern keeps (voice-keys.json); a provider's key stays in providers.json.
-export const KEYED = ['fish', 'minimax']
+export const KEYED = ['fish', 'minimax', 'moss']
 const MAX_TEXT = 500
 // media/tts/ kept at most this big: several hours of speech (keep, pruneCache).
 const TTS_CACHE_MAX = 300 * 1024 * 1024
@@ -91,14 +92,14 @@ export function cleanVoiceKey(value) {
  * @param settings - async () → the media settings (media.mjs cleanMedia).
  * @param providers - async () → providers.json, keys included.
  * @param proxy - () → the app's proxy now (the setting can change while running).
- * @param urls - test addresses for the cloud services: { fish, minimax: { cn, intl } }.
+ * @param urls - test addresses for the cloud services: { fish, minimax: { cn, intl }, moss }.
  * @param cacheMax - how big media/tts/ may grow (TTS_CACHE_MAX; smaller in tests).
  */
 export function createVoices({ root, settings, providers, proxy = () => null, features = null, urls = {}, cacheMax = TTS_CACHE_MAX }) {
   const bridge = createBridge({ root, features })
   // The phone has no 设置 → 网络代理 to point to.
   const proxyMenu = features?.proxy !== false
-  const sources = [createOpenaiSource(), createCloudSource('fish', { urls, proxyMenu }), createCloudSource('minimax', { urls, proxyMenu }), createGeminiSource()]
+  const sources = [createOpenaiSource(), createCloudSource('fish', { urls, proxyMenu }), createCloudSource('minimax', { urls, proxyMenu }), createCloudSource('moss', { urls, proxyMenu }), createGeminiSource()]
   const byId = new Map(sources.map(source => [source.id, source]))
   const ttsDir = path.join(root, 'media', 'tts')
 
@@ -306,7 +307,7 @@ export function createVoices({ root, settings, providers, proxy = () => null, fe
     for (const voice of await source.account({ ...ctx, signal })) {
       if (VOICE_ID.test(voice.id) && !account.has(voice.id)) account.set(voice.id, voice.name)
     }
-    // MiniMax's list starts as its system voices: they stay offered.
+    // MiniMax's and MOSS's lists start as their own voices: they stay offered.
     const listed = source.listed(ctx.media)
     const known = new Set(listed.map(v => v.id))
     const named = listed.map(v => ({ id: v.id, name: v.name || account.get(v.id) || '' }))

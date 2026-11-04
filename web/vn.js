@@ -1312,6 +1312,18 @@ export function initVn(deps) {
       parts.push(el('span', { text: t`正在画「${job.label}」· ${Math.round((Date.now() - job.started) / 1000)} 秒${waiting ? t`，还有 ${waiting} 张排着` : ''}` }))
       parts.push(control(t`取消`, '', () => job.controller.abort()))
     }
+    // The replies' own pictures (配图): their frames are in the story, out of sight here.
+    const pictures = deps.pictureWork?.(getChat()?.id) ?? { jobs: [], failures: [] }
+    for (const picture of pictures.jobs) {
+      const seconds = Math.max(0, Math.round((Date.now() - picture.started) / 1000))
+      parts.push(el('span', { text: picture.drawing ? t`正在画配图${picture.backend ? ` · ${picture.backend}` : ''} · ${seconds} 秒` : t`正在构思配图 · 写提示词 · ${seconds} 秒` }))
+      parts.push(control(t`取消`, '', picture.cancel))
+    }
+    for (const failure of pictures.failures) {
+      parts.push(el('span', { class: 'bad', text: failure.drawing ? t`配图没画出来：${failure.message}` : t`配图的提示词没写出来：${failure.message}` }))
+      parts.push(control(t`重试`, '', failure.retry))
+      parts.push(control(t`关掉`, '', failure.dismiss))
+    }
     const failed = art.error
     if (failed && failed.cardId === cardId) {
       parts.push(el('span', { class: 'bad', text: t`「${failed.label}」没画成：${failed.message}` }))
@@ -2472,5 +2484,14 @@ export function initVn(deps) {
     }
   }
 
-  return { render, streamed, isOn, turnFlags, marks, makeReady }
+  /** A reply's picture started, finished or failed: the corner says so, its seconds ticking while one is in the works. */
+  let pictureClock = 0
+  function picturesChanged() {
+    drawChip()
+    const busy = (deps.pictureWork?.(getChat()?.id)?.jobs.length ?? 0) > 0
+    if (busy && !pictureClock) pictureClock = setInterval(picturesChanged, 1000)
+    else if (!busy && pictureClock) pictureClock = clearInterval(pictureClock) ?? 0
+  }
+
+  return { render, streamed, isOn, turnFlags, marks, makeReady, picturesChanged }
 }

@@ -1,5 +1,5 @@
 // Model providers: external APIs (OpenAI-compatible, OpenAI Responses,
-// Anthropic Messages). Keys are sent to the
+// Anthropic Messages, Gemini's own). Keys are sent to the
 // server once and never come back; the form only shows their last characters.
 import { t } from '/i18n.js'
 
@@ -7,11 +7,13 @@ const PLACEHOLDER = {
   'openai-completions': 'https://api.deepseek.com/v1',
   'openai-responses': 'https://api.openai.com/v1',
   'anthropic-messages': 'https://api.anthropic.com',
+  'google-generative': 'https://generativelanguage.googleapis.com/v1beta',
 }
 const URL_HINT = {
   'openai-completions': t`写到 /v1 为止（DeepSeek、Kimi、智谱、OpenRouter、本机中转都是这种）。请求发到 …/chat/completions。`,
   'openai-responses': t`写到 /v1 为止。请求发到 …/responses，不在对方服务器保存对话。`,
   'anthropic-messages': t`可以省略 /v1。请求发到 …/v1/messages，自动加缓存断点。`,
+  'google-generative': t`写到 /v1beta 为止（写成 OpenAI 兼容的 …/v1beta/openai 也行）。请求发到 …/models/模型:streamGenerateContent，安全过滤设为最宽松，联网用 Google 搜索。`,
 }
 
 // Starting points for a new provider. Model ids change often: the note asks to
@@ -38,10 +40,10 @@ const TEMPLATES = [
     note: t`密钥在 platform.deepseek.com 创建，国内直连。前缀不变时自动命中缓存，很便宜。`,
   },
   {
-    name: 'Gemini API', api: 'openai-completions', baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai', apiKeyEnv: 'GEMINI_API_KEY', proxy: 'global',
+    name: 'Gemini API', api: 'google-generative', baseURL: 'https://generativelanguage.googleapis.com/v1beta', apiKeyEnv: 'GEMINI_API_KEY', proxy: 'global',
     site: 'https://aistudio.google.com', keys: 'https://aistudio.google.com/apikey',
     models: [{ id: 'gemini-3.1-pro-preview' }, { id: 'gemini-3-flash-preview' }],
-    note: t`Google AI Studio 的 Gemini API（OpenAI 兼容接口），密钥在 aistudio.google.com 创建，需要走代理。`,
+    note: t`Google AI Studio 的 Gemini API（原生接口，和 SillyTavern 的「Google AI Studio」一样），密钥在 aistudio.google.com 创建，需要走代理。以前用 OpenAI 兼容接口建的，可以在这里把「接口类型」改成「Gemini 原生」，Base URL 不用动。`,
   },
   // Agent Platform (once Vertex AI): an API key, or a JSON credential where an organization allows none (accounts: where
   // that is made). check: what to say of the model list, in place of the usual line.

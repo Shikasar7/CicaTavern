@@ -19,6 +19,8 @@ const PCM = Buffer.alloc(480, 1) // 10 ms of 24 kHz mono 16-bit
 const PROVIDER_KEY = 'sk-voice-provider-0001'
 const FISH_KEY = 'fish-secret-key-abcd1234'
 const MINIMAX_KEY = 'eyJminimax.secret.key-wxyz5678'
+const MOSS_KEY = 'sk-moss-secret-key-9876'
+const MOSS_VOICE = '94aa4989-c7e9-5007-ae42-ab401823e6c9'
 const FISH_VOICE = '0123456789abcdef0123456789abcdef'
 // No voice service assumed (the release): an emptied address stays empty.
 const RELEASE = mediaDefaults({ xiaoya: false })
@@ -28,10 +30,10 @@ async function saveMedia(store, patch) {
   await store.saveSettings({ media: cleanMedia(patch, (await store.getSettings()).media ?? RELEASE, RELEASE) })
 }
 
-/** One fake server for every voice source: /audio/speech, Fish, MiniMax (both sites) and a voice bridge. */
+/** One fake server for every voice source: /audio/speech, Fish, MiniMax (both sites), MOSS and a voice bridge. */
 async function fakeVoices(t) {
   const seen = []
-  const fake = { pcm: false, minimaxError: 0, bridgeNames: ['jok'], bridgeCloud: [], fishModels: [], minimaxAccount: {} }
+  const fake = { pcm: false, minimaxError: 0, bridgeNames: ['jok'], bridgeCloud: [], fishModels: [], minimaxAccount: {}, mossVoices: [] }
   const server = createServer(async (req, res) => {
     const chunks = []
     for await (const chunk of req) chunks.push(chunk)
@@ -70,6 +72,19 @@ async function fakeVoices(t) {
       if (fake.minimaxError) return send(200, { base_resp: { status_code: fake.minimaxError, status_msg: 'nope' } })
       return send(200, { data: { audio: MP3.toString('hex'), status: 2 }, base_resp: { status_code: 0, status_msg: 'success' } })
     }
+    // MOSS: the audio itself (no delivery_method), and the account's voices a page at a time.
+    if (req.url === '/moss/v1/audio/speech') {
+      if (req.headers.authorization !== `Bearer ${MOSS_KEY}`) return send(401, { error: { code: 'invalid_api_key', message: `bad key ${req.headers.authorization}` } })
+      if (json.voice_id === 'gone') return send(404, { error: { code: 'voice_not_found', message: 'voice not found' } })
+      return send(200, MP3, 'audio/mpeg')
+    }
+    if (req.url.startsWith('/moss/v1/audio/voices?')) {
+      if (req.headers.authorization !== `Bearer ${MOSS_KEY}`) return send(401, { error: { code: 'invalid_api_key', message: 'bad key' } })
+      const after = Number(new URL(req.url, 'http://fake').searchParams.get('after') ?? 0)
+      const data = fake.mossVoices.slice(after, after + 2).map(([id, name]) => ({ id, object: 'audio.voice', name, created_at: 1710000000 }))
+      const more = after + 2 < fake.mossVoices.length
+      return send(200, { object: 'list', data, has_more: more, ...(more ? { next_cursor: String(after + 2) } : {}) })
+    }
     if (req.url === '/api/persona/list') return send(200, { voices: fake.bridgeNames.map(name => ({ name })), cloud_voices: fake.bridgeCloud, current: { voice: 'jok' } })
     if (req.url === '/api/tts') return send(200, WAV, 'audio/wav')
     send(404, { error: 'no' })
@@ -78,7 +93,7 @@ async function fakeVoices(t) {
   t.after(() => server.close())
   const base = `http://127.0.0.1:${server.address().port}`
   const calls = url => seen.filter(r => r.url === url)
-  return { seen, calls, base, fake, urls: { fish: `${base}/fish`, minimax: { cn: `${base}/minimax-cn`, intl: `${base}/minimax-intl` } } }
+  return { seen, calls, base, fake, urls: { fish: `${base}/fish`, minimax: { cn: `${base}/minimax-cn`, intl: `${base}/minimax-intl` }, moss: `${base}/moss` } }
 }
 
 async function setup(t, mediaSettings = {}) {
@@ -253,7 +268,7 @@ test('Fish and MiniMax: keys kept server-side, tags only for Fish, hex decoded, 
   assert.deepEqual([fishSource.configured, fishSource.voices, minimaxSource.configured], [false, [], false])
   await assert.rejects(media.speak({ text: '你好', voice: `fish:${FISH_VOICE}` }), /Fish Audio 还没填密钥/)
 
-  assert.deepEqual(await media.setVoiceKey('fish', `Bearer ${FISH_KEY}`), { fish: { hasKey: true, keyHint: '…1234' }, minimax: { hasKey: false, keyHint: '' } })
+  assert.deepEqual(await media.setVoiceKey('fish', `Bearer ${FISH_KEY}`), { fish: { hasKey: true, keyHint: '…1234' }, minimax: { hasKey: false, keyHint: '' }, moss: { hasKey: false, keyHint: '' } })
   await media.setVoiceKey('minimax', MINIMAX_KEY)
   await assert.rejects(media.setVoiceKey('fish', 'has space in it'), /密钥格式/)
   ;[, , fishSource, minimaxSource] = (await media.voices()).sources
@@ -317,7 +332,7 @@ test('Fish and MiniMax: keys kept server-side, tags only for Fish, hex decoded, 
   assert.match(denied.message, /\[密钥已隐藏\]/)
   // Removing the last key removes the file.
   await media.setVoiceKey('fish', '')
-  assert.deepEqual(await media.voiceKeys(), { fish: { hasKey: false, keyHint: '' }, minimax: { hasKey: true, keyHint: '…5678' } })
+  assert.deepEqual(await media.voiceKeys(), { fish: { hasKey: false, keyHint: '' }, minimax: { hasKey: true, keyHint: '…5678' }, moss: { hasKey: false, keyHint: '' } })
 })
 
 test('从账户读取音色: Fish pages, MiniMax groups, merged into the form list with its names, nothing saved, key not echoed', async t => {
@@ -352,7 +367,7 @@ test('从账户读取音色: Fish pages, MiniMax groups, merged into the form li
   assert.deepEqual([typed.voices.length, typed.found, typed.added, typed.changed, typed.full], [100, 102, 98, true, true])
   assert.doesNotMatch(JSON.stringify(typed), new RegExp(FISH_KEY))
   assert.deepEqual((await store.getSettings()).media.fishVoices, [{ id: FISH_VOICE, name: '南晚' }, { id: other, name: '' }], 'not saved')
-  assert.deepEqual(await media.voiceKeys(), { fish: { hasKey: false, keyHint: '' }, minimax: { hasKey: false, keyHint: '' } })
+  assert.deepEqual(await media.voiceKeys(), { fish: { hasKey: false, keyHint: '' }, minimax: { hasKey: false, keyHint: '' }, moss: { hasKey: false, keyHint: '' } })
 
   // The form's list as it stands, with the saved key; a short last page ends the paging.
   await media.setVoiceKey('fish', FISH_KEY)
@@ -437,7 +452,7 @@ test('cloud voices give up on a service that never answers (读取音色, 试听
   const home = await quick(list({ service: 'minimax', key: MINIMAX_KEY, region: 'cn', urls: { minimax: { cn: at(silent) } } }))
   assert.match(home.message, /^连不上 MiniMax：等了 1 秒没有回应。检查网络。$/)
   const phone = await quick(list({ urls: { fish: at(silent) } }, { proxyMenu: false }))
-  assert.match(phone.message, /没有回应。手机应用不经过代理设置：.*加速器.*MiniMax 国内站。$/)
+  assert.match(phone.message, /没有回应。手机应用不经过代理设置：.*加速器.*MiniMax 国内站或 MOSS。$/)
   // A refused connection says the same at once.
   const down = await quick(list({ urls: { fish: refused } }, { timeoutMs: 20000 }))
   assert.equal(down.status, 502)
@@ -526,7 +541,7 @@ test('voice over HTTP: real content type, keys never reach the page, 试听 with
 
   const saved = await call('/api/media/settings', { method: 'PUT', body: { ttsProvider: provider.id, ttsVoices: 'coral', fishKey: FISH_KEY, minimaxKey: MINIMAX_KEY, fishVoices: FISH_VOICE } })
   assert.equal(saved.status, 200)
-  assert.deepEqual(saved.body.voiceKeys, { fish: { hasKey: true, keyHint: '…1234' }, minimax: { hasKey: true, keyHint: '…5678' } })
+  assert.deepEqual(saved.body.voiceKeys, { fish: { hasKey: true, keyHint: '…1234' }, minimax: { hasKey: true, keyHint: '…5678' }, moss: { hasKey: false, keyHint: '' } })
   // Neither key appears in anything the page can read.
   const pages = await Promise.all(['/api/media/settings', '/api/settings', '/api/media/voices', '/api/persona/list', '/api/status'].map(p => call(p)))
   for (const page of pages) {
@@ -576,4 +591,46 @@ test('speech chunks: dialogue and narration may take different lengths', async (
   const longest = kind => Math.max(...chunks.filter(c => c.kind === kind).map(c => c.text.length))
   assert.ok(longest('narration') <= 100)
   assert.ok(longest('dialogue') > 100 && longest('dialogue') <= 250)
+})
+
+test('MOSS: voice_id and input, the audio itself, its library voices by default, direct even with a proxy, the account read a page at a time', async t => {
+  const spec = requestSpec({ service: 'moss', key: 'k', model: 'moss-tts-1.5-flash', voice: MOSS_VOICE }, '你好')
+  assert.equal(spec.url, 'https://api.mosi.cn/v1/audio/speech')
+  assert.equal(spec.headers.authorization, 'Bearer k')
+  assert.deepEqual(spec.body, { model: 'moss-tts-1.5-flash', input: '你好', voice_id: MOSS_VOICE, response_format: 'mp3' })
+  assert.throws(() => cleanMedia({ mossModel: 'speech-2.8-hd' }), /MOSS 朗读模型/)
+  assert.equal(cleanMedia({ mossModel: 'moss-tts-1.5-flash-2026-06-26' }).mossModel, 'moss-tts-1.5-flash-2026-06-26')
+  assert.deepEqual(cleanMedia({ mossVoices: `${MOSS_VOICE} 周周` }).mossVoices, [{ id: MOSS_VOICE, name: '周周' }])
+
+  const { media, calls, fake, urls } = await setup(t)
+  await media.setVoiceKey('moss', MOSS_KEY)
+  const moss = (await media.voices()).sources.find(s => s.id === 'moss')
+  assert.equal(moss.configured, true)
+  assert.equal(moss.emotion, 'none')
+  assert.equal(moss.voices[0].ref, `moss:${MOSS_VOICE}`, 'the library voices while none are listed')
+  assert.ok(moss.voices.length >= 5)
+
+  // Emotion tags are dropped.
+  const spoken = await media.speak({ text: '[开心地] 欢迎回来。', voice: `moss:${MOSS_VOICE}` })
+  assert.deepEqual([spoken.mime, spoken.buffer], ['audio/mpeg', MP3])
+  const [call] = calls('/moss/v1/audio/speech')
+  assert.equal(call.headers.authorization, `Bearer ${MOSS_KEY}`)
+  assert.deepEqual(call.json, { model: 'moss-tts-1.5-flash', input: '欢迎回来。', voice_id: MOSS_VOICE, response_format: 'mp3' })
+
+  // A service at home: a proxy set for the others (here one that is not there) is not used.
+  const source = createCloudSource('moss', { urls: { moss: urls.moss } })
+  const direct = await source.synth({ voice: MOSS_VOICE, text: '直连' }, { media: { mossModel: 'moss-tts-1.0-pro', mossVoices: [] }, keys: { moss: MOSS_KEY }, proxy: () => 'http://127.0.0.1:1' })
+  assert.equal(direct.mime, 'audio/mpeg')
+  assert.equal(calls('/moss/v1/audio/speech').at(-1).json.model, 'moss-tts-1.0-pro')
+
+  const gone = await media.speak({ text: '还在吗', voice: 'moss:gone' }).catch(error => error)
+  assert.match(gone.message, /^MOSS HTTP 404：模型或音色不存在/)
+  assert.doesNotMatch(gone.message, new RegExp(MOSS_KEY))
+
+  fake.mossVoices = [['clone-1', '我的声音'], ['design-2', ''], ['clone-3', '晴']]
+  const account = await media.accountVoices({ source: 'moss' })
+  assert.equal(account.found, 3)
+  assert.deepEqual(account.voices.slice(-3), [{ id: 'clone-1', name: '我的声音' }, { id: 'design-2', name: '' }, { id: 'clone-3', name: '晴' }])
+  assert.equal(account.voices[0].id, MOSS_VOICE, 'the library voices stay first')
+  assert.deepEqual(await media.voiceKeys(), { fish: { hasKey: false, keyHint: '' }, minimax: { hasKey: false, keyHint: '' }, moss: { hasKey: true, keyHint: '…9876' } })
 })

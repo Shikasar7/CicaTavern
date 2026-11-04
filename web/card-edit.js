@@ -45,7 +45,7 @@ const IDEAS = [t`让她说话更冷淡一点`, t`加一个青梅竹马的 NPC �
  *   onCardChanged(cardId, { avatar }) (the list, the card's details and its picture follow),
  *   pickDraw(options) (web/draw-choice.js: the 画图方式 and model for one drawing) }
  */
-export function initCardEdit({ api, el, toast, guard, saveFile, getChat, isGenerating, openProviders, openBook, onChatChanged, onCardChanged, pickDraw }) {
+export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = null, getChat, isGenerating, openProviders, openBook, onChatChanged, onCardChanged, pickDraw }) {
   const $ = id => document.getElementById(id)
   const dialog = $('card-edit-dialog')
   const state = {
@@ -196,7 +196,12 @@ export function initCardEdit({ api, el, toast, guard, saveFile, getChat, isGener
           el('button', { type: 'button', class: 'btn small', text: card.hasAvatar ? t`换头像` : t`上传头像`, disabled: Boolean(drawn?.busy), onclick: () => upload.click() }),
           upload,
           el('button', { type: 'button', class: 'btn small', text: t`生成头像`, title: t`按这张卡的角色画一张方形头像，可以选画图方式和模型`, disabled: Boolean(drawn?.busy), onclick: () => drawAvatar() }),
-          card.hasAvatar && !android ? el('a', { class: 'btn small ghost', href: `/api/cards/${card.id}/png?v=${Date.now()}${state.withRegex ? '&regex=sets' : ''}`, download: `${card.name}.png`, title: t`图片里带着整张卡（包括这里的修改），SillyTavern 可以直接导入`, text: t`导出 PNG` }) : null,
+          // The phone app saves it itself (saveDownload), one from before that cannot.
+          card.hasAvatar && (!android || saveDownload) ? el('a', { class: 'btn small ghost', href: `/api/cards/${card.id}/png?v=${Date.now()}${state.withRegex ? '&regex=sets' : ''}`, download: `${card.name}.png`, onclick: event => {
+            if (!saveDownload) return
+            event.preventDefault()
+            saveDownload(new URL(event.currentTarget.href).pathname + new URL(event.currentTarget.href).search, `${card.name}.png`, 'image/png')
+          }, title: t`图片里带着整张卡（包括这里的修改），SillyTavern 可以直接导入`, text: t`导出 PNG` }) : null,
           el('button', { type: 'button', class: 'btn small ghost', text: t`导出 JSON`, title: t`SillyTavern 的角色卡 JSON，包括这里的修改`, onclick: () => exportJson() }),
         ]),
         regexChoice(card),

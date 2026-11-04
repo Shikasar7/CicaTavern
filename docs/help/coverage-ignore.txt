@@ -25,6 +25,7 @@
 NovelAI 模型名不对
 NovelAI 模型名不对（例如 nai-diffusion-5-full）
 MiniMax 模型名不对（例如 speech-2.8-hd）
+MOSS 朗读模型名不对（例如 moss-tts-1.5-flash）
 
 # 发布版本身不会走到这一步（按钮只在能用时显示，后台服务总能从页面重启）
 这个版本不能在应用里安装更新

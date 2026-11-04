@@ -136,8 +136,10 @@ If you can't quite say what you want, the creator guides you round by round:
 
 <br clear="right">
 
-## Latest changes [2.3.1]
+## Latest changes [2.3.2]
 
+- **2.3.2: the story stays put**: in 2.3.1, switching chats or finishing a new turn could leave you a few rounds above the latest one; you now land at the very bottom, and swiping or editing a message keeps you on the same line. The app opens on the chat you last played.
+- **2.3.2: native Gemini, MOSS voices, exports on Android**: providers can use Gemini's native API (generateContent), and the Gemini API template starts on it; MOSS joins the voice sources; the Android app exports chat packages and card PNGs. Errors tell a busy model, a rate limit and a used-up quota apart, and visual novel mode shows how a reply's picture is coming along.
 - **2.3.1: long chats stay smooth**: in a chat of two or three hundred rounds, messages out of view are no longer laid out, so a reply streaming in costs next to nothing to show, and long chats open several times faster. The rail beside the story spreads out only the ten or so rounds you are reading and folds the rest into a band at each end, unfolding as you scroll.
 - **2.3.1: card interfaces run more SillyTavern commands**: dozens of them, like /setvar, /if, /while, /sys, /cut, /gen and /buttons, with pipes and closures; a command this app lacks skips that step and the rest runs. Also fixed: the delete button of a chat not showing on phones, a Base URL with spaces inside not connecting, opening screens failing on /sys, and the whole chat flashing after a card interface saved its variables.
 - **Long-term memory (Beta)**: Settings → Model → Long-term memory (Beta), off by default. When the context is compacted, the same call that writes the story archive also notes the people, events, things and places, and promises and foreshadowing as separate entries in the chat's memory book; when a later round mentions them (by a keyword, an alias or similar wording), the matching entries go along with that round's message, and the reply says Recalled: …. They ride in that round's message only, so the frozen prefix stays as it is and the cache keeps hitting. Memory in the top bar reads, edits, pins, deletes and exports them as a world book, and Tidy while playing can note things down in the background every few rounds. The memory book follows branches, and Export archive carries it.
@@ -458,8 +460,10 @@ flowchart LR
 
 <br clear="right">
 
-## 最新版本变动[2.3.1]
+## 最新版本变动[2.3.2]
 
+- **2.3.2：修了正文往回弹**：2.3.1 里切换对话、写完新回合后，正文会停在最新几轮之前；现在都停在最底部，划动换版本、改消息时也留在原来那一行。打开应用时进的是最近聊过的对话。
+- **2.3.2：Gemini 原生接口、MOSS 朗读、安卓导出**：供应商多了「Gemini 原生（generateContent）」，「Gemini API」模板默认用它；朗读来源加了国内直连的 MOSS；安卓应用能导出对话包和角色卡 PNG。报错把模型繁忙、限流、额度用完分开说清楚，视觉小说模式左上角能看到配图进度。
 - **2.3.1：长对话不卡了**：两三百轮的对话，看不见的消息不再参与排版，模型一边写、页面一边重排的开销降到几乎为零，打开长对话也快了好几倍。正文右边的刻度条只铺开正在看的十轮左右，其余收进两头的细纹带，往上翻时一路展开。
 - **2.3.1：卡片界面能用更多 SillyTavern 命令**：/setvar、/if、/while、/sys、/cut、/gen、/buttons 等几十个，带管道和闭包；这里没有的命令跳过那一步、其余照常。另外修了手机上对话的删除按钮看不见、Base URL 中间多空格连不上、开局页 /sys 报不支持、卡片界面存变量后整个对话闪一下。
 - **长期记忆（Beta）**：设置 → 模型 → 长期记忆（Beta），默认关。压缩上下文时，写剧情存档的同一次调用顺带把人物、事件、物品与地点、约定与伏笔记成一条条，存进这个对话的「记忆簿」；之后哪一轮提到它们（关键词、别名或相近的说法），就把相关的几条附在这一轮的消息里，回复下面写着「想起：…」。只附在这一轮的消息里，不动固定前缀，缓存照常命中。顶栏「记忆」可以查看、修改、固定、删除、导出成世界书；可选「边玩边整理」，每隔几轮在后台记一次。记忆簿跟着分支走，「导出存档」也会带上。

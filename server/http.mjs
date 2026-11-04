@@ -774,7 +774,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       // The NovelAI token goes to its own file; a blank field keeps the saved one.
       if (typeof body.naiToken === 'string' && body.naiToken.trim()) await media.setNaiToken(body.naiToken)
       else if (body.naiClearToken === true) await media.setNaiToken('')
-      // Cloud speech keys (fishKey, minimaxKey) the same way, each in voice-keys.json.
+      // Cloud speech keys (fishKey, minimaxKey, mossKey) the same way, each in voice-keys.json.
       for (const id of VOICE_KEYED) {
         if (typeof body[`${id}Key`] === 'string' && body[`${id}Key`].trim()) await media.setVoiceKey(id, body[`${id}Key`])
         else if (body[`${id}ClearKey`] === true) await media.setVoiceKey(id, '')

@@ -476,7 +476,7 @@ test('voice: voices listed, speech proxied and cached, a dead bridge explained',
   const { fake, store, media } = await setup(t)
   const [external, ...own] = (await media.voices()).sources
   assert.deepEqual(external, { id: 'bridge', label: '本地语音桥接', chunkMax: 100, configured: true, ok: true, voices: ['jok', '南晚'], cloud: [{ name: 'fish:abc', label: '南晚 · abc', provider: 'Fish Audio · 云端', model: 'drama-3', tags: true }], current: 'jok', remote: false })
-  assert.deepEqual(own.map(s => [s.id, s.configured]), [['openai', false], ['fish', false], ['minimax', false], ['gemini', false]])
+  assert.deepEqual(own.map(s => [s.id, s.configured]), [['openai', false], ['fish', false], ['minimax', false], ['moss', false], ['gemini', false]])
   const first = await media.speak({ text: '站住。', voice: '南晚', stable: true })
   assert.deepEqual([first.buffer.toString(), first.mime], ['RIFF....WAVE', 'audio/wav'])
   const call = fake.seen.find(r => r.url === '/api/tts')
