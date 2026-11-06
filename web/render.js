@@ -4,7 +4,7 @@
 // opaque origin: it cannot read this page, its storage, or call the local API.
 import { applyScripts, PLACEMENT } from './shared/regex.js'
 import { replaceVariableMacros, UPDATE_BLOCK } from './shared/vars.js'
-import { CHOICES_BLOCK, TIME_BOX_BLOCK } from './shared/basic.js'
+import { CHOICES_BLOCK, SELF_CHECK_BLOCK, TIME_BOX_BLOCK } from './shared/basic.js'
 import { frameShim, libraryTags, replaceViewportHeight } from './compat.js'
 
 const PLACEHOLDER = /<StatusPlaceHolderImpl\s*\/>/i
@@ -15,6 +15,7 @@ const HIDDEN = [
   // The built-in preset's time box and choices: the page draws them (status.js), not as text.
   TIME_BOX_BLOCK,
   CHOICES_BLOCK,
+  SELF_CHECK_BLOCK,
 ]
 // Reasoning tags (<thinking>, <思考>…) are not among them: app.js folds those (思考中… while one is still open).
 const OPEN_HIDDEN = /<(state|update(?:variable)?|time_box|choices)>(?![\s\S]*<\/\1>)[\s\S]*$/i
@@ -44,6 +45,14 @@ export function useBlockWords(words, block) {
   shownWords = { words, block }
 }
 
+// 游戏规则's marks, in a chat that has them: { strip, cut } (web/game-play.js). Handed over by app.js as the 屏蔽词
+// are: only a card with rules loads those files.
+let shownMarks = null
+
+export function useGameMarks(marks) {
+  shownMarks = marks
+}
+
 /** Text as shown: the 屏蔽词 applied. `partial` for text still streaming. */
 export function blockShown(text, partial = false) {
   const { words, block } = shownWords
@@ -52,7 +61,9 @@ export function blockShown(text, partial = false) {
 
 /** Text streamed so far, with finished bookkeeping blocks removed and an unfinished one hidden. */
 export function streamingText(text) {
-  return blockShown(stripHidden(String(text ?? '')).replace(OPEN_HIDDEN, '').trimEnd(), true)
+  const written = stripHidden(String(text ?? '')).replace(OPEN_HIDDEN, '').trimEnd()
+  // What comes after a stop will not be kept: it does not show on the way either.
+  return blockShown(shownMarks ? shownMarks.strip(shownMarks.cut(written)) : written, true)
 }
 
 export function usesStatusPlaceholder(scripts) {
@@ -78,6 +89,7 @@ export function displayOf(node, { scripts, names, depth, withStatus, variables =
   // Before the regex: the words come out of what was written, not out of the HTML a card's regex builds.
   let text = blockShown(node.raw ?? node.text ?? '')
   if (node.role === 'user' && !scripts.length) return text
+  if (shownMarks && node.role !== 'user') text = shownMarks.strip(text)
   // The status bar always goes after the story: models often write the placeholder first,
   // or before their variable-update block.
   if (withStatus || PLACEHOLDER.test(text)) text = `${text.replace(/<StatusPlaceHolderImpl\s*\/>/gi, '').trimEnd()}\n\n<StatusPlaceHolderImpl/>`
@@ -139,6 +151,102 @@ function splitProse(text, out) {
   }
   if (html !== null) out.push({ kind: 'html', body: html.join('\n\n') })
   flushStory()
+}
+
+const escaped = text => text.replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch])
+
+/** A line of Markdown as HTML: code, links to the web, bold and italics; everything else is text. */
+function inlineMarkdown(text) {
+  const codes = []
+  return escaped(text)
+    .replace(/`([^`\n]+)`/g, (_, code) => `\uE030${codes.push(code) - 1}\uE030`)
+    .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*\n]+?)\*/g, '$1<em>$2</em>')
+    .replace(/\uE030(\d+)\uE030/g, (_, i) => `<code>${codes[i]}</code>`)
+}
+
+const LIST_LINE = /^(\s*)([-*+]|\d{1,4}[.)])\s+(.*)$/
+const CODE_MARK = /^\s*```/
+const RULE = /^\s*([-*_])(\s*\1){2,}\s*$/
+const TABLE_RULE = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/
+const cells = line => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(cell => inlineMarkdown(cell.trim()))
+const isTable = (lines, i) => lines[i].includes('|') && lines[i + 1]?.includes('-') && TABLE_RULE.test(lines[i + 1] ?? '')
+const startsBlock = (lines, i) => CODE_MARK.test(lines[i]) || /^#{1,6}\s/.test(lines[i]) || /^\s*>/.test(lines[i]) || LIST_LINE.test(lines[i]) || RULE.test(lines[i]) || isTable(lines, i)
+
+/** The list starting at line `start`, with the lists under it: { html, next }. Blank lines between items keep it one list. */
+function listHtml(lines, start) {
+  const [, indent, marker] = LIST_LINE.exec(lines[start])
+  const ordered = /\d/.test(marker)
+  const items = []
+  let i = start
+  while (i < lines.length) {
+    const item = LIST_LINE.exec(lines[i])
+    if (item && item[1].length < indent.length) break
+    if (item && item[1].length === indent.length) {
+      if (/\d/.test(item[2]) !== ordered) break
+      items.push({ words: [item[3]], under: '' })
+      i++
+    } else if (item) {
+      const nested = listHtml(lines, i)
+      items.at(-1).under += nested.html
+      i = nested.next
+    } else if (/^\s+\S/.test(lines[i])) {
+      items.at(-1).words.push(lines[i].trim())
+      i++
+    } else if (!lines[i].trim() && (/^\s+\S/.test(lines[i + 1] ?? '') || LIST_LINE.test(lines[i + 1] ?? ''))) i++
+    else break
+  }
+  const tag = ordered ? 'ol' : 'ul'
+  const first = ordered ? parseInt(marker, 10) : 1
+  const body = items.map(item => `<li>${inlineMarkdown(item.words.join(' '))}${item.under}</li>`).join('')
+  return { html: `<${tag}${first > 1 ? ` start="${first}"` : ''}>${body}</${tag}>`, next: i }
+}
+
+/**
+ * A reply of 直连对话 as HTML: the Markdown an assistant writes, safe for the page: all that came from the model is
+ * escaped first, and only web links become links. A code fence still open reads to the end, for a reply being written.
+ */
+export function markdownHtml(text) {
+  const lines = String(text ?? '').replace(/\r\n?/g, '\n').replace(/\uE030/g, '').split('\n')
+  const out = []
+  for (let i = 0; i < lines.length;) {
+    const line = lines[i]
+    const heading = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line)
+    if (!line.trim()) i++
+    else if (CODE_MARK.test(line)) {
+      const start = ++i
+      while (i < lines.length && !CODE_MARK.test(lines[i])) i++
+      out.push(`<pre class="code"><code>${escaped(lines.slice(start, i).join('\n'))}</code></pre>`)
+      i++
+    } else if (heading) {
+      const level = Math.min(heading[1].length + 2, 6)
+      out.push(`<h${level}>${inlineMarkdown(heading[2])}</h${level}>`)
+      i++
+    } else if (RULE.test(line)) {
+      out.push('<hr>')
+      i++
+    } else if (/^\s*>/.test(line)) {
+      const start = i
+      while (i < lines.length && /^\s*>/.test(lines[i])) i++
+      out.push(`<blockquote>${markdownHtml(lines.slice(start, i).map(quoted => quoted.replace(/^\s*>\s?/, '')).join('\n'))}</blockquote>`)
+    } else if (LIST_LINE.test(line)) {
+      const list = listHtml(lines, i)
+      out.push(list.html)
+      i = list.next
+    } else if (isTable(lines, i)) {
+      const head = cells(line)
+      i += 2
+      const rows = []
+      while (i < lines.length && lines[i].includes('|')) rows.push(cells(lines[i++]))
+      out.push(`<div class="answer-table"><table><thead><tr>${head.map(cell => `<th>${cell}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr>${row.map(cell => `<td>${cell}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`)
+    } else {
+      const start = i++
+      while (i < lines.length && lines[i].trim() && !startsBlock(lines, i)) i++
+      out.push(`<p>${lines.slice(start, i).map(inlineMarkdown).join('<br>')}</p>`)
+    }
+  }
+  return out.join('')
 }
 
 /** Split display text into story text, HTML (for frames) and plain code. */

@@ -2,6 +2,7 @@
 // a scrub rail beside the transcript, a "where am I" pill, and a panel to
 // search past rounds or jump straight to one by number.
 import { t } from '/i18n.js'
+import { pageZoom } from '/theme.js'
 
 const $ = id => document.getElementById(id)
 const LONG_JUMP = 6 // viewports; farther than this jumps instead of gliding
@@ -13,7 +14,7 @@ const RECENT = 10 // rounds spread out at a time
 const LEAD = 0.5 // of them above the top of the view, the rest below
 const REFLOW_MS = 400
 
-export function initHistory({ el, getChat }) {
+export function initHistory({ el, getChat, settleScroll }) {
   const box = $('transcript')
   const rail = $('rail')
   const track = rail.querySelector('.rail-track')
@@ -333,9 +334,12 @@ export function initHistory({ el, getChat }) {
     const far = Math.abs(target - box.scrollTop) > box.clientHeight * LONG_JUMP
     box.scrollTo({ top: target, behavior: far || reducedMotion.matches ? 'instant' : 'smooth' })
     const land = () => {
-      // Messages out of view were laid out at a guessed height: where the round really is now.
-      const off = round.nodes[0].offsetTop - 12 - box.scrollTop
-      if (Math.abs(off) > 4) box.scrollTop += off
+      // Messages out of view were laid out at a guessed height, and take their real one around now: it stays on
+      // the round until that is over, or a hand takes the page.
+      settleScroll(() => {
+        const off = round.nodes[0].offsetTop - 12 - box.scrollTop
+        if (Math.abs(off) > 4) box.scrollTop += off
+      })
       for (const article of round.nodes) {
         article.classList.remove('found')
         void article.offsetWidth
@@ -403,7 +407,7 @@ export function initHistory({ el, getChat }) {
     if (!round) return hideBubble()
     const rect = track.getBoundingClientRect()
     bubble.hidden = false
-    bubble.style.top = `${Math.min(Math.max(y - rect.top, 18), rect.height - 18)}px`
+    bubble.style.top = `${Math.min(Math.max((y - rect.top) / pageZoom(), 18), rect.height / pageZoom() - 18)}px`
     bubble.querySelector('b').textContent = label(round)
     bubble.querySelector('span').textContent = round.n === 0 ? round.reply.slice(0, 80) : round.input.slice(0, 120)
     const [image] = imagesOf(round)
@@ -433,7 +437,7 @@ export function initHistory({ el, getChat }) {
       moved: false,
       onThumb,
       startY: event.clientY,
-      grab: onThumb ? event.clientY - thumbTop : thumb.offsetHeight / 2,
+      grab: onThumb ? event.clientY - thumbTop : (thumb.offsetHeight / 2) * pageZoom(),
     }
     rail.setPointerCapture(event.pointerId)
     rail.classList.add('dragging', 'awake')

@@ -2,7 +2,7 @@
 // session + message uuid it ended on, so any node can be continued (resume) or
 // branched from (fork at that uuid) without replaying anything.
 import { greetingsOf } from './cards.mjs'
-import { buildChatPrompt, chatTemplates, replaceMacros, templateText } from './prompt.mjs'
+import { buildChatPrompt, chatTemplates, fixedWorldBooks, replaceMacros, templateText } from './prompt.mjs'
 import YAML from 'yaml'
 import { constantEntries, entryText, initialState, lateEntries } from './worldbook.mjs'
 import { applyStateUpdates, applyWrites, displayText } from './state.mjs'
@@ -14,18 +14,21 @@ import { estimateTokens } from './context.mjs'
 import { BASIC_ID, VN_ID, asksChoices, basicPreset, vnPreset } from './basic.mjs'
 import { readSillyTavernChat } from './st-chat.mjs'
 import { markSpeakers } from '../web/shared/vn.js'
+import { gateOf, withoutGameMarks } from '../web/shared/game/marks.js'
+import { sheetOnPath } from '../web/shared/game/sheet.js'
 import { chatScriptList } from '../web/shared/regex.js'
 import { cardPick, DEFAULT_ITEM, defaultOf, itemOf, pickFor } from '../web/shared/personas.js'
-import { withChatChanges } from './frames.mjs'
+import { chatBooks, withChatChanges } from './frames.mjs'
 import { cleanEntry, MAX_ENTRIES, memoryOf, snapshotOf } from './memory.mjs'
 
 /**
  * A chat's books: the card's own, the imported ones it has mounted, then the
- * global ones (全局世界书) it has not, each once.
+ * global ones (全局世界书) it has not, each once; with a chat, then the ones its card made there.
  * @param settings - when the caller has them already.
  * @param chat - a chat whose card wrote to its books (frames.mjs): what that chat reads.
  */
 export async function booksForCard(store, card, settings = null, chat = null) {
+  if (card.direct) return []
   const books = card.book ? [{ ...card.book, id: `card-${card.id}` }] : []
   const { globalBookIds = [] } = settings ?? await store.getSettings()
   for (const id of new Set([...(card.worldbookIds ?? []), ...globalBookIds])) {
@@ -35,7 +38,7 @@ export async function booksForCard(store, card, settings = null, chat = null) {
       // A deleted worldbook is simply skipped.
     }
   }
-  return chat ? withChatChanges(books, chat) : books
+  return chat ? withChatChanges([...books, ...chatBooks(chat)], chat) : books
 }
 
 /**
@@ -176,14 +179,15 @@ export async function rebuildPrompt(store, chat, presetId = chat.presetId ?? '')
     }
   }
   const hasState = Object.keys(chat.nodes.root.state ?? {}).length > 0
+  const scripts = scriptsOf(card, preset, globalScripts, regexSets)
   const prefix = prefixTemplates({
-    names: chat.names, card, preset, books, scripts: scriptsOf(card, preset, globalScripts, regexSets),
+    names: chat.names, card, preset, books, scripts,
     state: chat.nodes.root.state ?? {}, local: chat.frameVars ?? {}, global: settings.globalVars ?? {},
     messages: [{ role: 'assistant', text: chat.nodes.root.text ?? '' }],
   })
   let built
   try {
-    built = buildChatPrompt({ card, persona: playerOf(card, picks.persona, chat.names.user), style: picks.style.text, settings, books, hasState, preset, render: prefix.render })
+    built = buildChatPrompt({ card, persona: playerOf(card, picks.persona, chat.names.user), style: picks.style.text, settings, books: fixedWorldBooks(books, scripts, chat.names), hasState, preset, render: prefix.render })
     built.systemPrompt = prefix.resolve(built.systemPrompt)
   } finally {
     prefix.dispose()
@@ -322,9 +326,11 @@ function openingInit(state, greeting) {
  * @param options.userName - the player's name in this chat, instead of the card's or the persona's.
  */
 async function startChat(store, cardId, makeRoot, { userName = '' } = {}) {
-  const card = await store.getCard(cardId)
+  const stored = await store.getCard(cardId)
+  // 直连对话 answers under a name in the page's language, and without a preset's story rules.
+  const card = stored.direct ? { ...stored, name: msg`助手` } : stored
   const [personas, styles, settings, globalScripts, regexSets] = await Promise.all([store.getPersonas(), store.getStyles(), store.getSettings(), store.getRegex(), store.getRegexSets()])
-  const preset = await presetFor(store, settings.presetId)
+  const preset = card.direct ? null : await presetFor(store, settings.presetId)
   const books = await booksForCard(store, card, settings)
   const picks = newChatPicks(card, personas, styles)
   const player = playerOf(card, picks.persona, userName || picks.name)
@@ -339,7 +345,7 @@ async function startChat(store, cardId, makeRoot, { userName = '' } = {}) {
   let built
   let globalWrites = root.global ?? []
   try {
-    built = buildChatPrompt({ card, persona: player, style: picks.style.text, settings, books, hasState: Object.keys(root.state).length > 0, preset, render: prefix.render })
+    built = buildChatPrompt({ card, persona: player, style: picks.style.text, settings, books: fixedWorldBooks(books, ctx.scripts, names), hasState: Object.keys(root.state).length > 0, preset, render: prefix.render })
     built.systemPrompt = prefix.resolve(built.systemPrompt)
     const writes = prefix.writes()
     root.state = applyWrites(root.state, writes.message)
@@ -382,6 +388,7 @@ async function startChat(store, cardId, makeRoot, { userName = '' } = {}) {
         state: root.state,
         ...(errors.length ? { templateErrors: errors } : {}),
         ...(root.compaction ? { compaction: root.compaction } : {}),
+        ...(root.game ? { game: root.game } : {}),
         sel: null,
         sdk: null,
         createdAt: now,
@@ -431,6 +438,7 @@ export function exportStory(chat, nodeId) {
     // Oldest first; the last one is the reply the story continues from.
     recent: tail.map(node => ({ role: node.role, text: node.text })),
     state: tip.state ?? {},
+    ...(sheetOnPath(path) ? { game: sheetOnPath(path) } : {}),
     // 长期记忆: the 记忆簿 in force there (its turns numbered as this story's are).
     ...(memoryOf(path)?.entries.length ? { memory: memoryOf(path).entries } : {}),
   }
@@ -449,6 +457,7 @@ export function readStory(archive) {
     summary,
     recent,
     state: isPlainObject(archive.state) ? archive.state : {},
+    game: isPlainObject(archive.game) && Array.isArray(archive.game.things) && Array.isArray(archive.game.quests) ? archive.game : null,
     turns: Math.max(0, Number(archive.turns) || 0),
     model: typeof archive.model === 'string' ? archive.model : null,
     title: typeof archive.title === 'string' ? archive.title.replace(/(（导入）| \(imported\))$/, '').slice(0, 60) : '',
@@ -468,6 +477,7 @@ export async function importStory(store, cardId, archive) {
   return startChat(store, cardId, ({ card, state }) => ({
     text: story.recent.at(-1).text,
     state: mergeState(state, story.state),
+    ...(story.game ? { game: story.game } : {}),
     title: msg`${story.title || card.name}（导入）`,
     compaction: {
       summary: story.summary,
@@ -650,6 +660,46 @@ export function hideRound(chat, id, hidden = true) {
   chat.stateDirty = true
 }
 
+/**
+ * 删除: this one message goes from the chat and from what the model reads, a reply or the player's own. It stays in
+ * the tree, marked, so what came after it keeps its place and the variables stay as they are; undone with `deleted`
+ * false, until the next turn clears its words (forgetDeleted). A version with others beside it gives way to the newest,
+ * unless the story goes on from it: that stays where it is, and only this message goes.
+ */
+export function deleteMessage(chat, id, deleted = true) {
+  const path = activePath(chat)
+  const index = path.findIndex(node => node.id === id)
+  const node = index < 0 ? chat.nodes[id] : path[index]
+  if (!node || (index < 0 && !node.deleted)) throw httpError(404, msg`这条消息不在当前对话里`)
+  if (!deleted && node.forgotten) throw httpError(400, msg`这条消息的内容已经清掉了，不能恢复：删除之后又写了新的一轮`)
+  if (node.id === 'root') throw httpError(400, msg`开场不能删除`)
+  if (node.compaction) throw httpError(400, msg`压缩点所在的这一条不能删除：之后接着写的都从这里开始`)
+  const compactedAt = path.findLastIndex(n => n.compaction)
+  if (index >= 0 && index < compactedAt) throw httpError(400, msg`这条消息在上次压缩之前，模型现在只读剧情存档，删除它不起作用；要去掉内容，可以修改存档`)
+  if (path.slice(compactedAt + 1).some(n => n.sdk)) throw httpError(400, msg`订阅模型的会话里已经有这条消息，不能删除；可以用「修改」改掉它的内容`)
+  if (Boolean(node.deleted) === Boolean(deleted)) return
+  if (deleted) node.deleted = true
+  else delete node.deleted
+  if (deleted) {
+    const other = childrenOf(chat, node.id).length ? null : childrenOf(chat, node.parent).findLast(kid => !kid.deleted)
+    if (other) selectNode(chat, other.id)
+  } else selectNode(chat, id)
+  // What the model read has changed: the next turn sends the variables in full.
+  chat.stateDirty = true
+}
+
+/** A turn went on: deleted messages can no longer come back, and their words go. */
+export function forgetDeleted(chat) {
+  for (const node of Object.values(chat.nodes)) {
+    if (!node.deleted || node.forgotten) continue
+    node.forgotten = true
+    node.text = ''
+    node.display = ''
+    if (node.role === 'user') node.prompt = ''
+    delete node.files
+  }
+}
+
 /** Undo a rollback: show the folded turns again. */
 export function restoreFolded(chat) {
   const last = activePath(chat).at(-1)
@@ -740,7 +790,9 @@ export function editMessage(chat, id, text, { sentInput = input => input } = {})
   node.text = next
   let promptMissed = false
   if (node.role === 'assistant') {
-    node.display = displayText(next)
+    node.display = displayText(node.game ? withoutGameMarks(next) : next)
+    // The stop written out of the reply is no stop.
+    if (node.gate && !gateOf(next)) delete node.gate
     delete node.historyTrim
   } else if (typeof node.prompt === 'string') {
     const swapped = swapInput(node.prompt, sentInput(before), sentInput(next)) ?? swapInput(node.prompt, before, next)
@@ -779,8 +831,8 @@ function swapInput(prompt, before, next) {
 
 /** Client view: the active path plus sibling counts for swipe controls. */
 export function chatView(chat) {
-  const path = activePath(chat).map(node => {
-    const siblings = node.parent ? childrenOf(chat, node.parent) : [node]
+  const path = activePath(chat).filter(node => !node.deleted).map(node => {
+    const siblings = node.parent ? childrenOf(chat, node.parent).filter(kid => !kid.deleted) : [node]
     return {
       id: node.id,
       parent: node.parent,
@@ -789,7 +841,13 @@ export function chatView(chat) {
       text: node.role === 'user' ? node.text : node.display,
       raw: node.text,
       // A player's message: the variables before it, with what its turn's templates wrote.
-      state: node.role === 'assistant' ? node.state ?? {} : applyWrites(chat.nodes[node.parent]?.state ?? {}, node.templateWrites),
+      state: node.role === 'assistant' ? node.state ?? {} : applyWrites(chat.nodes[node.parent]?.state ?? {}, [...(node.templateWrites ?? []), ...(node.gameWrites ?? [])]),
+      game: node.game ?? undefined,
+      gate: node.gate ?? undefined,
+      check: node.check ?? undefined,
+      battle: node.battle ?? undefined,
+      gameOps: node.gameOps ?? undefined,
+      auto: node.auto ?? undefined,
       templateErrors: node.templateErrors?.length ? node.templateErrors : undefined,
       historyTrim: node.historyTrim ?? undefined,
       edited: node.edited ?? undefined,
@@ -808,6 +866,8 @@ export function chatView(chat) {
       // 显示思考过程: the model's own thinking before this reply (not part of the story, never sent back).
       reasoning: node.reasoning || undefined,
       stateChanges: node.stateChanges ?? undefined,
+      updateUnread: node.updateUnread || undefined,
+      schemaProblem: node.schemaProblem || undefined,
       compaction: node.compaction ? compactionView(chat, node) : undefined,
       media: node.media?.images?.length ? node.media : undefined,
       // Brought in from SillyTavern (importSillyTavern): no model of ours wrote it.
@@ -815,6 +875,8 @@ export function chatView(chat) {
       rewroteChoices: node.rewroteChoices ?? undefined,
       // 隐藏这一轮: on the reply, and on the player's message of the same round.
       hidden: node.hidden || undefined,
+      // 直连对话: the files that came with the message (what is in them went to the model).
+      files: node.files?.length ? node.files.map(({ name, kind, chars }) => ({ name, kind, chars })) : undefined,
       // 长期记忆: the 记忆簿 entries the turn brought back (on the player's message).
       recalled: node.recalledTitles?.length ? node.recalledTitles : undefined,
       createdAt: node.createdAt,
@@ -842,6 +904,8 @@ export function chatView(chat) {
     createdAt: chat.createdAt,
     updatedAt: chat.updatedAt,
     path,
+    // What the next turn follows: the latest reply, even one deleted (it is not in `path` then).
+    replyTip: lastAssistant?.id ?? null,
     folded: foldedTurns(chat),
     // Turns a manual compaction would fold into a summary; 0 when there is nothing worth it, and why
     // (compactBlock). A subscription session cannot reach turns folded behind a rollback: 'session'.
@@ -904,7 +968,7 @@ export function saveMemory(chat, entries) {
 
 export function chatSummary(chat) {
   const turns = Object.values(chat.nodes).filter(n => n.role === 'user').length
-  const last = activePath(chat).at(-1)
+  const last = activePath(chat).filter(node => !node.deleted).at(-1)
   return {
     id: chat.id,
     cardId: chat.cardId,

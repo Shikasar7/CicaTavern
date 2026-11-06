@@ -20,7 +20,7 @@ import { createHash, randomInt } from 'node:crypto'
 import { copyFile, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { inflateRawSync } from 'node:zlib'
 import path from 'node:path'
-import { complete, fetchBytes, googleRequest, isProviderRef, postJson, providerError, providerRequest, refLabel, resolveRef, withCode } from './providers.mjs'
+import { complete, fetchBytes, googleRequest, isProviderRef, postJson, providerError, providerRequest, refLabel, resolveRef, unreadReply, withCode } from './providers.mjs'
 import { chatMaterial, cleanFrame, cleanLora, cleanRoster, cleanStrength, countTags, draftMaterial, flattenFrame, frameFormat, isFramePrompt, isRosterId, leadOf, naiCharacters, parseFrame, parseRosterChat, parseRosterDraft, rosterBrief, rosterChatRequest, rosterDraftRequest, withSomeone } from './roster.mjs'
 import { httpError, newId } from './store.mjs'
 import { blockRequest } from './blockwords.mjs'
@@ -85,6 +85,8 @@ export const DEFAULT_MEDIA = Object.freeze({
   geminiTtsProvider: '', // a provider with Google's key: Gemini's speech models (voices gemini:<name>)
   geminiTtsModel: 'gemini-2.5-flash-preview-tts',
   geminiTtsVoices: Object.freeze([]), // none listed = Gemini's prebuilt voices
+  defaultVoice: '', // 默认对白音色: read with for a card that has no dialogue voice of its own; '' = the bridge's current one, else the browser's
+  defaultVoiceAsked: Object.freeze([]), // the sources already asked about it (the page's offer after 朗读来源 is set up): each is asked once
   localModels: Object.freeze({}), // the model picked for each of this install's own image backends (createMedia ownBackends), by id
   ...DEFAULT_LISTEN, // 语音输入: where a recording is turned into text (voice/listen.mjs)
   autoRead: false,
@@ -289,6 +291,8 @@ export function cleanMedia(input, previous = DEFAULT_MEDIA, defaults = DEFAULT_M
     value.mossModel = source.mossModel
   }
   value.drawHistory = cleanKeep(source.drawHistory, cleanKeep(value.drawHistory))
+  text('defaultVoice', 250)
+  if (Array.isArray(source.defaultVoiceAsked)) value.defaultVoiceAsked = [...new Set(source.defaultVoiceAsked.filter(id => typeof id === 'string').map(id => id.slice(0, 20)))].slice(0, 12)
   for (const key of ['ttsVoices', 'fishVoices', 'minimaxVoices', 'mossVoices', 'geminiTtsVoices']) {
     if (typeof source[key] === 'string' || Array.isArray(source[key])) value[key] = cleanVoiceList(source[key], { fish: key === 'fishVoices' })
   }
@@ -469,12 +473,12 @@ export function imagePromptRequest({ card, names, reply, input, state, style, pr
   const cast = roster.length > 0
   const format = cast ? frameFormat(promptStyle, detail) : plainFormat(promptStyle, detail)
   const task = [
-    'TASK: write an image-generation prompt for ONE frame of the scene above. Do not continue or summarise the story, no dialogue, no narration, no Chinese.',
+    `TASK: write an image-generation prompt for ONE frame of the scene above. Do not continue or summarise the story, no dialogue, no narration, ${cast ? 'in English except the names in [ ]' : 'no Chinese'}.`,
     cast
       ? 'Pick the most vivid moment of <latest_passage>. No text, captions or speech bubbles in the picture.'
       : 'Pick the most vivid moment of <latest_passage>. Keep the character\'s looks consistent with <character> and with what the story changed (clothes, wounds, where they are). No text, captions or speech bubbles in the picture.',
     cast
-      ? `Somebody is always in the picture: at least one cast member, ${names.char} or another one rather than the player alone where the moment allows. Never an empty room or a close-up of objects only.`
+      ? `Somebody is always in the picture: the people <latest_passage> shows at that moment, rather than the player alone where the moment allows. A cast member who is not there stays out, even ${names.char}. If only people off the cast list are there, they go in the 场景 line and there is no [Name] line. Never an empty room or a close-up of objects only.`
       : `Somebody is always in the picture, normally ${names.char}. Never an empty room or a close-up of objects only.`,
     ...promptCraft({ promptStyle, cast, style }),
     DETAIL_HINT[detail],
@@ -649,7 +653,7 @@ export function contextImageInstruction({ promptStyle, style, passage, roster = 
     cast
       ? `为${passage ? '上面这段' : '你上一条回复里'}最有画面感的一个瞬间，写给生图模型用的英文提示词。人物长相会自动补上，你只写谁在画面里、现在穿什么（换过的衣服、受的伤都要对）、在做什么、什么表情、站在哪。画面里不要出现文字、字幕或对话气泡。`
       : `为${passage ? '上面这段' : '你上一条回复里'}最有画面感的一个瞬间，写一段给生图模型用的英文提示词。人物外貌以角色设定和剧情里的最新状态为准（换过的衣服、受的伤、所在的地方都要对）。画面里不要出现文字、字幕或对话气泡。`,
-    cast ? '画面里一定要有人：至少一个出场人物，能选的话画角色本人或其他人，不要只有玩家。不要画空场景，也不要只画物品特写。' : '画面里一定要有人，通常是角色本人。不要画空场景，也不要只画物品特写。',
+    cast ? '画面里一定要有人：画这一刻真的在场的人，能选的话不要只有玩家。这一刻不在场的出场人物不要加，角色本人也一样。在场的只有名单外的人时，写进场景行，不写方括号行。不要画空场景，也不要只画物品特写。' : '画面里一定要有人，通常是角色本人。不要画空场景，也不要只画物品特写。',
     ...craft,
     format,
     rules ? `用户自己定的写法（和上面不一样的地方以这里为准，但仍然只输出提示词）：\n<user_rules>\n${rules}\n</user_rules>` : '',
@@ -1340,8 +1344,8 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     // A cast answers in its own format; an answer that ignored it is still usable as a plain prompt.
     // Either way somebody from the cast is in it when the answer left everyone out.
     const clean = text => {
-      const prompt = (roster.length && cleanFrame(text, detail)) || cleanPrompt(text, media.promptStyle, detail)
-      return withSomeone(prompt, roster, chat.names.user, card.name, media.promptStyle)
+      const prompt = (roster.length && cleanFrame(text, detail, { roster, userName: chat.names.user, passage: reply })) || cleanPrompt(text, media.promptStyle, detail)
+      return withSomeone(prompt, roster, chat.names.user, card.name, media.promptStyle, reply)
     }
     let note = ''
     if (media.promptSource === 'chat' && askInContext) {
@@ -1373,7 +1377,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
       throw httpError(502, providerError(provider, error))
     }
     const prompt = clean(result.text)
-    if (!prompt) throw httpError(502, msg`${provider.name} · ${modelId} 没有写出提示词${result.stopReason ? msg`（${result.stopReason}）` : ''}：推理型模型可能把输出额度花在了思考上，辅助模型换个不带推理的快模型`)
+    if (!prompt) throw httpError(502, unreadReply(provider, result) ?? msg`${provider.name} · ${modelId} 没有写出提示词${result.stopReason ? msg`（${result.stopReason}）` : ''}：推理型模型可能把输出额度花在了思考上，辅助模型换个不带推理的快模型`)
     return { prompt: withStyle(prompt, cardMedia.style, media.promptStyle), model: `${provider.name} · ${modelId}`, note }
   }
 
@@ -2184,6 +2188,18 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     return render(plain, cardId, cast, cast, '', signal, { negative: SPRITE_NEGATIVE })
   }
 
+  /** A foe for a fight (敌人图鉴): as a 立绘, on white, from what the helper said of it. No one to look like: no references. */
+  async function drawFoe(cardId, foe, signal, choice = {}) {
+    if (!foe.looks) throw httpError(400, msg`还不知道${foe.name}长什么样，等遭遇时辅助模型写好再画`)
+    const { style } = cleanCardMedia((await store.getCard(cardId)).media)
+    const media = await settingsFor(choice)
+    const tags = media.promptStyle === 'tags'
+    const entry = { id: 'foe', name: foe.name, looks: foe.looks, outfit: '' }
+    const cast = { scene: [style, tags ? SPRITE_SCENE : SPRITE_SCENE_NATURAL].filter(Boolean).join(', '), characters: [{ entry, action: tags ? 'standing' : '', position: '' }], solo: entry, lead: entry }
+    const plain = { ...media, imageShape: 'portrait', imageReference: false, geminiReference: false, naiReference: false, naiNegative: [media.naiNegative, SPRITE_NEGATIVE].filter(Boolean).join(', '), sdNegative: [media.sdNegative, SPRITE_NEGATIVE].filter(Boolean).join(', ') }
+    return render(plain, cardId, cast, cast, '', signal, { references: 'none', negative: SPRITE_NEGATIVE })
+  }
+
   /**
    * One expression of a 立绘 (视觉小说 表情差分): the 立绘 itself, else the cast
    * member's reference picture, goes along as the picture to keep, and only the
@@ -2351,7 +2367,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
         const answer = passage ? readSceneryAnswer(result.text) : { place: '', prompt: result.text }
         named = answer.place
         text = cleanPrompt(answer.prompt, media.promptStyle)
-        if (!text) throw httpError(502, msg`${provider.name} · ${modelId} 没有写出场景提示词`)
+        if (!text) throw httpError(502, unreadReply(provider, result) ?? msg`${provider.name} · ${modelId} 没有写出场景提示词`)
       } else if (passage && !place) {
         throw httpError(400, msg`按这一轮画场景要辅助模型读回复：在「配图与朗读」里选一个辅助模型`)
       } else {
@@ -2441,5 +2457,5 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     return listen.transcribe({ media, audio: readAudio(audio, type), names: Array.isArray(names) ? names : [] }, signal)
   }
 
-  return { defaults, settings, cleanSettings, ownBackends: ownBackendViews, naiStatus, setNaiToken, naiCheck, cardMediaView, saveCardMedia, inheritCardMedia, draftRoster, draftRosterFromChat, drawPortrait, drawCardArt, drawAvatar, drawScenery, drawBackdrop, drawSprite, drawExpression, drawsFromPicture, settingsFor, labelExpressions, readRosterRef, saveRosterRef, removeRosterRef, writeImagePrompt, generateImage, readImage, removeImage, removeChatMedia, copyChatMedia, loras, voices: voices.list, personaList: voices.personaList, ttsKeyStatus: voices.ttsKeyStatus, setTtsKey: voices.setTtsKey, voiceKeys: voices.keyStatus, setVoiceKey: voices.setKey, speak, previewVoice, accountVoices, transcribe, loadWorkflow, saveWorkflow, describeWorkflow, comfyModels }
+  return { drawFoe, defaults, settings, cleanSettings, ownBackends: ownBackendViews, naiStatus, setNaiToken, naiCheck, cardMediaView, saveCardMedia, inheritCardMedia, draftRoster, draftRosterFromChat, drawPortrait, drawCardArt, drawAvatar, drawScenery, drawBackdrop, drawSprite, drawExpression, drawsFromPicture, settingsFor, labelExpressions, readRosterRef, saveRosterRef, removeRosterRef, writeImagePrompt, generateImage, readImage, removeImage, removeChatMedia, copyChatMedia, loras, voices: voices.list, personaList: voices.personaList, ttsKeyStatus: voices.ttsKeyStatus, setTtsKey: voices.setTtsKey, voiceKeys: voices.keyStatus, setVoiceKey: voices.setKey, speak, previewVoice, accountVoices, transcribe, loadWorkflow, saveWorkflow, describeWorkflow, comfyModels }
 }

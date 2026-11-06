@@ -9,7 +9,7 @@
 import YAML from 'yaml'
 // Old MVU values are [value, "description"]; reads and writes target the value slot.
 import { isDescribed, splitPath, UPDATE_BLOCK, writablePath } from '../web/shared/vars.js'
-import { CHOICES_BLOCK, TIME_BOX_BLOCK } from '../web/shared/basic.js'
+import { CHOICES_BLOCK, SELF_CHECK_BLOCK, TIME_BOX_BLOCK } from '../web/shared/basic.js'
 import { FOLD_TAG } from '../web/shared/vn.js'
 
 const HIDDEN_BLOCKS = [
@@ -17,9 +17,13 @@ const HIDDEN_BLOCKS = [
   // Reasoning in its own tag (<thinking>, <思考>…): folded on the page, not story for summaries or pictures.
   new RegExp(`<(${FOLD_TAG})>[\\s\\S]*?</\\1>`, 'gi'),
   /<StatusPlaceHolderImpl\s*\/>/gi,
+  /<CreationPage\s*\/>/gi,
   // The built-in preset's time box and choices (web/shared/basic.js): the page draws them itself.
   TIME_BOX_BLOCK,
   CHOICES_BLOCK,
+  SELF_CHECK_BLOCK,
+  // 裁判表's judgment: a card shows it as it likes, but it is no story.
+  /<judge>[\s\S]*?(?:<\/judge>|$)/gi,
 ]
 
 /** Reply text as shown to the player when the card has no display regex: bookkeeping removed. */
@@ -29,9 +33,15 @@ export function displayText(text) {
   return out.replace(/\n{3,}/g, '\n\n').trim()
 }
 
+/**
+ * What the update blocks in `text` make of `state`.
+ * @returns { state, changes }, and `unread: true` when the reply has an update block and nothing in it could be read.
+ */
 export function applyStateUpdates(state, text) {
   let next = structuredClone(state ?? {})
   const changes = []
+  let wrote = false
+  let read = false
   const blocks = [...String(text ?? '').matchAll(UPDATE_BLOCK)]
   const isState = match => match[1].toLowerCase() === 'state'
   // <state> patches first, then MVU's updates.
@@ -44,7 +54,9 @@ export function applyStateUpdates(state, text) {
   }
   for (const match of blocks.filter(match => !isState(match))) {
     const body = match[2]
+    if (body.trim()) wrote = true
     for (const ops of jsonPatches(body)) {
+      read = true
       for (const op of ops) {
         const changed = applyPatchOp(next, op)
         if (changed) changes.push(changed)
@@ -57,6 +69,7 @@ export function applyStateUpdates(state, text) {
       } catch {
         continue
       }
+      read = true
       const [pathArg] = args
       if (typeof pathArg !== 'string') continue
       const keys = statKeys(pathArg)
@@ -71,7 +84,7 @@ export function applyStateUpdates(state, text) {
       changes.push(pathArg)
     }
   }
-  return { state: next, changes: [...new Set(changes)] }
+  return { state: next, changes: [...new Set(changes)], ...(wrote && !read ? { unread: true } : {}) }
 }
 
 /**
@@ -121,11 +134,115 @@ function parseLoose(text) {
   }
 }
 
-/** Every JSON Patch array inside an update block: <JSONPatch> tags, else a bare top-level array. */
+/**
+ * A `"` inside a string that nothing valid could follow is part of the text, as is a line break:
+ * what models leave unescaped in the story text they put in a value.
+ */
+function mendStrings(source) {
+  let out = ''
+  let inString = false
+  for (let i = 0; i < source.length; i++) {
+    const ch = source[i]
+    if (!inString) {
+      inString = ch === '"'
+      out += ch
+    } else if (ch === '\\') {
+      out += ch + (source[++i] ?? '')
+    } else if (ch === '\n' || ch === '\r' || ch === '\t') {
+      out += ch === '\n' ? '\\n' : ch === '\t' ? '\\t' : ''
+    } else if (ch === '"') {
+      const after = /\S/.exec(source.slice(i + 1, i + 80))?.[0] ?? ''
+      if (!after || ',}]:'.includes(after)) {
+        inString = false
+        out += ch
+      } else out += '\\"'
+    } else out += ch
+  }
+  return out
+}
+
+const CLOSER = { '{': '}', '[': ']' }
+
+/**
+ * Brackets in `text` from `from`, outside its strings.
+ * @returns { end, kept, wanted, inString }: `end` just past the one closing the first (-1 when none does);
+ *   `kept` the text without closers that close nothing; `wanted` the closers it still needs, innermost last.
+ */
+function balance(text, from = 0) {
+  const wanted = []
+  let kept = ''
+  let end = -1
+  let inString = false
+  for (let i = from; i < text.length; i++) {
+    const ch = text[i]
+    if (inString) {
+      if (ch === '\\') kept += ch + (text[++i] ?? '')
+      else {
+        inString = ch !== '"'
+        kept += ch
+      }
+      continue
+    }
+    if (ch === '"') inString = true
+    else if (ch === '{' || ch === '[') wanted.push(CLOSER[ch])
+    else if (ch === '}' || ch === ']') {
+      if (wanted.at(-1) !== ch) continue
+      wanted.pop()
+      if (!wanted.length && end < 0) end = i + 1
+    }
+    kept += ch
+  }
+  return { end, kept, wanted, inString }
+}
+
+const isOp = value => value !== null && typeof value === 'object' && typeof value.op === 'string' && typeof value.path === 'string'
+const OP_START = /\{\s*"(?:op|path)"\s*:/g
+
+function nextOp(text, from) {
+  OP_START.lastIndex = from
+  return OP_START.exec(text)?.index ?? -1
+}
+
+/**
+ * The operations that can be read in a patch that does not parse as a whole, each on its own: a stray or
+ * missing bracket in one (measured: about one patch in twelve) costs that one at most, not the turn's whole
+ * update. An operation cut off by the end of a reply is left out, not guessed at.
+ */
+function salvagePatch(source) {
+  const text = mendStrings(source)
+  const mended = parseLoose(text)
+  if (Array.isArray(mended)) return mended
+  const finished = text.trimEnd().endsWith(']')
+  const ops = []
+  for (let start = nextOp(text, 0); start >= 0;) {
+    const { end } = balance(text, start)
+    const whole = end > 0 ? parseLoose(text.slice(start, end)) : null
+    if (isOp(whole)) {
+      ops.push(whole)
+      start = nextOp(text, end)
+      continue
+    }
+    const after = nextOp(text, start + 1)
+    if (after >= 0 || finished) {
+      const piece = balance(text.slice(start, after < 0 ? text.length : after))
+      const repaired = piece.inString ? null : parseLoose(piece.kept.replace(/[\s,]+$/, '') + piece.wanted.reverse().join(''))
+      if (isOp(repaired)) ops.push(repaired)
+    }
+    start = after
+  }
+  return ops
+}
+
+/** Every JSON Patch array inside an update block: <JSONPatch> tags (a cut-off reply may not close them), else a bare top-level array. */
 function jsonPatches(body) {
-  const tagged = [...body.matchAll(/<JSONPatch>([\s\S]*?)<\/JSONPatch>/gi)].map(m => m[1])
+  const tagged = [...body.matchAll(/<JSONPatch>([\s\S]*?)(?:<\/JSONPatch>|$)/gi)].map(m => m[1])
   const sources = tagged.length ? tagged : (/^\s*\[[\s\S]*\]\s*$/m.test(body) ? [body.slice(body.indexOf('['), body.lastIndexOf(']') + 1)] : [])
-  return sources.map(parseLoose).filter(Array.isArray)
+  return sources.flatMap(source => {
+    const whole = parseLoose(source)
+    if (Array.isArray(whole)) return [whole]
+    const ops = salvagePatch(source)
+    return ops.length ? [ops] : []
+  })
 }
 
 /**
@@ -210,6 +327,24 @@ function parentOf(object, keys) {
     cursor = cursor[key]
   }
   return cursor
+}
+
+/** `value` at a dotted path of `state`, the objects on the way made as needed; a path that is not a variable's is left. */
+export function setStatePath(state, path, value) {
+  const keys = splitPath(path)
+  if (writablePath(keys)) setPath(state, keys, value)
+}
+
+/** The paths in `written` that `kept` no longer has (variable rules drop what they do not name), the shortest of each. */
+export function lostPaths(written, kept, keys = []) {
+  const lost = []
+  for (const [key, value] of Object.entries(written ?? {})) {
+    if (key.startsWith('$')) continue
+    const path = [...keys, key]
+    if (!Object.hasOwn(kept ?? {}, key)) lost.push(path.join('.'))
+    else if (value && typeof value === 'object' && !Array.isArray(value) && kept[key] && typeof kept[key] === 'object') lost.push(...lostPaths(value, kept[key], path))
+  }
+  return lost
 }
 
 function setPath(object, keys, value) {

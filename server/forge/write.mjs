@@ -4,10 +4,16 @@
 // as SillyTavern's V3 shape.
 import YAML from 'yaml'
 import { toBookEntry } from './configure.mjs'
-import { DEFAULT_LANGUAGE, LONG_TOKENS, TALK_TOKENS, conditionValue, englishCard, eventConditions, looseJson, ownWords, plainWriting, planLanguage, section, stagesOf, typedValue } from './prompts.mjs'
+import { DEFAULT_LANGUAGE, LONG_TOKENS, TALK_TOKENS, conditionValue, englishCard, eventConditions, looseJson, ownWords, plainWriting, planLanguage, playerRoot, section, stagesOf, typedValue } from './prompts.mjs'
 import { msg } from '../i18n.mjs'
+import { WRITE_REFERENCE_RULES, referenceBlock, userMessage, writingMaterial } from './references.mjs'
+import { creditText } from './structure.mjs'
+import { creationOpening, creationReady } from './creation.mjs'
 import { mvuHelper, statusScripts, statusSpecOf } from './status.mjs'
+import { LIST_GROWS } from '../../web/shared/status.js'
+import { brickContent, brickScripts } from './bricks.mjs'
 import { writablePath } from '../../web/shared/vars.js'
+import { cleanRulebook, kitBook, kitWorld } from '../../web/shared/game/sheet.js'
 
 const clip = (value, max) => (typeof value === 'string' ? value.trim().slice(0, max) : '')
 
@@ -25,6 +31,7 @@ const FORMATS = {
 外貌特征: {体型, 发型, 瞳色, 穿着, 特征}（只写遮住名字也认得出她的特征）
 背景设定: {家庭背景, 关键经历: [...], 社交关系}（只写删掉后角色会变的经历）
 关系设定: {与<user>的关系: {定位, 认识过程, 互动方式}}
+说话: {风格, 口头禅}（照方案的 voice 写）
 200 到 500 字。`,
   '角色.personality': `性格调色盘：第一行写「性格调色盘：人的性格像调色盘，<底色>是底色，<主色调>是主色调，多种性格衍生组合起来，才是活生生的人」。
 然后写「主色调」（1 到 2 个）、「底色」、「点缀」。
@@ -137,15 +144,32 @@ function eventNote(plan, entry) {
   return event ? `\n  事件内容：${[event.when, event.content].filter(Boolean).join('；')}` : ''
 }
 
-export function entriesRequest(plan, targets, written) {
+/**
+ * What a batch of a bigger card is told of the plan: the world, the core cast, and in full only the people, places
+ * and events being written. The rest stay as names: the whole plan with every batch costs more than the writing.
+ */
+function batchPlan(plan, targets) {
+  if (!plan.scale) return plan
+  const named = new Set(targets.flatMap(target => [target.name, target.owner].filter(Boolean)))
+  const short = place => (named.has(place.name) ? place : { name: place.name })
+  return {
+    ...plan,
+    characters: plan.characters.map(c => (c.kind === 'core' || named.has(c.name) ? c : { name: c.name, kind: c.kind, identity: c.identity })),
+    world: { ...plan.world, places: plan.world.places.map(short), factions: plan.world.factions.map(short) },
+    events: plan.events.filter((_, index) => targets.some(target => target.event === index)),
+  }
+}
+
+export function entriesRequest(plan, targets, written, references = []) {
+  const material = referenceBlock(writingMaterial(references))
   const asked = targets.map(e => `- ${e.name}：${e.purpose}\n  写法：${formatOf(e)}${e.staged ? stagedNote(plan, e) : ''}${e.type === '事件' ? eventNote(plan, e) : ''}`).join('\n')
   const content = [
-    `<plan>\n${SAMPLE_PLAN(plan)}\n</plan>`,
+    `<plan>\n${SAMPLE_PLAN(batchPlan(plan, targets))}\n</plan>`,
     writtenBlock(written),
     `这次要写下面这些条目：\n${asked}`,
     '每个条目的正文放在 <entry name="条目名"> 和 </entry> 之间，名字和上面一字不差；只写正文，标签外不写别的。',
   ].filter(Boolean).join('\n\n')
-  return { system: writeSystem(planLanguage(plan)), messages: [{ role: 'user', content }], maxTokens: LONG_TOKENS, softCap: true }
+  return { system: writeSystem(planLanguage(plan)) + (material ? WRITE_REFERENCE_RULES : ''), messages: [userMessage(material, content)], maxTokens: LONG_TOKENS, softCap: true }
 }
 
 const greetingSystem = language => `你是角色卡的开场白作者。开场白是玩家进入故事读到的第一段正文，它决定玩家想不想开口。
@@ -168,7 +192,8 @@ function stateLine(plan, greeting) {
   return `\n  这个开场的开局数值和默认不同：${own.map(([path, value]) => `${label(path)}（${path}）= ${value}`).join('；')}。叙述要和它们一致。`
 }
 
-export function greetingsRequest(plan, targets, written, initial) {
+export function greetingsRequest(plan, targets, written, initial, references = []) {
+  const material = referenceBlock(writingMaterial(references))
   const asked = targets.map(g => `- 开场 ${g.index + 1}「${g.title}」：${[g.start, g.scene, g.situation].filter(Boolean).join('；')}。${g.length} 字。${plan.tracking.enabled ? stateLine(plan, g) : ''}`).join('\n')
   const content = [
     `<plan>\n${SAMPLE_PLAN(plan)}\n</plan>`,
@@ -177,7 +202,7 @@ export function greetingsRequest(plan, targets, written, initial) {
     `这次要写下面这些开场白：\n${asked}`,
     '每段开场白放在 <greeting index="序号"> 和 </greeting> 之间，序号和上面一致；只写正文，标签外不写别的。',
   ].filter(Boolean).join('\n\n')
-  return { system: greetingSystem(planLanguage(plan)), messages: [{ role: 'user', content }], maxTokens: LONG_TOKENS, softCap: true }
+  return { system: greetingSystem(planLanguage(plan)) + (material ? WRITE_REFERENCE_RULES : ''), messages: [userMessage(material, content)], maxTokens: LONG_TOKENS, softCap: true }
 }
 
 // ─── Reading written text back ────────────────────────────────────────────
@@ -321,7 +346,8 @@ export function applyIssues(card, issues, language = DEFAULT_LANGUAGE) {
 export const withoutEcho = text => text.replace(/([^。！？!?\n]{3,}?)[，,]\1(?=[，,。！？!?\n]|$)/g, '$1')
 
 /** Rewrite whole pieces: by review issues, or by the user's note on one piece. */
-export function rewriteRequest(plan, card, pieces) {
+export function rewriteRequest(plan, card, pieces, references = []) {
+  const material = referenceBlock(writingMaterial(references))
   const asked = pieces
     .map(p => {
       const notes = p.issues?.length ? p.issues.map(i => `  - ${i.type ? `${i.type}：` : ''}${i.original ? `「${i.original}」` : ''}${i.suggestion ? ` → ${i.suggestion}` : ''}`).join('\n') : `  - ${p.note}`
@@ -338,7 +364,8 @@ export function rewriteRequest(plan, card, pieces) {
   ].filter(Boolean).join('\n\n')
   const greetingsOnly = pieces.every(p => p.greeting)
   const language = planLanguage(plan)
-  return { system: greetingsOnly ? greetingSystem(language) : `${writeSystem(language)}\n开场白另按开场白的写法：头三行抓人，结尾给 <user> 话头，不替 <user> 说话做决定。`, messages: [{ role: 'user', content }], maxTokens: LONG_TOKENS, softCap: true }
+  const system = greetingsOnly ? greetingSystem(language) : `${writeSystem(language)}\n开场白另按开场白的写法：头三行抓人，结尾给 <user> 话头，不替 <user> 说话做决定。`
+  return { system: system + (material ? WRITE_REFERENCE_RULES : ''), messages: [userMessage(material, content)], maxTokens: LONG_TOKENS, softCap: true }
 }
 
 // ─── State tracking, built in code ────────────────────────────────────────
@@ -355,7 +382,10 @@ function nested(variables, leaf) {
   return root
 }
 
-export const initialState = plan => nested(plan.tracking.variables, typedValue)
+/** A variable as a card starts it: a list carries MVU's mark, or nothing can be added to it in SillyTavern. */
+const startingValue = variable => (variable.type === 'list' ? [...typedValue(variable), LIST_GROWS] : typedValue(variable))
+
+export const initialState = plan => nested(plan.tracking.variables, startingValue)
 
 /**
  * The state an opening starts from: the defaults with its own values over them,
@@ -364,7 +394,7 @@ export const initialState = plan => nested(plan.tracking.variables, typedValue)
 export function greetingState(plan, greeting) {
   const own = greeting?.state ?? {}
   if (!plan.tracking.enabled || !Object.keys(own).length) return null
-  return nested(plan.tracking.variables, v => typedValue(Object.hasOwn(own, v.path) ? { ...v, initial: own[v.path] } : v))
+  return nested(plan.tracking.variables, v => startingValue(Object.hasOwn(own, v.path) ? { ...v, initial: own[v.path] } : v))
 }
 
 /**
@@ -389,6 +419,8 @@ const STATE_WORDS = {
       '- JSONPatch 里必须是合法的 JSON 数组；这一轮没有变化就写 []。',
       '- 数值按「怎么变」的规则小步变化，只有剧情出现重大转折时才大幅变化。',
     ],
+    bookRule: names => `- 册子（${names}）一行一个键：加一行用 add，路径写到这一行的名字；删一行用 remove；改一项用 replace，路径写到那一项。`,
+    bookRow: '这一行的名字', rowKey: '每行记',
     rulesKey: '变量更新规则', anyChange: '按剧情更新',
     hideFromModel: '对模型隐藏变量更新', hideFromPlayer: '对玩家隐藏变量更新',
     hidePlaceholder: '对模型隐藏状态栏', statusBar: '状态栏',
@@ -405,6 +437,8 @@ const STATE_WORDS = {
       '- The JSONPatch must be a valid JSON array; with no change this turn, write [].',
       '- Numbers move in small steps by their check; only a major turn in the story moves them far.',
     ],
+    bookRule: names => `- Books (${names}) keep a key per row: add a row with add, its path ending in the row's name; take one out with remove; change one item with replace, its path ending in that item.`,
+    bookRow: 'name of the row', rowKey: 'each row keeps',
     rulesKey: 'Variable update rules', anyChange: 'changes with the story',
     hideFromModel: 'Hide variable updates from the model', hideFromPlayer: 'Hide variable updates from the player',
     hidePlaceholder: 'Hide the status bar from the model', statusBar: 'Status bar',
@@ -419,19 +453,21 @@ const stateWords = plan => STATE_WORDS[englishCard(planLanguage(plan)) ? 'en' : 
 
 function formatEntry(plan) {
   const words = stateWords(plan)
-  const example = plan.tracking.variables.find(v => v.type === 'number') ?? plan.tracking.variables[0]
-  const path = `/${example.path.split('.').join('/')}`
-  const value = example.type === 'number' ? typedValue(example) + 2 : JSON.stringify(typedValue(example))
+  const example = plan.tracking.variables.find(v => v.type === 'number') ?? plan.tracking.variables.find(v => v.type !== 'book')
+  const books = plan.tracking.variables.filter(v => v.type === 'book')
+  const change = example && `{ "op": "replace", "path": "/${example.path.split('.').join('/')}", "value": ${example.type === 'number' ? typedValue(example) + 2 : JSON.stringify(typedValue(example))} }`
+  const added = books[0] && `{ "op": "add", "path": "/${books[0].path.split('.').join('/')}/${words.bookRow}", "value": ${JSON.stringify(Object.fromEntries(books[0].columns.map(column => [column, '…'])))} }`
   return [
     '<update_variable_rules>',
     words.formatLead,
     '<UpdateVariable>',
     '<Analysis>(in English, no more than 80 words) go through each variable by its check, based only on this reply; for numbers write old + change = new</Analysis>',
     '<JSONPatch>',
-    `[{ "op": "replace", "path": "${path}", "value": ${value} }]`,
+    `[${[change, added].filter(Boolean).join(', ')}]`,
     '</JSONPatch>',
     '</UpdateVariable>',
     ...words.formatRules,
+    ...(books.length ? [words.bookRule(books.map(v => v.label || v.path).join(words.separator))] : []),
     '</update_variable_rules>',
   ].join('\n')
 }
@@ -441,6 +477,7 @@ function rulesEntry(plan) {
   const rule = variable => {
     const out = {}
     if (variable.type !== 'string') out.type = variable.type
+    if (variable.type === 'book') out[words.rowKey] = variable.columns
     if (variable.range) out.range = variable.range
     if (variable.check) out.check = [variable.check]
     return Object.keys(out).length ? out : words.anyChange
@@ -454,26 +491,36 @@ export function stateContent(entry, plan) {
   if (entry.part === 'variables') return VARIABLES_ENTRY
   if (entry.part === 'rules') return rulesEntry(plan)
   if (entry.part === 'format') return formatEntry(plan)
-  return ''
+  return chineseText(brickContent(entry.part, plan, englishCard(planLanguage(plan)), playerRoot(planLanguage(plan))), planLanguage(plan))
 }
 
 // ─── The steps ────────────────────────────────────────────────────────────
 
 const WORLD_TYPES = new Set(['世界观', '扮演准则', '时间线', '地理'])
+// A bigger card goes out in batches: too much at once and an answer gets cut off, or comes back with half of it.
+const BATCH = 8
+
+/** Steps for a run of entries: one, or a batch at a time for a card of a bigger scale. */
+function batched(plan, id, label, entries) {
+  if (!entries.length) return []
+  if (!plan.scale || entries.length <= BATCH) return [{ id, label, names: entries.map(e => e.name) }]
+  const count = Math.ceil(entries.length / BATCH)
+  return Array.from({ length: count }, (_, i) => ({ id: `${id}:${i + 1}`, label: msg`${label}（${i + 1}/${count}）`, names: entries.slice(i * BATCH, (i + 1) * BATCH).map(e => e.name) }))
+}
 
 /** The writing steps for a card, each with the entries or openings it fills. */
 export function writeSteps(plan, card) {
   const steps = []
   const world = card.entries.filter(e => WORLD_TYPES.has(e.type))
-  if (world.length) steps.push({ id: 'world', label: msg`世界观、规则和地点`, names: world.map(e => e.name) })
+  steps.push(...batched(plan, 'world', msg`世界观、规则和地点`, world))
   for (const c of plan.characters.filter(c => c.kind === 'core')) {
     const own = card.entries.filter(e => e.type === '角色' && e.owner === c.name)
     if (own.length) steps.push({ id: `character:${c.name}`, label: msg`${c.name}的档案与性格`, names: own.map(e => e.name) })
   }
   const rest = card.entries.filter(e => e.type === 'NPC' || e.part === 'catalog')
-  if (rest.length) steps.push({ id: 'cast', label: msg`配角`, names: rest.map(e => e.name) })
+  steps.push(...batched(plan, 'cast', msg`配角`, rest))
   const events = card.entries.filter(e => e.type === '事件')
-  if (events.length) steps.push({ id: 'events', label: msg`事件`, names: events.map(e => e.name) })
+  steps.push(...batched(plan, 'events', msg`事件`, events))
   steps.push({ id: 'greetings', label: msg`开场白`, greetings: true })
   steps.push({ id: 'review', label: msg`检查套话和前后矛盾` })
   steps.push({ id: 'fix', label: msg`按检查结果修改` })
@@ -569,7 +616,7 @@ const readVariable = variable => `getvar(${JSON.stringify(`stat_data.${variable.
 export function conditionExpression(condition) {
   const { variable, op, value } = condition
   const read = readVariable(variable)
-  if (op === 'has') return `${read}.includes(${JSON.stringify(value)})`
+  if (op === 'has') return variable.type === 'book' ? `(${JSON.stringify(value)} in ${read})` : `${read}.includes(${JSON.stringify(value)})`
   return `${read} ${{ '==': '===', '!=': '!==' }[op] ?? op} ${JSON.stringify(conditionValue(condition))}`
 }
 
@@ -658,34 +705,42 @@ export const usesEjs = (plan, card) => card.entries.some(entry => /<%|^@@if /m.t
 const UPDATE_BLOCK = '/<(update(?:variable)?)>[\\s\\S]*?<\\/\\1>/gi'
 const regexScript = (name, options) => ({ id: name, scriptName: name, findRegex: UPDATE_BLOCK, replaceString: '', trimStrings: [], placement: [2], disabled: false, markdownOnly: false, promptOnly: false, runOnEdit: true, substituteRegex: 0, minDepth: null, maxDepth: null, ...options })
 
+/** 战斗与成长 as the card carries it: rules at full, from the first turn. */
+const planRulebook = game => cleanRulebook({ level: 'full', ...kitBook(game), ...kitWorld(game) })
+
 /**
  * The finished card as SillyTavern's V3 JSON.
  * @param options.author - the player's name in settings (你的角色): the card's author is it + CicaTavern; the
  *   default name (你) is no one's, and leaves CicaTavern alone.
+ * @param options.credits - cards whose content this one uses, [{ title, author }]: the player answers for it, so the
+ *   card is theirs alone, and its notes end by saying where it came from.
  */
-export function cardJson(plan, card, { author = '' } = {}) {
+export function cardJson(plan, card, { author = '', credits = [] } = {}) {
   const entries = [...card.entries].sort((a, b) => a.order - b.order).map((entry, i) => toBookEntry({ ...entry, content: wrapped(entry, plan) }, i))
   const greetings = card.greetings.map((_, i) => greetingText(plan, card, i)).filter(Boolean)
   const words = stateWords(plan)
   const status = statusSpecOf(plan)
   // A name of the card's own for the player (创作角色卡 asked); none = the one in settings.
   const userName = plan.user_role.name ?? ''
-  const own = { ...(status ? { status_bar: status } : {}), ...(userName ? { user_name: userName } : {}) }
+  const own = { ...(status ? { status_bar: status } : {}), ...(userName ? { user_name: userName } : {}), ...(plan.game ? { game: planRulebook(plan.game) } : {}) }
   const scripts = plan.tracking.enabled ? [regexScript(words.hideFromModel, { promptOnly: true }), regexScript(words.hideFromPlayer, { markdownOnly: true })] : []
+  scripts.push(...brickScripts(plan, englishCard(planLanguage(plan))))
   if (status) scripts.push(...statusScripts(status, words))
+  // 建角页: the card opens on the form; the written openings stay, for a start without it.
+  const form = creationReady(plan) ? creationOpening(plan.creation, englishCard(planLanguage(plan))) : null
   const data = {
     name: plan.name,
     description: card.description,
     personality: '',
     scenario: '',
-    first_mes: greetings[0] ?? '',
+    first_mes: form ?? greetings[0] ?? '',
     mes_example: '',
-    creator_notes: [card.creatorNotes, userName && words.playerName(userName), usesEjs(plan, card) && words.ejsInfo].filter(Boolean).join('\n\n'),
+    creator_notes: [credits.length ? card.creatorNotes.replace(words.creator, '').trim() : card.creatorNotes, userName && words.playerName(userName), usesEjs(plan, card) && words.ejsInfo, credits.length && creditText(credits, englishCard(planLanguage(plan)))].filter(Boolean).join('\n\n'),
     system_prompt: '',
     post_history_instructions: '',
-    alternate_greetings: greetings.slice(1),
-    tags: ['CicaTavern'],
-    creator: author && author !== '你' ? `${author} + CicaTavern` : 'CicaTavern', // i18n-ignore: the default name as saved
+    alternate_greetings: form ? greetings : greetings.slice(1),
+    tags: credits.length ? [] : ['CicaTavern'],
+    creator: credits.length ? (author === '你' ? '' : author) : author && author !== '你' ? `${author} + CicaTavern` : 'CicaTavern', // i18n-ignore: the default name as saved
     character_version: '1.0',
     extensions: {
       talkativeness: '0.5',

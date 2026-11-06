@@ -29,7 +29,7 @@ const THRESHOLD = {
   角色: { basic: 5, personality: 2, facets: 2, other: 2, catalog: Infinity },
   NPC: 0,
   事件: 0,
-  状态: { initvar: null, variables: Infinity, rules: Infinity, format: Infinity },
+  状态: { initvar: null, variables: Infinity, rules: Infinity, format: Infinity, creation: 0 },
 }
 
 const SPLIT = /[-_\s/·・]+/

@@ -9,11 +9,19 @@ import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.provider.MediaStore;
+import android.provider.Settings;
 import android.text.TextUtils;
+import android.view.View;
+import android.view.Window;
+import android.view.WindowInsets;
+import android.view.WindowInsetsController;
+import android.view.WindowManager;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
@@ -46,12 +54,16 @@ public class MainActivity extends Activity {
     private static final int PICK_FILES = 1;
     private static final int ASK_MICROPHONE = 2;
     private static final long START_TIMEOUT_MS = 60_000;
+    // The longest a reply keeps the CPU on, should the page never say it ended.
+    private static final long AWAKE_MS = 15 * 60_000;
 
     private final Handler main = new Handler(Looper.getMainLooper());
+    private PowerManager.WakeLock awake;
     // The bridge (window.AgentTavernAndroid) is in every frame of the WebView, card frames too: each call carries
     // this launch's key, a cookie of the app's own page that an opaque-origin card frame cannot read (web/app.js android).
     private final String bridgeKey = newKey();
     private WebView web;
+    private boolean barsHidden;
     private ValueCallback<Uri[]> pendingChooser;
     // The page's microphone request (语音输入) while Android asks the user for RECORD_AUDIO.
     private PermissionRequest pendingMicrophone;
@@ -83,8 +95,37 @@ public class MainActivity extends Activity {
         start();
     }
 
+    /** 全屏 in the visual novel: the status and navigation bars go, until a swipe from the edge brings them back for a moment. */
+    @SuppressWarnings("deprecation")
+    private void hideBars(boolean hide) {
+        barsHidden = hide;
+        Window window = getWindow();
+        WindowManager.LayoutParams attributes = window.getAttributes();
+        attributes.layoutInDisplayCutoutMode = hide ? WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES : WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT;
+        window.setAttributes(attributes);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            WindowInsetsController bars = window.getInsetsController();
+            if (bars == null) return;
+            bars.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+            if (hide) bars.hide(WindowInsets.Type.systemBars());
+            else bars.show(WindowInsets.Type.systemBars());
+        } else {
+            window.getDecorView().setSystemUiVisibility(hide
+                ? View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                : View.SYSTEM_UI_FLAG_VISIBLE);
+        }
+    }
+
+    /** Coming back from another app or the notification shade, the bars stay away. */
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus && barsHidden) hideBars(true);
+    }
+
     /** The WebView the app shows, a fresh one in place of any before it (onRenderProcessGone). */
     private void newWebView() {
+        if (barsHidden) hideBars(false);
         WebView previous = web;
         web = new WebView(this);
         WebSettings settings = web.getSettings();
@@ -94,6 +135,8 @@ public class MainActivity extends Activity {
         // The WebView scales text by the system font size, but the layout is in px:
         // at a large font size labels overflow their buttons and dialogs. Keep the page's own sizes.
         settings.setTextZoom(100);
+        // 界面大小 lays the page out narrower through the viewport tag (web/theme.js), which only counts with this on.
+        settings.setUseWideViewPort(true);
         settings.setAllowFileAccess(false);
         settings.setAllowContentAccess(true);
         web.setWebViewClient(new LocalOnlyClient());
@@ -257,6 +300,7 @@ public class MainActivity extends Activity {
         String script = "(() => {"
             + "const d = [...document.querySelectorAll('dialog[open]')].pop();"
             + "if (d) { d.close(); return 'closed' }"
+            + "if (document.querySelector('.stage.vn-full')) { document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); return 'closed' }"
             + "const app = document.querySelector('.app');"
             + "if (app && (app.classList.contains('show-left') || app.classList.contains('show-right'))) { app.classList.remove('show-left', 'show-right'); return 'closed' }"
             + "return 'none' })()";
@@ -467,6 +511,40 @@ public class MainActivity extends Activity {
             if (allowed(key)) main.post(MainActivity.this::openApp);
         }
 
+        /** 后台运行: whether this app is left out of the phone's battery optimization. */
+        @JavascriptInterface
+        public boolean batteryFree(String key) {
+            return allowed(key) && getSystemService(PowerManager.class).isIgnoringBatteryOptimizations(getPackageName());
+        }
+
+        /** The phone's own question about it, or this app's page in the settings where there is none. */
+        @JavascriptInterface
+        public void openBatterySettings(String key) {
+            if (!allowed(key)) return;
+            main.post(() -> {
+                Uri app = Uri.parse("package:" + getPackageName());
+                try {
+                    startActivity(new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, app));
+                } catch (ActivityNotFoundException error) {
+                    startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, app));
+                }
+            });
+        }
+
+        /** The CPU stays on while a reply is written, the screen off or not; for a while at most, should the page never say it ended. */
+        @JavascriptInterface
+        public void keepAwake(String key, boolean on) {
+            if (!allowed(key)) return;
+            main.post(() -> {
+                if (awake == null) {
+                    awake = getSystemService(PowerManager.class).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "CicaTavern:reply");
+                    awake.setReferenceCounted(false);
+                }
+                if (on) awake.acquire(AWAKE_MS);
+                else if (awake.isHeld()) awake.release();
+            });
+        }
+
         @JavascriptInterface
         public void copy(String key, String text) {
             if (!allowed(key)) return;
@@ -504,6 +582,11 @@ public class MainActivity extends Activity {
                 runOnUiThread(() -> android.widget.Toast.makeText(MainActivity.this, (ok ? "已保存到「下载」：" : "保存失败：") + name, android.widget.Toast.LENGTH_LONG).show());
             }, "save-download").start();
             return true;
+        }
+
+        @JavascriptInterface
+        public void setFullscreen(String key, boolean on) {
+            if (allowed(key)) main.post(() -> hideBars(on));
         }
 
         @JavascriptInterface

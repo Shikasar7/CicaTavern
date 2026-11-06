@@ -150,6 +150,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   scanDepth: 4,
   reinjectAfter: 6,
   stateRefreshEvery: 5,
+  autoFillUpdate: true, // 自动补写变量: a reply without a readable update block gets one right after the turn
+  replyToTop: true, // a reply written to its end is shown from its first line (not in the visual novel mode)
   dynamicStrip: 'rare', // when piled-up <动态设定> copies are stripped: 'often' | 'rare' | 'off' (dynamic.mjs)
   compaction: null, // 自动压缩: { auto, percent, cap, windows } (context.mjs cleanCompaction); null = its defaults
   memory: null, // 长期记忆（Beta）: { enabled, tidy: { enabled, every, model }, budget } (memory.mjs cleanMemory); null = all off
@@ -258,6 +260,8 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
         if (next.subscription !== 'off') next.subscription = 'on'
         next.proxy = cleanProxySetting(next.proxy)
         if (!['often', 'rare', 'off'].includes(next.dynamicStrip)) next.dynamicStrip = 'rare'
+        next.autoFillUpdate = next.autoFillUpdate !== false
+        next.replyToTop = next.replyToTop !== false
         next.compaction = cleanCompaction(next.compaction)
         next.memory = cleanMemory(next.memory)
         if (!['auto', 'zh', 'en'].includes(next.uiLanguage)) next.uiLanguage = 'auto'
@@ -344,7 +348,7 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
       for (const name of names) {
         if (!SAFE_ID.test(name)) continue
         const card = await readJson(path.join(dirs.cards, name, 'card.json'), null)
-        if (card) cards.push(card)
+        if (card && !card.direct) cards.push(card)
       }
       return cards.sort((a, b) => b.importedAt.localeCompare(a.importedAt))
     },

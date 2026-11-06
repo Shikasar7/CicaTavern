@@ -1,13 +1,71 @@
 // Pictures and voice for replies: the 配图 / 朗读 buttons, the picture strip
 // under a reply, the reading bar above the input box and the settings window.
 // Nothing here changes what the model sees.
-import { speechChunks } from '/shared/speech.js'
+import { readyVoiceSources, sourcesToAsk, speechChunks } from '/shared/speech.js'
 import { hasMarks, speakerNames, splitLines } from '/shared/vn.js'
-import { createMenu, MENU_ICONS, whoLine } from '/menu.js'
+import { comboBox, createMenu, MENU_ICONS, whoLine } from '/menu.js'
 import { locale, t, zh } from '/i18n.js'
 import { NAI_MODELS, historyStrip, keptItems } from '/draw-choice.js'
 import { GEMINI_IMAGE_MODELS, IMAGE_MODEL, STYLE_PRESETS, stylePresetOf } from '/shared/draw.js'
 import { matchesTerms, searchBox, searchTerms } from '/books.js'
+import { blackBars } from '/shared/cutout.js'
+
+// How loud reading aloud is on this device (声音 in the visual novel mode).
+const VOICE_VOLUME_KEY = 'cicatavern.voiceVolume'
+
+function voiceVolume() {
+  try {
+    const kept = Number(localStorage.getItem(VOICE_VOLUME_KEY) ?? 1)
+    return Number.isFinite(kept) ? Math.min(1, Math.max(0, kept)) : 1
+  } catch {
+    return 1
+  }
+}
+
+// The only canvases NovelAI takes a reference picture on.
+const REFERENCE_SIZES = [[1024, 1536], [1536, 1024], [1472, 1472]]
+
+/**
+ * A reference picture on the closest of those canvases, as a data URL. What is left over takes on the picture's own
+ * edges: padded in black, the band shows in the 人设图 and gets drawn back into what is made from it.
+ * @param source - a Blob, or an ImageBitmap.
+ */
+export async function padForReference(source) {
+  const bitmap = source instanceof Blob ? await createImageBitmap(source) : source
+  const { width, height } = bitmap
+  const aspect = width / height
+  const [w, h] = REFERENCE_SIZES.reduce((best, size) => (Math.abs(size[0] / size[1] - aspect) < Math.abs(best[0] / best[1] - aspect) ? size : best))
+  const canvas = Object.assign(document.createElement('canvas'), { width: w, height: h })
+  const ctx = canvas.getContext('2d')
+  const scale = Math.min(w / width, h / height)
+  const dw = Math.round(width * scale)
+  const dh = Math.round(height * scale)
+  const x = Math.round((w - dw) / 2)
+  const y = Math.round((h - dh) / 2)
+  ctx.imageSmoothingQuality = 'high'
+  if (y) {
+    ctx.drawImage(bitmap, 0, 0, width, 1, x, 0, dw, y)
+    ctx.drawImage(bitmap, 0, height - 1, width, 1, x, y + dh, dw, h - y - dh)
+  }
+  if (x) {
+    ctx.drawImage(bitmap, 0, 0, 1, height, 0, y, x, dh)
+    ctx.drawImage(bitmap, width - 1, 0, 1, height, x + dw, y, w - x - dw, dh)
+  }
+  ctx.drawImage(bitmap, x, y, dw, dh)
+  return canvas.toDataURL('image/png')
+}
+
+/** A reference picture with the black bands an earlier version gave it, padded again; null for one that has none. */
+export async function mendReference(blob) {
+  const bitmap = await createImageBitmap(blob)
+  if (!REFERENCE_SIZES.some(([w, h]) => w === bitmap.width && h === bitmap.height)) return null
+  const canvas = Object.assign(document.createElement('canvas'), { width: bitmap.width, height: bitmap.height })
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
+  ctx.drawImage(bitmap, 0, 0)
+  const bars = blackBars(ctx.getImageData(0, 0, bitmap.width, bitmap.height))
+  if (!bars) return null
+  return padForReference(await createImageBitmap(bitmap, bars.left, bars.top, bitmap.width - bars.left - bars.right, bitmap.height - bars.top - bars.bottom))
+}
 
 const SHAPES = [['square', t`方图`], ['portrait', t`竖图`], ['landscape', t`横图`]]
 const IMAGE_BACKEND_TEXT = { openai: t`图片接口`, gemini: 'Gemini', comfy: 'ComfyUI', sdwebui: 'SD WebUI', novelai: 'NovelAI' }
@@ -82,6 +140,8 @@ speech?.getVoices()
 
 // Voice sources on the server (server/voice/): a card names a voice as `<source>:<id>`.
 const VOICE_SOURCES = ['openai', 'fish', 'minimax', 'moss', 'gemini']
+// The sources with an account to read voices from (从账户读取音色).
+const ACCOUNT_SOURCES = ['fish', 'minimax', 'moss']
 const VOICE_FIELDS = ['ttsProvider', 'ttsModel', 'ttsVoices', 'fishModel', 'fishVoices', 'minimaxModel', 'minimaxRegion', 'minimaxVoices', 'mossModel', 'mossVoices', 'geminiTtsProvider', 'geminiTtsModel', 'geminiTtsVoices']
 const TTS_MODELS = ['gpt-4o-mini-tts', 'tts-1', 'tts-1-hd', 'FunAudioLLM/CosyVoice2-0.5B']
 const FISH_MODELS = [['drama-3', t`drama-3（情绪最足，按用量计费）`], ['s2.1-pro', 's2.1-pro'], ['s2.1-pro-free', t`s2.1-pro-free（免费，合理使用）`], ['s2-pro', 's2-pro']]
@@ -126,11 +186,13 @@ function browserVoice(ref) {
 export function initMedia({ api, el, toast, guard, getChat, getModels, openProviders, saveFile, pickDraw, onPictures = () => {} }) {
   const $ = id => document.getElementById(id)
   // The settings window (配图与朗读) as a menu of parts (web/menu.js).
-  const settingsMenu = createMenu({ dialog: $('media-dialog'), form: $('media-form'), el, title: t`配图与朗读` })
+  const settingsMenu = createMenu({ dialog: $('media-dialog'), form: $('media-form'), el, title: t`配图与朗读`, onPage: (_, left) => left === 'voice' && settleVoiceKeys() })
   const state = {
     settings: null,
     cardId: null,
     cardMedia: { voice: '', narratorVoice: '', style: '', styleNegative: '', promptRules: '', lora: '', loraTrigger: '', loraStrength: 0.8 },
+    formCard: null, // { id, name }: the card the settings window is about, when it was opened for one (a card's ⋯)
+    keySaved: false, // a voice key was saved on its own since 朗读来源 last offered 默认对白音色
     jobs: new Map(), // nodeId → { stage, chatId, controller, started, backend } of a picture in the works
     failures: new Map(), // nodeId → { stage, chatId, prompt, message } shown in place of the picture
     fresh: new Set(), // files just drawn: they come into focus once loaded
@@ -756,6 +818,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       // Synthesise the next block while this one plays.
       if (i + 1 < this.queue.length && !spokenHere(this.queue[i + 1])) this.fetchChunk(i + 1)
       this.audio = new Audio(url)
+      this.audio.volume = voiceVolume()
       this.audio.onended = () => {
         URL.revokeObjectURL(url)
         this.fetched.delete(i)
@@ -783,6 +846,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       const chunk = this.queue[i]
       // Bracketed delivery tags are for voices that act on them; a browser would read them out.
       const utterance = new SpeechSynthesisUtterance(chunk.text.replace(DELIVERY_TAG, ''))
+      utterance.volume = voiceVolume()
       const voice = browserVoice(chunk.voice)
       utterance.lang = voice?.lang ?? 'zh-CN'
       if (voice) utterance.voice = voice
@@ -901,14 +965,17 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     return speakerNames({ char: chat?.names?.char, user: chat?.names?.user, roster: cast() })
   }
 
-  /** A speaker's voice: their cast entry's own, else the card's dialogue voice. */
+  /** The card's dialogue voice, else 默认对白音色; '' reads with the bridge's current voice, else the browser's. */
+  const dialogueVoice = () => state.cardMedia?.voice || state.settings?.defaultVoice || ''
+
+  /** A speaker's voice: their cast entry's own, else the dialogue voice. */
   function voiceOf(speaker, names = castNames()) {
     const id = speaker ? names.find(entry => entry.name === speaker)?.id : null
-    return (id && cast().find(entry => entry.id === id)?.voice) || state.cardMedia?.voice || ''
+    return (id && cast().find(entry => entry.id === id)?.voice) || dialogueVoice()
   }
 
   /** Characters per dialogue chunk: the shortest any voice in use takes. */
-  const dialogueMax = () => Math.min(chunkMaxFor(state.cardMedia?.voice), ...cast().filter(entry => entry.voice).map(entry => chunkMaxFor(entry.voice)))
+  const dialogueMax = () => Math.min(chunkMaxFor(dialogueVoice()), ...cast().filter(entry => entry.voice).map(entry => chunkMaxFor(entry.voice)))
 
   /**
    * (quote text) → who says it, for a reply's quotes in reading order: found in
@@ -977,7 +1044,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     if (player.line === span) return player.stop()
     const node = getChat()?.path.find(n => n.id === nodeId)
     const names = castNames()
-    const voice = castVoiced() && node ? voiceOf(quoteSpeakers(shownText(node), names)(span.innerText), names) : state.cardMedia.voice
+    const voice = castVoiced() && node ? voiceOf(quoteSpeakers(shownText(node), names)(span.innerText), names) : dialogueVoice()
     const chunks = speechChunks(span.innerText + voiceTagFor(span), { narration: false, tags: true, max: chunkMaxFor(voice) })
     if (!chunks.length) return toast(t`这句没有能读的文字`)
     player.start(nodeId, chunks.map(chunk => ({ ...chunk, voice, stable: false })), span)
@@ -1012,12 +1079,17 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
   // ─── Settings ─────────────────────────────────────────────────────────
 
   /**
-   * @param section - open straight into one part ('image', 'voice', 'card',
-   *   'roster'); without it a fresh opening shows the menu, and a re-render
-   *   (after 保存) stays where it was.
+   * @param section - open straight into one part ('image', 'voice', 'card-style',
+   *   'card-voice', 'roster'); without it a fresh opening shows the menu, and a
+   *   re-render (after 保存) stays where it was.
+   * @param options.panel - a fresh opening's menu is this panel alone: 'image' (配图) or 'voice' (朗读).
+   * @param options.card - { id, name }: that card's settings, open or not (its ⋯ in the list).
    */
-  const openSettings = guard(async section => {
-    if (!$('media-dialog').open || typeof section === 'string') settingsMenu.start(typeof section === 'string' ? section : null)
+  const openSettings = guard(async (section, { panel = null, card: forCard = null } = {}) => {
+    if (!$('media-dialog').open || typeof section === 'string') {
+      settingsMenu.start(typeof section === 'string' ? section : null, panel)
+      state.formCard = forCard
+    }
     const [{ media, workflow, novelai, voiceKey, voiceKeys, ownBackends = [] }, providers, voiceInfo, loraInfo, browserVoices] = await Promise.all([
       api('/api/media/settings'),
       api('/api/providers'),
@@ -1028,10 +1100,14 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     state.settings = media
     state.ownBackends = ownBackends
     state.voiceInfo = voiceInfo
-    const card = state.cardId ? await api(`/api/cards/${state.cardId}/media`) : null
+    const cardId = formCardId()
+    const card = cardId ? await api(`/api/cards/${cardId}/media`) : null
     renderSettings({ media, workflow, novelai, voiceKey, voiceKeys, providers: providers.providers, voiceInfo, loraInfo, card, browserVoices })
     if (!$('media-dialog').open) $('media-dialog').showModal()
   })
+
+  /** The card the settings window is about. */
+  const formCardId = () => state.formCard?.id ?? state.cardId
 
   function renderSettings({ media, workflow, novelai, voiceKey, voiceKeys, providers, voiceInfo, loraInfo, card, browserVoices = [] }) {
     const form = $('media-form')
@@ -1059,20 +1135,22 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     const backend = el('select', { name: 'imageBackend' }, [...imageBackends(), ...state.ownBackends.map(own => [own.id, own.name])].map(([value, text]) => option(value, text, media.imageBackend)))
     const imageProviders = providers.filter(p => p.api !== 'anthropic-messages')
     const provider = el('select', { name: 'imageProvider' }, [option('', imageProviders.length ? t`选一个供应商` : t`先在「供应商」里添加`, media.imageProvider), ...imageProviders.filter(openaiStyle).map(p => option(p.id, p.name, media.imageProvider))])
-    const modelList = el('datalist', { id: 'image-models' })
-    const model = el('input', { name: 'imageModel', value: media.imageModel, list: 'image-models', placeholder: t`例如 grok-imagine-image-2.0`, spellcheck: 'false' })
+    let imageModels = []
+    const listImageModels = input => comboBox(el, { input, options: () => imageModels, empty: t`点「获取」列出模型，也可以直接填写` })
+    const model = el('input', { name: 'imageModel', value: media.imageModel, placeholder: t`例如 grok-imagine-image-2.0`, spellcheck: 'false' })
+    const modelPick = listImageModels(model)
     const fetchModels = el('button', { type: 'button', class: 'btn small', text: t`获取` })
     fetchModels.onclick = guard(async () => {
       if (!provider.value) throw new Error(t`先选供应商`)
       const { models } = await api('/api/providers/models', { method: 'POST', body: { id: provider.value } })
       const images = models.filter(id => IMAGE_MODEL.test(id))
-      modelList.replaceChildren(...(images.length ? images : models).map(id => el('option', { value: id })))
-      toast(images.length ? t`找到 ${images.length} 个生图模型，点输入框选` : t`没认出生图模型，列出了全部 ${models.length} 个`)
-      model.focus()
+      imageModels = images.length ? images : models
+      toast(images.length ? t`找到 ${images.length} 个生图模型，在列表里选` : t`没认出生图模型，列出了全部 ${models.length} 个`)
+      modelPick.open()
     })
     const size = el('select', { name: 'imageShape' }, SHAPES.map(([value, text]) => option(value, text, media.imageShape)))
     const reference = el('input', { type: 'checkbox', name: 'imageReference', checked: media.imageReference })
-    const editModel = el('input', { name: 'imageEditModel', value: media.imageEditModel, list: 'image-models', placeholder: t`同上（和生图模型一样）`, spellcheck: 'false' })
+    const editModel = el('input', { name: 'imageEditModel', value: media.imageEditModel, placeholder: t`同上（和生图模型一样）`, spellcheck: 'false' })
     const comfyUrl = el('input', { name: 'comfyUrl', value: media.comfyUrl, spellcheck: 'false' })
     const workflowInfo = el('span', { class: 'hint', style: 'white-space: pre-line', text: workflowText(workflow), 'data-imported': workflow ? '1' : undefined })
     const workflowInput = el('input', { type: 'file', accept: '.json,application/json', hidden: true })
@@ -1112,7 +1190,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       serviceLinks('openai', t`常用的图片接口，在「管理供应商」里添加后在这里选：`),
       el('div', { class: 'grid' }, [
         field(t`供应商`, provider),
-        el('label', {}, [t`生图模型`, el('span', { class: 'select-with-action' }, [model, fetchModels]), modelList]),
+        el('label', {}, [t`生图模型`, el('span', { class: 'select-with-action' }, [modelPick.box, fetchModels])]),
       ]),
     ])
     // 简单模式 (server/media.mjs simpleWorkflow): no workflow to import, the model picked from what ComfyUI has.
@@ -1125,14 +1203,10 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       option('unet', t`扩散模型 + 文本编码器（Flux、Krea 2、Qwen-Image、Anima…）`, media.comfyTemplate),
     ])
     const comfyLists = { checkpoints: [], unets: [], clips: [], clipTypes: [], vaes: [], samplers: [], schedulers: [] }
-    const comfyList = id => el('datalist', { id })
-    const comfyModelList = comfyList('comfy-models')
-    const comfyClipList = comfyList('comfy-clips')
-    const comfyVaeList = comfyList('comfy-vaes')
-    const comfySamplerList = comfyList('comfy-samplers')
-    const comfySchedulerList = comfyList('comfy-schedulers')
-    const comfyText = (name, list, placeholder = '') => el('input', { name, value: media[name] ?? '', list, placeholder, spellcheck: 'false' })
-    const comfyModel = comfyText('comfyModel', 'comfy-models', t`点「读取模型」从 ComfyUI 里选`)
+    const comfyText = (name, placeholder = '') => el('input', { name, value: media[name] ?? '', placeholder, spellcheck: 'false' })
+    const listComfy = (input, options) => comboBox(el, { input, options, empty: t`点「读取模型」列出 ComfyUI 里有的，也可以直接填写` })
+    const comfyModel = comfyText('comfyModel', t`点「读取模型」从 ComfyUI 里选`)
+    const comfyModelPick = listComfy(comfyModel, () => (comfyTemplate.value === 'unet' ? comfyLists.unets : comfyLists.checkpoints))
     const comfyClipType = el('select', { name: 'comfyClipType' })
     const fillComfyClipTypes = () => {
       const now = comfyClipType.value || media.comfyClipType || ''
@@ -1140,44 +1214,34 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       comfyClipType.replaceChildren(option('', t`自动（按模型文件名认）`, now), ...types.map(type => option(type, type, now)))
     }
     fillComfyClipTypes()
-    const comfyVae = comfyText('comfyVae', 'comfy-vaes')
+    const comfyVae = comfyText('comfyVae')
     const comfySteps = el('input', { name: 'comfySteps', type: 'number', min: '1', max: '150', step: '1', value: String(media.comfySteps ?? 24) })
     const comfyCfg = el('input', { name: 'comfyCfg', type: 'number', min: '0', max: '30', step: '0.5', value: String(media.comfyCfg ?? 6) })
-    const comfySampler = comfyText('comfySampler', 'comfy-samplers')
-    const comfyScheduler = comfyText('comfyScheduler', 'comfy-schedulers')
-    const fillList = (list, names) => list.replaceChildren(...names.map(name => el('option', { value: name })))
-    const fillComfyModels = () => fillList(comfyModelList, comfyTemplate.value === 'unet' ? comfyLists.unets : comfyLists.checkpoints)
+    const comfySampler = comfyText('comfySampler')
+    const comfyScheduler = comfyText('comfyScheduler')
     const readComfyModels = el('button', { type: 'button', class: 'btn small', text: t`读取模型` })
     readComfyModels.onclick = guard(async () => {
       Object.assign(comfyLists, await api('/api/media/comfy/models', { method: 'POST', body: { url: comfyUrl.value.trim() } }))
-      fillComfyModels()
-      fillList(comfyClipList, comfyLists.clips)
-      fillList(comfyVaeList, comfyLists.vaes)
-      fillList(comfySamplerList, comfyLists.samplers)
-      fillList(comfySchedulerList, comfyLists.schedulers)
       fillComfyClipTypes()
-      toast(t`ComfyUI 里有 ${comfyLists.checkpoints.length} 个 Checkpoint、${comfyLists.unets.length} 个扩散模型，点输入框选`)
-      comfyModel.focus()
+      toast(t`ComfyUI 里有 ${comfyLists.checkpoints.length} 个 Checkpoint、${comfyLists.unets.length} 个扩散模型，在列表里选`)
+      comfyModelPick.open()
     })
     const comfyUnetFields = el('div', { class: 'grid' }, [
-      field(t`文本编码器`, comfyText('comfyClip', 'comfy-clips')),
-      field(t`第二个文本编码器`, comfyText('comfyClip2', 'comfy-clips', t`只有 Flux 要（clip_l），别的留空`)),
+      field(t`文本编码器`, listComfy(comfyText('comfyClip'), () => comfyLists.clips).box),
+      field(t`第二个文本编码器`, listComfy(comfyText('comfyClip2', t`只有 Flux 要（clip_l），别的留空`), () => comfyLists.clips).box),
       field(t`编码器类型`, comfyClipType),
     ])
     const comfySimpleBox = el('div', {}, [
       field(t`模型类型`, comfyTemplate),
-      el('label', {}, [t`模型`, el('span', { class: 'select-with-action' }, [comfyModel, readComfyModels]), comfyModelList]),
+      el('label', {}, [t`模型`, el('span', { class: 'select-with-action' }, [comfyModelPick.box, readComfyModels])]),
       comfyUnetFields,
-      field('VAE', comfyVae),
+      field('VAE', listComfy(comfyVae, () => comfyLists.vaes).box),
       el('div', { class: 'grid' }, [
         field(t`步数`, comfySteps),
         field('CFG', comfyCfg),
-        el('label', {}, [t`采样器`, comfySampler, comfySamplerList]),
-        el('label', {}, [t`调度器`, comfyScheduler, comfySchedulerList]),
+        el('label', {}, [t`采样器`, listComfy(comfySampler, () => comfyLists.samplers).box]),
+        el('label', {}, [t`调度器`, listComfy(comfyScheduler, () => comfyLists.schedulers).box]),
       ]),
-      comfyClipList,
-      comfyVaeList,
-      comfySchedulerList,
       el('p', { class: 'hint', text: t`列出的是 ComfyUI 现在装着的模型。加速版（Turbo、Lightning、LCM）一般 4–8 步、CFG 1；Flux 和 Krea 2 的 CFG 也是 1。卡和名册角色的 LoRA 照样加，提示词写法 SD 系选「标签」，Flux、Krea 2、Qwen 选「自然语言」。` }),
     ])
     // A diffusion model is drawn the way its kind usually is: CFG 1, the simple comfyScheduler.
@@ -1185,7 +1249,6 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       const unet = comfyTemplate.value === 'unet'
       comfyUnetFields.hidden = !unet
       comfyVae.placeholder = unet ? t`扩散模型要单独选 VAE` : t`留空用模型自带的`
-      fillComfyModels()
     }
     comfyTemplate.onchange = () => {
       const unet = comfyTemplate.value === 'unet'
@@ -1277,22 +1340,23 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       option('', imageProviders.length ? t`选一个供应商` : t`先在「供应商」里添加`, geminiPick),
       ...[...googleProviders, ...imageProviders.filter(p => !isGoogle(p))].map(p => option(p.id, p.name, geminiPick)),
     ])
-    const geminiModels = el('datalist', { id: 'gemini-image-models' }, GEMINI_IMAGE_MODELS.map(id => el('option', { value: id })))
-    const geminiModel = el('input', { name: 'geminiImageModel', value: media.geminiImageModel, list: 'gemini-image-models', spellcheck: 'false' })
+    let geminiModels = GEMINI_IMAGE_MODELS
+    const geminiModel = el('input', { name: 'geminiImageModel', value: media.geminiImageModel, spellcheck: 'false' })
+    const geminiImagePick = comboBox(el, { input: geminiModel, options: () => geminiModels })
     const fetchGemini = el('button', { type: 'button', class: 'btn small', text: t`获取` })
     fetchGemini.onclick = guard(async () => {
       if (!geminiProvider.value) throw new Error(t`先选供应商`)
       const { models } = await api('/api/providers/models', { method: 'POST', body: { id: geminiProvider.value } })
       const images = models.filter(id => /image/i.test(id) && !/imagen/i.test(id))
-      geminiModels.replaceChildren(...(images.length ? images : GEMINI_IMAGE_MODELS).map(id => el('option', { value: id })))
-      toast(images.length ? t`找到 ${images.length} 个生图模型，点输入框选` : t`这个供应商没列出 Gemini 生图模型，列的是常用的`)
-      geminiModel.focus()
+      geminiModels = images.length ? images : GEMINI_IMAGE_MODELS
+      toast(images.length ? t`找到 ${images.length} 个生图模型，在列表里选` : t`这个供应商没列出 Gemini 生图模型，列的是常用的`)
+      geminiImagePick.open()
     })
     const geminiBox = el('div', {}, [
       serviceLinks('gemini'),
       el('div', { class: 'grid' }, [
         field(t`供应商`, geminiProvider, googleProviders.length ? '' : t`先用「Gemini API」或「Gemini Agent Platform」模板建一个供应商（Gemini API 的密钥在 aistudio.google.com 创建）`),
-        el('label', {}, [t`生图模型`, el('span', { class: 'select-with-action' }, [geminiModel, fetchGemini]), geminiModels]),
+        el('label', {}, [t`生图模型`, el('span', { class: 'select-with-action' }, [geminiImagePick.box, fetchGemini])]),
       ]),
       el('label', { class: 'check-row' }, [
         el('input', { type: 'checkbox', name: 'geminiReference', checked: media.geminiReference }),
@@ -1301,12 +1365,11 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       el('p', { class: 'hint', text: t`走 Google 自己的接口，和对话共用这个 Google 供应商的密钥和代理。gemini-2.5-flash-image 快、便宜；gemini-3-pro-image-preview 画得更细。提示词写法选「自然语言」。` }),
     ])
     // Stable Diffusion WebUI / Forge: the model loaded there draws.
-    const sdSamplers = el('datalist', { id: 'sd-samplers' }, SD_SAMPLERS.map(id => el('option', { value: id })))
     const sdBox = el('div', {}, [
       serviceLinks('sdwebui'),
       field(t`WebUI 地址`, el('input', { name: 'sdUrl', value: media.sdUrl, spellcheck: 'false' }), t`AUTOMATIC1111、Forge、reForge 都行，启动参数要加 --api。用 WebUI 里当前加载的模型画。`),
       el('div', { class: 'grid three' }, [
-        el('label', {}, [t`采样器`, el('input', { name: 'sdSampler', value: media.sdSampler, list: 'sd-samplers', spellcheck: 'false' }), sdSamplers]),
+        el('label', {}, [t`采样器`, comboBox(el, { input: el('input', { name: 'sdSampler', value: media.sdSampler, spellcheck: 'false' }), options: () => SD_SAMPLERS }).box]),
         field(t`步数`, el('input', { name: 'sdSteps', type: 'number', min: '1', max: '80', step: '1', value: String(media.sdSteps) })),
         field('CFG', el('input', { name: 'sdCfg', type: 'number', min: '1', max: '20', step: '0.5', value: String(media.sdCfg) })),
       ]),
@@ -1344,7 +1407,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     backend.onchange = syncBackend
     const referenceRow = el('div', {}, [
       el('label', { class: 'check-row' }, [reference, el('span', { text: t`用这张卡的头像当参考图（走 /images/edits，长相更稳定）` })]),
-      field(t`参考图用的模型`, editModel, t`有的网关生图和改图是两个模型：grok2api 只有 Web 账号时，2.0 只能生图，改图要用 grok-imagine-image-edit。改图失败时这张会自动不带参考图再画。`),
+      field(t`参考图用的模型`, listImageModels(editModel).box, t`有的网关生图和改图是两个模型：grok2api 只有 Web 账号时，2.0 只能生图，改图要用 grok-imagine-image-edit。改图失败时这张会自动不带参考图再画。`),
     ])
     const syncReference = () => { editModel.closest('label').hidden = !reference.checked }
     reference.onchange = syncReference
@@ -1356,7 +1419,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     // Only this machine's own install assumes the xiaoya bridge; elsewhere the browser reads unless a source is set up.
     const xiaoya = document.documentElement.dataset.featureXiaoya !== 'false'
     const choices = voiceChoices({ voiceInfo, browserVoices, media, providers })
-    const { sources, external, service, voices, cloud, chinese, groups, known, dialogueDefault } = choices
+    const { sources, external, service, voices, cloud, chinese, groups, known, unset, dialogueDefault } = choices
     const ttsUrl = el('input', { name: 'ttsUrl', value: media.ttsUrl, spellcheck: 'false', placeholder: xiaoya ? '' : t`不用就留空` })
     const ttsStatus = el('span', {
       class: external.ok ? 'hint' : 'hint warn',
@@ -1366,7 +1429,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     const ttsKeyHint = el('span', { class: 'hint tts-key-hint' })
     voiceKeyText(ttsKeyHint, voiceKey)
     const autoRead = el('input', { type: 'checkbox', name: 'autoRead', checked: media.autoRead })
-    const voicePicker = (name, value, empty) => voicePickerFrom(choices, { name, value, empty, form, silent: name === 'narratorVoice' })
+    const voicePicker = (name, value, empty, fallback = '') => voicePickerFrom(choices, { name, value, empty, form, silent: name === 'narratorVoice', fallback })
     const anyCloud = cloud.length || VOICE_SOURCES.some(id => sources[id]?.voices?.length)
     const narratorHint = anyCloud
       ? xiaoya && cloud.length
@@ -1411,10 +1474,11 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     // The dialog as a menu (web/menu.js): 配图 and 朗读, each with what every card
     // shares first (how pictures are drawn, where voices come from), then this
     // card's own settings.
-    const charName = getChat()?.names?.char ?? ''
+    const openChat = getChat()?.cardId === formCardId() ? getChat() : null
+    const charName = state.formCard?.name ?? openChat?.names?.char ?? ''
     const voiceText = new Map(groups.flatMap(([, list]) => list))
     const voiceName = (value, empty) => (value ? voiceText.get(value) ?? value.replace(BROWSER, '') : empty)
-    const roster = card ? rosterEditor(card, loraInfo, getChat()?.names?.user ?? '') : null
+    const roster = card ? rosterEditor(card, loraInfo, openChat?.names?.user ?? '') : null
     if (roster) roster.open = true
     // The card's 画风, a 画风预设 to fill it with, and its own 写提示词的额外要求.
     const styleBox = el('textarea', { name: 'style', rows: 2, text: card?.style ?? '', placeholder: t`例如 anime style, delicate lineart, soft cel shading, soft lighting` })
@@ -1553,6 +1617,31 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         },
         body: voiceSourceSections,
       }),
+      // A server from before it keeps no default: no row until it restarts.
+      'defaultVoice' in media && shared(t`朗读`, {
+        id: 'default-voice',
+        title: t`默认对白音色`,
+        summary: () => {
+          const voice = form.elements.defaultVoice?.value
+          return voice ? voiceName(voice, '') : t`还没选：没选对白音色的卡用${unset}读`
+        },
+        status: () => {
+          const voice = form.elements.defaultVoice?.value
+          return voice && !known.has(voice) ? ['warn', t`音色不在了`] : null
+        },
+        body: [
+          field(t`默认对白音色`, voicePicker('defaultVoice', media.defaultVoice, unset), t`没选对白音色的卡都用它读；卡和角色自己选的音色不受影响。`),
+          el('div', { class: 'row voice-actions' }, [
+            el('button', {
+              type: 'button', class: 'btn small', text: t`拉取音色并选择…`, title: t`读一次各个来源的音色，包括账户里自己克隆或设计的，再选一个`,
+              onclick: guard(async () => {
+                if (settingsMenu.dirty) throw new Error(t`有改动还没保存：先点「保存」，再拉取音色`)
+                await chooseDefaultVoice({ asking: false })
+              }),
+            }),
+          ]),
+        ],
+      }),
       card && own(t`朗读`, {
         id: 'card-voice',
         title: t`音色`,
@@ -1563,23 +1652,23 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         status: () => {
           const voice = form.elements.voice?.value ?? ''
           // A card without a voice reads with the local bridge's current one.
-          if (!voice && service && !external.ok) return ['warn', t`默认走${BRIDGE_NAME}，没开`]
+          if (!voice && !media.defaultVoice && service && !external.ok) return ['warn', t`默认走${BRIDGE_NAME}，没开`]
           if (voice && !known.has(voice)) return ['warn', t`音色不在了`]
           return null
         },
         body: [
           el('div', { class: 'grid' }, [
-            field(t`对白音色`, voicePicker('voice', card.voice, dialogueDefault), tagHint),
+            field(t`对白音色`, voicePicker('voice', card.voice, dialogueDefault, media.defaultVoice), tagHint),
             field(t`旁白音色`, voicePicker('narratorVoice', card.narratorVoice, t`不读旁白`), narratorHint),
           ]),
-          el('p', { class: 'hint', text: t`没选对白音色时，用${service ? t`${BRIDGE_NAME}当前的音色` : t`浏览器默认的中文音色`}读。选了哪个来源的音色，就只用那个来源，别的来源开没开都不影响。` }),
-          ...castVoiceBlock(card.roster, choices, form, () => settingsMenu.show('roster', 'forward')),
+          el('p', { class: 'hint', text: t`没选对白音色时，用${media.defaultVoice ? t`默认对白音色` : service ? t`${BRIDGE_NAME}当前的音色` : t`浏览器默认的中文音色`}读。选了哪个来源的音色，就只用那个来源，别的来源开没开都不影响。` }),
+          ...castVoiceBlock(card.roster, choices, form, () => settingsMenu.show('roster', 'forward'), null, () => form.elements.voice?.value || media.defaultVoice),
         ],
       }),
       shared(t`语音输入`, { id: 'stt', title: t`录音交给谁转写`, summary: dictation.summary, status: dictation.status, body: dictation.body }),
     ].filter(Boolean)
 
-    const who = () => (card ? whoLine(el, { cardId: state.cardId, name: charName, note: t`这张卡自己的` }) : el('p', { class: 'menu-who none', text: t`选一张角色卡后，这里可以给它单独设置。` }))
+    const who = () => (card ? whoLine(el, { cardId: formCardId(), name: charName, note: t`这张卡自己的` }) : el('p', { class: 'menu-who none', text: t`选一张角色卡后，这里可以给它单独设置。` }))
     const switchRow = (input, text, hint) => {
       input.classList.add('switch')
       return el('label', { class: 'menu-switch', title: hint }, [el('span', { text }), input])
@@ -1587,7 +1676,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     settingsMenu.mount({
       panels: [
         { id: 'image', title: t`配图`, icon: MENU_ICONS.picture, aside: switchRow(autoImage, t`新回复自动配图`, t`每轮多一次辅助模型调用和一次生图`), rows: ['image', 'prompt', who(), 'card-style', 'roster'] },
-        { id: 'voice', title: t`朗读`, icon: MENU_ICONS.voice, aside: switchRow(autoRead, t`新回复自动朗读`), rows: ['voice', who(), 'card-voice'] },
+        { id: 'voice', title: t`朗读`, icon: MENU_ICONS.voice, aside: switchRow(autoRead, t`新回复自动朗读`), rows: ['voice', 'default-voice', who(), 'card-voice'] },
         { id: 'stt', title: t`语音输入`, icon: MENU_ICONS.mic, rows: ['stt'] },
       ],
       sections,
@@ -1628,8 +1717,12 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       cloud.length ? [t`${BRIDGE_NAME} · 经它转发的云端音色（按字数计费）`, cloud.map(v => [v.name, t`${v.label}（${v.provider.replace(/ · 云端$/, '')} · ${v.model}）`])] : null,
     ].filter(Boolean)
     const known = new Set(groups.flatMap(([, list]) => list.map(([value]) => value)))
-    const dialogueDefault = service ? t`${BRIDGE_NAME}当前的音色${external.current ? t`（${external.current}）` : ''}` : t`浏览器默认中文音色`
-    return { sources, external, service, voices, cloud, chinese, groups, known, dialogueDefault }
+    // What reads with nothing chosen at all, and with no dialogue voice on the card.
+    const unset = service ? t`${BRIDGE_NAME}当前的音色${external.current ? t`（${external.current}）` : ''}` : t`浏览器默认中文音色`
+    const labels = new Map(groups.flatMap(([, list]) => list))
+    const defaultVoice = media?.defaultVoice ?? ''
+    const dialogueDefault = defaultVoice ? t`默认对白音色（${labels.get(defaultVoice) ?? defaultVoice.replace(BROWSER, '')}）` : unset
+    return { sources, external, service, voices, cloud, chinese, groups, known, unset, dialogueDefault }
   }
 
   function voiceSelectFrom({ groups, known }, { name, value, empty }) {
@@ -1644,12 +1737,15 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     ].filter(Boolean))
   }
 
-  /** A voice picker with its own 试听; onChange(value) once one is picked. */
-  function voicePickerFrom(choices, { name, value, empty, form, silent = false, onChange = null }) {
+  /**
+   * A voice picker with its own 试听; onChange(value) once one is picked.
+   * @param fallback - what 试听 reads with while nothing is picked: a voice, or a function that gives one.
+   */
+  function voicePickerFrom(choices, { name, value, empty, form, silent = false, onChange = null, fallback = '' }) {
     const select = voiceSelectFrom(choices, { name, value, empty })
     if (onChange) select.addEventListener('change', () => onChange(select.value))
     const listen = el('button', { type: 'button', class: 'btn small', text: t`试听`, title: t`用这个音色读一句示例（没保存的设置也算）` })
-    listen.onclick = () => previewVoice(listen, { voice: select.value, form, silent })
+    listen.onclick = () => previewVoice(listen, { voice: select.value || (typeof fallback === 'function' ? fallback() : fallback) || '', form, silent })
     return el('span', { class: 'select-with-action' }, [select, listen])
   }
 
@@ -1657,11 +1753,12 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
    * 角色各自的音色: a picker for each one in the cast ('' = the card's dialogue voice).
    * @param toRoster - opens 角色名册, for a card without a cast.
    * @param onChange - (entry, voice) once one is picked.
+   * @param fallback - the dialogue voice, for 试听 with no voice of their own.
    */
-  function castVoiceBlock(roster, choices, form, toRoster, onChange = null) {
+  function castVoiceBlock(roster, choices, form, toRoster, onChange = null, fallback = '') {
     const rows = roster.map(entry => el('label', { class: 'cast-voice' }, [
       el('span', { class: 'cast-voice-name', text: entry.player ? t`${entry.name}（主角）` : entry.name }),
-      voicePickerFrom(choices, { name: `castVoice:${entry.id}`, value: entry.voice ?? '', empty: t`同对白音色`, form, onChange: onChange && (value => onChange(entry, value)) }),
+      voicePickerFrom(choices, { name: `castVoice:${entry.id}`, value: entry.voice ?? '', empty: t`同对白音色`, form, fallback, onChange: onChange && (value => onChange(entry, value)) }),
     ]))
     return [
       el('h4', { class: 'cast-voice-title', text: t`角色各自的音色` }),
@@ -1701,7 +1798,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       const backend = el('select', { onchange: () => saveMedia({ imageBackend: backend.value }, true) }, [...imageBackends(), ...state.ownBackends.map(own => [own.id, own.name])].map(([id, text]) => option(id, text, media.imageBackend)))
       const own = ownBackend(media.imageBackend)
       const ownModel = own?.models.length ? el('select', { onchange: () => saveMedia({ localModels: { [own.id]: ownModel.value } }) }, own.models.map(m => option(m.id, m.label, own.model))) : null
-      const geminiModel = el('input', { value: media.geminiImageModel ?? '', list: 'quick-gemini-models', spellcheck: 'false', onchange: () => saveMedia({ geminiImageModel: geminiModel.value.trim() }) })
+      const geminiModel = el('input', { value: media.geminiImageModel ?? '', spellcheck: 'false', onchange: () => saveMedia({ geminiImageModel: geminiModel.value.trim() }) })
       const nai = el('select', { onchange: () => saveMedia({ naiModel: nai.value }) }, [
         ...NAI_MODELS.map(([value, text]) => option(value, text, media.naiModel)),
         NAI_MODELS.some(([value]) => value === media.naiModel) ? null : option(media.naiModel, media.naiModel, media.naiModel),
@@ -1711,7 +1808,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       const modelRow = {
         openai: media.imageProvider ? row(t`生图模型`, model) : unset(t`还没选供应商：在「更多配图设置」里选`),
         gemini: media.geminiImageProvider
-          ? row(t`Gemini 生图模型`, el('span', {}, [geminiModel, el('datalist', { id: 'quick-gemini-models' }, GEMINI_IMAGE_MODELS.map(id => el('option', { value: id })))]))
+          ? row(t`Gemini 生图模型`, comboBox(el, { input: geminiModel, options: () => GEMINI_IMAGE_MODELS }).box)
           : unset(t`还没选 Gemini 的供应商：在「更多配图设置」里选`),
         novelai: row(t`NovelAI 模型`, nai),
         comfy: el('p', { class: 'hint', text: t`用导入的 ComfyUI 工作流画，在「更多配图设置」里换。` }),
@@ -1747,8 +1844,8 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     const { sources } = choices
     const models = []
     if (sources.openai?.configured) {
-      const input = el('input', { value: media.ttsModel ?? '', list: 'quick-tts-models', spellcheck: 'false', onchange: () => saveMedia({ ttsModel: input.value.trim() }, true) })
-      models.push(row(t`朗读模型（供应商）`, el('span', {}, [input, el('datalist', { id: 'quick-tts-models' }, TTS_MODELS.map(id => el('option', { value: id })))])))
+      const input = el('input', { value: media.ttsModel ?? '', spellcheck: 'false', onchange: () => saveMedia({ ttsModel: input.value.trim() }, true) })
+      models.push(row(t`朗读模型（供应商）`, comboBox(el, { input, options: () => TTS_MODELS }).box))
     }
     if (sources.fish?.configured) {
       const select = el('select', { onchange: () => saveMedia({ fishModel: select.value }, true) }, FISH_MODELS.map(([value, text]) => option(value, text, media.fishModel)))
@@ -1764,15 +1861,15 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       models.push(row(t`朗读模型（MOSS）`, select))
     }
     if (sources.gemini?.configured) {
-      const input = el('input', { value: media.geminiTtsModel ?? '', list: 'quick-gemini-tts', spellcheck: 'false', onchange: () => saveMedia({ geminiTtsModel: input.value.trim() }, true) })
-      models.push(row(t`朗读模型（Gemini）`, el('span', {}, [input, el('datalist', { id: 'quick-gemini-tts' }, GEMINI_TTS_MODELS.map(id => el('option', { value: id })))])))
+      const input = el('input', { value: media.geminiTtsModel ?? '', spellcheck: 'false', onchange: () => saveMedia({ geminiTtsModel: input.value.trim() }, true) })
+      models.push(row(t`朗读模型（Gemini）`, comboBox(el, { input, options: () => GEMINI_TTS_MODELS }).box))
     }
     box.replaceChildren(...[
       ...(state.cardId
         ? [
-            row(t`对白音色`, voicePickerFrom(choices, { name: 'voice', value: card.voice ?? '', empty: choices.dialogueDefault, form, onChange: value => saveCard({ voice: value }) })),
+            row(t`对白音色`, voicePickerFrom(choices, { name: 'voice', value: card.voice ?? '', empty: choices.dialogueDefault, form, fallback: media.defaultVoice, onChange: value => saveCard({ voice: value }) })),
             row(t`旁白音色`, voicePickerFrom(choices, { name: 'narratorVoice', value: card.narratorVoice ?? '', empty: t`不读旁白`, form, silent: true, onChange: value => saveCard({ narratorVoice: value }) })),
-            ...castVoiceBlock(cast(), choices, form, () => openSettings('roster'), (entry, value) => saveCard({ roster: cast().map(e => (e.id === entry.id ? { ...e, voice: value } : e)) })),
+            ...castVoiceBlock(cast(), choices, form, () => openSettings('roster'), (entry, value) => saveCard({ roster: cast().map(e => (e.id === entry.id ? { ...e, voice: value } : e)) }), dialogueVoice),
           ]
         : [el('p', { class: 'hint', text: t`选一张角色卡后，这里可以给它选音色。` })]),
       choices.service && !choices.external.ok ? el('p', { class: 'hint warn', text: t`${BRIDGE_NAME}连不上：${choices.external.error ?? ''}` }) : null,
@@ -1794,22 +1891,19 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
   const newEntryId = () => Array.from(crypto.getRandomValues(new Uint8Array(5)), b => b.toString(16).padStart(2, '0')).join('')
   const refUrl = (cardId, id) => `/api/cards/${cardId}/roster/${id}/ref?v=${Date.now()}`
 
-  /** NovelAI takes reference pictures on three canvases only: letterbox onto the closest, in black. */
-  async function padForReference(blob) {
-    const bitmap = await createImageBitmap(blob)
-    const sizes = [[1024, 1536], [1536, 1024], [1472, 1472]]
-    const aspect = bitmap.width / bitmap.height
-    const [w, h] = sizes.reduce((best, size) => (Math.abs(size[0] / size[1] - aspect) < Math.abs(best[0] / best[1] - aspect) ? size : best))
-    const canvas = Object.assign(document.createElement('canvas'), { width: w, height: h })
-    const ctx = canvas.getContext('2d')
-    ctx.fillStyle = '#000'
-    ctx.fillRect(0, 0, w, h)
-    const scale = Math.min(w / bitmap.width, h / bitmap.height)
-    const dw = Math.round(bitmap.width * scale)
-    const dh = Math.round(bitmap.height * scale)
-    ctx.imageSmoothingQuality = 'high'
-    ctx.drawImage(bitmap, Math.round((w - dw) / 2), Math.round((h - dh) / 2), dw, dh)
-    return canvas.toDataURL('image/png')
+  // Each 人设图 looked at once on this page for a black band of old.
+  const refsLooked = new Set()
+
+  /** A 人设图 padded in black by an earlier version, put right. The old one stays in 抽图历史. → whether it changed. */
+  async function mendRef(cardId, entryId) {
+    const key = `${cardId}:${entryId}`
+    if (refsLooked.has(key)) return false
+    refsLooked.add(key)
+    const blob = await fetch(`/api/cards/${cardId}/roster/${entryId}/ref`).then(res => (res.ok ? res.blob() : null), () => null)
+    const image = blob ? await mendReference(blob) : null
+    if (!image) return false
+    await api(`/api/cards/${cardId}/roster/${entryId}/ref`, { method: 'PUT', body: { image } })
+    return true
   }
 
   /** The roster as the form shows it now; each one's voice from 朗读 → 音色 (one added since has none yet). */
@@ -1842,7 +1936,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
    * chat is marked new or changed until saved; a change can be taken back.
    */
   function rosterEditor(card, loraInfo, userName) {
-    const cardId = state.cardId
+    const cardId = formCardId()
     const list = el('div', { class: 'roster-list' })
     const summary = el('summary')
     const status = el('span', { class: 'hint roster-status' })
@@ -1916,6 +2010,14 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         loadKept()
         refChanged(cardId)
       })
+      if (entry.ref) {
+        mendRef(cardId, entry.id).then(changed => {
+          if (!changed) return
+          setRef(true)
+          loadKept()
+          refChanged(cardId)
+        }).catch(() => {})
+      }
       const oldBox = el('div', { class: 'roster-old' })
       const syncOld = () => oldBox.replaceChildren(...[historyStrip(el, keptItems(cardId, kept.slots[`roster:${entry.id}`]), {
         title: t`旧人设图`,
@@ -2276,6 +2378,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       try {
         show(await store({ [`${id}Key`]: key }))
         input.value = ''
+        state.keySaved = true
         toast(t`密钥已保存`)
       } catch (error) {
         show(saved)
@@ -2353,9 +2456,8 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       serviceLinks('voice:openai', t`常用的朗读接口，在「管理供应商」里添加后在这里选：`),
       el('div', { class: 'grid' }, [
         field(t`供应商`, el('select', { name: 'ttsProvider' }, [option('', speakers.length ? t`不用` : t`先在「供应商」里添加`, media.ttsProvider), ...speakers.filter(openaiStyle).map(p => option(p.id, p.name, media.ttsProvider))])),
-        field(t`模型`, el('input', { name: 'ttsModel', value: media.ttsModel, list: 'tts-models', spellcheck: 'false', placeholder: 'gpt-4o-mini-tts' })),
+        field(t`模型`, comboBox(el, { input: el('input', { name: 'ttsModel', value: media.ttsModel, spellcheck: 'false', placeholder: 'gpt-4o-mini-tts' }), options: () => TTS_MODELS }).box),
       ]),
-      el('datalist', { id: 'tts-models' }, TTS_MODELS.map(id => el('option', { value: id }))),
       field(t`音色（每行一个：ID，后面可以空一格写名字）`, el('textarea', { name: 'ttsVoices', rows: 3, spellcheck: 'false', placeholder: t`coral 温柔\nnova`, text: voiceListText(media.ttsVoices) }),
         t`留空就用模型常见的音色：OpenAI 的 alloy、coral、nova…；硅基流动 FunAudioLLM/CosyVoice2-0.5B 的 8 个预置音色。用供应商自己的地址、密钥和代理设置；gpt-4o-mini-tts 会把回复里的情绪当语气说明。`),
       el('div', { class: 'row voice-actions' }, [listen('openai')]),
@@ -2399,33 +2501,189 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
 
     // Gemini's speech models through a provider holding Google's key (the one chat uses).
     const googleSpeakers = speakers.filter(isGoogle)
-    const geminiModelList = el('datalist', { id: 'gemini-tts-models' }, GEMINI_TTS_MODELS.map(id => el('option', { value: id })))
+    let geminiTtsModels = GEMINI_TTS_MODELS
     const geminiProvider = el('select', { name: 'geminiTtsProvider' }, [
       option('', speakers.length ? t`不用` : t`先在「供应商」里添加`, media.geminiTtsProvider),
       ...[...googleSpeakers, ...speakers.filter(p => !isGoogle(p))].map(p => option(p.id, p.name, media.geminiTtsProvider)),
     ])
-    const geminiModel = el('input', { name: 'geminiTtsModel', value: media.geminiTtsModel, list: 'gemini-tts-models', spellcheck: 'false' })
+    const geminiModelPick = comboBox(el, { input: el('input', { name: 'geminiTtsModel', value: media.geminiTtsModel, spellcheck: 'false' }), options: () => geminiTtsModels })
     const fetchModels = el('button', { type: 'button', class: 'btn small', text: t`获取` })
     fetchModels.onclick = guard(async () => {
       if (!geminiProvider.value) throw new Error(t`先选供应商`)
       const { models } = await api('/api/providers/models', { method: 'POST', body: { id: geminiProvider.value } })
       const found = models.filter(id => /tts/i.test(id))
-      geminiModelList.replaceChildren(...(found.length ? found : GEMINI_TTS_MODELS).map(id => el('option', { value: id })))
-      toast(found.length ? t`找到 ${found.length} 个朗读模型，点输入框选` : t`这个供应商没列出朗读模型，列的是常用的`)
-      geminiModel.focus()
+      geminiTtsModels = found.length ? found : GEMINI_TTS_MODELS
+      toast(found.length ? t`找到 ${found.length} 个朗读模型，在列表里选` : t`这个供应商没列出朗读模型，列的是常用的`)
+      geminiModelPick.open()
     })
     const gemini = el('details', { class: 'voice-source', open: Boolean(media.geminiTtsProvider) }, [
       el('summary', {}, [el('span', { class: 'voice-source-name' }, [t`Gemini 朗读（Google）`, netTag('proxy')]), state('gemini')]),
       serviceLinks('voice:gemini'),
       el('div', { class: 'grid' }, [
         field(t`供应商`, geminiProvider, googleSpeakers.length ? t`选用「Gemini API」或「Gemini Agent Platform」模板建的供应商，和对话共用密钥和代理` : t`先用「Gemini API」或「Gemini Agent Platform」模板建一个供应商（Gemini API 的密钥在 aistudio.google.com 创建）`),
-        el('label', {}, [t`模型`, el('span', { class: 'select-with-action' }, [geminiModel, fetchModels]), geminiModelList]),
+        el('label', {}, [t`模型`, el('span', { class: 'select-with-action' }, [geminiModelPick.box, fetchModels])]),
       ]),
       field(t`音色（每行一个：音色名，后面可以空一格写说明）`, el('textarea', { name: 'geminiTtsVoices', rows: 3, spellcheck: 'false', placeholder: t`留空列出全部 30 个预置音色，例如\nKore 女主\nPuck 男主`, text: voiceListText(media.geminiTtsVoices) }),
         t`预置音色有 Kore、Leda、Aoede（女声）、Puck、Charon、Fenrir（男声）等 30 个，中文也能读。回复里的情绪会变成「用…的语气说」放在台词前。按用量计费，走「设置」里的代理。`),
       el('div', { class: 'row voice-actions' }, [listen('gemini')]),
     ])
     return [openai, fish, minimax, moss, gemini]
+  }
+
+  // ─── 默认对白音色: what a card with no dialogue voice reads in ─────────
+  // Offered once a source is set up (sourcesToAsk says when), and picked from what the sources have now.
+
+  /**
+   * A key saved on its own is a source set up, with nothing left to 保存: its voices show, and the
+   * offer comes when you leave 朗读来源 or close the window. With other changes waiting, 保存 takes it from there.
+   */
+  const settleVoiceKeys = guard(async () => {
+    if (!state.keySaved || settingsMenu.dirty) return
+    state.keySaved = false
+    if ($('media-dialog').open) await openSettings()
+    await offerDefaultVoice()
+  })
+
+  async function offerDefaultVoice() {
+    const media = state.settings
+    if (!media || !('defaultVoice' in media) || media.defaultVoice) return
+    const info = await api('/api/media/voices').catch(() => null)
+    if (info && sourcesToAsk(info.sources, media).length) await chooseDefaultVoice({ asking: true, info })
+  }
+
+  let defaultVoiceDialog = null
+
+  /** Every account's own voices into its list (kept: the pickers only know listed voices). → what went wrong, one line each. */
+  async function pullAccounts(sources, stillWanted) {
+    const problems = []
+    const lists = {}
+    await Promise.all(sources.filter(source => ACCOUNT_SOURCES.includes(source.id) && source.configured).map(async source => {
+      try {
+        const { voices, changed } = await api('/api/media/voices/account', { method: 'POST', body: { source: source.id } })
+        if (changed) lists[`${source.id}Voices`] = voiceListText(voices)
+      } catch (error) {
+        problems.push(t`${source.label} 的账户音色没读到：${error.message}`)
+      }
+    }))
+    if (!Object.keys(lists).length || !stillWanted()) return { problems, changed: false }
+    state.settings = (await api('/api/media/settings', { method: 'PUT', body: lists })).media
+    return { problems, changed: true }
+  }
+
+  /**
+   * The window for 默认对白音色. Every way out of it closes it: 否, 取消 or Esc mean no (those sources
+   * aren't asked about again), while a source with nothing to pick from yet leaves the question for next time.
+   * @param asking - starts on the question, with info (/api/media/voices); else straight on 拉取音色.
+   */
+  function chooseDefaultVoice({ asking, info = null }) {
+    const dialog = (defaultVoiceDialog ??= document.body.appendChild(el('dialog', { class: 'dialog default-voice', 'aria-label': t`默认对白音色` })))
+    if (dialog.open) return Promise.resolve()
+    const box = el('form', { class: 'dc-form' })
+    const heard = el('form', {}, [el('input', { type: 'hidden', name: 'ttsUrl', value: state.settings?.ttsUrl ?? '' })])
+    const ready = () => readyVoiceSources(state.voiceInfo?.sources)
+    const asked = () => [...new Set([...(state.settings?.defaultVoiceAsked ?? []), ...ready()])]
+    const fresh = () => sourcesToAsk(state.voiceInfo?.sources, { defaultVoice: '', defaultVoiceAsked: state.settings?.defaultVoiceAsked })
+    if (info) state.voiceInfo = info
+    let answer = 'no' // what closing now means: 'no', 'later' (nothing was refused) or 'set'
+    let listsChanged = false
+    let pulling = 0 // the pull under way; one cancelled or overtaken comes to nothing
+    const button = (text, onclick, cls = 'btn ghost') => el('button', { type: 'button', class: cls, text, onclick })
+    const stage = (title, lines, buttons) => box.replaceChildren(...[
+      el('h3', { text: title }),
+      ...lines,
+      el('div', { class: 'row end' }, [el('span', { class: 'grow' }), ...buttons]),
+    ].filter(Boolean))
+    const say = text => el('p', { class: 'hint', text })
+    const warn = text => el('p', { class: 'hint warn', text })
+
+    function question() {
+      const { unset } = voiceChoices({ voiceInfo: state.voiceInfo, media: state.settings })
+      stage(t`把一个音色设为默认对白音色吗？`, [
+        say(t`朗读来源设好了。没选对白音色的卡现在用${unset}读；设了默认音色，这些卡都改用它，卡和角色自己选的音色不受影响。`),
+      ], [
+        button(t`否`, () => dialog.close()),
+        button(t`是，选一个音色`, pull, 'btn primary'),
+      ])
+    }
+
+    async function pull() {
+      const mine = ++pulling
+      answer = 'later'
+      stage(t`正在拉取音色…`, [say(t`读各个来源的音色，要几秒钟。`)], [button(t`取消`, () => dialog.close())])
+      try {
+        const sources = (state.voiceInfo ?? await api('/api/media/voices')).sources ?? []
+        const { problems, changed } = await pullAccounts(sources, () => mine === pulling && dialog.open)
+        listsChanged ||= changed
+        const [voiceInfo, browserVoices, providers] = await Promise.all([
+          api('/api/media/voices'),
+          loadBrowserVoices(),
+          api('/api/providers').then(view => view.providers, () => []),
+        ])
+        if (mine !== pulling || !dialog.open) return
+        state.voiceInfo = voiceInfo
+        pick(voiceChoices({ voiceInfo, browserVoices, media: state.settings, providers }), problems)
+      } catch (error) {
+        if (mine !== pulling || !dialog.open) return
+        stage(t`音色没拉取到`, [warn(error.message)], [button(t`以后再说`, () => dialog.close()), button(t`重试`, pull, 'btn primary')])
+      }
+    }
+
+    function pick(choices, problems) {
+      const notes = problems.map(warn)
+      const first = groups => groups[0]?.[1][0]?.[0] ?? ''
+      // The source just set up comes first; what is chosen already, when opened to change it.
+      const newest = fresh().map(id => (id === 'bridge' ? choices.voices[0] : choices.sources[id]?.voices?.[0]?.ref)).find(Boolean)
+      if (!choices.groups.length) {
+        return stage(t`还没有能选的音色`, [
+          ...notes,
+          say(t`朗读来源里读不到音色：在来源的音色框里写上音色，或者点「从账户读取音色」，保存后再选。`),
+        ], [button(t`知道了`, () => dialog.close(), 'btn primary')])
+      }
+      answer = 'no'
+      const picker = voicePickerFrom(choices, { name: 'pick', value: state.settings?.defaultVoice || newest || first(choices.groups), empty: t`选一个音色`, form: heard })
+      const select = picker.querySelector('select')
+      const go = button(t`设为默认`, null, 'btn primary')
+      const follow = () => { go.disabled = !select.value }
+      select.addEventListener('change', follow)
+      go.onclick = guard(async () => {
+        go.disabled = true
+        try {
+          const { media } = await api('/api/media/settings', { method: 'PUT', body: { defaultVoice: select.value, defaultVoiceAsked: asked() } })
+          if (media.defaultVoice !== select.value) throw new Error(t`默认对白音色要重启后台服务后才能保存：关掉所有窗口等一分钟，再从桌面图标打开。`)
+          state.settings = media
+          answer = 'set'
+          dialog.close()
+          toast(t`默认对白音色：${select.selectedOptions[0]?.text ?? ''}`)
+        } finally {
+          follow()
+        }
+      })
+      follow()
+      stage(t`选默认对白音色`, [
+        ...notes,
+        el('label', { class: 'dc-field' }, [el('span', { text: t`音色` }), picker]),
+        say(t`没选对白音色的卡都用它读，云端音色按字数计费。之后在「设置 → 配图与朗读 → 朗读 → 默认对白音色」里改。`),
+      ], [button(t`取消`, () => dialog.close()), go])
+    }
+
+    return new Promise(resolve => {
+      dialog.replaceChildren(box)
+      dialog.addEventListener('close', async () => {
+        pulling++
+        stopPreview()
+        if (answer === 'no' && asking) {
+          await api('/api/media/settings', { method: 'PUT', body: { defaultVoiceAsked: asked() } }).then(view => { state.settings = view.media }, () => {})
+        }
+        announceSettings()
+        // The lists or the default in the settings window are out of date.
+        if ((listsChanged || answer === 'set') && $('media-dialog').open) await openSettings()
+        resolve()
+      }, { once: true })
+      box.addEventListener('submit', event => event.preventDefault())
+      if (asking) question()
+      else pull()
+      dialog.showModal()
+    })
   }
 
   /** The voice settings and typed keys as the form shows them, for 试听 and saving. */
@@ -2473,9 +2731,8 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       serviceLinks('stt:provider', t`有语音转写接口的供应商，在「管理供应商」里添加后在这里选：`),
       el('div', { class: 'grid' }, [
         field(t`供应商`, provider),
-        field(t`模型`, el('input', { name: 'sttModel', value: media.sttModel, list: 'stt-models', spellcheck: 'false', placeholder: t`留空自动选` })),
+        field(t`模型`, comboBox(el, { input: el('input', { name: 'sttModel', value: media.sttModel, spellcheck: 'false', placeholder: t`留空自动选` }), options: () => STT_MODELS }).box),
       ]),
-      el('datalist', { id: 'stt-models' }, STT_MODELS.map(id => el('option', { value: id }))),
       el('p', { class: 'hint', text: t`模型留空时按供应商选：硅基流动 FunAudioLLM/SenseVoiceSmall（免费），Groq whisper-large-v3-turbo，OpenAI gpt-4o-mini-transcribe，其余 whisper-1。只有对话接口的供应商（DeepSeek、Anthropic 等）转不了。` }),
       providerWhere,
     ])
@@ -2716,6 +2973,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     // A source set up or changed has other voices to pick from: show them.
     const voiceSettings = media => JSON.stringify(VOICE_FIELDS.map(name => media?.[name]))
     const voicesBefore = voiceSettings(state.settings)
+    const defaultBefore = state.settings?.defaultVoice
     const { media: draftVoices, keys } = voiceDraft(form)
     const { media, novelai, voiceKey, ownBackends } = await api('/api/media/settings', {
       method: 'PUT',
@@ -2755,6 +3013,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         ...(form.elements.drawHistory ? { drawHistory: Number(value('drawHistory')) } : {}),
         ttsUrl: value('ttsUrl'),
         ...draftVoices,
+        ...(form.elements.defaultVoice ? { defaultVoice: value('defaultVoice') } : {}),
         ...Object.fromEntries(Object.entries(keys).map(([id, key]) => [`${id}Key`, key])),
         autoRead: checked('autoRead'),
         ...sttDraft(form),
@@ -2771,20 +3030,29 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     if (novelai?.hasToken && form.elements.naiToken) form.elements.naiToken.placeholder = t`留空不改`
     const hint = form.querySelector('.nai-token-hint')
     if (hint) naiTokenText(hint, novelai)
-    if (hasCard && state.cardId) {
-      state.cardMedia = await api(`/api/cards/${state.cardId}/media`, {
+    const cardId = formCardId()
+    if (hasCard && cardId) {
+      const saved = await api(`/api/cards/${cardId}/media`, {
         method: 'PUT',
         body: { voice: value('voice'), narratorVoice: value('narratorVoice'), style: value('style'), styleNegative: value('styleNegative'), promptRules: value('cardPromptRules'), lora: value('lora'), loraTrigger: value('loraTrigger'), loraStrength: Number(value('loraStrength') || 0.8), roster: collectRoster(form) },
       })
-      announceCardMedia()
+      // Another card's settings (its ⋯) change nothing in the chat that is open.
+      if (cardId === state.cardId) {
+        state.cardMedia = saved
+        announceCardMedia()
+      }
     }
     settingsMenu.markClean()
     toast(t`已保存`)
-    // A new voice service or source has its own voices: show them.
-    if (media.ttsUrl !== before || pastedKey || voiceSettings(media) !== voicesBefore || Object.keys(keys).length) openSettings()
+    // A new voice service or source has its own voices: show them, and offer one as the default.
+    const sourcesSet = media.ttsUrl !== before || pastedKey || voiceSettings(media) !== voicesBefore || Object.keys(keys).length || state.keySaved
+    state.keySaved = false
+    if (sourcesSet || media.defaultVoice !== defaultBefore) await openSettings()
+    if (sourcesSet) await offerDefaultVoice()
   })
 
   $('media-dialog').addEventListener('close', stopPreview)
+  $('media-dialog').addEventListener('close', settleVoiceKeys)
   $('media-dialog').addEventListener('close', () => {
     sttTest?.cancel()
     sttTest = null
@@ -2794,5 +3062,15 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
   $('player-stop').addEventListener('click', () => player.stop())
   loadSettings()
 
-  return { settings: () => state.settings, pictureWork, openLibrary, toolsFor: mediaTools, gallery, openSettings, viewPicture, setCard, afterTurn, flags, readBeat, fillQuick, stopReading: () => player.stop(), toggleReading: () => player.toggle() }
+  /** How loud reading aloud is from now on, the line being read included. */
+  function setVoiceVolume(value) {
+    try {
+      localStorage.setItem(VOICE_VOLUME_KEY, String(value))
+    } catch {
+      // Private mode: the line being read at least.
+    }
+    if (player.audio) player.audio.volume = value
+  }
+
+  return { voiceVolume, setVoiceVolume, settings: () => state.settings, pictureWork, openLibrary, toolsFor: mediaTools, gallery, openSettings, viewPicture, setCard, afterTurn, flags, readBeat, fillQuick, stopReading: () => player.stop(), toggleReading: () => player.toggle() }
 }

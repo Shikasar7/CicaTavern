@@ -87,6 +87,11 @@ export function nameFor(entry, userName) {
 
 const CHARACTER_LINE = /^\s*[[【]([^\]】]{1,40})[\]】]\s*(.*)$/
 const SCENE_LABEL = /^\s*(?:场景|画面|scene|setting)\s*[:：]\s*/i
+const SCENE_WORD = /^(?:场景|画面|scene|setting)$/i
+// How a model may wrap a line of the format: a list item (`1. [苏晚] …`), or `苏晚: …` and `苏晚 …` without the brackets.
+const LIST_MARK = /^(?:[-*•·]|\d{1,2}[.)、．])\s*/
+const NAME_LABEL = /^([^:：,，\s]{1,20})[\s:：,，]+(.+)$/
+const PLAYER_WORD = /^(?:你|玩家|主角|you|player|<user>|\{\{user\}\})$/i
 
 /** Does the text use the cast format (a [Name] line)? */
 export function isFramePrompt(textValue) {
@@ -114,7 +119,7 @@ export function parseFrame(textValue, roster, userName) {
     const match = CHARACTER_LINE.exec(line)
     if (match) {
       const entry = findEntry(roster, match[1], userName)
-      const [action = '', position = ''] = match[2].split(/\s*[|｜]\s*/)
+      const [action = '', position = ''] = match[2].replace(/^[:：]\s*/, '').split(/\s*[|｜]\s*/)
       if (entry && !characters.some(c => c.entry.id === entry.id) && characters.length < FRAME_MAX) {
         characters.push({ entry, action: action.trim(), position: positionOf(position) })
       } else if (action.trim()) {
@@ -157,7 +162,10 @@ export function flattenFrame(frame, promptStyle = 'tags') {
   const { scene, characters } = frame
   if (promptStyle === 'tags') return join([countTags(characters), scene, ...characters.map(c => join([c.entry.looks, c.action]))])
   const who = { girl: 'A girl', boy: 'A young man', other: 'A figure' }
+  const the = { girl: 'The girl', boy: 'The young man', other: 'The figure' }
   const people = characters.map(c => {
+    // Nothing of their own to say: the scene already has them in it (withSomeone), this only gives their looks.
+    if (!c.action && c.entry.looks) return `${the[c.entry.kind]} has ${c.entry.looks}.`
     const where = c.position ? ` (${c.position === 'center' ? 'in the middle' : `on the ${c.position}`})` : ''
     return `${who[c.entry.kind]}${where}${c.entry.looks ? ` with ${c.entry.looks}` : ''}: ${c.action || 'in the scene'}.`
   })
@@ -205,23 +213,66 @@ export function frameFormat(promptStyle, detail = 'standard') {
     'Format, one item per line:',
     `场景: ${tags ? `${length.sceneTags} comma-separated English tags` : length.sceneWords} for the shot (close-up, upper body, cowboy shot, full body or wide shot), camera angle, the setting and its objects, time of day, lighting and mood. No people here.`,
     `[Name] ${tags ? `${length.personTags} comma-separated English tags` : length.personWords}: what they are wearing right now (the usual outfit unless the story changed it), pose, action, hands and what they hold, expression, where they look | left, center or right`,
-    'One [Name] line for each cast member visible in the frame: at least one, at most 4, names exactly as in the cast list; leave out the rest.',
+    'One [Name] line for each cast member visible in the frame, at most 4, with the brackets, names exactly as in the cast list, in the same script, never romanized or translated; leave out the rest.',
     'Never describe their hair, eyes, face or body: that is filled in automatically. Refer to other people as him, her or the girl, never by name.',
     'Anyone visible who is not in the cast goes into the 场景 line, briefly.',
   ].join('\n')
 }
 
-/** Strip wrapping and keep the cast-format lines; null when the answer is not in that format. */
-export function cleanFrame(answer, detail = 'standard') {
+/** The cast the passage talks about, the most named first. Not the player, who is mostly half in frame. */
+function mentioned(roster, passage) {
+  const text = String(passage ?? '').toLowerCase()
+  const times = entry => namesOf(entry).reduce((sum, name) => sum + text.split(name).length - 1, 0)
+  return roster.filter(entry => !entry.player).map(entry => ({ entry, count: times(entry) })).filter(item => item.count).sort((a, b) => b.count - a.count).map(item => item.entry)
+}
+
+/** Who a name in a [ ] means: as listed, a name with more around it (苏晚姑娘), or the player by a word for one. */
+function closestEntry(roster, name, userName) {
+  const wanted = String(name ?? '').trim().toLowerCase()
+  const near = entry => namesOf(entry, userName).some(known => known.length > 1 && wanted.length > 1 && (wanted.includes(known) || known.includes(wanted)))
+  return findEntry(roster, wanted, userName) ?? (PLAYER_WORD.test(wanted) ? roster.find(entry => entry.player) : null) ?? roster.find(near) ?? null
+}
+
+/** A line of the answer as the format has it: [场景] as the 场景 line, 苏晚: as [苏晚]. Only a name on the list, as it is listed: any other first word is just a word. */
+function formatLine(line, roster, userName) {
+  const bracket = CHARACTER_LINE.exec(line)
+  if (bracket) return SCENE_WORD.test(bracket[1].trim()) ? `场景: ${bracket[2].replace(/^[:：]\s*/, '')}` : line
+  const label = SCENE_LABEL.test(line) ? null : NAME_LABEL.exec(line)
+  return label && findEntry(roster, label[1], userName) ? `[${label[1]}] ${label[2]}` : line
+}
+
+/**
+ * The [Name] lines under the names on the list. A name neither on the list nor in the story is the model's own way
+ * of writing somebody (Su Wan, Name, the girl): the person the passage talks about who is not in the frame yet. A
+ * name the story does use is somebody off the list, and stays as written.
+ */
+function settleNames(lines, roster, userName, passage) {
+  const people = lines.map(line => {
+    const [, name, rest] = CHARACTER_LINE.exec(line)
+    return { name, rest: rest.replace(/^[:：]\s*/, ''), entry: closestEntry(roster, name, userName) }
+  })
+  const placed = new Set(people.map(person => person.entry?.id))
+  for (const person of people.filter(person => !person.entry && !String(passage ?? '').includes(person.name))) {
+    person.entry = mentioned(roster, passage).find(entry => !placed.has(entry.id)) ?? null
+    placed.add(person.entry?.id)
+  }
+  return people.map(({ name, rest, entry }) => `[${entry ? nameFor(entry, userName) : name}] ${rest}`.trim())
+}
+
+/**
+ * Strip wrapping and keep the cast-format lines; null when the answer is not in that format.
+ * @param options.roster, options.userName, options.passage - to tell who a line means when it is not written as asked.
+ */
+export function cleanFrame(answer, detail = 'standard', { roster = [], userName = '', passage = '' } = {}) {
   const lines = String(answer ?? '')
     .replace(/<think>[\s\S]*?<\/think>/gi, '')
     .replace(/```\w*/g, '')
     .split(/\r?\n/)
-    .map(line => line.trim().replace(/\*\*/g, '').replace(/^[-*•]\s*/, ''))
+    .map(line => formatLine(line.trim().replace(/\*\*/g, '').replace(LIST_MARK, ''), roster, userName))
     .filter(line => SCENE_LABEL.test(line) || CHARACTER_LINE.test(line))
   if (!lines.some(line => CHARACTER_LINE.test(line))) return null
   const scene = lines.filter(line => SCENE_LABEL.test(line)).slice(0, 1)
-  const people = lines.filter(line => CHARACTER_LINE.test(line)).slice(0, FRAME_MAX)
+  const people = settleNames(lines.filter(line => CHARACTER_LINE.test(line)).slice(0, FRAME_MAX), roster, userName, passage)
   const clip = (line, words) => line.split(/\s+/).slice(0, words).join(' ')
   const length = frameLength(detail)
   return [...scene.map(line => clip(line, length.scene)), ...people.map(line => clip(line, length.person))].join('\n')
@@ -230,20 +281,31 @@ export function cleanFrame(answer, detail = 'standard') {
 // Somebody described without a [Name] line: a head count, or a person word in the scene.
 const PERSON = /\b(?:\d+\s*(?:girl|boy|other)s?|solo|girls?|boys?|wom[ae]n|m[ae]n|people|person|figure|couple|crowd)\b/i
 const NOBODY = /\b(?:no humans|no people|nobody|no one)\b\.?/gi
+const ONE_PERSON = /\b(?:solo|1\s*(?:girl|boy|other))\b/i
 
 /**
  * An illustration always has somebody in it. A prompt with nobody in it (only a
- * 场景 line, or an empty room written as a plain prompt) gets the card's own
- * character, in the usual outfit, standing in the scene; "no humans" goes.
+ * 场景 line, or an empty room written as a plain prompt) gets the person the passage
+ * talks about most, else the card's own character, in the usual outfit, standing in
+ * the scene; "no humans" goes. A prompt that describes people without naming them (a
+ * model that left the format) keeps its words, and the ones the passage talks about
+ * are named under it, for their looks: one where it says so, else two at most.
+ * @param passage - the reply the picture is for.
  */
-export function withSomeone(prompt, roster, userName, cardName = '', promptStyle = 'tags') {
+export function withSomeone(prompt, roster, userName, cardName = '', promptStyle = 'tags', passage = '') {
   const value = String(prompt ?? '').trim()
   if (!value || !roster.length) return value
   const lines = value.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
   const named = lines.filter(line => CHARACTER_LINE.test(line))
   const scene = lines.filter(line => !CHARACTER_LINE.test(line)).map(line => line.replace(SCENE_LABEL, '')).join(', ')
-  if (named.length || PERSON.test(scene.replace(NOBODY, ''))) return value
-  const lead = roster.find(entry => !entry.player && cardName.includes(entry.name)) ?? roster.find(entry => !entry.player) ?? roster[0]
+  if (named.length) return value
+  const people = mentioned(roster, passage)
+  if (PERSON.test(scene.replace(NOBODY, ''))) {
+    if (!people.length) return value
+    const shown = people.slice(0, ONE_PERSON.test(scene) ? 1 : 2).map(entry => `[${nameFor(entry, userName)}]`)
+    return [`场景: ${scene}`, ...shown].join('\n')
+  }
+  const lead = people[0] ?? roster.find(entry => !entry.player && cardName.includes(entry.name)) ?? roster.find(entry => !entry.player) ?? roster[0]
   const pose = promptStyle === 'tags' ? 'standing, looking at viewer' : 'standing in the scene, looking at the viewer'
   const empty = scene.replace(NOBODY, '').replace(/\s*,\s*(?:,\s*)+/g, ', ').replace(/^[\s,.]+|[\s,]+$/g, '')
   return [empty ? `场景: ${empty}` : '', `[${nameFor(lead, userName)}] ${[lead.outfit, pose].filter(Boolean).join(', ')} | center`].filter(Boolean).join('\n')

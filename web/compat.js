@@ -618,10 +618,23 @@ function shimMain(ctx, makeFetch) {
   }
 
   // ── Worldbooks ──
-  const books = { own: '', mounted: [], global: [], ...(ctx.books || {}) }
-  const bookNames = () => [...new Set([books.own, ...books.mounted, ...books.global].filter(Boolean))]
+  const books = { own: '', mounted: [], global: [], chat: [], ...(ctx.books || {}) }
+  const bookNames = () => [...new Set([books.own, ...books.mounted, ...books.global, ...books.chat].filter(Boolean))]
   const getWorldbook = async name => call('worldbook', { action: 'get', name: String(name ?? '') })
   const replaceWorldbook = async (name, entries) => call('worldbook', { action: 'replace', name: String(name ?? ''), entries: clone(entries || []) })
+  // A new book is this chat's (server/frames.mjs createChatBook). false: the chat has one of that name, as Tavern Helper answers.
+  const createWorldbook = async (name, entries) => {
+    const wanted = String(name ?? '').replace(/\s+/g, ' ').trim().slice(0, 100)
+    const created = await call('worldbook', { action: 'create', name: wanted })
+    if (created && !books.chat.includes(wanted)) books.chat.push(wanted)
+    if (created && entries?.length) await replaceWorldbook(wanted, entries)
+    return created
+  }
+  const createOrReplaceWorldbook = async (name, entries) => {
+    const created = await createWorldbook(name, entries)
+    if (!created) await replaceWorldbook(name, entries)
+    return created
+  }
   const updateWorldbookWith = async (name, updater) => {
     const entries = await getWorldbook(name)
     const next = (await updater(clone(entries))) ?? entries
@@ -796,8 +809,8 @@ function shimMain(ctx, makeFetch) {
     updateWorldbookWith,
     createWorldbookEntries,
     deleteWorldbookEntries,
-    createWorldbook: unsupported('createWorldbook'),
-    createOrReplaceWorldbook: unsupported('createOrReplaceWorldbook'),
+    createWorldbook,
+    createOrReplaceWorldbook,
     deleteWorldbook: unsupported('deleteWorldbook'),
     rebindGlobalWorldbooks: unsupported('rebindGlobalWorldbooks'),
     rebindCharWorldbooks: unsupported('rebindCharWorldbooks'),
@@ -805,6 +818,7 @@ function shimMain(ctx, makeFetch) {
     getOrCreateChatWorldbook: unsupported('getOrCreateChatWorldbook'),
     // The older lorebook names for the same books.
     getLorebooks: () => bookNames(),
+    createLorebook: name => createWorldbook(name),
     getCharLorebooks: () => ({ primary: books.own || null, additional: [...books.mounted] }),
     getCurrentCharPrimaryLorebook: () => books.own || null,
     getChatLorebook: () => null,
@@ -818,6 +832,10 @@ function shimMain(ctx, makeFetch) {
     createLorebookEntries: async (name, entries) => {
       const { worldbook, new_entries } = await createWorldbookEntries(name, (entries || []).map(fromLegacy))
       return { entries: worldbook.map(legacyOf), new_uids: new_entries.map(e => e.uid) }
+    },
+    createLorebookEntry: async (name, entry) => {
+      const { new_entries } = await createWorldbookEntries(name, [fromLegacy(entry || {})])
+      return new_entries[0]?.uid
     },
     deleteLorebookEntries: async (name, uids) => {
       const drop = new Set((uids || []).map(Number))

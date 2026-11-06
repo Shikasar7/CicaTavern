@@ -3,11 +3,12 @@
 //   - the chat's card-kept variables (Tavern Helper's chat variables);
 //   - the books this chat uses, as Tavern Helper's worldbook entries; a card's
 //     changes are kept on the chat (`bookOverlay`), never on the book itself, so
-//     the card's other chats and its export stay as they were;
+//     the card's other chats and its export stay as they were; a book it makes
+//     is the chat's too (`chatBooks`);
 //   - the app's own MVU parser (Mvu.parseMessage);
 //   - the prompt for a model call the card makes without the chat's history (generateRaw).
 import { applyStateUpdates } from './state.mjs'
-import { inPrefix, normalizeBook } from './worldbook.mjs'
+import { emptyBook, inPrefix, normalizeBook } from './worldbook.mjs'
 import { httpError } from './store.mjs'
 import { msg } from './i18n.mjs'
 
@@ -17,6 +18,8 @@ const ROLES = ['system', 'user', 'assistant']
 const LOGICS = ['and_any', 'not_all', 'not_any', 'and_all']
 // What a card may keep in chat variables, at most.
 const FRAME_VARS_MAX = 200_000
+// The books a card may make in one chat, at most.
+const CHAT_BOOKS_MAX = 20
 
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value)
 const keyText = key => (typeof key === 'string' ? key : String(key ?? ''))
@@ -90,6 +93,23 @@ export function entryFromTh(change, base = null, uid = '0') {
   return base?.extra ? { ...entry, extra: { ...base.extra, ...entry.extra } } : entry
 }
 
+/** The books a card made in this chat. Each is empty as stored: its entries are the chat's changes to it, as with any other book. */
+export const chatBooks = chat => (Array.isArray(chat?.chatBooks) ? chat.chatBooks : [])
+
+/**
+ * A card makes a book (Tavern Helper createWorldbook, createLorebook): for this chat only, and in use at once.
+ * @param books - the books the chat has by name.
+ * @returns whether it was made: false when the chat has a book of that name, as Tavern Helper answers.
+ */
+export function createChatBook(chat, name, books) {
+  if (typeof name !== 'string' || !name.trim()) throw httpError(400, msg`世界书要有名字`)
+  const book = emptyBook(name)
+  if (books.some(b => b.name === book.name)) return false
+  if (chatBooks(chat).length >= CHAT_BOOKS_MAX) throw httpError(400, msg`这个对话的卡新建的世界书太多了（最多 ${CHAT_BOOKS_MAX} 本）`)
+  chat.chatBooks = [...chatBooks(chat), { ...book, id: `chat-${book.id}` }]
+  return true
+}
+
 /** The books with this chat's own changes (what its card's HTML wrote) on top. */
 export function withChatChanges(books, chat) {
   const overlay = chat?.bookOverlay
@@ -105,13 +125,13 @@ export function withChatChanges(books, chat) {
 }
 
 /**
- * The names a card sees: its own book, the books mounted on it, the global ones.
+ * The names a card sees: its own book, the books mounted on it, the global ones, the ones it made in this chat.
  * @param books - booksForCard: the card's own first (id card-<id>).
  */
-export function bookNames(books, card, globalIds = []) {
+export function bookNames(books, card, globalIds = [], chat = null) {
   const own = books.find(b => b.id === `card-${card.id}`)
   const named = ids => books.filter(b => ids.includes(b.id)).map(b => b.name)
-  return { own: own?.name ?? '', mounted: named(card.worldbookIds ?? []), global: named(globalIds) }
+  return { own: own?.name ?? '', mounted: named(card.worldbookIds ?? []), global: named(globalIds), chat: chatBooks(chat).map(b => b.name) }
 }
 
 /** The book a card means by `name` ('' = its own); its own, then mounted, then global. */

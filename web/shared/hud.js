@@ -22,14 +22,17 @@ const lookOf = field => (NUMERIC.has(field.show) ? field.show : 'text')
  */
 export function hudPicks(spec, saved = null) {
   const fields = (spec?.fields ?? []).filter(field => field.show !== 'hidden')
+  // What the player has to see when there is something to see: it shows nothing the rest of the time.
+  const always = fields.filter(field => field.always).map(field => ({ path: field.path, look: lookOf(field) }))
   if (Array.isArray(saved?.paths)) {
-    return saved.paths.map(path => {
+    const picks = saved.paths.map(path => {
       const field = fields.find(item => item.path === path)
       const look = saved.looks?.[path]
       return { path, look: LOOKS.includes(look) ? look : field ? lookOf(field) : 'text' }
     })
+    return [...picks, ...always.filter(item => !saved.paths.includes(item.path))]
   }
-  return fields.filter(field => NUMERIC.has(field.show)).slice(0, DEFAULT_COUNT).map(field => ({ path: field.path, look: field.show }))
+  return [...fields.filter(field => NUMERIC.has(field.show)).slice(0, DEFAULT_COUNT).map(field => ({ path: field.path, look: field.show })), ...always]
 }
 
 /** A field's name as the HUD shows it: its label (or last key), after its owner's name when several own the kept ones. */
@@ -163,4 +166,9 @@ const ICONS = [
 /** The icon for a variable's name, or a plain diamond. */
 export function iconFor(label) {
   return ICONS.find(([, pattern]) => pattern.test(String(label ?? '')))?.[0] ?? '◆'
+}
+
+/** The icon a change comes with: its own, a bag for what was gained or lost, else its variable's. */
+export function noteIcon(note) {
+  return note.icon ?? (note.kind === 'gain' || note.kind === 'lose' ? '🎒' : iconFor(note.label))
 }

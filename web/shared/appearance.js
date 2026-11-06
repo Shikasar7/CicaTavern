@@ -81,23 +81,34 @@ export const BACKDROP_FILE = /^backdrop-[a-z0-9]{4,16}\.(jpg|png|webp)$/
 // (--font-hei and so on), each falling back to Song where the device has none.
 export const STORY_FONTS = ['song', 'hei', 'kai', 'fang', 'custom']
 
-export const READING_DEFAULTS = Object.freeze({ font: 'song', custom: '', scale: 1 })
+// width 0 is the page's own (style.css --read).
+export const READING_DEFAULTS = Object.freeze({ font: 'song', custom: '', scale: 1, ui: 1, width: 0 })
 
 export const STORY_SCALE = Object.freeze({ min: 0.8, max: 1.6, step: 0.05 })
+
+// 界面大小: the whole page on a touch screen (theme.js fitInterface).
+export const UI_SCALE = Object.freeze({ min: 0.85, max: 1.3, step: 0.05 })
+
+// 正文宽度: the story's column, in pixels (theme.js).
+export const READ_WIDTH = Object.freeze({ min: 480, usual: 640, max: 1600, step: 8 })
 
 /** A font name as typed: no quotes or CSS punctuation, at most 60 characters. */
 export function cleanFontName(name) {
   return String(name ?? '').replace(/["'\\;{}<>\r\n\t]/g, '').replace(/\s+/g, ' ').trim().slice(0, 60)
 }
 
-/** Any value → a valid { font, custom, scale }. */
+/** Any value → a valid { font, custom, scale, ui, width }. */
 export function cleanReading(value) {
   const raw = value && typeof value === 'object' ? value : {}
   const scale = Number(raw.scale)
+  const ui = Number(raw.ui)
+  const width = Number(raw.width)
   return {
     font: STORY_FONTS.includes(raw.font) ? raw.font : READING_DEFAULTS.font,
     custom: cleanFontName(raw.custom),
+    ui: raw.ui !== undefined && Number.isFinite(ui) ? Math.min(UI_SCALE.max, Math.max(UI_SCALE.min, Math.round(ui * 100) / 100)) : READING_DEFAULTS.ui,
     scale: Number.isFinite(scale) ? Math.min(STORY_SCALE.max, Math.max(STORY_SCALE.min, Math.round(scale * 100) / 100)) : READING_DEFAULTS.scale,
+    width: width > 0 ? Math.min(READ_WIDTH.max, Math.max(READ_WIDTH.min, Math.round(width))) : READING_DEFAULTS.width,
   }
 }
 

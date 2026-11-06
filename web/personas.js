@@ -7,6 +7,7 @@
 // 应用到当前对话 after an edit) builds the open one's prefix again, and the
 // next turn writes the cache once more. Files go out in SillyTavern's shapes
 // (web/shared/personas.js).
+import { styleLibrary } from '/basic-options.js'
 import { lang, t, zh } from '/i18n.js'
 import { cardsOf, DEFAULT_ITEM, pickFor, stPersonas, stStyles } from '/shared/personas.js'
 // For 设置 → 写作 (app.js), which loads this module when it opens.
@@ -51,6 +52,8 @@ export function initPersonas({ api, el, toast, guard, saveFile, getChat, getCard
   const state = {
     kind: 'persona',
     selected: null,
+    // 内置文风 shown on the right instead of an item.
+    library: false,
     panels: new Set(),
     // Items edited while the open chat uses them: id → the persona's name before (its chat may go by it).
     stale: new Map(),
@@ -79,7 +82,9 @@ export function initPersonas({ api, el, toast, guard, saveFile, getChat, getCard
     await saving
     if (of !== state.kind) state.stale.clear()
     state.kind = of
+    state.library = false
     await load(of)
+    $('persona-library').hidden = of !== 'style'
     const wanted = selectId ?? chatUses()?.id ?? list().defaultId
     state.selected = list().items.some(item => item.id === wanted) ? wanted : list().defaultId
     $('persona-title').textContent = kind().title
@@ -96,6 +101,7 @@ export function initPersonas({ api, el, toast, guard, saveFile, getChat, getCard
 
   function select(id) {
     state.selected = id
+    state.library = false
     renderNav()
     renderMain()
   }
@@ -111,7 +117,7 @@ export function initPersonas({ api, el, toast, guard, saveFile, getChat, getCard
         uses?.id === one.id ? el('span', { class: 'tag', text: t`当前对话` }) : null,
         here && cards.includes(here) ? el('span', { class: 'tag', text: t`这张卡指定` }) : cards.length ? el('span', { class: 'tag off', text: t`${cards.length} 张卡` }) : null,
       ]
-      return el('li', { class: state.selected === one.id ? 'active' : '', onclick: () => select(one.id) }, [
+      return el('li', { class: !state.library && state.selected === one.id ? 'active' : '', onclick: () => select(one.id) }, [
         el('div', { class: 'item-title' }, [el('span', { class: 'item-main', text: kind().label(one) }), ...tags]),
         el('div', { class: 'item-sub', text: kind().sub(one) }),
       ])
@@ -161,6 +167,7 @@ export function initPersonas({ api, el, toast, guard, saveFile, getChat, getCard
   }
 
   function renderMain() {
+    if (state.library) return $('persona-main').replaceChildren(libraryView())
     const item = shown()
     $('persona-main').replaceChildren(
       el('div', { id: 'persona-headwrap' }, headParts(item)),
@@ -270,6 +277,44 @@ export function initPersonas({ api, el, toast, guard, saveFile, getChat, getCard
     const picked = saved.cards[card.id] === item.id
     toast(picked ? t`「${card.name}」新开的对话用「${kind().label(item)}」` : t`「${card.name}」不再指定，新开的对话用默认的`)
     await offerSwitch(card.id, [state.kind])
+  }
+
+  // ─── 内置文风 ─────────────────────────────────────────────────────────
+  /** The long versions the app comes with. One added is the player's own item, to change as they like. */
+  function libraryView() {
+    const added = style => list().items.some(item => item.text === style.text)
+    return el('div', { class: 'style-library' }, [
+      el('header', { class: 'preset-head' }, [
+        el('h3', { class: 'preset-title', text: t`内置文风` }),
+        el('div', { class: 'preset-meta', text: t`比基础预设的文风按钮写得细，用导入的预设也生效。加入后就是你自己的一项，可以随便改，再设为默认或指定给卡。用它的时候，把基础预设的文风按钮选「无」，免得两段要求打架。` }),
+      ]),
+      ...styleLibrary().map(style => el('section', { class: 'style-entry' }, [
+        el('div', { class: 'style-entry-head' }, [
+          el('h4', { text: style.name }),
+          el('button', { class: 'btn small', type: 'button', disabled: added(style), text: added(style) ? t`已在列表里` : t`加入列表`, onclick: guard(() => addBuiltin(style)) }),
+        ]),
+        el('p', { class: 'style-entry-about', text: style.about }),
+        style.sample ? el('p', { class: 'style-entry-sample', text: style.sample }) : null,
+        el('details', { class: 'style-entry-more' }, [el('summary', { text: t`看完整要求` }), el('pre', { text: style.text })]),
+      ])),
+    ])
+  }
+
+  async function openLibrary() {
+    await saving
+    state.library = true
+    renderNav()
+    renderMain()
+    layout.classList.add('show-main')
+  }
+
+  async function addBuiltin(style) {
+    await saving
+    const { item, list: saved } = await api(kind().url, { method: 'POST', body: { name: style.name, text: style.text } })
+    lists[state.kind] = saved
+    onListChanged?.(state.kind, saved)
+    select(item.id)
+    toast(t`已加入「${style.name}」，还没有卡指定它`)
   }
 
   // ─── Whole items ──────────────────────────────────────────────────────
@@ -414,6 +459,7 @@ export function initPersonas({ api, el, toast, guard, saveFile, getChat, getCard
   }
 
   $('persona-new').addEventListener('click', guard(create))
+  $('persona-library').addEventListener('click', guard(openLibrary))
   $('persona-export-all').addEventListener('click', () => exportItems(list().items))
   $('persona-import').addEventListener('change', guard(async event => {
     const files = [...event.target.files]

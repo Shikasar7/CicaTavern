@@ -13,7 +13,8 @@
 //   written into a <style> of their own (paletteCss); 细调颜色 changes them one by
 //   one, 对话修改 (talk-dialog.js) has them written from a few words, previewed first.
 import { t } from '/i18n.js'
-import { APPEARANCE_DEFAULTS, PALETTE_KEYS, READING_DEFAULTS, STORY_FONTS, STORY_SCALE, STYLES, cleanAppearance, cleanColor, cleanCustom, cleanFontName, cleanPalette, cleanReading, paletteCss, paletteIssues, storyFontOf } from '/shared/appearance.js'
+import { currentLook, lookNames, setLook } from '/game-look.js'
+import { APPEARANCE_DEFAULTS, PALETTE_KEYS, READING_DEFAULTS, READ_WIDTH, STORY_FONTS, STORY_SCALE, STYLES, UI_SCALE, cleanAppearance, cleanColor, cleanCustom, cleanFontName, cleanPalette, cleanReading, paletteCss, paletteIssues, storyFontOf } from '/shared/appearance.js'
 
 const MODES = ['auto', 'light', 'dark']
 const MODE_LABEL = { auto: t`跟随系统`, light: t`浅色`, dark: t`深色` }
@@ -144,8 +145,62 @@ export function applyReading(value) {
   else root.style.removeProperty('--story-font')
   if (reading.scale === READING_DEFAULTS.scale) root.style.removeProperty('--story-scale')
   else root.style.setProperty('--story-scale', String(reading.scale))
+  if (reading.width === READING_DEFAULTS.width) root.style.removeProperty('--read')
+  else root.style.setProperty('--read', `${reading.width}px`)
   remember(READING_KEY, JSON.stringify(reading))
+  fitInterface(reading.ui)
   return reading
+}
+
+const touchScreen = matchMedia('(hover: none)')
+const DEVICE_VIEWPORT = 'width=device-width, initial-scale=1, viewport-fit=cover'
+// The Mac app zooms its own view (launcher/mac/main.swift).
+const nativeZoom = () => (window.cicatavernNative?.pageZoom ? window.webkit?.messageHandlers?.pageZoom : null)
+// A page zoomed with CSS measures in screen pixels only where zoom has its standard meaning; that comes with this property.
+const cssZoom = 'currentCSSZoom' in Element.prototype
+const canSizeInterface = () => touchScreen.matches || Boolean(nativeZoom()) || cssZoom
+
+/** How much 界面大小 zooms the page with CSS: a screen position (a rect, a pointer) divided by it is a length on the page. */
+export const pageZoom = () => document.documentElement.currentCSSZoom ?? 1
+
+/** A media query as the page's own CSS has it now, for matchMedia. */
+export const zoomedQuery = query => query.replace(/(\d+)px/g, (_, px) => `${px * pageZoom()}px`)
+
+let zoomedTo = 1
+const plainQueries = new WeakMap()
+/** The stylesheet's widths are the page's, and media queries measure the screen: each moves with the zoom. */
+function zoomQueries(rules, zoom) {
+  for (const rule of rules) {
+    if (rule instanceof CSSMediaRule) {
+      if (!plainQueries.has(rule)) plainQueries.set(rule, rule.media.mediaText)
+      rule.media.mediaText = plainQueries.get(rule).replace(/(\d+(?:\.\d+)?)px/g, (_, px) => `${px * zoom}px`)
+    }
+    if (rule.cssRules) zoomQueries(rule.cssRules, zoom)
+  }
+}
+
+/**
+ * 界面大小. On a touch screen: the page laid out for a narrower screen and shown larger, as a browser's own zoom does, so
+ * everything grows together and the layout still fits; again when the screen changes (turned, folded). In the Mac app: its
+ * view's zoom. In a computer's browser, which keeps its zoom to itself: CSS zoom, with what that leaves out seen to here,
+ * in style.css (--page-zoom) and where a screen position becomes a length (pageZoom).
+ */
+function fitInterface(ui) {
+  const root = document.documentElement
+  if (touchScreen.matches) {
+    const tag = document.querySelector('meta[name="viewport"]')
+    const view = window.visualViewport
+    if (!tag || !view) return
+    const content = ui === 1 ? DEVICE_VIEWPORT : `width=${Math.round((view.width * view.scale) / ui)}, initial-scale=${ui}, viewport-fit=cover`
+    if (tag.content !== content) tag.content = content
+  } else if (nativeZoom()) nativeZoom().postMessage(ui)
+  else if (cssZoom && ui !== zoomedTo) {
+    zoomedTo = ui
+    root.style.zoom = ui === 1 ? '' : String(ui)
+    if (ui === 1) root.style.removeProperty('--page-zoom')
+    else root.style.setProperty('--page-zoom', String(ui))
+    for (const sheet of document.styleSheets) zoomQueries(sheet.cssRules, ui)
+  }
 }
 
 let probe = null
@@ -271,6 +326,141 @@ export function initTheme({ api, el, toast, guard, getSettings, setSettings, onR
         el('label', { class: 'theme-opacity' }, [el('span', { class: 'theme-size-a', 'aria-hidden': 'true', text: 'A' }), size, el('span', { class: 'theme-size-a big', 'aria-hidden': 'true', text: 'A' }), shown]),
         el('p', { class: 'theme-reading-sample', text: t`雨下得正紧，她把伞往你这边偏了偏：「今晚怕是回不去了。」` }),
         el('div', { class: 'row between' }, [el('p', { class: 'hint', text: t`字体和字号只改故事正文：回复、你的输入和视觉小说的文本框。只记在这台设备上，电脑和手机可以各用各的。` }), usual]),
+      ]),
+    ])
+  }
+
+  /** The widest the column goes here: what the stage has inside its padding (style.css .read-edge). */
+  const widestColumn = () => {
+    const padding = parseFloat(getComputedStyle(document.getElementById('read-left')).getPropertyValue('--gutter')) || 0
+    return Math.max(READ_WIDTH.min, Math.min(READ_WIDTH.max, document.querySelector('.reader').getBoundingClientRect().width / pageZoom() - padding))
+  }
+  // Even: the column stays centred on a whole pixel.
+  const fitColumn = width => Math.round(Math.min(widestColumn(), Math.max(READ_WIDTH.min, width)) / 2) * 2
+
+  /** 正文宽度: the same as dragging the column's edges, for a phone-sized hand or a keyboard; not on a phone, where the column is the screen. */
+  function widthRow(reading) {
+    if (matchMedia(zoomedQuery('(max-width: 560px)')).matches) return null
+    const shown = el('span', { class: 'theme-opacity-value', text: `${reading.width || READ_WIDTH.usual}` })
+    const width = el('input', { type: 'range', min: String(READ_WIDTH.min), max: String(widestColumn()), step: String(READ_WIDTH.step), value: String(reading.width || READ_WIDTH.usual), 'aria-label': t`正文宽度` })
+    const usual = el('button', { type: 'button', class: 'btn small ghost', text: t`默认宽度`, disabled: !reading.width })
+    width.addEventListener('input', () => {
+      setReading({ width: Number(width.value) })
+      shown.textContent = width.value
+      usual.disabled = false
+    })
+    usual.addEventListener('click', () => {
+      setReading({ width: READING_DEFAULTS.width })
+      render()
+    })
+    return el('div', { class: 'theme-row top' }, [
+      el('span', { class: 'theme-label', text: t`正文宽度` }),
+      el('div', { class: 'theme-reading' }, [
+        el('label', { class: 'theme-opacity' }, [width, shown]),
+        el('div', { class: 'row between' }, [el('p', { class: 'hint', text: t`普通对话的正文和输入框有多宽，也可以直接拖正文两边的竖条。窗口放不下时按窗口宽度。只记在这台设备上。` }), usual]),
+      ]),
+    ])
+  }
+
+  /**
+   * The column's two edges. The column stays centred, so an edge moved one way takes the other with it and stays under the
+   * finger; the place being read stays where it is while the lines above it change. Saved when let go.
+   */
+  function bindReadEdges() {
+    const root = document.documentElement
+    const box = document.getElementById('transcript')
+    const edges = { left: document.getElementById('read-left'), right: document.getElementById('read-right') }
+    const columnNow = () => (edges.right.getBoundingClientRect().left - edges.left.getBoundingClientRect().left) / pageZoom() - 24
+    /** Where the stage leaves next to nothing to choose from, the edges keep out of the way; again as it changes (a pane folded, the window turned). */
+    const say = () => {
+      const widest = Math.round(widestColumn())
+      const room = widest - READ_WIDTH.min >= 64
+      for (const edge of Object.values(edges)) edge.hidden = !room
+      if (!room) return
+      const now = Math.round(columnNow())
+      for (const edge of Object.values(edges)) for (const [name, value] of [['aria-valuemin', READ_WIDTH.min], ['aria-valuemax', widest], ['aria-valuenow', now]]) edge.setAttribute(name, String(value))
+    }
+    /** How far through the first message in view the top of the view is; the function puts it back there. */
+    const holdPlace = () => {
+      const top = box.getBoundingClientRect().top
+      const message = [...box.querySelectorAll('.msg')].find(node => node.getBoundingClientRect().bottom > top)
+      if (!message) return () => {}
+      const before = message.getBoundingClientRect()
+      const through = (top - before.top) / (before.height || 1)
+      return () => {
+        const now = message.getBoundingClientRect()
+        box.scrollTop += now.top + through * now.height - top
+      }
+    }
+    for (const [side, edge] of Object.entries(edges)) {
+      const outward = side === 'right' ? 1 : -1
+      edge.addEventListener('pointerdown', event => {
+        if (event.button) return
+        event.preventDefault()
+        edge.setPointerCapture(event.pointerId)
+        edge.classList.add('dragging')
+        const from = columnNow()
+        const startX = event.clientX
+        const putBack = holdPlace()
+        let width = 0
+        const move = moved => {
+          width = fitColumn(from + (2 * outward * (moved.clientX - startX)) / pageZoom())
+          root.style.setProperty('--read', `${width}px`)
+          putBack()
+        }
+        const end = () => {
+          edge.removeEventListener('pointermove', move)
+          edge.removeEventListener('pointerup', end)
+          edge.removeEventListener('pointercancel', end)
+          edge.classList.remove('dragging')
+          // A press that did not move leaves the column as it was.
+          if (width) setReading({ width })
+          say()
+        }
+        edge.addEventListener('pointermove', move)
+        edge.addEventListener('pointerup', end)
+        edge.addEventListener('pointercancel', end)
+      })
+      edge.addEventListener('keydown', event => {
+        const step = { ArrowLeft: -1, ArrowRight: 1 }[event.key]
+        if (!step) return
+        event.preventDefault()
+        const putBack = holdPlace()
+        setReading({ width: fitColumn(columnNow() + step * outward * 32) })
+        putBack()
+        say()
+      })
+      edge.addEventListener('dblclick', () => {
+        const putBack = holdPlace()
+        setReading({ width: READING_DEFAULTS.width })
+        putBack()
+        say()
+      })
+    }
+    new ResizeObserver(say).observe(document.querySelector('.reader'))
+  }
+
+  /** 界面大小: applied when the slider is let go, or it would run away from under the finger. */
+  function interfaceRow(reading) {
+    if (!canSizeInterface()) return null
+    const percent = value => `${Math.round(value * 100)}%`
+    const size = el('input', { type: 'range', min: String(UI_SCALE.min * 100), max: String(UI_SCALE.max * 100), step: String(UI_SCALE.step * 100), value: String(Math.round(reading.ui * 100)), 'aria-label': t`界面大小` })
+    const shown = el('span', { class: 'theme-opacity-value', text: percent(reading.ui) })
+    const usual = el('button', { type: 'button', class: 'btn small ghost', text: t`默认大小`, disabled: reading.ui === READING_DEFAULTS.ui })
+    size.addEventListener('input', () => { shown.textContent = percent(size.value / 100) })
+    size.addEventListener('change', () => {
+      setReading({ ui: size.value / 100 })
+      usual.disabled = currentReading().ui === READING_DEFAULTS.ui
+    })
+    usual.addEventListener('click', () => {
+      setReading({ ui: READING_DEFAULTS.ui })
+      render()
+    })
+    return el('div', { class: 'theme-row top' }, [
+      el('span', { class: 'theme-label', text: t`界面大小` }),
+      el('div', { class: 'theme-reading' }, [
+        el('label', { class: 'theme-opacity' }, [el('span', { class: 'theme-size-a', 'aria-hidden': 'true', text: 'A' }), size, el('span', { class: 'theme-size-a big', 'aria-hidden': 'true', text: 'A' }), shown]),
+        el('div', { class: 'row between' }, [el('p', { class: 'hint', text: t`菜单、按钮、设置窗口和正文一起放大缩小，松手时生效。只记在这台设备上。` }), usual]),
       ]),
     ])
   }
@@ -473,11 +663,18 @@ export function initTheme({ api, el, toast, guard, getSettings, setSettings, onR
     opacity.addEventListener('change', guard(() => save({ backdropOpacity: opacity.value / 100 })))
 
     dialog.replaceChildren(
+      el('button', { type: 'submit', class: 'btn small dialog-x', value: 'close', text: t`关闭` }),
       el('h2', { text: t`主题` }),
       el('div', { class: 'theme-row' }, [el('span', { class: 'theme-label', text: t`明暗` }), seg]),
       el('div', { class: 'theme-row top' }, [el('span', { class: 'theme-label', text: t`配色` }), el('div', { class: 'theme-colors' }, [styles, colorTools, tuning && current.custom ? tuner(current) : null])]),
       fontRow(currentReading()),
       sizeRow(currentReading()),
+      widthRow(currentReading()),
+      interfaceRow(currentReading()),
+      el('div', { class: 'theme-row' }, [
+        el('span', { class: 'theme-label', text: t`游戏界面` }),
+        el('select', { 'aria-label': t`视觉小说、战斗和掷骰的样子`, onchange: event => setLook({ look: event.target.value }) }, Object.entries(lookNames()).map(([look, name]) => el('option', { value: look, text: name, selected: look === currentLook().look }))),
+      ]),
       el('div', { class: 'theme-row top' }, [
         el('span', { class: 'theme-label', text: t`背景图` }),
         el('div', { class: 'theme-backdrop' }, [
@@ -487,7 +684,6 @@ export function initTheme({ api, el, toast, guard, getSettings, setSettings, onR
           el('p', { class: 'hint', text: current.backdrop ? t`透明度越低，图越淡，字越好认。` : t`选一张图放在界面后面，存在酒馆的数据文件夹里。` }),
         ]),
       ]),
-      el('div', { class: 'row end' }, [el('button', { type: 'submit', class: 'btn', value: 'close', text: t`关闭` })]),
     )
   }
 
@@ -503,6 +699,8 @@ export function initTheme({ api, el, toast, guard, getSettings, setSettings, onR
   // Following the system: the bar colour follows it too.
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', syncThemeColor)
   applyReading(currentReading())
+  addEventListener('resize', () => fitInterface(currentReading().ui))
   renderButton()
+  bindReadEdges()
   return { renderButton, apply: () => { applyAppearance(getSettings()?.appearance); renderButton() } }
 }

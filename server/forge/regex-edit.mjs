@@ -23,7 +23,7 @@ export const onOf = script => {
 }
 export { effectOf }
 /** Whether a script changes what the model reads (so the next turn writes the cache once more). */
-export const touchesPrompt = script => Boolean(script) && !script.disabled && effectOf(script) !== 'display' && onOf(script) !== 'none'
+export const touchesPrompt = script => Boolean(script) && !script.disabled && effectOf(script) !== 'display' && (onOf(script) !== 'none' || script.placement.includes(PLACEMENT.WORLD_INFO))
 
 /** The ids sent in full: the one asked about, those the request names, then in order within the budget. */
 function shownScripts(scripts, words, target) {
@@ -170,19 +170,24 @@ export function readRegexEdit(text, subject, { shown = null, target = '' } = {})
   return { reply, changes: target ? list.filter(change => change.id === target) : list }
 }
 
-/** A proposed script as it would be kept (a changed one over the one it replaces). */
+/**
+ * A proposed script as it would be kept (a changed one over the one it replaces). What only a program proposes (角色卡自检):
+ * `world`, it also runs over worldbook text; `minDepth`, how far back it starts.
+ */
 export function scriptOf(change, current = null) {
   const on = change.newOn ?? change.on
   const effect = change.newEffect ?? change.effect
+  const others = (current?.placement ?? []).filter(p => p !== PLACEMENT.AI_OUTPUT && p !== PLACEMENT.USER_INPUT)
   return {
     ...(current ?? { id: '', trimStrings: [], substituteRegex: 0, minDepth: null, maxDepth: null }),
     scriptName: change.name ?? current?.scriptName ?? '',
     // A pattern or replacement the proposal leaves alone stays as the script has it now.
     findRegex: current && change.findAfter === change.findBefore ? current.findRegex : change.findAfter ?? change.find,
     replaceString: current && change.replaceAfter === change.replaceBefore ? current.replaceString : change.replaceAfter ?? change.replace,
-    placement: [...ON[on], ...(current?.placement ?? []).filter(p => p !== PLACEMENT.AI_OUTPUT && p !== PLACEMENT.USER_INPUT)],
+    placement: [...ON[on], ...others, ...(change.world && !others.includes(PLACEMENT.WORLD_INFO) ? [PLACEMENT.WORLD_INFO] : [])],
     ...effectFlags(effect, current),
     disabled: change.enabled === undefined ? current?.disabled === true : !change.enabled,
+    ...(change.minDepth === undefined ? {} : { minDepth: change.minDepth }),
   }
 }
 

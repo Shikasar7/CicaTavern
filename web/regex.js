@@ -18,7 +18,7 @@ const EFFECT_LABEL = { both: t`显示和发送都改`, display: t`只改显示`,
 const SAMPLE = t`她把伞收起来，抖了抖水。「进来坐吧。」` + '\n<state>{"好感": 12}</state>' // i18n-ignore: a variable block as cards write it
 
 /** Whether the script changes what the model reads again (so the cache is written once more). */
-const touchesPrompt = script => Boolean(script) && effectOf(script) !== 'display' && (script.placement.includes(PLACEMENT.AI_OUTPUT) || script.placement.includes(PLACEMENT.USER_INPUT))
+const touchesPrompt = script => Boolean(script) && effectOf(script) !== 'display' && script.placement.some(p => p === PLACEMENT.AI_OUTPUT || p === PLACEMENT.USER_INPUT || p === PLACEMENT.WORLD_INFO)
 const newId = () => (crypto.randomUUID ? crypto.randomUUID() : `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`)
 const titleOf = script => script.scriptName || script.findRegex
 // What a place's search looks through.
@@ -495,7 +495,7 @@ export function initRegex({ api, el, toast, guard, saveFile, context, getCards, 
   }
 
   function where(script) {
-    return [script.placement.includes(PLACEMENT.AI_OUTPUT) && t`AI 回复`, script.placement.includes(PLACEMENT.USER_INPUT) && t`用户输入`].filter(Boolean).join(t`、`) || t`不作用`
+    return [script.placement.includes(PLACEMENT.AI_OUTPUT) && t`AI 回复`, script.placement.includes(PLACEMENT.USER_INPUT) && t`用户输入`, script.placement.includes(PLACEMENT.WORLD_INFO) && t`世界书`].filter(Boolean).join(t`、`) || t`不作用`
   }
 
   /** The row of a script (kept while the place is shown, so an open editor keeps what is typed). */

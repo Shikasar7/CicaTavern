@@ -299,3 +299,16 @@ test('人设图, 场景 and the card\'s picture keep theirs too; with none kept,
   assert.deepEqual(await readdir(path.join(dataRoot, 'cards')).then(names => names.includes(cardId)), false)
   assert.equal((await call(`/api/cards/${cardId}/history`)).status, 404)
 })
+
+test('a foe drawn for the bestiary: a picture of its own, from what the helper said of it', async t => {
+  const { call, bytes, cardId } = await tavern(t)
+  await call(`/api/cards/${cardId}/game`, { method: 'PUT', body: { level: 'full', foes: { 灰狼: { looks: 'grey wolf, snarling', moves: ['撕咬'] }, 山贼: { looks: '', moves: [] } } } })
+  const book = (await call(`/api/cards/${cardId}/foes/draw`, { method: 'POST', body: { name: '灰狼' } })).body
+  assert.match(book.foes.灰狼.file, /^foe-.+\.png$/)
+  assert.deepEqual(book.foes.灰狼.moves, ['撕咬'], 'the rest of what is known stays')
+  assert.ok((await bytes(`/api/foes/${cardId}/${book.foes.灰狼.file}`)).length > 0)
+  const again = (await call(`/api/cards/${cardId}/foes/draw`, { method: 'POST', body: { name: '灰狼' } })).body
+  assert.notEqual(again.foes.灰狼.file, book.foes.灰狼.file, 'drawn again, the new one takes its place')
+  assert.equal((await call(`/api/cards/${cardId}/foes/draw`, { method: 'POST', body: { name: '山贼' } })).status, 400, 'nothing known of its looks')
+  assert.equal((await call(`/api/cards/${cardId}/foes/draw`, { method: 'POST', body: { name: '没见过' } })).status, 404)
+})

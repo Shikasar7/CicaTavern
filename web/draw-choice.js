@@ -4,6 +4,7 @@
 // what they still need. Nothing is saved (web/shared/draw.js, server/media.mjs
 // withDrawChoice).
 import { t } from '/i18n.js'
+import { comboBox } from '/menu.js'
 import { IMAGE_MODEL, choiceBody, drawChoices, startingChoice } from '/shared/draw.js'
 
 export const NAI_MODELS = [
@@ -71,17 +72,18 @@ export function initDrawChoice({ api, el, guard, openSettings }) {
           return modelBox.replaceChildren(el('label', { class: 'dc-field' }, [el('span', { text: t`模型` }), select]))
         }
         // OpenAI-compatible and Gemini: any model name, with the known ones to pick from.
-        const list = el('datalist', { id: 'draw-choice-models' }, method.models.map(id => el('option', { value: id })))
-        const input = el('input', { value: chosen.model, list: 'draw-choice-models', spellcheck: 'false', placeholder: t`例如 gpt-image-1`, 'aria-label': t`模型`, oninput: () => (chosen.model = input.value.trim()) })
+        let listed = method.models
+        const input = el('input', { value: chosen.model, spellcheck: 'false', placeholder: t`例如 gpt-image-1`, 'aria-label': t`模型`, oninput: () => (chosen.model = input.value.trim()) })
+        const modelPick = comboBox(el, { input, options: () => listed, empty: t`点「获取」列出模型，也可以直接填写` })
         const fetchAll = el('button', { type: 'button', class: 'btn small ghost', text: t`获取`, title: t`问供应商要它的模型列表` })
         fetchAll.onclick = guard(async () => {
           const { models } = await api('/api/providers/models', { method: 'POST', body: { id: method.providerId } })
           const images = models.filter(id => IMAGE_MODEL.test(id))
-          list.replaceChildren(...[...new Set([...method.models, ...(images.length ? images : models)])].map(id => el('option', { value: id })))
-          input.focus()
+          listed = [...method.models, ...(images.length ? images : models)]
+          modelPick.open()
         })
         modelBox.replaceChildren(
-          el('label', { class: 'dc-field' }, [el('span', { text: t`模型` }), el('span', { class: 'dc-model-row' }, [input, method.providerId ? fetchAll : null]), list]),
+          el('label', { class: 'dc-field' }, [el('span', { text: t`模型` }), el('span', { class: 'dc-model-row' }, [modelPick.box, method.providerId ? fetchAll : null])]),
           el('p', { class: 'hint', text: method.provider ? t`${method.provider} 的模型；空着就用设置里的 ${method.model || t`（还没填）`}。` : '' }),
         )
       }

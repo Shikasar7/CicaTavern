@@ -4,6 +4,9 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- 后台运行: a reply goes on with the screen off (Bridge.keepAwake), and the app can ask to be left out of battery optimization. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- 设置 → 更多 → 更新 hands the downloaded APK to the system installer (ApkUpdate). -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- 语音输入 (web/dictation.js): the page records through getUserMedia; asked for on the first press. -->
@@ -20,7 +23,7 @@
 
         <activity
             android:name=".MainActivity"
-            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|density|keyboard|keyboardHidden|navigation"
             android:exported="true"
             android:launchMode="singleTask"
             android:windowSoftInputMode="adjustResize">

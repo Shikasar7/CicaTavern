@@ -25,6 +25,12 @@ export async function initTemplates() {
   quickjs ??= await getQuickJS()
 }
 
+/** QuickJS, for a sandbox of another kind (server/schema.mjs). */
+export function sandboxEngine() {
+  if (!quickjs) throw new Error('templates not initialised')
+  return quickjs
+}
+
 // Template tags are found by scanning for `<%` and `%>`, as the lazy /<%[\s\S]*?%>/ would match them: that regex
 // took quadratic time on text full of `<%` with no `%>` (a 256 KB EjsTemplate check held the server for 14 s).
 

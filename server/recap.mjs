@@ -33,6 +33,17 @@ export function summaryInstruction(names, extra = '') {
   return extra ? `${text.replace(/只输出存档本身，(放在 <剧情存档> 和 <\/剧情存档> 之间。)$/, '先写存档，$1')}\n\n${extra}` : text
 }
 
+/** The same for 直连对话: a conversation to carry on, not a story. The tags are the ones the archive is read by. */
+export const directSummaryInstruction = () => `【这一条是系统请求，不要回答之前的问题】
+这段对话要换到新的上下文里继续，之前的记录会被这份摘要代替。请写一份摘要，包括：
+
+1. 用户想做什么、问过什么。
+2. 已经得出的结论和答案，保留具体的名称、数字和代码要点。
+3. 用户附过的文件讲了什么。
+4. 还没解决的问题。
+
+篇幅和对话量相称，不要评论。只输出摘要本身，放在 <剧情存档> 和 </剧情存档> 之间。`
+
 // The parts summaryInstruction asks for, as headings: an archive written without its tags still has them.
 const heading = words => new RegExp(`^\\s*(?:[#>*\\-]+\\s*|\\d+\\s*[.、．)]\\s*|【)?\\**(?:${words})\\**\\s*(?:】|[:：]|$)`, 'im')
 const ARCHIVE_PARTS = [
@@ -95,8 +106,8 @@ export function storyPath(path) {
  * message before it. What the model reads; the chat keeps and shows them.
  */
 export function withoutHidden(path) {
-  if (!path.some(node => node.hidden)) return path
-  return path.filter((node, index) => !node.hidden && !(node.role === 'user' && path[index + 1]?.hidden))
+  if (!path.some(node => node.hidden || node.deleted)) return path
+  return path.filter((node, index) => !node.hidden && !node.deleted && !(node.role === 'user' && path[index + 1]?.hidden))
 }
 
 /** User turns the story on `path` has had, counting those before an import. */
@@ -132,10 +143,10 @@ export function recentExchanges(path, names, transform = ({ text }) => text, tur
 }
 
 /** The block the first turn after a compaction opens with. */
-export function recapBlock(summary, recent) {
+export function recapBlock(summary, recent, { direct = false } = {}) {
   const parts = [
     '<前情提要>',
-    '故事已经进行了一段时间，之前的对话记录已收起。下面是剧情存档和最近几轮的原文，请从最近一轮之后自然接续，不要复述。',
+    direct ? '这段对话已经进行了一段时间，之前的记录已收起。下面是摘要和最近几轮的原文，接着回答用户，不要复述。' : '故事已经进行了一段时间，之前的对话记录已收起。下面是剧情存档和最近几轮的原文，请从最近一轮之后自然接续，不要复述。',
     `<剧情存档>\n${String(summary).trim()}\n</剧情存档>`,
   ]
   if (recent) parts.push(`<最近原文>\n${recent}\n</最近原文>`)

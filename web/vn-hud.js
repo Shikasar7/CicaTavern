@@ -1,16 +1,16 @@
 // 游戏式 HUD in the visual novel mode (web/vn.js): a few of the story's
 // variables in the corner, each a bar, a number or an icon (chosen per card on
 // this device; by default the layout's first few numbers), and what a reply
-// changed popping up as the player reaches its end (好感 +5, 获得：铜钥匙).
+// changed popping up as the player reaches it, or the end of the reply (好感 +5, 获得：铜钥匙).
 // Only reads the chat's state (web/shared/hud.js); the model is asked for nothing.
 import { t } from '/i18n.js'
-import { hudPicks, hudRows } from '/shared/hud.js'
+import { hudPicks, hudRows, noteIcon } from '/shared/hud.js'
 
 // Per card: { paths, looks } — what the player chose to keep and how.
 const PICKS_KEY = 'cicatavern.vnHud'
 // How long a note stays, and the gap between notes popping up together.
-const NOTE_MS = 3200
-const NOTE_GAP = 260
+const NOTE_MS = 4600
+const NOTE_GAP = 320
 
 function recall(key, fallback) {
   try {
@@ -30,6 +30,18 @@ function remember(key, value) {
 
 const signed = n => (n > 0 ? `+${n}` : `−${Math.abs(n)}`)
 const shown = n => String(Math.round(n * 100) / 100)
+
+/** Changes as chips, for the transcript and the 回看. */
+export const noteChips = (el, notes) => el('div', { class: 'game-changes' }, notes.map(note => el('span', { class: `game-change ${note.kind}`, text: `${noteIcon(note)} ${noteText(note)}` })))
+
+/** What a change says: 好感 +5, 获得：铜钥匙. */
+export function noteText(note) {
+  if (note.text) return note.text
+  if (note.kind === 'up' || note.kind === 'down') return `${note.label} ${signed(note.delta)}`
+  if (note.kind === 'gain') return t`获得：${note.item}${note.count > 1 ? ` ×${note.count}` : ''}`
+  if (note.kind === 'lose') return t`失去：${note.item}${note.count > 1 ? ` ×${note.count}` : ''}`
+  return note.kind === 'on' ? t`${note.label}：是` : t`${note.label}：否`
+}
 
 /**
  * @param deps.prefs - the mode's settings (prefs.hud, prefs.hudNotes: false turns them off); deps.savePrefs keeps them.
@@ -92,14 +104,10 @@ export function initVnHud({ el, prefs, savePrefs, open }) {
   function notify(list) {
     if (prefs.hudNotes === false) return
     list.forEach((note, i) => {
-      const text = note.kind === 'up' || note.kind === 'down'
-        ? `${note.label} ${signed(note.delta)}`
-        : note.kind === 'gain'
-          ? t`获得：${note.item}${note.count > 1 ? ` ×${note.count}` : ''}`
-          : note.kind === 'lose'
-            ? t`失去：${note.item}${note.count > 1 ? ` ×${note.count}` : ''}`
-            : note.kind === 'on' ? t`${note.label}：是` : t`${note.label}：否`
-      const pill = el('div', { class: `vn-note ${note.kind}`, text, style: `--delay: ${i * NOTE_GAP}ms` })
+      const pill = el('div', { class: `vn-note ${note.kind}`, style: `--delay: ${i * NOTE_GAP}ms` }, [
+        el('span', { class: 'vn-note-icon', 'aria-hidden': 'true', text: noteIcon(note) }),
+        el('span', { text: noteText(note) }),
+      ])
       notes.append(pill)
       setTimeout(() => pill.remove(), NOTE_MS + i * NOTE_GAP)
     })
@@ -175,7 +183,7 @@ export function initVnHud({ el, prefs, savePrefs, open }) {
         draw(last)
         redraw()
       }),
-      switchRow(t`数值变化提示`, t`读到一轮的结尾时，弹出「好感 +5」「获得：铜钥匙」`, prefs.hudNotes !== false, on => {
+      switchRow(t`数值变化提示`, t`读到变化的地方时，弹出「好感 +5」「获得：铜钥匙」`, prefs.hudNotes !== false, on => {
         prefs.hudNotes = on
         savePrefs()
         redraw()

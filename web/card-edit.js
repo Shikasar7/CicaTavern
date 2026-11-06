@@ -37,15 +37,15 @@ const FIELD_TEXT = {
   tags: [t`标签`, ''],
 }
 const inPrefix = key => CARD_FIELDS.find(f => f.key === key)?.prefix === true
-const IDEAS = [t`让她说话更冷淡一点`, t`加一个青梅竹马的 NPC 条目`, t`开场白短一点，结尾留个悬念`]
+const IDEAS = [t`让她说话更冷淡一点`, t`加一个青梅竹马的 NPC 条目`, t`开场白短一点，结尾留个悬念`, t`把对话里后来出场的角色加进设定和变量`]
 
 /**
- * @param deps - { api, el, toast, guard, saveFile, getChat, isGenerating, openProviders,
+ * @param deps - { api, el, toast, guard, saveFile, getChat, isGenerating, openProviders, openCheck(cardId) (检查这张卡),
  *   openBook(cardId) (the entries window on the card's own book), onChatChanged(chatView),
  *   onCardChanged(cardId, { avatar }) (the list, the card's details and its picture follow),
  *   pickDraw(options) (web/draw-choice.js: the 画图方式 and model for one drawing) }
  */
-export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = null, getChat, isGenerating, openProviders, openBook, onChatChanged, onCardChanged, pickDraw }) {
+export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = null, getChat, isGenerating, openProviders, openCheck, openBook, onChatChanged, onCardChanged, pickDraw }) {
   const $ = id => document.getElementById(id)
   const dialog = $('card-edit-dialog')
   const state = {
@@ -203,6 +203,7 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
             saveDownload(new URL(event.currentTarget.href).pathname + new URL(event.currentTarget.href).search, `${card.name}.png`, 'image/png')
           }, title: t`图片里带着整张卡（包括这里的修改），SillyTavern 可以直接导入`, text: t`导出 PNG` }) : null,
           el('button', { type: 'button', class: 'btn small ghost', text: t`导出 JSON`, title: t`SillyTavern 的角色卡 JSON，包括这里的修改`, onclick: () => exportJson() }),
+          el('button', { type: 'button', class: 'btn small ghost', text: t`检查这张卡`, title: t`查写错和对不上的地方，也可以让模型提优化建议`, onclick: guard(async () => { await state.saving; await openCheck(state.card.id) }) }),
         ]),
         regexChoice(card),
         drawn?.image ? drawnBox(drawn) : null,
@@ -486,11 +487,12 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
   })
 
   // ─── 对话修改 (talk.js) ───────────────────────────────────────────────
-  const KIND_TEXT = { field: '', greeting: '', entry: t`世界书`, newEntry: t`新条目`, removeEntry: t`删除条目` }
+  const KIND_TEXT = { field: '', greeting: '', entry: t`世界书`, newEntry: t`新条目`, removeEntry: t`删除条目`, chatState: t`对话变量` }
 
   function changeTitle(change) {
     if (change.kind === 'field') return FIELD_TEXT[change.key]?.[0] ?? change.key
     if (change.kind === 'greeting') return change.index < state.card.greetings.length || change.before ? t`开场白 ${change.index + 1}` : t`开场白 ${change.index + 1}（新加）`
+    if (change.kind === 'chatState') return `${KIND_TEXT.chatState} · ${change.path}`
     const name = change.kind === 'newEntry' ? change.name : change.title || t`未命名条目`
     return `${KIND_TEXT[change.kind]} · ${name}`
   }
@@ -503,12 +505,14 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
       return [t`不发给模型`, 'off', '']
     }
     if (change.kind === 'greeting') return [t`新对话`, 'off', t`开新对话时选`]
-    if (change.initvar) return [t`初始变量`, 'on', t`新对话从这些值开始；已有的对话点「应用到当前对话」后补上`]
+    if (change.kind === 'chatState') return [t`这段对话`, 'key', t`写进读到的这段对话现在的变量，下一轮发给模型`]
+    if (change.initvar) return [t`初始变量`, 'on', t`新对话从这些值开始；还没有变量的对话点「应用到当前对话」后补上，已经有变量的对话不会变`]
     return change.constant ? [t`常驻`, 'on', t`写进对话开局时的固定前缀`] : [t`关键词`, 'key', t`最近的对话提到关键词时随消息发送`]
   }
 
   function changeNotes(change) {
     const notes = []
+    if (change.kind === 'chatState') notes.push(t`写进对话：${change.chat}`)
     if (change.kind === 'entry' && change.name) notes.push(t`名称：${change.title || t`未命名条目`} → ${change.name}`)
     if ((change.kind === 'newEntry' && !change.initvar) || change.keys) notes.push(t`关键词：${(change.keys ?? []).join(t`、`) || t`（无）`}`)
     if (change.kind === 'newEntry' && change.constant) notes.push(t`常驻：写进对话开局时的固定前缀`)
@@ -535,11 +539,16 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
     targetLabel,
     // A request waits for the fields still saving.
     beforeAsk: () => state.saving,
+    references: {
+      chats: async () => (await api('/api/chats')).filter(chat => chat.cardId === state.card.id),
+      current: () => getChat()?.id ?? '',
+    },
     async onApplied(result) {
       absorb(result.card)
       renderMain()
       saved(result.prefix, t`已改进卡里：${result.applied} 处`)
-      toast(t`已改进卡里：${result.applied} 处`)
+      toast(result.lost?.length ? t`已改进卡里：${result.applied} 处。这张卡的变量规则里没有 ${result.lost.join(t`、`)}，下一条回复后会被去掉` : t`已改进卡里：${result.applied} 处`, result.lost?.length ? 9000 : undefined)
+      if (result.chat?.id === getChat()?.id) onChatChanged(result.chat)
       await onCardChanged?.(state.card.id)
     },
   })
@@ -550,12 +559,14 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
     showPane('assist')
   }
 
-  // The entries window edits the card's book: count again when it closes.
-  $('book-dialog')?.addEventListener('close', guard(async () => {
+  // The entries window and 检查这张卡 change the card behind this one: read it again when they close.
+  const readAgain = guard(async () => {
     if (!dialog.open || !state.card) return
     absorb(await api(`/api/cards/${state.card.id}/edit`))
     renderMain()
-  }))
+  })
+  $('book-dialog')?.addEventListener('close', readAgain)
+  $('card-check-dialog')?.addEventListener('close', readAgain)
   dialog.addEventListener('close', () => talk.stop())
   // Esc: the field being typed in saves as it loses focus.
   dialog.addEventListener('cancel', () => document.activeElement?.blur?.())

@@ -11,15 +11,19 @@ import { homedir } from 'node:os'
 import path from 'node:path'
 import YAML from 'yaml'
 import { fileURLToPath } from 'node:url'
-import { backfillEntryPositions, cardSummary, cleanGroup, exportCard, greetingsOf, importOwnCard, normalizeCard, orderCards, organizeCard, parseCardFile, previousVersion, rawOfPicture, sillyTavernCard, unwrapWorkspace, writeCardPng } from './cards.mjs'
+import { backfillEntryPositions, cardSummary, cleanGroup, directCard, exportCard, greetingsOf, importOwnCard, normalizeCard, orderCards, organizeCard, parseCardFile, previousVersion, rawOfPicture, rulebookOf, sillyTavernCard, unwrapWorkspace, writeCardPng } from './cards.mjs'
 import { memoryWorldFile } from './memory.mjs'
-import { chatSummary, chatView, childrenOf, createChat, selectNode, activePath, rebuildPrompt, restoreFolded, rollbackTo, hideRound, memoryView, saveMemory, editCompaction, dropCompaction, exportStory, importStory, importSillyTavern, forkChat, mountChange, switchOpening, booksForCard, playerOf, chatPicks, newChatPicks, switchPicks } from './chats.mjs'
-import { bookByName, bookNames, fieldChange, parseUpdates, setFrameVars, thEntry, withChatChanges, writeChatBook } from './frames.mjs'
+import { chatSummary, chatView, childrenOf, createChat, deleteMessage, selectNode, activePath, rebuildPrompt, restoreFolded, rollbackTo, hideRound, memoryView, saveMemory, editCompaction, dropCompaction, exportStory, importStory, importSillyTavern, forkChat, mountChange, switchOpening, booksForCard, playerOf, chatPicks, newChatPicks, switchPicks } from './chats.mjs'
+import { onSchemaProblem } from './schema.mjs'
+import { bookByName, bookNames, chatBooks, createChatBook, fieldChange, parseUpdates, setFrameVars, thEntry, withChatChanges, writeChatBook } from './frames.mjs'
 import { editPreset, exportPreset, importOwnPreset, normalizePreset, presetDetail, presetSummary } from './presets.mjs'
 import { VN_ID, basicDetail } from './basic.mjs'
+import { DIRECT_CARD } from '../web/shared/basic.js'
 import { appVersion, featuresOf } from './edition.mjs'
 import { createProxy, proxyOverride } from './proxy.mjs'
 import { createEngine } from './engine.mjs'
+import { createRulebooks } from './game.mjs'
+import { createMusic } from './music.mjs'
 import { APIS, draftProvider, exportProviders, importProviders, isProviderRef, listRemoteModelDetails, mergeDshProviders, normalizeProvider, providersFromDsh, providerChoices, providerError, publicProvider, refLabel } from './providers.mjs'
 import { initTemplates, templateSyntaxError } from './template.mjs'
 import { canonicalModel } from './models.mjs'
@@ -36,7 +40,10 @@ import { createSaves } from './saves.mjs'
 import { KEYED as VOICE_KEYED } from './voice/index.mjs'
 import { createPromptLibrary } from './prompts.mjs'
 import { createForge } from './forge/index.mjs'
+import { qrSvg } from './qr.mjs'
+import { lostPaths, setStatePath } from './state.mjs'
 import { ensureBook } from './forge/edit.mjs'
+import { forSillyTavern } from './forge/st-export.mjs'
 import { editCard, greetingList } from '../web/shared/card-edit.js'
 import { patchVars } from '../web/shared/vars.js'
 import { normalizeScripts, withUniqueIds } from '../web/shared/regex.js'
@@ -69,6 +76,9 @@ const STATIC = {
   '/': ['index.html', 'text/html; charset=utf-8'],
   '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
   '/style.css': ['style.css', 'text/css; charset=utf-8'],
+  '/look.css': ['look.css', 'text/css; charset=utf-8'],
+  '/fonts/mashanzheng.woff2': ['fonts/mashanzheng.woff2', 'font/woff2'],
+  '/fonts/zcool.woff2': ['fonts/zcool.woff2', 'font/woff2'],
   '/render.js': ['render.js', 'text/javascript; charset=utf-8'],
   '/compat.js': ['compat.js', 'text/javascript; charset=utf-8'],
   '/stscript.js': ['stscript.js', 'text/javascript; charset=utf-8'],
@@ -86,6 +96,7 @@ const STATIC = {
   '/i18n.js': ['i18n.js', 'text/javascript; charset=utf-8'],
   '/i18n/en.js': ['i18n/en.js', 'text/javascript; charset=utf-8'],
   '/shared/i18n.js': ['shared/i18n.js', 'text/javascript; charset=utf-8'],
+  '/shared/look.js': ['shared/look.js', 'text/javascript; charset=utf-8'],
   '/shared/speech.js': ['shared/speech.js', 'text/javascript; charset=utf-8'],
   '/shared/vars.js': ['shared/vars.js', 'text/javascript; charset=utf-8'],
   '/shared/regex.js': ['shared/regex.js', 'text/javascript; charset=utf-8'],
@@ -98,6 +109,8 @@ const STATIC = {
   '/regex.js': ['regex.js', 'text/javascript; charset=utf-8'],
   '/books.js': ['books.js', 'text/javascript; charset=utf-8'],
   '/card-edit.js': ['card-edit.js', 'text/javascript; charset=utf-8'],
+  '/card-check.js': ['card-check.js', 'text/javascript; charset=utf-8'],
+  '/trial.js': ['trial.js', 'text/javascript; charset=utf-8'],
   '/talk.js': ['talk.js', 'text/javascript; charset=utf-8'],
   '/talk-dialog.js': ['talk-dialog.js', 'text/javascript; charset=utf-8'],
   '/shared/card-edit.js': ['shared/card-edit.js', 'text/javascript; charset=utf-8'],
@@ -110,6 +123,24 @@ const STATIC = {
   '/shared/stage.js': ['shared/stage.js', 'text/javascript; charset=utf-8'],
   '/shared/zip.js': ['shared/zip.js', 'text/javascript; charset=utf-8'],
   '/shared/hud.js': ['shared/hud.js', 'text/javascript; charset=utf-8'],
+  '/shared/game/dice.js': ['shared/game/dice.js', 'text/javascript; charset=utf-8'],
+  '/shared/game/marks.js': ['shared/game/marks.js', 'text/javascript; charset=utf-8'],
+  '/shared/game/sheet.js': ['shared/game/sheet.js', 'text/javascript; charset=utf-8'],
+  '/shared/game/bindings.js': ['shared/game/bindings.js', 'text/javascript; charset=utf-8'],
+  '/game-bag.js': ['game-bag.js', 'text/javascript; charset=utf-8'],
+  '/game-battle.js': ['game-battle.js', 'text/javascript; charset=utf-8'],
+  '/game-dice.js': ['game-dice.js', 'text/javascript; charset=utf-8'],
+  '/game-look.js': ['game-look.js', 'text/javascript; charset=utf-8'],
+  '/look-ink.js': ['look-ink.js', 'text/javascript; charset=utf-8'],
+  '/game-sound.js': ['game-sound.js', 'text/javascript; charset=utf-8'],
+  '/shared/game/sound.js': ['shared/game/sound.js', 'text/javascript; charset=utf-8'],
+  '/shared/game/battle.js': ['shared/game/battle.js', 'text/javascript; charset=utf-8'],
+  '/shared/game/encounter.js': ['shared/game/encounter.js', 'text/javascript; charset=utf-8'],
+  '/shared/game/rank.js': ['shared/game/rank.js', 'text/javascript; charset=utf-8'],
+  '/shared/game/achievements.js': ['shared/game/achievements.js', 'text/javascript; charset=utf-8'],
+  '/game-rules.js': ['game-rules.js', 'text/javascript; charset=utf-8'],
+  '/settings-search.js': ['settings-search.js', 'text/javascript; charset=utf-8'],
+  '/game-play.js': ['game-play.js', 'text/javascript; charset=utf-8'],
   '/vn-saves.js': ['vn-saves.js', 'text/javascript; charset=utf-8'],
   '/vn-hud.js': ['vn-hud.js', 'text/javascript; charset=utf-8'],
   '/shared/cutout.js': ['shared/cutout.js', 'text/javascript; charset=utf-8'],
@@ -250,11 +281,11 @@ function summaryOrNone(summarize, item, kind, warn = () => {}) {
   }
 }
 
-/** → { card, avatar, raw }: `raw` the SillyTavern JSON it was read from (null for this app's own export). */
+/** → { card, avatar, raw, game }: `raw` the SillyTavern JSON it was read from (null for this app's own export), `game` its rule book. */
 function readCardUpload(body) {
   const { filename, buffer } = decodeUpload(body)
   const { raw, avatar } = parseCardFile(filename, buffer)
-  return importOwnCard(raw) ?? { card: normalizeCard(raw), avatar, raw }
+  return importOwnCard(raw) ?? { card: normalizeCard(raw), avatar, raw, game: rulebookOf(raw) }
 }
 
 /**
@@ -275,7 +306,7 @@ function readCardUpload(body) {
  *   root, feed, check, spawnSwitch...).
  */
 export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition = 'personal', accessToken = null, update = {} } = {}) {
-  const features = { ...featuresOf(edition) }
+  const features = { ...featuresOf(edition), direct: true }
   // Which server process answers: a page waiting out a restart (设置 → 更多 → 更新) reloads when it changes.
   const instance = randomBytes(6).toString('hex')
   // A tree without the subscription backend (CicaTavern, the phone) has no subscription whatever the edition says.
@@ -284,6 +315,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
   // 设置 → 更多 → 错误日志.
   const diagnostics = createDiagnostics(store.dirs.root, store, { version: VERSION, edition: features.edition, appName: features.appName })
   // A card's regex left out for running too long (regex-guard.mjs): said in the error log, so the card's author can be told.
+  onSchemaProblem(message => diagnostics.record({ source: 'process', what: msg`卡片的变量规则`, message }).catch(() => {}))
   onSlowPattern(regex => diagnostics.record({ source: 'process', what: msg`卡片的正则`, message: msg`这条正则运行太久，已经跳过：/${regex.source.slice(0, 300)}/${regex.flags}` }).catch(() => {}))
   // A card or preset whose file is too damaged to list.
   const leftOut = (what, why) => diagnostics.note({ level: 'warn', what: msg`列表里跳过了读不了的 ${what}`, detail: why }).catch(() => {})
@@ -307,7 +339,9 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
         },
       })
     : null
-  const engine = createEngine(store, isolation, ledger, { subscription })
+  const rulebooks = createRulebooks(store)
+  const music = createMusic(store)
+  const engine = createEngine(store, isolation, ledger, { subscription, rulebooks })
   // This install's own image backends (server/subscription/), offered beside the usual ones.
   const ownBackends = features.subscription ? subscriptionBackend.imageBackends?.({ store, proxy: () => isolation.proxy }) ?? [] : []
   // 抽图历史: the pictures a card's places had before they were drawn again (draw-history.mjs).
@@ -320,12 +354,43 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
   const scenes = createScenes(store, { media, history: drawHistory })
   const saves = createSaves(store)
   const prompts = createPromptLibrary(store)
+  /**
+   * Variables written by hand over the latest reply's, on `chat` (saved by the caller). The state stays as it was
+   * written here. → the paths the card's variable rules will drop after the next reply (a name a fixed list does not have).
+   */
+  async function putState(chat, state) {
+    const last = [...activePath(chat)].reverse().find(n => n.role === 'assistant')
+    last.state = state
+    // Put right by hand, the warning goes.
+    const kept = await engine.keptToSchema(chat, state)
+    if (kept.problem) last.schemaProblem = kept.problem
+    else delete last.schemaProblem
+    // The model has not seen this edit; the next turn re-sends the full state.
+    chat.stateDirty = true
+    return kept.problem ? [] : lostPaths(state, kept.state)
+  }
+
+  /** Variables a proposal of 对话修改 puts into the chat it read, each at its path. */
+  function writeChatState(chatId, variables) {
+    return store.withChat(chatId, async () => {
+      if (engine.isRunning(chatId)) throw httpError(409, msg`正在生成，先停止`)
+      const chat = await store.getChat(chatId)
+      const state = structuredClone([...activePath(chat)].reverse().find(n => n.role === 'assistant')?.state ?? {})
+      for (const { path, value } of variables) setStatePath(state, path, value)
+      const lost = await putState(chat, state)
+      return { chat: await store.saveChat(chat), lost }
+    })
+  }
+
   const forge = createForge(store, {
     proxyNow: () => isolation.proxy,
     ledger,
+    engine,
     draw: (input, signal, choice) => media.drawCardArt(input, signal, choice),
     drawBackdrop: (prompt, signal) => media.drawBackdrop(prompt, signal),
     storeBackdrop: buffer => appearance.storeBackdrop(buffer),
+    rulebooks,
+    writeChatState,
   })
   // 设置 → 更多 → 更新. A restart after an update starts the server the way this one was started.
   let listenArg
@@ -414,7 +479,9 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     }
     const what = `${args.userNodeId ? msg`重新生成` : msg`生成回复`} · ${chatId}`
     try {
-      const { chat, nodeId } = await engine.runTurn(chatId, args, send)
+      const turn = await engine.runTurn(chatId, args, send)
+      const { nodeId } = turn
+      const chat = await autoFill(chatId, turn.chat, nodeId, send, what)
       send({ type: 'done', nodeId, chat: chatView(chat) })
       await noteTurn(what, chat, chat.nodes[nodeId]).catch(() => {})
       // 边玩边整理 (长期记忆), on its own once the turn is in: the pages hear when it starts and when it ends.
@@ -434,6 +501,20 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     res.end()
   }
 
+  /** 自动补写变量: the reply just written has no readable update block. One that fails leaves the reply as it is, with its 补写变量 button. */
+  async function autoFill(chatId, chat, nodeId, send, what) {
+    const node = chat.nodes[nodeId]
+    const settings = await store.getSettings()
+    if (settings.autoFillUpdate === false || node?.api?.truncated === 'paused' || !(await engine.missesUpdate(chat, node))) return chat
+    send({ type: 'filling' })
+    try {
+      return await engine.fillUpdate(chatId, nodeId)
+    } catch (error) {
+      if (error.status !== 499) await diagnostics.note({ level: 'warn', what, detail: msg`自动补写变量没成功：${localize(error.message)}` }).catch(() => {})
+      return store.getChat(chatId)
+    }
+  }
+
   /** A turn that went through, in the operations log: model, time, tokens; a warning for what went wrong in it. */
   async function noteTurn(what, chat, node) {
     if (!node) return
@@ -443,7 +524,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     await diagnostics.note({ what, detail: [node.model, seconds, tokens].filter(Boolean).join(' · ') })
     if (node.api?.truncated) await diagnostics.note({ level: 'warn', what, detail: node.api.truncated === 'paused' ? msg`联网搜索还没结束，回复停在了中途` : msg`回复写到了输出上限，后面被截断（末尾的选项、变量块可能缺了）` })
     // A cut-off reply already says its update block may be missing.
-    else if (await engine.missesUpdate(chat, node)) await diagnostics.note({ level: 'warn', what, detail: msg`这张 MVU 卡的回复没写变量更新块（<UpdateVariable>），状态没跟着这一轮变（回复下方有「补写变量」）` })
+    else if (await engine.missesUpdate(chat, node)) await diagnostics.note({ level: 'warn', what, detail: node.updateUnread ? msg`这张 MVU 卡的回复写了变量更新块，但一条也读不出来，状态没跟着这一轮变（回复下方有「补写变量」）` : msg`这张 MVU 卡的回复没写变量更新块（<UpdateVariable>），状态没跟着这一轮变（回复下方有「补写变量」）` })
     if (node.templateErrors?.length) await diagnostics.note({ level: 'warn', what, detail: msg`回复里的 EJS 模板出错：${node.templateErrors.map(String).join(' / ').slice(0, 400)}` })
   }
 
@@ -483,13 +564,21 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
 
   /**
    * A card frame reads or writes one of its chat's books (Tavern Helper getWorldbook / replaceWorldbook,
-   * /setentryfield). Writes are the chat's own changes; one reaching the frozen prefix rebuilds it.
-   * @param body - { action: 'get' | 'replace' | 'field', name, entries?, uid?, field?, value? }
+   * /setentryfield) or makes one (createWorldbook). Writes are the chat's own changes; one reaching the
+   * frozen prefix rebuilds it.
+   * @param body - { action: 'get' | 'replace' | 'field' | 'create', name, entries?, uid?, field?, value? }
    */
   async function frameBook(chatId, body) {
     const chat = await store.getChat(chatId)
     const [card, settings] = await Promise.all([store.getCard(chat.cardId), store.getSettings()])
-    const base = bookByName(await booksForCard(store, card, settings), body.name, card)
+    const books = [...await booksForCard(store, card, settings), ...chatBooks(chat)]
+    if (body.action === 'create') {
+      if (engine.isRunning(chatId)) throw httpError(409, msg`正在生成，先停止`)
+      const created = createChatBook(chat, body.name, books)
+      if (created) await store.saveChat(chat)
+      return { created }
+    }
+    const base = bookByName(books, body.name, card)
     if (!base) throw httpError(404, msg`这个对话没有用名为「${String(body.name ?? '')}」的世界书`)
     const [current] = withChatChanges([base], chat)
     if (body.action === 'get') return { entries: current.entries.map(thEntry) }
@@ -519,8 +608,14 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
 
   /** The card a SillyTavern export writes: with `?regex=sets`, the 正则集 attached to it after its own scripts. */
   async function exportedCard(cardId, url) {
-    const card = await store.getCard(cardId)
+    const card = await withRulebook(await store.getCard(cardId))
     return url.searchParams.get('regex') === 'sets' ? withAttachedScripts(card, await store.getRegexSets()) : card
+  }
+
+  /** A card as it leaves the app: its rule book, kept beside it, goes along. */
+  async function withRulebook(card) {
+    const game = await rulebooks.portable(card.id)
+    return game ? { ...card, game } : card
   }
 
   const routes = [
@@ -691,6 +786,36 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       await drawHistory.remove(id, file)
       return drawHistory.list(id)
     }],
+    // 游戏规则 (game.mjs): a card's rule book.
+    ['GET', /^\/api\/cards\/([\w-]+)\/game$/, ([id]) => rulebooks.read(id)],
+    ['PUT', /^\/api\/cards\/([\w-]+)\/game$/, ([id], body) => rulebooks.change(id, body)],
+    // 辅助模型配置: a proposal the rule window shows; taking it is a PUT like any other.
+    ['POST', /^\/api\/cards\/([\w-]+)\/game\/suggest$/, ([id], body) => engine.suggestRules(id, typeof body?.chatId === 'string' ? body.chatId : '')],
+    // 敌人图鉴 (game.mjs): what the helper says of foes, and a picture of one by hand; drawing one is a slow call below.
+    ['POST', /^\/api\/chats\/([\w-]+)\/game\/foes$/, async ([id], body) => {
+      const names = (Array.isArray(body?.names) ? body.names : []).filter(name => typeof name === 'string' && name.trim()).map(name => name.trim().slice(0, 40)).slice(0, 8)
+      const { cardId } = await store.getChat(id)
+      return names.length ? rulebooks.learnFoes(cardId, await engine.describeFoes(id, names)) : rulebooks.read(cardId)
+    }],
+    ['PUT', /^\/api\/cards\/([\w-]+)\/foes\/image$/, ([id], body) => {
+      const match = /^data:image\/(?:png|jpeg|webp);base64,([A-Za-z0-9+/=]+)$/.exec(String(body?.image ?? ''))
+      if (body?.image && !match) throw httpError(400, msg`立绘要是 PNG、JPG 或 WebP`)
+      return rulebooks.setFoePicture(id, String(body?.name ?? '').slice(0, 40), match ? Buffer.from(match[1], 'base64') : null)
+    }],
+    // 背景音乐 (music.mjs): the player's own tracks for a card.
+    ['GET', /^\/api\/cards\/([\w-]+)\/music$/, ([id]) => music.list(id)],
+    ['POST', /^\/api\/cards\/([\w-]+)\/music$/, ([id], body) => music.add(id, body ?? {})],
+    ['PUT', /^\/api\/cards\/([\w-]+)\/music\/([\w-]+)$/, ([id, trackId], body) => music.update(id, trackId, body ?? {})],
+    ['DELETE', /^\/api\/cards\/([\w-]+)\/music\/([\w-]+)$/, ([id, trackId]) => music.remove(id, trackId)],
+    // What the story's things do, asked once and kept in the rule book; what the player set stays.
+    ['POST', /^\/api\/chats\/([\w-]+)\/game\/things$/, async ([id], body) => {
+      const things = (Array.isArray(body?.things) ? body.things : []).slice(0, 40)
+        .filter(thing => typeof thing?.name === 'string' && thing.name.trim())
+        .map(thing => ({ name: thing.name.trim().slice(0, 40), note: String(thing.note ?? '').slice(0, 120) }))
+      const { cardId } = await store.getChat(id)
+      const sorted = things.length ? await engine.sortThings(id, things) : {}
+      return rulebooks.change(cardId, { items: { ...sorted, ...(await rulebooks.read(cardId)).items } })
+    }],
     // 存档 (saves.mjs): a card's save slots for the visual novel mode.
     ['GET', /^\/api\/cards\/([\w-]+)\/saves$/, ([id]) => saves.list(id)],
     ['PUT', /^\/api\/cards\/([\w-]+)\/saves\/slot\/(\w+)$/, ([id, slot], body) => saves.put(id, slot, body)],
@@ -840,6 +965,12 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['GET', /^\/api\/forge$/, () => forge.list()],
     ['POST', /^\/api\/forge$/, (_, body) => forge.create(body ?? {})],
     ['POST', /^\/api\/forge\/ideas$/, (_, body) => forge.ideas(body ?? {})],
+    // Material for a card (forge/references.mjs): read for the page before there is a draft, or kept on the draft.
+    ['POST', /^\/api\/forge\/references$/, (_, body) => forge.readReference(body ?? {})],
+    ['POST', /^\/api\/forge\/([\w-]+)\/references$/, ([id], body) => forge.addReference(id, body ?? {})],
+    ['GET', /^\/api\/forge\/([\w-]+)\/references\/([\w-]+)$/, ([id, reference]) => forge.referenceText(id, reference)],
+    ['PUT', /^\/api\/forge\/([\w-]+)\/references\/([\w-]+)$/, ([id, reference], body) => forge.setReferenceMode(id, reference, body ?? {})],
+    ['DELETE', /^\/api\/forge\/([\w-]+)\/references\/([\w-]+)$/, ([id, reference]) => forge.dropReference(id, reference)],
     ['GET', /^\/api\/forge\/([\w-]+)$/, ([id]) => forge.get(id)],
     ['PUT', /^\/api\/forge\/([\w-]+)$/, ([id], body) => forge.update(id, body ?? {})],
     ['DELETE', /^\/api\/forge\/([\w-]+)$/, ([id]) => forge.remove(id)],
@@ -899,7 +1030,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     // linked worldbooks stay). Otherwise a new card, which still takes over the settings and
     // reference pictures of an older version of itself, so deleting that one loses nothing.
     ['POST', /^\/api\/cards\/import$/, async (_, body) => {
-      const { card, avatar, raw = null } = readCardUpload(body)
+      const { card, avatar, raw = null, game = null } = readCardUpload(body)
       if (typeof body.replace === 'string' && body.replace) {
         const old = await store.getCard(body.replace)
         Object.assign(card, { id: old.id, media: old.media, worldbookIds: old.worldbookIds ?? [], hasAvatar: Boolean(avatar) || old.hasAvatar, group: old.group ?? '', archived: old.archived === true, pinned: old.pinned === true, favorite: old.favorite === true })
@@ -916,6 +1047,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
           }
         }
         await store.saveCard(card, picture)
+        await rulebooks.arrive(card.id, game)
         return { ...cardSummary(card), updated: old.name }
       }
       card.hasAvatar = Boolean(avatar)
@@ -926,9 +1058,13 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       if (previous) {
         await media.inheritCardMedia(previous.id, card.id)
         await scenes.inherit(previous.id, card.id)
+        await rulebooks.inherit(previous.id, card.id)
+        await music.inherit(previous.id, card.id)
+        await rulebooks.arrive(card.id, game)
         await picks.inheritCard(previous.id, card.id)
         return { ...cardSummary(card), inherited: previous.name }
       }
+      await rulebooks.arrive(card.id, game)
       return cardSummary(card)
     }],
     ['GET', /^\/api\/cards\/([\w-]+)$/, async ([id]) => {
@@ -946,7 +1082,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       }
     }],
     ['GET', /^\/api\/cards\/([\w-]+)\/export$/, async ([id]) => {
-      const card = await store.getCard(id)
+      const card = await withRulebook(await store.getCard(id))
       return exportCard(card, card.hasAvatar ? await readFile(store.avatarPath(id)).catch(() => null) : null)
     }],
     ['DELETE', /^\/api\/cards\/([\w-]+)$/, async ([id]) => {
@@ -954,6 +1090,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       await forge.dropTalk('card', id)
       await forge.dropTalk('book', `card-${id}`)
       await forge.dropTalk('regex', `card-${id}`)
+      await forge.dropCheck(id)
+      await forge.dropTrial(id)
       // 正则集 attached to it stay, for the other cards or later; so do the personas and styles it picked.
       await regex.dropCard(id)
       await picks.dropCard(id)
@@ -988,7 +1126,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       if (png.length > MAX_AVATAR) throw httpError(400, msg`图片太大了（15 MB 以内）`)
       const card = await store.getCard(id)
       const old = card.hasAvatar ? await readFile(store.avatarPath(id)).catch(() => null) : null
-      const file = writeCardPng(png, sillyTavernCard(card, rawOfPicture(old)))
+      const file = writeCardPng(png, sillyTavernCard(await withRulebook(card), rawOfPicture(old)))
       // 抽图历史: a picture taken from there (`history`) is no longer kept there; the one it replaces is.
       if (typeof body.history === 'string' && body.history) await drawHistory.remove(id, body.history).catch(() => {})
       if (old) await drawHistory.push(id, 'avatar', { buffer: old, at: await madeAt(store.avatarPath(id)), source: 'avatar' })
@@ -1004,7 +1142,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['GET', /^\/api\/cards\/([\w-]+)\/sillytavern$/, async ([id], _, url) => {
       const card = await exportedCard(id, url)
       const picture = card.hasAvatar ? await readFile(store.avatarPath(id)).catch(() => null) : null
-      return sillyTavernCard(card, rawOfPicture(picture))
+      const raw = rawOfPicture(picture)
+      return sillyTavernCard(forSillyTavern(card, raw), raw)
     }],
     // 修改角色卡 → 对话修改: the card's edit session (forge/edit.mjs), run like a draft's jobs.
     ['GET', /^\/api\/cards\/([\w-]+)\/assistant$/, ([id]) => forge.talkGet('card', id)],
@@ -1015,9 +1154,31 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['POST', /^\/api\/cards\/([\w-]+)\/assistant\/stop$/, ([id]) => forge.talkStop('card', id)],
     ['POST', /^\/api\/cards\/([\w-]+)\/assistant\/discard$/, ([id]) => forge.talkDiscard('card', id)],
     ['POST', /^\/api\/cards\/([\w-]+)\/assistant\/apply$/, async ([id], body) => {
-      const { session, subject, applied, prefix } = await forge.talkApply('card', id, body ?? {})
-      return { session, applied, prefix, card: cardEditView(subject) }
+      const { session, subject, applied, prefix, chat, lost } = await forge.talkApply('card', id, body ?? {})
+      return { session, applied, prefix, card: cardEditView(subject), ...(chat ? { chat: chatView(chat), lost } : {}) }
     }],
+    // 角色卡自检 (web/card-check.js): what the program finds, worked out on each read; the model is asked only by /ask.
+    ['GET', /^\/api\/cards\/([\w-]+)\/check$/, ([id]) => forge.checkGet(id)],
+    ['PUT', /^\/api\/cards\/([\w-]+)\/check$/, ([id], body) => forge.checkUpdate(id, body ?? {})],
+    ['POST', /^\/api\/cards\/([\w-]+)\/check\/ask$/, ([id], body) => forge.checkAsk(id, body ?? {})],
+    ['POST', /^\/api\/cards\/([\w-]+)\/check\/stop$/, ([id]) => forge.checkStop(id)],
+    // 试玩体检 (web/trial.js): the card played for a few rounds in a chat nobody sees; sent only by /run.
+    ['GET', /^\/api\/cards\/([\w-]+)\/trial$/, ([id]) => forge.trialGet(id)],
+    ['PUT', /^\/api\/cards\/([\w-]+)\/trial$/, ([id], body) => forge.trialUpdate(id, body ?? {})],
+    ['POST', /^\/api\/cards\/([\w-]+)\/trial\/run$/, ([id]) => forge.trialRun(id)],
+    ['POST', /^\/api\/cards\/([\w-]+)\/trial\/stop$/, ([id]) => forge.trialStop(id)],
+    ['POST', /^\/api\/cards\/([\w-]+)\/check\/apply$/, async ([id], body) => {
+      const { view, card, applied, prefix } = await forge.checkApply(id, body ?? {})
+      return { check: view, card: cardEditView(card), applied, prefix }
+    }],
+    ['POST', /^\/api\/cards\/([\w-]+)\/check\/undo$/, async ([id], body) => {
+      const { view, card, prefix } = await forge.checkUndo(id, body ?? {})
+      return { check: view, card: cardEditView(card), prefix }
+    }],
+    // What to read beside the card (forge/references.mjs): a file, another card, or a stretch of one of its chats.
+    ['POST', /^\/api\/cards\/([\w-]+)\/assistant\/references$/, ([id], body) => forge.talkReference('card', id, body ?? {})],
+    ['GET', /^\/api\/cards\/([\w-]+)\/assistant\/references\/([\w-]+)$/, ([id, reference]) => forge.talkReferenceText('card', id, reference)],
+    ['DELETE', /^\/api\/cards\/([\w-]+)\/assistant\/references\/([\w-]+)$/, ([id, reference]) => forge.talkDropReference('card', id, reference)],
     // 世界书 / 预设 / 正则 / 主题 → 对话修改 (web/talk.js): a book (an imported one, or
     // card-<id> for a card's own), a preset, regex scripts (global, card-<id> or
     // preset-<id>) or the look (appearance), changed by talking like a card; the
@@ -1229,7 +1390,12 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       return { ok: true }
     }],
 
-    ['GET', /^\/api\/chats$/, async (_, __, url) => (await store.listChats(url.searchParams.get('cardId'))).map(chatSummary)],
+    // A 试玩体检's chat is the window's, and goes when it ends, or here when the app did not live through it.
+    ['GET', /^\/api\/chats$/, async (_, __, url) => {
+      const chats = await store.listChats(url.searchParams.get('cardId'))
+      for (const chat of chats) if (chat.trial && !forge.trialRunning(chat.cardId)) await store.deleteChat(chat.id).catch(() => {})
+      return chats.filter(chat => !chat.trial).map(chatSummary)
+    }],
     ['POST', /^\/api\/chats$/, async (_, body) => chatView(await createChat(store, String(body.cardId), Number(body.greetingIndex) || 0))],
     // A card's welcome page switching the first message to another of its openings (before the first turn).
     ['POST', /^\/api\/chats\/([\w-]+)\/opening$/, ([id], body) => {
@@ -1302,6 +1468,15 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       hideRound(chat, String(body.nodeId), body.hidden !== false)
       return chatView(await store.saveChat(chat))
     })],
+    // 删除: one message, a reply or the player's (chats.mjs deleteMessage); `deleted: false` brings it back.
+    ['POST', /^\/api\/chats\/([\w-]+)\/delete-message$/, ([id], body) => store.withChat(id, async () => {
+      if (engine.isRunning(id)) throw httpError(409, msg`正在生成，先停止`)
+      const chat = await store.getChat(id)
+      deleteMessage(chat, String(body.nodeId), body.deleted !== false)
+      return chatView(await store.saveChat(chat))
+    })],
+    // 直连对话: what came with a message, for 编辑重发 to send it again.
+    ['GET', /^\/api\/chats\/([\w-]+)\/messages\/([\w-]+)\/files$/, async ([id, nodeId]) => ({ files: (await store.getChat(id)).nodes[nodeId]?.files ?? [] })],
     // Rewrite one message (shown and sent from now on); see engine.editMessage.
     ['PUT', /^\/api\/chats\/([\w-]+)\/messages\/([\w-]+)$/, async ([id, nodeId], body) => {
       const { chat, ...outcome } = await engine.editMessage(id, nodeId, body.text)
@@ -1378,11 +1553,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       if (engine.isRunning(id)) throw httpError(409, msg`正在生成，先停止`)
       if (!body.state || typeof body.state !== 'object' || Array.isArray(body.state)) throw httpError(400, msg`状态必须是 JSON 对象`)
       const chat = await store.getChat(id)
-      const last = [...activePath(chat)].reverse().find(n => n.role === 'assistant')
-      last.state = body.state
-      // The model has not seen this edit; the next turn re-sends the full state.
-      chat.stateDirty = true
-      return chatView(await store.saveChat(chat))
+      const lost = await putState(chat, body.state)
+      return { ...chatView(await store.saveChat(chat)), lost }
     })],
     ['POST', /^\/api\/chats\/([\w-]+)\/preview$/, ([id], body) =>
       engine.previewTurn(id, { parentId: String(body.parentId), input: body.input, marks: body.marks === true })],
@@ -1401,7 +1573,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       const chat = await store.getChat(id)
       const [card, settings] = await Promise.all([store.getCard(chat.cardId), store.getSettings()])
       const [books, { persona }] = await Promise.all([booksForCard(store, card, settings), chatPicks(store, chat, card)])
-      return { books: bookNames(books, card, settings.globalBookIds ?? []), vars: chat.frameVars ?? {}, globalVars: settings.globalVars ?? {}, persona: { description: playerOf(card, persona, chat.names.user).description ?? '' }, avatarKey: avatarKey(chat.cardId) }
+      return { books: bookNames(books, card, settings.globalBookIds ?? [], chat), vars: chat.frameVars ?? {}, globalVars: settings.globalVars ?? {}, persona: { description: playerOf(card, persona, chat.names.user).description ?? '' }, avatarKey: avatarKey(chat.cardId) }
     }],
     // Tavern Helper's chat variables (the templates' local scope): `vars` whole, or a card UI's
     // { set, unset } over those saved now (patchVars), so two UIs open at once keep each other's keys.
@@ -1442,7 +1614,10 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       running: access.mode,
       saved: settings.listen === 'lan' ? 'lan' : 'local',
       port: access.port,
-      links: token ? addresses.map(({ host, adapter, kind, primary }) => ({ url: `http://${host}:${access.port}/#k=${token}`, adapter, kind, primary })) : [],
+      links: token ? addresses.map(({ host, adapter, kind, primary }) => {
+        const url = `http://${host}:${access.port}/#k=${token}`
+        return { url, adapter, kind, primary, qr: qrSvg(url) }
+      }) : [],
     }
   }
 
@@ -1534,7 +1709,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       try {
         const card = await exportedCard(cardPng[1], url)
         const picture = await readFile(store.avatarPath(card.id))
-        const data = writeCardPng(picture, sillyTavernCard(card, rawOfPicture(picture)))
+        const raw = rawOfPicture(picture)
+        const data = writeCardPng(picture, sillyTavernCard(forSillyTavern(card, raw), raw))
         res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'no-store', 'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(`${card.name}.png`)}` })
         return res.end(data)
       } catch (error) {
@@ -1583,6 +1759,29 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       // A picture's name changes with the picture: it can stay cached.
       res.writeHead(200, { 'content-type': found.type, 'cache-control': 'max-age=31536000, immutable' })
       return res.end(found.data)
+    }
+    const foePicture = /^\/api\/foes\/([\w-]+)\/([\w.-]+)$/.exec(url.pathname)
+    if (req.method === 'GET' && foePicture) {
+      const found = await rulebooks.readFoePicture(foePicture[1], foePicture[2])
+      if (!found) return sendJson(res, 404, { error: msg`没有这张立绘` })
+      res.writeHead(200, { 'content-type': found.type, 'cache-control': 'max-age=31536000, immutable' })
+      return res.end(found.data)
+    }
+    const musicFile = /^\/api\/music\/([\w-]+)\/([\w.-]+)$/.exec(url.pathname)
+    if (req.method === 'GET' && musicFile) {
+      const found = await music.readTrack(musicFile[1], musicFile[2])
+      if (!found) return sendJson(res, 404, { error: msg`没有这首音乐` })
+      // A file's name is its own: it can stay cached. Safari asks for it in pieces.
+      const headers = { 'content-type': found.type, 'accept-ranges': 'bytes', 'cache-control': 'max-age=31536000, immutable' }
+      const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range ?? '')
+      if (!range) {
+        res.writeHead(200, { ...headers, 'content-length': found.data.length })
+        return res.end(found.data)
+      }
+      const start = range[1] ? Number(range[1]) : Math.max(0, found.data.length - Number(range[2]))
+      const end = range[1] && range[2] ? Math.min(Number(range[2]), found.data.length - 1) : found.data.length - 1
+      res.writeHead(206, { ...headers, 'content-range': `bytes ${start}-${end}/${found.data.length}`, 'content-length': end - start + 1 })
+      return res.end(found.data.subarray(start, end + 1))
     }
     // 更新了什么 (web/whatsnew.js): the notes and their pictures, shipped in web/whatsnew/.
     const whatsNew = /^\/whatsnew\/([\w.-]+\.(json|webp|png|jpg))$/.exec(url.pathname)
@@ -1740,6 +1939,15 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       return sendJson(res, 200, await scenes.draw(sceneDraw[1], { place: text('place'), sceneId: text('sceneId'), prompt: text('prompt'), rewrite: body.rewrite === true, passage: text('passage'), choice: drawChoiceOf(body) }, cancelOnClose()))
     }
     // 立绘 and 表情 take a { backend, model } of their own too (做成视觉小说 asks how to draw first).
+    const foeDraw = /^\/api\/cards\/([\w-]+)\/foes\/draw$/.exec(url.pathname)
+    if (req.method === 'POST' && foeDraw) {
+      const body = await readBody(req)
+      const name = String(body.name ?? '').slice(0, 40)
+      const foe = (await rulebooks.read(foeDraw[1])).foes[name]
+      if (!foe) throw httpError(404, msg`图鉴里没有这个敌人`)
+      const picture = await media.drawFoe(foeDraw[1], { name, looks: foe.looks }, cancelOnClose(), drawChoiceOf(body))
+      return sendJson(res, 200, await rulebooks.setFoePicture(foeDraw[1], name, picture.buffer))
+    }
     const spriteDraw = /^\/api\/cards\/([\w-]+)\/sprites\/([\w-]+)\/draw$/.exec(url.pathname)
     if (req.method === 'POST' && spriteDraw) {
       const body = await readBody(req)
@@ -1793,7 +2001,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     }
 
     // 设置 → 更多 → 更新: any page may check; downloading, switching versions and
-    // deleting old folders only from this computer, like 停止后台服务.
+    // deleting old folders only from this computer, like 退出应用并停止后台服务.
     if (url.pathname === '/api/update' || url.pathname.startsWith('/api/update/')) {
       const local = isLoopback(req.socket.remoteAddress)
       const action = url.pathname.slice('/api/update'.length) || '/'
@@ -1877,7 +2085,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     if (req.method === 'POST' && turn) {
       const body = await readBody(req)
       const args = turn[2] === 'turn'
-        ? { parentId: String(body.parentId), input: body.input, marks: body.marks === true }
+        ? { parentId: String(body.parentId), input: body.input, marks: body.marks === true, game: body.game ?? null, files: body.files }
         : { userNodeId: String(body.userNodeId) }
       return streamTurn(res, turn[1], args)
     }
@@ -1906,6 +2114,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     /** @param host - the address to bind instead of the mode's own (tests keep a LAN-mode server on loopback). */
     async listen({ port = 8791, listen, host: bindHost } = {}) {
       await store.init()
+      await store.getCard(DIRECT_CARD).catch(() => store.saveCard(directCard()))
       await backfillEntryPositions(store)
       if (subscription) await subscription.prepareStorage()
       await initTemplates()

@@ -17,6 +17,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600&display=swap">
   <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/look.css">
   <!-- Used throughout, missing from old Android system WebViews (before Chrome 92 / 97). -->
   <script>{
     const add = (proto, name, value) => proto[name] || Object.defineProperty(proto, name, { value, writable: true, configurable: true })
@@ -30,6 +31,8 @@
     const root = document.documentElement, t = localStorage.getItem('theme'), a = JSON.parse(localStorage.getItem('appearance') || 'null')
     if (t === 'light' || t === 'dark') root.dataset.theme = t
     if (a && /^(sakura|bamboo|paper|night)$/.test(a.style)) root.dataset.style = a.style
+    // The side panes folded on this device (app.js togglePane).
+    for (const side of ['left', 'right']) if (localStorage.getItem('fold-' + side) === '1') root.setAttribute('data-fold-' + side, '')
     // The custom style: its colours as theme.js wrote them last (paletteCss).
     const p = localStorage.getItem('appearance-palette')
     if (p) document.head.append(Object.assign(document.createElement('style'), { id: 'custom-palette', textContent: p }))
@@ -44,6 +47,18 @@
     if (r && /^(hei|kai|fang)$/.test(r.font)) root.style.setProperty('--story-font', `var(--font-${r.font})`)
     if (r && r.font === 'custom' && /^[^"'\\;{}<>\r\n\t]{1,60}$/.test(r.custom)) root.style.setProperty('--story-font', `"${r.custom}", var(--serif)`)
     if (s >= .8 && s <= 1.6 && s !== 1) root.style.setProperty('--story-scale', String(s))
+    // 正文宽度 on this device (theme.js applyReading).
+    const w = Number(r && r.width)
+    if (w >= 480 && w <= 1600) root.style.setProperty('--read', w + 'px')
+    // 界面大小, before anything is laid out (theme.js fitInterface).
+    const u = Number(r && r.ui)
+    if (u >= .85 && u <= 1.3 && u !== 1) {
+      if (matchMedia('(hover: none)').matches) document.querySelector('meta[name="viewport"]').content = `width=${Math.round(root.clientWidth / u)}, initial-scale=${u}, viewport-fit=cover`
+      else if ('currentCSSZoom' in Element.prototype && !(window.cicatavernNative && window.cicatavernNative.pageZoom)) {
+        root.style.zoom = String(u)
+        root.style.setProperty('--page-zoom', String(u))
+      }
+    }
   } catch {}</script>
 </head>
 <body>
@@ -53,6 +68,9 @@
         <img class="brand-mark" src="/icon.png" alt="" width="38" height="38">
         <span class="brand-line"><span class="brand-name">CicaTavern</span><button type="button" class="brand-version" id="whatsnew-open" title="这一版更新了什么" hidden></button></span>
         <span class="brand-sub">用自己的 API 游玩角色卡</span>
+        <button type="button" class="pane-fold" id="fold-left" title="收起左栏" aria-label="收起左栏" aria-controls="left">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m12 5-5 5 5 5" /></svg>
+        </button>
       </header>
       <label class="import" title="SillyTavern 角色卡（PNG/JSON）、世界书或预设（JSON），也可以直接把文件拖进窗口">
         <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v10m0 0-4-4m4 4 4-4M4 16h12" /></svg>
@@ -91,8 +109,9 @@
 
     <main class="stage">
       <div class="topbar">
-        <button class="btn ghost icon only-narrow" id="toggle-left" aria-label="角色卡与对话">
-          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h14" /></svg>
+        <button class="btn ghost icon pane-toggle left" id="toggle-left" title="角色卡与对话" aria-label="角色卡与对话" aria-controls="left" aria-expanded="false">
+          <svg class="drawer-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h14" /></svg>
+          <svg class="dock-icon" viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4" width="14" height="12" rx="2" /><path d="M8 4v12" /></svg>
         </button>
         <div class="topbar-title" id="chat-title">选择一张角色卡开始</div>
         <button class="pill" id="chat-preset" title="这个对话用的预设" hidden></button>
@@ -108,7 +127,7 @@
         <button class="btn ghost icon" id="history-open" title="回看历史（Ctrl+K）" aria-label="回看历史" aria-controls="history" aria-expanded="false" hidden>
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 10a6.5 6.5 0 1 0 1.9-4.6M3.5 3.5v3h3" /><path d="M10 6.5V10l2.5 1.6" /></svg>
         </button>
-        <button class="btn ghost icon only-mid" id="toggle-right" aria-label="状态面板">
+        <button class="btn ghost icon pane-toggle right" id="toggle-right" title="状态面板" aria-label="状态面板" aria-controls="right" aria-expanded="false">
           <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4" width="14" height="12" rx="2" /><path d="M12 4v12" /></svg>
         </button>
       </div>
@@ -120,6 +139,8 @@
             <p class="muted">角色卡、预设和常驻世界书只在开局时写入一次，之后每轮只追加新内容，所以缓存命中高、出字快。</p>
           </div>
         </div>
+        <div class="read-edge left" id="read-left" role="separator" aria-orientation="vertical" aria-label="正文宽度" title="拖动调整正文宽度，双击恢复默认" tabindex="0"><i></i></div>
+        <div class="read-edge right" id="read-right" role="separator" aria-orientation="vertical" aria-label="正文宽度" title="拖动调整正文宽度，双击恢复默认" tabindex="0"><i></i></div>
         <div class="rail" id="rail" aria-hidden="true" hidden>
           <div class="rail-track"><div class="rail-ticks" id="rail-ticks"></div><div class="rail-thumb" id="rail-thumb"></div></div>
           <div class="rail-bubble" id="rail-bubble" hidden><img alt="" decoding="async" hidden><b></b><span></span></div>
@@ -161,6 +182,16 @@
           <button type="button" class="player-btn" id="player-stop" title="停止" aria-label="停止">■</button>
         </div>
         <div class="branch-note" id="branch-note" hidden></div>
+        <div class="direct-tip" id="direct-tip" hidden>
+          <span>目前还没有角色卡，建议导入或创建角色卡后进行游玩~</span>
+          <span class="direct-tip-actions">
+            <button type="button" class="btn small" id="direct-tip-forge">创作角色卡</button>
+            <button type="button" class="btn small" id="direct-tip-import">导入已有角色卡</button>
+            <button type="button" class="btn small ghost" id="direct-tip-close">关闭</button>
+          </span>
+        </div>
+        <div class="ce-refs" id="direct-files" hidden></div>
+        <div class="ce-ref-text" id="direct-file-text" hidden></div>
         <div class="composer-box">
           <button type="button" class="quick-btn" id="quick-open" title="快捷开关：预设里钉住的条目" aria-label="快捷开关" hidden>
             <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 6h7m4 0h1M4 14h1m4 0h7" /><circle cx="13" cy="6" r="2" /><circle cx="7" cy="14" r="2" /></svg>
@@ -181,12 +212,19 @@
           </button>
         </div>
         <div class="composer-row">
+          <button type="button" class="btn ghost small" id="direct-attach" title="附文本文件给模型读：txt、md、json 这类文件，或者一张卡、一本世界书。Word 和 PDF 先另存成 txt" hidden>附文件</button>
+          <input type="file" id="direct-file" multiple hidden>
           <span class="muted small" id="composer-hint">Enter 发送，Shift+Enter 换行</span>
         </div>
       </form>
     </main>
 
     <aside class="pane right" id="right">
+      <div class="pane-top">
+        <button type="button" class="pane-fold" id="fold-right" title="收起右栏" aria-label="收起右栏" aria-controls="right">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m8 5 5 5-5 5" /></svg>
+        </button>
+      </div>
       <section class="panel">
         <div class="panel-head">
           <span>状态</span>
@@ -240,7 +278,7 @@
               <option value="off">关闭（最快）</option>
               <option value="adaptive">自适应</option>
             </select>
-            <span class="hint">Claude 模型（Anthropic 接口）按这里开关思考。Opus 5.5、Fable 5.1 关不掉，选关闭也会思考。</span>
+            <span class="hint">只管 Claude 模型（Anthropic 接口）。Opus 5.5、Fable 5.1 关不掉，选关闭也会思考。DeepSeek、GLM 和本地模型不看这里，要关思考，在供应商的「高级」里把「思考」选成关闭。</span>
           </label>
           <label>努力程度
             <select name="effort">
@@ -250,7 +288,7 @@
               <option value="xhigh">xhigh</option>
               <option value="max">max（最慢最贵）</option>
             </select>
-            <span class="hint">Anthropic 接口发 effort，OpenAI 接口发 reasoning effort。模型或中转不认时自动去掉重发。</span>
+            <span class="hint">Anthropic 接口发 effort，OpenAI 接口发 reasoning effort。思考关着也照发，Claude 这时最高按 high 发。有的模型不看这一项；明确不认时自动去掉重发。</span>
           </label>
         </div>
         <label class="check-row"><input type="checkbox" name="showReasoning"> 显示模型的思考过程</label>
@@ -283,6 +321,7 @@
           </label>
         </div>
         <p class="hint">动态设定（变量列表）在历史里堆多了会一次性删掉；删的那一轮要重写整段历史的缓存。删得少更省，但上下文长得快些。</p>
+        <label class="check-row"><input type="checkbox" name="autoFillUpdate"> 模型漏写变量更新时自动补写</label>
       </div>
       <div data-section="compaction">
         <label class="check-row"><input type="checkbox" name="compactAuto"> 上下文快满时自动压缩</label>
@@ -345,6 +384,30 @@
         <p class="hint">自动检查更新的开关在「更新」里。字体的改动下次打开时生效。</p>
       </div>
       <!-- The page's own language; app.js fills the choices and the name in the other language. -->
+      <div data-section="reading">
+        <label class="check-row"><input type="checkbox" name="replyToTop"> 回复写完后回到它的开头</label>
+        <p class="hint">普通模式下，模型写完一轮后回到这条回复的第一行，不用自己往上翻。视觉小说模式一句一句读，不受影响。</p>
+      </div>
+      <div data-section="background">
+        <p class="hint">有些手机切到后台或锁屏后，会停掉应用或断网，回复就写到一半断了，或者提示连接失败。按下面设置一次就好。</p>
+        <button type="button" class="btn small" id="battery-open" hidden>打开电池设置</button>
+        <p class="hint" id="battery-state"></p>
+        <ol class="background-steps">
+          <li>电池：把 CicaTavern 设成「无限制」或「允许后台运行」。</li>
+          <li>自启动和后台活动：都打开。</li>
+          <li>最近任务：把 CicaTavern 锁定，一键清理时不要清掉。</li>
+          <li>流量：允许后台使用数据，省流量模式不要限制它。</li>
+        </ol>
+        <p class="hint">常见手机的位置，系统版本不同，名字可能略有差别：</p>
+        <ul class="background-steps">
+          <li>小米、红米：应用设置 → 应用管理 → CicaTavern → 省电策略 → 无限制，同一页打开自启动。</li>
+          <li>华为、荣耀：电池 → 启动管理 → 关掉 CicaTavern 的自动管理，手动打开所有开关。</li>
+          <li>OPPO、一加、realme：电池 → 应用耗电管理 → CicaTavern → 允许后台运行。</li>
+          <li>vivo、iQOO：电池 → 后台耗电管理 → CicaTavern → 允许后台高耗电。</li>
+          <li>三星：应用程序 → CicaTavern → 电池 → 不受限制。</li>
+        </ul>
+        <p class="hint">用手机浏览器连电脑时，回复在电脑上写，切走也不会停，回来就能看到。这时断开的话，看电脑有没有睡眠、手机 WiFi 有没有断。</p>
+      </div>
       <div data-section="interface">
         <label><span>界面语言<span class="other-lang" id="ui-language-other"></span></span>
           <select name="uiLanguage" id="ui-language"></select>
@@ -433,6 +496,7 @@
         <div class="preset-nav-head">
           <h2 id="persona-title">你的角色</h2>
           <span class="row-actions">
+            <button type="button" class="btn small" id="persona-library" title="应用自带的长版文风，加入列表后可以自己改" hidden>内置文风</button>
             <button type="button" class="btn small" id="persona-new">新建</button>
             <label class="btn small" id="persona-import-label">导入
               <input type="file" id="persona-import" accept=".json,.txt,.md,application/json,text/plain,text/markdown" multiple hidden>
@@ -488,6 +552,10 @@
   <!-- 修改角色卡 (web/card-edit.js), from the card list's ⋯ -->
   <dialog id="card-edit-dialog" class="dialog forge-dialog card-edit-dialog" aria-label="修改角色卡"></dialog>
   <dialog id="talk-dialog" class="dialog forge-dialog talk-dialog" aria-label="对话修改"></dialog>
+  <!-- 检查这张卡 (web/card-check.js), from the card list's ⋯ and 修改角色卡 -->
+  <dialog id="card-check-dialog" class="dialog forge-dialog card-check-dialog" aria-label="检查这张卡"></dialog>
+  <!-- 试玩体检 (web/trial.js), from the card list's ⋯ -->
+  <dialog id="trial-dialog" class="dialog forge-dialog card-check-dialog" aria-label="试玩体检"></dialog>
 
   <dialog id="image-dialog" class="dialog wide">
     <form method="dialog">
@@ -593,6 +661,16 @@
       <div class="row end">
         <button class="btn" value="cancel">关闭</button>
         <button class="btn primary" type="button" id="quick-apply" disabled>应用</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="start-dialog" class="dialog">
+    <form method="dialog">
+      <p>目前这张卡还没有对话，是否开始一段新对话？</p>
+      <div class="row end">
+        <button class="btn" value="no">否</button>
+        <button class="btn primary" value="yes">是</button>
       </div>
     </form>
   </dialog>

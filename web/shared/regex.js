@@ -1,7 +1,10 @@
 // SillyTavern regex scripts (card `extensions.regex_scripts`), shared by the
 // server (text sent to the model) and the web UI (text shown to the player).
 
-export const PLACEMENT = Object.freeze({ USER_INPUT: 1, AI_OUTPUT: 2 })
+export const PLACEMENT = Object.freeze({ USER_INPUT: 1, AI_OUTPUT: 2, WORLD_INFO: 5 })
+
+/** The scripts run over worldbook text: as SillyTavern reads it there (a prompt, not the message), only 仅格式提示词 ones. */
+export const worldScripts = scripts => scripts.filter(s => !s.disabled && s.promptOnly && s.placement.includes(PLACEMENT.WORLD_INFO))
 
 /**
  * A card's or preset's scripts each with an id of its own, as the editor finds them by: one missing or already
@@ -150,7 +153,7 @@ export function patternOf(script, macros = t => t) {
 
 /**
  * Run every applicable script over `text`, in order.
- * @param options.placement - PLACEMENT.USER_INPUT or PLACEMENT.AI_OUTPUT.
+ * @param options.placement - a PLACEMENT.
  * @param options.target - 'display' or 'prompt'.
  * @param options.depth - 0 for the latest message, counting up towards the start.
  * @param options.macros - text => text, applied to replace strings and (per substituteRegex) patterns.

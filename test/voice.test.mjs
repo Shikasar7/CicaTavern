@@ -634,3 +634,34 @@ test('MOSS: voice_id and input, the audio itself, its library voices by default,
   assert.equal(account.voices[0].id, MOSS_VOICE, 'the library voices stay first')
   assert.deepEqual(await media.voiceKeys(), { fish: { hasKey: false, keyHint: '' }, minimax: { hasKey: false, keyHint: '' }, moss: { hasKey: true, keyHint: '…9876' } })
 })
+
+test('默认对白音色 is kept with the media settings, and only strings of the right size get in', () => {
+  const saved = cleanMedia({ defaultVoice: '  fish:abc  ', defaultVoiceAsked: ['fish', 'fish', 7, 'minimax'] })
+  assert.equal(saved.defaultVoice, 'fish:abc')
+  assert.deepEqual(saved.defaultVoiceAsked, ['fish', 'minimax'])
+  // A save that says nothing of them keeps them; an empty one clears the voice.
+  const again = cleanMedia({ autoRead: true }, saved)
+  assert.equal(again.defaultVoice, 'fish:abc')
+  assert.deepEqual(again.defaultVoiceAsked, ['fish', 'minimax'])
+  assert.equal(cleanMedia({ defaultVoice: '' }, saved).defaultVoice, '')
+  assert.equal(cleanMedia({ defaultVoice: 'x'.repeat(400) }).defaultVoice.length, 250)
+  assert.equal(cleanMedia({ defaultVoice: 7 }).defaultVoice, '')
+})
+
+test('默认对白音色 is asked about once per source, and not with one chosen', async () => {
+  const { readyVoiceSources, sourcesToAsk } = await import('../web/shared/speech.js')
+  const sources = [
+    { id: 'bridge', configured: true, ok: false },
+    { id: 'openai', configured: false },
+    { id: 'fish', configured: true },
+    { id: 'minimax', configured: true },
+  ]
+  assert.deepEqual(readyVoiceSources(sources), ['fish', 'minimax'], 'a bridge that does not answer is not set up')
+  assert.deepEqual(readyVoiceSources(undefined), [])
+  assert.deepEqual(sourcesToAsk(sources, { defaultVoice: '', defaultVoiceAsked: [] }), ['fish', 'minimax'])
+  assert.deepEqual(sourcesToAsk(sources, { defaultVoice: '', defaultVoiceAsked: ['fish'] }), ['minimax'], 'a source answered for stays quiet, a new one is asked about')
+  assert.deepEqual(sourcesToAsk(sources, { defaultVoice: '', defaultVoiceAsked: ['fish', 'minimax'] }), [])
+  assert.deepEqual(sourcesToAsk(sources, { defaultVoice: 'fish:abc', defaultVoiceAsked: [] }), [], 'one chosen: no more questions')
+  assert.deepEqual(sourcesToAsk(sources, { autoRead: true }), [], 'a server from before it cannot keep one')
+  assert.deepEqual(sourcesToAsk(sources, null), [])
+})

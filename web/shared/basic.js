@@ -13,9 +13,11 @@ export const BASIC_ID = 'basic'
 /** Each option's values; the first listed is not necessarily the default (see BASIC_DEFAULTS). */
 export const BASIC_OPTIONS = Object.freeze({
   person: ['greeting', 'second', 'third', 'first'],
-  style: ['natural', 'plain', 'cinematic', 'delicate', 'light', 'classical', 'webnovel'],
+  style: ['natural', 'cinematic', 'delicate', 'light', 'classical', 'webnovel', 'literary', 'diary', 'realist', 'earthy', 'calm'],
+  pace: ['natural', 'slow', 'steady', 'fast'],
   impersonation: ['off', 'standard', 'strict'],
   knowledge: ['off', 'on'],
+  selfCheck: ['off', 'on'],
   themes: ['standard', 'open'],
   jailbreak: ['off', 'soft', 'strong'],
   intimacy: ['restrained', 'natural', 'explicit'],
@@ -27,8 +29,10 @@ export const BASIC_OPTIONS = Object.freeze({
 export const BASIC_DEFAULTS = Object.freeze({
   person: 'greeting',
   style: 'natural',
+  pace: 'natural',
   impersonation: 'standard',
   knowledge: 'on',
+  selfCheck: 'off',
   themes: 'standard',
   jailbreak: 'off',
   intimacy: 'natural',
@@ -37,11 +41,15 @@ export const BASIC_DEFAULTS = Object.freeze({
   statusBar: 'auto',
 })
 
+// Values that went, and the closest one left. 白描 (up to 2.3.2) read the same as 淡然 and 电影感.
+const REPLACED = Object.freeze({ style: { plain: 'calm' } })
+
 /** Saved options with unknown keys dropped and unknown values back at their default. */
 export function cleanBasic(value, options = BASIC_OPTIONS, defaults = BASIC_DEFAULTS) {
   const out = {}
   for (const [key, values] of Object.entries(options)) {
-    out[key] = values.includes(value?.[key]) ? value[key] : defaults[key]
+    const saved = REPLACED[key]?.[value?.[key]] ?? value?.[key]
+    out[key] = values.includes(saved) ? saved : defaults[key]
   }
   return out
 }
@@ -49,6 +57,9 @@ export function cleanBasic(value, options = BASIC_OPTIONS, defaults = BASIC_DEFA
 // The visual novel preset (视觉小说预设): the built-in preset's options, saved apart
 // (settings.vn), and its own on how the story is told: more dialogue, short narration,
 // scenery left to the background picture, a beat per paragraph for the text box.
+// 直连对话: talking to the model with no card. Its chats hang on this hidden card, so everything a chat has works for them.
+export const DIRECT_CARD = 'direct'
+
 export const VN_ID = 'vn'
 
 export const VN_OPTIONS = Object.freeze({
@@ -88,6 +99,8 @@ const CHOICES = /<choices>([\s\S]*?)(?:<\/choices>|$)/i
 /** Both blocks, for hiding them from the story text. */
 export const TIME_BOX_BLOCK = new RegExp(TIME_BOX_SOURCE, 'gim')
 export const CHOICES_BLOCK = /<choices>[\s\S]*?(?:<\/choices>|$)/gi
+/** 写前自查: never story, whichever way the option stands now. One left open ends with its paragraph. */
+export const SELF_CHECK_BLOCK = /<self_check>(?:[\s\S]*?<\/self_check>|(?![\s\S]*<\/self_check>)[\s\S]*?(?:\n\s*\n|$))\s*/gi
 const ITEM = /^\s*(?:[-*•]\s*)?(?:[A-Ia-i]|[1-9]|[①-⑨])\s*[.、:：)）．]\s*/
 /** The most choices a reply shows: A–I, so the visual novel's number keys reach each one. */
 export const MAX_CHOICES = 9

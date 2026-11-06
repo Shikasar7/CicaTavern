@@ -164,6 +164,8 @@ export function normalizeProvider(input, previous = null, taken = new Set()) {
     maxTokens: intIn(input.maxTokens, 1, 1_000_000),
     temperature,
     extraBody,
+    // 思考: 'off' asks the model not to think, for models the 思考 setting does not reach (thinkingOff).
+    thinking: input.thinking === 'off' ? 'off' : '',
     // Anthropic prompt cache lifetime: '5m' (default) or '1h' (writes cost 2x instead of 1.25x,
     // but a turn read more than five minutes after the last one still hits).
     cacheTtl: input.cacheTtl === '1h' ? '1h' : '5m',
@@ -1070,6 +1072,24 @@ export function reasoningFields(api, modelId, { thinking, effort } = {}) {
   return api === 'openai-responses' ? { reasoning: { effort: level } } : { reasoning_effort: level }
 }
 
+/**
+ * How a provider is told not to think, for a provider set to 思考: 关闭. There is no common field: each service has
+ * its own, and the servers people run themselves (llama.cpp, vLLM, SGLang) take it through the model's chat template,
+ * Ollama by its own words. {} where nothing is known: Claude goes by the 思考 setting.
+ */
+export function thinkingOff(provider, modelId) {
+  if (provider.thinking !== 'off') return {}
+  if (provider.api === 'anthropic-messages') return claudeInfo(modelId) ? {} : { thinking: { type: 'disabled' } }
+  if (provider.api === 'openai-responses') return { reasoning: { effort: 'none' } }
+  if (provider.api !== 'openai-completions') return {}
+  if (isGoogle(provider)) return { reasoning_effort: 'none' }
+  const { hostname, port } = new URL(provider.baseURL)
+  if (/(^|\.)(deepseek\.com|volces\.com|bigmodel\.cn|moonshot\.cn)$/i.test(hostname)) return { thinking: { type: 'disabled' } }
+  if (/(^|\.)aliyuncs\.com$/i.test(hostname)) return { enable_thinking: false }
+  if (port === '11434') return { think: false, reasoning_effort: 'none' }
+  return { chat_template_kwargs: { enable_thinking: false } }
+}
+
 // Gemini's thinking_level for each 努力程度 (Gemini 3; it has nothing above high).
 const GEMINI_LEVELS = { low: 'low', medium: 'medium', high: 'high', xhigh: 'high', max: 'high' }
 
@@ -1094,7 +1114,7 @@ const THOUGHTS_REFUSED = /summar|thinking_config|thinking_level|include_thoughts
 
 // Provider + model pairs that refused the reasoning fields once: sent without them from then on.
 const NO_REASONING = new Set()
-const REASONING_REFUSED = /thinking|effort|reasoning|output_config|extra inputs|unknown (field|param)|unrecognized|not (supported|permitted|allowed)|unsupported/i
+const REASONING_REFUSED = /thinking|effort|reasoning|chat_template|output_config|extra inputs|unknown (field|param)|unrecognized|not (supported|permitted|allowed)|unsupported/i
 
 // Gemini's own API takes the safety thresholds its OpenAI-compatible address cannot: none of its filters held lower
 // than their loosest (its server-side check, PROHIBITED_CONTENT, still runs whatever these say).
@@ -1149,30 +1169,39 @@ function requestBody(provider, modelId, { system, messages, maxTokens: cap, reas
     const effort = withReasoning && GEMINI_LEVELS[reasoning?.effort] ? reasoning.effort : null
     return geminiBody(provider, modelId, { system, messages, maxTokens, effort, thoughts: withReasoning ? thoughts : null, search })
   }
-  const fields = withReasoning && reasoning ? reasoningFields(provider.api, modelId, reasoning) : {}
+  // 思考: 关闭 on the provider takes the place of the thinking settings, the effort too: no thinking, nothing to weigh.
+  const off = withReasoning ? thinkingOff(provider, modelId) : {}
+  const stopped = Object.keys(off).length > 0
+  const fields = stopped ? off : withReasoning && reasoning ? reasoningFields(provider.api, modelId, reasoning) : {}
   const common = {
     ...(provider.temperature !== null && provider.temperature !== undefined ? { temperature: provider.temperature } : {}),
     // The app's thinking settings (and the thinking asked for, `thoughts`); the provider's own extra parameters below win over them.
-    ...((thoughts && withReasoning && reasoning ? thoughtFields(provider, fields, reasoning.effort, thoughts) : null) ?? fields),
+    ...((thoughts && withReasoning && reasoning && !stopped ? thoughtFields(provider, fields, reasoning.effort, thoughts) : null) ?? fields),
   }
   if (provider.api === 'anthropic-messages') {
     // One breakpoint on the system prompt and one on the newest message: each
     // request reads the previous request's cached prefix and extends it. A message
-    // marked `cache` (the newest one later turns will not rewrite) gets a third.
+    // marked `cache` (the newest one later turns will not rewrite) gets a third. So does
+    // the `cacheHead` first characters of a message, what the next requests will start with word for word.
     // The newest message of the conversation itself: a paused reply sent back after it (its blocks) has none.
     const last = messages.findLastIndex(m => !Array.isArray(m.content))
     const cache = ttl === '1h' ? { type: 'ephemeral', ttl: '1h' } : { type: 'ephemeral' }
     // Only Claude takes the breakpoints. Relays that put other models (DeepSeek, Kimi…) behind this
     // API cache by themselves, and some drop the system prompt when a message comes as marked blocks.
     const marked = !OTHER_MODELS.test(modelId)
+    const blocks = (m, mark) => {
+      const end = { type: 'text', text: m.content.slice(m.cacheHead ?? 0), ...(mark ? { cache_control: cache } : {}) }
+      return m.cacheHead ? [{ type: 'text', text: m.content.slice(0, m.cacheHead), cache_control: cache }, end] : [end]
+    }
     return {
       model: modelId,
       max_tokens: maxTokens || ANTHROPIC_DEFAULT_MAX,
       // An empty text block is refused, so a request without a system prompt has no system field.
       ...(String(system ?? '').trim() ? { system: marked ? [{ type: 'text', text: system, cache_control: cache }] : system } : {}),
-      messages: messages.map((m, i) =>
-        marked && !Array.isArray(m.content) && (i === last || m.cache) ? { role: m.role, content: [{ type: 'text', text: m.content, cache_control: cache }] } : { role: m.role, content: m.content },
-      ),
+      messages: messages.map((m, i) => {
+        const mark = i === last || m.cache
+        return marked && !Array.isArray(m.content) && (mark || m.cacheHead) ? { role: m.role, content: blocks(m, mark) } : { role: m.role, content: m.content }
+      }),
       stream: true,
       ...(search === 'anthropic' ? { tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: SEARCHES_PER_REPLY }] } : {}),
       ...common,
@@ -1213,7 +1242,7 @@ const PROTOCOL = {
 
 /**
  * Stream one completion.
- * @param request - { system, messages: [{ role: 'user'|'assistant', content }], maxTokens?, signal, onDelta }
+ * @param request - { system, messages: [{ role: 'user'|'assistant', content, cache?, cacheHead? }], maxTokens?, signal, onDelta }
  * @param proxy - the app's proxy URL, or null; ignored when the provider is set to direct.
  */
 export async function complete(provider, modelId, original, { proxy = null } = {}) {
@@ -1231,7 +1260,7 @@ export async function complete(provider, modelId, original, { proxy = null } = {
   const pair = `${provider.id}/${modelId}`
   // Kept apart with 联网 on: a relay may refuse thinking only alongside the search tool.
   const refusedKey = request.webSearch ? `${pair} 联网` : pair
-  const reasoning = !NO_REASONING.has(refusedKey) && request.reasoning && Object.keys(reasoningFields(provider.api, modelId, request.reasoning)).length > 0
+  const reasoning = !NO_REASONING.has(refusedKey) && (Object.keys(thinkingOff(provider, modelId)).length > 0 || (request.reasoning && Object.keys(reasoningFields(provider.api, modelId, request.reasoning)).length > 0))
   const short = request.maxTokens > 0 && request.maxTokens < THINKING_ROOM
   const attempt = async () => {
     // 显示思考过程 on (the caller takes the thinking): asked for where it must be, as far as this pair allows.
@@ -1699,10 +1728,21 @@ function rateLimited(name, text, full = text) {
   return msg`${name} 现在请求太频繁，被限流了（429）。稍后再试，或者先换个模型。（${quote}）`
 }
 
+// New API's 参数覆盖: a relay's channel changing a field of the request, which fails when the field isn't there.
+// Written for /chat/completions, it finds nothing to change in what the Responses API sends.
+const OVERRIDE_FAILED = /param_override_invalid|operation \w+ failed: operation not supported/i
+
+/** Words for a Responses provider whose answer had nothing in it this API has, not even an end: a relay answering some other way. */
+export function unreadReply(provider, result) {
+  if (provider?.api !== 'openai-responses' || String(result?.text ?? '').trim() || result?.stopReason || result?.usage) return null
+  return msg`${provider.name} 的回复读不出来：这个中转站可能不支持 Responses 接口。在「模型供应商」里把接口类型改成「OpenAI 兼容（Chat Completions）」再试。`
+}
+
 function plainError(provider, error) {
   const text = String(error?.message ?? error ?? '')
   const status = error?.providerStatus
   const name = provider?.name ?? msg`供应商`
+  if (provider?.api === 'openai-responses' && OVERRIDE_FAILED.test(`${text} ${error?.body ?? ''}`)) return msg`${name} 的中转站设置和 Responses 接口对不上：在「模型供应商」里把接口类型改成「OpenAI 兼容（Chat Completions）」再试。（${text.slice(0, 160)}）`
   // Agent Platform's address names the project by its ID; a project's name (or someone else's project) is turned away.
   if (status === 403 && /Permission denied on resource project/i.test(text)) return msg`${name} 不认地址里的项目：Base URL 里要填 Google Cloud 项目 ID（控制台顶部项目选择器里的「ID」，不是项目名称），并且 API Key 属于这个项目。（${text.slice(0, 160)}）`
   if (status === 401 || status === 403) return msg`${name} 拒绝了请求：API Key 无效或没有权限。（${text.slice(0, 160)}）`

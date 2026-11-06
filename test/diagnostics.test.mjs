@@ -253,7 +253,7 @@ test('operations log: an MVU card\'s reply without its update block is a warning
   const replies = ['她抬头看了你一眼。', '她笑了。\n<UpdateVariable>\n_.set(\'好感\', 0, 5);\n</UpdateVariable>']
   const provider = normalizeProvider({ name: 'Gemini', api: 'openai-completions', baseURL: await replyingModel(t, replies), apiKey: KEY, models: [{ id: 'gemini-x' }] })
   await app.store.saveProviders([provider])
-  await call('/api/settings', { method: 'PUT', body: { model: `${provider.id}/gemini-x`, thinking: 'off' } })
+  await call('/api/settings', { method: 'PUT', body: { model: `${provider.id}/gemini-x`, thinking: 'off', autoFillUpdate: false } })
   const data = { name: '林雪', first_mes: '雪下了一整夜。', system_prompt: '每轮结尾用 <UpdateVariable> 块和 _.set() 更新变量。' }
   const card = (await call('/api/cards/import', { method: 'POST', body: { filename: 'card.json', data: Buffer.from(JSON.stringify({ spec: 'chara_card_v2', data })).toString('base64') } })).body
   let chat = (await call('/api/chats', { method: 'POST', body: { cardId: card.id } })).body

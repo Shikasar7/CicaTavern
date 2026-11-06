@@ -3,11 +3,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createServer } from 'node:http'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import YAML from 'yaml'
 import { createForge } from '../server/forge/index.mjs'
+import { createRulebooks } from '../server/game.mjs'
 import { cleanCardOptions, discussRequest, editTracking, emptyBrief, ideaSeeds, ideasRequest, normalizePlan, planRequest, readIdeas, withCardOptions } from '../server/forge/prompts.mjs'
 import { cardJson, greetingState, greetingsRequest, newCard } from '../server/forge/write.mjs'
 import { greetingState as openingState } from '../server/chats.mjs'
@@ -215,4 +216,69 @@ test('格式 and 状态栏样式: a plain-text card tracks nothing, plain MVU ha
   assert.match(bar.replaceString, /\.theme-neon\{/)
   // The picks as kept: a look only goes with the styled bar.
   assert.deepEqual(cleanCardOptions({ format: 'mvu', statusTheme: 'neon', play: ['bond', 'bond', 'nope'] }), { cast: '', world: false, gender: '', play: ['bond'], format: 'mvu', statusTheme: '' })
+})
+
+
+test('战斗与成长: the planner is told, the plan keeps what makes sense, the card comes out ready to fight', () => {
+  const rounds = [{ user: { text: '江湖冒险', picks: [] }, assistant: null }]
+  const talk = discussRequest(rounds, emptyBrief(), undefined, { options: { play: ['battle'], format: 'text' } }).system
+  assert.match(talk, /应用内置的规则/)
+  assert.doesNotMatch(talk, /靠叙述体现/, 'it is not told by the story, plain text or not')
+  const asked = planRequest(rounds, emptyBrief(), undefined, { options: { play: ['bond', 'battle'], format: 'mvu' } }).system
+  assert.match(asked, /多写一个 game 字段/)
+  assert.match(asked, /变量围绕这些玩法：好感与关系阶段（/)
+  assert.doesNotMatch(planRequest(rounds, emptyBrief(), undefined, { options: { play: ['bond'] } }).system, /game 字段/)
+
+  const game = {
+    attributes: { body: 30, grace: 12, mind: 'x', charm: 9 },
+    skills: [{ name: '裂石', kind: 'strike' }, { name: '怪招', kind: 'nope' }, { kind: 'sweep' }],
+    things: [{ name: '回春丹', count: 2, type: 'heal', size: 'large' }, { name: '铜钥匙', count: 99 }],
+    foes: [{ name: '灰狼', looks: 'grey wolf', moves: ['撕咬'] }],
+  }
+  const plan = withCardOptions(normalizePlan({ ...PLAN, game }), { play: ['battle'] })
+  assert.deepEqual(plan.game.attributes, { body: 18, grace: 10, mind: 10, charm: 9 }, 'the points the rule window would give')
+  assert.deepEqual(plan.game.skills, [{ name: '裂石', kind: 'strike' }, { name: '怪招', kind: '' }])
+  assert.deepEqual(plan.game.things[1], { name: '铜钥匙', count: 9, type: '', size: 'medium' })
+  assert.deepEqual(normalizePlan(plan).game, plan.game, 'read again it stays')
+
+  const card = newCard(plan)
+  card.greetings = [{ title: 'a', text: '雨下起来了。' }]
+  const book = cardJson(plan, card).data.extensions.cicatavern.game
+  assert.equal(book.level, 'full')
+  assert.deepEqual(book.start, { things: [{ name: '回春丹', count: 2 }, { name: '铜钥匙', count: 9 }], skills: ['裂石', '怪招'] })
+  assert.deepEqual(book.items, { 回春丹: { type: 'heal', size: 'large' } })
+  assert.deepEqual(book.skills, { 裂石: 'strike' })
+  assert.deepEqual(book.foes, { 灰狼: { looks: 'grey wolf', moves: ['撕咬'] } })
+
+  const left = withCardOptions(normalizePlan(PLAN), { play: ['battle'] })
+  assert.equal(left.game.skills.length, 0, 'left out by the planner: the defaults')
+  assert.equal(withCardOptions(normalizePlan({ ...PLAN, game }), { play: ['bond'] }).game, null, 'not picked: not there')
+  assert.equal(cardJson(withCardOptions(normalizePlan(PLAN), {}), card).data.extensions.cicatavern?.game, undefined)
+})
+
+
+test('a card made with 战斗与成长 is saved with its rules on; saved again, what play taught the bestiary stays', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'forge-game-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const store = createStore(root)
+  await store.init()
+  const rulebooks = createRulebooks(store)
+  const forge = createForge(store, { rulebooks })
+  const plan = withCardOptions(normalizePlan({ ...PLAN, game: { skills: [{ name: '裂石', kind: 'strike' }], foes: [{ name: '灰狼', looks: 'wolf', moves: [] }] } }), { play: ['battle'] })
+  const card = { ...newCard(plan), writtenAt: new Date().toISOString() }
+  card.greetings[0].text = '雨下起来了。'
+  const now = new Date().toISOString()
+  const draft = { id: 'gamedraft', createdAt: now, updatedAt: now, stage: 'polish', model: '', rounds: [{ user: { text: '雨夜', picks: [] }, assistant: null }], brief: { title: '雨宿', readiness: 1 }, plan, card }
+  await mkdir(path.join(root, 'forge'), { recursive: true })
+  await writeFile(path.join(root, 'forge', 'gamedraft.json'), JSON.stringify(draft))
+  const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+  const first = await forge.saveCard('gamedraft', { avatar: png })
+  const book = await rulebooks.read(first.card.id)
+  assert.equal(book.level, 'full', 'ready from the first turn')
+  assert.deepEqual(book.start.skills, ['裂石'])
+  assert.equal((await store.getCard(first.card.id)).game, undefined)
+  await rulebooks.learnFoes(first.card.id, { 狼王: { looks: 'black wolf', moves: ['裂爪'] } })
+  await writeFile(path.join(root, 'forge', 'gamedraft.json'), JSON.stringify({ ...draft, card: { ...card, savedCardId: first.card.id } }))
+  await forge.saveCard('gamedraft', { avatar: png })
+  assert.deepEqual(Object.keys((await rulebooks.read(first.card.id)).foes).sort(), ['灰狼', '狼王'].sort())
 })

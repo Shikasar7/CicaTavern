@@ -1,7 +1,7 @@
 // 立绘 cut-out (web/shared/cutout.js): the plain background goes, the figure and what is inside it stay.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { cutOut, spriteFrame } from '../web/shared/cutout.js'
+import { cutOut, spriteFrame, blackBars } from '../web/shared/cutout.js'
 
 /** A width × height picture filled by paint(x, y) → [r, g, b]. */
 function picture(width, height, paint) {
@@ -118,4 +118,43 @@ test('a whole figure, head to feet, keeps head to mid-thigh; one from the thighs
   const half = figure(40, 50)
   const kept = cutOut(half)
   assert.deepEqual(spriteFrame(half, kept.box), kept.box)
+})
+
+test('gaps: the background showing through a figure goes when asked, a highlight stays', () => {
+  // The robe again, with a window in it and a speck too small to be one.
+  const make = () => picture(60, 80, (x, y) => {
+    const half = 8 + y / 4
+    if (y < 15 || Math.abs(x - 30) > half) return WHITE
+    const window = y > 40 && y < 50 && Math.abs(x - 30) < 4
+    const speck = y === 62 && Math.abs(x - 30) < 2
+    return window || speck ? WHITE : ROBE
+  })
+  const plain = make()
+  assert.equal(cutOut(plain).ok, true)
+  assert.equal(alphaAt(plain, 30, 45), 255, 'sprites keep it: a white blouse can be as flat')
+  const asked = make()
+  assert.equal(cutOut(asked, { gaps: true }).ok, true)
+  assert.equal(alphaAt(asked, 30, 45), 0)
+  assert.equal(alphaAt(asked, 30, 62), 255, 'too small to be a gap')
+  assert.equal(alphaAt(asked, 30, 30), 255)
+})
+
+test('black bands a picture was padded with: at both ends alike, not a dark corner or a dark picture', () => {
+  const picture = (width, height, black) => {
+    const data = new Uint8ClampedArray(width * height * 4)
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const at = (y * width + x) * 4
+        data.set(black(x, y) ? [0, 0, 0, 255] : [200, 200, 205, 255], at)
+      }
+    }
+    return { width, height, data }
+  }
+  assert.deepEqual(blackBars(picture(20, 40, (_, y) => y < 5 || y >= 34)), { top: 5, bottom: 6, left: 0, right: 0 })
+  assert.deepEqual(blackBars(picture(40, 20, x => x < 4 || x >= 36)), { top: 0, bottom: 0, left: 4, right: 4 })
+  assert.equal(blackBars(picture(20, 40, () => false)), null)
+  assert.equal(blackBars(picture(20, 40, (_, y) => y < 5)), null, 'at one end only: part of the picture')
+  assert.equal(blackBars(picture(20, 40, (_, y) => y < 2 || y >= 38)), null, 'too thin to be padding')
+  assert.equal(blackBars(picture(20, 40, (x, y) => (y < 5 || y >= 35) && x > 0)), null, 'not from edge to edge')
+  assert.equal(blackBars(picture(20, 40, () => true)), null, 'all of it dark')
 })

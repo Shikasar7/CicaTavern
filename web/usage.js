@@ -2,6 +2,7 @@
 // cache hit rate and subscription quota over time (lines), per-model and
 // per-chat tables. Hand-written SVG, one y-axis per chart, hover on every mark.
 import { locale, t } from '/i18n.js'
+import { pageZoom } from '/theme.js'
 
 const SVG = 'http://www.w3.org/2000/svg'
 const SERIES = {
@@ -70,11 +71,12 @@ function tooltip(card) {
     show(rows, clientX, clientY) {
       tip.replaceChildren(...rows)
       tip.hidden = false
+      const zoom = pageZoom()
       const box = card.getBoundingClientRect()
-      const x = clientX - box.left
-      const y = clientY - box.top
+      const x = (clientX - box.left) / zoom
+      const y = (clientY - box.top) / zoom
       const width = tip.offsetWidth
-      tip.style.left = `${Math.min(Math.max(8, x + 14), box.width - width - 8)}px`
+      tip.style.left = `${Math.min(Math.max(8, x + 14), box.width / zoom - width - 8)}px`
       tip.style.top = `${Math.max(8, y - tip.offsetHeight - 10)}px`
     },
     hide() {

@@ -88,6 +88,13 @@ export function hasVariableMacros(text) {
   return VAR_MACRO.test(String(text ?? ''))
 }
 
+/** A value without MVU's marks on what may grow (`$meta`, `$__META_EXTENSIBLE__$`), which are no part of the story. */
+export function withoutMarks(value) {
+  if (Array.isArray(value)) return value.filter(item => !(typeof item === 'string' && item.startsWith('$__META'))).map(withoutMarks)
+  if (!value || typeof value !== 'object') return value
+  return Object.fromEntries(Object.entries(value).filter(([key]) => key !== '$meta').map(([key, item]) => [key, withoutMarks(item)]))
+}
+
 /**
  * Resolve {{get_message_variable::p}}, {{format_message_variable::p}}, {{getvar::p}}
  * and the chat and global forms. As in SillyTavern, getvar and the chat forms read
@@ -100,8 +107,8 @@ export function replaceVariableMacros(text, state, { local = null, global = null
     const where = getvarPath !== undefined || scope?.toLowerCase() === 'chat' ? local : scope?.toLowerCase() === 'global' ? global : null
     const own = where ? getPath(where, path ?? getvarPath) : undefined
     const value = own !== undefined ? own : getPath(vars, path ?? getvarPath)
-    if (kind?.toLowerCase() === 'format') return formatValue(value)
+    if (kind?.toLowerCase() === 'format') return formatValue(withoutMarks(value))
     const v = unwrap(value)
-    return v === undefined || v === null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v)
+    return v === undefined || v === null ? '' : typeof v === 'object' ? JSON.stringify(withoutMarks(v)) : String(v)
   })
 }

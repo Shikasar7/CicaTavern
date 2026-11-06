@@ -10,9 +10,10 @@
 //             upload the avatar, save it as a card and export the PNG.
 // The model works in the background; the window polls the draft while it does.
 import { t, zh } from '/i18n.js'
-import { cleanPath, cleanStatusSpec, rangeOf } from '/shared/status.js'
+import { EVENT_RATES, bookValue, cleanPath, cleanStatusSpec, rangeOf, settlePicks } from '/shared/status.js'
 import { splitPath } from '/shared/vars.js'
 import { statusBar } from '/status.js'
+import { REFERENCE_FILES, referenceBody, referenceChips } from '/talk.js'
 
 // On a phone the keyboard's Enter key starts a new line (it has no Shift+Enter); the button sends.
 const touchKeyboard = matchMedia('(hover: none) and (pointer: coarse)')
@@ -63,6 +64,7 @@ const EXAMPLES = {
     t`宫斗：从答应一路往上，宠爱、位份和人脉`,
   ],
 }
+const brickLabel = brick => OPTION_GROUPS_LABELS[brick] ?? brick
 const examplesFor = kind => (EXAMPLES[kind] ?? Object.values(EXAMPLES).flat())
 /** Four examples of a kind at random, not the ones shown just now where there are enough. */
 function drawExamples(kind, shown = []) {
@@ -77,11 +79,29 @@ const OPTION_GROUPS = [
   { key: 'cast', kind: 'one', label: t`人物`, values: [['', t`不定`], ['single', t`一个主角`], ['ensemble', t`几个主角（群像）`]], hint: t`群像：两到四个主要角色，各有目的，彼此之间也有关系。` },
   { key: 'world', kind: 'flag', label: t`世界观`, values: [[false, t`不强调`], [true, t`重世界观`]], hint: t`地点、势力、规则写得具体，模型兼任叙述者，适合冒险、探索、模拟。可以和群像、玩法一起选。` },
   { key: 'gender', kind: 'one', label: t`角色性别`, values: [['', t`不限`], ['female', t`女性`], ['male', t`男性`], ['mixed', t`男女都有`]], hint: t`核心角色的性别；给我灵感和交给 Cica 也按它来。` },
-  { key: 'play', kind: 'many', label: t`玩法`, values: [['bond', t`好感与关系阶段`], ['growth', t`成长与能力`], ['resources', t`经营与资源`], ['countdown', t`倒计时与事件`], ['explore', t`探索与线索`]], hint: t`可多选。每种玩法记录对应的数值：好感和信任（性格随它分阶段）、等级和修为、金钱和物资、剩余天数、解锁的地点和线索。` },
+  { key: 'play', kind: 'many', label: t`玩法`, values: [['bond', t`好感与关系阶段`], ['growth', t`成长与能力`], ['resources', t`经营与资源`], ['countdown', t`倒计时与事件`], ['explore', t`探索与线索`], ['battle', t`战斗与成长`]], hint: t`可多选。每种玩法记录对应的数值：好感和信任（性格随它分阶段）、等级和修为、金钱和物资、剩余天数、解锁的地点和线索。战斗与成长用应用内置的规则，不占变量，开局就有检定、回合制战斗、背包和升级。` },
   { key: 'format', kind: 'one', label: t`格式`, values: [['', t`向导定`], ['text', t`纯文本卡`], ['mvu', t`MVU 变量卡`], ['mvu-ui', t`MVU + 美化状态栏`]], hint: t`纯文本：不记录数值。MVU：记录数值，每条回复下面有状态栏。美化状态栏：在 SillyTavern 里也显示成好看的面板（要装酒馆助手）。` },
   { key: 'statusTheme', kind: 'one', label: t`状态栏样式`, values: [['plain', t`简洁`], ['paper', t`古风纸笺`], ['neon', t`赛博霓虹`], ['pastel', t`柔和手账`]], when: options => options.format === 'mvu-ui' },
+  // 高级选项: folded away, and nothing changes while none is picked. server/forge/bricks.mjs writes what the bricks put in a card.
+  { key: 'bricks', kind: 'many', advanced: true, label: t`玩法积木`, values: [['books', t`背包和册子`], ['selfcheck', t`写前自查`], ['events', t`随机事件`], ['judge', t`裁判表`], ['world', t`世界动态`], ['creation', t`建角页`]], about: {
+    books: t`玩的时候能增能减的记录：物品、认识的人、任务、回忆、线索。向导按卡定一到三本，状态栏里显示成表格。`,
+    selfcheck: t`模型写之前先过一遍这张卡最容易写崩的地方，比如人物说话走样、设定前后打架。玩家看不到这段，每轮多写一小段。`,
+    events: t`程序每轮抽一次，抽中了就发生：路上碰到的人、日常小事、远处传来的消息。不用记数值，纯文本卡也能用。`,
+    judge: t`用等级决定成败，不让模型放水：修为、关系深度、势力实力都能比。模型照表判定，SillyTavern 里也有效。和「战斗与成长」只能留一个。`,
+    creation: t`开局先填一张表再开始故事：选出身、分点数、写一小段，也能全部随机。填完模型按你选的写开场，写进变量。不想填可以换到普通开场白。`,
+    world: t`你不动，世界也在变：几件事各有进度，程序隔几轮推一件往前走一步，模型用一两句让你听到风声。状态栏里看得到走到哪一步。`,
+  } },
+  { key: 'eventRate', kind: 'one', advanced: true, label: t`事件多常见`, values: [['', t`交给向导`], ['rare', t`偶尔`], ['normal', t`常见`], ['often', t`频繁`]], hint: t`偶尔：约八轮一次。常见：约五轮一次。频繁：约三轮一次。`, when: options => options.bricks.includes('events') },
+  { key: 'judgeDice', kind: 'one', advanced: true, label: t`运气`, values: [['', t`交给向导`], ['on', t`平手看骰子`], ['off', t`不看运气`]], hint: t`等级一样时怎么定：程序掷骰子，或者由模型按故事判。`, when: options => options.bricks.includes('judge') },
+  { key: 'worldRate', kind: 'one', advanced: true, label: t`世界动得多快`, values: [['', t`交给向导`], ['rare', t`慢`], ['normal', t`中`], ['often', t`快`]], hint: t`慢：约八轮动一步。中：约五轮。快：约三轮。`, when: options => options.bricks.includes('world') },
+  { key: 'scale', kind: 'one', advanced: true, label: t`卡的规模`, values: [['', t`轻量`], ['standard', t`标准`], ['epic', t`大作`]], hint: t`轻量和以前一样。标准：最多 30 个角色、20 个地点、120 个变量。大作：最多 60 个角色、40 个地点、200 个变量。方案页就是世界目录，配角和地点先写一句话，看过再分批写，写卡的时间和花费都会多很多。` },
+  { key: 'statusTheme', kind: 'one', advanced: true, label: t`更多样式`, values: [['ink', t`水墨`], ['parchment', t`羊皮卷`], ['gothic', t`暗夜`], ['terminal', t`终端`], ['ocean', t`深海`], ['auto', t`按卡配色`]], hint: t`按卡配色：向导按这张卡的气氛挑颜色，方案页还能改。`, when: options => options.format === 'mvu-ui' },
+  { key: 'statusPages', kind: 'flag', advanced: true, label: t`状态栏分页`, values: [[false, t`一页`], [true, t`分几页`]], hint: t`变量多时分成几页，比如概览、册子、人物，向导按卡分。`, when: options => options.format === 'mvu-ui' },
 ]
-const NO_OPTIONS = { cast: '', world: false, gender: '', play: [], format: '', statusTheme: 'plain' }
+// Words that ask for another card's own text. Asked for with a card only being learned from, the page asks first.
+const COPY_WORDS = /照搬|照抄|抄过来|搬过来|原文|原样|原封不动|一模一样|复制(这张|那张|它|原)|照着(它|这张|那张|原卡)写|直接用(它|这张|那张|原卡|原来)/
+const OPTION_GROUPS_LABELS = Object.fromEntries(OPTION_GROUPS.find(group => group.key === 'bricks').values)
+const NO_OPTIONS = { cast: '', world: false, gender: '', play: [], format: '', statusTheme: 'plain', bricks: [], eventRate: '', judgeDice: '', worldRate: '', scale: '', statusPages: false }
 /** The examples that fit the picks (EXAMPLES is by the old kinds). */
 const exampleKind = options => (options.play?.length || options.format.startsWith('mvu') ? 'game' : options.world ? 'world' : options.cast || '')
 /** The picks in a few words, for the sketch's folded row. */
@@ -114,8 +134,8 @@ const STRATEGY = { constant: [t`常驻`, 'on'], keyword: [t`提到时`, 'key'], 
 const POSITION = { before: t`角色定义前`, after: t`角色定义后`, depth: t`上下文末尾` }
 const STAGE_TEXT = { discuss: t`聊想法`, plan: t`定方案`, write: t`动笔`, polish: t`打磨与头像` }
 // How a tracked variable shows in the status bar, and the value type each implies (hidden keeps its own).
-const SHOWS = [['meter', t`进度条`], ['number', t`数字`], ['text', t`文字`], ['tags', t`标签`], ['flag', t`是或否`], ['hidden', t`不显示`]]
-const SHOW_TYPE = { meter: 'number', number: 'number', text: 'string', tags: 'list', flag: 'boolean' }
+const SHOWS = [['meter', t`进度条`], ['number', t`数字`], ['rating', t`星级`], ['text', t`文字`], ['badge', t`徽章`], ['long', t`长文字`], ['tags', t`标签`], ['list', t`列表`], ['table', t`表格`], ['flag', t`是或否`], ['hidden', t`不显示`]]
+const SHOW_TYPE = { meter: 'number', number: 'number', rating: 'number', text: 'string', badge: 'string', long: 'string', tags: 'list', list: 'list', table: 'book', flag: 'boolean' }
 
 /** The variables' initial values as the card's [InitVar] will have them (server/forge/write.mjs typedValue). */
 function initialOf(variables) {
@@ -128,6 +148,7 @@ function initialOf(variables) {
     if (v.type === 'number') value = Number.isFinite(Number(raw)) && raw !== '' ? Number(raw) : 0
     else if (v.type === 'boolean') value = /^(true|是|有|1)$/i.test(raw) // i18n-ignore: values typed into the card
     else if (v.type === 'list') value = raw ? raw.split(/[、,，]/).map(s => s.trim()).filter(Boolean) : []
+    else if (v.type === 'book') value = bookValue(raw, v.columns)
     let at = root
     for (const key of keys.slice(0, -1)) at = at[key] = at[key] && typeof at[key] === 'object' ? at[key] : {}
     at[keys.at(-1)] = value
@@ -185,6 +206,9 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
     notes: new Map(), // plan section → comment
     planText: '',
     idea: '',
+    references: [], // the home view's files, as the server read them, for the new draft
+    homeReading: '', // which of them is open
+    readingRef: '', // the draft's reference open above the box
     options: { ...NO_OPTIONS }, // the home view's picks for a new draft (OPTION_GROUPS)
     ideas: [], // 给我灵感: the batch shown
     ideasSeen: [], // titles shown so far, for 换一批 to bring new ones
@@ -230,6 +254,13 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
       },
     })
     view.planText = el('textarea', { class: 'forge-input', rows: 2, placeholder: t`对方案的总体意见，比如：配角太多了，只留店长`, oninput: () => { state.planText = view.planText.value; updateFoot() } })
+    view.file = el('input', { type: 'file', accept: REFERENCE_FILES, multiple: true, hidden: true, onchange: () => addFiles() })
+    view.attach = attachButton()
+    view.attachPlan = attachButton()
+    view.refList = el('div', { class: 'ce-refs' })
+    view.refText = el('div', { class: 'ce-ref-text', hidden: true })
+    view.refStudy = el('div', { class: 'forge-study-list' })
+    view.refs = el('div', { class: 'forge-refbar', hidden: true }, [view.refList, view.refStudy, view.refText])
     view.pickCount = el('span', { class: 'forge-count' })
     view.undo = el('button', { type: 'button', class: 'btn ghost small', text: t`撤回上一轮`, title: t`去掉你上一次的回答和向导对它的回复`, onclick: () => undo() })
     view.toPlan = el('button', { type: 'button', class: 'btn', text: t`差不多了，出方案`, onclick: () => makePlan() })
@@ -252,8 +283,8 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
     } })
     view.save = el('button', { type: 'button', class: 'btn primary', text: t`保存为角色卡`, onclick: () => saveCard() })
     view.polishFoot = el('div', { class: 'forge-foot' }, [el('div', { class: 'forge-actions' }, [view.toPlanBack, el('span', { class: 'grow' }), view.saved, view.png, view.vn, view.chat, view.save])])
-    view.discussFoot = el('div', { class: 'forge-foot' }, [view.composer, el('div', { class: 'forge-actions' }, [view.pickCount, el('span', { class: 'grow' }), view.undo, view.toPlans, view.toPlan, view.send])])
-    view.planFoot = el('div', { class: 'forge-foot' }, [view.planText, el('div', { class: 'forge-actions' }, [view.back, el('span', { class: 'grow' }), view.rewriteAll, view.revise, view.write])])
+    view.discussFoot = el('div', { class: 'forge-foot' }, [view.composer, el('div', { class: 'forge-actions' }, [view.attach, view.pickCount, el('span', { class: 'grow' }), view.undo, view.toPlans, view.toPlan, view.send])])
+    view.planFoot = el('div', { class: 'forge-foot' }, [view.planText, el('div', { class: 'forge-actions' }, [view.back, view.attachPlan, el('span', { class: 'grow' }), view.rewriteAll, view.revise, view.write])])
     view.body = el('div', { class: 'forge-body' }, [view.main, view.sketch])
     dialog.replaceChildren(
       el('div', { class: 'forge' }, [
@@ -263,11 +294,17 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
           el('div', { class: 'forge-tools' }, [view.model, view.home, close]),
         ]),
         view.body,
+        view.refs,
         view.discussFoot,
         view.planFoot,
         view.polishFoot,
+        view.file,
       ]),
     )
+  }
+
+  function attachButton() {
+    return el('button', { type: 'button', class: 'btn ghost small', text: t`附文件`, title: t`附资料给向导读：设定、小说原文（txt、md），一张卡（PNG、JSON），或世界书。之后聊天、写方案和写卡都照着它`, onclick: () => view.file.click() })
   }
 
   // ─── Data ─────────────────────────────────────────────────────────────
@@ -327,7 +364,97 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
     view.polishFoot.hidden = !draft || draft.stage !== 'polish'
     renderMain()
     renderSketch()
+    renderReferences()
     updateFoot()
+  }
+
+  /** The draft's material, above the box while there is talk to go by it. */
+  function renderReferences() {
+    const draft = state.draft
+    const list = draft && (draft.stage === 'discuss' || draft.stage === 'plan') ? draft.references ?? [] : []
+    view.refs.hidden = !list.length
+    const key = JSON.stringify([draft?.id, list.map(item => [item.id, item.mode]), Boolean(draft?.job)])
+    if (key === state.refsShown) return
+    state.refsShown = key
+    if (!list.some(item => item.id === state.readingRef)) closeReading()
+    view.refList.replaceChildren(...(list.length ? referenceChips(el, list, { open: toggleReading, drop: dropReference, locked: Boolean(draft.job) }) : []))
+    view.refStudy.replaceChildren(...list.filter(item => item.structure).map(item => studyRow(item, { locked: Boolean(draft.job), change: changeDraftMode })))
+  }
+
+  /** A card among the material: what is being learned from it, and the way to its content. */
+  function studyRow(item, { locked = false, change, take = null }) {
+    const { title, bricks } = item.structure
+    const copying = item.mode === 'content'
+    const found = bricks.map(brickLabel)
+    return el('div', { class: 'forge-study' }, [
+      el('span', { class: 'hint', text: copying ? t`「${title}」：使用原文。做出来的卡会写明参考了它和它的作者。` : found.length ? t`「${title}」：只学结构，不读内容。认出了${found.join(t`、`)}。` : t`「${title}」：只学结构，不读内容。` }),
+      take && !copying ? el('button', { type: 'button', class: 'btn ghost small', text: t`照这个结构选上`, onclick: () => take(item) }) : null,
+      el('button', { type: 'button', class: 'btn ghost small', disabled: locked, text: copying ? t`改回只学结构` : t`使用原文…`, onclick: guard(async () => change(item, !copying)) }),
+    ].filter(Boolean))
+  }
+
+  /** Whether the player says the author allows it: nothing of the card's reaches the model before they do. */
+  function askToCopy({ title, author, notes }) {
+    return new Promise(resolve => {
+      const box = el('input', { type: 'checkbox' })
+      const go = el('button', { type: 'button', class: 'btn primary', disabled: true, text: t`使用原文` })
+      box.addEventListener('change', () => { go.disabled = !box.checked })
+      const done = answer => {
+        dialog.close()
+        dialog.remove()
+        resolve(answer)
+      }
+      go.addEventListener('click', () => done(true))
+      const dialog = el('dialog', { class: 'dialog forge-copy' }, [
+        el('h2', { text: t`要用「${title}」里的原文和素材吗？` }),
+        el('p', { text: t`这张卡的内容属于它的作者。很多卡写明了不许二传和二创，请先看作者的说明，确认对方允许这样使用，尊重作者的版权。` }),
+        el('p', { class: 'hint', text: author ? t`原作者：${author}` : t`这张卡没有写作者，确认起来要更小心。` }),
+        notes ? el('blockquote', { text: notes }) : null,
+        el('p', { text: t`确认之后，向导会读这张卡的全文。做出来的卡，作者写你的名字，不写 CicaTavern，简介末尾写上参考的卡名、原作者和声明。` }),
+        el('p', { class: 'hint', text: t`免责声明：CicaTavern 不检查授权，也不替你承担责任。用不用、怎么用由你决定，由此产生的责任由你承担。` }),
+        el('label', { class: 'check-row' }, [box, el('span', { text: t`我已确认原作者允许这样使用` })]),
+        el('div', { class: 'row forge-copy-actions' }, [el('button', { type: 'button', class: 'btn ghost', text: t`只学结构`, onclick: () => done(false) }), go]),
+      ].filter(Boolean))
+      dialog.addEventListener('cancel', event => {
+        event.preventDefault()
+        done(false)
+      })
+      document.body.append(dialog)
+      dialog.showModal()
+    })
+  }
+
+  const changeDraftMode = async (item, copying) => {
+    if (copying && !(await askToCopy(item.structure))) return
+    apply(await api(`/api/forge/${state.draft.id}/references/${item.id}`, { method: 'PUT', body: { mode: copying ? 'content' : 'structure', confirmed: copying } }))
+  }
+
+  const changeHomeMode = async (item, copying) => {
+    if (copying && !(await askToCopy(item.structure))) return
+    item.mode = copying ? 'content' : 'structure'
+    item.confirmed = copying
+    redrawHome()
+  }
+
+  /** 照这个结构选上: what was found in the card, as picks of the player's own to change. */
+  function takeStructure({ structure }) {
+    const next = { ...state.options, bricks: [...new Set([...state.options.bricks, ...structure.bricks])], ...(structure.scale ? { scale: structure.scale } : {}), ...(structure.format !== 'text' ? { format: structure.format } : {}) }
+    state.options = settlePicks(next, state.options)
+    state.advancedOpen = true
+    redrawHome()
+    toast(t`已选上，可以在高级选项里再改。`)
+  }
+
+  /** Before words that ask for a card's text go out: the same question as the button's. */
+  async function offerCopy(text, cards, change) {
+    if (!COPY_WORDS.test(text)) return
+    for (const item of cards.filter(card => card.structure && card.mode !== 'content')) await change(item, true)
+  }
+
+  function closeReading() {
+    state.readingRef = ''
+    view.refText.hidden = true
+    view.refText.replaceChildren()
   }
 
   function renderSteps() {
@@ -436,6 +563,10 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
       state.idea = idea.value = text
       idea.focus()
     }
+    const study = state.references.filter(item => item.structure).map(item => studyRow(item, { change: changeHomeMode, take: takeStructure }))
+    const attached = state.references.length ? el('div', { class: 'ce-refs' }, referenceChips(el, state.references, { open: toggleHomeReading, drop: dropHomeReference })) : null
+    const reading = state.references.find(item => item.id === state.homeReading)
+    if (attached) idea.placeholder = t`想怎么用这些资料？也可以不写，向导读完会问你`
     const kinds = optionsPanel(state.options, next => {
       const kindBefore = exampleKind(state.options)
       state.options = next
@@ -463,6 +594,10 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
         kinds,
       ]),
       idea,
+      attached,
+      study.length ? el('div', { class: 'forge-study-list' }, study) : null,
+      reading ? el('div', { class: 'ce-ref-text' }, el('pre', { text: reading.text })) : null,
+      el('div', { class: 'forge-attach-row' }, [attachButton(), el('span', { class: 'hint', text: t`手上有设定或小说？附上它，向导会照着聊，写卡时也照着写。附别人的卡时默认只学结构，不读内容。` })]),
       el('div', { class: 'forge-ideas-head' }, [
         el('span', { class: 'hint', text: state.ideas.length ? t`点一个填进上面，可以再改` : t`没想好？` }),
         el('span', { class: 'row' }, [
@@ -638,6 +773,7 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
     view.pickCount.textContent = asked ? t`${picks} / ${asked} 个问题已选` : ''
     view.send.disabled = busy || waiting || (!picks && !view.composer.value.trim())
     view.toPlan.disabled = view.toPlans.disabled = busy || !draft.rounds.some(r => r.assistant)
+    view.attach.disabled = view.attachPlan.disabled = busy
     view.toPlan.classList.toggle('ready', draft.brief.readiness >= 75)
     view.undo.hidden = draft.rounds.length < 2
     view.undo.disabled = busy
@@ -742,23 +878,38 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
    * them all with the one changed. The status bar's look shows only with the styled bar.
    */
   function optionsPanel(options, onChange, { compact = false, disabled = false } = {}) {
-    const rows = OPTION_GROUPS.filter(group => !group.when || group.when(options)).map(group => {
+    const row = group => {
       const value = options[group.key]
       const on = key => (group.kind === 'many' ? value.includes(key) : value === key)
+      const pick = key => {
+        const next = group.kind === 'many' ? (on(key) ? value.filter(v => v !== key) : [...value, key]) : key
+        onChange(settlePicks({ ...options, [group.key]: next }, options))
+      }
+      // Bricks say what they do where there is room: each is a choice that costs something.
+      const cards = group.about && !compact
       const buttons = group.values.map(([key, label]) => el('button', {
-        type: 'button', text: label, disabled, 'aria-pressed': String(on(key)),
-        onclick: () => {
-          const next = group.kind === 'many' ? (on(key) ? value.filter(v => v !== key) : [...value, key]) : key
-          onChange({ ...options, [group.key]: next })
-        },
-      }))
-      return el('div', { class: 'forge-pick' }, [
+        type: 'button', class: cards ? 'forge-brick' : null, text: cards ? null : label, disabled, 'aria-pressed': String(on(key)),
+        onclick: () => pick(key),
+      }, cards ? [el('b', { text: label }), el('span', { text: group.about[key] })] : []))
+      return el('div', { class: `forge-pick${cards ? ' wide' : ''}` }, [
         el('span', { class: 'forge-pick-label', text: group.label }),
-        el('div', { class: `seg${group.kind === 'many' ? ' many' : ''}`, role: 'group', 'aria-label': group.label }, buttons),
+        el('div', { class: `${cards ? 'forge-bricks' : 'seg'}${group.kind === 'many' ? ' many' : ''}`, role: 'group', 'aria-label': group.label }, buttons),
         !compact && group.hint ? el('p', { class: 'hint forge-pick-hint', text: group.hint }) : null,
       ])
-    })
-    return el('div', { class: `forge-picks${compact ? ' compact' : ''}` }, rows)
+    }
+    const shown = OPTION_GROUPS.filter(group => !group.when || group.when(options))
+    const advanced = shown.filter(group => group.advanced)
+    // What is picked in there stays in view; otherwise it opens only when asked.
+    const open = state.advancedOpen ?? (options.bricks.length > 0 || Boolean(options.scale) || options.statusPages)
+    return el('div', { class: `forge-picks${compact ? ' compact' : ''}` }, [
+      ...shown.filter(group => !group.advanced).map(row),
+      el('details', { class: 'forge-advanced', open, ontoggle: event => (state.advancedOpen = event.target.open) }, [
+        el('summary', { text: t`高级选项` }),
+        compact ? null : el('p', { class: 'hint', text: t`想做复杂的卡再看这里，不选就和平常一样。` }),
+        ...advanced.map(row),
+        options.formatBefore !== undefined ? el('p', { class: 'hint forge-pick-note', text: t`这块积木要记数值，格式改成了「MVU + 美化状态栏」。取消它就改回来。` }) : null,
+      ]),
+    ])
   }
 
   const saveOptions = guard(async patch => apply(await api(`/api/forge/${state.draft.id}`, { method: 'PUT', body: patch })))
@@ -857,6 +1008,8 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
         plan.play_rules.length ? el('h5', { text: t`扮演准则` }) : null,
         plan.play_rules.length ? bullets(plan.play_rules) : null,
       ]),
+      plan.game ? section(t`战斗与成长`, gameSection(plan.game, fields)) : null,
+      plan.bricks?.length ? section(t`玩法积木`, brickSection(draft, fields, bullets)) : null,
       section(t`状态栏`, statusEditor(draft)),
       section(t`开场白`, [
         plan.tracking.enabled ? el('p', { class: 'hint', text: t`每个开场是一个不同的起点。处境和状态栏初始值对不上的开场，带着自己的开局数值，玩家选这个开场时生效。` }) : null,
@@ -950,8 +1103,11 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
     const tracking = draft.plan.tracking
     const busy = Boolean(draft.job)
     let variables = tracking.variables.map(v => ({ ...v }))
+    const look = draft.plan.status ?? {}
+    // 按卡配色: the three colors the rest is worked out from, here to be changed by hand.
+    let palette = look.theme === 'auto' ? look.palette ?? { bg: '#f7f8f5', ink: '#1c2427', accent: '#2b5869' } : null
     const save = guard(async ({ enabled = state.draft.plan.tracking.enabled, redraw = false } = {}) => {
-      const body = { tracking: { enabled, title: title.value.trim(), variables: variables.filter(v => v.path.trim()) } }
+      const body = { tracking: { enabled, title: title.value.trim(), variables: variables.filter(v => v.path.trim()), ...(palette ? { palette } : {}) } }
       const view = await api(`/api/forge/${draft.id}`, { method: 'PUT', body })
       if (redraw) return apply(view)
       state.draft = view
@@ -980,7 +1136,7 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
     const rows = el('div', { class: 'var-rows' })
     const drawPreview = () => {
       const shown = variables.filter(v => v.path.trim())
-      const spec = cleanStatusSpec({ title: title.value.trim(), fields: shown.map(v => ({ path: v.path, label: v.label, show: v.show, ...rangeOf(v.range) })) })
+      const spec = cleanStatusSpec({ title: title.value.trim(), theme: look.theme, palette, fields: shown.map(v => ({ path: v.path, label: v.label, show: v.show, ...rangeOf(v.range), ...(look.pages && v.page ? { page: v.page } : {}) })) })
       preview.replaceChildren(spec ? statusBar(el, spec, initialOf(shown), { collapsible: false, note: t`预览 · 初始值` }) ?? empty() : empty())
     }
     const empty = () => el('p', { class: 'hint', text: t`还没有要显示的项。` })
@@ -995,6 +1151,14 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
       }
       const range = input('range', { class: 'var-range', placeholder: t`范围 0~100`, 'aria-label': t`范围` })
       range.hidden = v.type !== 'number'
+      // 册子: what each row keeps, split as the server splits a list.
+      const columns = el('input', { type: 'text', class: 'var-range', disabled: busy, placeholder: t`每行记什么，比如 数量、说明`, 'aria-label': t`每行记什么` })
+      columns.value = (v.columns ?? []).join(t`、`)
+      columns.hidden = v.type !== 'book'
+      columns.addEventListener('input', () => { v.columns = columns.value.split(/[、,，\s]+/).filter(Boolean); drawPreview() }) // i18n-ignore: separators
+      columns.addEventListener('change', () => save())
+      const page = input('page', { class: 'var-range', maxlength: 8, placeholder: t`第几页的页名`, 'aria-label': t`在状态栏哪一页` })
+      page.hidden = !look.pages
       const show = el('select', { class: 'var-show', disabled: busy, 'aria-label': t`显示方式` }, SHOWS.map(([value, label]) => el('option', { value, text: label })))
       show.value = v.show
       const row = el('div', { class: `var-row${v.show === 'hidden' ? ' quiet' : ''}` }, [
@@ -1010,21 +1174,33 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
           } }),
         ]),
         el('div', { class: 'var-line' }, [
-          input('initial', { class: 'var-initial', placeholder: t`初始值`, 'aria-label': t`初始值` }),
+          input('initial', { class: 'var-initial', placeholder: v.type === 'book' ? t`名字|数量|说明，几行用；隔开` : t`初始值`, 'aria-label': t`初始值` }),
           range,
+          columns,
+          page,
           input('check', { class: 'var-check', placeholder: t`什么事会让它怎么变`, 'aria-label': t`怎么变` }),
         ]),
       ])
       show.addEventListener('change', () => {
         v.show = show.value
         if (SHOW_TYPE[v.show]) v.type = SHOW_TYPE[v.show]
+        if (v.type === 'book' && !v.columns?.length) v.columns = [zh`说明`]
         range.hidden = v.type !== 'number'
+        columns.hidden = v.type !== 'book'
+        columns.value = (v.columns ?? []).join(t`、`)
         row.classList.toggle('quiet', v.show === 'hidden')
         drawPreview()
         save()
       })
       return row
     }
+    const colorRow = () => el('div', { class: 'var-colors' }, [['bg', t`背景`], ['ink', t`文字`], ['accent', t`强调`]].map(([key, label]) => {
+      const box = el('input', { type: 'color', disabled: busy, 'aria-label': label })
+      box.value = palette[key]
+      box.addEventListener('input', () => { palette = { ...palette, [key]: box.value }; drawPreview() })
+      box.addEventListener('change', () => save())
+      return el('label', {}, [box, el('span', { text: label })])
+    }))
     title.addEventListener('input', drawPreview)
     title.addEventListener('change', () => save())
     drawRows()
@@ -1034,6 +1210,7 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
       el('div', { class: 'status-editor' }, [
         el('div', { class: 'var-editor' }, [
           title,
+          palette ? colorRow() : null,
           rows,
           el('div', { class: 'row' }, [
             el('button', { type: 'button', class: 'btn small', disabled: busy, text: t`＋ 加一项`, onclick: () => {
@@ -1061,6 +1238,58 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
       return t`${s.name}（${label} ${range}）${s.main.length ? t`：${s.main.join(t`、`)}` : ''}`
     })
     return parts.join(' → ')
+  }
+
+  /** 战斗与成长 in the plan: how the player starts. The card's 游戏规则 can change it afterwards. */
+  function gameSection(game, fields) {
+    const { body, grace, mind, charm } = game.attributes
+    return [
+      el('p', { class: 'hint', text: t`保存后这张卡开着完整规则，开局就能打。想改就告诉向导，或者保存后在角色卡的「游戏规则」里改。` }),
+      fields([
+        [t`属性`, t`体魄 ${body}、灵巧 ${grace}、心智 ${mind}、魅力 ${charm}`],
+        [t`技能`, game.skills.map(skill => skill.name)],
+        [t`开局物品`, game.things.map(thing => (thing.count > 1 ? `${thing.name} ×${thing.count}` : thing.name))],
+        [t`常见敌人`, game.foes.map(foe => foe.name)],
+        [t`气力叫作`, game.energyName],
+        [t`等级阶梯`, game.ranks?.join(' → ')],
+        [t`阶梯跨度`, game.ranks?.length ? (game.rankSpan === 'narrow' ? t`小：差几级才打不过` : t`大：差一级就很难打`) : ''],
+        [t`理智`, game.sanity ? t`记录，受到惊吓会掉` : ''],
+      ]),
+    ]
+  }
+
+  /** 玩法积木 in the plan: the works are the code's; this is what the model filled in, and what they add. */
+  function brickSection(draft, fields, bullets) {
+    const plan = draft.plan
+    const books = plan.tracking.variables.filter(v => v.type === 'book')
+    const events = plan.random_events
+    const judge = plan.judge
+    const moves = plan.world_moves
+    const form = plan.creation
+    const cost = draft.brickCost
+    return [
+      el('p', { class: 'hint', text: t`机关由程序写好，下面是向导填的内容。想改就点「提意见」写一句。` }),
+      cost ? el('p', { class: 'hint', text: t`这些规则常驻约 ${cost.always} 字，模型每轮大概多写 ${cost.reply} 字。` }) : null,
+      books.length ? el('h5', { text: t`册子` }) : null,
+      books.length ? bullets(books.map(v => t`${v.label || v.path}：每行记${v.columns.join(t`、`)}`)) : null,
+      plan.selfcheck?.length ? el('h5', { text: t`写前自查` }) : null,
+      plan.selfcheck?.length ? bullets(plan.selfcheck) : null,
+      events?.groups.length ? el('h5', { text: t`随机事件（约 ${EVENT_RATES[events.rate]} 轮一次）` }) : null,
+      ...(events?.groups ?? []).map(group => fields([[group.when || t`名单`, group.items]])),
+      judge?.ranks.length ? el('h5', { text: t`裁判表` }) : null,
+      judge?.ranks.length ? fields([
+        [t`比什么`, judge.measure],
+        [t`什么时候判`, judge.when],
+        [t`等级`, judge.ranks.join(' < ')],
+        [t`差距`, judge.gaps.map(gap => t`差 ${gap.gap}：${gap.result}`)],
+        [t`已知`, judge.known.map(item => `${item.name} ${item.rank}`)],
+        [t`运气`, judge.dice ? t`平手看骰子` : t`不看运气`],
+      ]) : null,
+      moves?.lines.length ? el('h5', { text: t`世界动态（约 ${EVENT_RATES[moves.rate]} 轮动一步）` }) : null,
+      moves?.lines.length ? fields(moves.lines.map(line => [line.name, line.stages.join(' → ')])) : null,
+      form?.fields.length ? el('h5', { text: t`建角页` }) : null,
+      form?.fields.length ? fields(form.fields.map(field => [field.label, field.kind === 'text' ? t`玩家自己写` : field.kind === 'points' ? t`${field.total} 点分给：${field.options.join(t`、`)}` : field.options])) : null,
+    ]
   }
 
   /** An event in the plan: when it comes in, and whether it made it into the card (it needs a way to come in). */
@@ -1405,15 +1634,52 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
   // ─── Actions ──────────────────────────────────────────────────────────
   const start = guard(async () => {
     const text = state.idea.trim()
-    if (!text) {
+    if (!text && !state.references.length) {
       toast(t`先说说你想要一张什么样的卡，一句话也行`)
       return
     }
-    const draft = await api('/api/forge', { method: 'POST', body: { text, model: state.homeModel, options: state.options } })
+    await offerCopy(text, state.references, changeHomeMode)
+    const draft = await api('/api/forge', { method: 'POST', body: { text, model: state.homeModel, options: state.options, references: state.references } })
     state.idea = ''
     state.ideas = []
+    state.references = []
+    state.homeReading = ''
     apply(draft)
   })
+
+  // 附文件: on a draft they go onto it; before there is one the page keeps what the server read of them.
+  const addFiles = guard(async () => {
+    const files = [...view.file.files]
+    view.file.value = ''
+    for (const file of files) {
+      const body = await referenceBody(file)
+      if (state.draft) apply(await api(`/api/forge/${state.draft.id}/references`, { method: 'POST', body }))
+      else {
+        state.references.push(await api('/api/forge/references', { method: 'POST', body: { ...body, have: state.references.map(item => item.chars) } }))
+        redrawHome()
+      }
+    }
+  })
+
+  const toggleReading = guard(async item => {
+    if (state.readingRef === item.id) return closeReading()
+    const { text } = await api(`/api/forge/${state.draft.id}/references/${item.id}`)
+    state.readingRef = item.id
+    view.refText.replaceChildren(el('pre', { text }))
+    view.refText.hidden = false
+  })
+
+  const dropReference = guard(async item => apply(await api(`/api/forge/${state.draft.id}/references/${item.id}`, { method: 'DELETE' })))
+
+  function toggleHomeReading(item) {
+    state.homeReading = state.homeReading === item.id ? '' : item.id
+    redrawHome()
+  }
+
+  function dropHomeReference(item) {
+    state.references = state.references.filter(other => other !== item)
+    redrawHome()
+  }
 
   /** The home view again, with what was typed (it lives in state.idea). */
   function redrawHome() {
@@ -1455,6 +1721,7 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
     const draft = state.draft
     if (view.send.disabled) return
     const body = { text: view.composer.value.trim(), picks: picksList() }
+    await offerCopy(body.text, draft.references ?? [], changeDraftMode)
     const next = await api(`/api/forge/${draft.id}/say`, { method: 'POST', body })
     view.composer.value = ''
     apply(next)

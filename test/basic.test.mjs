@@ -1,10 +1,10 @@
 // The built-in preset (基础预设), the blocks it asks for, and the status bar layout.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { BASIC_DEFAULTS, VN_DEFAULTS, VN_ID, choicesOf, cleanBasic, cleanVn, timeBoxOf, withoutBasicBlocks } from '../web/shared/basic.js'
+import { BASIC_DEFAULTS, BASIC_OPTIONS, VN_DEFAULTS, VN_ID, choicesOf, cleanBasic, cleanVn, timeBoxOf, withoutBasicBlocks } from '../web/shared/basic.js'
 import { autoStatusSpec, cleanStatusSpec, compactText, statusGroups } from '../web/shared/status.js'
 import { applyScripts, PLACEMENT } from '../web/shared/regex.js'
 import { streamingText, withoutOwnStatus } from '../web/render.js'
@@ -40,9 +40,9 @@ test('the built-in preset: narrator rules plus one paragraph per option, in the 
   assert.doesNotMatch(prompt, /选项菜单/, 'the narrator rules no longer forbid the choices')
   assert.doesNotMatch(rules, /文风——/, '自然 adds nothing')
   // Every option off or at its quietest: no format block, no 防抢话 line anywhere.
-  const quiet = build({ impersonation: 'off', knowledge: 'off', choices: 'off', timeBox: 'off', intimacy: 'restrained', style: 'plain', person: 'second' })
+  const quiet = build({ impersonation: 'off', knowledge: 'off', choices: 'off', timeBox: 'off', intimacy: 'restrained', style: 'cinematic', person: 'second' })
   assert.doesNotMatch(quiet, /不替玩家角色|time_box|choices|信息隔离/)
-  assert.match(quiet, /文风——白描/)
+  assert.match(quiet, /文风——电影感/)
   assert.match(quiet, /用「你」称呼玩家角色「旅人」/)
   assert.match(quiet, /点到为止/)
   assert.equal(basicRules(cleanBasic({ intimacy: 'explicit' })).includes('面向成年玩家'), true)
@@ -161,10 +161,11 @@ test('status bar layouts: cleaned, laid out from a state, grouped with changes',
   }
   const spec = autoStatusSpec(state)
   assert.deepEqual(spec.fields.map(f => [f.path, f.show]), [
-    ['小雨.好感度', 'meter'], ['小雨.心情', 'text'], ['小雨.金钱', 'number'], ['小雨.已告白', 'flag'],
-    ['主角.体力', 'meter'], ['主角.随身', 'tags'], ['主角.背包', 'text'], ['天气', 'text'],
+    ['小雨.好感度', 'meter'], ['小雨.心情', 'badge'], ['小雨.金钱', 'number'], ['小雨.已告白', 'flag'],
+    ['主角.体力', 'meter'], ['主角.随身', 'tags'], ['主角.背包', 'tags'], ['天气', 'text'],
   ])
-  const groups = statusGroups({ ...spec, fields: [...spec.fields, { path: '主角.背包', show: 'tags' }, { path: '没有', show: 'text' }] }, state, { 小雨: { 好感度: 42 }, 主角: { 体力: 80 } })
+  const fields = spec.fields.map(f => (f.path === '主角.背包' ? { ...f, show: 'text' } : f))
+  const groups = statusGroups({ ...spec, fields: [...fields, { path: '主角.背包', show: 'tags' }, { path: '没有', show: 'text' }] }, state, { 小雨: { 好感度: 42 }, 主角: { 体力: 80 } })
   assert.deepEqual(groups.map(g => g.name), ['小雨', '主角', ''])
   const [like] = groups[0].rows
   assert.deepEqual([like.value, like.delta, like.percent], [46, 4, 46])
@@ -211,4 +212,52 @@ test('the visual novel preset: the built-in options and its own, saved apart, it
   assert.equal(chat.presetId, VN_ID)
   assert.match(chat.systemPrompt, /几乎全用对白推进/)
   assert.match(chat.systemPrompt, /<choices>/)
+})
+
+test('剧情推进: says nothing until it is set, and goes for both built-in presets', () => {
+  assert.doesNotMatch(basicRules(cleanBasic({})), /剧情推进/)
+  assert.match(basicRules(cleanBasic({ pace: 'fast' })), /剧情推进快/)
+  assert.match(basicRules(cleanVn({ pace: 'slow' })), /剧情推进慢/)
+  assert.equal(cleanBasic({ pace: 'warp' }).pace, 'natural')
+})
+
+test('文风: 无 says nothing; each of the others leads its paragraph and comes before what the opening set', () => {
+  assert.doesNotMatch(basicRules(cleanBasic({ style: 'natural' })), /文风——/)
+  for (const style of BASIC_OPTIONS.style.filter(value => value !== 'natural')) {
+    const rules = basicRules(cleanBasic({ style }))
+    assert.equal(cleanBasic({ style }).style, style)
+    assert.match(rules, /文风——[^\n]{100,}从这一轮起照这里写/, style)
+  }
+  // Both built-in presets have them, and the diary writes as the card's character.
+  assert.match(basicRules(cleanVn({ style: 'realist' })), /文风——写实/)
+  const diary = build({ style: 'diary' })
+  assert.match(diary, /每轮回复都是小雨写下的一页日记/, 'macros expanded')
+  assert.doesNotMatch(diary, /\{\{char\}\}/)
+})
+
+test('文风: 白描 went, and whoever had it picked gets 淡然 in both built-in presets', () => {
+  assert.equal(BASIC_OPTIONS.style.includes('plain'), false)
+  assert.equal(cleanBasic({ style: 'plain' }).style, 'calm')
+  assert.equal(cleanVn({ style: 'plain' }).style, 'calm')
+  assert.match(basicRules(cleanBasic({ style: 'plain' })), /文风——淡然/)
+})
+
+test('文风: the page knows every value, and each one but 无 has what a button shows and a long version', async () => {
+  const source = await readFile(new URL('../web/basic-options.js', import.meta.url), 'utf8')
+  const guide = source.slice(source.indexOf('export const STYLE_GUIDE = {'), source.indexOf('/** The 文风 with a long version'))
+  assert.deepEqual([...guide.matchAll(/^ {2}(\w+): \{/gm)].map(match => match[1]), BASIC_OPTIONS.style)
+  const entries = guide.split(/^ {2}(?=\w+: \{)/m).slice(1)
+  for (const entry of entries.filter(entry => !entry.startsWith('natural'))) {
+    assert.match(entry, /about: t`[^`]+`/, entry.slice(0, 12))
+    assert.match(entry, /sample: t`[^`]+`/, entry.slice(0, 12))
+    assert.match(entry, /text: zh`[^`]+\$\{FIRST\}`/, entry.slice(0, 12))
+  }
+})
+
+test('亲密描写 强化: says what to write out, keeps to adults and leaves the ending to the player', () => {
+  const rules = basicRules(cleanBasic({ intimacy: 'explicit' }))
+  for (const part of ['用词：', '动作：', '感官：', '挑逗：', '语言：', '节奏：']) assert.ok(rules.includes(part), part)
+  assert.match(rules, /涉及性的角色一律是成年人/)
+  assert.match(rules, /不替「\{\{user\}\}」决定高潮和结束/)
+  assert.doesNotMatch(basicRules(cleanBasic({ intimacy: 'restrained' })), /涉及性的角色/)
 })

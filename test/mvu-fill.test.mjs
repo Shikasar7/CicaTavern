@@ -72,7 +72,7 @@ async function fakeProvider(t) {
     requests.push(json)
     const asked = JSON.stringify(json.messages.at(-1))
     // Story turns forget the block; a request to write it gets one.
-    const text = /UpdateVariable/.test(asked) && /漏写/.test(body) ? `好的。\n${UPDATE}` : `第 ${++count} 次回复，好感涨了。`
+    const text = /UpdateVariable/.test(asked) && /漏写/.test(body) ? `好的。\n${UPDATE}` : /写坏/.test(asked) ? `第 ${++count} 次回复。\n<UpdateVariable>这不是补丁</UpdateVariable>` : `第 ${++count} 次回复，好感涨了。`
     res.writeHead(200, { 'content-type': 'text/event-stream' })
     res.write(`data: ${JSON.stringify({ model: json.model, choices: [{ delta: { content: text }, finish_reason: 'stop' }] })}\n\n`)
     res.write(`data: ${JSON.stringify({ model: json.model, choices: [], usage: { prompt_tokens: 10, completion_tokens: 5 } })}\n\n`)
@@ -111,6 +111,22 @@ async function setup(t) {
   }
   return { fake, store, engine, chat, card, provider, turn }
 }
+
+test('补写变量: a block nothing can be read from counts as missing until a readable one is added', async t => {
+  const { engine, chat, turn } = await setup(t)
+  const after = await turn('这轮写坏')
+  const tip = activePath(after).at(-1)
+  assert.equal(tip.updateUnread, true)
+  assert.equal(tip.state.好感, 10)
+  assert.equal(await engine.missesUpdate(after, tip), true)
+
+  const filled = await engine.fillUpdate(chat.id, tip.id)
+  const node = filled.nodes[tip.id]
+  assert.equal(node.state.好感, 12)
+  assert.equal(node.updateUnread, undefined)
+  assert.equal(await engine.missesUpdate(filled, node), false)
+  await assert.rejects(engine.fillUpdate(chat.id, tip.id), /已经有变量更新/)
+})
 
 test('补写变量: asked inside the conversation, appended, and the state follows', async t => {
   const { fake, store, engine, chat, card, turn } = await setup(t)

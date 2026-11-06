@@ -39,19 +39,136 @@ export function whoLine(el, { cardId, name, note }) {
   return el('div', { class: 'menu-who' }, [mark, el('span', { class: 'menu-who-name', text: name || t`这张卡` }), el('span', { class: 'menu-who-note', text: note })])
 }
 
+let comboCount = 0
+
+/**
+ * A text box with a list to pick from, the name still typed by hand when it is not listed: a model a service offers, say.
+ * Not <input list>: a browser offers only what matches the text already in the box, so a filled box offers nothing,
+ * and an Android system WebView may draw no list at all. This list opens under the box inside the page, not as a popup,
+ * so a window that scrolls scrolls to it, on any screen.
+ * @param el - the page's element helper.
+ * @param input - the text box; its name, form and change handlers stay as they are.
+ * @param options - () => the names, read each time the list opens.
+ * @param empty - what the arrow says while there are none.
+ * @returns box to place instead of the input; open() to show the list once there is something new in it.
+ */
+export function comboBox(el, { input, options, empty = '' }) {
+  const id = `combo-${++comboCount}`
+  const list = el('span', { id, class: 'combo-list', role: 'listbox', hidden: true })
+  const arrow = el('button', { type: 'button', class: 'combo-arrow', tabindex: '-1', title: t`展开列表`, 'aria-label': t`展开列表`, html: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5.5 8 4.5 4.5L14.5 8" /></svg>' })
+  const box = el('span', { class: 'combo' }, [input, arrow, list])
+  for (const [name, value] of Object.entries({ role: 'combobox', autocomplete: 'off', 'aria-autocomplete': 'list', 'aria-expanded': 'false', 'aria-controls': id })) input.setAttribute(name, value)
+  const names = () => [...new Set(options().filter(Boolean))]
+  // A finger's keyboard would cover the list: only a mouse gets the box focused for it.
+  const focusBox = () => { if (matchMedia('(hover: hover) and (pointer: fine)').matches) input.focus({ preventScroll: true }) }
+  let rows = []
+  let active = -1
+  let picking = false
+
+  const outside = event => { if (!box.contains(event.target)) close() }
+  function close() {
+    if (list.hidden) return
+    list.hidden = true
+    box.classList.remove('open')
+    input.setAttribute('aria-expanded', 'false')
+    input.removeAttribute('aria-activedescendant')
+    document.removeEventListener('pointerdown', outside, true)
+  }
+
+  function mark(index) {
+    list.querySelector('.active')?.classList.remove('active')
+    active = index
+    const row = list.children[index]
+    if (!row) return input.removeAttribute('aria-activedescendant')
+    row.classList.add('active')
+    input.setAttribute('aria-activedescendant', row.id)
+    if (row.offsetTop < list.scrollTop) list.scrollTop = row.offsetTop
+    else if (row.offsetTop + row.offsetHeight > list.scrollTop + list.clientHeight) list.scrollTop = row.offsetTop + row.offsetHeight - list.clientHeight
+  }
+
+  function pick(name) {
+    input.value = name
+    picking = true
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    picking = false
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+    close()
+    focusBox()
+  }
+
+  /** Every name for an empty query; what has all its words otherwise, or no list when nothing does. */
+  function show(query) {
+    const terms = query.toLowerCase().split(/\s+/).filter(Boolean)
+    const all = names()
+    const current = input.value.trim()
+    rows = all.filter(name => terms.every(term => name.toLowerCase().includes(term)))
+    if (!rows.length && (all.length || !empty || query)) return close()
+    list.replaceChildren(...(rows.length
+      ? rows.map((name, i) => el('button', { type: 'button', id: `${id}-${i}`, class: `combo-option${name === current ? ' current' : ''}`, role: 'option', 'aria-selected': String(name === current), text: name, onclick: () => pick(name) }))
+      : [el('span', { class: 'combo-empty', text: empty })]))
+    if (list.hidden) document.addEventListener('pointerdown', outside, true)
+    list.hidden = false
+    box.classList.add('open')
+    input.setAttribute('aria-expanded', 'true')
+    list.scrollTop = 0
+    mark(terms.length ? -1 : rows.indexOf(current))
+    list.scrollIntoView({ block: 'nearest' })
+  }
+
+  input.addEventListener('input', () => { if (!picking) show(input.value) })
+  input.addEventListener('click', () => { if (list.hidden && names().length) show('') })
+  input.addEventListener('keydown', event => {
+    if (event.isComposing) return
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault()
+      if (list.hidden) show('')
+      else if (rows.length) mark((active + (event.key === 'ArrowDown' ? 1 : rows.length - (active < 0 ? 0 : 1))) % rows.length)
+    } else if (event.key === 'Tab') close()
+    else if (list.hidden) return
+    else if (event.key === 'Enter') {
+      // Not the form's Enter while the list is what is being answered: what was typed stays when no row is lit.
+      event.preventDefault()
+      if (active >= 0) pick(rows[active])
+      else close()
+    } else if (event.key === 'Escape') {
+      // Only the list: the window it is in stays open.
+      event.preventDefault()
+      event.stopPropagation()
+      close()
+    }
+  })
+  box.addEventListener('focusout', event => { if (!box.contains(event.relatedTarget)) close() })
+  // A press on the arrow or a row must not take the focus from the box and close the list before the click lands.
+  for (const node of [arrow, list]) node.addEventListener('mousedown', event => event.preventDefault())
+  arrow.addEventListener('click', () => {
+    if (!list.hidden) return close()
+    show('')
+    focusBox()
+  })
+  return {
+    box,
+    open() {
+      show('')
+      focusBox()
+    },
+  }
+}
+
 /**
  * @param dialog - the <dialog>; it gets the menu-dialog look.
  * @param form - the form inside it that holds every part.
  * @param el - the page's element helper.
  * @param title - the menu's own title.
  * @param edits - target => whether a change to it waits for 保存.
+ * @param onPage - (shown, left) after the page changes; a page's id, or null for the menu.
  */
-export function createMenu({ dialog, form, el, title: menuTitle, edits = countsAsEdit }) {
+export function createMenu({ dialog, form, el, title: menuTitle, edits = countsAsEdit, onPage = () => {} }) {
   dialog.classList.add('menu-dialog')
   form.classList.add('menu-form')
   let sections = []
   let current = null
   let dirty = false
+  let only = null // the one panel this opening shows as the menu (a window of its own), else every panel
   let view = null // the mounted layout's parts
 
   const setDirty = value => {
@@ -115,8 +232,10 @@ export function createMenu({ dialog, form, el, title: menuTitle, edits = countsA
    *   body: Node[] | pane: Element (a page), or action() (another window), hidden }]
    * @param footStart / footEnd - buttons at the start / before 保存 in the save row.
    * @param save - { text, onClick } for the primary button.
+   * @param search - { find: query → [[category, [{ title, place, go }]]], snippet: (item, query) → why it matched, parts: (text, query) → [{ text, hit }] }:
+   *   a search box in the title row, what it finds under each category with the words searched for marked.
    */
-  function mount({ panels, sections: list, note = '', footStart = [], footEnd = [], save = null }) {
+  function mount({ panels, sections: list, note = '', footStart = [], footEnd = [], save = null, search = null }) {
     sections = list
     const entries = new Map()
     const panelNodes = panels.map(panel =>
@@ -135,6 +254,7 @@ export function createMenu({ dialog, form, el, title: menuTitle, edits = countsA
       ]),
     )
     const home = el('div', { class: 'menu-home' }, [...panelNodes, note ? el('p', { class: 'menu-home-note', text: note }) : null])
+    const homeTitle = panels.find(panel => panel.id === only)?.title ?? menuTitle
     const panes = sections
       .filter(section => !section.action)
       .map(section => {
@@ -146,27 +266,74 @@ export function createMenu({ dialog, form, el, title: menuTitle, edits = countsA
       })
     const back = el('button', { type: 'button', class: 'btn ghost icon menu-back', 'aria-label': t`回到菜单`, title: t`回到菜单（也可以点窗口外面，或按 Esc）`, html: ICON_BACK, onclick: () => show(null, 'back') })
     const crumb = el('span', { class: 'menu-crumb', hidden: true })
-    const title = el('h2', { text: menuTitle })
-    const body = el('div', { class: 'menu-body' }, [home, ...panes])
+    const title = el('h2', { text: homeTitle })
+    const found = el('div', { class: 'menu-found', hidden: true })
+    const finder = search ? el('input', { type: 'search', class: 'menu-search', placeholder: t`搜索设置`, 'aria-label': t`搜索设置` }) : null
+    finder?.addEventListener('input', () => drawFound(search))
+    finder?.addEventListener('keydown', event => {
+      // Enter would send the form; Esc clears the box first.
+      if (event.key === 'Enter') {
+        event.preventDefault()
+        found.querySelector('button')?.click()
+      } else if (event.key === 'Escape' && finder.value) {
+        event.preventDefault()
+        event.stopPropagation()
+        finder.value = ''
+        drawFound(search)
+      }
+    })
+    const body = el('div', { class: 'menu-body' }, [home, ...panes, found])
     const dirtyNote = el('span', { class: 'menu-dirty', hidden: true, text: t`有改动还没保存` })
     const saveButton = save ? el('button', { type: 'button', class: 'btn primary', text: save.text ?? t`保存`, onclick: save.onClick }) : null
     const closeButton = el('button', { type: 'button', class: 'btn', text: t`关闭`, onclick: () => up() })
     form.replaceChildren(
-      el('div', { class: 'menu-head' }, [back, el('div', { class: 'menu-titles' }, [crumb, title])]),
+      el('div', { class: 'menu-head' }, [back, el('div', { class: 'menu-titles' }, [crumb, title]), finder]),
       body,
       el('div', { class: 'menu-foot' }, [
         el('div', { class: 'row' }, footStart),
         el('div', { class: 'row' }, [dirtyNote, ...footEnd, closeButton, saveButton]),
       ]),
     )
-    view = { home, panels: panelNodes, panes, back, crumb, title, body, entries, dirtyNote, saveButton, closeButton }
+    view = { home, homeTitle, panels: panelNodes, panes, back, crumb, title, body, found, finder, entries, dirtyNote, saveButton, closeButton }
     setDirty(dirty)
     show(sections.some(s => s.id === current && !s.action) ? current : null)
+  }
+
+  /** What the box found, in place of the menu or the page; with nothing typed they come back. */
+  function drawFound({ find, snippet, parts }) {
+    const query = view.finder.value.trim()
+    view.found.hidden = !query
+    view.home.hidden = Boolean(query || current)
+    for (const pane of view.panes) pane.hidden = Boolean(query) || pane.dataset.section !== current
+    if (!query) return
+    const marked = text => parts(text, query).map(part => (part.hit ? el('mark', { text: part.text }) : part.text))
+    const row = item => el('button', { type: 'button', class: 'menu-entry shared action', onclick: () => {
+      view.finder.value = ''
+      view.found.hidden = true
+      show(current)
+      item.go()
+    } }, [
+      el('span', { class: 'menu-entry-main' }, [
+        el('span', { class: 'menu-entry-title' }, el('span', {}, marked(item.title))),
+        el('span', { class: 'menu-entry-sub' }, marked([item.place, snippet(item, query)].filter(Boolean).join(' · '))),
+      ]),
+      el('span', { class: 'menu-entry-go', 'aria-hidden': 'true', html: ICON_NEXT }),
+    ])
+    const groups = find(query)
+    view.found.replaceChildren(...(groups.length ? groups.map(([name, items]) => el('section', { class: 'menu-panel' }, [
+      el('header', { class: 'menu-panel-head' }, [el('h3', { text: name })]),
+      ...items.map(row),
+    ])) : [el('p', { class: 'menu-found-none', text: t`没有找到「${query}」` })]))
+    view.body.scrollTop = 0
   }
 
   /** One page ('forward' from the menu), or the menu (null, 'back'). Typed values stay. */
   function show(id = null, direction = '') {
     if (!view) return
+    if (view.finder) {
+      view.finder.value = ''
+      view.found.hidden = true
+    }
     const section = sections.find(s => s.id === id && !s.action) ?? null
     const was = current
     current = section?.id ?? null
@@ -178,7 +345,7 @@ export function createMenu({ dialog, form, el, title: menuTitle, edits = countsA
     view.back.hidden = !section
     view.crumb.hidden = !section?.crumb
     view.crumb.textContent = section?.crumb ?? ''
-    view.title.textContent = section ? section.title : menuTitle
+    view.title.textContent = section ? section.title : view.homeTitle
     if (!section) refresh()
     view.body.scrollTop = 0
     // The row clicked (or the page left) is hidden now: focus stays in the window, so its next Esc is the
@@ -191,6 +358,7 @@ export function createMenu({ dialog, form, el, title: menuTitle, edits = countsA
       void shown.offsetWidth
       shown.classList.add(`enter-${direction}`)
     }
+    if (was !== current) onPage(current, was)
   }
 
   /** Each row's summary and status, as the form shows the settings now. */
@@ -206,7 +374,11 @@ export function createMenu({ dialog, form, el, title: menuTitle, edits = countsA
       button.classList.toggle('need', kind === 'need')
     }
     // A panel with every row hidden goes too (the phone app has nothing under 连接).
-    for (const panel of view?.panels ?? []) panel.hidden = [...panel.children].slice(1).every(row => row.hidden)
+    for (const panel of view?.panels ?? []) {
+      panel.hidden = (only && panel.dataset.panel !== only) || [...panel.children].slice(1).every(row => row.hidden)
+      // On its own under its own title: its head needn't say the name again.
+      panel.classList.toggle('alone', only === panel.dataset.panel)
+    }
   }
 
   /** Close; with unsaved changes, ask first. */
@@ -222,14 +394,21 @@ export function createMenu({ dialog, form, el, title: menuTitle, edits = countsA
     show,
     refresh,
     close,
-    /** Before showing the dialog: start on a page, or on the menu. */
-    start(id = null) {
+    /**
+     * Before showing the dialog: start on a page, or on the menu.
+     * @param panel - a panel's id: the menu is that panel alone, under its title.
+     */
+    start(id = null, panel = null) {
       current = id
       entered = id
+      only = panel
       setDirty(false)
     },
     get current() {
       return current
+    },
+    get dirty() {
+      return dirty
     },
     markClean: () => setDirty(false),
   }

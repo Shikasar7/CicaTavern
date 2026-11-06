@@ -5,6 +5,13 @@
 // ({ data: RGBA bytes, width, height }); shared with the tests.
 
 /** The largest difference in any channel between pixel `i` and a colour. */
+// What counts as the background showing through: within this of its colour, and at least this many pixels.
+// What counts as a padded band: as dark as this, this many pixels wide, the same at both ends.
+const BAR_BLACK = 6
+const MIN_BAR = 3
+const GAP_TOLERANCE = 6
+const MIN_GAP = 24
+
 const distance = (data, i, [r, g, b]) => Math.max(Math.abs(data[i] - r), Math.abs(data[i + 1] - g), Math.abs(data[i + 2] - b))
 
 /**
@@ -104,13 +111,72 @@ function clearBars(data, width, height, cleared) {
 /**
  * Clears the background of `image` in place.
  * @param options.tolerance - how far (per channel) a pixel may be from the background colour and still be background.
+ * @param options.gaps - also clear flat patches of the background the fill could not reach, such as between an arm
+ *   and a body. Off for sprites, where a white blouse can be as flat.
  * @returns {{ ok: boolean, box: { x, y, width, height }, removed: number, why: string }} ok when there was a
  *   plain background to clear and a figure left; box is what is not see-through; why, when not ok:
  *   'busy' (the background is not one plain colour), 'fill' (the figure fills the picture, hardly
  *   any background to clear), 'faint' (nearly all of it went: the figure is the background's colour),
  *   'edge' (much is left down both upper sides: a second background colour, or a figure cut off by the frame).
  */
-export function cutOut(image, { tolerance = 28 } = {}) {
+/** The background showing through the figure: patches of just its colour, not so small that they are a highlight. */
+function clearGaps(data, width, height, cleared, bg) {
+  const size = width * height
+  const seen = new Uint8Array(size)
+  const stack = new Int32Array(size)
+  const near = p => cleared[p] !== 2 && distance(data, p * 4, bg) <= GAP_TOLERANCE
+  for (let start = 0; start < size; start++) {
+    if (seen[start] || !near(start)) continue
+    const patch = []
+    let top = 0
+    seen[start] = 1
+    stack[top++] = start
+    while (top) {
+      const p = stack[--top]
+      patch.push(p)
+      const x = p % width
+      for (const next of [x > 0 ? p - 1 : -1, x < width - 1 ? p + 1 : -1, p - width, p + width]) {
+        if (next < 0 || next >= size || seen[next] || !near(next)) continue
+        seen[next] = 1
+        stack[top++] = next
+      }
+    }
+    if (patch.length >= MIN_GAP) for (const p of patch) cleared[p] = 2
+  }
+}
+
+/**
+ * The black bands a picture was padded out with: { top, bottom, left, right } in pixels, or null for a picture with none.
+ * Pure black from edge to edge at both ends alike: a dark picture has neither.
+ */
+export function blackBars({ width, height, data }) {
+  const dark = (x, y) => {
+    const at = (y * width + x) * 4
+    return data[at] <= BAR_BLACK && data[at + 1] <= BAR_BLACK && data[at + 2] <= BAR_BLACK && data[at + 3] > 250
+  }
+  const rowDark = y => {
+    for (let x = 0; x < width; x++) if (!dark(x, y)) return false
+    return true
+  }
+  const columnDark = x => {
+    for (let y = 0; y < height; y++) if (!dark(x, y)) return false
+    return true
+  }
+  const inward = (count, isDark) => {
+    let bar = 0
+    while (bar < count && isDark(bar)) bar++
+    return bar
+  }
+  const alike = (a, b, whole) => a >= MIN_BAR && Math.abs(a - b) <= 1 && a + b < whole
+  const top = inward(height, rowDark)
+  const bottom = inward(height, i => rowDark(height - 1 - i))
+  if (alike(top, bottom, height)) return { top, bottom, left: 0, right: 0 }
+  const left = inward(width, columnDark)
+  const right = inward(width, i => columnDark(width - 1 - i))
+  return alike(left, right, width) ? { top: 0, bottom: 0, left, right } : null
+}
+
+export function cutOut(image, { tolerance = 28, gaps = false } = {}) {
   const { data, width, height } = image
   const size = width * height
   const cleared = new Uint8Array(size)
@@ -151,6 +217,7 @@ export function cutOut(image, { tolerance = 28 } = {}) {
     if (p >= width) seed(p - width)
     if (p < size - width) seed(p + width)
   }
+  if (gaps) clearGaps(data, width, height, cleared, bg)
   let removed = 0
   for (let p = 0; p < size; p++) {
     if (cleared[p] !== 2) continue

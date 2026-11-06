@@ -1,0 +1,203 @@
+// 试玩体检 (the card list's ⋯): a few rounds of a card on the real chat engine, with a report. Nothing is sent until the
+// button here, which says first which model and about how much; the chat it plays in is never shown and goes when it ends
+// (server/forge/trial.mjs). Loaded when asked for: a page already open from before an update goes on working without it.
+import { t } from '/i18n.js'
+
+const ICON_CLOSE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>'
+const MANAGE_PROVIDERS = '__manage__'
+const count = n => Math.round(n).toLocaleString()
+const MARK = { ok: '✓', warn: '!', error: '✕' }
+const KIND_TEXT = { 抢话: t`抢话`, 出戏: t`出戏`, 矛盾: t`矛盾`, 放水: t`放水`, 重复: t`重复`, 其他: t`其他` }
+const INTENT_TEXT = { go: t`顺着玩`, use: t`用东西`, ask: t`追问`, push: t`硬闯`, claim: t`说假话`, hand: t`让对方决定` }
+
+/** @param deps - { api, el, toast, guard, copyText(text), openProviders, openEdit(cardId) } */
+export function initTrial({ api, el, toast, guard, copyText, openProviders, openEdit }) {
+  const dialog = document.getElementById('trial-dialog')
+  const view = {}
+  const state = { cardId: '', data: null, models: [], defaultModel: '', poll: null }
+  const url = (path = '') => `/api/cards/${state.cardId}/trial${path}`
+
+  function layout() {
+    view.sub = el('span', { class: 'forge-sub' })
+    view.main = el('div', { class: 'forge-main cc-main' })
+    dialog.replaceChildren(
+      el('div', { class: 'forge cc' }, [
+        el('header', { class: 'forge-head' }, [
+          el('div', { class: 'forge-titles' }, [el('h2', { text: t`试玩体检` }), view.sub]),
+          el('div', { class: 'forge-tools' }, [el('button', { type: 'button', class: 'btn ghost icon', title: t`关闭`, 'aria-label': t`关闭`, html: ICON_CLOSE, onclick: () => dialog.close() })]),
+        ]),
+        view.main,
+      ]),
+    )
+  }
+
+  function load(data) {
+    const running = Boolean(state.data?.job)
+    state.data = data
+    view.sub.textContent = data.name
+    render()
+    if (running && !data.job && data.report && !data.error) view.main.scrollTop = 0
+    schedule()
+  }
+
+  function schedule() {
+    clearTimeout(state.poll)
+    if (!state.data?.job || !dialog.open) return
+    const cardId = state.cardId
+    state.poll = setTimeout(async () => {
+      try {
+        const data = await api(url())
+        if (state.cardId === cardId) load(data)
+      } catch {
+        schedule()
+      }
+    }, 1200)
+  }
+
+  async function loadModels() {
+    const data = await api('/api/models').catch(() => ({ choices: [], defaultModel: '' }))
+    state.models = data.choices.filter(model => model.id.includes('/'))
+    state.defaultModel = data.defaultModel || ''
+  }
+
+  // ─── Before it starts ──────────────────────────────────────
+  const label = model => model.label || model.id
+
+  function modelChoice() {
+    const { model, job } = state.data
+    const known = state.models.find(item => item.id === state.defaultModel)
+    const select = el('select', { class: 'forge-model', title: t`用哪个模型玩`, disabled: Boolean(job), onchange: guard(async () => {
+      if (select.value === MANAGE_PROVIDERS) {
+        select.value = model
+        openProviders()
+        return
+      }
+      load(await api(url(), { method: 'PUT', body: { model: select.value } }))
+    }) }, [
+      el('option', { value: '', selected: !model, text: known ? t`默认模型（${label(known)}）` : t`默认模型（还没选）` }),
+      ...state.models.map(item => el('option', { value: item.id, selected: item.id === model, text: label(item) })),
+      el('option', { value: MANAGE_PROVIDERS, text: t`管理模型…` }),
+    ])
+    return select
+  }
+
+  function roundsChoice() {
+    const { rounds, choices, job } = state.data
+    const select = el('select', { class: 'forge-model', title: t`玩几回合`, disabled: Boolean(job), onchange: guard(async () => load(await api(url(), { method: 'PUT', body: { rounds: Number(select.value) } }))) },
+      choices.map(n => el('option', { value: String(n), selected: n === rounds, text: t`${n} 回合` })))
+    return select
+  }
+
+  function startCard() {
+    const { estimate, job, report } = state.data
+    const note = estimate.ready
+      ? t`点了才发送。用 ${estimate.model} 玩，大约 ${count(estimate.input)} 输入、${count(estimate.output)} 输出 token${estimate.cost ? t`，约 $${estimate.cost.toFixed(2)}` : ''}。思考多的模型会更高，额度紧的话先选少一点。`
+      : t`还没有可用的模型，先在「管理模型」里加一个。`
+    return el('section', { class: 'plan-card cc-model' }, [
+      el('h3', { text: t`让模型替你玩几回合` }),
+      el('p', { class: 'hint', text: t`用这张卡真实地跑几回合：一个模型演卡，一个模型扮玩家，中途会故意试探，比如硬闯、说假话、让它替你决定。这一局不进你的对话列表，玩完就删。` }),
+      el('p', { class: 'hint', text: note }),
+      job
+        ? el('div', { class: 'cc-send' }, [el('span', { class: 'hint', text: stepText(job.step) }), el('span', { class: 'grow' }), el('button', { type: 'button', class: 'btn ghost small', text: t`停下`, onclick: guard(stop) })])
+        : el('div', { class: 'cc-send' }, [modelChoice(), roundsChoice(), el('span', { class: 'grow' }), el('button', { type: 'button', class: 'btn primary small', text: report ? t`再玩一次` : t`开始试玩`, disabled: !estimate.ready, onclick: guard(start) })]),
+    ])
+  }
+
+  function stepText(step) {
+    if (step === 'review') return t`在读这一局，挑毛病…`
+    const [, now, total, who] = /^round:(\d+):(\d+):(\w+)$/.exec(step ?? '') ?? []
+    if (!now) return t`准备中…`
+    return who === 'player' ? t`第 ${now}/${total} 回合：玩家在想…` : t`第 ${now}/${total} 回合：模型在写…`
+  }
+
+  async function start() {
+    if (state.data.report && !confirm(t`再玩一次会换掉这份报告，继续？`)) return
+    load(await api(url('/run'), { method: 'POST' }))
+  }
+
+  async function stop() {
+    await api(url('/stop'), { method: 'POST' })
+    schedule()
+  }
+
+  // ─── The report ────────────────────────────────────────────
+  function reportText(report) {
+    const lines = [t`《${state.data.name}》试玩体检`, report.summary, ...report.lines.filter(line => line.level !== 'ok').map(line => `- ${line.text}`)]
+    for (const issue of report.issues) lines.push(t`- 第 ${issue.round} 回合 · ${KIND_TEXT[issue.kind] ?? issue.kind}：${issue.what}${issue.fix ? t` 建议：${issue.fix}` : ''}`)
+    return lines.filter(Boolean).join('\n')
+  }
+
+  function issueView(issue) {
+    return el('div', { class: 'trial-issue' }, [
+      el('div', { class: 'trial-issue-head' }, [el('span', { class: 'strategy key', text: KIND_TEXT[issue.kind] ?? issue.kind }), el('span', { class: 'hint', text: t`第 ${issue.round} 回合` })]),
+      el('p', { text: issue.what }),
+      issue.quote ? el('blockquote', { text: issue.quote }) : null,
+      issue.fix ? el('p', { class: 'hint', text: t`改法：${issue.fix}` }) : null,
+    ].filter(Boolean))
+  }
+
+  function roundView(round, i) {
+    const bad = round.problems.length > 0
+    return el('details', { class: 'trial-round' }, [
+      el('summary', {}, [el('span', { text: t`第 ${i + 1} 回合` }), el('span', { class: 'hint', text: INTENT_TEXT[round.intent] ?? '' }), bad ? el('span', { class: 'trial-mark error', text: t`${round.problems.length} 个问题` }) : null].filter(Boolean)),
+      el('p', { class: 'trial-you', text: round.input }),
+      el('div', { class: 'trial-reply', text: round.shown }),
+      ...round.problems.map(problem => el('p', { class: 'trial-mark error', text: problem.what })),
+      round.changes?.length ? el('p', { class: 'hint', text: t`变量：${round.changes.join(t`、`)}` }) : null,
+    ].filter(Boolean))
+  }
+
+  function report() {
+    const data = state.data.report
+    if (!data) return null
+    const issues = data.issues.length
+      ? data.issues.map(issueView)
+      : [el('p', { class: 'hint', text: data.stopped ? t`提前停下了，没有读这一局。` : data.unread ? t`模型的审读没能读出来，上面程序查的结果不受影响。` : t`读下来没有挑出毛病。` })]
+    return el('div', { class: 'cc-page-part' }, [
+      el('section', { class: 'plan-card' }, [
+        el('h3', { text: t`结果` }),
+        el('p', { class: 'hint', text: t`${data.model} · 玩了 ${data.rounds.length} 回合${data.stopped ? t`（提前停下）` : ''} · 这一局用了 ${count(data.tokens.input)} 输入、${count(data.tokens.output)} 输出 token` }),
+        data.summary ? el('p', { text: data.summary }) : null,
+        el('ul', { class: 'trial-lines' }, data.lines.map(line => el('li', { class: `trial-line ${line.level}` }, [el('span', { class: 'trial-dot', text: MARK[line.level] }), el('span', { text: line.text })]))),
+      ].filter(Boolean)),
+      el('section', { class: 'plan-card' }, [el('h3', { text: t`读下来的问题` }), ...issues]),
+      el('section', { class: 'plan-card' }, [el('h3', { text: t`这一局` }), ...data.rounds.map(roundView)]),
+      el('div', { class: 'cc-send' }, [
+        el('button', { type: 'button', class: 'btn ghost small', text: t`复制问题清单`, onclick: guard(async () => {
+          await copyText(reportText(data))
+          toast(t`已复制，可以贴到「对话修改」里让向导改。`)
+        }) }),
+        el('button', { type: 'button', class: 'btn ghost small', text: t`去修改这张卡`, onclick: () => {
+          dialog.close()
+          openEdit(state.cardId)
+        } }),
+      ]),
+    ])
+  }
+
+  function render() {
+    const top = view.main.scrollTop
+    const { error } = state.data
+    view.main.replaceChildren(el('div', { class: 'cc-page' }, [
+      startCard(),
+      error ? el('p', { class: 'trial-mark error', text: error.message }) : null,
+      report(),
+    ].filter(Boolean)))
+    view.main.scrollTop = top
+  }
+
+  dialog.addEventListener('close', () => clearTimeout(state.poll))
+  layout()
+
+  return {
+    /** Opens the window on a card. */
+    async open(cardId) {
+      state.cardId = cardId
+      state.data = null
+      await loadModels()
+      load(await api(url()))
+      if (!dialog.open) dialog.showModal()
+      schedule()
+    },
+  }
+}

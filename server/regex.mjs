@@ -13,8 +13,8 @@ import { httpError, newId } from './store.mjs'
 import { msg } from './i18n.mjs'
 
 const MAX_SCRIPTS = 200
-// A beautifier's replacement is a whole page of HTML and CSS: presets ship ones of 40 000 characters and more.
-const MAX_TEXT = 400_000
+// A beautifier's replacement is a whole page of HTML and CSS: a card's status bar can be a built app of 700 000 characters.
+const MAX_TEXT = 2_000_000
 const MAX_SETS = 200
 const NAME_MAX = 80
 const NOTE_MAX = 4000

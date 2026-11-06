@@ -313,6 +313,10 @@ export function initProviders({ api, el, toast, guard, saveFile, onChanged }) {
     const fetchButton = el('button', { type: 'button', class: 'btn small', text: t`从接口获取模型列表` })
     const maxTokens = el('input', { name: 'maxTokens', type: 'number', min: 0, max: 1000000, step: 256, value: p.maxTokens || '', placeholder: t`用预设的` })
     const temperature = el('input', { name: 'temperature', type: 'number', min: 0, max: 2, step: 0.05, value: p.temperature ?? '', placeholder: t`服务默认` })
+    const thinking = el('select', { name: 'thinking' }, [
+      el('option', { value: '', text: t`模型默认`, selected: p.thinking !== 'off' }),
+      el('option', { value: 'off', text: t`关闭`, selected: p.thinking === 'off' }),
+    ])
     const extraBody = el('textarea', { name: 'extraBody', rows: 3, spellcheck: 'false', placeholder: '{"thinking": {"type": "disabled"}}' })
     extraBody.value = p.extraBody ? JSON.stringify(p.extraBody, null, 2) : ''
     const headers = el('textarea', { name: 'headers', rows: 2, spellcheck: 'false', placeholder: '{"HTTP-Referer": "http://localhost"}' })
@@ -331,6 +335,7 @@ export function initProviders({ api, el, toast, guard, saveFile, onChanged }) {
       maxTokens: Number(maxTokens.value) || 0,
       temperature: temperature.value === '' ? null : Number(temperature.value),
       cacheTtl: cacheTtl.value,
+      thinking: thinking.value,
       extraBody: parseJsonField(extraBody.value, t`额外请求参数`),
       headers: parseJsonField(headers.value, t`额外请求头`) ?? {},
     })
@@ -454,9 +459,10 @@ export function initProviders({ api, el, toast, guard, saveFile, onChanged }) {
       el('div', { class: 'models-head' }, [el('span', { text: t`模型（每行一个 ID，要换显示名写成「ID = 显示名」）` }), fetchButton]),
       models,
       remoteBox,
-      el('details', { class: 'provider-advanced', open: Boolean(p.maxTokens || p.temperature !== null || p.extraBody || Object.keys(p.headers ?? {}).length) }, [
+      el('details', { class: 'provider-advanced', open: Boolean(p.maxTokens || p.temperature !== null || p.extraBody || p.thinking || Object.keys(p.headers ?? {}).length) }, [
         el('summary', { text: t`高级` }),
         el('div', { class: 'grid' }, [field(t`最大输出 token`, maxTokens), field(t`温度`, temperature)]),
+        field(t`思考`, thinking, t`DeepSeek、GLM、Qwen 和本地模型默认先思考。选关闭后这个供应商的模型都不思考，回复更快；个别服务不认时不起作用，模型还会照常思考。Claude 看「设置 → 模型」里的思考。`),
         field(t`额外请求参数（JSON，合并进请求体）`, extraBody, t`例如关掉思考、指定 reasoning_effort，写法看服务商文档`),
         field(t`额外请求头（JSON）`, headers),
       ]),

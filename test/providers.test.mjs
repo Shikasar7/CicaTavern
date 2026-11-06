@@ -10,7 +10,7 @@ import { activePath, chatView, createChat, restoreFolded, rollbackTo } from '../
 import { createEngine } from '../server/engine.mjs'
 import { testSubscription } from './support/subscription.mjs'
 import { editPreset, normalizePreset } from '../server/presets.mjs'
-import { complete, draftProvider, exportProviders, googleRequest, importProviders, isGoogle, listRemoteModelDetails, listRemoteModels, normalizeProvider, providerChoices, providerError, publicProvider, reasoningFields, retryWait } from '../server/providers.mjs'
+import { complete, draftProvider, exportProviders, googleRequest, importProviders, isGoogle, listRemoteModelDetails, listRemoteModels, normalizeProvider, providerChoices, providerError, publicProvider, reasoningFields, retryWait, thinkingOff } from '../server/providers.mjs'
 import { createStore } from '../server/store.mjs'
 import { cleanScripts } from '../server/regex.mjs'
 
@@ -371,6 +371,41 @@ test('compaction and rollbacks: compacted with turns folded behind it, they come
 test('a provider\'s model list says how long each context is where it can', async t => {
   const { provider } = await setup(t, 'openai-completions')
   assert.deepEqual(await listRemoteModelDetails(provider), { models: ['m-a', 'm-b'], contexts: { 'm-a': 64_000 } })
+})
+
+test('the start of a message that later requests repeat gets a breakpoint of its own, on Anthropic alone', async t => {
+  const message = { role: 'user', content: '资料要求', cacheHead: 2 }
+  for (const [api, read] of [['anthropic-messages', body => body.messages[0]], ['openai-completions', body => body.messages.at(-1)]]) {
+    const { fake, provider } = await setup(t, api)
+    await complete(provider, 'test-model', { system: '规则', messages: [message] })
+    const sent = read(fake.requests.at(-1).body)
+    if (api === 'openai-completions') assert.deepEqual(sent, { role: 'user', content: '资料要求' })
+    else assert.deepEqual(sent.content, [{ type: 'text', text: '资料', cache_control: { type: 'ephemeral' } }, { type: 'text', text: '要求', cache_control: { type: 'ephemeral' } }])
+  }
+})
+
+test('思考: 关闭 on a provider: each service in its own words, and nothing of the kind from the effort', async t => {
+  const of = (api, baseURL, modelId = 'm') => thinkingOff({ thinking: 'off', api, baseURL, models: [] }, modelId)
+  assert.deepEqual(of('openai-completions', 'https://api.deepseek.com/v1'), { thinking: { type: 'disabled' } })
+  assert.deepEqual(of('openai-completions', 'https://ark.cn-beijing.volces.com/api/v3'), { thinking: { type: 'disabled' } })
+  assert.deepEqual(of('openai-completions', 'https://dashscope.aliyuncs.com/compatible-mode/v1'), { enable_thinking: false })
+  assert.deepEqual(of('openai-completions', 'http://127.0.0.1:11434/v1'), { think: false, reasoning_effort: 'none' })
+  assert.deepEqual(of('openai-completions', 'http://127.0.0.1:8080/v1'), { chat_template_kwargs: { enable_thinking: false } })
+  assert.deepEqual(of('openai-responses', 'https://api.openai.com/v1'), { reasoning: { effort: 'none' } })
+  assert.deepEqual(of('anthropic-messages', 'https://relay.test', 'deepseek-v4'), { thinking: { type: 'disabled' } })
+  assert.deepEqual(of('anthropic-messages', 'https://api.anthropic.com', 'claude-sonnet-5-5'), {}, 'Claude goes by the 思考 setting')
+  assert.deepEqual(thinkingOff({ thinking: '', api: 'openai-completions', baseURL: 'http://127.0.0.1:8080/v1' }, 'm'), {})
+
+  const { fake, provider } = await setup(t, 'openai-completions')
+  const off = { ...provider, thinking: 'off' }
+  await complete(off, 'm1', { system: '规则', messages: [{ role: 'user', content: '你好' }], reasoning: { thinking: 'off', effort: 'low' } })
+  const body = fake.requests.at(-1).body
+  assert.deepEqual(body.chat_template_kwargs, { enable_thinking: false })
+  assert.equal(body.reasoning_effort, undefined, 'the effort stays out')
+  await complete(off, 'm1', { system: '规则', messages: [{ role: 'user', content: '写个标题' }], maxTokens: 50 })
+  assert.deepEqual(fake.requests.at(-1).body.chat_template_kwargs, { enable_thinking: false }, 'a helper call is asked too')
+  assert.equal(normalizeProvider({ name: 'L', api: 'openai-completions', baseURL: 'http://127.0.0.1:8080/v1', models: [{ id: 'm' }], thinking: 'off' }).thinking, 'off')
+  assert.equal(normalizeProvider({ name: 'L', api: 'openai-completions', baseURL: 'http://127.0.0.1:8080/v1', models: [{ id: 'm' }] }).thinking, '')
 })
 
 test('Anthropic Messages provider: /v1 added, x-api-key, cache breakpoints, usage', async t => {

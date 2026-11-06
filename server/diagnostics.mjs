@@ -283,7 +283,7 @@ export function createDiagnostics(root, store, { version, edition, appName }) {
     const [settings, providers, list, done, known] = await Promise.all([store.getSettings(), store.getProviders(), errors.load(), activity.load(), savedSecrets(root)])
     const label = ref => (ref ? refLabel(ref, providers) ?? ref : msg`没选`)
     const proxy = settings.proxy === 'none' ? msg`不用` : settings.proxy === 'system' || !settings.proxy ? msg`跟随系统` : msg`手动设置`
-    const [cards, chats, presets, books] = await Promise.all([count(store.dirs.cards), count(store.dirs.chats), count(store.dirs.presets), count(store.dirs.books)])
+    const [cards, chats, presets, books] = await Promise.all([store.listCards().then(list => list.length), count(store.dirs.chats), count(store.dirs.presets), count(store.dirs.books)])
     const short = value => String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, 300)
     const lines = [
       msg`${appName} 错误日志`,

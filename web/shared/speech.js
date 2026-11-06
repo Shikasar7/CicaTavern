@@ -8,6 +8,19 @@ const QUOTE = /“[^”]*”|「[^」]*」|『[^』]*』|"[^"\n]*"/g
 const SENTENCE_END = /(?<=[。！？!?…~～♪])/
 const SPEAKABLE = /[\p{L}\p{N}]/u
 
+/** The sources set up to read now, by id (/api/media/voices): a bridge that does not answer is not one. */
+export const readyVoiceSources = sources => (sources ?? []).filter(source => source.configured && source.ok !== false).map(source => source.id)
+
+/**
+ * The sources to ask about 默认对白音色 once 朗读来源 is set up: none with a default chosen, or from a
+ * server that keeps none; each source is asked about once, whatever the answer was.
+ */
+export function sourcesToAsk(sources, media) {
+  if (!media || !('defaultVoice' in media) || media.defaultVoice) return []
+  const asked = new Set(media.defaultVoiceAsked ?? [])
+  return readyVoiceSources(sources).filter(id => !asked.has(id))
+}
+
 /** Remove what a voice would read out as noise: markup, dividers, macros, brackets. */
 export function cleanForSpeech(text) {
   return String(text ?? '')

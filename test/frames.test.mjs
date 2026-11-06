@@ -53,7 +53,7 @@ test('a card writes a book: the chat keeps its changes, the book stays as it was
 test('books by the names a card uses: its own, mounted, global', () => {
   const books = [book(), { id: 'b2', name: '城市', entries: [] }, { id: 'g1', name: '通用', entries: [] }]
   const card = { id: 'c1', worldbookIds: ['b2'] }
-  assert.deepEqual(bookNames(books, card, ['g1']), { own: '性斗学园', mounted: ['城市'], global: ['通用'] })
+  assert.deepEqual(bookNames(books, card, ['g1']), { own: '性斗学园', mounted: ['城市'], global: ['通用'], chat: [] })
   assert.equal(bookByName(books, '', card).id, 'card-c1')
   assert.equal(bookByName(books, '城市', card).id, 'b2')
   assert.equal(bookByName(books, '没有', card), null)

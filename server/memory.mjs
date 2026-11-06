@@ -145,7 +145,10 @@ export function turnTexts(path) {
     turn++
     const reply = path[index + 1]
     if (node.hidden || reply?.hidden) return
-    turns.push({ turn, id: node.id, user: node.text ?? '', reply: reply?.text ?? '' })
+    // 删除: one side of a turn can go; the turn keeps its number.
+    const user = node.deleted ? '' : node.text ?? ''
+    const answer = reply?.deleted ? '' : reply?.text ?? ''
+    if (user || answer) turns.push({ turn, id: node.id, user, reply: answer })
   })
   return turns
 }

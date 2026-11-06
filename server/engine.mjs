@@ -4,12 +4,19 @@
 // prefix cache hits.
 // Other model references go to an optional backend passed in as `subscription`
 // (this machine's own install: server/subscription/); without one they are refused.
-import { activePath, booksForCard, chatPicks, childrenOf, compactBlock, editMessage as editChatMessage, pathTo, playerOf, presetFor, scriptsOf, selectNode } from './chats.mjs'
+import { readFile } from 'node:fs/promises'
+import { activePath, booksForCard, chatPicks, childrenOf, compactBlock, editMessage as editChatMessage, forgetDeleted, pathTo, playerOf, presetFor, scriptsOf, selectNode } from './chats.mjs'
 import { hasPrefixRules, renderPresetTail } from './presets.mjs'
-import { asksChoices, choicesInstruction, choicesRequest, extractChoices, replyScripts, withChoices } from './basic.mjs'
-import { choicesOf } from '../web/shared/basic.js'
-import { buildTurnPrompt, chatTemplates, everyTurnReminder, openingBlock, renderEntry, replaceMacros, templateText, webSearchNote } from './prompt.mjs'
+import { asksChoices, asksSelfCheck, choicesInstruction, choicesRequest, extractChoices, replyScripts, withChoices } from './basic.mjs'
+import { DIRECT_CARD, choicesOf, isBuiltinPreset } from '../web/shared/basic.js'
+import { cleanReferences, referenceBlock } from './forge/references.mjs'
+import { buildTurnPrompt, chatTemplates, drawnEntries, everyTurnReminder, openingBlock, renderEntry, replaceMacros, templateText, webSearchNote } from './prompt.mjs'
 import { applyStateUpdates, applyWrites, displayText, writeLabels } from './state.mjs'
+import { choiceFights, cutAtGate, withoutGameMarks } from '../web/shared/game/marks.js'
+import { applyOps, checkExperience, checkLine, cleanCheck, cleanOps, gateKinds, keptSheet, opWrites, pausesOn, rankNow, rollCheck, rulesOn, sheetOf, sheetOnPath } from '../web/shared/game/sheet.js'
+import { cleanFight, encounterSetup, fightLine, fightResult } from '../web/shared/game/encounter.js'
+import { asksForFight, foesRequest, gamePrompt, mayAskForFight, parseFoes, parseSuggestion, parseThings, settledSheet, suggestRequest, thingsRequest } from './game.mjs'
+import { variablePaths } from '../web/shared/game/bindings.js'
 import { httpError, newId } from './store.mjs'
 import { dynamicEntries, inPrefix, isConstant, isInitvar, isPreprocessing, triggeredEntries } from './worldbook.mjs'
 import { depthWindow, PLACEMENT } from '../web/shared/regex.js'
@@ -17,12 +24,14 @@ import { applyScripts } from './regex-guard.mjs'
 import { replaceVariableMacros } from '../web/shared/vars.js'
 import { decoratorsOf, hasEjs, hasTemplate, stripTemplates, templateSession } from './template.mjs'
 import { accumulatedDynamic, compactThreshold, dynamicMemory, planDynamic, stripDynamicText } from './dynamic.mjs'
-import { complete, CONTEXT_FULL, isProviderRef, providerError, resolveRef, webSearchKind } from './providers.mjs'
+import { complete, CONTEXT_FULL, isProviderRef, providerError, resolveRef, unreadReply, webSearchKind } from './providers.mjs'
 import { canonicalModel } from './models.mjs'
-import { extractSummary, keptArchive, looksLikeArchive, MIN_TURNS, recapBlock, recentExchanges, storyPath, storyTurns, summaryInstruction, turnsSinceCompaction, withoutHidden } from './recap.mjs'
+import { directSummaryInstruction, extractSummary, keptArchive, looksLikeArchive, MIN_TURNS, recapBlock, recentExchanges, storyPath, storyTurns, summaryInstruction, turnsSinceCompaction, withoutHidden } from './recap.mjs'
 import { contextUsed, limitFromError, thresholdFor, windowOf } from './context.mjs'
 import { msg } from './i18n.mjs'
 import { extractUpdate, fillInstruction, fillRequest, hasUpdateBlock, usesMvu } from './mvu.mjs'
+import { rawOfPicture } from './cards.mjs'
+import { keepToSchema, schemaScript } from './schema.mjs'
 import { rawRequest } from './frames.mjs'
 import { blockRequest, blockSent } from './blockwords.mjs'
 import { blockText } from '../web/shared/blockwords.js'
@@ -48,7 +57,8 @@ function filteredReply(name, reason) {
   return null
 }
 // 补写变量: a big card's update block (many fields, its analysis) fits in this.
-const FILL_MAX_TOKENS = 4000
+// A thinking model spends thousands of tokens before the block starts.
+const FILL_MAX_TOKENS = 16000
 // 重写选项: four lines, with room for a thinking model's reasoning.
 const CHOICES_MAX_TOKENS = 2000
 // An imported chat's history is summarised in parts of about this many characters (well inside 200k tokens).
@@ -84,6 +94,19 @@ function friendlyError(message, subscription) {
 const SEARCH_NOTE = () => `\n\n${webSearchNote()}`
 
 /** What a session from compaction point `node` opens with: its summary and the last turns of `story`, as the prompt sends them. */
+// How long an archive is at the least, or it was cut off. A summary of a short question and answer can be short.
+const archiveMinimum = chat => (chat.cardId === DIRECT_CARD ? 30 : 200)
+
+/** Messages taking turns again, starting with the player's and ending with a reply: a stand-in where one was deleted. */
+function closeGaps(messages) {
+  const standIn = role => ({ role, content: '（这条消息已删除）' })
+  for (let i = messages.length - 1; i > 0; i--) {
+    if (messages[i].role === messages[i - 1].role) messages.splice(i, 0, standIn(messages[i].role === 'user' ? 'assistant' : 'user'))
+  }
+  if (messages[0]?.role === 'assistant') messages.unshift(standIn('user'))
+  if (messages.at(-1)?.role === 'user') messages.push(standIn('assistant'))
+}
+
 function compactionRecap(node, story, names, scripts, chat) {
   const macros = text => replaceMacros(text, names)
   return recapBlock(
@@ -91,6 +114,7 @@ function compactionRecap(node, story, names, scripts, chat) {
     recentExchanges(story, names, ({ role, text, depth, node: message }) =>
       applyScripts(text, replyScripts(scripts, chat, message), { placement: role === 'user' ? PLACEMENT.USER_INPUT : PLACEMENT.AI_OUTPUT, target: 'prompt', depth: depth + 1, macros }),
     ),
+    { direct: chat.cardId === DIRECT_CARD },
   )
 }
 
@@ -99,7 +123,10 @@ function compactionRecap(node, story, names, scripts, chat) {
  * @param ledger - usage ledger (see usage.mjs); optional in tests.
  * @param subscription - the optional backend for models without a provider (server/subscription/).
  */
-export function createEngine(store, isolation, ledger = null, { subscription = null } = {}) {
+// Whether a chat tells its story with a preset of this app's own ('' is the default one).
+const ownPreset = chat => !chat.presetId || isBuiltinPreset(chat.presetId)
+
+export function createEngine(store, isolation, ledger = null, { subscription = null, rulebooks = null } = {}) {
   const running = new Map()
 
   function scanWindow(path, depth, input) {
@@ -141,7 +168,17 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
    * @param marks - ask for the 视觉小说格式 this turn (the page's visual novel mode has it on).
    * The turn's templates share one sandbox, let go of when the prompt is built.
    */
+  /** 直连对话's message: the words as typed and the files that came with them; after a compaction, what it kept first. */
+  async function directPrompt(chat, parent, input, files) {
+    const path = pathTo(chat, parent.id)
+    const start = Math.max(0, path.findLastIndex(node => node.compaction))
+    const newSession = Boolean(path[start].compaction) && !withoutHidden(path.slice(start + 1)).some(node => node.role === 'user')
+    const recap = newSession ? compactionRecap(path[start], storyPath(path.slice(0, start + 1)), chat.names, [], chat) : ''
+    return { settings: await store.getSettings(), prompt: [recap, referenceBlock(files), input].filter(Boolean).join('\n\n'), input, injected: [], injectedTitles: [], templateErrors: [], shouldCompact: false }
+  }
+
   async function preparePrompt(chat, parent, input, options = {}) {
+    if (chat.cardId === DIRECT_CARD) return directPrompt(chat, parent, input, options.files)
     const templates = { session: null }
     try {
       return await buildPrompt(chat, parent, input, options, templates)
@@ -150,7 +187,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     }
   }
 
-  async function buildPrompt(chat, parent, input, { forceFull = false, marks = false }, templates) {
+  async function buildPrompt(chat, parent, input, { forceFull = false, marks = false, rules = null }, templates) {
     const [settings, card, preset, globalScripts, regexSets] = await Promise.all([store.getSettings(), store.getCard(chat.cardId), presetFor(store, chat.presetId), store.getRegex(), store.getRegexSets()])
     const { persona } = await chatPicks(store, chat, card)
     const books = await booksForCard(store, card, settings, chat)
@@ -164,11 +201,13 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     // it when it is the first after it, or every turn since was hidden.
     const start = Math.max(0, path.findLastIndex(node => node.compaction))
     const opens = !withoutHidden(path.slice(start + 1)).some(node => node.role === 'user')
+    const game = rules ? gamePrompt(rules, withoutHidden(path.slice(start + 1))) : null
     // Continuing from a compaction point opens a new session that has seen only
     // the frozen prefix: everything the history used to carry is sent again.
     const newSession = Boolean(path[start].compaction) && opens
     if (newSession) forceFull = true
-    const state = parent.state ?? {}
+    // What the rules settle this turn is already so: the card's own lists show it.
+    const state = applyWrites(parent.state ?? {}, rules?.writes)
     const templateErrors = []
     const story = storyPath(path)
     // The turn's sandbox, opened by the first template: getwi reads these books;
@@ -206,7 +245,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     const bookOf = new Map(turnBooks.flatMap(book => book.entries.map(entry => [entry, book])))
     const refOf = (entry, book = bookOf.get(entry)) => `${book?.id}:${entry.uid}`
     const render = (entry, book = bookOf.get(entry)) => {
-      const { text, error } = renderEntry(entry, { state, names, session: session(), world: book?.name ?? '' })
+      const { text, error } = renderEntry(entry, { state, names, session: session(), world: book?.name ?? '', scripts })
       if (error) templateErrors.push(`${entry.comment || entry.uid}: ${error}`)
       return { title: entry.comment, text }
     }
@@ -232,8 +271,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     const opening = opens && !newSession ? applyScripts(path[0].text, scripts, { placement: PLACEMENT.AI_OUTPUT, target: 'prompt', depth: 0, macros }) : ''
     const promptInput = applyScripts(said, scripts, { placement: PLACEMENT.USER_INPUT, target: 'prompt', depth: 0, macros })
 
-    const renderedDynamic = dynamic
-      .map(entry => render(entry))
+    const renderedDynamic = [...dynamic.map(entry => render(entry)), ...drawnEntries(books, scripts, names)]
       .filter(item => item.text)
       .map(item => (item.title ? `【${item.title}】\n${item.text}` : item.text))
       .join('\n\n')
@@ -283,8 +321,9 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       input: resolve(promptInput),
       replyLength: Number(settings.replyLength) || 0,
       presetText: resolve(presetText),
-      reminder: everyTurnReminder(chat.systemPrompt, books, { presetRules: hasPrefixRules(preset), mvu: usesMvu(card, books), choices: asksChoices(chat) }),
+      reminder: [everyTurnReminder(chat.systemPrompt, books, { presetRules: hasPrefixRules(preset), mvu: usesMvu(card, books), choices: asksChoices(chat), selfCheck: asksSelfCheck(chat), scripts }), game?.reminder].filter(Boolean).join(''),
       marks,
+      game: game?.text,
     })
     return {
       settings,
@@ -316,7 +355,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
   async function nodeTemplates(chat, nodeId, state, { extra = [], runType = 'generate', context = {} } = {}) {
     const [settings, card, preset, globalScripts, regexSets] = await Promise.all([store.getSettings(), store.getCard(chat.cardId), presetFor(store, chat.presetId), store.getRegex(), store.getRegexSets()])
     const books = await booksForCard(store, card, settings, chat)
-    const story = storyPath(pathTo(chat, nodeId))
+    const story = storyPath(pathTo(chat, nodeId)).filter(node => !node.deleted)
     return chatTemplates({
       names: chat.names, card, preset, books, scripts: scriptsOf(card, preset, globalScripts, regexSets), state,
       local: chat.frameVars ?? {},
@@ -465,6 +504,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       const opening = applyScripts(path[start].text, scripts, { placement: PLACEMENT.AI_OUTPUT, target: 'prompt', depth: 0, macros })
       messages[opener].content = `${openingBlock(opening, chat.names)}\n\n${messages[opener].content}`
     }
+    // 删除 can leave two messages of one side together, or a reply first; some models' templates take only turns in order.
+    if (path.slice(start + 1).some(node => node.deleted)) closeGaps(messages)
     // 'latest' preset mode: the post-history prompts ride only on the newest message, as in
     // SillyTavern. Older messages lose them, so the newest one changes next turn: the reply
     // before it is the last thing that stays put.
@@ -493,7 +534,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
    */
   async function summarizeInParts(target, chat, history, signal, carry = '', depth = 0, options = {}) {
     const { maxChars = Infinity, system = chat.systemPrompt, onPart = () => {}, extra = '' } = options
-    const instruction = { role: 'user', content: summaryInstruction(chat.names, extra) }
+    const instruction = { role: 'user', content: chat.cardId === DIRECT_CARD ? directSummaryInstruction() : summaryInstruction(chat.names, extra) }
     const lead = carry
       ? [
           { role: 'user', content: `<前情提要>\n下面是这段故事更早部分的剧情存档，之后是接着发生的原文。写存档时把这份前情一并写进去。\n<剧情存档>\n${carry}\n</剧情存档>\n</前情提要>` },
@@ -517,7 +558,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     const plain = history.map(({ role, content }) => ({ role, content }))
     const older = await summarizeInParts(target, chat, plain.slice(0, cut), signal, carry, depth + 1, options)
     const archive = extractSummary(older.reply)
-    if (archive.length < 200 || !looksLikeArchive(older.reply)) throw httpError(502, msg`前半段的剧情存档没有写完整，这次没有压缩，可以再试一次`)
+    if (archive.length < archiveMinimum(chat) || !looksLikeArchive(older.reply)) throw httpError(502, msg`前半段的剧情存档没有写完整，这次没有压缩，可以再试一次`)
     const newer = await summarizeInParts(target, chat, plain.slice(cut), signal, archive, depth + 1, options)
     const tokens = Object.fromEntries(Object.entries(newer.tokens).map(([key, value]) => [key, typeof value === 'number' ? value + (older.tokens[key] ?? 0) : value]))
     // Every part's reply, oldest first: each may carry the 记忆条目 of its part.
@@ -549,7 +590,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     }
     if (!result.text.trim()) {
       const reason = String(result.stopReason ?? '')
-      const said = filteredReply(target.provider.name, reason) ?? msg`${target.provider.name} 没有返回正文${reason ? msg`（${reason}）` : ''}`
+      const said = filteredReply(target.provider.name, reason) ?? unreadReply(target.provider, result) ?? msg`${target.provider.name} 没有返回正文${reason ? msg`（${reason}）` : ''}`
       throw Object.assign(httpError(502, said), { detail: JSON.stringify({ stopReason: result.stopReason ?? null, model: result.model ?? target.modelId, usage: result.usage ?? null }) })
     }
     const u = result.usage ?? {}
@@ -579,7 +620,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
    * @param userNodeId - reuse an existing user node (regenerate) instead of creating one.
    * @param marks - ask for the 视觉小说格式 (a regenerated turn keeps what it asked).
    */
-  async function runTurn(chatId, { parentId, input, userNodeId, marks = false }, emit) {
+  /** @param files - 直连对话: what came with the message, as read for the page (forge/references.mjs). */
+  async function runTurn(chatId, { parentId, input, userNodeId, marks = false, game = null, files: attached = [] }, emit) {
     if (running.has(chatId)) throw httpError(409, msg`这个对话正在生成`)
     const abortController = new AbortController()
     running.set(chatId, abortController)
@@ -587,11 +629,14 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     let resumedInPlace = null
     try {
       let chat = await store.getChat(chatId)
+      const files = chat.cardId === DIRECT_CARD ? cleanReferences(attached) : []
       let userNode = userNodeId ? chat.nodes[userNodeId] : null
       if (userNodeId && (!userNode || userNode.role !== 'user')) throw httpError(404, msg`要重新生成的回合不存在`)
+      if (userNode?.deleted) throw httpError(400, msg`这条消息已经删除，不能从它重新生成`)
       let parent = chat.nodes[userNode ? userNode.parent : parentId]
       if (!parent || parent.role !== 'assistant') throw httpError(400, msg`只能在一条叙述之后继续`)
-      const text = userNode ? userNode.text : String(input ?? '').trim()
+      const rules = userNode ? null : await gameTurn(chat, parent, input, game)
+      const text = userNode ? userNode.text : rules?.input ?? String(input ?? '').trim()
       if (!text) throw httpError(400, msg`输入不能为空`)
       // 自动压缩: a new turn on a story past the threshold starts from its archive.
       if (!userNode) {
@@ -606,17 +651,18 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       // (and its worldbook injections) matches the original attempt exactly.
       let prepared = userNode
         ? { settings: await store.getSettings(), prompt: userNode.prompt, injected: userNode.injected, injectedTitles: userNode.injectedTitles, templateWrites: userNode.templateWrites ?? [] }
-        : await preparePrompt(chat, parent, text, { marks })
+        : await preparePrompt(chat, parent, text, { marks, rules, files })
       const target = await targetFor(modelFor(chat, prepared.settings), prepared.settings)
       // 联网: the provider's own search, when this chat has it on and the model has one. A new turn's
       // message says when to search (kept with the turn, so a regenerate sends the same).
       const webSearch = Boolean(chat.webSearch && target.api && webSearchKind(target.provider, target.modelId))
-      const withSearchNote = p => (webSearch && !userNode ? { ...p, prompt: `${p.prompt}${SEARCH_NOTE()}` } : p)
+      // Its words are for a story; 直连对话 has the search tool and needs no more said.
+      const withSearchNote = p => (webSearch && !userNode && chat.cardId !== DIRECT_CARD ? { ...p, prompt: `${p.prompt}${SEARCH_NOTE()}` } : p)
       prepared = withSearchNote(prepared)
       const newSession = Boolean(parent.compaction)
       // The turn's prompt again with the full variable list, the piled-up copies gone.
       const reprepare = async () => {
-        const full = await preparePrompt(chat, parent, text, { forceFull: true, marks })
+        const full = await preparePrompt(chat, parent, text, { forceFull: true, marks, rules, files })
         full.dynamicState = { ...full.dynamicState, compacted: true }
         return full
       }
@@ -646,6 +692,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         templateErrors: prepared.templateErrors ?? [],
         trimmed,
         compacted,
+        // What the rules settled for this turn: the page shows it while the reply is written.
+        ...(rules ? { sheet: keptSheet(rules.sheet) } : {}),
       })
 
       const started = Date.now()
@@ -671,8 +719,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         outcome = await subscription.generate(sent, run, { onText, onRate: info => emit({ type: 'rate_limit', info }) })
         if (!outcome.sdk) throw httpError(502, msg`模型没有返回正文`)
       }
-      const reply = outcome.reply
-      if (!reply.trim()) throw httpError(502, msg`模型没有返回正文`)
+      const written = outcome.reply
+      if (!written.trim()) throw httpError(502, msg`模型没有返回正文`)
 
       // Re-read and saved with no other change to the chat in between (a picture drawn, the card's variables):
       // what came meanwhile stays.
@@ -690,19 +738,32 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
             injected: prepared.injected,
             injectedTitles: prepared.injectedTitles,
             ...(prepared.recalled?.length ? { recalled: prepared.recalled, recalledTitles: prepared.recalledTitles } : {}),
+            ...(files.length ? { files: files.map(({ id, name, kind, text, chars, total }) => ({ id, name, kind, text, chars, total })) } : {}),
             templateErrors: prepared.templateErrors ?? [],
             // What the turn's templates wrote to the chat state: a regenerate plays it back, never runs it twice.
             ...(prepared.templateWrites?.length ? { templateWrites: prepared.templateWrites } : {}),
             ...(prepared.dynamicState ? { dynamic: prepared.dynamicState } : {}),
+            ...(rules?.check ? { check: rules.check } : {}),
+            ...(rules?.battle ? { battle: rules.battle } : {}),
+            ...(rules?.auto ? { auto: true } : {}),
+            ...(rules?.ops.length ? { gameOps: rules.ops } : {}),
+            ...(rules?.writes.length ? { gameWrites: rules.writes } : {}),
             sel: null,
             createdAt: now,
           }
           fresh.nodes[userNode.id] = userNode
+          forgetDeleted(fresh)
           // Chat-wide and app-wide variables are outside the tree: written once, when the turn is first taken.
           if (prepared.localWrites?.length) fresh.frameVars = applyWrites(fresh.frameVars ?? {}, prepared.localWrites)
           globalWrites = prepared.globalWrites ?? []
         }
-        const turnWrites = userNode.templateWrites ?? []
+        // 游戏规则: a reply stops at its mark, what was written past it goes. A turn that has rolled does not roll again.
+        const book = await rulebooks?.read(fresh.cardId).catch(() => null)
+        const ruled = rulesOn(book)
+        const stops = ruled && pausesOn(book, ownPreset(fresh)) && !userNode.battle ? gateKinds(book).filter(kind => kind !== 'check' || !userNode.check) : []
+        const { text: reply, gate } = cutAtGate(written, stops)
+        const gameWrites = userNode.gameWrites ?? []
+        const turnWrites = [...(userNode.templateWrites ?? []), ...gameWrites]
         const updated = applyStateUpdates(applyWrites(parent.state, turnWrites), reply)
         // The reply's own templates run once and the rendered text is what is kept, shown and
         // sent back later; what they write lands after the reply's own update blocks.
@@ -710,15 +771,26 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         const replyText = evaluated?.text ?? reply
         if (evaluated?.writes.local.length) fresh.frameVars = applyWrites(fresh.frameVars ?? {}, evaluated.writes.local)
         if (evaluated) globalWrites = [...globalWrites, ...evaluated.writes.global]
+        // What the rules settled this turn stands, whatever the reply did to it. These go last, and with the
+        // reply's own writes, so 补写变量 keeps them too. A bag is not among them: what the reply put in it stays.
+        const replyWrites = [...(evaluated?.writes.message ?? []), ...gameWrites.filter(write => typeof write.value === 'number')]
+        // The card's variable rules have the last word on the state, so the sheet reads what they kept.
+        const kept = await keptToSchema(fresh, applyWrites(updated.state, replyWrites))
+        const finalState = kept.state
+        const sheet = ruled ? settledSheet(book, pathTo(fresh, parent.id), userNode, replyText, finalState) : null
         const node = {
           id: newId(),
           parent: userNode.id,
           role: 'assistant',
           text: replyText,
-          display: displayText(replyText),
-          state: applyWrites(updated.state, evaluated?.writes.message),
+          display: displayText(ruled ? withoutGameMarks(replyText) : replyText),
+          state: finalState,
+          ...(sheet ? { game: sheet } : {}),
+          ...(gate ? { gate } : {}),
           stateChanges: [...new Set([...writeLabels(turnWrites), ...updated.changes, ...writeLabels(evaluated?.writes.message)])],
-          ...(evaluated?.writes.message.length ? { templateWrites: evaluated.writes.message } : {}),
+          ...(updated.unread ? { updateUnread: true } : {}),
+          ...(kept.problem ? { schemaProblem: kept.problem } : {}),
+          ...(replyWrites.length ? { templateWrites: replyWrites } : {}),
           ...(evaluated?.errors.length ? { templateErrors: evaluated.errors } : {}),
           sdk: outcome.sdk ?? null,
           ...(outcome.api ? { api: outcome.api } : {}),
@@ -742,8 +814,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         if (!target.api) subscription.afterTurn(fresh, outcome)
         // The session holds the reply as the model wrote it: it gets the rendered one, before
         // the next turn reads it back (the same rewrite an edit makes, so no cache is lost).
-        if (!target.api && replyText !== reply && node.sdk) {
-          const rewritten = await subscription.editTranscripts({ chat: fresh, node, edit: { node, before: reply }, path: activePath(fresh) })
+        if (!target.api && replyText !== written && node.sdk) {
+          const rewritten = await subscription.editTranscripts({ chat: fresh, node, edit: { node, before: written }, path: activePath(fresh) })
           if (!rewritten.sessions) delete node.historyTrim
         }
         if (trimmed) fresh.nodes[parent.id].historyTrim = trimmed
@@ -840,7 +912,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
           used = await subscription.compact({ chat, tip, settings, abortController, model: target.model })
         }
         if (!looksLikeArchive(used.reply)) throw httpError(502, msg`模型没有写出剧情存档（可能接着写了剧情），这次没有压缩，可以再试一次`)
-        if (extractSummary(used.reply).length < 200) throw httpError(502, msg`模型没有写出完整的剧情存档，这次没有压缩，可以再试一次`)
+        if (extractSummary(used.reply).length < archiveMinimum(chat)) throw httpError(502, msg`模型没有写出完整的剧情存档，这次没有压缩，可以再试一次`)
       }
     } finally {
       compacting.delete(chat.id)
@@ -1074,7 +1146,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     const target = await targetFor(ref, settings)
     // The story as plain turns: the opening as the player's first message, so every model takes it.
     const story = []
-    for (const node of storyPath(path)) {
+    for (const node of withoutHidden(storyPath(path))) {
       const text = String(node.role === 'user' ? node.text : node.display ?? node.text ?? '').trim()
       if (!text) continue
       const role = node.id === 'root' || node.id === 'opening' ? 'user' : node.role
@@ -1129,9 +1201,28 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     return { chat, behindCompaction: edit.behindCompaction, sessions, missed, promptMissed: edit.promptMissed }
   }
 
-  /** Whether a reply of an MVU card came without its <UpdateVariable> block (what 补写变量 is for). */
+  /**
+   * The state as the chat's card's schema makes it, as { state, problem } (keepToSchema). A card
+   * imported before schemas were kept has its script in its picture only: read from there once.
+   */
+  async function keptToSchema(chat, state) {
+    const card = await store.getCard(chat.cardId).catch(() => null)
+    if (!card) return { state }
+    if (typeof card.mvuSchema !== 'string') {
+      const picture = card.hasAvatar ? await readFile(store.avatarPath(card.id)).catch(() => null) : null
+      const raw = picture ? rawOfPicture(picture) : null
+      card.mvuSchema = schemaScript((raw?.data ?? raw)?.extensions)
+      await store.saveCard(card)
+    }
+    return keepToSchema(card.mvuSchema, state)
+  }
+
+  /**
+   * Whether a reply of an MVU card came without an <UpdateVariable> block that could be read (what 补写变量 is for).
+   * One stopped at a roll or a fight was told to leave it for the reply after.
+   */
   async function missesUpdate(chat, node) {
-    if (!node || node.role !== 'assistant' || hasUpdateBlock(node.text)) return false
+    if (!node || node.role !== 'assistant' || node.gate || (hasUpdateBlock(node.text) && !node.updateUnread)) return false
     const [settings, card] = await Promise.all([store.getSettings(), store.getCard(chat.cardId)])
     return usesMvu(card, await booksForCard(store, card, settings, chat))
   }
@@ -1156,14 +1247,14 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       if (!node || node.id !== nodeId || node.role !== 'assistant' || node.id === 'root') throw httpError(400, msg`只能给最新一条回复补写变量`)
       // Its text is in the summary now, and a compaction point is not edited (editMessage).
       if (node.compaction) throw httpError(400, msg`这条回复已经压缩进剧情存档，不能再补写变量`)
-      if (hasUpdateBlock(node.text)) throw httpError(400, msg`这条回复已经有变量更新了`)
+      if (hasUpdateBlock(node.text) && !node.updateUnread) throw httpError(400, msg`这条回复已经有变量更新了`)
       const [settings, card] = await Promise.all([store.getSettings(), store.getCard(chat.cardId)])
       const books = await booksForCard(store, card, settings, chat)
       if (!usesMvu(card, books)) throw httpError(400, msg`这张卡不用 MVU 变量`)
       // As the turn worked it out: from the reply it continued (the player's message sits in between),
       // with what that turn's templates wrote.
       const turn = chat.nodes[node.parent]
-      const before = applyWrites(chat.nodes[turn?.parent]?.state ?? {}, turn?.templateWrites)
+      const before = applyWrites(chat.nodes[turn?.parent]?.state ?? {}, [...(turn?.templateWrites ?? []), ...(turn?.gameWrites ?? [])])
       const started = Date.now()
       let answer = await askInContext(chatId, nodeId, fillInstruction(), { maxTokens: FILL_MAX_TOKENS, signal: abortController.signal })
       if (!answer) {
@@ -1171,7 +1262,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         const ref = [settings.media?.helperModel, settings.model].find(r => isProviderRef(r))
         if (!ref) throw httpError(400, msg`补写变量要用供应商的模型（这条回复不是供应商模型写的，借不了它的上下文）：在顶栏选一个供应商的模型，或在「配图与朗读」里选一个辅助模型`)
         const target = await targetFor(ref, settings)
-        const session = templateSession({ state: before, names: chat.names, books, messages: activePath(chat).map(item => ({ role: item.role, text: item.text ?? '' })) })
+        const session = templateSession({ state: before, names: chat.names, books, messages: activePath(chat).filter(item => !item.deleted).map(item => ({ role: item.role, text: item.text ?? '' })) })
         let request
         try {
           request = fillRequest({ books, render: entry => renderEntry(entry, { state: before, names: chat.names, session }).text, state: before, reply: node.display ?? node.text, maxTokens: FILL_MAX_TOKENS })
@@ -1187,9 +1278,14 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       return await store.withChat(chatId, async () => {
         const fresh = await store.getChat(chatId)
         const edit = editChatMessage(fresh, nodeId, `${fresh.nodes[nodeId].text.trimEnd()}\n\n${block}`)
-        const { state, changes } = applyStateUpdates(before, edit.node.text)
+        const { state, changes, unread } = applyStateUpdates(before, edit.node.text)
+        if (unread) edit.node.updateUnread = true
+        else delete edit.node.updateUnread
         // The reply's own template writes land after its update blocks again.
-        edit.node.state = applyWrites(state, edit.node.templateWrites)
+        const kept = await keptToSchema(fresh, applyWrites(state, edit.node.templateWrites))
+        edit.node.state = kept.state
+        if (kept.problem) edit.node.schemaProblem = kept.problem
+        else delete edit.node.schemaProblem
         edit.node.stateChanges = [...new Set([...writeLabels(turn?.templateWrites), ...changes, ...writeLabels(edit.node.templateWrites)])]
         edit.node.filledUpdate = { at: new Date().toISOString(), model: answer.model ?? null }
         if (subscription) await subscription.editTranscripts({ chat: fresh, node: edit.node, edit, path: activePath(fresh) })
@@ -1230,7 +1326,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         const ref = [settings.media?.helperModel, settings.model].find(r => isProviderRef(r))
         if (!ref) throw httpError(400, msg`重写选项要用供应商的模型（这条回复不是供应商模型写的，借不了它的上下文）：在顶栏选一个供应商的模型，或在「配图与朗读」里选一个辅助模型`)
         const target = await targetFor(ref, settings)
-        const story = storyPath(activePath(chat)).slice(-6).map(item => ({ role: item.role, text: String(item.role === 'user' ? item.text : item.display ?? item.text ?? '') }))
+        const story = withoutHidden(storyPath(activePath(chat))).slice(-6).map(item => ({ role: item.role, text: String(item.role === 'user' ? item.text : item.display ?? item.text ?? '') }))
         const request = choicesRequest({ names: chat.names, story, previous, language: settings.language || '简体中文', maxTokens: CHOICES_MAX_TOKENS })
         const result = await generateApi(target, request, abortController.signal, () => {})
         await ledger?.recordTurn(chat, { createdAt: new Date().toISOString(), model: result.model, usage: result.tokens, timing: { totalMs: Date.now() - started, firstTokenMs: null, forked: false, api: true } }).catch(() => {})
@@ -1257,14 +1353,110 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
   }
 
   /** The exact user message a turn would send, without calling the model. */
+  /**
+   * What the 游戏规则 bring to a new turn, or null with them off. A roll is made here: for the choice the
+   * player sent (`game.check`), or for the reply this turn settles (`game.settle`), which needs no words
+   * from the player: the turn's input is then the roll in a line. A fight taken from the choices settles
+   * the same way (`game.choice`), with the choice as the player's words.
+   */
+  async function gameTurn(chat, parent, input, game) {
+    const book = await rulebooks?.read(chat.cardId).catch(() => null)
+    if (!rulesOn(book)) return null
+    const before = sheetOf(book, sheetOnPath(pathTo(chat, parent.id)), parent.state)
+    const queued = applyOps(before, book, cleanOps(game?.ops))
+    const settling = game?.settle === true
+    const fights = gateKinds(book).includes('battle')
+    const choice = String(game?.choice ?? '').trim()
+    const chosen = settling && !parent.gate && fights ? choiceFights(parent.text).get(choice) ?? null : null
+    const gate = parent.gate ?? chosen
+    if (settling && !gate) throw httpError(400, msg`这条回复没有待掷的检定`)
+    const fight = settling && gate.kind === 'battle' ? settleFight(queued.sheet, book, chat, gate, chosen ? `${parent.id}:${choice}` : parent.id, game.battle) : null
+    const asked = fight ? null : settling ? gate : cleanCheck(game?.check)
+    const check = asked ? rollCheck(queued.sheet, book, asked, chat.id, parent.id, settling ? '' : String(input ?? '').trim()) : null
+    const earned = check ? checkExperience(book, check) : 0
+    const settled = fight?.op ?? (earned ? { op: 'grow', experience: earned } : null)
+    const { sheet, ops, lines } = settled ? applyOps(queued.sheet, book, [settled]) : { ...queued, ops: [], lines: [] }
+    const done = [...queued.ops, ...ops]
+    const own = game?.own === true && !settling && !check
+    const wantsFight = fights && !settling && !check && asksForFight(input)
+    return {
+      sheet,
+      rank: fights ? rankNow(sheet, book) : '',
+      ranks: fights ? book.ranks : [],
+      check,
+      battle: fight?.battle ?? null,
+      ops: done,
+      lines: [...queued.lines, ...lines],
+      writes: opWrites(book, parent.state, before, sheet, done),
+      bound: Object.keys(book.bindings),
+      auto: settling && !chosen,
+      input: chosen ? null : fight ? fightLine(fight.battle) : settling ? checkLine(check) : null,
+      pausing: pausesOn(book, ownPreset(chat)),
+      fights,
+      fightRate: book.fightRate,
+      foes: Object.keys(book.foes),
+      wantsFight,
+      mayFight: fights && own && !wantsFight && mayAskForFight(input),
+      own,
+      safe: game?.safe === true && !settling,
+      spot: `${chat.id}:${parent.id}`,
+    }
+  }
+
+  /** The fight a reply stopped on or offered (`spot` tells them apart), as the page reports it, played through again here. */
+  function settleFight(sheet, book, chat, gate, spot, report) {
+    const fight = cleanFight(report)
+    if (!fight) throw httpError(400, msg`这场战斗的记录对不上，重打一次吧`)
+    try {
+      return fightResult(encounterSetup(sheet, book, gate, chat.id, spot), fight)
+    } catch {
+      throw httpError(400, msg`这场战斗的记录对不上，重打一次吧`)
+    }
+  }
+
+  /** A small request about the rules, on the helper model, kept on the books like the rest. → the answer's text */
+  async function askAboutRules(chat, request) {
+    const [settings, providers] = await Promise.all([store.getSettings(), store.getProviders()])
+    const usable = ref => isProviderRef(ref) && providers.some(p => p.id === ref.slice(0, ref.indexOf('/')))
+    const ref = [settings.media?.helperModel, chat && modelFor(chat, settings), settings.model].find(usable)
+    if (!ref) throw httpError(400, msg`物品归类要用供应商的模型：在顶栏选一个，或在「配图与朗读」里选一个辅助模型`)
+    const begun = Date.now()
+    const result = await generateApi(await targetFor(ref, settings), request, new AbortController().signal, () => {})
+    if (chat) await ledger?.recordTurn(chat, sideRecord(result, begun)).catch(() => {})
+    return result.reply
+  }
+
+  /** A card's rules laid out from what it says: `chatId` for the variables of a story with it, if any. Nothing is kept until the player takes it. */
+  async function suggestRules(cardId, chatId) {
+    const card = await store.getCard(cardId)
+    const chat = chatId ? await store.getChat(chatId) : null
+    const paths = variablePaths(chat ? activePath(chat).findLast(node => node.role === 'assistant')?.state : null)
+    const found = parseSuggestion(await askAboutRules(chat, suggestRequest(card, paths)), paths)
+    if (!found) throw httpError(502, msg`辅助模型的回答读不出来，再试一次`)
+    return found
+  }
+
+  /** What things do, for a card's rule book: one small request for all of them. */
+  async function sortThings(chatId, things) {
+    return parseThings(await askAboutRules(await store.getChat(chatId), thingsRequest(things)), things)
+  }
+
+  /** What foes look like and do, for the 敌人图鉴: one small request, with the reply that brought them on. */
+  async function describeFoes(chatId, names) {
+    const chat = await store.getChat(chatId)
+    const story = activePath(chat).filter(node => node.role === 'assistant').at(-1)?.display ?? ''
+    return parseFoes(await askAboutRules(chat, foesRequest(names, String(story).slice(-800))), names)
+  }
+
   async function previewTurn(chatId, { parentId, input, marks = false }) {
     const chat = await store.getChat(chatId)
     const parent = chat.nodes[parentId]
     if (!parent || parent.role !== 'assistant') throw httpError(400, msg`只能在一条叙述之后继续`)
-    let prepared = await preparePrompt(chat, parent, String(input ?? ''), { marks })
+    const rules = await gameTurn(chat, parent, input, null)
+    let prepared = await preparePrompt(chat, parent, String(input ?? ''), { marks, rules })
     const api = isProviderRef(modelFor(chat, prepared.settings))
     const inPlace = subscription?.inPlace(chat, parent) ?? false
-    if (prepared.shouldCompact && (api || inPlace)) prepared = await preparePrompt(chat, parent, String(input ?? ''), { forceFull: true, marks })
+    if (prepared.shouldCompact && (api || inPlace)) prepared = await preparePrompt(chat, parent, String(input ?? ''), { forceFull: true, marks, rules })
     return { prompt: blockSent(prepared.prompt, await store.getBlockWords()), injected: prepared.injectedTitles, templateErrors: prepared.templateErrors }
   }
 
@@ -1298,8 +1490,12 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     frameGenerate,
     fillUpdate,
     missesUpdate,
+    keptToSchema,
     rewriteChoices,
     previewTurn,
+    sortThings,
+    suggestRules,
+    describeFoes,
     blockImpact,
     editMessage,
     renderForDisplay,

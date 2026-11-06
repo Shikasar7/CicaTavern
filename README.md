@@ -50,7 +50,7 @@ From the author's own long chats (October 2026):
 
 ### Long-term memory (Beta): what was compacted comes back when it matters
 
-<p align="center"><img src="web/whatsnew/2.3.0-memory.webp" alt="Long-term memory: mentioning the pier recalls the promise made in rounds 5–6; the memory book keeps people, events and promises as separate entries" width="880"></p>
+<p align="center"><img src="web/whatsnew/2.4.0-battle.webp" alt="A turn-based fight: two wolves and a bandit chief on a mountain road, the chief taking a 17-point critical hit" width="880"></p>
 
 A long story has to compact its context sooner or later: the story so far becomes a story archive, and after a few rounds of that the oldest details blur. A promise made long ago, a side character's name, where some object came from: the model no longer knows. Long-term memory writes those details down as separate entries and puts them back in front of the model when the story brings them up again.
 
@@ -136,8 +136,12 @@ If you can't quite say what you want, the creator guides you round by round:
 
 <br clear="right">
 
-## Latest changes [2.3.2]
+## Latest changes [2.4.0]
 
+- **2.4.0: direct chat**: talk to a model with no character card, from the top of the left column, with text files, web search and replies shown as Markdown.
+- **2.4.0: game rules (in development)**: a card's ⋯ menu has Game rules, on per card and off by default. It brings checks and dice, a pack, turn-based fights, levels and achievements, with success worked out by the program.
+- **2.4.0: check a card, trial run**: the program finds format problems and a model suggests changes, each one taken or undone by itself; a model can also play the card for a few rounds and report. The card creator gained reference files, gameplay blocks and card sizes.
+- **2.4.0: smoother to use**: delete a single message, a QR code for phone access, search in settings, side columns that fold away, a story column you can drag wider, rewritten writing styles. Going up after a jump no longer throws you to the end of a passage.
 - **2.3.2: the story stays put**: in 2.3.1, switching chats or finishing a new turn could leave you a few rounds above the latest one; you now land at the very bottom, and swiping or editing a message keeps you on the same line. The app opens on the chat you last played.
 - **2.3.2: native Gemini, MOSS voices, exports on Android**: providers can use Gemini's native API (generateContent), and the Gemini API template starts on it; MOSS joins the voice sources; the Android app exports chat packages and card PNGs. Errors tell a busy model, a rate limit and a used-up quota apart, and visual novel mode shows how a reply's picture is coming along.
 - **2.3.1: long chats stay smooth**: in a chat of two or three hundred rounds, messages out of view are no longer laid out, so a reply streaming in costs next to nothing to show, and long chats open several times faster. The rail beside the story spreads out only the ten or so rounds you are reading and folds the rest into a band at each end, unfolding as you scroll.
@@ -158,7 +162,7 @@ If you can't quite say what you want, the creator guides you round by round:
 3. First use: at the bottom of the model picker in the top bar, choose 管理模型供应商… (Manage providers) → 添加 (Add) → 从模板开始 (Start from a template), pick a provider, paste your API key, and click 从接口获取模型列表 (Fetch model list) to check the connection. Then choose a default model in 设置 (Settings). Google has two templates: "Gemini API" takes an AI Studio key; "Gemini Agent Platform" (Google Cloud, formerly Vertex AI; a new account's free-trial credit works there) takes an Agent Platform API key, with PROJECT_ID in the address replaced by your project ID, or, where an organization allows no API keys, a JSON credential (a service account's JSON key, or the file gcloud's login writes), picked with 选择 JSON 凭据文件 (Choose a JSON credential file). The template note says how.
 4. Top left, 导入角色卡、世界书或预设 (Import card, world book or preset): choose a SillyTavern PNG or JSON card, then 新对话 (New chat).
 
-The Node runtime comes with it (`runtime/node.exe`); nothing else needs installing. About a minute after every page is closed, the background server exits by itself; 设置 → 更多 → 停止后台服务 (Stop the background server) stops it at once.
+The Node runtime comes with it (`runtime/node.exe`); nothing else needs installing. About a minute after every page is closed, the background server exits by itself; 设置 → 更多 → 退出应用并停止后台服务 (Quit and stop the background server) stops it at once.
 
 **CicaTavern.exe is not code-signed.** Windows may say "Windows protected your PC" the first time: click **More info → Run anyway**. It won't ask again, and versions downloaded by the in-app updater don't ask either (see [Code signing](#code-signing)). CicaTavern.exe is a very small program (source in `launcher/`) that does two things: runs `runtime\node.exe bin\launch.mjs` without a console window, and creates the desktop shortcut through Windows' own interface. `runtime\node.exe` is the official, signed Node.js. There are no script launchers in the package. To see the server's output, start it with 排查问题（带控制台）.cmd (troubleshooting, with a console).
 
@@ -278,7 +282,7 @@ What it connects to:
 
 ## Uninstall
 
-1. 设置 → 更多 → 停止后台服务 (Stop the background server), or close every window and wait a minute.
+1. 设置 → 更多 → 退出应用并停止后台服务 (Quit and stop the background server), or close every window and wait a minute.
 2. Delete the program folder (`CicaTavern-<version>-win-x64`; if you've used the in-app updater, older version folders may sit next to it) and the CicaTavern shortcut on the desktop or in the Start menu.
 3. Your data is in `%USERPROFILE%\.cicatavern\`; delete it too if you don't want it any more. CicaTavern writes nothing to the registry, installs no service and doesn't start with Windows.
 
@@ -374,7 +378,7 @@ Windows 解压即用，也有安卓版；界面有简体中文和英文。数据
 
 ### 长期记忆（Beta）：压缩掉的剧情，提到时会想起来
 
-<p align="center"><img src="web/whatsnew/2.3.0-memory.webp" alt="长期记忆：提到「码头」时想起第 5–6 轮许下的看灯之约；记忆簿把人物、事件、约定记成一条条" width="880"></p>
+<p align="center"><img src="web/whatsnew/2.4.0-battle.webp" alt="回合制战斗：两头灰狼和山贼头目站在山路上，头目吃了一记 17 点暴击" width="880"></p>
 
 长对话迟早要压缩上下文：前面的剧情压成一份剧情存档，压过几次，越早的细节越模糊。很久以前许下的约定、配角的名字、某件东西的来历，模型就不记得了。长期记忆把这些细节记成一条条，等剧情又提到它们时，再放回模型眼前。
 
@@ -460,8 +464,12 @@ flowchart LR
 
 <br clear="right">
 
-## 最新版本变动[2.3.2]
+## 最新版本变动[2.4.0]
 
+- **2.4.0：直连对话**：不用角色卡也能直接和模型聊，入口在左栏最上面，可以附文本文件、联网搜索，回复按 Markdown 显示。
+- **2.4.0：游戏规则（开发中）**：角色卡的「⋯」里多了「游戏规则…」，按卡开启，默认关。打开后有检定和掷骰、行囊、回合制战斗、等级和成就，成败由程序计算。
+- **2.4.0：检查这张卡、试玩体检**：程序查格式问题，模型提建议，可以逐条采用和撤销；还能让模型替你把卡玩几回合再出报告。创作向导多了参考文件、玩法积木和卡的规模。
+- **2.4.0：用起来更顺**：能删除单条消息，手机访问有二维码，设置可以搜索，左右栏能收起，正文能拖宽，文风重写。跳到前面的对话再往上翻不再瞬移。
 - **2.3.2：修了正文往回弹**：2.3.1 里切换对话、写完新回合后，正文会停在最新几轮之前；现在都停在最底部，划动换版本、改消息时也留在原来那一行。打开应用时进的是最近聊过的对话。
 - **2.3.2：Gemini 原生接口、MOSS 朗读、安卓导出**：供应商多了「Gemini 原生（generateContent）」，「Gemini API」模板默认用它；朗读来源加了国内直连的 MOSS；安卓应用能导出对话包和角色卡 PNG。报错把模型繁忙、限流、额度用完分开说清楚，视觉小说模式左上角能看到配图进度。
 - **2.3.1：长对话不卡了**：两三百轮的对话，看不见的消息不再参与排版，模型一边写、页面一边重排的开销降到几乎为零，打开长对话也快了好几倍。正文右边的刻度条只铺开正在看的十轮左右，其余收进两头的细纹带，往上翻时一路展开。
@@ -482,7 +490,7 @@ flowchart LR
 3. 第一次用：顶栏模型选择最下面的「管理模型供应商…」→「添加」→「从模板开始」，选一家，粘贴 API Key，再点「从接口获取模型列表」检查连接。然后在 设置 里选默认模型。Google 有两个模板：「Gemini API」用 AI Studio 的密钥；「Gemini Agent Platform」（Google Cloud，原 Vertex AI，新账号的赠金能用在这里）用 Agent Platform 的 API Key，把地址里的 PROJECT_ID 换成项目 ID，组织不让建 API 密钥时也可以用 JSON 凭据（服务账号的 JSON 密钥，或 gcloud 登录生成的文件），点「选择 JSON 凭据文件」选进来。模板说明里写了怎么弄。
 4. 左上「导入角色卡、世界书或预设」，选 SillyTavern 的 PNG / JSON 角色卡，点「新对话」开始。
 
-自带 Node 运行环境（`runtime/node.exe`），不用另外安装任何东西。所有页面关掉约一分钟后，后台服务会自动退出；也可以在 设置 → 更多 →「停止后台服务」立刻停止。
+自带 Node 运行环境（`runtime/node.exe`），不用另外安装任何东西。所有页面关掉约一分钟后，后台服务会自动退出；也可以在 设置 → 更多 →「退出应用并停止后台服务」立刻停止。
 
 **CicaTavern.exe 目前没有数字签名**：第一次打开时 Windows 可能提示「Windows 已保护你的电脑」，点「更多信息 → 仍要运行」就行，之后不会再问；应用内更新下载的新版本也不会再问（见[代码签名](#代码签名)）。CicaTavern.exe 是个很小的程序（源码在 `launcher/`），只做两件事：不开黑色窗口地运行 `runtime\node.exe bin\launch.mjs`，以及用 Windows 自己的接口建桌面快捷方式；`runtime\node.exe` 是 Node.js 官方签名的原版。包里没有任何脚本启动器。要看服务的输出，用「排查问题（带控制台）.cmd」启动。
 
@@ -602,7 +610,7 @@ CicaTavern 不收集使用数据，也不往开发者那里发任何东西。数
 
 ## 卸载
 
-1. 设置 → 更多 →「停止后台服务」（或者关掉所有窗口等一分钟）。
+1. 设置 → 更多 →「退出应用并停止后台服务」（或者关掉所有窗口等一分钟）。
 2. 删掉程序文件夹（`CicaTavern-<版本>-win-x64`，用过应用内更新的话旁边可能还有旧版本的文件夹），以及桌面或开始菜单里的 CicaTavern 快捷方式。
 3. 数据在 `%USERPROFILE%\.cicatavern\`，不要了也一并删掉。CicaTavern 不写注册表，不装服务，也不设开机启动。
 

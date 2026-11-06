@@ -5,12 +5,73 @@
 // (server/forge/index.mjs) and runs the model in the background; the talk polls
 // it while a job runs. The window around it belongs to whoever made it.
 import { t } from '/i18n.js'
-import { diffLines, foldSame } from '/shared/card-edit.js'
+import { decodeTextFile, diffLines, foldSame } from '/shared/card-edit.js'
 
 // On a phone the keyboard's Enter key starts a new line (it has no Shift+Enter); the button sends.
 const touchKeyboard = matchMedia('(hover: none) and (pointer: coarse)')
 
 const MANAGE_PROVIDERS = '__manage__'
+
+// What 附文件 reads: anything of text (decodeTextFile tells the rest apart) and a PNG with a card in it.
+export const REFERENCE_FILES = '.txt,.md,.markdown,.json,.jsonl,.yaml,.yml,.csv,.tsv,.log,.html,.htm,.xml,.ini,.srt,.ass,.png,text/*,image/png'
+const MAX_FILE = 16 * 1024 * 1024
+const PNG_START = [0x89, 0x50, 0x4e, 0x47]
+const CHAT_SPANS = [[20, () => t`最近 20 轮`], [50, () => t`最近 50 轮`], [100, () => t`最近 100 轮`], [0, () => t`全部`]]
+
+const base64Of = file => new Promise((resolve, reject) => {
+  const reader = new FileReader()
+  reader.onload = () => resolve(String(reader.result).split(',')[1] ?? '')
+  reader.onerror = () => reject(reader.error)
+  reader.readAsDataURL(file)
+})
+
+/** What the server gets for a file from 附文件: the bytes of a PNG, else the text, decoded here where every encoding is at hand. */
+export async function referenceBody(file) {
+  if (file.size > MAX_FILE) throw new Error(t`「${file.name}」太大了，附的文件不能超过 16 MB`)
+  const buffer = await file.arrayBuffer()
+  const start = new Uint8Array(buffer).subarray(0, PNG_START.length)
+  if (PNG_START.every((byte, i) => start[i] === byte)) return { filename: file.name, data: await base64Of(file) }
+  const text = decodeTextFile(buffer)
+  if (text === null) throw new Error(t`「${file.name}」读不了。能读 txt、md、json 这类文本文件和带角色卡的 PNG，Word 和 PDF 先另存成 txt`)
+  return { name: file.name, text }
+}
+
+const chars = n => n.toLocaleString()
+
+function referenceTip(item) {
+  if (item.kind === 'chat') return item.rounds < item.total ? t`只放得下最近的 ${item.rounds} 轮（共 ${item.total} 轮）。点开看向导读到的内容` : t`共 ${item.rounds} 轮。点开看向导读到的内容`
+  if (item.chars >= item.total) return t`点开看向导读到的内容`
+  return item.kind === 'file' ? t`文件太长，只读了前 ${chars(item.chars)} 字（共 ${chars(item.total)} 字）。点开看向导读到的内容` : t`内容太长，长的条目只读了开头（共 ${chars(item.total)} 字）。点开看向导读到的内容`
+}
+
+/**
+ * References as chips, each with what it is when that was worked out from the file.
+ * @param open - a tap on one: what the model reads of it. @param drop - its ×.
+ * @param locked - they cannot be taken off for now. @param label - what goes before them.
+ */
+export function referenceChips(el, items, { open, drop, locked = false, label = t`向导读：` }) {
+  const kind = item => (item.kind === 'card' ? t`角色卡` : item.kind === 'book' ? t`世界书` : '')
+  return [
+    el('span', { class: 'ce-refs-note', text: label }),
+    ...items.map(item => el('span', { class: 'ce-ref' }, [
+      el('button', { type: 'button', class: 'ce-ref-name', title: referenceTip(item), onclick: () => open(item) }, [
+        el('span', { text: item.name }),
+        el('small', { text: kind(item) ? t`${kind(item)} · ${chars(item.chars)} 字` : t`${chars(item.chars)} 字` }),
+      ]),
+      el('button', { type: 'button', class: 'ce-ref-off', disabled: locked, 'aria-label': t`去掉「${item.name}」`, title: t`去掉`, text: '×', onclick: () => drop(item) }),
+    ])),
+  ]
+}
+
+/** A change as before and after: lines that differ, and inside a changed line the words that do. */
+export function diffView(el, before, after) {
+  const lines = foldSame(diffLines(before, after), 1)
+  return el('div', { class: 'ce-diff' }, lines.map(line => {
+    if (line.op === 'skip') return el('div', { class: 'ce-line skip', text: t`…没改的 ${line.count} 行…` })
+    if (line.op === 'change') return el('div', { class: 'ce-line change' }, line.parts.map(part => (part.op === 'same' ? part.text : el(part.op === 'del' ? 'del' : 'ins', { text: part.text }))))
+    return el('div', { class: `ce-line ${line.op}`, text: line.text || ' ' })
+  }))
+}
 
 /**
  * @param deps - { api, el, guard, openProviders }
@@ -27,6 +88,8 @@ const MANAGE_PROVIDERS = '__manage__'
  *   canTake(change) (optional): false for a change that cannot go in (a pattern that does not compile)
  *   context() (optional): sent along with a request (the latest reply, the colours on screen)
  *   beforeAsk(): awaited before a request or an apply (修改角色卡's saves)
+ *   references (optional): files and chats can go along ({url}/references):
+ *     { chats(): this card's chats ({ id, title, turns }), current(): the one open here, if any }
  *   onApplied(result), onUndone(result): what was taken in, or taken back (undo)
  *   undo: the last applied proposal can be taken back
  */
@@ -44,6 +107,8 @@ export function createTalk({ api, el, guard, openProviders }, spec) {
     shown: '', // what the thread last showed
     modelsShown: '',
     applying: false, // a proposal is going in: no new request meanwhile
+    referencesShown: '', // the references last listed
+    readingId: '', // the reference open below the list
   }
   const view = {}
   view.thread = el('div', { class: 'ce-thread' })
@@ -63,7 +128,13 @@ export function createTalk({ api, el, guard, openProviders }, spec) {
   view.stop = el('button', { type: 'button', class: 'btn', text: t`停下`, hidden: true, onclick: () => stopJob() })
   view.clear = el('button', { type: 'button', class: 'btn ghost small', text: t`清空对话`, title: t`忘掉这里聊过的内容（已经改进去的不受影响）`, onclick: () => clearTalk() })
   view.model = el('select', { class: 'forge-model', title: t`对话修改用哪个模型`, onchange: () => changeModel() })
-  view.compose = el('div', { class: 'ce-compose' }, [view.targetChip, view.composer, el('div', { class: 'forge-actions' }, [el('span', { class: 'grow' }), view.stop, view.send])])
+  view.references = el('div', { class: 'ce-refs', hidden: true })
+  view.reader = el('div', { class: 'ce-ref-reader', hidden: true })
+  view.reading = el('div', { class: 'ce-ref-text', hidden: true })
+  view.file = el('input', { type: 'file', accept: REFERENCE_FILES, multiple: true, hidden: true, onchange: () => addFiles() })
+  view.attach = spec.references ? el('button', { type: 'button', class: 'btn ghost small', text: t`附文件`, title: t`附文件给向导读：设定、小说原文（txt、md），另一张卡（PNG、JSON），或世界书`, onclick: () => view.file.click() }) : null
+  view.readChat = spec.references ? el('button', { type: 'button', class: 'btn ghost small', text: t`读对话`, title: t`让向导读这张卡玩过的一段对话，把里面出场的角色和发生的事写进设定`, onclick: () => openReader() }) : null
+  view.compose = el('div', { class: 'ce-compose' }, [view.targetChip, view.references, view.reading, view.reader, view.composer, el('div', { class: 'forge-actions' }, [view.attach, view.readChat, view.file, el('span', { class: 'grow' }), view.stop, view.send])])
 
   // ─── Data ─────────────────────────────────────────────────────────────
   async function loadModels() {
@@ -84,6 +155,7 @@ export function createTalk({ api, el, guard, openProviders }, spec) {
     }
     renderModels()
     renderThread()
+    renderReferences()
     updateFoot()
     schedule()
   }
@@ -248,14 +320,69 @@ export function createTalk({ api, el, guard, openProviders }, spec) {
     ])
   }
 
-  function diffBox(before, after) {
-    const lines = foldSame(diffLines(before, after), 1)
-    return el('div', { class: 'ce-diff' }, lines.map(line => {
-      if (line.op === 'skip') return el('div', { class: 'ce-line skip', text: t`…没改的 ${line.count} 行…` })
-      if (line.op === 'change') return el('div', { class: 'ce-line change' }, line.parts.map(part => (part.op === 'same' ? part.text : el(part.op === 'del' ? 'del' : 'ins', { text: part.text }))))
-      return el('div', { class: `ce-line ${line.op}`, text: line.text || ' ' })
-    }))
+  const diffBox = (before, after) => diffView(el, before, after)
+
+  // ─── What goes with a request ─────────────────────────────────────────
+  function renderReferences() {
+    if (!spec.references) return
+    const references = state.session?.references ?? []
+    const key = JSON.stringify(references.map(item => item.id))
+    view.references.hidden = !references.length
+    if (key === state.referencesShown) return
+    state.referencesShown = key
+    if (state.readingId && !references.some(item => item.id === state.readingId)) closeReading()
+    view.references.replaceChildren(...referenceChips(el, references, { open: toggleReading, drop: dropReference }))
   }
+
+  function closeReading() {
+    state.readingId = ''
+    view.reading.hidden = true
+    view.reading.replaceChildren()
+  }
+
+  const toggleReading = guard(async item => {
+    if (state.readingId === item.id) return closeReading()
+    const { text } = await api(`${spec.url()}/references/${item.id}`)
+    state.readingId = item.id
+    view.reading.replaceChildren(el('pre', { text }))
+    view.reading.hidden = false
+  })
+
+  const dropReference = guard(async item => load(await api(`${spec.url()}/references/${item.id}`, { method: 'DELETE' })))
+
+  const addFiles = guard(async () => {
+    const files = [...view.file.files]
+    view.file.value = ''
+    for (const file of files) load(await api(`${spec.url()}/references`, { method: 'POST', body: await referenceBody(file) }))
+  })
+
+  /** 读对话: which chat of this card, how far back, and whose part of it. */
+  const openReader = guard(async () => {
+    if (!view.reader.hidden) {
+      view.reader.hidden = true
+      return
+    }
+    const chats = await spec.references.chats()
+    if (!chats.length) throw new Error(t`这张卡还没有对话`)
+    const current = spec.references.current()
+    const chat = el('select', { 'aria-label': t`读哪段对话` }, chats.map(item => el('option', { value: item.id, selected: item.id === current, text: t`${item.title || t`未命名对话`}（${item.turns} 轮）` })))
+    const span = el('select', { 'aria-label': t`读多少` }, CHAT_SPANS.map(([value, label], index) => el('option', { value: String(value), selected: index === 1, text: label() })))
+    const names = el('input', { type: 'text', maxlength: 120, placeholder: t`只看提到这些名字的轮次（可不填）`, 'aria-label': t`只看提到这些名字的轮次` })
+    const read = guard(async () => {
+      load(await api(`${spec.url()}/references`, { method: 'POST', body: { chatId: chat.value, turns: Number(span.value), names: names.value } }))
+      view.reader.hidden = true
+    })
+    view.reader.replaceChildren(
+      chat, span, names,
+      el('div', { class: 'forge-actions' }, [
+        el('p', { class: 'hint', text: t`向导会读到这段对话的摘要、记忆簿、当前变量和原文，之后每次发送都带上，读得越多花的额度越多。` }),
+        el('span', { class: 'grow' }),
+        el('button', { type: 'button', class: 'btn ghost small', text: t`取消`, onclick: () => { view.reader.hidden = true } }),
+        el('button', { type: 'button', class: 'btn primary small', text: t`读这段`, onclick: read }),
+      ]),
+    )
+    view.reader.hidden = false
+  })
 
   // ─── The request box ──────────────────────────────────────────────────
   function updateFoot() {
@@ -265,6 +392,7 @@ export function createTalk({ api, el, guard, openProviders }, spec) {
     view.send.disabled = !view.composer.value.trim() || state.applying
     view.composer.disabled = busy || state.applying
     view.model.disabled = busy
+    if (view.attach) view.attach.disabled = view.readChat.disabled = busy || state.applying
     view.targetChip.hidden = !state.target
     if (state.target) {
       view.targetChip.replaceChildren(
@@ -388,7 +516,10 @@ export function createTalk({ api, el, guard, openProviders }, spec) {
       state.labels.clear()
       state.shown = ''
       state.pickedFor = ''
+      state.referencesShown = ''
       view.composer.value = ''
+      view.reader.hidden = true
+      closeReading()
     },
     stop: () => clearTimeout(state.poll),
   }

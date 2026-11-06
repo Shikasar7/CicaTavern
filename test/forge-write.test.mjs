@@ -184,7 +184,7 @@ test('the card as SillyTavern reads it: V3 with its book in order, wrapped entri
   assert.deepEqual(json.data.extensions.cicatavern.status_bar, layout)
   const bar = scripts.find(s => s.id === 'cicatavern-status-bar')
   assert.equal(bar.findRegex, '<StatusPlaceHolderImpl/>')
-  assert.match(bar.replaceString, /^```html\n[\s\S]*Mvu\.getMvuData[\s\S]*\n```$/)
+  assert.match(bar.replaceString, /^```html\n<!DOCTYPE html>[\s\S]*<body>[\s\S]*\.getMvuData[\s\S]*<\/body><\/html>\n```$/)
   assert.ok(bar.replaceString.includes('"path":"林小雨.好感度"'))
   assert.equal(json.data.extensions.tavern_helper.scripts[0].name, 'MVU')
   // The app reads it back the same way, MVU entries and all.

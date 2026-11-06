@@ -904,6 +904,134 @@
           }
         }
       ]
+    },
+    {
+      "version": "2.4.0",
+      "date": "2026-11",
+      "items": [
+        {
+          "image": "2.4.0-battle.webp",
+          "zh": {
+            "title": "回合制战斗",
+            "text": "角色卡的「⋯」里多了「游戏规则…」（开发中），按卡开启，默认关，关着时发给模型的内容不变。\n规则开到「完整」，模型写到打起来就进入战斗：攻击、技能、道具、防御、逃跑，成败由程序算，模型只管把结果写好。打赢得经验，升级加属性；遇到新敌人会记进图鉴，可以画立绘。"
+          },
+          "en": {
+            "title": "Turn-based fights",
+            "text": "A card's ⋯ menu has Game rules (in development), on per card and off by default; off, nothing sent to the model changes.\nWith the rules at Full, a fight starts when the story comes to blows: attack, skills, items, guard or flee. The program decides the outcome and the model writes it. Wins bring experience and levels, and new foes go into a bestiary, with pictures if you like."
+          }
+        },
+        {
+          "image": "2.4.0-dice.webp",
+          "zh": {
+            "title": "掷骰检定和行囊",
+            "text": "有风险的选项会写明属性、成功率和风险，点了就掷骰，结果随这一轮发给模型。点数由种子决定，重新生成、回滚、读档都不变。\n「行囊」里有角色、背包、任务、地图和成就。物品可以使用，卡已有的体力、背包、任务变量也能绑定成规则的字段。"
+          },
+          "en": {
+            "title": "Dice checks and the pack",
+            "text": "A risky choice shows its attribute, odds and risk. Pick it and the dice roll, and the result goes to the model with the turn. Rolls come from a seed, so regenerating, rolling back or loading a save changes nothing.\nThe pack holds your character, items, quests, a map and achievements. Items can be used, and a card's own health, inventory and quest variables can be bound to the rules."
+          }
+        },
+        {
+          "image": "2.4.0-look.webp",
+          "zh": {
+            "title": "视觉小说有了四种界面",
+            "text": "右上角「界面」→「主题」换整体样子：简约、古风、怀旧游戏机、酷炫，战斗和掷骰跟着一起换。\n选项挪到了对话框上方，不再挡住立绘的脸。写行动时画面也不再跳动。"
+          },
+          "en": {
+            "title": "Four looks for the visual novel",
+            "text": "View → Theme at the top right changes the whole look: Simple, Classical, Retro console or Bold, with fights and dice to match.\nThe choices now sit above the text box and stay off the sprite's face, and writing an action no longer moves the picture."
+          }
+        },
+        {
+          "image": "2.4.0-themes.webp",
+          "zh": {
+            "title": "每种主题都有自己的战斗",
+            "text": "主题不只是换颜色。古风掷的是一圈八卦，放技能是大字泼墨；怀旧游戏机是老式窗口，动作一格一格跳；酷炫用纯色切割和技能横幅。\n简约跟着应用的浅色和深色走。选项、掷骰、战斗、放技能、胜利都跟着换。"
+          },
+          "en": {
+            "title": "Every theme has its own fights",
+            "text": "A theme is more than colours. Classical rolls on a ring of trigrams and writes skills in big ink strokes; Retro console uses old-style windows with moves that jump frame by frame; Bold cuts in solid colour with skill banners.\nSimple follows the app's light or dark. Choices, dice, fights, skills and victory all change with it."
+          }
+        },
+        {
+          "image": "2.4.0-direct.webp",
+          "zh": {
+            "title": "直连对话",
+            "text": "不用角色卡也能直接和模型聊，入口在左栏角色卡列表最上面。不带角色扮演的规矩，就是一个普通的助手。\n可以附文本文件，也能联网搜索；回复按 Markdown 显示，列表、表格、代码都排得好。"
+          },
+          "en": {
+            "title": "Direct chat",
+            "text": "Talk to a model with no character card, from the top of the card list. No roleplay rules come with it: it is a plain assistant.\nAttach text files or search the web. Replies show as Markdown, with lists, tables and code laid out properly."
+          }
+        },
+        {
+          "image": "2.4.0-forge.webp",
+          "zh": {
+            "title": "创作角色卡能做的多了",
+            "text": "「卡的设定」下面多了折叠的「高级选项」，不选就和以前一样：背包和册子、写前自查、随机事件、裁判表、世界动态、建角页。卡的规模分轻量、标准、大作，大作最多 60 个角色。\n还能附参考文件，txt、md、设定、别的卡都行；状态栏多了水墨、羊皮卷等样式。"
+          },
+          "en": {
+            "title": "More in the card creator",
+            "text": "Advanced options now fold out under the card's setting, and nothing changes if you leave them: bags and books, a self-check before writing, random events, a judge table, world moves and a character page. Cards come in light, standard and epic sizes, up to 60 characters.\nYou can attach reference files too, from text and notes to other cards, and the status bar gained new styles such as ink and parchment."
+          }
+        },
+        {
+          "image": "2.4.0-check.webp",
+          "zh": {
+            "title": "检查这张卡",
+            "text": "角色卡的「⋯」和修改角色卡里多了「检查这张卡」，自己做的卡和导入的卡都能查：写错的正则和模板、连成一个的关键词、永远发送不了的条目、状态栏对不上变量。\n程序查不花钱，每一条都看得到改前改后，可以采用或撤销。想听建议再点「让模型再看看」。"
+          },
+          "en": {
+            "title": "Check this card",
+            "text": "The card's ⋯ menu and the card editor now have Check this card, for your own cards and imported ones: broken regexes and templates, keywords run together, entries that can never be sent, a status bar that doesn't match its variables.\nThe program's check costs nothing. Every item shows before and after, and can be taken or undone. Choose Ask a model only if you want its suggestions."
+          }
+        },
+        {
+          "image": "2.4.0-trial.webp",
+          "zh": {
+            "title": "试玩体检",
+            "text": "角色卡的「⋯」里多了「试玩体检」：一个模型扮卡，一个模型扮玩家，中途还会故意试探，比如硬闯、说假话、让它替你决定。\n玩完程序统计变量和格式写对了多少，再由模型挑出抢话、矛盾、放水和重复。点了才发送，开始前会写大约花多少。"
+          },
+          "en": {
+            "title": "Trial run",
+            "text": "The card's ⋯ menu has Trial run: one model plays the card and another plays you, testing it on purpose by forcing their way, telling lies or asking it to decide for them.\nAfterwards the program counts how well variables and formats held up, and a model picks out speaking for the player, contradictions, going easy and repetition. Nothing is sent until you start, and it tells you about how much first."
+          }
+        },
+        {
+          "image": "2.4.0-styles.webp",
+          "zh": {
+            "title": "文风全部重写",
+            "text": "基础预设的文风重写了一遍，每种都有自己的硬要求，读起来分得开。新加了文艺、日记、写实、淡然和烟火气，「白描」去掉了，选过的自动换成「淡然」。\n鼠标停在按钮上能看说明和示例，手机上点一下。"
+          },
+          "en": {
+            "title": "Writing styles rewritten",
+            "text": "The Basic preset's writing styles are all new, each with rules of its own, so they read apart. Literary, Diary, Realist, Understated and Earthy are added. One old style is gone, and anyone who chose it moves to Understated.\nRest the mouse on a button to read its note and a sample, or tap it on a phone."
+          }
+        },
+        {
+          "image": "2.4.0-more.webp",
+          "zh": {
+            "title": "还有这些",
+            "text": "每条消息都能单独删除，模型之后不再看到。手机访问有了二维码，设置可以搜索。左右栏能收起，正文能拖宽。\n跳到前面的对话再往上翻不再瞬移，CG 回廊关掉图片回到回廊，模型下拉框修好了，手机后台掐断回复时会告诉你怎么设置。"
+          },
+          "en": {
+            "title": "And also",
+            "text": "Any single message can be deleted, and the model stops seeing it. Phone access has a QR code, settings can be searched, the side columns fold away and the story column drags wider.\nGoing up after a jump no longer throws you elsewhere, closing a picture returns to the CG gallery, the model list opens again, and a reply cut off in the background tells you what to set on your phone."
+          }
+        },
+        {
+          "recap": "2.3",
+          "image": "2.3.0-memory.webp",
+          "zh": {
+            "title": "2.3 加了什么",
+            "text": "长期记忆（Beta）：压缩掉的剧情，提到时会想起来；隐藏这一轮；两三百轮的长对话不卡了；卡片界面能用更多 SillyTavern 命令；Gemini 原生接口和 MOSS 朗读；安卓能导出对话包和角色卡 PNG。"
+          },
+          "en": {
+            "title": "What 2.3 added",
+            "text": "Long-term memory (Beta), so compacted story comes back when it is mentioned; hiding a round from the model; chats of hundreds of rounds staying smooth; more SillyTavern commands in card interfaces; native Gemini and MOSS voices; chat packages and card PNGs exported on Android."
+          }
+        }
+      ]
     }
   ]
 }

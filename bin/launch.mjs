@@ -3,7 +3,7 @@
 // running, then open it in an app window (Edge or Chrome --app: no tabs, no
 // address bar). Exits as soon as the window is open. The server it starts quits
 // about a minute after the last page (computer or phone) closes, or at
-// 设置 → 停止后台服务; a server already running from a console is left alone.
+// 设置 → 退出应用并停止后台服务; a server already running from a console is left alone.
 // A package folder replaced by an in-app update hands over to the newer folder
 // (server/update/install.mjs), so its CicaTavern.exe keeps working.
 // CicaTavern.exe (launcher/) runs this with no console window.

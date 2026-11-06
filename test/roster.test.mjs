@@ -83,7 +83,7 @@ test('cast-format answers cleaned; style goes first in the scene line', () => {
   assert.match(request.messages[0].content, /<cast>\n- \[顾念念\]/)
   assert.match(request.messages[0].content, /Never describe their hair, eyes, face or body/)
   assert.doesNotMatch(request.messages[0].content, /Keep the character's looks consistent/)
-  assert.match(request.messages[0].content, /Somebody is always in the picture: at least one cast member, 顾念念/)
+  assert.match(request.messages[0].content, /Somebody is always in the picture: the people <latest_passage> shows at that moment/)
 })
 
 test('an illustration always has somebody in it: the card\'s own character joins an empty scene', () => {
@@ -184,4 +184,54 @@ test('从对话里补充: newcomers, and for the list\'s people the names the st
   const many = Array.from({ length: 30 }, (_, i) => `外号${i}`).join(',')
   const full = parseRosterChat(JSON.stringify({ fix: [{ name: '顾念念', aliases: many }] }), [{ ...cast[1], aliases: '念念' }])
   assert.ok(full.fixes[0].aliases.length < 30 && `念念, ${full.fixes[0].aliases.join(', ')}`.length <= 120, 'as many as the field keeps')
+})
+
+const PASSAGE = '慕寒漪把剑放下，小师妹没有接话，念念只是低着头。'
+const framed = (answer, passage = PASSAGE) => cleanFrame(answer, 'standard', { roster: ROSTER, userName: '大师兄', passage })
+
+test('a cast line written a little differently is still that person: a list item, no brackets, a colon, a word for the player', () => {
+  assert.equal(framed('场景: hall\n1. [顾念念] crying | left'), '场景: hall\n[顾念念] crying | left')
+  assert.equal(framed('场景: hall\n- 慕寒漪: holding a sword'), '场景: hall\n[慕寒漪] holding a sword')
+  assert.equal(framed('[场景] hall, night\n[顾念念]: crying'), '场景: hall, night\n[顾念念] crying')
+  assert.equal(framed('[小师妹] crying'), '[顾念念] crying', 'an alias')
+  assert.equal(framed('[慕寒漪姑娘] standing'), '[慕寒漪] standing', 'with more around the name')
+  assert.equal(framed('[你] watching'), '[大师兄] watching')
+  assert.equal(framed('hall: wide and dark\n[顾念念] crying'), '[顾念念] crying', 'a label that is nobody is no line of the format')
+  assert.equal(framed('场景: hall\n顾念念 提着灯, crouching'), '场景: hall\n[顾念念] 提着灯, crouching', 'the name, then a space')
+  assert.equal(cleanFrame('You stand in a hall', 'standard', { roster: ROSTER, userName: '大师兄', passage: PASSAGE }), null, 'a word for the player only counts in brackets')
+  assert.equal(parseFrame('[顾念念]: crying | left', ROSTER, '大师兄').characters[0].action, 'crying')
+})
+
+test('a name nobody uses is the person the passage talks about, and one the story does use stays somebody off the list', () => {
+  assert.equal(framed('[Gu Niannian] crying'), '[顾念念] crying', 'the most named in the passage')
+  assert.equal(framed('[慕寒漪] standing\n[Name] crying'), '[慕寒漪] standing\n[顾念念] crying', 'someone in the frame already is not taken twice')
+  assert.equal(framed('[Su Wan] crying', '窗外下着雨。'), '[Su Wan] crying', 'nobody to go by')
+  assert.equal(framed('[老周] old man, limping', '老周走进雨里，慕寒漪看着他。'), '[老周] old man, limping')
+  assert.deepEqual(parseFrame(framed('[Name] crying'), ROSTER, '大师兄').characters.map(c => c.entry.name), ['顾念念'])
+})
+
+test('nobody in the prompt: the person the passage is about, before the card\'s own character', () => {
+  assert.match(withSomeone('场景: hall, night', ROSTER, '大师兄', '顾念念', 'tags', '慕寒漪收了剑，慕寒漪转过身。'), /^场景: hall, night\n\[慕寒漪\] /)
+  assert.match(withSomeone('场景: hall, night', ROSTER, '大师兄', '顾念念', 'tags', '窗外下着雨。'), /\n\[顾念念\] /, 'nobody named: the card\'s own')
+})
+
+test('a prompt that left the format keeps its words and gets the looks of those the passage is about', () => {
+  const tags = withSomeone('1girl, solo, crying, hall', ROSTER, '大师兄', '武当', 'tags', PASSAGE)
+  assert.equal(tags, '场景: 1girl, solo, crying, hall\n[顾念念]')
+  const frame = parseFrame(tags, ROSTER, '大师兄')
+  assert.match(flattenFrame(frame, 'tags'), /^1girl, 1girl, solo, crying, hall, black hair, hair bun/)
+  const words = withSomeone('Two women stand in a dark hall, one holding a sword.', ROSTER, '大师兄', '武当', 'natural', PASSAGE)
+  assert.equal(words, '场景: Two women stand in a dark hall, one holding a sword.\n[顾念念]\n[慕寒漪]')
+  assert.match(flattenFrame(parseFrame(words, ROSTER, '大师兄'), 'natural'), /^Two women stand in a dark hall, one holding a sword\. The girl has black hair.* The girl has long silver hair/)
+  assert.equal(withSomeone('1girl, crying', ROSTER, '大师兄', '武当', 'tags', '窗外下着雨。'), '1girl, crying', 'nobody on the list in the passage')
+})
+
+test('the cast\'s names may stay Chinese in an English prompt; without a cast nothing Chinese is asked for', () => {
+  const asked = (roster = []) => { const request = imagePromptRequest({ card: { name: '林雪', description: '掌柜' }, names: { char: '林雪', user: '你' }, reply: '下雨了', roster, promptStyle: 'tags' }); return request.messages[0].content }
+  assert.ok(!asked(ROSTER).includes('no Chinese'))
+  assert.match(asked(ROSTER), /in English except the names in \[ \]/)
+  assert.match(asked(ROSTER), /never romanized or translated/)
+  assert.match(asked(), /no Chinese/)
+  assert.match(asked(ROSTER), /A cast member who is not there stays out, even 林雪/)
+  assert.ok(!/at least one/.test(asked(ROSTER)), 'nobody is added to fill the frame')
 })

@@ -13,14 +13,26 @@ import { advanceDay, latestPlace, matchScene, normalizePlace, opensNextDay, plac
 import { cutOut, spriteFrame } from '/shared/cutout.js'
 import { EXPRESSIONS, PACK_PICTURE, packFaces, stageAt } from '/shared/stage.js'
 import { initVnSaves } from '/vn-saves.js'
-import { initVnHud } from '/vn-hud.js'
+import { initVnHud, noteChips } from '/vn-hud.js'
 import { changeNotes } from '/shared/hud.js'
-import { shrink } from '/theme.js'
+import { shrink, zoomedQuery } from '/theme.js'
+import { currentLook, headIn, letters, lookFields, lookHints, lookNames, paletteNames, palettesOf, setHero, setLook, slideSlab } from '/game-look.js'
 import { VN_ID, isBuiltinPreset } from '/shared/basic.js'
 import { historyStrip, keptItems } from '/draw-choice.js'
 
+// How long 自动 lets a roll be seen before throwing the die.
+const GATE_WAIT = 1200
+// 快进: how long each line already read stays on screen.
+const SKIP_MS = 55
+// A layer switched on with its volume at nothing.
+const SOUND_FIRST = 0.6
 const MODE_KEY = 'cicatavern.vnMode'
 const PREFS_KEY = 'cicatavern.vnPrefs'
+// How much of a head has to stay in sight (the face, not the hair round it), and how far from what is near it.
+const FACE_SHOWN = 0.62
+const FACE_GAP = 8
+const SMALLEST_STAGE = 0.42
+const ROOM_FOR_TITLE = 0.62
 // A scene drawn for one turn (画这一轮的场景) stays this chat's background while the place is the same.
 const PINS_KEY = 'cicatavern.vnPins'
 // Tried at least once: the top bar's switch stops calling for attention.
@@ -29,11 +41,21 @@ const TRIED_KEY = 'cicatavern.vnTried'
 const FORMAT_KEY = 'cicatavern.vnFormat'
 // 视觉小说预设 offered on going into the mode: 'never' once the player said 不再提示.
 const PRESET_OFFER_KEY = 'cicatavern.vnPresetOffer'
+// 游戏规则 offered on going into the mode: { never: true } or { cardId: true } once asked.
+const RULES_OFFER_KEY = 'cicatavern.vnRulesOffer'
+// How far each reply has been read: { chatId: { nodeId: line } }, the chats and replies last read kept.
+const READ_KEY = 'cicatavern.vnRead'
+const READ_CHATS = 40
+const READ_REPLIES = 300
 const SPEEDS = { slow: 25, normal: 45, fast: 90, instant: 0 }
 const SPEED_LABEL = { slow: t`慢`, normal: t`中`, fast: t`快`, instant: t`瞬间` }
 // A place with no background, a speaker with no 立绘: draw one at once, offer to, or leave it.
 const NEW_ART = { auto: t`自动画`, ask: t`先问`, off: t`不画` }
 const LOG_REPLIES = 20
+// 回看: how much of an action its round's name in the list shows, where a round counts as being read, how far ahead the rest are drawn.
+const LOG_ACTION = 16
+const LOG_TOP = 24
+const LOG_AHEAD = '900px 0px'
 const SPRITE_SIDE = 1400
 // Where the ones on stage stand (percent across), by how many there are.
 const SLOTS = { 1: [50], 2: [32, 68], 3: [20, 50, 80] }
@@ -131,6 +153,7 @@ export function initVn(deps) {
     on: false, chatId: null, cardId: null, key: null, node: null, steps: [], trailing: [], options: [], available: 0,
     index: -1, seen: -1, phase: 'idle', streaming: false, pending: false, auto: false, follow: false,
     typing: 0, autoTimer: 0, names: [], roster: new Map(), readId: null, reading: false,
+    readTo: -1, skipping: false, holding: false, skipTimer: 0, changeAt: Infinity,
   }
 
   // ─── The layers, back to front ──────────────────────────────────────
@@ -140,18 +163,28 @@ export function initVn(deps) {
   // 回忆滤镜: over the picture and the people while a memory's lines are read.
   const memoryLayer = el('div', { class: 'vn-memory', 'aria-hidden': 'true' })
   const flash = el('div', { class: 'vn-flash', 'aria-hidden': 'true' })
+  // What a reply changed, across the whole picture for a moment: red for a wound, gold for a level.
+  const pulse = el('div', { class: 'vn-pulse', 'aria-hidden': 'true' })
   const sign = el('div', { class: 'vn-sign' })
   const sceneChip = el('div', { class: 'vn-scene-chip', hidden: true })
   const cgButton = el('button', { type: 'button', class: 'vn-cg-thumb', hidden: true, title: t`这一轮的配图` })
   // 游戏式 HUD: a few variables under the time box; what a reply changed pops up at its end.
   const hud = initVnHud({ el, prefs, savePrefs: () => remember(PREFS_KEY, prefs), open: () => togglePop('hud') })
-  const corner = el('div', { class: 'vn-corner' }, [sign, hud.box, hud.notes, sceneChip, cgButton])
+  const corner = el('div', { class: 'vn-corner' }, [sign, hud.box, sceneChip, cgButton])
   const title = el('div', { class: 'vn-title', hidden: true })
   // A new day: its title across the picture for a moment (第 3 天, the date, the place).
   const chapter = el('div', { class: 'vn-chapter', 'aria-hidden': 'true' })
   const panel = el('div', { class: 'vn-panel', hidden: true })
   // The turn's choices, as a game's: a menu in the middle of the picture.
   const menu = el('div', { class: 'vn-menu', hidden: true, role: 'dialog', 'aria-label': t`行动选项` })
+  // While the model writes: that it does, for how long, and what the player's action came to.
+  const waitWords = el('b')
+  const waitClock = el('span', { class: 'vn-wait-clock' })
+  const waitResult = el('div', { class: 'vn-wait-result', hidden: true })
+  const waitBox = el('div', { class: 'vn-wait', hidden: true, role: 'status' }, [
+    el('div', { class: 'vn-wait-head' }, [el('span', { class: 'live-dots', 'aria-hidden': 'true' }, [el('i'), el('i'), el('i')]), waitWords, waitClock]),
+    waitResult,
+  ])
   // The line being read aloud (web/media.js announces it): a small sign in the text box.
   const voice = el('button', { type: 'button', class: 'vn-voice', hidden: true, title: t`正在朗读这一句：点一下暂停或继续（右上角「朗读」关掉就不读了）` }, [el('i'), el('i'), el('i')])
   const plate = el('div', { class: 'vn-name', hidden: true })
@@ -159,7 +192,18 @@ export function initVn(deps) {
   const spoken = el('div', { class: 'vn-sr', 'aria-live': 'polite' })
   const nextMark = el('span', { class: 'vn-next', 'aria-hidden': 'true' })
   const endRow = el('div', { class: 'vn-end', hidden: true })
-  const box = el('div', { class: 'vn-box' }, [plate, voice, lineBox, nextMark, endRow, spoken])
+  // 快进: through what has been read, to the first new line or the choices.
+  const fastButton = el('button', { type: 'button', class: 'vn-btn vn-fast', title: t`快进读过的内容，到新内容或选项停下（也可以按住 Ctrl）`, text: t`快进` })
+  fastButton.addEventListener('click', event => {
+    event.stopPropagation()
+    if (!state.skipping && !canSkip()) return toast(t`后面没有读过的内容了`)
+    setSkipping(!state.skipping)
+  })
+  // What reading needs, at the foot of the text box as a galgame has it (filled in below, with the controls).
+  const quickBar = el('div', { class: 'vn-quickbar' })
+  // 怀旧游戏机: who is speaking looks out of a frame beside the words.
+  const face = el('div', { class: 'vn-face', hidden: true, 'aria-hidden': 'true' })
+  const box = el('div', { class: 'vn-box' }, [plate, face, voice, lineBox, nextMark, endRow, quickBar, spoken])
   const logBox = el('section', { class: 'vn-log', hidden: true, role: 'dialog', 'aria-label': t`回看` })
   const cgView = el('div', { class: 'vn-cg', hidden: true, role: 'dialog', 'aria-label': t`配图` })
 
@@ -195,70 +239,150 @@ export function initVn(deps) {
   const optionsButton = control(t`选项`, t`这一轮的行动选项（O）`, () => (menu.hidden ? showMenu() : hideMenu()))
   const fullButton = control(t`全屏`, t`全屏（F），Esc 退出`, () => toggleFullscreen())
   const cgControl = control('CG', t`CG 回廊：这条故事线上所有的配图（G）`, () => openGallery())
-  const sceneControl = control(t`场景`, t`这张卡的场景图`, () => openLibrary('scenes'))
-  const spriteControl = control(t`立绘`, t`角色说话时显示的立绘`, () => openLibrary('sprites'))
   const hideControl = control(t`隐藏`, t`隐藏界面（H），点一下恢复`, () => root.classList.add('bare'))
-  const actControl = control(t`✎ 行动`, t`写下你的行动（回车）`, () => compose(true))
+  const actControl = control(t`✎ 行动`, t`写下你的行动（回车），再点一下收起`, () => compose(!stage.classList.contains('vn-compose')))
   const exitControl = control(t`退出`, t`退出视觉小说模式`, () => setOn(state.cardId, false))
   const saveControl = control(t`存档`, t`存档（F5 快速存档）`, () => saves.open('save'))
   const loadControl = control(t`读档`, t`读档（F9 快速读档）`, () => saves.open('load'))
-  // On a phone the row keeps 朗读, 配图, 回看, 自动, 跳过; the rest wait behind ⋯ (CSS hides them, its menu lists them).
-  const extras = [cgControl, speedButton, statusButton, hudControl, optionsButton, saveControl, loadControl, sceneControl, spriteControl, hideControl, fullButton, actControl, exitControl]
-  for (const b of extras) b.classList.add('vn-extra')
-  const moreButton = control('⋯', t`更多：CG、速度、状态、HUD、选项、存档、读档、场景、立绘、隐藏、全屏、行动、退出`, () => togglePop('more'))
-  moreButton.classList.add('vn-overflow')
+  // The top bar and its 记忆 are gone in here on a phone on its side and in full screen.
+  const memoryControl = control(t`记忆`, t`长期记忆（Beta）：记忆簿`, () => deps.openMemory())
+  const selfControl = control(t`角色`, t`行囊：属性、等级和技能（I）`, () => deps.openBag('self'))
+  const thingsControl = control(t`背包`, t`行囊：带着的东西，能用的可以用`, () => deps.openBag('bag'))
+  const questsControl = control(t`任务`, t`行囊：进行中和做完的任务`, () => deps.openBag('quests'))
+  const bagControls = [selfControl, thingsControl, questsControl]
+  const soundControl = control(t`声音`, t`音乐、音效和语音的开关与音量`, () => togglePop('sound'))
+  const rulesControl = control(t`规则`, t`游戏规则：开关检定和战斗，调属性、技能和敌人`, () => deps.openRules())
   const logControl = control(t`回看`, t`回看（L）`, () => openLog())
   const skipControl = control(t`跳过`, t`跳到最新一句`, () => skip())
-  // Where even that row runs long (English on a narrow phone), these go behind ⋯ too, in this order.
-  const tuckable = [logControl, skipControl, autoButton]
+  quickBar.append(logControl, autoButton, skipControl, fastButton, saveControl, loadControl)
+  // Clicked, they let go of the keyboard: Space goes on reading, not pressing the same button again.
+  quickBar.addEventListener('click', event => {
+    if (event.detail) document.activeElement?.blur()
+  }, { capture: true })
+  // Up top only what sets the mode up. The rest of it is behind 游戏 and 界面, the same on a phone.
+  const gameControls = [rulesControl, ...bagControls, optionsButton, actControl, memoryControl, cgControl]
+  const lookControl = control(t`主题`, t`视觉小说、战斗和掷骰的样子`, () => togglePop('look'))
+  const viewControls = [lookControl, speedButton, statusButton, hudControl, hideControl, fullButton, exitControl]
+  const menuButton = (kind, name, hint) => {
+    const button = control(`${name} ▾`, hint, () => togglePop(kind))
+    button.classList.add('vn-menu-btn')
+    return button
+  }
+  const gameMenu = menuButton('game', t`游戏`, t`规则、角色、背包、任务、选项、行动、记忆和 CG`)
+  const viewMenu = menuButton('view', t`界面`, t`速度、状态、HUD、隐藏、全屏和退出`)
   const controls = el('div', { class: 'vn-controls' }, [
-    el('span', { class: 'vn-quick' }, [split(readButton, readMore), split(imageButton, imageMore)]),
-    logControl,
-    cgControl,
-    autoButton,
-    skipControl,
-    speedButton,
-    statusButton,
-    hudControl,
-    optionsButton,
-    saveControl,
-    loadControl,
-    sceneControl,
-    spriteControl,
-    hideControl,
-    fullButton,
-    actControl,
-    exitControl,
-    moreButton,
+    el('span', { class: 'vn-quick' }, [split(readButton, readMore), split(imageButton, imageMore), soundControl]),
+    gameMenu,
+    viewMenu,
   ])
-  root.append(bg, tint, actors, memoryLayer, flash, corner, title, chapter, panel, menu, box, controls, scrim, pop, logBox, cgView)
+  root.append(bg, tint, lookFields(el), actors, memoryLayer, flash, pulse, corner, title, chapter, panel, menu, waitBox, hud.notes, box, controls, scrim, pop, logBox, cgView)
 
-  // Where the layers in between may go: under the controls (however they wrapped), above the text box,
-  // and the text box itself above the input while it is open.
+  // Where the layers in between may go: under the controls (however they wrapped), above the text box and the input.
   function placeLayers() {
     if (root.hidden) return
-    fitControls()
+    clearFaces()
     const composer = $('composer')
-    if (composer) root.style.setProperty('--vn-composer', `${composer.offsetHeight}px`)
+    // The input box floats just above the text box.
+    stage.style.setProperty('--vn-box-foot', `${root.clientHeight - box.offsetTop + 10}px`)
     const below = controls.offsetTop + controls.offsetHeight
     root.style.setProperty('--vn-above', `${below + 8}px`)
     // The choices also keep clear of the time box (the CG under it may go behind them).
     const signFoot = sign.hidden || !sign.offsetHeight ? 0 : corner.offsetTop + sign.offsetTop + sign.offsetHeight
     root.style.setProperty('--vn-menu-top', `${Math.max(below, signFoot) + 8}px`)
-    root.style.setProperty('--vn-below', `${root.clientHeight - box.offsetTop + 10}px`)
+    // What is above it stops at the input box, while it is open.
+    const inputTop = composer ? composer.getBoundingClientRect().top - root.getBoundingClientRect().top : box.offsetTop
+    const foot = stage.classList.contains('vn-compose') ? Math.min(inputTop, box.offsetTop) : box.offsetTop
+    root.style.setProperty('--vn-below', `${root.clientHeight - foot + 10}px`)
   }
-  /** With ⋯ showing, the row keeps what fits; it is aligned right, so too much runs off its left edge. */
-  function fitControls() {
-    for (const b of tuckable) b.classList.remove('vn-tucked')
-    if (getComputedStyle(moreButton).display === 'none') return
-    const runsOver = () => controls.firstElementChild.getBoundingClientRect().left < controls.getBoundingClientRect().left - 0.5
-    for (const b of tuckable) {
-      if (!runsOver()) break
-      b.classList.add('vn-tucked')
+  /** Where a node is on the picture, in the picture's own pixels (the page may be zoomed). */
+  function placeOf(node) {
+    const [box, frame] = [node.getBoundingClientRect(), root.getBoundingClientRect()]
+    const scale = frame.height ? root.offsetHeight / frame.height : 1
+    return { left: (box.left - frame.left) * scale, right: (box.right - frame.left) * scale, top: (box.top - frame.top) * scale, bottom: (box.bottom - frame.top) * scale }
+  }
+
+  /** The faces on the stage, where they stand before the stage is moved. */
+  async function facesOnStage() {
+    const shown = [...onStage.values()].filter(actor => actor.src)
+    const places = await Promise.all(shown.map(actor => headIn(actor.src)))
+    const moved = ((parseFloat(getComputedStyle(actors).getPropertyValue('--stage-x')) || 0) / 100) * actors.offsetWidth
+    return shown.flatMap((actor, i) => {
+      if (!places[i]) return []
+      const { face, ratio } = places[i]
+      const height = actor.box.offsetHeight
+      const width = height / ratio
+      const [x, y, half] = [moved + actor.box.offsetLeft + (face.x - 0.5) * width, root.offsetHeight - height + face.y * height, (face.side * height * FACE_SHOWN) / 2]
+      return [{ left: x - half, right: x + half, top: y - half, bottom: y + half + half * 0.2, picture: root.offsetHeight - height }]
+    })
+  }
+
+  /** Between `ceiling` and what is over them, how small the people have to stand, and how far up. Smaller keeps the top of the picture where it is. */
+  function stageRoom(faces, over, ceiling) {
+    const floor = Math.min(...faces.flatMap(face => over.filter(box => face.left < box.right && face.right > box.left).map(box => box.top))) - FACE_GAP
+    if (floor === Infinity) return { small: 1, up: 0 }
+    const [top, bottom, picture] = [Math.min(...faces.map(face => face.top)), Math.max(...faces.map(face => face.bottom)), Math.min(...faces.map(face => face.picture))]
+    const small = Math.min(1, Math.max(SMALLEST_STAGE, (floor - ceiling) / (bottom - top)))
+    const up = Math.max(0, Math.min(picture + small * (bottom - picture) - floor, picture + small * (top - picture) - ceiling))
+    return { small, up: Math.round(up) }
+  }
+
+  /** Where the menu starts as it is laid out (it may be half way through opening), a title or tab standing out of it included. */
+  function menuTop() {
+    const title = menu.firstElementChild
+    return menu.offsetTop + (menu.classList.contains('tight') || !title ? 0 : Math.min(0, title.offsetTop))
+  }
+
+  /** The menu over the stage, without its title if that is what it takes to leave a face room. */
+  function menuOverFaces(faces, input, under) {
+    const box = placeOf(menu)
+    menu.classList.remove('tight')
+    const whole = menuTop()
+    menu.classList.toggle('tight', stageRoom(faces, [{ ...box, top: whole }, ...input], under).small < ROOM_FOR_TITLE)
+    const top = menuTop()
+    // Writing an action in a small window: the choices wait until the input is put away.
+    if (input.length && stageRoom(faces, [{ ...box, top }, ...input], under).small <= SMALLEST_STAGE) menu.classList.add('away')
+    return { ...box, top }
+  }
+
+  // What opens over the stage has its turn first: the people move aside from the corner, then fit under the controls and over the menu.
+  let facesAsked = 0
+  async function clearFaces() {
+    const asked = ++facesAsked
+    const faces = await facesOnStage()
+    if (asked !== facesAsked || !state.on) return
+    const under = controls.offsetTop + controls.offsetHeight + FACE_GAP
+    const input = stage.classList.contains('vn-compose') ? [placeOf($('composer'))] : []
+    if (!input.length) menu.classList.remove('away')
+    const overAt = height => (menu.hidden || !menu.offsetParent ? input : [menuOverFaces(faces, input, height), ...input])
+    let over = overAt(under)
+    let ceiling = under
+    let room = faces.length ? stageRoom(faces, over, ceiling) : { small: 1, up: 0 }
+    let aside = 0
+    if (faces.length === 1) {
+      const [face, box] = [faces[0], placeOf(corner)]
+      const topAt = face.picture + room.small * (face.top - face.picture) - room.up
+      if (face.left < box.right && face.right > box.left && topAt < box.bottom && box.bottom > box.top) {
+        aside = Math.round(Math.max(0, Math.min(box.right - face.left + FACE_GAP, root.offsetWidth - face.right - FACE_GAP)))
+        if (face.left + aside < box.right) {
+          ceiling = box.bottom + FACE_GAP
+          over = overAt(ceiling)
+          room = stageRoom(faces, over, ceiling)
+        }
+      }
     }
+    actors.style.setProperty('--vn-up', `${room.up}px`)
+    actors.style.setProperty('--vn-aside', `${aside}px`)
+    actors.style.setProperty('--vn-small', String(room.small))
+    actors.style.setProperty('--vn-small-at', `${faces.length ? Math.min(...faces.map(face => face.picture)) : 0}px`)
   }
-  const layout = new ResizeObserver(() => placeLayers())
+
+  const layout = new ResizeObserver(() => {
+    placeLayers()
+    fitChoices()
+  })
   for (const node of [root, controls, box, sign, $('composer')]) if (node) layout.observe(node)
+  // The keyboard moves the input without changing the size of anything.
+  window.visualViewport?.addEventListener('resize', () => requestAnimationFrame(placeLayers))
 
   voice.addEventListener('click', event => {
     event.stopPropagation()
@@ -270,6 +394,9 @@ export function initVn(deps) {
     voice.dataset.state = reading
   })
 
+  // 收起, above the input box (the only way to put it away on a phone).
+  $('composer')?.prepend(el('button', { type: 'button', class: 'btn small vn-compose-close', text: t`收起`, title: t`收起输入框（Esc）`, onclick: () => compose(false) }))
+
   // ─── Fullscreen: the stage fills the window (side panels and top bar out of the way), and the
   // screen too where the browser allows it (not iPhone Safari, not every embedded view).
   let screenFull = false
@@ -277,6 +404,7 @@ export function initVn(deps) {
     stage.classList.toggle('vn-full', on)
     fullButton.classList.toggle('on', on)
     fullButton.setAttribute('aria-pressed', String(on))
+    deps.setScreenFull?.(on)
     if (on) stage.requestFullscreen?.().catch(() => {})
     else if (document.fullscreenElement === stage) document.exitFullscreen?.().catch(() => {})
   }
@@ -321,7 +449,7 @@ export function initVn(deps) {
       state.readId = null
       if (on) readStep()
       else if (state.reading) {
-        state.reading = false
+        setReading(false)
         deps.stopReading?.()
       }
     }
@@ -346,12 +474,16 @@ export function initVn(deps) {
     if (kind === 'hud') {
       pop.setAttribute('aria-label', t`HUD 设置`)
       pop.replaceChildren(el('div', { class: 'vn-pop-head' }, [el('b', { text: t`HUD` }), close]), el('div', { class: 'vn-pop-own vn-hud-settings' }, hud.settings(() => openPop('hud'))))
-    } else if (kind === 'more') {
-      pop.setAttribute('aria-label', t`更多`)
-      pop.replaceChildren(
-        el('div', { class: 'vn-pop-head' }, [el('b', { text: t`更多` }), close]),
-        el('div', { class: 'vn-more-grid' }, [...tuckable.filter(b => b.classList.contains('vn-tucked')), ...extras].filter(b => !b.hidden).map(proxyOf)),
-      )
+    } else if (kind === 'game' || kind === 'view') {
+      const [name, buttons] = kind === 'game' ? [t`游戏`, gameControls] : [t`界面`, viewControls]
+      pop.setAttribute('aria-label', name)
+      pop.replaceChildren(el('div', { class: 'vn-pop-head' }, [el('b', { text: name }), close]), el('div', { class: 'vn-more-grid' }, buttons.filter(b => !b.hidden).map(proxyOf)))
+    } else if (kind === 'look') {
+      pop.setAttribute('aria-label', t`主题`)
+      pop.replaceChildren(el('div', { class: 'vn-pop-head' }, [el('b', { text: t`主题` }), close]), el('div', { class: 'vn-pop-own' }, lookRows()))
+    } else if (kind === 'sound') {
+      pop.setAttribute('aria-label', t`声音设置`)
+      pop.replaceChildren(el('div', { class: 'vn-pop-head' }, [el('b', { text: t`声音` }), close]), el('div', { class: 'vn-pop-own vn-sound' }, soundRows()))
     } else {
       const tabs = el('div', { class: 'seg' }, [['voice', t`朗读`], ['image', t`配图`]].map(([value, text]) => {
         const b = el('button', { type: 'button', 'aria-pressed': String(kind === value), text })
@@ -366,13 +498,47 @@ export function initVn(deps) {
     placeLayers()
     pop.hidden = false
     scrim.hidden = false
-    for (const [button, which] of [[readMore, 'voice'], [imageMore, 'image'], [moreButton, 'more']]) button.classList.toggle('open', kind === which)
-    if (kind === 'more' || kind === 'hud') return
+    for (const [button, which] of [[readMore, 'voice'], [imageMore, 'image'], [gameMenu, 'game'], [viewMenu, 'view'], [soundControl, 'sound']]) button.classList.toggle('open', kind === which)
+    if (kind !== 'voice' && kind !== 'image') return
     if (deps.fillQuick) deps.fillQuick(popShared, kind)
     else popShared.replaceChildren()
   }
 
-  /** ⋯'s menu: a control from the row, as it is now. */
+  /** 主题: the four looks, the colours of the one chosen, and how far 酷炫 washes the scene. */
+  function lookRows() {
+    const now = currentLook()
+    const choose = patch => {
+      setLook(patch)
+      placeLayers()
+      openPop('look')
+    }
+    const hints = lookHints()
+    const cards = el('div', { class: 'vn-look-cards' }, Object.entries(lookNames()).map(([look, name]) => {
+      const b = el('button', { type: 'button', class: `vn-look-card ${look}`, 'aria-pressed': String(look === now.look) }, [el('b', { text: name }), el('small', { text: hints[look] })])
+      b.addEventListener('click', () => choose({ look }))
+      return b
+    }))
+    const names = paletteNames()
+    const palettes = palettesOf(now.look).map(palette => {
+      const b = el('button', { type: 'button', 'aria-pressed': String(palette === now.palette), text: names[palette] })
+      b.addEventListener('click', () => choose({ palette }))
+      return b
+    })
+    const row = (label, control) => el('label', { class: 'vn-pop-row' }, [el('span', { text: label }), control])
+    const strength = el('input', { type: 'range', min: 0, max: 100, step: 5, value: now.strength })
+    const shown = el('b', { text: `${now.strength}%` })
+    strength.addEventListener('input', () => {
+      setLook({ strength: Number(strength.value) })
+      shown.textContent = `${strength.value}%`
+    })
+    return [
+      cards,
+      palettes.length ? el('div', { class: 'vn-pop-row' }, [el('span', { text: t`配色` }), el('div', { class: 'seg' }, palettes)]) : null,
+      now.look === 'bold' ? row(t`场景滤镜`, el('span', { class: 'vn-look-strength' }, [strength, shown])) : null,
+    ]
+  }
+
+  /** 游戏's or 界面's menu: a control, as it is now. */
   function proxyOf(button) {
     const proxy = el('button', { type: 'button', class: 'vn-btn', title: button.title, text: button.textContent })
     proxy.classList.toggle('on', button.classList.contains('on'))
@@ -381,7 +547,7 @@ export function initVn(deps) {
       // 速度 changes in place; the rest open something or leave, so the menu goes first.
       if (button === speedButton) {
         button.click()
-        return openPop('more')
+        return openPop('view')
       }
       closePop()
       button.click()
@@ -393,7 +559,60 @@ export function initVn(deps) {
     pop.hidden = true
     scrim.hidden = true
     popKind = null
-    for (const button of [readMore, imageMore, moreButton]) button.classList.remove('open')
+    for (const button of [readMore, imageMore, gameMenu, viewMenu, soundControl]) button.classList.remove('open')
+  }
+
+  /** 声音: 音乐, 音效 and 环境音 are the rules' (web/game-sound.js), 语音 this mode's 朗读; each with its switch and its volume. */
+  function soundRows() {
+    const row = (label, hint, { on, level, off = false, toggle, change, done }) => {
+      const tick = el('input', { type: 'checkbox', class: 'switch', checked: on, disabled: off, 'aria-label': label })
+      const slider = el('input', { type: 'range', min: 0, max: 100, value: Math.round(level * 100), disabled: off, 'aria-label': t`${label}音量` })
+      const shown = el('span', { class: 'vn-sound-level', text: `${Math.round(level * 100)}%` })
+      tick.addEventListener('change', () => {
+        toggle(tick.checked)
+        openPop('sound')
+      })
+      slider.addEventListener('input', () => {
+        shown.textContent = `${slider.value}%`
+        change(Number(slider.value) / 100)
+      })
+      if (done) slider.addEventListener('change', done)
+      return el('div', { class: 'vn-sound-row' }, [el('span', { class: 'vn-sound-name' }, [label, el('small', { text: hint })]), tick, slider, shown])
+    }
+    const sound = deps.sound?.() ?? null
+    const now = sound?.prefs()
+    const layer = (id, label, hint, done) => row(label, hint, {
+      on: Boolean(now?.on && !now.off.includes(id) && now[id]),
+      level: now?.[id] ?? 0,
+      off: !sound,
+      // Music starts silent, waiting to be asked for: asked for, it has to be heard.
+      toggle: on => sound.setPrefs(on ? { on: true, off: now.off.filter(item => item !== id), ...(now[id] ? {} : { [id]: SOUND_FIRST }) } : { off: [...now.off, id] }),
+      change: value => sound.setPrefs({ [id]: value }),
+      done,
+    })
+    return [
+      layer('music', t`音乐`, t`你上传的背景音乐`),
+      layer('effects', t`音效`, t`掷骰、命中、治疗、胜负`, () => sound?.play('hit')),
+      layer('ambience', t`环境音`, t`跟着天气的雨、风、雷`),
+      row(t`语音`, t`逐句朗读`, { on: Boolean(prefs.read), level: deps.voiceVolume?.() ?? 1, toggle: on => setQuick('read', on), change: value => deps.setVoiceVolume?.(value) }),
+      sound
+        ? el('button', { type: 'button', class: 'btn small', text: t`管理背景音乐`, onclick: () => {
+          closePop()
+          deps.openBag('sound')
+        } })
+        : el('p', { class: 'hint', text: t`音乐、音效和环境音要打开这张卡的游戏规则才有。` }),
+    ]
+  }
+
+  /** A way to the 场景 or 立绘 window, at the top of 配图's menu. */
+  function artPage(tab, name, hint) {
+    const go = el('button', { type: 'button', class: 'vn-pop-page' }, [el('b', { text: name }), el('small', { text: hint })])
+    go.addEventListener('click', event => {
+      event.stopPropagation()
+      closePop()
+      openLibrary(tab)
+    })
+    return go
   }
 
   /** This mode's own switches at the top of the menu, as they are now. */
@@ -414,6 +633,7 @@ export function initVn(deps) {
           artMode('newScene', t`到了新地点：`, renderPopOwn),
           artMode('newSprite', t`没有立绘的角色说话时：`, renderPopOwn),
         ]))
+    if (popKind === 'image') popOwn.prepend(el('div', { class: 'vn-pop-pages' }, [artPage('scenes', t`场景`, t`这张卡的背景图`), artPage('sprites', t`立绘`, t`角色说话时显示的立绘`)]))
   }
 
   // ─── Saves (web/vn-saves.js): the line on screen, and getting back to it ──
@@ -490,7 +710,7 @@ export function initVn(deps) {
     if (!chat) return
     const on = !isOn(chat.cardId)
     setOn(chat.cardId, on)
-    if (on) offerPreset(chat)
+    if (on) offerPreset(chat).then(() => offerRules(chat))
   })
 
   // Chats offered the preset in this page already: asked once each.
@@ -536,6 +756,98 @@ export function initVn(deps) {
       document.body.append(box)
       box.showModal()
     })
+  }
+
+  let offeringRules = false
+
+  /** Going into the mode with a card whose rules are off: once per card, what they would add. With another window open, next time. */
+  async function offerRules(chat) {
+    const asked = recall(RULES_OFFER_KEY, {})
+    if (offeringRules || !chat || asked.never || asked[chat.cardId]) return
+    offeringRules = true
+    const level = await deps.rulesLevel(chat.cardId)
+    if (level !== 'off' || !isOn(chat.cardId) || getChat()?.id !== chat.id || document.querySelector('dialog[open]')) {
+      offeringRules = false
+      return
+    }
+    const box = el('dialog', { class: 'dialog vn-preset-offer' })
+    const done = answer => {
+      offeringRules = false
+      box.close()
+      box.remove()
+      remember(RULES_OFFER_KEY, answer === 'never' ? { ...recall(RULES_OFFER_KEY, {}), never: true } : { ...recall(RULES_OFFER_KEY, {}), [chat.cardId]: true })
+      if (answer === 'light' || answer === 'full') deps.setRules(chat.cardId, answer).catch(error => toast(error.message))
+    }
+    box.append(
+      el('h2', { text: t`开启游戏规则？` }),
+      el('p', { text: t`给这张卡加上骰子检定、回合制战斗、背包、任务和成长。成败和数值由程序计算，模型只按结果写故事。` }),
+      el('ul', { class: 'vn-offer-list' }, [
+        el('li', { text: t`有风险的选项标着成功率，点了就掷骰，冒险成功收获更大` }),
+        el('li', { text: t`遇到敌人时进入回合制战斗，全程不调用模型` }),
+        el('li', { text: t`物品、任务、生命的变化都由程序记下，随时能在「行囊」里看` }),
+      ]),
+      el('p', { class: 'muted small', text: t`只对这张卡生效，已有的对话不受影响，随时可以在顶栏「规则」里改。` }),
+      el('div', { class: 'row end' }, [
+        el('button', { type: 'button', class: 'btn ghost', text: t`不再提示`, onclick: () => done('never') }),
+        el('span', { class: 'grow' }),
+        el('button', { type: 'button', class: 'btn', text: t`先不开`, onclick: () => done('no') }),
+        el('button', { type: 'button', class: 'btn', text: t`只开检定`, onclick: () => done('light') }),
+        el('button', { type: 'button', class: 'btn primary', text: t`全部开启`, onclick: () => done('full') }),
+      ]),
+    )
+    box.addEventListener('cancel', () => done('no'))
+    document.body.append(box)
+    box.showModal()
+  }
+
+  // ─── How far each reply has been read ──────────────────────────────
+  const readBefore = (chatId, nodeId) => recall(READ_KEY, {})[chatId]?.[nodeId] ?? -1
+
+  function keepRead(chatId, nodeId, line) {
+    const all = recall(READ_KEY, {})
+    const replies = all[chatId] ?? {}
+    if ((replies[nodeId] ?? -1) >= line) return
+    delete replies[nodeId]
+    replies[nodeId] = line
+    delete all[chatId]
+    all[chatId] = Object.fromEntries(Object.entries(replies).slice(-READ_REPLIES))
+    remember(READ_KEY, Object.fromEntries(Object.entries(all).slice(-READ_CHATS)))
+  }
+
+  /** The line on screen counts as read; a reply still being written is kept once it has its place in the story. */
+  function noteRead() {
+    state.readTo = Math.max(state.readTo, state.index)
+    if (state.node) keepRead(state.chatId, state.node.id, state.readTo)
+  }
+
+  // ─── 快进 ───────────────────────────────────────────────────────────
+  const canSkip = () => state.index + 1 < state.available && state.index + 1 <= state.readTo
+
+  const drawFast = () => fastButton.classList.toggle('idle', !canSkip() && !state.skipping)
+
+  function setSkipping(on) {
+    if (state.skipping === on) return
+    state.skipping = on
+    clearTimeout(state.skipTimer)
+    fastButton.classList.toggle('on', on)
+    if (on) return skipOn()
+    drawFast()
+    // Where it stopped is read like any other line, and 自动 goes on from there.
+    readStep()
+    if (state.auto && state.phase === 'shown') lineShown()
+  }
+
+  /** One read line more, until the next one is new: the end of the reply stops it by itself. */
+  function skipOn() {
+    if (!state.skipping) return
+    if (state.phase === 'typing') {
+      cancelTyping()
+      lineShown()
+    }
+    if (!canSkip()) return setSkipping(false)
+    state.index++
+    showStep(false)
+    state.skipTimer = setTimeout(skipOn, SKIP_MS)
   }
 
   // ─── The text and its steps ────────────────────────────────────────
@@ -610,16 +922,21 @@ export function initVn(deps) {
   /** Redraws from the chat as it is now: a new reply starts at its first line, the same one keeps its place. */
   function render(chat) {
     const on = Boolean(chat) && isOn(chat.cardId)
+    memoryControl.hidden = !deps.memoryOn()
+    for (const b of bagControls) b.hidden = !deps.rulesRunning()
+    rulesControl.classList.toggle('on', deps.rulesRunning())
     toggle?.setAttribute('aria-pressed', String(on))
     if (toggle) {
       toggle.hidden = !chat
       toggle.classList.toggle('fresh', !recall(TRIED_KEY, false))
     }
     if (state.on && !on) leave()
+    const entering = on && !state.on
     state.on = on
     root.hidden = !on
     stage.classList.toggle('vn-on', on)
     if (!on) return fitInput?.()
+    if (entering) offerRules(chat)
     quickDefaults()
     renderQuick()
     if (chat.cardId !== state.cardId) {
@@ -651,7 +968,9 @@ export function initVn(deps) {
     state.options = options
     state.streaming = writing
     state.available = writing ? Math.max(0, steps.length - 1) : steps.length
+    state.changeAt = writing || !node ? Infinity : changeLine(node, steps)
     if (writing) compose(false)
+    if (finishing && node) noteRead()
     if (fresh) {
       // Which day the story had reached before this reply; its own dates count on from there.
       // Opening a chat (or coming back to this mode) shows no title for the reply already there.
@@ -662,10 +981,15 @@ export function initVn(deps) {
       state.reached = quiet ? key : null
       state.index = -1
       state.seen = -1
+      state.readTo = !writing && node ? readBefore(chat.id, node.id) : -1
       state.stepWhere = null
       state.follow = false
       state.pending = true
       state.readId = null
+      setSkipping(false)
+      // The choices of the turn just taken go, whatever comes next: a reply may have no line to take them away.
+      hideMenu()
+      endRow.hidden = true
       closePanel()
     } else if (current) {
       // The same reply again (more of it in, finished, or its regex changed): stay on the same line.
@@ -691,6 +1015,8 @@ export function initVn(deps) {
     drawStatus(chat)
     drawCg(chat)
     drawHud(chat)
+    // Read past where it changes before the reply was all in.
+    if (state.index >= state.changeAt) reachEnd()
     if (!writing && node) labelFaces()
     if (jumped) showStep(false)
     else if (state.index < 0 || state.pending) catchUp()
@@ -701,6 +1027,31 @@ export function initVn(deps) {
       if (now?.type === 'line' && current?.type === 'line' && now.plain === current.plain && now.speaker !== current.speaker) drawSpeaker(now)
     }
     if (writing && state.index < 0) waitingLine(job.echo)
+    drawWait(writing ? job : null)
+    drawFast()
+  }
+
+  /** While a turn is written: what the model is doing, for how long, and what the player's action came to. */
+  let waitTimer = 0
+  function drawWait(job) {
+    waitBox.hidden = !job
+    clearInterval(waitTimer)
+    waitTimer = 0
+    if (!job) return
+    const tick = () => {
+      const seconds = Math.floor((Date.now() - (job.startedAt ?? Date.now())) / 1000)
+      waitClock.textContent = seconds ? t`${seconds} 秒` : ''
+    }
+    const busy = job.noteBefore != null || /…$/.test(job.note ?? '') && job.note !== '…'
+    waitWords.textContent = busy ? job.note : job.text ? t`模型正在写` : job.reasoning ? t`模型在思考` : t`等模型回复`
+    waitBox.classList.toggle('small', state.index >= 0)
+    waitResult.hidden = !job.outcome
+    if (job.outcome) {
+      waitResult.textContent = job.outcome.text
+      waitResult.className = `vn-wait-result ${job.outcome.tier}`
+    }
+    tick()
+    waitTimer = setInterval(tick, 1000)
   }
 
   /** The text arrived since the last frame: lines that are complete now may show. */
@@ -738,6 +1089,14 @@ export function initVn(deps) {
       state.pending = false
       state.index = Math.max(0, Math.min(state.index, state.available - 1))
       showStep(false)
+    } else if (!state.streaming && state.node) {
+      // A reply that is nothing but its mark: straight to what it asks of the player.
+      state.pending = false
+      plate.hidden = true
+      lineBox.replaceChildren()
+      nextMark.className = 'vn-next end'
+      reachEnd()
+      showEnd()
     }
   }
 
@@ -774,6 +1133,10 @@ export function initVn(deps) {
     endRow.hidden = true
     if (!step) return
     state.seen = Math.max(state.seen, state.index)
+    noteRead()
+    state.phase = 'showing'
+    drawFast()
+    if (state.index >= state.changeAt) reachEnd()
     // The story moved on to another place or time: the sign, the background and the day follow.
     if (step.where?.place && (step.where.place !== state.stepWhere?.place || step.where.time !== state.stepWhere?.time)) {
       state.stepWhere = step.where
@@ -832,17 +1195,23 @@ export function initVn(deps) {
   }
 
   /** 朗读 on: the line on screen is read once (not again when the page redraws). */
+  /** A line being read aloud: the weather and the music step back from the voice. */
+  function setReading(on) {
+    state.reading = on
+    deps.readingSound(on)
+  }
+
   function readStep() {
     const step = state.steps[state.index]
-    if (!prefs.read || !deps.readBeat || step?.type !== 'line') return
+    if (!prefs.read || !deps.readBeat || step?.type !== 'line' || state.skipping) return
     const id = `${state.key}#${state.index}`
     if (state.readId === id) return
     state.readId = id
-    state.reading = true
+    setReading(true)
     // Called once the line has been read, or the voice gave up on it (failed, refused, stopped).
     deps.readBeat(state.node?.id ?? 'vn-live', step.text, () => {
       if (state.readId !== id || !state.reading || !state.on) return
-      state.reading = false
+      setReading(false)
       // 自动 waits for the voice, then moves on (one timer: a line read at once must not leave one behind).
       clearTimeout(state.autoTimer)
       if (state.auto && state.phase === 'shown') state.autoTimer = setTimeout(() => state.auto && advance(), 450)
@@ -858,7 +1227,7 @@ export function initVn(deps) {
     nextMark.className = `vn-next${last && state.streaming ? ' wait' : ''}${ended ? ' end' : ''}`
     if (ended) reachEnd()
     if (ended) showEnd()
-    else if (state.auto && !state.reading) {
+    else if (state.auto && !state.reading && !state.skipping) {
       const step = state.steps[state.index]
       state.autoTimer = setTimeout(() => {
         if (state.auto && state.phase === 'shown' && !state.reading && !document.hidden) advance()
@@ -874,11 +1243,21 @@ export function initVn(deps) {
 
   /** The choices as a game's menu: number keys pick one, ✎ edits it first, 自己写 opens the input. */
   function showMenu() {
+    const gate = deps.pendingGate()
+    if (gate) return showGate(gate)
     const choices = currentChoices()
     if (!choices.length) return
     const busy = isGenerating()
+    const noteOf = state.node ? deps.choiceNote(getChat(), state.node) : () => null
+    const notes = choices.map(noteOf)
     const rows = choices.map((text, i) => {
-      const go = el('button', { type: 'button', class: 'vn-choice', disabled: busy, style: `--i: ${i}` }, [el('span', { class: 'vn-choice-n', text: String(i + 1) }), el('span', { class: 'vn-choice-text', text })])
+      const note = notes[i]
+      const go = el('button', { type: 'button', class: 'vn-choice', disabled: busy, style: `--i: ${i}` }, [
+        el('span', { class: 'vn-choice-n', text: String(i + 1) }),
+        el('span', { class: 'vn-choice-text', text }),
+        note ? el('span', { class: `choice-risk vn-choice-tag ${note.risk}` }, [note.short ? el('i', { class: 'vn-seal', text: note.risk.includes('fight') ? t`战` : t`险` }) : null, note.text]) : null,
+        note?.short ? el('span', { class: `choice-risk vn-choice-short ${note.risk}`, text: note.short }) : null,
+      ])
       go.addEventListener('click', event => {
         event.stopPropagation()
         pick(text)
@@ -896,21 +1275,101 @@ export function initVn(deps) {
       event.stopPropagation()
       compose(true)
     })
+    openMenu(t`轮到你了`, notes.some(Boolean) ? t`冒险成功收获更大，稳妥的只推进一小步` : t`选一个，或者自己写`, rows, own, detailsButton)
+  }
+
+  function openMenu(title, hint, rows, own, more = null) {
+    const list = el('div', { class: 'vn-menu-list' }, rows)
+    slideSlab(el, list, '.vn-choice')
     menu.replaceChildren(
-      el('div', { class: 'vn-menu-head' }, [el('b', { text: t`轮到你了` }), el('span', { text: t`选一个，或者自己写` })]),
-      el('div', { class: 'vn-menu-list' }, rows),
-      el('div', { class: 'vn-menu-foot' }, [own, control(t`收起`, t`先收起选项看看画面（右上角「选项」或 O 再打开）`, () => hideMenu())]),
+      el('div', { class: 'vn-menu-head' }, [el('b', {}, letters(el, title)), el('span', { text: hint })]),
+      list,
+      el('div', { class: 'vn-menu-foot' }, [own, more, control(t`收起`, t`先收起选项看看画面（「游戏」里的「选项」或 O 再打开）`, () => hideMenu())]),
     )
+    menu.classList.toggle('has-details', Boolean(more))
+    drawDetails()
     placeLayers()
     menu.hidden = false
     root.classList.add('choosing')
     optionsButton.classList.add('on')
+    fitChoices()
+    clearFaces()
+  }
+
+  // On a phone each choice takes one line: the whole words, the full tag and ✎ wait behind 详情.
+  const detailsButton = control(t`详情`, t`看选项的全文、检定和敌人，也能改一改再发`, () => {
+    prefs.choiceDetails = !prefs.choiceDetails
+    remember(PREFS_KEY, prefs)
+    drawDetails()
+    placeLayers()
+    fitChoices()
+    clearFaces()
+  })
+  detailsButton.classList.add('vn-menu-more')
+  function drawDetails() {
+    menu.classList.toggle('brief', menu.classList.contains('has-details') && !prefs.choiceDetails)
+    detailsButton.classList.toggle('on', Boolean(prefs.choiceDetails))
+  }
+
+  /** One line each: the type comes down for all of them together, as far as it still reads; what is left over ends in …. */
+  function fitChoices() {
+    menu.style.removeProperty('--vn-choice-size')
+    if (menu.hidden || !menu.classList.contains('brief') || !matchMedia(zoomedQuery(NARROW)).matches) return
+    const texts = [...menu.querySelectorAll('.vn-choice-text')]
+    for (let size = 14; size >= 13 && texts.some(text => text.scrollWidth > text.clientWidth); size -= .5) menu.style.setProperty('--vn-choice-size', `${size}px`)
+  }
+
+  /** A reply stopped at a roll or a fight: the player's to take on, or their own action instead. */
+  function showGate(gate) {
+    const row = (n, label, act) => {
+      const button = el('button', { type: 'button', class: 'vn-choice', disabled: isGenerating() }, [el('span', { class: 'vn-choice-n', text: String(n) }), el('span', { class: 'vn-choice-text', text: label })])
+      button.addEventListener('click', event => {
+        event.stopPropagation()
+        act()
+      })
+      return el('div', { class: 'vn-choice-row' }, [button])
+    }
+    const own = el('button', { type: 'button', class: 'vn-menu-own', text: t`✎ 自己写行动` })
+    own.addEventListener('click', event => {
+      event.stopPropagation()
+      compose(true)
+    })
+    if (gate.kind === 'check') return openMenu(t`检定`, gate.line, [row(1, t`掷骰`, throwDie)], own)
+    const start = row(1, gate.resumes ? t`继续战斗` : t`开始战斗`, () => intoFight())
+    // Taken from the choices it can still be left; one the story brought on cannot.
+    if (!gate.choice) return openMenu(t`遭遇战`, gate.line, [gate.panel(), start], own)
+    openMenu(t`战斗`, gate.line, [gate.panel(), start, row(2, t`交给剧情`, () => leaveFight()), row(3, t`换个选择`, () => dropFight())], own)
+  }
+
+  function intoFight() {
+    hideMenu()
+    compose(false)
+    deps.startFight()
+  }
+
+  function leaveFight() {
+    hideMenu()
+    compose(false)
+    deps.leaveFight()
+  }
+
+  function dropFight() {
+    hideMenu()
+    deps.dropFight()
+  }
+
+  function throwDie() {
+    clearTimeout(state.autoTimer)
+    hideMenu()
+    compose(false)
+    deps.rollGate()
   }
 
   function hideMenu() {
     menu.hidden = true
     root.classList.remove('choosing')
     optionsButton.classList.remove('on')
+    clearFaces()
   }
 
   function pick(text) {
@@ -922,10 +1381,15 @@ export function initVn(deps) {
   /** After the last line: the menu, and under the line the turn's tools and a word that it is the player's move. */
   function showEnd() {
     state.phase = 'ended'
+    setSkipping(false)
+    drawFast()
     const node = state.node
     const busy = isGenerating()
     showMenu()
-    const tools = [el('span', { class: 'vn-turn-hint', text: t`轮到你了` })]
+    const gate = deps.pendingGate()
+    // 自动 reads on through a roll, after a moment to see what it is.
+    if (gate?.kind === 'check' && state.auto) state.autoTimer = setTimeout(() => state.auto && state.phase === 'ended' && deps.pendingGate() && throwDie(), GATE_WAIT)
+    const tools = [el('span', { class: 'vn-turn-hint', text: t`轮到你了` }), ...deps.queueChips()]
     if (node && node.siblingCount > 1) {
       const swipe = (delta, label) => control(label, '', () => selectNode(node.siblingIds[node.siblingIndex + delta]))
       const back = swipe(-1, '‹')
@@ -934,14 +1398,15 @@ export function initVn(deps) {
       forward.disabled = busy || node.siblingIndex === node.siblingCount - 1
       tools.push(back, el('span', { class: 'vn-swipe', text: `${node.siblingIndex + 1}/${node.siblingCount}` }), forward)
     }
-    if (node && node.id !== 'root') {
+    // With the player's message deleted there is nothing to write it from again.
+    if (node && node.id !== 'root' && getChat()?.path.some(other => other.id === node.parent)) {
       const again = control(t`重新生成`, '', () => regenerate(node.parent))
       again.disabled = busy
       tools.push(again)
     }
     // 重写选项, as under the reply in the transcript: not over a card's own options.
     const own = node && /<choices>/i.test(display(getChat(), node, true).raw ?? '')
-    if (node && node.id !== 'root' && !node.compaction && getChat()?.asksChoices && (own || !currentChoices().length)) {
+    if (node && node.id !== 'root' && !node.compaction && !gate && getChat()?.asksChoices && (own || !currentChoices().length)) {
       const label = own ? t`换一组选项` : t`补写选项`
       const redo = control(label, t`只重写这一轮结尾的四个行动选项，正文不动`, async () => {
         await rewriteChoices(node.id)
@@ -958,6 +1423,7 @@ export function initVn(deps) {
   // ─── Moving through the lines ──────────────────────────────────────
   function advance() {
     if (!state.on) return
+    if (state.skipping) return setSkipping(false)
     if (state.phase === 'typing') {
       cancelTyping()
       return lineShown()
@@ -972,7 +1438,7 @@ export function initVn(deps) {
       return
     }
     if (state.phase === 'ended') {
-      if (menu.hidden && currentChoices().length) return showMenu()
+      if (menu.hidden && (currentChoices().length || deps.pendingGate())) return showMenu()
       return compose(true)
     }
     showEnd()
@@ -1007,12 +1473,14 @@ export function initVn(deps) {
   /** The input box at the foot; opening it brings the turn's choices back too. */
   function compose(open) {
     stage.classList.toggle('vn-compose', open)
-    // The text box moves up over the input, or back down: the menu above it follows.
+    actControl.classList.toggle('on', open)
+    // The choices above keep clear of it.
     placeLayers()
     if (open) {
       // Filled while hidden, it has its height only now.
       fitInput?.()
       setAuto(false)
+      setSkipping(false)
       if (state.phase === 'ended' && menu.hidden) showMenu()
       $('input')?.focus()
     }
@@ -1048,29 +1516,68 @@ export function initVn(deps) {
     showPanel(el('div', { class: 'vn-status' }, [...parts, close]), kind)
   }
 
-  /** The state before a reply: the assistant message before it on the path. */
-  function stateBefore(chat, node) {
+  /** The assistant message before a reply on the path. */
+  function replyBefore(chat, node) {
     const index = chat.path.findIndex(item => item.id === node.id)
-    return chat.path.slice(0, Math.max(0, index)).reverse().find(item => item.role === 'assistant')?.state ?? null
+    return chat.path.slice(0, Math.max(0, index)).reverse().find(item => item.role === 'assistant') ?? null
   }
 
-  /** The HUD: the state as the reply on screen left it once its end is reached, the one before until then. */
+  /** What the HUD reads off a reply: its state, and the sheet when the rules keep one. `next`: the reply after it, on its way. */
+  const hudValues = (reply, next) => (reply ? deps.hudValues(reply, next) : null)
+
+  /** The line a reply's changes come with: the first where the rules were told of one; the end for a reply with no such mark. */
+  function changeLine(node, steps) {
+    const words = deps.changeWords?.(node) ?? null
+    if (words === null) return Infinity
+    const bare = text => String(text).replace(/【[^】]*】/g, '').replace(/[\s「」『』“”"*]/g, '')
+    const tail = bare(words)
+    if (!tail) return 0
+    for (const size of [8, 4]) {
+      const found = steps.findIndex(step => step.plain && bare(step.plain).includes(tail.slice(-size)))
+      if (found >= 0) return found
+    }
+    return Infinity
+  }
+
+  /** The HUD: the state as the reply on screen left it once its changes are reached, the one before (with what the turn settled) until then. */
   function drawHud(chat) {
     // While a turn is written, the reply before it (its state is the one before).
     const node = state.node ?? latestReply(chat)
     const spec = node ? deps.hudSpec?.(chat, node) ?? null : null
     hudControl.hidden = !spec?.fields?.some(field => field.show !== 'hidden')
     const reached = Boolean(state.node) && state.reached === state.key
-    hud.draw({ cardId: chat.cardId, spec, state: (state.node && !reached ? stateBefore(chat, state.node) : node?.state) ?? {} })
+    hud.draw({ cardId: chat.cardId, spec, state: (state.node && !reached ? hudValues(replyBefore(chat, state.node), state.node) : hudValues(node)) ?? {} })
   }
 
-  /** The reply read to its end: the HUD moves to its state, and what it changed pops up. */
+  /** The reply read as far as its changes, or to its end: the HUD moves to its state, and what it changed pops up. */
   function reachEnd() {
     const chat = getChat()
     if (!chat || !state.node || state.reached === state.key) return
     state.reached = state.key
     drawHud(chat)
-    hud.notify(changeNotes(deps.hudSpec?.(chat, state.node) ?? null, stateBefore(chat, state.node), state.node.state ?? null))
+    const notes = changesOf(chat, state.node)
+    hud.notify(notes)
+    if (prefs.hudNotes !== false) feelChanges(notes)
+  }
+
+  /** What a reply changed. The rules say so themselves, with more to say about it than a variable has. */
+  function changesOf(chat, node) {
+    const before = replyBefore(chat, node)
+    const spec = deps.hudSpec?.(chat, node) ?? null
+    const own = spec ? { ...spec, fields: (spec.fields ?? []).filter(field => !field.path.startsWith('$game.')) } : null
+    return [...changeNotes(own, hudValues(before), hudValues(node)), ...deps.sheetNotes(before, node)]
+  }
+
+  /** What was lost or won, felt: the picture takes it for a moment, with the sound that goes with it. */
+  function feelChanges(notes) {
+    const life = notes.find(note => note.field === 'life')
+    const big = notes.some(note => note.kind === 'level' || note.kind === 'achievement')
+    const kind = life?.delta < 0 ? 'hurt' : big ? 'bright' : life ? 'healed' : ''
+    if (!kind) return
+    deps.noteSound?.({ hurt: 'hit', bright: 'win', healed: 'heal' }[kind])
+    pulse.className = 'vn-pulse'
+    void pulse.offsetWidth
+    pulse.classList.add(kind)
   }
 
   function drawStatus(chat) {
@@ -1105,7 +1612,7 @@ export function initVn(deps) {
 
   /**
    * One picture full size, ‹ › through all of them (←/→). Without `start`, this
-   * turn's newest; from the gallery, Esc goes back to it.
+   * turn's newest; from the gallery, closing it in any way goes back to the gallery.
    */
   function openCg(start = null, fromGallery = false) {
     const chat = getChat()
@@ -1117,6 +1624,7 @@ export function initVn(deps) {
     const picture = el('img', { alt: '' })
     const count = el('span', { class: 'vn-cg-count' })
     const show = () => {
+      state.cgAt = at
       picture.src = all[at].src
       picture.alt = all[at].prompt
       count.textContent = `${cgLabel(all[at])} · ${at + 1} / ${all.length}`
@@ -1128,17 +1636,18 @@ export function initVn(deps) {
     cgView.replaceChildren(picture, el('div', { class: 'vn-cg-tools' }, [
       count,
       ...(all.length > 1 ? [control('‹', t`上一张（←）`, () => step(-1)), control('›', t`下一张（→）`, () => step(1))] : []),
-      control(t`回廊`, t`这条故事线上所有的 CG（G）`, () => openGallery()),
-      control(t`关闭`, t`Esc`, () => closeCg()),
-    ]))
+      // Opened from the gallery, 关闭 is the way back to it.
+      fromGallery ? null : control(t`回廊`, t`这条故事线上所有的 CG（G）`, () => openGallery(state.cgAt)),
+      control(t`关闭`, t`Esc`, () => leaveCg()),
+    ].filter(Boolean)))
     Object.assign(cgView.dataset, { mode: 'one', back: fromGallery ? '1' : '' })
     state.cgStep = step
     show()
     cgView.hidden = false
   }
 
-  /** CG 回廊: every picture on the story's path as a wall of thumbnails, this turn's marked. */
-  function openGallery() {
+  /** CG 回廊: every picture on the story's path as a wall of thumbnails, this turn's marked; `from`, the one just looked at, in view. */
+  function openGallery(from = null) {
     const chat = getChat()
     if (!chat) return
     const all = allCgs(chat)
@@ -1156,28 +1665,34 @@ export function initVn(deps) {
       el('div', { class: 'vn-gallery-head' }, [
         el('b', { text: t`CG 回廊` }),
         el('span', { class: 'muted small', text: all.length ? t`这条故事线上的 ${all.length} 张配图` : '' }),
+        deps.rulesRunning() ? control(t`成就`, t`这条故事线上做到的事`, () => deps.openBag('deeds')) : null,
         control(t`关闭`, t`Esc`, () => closeCg()),
       ]),
       all.length ? grid : el('p', { class: 'vn-waiting', text: t`这条故事线上还没有配图。右上角「配图」开着时，新回复会自动配图。` }),
     ]))
     Object.assign(cgView.dataset, { mode: 'gallery', back: '' })
     state.cgStep = null
+    state.cgAt = null
     cgView.hidden = false
-    grid.querySelector('.here')?.scrollIntoView({ block: 'center' })
+    ;(from === null ? grid.querySelector('.here') : grid.children[from])?.scrollIntoView({ block: 'center' })
   }
 
   function closeCg() {
     cgView.hidden = true
     cgView.replaceChildren()
     state.cgStep = null
+    state.cgAt = null
   }
+
+  /** Out of what is showing: a picture opened from the gallery goes back to it, anything else to the story. */
+  const leaveCg = () => (cgView.dataset.back ? openGallery(state.cgAt) : closeCg())
   cgButton.addEventListener('click', event => {
     event.stopPropagation()
     openCg()
   })
   cgView.addEventListener('click', event => {
     event.stopPropagation()
-    if (event.target === cgView || event.target.tagName === 'IMG') closeCg()
+    if (event.target === cgView || event.target.tagName === 'IMG') leaveCg()
   })
 
   /**
@@ -1194,6 +1709,7 @@ export function initVn(deps) {
     }
     root.dataset.time = timeOfDay(where?.time) ?? ''
     root.dataset.weather = weatherOf(where?.weather) ?? ''
+    deps.sceneSound(root.dataset.weather, where?.place ?? '')
     const parts = where ? [where.time, where.place, where.weather].filter(Boolean) : []
     sign.replaceChildren(...(parts.length ? [timeBox(el, parts)] : []))
     sign.hidden = !parts.length
@@ -1409,6 +1925,8 @@ export function initVn(deps) {
     if (bg.dataset.url === url) return
     bg.dataset.url = url
     bg.style.backgroundImage = url ? `url("${url}")` : ''
+    root.style.setProperty('--vn-picture', url ? `url("${url}")` : 'none')
+    root.classList.toggle('has-picture', Boolean(url))
   }
 
   /** The place's picture (or the one drawn for this chat's turn there), or the fallback while it has none. */
@@ -1591,7 +2109,7 @@ export function initVn(deps) {
     const cardId = state.cardId
     const step = state.steps[state.index]
     if (!cardId || step?.type !== 'line') return clearStage()
-    const narrow = matchMedia(NARROW).matches
+    const narrow = matchMedia(zoomedQuery(NARROW)).matches
     const layout = stageAt(state.steps, state.index, { names: state.names, max: narrow ? 2 : 3, isActor, labels: faceLabels.get(state.key) })
     const members = await Promise.all(layout.members.map(async member => {
       const entry = state.names.find(item => item.name === member.name)
@@ -1636,7 +2154,25 @@ export function initVn(deps) {
     })
     actors.classList.toggle('narration', !layout.speaker)
     actors.dataset.count = String(members.length)
+    clearFaces()
+    const speaker = members.find(member => member.name === layout.speaker)
+    showHead(speaker?.src)
+    if (speaker?.src ?? members[0]?.src) setHero(speaker?.src ?? members[0].src)
     if (effects) playEffects(layout)
+  }
+
+  /** The speaker's head in its frame; nobody speaking, none. */
+  async function showHead(src) {
+    if (face.dataset.src === (src ?? '')) return
+    face.dataset.src = src ?? ''
+    const crop = src ? await headIn(src) : null
+    if (face.dataset.src !== (src ?? '')) return
+    face.hidden = !crop
+    box.classList.toggle('faced', Boolean(crop))
+    if (!crop) return
+    face.style.backgroundImage = `url("${src}")`
+    face.style.backgroundSize = `${crop.size}% auto`
+    face.style.backgroundPosition = `${crop.x}% ${crop.y}%`
   }
 
   /** A new picture for someone on stage (another expression): the new one fades in over the old. */
@@ -1673,6 +2209,7 @@ export function initVn(deps) {
 
   /** Nobody on stage (a card's panel, waiting for the first line, leaving the mode). */
   function clearStage(forgetMissing = true) {
+    showHead('')
     cast.token++
     for (const actor of onStage.values()) {
       actor.box.classList.remove('show')
@@ -1696,6 +2233,16 @@ export function initVn(deps) {
       drawSprite(cardId, entry)
     }
     drawChip()
+  }
+
+  /**
+   * A foe's picture, drawn behind the scenes for the next time it is met: a fight never waits for it. By itself only
+   * as 立绘 are (没有立绘的角色说话时：自动) and only in this mode, or when asked for.
+   */
+  function drawFoe(cardId, name, done, asked = false) {
+    const key = `foe:${name}`
+    if (!asked && (prefs.newSprite !== 'auto' || art.failed.has(key))) return
+    enqueue(cardId, { key, label: t`${name}的立绘`, url: `/api/cards/${cardId}/foes/draw`, body: { name }, done })
   }
 
   /**
@@ -1882,10 +2429,10 @@ export function initVn(deps) {
     if (!library) return
     drawLibraryStatus()
     library.replaceChildren(
+      el('form', { method: 'dialog', class: 'dialog-x' }, [el('button', { class: 'btn small', text: t`关闭` })]),
       el('div', { class: 'vn-library-top' }, [el('h2', { text: libraryTab === 'sprites' ? t`立绘` : t`场景` }), tabs]),
       libraryStatus,
       ...body,
-      el('form', { method: 'dialog', class: 'row end' }, [el('button', { class: 'btn', text: t`关闭` })]),
     )
   }
 
@@ -2271,56 +2818,145 @@ export function initVn(deps) {
     return row
   }
 
-  /** Earlier turns (story only) and every line of this reply seen so far; the one on screen marked. */
+  /** The story in rounds: a turn and the reply to it. The opening is a round with no turn. */
+  function roundsOf(chat) {
+    const rounds = []
+    let turn = 0
+    for (const node of chat?.path ?? []) {
+      if (node.role === 'user') rounds.push({ turn: ++turn, user: node, reply: null })
+      else if (node.role === 'assistant' && rounds.at(-1) && !rounds.at(-1).reply) rounds.at(-1).reply = node
+      else if (node.role === 'assistant') rounds.push({ turn, user: null, reply: node })
+    }
+    return rounds
+  }
+
+  const roundName = round => (round.turn ? t`第 ${round.turn} 轮` : t`开场`)
+
+  /** A round in the 回看's list: its number and, when the player wrote it, what they did. */
+  function roundLabel(round) {
+    const action = round.user && !round.user.auto ? round.user.text.trim() : ''
+    return action ? `${roundName(round)} · ${action.length > LOG_ACTION ? `${action.slice(0, LOG_ACTION)}…` : action}` : roundName(round)
+  }
+
+  /** Whether a turn's words are one of the choices of the reply before it: a roll or a fight only comes from one. */
+  function fromChoices(chat, user, before) {
+    if (user.check || user.battle) return true
+    return Boolean(before) && (display(chat, before, true).choices ?? []).includes(user.text.trim())
+  }
+
+  /** What the player did, marked as picked or written. */
+  function actionRow(chat, user, before, userName) {
+    const picked = fromChoices(chat, user, before)
+    return el('div', { class: `vn-log-action ${picked ? 'picked' : 'written'}` }, [
+      el('span', { class: 'vn-log-action-tag', text: picked ? t`${userName} · 选项` : t`${userName} · 自己写` }),
+      el('span', { class: 'vn-log-action-text', text: user.text }),
+    ])
+  }
+
+  /**
+   * A round as the 回看 shows it: what the player did and what came of it, the story, what it changed.
+   * `now`: the reply on screen, as far as it has been read, each line a way back to it. `before`: the reply it follows.
+   */
+  function roundRows(chat, round, now, userName, before) {
+    const rows = []
+    if (round.user && !round.user.auto) rows.push(actionRow(chat, round.user, before, userName))
+    const results = round.live ? [live()?.outcome].filter(Boolean) : deps.turnResults?.(round.user) ?? []
+    for (const { tier, text } of results) rows.push(el('p', { class: `vn-log-result ${tier}`, text }))
+    let place = null
+    const placeRow = step => {
+      if (step.where?.place && step.where.place !== place) rows.push(el('p', { class: 'vn-log-scene', text: (place = step.where.place) }))
+    }
+    if (now) {
+      state.steps.slice(0, Math.max(state.seen, state.index) + 1).forEach((step, i) => {
+        if (step.type !== 'line') return
+        placeRow(step)
+        const row = logRow(step, { class: `vn-log-current${i === state.index ? ' here' : ''}` })
+        row.addEventListener('click', () => {
+          closeLog()
+          state.index = i
+          showStep(false)
+        })
+        rows.push(row)
+      })
+    } else if (round.reply) {
+      for (const step of storyLines(chat, round.reply)) {
+        placeRow(step)
+        rows.push(logRow(step))
+      }
+    }
+    // Not what the reply on screen changed before it has come to that.
+    const notes = round.reply && (!now || state.reached === state.key) ? changesOf(chat, round.reply) : []
+    if (notes.length) rows.push(noteChips(el, notes))
+    return rows
+  }
+
+  /** The story by rounds, with a way to any of them. The latest are drawn at once, the others as they come near. */
   function openLog() {
     setAuto(false)
     // The input box would cover its foot.
     compose(false)
     const chat = getChat()
-    const rows = []
-    const path = chat?.path ?? []
-    const latestId = state.node?.id ?? latestReply(chat)?.id
     const userName = shownName(chat?.names?.user || '你') // i18n-ignore: the default player name
-    for (const node of path.slice(-LOG_REPLIES * 2)) {
-      if (node.id === latestId && !state.streaming) break
-      if (node.role === 'user') {
-        rows.push(el('p', { class: 'vn-log-user' }, [el('b', { text: t`${userName}：` }), node.text]))
-        continue
-      }
-      let place = null
-      for (const step of storyLines(chat, node)) {
-        if (step.where?.place && step.where.place !== place) rows.push(el('p', { class: 'vn-log-scene', text: (place = step.where.place) }))
-        rows.push(logRow(step))
-      }
+    const rounds = roundsOf(chat)
+    const job = live()
+    if (state.streaming) rounds.push({ turn: (rounds.at(-1)?.turn ?? 0) + 1, user: { text: job?.echo ?? '', auto: !job?.echo }, reply: null, live: true })
+    const latestId = state.node?.id ?? latestReply(chat)?.id
+    const isNow = round => Boolean(round.live) || (!state.streaming && round.reply?.id === latestId)
+    const sections = rounds.map(round => el('section', { class: 'vn-log-round' }, [el('div', { class: 'vn-log-divider' }, [el('span', { text: roundName(round) })])]))
+    const fill = i => {
+      const section = sections[i]
+      if (!section || section.dataset.filled) return
+      section.dataset.filled = 'yes'
+      section.append(...roundRows(chat, rounds[i], isNow(rounds[i]), userName, rounds[i - 1]?.reply))
     }
-    const last = Math.max(state.seen, state.index)
-    let place = null
-    state.steps.slice(0, last + 1).forEach((step, i) => {
-      if (step.type !== 'line') return
-      if (step.where?.place && step.where.place !== place) rows.push(el('p', { class: 'vn-log-scene', text: (place = step.where.place) }))
-      const row = logRow(step, { class: `vn-log-current${i === state.index ? ' here' : ''}` })
-      row.addEventListener('click', () => {
-        closeLog()
-        state.index = i
-        showStep(false)
+    const body = el('div', { class: 'vn-log-body' }, sections.length ? sections : [el('p', { class: 'vn-waiting', text: t`还没有内容` })])
+    const jump = el('select', { class: 'vn-log-jump', 'aria-label': t`跳到某一轮` }, rounds.map((round, i) => el('option', { value: String(i), text: roundLabel(round) })))
+    const goTo = i => {
+      const at = Math.max(0, Math.min(i, sections.length - 1))
+      fill(at)
+      sections[at]?.scrollIntoView({ block: 'start' })
+      jump.value = String(at)
+    }
+    jump.addEventListener('change', () => goTo(Number(jump.value)))
+    // The list says which round is at the top of what is being read.
+    let watching = 0
+    body.addEventListener('scroll', () => {
+      if (watching) return
+      watching = requestAnimationFrame(() => {
+        watching = 0
+        const top = body.getBoundingClientRect().top + LOG_TOP
+        const at = sections.findLastIndex(section => section.getBoundingClientRect().top <= top)
+        jump.value = String(Math.max(0, at))
       })
-      rows.push(row)
     })
+    const nav = el('span', { class: 'vn-log-nav' }, [
+      control('‹', t`上一轮`, () => goTo(Number(jump.value) - 1)),
+      jump,
+      control('›', t`下一轮`, () => goTo(Number(jump.value) + 1)),
+      control(t`最新`, t`回到最新一轮`, () => goTo(sections.length - 1)),
+    ])
     logBox.replaceChildren(
-      el('div', { class: 'vn-log-head' }, [el('b', { text: t`回看` }), control(t`关闭`, t`Esc`, () => closeLog())]),
-      el('div', { class: 'vn-log-body' }, rows.length ? rows : [el('p', { class: 'vn-waiting', text: t`还没有内容` })]),
+      el('div', { class: 'vn-log-head' }, [el('b', { text: t`回看` }), sections.length ? nav : null, control(t`关闭`, t`Esc`, () => closeLog())]),
+      body,
     )
     logBox.hidden = false
     root.classList.add('reading-log')
-    const body = logBox.querySelector('.vn-log-body')
+    for (let i = Math.max(0, sections.length - LOG_REPLIES); i < sections.length; i++) fill(i)
+    state.logWatch?.disconnect()
+    state.logWatch = new IntersectionObserver(entries => {
+      for (const entry of entries) if (entry.isIntersecting) fill(sections.indexOf(entry.target))
+    }, { root: body, rootMargin: LOG_AHEAD })
+    for (const section of sections) state.logWatch.observe(section)
     const here = body.querySelector('.here')
     if (here) here.scrollIntoView({ block: 'center' })
     else body.scrollTop = body.scrollHeight
+    jump.value = String(Math.max(0, sections.length - 1))
   }
 
   function closeLog() {
     logBox.hidden = true
     root.classList.remove('reading-log')
+    state.logWatch?.disconnect()
   }
 
   // ─── Input ─────────────────────────────────────────────────────────
@@ -2349,10 +2985,15 @@ export function initVn(deps) {
   document.addEventListener('keydown', event => {
     if (!state.on || root.hidden) return
     const target = event.target
+    // Ctrl held: 快进 for as long as it is.
+    if (event.key === 'Control' && !event.repeat && menu.hidden && logBox.hidden && cgView.hidden && !target?.closest?.('input, textarea, select, [contenteditable="true"]') && !document.querySelector('dialog[open], .pop-menu')) {
+      state.holding = true
+      setSkipping(true)
+      return
+    }
     if (event.key === 'Escape') {
       if (!pop.hidden) return closePop()
-      // A picture opened from the gallery goes back to it.
-      if (!cgView.hidden) return cgView.dataset.back ? openGallery() : closeCg()
+      if (!cgView.hidden) return leaveCg()
       if (!logBox.hidden) return closeLog()
       if (!menu.hidden && target?.id !== 'input') return hideMenu()
       if (stage.classList.contains('vn-full') && target?.id !== 'input') return setFull(false)
@@ -2379,7 +3020,7 @@ export function initVn(deps) {
       if ((key === 'ArrowLeft' || key === 'ArrowRight') && state.cgStep) {
         event.preventDefault()
         state.cgStep(key === 'ArrowLeft' ? -1 : 1)
-      } else if (key === 'g' || key === 'G') openGallery()
+      } else if (key === 'g' || key === 'G') openGallery(state.cgAt)
       return
     }
     if (key === 'g' || key === 'G') return openGallery()
@@ -2398,17 +3039,36 @@ export function initVn(deps) {
     } else if (!menu.hidden && /^[1-9]$/.test(key)) {
       // The menu's numbers pick a choice.
       const choice = currentChoices()[Number(key) - 1]
-      if (choice && !isGenerating()) pick(choice)
+      const gate = deps.pendingGate()
+      if (gate && !isGenerating()) {
+        if (key === '1') (gate.kind === 'check' ? throwDie : intoFight)()
+        else if (key === '2' && gate.choice) leaveFight()
+        else if (key === '3' && gate.choice) dropFight()
+      } else if (choice && !isGenerating()) pick(choice)
     } else if (key === 'a' || key === 'A') setAuto(!state.auto)
     else if (key === 'h' || key === 'H') root.classList.toggle('bare')
     else if (key === 'l' || key === 'L') (logBox.hidden ? openLog() : closeLog())
     else if (key === 'o' || key === 'O') (menu.hidden ? showMenu() : hideMenu())
+    else if ((key === 'i' || key === 'I') && deps.rulesRunning()) deps.openBag()
     else if (key === 'f' || key === 'F') toggleFullscreen()
   }, { capture: true })
 
+  const letGo = () => {
+    if (!state.holding) return
+    state.holding = false
+    setSkipping(false)
+  }
+  document.addEventListener('keyup', event => {
+    if (event.key === 'Control') letGo()
+  })
+  window.addEventListener('blur', letGo)
+
   /** Leaving the mode: nothing keeps running. */
   function leave() {
+    setHero('')
     cancelTyping()
+    setSkipping(false)
+    drawWait(null)
     setAuto(false)
     compose(false)
     hideMenu()
@@ -2420,7 +3080,8 @@ export function initVn(deps) {
     closeCg()
     clearStage()
     if (state.reading) deps.stopReading?.()
-    state.reading = false
+    setReading(false)
+    deps.quietSound()
     root.classList.remove('bare', 'memory')
     chapter.classList.remove('show')
     hud.clear()
@@ -2493,5 +3154,15 @@ export function initVn(deps) {
     else if (!busy && pictureClock) pictureClock = clearInterval(pictureClock) ?? 0
   }
 
-  return { render, streamed, isOn, turnFlags, marks, makeReady, picturesChanged }
+  // The turn's operations changed under the line at the end of a reply.
+  const refreshEnd = () => {
+    if (!state.on) return
+    drawHud(getChat())
+    if (state.phase === 'ended') showEnd()
+  }
+  const openCompose = () => {
+    if (state.on) compose(true)
+  }
+
+  return { render, streamed, isOn, turnFlags, marks, makeReady, picturesChanged, refreshEnd, compose: openCompose, drawFoe }
 }

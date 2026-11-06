@@ -871,10 +871,13 @@ function atHeader(line, index) {
  * (时间：… ｜ 地点：…). Only the first few lines are looked at, and a line
  * needs a date or time beside the place. → { time, place, weather } or null.
  */
+// 【玛丽|思考】「三年前的事了。」: someone speaking. The bar is no separator here, and what she says of years no date.
+const SPOKEN = /^【[^【】|｜]{1,24}[|｜][^【】|｜]{0,12}】\s*\S/
+
 export function headerPlace(text) {
   const lines = String(text ?? '').split('\n').map(line => plainOf(line).trim()).filter(Boolean).slice(0, 3)
   for (const line of lines) {
-    if (line.length > 80) continue
+    if (line.length > 80 || SPOKEN.test(line)) continue
     const label = key => LABELLED[key].exec(line)?.[1]?.replace(WRAP, '').trim() ?? ''
     if (label('place') && atHeader(line, LABELLED.place.exec(line).index)) return { time: label('time'), place: label('place'), weather: label('weather') }
     const parts = line.replace(WRAP, '').split(PART_SPLIT).map(part => part.replace(WRAP, '').replace(/^[^\w一-鿿]+/, '').trim()).filter(Boolean)
@@ -919,22 +922,46 @@ export function placeIn(text) {
   return box.place ? box : headerPlace(String(text ?? '').replace(/<[^<>]*\/>/g, ''))
 }
 
-/**
- * The newest reply on a chat path that says where the story is: { nodeId,
- * time, place, weather } or null. A reply's own text first (time box, header
- * line), then the variables it left (系统.当前地点).
- */
+/** Where a reply on a path has the story: its own text first (time box, header line), then the variables it left (系统.当前地点). */
+function replyPlace(node, rawOf, stateOf) {
+  const where = placeIn(rawOf(node))
+  if (where?.place) return where
+  const state = stateOf(node)
+  const place = state && typeof state === 'object' ? stateValue(state, 'place') : ''
+  return place ? { time: stateValue(state, 'time'), place, weather: stateValue(state, 'weather') } : null
+}
+
+/** The newest reply on a chat path that says where the story is: { nodeId, time, place, weather } or null. */
 export function latestPlace(path, { rawOf = node => node.raw ?? node.text, stateOf = node => node.state } = {}) {
   for (let i = (path?.length ?? 0) - 1; i >= 0; i--) {
-    const node = path[i]
-    if (node.role !== 'assistant') continue
-    const where = placeIn(rawOf(node))
-    if (where?.place) return { nodeId: node.id, ...where }
-    const state = stateOf(node)
-    const place = state && typeof state === 'object' ? stateValue(state, 'place') : ''
-    if (place) return { nodeId: node.id, time: stateValue(state, 'time'), place, weather: stateValue(state, 'weather') }
+    if (path[i].role !== 'assistant') continue
+    const where = replyPlace(path[i], rawOf, stateOf)
+    if (where) return { nodeId: path[i].id, ...where }
   }
   return null
+}
+
+/**
+ * Everywhere the story has been along a path, each place once, as first reached. Two names for one scene
+ * are one place. → { places: [{ key, name, scene, visits }], here (the key of where it is now, or null) }
+ */
+export function visitedPlaces(path, scenes = [], { rawOf = node => node.raw ?? node.text, stateOf = node => node.state } = {}) {
+  const places = new Map()
+  const sceneOf = new Map()
+  let here = null
+  for (const node of path ?? []) {
+    if (node.role !== 'assistant') continue
+    const place = replyPlace(node, rawOf, stateOf)?.place
+    const name = normalizePlace(place)
+    if (!name) continue
+    if (!sceneOf.has(name)) sceneOf.set(name, matchScene(place, scenes))
+    const scene = sceneOf.get(name)
+    const key = scene?.id ?? name
+    if (!places.has(key)) places.set(key, { key, name: scene?.name ?? place, scene, visits: 0 })
+    if (here !== key) places.get(key).visits += 1
+    here = key
+  }
+  return { places: [...places.values()], here }
 }
 
 const NUMERALS = { 零: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10, 十一: 11, 十二: 12 } // i18n-ignore: clock words
@@ -1001,6 +1028,7 @@ export function dateOf(time) {
   }
   const fits = (n, max) => Number.isInteger(n) && n >= 1 && n <= max
   take(/第\s*([\d零〇一二两三四五六七八九十百]+)\s*[天日]|\bday\s*(\d+)\b/i, m => fits((date.count = numberOf(m[1] ?? m[2])), 9999))
+  take(/(?:星历|星曆|星际历|stardate)\s*[:：]?\s*(\d+(?:\.\d+)?)/i, m => { date.star = Number(m[1]) })
   take(/(\d{4})\s*[-/.年]\s*(\d{1,2})\s*[-/.月]\s*(\d{1,2})/, m => {
     Object.assign(date, { year: Number(m[1]), month: Number(m[2]), day: Number(m[3]) })
   })
@@ -1034,6 +1062,8 @@ export function dateOf(time) {
 /** Days from one date to another, when they say: by the day count, the calendar, the day of the month, the weekday. Else null. */
 export function daysBetween(from, to) {
   if (from?.count != null && to?.count != null) return to.count - from.count
+  // A stardate says later or not, and no more.
+  if (from?.star != null && to?.star != null) return to.star > from.star ? 1 : 0
   if (from?.month && from.day && to?.month && to.day) {
     // A lunar date and a calendar one cannot be counted between.
     if (Boolean(from.lunar) !== Boolean(to.lunar)) return null

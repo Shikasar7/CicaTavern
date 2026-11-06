@@ -3,11 +3,15 @@
 // (tagged blocks like the polish stage's rewrites, write.mjs), the page shows
 // them as before and after, and the ones the user keeps go into the stored
 // card. The session runs like a draft (index.mjs): in the background, polled.
+import YAML from 'yaml'
 import { editBook } from '../worldbook.mjs'
 import { newId } from '../store.mjs'
 import { CARD_FIELDS, cleanTags, editCard, greetingList } from '../../web/shared/card-edit.js'
 import { LONG_TOKENS, WRITING_RULES } from './prompts.mjs'
 import { attr, bodyFor, historyLines, readBlocks, splitKeys } from './blocks.mjs'
+import { CHAT_STATE_RULES, REFERENCE_RULES, referenceBlock } from './references.mjs'
+import { cleanPath } from '../../web/shared/status.js'
+import { getPath, splitPath, writablePath } from '../../web/shared/vars.js'
 
 // The card's fields as the model knows them: SillyTavern's names.
 export const FIELD_TAGS = Object.freeze({
@@ -54,6 +58,8 @@ function unescaped(body, before = '') {
 
 // Entry text sent in full, at most; past it, entries go by name and can't be changed this time.
 export const ENTRY_BUDGET = 60000
+const VARIABLE_WORDS = /变量|数值|状态|好感|属性|initvar|mvu/i
+const UPDATE_RULE = /UpdateVariable|_\.set\s*\(/
 export const modeOf = entry => (entry.initvar ? 'initvar' : entry.constant ? 'constant' : 'keyword')
 
 /** A card without a worldbook of its own gets an empty one, named as the importer names it. */
@@ -70,7 +76,10 @@ export function ensureBook(card) {
 export function shownEntries(entries, words, target = '', { picked = [], budget = ENTRY_BUDGET } = {}) {
   const first = target.startsWith('entry:') ? target.slice(6) : null
   const named = e => [e.comment, ...e.keys].some(name => name && name.length >= 2 && words.includes(name))
-  const rank = e => (e.uid === first ? 3 : picked.includes(e.uid) ? 2 : named(e) ? 1 : 0)
+  // Asked about variables, the entries that hold them come along however long the book is.
+  const variables = VARIABLE_WORDS.test(words)
+  const holdsVariables = e => variables && (e.initvar || UPDATE_RULE.test(e.content))
+  const rank = e => (e.uid === first ? 3 : picked.includes(e.uid) ? 2 : named(e) || holdsVariables(e) ? 1 : 0)
   const ranked = [...entries].sort((a, b) => rank(b) - rank(a) || a.order - b.order)
   const shown = new Set()
   let used = 0
@@ -101,7 +110,7 @@ export function bookBlock(entries, shown, empty = '（这张卡还没有世界�
   if (!entries.length) return empty
   return entries
     .map(e => {
-      const head = `<entry uid="${attr(e.uid)}" name="${attr(e.comment)}" mode="${modeOf(e)}" keys="${attr(e.keys.join(', '))}"${e.enabled ? '' : ' enabled="false"'}>`
+      const head = `<entry uid="${attr(e.uid)}" name="${attr(e.comment)}" mode="${modeOf(e)}" keys="${attr(e.keys.join(', '))}"${e.enabled || e.initvar ? '' : ' enabled="false"'}>`
       return shown.has(e.uid) ? `${head}\n${e.content}\n</entry>` : `${head}（正文 ${e.content.length} 字，这次没有附上，不能改）</entry>`
     })
     .join('\n\n')
@@ -123,7 +132,7 @@ const editSystem = reply => `你是角色卡编辑。用户在 SillyTavern 一�
 - 照原卡的写法改：原文是 YAML、列表还是段落，就还用那种格式；原文用 {{char}}、{{user}} 或 <user> 称呼，就照用；沿用原文的语言。不借机把整段改成另一种风格。
 - 改一处，前后要对得上：人设改了，对话示例、开场白和条目里明显冲突的句子一起改。用户没提到、也不冲突的内容一字不动。
 - 新条目是写给模型看的设定：简洁、具体，只写模型不知道的东西。关键词用故事里真会出现的叫法（名字、外号），至少两个字。人物、地点、物品用 keyword（提到时才发送）；只有每轮都要遵守的规则才用 constant。
-- mode 为 initvar 的条目是初始变量，enabled="false" 的条目没在用：用户没要求就不要动。
+- mode 为 initvar 的条目是初始变量（一直在起作用）；enabled="false" 的条目没在用。这两种用户没要求就不要动。
 - 要加变量（好感度一类的数值、状态栏、改成 MVU 卡）时，这个应用会自己记录变量、显示状态栏、需要时把当前变量发给模型，只要写两样：
   1. 初始变量：<new_entry name="[initvar]初始变量" mode="initvar">，正文用 YAML 写出每个变量和初始值；卡里已经有 initvar 条目就改那一条。
   2. 更新规则：一条 mode="constant" 的条目，写每个变量的含义、范围、什么时候怎么变，并要求每次回复末尾写一个 <UpdateVariable> 块，一行一个 _.set('变量路径', 旧值, 新值);//原因（数字增减也可以写 _.add('变量路径', 增量);），没有变化就不写。只能用 <UpdateVariable> 这个标签和 _.set、_.add 这两种写法。
@@ -152,23 +161,44 @@ ${WRITING_RULES.filter(rule => !rule.includes('<user>')).map(rule => `- ${rule}`
  * greeting:0, entry:3). Returns { request, shown }, shown being the uids of the
  * entries sent in full: only those can be changed by the answer.
  */
-export function editRequest(card, { text, target = '', turns = [], reply = '简体中文' } = {}) {
+export function editRequest(card, { text, target = '', turns = [], reply = '简体中文', references = [] } = {}) {
   const entries = card.book?.entries ?? []
   const shown = shownEntries(entries, `${text}\n${target}`, target)
   const history = historyLines(turns)
+  const material = referenceBlock(references)
+  const rules = !material ? '' : REFERENCE_RULES + (chatOf(references) && !target ? CHAT_STATE_RULES : '')
   const content = [
+    material,
     `<card>\n${cardBlock(card)}\n</card>`,
     `<worldbook>\n${bookBlock(entries, shown)}\n</worldbook>`,
     history.length ? `之前的几次修改（上面的卡已经是处理之后的样子）：\n${history.join('\n')}` : '',
     `这次的要求：\n${text}`,
     target ? `只改 ${targetTag(target)} 这一处，别的不动。` : '',
   ].filter(Boolean).join('\n\n')
-  return { request: { system: editSystem(reply), messages: [{ role: 'user', content }], maxTokens: LONG_TOKENS, softCap: true }, shown: [...shown] }
+  return { request: { system: editSystem(reply) + rules, messages: [{ role: 'user', content }], maxTokens: LONG_TOKENS, softCap: true }, shown: [...shown] }
+}
+
+/** The chat a proposal's <chat_state> goes to: the one read last. */
+const chatOf = references => references?.findLast(item => item.kind === 'chat') ?? null
+
+/** A <chat_state> value: JSON as asked, YAML as a model may write it anyway; undefined when it is neither. */
+function stateValue(body) {
+  const text = String(body ?? '').trim().replace(/^```\w*\n?|\n?```$/g, '')
+  if (!text) return undefined
+  try {
+    return JSON.parse(text)
+  } catch {
+    try {
+      return YAML.parse(text) ?? undefined
+    } catch {
+      return undefined
+    }
+  }
 }
 
 // ─── Reading the answer ───────────────────────────────────────────────────
 
-const TAGS = ['field', 'greeting', 'entry', 'new_entry', 'remove_entry']
+const TAGS = ['field', 'greeting', 'entry', 'new_entry', 'remove_entry', 'chat_state']
 
 /**
  * An answer → { reply, changes }. A change is
@@ -177,13 +207,14 @@ const TAGS = ['field', 'greeting', 'entry', 'new_entry', 'remove_entry']
  *   { id, kind: 'entry', uid, title, constant, before, after, name?, keys? }
  *   { id, kind: 'newEntry', name, keys, constant, initvar?, after }
  *   { id, kind: 'removeEntry', uid, title, constant, before }
+ *   { id, kind: 'chatState', chatId, chat, path, value, before, after }  (a variable for the chat that was read)
  * Pieces the same as before, entries not sent in full (`shown`), and with a
  * `target` anything else, are left out; `dropped` (only when there are any)
  * says which blocks could not be taken and why: [{ reason, name }], reason
  * 'unshown' (an entry not sent in full) or 'unknown' (a field this card has no
  * such name for).
  */
-export function readEdit(text, card, { shown = null, target = '' } = {}) {
+export function readEdit(text, card, { shown = null, target = '', references = [] } = {}) {
   const { reply, blocks } = readBlocks(text, TAGS)
   const greetings = greetingList(card)
   const entries = card.book?.entries ?? []
@@ -201,9 +232,22 @@ export function readEdit(text, card, { shown = null, target = '' } = {}) {
     const id = `new:${fresh++}`
     changes.set(id, { id, kind: 'newEntry', name, keys: initvar ? [] : splitKeys(attrs.keys), constant: !initvar && /constant|常驻/i.test(mode), ...(initvar ? { initvar: true } : {}), after: body })
   }
+  const chat = chatOf(references)
   for (const block of blocks) {
     const { tag, attrs } = block
     let { body } = block
+    if (tag === 'chat_state') {
+      const path = cleanPath(attrs.path)
+      const value = stateValue(body)
+      if (!chat || !path || !writablePath(splitPath(path)) || value === undefined) {
+        dropped.push({ reason: 'unknown', name: String(attrs.path ?? '') })
+        continue
+      }
+      const before = getPath(chat.state ?? {}, path)
+      if (JSON.stringify(before) === JSON.stringify(value)) continue
+      changes.set(`state:${path}`, { id: `state:${path}`, kind: 'chatState', chatId: chat.chatId, chat: chat.name, path, value, before: before === undefined ? '' : JSON.stringify(before, null, 2), after: JSON.stringify(value, null, 2) })
+      continue
+    }
     if (tag === 'field' && FIRST_MES.has(fieldName(attrs.name))) {
       const before = greetings[0] ?? ''
       body = unescaped(bodyFor(block, before), before)
@@ -297,7 +341,7 @@ export function applyChanges(card, changes, ids) {
   const edits = chosen.filter(c => c.kind === 'entry' && exists(c.uid)).map(c => ({ uid: c.uid, ...(c.after !== c.before ? { content: c.after } : {}), ...(c.name ? { comment: c.name } : {}), ...(c.keys ? { keys: c.keys } : {}) }))
   const removed = chosen.filter(c => c.kind === 'removeEntry' && exists(c.uid)).map(c => c.uid)
   if (edits.length) prefix = editBook(book, { entries: edits }).prefix || prefix
-  // New initial variables reach an open chat when it is applied there (chats.mjs rebuildPrompt fills them in).
+  // New initial variables reach a chat without any when it is applied there (chats.mjs rebuildPrompt fills them in).
   for (const change of added) prefix = editBook(book, { add: { comment: change.name, keys: change.keys, content: change.after, constant: change.constant } }).prefix || change.initvar === true || prefix
   if (removed.length) prefix = editBook(book, { remove: removed }).prefix || prefix
   return { applied: applied + edits.length + added.length + removed.length, prefix }

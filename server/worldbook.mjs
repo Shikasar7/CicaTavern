@@ -21,6 +21,8 @@ const list = value =>
 
 // MVU-style cards keep the initial variables in an entry, not in the prompt.
 const INITVAR = /initvar|初始变量|\[init/i
+// The item that lets an array grow in MVU; an object says so with `$meta: { extensible: true }`.
+export const EXTENSIBLE_MARK = '$__META_EXTENSIBLE__$'
 
 // What normalizeEntry reads of an entry. An imported book keeps the rest
 // (depth, group, sticky…) as `extra`, so its export gives SillyTavern them back.
@@ -173,7 +175,20 @@ function mergeDeep(base, change) {
   return out
 }
 
-function readInitvar(entries, render) {
+/** What in an array says it may grow in MVU: its marker, or a settings item. */
+const isGrowMark = item => item === EXTENSIBLE_MARK || (isPlainObject(item) && item.$arrayMeta === true)
+
+/**
+ * The initial variables without MVU's marks for what may grow ($meta, $__META_EXTENSIBLE__$): they are for
+ * SillyTavern. Nothing here limits what is added, so they stay in the entry's text and out of the variables.
+ */
+function withoutGrowMarks(value) {
+  if (Array.isArray(value)) return value.filter(item => !isGrowMark(item)).map(withoutGrowMarks)
+  if (!isPlainObject(value)) return value
+  return Object.fromEntries(Object.entries(value).filter(([key]) => key !== '$meta').map(([key, item]) => [key, withoutGrowMarks(item)]))
+}
+
+function mergedInitvar(entries, render) {
   let state = {}
   for (const entry of entries) {
     try {
@@ -187,6 +202,8 @@ function readInitvar(entries, render) {
   return state
 }
 
+const readInitvar = (entries, render) => withoutGrowMarks(mergedInitvar(entries, render))
+
 /**
  * Initial state from `[initvar]`-style entries (JSON or YAML).
  * @param render - entry => its text to parse; by default its EJS is taken out
@@ -195,6 +212,11 @@ function readInitvar(entries, render) {
 export function initialState(books, render = entryText) {
   // Initvar entries are usually disabled (so they never reach the model) — still read them.
   return readInitvar(books.flatMap(book => book.entries.filter(isInitvar)), render)
+}
+
+/** The same variables with MVU's marks left in, for what a card lets grow. */
+export function markedInitialState(books, render = entryText) {
+  return mergedInitvar(books.flatMap(book => book.entries.filter(isInitvar)), render)
 }
 
 /** The values ST-Prompt-Template keeps as `initial` variables: from [InitialVariables] / @@initial_variables entries only. */

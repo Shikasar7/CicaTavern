@@ -42,7 +42,7 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 - 原文：端口 {0} 上开着另一个版本的酒馆。关掉它，或者用 --port 换一个端口。
 - 出现在：双击 CicaTavern.exe、运行「排查问题（带控制台）.cmd」时
 - 原因：8790 端口已经有程序在用。多数时候是 CicaTavern 已经在后台开着（关掉窗口后服务还会再等一分钟才退出）；也可能是另一个版本的 CicaTavern，或者别的软件占了这个端口。
-- 解决：先在浏览器里打开 http://127.0.0.1:8790/ 看看是不是已经能用。提示「另一个版本」时，在那个版本的「设置 → 更多 → 停止后台服务」里停掉它，或者关掉所有窗口等一分钟再打开。
+- 解决：先在浏览器里打开 http://127.0.0.1:8790/ 看看是不是已经能用。提示「另一个版本」时，在那个版本的「设置 → 更多 → 退出应用并停止后台服务」（旧版本叫「停止后台服务」）里停掉它，或者关掉所有窗口等一分钟再打开。
 
 ## Windows 已保护你的电脑 {#err-smartscreen}
 
@@ -119,6 +119,17 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 - 出现在：发出一轮对话、配图、朗读时
 - 原因：供应商那边出了问题（返回 5xx）。「太忙了」是 503、529 或原话里写着 high demand、overloaded：这个模型这会儿用的人太多，Gemini 免费层高峰时经常这样。其余是服务出错、维护，或者中转站自己的上游出错。都不是你的网络或设置问题。
 - 解决：过几分钟重试，或者先换一个模型、换一家供应商。中转站经常这样的，可以问问中转站的群。
+
+## 中转站和 Responses 接口对不上 {#err-provider-responses}
+
+- 也叫：param_override_invalid、operation append failed、operation not supported for type、参数覆盖、new_api_error、酒馆能用这里不能用、gemini 一直报错、中转站没有返回正文
+- 原文：{0} 的中转站设置和 Responses 接口对不上：在「模型供应商」里把接口类型改成「OpenAI 兼容（Chat Completions）」再试。（{1}）
+- 原文：{0} 的回复读不出来：这个中转站可能不支持 Responses 接口。在「模型供应商」里把接口类型改成「OpenAI 兼容（Chat Completions）」再试。
+- 英文：{0}'s relay setup doesn't fit the Responses API: in Model providers, change its API type to "OpenAI-compatible (Chat Completions)" and try again. ({1})
+- 英文：Couldn't read {0}'s reply: this relay may not support the Responses API. In Model providers, change its API type to "OpenAI-compatible (Chat Completions)" and try again.
+- 出现在：发出一轮对话、配图写提示词、画场景时
+- 原因：这个供应商的接口类型是「OpenAI Responses」，请求发到 …/responses，但中转站不是按这个接口配的。常见的有两种：中转站的渠道配了「参数覆盖」，要改的字段在这种请求里没有；或者中转站回的不是 Responses 的格式，读不出内容。用「OpenAI」模板建供应商再换成中转站地址时，接口类型就是 Responses。
+- 解决：设置 → 模型 → 模型供应商，打开这个供应商，把「接口类型」改成「OpenAI 兼容（Chat Completions）」，Base URL 不用动，保存后再发一条。还是报 param_override_invalid 的话，是中转站渠道本身的设置问题，把报错里的 request id 发给站长。
 
 ## 供应商返回了别的错误（余额不足、参数不对） {#err-provider-other}
 
@@ -232,7 +243,7 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 - 原文：Failed to fetch
 - 原文：Load failed
 - 出现在：页面上点任何按钮时
-- 原因：页面连不上后台服务。最常见的是所有窗口关掉约一分钟后服务自动退出了，或者在「停止后台服务」之后还开着旧页面；手机访问时，电脑上的酒馆关了或者电脑睡眠了。
+- 原因：页面连不上后台服务。最常见的是所有窗口关掉约一分钟后服务自动退出了，或者在「退出应用并停止后台服务」之后还开着旧页面；手机访问时，电脑上的酒馆关了或者电脑睡眠了。
 - 解决：从桌面图标（或 CicaTavern.exe）重新打开，页面会重新连上。手机访问的话，先确认电脑上的 CicaTavern 开着。
 
 ## 请求失败（数字） {#err-request-failed}
@@ -318,6 +329,23 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 - 原因：选的文件不是 CicaTavern 导出的剧情存档，或者存档被改过、缺了内容（最后一轮要是模型的叙述）。
 - 解决：在原来的设备上重新导出一次；整段对话要搬到另一台设备的，用对话的「打包」导出再导入。
 
+## 附不上资料 {#err-reference}
+
+- 也叫：附文件失败、读对话失败、参考文件传不上
+- 原文：资料太多了：已经有 {0} 字，这份 {1} 字，加起来不能超过 {2} 字。先去掉一份，或者少读几轮
+- 原文：「{0}」太大了，附的文件不能超过 16 MB
+- 原文：「{0}」读不了。能读 txt、md、json 这类文本文件和带角色卡的 PNG，Word 和 PDF 先另存成 txt
+- 原文：这个文件是空的
+- 原文：最多附 {0} 份资料，先去掉一份
+- 英文：Too much to read: {0} characters already, {1} in this one, and they can be {2} at most together. Remove one, or read fewer turns
+- 英文：“{0}” is too large: an attached file can be 16 MB at most
+- 英文：“{0}” cannot be read. Text files like txt, md and json can, and a PNG with a card in it; save a Word file or PDF as txt first
+- 英文：This file is empty
+- 英文：At most {0} references can be attached: remove one first
+- 出现在：修改角色卡 → 对话修改的「附文件」「读对话」；创作角色卡的「附文件」；直连对话的「附文件」
+- 原因：资料每次发送都要带上，所以有上限：最多 6 份，加起来 10 万字，文件不超过 16 MB。能读文本文件、带角色卡的 PNG，其他图片和 Word、PDF 读不了。
+- 解决：点资料旁的 × 去掉一份，或者读对话时选少一点的轮数、只看提到某几个名字的轮次。Word、PDF 先另存成 txt。
+
 ## 名字不能空着 {#err-name-empty}
 
 - 原文：名字不能空着
@@ -359,6 +387,14 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 - 出现在：修改角色卡、世界书、预设、正则、主题的「对话修改」里点撤销
 - 原因：采用修改之后，你又在别处手动改过同一个东西，撤销会把那些改动也冲掉，所以不让撤。
 - 解决：照原来的样子手动改回去，或者在「对话修改」里说一句让它改回来。
+
+## 检查这张卡采用之后撤销不了 {#err-check-undo}
+
+- 原文：采用之后「{0}」又改过，不能撤销了
+- 英文："{0}" has changed since, so this can't be undone
+- 出现在：检查这张卡的「已采用」里点撤销
+- 原因：采用之后，这一段又被改过（手动改的，或者又采用了别的建议）。撤销会把后来的改动也冲掉，所以不让撤。
+- 解决：先撤销后面采用的那几条，再撤销这一条；或者到修改角色卡里手动改回去。
 
 ## 默认的不能删 {#err-persona-default}
 
@@ -405,6 +441,23 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 - 出现在：压缩记录的「查看 / 修改」里保存时
 - 原因：压缩之后已经写了新的回合，存档已经用进去了，不能再改；或者把存档内容清空了。
 - 解决：想换一份存档，在压缩点「回滚到这里」再压缩一次。存档不能是空的。
+
+## 这条消息不能删除 {#err-delete-message}
+
+- 也叫：删不了、删除失败、不能删除
+- 原文：开场不能删除
+- 原文：压缩点所在的这一条不能删除：之后接着写的都从这里开始
+- 原文：这条消息在上次压缩之前，模型现在只读剧情存档，删除它不起作用；要去掉内容，可以修改存档
+- 原文：这条消息的内容已经清掉了，不能恢复：删除之后又写了新的一轮
+- 原文：这条消息已经删除，不能从它重新生成
+- 英文：The opening can't be deleted
+- 英文：The message at the compaction point can't be deleted: everything written since starts from it
+- 英文：This message is from before the last compaction: the model only reads the story archive now, so deleting it does nothing. To remove something, edit the archive
+- 英文：This message's words are gone and it can't come back: a new turn was written after it was deleted
+- 英文：This message was deleted, so nothing can be written from it again
+- 出现在：聊天页 → 消息下方 → 删除
+- 原因：开场是对话的起点。压缩过的部分，模型现在只读剧情存档，删掉原文也改不了模型知道的内容。删除之后写了新的一轮，这条消息的文字就真的清掉了，撤销不回来，也不能从它重新生成。
+- 解决：要去掉压缩前的内容，在压缩点点「查看 / 修改」改存档；想整段重来，用「回滚到这里」。
 
 ## 这一轮不能隐藏 {#err-hide-round}
 
@@ -956,7 +1009,7 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 - 英文：In-app updates only work for CicaTavern on a Mac
 - 出现在：设置 → 更多 → 更新
 - 原因：发布页上没有给这台 Mac（这种芯片）的更新包，或者下载的包不完整、里面的 Node 在这台 Mac 上跑不起来；从源码运行的不在应用里更新。最后一条是在清理旧版本时想删 App 自带的那个版本：它在 CicaTavern.app 里面，不能从应用里删。
-- 解决：到发布页下载对应芯片的 dmg（Apple 芯片用 mac-arm64，Intel 用 mac-x64），先在设置里「停止后台服务」并关掉窗口，再把 CicaTavern 拖进「应用程序」替换旧的。数据在 ~/.cicatavern，不受影响。
+- 解决：到发布页下载对应芯片的 dmg（Apple 芯片用 mac-arm64，Intel 用 mac-x64），先在设置里「退出应用并停止后台服务」并关掉窗口，再把 CicaTavern 拖进「应用程序」替换旧的。数据在 ~/.cicatavern，不受影响。
 
 ## Mac 版打不开或连不上服务 {#err-mac-launch}
 
@@ -1033,7 +1086,7 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 - 英文：This works once the background server restarts: close every window, wait a minute, then open it from the desktop icon.
 - 出现在：手动更新之后打开新功能时
 - 原因：页面已经是新版本，后台还在跑旧版本的服务。
-- 解决：关掉所有 CicaTavern 窗口（包括手机上打开的），等一分钟让服务退出，再从桌面图标打开；或者在 设置 → 更多 →「停止后台服务」后重新打开。
+- 解决：关掉所有 CicaTavern 窗口（包括手机上打开的），等一分钟让服务退出，再从桌面图标打开；或者在 设置 → 更多 →「退出应用并停止后台服务」后重新打开。
 
 ## 错误日志复制不了 {#err-error-log-copy}
 

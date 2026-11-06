@@ -5,9 +5,11 @@ import { inflateSync } from 'node:zlib'
 import { normalizeBook } from './worldbook.mjs'
 import { httpError, newId } from './store.mjs'
 import { normalizeScripts, withUniqueIds } from '../web/shared/regex.js'
+import { DIRECT_CARD } from '../web/shared/basic.js'
 import { cleanStatusSpec } from '../web/shared/status.js'
 import { msg } from './i18n.mjs'
 import { usesMvu } from './mvu.mjs'
+import { helperScriptsOf, schemaScript } from './schema.mjs'
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 // The chunks a card lives in, the only compressed ones worth undoing; and as far as one may grow when undone
@@ -126,14 +128,14 @@ export function exportCard(card, avatar = null) {
   return { format: CARD_FORMAT, version: 1, exportedAt: new Date().toISOString(), card, avatar: avatar ? avatar.toString('base64') : null }
 }
 
-/** An exported card → { card (fresh id, no media), avatar }; null when the file is not one. */
+/** An exported card → { card (fresh id, no media), avatar, game (its rule book) }; null when the file is not one. */
 export function importOwnCard(json) {
   if (json?.format !== CARD_FORMAT) return null
   const card = json.card
   if (!card || typeof card !== 'object' || typeof card.name !== 'string' || !card.name.trim()) throw httpError(400, msg`角色卡文件不完整`)
-  const { media, ...rest } = card
+  const { media, game, ...rest } = card
   const avatar = typeof json.avatar === 'string' && json.avatar ? Buffer.from(json.avatar, 'base64') : null
-  return { card: { ...rest, ...ownCardFields(card), id: newId(), worldbookIds: [], hasAvatar: Boolean(avatar), importedAt: new Date().toISOString() }, avatar }
+  return { card: { ...rest, ...ownCardFields(card), id: newId(), worldbookIds: [], hasAvatar: Boolean(avatar), importedAt: new Date().toISOString() }, avatar, game }
 }
 
 const strings = value => (Array.isArray(value) ? value.filter(item => typeof item === 'string') : [])
@@ -181,6 +183,9 @@ function ownCardFields(card) {
   }
 }
 
+/** The hidden card 直连对话's chats hang on (DIRECT_CARD): it lists nowhere, and adds nothing to what the model reads. */
+export const directCard = () => ({ ...normalizeCard({ name: '助手' }), id: DIRECT_CARD, direct: true })
+
 /** Extract the card JSON from an uploaded file. */
 export function parseCardFile(filename, buffer) {
   if (/\.png$/i.test(filename) || buffer.subarray(0, 8).equals(PNG_SIGNATURE)) {
@@ -197,6 +202,12 @@ export function parseCardFile(filename, buffer) {
 }
 
 const str = value => (typeof value === 'string' ? value : '')
+
+/** The rule book a SillyTavern file carries: it is kept beside the card (server/game.mjs), so the card itself has none. */
+export function rulebookOf(raw) {
+  const book = (raw?.data ?? raw)?.extensions?.cicatavern?.game
+  return book && typeof book === 'object' && !Array.isArray(book) ? book : null
+}
 
 /** Flatten V1/V2/V3 into the fields the prompt builder uses. */
 export function normalizeCard(raw) {
@@ -223,8 +234,9 @@ export function normalizeCard(raw) {
     regexScripts: withUniqueIds(normalizeScripts(extensions.regex_scripts)),
     // Character note inserted near the end of the context in SillyTavern; here: the tail of each turn.
     depthPrompt: str(extensions.depth_prompt?.prompt),
-    // Tavern Helper scripts are not run; MVU behaviour is built in.
-    helperScripts: Array.isArray(extensions.tavern_helper?.scripts) ? extensions.tavern_helper.scripts.length : 0,
+    // Tavern Helper scripts are not run; MVU behaviour is built in, and a schema among them is kept to (schema.mjs).
+    helperScripts: helperScriptsOf(extensions).length,
+    mvuSchema: schemaScript(extensions),
     // The status bar layout a card creator card carries (web/shared/status.js); the page draws it.
     statusBar: cleanStatusSpec(extensions.cicatavern?.status_bar),
     // The player's name a card creator card has of its own; '' = the one in settings.
@@ -325,7 +337,7 @@ export function sillyTavernCard(card, base = null) {
     extensions.regex_scripts = card.regexScripts.map((script, i) => ({ ...plain(before.find(s => s?.id && String(s.id) === script.id) ?? before[i]), ...script }))
   }
   extensions.depth_prompt = { depth: 4, role: 'system', ...plain(extensions.depth_prompt), prompt: card.depthPrompt ?? '' }
-  const own = { ...plain(extensions.cicatavern), ...(card.statusBar ? { status_bar: card.statusBar } : {}), ...(card.userName ? { user_name: card.userName } : {}) }
+  const own = { ...plain(extensions.cicatavern), ...(card.statusBar ? { status_bar: card.statusBar } : {}), ...(card.userName ? { user_name: card.userName } : {}), ...(card.game ? { game: card.game } : {}) }
   if (Object.keys(own).length) extensions.cicatavern = own
   const data = {
     ...from,
@@ -385,6 +397,7 @@ export function cardSummary(card) {
     // Cards imported before 0.2 stored only a count.
     regexScripts: Array.isArray(card.regexScripts) ? card.regexScripts.length : Number(card.regexScripts) || 0,
     helperScripts: card.helperScripts ?? 0,
+    hasSchema: Boolean(card.mvuSchema),
     // Replies end with an <UpdateVariable> block (the page offers 补写变量 when one does not).
     mvu: usesMvu(card, card.book ? [card.book] : []),
     importedAt: card.importedAt,

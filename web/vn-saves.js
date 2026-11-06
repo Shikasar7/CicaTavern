@@ -123,10 +123,10 @@ export function initVnSaves({ api, el, toast, guard, current, snapshot, cardId, 
       ])
     }
     dialog.replaceChildren(
+      el('form', { method: 'dialog', class: 'dialog-x' }, [el('button', { class: 'btn small', text: t`关闭` })]),
       el('div', { class: 'vn-library-top' }, [el('h2', { text: mode === 'save' ? t`存档` : t`读档` }), tabs]),
       el('p', { class: 'muted small', text: mode === 'save' ? t`存下这一句：之后从这里读档，会回到这一轮这一句接着玩（后面写过的保留成一个分支）。F5 快速存档。` : t`读档会回到存档的那一轮那一句；之后写过的会收起来保留成分支，不会删掉。F9 读快速存档。` }),
       body,
-      el('form', { method: 'dialog', class: 'row end' }, [el('button', { class: 'btn', text: t`关闭` })]),
     )
   }
 
