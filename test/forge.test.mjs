@@ -60,7 +60,8 @@ async function fakeProvider() {
       return
     }
     let text = FIRST
-    if (system.includes('角色卡策划')) text = `<plan>\n${JSON.stringify(PLAN)}\n</plan>`
+    if (req.url.startsWith('/broken')) text = '<questions>[]</questions>'
+    else if (system.includes('角色卡策划')) text = `<plan>\n${JSON.stringify(PLAN)}\n</plan>`
     else if (json.messages.some(m => m.role === 'assistant')) text = SECOND
     res.writeHead(200, { 'content-type': 'application/json' })
     res.end(JSON.stringify({ model: json.model, choices: [{ message: { content: text }, finish_reason: 'stop' }], usage: { prompt_tokens: 100, completion_tokens: 50 } }))
@@ -273,6 +274,45 @@ test('talking a card into a plan: rounds, picks, locks, plan, revision, undo', a
   assert.ok(root)
 })
 
+test('a round or a plan that came out unreadable can be asked again of another model, this once', async t => {
+  const { forge, store, fake, provider, slow, recorded } = await setup(t)
+  const broken = normalizeProvider({ name: '坏', api: 'openai-completions', baseURL: `${fake.base}/broken/v1`, apiKey: 'sk-forge-test', models: ['broken'] }, null, new Set([provider.id, slow.id]))
+  await store.saveProviders([provider, slow, broken])
+  const brokenRef = `${broken.id}/broken`
+  const writer = `${provider.id}/writer`
+
+  // The draft's own model answers with nothing the guide can read.
+  let draft = await settled(forge, (await forge.create({ text: '雨夜便利店', model: brokenRef })).id)
+  assert.equal(draft.error.kind, 'discuss')
+  assert.equal(draft.error.model, brokenRef)
+  assert.equal(draft.rounds[0].assistant, null)
+
+  // Asked again of the other model: the round is read, marked with that model; the draft keeps its own.
+  await forge.retry(draft.id, { model: writer })
+  draft = await settled(forge, draft.id)
+  assert.equal(draft.error, null)
+  assert.equal(draft.rounds[0].assistant.model, '本机 · writer')
+  assert.equal(draft.model, brokenRef)
+  assert.equal(recorded.at(-1).node.model, writer)
+
+  // The plan the same way: the broken model fails it, the other writes it; the next call is the draft's own model again.
+  await forge.plan(draft.id)
+  draft = await settled(forge, draft.id)
+  assert.equal(draft.error.kind, 'plan')
+  assert.equal(draft.error.model, brokenRef)
+  await forge.retry(draft.id, { model: writer })
+  draft = await settled(forge, draft.id)
+  assert.equal(draft.error, null)
+  assert.equal(draft.stage, 'plan')
+  assert.equal(draft.planModel, '本机 · writer')
+  assert.equal(draft.model, brokenRef)
+  await forge.say(draft.id, { text: '再聊一句' })
+  draft = await settled(forge, draft.id)
+  assert.equal(draft.error.model, brokenRef)
+  assert.equal(recorded.at(-1).node.model, brokenRef)
+  assert.equal((await store.getSettings()).model, writer)
+})
+
 test('a call can be stopped; one cut off by a restart shows as such; no model, no talk', async t => {
   const { forge, store, slow, root, provider } = await setup(t)
   const draft = await forge.create({ text: '慢一点', model: `${slow.id}/slow` })
@@ -450,6 +490,15 @@ test('a Chinese page writing Chinese asks exactly as before; an English card get
   assert.match(card.description, /^林小雨: .*with <user>: /m)
   assert.match(card.entries.find(e => e.part === 'rules').content, /^Variable update rules:/)
   assert.match(reviewRequest(card, [], 'English').system, /suggestion 也用English写/)
+  // The review gets the plan's facts in either language; without a plan it reads as before.
+  const enReview = reviewRequest(card, [], 'English', enPlan)
+  assert.match(enReview.system, /<plan_facts> 里的名字和设定也是：按English的写法/)
+  assert.match(enReview.messages[0].content, /^<plan_facts>\n[\s\S]*林小雨/)
+  const zhReview = reviewRequest(newCard(zhPlan), [], '简体中文', zhPlan)
+  assert.match(zhReview.system, /和方案不符/)
+  assert.ok(zhReview.system.indexOf('和方案不符') < zhReview.system.indexOf('只输出一段 <issues>'), 'the rule comes before the format')
+  assert.doesNotMatch(reviewRequest(newCard(zhPlan), []).system, /plan_facts/)
+  assert.doesNotMatch(reviewRequest(newCard(zhPlan), []).messages[0].content, /plan_facts/)
   const json = cardJson(enPlan, card)
   assert.deepEqual(json.data.extensions.regex_scripts.map(s => s.scriptName), ['Hide variable updates from the model', 'Hide variable updates from the player', 'Hide the status bar from the model', 'Status bar'])
   assert.match(json.data.extensions.tavern_helper.scripts[0].info, /^MVU variable framework/)

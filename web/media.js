@@ -305,7 +305,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
           img,
           el('figcaption', {}, [
             el('button', { type: 'button', text: t`重画`, title: t`同一段提示词再画一张换掉这张，可以先选画图方式和模型；这张留在旧图里`, disabled: Boolean(job), onclick: () => redraw(node, image, chat.id) }),
-            el('button', { type: 'button', text: t`改提示词`, disabled: Boolean(job), onclick: () => openImageDialog(node, image.prompt, { chatId: chat.id, note: t`这张图的提示词，改完点「画」：新画的换掉这张，这张留在旧图里。`, replace: image.file }) }),
+            el('button', { type: 'button', text: t`改提示词`, disabled: Boolean(job), onclick: () => editPrompt(chat.id, node, image) }),
             el('button', { type: 'button', text: t`删除`, onclick: () => removeImage(node, image) }),
             old ? el('button', { type: 'button', text: t`旧图 ${old}`, title: t`这张重画之前的几张：点一张换回来`, 'aria-expanded': String(open), onclick: () => toggleOld(node, image) }) : null,
           ]),
@@ -395,7 +395,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     ])
   }
 
-  const retry = (node, failure) => (failure.stage === 'draw' ? draw(node, failure.prompt, failure.chatId, null, failure.replace) : writePrompt(node))
+  const retry = (node, failure) => (failure.stage === 'draw' ? draw(node, failure.prompt, failure.chatId, null, failure.replace) : writePrompt(node, failure.again ?? {}))
 
   /**
    * The chat's pictures in the works and the ones that did not come, for where the replies are out of sight
@@ -404,9 +404,10 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
   function pictureWork(chatId) {
     const nodeOf = nodeId => getChat()?.path.find(n => n.id === nodeId)
     const jobs = [...state.jobs].filter(([, job]) => job.chatId === chatId)
-      .map(([, job]) => ({ drawing: job.stage === 'draw', started: job.started, backend: job.backend, cancel: () => job.controller.abort() }))
+      .map(([nodeId, job]) => ({ nodeId, drawing: job.stage === 'draw', started: job.started, backend: job.backend, cancel: () => job.controller.abort() }))
     const failures = [...state.failures].filter(([nodeId, failure]) => failure.chatId === chatId && nodeOf(nodeId))
       .map(([nodeId, failure]) => ({
+        nodeId,
         drawing: failure.stage === 'draw',
         message: failure.message,
         retry: () => retry(nodeOf(nodeId), failure),
@@ -464,7 +465,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
    * failure stays where the picture would have been, with its reason
    * (`prompt` is what a retry draws; `replace`, the picture it draws over).
    */
-  async function runJob(node, chatId, stage, work, { prompt = '', reveal = false, backend = '', replace = '' } = {}) {
+  async function runJob(node, chatId, stage, work, { prompt = '', reveal = false, backend = '', replace = '', again = null } = {}) {
     if (state.jobs.has(node.id)) return null
     const job = { stage, chatId, controller: new AbortController(), started: Date.now(), backend: backend || backendName(), replace }
     state.jobs.set(node.id, job)
@@ -475,7 +476,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     try {
       return await work(job.controller.signal)
     } catch (error) {
-      if (error.name !== 'AbortError') state.failures.set(node.id, { stage, chatId, prompt, replace, message: error.message })
+      if (error.name !== 'AbortError') state.failures.set(node.id, { stage, chatId, prompt, replace, again, message: error.message })
       return null
     } finally {
       state.jobs.delete(node.id)
@@ -486,13 +487,14 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
   /**
    * 配图: the helper writes the prompt in the background; when it is done the
    * dialog opens (after any dialog already open closes). `auto` draws at once.
+   * `moment`: the lines to picture, in place of the whole reply.
    */
-  async function writePrompt(node, { auto = false } = {}) {
+  async function writePrompt(node, { auto = false, moment = '' } = {}) {
     const chat = getChat()
     if (!chat) return
     const chatId = chat.id
-    const reply = shownText(node)
-    const data = await runJob(node, chatId, 'prompt', signal => postJson(`/api/chats/${chatId}/nodes/${node.id}/image-prompt`, { reply }, signal), { reveal: !auto })
+    const body = moment ? { reply: moment, moment: true } : { reply: shownText(node) }
+    const data = await runJob(node, chatId, 'prompt', signal => postJson(`/api/chats/${chatId}/nodes/${node.id}/image-prompt`, body, signal), { reveal: !auto, again: moment ? { auto, moment } : null })
     if (!data) return
     if (auto) return draw(node, data.prompt, chatId)
     const how = data.inContext ? t`${data.model} 接着对话写的${data.cache !== null ? t`（缓存命中 ${data.cache}%）` : ''}` : t`${data.model} 写的`
@@ -524,6 +526,16 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     const picked = await pickDraw({ title: t`重画这张图`, note: kept ? t`同一段提示词再画一张，换掉这张；这张留在旧图里，随时换回来。` : t`同一段提示词再画一张，换掉这张（设置里旧图留 0 张，这张不留）。` })
     if (picked) await draw(node, image.prompt, chatId, picked, image.file)
   })
+
+  /** 改提示词: this picture's prompt in the 配图 window; what is drawn from it takes this one's place. */
+  const editPrompt = (chatId, node, image) => openImageDialog(node, image.prompt, { chatId, note: t`这张图的提示词，改完点「画」：新画的换掉这张，这张留在旧图里。`, replace: image.file })
+
+  /** 画 CG (the visual novel): the moment drawn at once, its picture joining the reply. False while that reply has one in the works. */
+  function drawMoment(node, moment) {
+    if (state.jobs.has(node.id)) return false
+    writePrompt(node, { auto: true, moment })
+    return true
+  }
 
   /** Show `open` once no other dialog is up, so a finished prompt never covers one. */
   function whenNoDialog(open) {
@@ -1377,11 +1389,42 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       el('p', { class: 'hint', text: t`名册角色或这张卡设了 LoRA 时，写成 <lora:文件名:强度> 加进提示词（文件要在 WebUI 的 Lora 文件夹里）。提示词写法选「标签」。` }),
     ])
     // This install's own backends: the model to draw with, and what the server says about them.
-    const ownBoxes = state.ownBackends.map(own => el('div', { 'data-own': own.id }, [
+    const ownParts = own => [
       own.models.length ? field(t`模型`, el('select', { name: `localModel:${own.id}` }, own.models.map(m => option(m.id, m.label, own.model)))) : null,
       own.ready ? null : el('p', { class: 'hint warn', text: own.need }),
       own.hint ? el('p', { class: 'hint', text: own.hint }) : null,
-    ].filter(Boolean)))
+      own.guide ? ownGuide(own) : null,
+    ].filter(Boolean)
+    const ownBoxes = state.ownBackends.map(own => el('div', { 'data-own': own.id }, ownParts(own)))
+    /** How to set one up: open until it can draw, folded after. 重新检查 asks the server again, the rest of the form as it is. */
+    function ownGuide(own) {
+      const recheck = el('button', { type: 'button', class: 'btn small', text: t`重新检查`, onclick: guard(async () => {
+        recheck.disabled = true
+        try {
+          const view = await api('/api/media/settings')
+          state.ownBackends = view.ownBackends ?? state.ownBackends
+          const fresh = ownBackend(own.id)
+          const box = ownBoxes.find(item => item.dataset.own === own.id)
+          if (fresh && box) box.replaceChildren(...ownParts(fresh))
+          syncBackend()
+          toast(fresh?.ready ? t`可以用了` : fresh?.need || t`还不能用`)
+        } finally {
+          recheck.disabled = false
+        }
+      }) })
+      const steps = el('ol', { class: 'own-guide' }, own.guide.steps.map(step => el('li', {}, [
+        el('span', { text: step.text }),
+        step.command ? el('div', { class: 'own-command' }, [
+          el('code', { text: step.command }),
+          el('button', { type: 'button', class: 'btn ghost small', text: t`复制`, onclick: () => copyCommand(step.command) }),
+        ]) : null,
+      ].filter(Boolean))))
+      const link = own.guide.link ? el('a', { href: own.guide.link.url, target: '_blank', rel: 'noopener noreferrer', text: own.guide.link.label }) : null
+      const body = [steps, el('div', { class: 'own-guide-foot' }, [recheck, link].filter(Boolean))]
+      return own.ready
+        ? el('details', { class: 'own-guide-box' }, [el('summary', { text: t`使用说明` }), ...body])
+        : el('div', { class: 'own-guide-box' }, [el('p', { class: 'own-guide-title', text: t`使用说明` }), ...body])
+    }
     const syncBackend = () => {
       for (const box of ownBoxes) box.hidden = backend.value !== box.dataset.own
       openaiBox.hidden = backend.value !== 'openai'
@@ -2333,6 +2376,21 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     return el('span', { class: `source-state ${kind}`, text })
   }
 
+  /** A command to paste into a terminal; a page that is not a secure one (a phone on the local network) copies the old way. */
+  async function copyCommand(text) {
+    try {
+      await navigator.clipboard.writeText(text)
+    } catch {
+      const area = Object.assign(document.createElement('textarea'), { value: text })
+      area.style.cssText = 'position:fixed;opacity:0'
+      document.body.append(area)
+      area.select()
+      document.execCommand('copy')
+      area.remove()
+    }
+    toast(t`已复制`)
+  }
+
   /** 国内直连 / 需科学上网 / 本机运行 beside a service's name. */
   const netTag = net => el('span', { class: `net-tag ${net}`, text: NET_TEXT[net] })
 
@@ -3072,5 +3130,5 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     if (player.audio) player.audio.volume = value
   }
 
-  return { voiceVolume, setVoiceVolume, settings: () => state.settings, pictureWork, openLibrary, toolsFor: mediaTools, gallery, openSettings, viewPicture, setCard, afterTurn, flags, readBeat, fillQuick, stopReading: () => player.stop(), toggleReading: () => player.toggle() }
+  return { voiceVolume, setVoiceVolume, settings: () => state.settings, pictureWork, drawMoment, redraw, editPrompt, openLibrary, toolsFor: mediaTools, gallery, openSettings, viewPicture, setCard, afterTurn, flags, readBeat, fillQuick, stopReading: () => player.stop(), toggleReading: () => player.toggle() }
 }

@@ -48,7 +48,7 @@ body{margin:0;background:transparent}
 .tags{display:flex;flex-wrap:wrap;gap:4px}
 .tag{font-size:12px;padding:0 9px;border-radius:999px;background:var(--soft);line-height:22px}
 .stars{color:var(--accent);letter-spacing:1px}
-.trow{display:flex;gap:8px;align-items:baseline;padding:2px 0;border-top:1px dashed var(--line)}.trow:first-child{border-top:0}.trow>b{font-weight:500}.trow>span{color:var(--muted);font-size:12px}
+.line{padding:2px 0;border-top:1px dashed var(--line)}.line:first-child{border-top:0}.trow{display:flex;gap:8px;align-items:baseline;padding:2px 0;border-top:1px dashed var(--line)}.trow:first-child{border-top:0}.trow>b{font-weight:500}.trow>span{color:var(--muted);font-size:12px}
 .tabs{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px}.tab{padding:2px 12px;border:1px solid var(--line);border-radius:999px;background:none;color:var(--muted);font:inherit;font-size:12.5px;cursor:pointer}.tab.on{background:var(--soft);border-color:var(--accent);color:var(--ink)}
 .faint{color:var(--faint)}.on{color:var(--ok)}
 .theme-paper{--bg:#f6efe0;--line:#dccdae;--ink:#3b2f22;--muted:#7a6a55;--faint:#a8977c;--accent:#8a3b2a;--soft:rgba(138,59,42,.1);--track:#e6dac2;font-family:"Noto Serif SC","Songti SC",STSong,serif}
@@ -83,6 +83,7 @@ const unwrap=v=>Array.isArray(v)&&v.length===2&&typeof v[1]==='string'&&(typeof 
 const get=(o,p)=>p.split('.').reduce((a,k)=>a==null?undefined:a[k],o);
 const text=v=>{v=unwrap(v);if(v==null)return'';if(typeof v!=='object')return String(v);if(Array.isArray(v))return v.map(text).join('、');return Object.entries(v).map(([k,x])=>k+'：'+text(x)).join('；')};
 const tags=v=>{v=unwrap(v);if(v==null||v==='')return[];if(Array.isArray(v))return v.map(text);if(typeof v==='object')return Object.entries(v).map(([k,x])=>typeof unwrap(x)==='number'?k+' ×'+unwrap(x):k);return String(v).split(/[、，,;；]/).map(s=>s.trim()).filter(Boolean)};
+const lines=v=>{v=unwrap(v);if(v==null||v==='')return[];if(Array.isArray(v))return v.map(text).filter(Boolean);if(typeof v==='object')return Object.entries(v).map(([k,x])=>k+'：'+text(x));return String(v).split(/\\n+/).map(s=>s.trim()).filter(Boolean)};
 const h=(tag,cls,content)=>{const e=document.createElement(tag);if(cls)e.className=cls;if(content!=null)e.textContent=content;return e};
 function draw(stat,page){
   const bar=document.getElementById('bar');bar.replaceChildren();
@@ -100,7 +101,8 @@ function draw(stat,page){
     const n=Number(ratio?ratio[1]:value),low=ratio?0:f.min,high=ratio?Number(ratio[2]):f.max;
     if(f.show==='meter'&&Number.isFinite(n)&&high>low){const m=h('span','meter'),i=h('i');i.style.width=Math.max(0,Math.min(100,(n-low)/(high-low)*100))+'%';m.append(i);row.append(m,h('span','value',ratio?String(value).trim():String(n)))}
     else if(f.show==='rating'&&Number.isFinite(n)){const top=f.max||5,on=Math.max(0,Math.min(top,Math.round(n)));row.append(h('span','wide stars','★'.repeat(on)+'☆'.repeat(top-on)))}
-    else if(f.show==='tags'||f.show==='list'||f.show==='stats'||f.show==='badge'){const t=h('span','tags wide');const list=tags(value);if(!list.length)t.append(h('span','faint','—'));for(const x of list)t.append(h('span','tag',x));row.append(t)}
+    else if(f.show==='list'){const t=h('div','wide');const list=lines(value);if(!list.length)t.append(h('span','faint','—'));for(const x of list)t.append(h('div','line',x));row.append(t)}
+    else if(f.show==='tags'||f.show==='stats'||f.show==='badge'){const t=h('span','tags wide');const list=tags(value);if(!list.length)t.append(h('span','faint','—'));for(const x of list)t.append(h('span','tag',x));row.append(t)}
     else if(f.show==='table'){const t=h('div','wide');const rows=value&&typeof value==='object'?Object.entries(value).filter(([k])=>!k.startsWith('$')):[];if(!rows.length)t.append(h('span','faint','—'));for(const[k,x]of rows){const r=h('div','trow');r.append(h('b','',Array.isArray(value)?text(x):k));if(!Array.isArray(value))r.append(h('span','',text(x)));t.append(r)}row.append(t)}
     else if(f.show==='flag'){const on=Boolean(value)&&value!=='false'&&value!=='否';row.append(h('span','wide '+(on?'on':'faint'),on?'✓':'—'))}
     else row.append(h('span','wide',text(value)||'—'));

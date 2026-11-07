@@ -9,7 +9,7 @@
 import { t } from '/i18n.js'
 import { htmlFrame, segments, streamingText } from '/render.js'
 import { timeBox } from '/status.js'
-import { advanceDay, latestPlace, matchScene, normalizePlace, opensNextDay, placeIn, sameLine, speakerNames, splitLines, stateTime, storyDay, timeOfDay, timesIn, weatherOf } from '/shared/vn.js'
+import { advanceDay, isCreationPage, latestPlace, matchScene, normalizePlace, opensNextDay, placeIn, sameLine, speakerNames, splitLines, stateTime, storyDay, timeOfDay, timesIn, weatherOf } from '/shared/vn.js'
 import { cutOut, spriteFrame } from '/shared/cutout.js'
 import { EXPRESSIONS, PACK_PICTURE, packFaces, stageAt } from '/shared/stage.js'
 import { initVnSaves } from '/vn-saves.js'
@@ -35,6 +35,10 @@ const SMALLEST_STAGE = 0.42
 const ROOM_FOR_TITLE = 0.62
 // A scene drawn for one turn (画这一轮的场景) stays this chat's background while the place is the same.
 const PINS_KEY = 'cicatavern.vnPins'
+// Each card's 立绘 choices: { [cardId]: { off, manual, fixed: [names] } }; nothing kept: on, and whoever speaks steps on.
+const STAGE_KEY = 'cicatavern.vnStage'
+// How much of the reply, up to the line on screen, 画 CG pictures.
+const MOMENT_LINES = 12
 // Tried at least once: the top bar's switch stops calling for attention.
 const TRIED_KEY = 'cicatavern.vnTried'
 // 视觉小说格式 (【名字|表情】「…」) switched on or off by hand, per card: { cardId: boolean }.
@@ -70,7 +74,6 @@ const WHY_UNUSABLE = {
 }
 // A phone (or a phone on its side) has room for two.
 const NARROW = '(max-width: 560px), (orientation: landscape) and (max-height: 520px)'
-
 function recall(key, fallback) {
   try {
     return JSON.parse(localStorage.getItem(key)) ?? fallback
@@ -149,6 +152,8 @@ export function initVn(deps) {
   const root = $('vn')
   const toggle = $('vn-toggle')
   const prefs = { speed: 'normal', newScene: 'auto', newSprite: 'auto', ...recall(PREFS_KEY, {}) }
+  const stageChoices = recall(STAGE_KEY, {})
+  const stageOf = cardId => stageChoices[cardId] ?? {}
   const state = {
     on: false, chatId: null, cardId: null, key: null, node: null, steps: [], trailing: [], options: [], available: 0,
     index: -1, seen: -1, phase: 'idle', streaming: false, pending: false, auto: false, follow: false,
@@ -170,7 +175,8 @@ export function initVn(deps) {
   const cgButton = el('button', { type: 'button', class: 'vn-cg-thumb', hidden: true, title: t`这一轮的配图` })
   // 游戏式 HUD: a few variables under the time box; what a reply changed pops up at its end.
   const hud = initVnHud({ el, prefs, savePrefs: () => remember(PREFS_KEY, prefs), open: () => togglePop('hud') })
-  const corner = el('div', { class: 'vn-corner' }, [sign, hud.box, sceneChip, cgButton])
+  const cgRow = el('div', { class: 'vn-cg-row' }, [cgButton])
+  const corner = el('div', { class: 'vn-corner' }, [sign, hud.box, sceneChip, cgRow])
   const title = el('div', { class: 'vn-title', hidden: true })
   // A new day: its title across the picture for a moment (第 3 天, the date, the place).
   const chapter = el('div', { class: 'vn-chapter', 'aria-hidden': 'true' })
@@ -239,6 +245,8 @@ export function initVn(deps) {
   const optionsButton = control(t`选项`, t`这一轮的行动选项（O）`, () => (menu.hidden ? showMenu() : hideMenu()))
   const fullButton = control(t`全屏`, t`全屏（F），Esc 退出`, () => toggleFullscreen())
   const cgControl = control('CG', t`CG 回廊：这条故事线上所有的配图（G）`, () => openGallery())
+  const drawCgControl = control(t`画 CG`, t`给眼前这一幕画一张 CG，画好后在左上角点开`, () => drawMoment())
+  cgRow.append(drawCgControl)
   const hideControl = control(t`隐藏`, t`隐藏界面（H），点一下恢复`, () => root.classList.add('bare'))
   const actControl = control(t`✎ 行动`, t`写下你的行动（回车），再点一下收起`, () => compose(!stage.classList.contains('vn-compose')))
   const exitControl = control(t`退出`, t`退出视觉小说模式`, () => setOn(state.cardId, false))
@@ -615,6 +623,43 @@ export function initVn(deps) {
     return go
   }
 
+  /** A card's 立绘 choice changed: the line on screen shows it at once. */
+  function setStage(patch) {
+    stageChoices[state.cardId] = { ...stageOf(state.cardId), ...patch }
+    remember(STAGE_KEY, stageChoices)
+    cast.missing = null
+    drawChip()
+    renderPopOwn()
+    drawStage()
+  }
+
+  /** 立绘 in the 配图 menu: whether they show, whether speaking brings someone on, and who stays there. */
+  function stageRows(switchRow) {
+    const cardId = state.cardId
+    if (!cardId) return []
+    const choice = stageOf(cardId)
+    const rows = [switchRow(t`显示立绘`, !choice.off, on => setStage({ off: !on }), t`关掉后只看背景和文字（这张卡记住）`)]
+    if (choice.off) return rows
+    rows.push(switchRow(t`自动识别出场角色`, !choice.manual, on => setStage({ manual: !on }), t`谁说话谁上场；关掉后台上只有常驻角色`))
+    const people = state.names.filter(entry => !entry.player)
+    if (!people.length) return rows
+    const fixed = choice.fixed ?? []
+    const list = cast.lists.get(cardId)
+    if (!list) spritesOf(cardId).then(() => renderPopOwn())
+    const buttons = people.map(entry => {
+      const held = fixed.includes(entry.name)
+      const bare = list && !spriteSources(cardId, entry, list).length
+      const b = el('button', { type: 'button', 'aria-pressed': String(held), title: bare ? t`还没有立绘，画好才能上台` : '' }, [entry.name, bare ? el('small', { text: t`无立绘` }) : null].filter(Boolean))
+      b.addEventListener('click', () => setStage({ fixed: held ? fixed.filter(name => name !== entry.name) : [...fixed, entry.name] }))
+      return b
+    })
+    rows.push(el('div', { class: 'vn-pop-cast' }, [
+      el('span', {}, [t`常驻角色`, el('small', { text: choice.manual && !fixed.length ? t`还没选：台上不会有人` : t`一直站在台上，电脑最多三人，手机两人` })]),
+      el('div', { class: 'vn-pop-cast-list' }, buttons),
+    ]))
+    return rows
+  }
+
   /** This mode's own switches at the top of the menu, as they are now. */
   function renderPopOwn() {
     if (popKind !== 'voice' && popKind !== 'image') return
@@ -632,6 +677,7 @@ export function initVn(deps) {
           switchRow(t`新回复自动配图`, prefs.image, on => setQuick('image', on), t`画好后在左上角点开看`),
           artMode('newScene', t`到了新地点：`, renderPopOwn),
           artMode('newSprite', t`没有立绘的角色说话时：`, renderPopOwn),
+          ...stageRows(switchRow),
         ]))
     if (popKind === 'image') popOwn.prepend(el('div', { class: 'vn-pop-pages' }, [artPage('scenes', t`场景`, t`这张卡的背景图`), artPage('sprites', t`立绘`, t`角色说话时显示的立绘`)]))
   }
@@ -877,7 +923,7 @@ export function initVn(deps) {
         }
       } else if (partial) {
         // A frame still being written is not shown yet.
-      } else if (i < lastStory) steps.push({ type: 'panel', kind: part.kind, body: part.body, plain: '' })
+      } else if (i < lastStory || isCreationPage(part)) steps.push({ type: 'panel', kind: part.kind, body: part.body, plain: '' })
       else trailing.push(part)
     })
     return { steps, trailing, options }
@@ -1153,7 +1199,7 @@ export function initVn(deps) {
       plate.hidden = true
       box.dataset.kind = 'narration'
       clearStage()
-      lineBox.replaceChildren(el('p', { class: 'vn-waiting', text: t`（卡片画面）` }))
+      lineBox.replaceChildren(el('p', { class: 'vn-waiting', text: isCreationPage(step) ? t`（填好上面的表，故事就开始）` : t`（卡片画面）` }))
       showPanel(step.kind === 'html' ? frameOf(step.body, getChat()) : el('pre', { class: 'code', text: step.body }))
       return lineShown()
     }
@@ -1586,7 +1632,8 @@ export function initVn(deps) {
 
   /** The turn's illustrations (配图) as a CG: a small picture in the corner, opened full size. */
   function drawCg(chat) {
-    const images = state.node?.media?.images ?? []
+    // From the chat as it is now: a picture just drawn joined that copy of the reply.
+    const images = (chat?.path.find(node => node.id === state.node?.id) ?? state.node)?.media?.images ?? []
     const last = images.at(-1)
     cgButton.hidden = !last
     // Only the corner picture goes: a CG or the 回廊 open from an earlier turn stays until it is closed.
@@ -1604,30 +1651,73 @@ export function initVn(deps) {
     for (const node of chat?.path ?? []) {
       if (node.role === 'user') turn += 1
       if (node.role !== 'assistant') continue
-      for (const image of node.media?.images ?? []) out.push({ src: `/api/media/${chat.id}/${image.file}`, nodeId: node.id, turn, prompt: image.prompt ?? '' })
+      for (const image of node.media?.images ?? []) out.push({ src: `/api/media/${chat.id}/${image.file}`, file: image.file, nodeId: node.id, turn, prompt: image.prompt ?? '' })
     }
     return out
   }
   const cgLabel = cg => (cg.turn ? t`第 ${cg.turn} 轮` : t`开场`)
 
+  /** 画 CG: the reply on screen, up to the line being read. */
+  function drawMoment() {
+    const node = state.node
+    if (!getChat() || !node) return
+    if (state.streaming) return toast(t`等这段写完再画`)
+    const lines = state.steps.slice(0, state.index + 1).filter(step => step.type === 'line' && step.plain)
+    const moment = lines.slice(-MOMENT_LINES).map(step => (step.speaker && !step.plain.includes(step.speaker) ? `${shownName(step.speaker)}: ${step.plain}` : step.plain)).join('\n')
+    if (!moment.trim()) return toast(t`这一轮没有能读的正文`)
+    if (!deps.drawMoment(node, moment)) toast(t`这一轮的图还在画`)
+  }
+
   /**
-   * One picture full size, ‹ › through all of them (←/→). Without `start`, this
-   * turn's newest; from the gallery, closing it in any way goes back to the gallery.
+   * One picture full size, ‹ › through all of them (←/→), with 重画 and 改提示词. Without `start`,
+   * this turn's newest; from the gallery, closing it in any way goes back to the gallery.
    */
   function openCg(start = null, fromGallery = false) {
     const chat = getChat()
-    const all = allCgs(chat)
+    let all = allCgs(chat)
     if (!chat || !all.length) return
     setAuto(false)
     closePop()
     let at = start ?? Math.max(0, all.findLastIndex(cg => cg.nodeId === state.node?.id))
     const picture = el('img', { alt: '' })
     const count = el('span', { class: 'vn-cg-count' })
+    const note = el('span', { class: 'vn-cg-note', hidden: true })
+    /** What the buttons work on: the picture on screen, from the chat as it is now. */
+    const onScreen = () => {
+      const now = getChat()
+      const node = now?.path.find(item => item.id === all[at].nodeId)
+      const image = node?.media?.images?.find(item => item.file === all[at].file)
+      return image ? { chatId: now.id, node, image } : null
+    }
+    const redraw = control(t`重画`, t`同一段提示词再画一张换掉这张，可以先选画图方式和模型；这张留在旧图里`, () => {
+      const here = onScreen()
+      if (here) deps.redrawPicture(here.node, here.image, here.chatId)
+    })
+    const edit = control(t`改提示词`, t`改这张图的提示词再画，新画的换掉这张`, () => {
+      const here = onScreen()
+      if (here) deps.editPicturePrompt(here.node, here.image, here.chatId)
+    })
     const show = () => {
       state.cgAt = at
-      picture.src = all[at].src
+      if (picture.getAttribute('src') !== all[at].src) picture.src = all[at].src
       picture.alt = all[at].prompt
       count.textContent = `${cgLabel(all[at])} · ${at + 1} / ${all.length}`
+      const work = deps.pictureWork?.(getChat()?.id) ?? { jobs: [], failures: [] }
+      const job = work.jobs.find(item => item.nodeId === all[at].nodeId)
+      const failure = work.failures.find(item => item.nodeId === all[at].nodeId)
+      redraw.disabled = edit.disabled = Boolean(job)
+      note.textContent = job ? t`这一轮的新图正在画…` : failure ? t`配图没画出来：${failure.message}` : ''
+      note.classList.toggle('bad', !job && Boolean(failure))
+      note.hidden = !note.textContent
+    }
+    // A picture redrawn comes in here: in the place of the one it replaces.
+    state.cgRefresh = () => {
+      const now = allCgs(getChat())
+      if (!now.length) return closeCg()
+      const same = now.findIndex(cg => cg.src === all[at].src)
+      at = same >= 0 ? same : Math.min(at, now.length - 1)
+      all = now
+      show()
     }
     const step = by => {
       at = (at + by + all.length) % all.length
@@ -1638,7 +1728,10 @@ export function initVn(deps) {
       ...(all.length > 1 ? [control('‹', t`上一张（←）`, () => step(-1)), control('›', t`下一张（→）`, () => step(1))] : []),
       // Opened from the gallery, 关闭 is the way back to it.
       fromGallery ? null : control(t`回廊`, t`这条故事线上所有的 CG（G）`, () => openGallery(state.cgAt)),
+      redraw,
+      edit,
       control(t`关闭`, t`Esc`, () => leaveCg()),
+      note,
     ].filter(Boolean)))
     Object.assign(cgView.dataset, { mode: 'one', back: fromGallery ? '1' : '' })
     state.cgStep = step
@@ -1673,6 +1766,7 @@ export function initVn(deps) {
     Object.assign(cgView.dataset, { mode: 'gallery', back: '' })
     state.cgStep = null
     state.cgAt = null
+    state.cgRefresh = null
     cgView.hidden = false
     ;(from === null ? grid.querySelector('.here') : grid.children[from])?.scrollIntoView({ block: 'center' })
   }
@@ -1682,6 +1776,7 @@ export function initVn(deps) {
     cgView.replaceChildren()
     state.cgStep = null
     state.cgAt = null
+    state.cgRefresh = null
   }
 
   /** Out of what is showing: a picture opened from the gallery goes back to it, anything else to the story. */
@@ -2108,9 +2203,10 @@ export function initVn(deps) {
     const token = ++cast.token
     const cardId = state.cardId
     const step = state.steps[state.index]
-    if (!cardId || step?.type !== 'line') return clearStage()
+    const choice = stageOf(cardId)
+    if (!cardId || step?.type !== 'line' || choice.off) return clearStage()
     const narrow = matchMedia(zoomedQuery(NARROW)).matches
-    const layout = stageAt(state.steps, state.index, { names: state.names, max: narrow ? 2 : 3, isActor, labels: faceLabels.get(state.key) })
+    const layout = stageAt(state.steps, state.index, { names: state.names, max: narrow ? 2 : 3, isActor, labels: faceLabels.get(state.key), auto: !choice.manual, fixed: choice.fixed ?? [] })
     const members = await Promise.all(layout.members.map(async member => {
       const entry = state.names.find(item => item.name === member.name)
       return { ...member, entry, src: entry ? await actorPicture(cardId, entry, member.expression) : null }
@@ -2789,9 +2885,11 @@ export function initVn(deps) {
   /** The latest reply's lines labelled by the helper (when switched on), once; the stage redraws with them. */
   async function labelFaces() {
     const key = state.key
-    if (!prefs.faceHelper || !state.on || state.streaming || !state.node || !key || faceLabels.has(key) || labelling.has(key)) return
+    const choice = stageOf(state.cardId)
+    if (!prefs.faceHelper || choice.off || !state.on || state.streaming || !state.node || !key || faceLabels.has(key) || labelling.has(key)) return
+    const stands = name => isActor(name) && (!choice.manual || (choice.fixed ?? []).includes(name))
     // Lines the model marked (【名字|表情】) already say.
-    const lines = state.steps.map(step => (step.type === 'line' && step.kind === 'dialogue' && step.speaker && !step.expression && isActor(step.speaker) ? { speaker: step.speaker, text: step.plain } : null))
+    const lines = state.steps.map(step => (step.type === 'line' && step.kind === 'dialogue' && step.speaker && !step.expression && stands(step.speaker) ? { speaker: step.speaker, text: step.plain } : null))
     if (!lines.some(Boolean)) return
     labelling.add(key)
     try {
@@ -2992,6 +3090,8 @@ export function initVn(deps) {
       return
     }
     if (event.key === 'Escape') {
+      // A window over the mode closes by itself: what is under it stays.
+      if (document.querySelector('dialog[open]')) return
       if (!pop.hidden) return closePop()
       if (!cgView.hidden) return leaveCg()
       if (!logBox.hidden) return closeLog()
@@ -3149,6 +3249,8 @@ export function initVn(deps) {
   let pictureClock = 0
   function picturesChanged() {
     drawChip()
+    if (state.on) drawCg(getChat())
+    state.cgRefresh?.()
     const busy = (deps.pictureWork?.(getChat()?.id)?.jobs.length ?? 0) > 0
     if (busy && !pictureClock) pictureClock = setInterval(picturesChanged, 1000)
     else if (!busy && pictureClock) pictureClock = clearInterval(pictureClock) ?? 0

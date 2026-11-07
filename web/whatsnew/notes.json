@@ -1032,6 +1032,46 @@
           }
         }
       ]
+    },
+    {
+      "version": "2.4.1",
+      "date": "2026-11",
+      "after": true,
+      "items": [
+        {
+          "image": "2.4.1-tune.webp",
+          "zh": {
+            "title": "聊着天随手调",
+            "text": "顶栏模型旁边多了「思考」，每个对话单独选默认、关或 low 到 max，下一条回复起生效，不改动设置和供应商。\n基础预设能填正文字数范围，模型在范围里定长短；主题里多了行距。顶栏「记忆」点开就能开关长期记忆，「世界书」标出这张卡自带和在用的书。"
+          },
+          "en": {
+            "title": "Tune it as you chat",
+            "text": "A Thinking pick sits beside the model in the top bar: default, off or low to max, per chat and from the next reply, leaving the settings and the provider as they are.\nThe basic preset takes a story length range, and the theme has line spacing. Memory in the top bar turns long-term memory on or off, and World books marks the books the card brings and uses."
+          }
+        },
+        {
+          "icon": "🛠️",
+          "zh": {
+            "title": "检查、试玩和创作向导",
+            "text": "检查这张卡多了「调整状态栏」和大卡的「全本检查」，试玩发现的问题能进检查列表一键修；试玩还会查数值和按数值触发的事件。\n创作向导能选你在卡里的性别，审稿对照方案，事件只发生一次，某一步写坏了可以换个模型重写。回复写到一半断了，已写的内容也会留下。"
+          },
+          "en": {
+            "title": "Checks, trial runs and the card creator",
+            "text": "Check this card adds Adjust status bar and, for big cards, Check the whole card; problems a trial run finds go into the check list to fix. Trial runs also check values and the events they set off.\nThe card creator asks your gender in the card, reviews against the plan, keeps one-time events one-time, and can redo a failed step with another model. A reply cut off partway keeps what was written."
+          }
+        },
+        {
+          "icon": "🎨",
+          "zh": {
+            "title": "画 CG 和 Codex 画图",
+            "text": "视觉小说控制栏多了「画 CG」，给眼前这一幕画一张；「配图」里能关掉立绘，或者选几个常驻角色一直站在台上。\n电脑版的画图方式可以选「Codex（本机）」，用你自己装好登录的 Codex CLI 画，下面有安装和登录的说明。"
+          },
+          "en": {
+            "title": "Draw a CG, draw with Codex",
+            "text": "The visual novel controls add Draw CG for the scene in front of you, and Pictures lets you hide sprites or keep a few characters on stage.\nOn a computer, the drawing method can be Codex (this PC): the Codex CLI you installed and signed in to yourself, with setup steps right below it."
+          }
+        }
+      ]
     }
   ]
 }

@@ -107,6 +107,10 @@ test('the request: the card in full, entries the words name first, a target kept
   assert.match(content, /<entry uid="1" name="茶点" mode="keyword" keys="茶点, 点心">/)
   assert.match(content, /只改 <entry uid="1"> 这一处/)
   assert.match(request.system, /用English/)
+  // A card's own update format stays (a JSONPatch card was once rewritten to _.set), and a laid-out bar needs 调整状态栏.
+  assert.match(request.system, /沿用它原来的写法/)
+  assert.doesNotMatch(request.system, /只能用 <UpdateVariable> 这个标签和 _\.set/)
+  assert.match(request.system, /调整状态栏」里加上才显示/)
   // Past the budget, entries go by name only and their text can't be changed.
   const big = stored()
   big.book.entries[0].content = '长'.repeat(70000)
@@ -268,6 +272,31 @@ test('editing over HTTP keeps the card\'s id, chats, cast and settings; an open 
   assert.equal(pictured.hasAvatar, true)
   assert.equal(rawOfPicture((await call(`/api/cards/${card.id}/avatar`)).body).data.character_version, '1.2')
   assert.equal((await call(`/api/cards/${card.id}/avatar`, { method: 'PUT', body: { image: 'data:image/jpeg;base64,AAAA' } })).status, 400)
+})
+
+test('a proposal taken in is taken back as a whole, once, and not after the card has changed since', async t => {
+  const { app, call } = await tavern(t)
+  const card = (await call('/api/cards/import', { method: 'POST', body: { filename: 'c.json', data: Buffer.from(JSON.stringify(RAW)).toString('base64') } })).body
+  let session = (await call(`/api/cards/${card.id}/assistant`, { method: 'POST', body: { text: '让她说话冷淡一点，再加一个青梅竹马' } })).body
+  for (let i = 0; i < 200 && session.job; i++) {
+    await new Promise(resolve => setTimeout(resolve, 10))
+    session = (await call(`/api/cards/${card.id}/assistant`)).body
+  }
+  const done = (await call(`/api/cards/${card.id}/assistant/apply`, { method: 'POST', body: { ids: ['field:personality', 'new:0'] } })).body
+  assert.equal(done.session.undo, true)
+  assert.equal((await call(`/api/cards/${card.id}/assistant`)).body.undo, true, 'still there when the window opens again')
+  const before = await app.store.getCard(card.id)
+  await app.store.saveCard({ ...before, creator: '别处改过' })
+  assert.equal((await call(`/api/cards/${card.id}/assistant/undo`, { method: 'POST' })).status, 409)
+  await app.store.saveCard(before)
+  const undone = (await call(`/api/cards/${card.id}/assistant/undo`, { method: 'POST' })).body
+  assert.equal(undone.card.personality, '温和，记性好。')
+  assert.equal(undone.card.bookEntries, 2)
+  assert.equal(undone.prefix, true)
+  assert.equal(undone.chatKept, false)
+  assert.equal(undone.session.undo, false)
+  assert.equal(undone.session.turns[0].outcome.undone, true)
+  assert.equal((await call(`/api/cards/${card.id}/assistant/undo`, { method: 'POST' })).status, 409, 'once')
 })
 
 test('asking in words: a proposal from the model, applied as chosen, counted under the card', async t => {

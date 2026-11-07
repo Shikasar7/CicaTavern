@@ -176,14 +176,15 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
       const settings = await api('/api/settings', { method: 'PUT', body: { [builtinKey(detail.id)]: options } })
       state.detail = await api(`/api/presets/${detail.id}`)
       onBasicChanged?.(settings)
-      if (fields.find(f => f.key === key)?.prompt !== false) markStale()
+      const field = fields.find(f => f.key === key || f.keys?.includes(key))
+      if (field?.prompt !== false && !field?.perTurn) markStale()
       renderHead()
       rules.textContent = state.detail.rules
     })
     const rules = el('pre', { class: 'basic-rules', text: detail.rules })
     main.replaceChildren(...[
       head,
-      el('div', { class: 'basic-options' }, fields.map(field => basicField(el, field, detail.options[field.key], { onPick: pick }))),
+      el('div', { class: 'basic-options' }, fields.map(field => basicField(el, field, field.kind === 'range' ? detail.options : detail.options[field.key], { onPick: pick }))),
       el('details', { class: 'basic-preview' }, [el('summary', { text: t`这些选项加进提示词的内容` }), rules]),
       state.list.length ? null : el('p', { class: 'basic-import', text: t`想用 SillyTavern 的预设：在它的「AI 响应配置」里导出预设 JSON（或用 SillyTavern/data/default-user/OpenAI Settings 里的文件），点左上角「导入」或拖进窗口。` }),
     ].filter(Boolean))

@@ -26,6 +26,19 @@ const HIDDEN_BLOCKS = [
   /<judge>[\s\S]*?(?:<\/judge>|$)/gi,
 ]
 
+// What a reply cut off may end in. The update and choices blocks run to the end of the text when unclosed, so a half
+// one would be read as a whole one.
+const OPEN_BLOCK = new RegExp(`<(state|update(?:variable)?|time_box|choices|self_check|judge|${FOLD_TAG})>(?![\\s\\S]*</\\1>)[\\s\\S]*$`, 'i')
+
+/** A reply that stopped partway, without what it was in the middle of: a block, a template, a tag or a speaker's mark. */
+export function withoutOpenEnd(text) {
+  return String(text ?? '')
+    .replace(OPEN_BLOCK, '')
+    .replace(/<%(?![\s\S]*%>)[\s\S]*$/, '')
+    .replace(/(?:<[^<>\n]*|【[^】\n]*)$/, '')
+    .trimEnd()
+}
+
 /** Reply text as shown to the player when the card has no display regex: bookkeeping removed. */
 export function displayText(text) {
   let out = String(text ?? '')
@@ -359,6 +372,16 @@ function setPath(object, keys, value) {
 function insertPath(object, keys, value) {
   const last = keys.at(-1)
   if (last === undefined) return false
+  // `-` appends to a list. Where none is yet (a chat older than the variable, or one value written in its place), start
+  // one with what was there: as an object, each later add would overwrite its one key "-" and the earlier item be lost.
+  if (last === '-' && keys.length > 1) {
+    const holder = parentOf(object, keys.slice(0, -1))
+    const was = holder[keys.at(-2)]
+    const earlier = was && typeof was === 'object' && !Array.isArray(was) && Object.keys(was).join() === '-' ? [was['-']] : null
+    if (was === undefined || was === null) holder[keys.at(-2)] = []
+    else if (earlier) holder[keys.at(-2)] = earlier
+    else if (typeof was !== 'object') holder[keys.at(-2)] = [was]
+  }
   const parent = parentOf(object, keys)
   if (Array.isArray(parent)) {
     const index = last === '-' ? parent.length : Number(last)

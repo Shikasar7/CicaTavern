@@ -134,30 +134,40 @@ const QUIET = 12
  * @param options.max - how many may stand at once.
  * @param options.isActor - (name) → whether this one can stand there (not the player, has a picture).
  * @param options.labels - an expression per step from the helper model (用辅助模型判断表情), used before the narration's.
+ * @param options.auto - false: nobody steps on by speaking; only `fixed` stand there.
+ * @param options.fixed - 常驻: names that stand there from the first line and stay, whatever happens; who is left
+ *   over when there are more than `max` steps on when they speak, in another one's place.
  * @returns {{ members: { name: string, expression: string }[], speaker: string|null, effects: object }}
  */
-export function stageAt(steps, index, { names = [], max = 3, isActor = () => true, labels = null } = {}) {
-  let members = []
+export function stageAt(steps, index, { names = [], max = 3, isActor = () => true, labels = null, auto = true, fixed = [] } = {}) {
+  const held = fixed.filter(isActor)
+  const stays = name => held.includes(name)
+  let members = held.slice(0, max).map(name => ({ name, expression: 'neutral', last: -1 }))
   let place = null
   const keysOf = name => names.find(entry => entry.name === name)?.keys ?? [name]
   const last = Math.min(index, (steps?.length ?? 0) - 1)
   for (let i = 0; i <= last; i++) {
     const step = steps[i]
     if (step?.type !== 'line') continue
-    if (step.where?.place && place && step.where.place !== place) members = []
+    if (step.where?.place && place && step.where.place !== place) members = members.filter(member => stays(member.name))
     if (step.where?.place) place = step.where.place
     const plain = step.plain ?? ''
     members = members.filter(member => {
+      if (stays(member.name)) return true
       if (i - member.last > QUIET) return false
       if (step.kind === 'dialogue' && step.speaker === member.name) return true
       return !keysOf(member.name).some(key => new RegExp(`${escape(key)}[^。！？.!?\\n]{0,10}${LEAVES}`, 'i').test(plain)) // i18n-ignore: a pattern
     })
-    const speaker = step.kind === 'dialogue' && step.speaker && isActor(step.speaker) ? step.speaker : null
+    const speaker = step.kind === 'dialogue' && step.speaker && isActor(step.speaker) && (auto || stays(step.speaker)) ? step.speaker : null
     if (!speaker) continue
     let member = members.find(item => item.name === speaker)
     if (!member) {
       if (members.length >= max) {
-        const quietest = members.reduce((a, b) => (b.last < a.last ? b : a))
+        // 常驻 keep their places, except from another of them.
+        const free = members.filter(item => !stays(item.name))
+        const room = free.length ? free : stays(speaker) ? members : []
+        if (!room.length) continue
+        const quietest = room.reduce((a, b) => (b.last < a.last ? b : a))
         members = members.filter(item => item !== quietest)
       }
       member = { name: speaker, expression: 'neutral', last: i }

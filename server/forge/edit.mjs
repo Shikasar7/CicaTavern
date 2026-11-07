@@ -4,6 +4,7 @@
 // them as before and after, and the ones the user keeps go into the stored
 // card. The session runs like a draft (index.mjs): in the background, polled.
 import YAML from 'yaml'
+import { helperBlock } from '../helper-scripts.mjs'
 import { editBook } from '../worldbook.mjs'
 import { newId } from '../store.mjs'
 import { CARD_FIELDS, cleanTags, editCard, greetingList } from '../../web/shared/card-edit.js'
@@ -135,8 +136,8 @@ const editSystem = reply => `你是角色卡编辑。用户在 SillyTavern 一�
 - mode 为 initvar 的条目是初始变量（一直在起作用）；enabled="false" 的条目没在用。这两种用户没要求就不要动。
 - 要加变量（好感度一类的数值、状态栏、改成 MVU 卡）时，这个应用会自己记录变量、显示状态栏、需要时把当前变量发给模型，只要写两样：
   1. 初始变量：<new_entry name="[initvar]初始变量" mode="initvar">，正文用 YAML 写出每个变量和初始值；卡里已经有 initvar 条目就改那一条。
-  2. 更新规则：一条 mode="constant" 的条目，写每个变量的含义、范围、什么时候怎么变，并要求每次回复末尾写一个 <UpdateVariable> 块，一行一个 _.set('变量路径', 旧值, 新值);//原因（数字增减也可以写 _.add('变量路径', 增量);），没有变化就不写。只能用 <UpdateVariable> 这个标签和 _.set、_.add 这两种写法。
-  不用另写状态栏界面、正则或脚本，也不用 {{getvar}}、{{get_message_variable}} 这类宏。
+  2. 更新规则：一条 mode="constant" 的条目，写每个变量的含义、范围、什么时候怎么变，并要求每次回复末尾写一个 <UpdateVariable> 块，没有变化就不写。卡里已经有写变量更新格式的条目（里面有 <UpdateVariable>、<JSONPatch> 或 _.set）时，沿用它原来的写法，把新变量加进去，不要换成别的写法；JSONPatch 和 _.set、_.add 这个应用都认。卡里还没有时，用 _.set('变量路径', 旧值, 新值);//原因 一行一个（数字增减也可以写 _.add('变量路径', 增量);）。
+  不用另写状态栏界面、正则或脚本，也不用 {{getvar}}、{{get_message_variable}} 这类宏。卡还没有状态栏布局时，新变量会自动显示在状态栏里；卡已经有自己的状态栏布局（创作向导做的卡，或在「检查这张卡」里调过的）时，新变量要在「检查这张卡 → 调整状态栏」里加上才显示，在 <reply> 里提醒用户，不要说它会自动出现。
 - 要求含糊时，按最可能的意思改，在 <reply> 里说你是怎么理解的。不需要改或者做不到的，在 <reply> 里说明，不输出改动。
 ${WRITING_RULES.filter(rule => !rule.includes('<user>')).map(rule => `- ${rule}`).join('\n')}
 
@@ -160,8 +161,9 @@ ${WRITING_RULES.filter(rule => !rule.includes('<user>')).map(rule => `- ${rule}`
  * asked before; `target`: a piece the change is kept to (field:description,
  * greeting:0, entry:3). Returns { request, shown }, shown being the uids of the
  * entries sent in full: only those can be changed by the answer.
+ * `helpers`: the card's scripts (helperBlock), told about when the request is about them.
  */
-export function editRequest(card, { text, target = '', turns = [], reply = '简体中文', references = [] } = {}) {
+export function editRequest(card, { text, target = '', turns = [], reply = '简体中文', references = [], helpers = null } = {}) {
   const entries = card.book?.entries ?? []
   const shown = shownEntries(entries, `${text}\n${target}`, target)
   const history = historyLines(turns)
@@ -171,6 +173,7 @@ export function editRequest(card, { text, target = '', turns = [], reply = '简�
     material,
     `<card>\n${cardBlock(card)}\n</card>`,
     `<worldbook>\n${bookBlock(entries, shown)}\n</worldbook>`,
+    helperBlock(helpers, text),
     history.length ? `之前的几次修改（上面的卡已经是处理之后的样子）：\n${history.join('\n')}` : '',
     `这次的要求：\n${text}`,
     target ? `只改 ${targetTag(target)} 这一处，别的不动。` : '',

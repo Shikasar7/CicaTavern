@@ -227,6 +227,48 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 3. 安卓版没有代理设置：海外服务要开手机上的加速器（全局模式，或者把 CicaTavern 加进分流）。
 4. 本机的模型服务（Ollama、LM Studio）报 ECONNREFUSED：先把它开起来。
 
+## 回复写到中途断开了 {#err-reply-cut-upstream}
+
+- 也叫：流式中断、输出到一半断了、文字消失、回复没了、上游中断、aborted、ECONNRESET、没写完
+- 平台：Windows、Mac、安卓
+- 原文：{0} 的回复写到中途，连接被上游（对方服务器，或中间的代理、网络）断开了。这不是 Base URL 或 Key 的问题，再试一次；总是这样就换个代理节点或模型。
+- 原文：{0} 写到中途报错了，这是上游返回的错误：{1}
+- 原文：这一轮没写完，写好的部分留下了。{0}
+- 原文：⚠ 上游中断，没写完
+- 原文：回复写到中途被上游断开了（连接被对方服务器、代理或网络切断，或者对方返回了错误），写好的部分留下了。可以重新生成。具体原因在 设置 → 更多 → 错误日志。
+- 英文：{0}'s reply was cut off partway: the connection was closed upstream (by its server, or a proxy or the network in between). This isn't a Base URL or key problem. Try again, and if it keeps happening, switch proxy node or model.
+- 英文：{0} failed partway through its reply. The error came from upstream: {1}
+- 英文：This turn didn't finish. What was written has been kept. {0}
+- 英文：⚠ Cut off upstream, not finished
+- 英文：The reply was cut off upstream partway: its server, a proxy or the network closed the connection, or the provider returned an error. What was written has been kept. You can regenerate. The cause is in Settings → More → Error log.
+- 出现在：回复已经开始输出之后
+- 原因：问题出在上游，不是你点了停止，也不是 Base URL 或 Key 配错了：请求已经成功，回复写到一半，连接被对方服务器或中间的代理、网络切断，或者对方在中途返回了错误。
+- 解决：已经写出的文字会留下来，回复下方标「⚠ 上游中断，没写完」，可以重新生成。这一轮写到一半的变量更新块、选项不算数，已经写完整的变量更新照常生效；这条回复不会自动配图、朗读或补写变量，也没有用量数字。总是断就换个代理节点、换个模型，或者调低最大回复长度。
+
+还没写出文字就断开的，这一轮不保存，你写的话放回输入框，提示写的是同一句「连接被上游断开」。
+
+## Codex 画不了 {#err-codex}
+
+- 也叫：Codex 没登录、没装 Codex、Codex 画图失败、Codex 用量上限、codex login
+- 平台：Windows、Mac
+- 原文：没装 Codex
+- 原文：Codex 没登录
+- 原文：还不能用
+- 原文：没找到 Codex：先装好 Codex CLI（npm i -g @openai/codex），再在终端运行 codex login 登录。
+- 原文：Codex 没登录或登录过期了：在终端运行 codex login 再试。
+- 原文：Codex 的用量到上限了，等额度恢复再画。
+- 原文：Codex 十分钟还没画完，停下了。
+- 英文：Codex not installed
+- 英文：Codex not signed in
+- 英文：Not ready yet
+- 英文：Codex not found: install the Codex CLI (npm i -g @openai/codex), then run codex login in a terminal.
+- 英文：Codex isn't signed in, or the sign-in has expired: run codex login in a terminal and try again.
+- 英文：Codex has reached its usage limit. Draw again once it resets.
+- 英文：Codex hadn't finished after ten minutes, so it was stopped.
+- 出现在：画图方式选了「Codex（本机）」时，设置里和画图时
+- 原因：这台电脑上没装 Codex CLI、没登录或登录过期了，或者 ChatGPT 账号的用量到了上限。
+- 解决：按「设置 → 配图与朗读 → 配图 → 画图方式」里 Codex 下面的「使用说明」装好、登录，再点「重新检查」。用量到上限就等额度恢复，或者先换别的画图方式。见「用 Codex 画图」。
+
 ## 代理地址格式不对 {#err-proxy-address}
 
 - 在哪：设置 → 连接 → 网络代理
@@ -337,14 +379,18 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 - 原文：「{0}」读不了。能读 txt、md、json 这类文本文件和带角色卡的 PNG，Word 和 PDF 先另存成 txt
 - 原文：这个文件是空的
 - 原文：最多附 {0} 份资料，先去掉一份
+- 原文：这张 PNG 里的角色卡数据损坏了，读不出来。换一份完好的文件再附
+- 原文：「{0}」看起来是角色卡，但文件损坏了，读不出来。创作角色卡时不会把它当普通文本读，修好或换一份完好的文件再附
 - 英文：Too much to read: {0} characters already, {1} in this one, and they can be {2} at most together. Remove one, or read fewer turns
 - 英文：“{0}” is too large: an attached file can be 16 MB at most
 - 英文：“{0}” cannot be read. Text files like txt, md and json can, and a PNG with a card in it; save a Word file or PDF as txt first
 - 英文：This file is empty
 - 英文：At most {0} references can be attached: remove one first
+- 英文：The card data in this PNG is damaged and cannot be read. Attach an intact copy instead
+- 英文：“{0}” looks like a character card, but the file is damaged and cannot be read. Creating a card won't read it as plain text: fix it or attach an intact copy
 - 出现在：修改角色卡 → 对话修改的「附文件」「读对话」；创作角色卡的「附文件」；直连对话的「附文件」
-- 原因：资料每次发送都要带上，所以有上限：最多 6 份，加起来 10 万字，文件不超过 16 MB。能读文本文件、带角色卡的 PNG，其他图片和 Word、PDF 读不了。
-- 解决：点资料旁的 × 去掉一份，或者读对话时选少一点的轮数、只看提到某几个名字的轮次。Word、PDF 先另存成 txt。
+- 原因：资料每次发送都要带上，所以有上限：最多 6 份，加起来 10 万字，文件不超过 16 MB。能读文本文件、带角色卡的 PNG，其他图片和 Word、PDF 读不了。创作角色卡时默认只学结构，所以看起来是角色卡、却读不出来的文件不会当普通文本读，不然向导就读到了原文。
+- 解决：点资料旁的 × 去掉一份，或者读对话时选少一点的轮数、只看提到某几个名字的轮次。Word、PDF 先另存成 txt。卡文件坏了就修好它，或者换一份完好的。如果这个文件其实是讲怎么写卡的笔记，删掉里面的卡字段示例（比如 first_mes、character_book）再附。自己写的 JSON 设定文件开头只有 name、description、personality、scenario 这几个字段时，也会被当成角色卡，把内容存成普通文字再附。
 
 ## 名字不能空着 {#err-name-empty}
 
@@ -396,6 +442,14 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 - 原因：采用之后，这一段又被改过（手动改的，或者又采用了别的建议）。撤销会把后来的改动也冲掉，所以不让撤。
 - 解决：先撤销后面采用的那几条，再撤销这一条；或者到修改角色卡里手动改回去。
 
+## 试玩报告里没有这些问题了 {#err-trial-fix-gone}
+
+- 原文：试玩报告里没有这些问题了，刷新一下再看
+- 英文：The trial report no longer has these problems. Refresh and look again
+- 出现在：检查这张卡的「试玩发现」里点「让模型出改法」
+- 原因：窗口打开以后又试玩了一次，报告换掉了，或者这条问题已经被采用的改法解决了。没有发送给模型。
+- 解决：关掉「检查这张卡」再打开，按现在的报告重新选。
+
 ## 默认的不能删 {#err-persona-default}
 
 - 在哪：设置 → 写作 → 你的角色；设置 → 写作 → 文风
@@ -414,6 +468,8 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 - 出现在：创作角色卡的「聊想法」「打磨」
 - 原因：模型这次的回复格式不对（常见于小模型、被截断的回复），或者要重写的那一段还没写出来。
 - 解决：点「换一组问题」重来；还不行换个更强的模型。空着的段落先写上内容再让它改。
+
+聊想法、出方案、写卡、按意见改报错停下时，报错下面可以「换个模型…」选另一个模型，看过估出的花费再点「换这个模型重写」，只这一次用它，草稿的模型不变，见[创作用哪个模型、花多少](features.md#forge-model)。
 
 ## 对话太长，超出模型的上下文 {#err-context-full}
 

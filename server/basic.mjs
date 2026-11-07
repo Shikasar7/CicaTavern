@@ -283,6 +283,21 @@ export function basicRules(options) {
     .join('\n\n')
 }
 
+/**
+ * 正文字数 as the turn asks for it, or '' with no range. `maxTokens`: the provider's output cap, when it has one: the
+ * upper bound comes down to what fits in it (a Chinese character counted as two tokens, a thousand kept for the status
+ * and update blocks), or the reply would be cut off partway.
+ */
+export function lengthRule({ lengthMin = 0, lengthMax = 0 } = {}, maxTokens = 0) {
+  const fits = maxTokens > 0 ? Math.max(100, Math.floor((maxTokens - 1000) / 2)) : Infinity
+  const max = lengthMax ? Math.min(lengthMax, fits) : 0
+  const min = max && lengthMin > max ? max : lengthMin
+  const tail = '只计叙事正文，不含时间框、状态栏、变量更新、选项等标签块。'
+  if (min && max && min < max) return `本轮正文 ${min}–${max} 字。在这个范围里按剧情需要定长短：事情多、场面大就写长些，简单的来回就写短些，不要每轮都写到上限。${tail}`
+  if (max) return min ? `本轮正文约 ${max} 字。${tail}` : `本轮正文不超过 ${max} 字，按剧情需要定长短。${tail}`
+  return min ? `本轮正文不少于 ${min} 字，按剧情需要定长短。${tail}` : ''
+}
+
 // 重写选项: a reply's four choices written again, its story left as it is (engine.rewriteChoices).
 const CHOICES_FORMAT = ['<choices>', 'A. ……', 'B. ……', 'C. ……', 'D. ……', '</choices>'].join('\n')
 const choicesRule = user => `每项一句话，只写「${user}」的行动或台词，不写结果；四项方向各不相同，至少一项出人意料。`

@@ -262,6 +262,8 @@ export const BASIC_FIELDS = [
   { key: 'choices', label: t`行动选项`, hint: t`回复末尾给四个行动：点一下填进输入框，点箭头直接发送。`, values: [['off', t`关`], ['four', t`四个`]] },
   { key: 'timeBox', label: t`时间框`, hint: t`回复开头一行写时间、地点和天气。`, values: [['off', t`关`], ['on', t`开`]] },
   { key: 'statusBar', label: t`状态栏`, hint: t`卡里有变量、但没有自带状态栏时，按变量自动排一个。只影响显示，马上生效。`, values: [['off', t`关`], ['auto', t`自动`]], prompt: false },
+  // Two numbers (basicRange), sent with each turn rather than in the prefix: a change needs no rebuild.
+  { key: 'length', kind: 'range', keys: ['lengthMin', 'lengthMax'], label: t`正文字数`, values: [], perTurn: true, hint: t`每轮正文的字数范围，模型在范围里按剧情定长短；只填一个就是不少于或不超过。空着用「设置 → 写作 → 语言与字数」的字数，填了以这里为准。只算正文，不算状态栏、选项这些。供应商设了「最大输出 token」时，上限按它收小（一个字约算 2 token），免得写到一半被截断；想写得长，把那里调大，或者留空。下一轮起生效。` },
 ]
 
 // The visual novel preset (视觉小说预设): its own options first, then the built-in preset's.
@@ -328,11 +330,30 @@ function withTip(el, button, tip) {
   button.addEventListener('blur', hideTip)
 }
 
+/** 正文字数: two number boxes, each saved on its own when it changes (`onPick(lengthMin, n)`); empty is 0. */
+function basicRange(el, field, values, { onPick, disabled, compact }) {
+  const box = (key, label) => {
+    const input = el('input', { type: 'number', min: '0', max: '20000', step: '50', inputmode: 'numeric', placeholder: t`不限`, disabled, value: values?.[key] ? String(values[key]) : '', 'aria-label': `${field.label} ${label}` })
+    input.addEventListener('change', () => {
+      const n = Math.max(0, Math.min(20000, Math.round(Number(input.value) || 0)))
+      input.value = n ? String(n) : ''
+      onPick(key, n)
+    })
+    return el('label', { class: 'range-box' }, [el('span', { text: label }), input, el('span', { text: t`字` })])
+  }
+  return el('div', { class: `basic-field${compact ? ' compact' : ''}` }, [
+    el('span', { class: 'basic-label', text: field.label }),
+    el('div', { class: 'range-boxes' }, [box(field.keys[0], t`最少`), el('span', { class: 'range-dash', text: '–' }), box(field.keys[1], t`最多`)]),
+    compact ? null : el('p', { class: 'basic-hint', text: field.hint }),
+  ])
+}
+
 /**
  * One option as a row of buttons. `onPick(key, value)` saves it; the row
- * marks the new value at once.
+ * marks the new value at once. A `range` field takes the saved options whole (`value`) for its two numbers.
  */
 export function basicField(el, field, value, { onPick, disabled = false, compact = false }) {
+  if (field.kind === 'range') return basicRange(el, field, value, { onPick, disabled, compact })
   const buttons = field.values.map(([v, label]) =>
     el('button', { type: 'button', 'aria-pressed': String(v === value), disabled, text: label, onclick: () => {
       if (buttons.find(b => b.getAttribute('aria-pressed') === 'true')?.dataset.value === v) return

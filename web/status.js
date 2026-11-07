@@ -197,7 +197,10 @@ export function statusBar(el, spec, state, { previous = null, note = '', collaps
   if (pages.length) {
     const open = page => {
       for (const tab of tabs.children) tab.setAttribute('aria-selected', String(tab.dataset.page === page))
-      fill(statusGroups(onPage(spec, page, pages), state, previous))
+      const shown = statusGroups(onPage(spec, page, pages), state, previous)
+      fill(shown)
+      // Its variables are nowhere in this state yet (a chat from before the bar had them): said, rather than a blank.
+      if (!shown.length) body.replaceChildren(el('p', { class: 'status-empty', text: t`这一页要显示的变量现在还没有` }))
       remember(PICKED_PAGE, page)
     }
     const tabs = el('div', { class: 'status-pages', role: 'tablist' }, pages.map(page => el('button', { type: 'button', role: 'tab', class: 'status-page', 'data-page': page, text: page, onclick: () => open(page) })))

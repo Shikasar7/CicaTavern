@@ -9,7 +9,7 @@ import YAML from 'yaml'
 import { normalizeCard, parseCardFile, readPngText, writeCardPng } from '../server/cards.mjs'
 import { createForge } from '../server/forge/index.mjs'
 import { cleanVariables, editTracking, normalizePlan } from '../server/forge/prompts.mjs'
-import { applyIssues, cardJson, chineseText, lintText, matchWritten, newCard, readTagged, retrack, stateContent } from '../server/forge/write.mjs'
+import { applyIssues, cardJson, chineseText, lintText, matchWritten, newCard, planFacts, readTagged, retrack, reviewRequest, stateContent } from '../server/forge/write.mjs'
 import { statusSpecOf } from '../server/forge/status.mjs'
 import { rangeOf } from '../web/shared/status.js'
 import { normalizeProvider } from '../server/providers.mjs'
@@ -36,19 +36,24 @@ const PLAN = {
   verbatim: ['氛围安静一点'],
 }
 
-/** A pretend model for the writing steps; `fail` makes the next entries call answer without tags. */
+/**
+ * A pretend model for the writing steps; `fail` makes the next entries call answer without tags,
+ * `broken` (a model id) makes every entries call to that model answer without them.
+ */
 async function fakeWriter() {
   const seen = []
-  const state = { fail: 0 }
+  const state = { fail: 0, review: null, broken: '' }
   const server = createServer(async (req, res) => {
     const chunks = []
     for await (const chunk of req) chunks.push(chunk)
     const json = JSON.parse(Buffer.concat(chunks).toString('utf8'))
     const system = json.messages[0].content
     const asked = json.messages.at(-1).content
-    seen.push({ system, asked })
+    seen.push({ system, asked, model: json.model })
     let text = ''
-    if (system.includes('审稿人')) {
+    if (system.includes('审稿人') && state.review) {
+      text = state.review(asked)
+    } else if (system.includes('审稿人')) {
       text = `<issues>[{"target": "世界设定", "type": "模糊词", "original": "仿佛", "suggestion": "像"}, {"target": "林小雨_基础信息", "type": "贴标签", "original": "找不到的句子", "suggestion": "改"}]</issues>`
     } else if (asked.includes('按要求改写')) {
       const names = [...asked.matchAll(/<entry name="([^"]+)">/g)].map(m => m[1])
@@ -58,8 +63,8 @@ async function fakeWriter() {
       const indexes = [...asked.matchAll(/^- 开场 (\d+)「/gm)].map(m => m[1])
       text = indexes.map(i => `<greeting index="${i}">\n凌晨两点十七分，门铃响了。开场 ${i} 的正文。<user> 抬起头。\n</greeting>`).join('\n')
     } else if (system.includes('角色卡写手')) {
-      if (state.fail > 0) {
-        state.fail--
+      if (state.fail > 0 || json.model === state.broken) {
+        if (json.model !== state.broken) state.fail--
         text = '我写好了，不过没用标签。'
       } else {
         const wanted = asked.split('这次要写下面这些条目：')[1] ?? ''
@@ -140,6 +145,15 @@ test('the local check finds stock phrasing but leaves the user\'s own words alon
   const literal = { entries: [{ name: '甲', content: '她笑了——然后走开。' }], greetings: [] }
   applyIssues(literal, [{ target: '甲', original: '——', suggestion: "$'$$" }])
   assert.equal(literal.entries[0].content, "她笑了$'$$然后走开。")
+  // Text found more than once is left for the rewrite: changing the first would leave the others,
+  // or change the wrong one (小雨 inside 林小雨). With words around it to tell them apart, it goes in.
+  const twice = { entries: [{ name: '甲', content: '林小语推门。林小语坐下。林小语笑了。' }, { name: '乙', content: '林小雨每晚来店里。熟客都叫王店长小雨。' }], greetings: [] }
+  const unclear = applyIssues(twice, [{ target: '甲', original: '林小语', suggestion: '林小雨' }, { target: '乙', original: '小雨', suggestion: '老王' }])
+  assert.deepEqual(twice.entries.map(e => e.content), ['林小语推门。林小语坐下。林小语笑了。', '林小雨每晚来店里。熟客都叫王店长小雨。'])
+  assert.deepEqual([...unclear.keys()], ['甲', '乙'])
+  const placed = applyIssues(twice, [{ target: '乙', original: '王店长小雨', suggestion: '王店长老王' }, ...['推门', '坐下', '笑了'].map(w => ({ target: '甲', original: `林小语${w}`, suggestion: `林小雨${w}` }))])
+  assert.deepEqual(twice.entries.map(e => e.content), ['林小雨推门。林小雨坐下。林小雨笑了。', '林小雨每晚来店里。熟客都叫王店长老王。'])
+  assert.equal(placed.size, 0)
   assert.deepEqual(Object.fromEntries(readTagged('<entry name="A 「甲」">一\n</entry><entry name="B">二', 'entry')), { A甲: '一', B: '二' })
   // A name with what the entry is for after it still finds its entry; another entry's name with a number does not.
   const blocks = readTagged('<entry name="角色速览：谁是谁">甲</entry><entry name="樱井商事 2">乙</entry>', 'entry')
@@ -306,6 +320,11 @@ test('writing a card: steps in order, a failed step carries on, check and fix, t
   await assert.rejects(forge.saveCard('draftone', { avatar: 'data:image/jpeg;base64,AAAA' }), /PNG/)
   const saved = await forge.saveCard('draftone', { avatar: PNG_URL })
   assert.equal(saved.updated, false)
+  // 试玩体检 from the wizard plays the saved card: the page is told when the draft has moved on from it.
+  assert.equal(saved.draft.card.changedSinceSave, false)
+  assert.equal((await forge.update('draftone', { stage: 'plan' })).card.changedSinceSave, false, 'moving between steps is no change')
+  assert.equal((await forge.editCard('draftone', { description: '改过的描述' })).card.changedSinceSave, true)
+  assert.equal((await forge.editCard('draftone', { description: '短描述' })).card.changedSinceSave, false, 'back as saved')
   const card = await store.getCard(saved.card.id)
   assert.equal(card.name, '雨宿')
   assert.equal(card.firstMes, '我自己写的开场——')
@@ -318,6 +337,7 @@ test('writing a card: steps in order, a failed step carries on, check and fix, t
   await forge.editCard('draftone', { greetings: ['新开场', '第二个'] })
   const again = await forge.saveCard('draftone', { avatar: PNG_URL })
   assert.equal(again.updated, true)
+  assert.equal(again.draft.card.changedSinceSave, false)
   assert.equal(again.card.id, saved.card.id)
   assert.equal((await store.getCard(saved.card.id)).firstMes, '新开场')
   assert.equal((await store.listCards()).length, 1)
@@ -326,12 +346,109 @@ test('writing a card: steps in order, a failed step carries on, check and fix, t
   await forge.write('draftone', { restart: true })
   draft = await settled(forge, 'draftone')
   assert.equal(draft.card.savedCardId, saved.card.id)
+  assert.equal(draft.card.savedAt, again.draft.card.savedAt)
+  assert.equal(draft.card.changedSinceSave, true, 'the rewrite is not in the saved card yet')
   assert.equal(draft.card.avatar.source, 'upload')
   assert.equal(draft.stage, 'polish')
 
   await forge.remove('draftone')
   await assert.rejects(forge.get('draftone'), /不存在/)
   assert.ok(root)
+})
+
+test('a step written wrong can be written again by another model: only that step, only when asked, priced first', async t => {
+  const { forge, fake, store, root } = await setup(t)
+  const [own] = await store.getProviders()
+  // A second model on the same provider, one with a known price.
+  await store.saveProviders([{ ...own, models: [...own.models, { id: 'claude-sonnet-5-5' }] }])
+  const writer = `${own.id}/writer`
+  const other = `${own.id}/claude-sonnet-5-5`
+
+  // The draft's model keeps leaving the format: the first step fails, and the error says which model and what it cost.
+  fake.state.broken = 'writer'
+  await forge.write('draftone')
+  let draft = await settled(forge, 'draftone')
+  assert.equal(draft.error.kind, 'write')
+  assert.match(draft.error.message, /没有按格式写出/)
+  assert.equal(draft.error.model, writer)
+  assert.deepEqual(draft.error.size, { input: 10, output: 10, measured: true })
+  assert.equal(draft.writing[0].state, 'failed')
+
+  // The estimate sends nothing and prices the step's last calls for the model picked.
+  const sent = fake.seen.length
+  const estimate = await forge.retryEstimate('draftone', { model: other })
+  assert.equal(estimate.model, `${own.name} · claude-sonnet-5-5`)
+  assert.equal(estimate.input + estimate.output, 20)
+  assert.equal(estimate.measured, true)
+  assert.ok(Math.abs(estimate.cost - (10 * 2 + 10 * 10) / 1e6) < 1e-12)
+  assert.equal((await forge.retryEstimate('draftone', { model: writer })).cost, null)
+  await assert.rejects(forge.retryEstimate('draftone', {}), /先选一个模型/)
+  assert.equal(fake.seen.length, sent)
+
+  // Retried with the other model: it writes the failed step only; the next goes back to the draft's model (which fails again).
+  await forge.retry('draftone', { model: other })
+  draft = await settled(forge, 'draftone')
+  assert.deepEqual(fake.seen.slice(sent).map(s => s.model), ['claude-sonnet-5-5', 'writer'])
+  assert.equal(draft.writing[0].state, 'done')
+  assert.equal(draft.writing[0].by, estimate.model)
+  assert.equal(draft.writing[1].state, 'failed')
+  assert.equal(draft.writing[1].by, null)
+  assert.equal(draft.error.model, writer)
+  // The draft's model and the default model stay as they were.
+  assert.equal(draft.model, '')
+  assert.equal((await store.getSettings()).model, writer)
+  const saved = JSON.parse(await readFile(path.join(root, 'forge', 'draftone.json'), 'utf8'))
+  assert.equal(saved.model, '')
+  assert.deepEqual(saved.card.stepModels, { [draft.writing[0].id]: estimate.model })
+
+  // A draft whose error was saved before the model and the usage were kept (the same card, as it stands now).
+  const { stepModels, ...card } = saved.card
+  await writeFile(path.join(root, 'forge', 'draftold.json'), JSON.stringify({ ...saved, id: 'draftold', card, error: { kind: 'write', message: '旧的报错' } }))
+  assert.deepEqual(await forge.retryEstimate('draftold', { model: other }), { model: estimate.model, input: null, output: null, measured: false, cost: null })
+
+  // A plain retry uses the draft's model again and carries on to the end; the step written by the other keeps its mark.
+  fake.state.broken = ''
+  const before = fake.seen.length
+  await forge.retry('draftone')
+  draft = await settled(forge, 'draftone')
+  assert.equal(draft.error, null)
+  assert.equal(draft.stage, 'polish')
+  assert.ok(fake.seen.slice(before).every(s => s.model === 'writer'))
+  assert.deepEqual(draft.writing.filter(s => s.by).map(s => s.id), [draft.writing[0].id])
+
+  // The old draft takes another model too: it writes the step that failed, the draft's model the rest.
+  await forge.retry('draftold', { model: other })
+  draft = await settled(forge, 'draftold')
+  assert.equal(draft.error, null)
+  assert.equal(draft.stage, 'polish')
+  assert.deepEqual(draft.writing.filter(s => s.by).map(s => s.id), [draft.writing[1].id])
+  assert.equal(draft.model, '')
+})
+
+test('another model retrying a failed step writes from the version picked since, like 接着写', async t => {
+  const { forge, fake, store, root } = await setup(t)
+  const [own] = await store.getProviders()
+  await store.saveProviders([{ ...own, models: [...own.models, { id: 'claude-sonnet-5-5' }] }])
+  const other = `${own.id}/claude-sonnet-5-5`
+  // Two versions to pick from; writing starts from the first and fails.
+  const first = normalizePlan(PLAN)
+  const second = normalizePlan({ ...PLAN, name: '另一版', characters: [{ ...PLAN.characters[0], name: '苏晴', aliases: ['阿晴'] }, PLAN.characters[1]], avatar: { ...PLAN.avatar, character: '苏晴' } })
+  const file = path.join(root, 'forge', 'draftone.json')
+  await writeFile(file, JSON.stringify({ ...JSON.parse(await readFile(file, 'utf8')), planOptions: [{ angle: 'a', plan: first }, { angle: 'b', plan: second }], planPick: 0 }))
+  fake.state.broken = 'writer'
+  await forge.write('draftone')
+  let draft = await settled(forge, 'draftone')
+  assert.equal(draft.error.kind, 'write')
+
+  // The other version is picked, then the failed step is written again by another model.
+  await forge.update('draftone', { planPick: 1 })
+  await forge.retry('draftone', { model: other })
+  draft = await settled(forge, 'draftone')
+  const names = draft.card.entries.map(e => e.name)
+  assert.ok(names.some(n => n.includes('苏晴')))
+  assert.ok(!names.some(n => n.includes('林小雨')))
+  assert.equal(draft.writing[0].state, 'done')
+  assert.ok(draft.writing.some(s => s.id === 'character:苏晴'))
 })
 
 test('carrying on after the plan was revised: the card follows the plan, what was written stays', async t => {
@@ -361,4 +478,97 @@ test('no image backend: the avatar is upload-only', async t => {
   await forge.write('draftone')
   await settled(forge, 'draftone')
   await assert.rejects(forge.drawAvatar('draftone'), /上传/)
+})
+
+test('the review holds the card to the plan: a wrong name is put right as the plan has it', async t => {
+  const { forge, root, fake, plan } = await setup(t)
+  // Written to the end but not checked, with the heroine's name wrong in her profile.
+  const card = newCard(plan)
+  for (const entry of card.entries) if (!entry.content) entry.content = `${entry.name}的内容`
+  card.entries.find(e => e.name === '林小雨_基础信息').content = '姓名: 林小语\n身份: 雨女\n林小语只在雨夜出现。'
+  // And her nickname given to the shop manager, next to her right name.
+  card.entries.find(e => e.name === '王店长').content = '林小雨每晚来店里。熟客都叫王店长小雨。'
+  card.greetings.forEach((g, i) => (g.text = `开场 ${i + 1}，她推门进来。`))
+  const file = path.join(root, 'forge', 'draftone.json')
+  await writeFile(file, JSON.stringify({ ...JSON.parse(await readFile(file, 'utf8')), stage: 'write', card }))
+  // The pretend reviewer can only tell the name is wrong from the plan's facts. The wrong
+  // name is reported once per place, with words around it; the nickname only by itself.
+  fake.state.review = asked => {
+    const facts = /<plan_facts>([\s\S]*?)<\/plan_facts>/.exec(asked)?.[1] ?? ''
+    if (!facts.includes('林小雨（又名 小雨）') || !asked.includes('林小语')) return '<issues>[]</issues>'
+    return `<issues>[
+      {"target": "林小雨_基础信息", "type": "和方案不符", "original": "姓名: 林小语", "suggestion": "姓名: 林小雨"},
+      {"target": "林小雨_基础信息", "type": "和方案不符", "original": "林小语只在", "suggestion": "林小雨只在"},
+      {"target": "王店长", "type": "和方案不符", "original": "小雨", "suggestion": "老王"}
+    ]</issues>`
+  }
+
+  await forge.write('draftone')
+  const draft = await settled(forge, 'draftone')
+  assert.equal(draft.error, null)
+  const review = fake.seen.find(s => s.system.includes('审稿人'))
+  assert.match(review.system, /和方案不符/)
+  assert.match(review.system, /每处各报一条/)
+  assert.match(review.asked, /^<plan_facts>\n[\s\S]*林小雨.好感度=10（0~100）[\s\S]*<\/plan_facts>/)
+  assert.ok(!review.asked.includes('<plan>'), 'facts, not the whole plan')
+  assert.equal(draft.card.issuesFound, 3)
+  assert.equal(draft.card.entries.find(e => e.name === '林小雨_基础信息').content, '姓名：林小雨\n身份：雨女\n林小雨只在雨夜出现。')
+  // 小雨 is in 林小雨 too: not changed in place (that would make it 林老王), the rewrite gets it with the note.
+  const rewrite = fake.seen.find(s => s.asked.includes('按要求改写'))
+  assert.ok(rewrite, 'the unclear one goes to a rewrite')
+  const asked = rewrite.asked.split('按要求改写')[1]
+  assert.match(asked, /<entry name="王店长">\n林小雨每晚来店里。熟客都叫王店长小雨。\n<\/entry>\n要改的地方：\n {2}- 和方案不符：「小雨」 → 老王/)
+  assert.ok(!asked.includes('<entry name="林小雨_基础信息">'), 'what was put right in place is not rewritten')
+  assert.equal(draft.card.entries.find(e => e.name === '王店长').content, '改写后的王店长')
+})
+
+test('the plan facts for the review: whole and small for a small plan, the most mentioned parts of a large one', () => {
+  const plan = normalizePlan(PLAN)
+  const facts = planFacts(plan)
+  for (const fact of ['林小雨（又名 小雨）｜女｜雨女｜和 <user>：每逢下雨就来店里', '她只在下雨时能被看见', '开场白1「第三个雨夜」：凌晨两点', '林小雨.好感度=10（0~100）', '王店长｜配角'])
+    assert.ok(facts.includes(fact), fact)
+  assert.doesNotMatch(facts, /省了/)
+  // A small card with every field of its plan written to the limit: 2 core characters, 3 side
+  // ones, 3 places, a faction, 2 past events, 3 rules, 2 openings, 3 values. It all fits, and
+  // the review grows by about a tenth.
+  const fill = (s, n) => s.repeat(Math.ceil(n / s.length)).slice(0, n)
+  const full = normalizePlan({
+    ...PLAN,
+    user_role: { identity: fill('新来的夜班店员，', 300), constraints: ['不能离开书店太久', '看不见幽灵'] },
+    world: {
+      kind: '架空', overview: fill('常年下雨的海港城，', 800), rules: [1, 2, 3].map(() => fill('雨夜死去的人会留在书里，', 120)),
+      places: [1, 2, 3].map(i => ({ name: `地点${i}`, aliases: [`别称${i}`], description: fill('潮湿的旧街区，', 400), scenes: ['书架间', '阁楼'] })),
+      factions: [{ name: '守书会', description: fill('看管禁书的老人们，', 400), members: ['林小雨', '沈默'] }],
+      history: [1, 2].map(() => ({ event: fill('十年前的大火，', 200), impact: fill('地下室被封了，', 200) })),
+    },
+    characters: [
+      ...['林小雨', '沈默'].map(name => ({ name, kind: 'core', aliases: ['小名'], gender: '女', age: '19', identity: fill('住在书架里的幽灵，', 120), relationship: fill('每逢雨夜来借书，', 300), appearance: ['湿漉漉的长发', '褪色的校服', '左手腕一道疤', '总光着脚'], personality: { base: '安静', main: ['好奇'] }, role: fill('引出往事', 200) })),
+      ...[1, 2, 3].map(i => ({ name: `配角${i}`, kind: 'npc', gender: '男', age: '40', identity: fill('街口卖伞的，', 120), relationship: fill('认识你，', 300), role: fill('跑龙套', 200) })),
+    ],
+    tracking: { enabled: true, variables: [{ path: '林小雨.好感度', type: 'number', initial: '10', range: '0~100' }, { path: '林小雨.信任', type: 'number', initial: '5', range: '0~100' }, { path: '世界.天数', type: 'number', initial: '1' }] },
+    greetings: [{ title: '第三个雨夜', scene: fill('书店柜台，', 200), start: fill('凌晨两点，', 200), situation: 'x' }, { title: '火灾那天', scene: fill('烧着的街，', 200), start: fill('十年前，', 200), situation: 'x', state: { '林小雨.好感度': '40' } }],
+  })
+  const fullFacts = planFacts(full)
+  assert.doesNotMatch(fullFacts, /省了/)
+  for (const fact of ['林小雨（又名 小名）｜女｜19', '地点3（又名 别称3）', '守书会：成员 林小雨、沈默', '开局数值不同：林小雨.好感度=40', '世界.天数=1', '配角3｜配角｜男｜40'])
+    assert.ok(fullFacts.includes(fact), fact)
+  const card = newCard(full)
+  for (const entry of card.entries) if (!entry.content) entry.content = fill(`${entry.name}写了一些内容。`, 600)
+  card.greetings.forEach(g => (g.text = fill('开场正文。', 700)))
+  const size = r => r.system.length + r.messages[0].content.length
+  const without = size(reviewRequest(card, []))
+  const added = size(reviewRequest(card, [], '简体中文', full)) - without
+  assert.ok(fullFacts.length < 1100 && added < 1300 && added / without < 0.11, `${fullFacts.length} / ${added} / ${without}`)
+
+  // A large plan: kept to the budget, what the card names most first, and a line on what was left out.
+  const large = normalizePlan({
+    ...PLAN,
+    characters: [PLAN.characters[0], ...Array.from({ length: 40 }, (_, i) => ({ name: `配角${i}号`, kind: 'npc', identity: '身份'.repeat(20), relationship: '关系'.repeat(30) }))],
+    world: { ...PLAN.world, places: Array.from({ length: 20 }, (_, i) => ({ name: `第${i}号街`, description: '描述'.repeat(30) })) },
+  }, { scale: 'epic' })
+  const cut = planFacts(large, ['配角39号 在 第19号街', '配角39号'])
+  assert.ok(cut.length < 3200, String(cut.length))
+  assert.ok(cut.includes('林小雨（又名 小雨）') && cut.includes('开场白2') && cut.includes('配角39号'))
+  assert.match(cut, /（方案较大，只列了卡里提得多的部分，省了：配角 \d+ 条、地点 \d+ 条。/)
+  assert.equal(planFacts({ characters: [] }), '')
 })

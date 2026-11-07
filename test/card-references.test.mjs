@@ -286,6 +286,12 @@ test('over HTTP: read a file and a chat, ask, take the entry and the variable in
   assert.deepEqual(saved.nodes.a1.state.角色.苏晚, { 好感度: 15 })
   assert.equal((await app.store.getCard(card.id)).book.entries.at(-1).comment, '苏晚')
 
+  // Taken back, the card is as it was; what went into the chat stays, and the page says so.
+  const undone = (await call(`${url}/undo`, { method: 'POST' })).body
+  assert.equal(undone.chatKept, true)
+  assert.equal((await app.store.getCard(card.id)).book, null, 'it had no book before')
+  assert.deepEqual((await app.store.getChat(opened.id)).nodes.a1.state.角色.苏晚, { 好感度: 15 })
+
   // They stay until taken off, and go with the talk.
   const left = (await call(`${url}/references/${stretch.id}`, { method: 'DELETE' })).body
   assert.deepEqual(left.references.map(item => item.id), [file.id])
@@ -324,4 +330,12 @@ $(() => { registerMvuSchema(Schema); });`
   const view = (await call(`/api/chats/${chat.id}/state`, { method: 'PUT', body: { state: fixed } })).body
   assert.deepEqual(view.lost, ['角色.苏晚'])
   assert.deepEqual(view.state, fixed, 'kept as written for now')
+})
+
+test('a card the wizard only studies shows what the model reads of it, not its text', () => {
+  const ref = readReference({ name: 'c.json', text: JSON.stringify({ spec: 'chara_card_v2', data: { name: '林青禾', description: '临溪茶馆的掌柜。', first_mes: '你来了。' } }) })
+  const view = referenceView({ ...ref, mode: 'structure' })
+  assert.match(view.brief, /结构/)
+  assert.doesNotMatch(view.brief, /林青禾|临溪|掌柜/)
+  assert.equal(referenceView({ id: 'x', kind: 'file', name: 'a.txt', chars: 3, total: 3 }).brief, undefined)
 })

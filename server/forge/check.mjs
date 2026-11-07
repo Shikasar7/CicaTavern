@@ -13,6 +13,7 @@ import { PLACEMENT, effectOf, regexFromString } from '../../web/shared/regex.js'
 import { BRICKS, autoStatusSpec, cleanStatusSpec, joinPath } from '../../web/shared/status.js'
 import { getPath, splitPath } from '../../web/shared/vars.js'
 import { estimateTokens } from '../context.mjs'
+import { helperSummary } from '../helper-scripts.mjs'
 import { msg } from '../i18n.mjs'
 import { usesMvu } from '../mvu.mjs'
 import { keepToSchema } from '../schema.mjs'
@@ -22,6 +23,8 @@ import { DICE_TOKEN, JUDGE, KEPT_DEPTH, RULE_TAGS, SELF_CHECK, WORLD_TOKEN, dice
 import { CREATION_TAG, creationOf } from './creation.mjs'
 import { onOf } from './regex-edit.mjs'
 import { INIT_BLOCK, madeHere } from './st-export.mjs'
+import { ownWords } from './prompts.mjs'
+import { eventItem, eventsDone, notHappened, onceMarked } from './write.mjs'
 
 // Past these a card costs more than it needs to on every chat (固定前缀 is cached, what is sent each turn is not).
 const HEAVY_PREFIX = 30_000
@@ -45,13 +48,13 @@ const UPDATE_TAG = /update(?:variable)?/i
 
 const isRecord = value => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 const nameOf = entry => entry.comment || msg`未命名条目`
-const scriptName = script => script.scriptName || script.findRegex.slice(0, 24)
+export const scriptName = script => script.scriptName || script.findRegex.slice(0, 24)
 const pathKey = keys => keys.join('\u0000')
 
 const finding = (rule, target, level, title, why, changes = [], more = {}) => ({ id: `${rule}:${target}`, rule, level, from: 'program', title, why, changes, ...more })
 
 /** An entry as a change; `keysNow`, the keywords it has, for the box to write new ones in. */
-const entryChange = (entry, change = {}) => ({ id: `entry:${entry.uid}`, kind: 'entry', uid: entry.uid, title: entry.comment, constant: entry.constant, keysNow: entry.keys, before: entry.content, after: entry.content, ...change })
+export const entryChange = (entry, change = {}) => ({ id: `entry:${entry.uid}`, kind: 'entry', uid: entry.uid, title: entry.comment, constant: entry.constant, keysNow: entry.keys, before: entry.content, after: entry.content, ...change })
 
 /** A script as a change that leaves it as it is until `change` says otherwise (regex-edit.mjs readRegexEdit). */
 export const scriptChange = (script, change = {}) => ({
@@ -445,6 +448,52 @@ function pathFindings({ card, initvars, known, mvu, texts, schema, made, bricks 
   return out
 }
 
+// 创作角色卡 once told an event only in words that it happens once, and a model would play it again. A card it made with
+// variables can keep the events that happened in a list instead (write.mjs): the old entries get the test and the line,
+// the starting values the list. Optional, so it is a tip, and it changes how the card plays.
+const OLD_ONCE = { zh: ownWords('').eventOnce, en: ownWords('English').eventOnce }
+const EVENT_NAME = /<event name="([^"]+)">/
+
+/** YAML with an empty list of what happened under `key`; null when it cannot be read, or already has one. */
+function withEventsDone(text, key) {
+  const doc = YAML.parseDocument(text)
+  if (doc.errors.length || !YAML.isMap(doc.contents) || doc.has(key)) return null
+  doc.set(key, doc.createNode([EXTENSIBLE_MARK]))
+  return doc.toString({ lineWidth: 0 }).trimEnd()
+}
+
+function eventOnceFindings({ card, live, initvars, made, mvu }) {
+  if (!made || !mvu) return []
+  const old = live.flatMap(entry => {
+    const lines = entry.content.split('\n')
+    const english = lines.includes(OLD_ONCE.en)
+    const name = EVENT_NAME.exec(entry.content)?.[1]
+    // Only an @@if the code put first is known to stand there; any other decorator is someone's own.
+    if ((!english && !lines.includes(OLD_ONCE.zh)) || !name || (lines[0].startsWith('@@') && !lines[0].startsWith('@@if '))) return []
+    return [{ entry, lines, english, item: eventItem(name) }]
+  })
+  const init = initvars.find(entry => !OLD_ENTRY.test(entry.comment) && !hasTemplate(entry.content) && parsedInit(entry))
+  if (!old.length || !init) return []
+  const language = old[0].english ? 'English' : ''
+  const key = eventsDone(language)
+  const changes = old.map(({ entry, lines, english, item }) => {
+    const once = lines.map(line => (line === OLD_ONCE[english ? 'en' : 'zh'] ? onceMarked(language, item) : line))
+    const test = notHappened(language, item)
+    const after = once[0].startsWith('@@if ') ? [`${once[0]} && ${test}`, ...once.slice(1)] : [`@@if ${test}`, ...once]
+    return entryChange(entry, { after: after.join('\n') })
+  })
+  const { body } = splitDecorators(init.content)
+  const list = withEventsDone(body, key)
+  if (list !== null) changes.push(entryChange(init, { after: `${init.content.slice(0, init.content.length - body.length)}${list}` }))
+  // An opening with values of its own starts from those instead.
+  greetingList(card).forEach((text, index) => {
+    const block = INIT_BLOCK.exec(text)?.[1]
+    const own = block ? withEventsDone(block, key) : null
+    if (own !== null) changes.push({ id: `greeting:${index}`, kind: 'greeting', index, before: text, after: text.replace(INIT_BLOCK, () => `<initvar>\n${own}\n</initvar>`) })
+  })
+  return [finding('event-once', 'card', 'tip', msg`有 ${old.length} 个事件只靠文字提醒「只发生一次」`, msg`模型不一定记得一件事已经写过，到了时机可能再写一遍。可以改成用变量记下：事件写进故事的那一轮，模型把它加进「${key}」，之后这一条就不再发出去。在这里已经开始的聊天也照样记。在 SillyTavern 里要装提示词模板扩展（ST-Prompt-Template）才生效，最好从新的聊天开始。`, changes, { risky: true })]
+}
+
 /** Whether a card shows a status bar of its own making: a regex or a script draws it, not a layout. */
 export function drawsOwnBar(card) {
   const scripts = Array.isArray(card.regexScripts) ? card.regexScripts : []
@@ -492,7 +541,7 @@ const WORLD_NAME = WORLD_TOKEN.slice(1, -1)
 const drawName = script => DRAW_NAME.exec(script.findRegex)?.[0] ?? ''
 const groupOf = name => Number(name.slice(name.lastIndexOf('_') + 1))
 
-/** The bricks a card has: { selfcheck, events, judge, world: their rule, creation: { page, opening, mark, rule }, books: paths, tokens: draws the rules read, draws: [{ group, script, items, rate }] }. */
+/** The bricks a card has: { selfcheck, events, judge, world: their rule, worldDraw: its script, creation: { page, opening, mark, rule }, books: paths, tokens: draws the rules read, draws: [{ group, script, items, rate }] }. */
 export function bricksOf(card) {
   const live = (card.book?.entries ?? []).filter(entry => entry.enabled !== false && !isInitvar(entry))
   const scripts = Array.isArray(card.regexScripts) ? card.regexScripts : []
@@ -508,7 +557,7 @@ export function bricksOf(card) {
   const opening = greetingList(card).some(text => text.includes(CREATION_TAG))
   const mark = creationOf(scripts)?.mark.trim() ?? ''
   const creation = page || opening ? { page, opening, mark, rule: live.find(entry => entry.keys.includes(mark)) ?? null } : null
-  return { selfcheck: rule(RULE_TAGS.selfcheck), events, judge: rule(RULE_TAGS.judge), world: rule(RULE_TAGS.world), creation, books: booksInRules(live.map(entry => entry.content)), tokens, draws: draws.sort((a, b) => a.group - b.group) }
+  return { selfcheck: rule(RULE_TAGS.selfcheck), events, judge: rule(RULE_TAGS.judge), world: rule(RULE_TAGS.world), worldDraw: scripts.find(script => drawName(script) === WORLD_NAME) ?? null, creation, books: booksInRules(live.map(entry => entry.content)), tokens, draws: draws.sort((a, b) => a.group - b.group) }
 }
 
 /** Whether a script takes a whole block out of a reply. */
@@ -554,7 +603,7 @@ function selfCheckFindings({ card, scripts, bricks }) {
 }
 
 /** What a draw's script needs: it runs over the rules, only for the model, and answers to the whole token. */
-function drawWorks(script, token) {
+export function drawWorks(script, token) {
   const found = regexFromString(script.findRegex)?.exec(token)?.[0]
   return !script.disabled && script.promptOnly && script.placement.includes(PLACEMENT.WORLD_INFO) && found === token && Boolean(script.replaceString.trim())
 }
@@ -697,12 +746,35 @@ const LEVELS = { error: 0, warn: 1, tip: 2 }
 /** What the program finds on a card, the worst first. */
 export function checkCard(card, { helpers = null } = {}) {
   const facts = factsOf(card, helpers)
-  const found = [...regexFindings(facts), ...keyFindings(facts), ...entryFindings(facts), ...greetingFindings(facts), ...macroFindings(facts), ...variableFindings(facts), ...pathFindings(facts), ...statusFindings(facts), ...selfCheckFindings(facts), ...drawFindings(facts), ...creationFindings(facts), ...judgeFindings(facts), ...heavyFindings(facts)]
+  const found = [...regexFindings(facts), ...keyFindings(facts), ...entryFindings(facts), ...greetingFindings(facts), ...macroFindings(facts), ...variableFindings(facts), ...pathFindings(facts), ...eventOnceFindings(facts), ...statusFindings(facts), ...selfCheckFindings(facts), ...drawFindings(facts), ...creationFindings(facts), ...judgeFindings(facts), ...heavyFindings(facts)]
   return found.sort((a, b) => LEVELS[a.level] - LEVELS[b.level])
 }
 
 /** The variables as they start, for a status bar's preview. */
 export const startingState = (card, { helpers = null } = {}) => factsOf(card, helpers).known
+
+/** The status bar's shown fields with no variable behind them at the start ({ path, label }); none for a card without variables. */
+export function missingStatusFields(card, { helpers = null } = {}) {
+  const { known, variables } = factsOf(card, helpers)
+  if (!card.statusBar || !variables) return []
+  return card.statusBar.fields
+    .filter(field => field.show !== 'hidden' && getPath(known, field.path) === undefined)
+    .map(field => ({ path: field.path, label: field.label || splitPath(field.path).at(-1) }))
+}
+
+export const STATUS_TUNE = 'status-tune:card'
+
+/**
+ * 调整状态栏: the card's bar as a change to write over by hand, or one laid out from its variables; no model, nothing to
+ * find. Taken in as any finding is, so it can be taken back. null when there is no bar to adjust: no variables, or the
+ * card draws its own. `fields`: what the bar can show, for putting one back.
+ */
+export function statusTuning(card, { helpers = null } = {}) {
+  const auto = autoStatusSpec(startingState(card, { helpers }))
+  const spec = card.statusBar ?? (drawsOwnBar(card) ? null : auto)
+  if (!spec) return null
+  return { ...finding('status-tune', 'card', 'tip', msg`调整状态栏`, '', [statusChange(card.statusBar ?? null, spec, card.statusBar ? {} : { scripts: true })]), fields: auto?.fields ?? [] }
+}
 
 /** The hosts a card's scripts load things from: its look needs them online. */
 function remoteHosts(scripts) {
@@ -728,6 +800,8 @@ export function cardFacts(card, { helpers = null } = {}) {
     scripts: scripts.length,
     greetings: greetingList(card).filter(text => text.trim()).length,
     helperScripts: card.helperScripts ?? 0,
+    // What each is, from the file when there is one; null when neither that nor a list kept at import says.
+    helperList: helpers ? helperSummary(helpers) : card.helperList?.length ? card.helperList : null,
     schema,
     attachedBooks: card.worldbookIds?.length ?? 0,
     remote: remoteHosts(scripts),

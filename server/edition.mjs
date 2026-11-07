@@ -20,11 +20,12 @@ const APP_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
 // the phone's Node is 18. updates: what 设置 → 更多 → 更新 does (server/update/):
 // 'zip' installs the Windows package, 'apk' points to the phone app's download,
 // null for this machine's own install (a git checkout). privacyNotice: the public
-// builds list, once, the connections nobody configured (隐私与网络).
+// builds list, once, the connections nobody configured (隐私与网络). codexDrawing: Codex（本机）
+// as a 画图方式, which runs the Codex CLI the user installed: a computer only.
 const EDITIONS = {
-  personal: { subscription: true, lan: true, dshImport: true, xiaoya: true, proxy: true, defaultProxy: 'system', appName: 'CicaTavern', dataDir: '.agent-tavern', port: 8791, updates: null, privacyNotice: false },
-  release: { subscription: false, lan: true, dshImport: false, xiaoya: false, proxy: true, defaultProxy: 'none', appName: 'CicaTavern', dataDir: '.cicatavern', port: 8790, updates: 'zip', privacyNotice: true },
-  android: { subscription: false, lan: false, dshImport: false, xiaoya: false, proxy: false, defaultProxy: 'none', appName: 'CicaTavern', dataDir: '.cicatavern', port: 0, updates: 'apk', privacyNotice: true },
+  personal: { subscription: true, lan: true, dshImport: true, xiaoya: true, proxy: true, defaultProxy: 'system', appName: 'CicaTavern', dataDir: '.agent-tavern', port: 8791, updates: null, privacyNotice: false, codexDrawing: true },
+  release: { subscription: false, lan: true, dshImport: false, xiaoya: false, proxy: true, defaultProxy: 'none', appName: 'CicaTavern', dataDir: '.cicatavern', port: 8790, updates: 'zip', privacyNotice: true, codexDrawing: true },
+  android: { subscription: false, lan: false, dshImport: false, xiaoya: false, proxy: false, defaultProxy: 'none', appName: 'CicaTavern', dataDir: '.cicatavern', port: 0, updates: 'apk', privacyNotice: true, codexDrawing: false },
 }
 // The name this edition had before there were several.
 const ALIASES = { desktop: 'personal' }

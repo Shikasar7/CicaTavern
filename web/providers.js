@@ -462,7 +462,7 @@ export function initProviders({ api, el, toast, guard, saveFile, onChanged }) {
       el('details', { class: 'provider-advanced', open: Boolean(p.maxTokens || p.temperature !== null || p.extraBody || p.thinking || Object.keys(p.headers ?? {}).length) }, [
         el('summary', { text: t`高级` }),
         el('div', { class: 'grid' }, [field(t`最大输出 token`, maxTokens), field(t`温度`, temperature)]),
-        field(t`思考`, thinking, t`DeepSeek、GLM、Qwen 和本地模型默认先思考。选关闭后这个供应商的模型都不思考，回复更快；个别服务不认时不起作用，模型还会照常思考。Claude 看「设置 → 模型」里的思考。`),
+        field(t`思考`, thinking, t`DeepSeek、GLM、Qwen 和本地模型默认先思考。选关闭后这个供应商的模型都不思考，回复更快；个别服务不认时不起作用，模型还会照常思考。Claude 看「设置 → 模型」里的思考。对话顶栏给某个对话单独选的思考优先于这里。`),
         field(t`额外请求参数（JSON，合并进请求体）`, extraBody, t`例如关掉思考、指定 reasoning_effort，写法看服务商文档`),
         field(t`额外请求头（JSON）`, headers),
       ]),

@@ -797,6 +797,12 @@ export function sameLine(before, index, after) {
   return copies.reduce((best, i) => (best < 0 || Math.abs(i - index) < Math.abs(best - index) ? i : best), -1)
 }
 
+/**
+ * A 建角页 (server/forge/creation.mjs) among a reply's parts: the form the story waits for. It sits after the
+ * opening's words, where a status bar would wait behind 状态; nobody would find it there, so it is a step.
+ */
+export const isCreationPage = part => part?.kind === 'html' && part.body.includes('.cr-go{') && part.body.includes('var SPEC=')
+
 // ─── Scenes ──────────────────────────────────────────────────────────────
 
 /** A place name as compared: full-width letters half-width, no spaces or punctuation, ASCII lower-case. */

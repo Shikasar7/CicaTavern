@@ -38,6 +38,66 @@ export function staleChange(card, change) {
   return false
 }
 
+// ─── A change written against text that has moved on ─────────────────────
+
+// How much of what a change kept on each side of its edit finds the place again.
+const AROUND = 24
+
+/**
+ * A text change made again on text that has changed since it was written (`now`): its edit, the part between what
+ * before and after share, goes where that part and a little on each side of it still stand, once. null when that is
+ * gone (the same words were changed) or found twice (no telling which).
+ */
+export function rebaseText(now, before, after) {
+  if (typeof now !== 'string' || typeof before !== 'string' || typeof after !== 'string' || !before) return null
+  let start = 0
+  while (start < before.length && start < after.length && before[start] === after[start]) start++
+  let end = 0
+  while (end < before.length - start && end < after.length - start && before[before.length - 1 - end] === after[after.length - 1 - end]) end++
+  // Less around it when the words next to the edit were changed too, as long as the place stays one.
+  for (const around of [AROUND, 12, 6, 2]) {
+    const lead = before.slice(Math.max(0, start - around), start)
+    const tail = before.slice(before.length - end, before.length - end + around)
+    const piece = lead + before.slice(start, before.length - end) + tail
+    if (!piece) return null
+    const at = now.indexOf(piece)
+    if (at < 0) continue
+    if (now.indexOf(piece, at + 1) >= 0) return null
+    return now.slice(0, at) + lead + after.slice(start, after.length - end) + tail + now.slice(at + piece.length)
+  }
+  return null
+}
+
+/** The text a field, opening or entry change is about, as the card has it now; undefined when it is gone. */
+function textNow(card, change) {
+  if (change.kind === 'field') return change.key === 'tags' ? undefined : String(card[change.key] ?? '')
+  if (change.kind === 'greeting') return greetingList(card)[change.index]
+  if (change.kind === 'entry') return card.book?.entries.find(entry => entry.uid === change.uid)?.content
+  return undefined
+}
+
+/**
+ * A finding with each change gone out of date made again on the card as it is (rebaseText): two suggestions that both
+ * add a line to one entry go in together, as ticked. null when one of them cannot be placed; the finding itself when
+ * none is out of date.
+ */
+export function rebased(card, finding) {
+  if (!finding.changes.some(change => staleChange(card, change))) return finding
+  const changes = []
+  for (const change of finding.changes) {
+    if (!staleChange(card, change)) {
+      changes.push(change)
+      continue
+    }
+    if (change.kind !== 'field' && change.kind !== 'greeting' && change.kind !== 'entry') return null
+    const now = textNow(card, change)
+    const after = rebaseText(now, change.before, change.after)
+    if (after === null) return null
+    changes.push({ ...change, before: now, after })
+  }
+  return { ...finding, changes }
+}
+
 /** What a person wrote over a change, checked as a model's would be. */
 function editedChange(card, change, edit) {
   const out = { ...change }

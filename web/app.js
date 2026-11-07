@@ -98,6 +98,7 @@ async function loadModels() {
     const data = await api('/api/models')
     ui.models = data.choices
     ui.defaultModel = data.defaultModel
+    ui.reasoning = data.reasoning ?? null
   } catch {
     ui.models = []
   }
@@ -120,7 +121,40 @@ function renderModelSelect() {
     el('option', { value: MANAGE_PROVIDERS, text: t`管理模型供应商…` }),
   ].filter(Boolean))
   select.disabled = ui.generating
+  renderThinkingSelect()
 }
+
+/**
+ * The chat's own 思考 beside its model: 默认 follows the provider (思考: 关闭) and 设置 → 模型, and says what that comes
+ * to for this model; 关 or an effort holds for this chat's replies from the next one, over both.
+ */
+function renderThinkingSelect() {
+  const select = $('chat-thinking')
+  const chat = ui.chat
+  const model = chat && ui.models.find(m => m.id === (chat.model || ui.defaultModel))
+  // Haiku 4.5 takes none of it: nothing to pick.
+  select.hidden = !model || Boolean(model.subscription) || Boolean(model.noThinking)
+  if (select.hidden) return
+  const { thinking, effort } = ui.reasoning ?? {}
+  // As providers.mjs sends it: Claude by 设置's 思考 (a provider's 关闭 does not reach it), the rest by the provider's 关闭.
+  const off = !model.alwaysThinks && (model.claude ? thinking !== 'adaptive' : Boolean(model.thinkingOff))
+  const follows = off ? t`关` : effort || 'low'
+  const choices = [
+    ['', t`思考：默认（${follows}）`],
+    ['off', model.alwaysThinks ? t`思考：关（这个模型关不掉）` : t`思考：关`],
+    ...['low', 'medium', 'high', 'xhigh', 'max'].map(level => [level, t`思考：${level}`]),
+  ]
+  select.replaceChildren(...choices.map(([value, text]) => el('option', { value, text, selected: (chat.thinking ?? '') === value })))
+}
+
+const changeChatThinking = guard(async () => {
+  const chat = ui.chat
+  const thinking = $('chat-thinking').value
+  const view = await api(`/api/chats/${chat.id}`, { method: 'PUT', body: { thinking } })
+  if (ui.chat?.id !== chat.id) return
+  ui.chat = { ...ui.chat, thinking: view.thinking }
+  renderThinkingSelect()
+})
 
 const changeChatModel = guard(async () => {
   const model = $('chat-model').value
@@ -671,7 +705,7 @@ const addDirectFiles = guard(async () => {
   $('direct-file').value = ''
   for (const file of picked) {
     const body = await referenceBody(file)
-    ui.directFiles.push(await api('/api/forge/references', { method: 'POST', body: { ...body, have: ui.directFiles.map(item => item.chars) } }))
+    ui.directFiles.push(await api('/api/forge/references', { method: 'POST', body: { ...body, direct: true, have: ui.directFiles.map(item => item.chars) } }))
     renderDirectFiles()
   }
 })
@@ -2288,7 +2322,11 @@ function renderNode(chat, node, isLastAssistant, depth = 0) {
   if (!isUser && node.historyTrim?.removedChars > 0) {
     tools.push(el('span', { class: 'chip', title: t`按角色卡的「仅发送」正则，这条回复在之后的上下文里去掉了这些内容（比如变量更新块），显示不受影响`, text: t`上下文精简 ${fmt(node.historyTrim.removedChars)} 字` }))
   }
-  if (!isUser && node.truncated === 'paused') {
+  if (!isUser && node.truncated === 'stopped') {
+    tools.push(el('span', { class: 'chip', title: t`你在这里停止了生成，写好的部分留下了。想要完整的一版可以重新生成。`, text: t`已停止，没写完` }))
+  } else if (!isUser && node.truncated === 'broken') {
+    tools.push(el('span', { class: 'chip warn', title: t`回复写到中途被上游断开了（连接被对方服务器、代理或网络切断，或者对方返回了错误），写好的部分留下了。可以重新生成。具体原因在 设置 → 更多 → 错误日志。`, text: t`⚠ 上游中断，没写完` }))
+  } else if (!isUser && node.truncated === 'paused') {
     tools.push(el('span', { class: 'chip warn', title: t`联网搜索时模型中途暂停了（搜了很多次的时候会这样），这条回复没写完。可以重新生成。`, text: t`⚠ 联网搜索中途停了，没写完` }))
   } else if (!isUser && node.truncated) {
     tools.push(el('span', { class: 'chip warn', title: t`模型写到了单次输出的上限，回复后半段（常见的是变量更新、行动选项这些放在最后的块）没写出来。上限取预设的「最大回复长度」；供应商设置里填了「最大输出」时以那个为准。可以重新生成，或调大上限。`, text: t`⚠ 写到输出上限，被截断` }))
@@ -3347,17 +3385,44 @@ const restoreFolded = guard(async () => {
 const MEMORY_KINDS = () => ({ person: t`人物`, event: t`事件`, thing: t`物品与地点`, promise: t`约定与伏笔` })
 const memoryUi = { view: null, editing: null }
 
-/** The topbar's 记忆 pill: with 长期记忆 on, how many entries the open chat's book has, and a tidy under way. */
+/**
+ * The topbar's 记忆 pill: how many entries the open chat's book has, and a tidy under way. With 长期记忆 off it is
+ * there too, dashed: its window is where it can be turned on.
+ */
 function renderMemoryPill() {
   const pill = $('memory-book')
   const chat = ui.chat
-  pill.hidden = !chat || !ui.settings?.memory?.enabled
+  pill.hidden = !chat
   if (pill.hidden) return
-  pill.classList.toggle('busy', Boolean(chat.tidying))
-  $('memory-count').hidden = !chat.memoryEntries
+  const on = Boolean(ui.settings?.memory?.enabled)
+  pill.classList.toggle('unset', !on)
+  pill.classList.toggle('busy', on && Boolean(chat.tidying))
+  $('memory-count').hidden = !on || !chat.memoryEntries
   $('memory-count').textContent = String(chat.memoryEntries ?? '')
-  pill.title = chat.tidying ? t`长期记忆（Beta）：正在整理记忆簿` : t`长期记忆（Beta）：记忆簿里有 ${chat.memoryEntries ?? 0} 条`
+  pill.title = !on ? t`长期记忆（Beta）没开：点开可以打开` : chat.tidying ? t`长期记忆（Beta）：正在整理记忆簿` : t`长期记忆（Beta）：记忆簿里有 ${chat.memoryEntries ?? 0} 条`
 }
+
+/** 打开长期记忆 in the 记忆簿 window: the same setting as 设置 → 模型 → 长期记忆, its other options kept. */
+const switchMemory = guard(async () => {
+  const box = $('memory-on')
+  const enabled = box.checked
+  try {
+    ui.settings = await api('/api/settings', { method: 'PUT', body: { memory: { ...(ui.settings?.memory ?? {}), enabled } } })
+  } catch (error) {
+    box.checked = !enabled
+    throw error
+  }
+  // An open settings window shows it too, so that saving it does not put the old value back.
+  const form = $('settings-form')
+  if (form?.memoryOn) {
+    form.memoryOn.checked = enabled
+    form.memoryOn.onchange?.()
+  }
+  if (memoryUi.view) memoryUi.view = { ...memoryUi.view, settings: ui.settings.memory }
+  renderMemory()
+  renderMemoryPill()
+  toast(enabled ? t`已打开长期记忆：压缩上下文时会记下记忆簿，之后提到时想起来` : t`已关闭长期记忆：记忆簿留着，不再记下，也不再附上`)
+})
 
 const openMemory = guard(async () => {
   if (!ui.chat) return
@@ -3373,7 +3438,9 @@ function renderMemory() {
   const view = memoryUi.view
   const by = { compaction: t`压缩时`, tidy: t`边玩边整理`, edit: t`手动`, import: t`导入的存档` }
   const meta = []
-  if (!view.settings.enabled) meta.push(t`长期记忆没开：在「设置 → 长期记忆」里打开后，压缩上下文时会记下记忆簿，之后提到时想起来`)
+  const on = Boolean(view.settings?.enabled)
+  $('memory-on').checked = on
+  if (!on) meta.push(t`长期记忆没开：勾上面的「打开长期记忆」后，压缩上下文时会记下记忆簿，之后提到时想起来`)
   meta.push(view.entries.length ? t`共 ${view.entries.length} 条` : t`还没有条目`)
   if (view.turns) meta.push(t`${by[view.by] ?? ''}记到第 ${view.turns} 轮`)
   meta.push(view.compactedTurns ? t`最近一次压缩到第 ${view.compactedTurns} 轮：那之前的条目，提到时会想起来` : t`还没压缩过：原文都在上下文里，条目先只记不发`)
@@ -3382,7 +3449,7 @@ function renderMemory() {
   status.hidden = !view.tidying && !view.memoryError
   status.className = `small${view.memoryError && !view.tidying ? ' warn' : ''}`
   status.textContent = view.tidying ? t`正在整理记忆…` : view.memoryError ? t`上次整理没成功：${view.memoryError}` : ''
-  $('memory-tidy').disabled = Boolean(view.tidying) || !view.settings.enabled
+  $('memory-tidy').disabled = Boolean(view.tidying) || !on
   $('memory-export').disabled = !view.entries.length
   const kinds = MEMORY_KINDS()
   const groups = Object.keys(kinds).map(kind => {
@@ -4107,6 +4174,8 @@ async function generate(endpoint, body, echoUserText, outcome = null) {
   const live = () => (viewing() ? box.querySelector('.msg.streaming') : null)
   let finished = null
   let finishedNode = null
+  // A reply that stopped partway, kept as far as it went: { stopped, message }.
+  let cutShort = null
   let failure = null
   // The connection went before the turn's end was heard (a phone's screen locked): the server writes on.
   let dropped = false
@@ -4166,6 +4235,7 @@ async function generate(endpoint, body, echoUserText, outcome = null) {
       } else if (event.type === 'done') {
         finished = event.chat
         finishedNode = event.nodeId
+        cutShort = event.cut ?? null
       } else if (event.type === 'error') {
         failure = event
       }
@@ -4189,15 +4259,18 @@ async function generate(endpoint, body, echoUserText, outcome = null) {
     }
   }
   if (finished) {
+    const brokeOff = cutShort?.message ? t`这一轮没写完，写好的部分留下了。${cutShort.message}` : ''
     if (viewing()) {
       // Written to its end, the reply is read from its start (the visual novel goes a line at a time anyway).
       // Someone who scrolled away stays where they are; 回复写完后回到它的开头 is for those who followed it down.
       if ((!follow.on || ui.settings?.replyToTop !== false) && !vnUi.isOn(finished.cardId)) ui.readFrom = { chatId, nodeId: finishedNode, moved: !follow.on }
       setChat(finished)
-      mediaUi.afterTurn(finishedNode, vnUi.turnFlags(finished.cardId))
+      // Drawing and reading aloud wait for a whole reply.
+      if (!cutShort) mediaUi.afterTurn(finishedNode, vnUi.turnFlags(finished.cardId))
       remindCompaction(finished)
+      if (brokeOff) toast(brokeOff, 12000, { log: true })
     } else {
-      toast(t`「${title}」这一轮写好了`, 5000)
+      toast(brokeOff ? t`「${title}」：${brokeOff}` : t`「${title}」这一轮写好了`, brokeOff ? 12000 : 5000, brokeOff ? { log: true } : undefined)
     }
     await refreshChats()
     return true
@@ -4271,6 +4344,86 @@ const regenerate = guard(async userNodeId => {
 const stop = guard(async () => {
   if (ui.chat) await api(`/api/chats/${ui.chat.id}/stop`, { method: 'POST', body: {} })
 })
+
+// ─── The line between the card list and the chat list ───────────────────
+const LIST_HEIGHT_KEY = 'cicatavern.cardListHeight'
+const LIST_MIN = { cards: 56, chats: 96 }
+
+/** Dragged, or with the arrow keys; kept on this device. Double-clicked, back to what the page does on its own. */
+function bindListSplit() {
+  const split = $('list-split')
+  if (!split) return
+  const pane = split.closest('.pane')
+  const cards = $('card-list')
+  const chats = $('chat-list')
+  const put = height => pane.style.setProperty('--card-list-h', `${Math.round(height)}px`)
+  const keep = height => {
+    try {
+      if (height) localStorage.setItem(LIST_HEIGHT_KEY, String(Math.round(height)))
+      else localStorage.removeItem(LIST_HEIGHT_KEY)
+    } catch {
+      // Private windows may refuse: it lasts until the page is closed.
+    }
+  }
+  /** The two lists' heights now, and the most the first may have. */
+  const room = () => {
+    const zoom = pageZoom()
+    const now = cards.getBoundingClientRect().height / zoom
+    return { now, most: Math.max(LIST_MIN.cards, now + chats.getBoundingClientRect().height / zoom - LIST_MIN.chats) }
+  }
+  const fit = (height, most) => Math.min(most, Math.max(LIST_MIN.cards, height))
+  try {
+    const saved = Number(localStorage.getItem(LIST_HEIGHT_KEY))
+    if (saved > 0) put(saved)
+  } catch {
+    // As above.
+  }
+  split.addEventListener('pointerdown', event => {
+    if (event.button) return
+    event.preventDefault()
+    split.setPointerCapture(event.pointerId)
+    split.classList.add('dragging')
+    const { now, most } = room()
+    const zoom = pageZoom()
+    const startY = event.clientY
+    let height = 0
+    let frame = 0
+    const move = moved => {
+      height = fit(now + (moved.clientY - startY) / zoom, most)
+      frame ||= requestAnimationFrame(() => {
+        frame = 0
+        put(height)
+      })
+    }
+    const end = () => {
+      cancelAnimationFrame(frame)
+      split.removeEventListener('pointermove', move)
+      split.removeEventListener('pointerup', end)
+      split.removeEventListener('pointercancel', end)
+      split.classList.remove('dragging')
+      if (!height) return
+      put(height)
+      keep(height)
+    }
+    split.addEventListener('pointermove', move)
+    split.addEventListener('pointerup', end)
+    split.addEventListener('pointercancel', end)
+  })
+  split.addEventListener('keydown', event => {
+    const step = { ArrowUp: -32, ArrowDown: 32 }[event.key]
+    if (!step) return
+    event.preventDefault()
+    const { now, most } = room()
+    const height = fit(now + step, most)
+    put(height)
+    keep(height)
+  })
+  split.addEventListener('dblclick', () => {
+    pane.style.removeProperty('--card-list-h')
+    keep(0)
+  })
+}
+bindListSplit()
 
 // ─── Right pane ─────────────────────────────────────────────────────────
 function renderSide() {
@@ -4522,10 +4675,14 @@ function bookEntriesButton(id) {
 
 const tickedBooks = () => [...$('book-options').querySelectorAll('input[name="book"]:checked')].map(input => input.value)
 
-/** The 世界书 window on every imported book (the card list's 世界书, 设置 → 管理世界书). */
+/**
+ * The 世界书 window on every imported book (the card list's 世界书, 设置 → 管理世界书), with the chosen card's own
+ * book among them and what that card uses marked; with no card chosen, the imported books alone.
+ */
 const openBookManager = guard(async () => {
   ui.books = await api('/api/worldbooks')
-  await booksUi.open({ books: ui.books })
+  const card = ui.cards.find(c => c.id === ui.cardId) ?? null
+  await booksUi.open({ card, books: ui.books, mounted: card?.worldbookIds ?? [] })
 })
 
 function openBookEntries(id) {
@@ -5224,6 +5381,9 @@ const vnUi = initVn({
   mediaFlags: () => mediaUi.flags(),
   openMedia: section => mediaUi.openSettings(section),
   pictureWork: chatId => mediaUi.pictureWork(chatId),
+  drawMoment: (node, moment) => mediaUi.drawMoment(node, moment),
+  redrawPicture: (node, image, chatId) => mediaUi.redraw(node, image, chatId),
+  editPicturePrompt: (node, image, chatId) => mediaUi.editPrompt(chatId, node, image),
   setScreenFull: on => android?.setFullscreen?.(on),
   memoryOn: () => Boolean(ui.settings?.memory?.enabled),
   openMemory: () => openMemory(),
@@ -5293,6 +5453,7 @@ const forgeUi = initForge({
     await newChat()
   },
   makeVisualNovel,
+  openTrial: (cardId, options) => openTrial(cardId, options),
 })
 
 const providersUi = initProviders({
@@ -5396,6 +5557,8 @@ const openCardCheck = guard(async id => {
     getChat: () => ui.chat,
     isGenerating: () => ui.generating,
     openProviders: () => providersUi.open(),
+    openTalk: (cardId, say) => cardEditUi.open(cardId, { say }),
+    openTrial: cardId => openTrial(cardId),
     onChatChanged: chat => setChat(chat),
     async onCardChanged(cardId) {
       ui.cardDetails.delete(cardId)
@@ -5411,10 +5574,10 @@ const openCardCheck = guard(async id => {
 
 // 试玩体检 (the card list's ⋯): a few rounds of the card, played and read. Loaded when asked for, as above.
 let trialUi = null
-const openTrial = guard(async id => {
+const openTrial = guard(async (id, options) => {
   const { initTrial } = await import('/trial.js')
-  trialUi ??= initTrial({ api, el, toast, guard, copyText, openProviders: () => providersUi.open(), openEdit: cardId => cardEditUi.open(cardId) })
-  await trialUi.open(id)
+  trialUi ??= initTrial({ api, el, toast, guard, copyText, openProviders: () => providersUi.open(), openEdit: cardId => cardEditUi.open(cardId), openCheck: cardId => openCardCheck(cardId) })
+  await trialUi.open(id, options)
 })
 
 // ─── Quick switches: preset entries pinned in the preset editor ─────────
@@ -5527,21 +5690,24 @@ function openBasicQuick() {
   const fields = fieldsOf(presetId)
   const saved = builtinOptions(ui.settings, presetId)
   const changed = new Map()
-  const rebuilds = () => [...changed.keys()].some(key => fields.find(f => f.key === key)?.prompt !== false)
+  const fieldOf = key => fields.find(f => f.key === key || f.keys?.includes(key))
+  const rebuilds = () => [...changed.keys()].some(key => fieldOf(key)?.prompt !== false && !fieldOf(key)?.perTurn)
   const update = () => {
     $('quick-apply').disabled = !changed.size
     $('quick-hint').textContent = !changed.size
       ? presetId === VN_ID ? t`视觉小说预设的选项，改动对这个对话和之后的新对话都生效。` : t`基础预设的选项，改动对这个对话和之后的新对话都生效。`
       : rebuilds()
         ? t`应用后会重建这个对话的固定前缀，下一轮重写一次缓存。`
-        : t`只影响显示，应用后马上生效。`
+        : [...changed.keys()].some(key => fieldOf(key)?.perTurn)
+          ? t`下一轮起生效，不用重建固定前缀。`
+          : t`只影响显示，应用后马上生效。`
   }
   const pick = (key, value) => {
     if (value === saved[key]) changed.delete(key)
     else changed.set(key, value)
     update()
   }
-  $('quick-list').replaceChildren(...fields.map(field => el('li', {}, basicField(el, field, saved[field.key], { onPick: pick, compact: true }))))
+  $('quick-list').replaceChildren(...fields.map(field => el('li', {}, basicField(el, field, field.kind === 'range' ? saved : saved[field.key], { onPick: pick, compact: true }))))
   ui.quickChanges = changed
   ui.quickBasic = { saved, rebuilds, presetId }
   update()
@@ -5824,6 +5990,7 @@ function bind() {
     window.visualViewport.addEventListener('scroll', syncKeyboard)
   }
   $('chat-model').addEventListener('change', changeChatModel)
+  $('chat-thinking').addEventListener('change', changeChatThinking)
   $('usage-range').addEventListener('click', event => {
     const button = event.target.closest('button[data-days]')
     if (!button) return
@@ -5841,6 +6008,12 @@ function bind() {
   $('memory-book').addEventListener('click', () => openMemory())
   $('memory-add').addEventListener('click', () => { memoryUi.editing = 'new'; renderMemory() })
   $('memory-tidy').addEventListener('click', tidyMemoryNow)
+  $('memory-on').addEventListener('change', switchMemory)
+  $('memory-settings').addEventListener('click', guard(async () => {
+    $('memory-dialog').close()
+    await openSettings()
+    settingsMenu.show('memory')
+  }))
   $('memory-export').addEventListener('click', exportMemory)
   $('recap-drop').addEventListener('click', dropRecap)
   for (const side of PANES) {

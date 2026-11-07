@@ -82,9 +82,12 @@ export const BACKDROP_FILE = /^backdrop-[a-z0-9]{4,16}\.(jpg|png|webp)$/
 export const STORY_FONTS = ['song', 'hei', 'kai', 'fang', 'custom']
 
 // width 0 is the page's own (style.css --read).
-export const READING_DEFAULTS = Object.freeze({ font: 'song', custom: '', scale: 1, ui: 1, width: 0 })
+export const READING_DEFAULTS = Object.freeze({ font: 'song', custom: '', scale: 1, leading: 1, ui: 1, width: 0 })
 
 export const STORY_SCALE = Object.freeze({ min: 0.8, max: 1.6, step: 0.05 })
+
+// 行距: the story's line height as a share of its usual one (each place keeps its own, 2 for a reply).
+export const STORY_LEADING = Object.freeze({ min: 0.8, max: 1.4, step: 0.05 })
 
 // 界面大小: the whole page on a touch screen (theme.js fitInterface).
 export const UI_SCALE = Object.freeze({ min: 0.85, max: 1.3, step: 0.05 })
@@ -101,6 +104,7 @@ export function cleanFontName(name) {
 export function cleanReading(value) {
   const raw = value && typeof value === 'object' ? value : {}
   const scale = Number(raw.scale)
+  const leading = Number(raw.leading)
   const ui = Number(raw.ui)
   const width = Number(raw.width)
   return {
@@ -108,6 +112,7 @@ export function cleanReading(value) {
     custom: cleanFontName(raw.custom),
     ui: raw.ui !== undefined && Number.isFinite(ui) ? Math.min(UI_SCALE.max, Math.max(UI_SCALE.min, Math.round(ui * 100) / 100)) : READING_DEFAULTS.ui,
     scale: Number.isFinite(scale) ? Math.min(STORY_SCALE.max, Math.max(STORY_SCALE.min, Math.round(scale * 100) / 100)) : READING_DEFAULTS.scale,
+    leading: raw.leading !== undefined && Number.isFinite(leading) ? Math.min(STORY_LEADING.max, Math.max(STORY_LEADING.min, Math.round(leading * 100) / 100)) : READING_DEFAULTS.leading,
     width: width > 0 ? Math.min(READ_WIDTH.max, Math.max(READ_WIDTH.min, Math.round(width))) : READING_DEFAULTS.width,
   }
 }

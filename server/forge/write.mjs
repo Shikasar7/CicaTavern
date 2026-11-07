@@ -10,7 +10,7 @@ import { WRITE_REFERENCE_RULES, referenceBlock, userMessage, writingMaterial } f
 import { creditText } from './structure.mjs'
 import { creationOpening, creationReady } from './creation.mjs'
 import { mvuHelper, statusScripts, statusSpecOf } from './status.mjs'
-import { LIST_GROWS } from '../../web/shared/status.js'
+import { EVENTS_DONE, LIST_GROWS } from '../../web/shared/status.js'
 import { brickContent, brickScripts } from './bricks.mjs'
 import { writablePath } from '../../web/shared/vars.js'
 import { cleanRulebook, kitBook, kitWorld } from '../../web/shared/game/sheet.js'
@@ -62,6 +62,14 @@ const writeSystem = language => `你是角色卡写手，按创作方案写 Sill
 - 独占一行的「【阶段：……】」是分阶段的分段标记，原样保留，改写时也不动。
 - 玩家写作 <user>；方案没写 <user> 是男是女，就不用「他」「她」指代 <user>。
 ${plainWriting(language)}`
+
+// The player's gender when the plan has one (创作角色卡 你的性别): the writers are told outright, so a pronoun or a way of
+// addressing <user> is not guessed. None = nothing more, and the rule against 他/她 above stands.
+const PLAYER_GENDER = { female: ['女性', '她'], male: ['男性', '他'] }
+const genderRule = plan => {
+  const said = PLAYER_GENDER[plan.user_role?.gender]
+  return said ? `\n- 方案里 <user> 是${said[0]}：指代 <user> 用「${said[1]}」（别的语言用对应的代词），称呼和关系的叫法也按${said[0]}来。` : ''
+}
 
 // Without the player's name: the card says <user>, whatever the player is called.
 const SAMPLE_PLAN = plan => {
@@ -169,7 +177,7 @@ export function entriesRequest(plan, targets, written, references = []) {
     `这次要写下面这些条目：\n${asked}`,
     '每个条目的正文放在 <entry name="条目名"> 和 </entry> 之间，名字和上面一字不差；只写正文，标签外不写别的。',
   ].filter(Boolean).join('\n\n')
-  return { system: writeSystem(planLanguage(plan)) + (material ? WRITE_REFERENCE_RULES : ''), messages: [userMessage(material, content)], maxTokens: LONG_TOKENS, softCap: true }
+  return { system: writeSystem(planLanguage(plan)) + genderRule(plan) + (material ? WRITE_REFERENCE_RULES : ''), messages: [userMessage(material, content)], maxTokens: LONG_TOKENS, softCap: true }
 }
 
 const greetingSystem = language => `你是角色卡的开场白作者。开场白是玩家进入故事读到的第一段正文，它决定玩家想不想开口。
@@ -202,7 +210,7 @@ export function greetingsRequest(plan, targets, written, initial, references = [
     `这次要写下面这些开场白：\n${asked}`,
     '每段开场白放在 <greeting index="序号"> 和 </greeting> 之间，序号和上面一致；只写正文，标签外不写别的。',
   ].filter(Boolean).join('\n\n')
-  return { system: greetingSystem(planLanguage(plan)) + (material ? WRITE_REFERENCE_RULES : ''), messages: [userMessage(material, content)], maxTokens: LONG_TOKENS, softCap: true }
+  return { system: greetingSystem(planLanguage(plan)) + genderRule(plan) + (material ? WRITE_REFERENCE_RULES : ''), messages: [userMessage(material, content)], maxTokens: LONG_TOKENS, softCap: true }
 }
 
 // ─── Reading written text back ────────────────────────────────────────────
@@ -278,7 +286,7 @@ export function lintCard(card, verbatim = []) {
   return reviewTargets(card).flatMap(t => lintText(t.text, { facets: t.facets, verbatim }).map(hit => ({ target: t.target, ...hit })))
 }
 
-const REVIEW_SYSTEM = `你是角色卡的审稿人，眼光严格，宁可多挑也不放过。逐段检查下面的条目和开场白，找出这些毛病：
+const reviewSystem = (facts = '') => `你是角色卡的审稿人，眼光严格，宁可多挑也不放过。逐段检查下面的条目和开场白，找出这些毛病：
 - 套话：陈旧比喻、「仿佛/似乎」一类模糊词、细小表情的固定写法、「带着……的语气」、夸张的情绪词、破折号。
 - 贴标签：用「温柔善良」「关系很好」这种词代替具体的画面和行为。
 - 隔着讲情绪：「她感到」「她意识到」「一股暖意涌上心头」这类，应当写成看得见的动作和细节。
@@ -286,20 +294,102 @@ const REVIEW_SYSTEM = `你是角色卡的审稿人，眼光严格，宁可多挑
 - 名称不具体：「某城市」「那个地方」。
 - 写给作者看的话、引用别的条目（「详见」「本卡」「戏剧作用」）。
 - 前后矛盾：同一个角色在不同段落里外貌、性格、关系对不上；两个角色共用同样的标签；几段反复用同一个比喻或句式。
-开场白按文风写，可以有修辞，但上面的毛病照样要挑。用户的原话不挑。
+开场白按文风写，可以有修辞，但上面的毛病照样要挑。用户的原话不挑。${facts}
 
 只输出一段 <issues> 包着的 JSON 数组，没有毛病就输出 []：
 <issues>
 [{"target": "条目名或「开场白1」", "type": "毛病的类别", "original": "原文里一字不差的一小段", "suggestion": "改成什么；要删掉就写空字符串"}]
 </issues>
-original 必须能在原文里原样找到，尽量短；suggestion 只写替换 original 的那一小段，不要把 original 前后的原文再写一遍（原文「她盯着你，像要看穿什么，眨眼变少」，要删比喻就写 original「像要看穿什么，」、suggestion 空字符串）；最多 30 条。`
+original 必须能在原文里原样找到，而且在那一段里只出现一次（会重复就带上前后几个字），此外尽量短；suggestion 只写替换 original 的那一小段，不要把 original 前后的原文再写一遍（原文「她盯着你，像要看穿什么，眨眼变少」，要删比喻就写 original「像要看穿什么，」、suggestion 空字符串）；最多 30 条。`
 
-/** @param language - the plan's (planLanguage). */
-export function reviewRequest(card, hits, language = DEFAULT_LANGUAGE) {
-  const blocks = reviewTargets(card).map(t => (t.target.startsWith('开场白') ? `<greeting index="${t.target.slice(3)}">\n${t.text}\n</greeting>` : `<entry name="${t.target}">\n${t.text}\n</entry>`))
+// Said only when the facts come along: without them the review cannot tell a wrong name from a right one.
+const REVIEW_FACTS = `
+<plan_facts> 是创作方案里定下的事实。条目或开场白和它对不上的，也算前后矛盾，type 写「和方案不符」：名字写错、外号张冠李戴、年龄性别身份或和 <user> 的关系变了、地点和势力说错、违背了设定、开场的处境和开局数值对不上。以方案为准，suggestion 照方案改。方案里没列出的内容不算矛盾。同一个错出现几处就每处各报一条；名字常是别的名字的一部分（「小雨」在「林小雨」里），original 要带上前后的字。`
+
+// The facts' share of the review. Lines are cut to what a wrong name, a changed
+// relationship or a moved place shows up against, so a small plan fits whole in
+// about 1000 characters even with every field written to its limit (about a tenth
+// of its review); a large one keeps what the card mentions most.
+const FACTS_BUDGET = 1200
+const short = (value, max) => {
+  const text = String(value ?? '').replace(/\s+/g, ' ').trim()
+  return text.length > max ? `${text.slice(0, max)}…` : text
+}
+
+/**
+ * What the plan settled that a review can hold the written card to: names,
+ * relationships, places, rules, the openings and their starting values. Lines
+ * only, no prose (what a character is for in the story, a place's scenes and
+ * the events, which the card writes up under their own names, are left out);
+ * each field is cut short. With a large plan the parts the card
+ * mentions least are left out, and a closing line says what was.
+ * @param texts - the card's written pieces, to rank by mentions when not everything fits.
+ */
+export function planFacts(plan, texts = [], budget = FACTS_BUDGET) {
+  if (!plan?.characters?.length) return ''
+  const said = PLAYER_GENDER[plan.user_role?.gender]
+  const named = (name, aliases) => `${name}${aliases?.length ? `（又名 ${aliases.join('、')}）` : ''}`
+  // A side character is checked by name and who they are; a core one also by how they stand with <user> and look.
+  const character = c => `- ${[
+    named(c.name, c.aliases),
+    c.kind === 'npc' ? '配角' : '',
+    c.gender, c.age, short(c.identity, c.kind === 'npc' ? 16 : 24),
+    c.kind !== 'npc' && c.relationship && `和 <user>：${short(c.relationship, 30)}`,
+    c.kind !== 'npc' && c.appearance?.length && `外貌：${short(c.appearance.join('、'), 24)}`,
+    c.kind !== 'npc' && c.personality?.base && `底色 ${short(c.personality.base, 8)}`,
+  ].filter(Boolean).join('｜')}`
+  const opening = (g, i) => {
+    const state = Object.entries(g.state ?? {}).map(([path, value]) => `${path}=${short(value, 16)}`).join('，')
+    const detail = [short(g.scene, 16), short(g.start, 30), state && `开局数值不同：${state}`].filter(Boolean).join('；')
+    return `- 开场白${i + 1}「${g.title}」${detail ? `：${detail}` : ''}`
+  }
+  // Each section: a heading, its items as [line, the name the card would mention it by].
+  const sections = [
+    { title: '<user>', items: [[`- ${[said?.[0], short(plan.user_role?.identity, 30), ...(plan.user_role?.constraints ?? []).slice(0, 3).map(c => short(c, 16))].filter(Boolean).join('｜')}`, '']].filter(([line]) => line !== '- ') },
+    { title: '核心角色', items: plan.characters.filter(c => c.kind === 'core').map(c => [character(c), c.name]) },
+    { title: '世界', items: [plan.world?.overview && [`- ${plan.world.kind === '真实' ? '真实世界' : '架空世界'}：${short(plan.world.overview, 40)}`, ''], ...(plan.world?.rules ?? []).map(r => [`- ${short(r, 30)}`, ''])].filter(Boolean) },
+    { title: '开场', items: (plan.greetings ?? []).map((g, i) => [opening(g, i), '']) },
+    { title: '开局数值', items: plan.tracking?.enabled ? plan.tracking.variables.map(v => [`- ${v.path}=${short(v.initial, 16)}${v.range ? `（${v.range}）` : ''}`, v.path.split('.').at(-1)]) : [] },
+    { title: '配角', items: plan.characters.filter(c => c.kind === 'npc').map(c => [character(c), c.name]) },
+    { title: '地点', items: (plan.world?.places ?? []).map(p => [`- ${named(p.name, p.aliases)}${p.description ? `：${short(p.description, 16)}` : ''}`, p.name]) },
+    { title: '势力', items: (plan.world?.factions ?? []).map(f => [`- ${f.name}${f.members?.length ? `：成员 ${f.members.join('、')}` : ''}${f.description ? `｜${short(f.description, 16)}` : ''}`, f.name]) },
+    { title: '往事', items: (plan.world?.history ?? []).map(h => [`- ${short(h.event, 30)}${h.impact ? ` → ${short(h.impact, 16)}` : ''}`, '']) },
+  ].filter(s => s.items.length)
+  const whole = sections.map(s => `${s.title}：\n${s.items.map(([line]) => line).join('\n')}`).join('\n')
+  if (whole.length <= budget) return whole
+  // Too much: in each section, what the card names most first; sections in the order above.
+  const text = texts.join('\n')
+  const mentions = name => (name ? text.split(name).length - 1 : 0)
+  let left = budget
+  const kept = []
+  const dropped = []
+  for (const section of sections) {
+    const items = section.items.map((item, at) => ({ line: item[0], score: mentions(item[1]), at })).sort((a, b) => b.score - a.score || a.at - b.at)
+    const lines = []
+    for (const item of items) {
+      const cost = item.line.length + 1 + (lines.length ? 0 : section.title.length + 2)
+      if (cost > left) continue
+      lines.push(item)
+      left -= cost
+    }
+    if (lines.length) kept.push(`${section.title}：\n${lines.sort((a, b) => a.at - b.at).map(item => item.line).join('\n')}`)
+    if (lines.length < items.length) dropped.push(`${section.title} ${items.length - lines.length} 条`)
+  }
+  return `${kept.join('\n')}\n（方案较大，只列了卡里提得多的部分，省了：${dropped.join('、')}。没列出的照常检查前后是否一致。）`
+}
+
+/**
+ * @param language - the plan's (planLanguage).
+ * @param plan - its facts go along, so the review can hold the card to them; without one, the card is checked against itself.
+ */
+export function reviewRequest(card, hits, language = DEFAULT_LANGUAGE, plan = null) {
+  const targets = reviewTargets(card)
+  const blocks = targets.map(t => (t.target.startsWith('开场白') ? `<greeting index="${t.target.slice(3)}">\n${t.text}\n</greeting>` : `<entry name="${t.target}">\n${t.text}\n</entry>`))
+  const facts = plan ? planFacts(plan, targets.map(t => t.text)) : ''
   const flagged = hits.length ? `程序先扫出的可疑处（只是候选，你来判断）：\n${hits.slice(0, 40).map(h => `- ${h.target}：${h.label}「${h.excerpt}」`).join('\n')}` : ''
-  const content = [blocks.join('\n\n'), flagged].filter(Boolean).join('\n\n')
-  const system = language === DEFAULT_LANGUAGE ? REVIEW_SYSTEM : `${REVIEW_SYSTEM}\n这些条目和开场白是用${language}写的：按${language}的写法挑这些毛病，suggestion 也用${language}写。`
+  const content = [facts && `<plan_facts>\n${facts}\n</plan_facts>`, blocks.join('\n\n'), flagged].filter(Boolean).join('\n\n')
+  const base = reviewSystem(facts ? REVIEW_FACTS : '')
+  const system = language === DEFAULT_LANGUAGE ? base : `${base}\n这些条目和开场白是用${language}写的${facts ? '，<plan_facts> 里的名字和设定也是' : ''}：按${language}的写法挑这些毛病，suggestion 也用${language}写。`
   return { system, messages: [{ role: 'user', content }], maxTokens: TALK_TOKENS, softCap: true }
 }
 
@@ -312,8 +402,8 @@ export function readIssues(text) {
 }
 
 /**
- * Apply what can be applied in place: an issue whose original text is found
- * gets its suggestion. Returns the issues left for a rewrite, by target.
+ * Apply what can be applied in place: an issue whose original text is found,
+ * once, gets its suggestion. Returns the issues left for a rewrite, by target.
  */
 export function applyIssues(card, issues, language = DEFAULT_LANGUAGE) {
   const left = new Map()
@@ -322,9 +412,11 @@ export function applyIssues(card, issues, language = DEFAULT_LANGUAGE) {
     const holder = greeting ? card.greetings[Number(greeting[1]) - 1] : card.entries.find(e => squash(e.name) === squash(issue.target))
     if (!holder) continue
     const key = greeting ? 'text' : 'content'
-    if (issue.original && holder[key].includes(issue.original)) {
+    const at = issue.original ? holder[key].indexOf(issue.original) : -1
+    // Found more than once, which one was meant cannot be told (a wrong name said three times,
+    // 小雨 inside 林小雨): changing the first could leave the rest or break a right one, so the rewrite takes it.
+    if (at >= 0 && holder[key].indexOf(issue.original, at + 1) < 0) {
       // Only the sentence the change is in is looked at for an echo: elsewhere a repeat may be meant.
-      const at = holder[key].indexOf(issue.original)
       const before = holder[key].slice(0, at)
       const after = holder[key].slice(at + issue.original.length)
       const start = Math.max(...['。', '！', '？', '\n'].map(mark => before.lastIndexOf(mark))) + 1
@@ -365,7 +457,7 @@ export function rewriteRequest(plan, card, pieces, references = []) {
   const greetingsOnly = pieces.every(p => p.greeting)
   const language = planLanguage(plan)
   const system = greetingsOnly ? greetingSystem(language) : `${writeSystem(language)}\n开场白另按开场白的写法：头三行抓人，结尾给 <user> 话头，不替 <user> 说话做决定。`
-  return { system: system + (material ? WRITE_REFERENCE_RULES : ''), messages: [userMessage(material, content)], maxTokens: LONG_TOKENS, softCap: true }
+  return { system: system + genderRule(plan) + (material ? WRITE_REFERENCE_RULES : ''), messages: [userMessage(material, content)], maxTokens: LONG_TOKENS, softCap: true }
 }
 
 // ─── State tracking, built in code ────────────────────────────────────────
@@ -385,7 +477,7 @@ function nested(variables, leaf) {
 /** A variable as a card starts it: a list carries MVU's mark, or nothing can be added to it in SillyTavern. */
 const startingValue = variable => (variable.type === 'list' ? [...typedValue(variable), LIST_GROWS] : typedValue(variable))
 
-export const initialState = plan => nested(plan.tracking.variables, startingValue)
+export const initialState = plan => withEventsDone(plan, nested(plan.tracking.variables, startingValue))
 
 /**
  * The state an opening starts from: the defaults with its own values over them,
@@ -394,7 +486,54 @@ export const initialState = plan => nested(plan.tracking.variables, startingValu
 export function greetingState(plan, greeting) {
   const own = greeting?.state ?? {}
   if (!plan.tracking.enabled || !Object.keys(own).length) return null
-  return nested(plan.tracking.variables, v => startingValue(Object.hasOwn(own, v.path) ? { ...v, initial: own[v.path] } : v))
+  return withEventsDone(plan, nested(plan.tracking.variables, v => startingValue(Object.hasOwn(own, v.path) ? { ...v, initial: own[v.path] } : v)))
+}
+
+// ─── Events that happen once ──────────────────────────────────────────────
+// A card with variables keeps the events that happened in a list of their names (EVENTS_DONE): an event's entry
+// goes out only while its name is not there, and the model adds it in the turn the event comes in. A reminder in
+// words alone was not enough to keep one from coming again. Without variables the reminder is all there is.
+
+/** Whether a plan's events are kept to once by the list. */
+const marksEvents = plan => Boolean(plan?.tracking?.enabled)
+
+/** The list of events that happened, by a card's language. */
+export const eventsDone = language => EVENTS_DONE[englishCard(language) ? 'en' : 'zh']
+
+/** An event as the list keeps it: its entry's name without 事件_. */
+export const eventItem = name => String(name ?? '').replace(/^(?:事件_|Event_)/, '')
+
+/**
+ * The EJS test that an event has not happened yet: its name, quoted, is nowhere in the list as JSON. That still holds
+ * when the list was written back some other way: as one string, or as {"-": name} by an add where no list was
+ * (state.mjs now starts a list there, but a chat may hold one from before).
+ */
+export const notHappened = (language, item) => `!JSON.stringify(getvar(${JSON.stringify(`stat_data.${eventsDone(language)}`)}, { defaults: [] })).includes(${JSON.stringify(JSON.stringify(item))})`
+
+/** The line an event opens with when the list keeps it: the update that puts it there, written out. */
+export const onceMarked = (language, item) => ownWords(language).eventOnceMarked(`{ "op": "add", "path": ${JSON.stringify(`/${eventsDone(language)}/-`)}, "value": ${JSON.stringify(item)} }`)
+
+/** A starting state with the list, empty, on a card that has events to keep to once. */
+function withEventsDone(plan, state) {
+  if (!marksEvents(plan) || !plan.entries?.some(entry => entry.type === '事件')) return state
+  return { ...state, [eventsDone(planLanguage(plan))]: [LIST_GROWS] }
+}
+
+/**
+ * The starting values or the update rules as a draft keeps them, with the list added where the card's events use it
+ * and the text has none: a draft written before events were kept by the list still has those two from then (they
+ * are filled when writing starts), while its events are wrapped as they are now. Anything else is left as it is.
+ */
+function withListedEvents(entry, plan) {
+  if (entry.part !== 'initvar' && entry.part !== 'rules') return entry
+  const done = eventsDone(planLanguage(plan))
+  if (!Object.hasOwn(initialState(plan), done)) return entry
+  const words = stateWords(plan)
+  const path = entry.part === 'rules' ? [words.rulesKey, done] : [done]
+  const doc = YAML.parseDocument(entry.content)
+  if (doc.errors.length || !YAML.isMap(doc.contents) || doc.hasIn(path) || (path.length > 1 && !YAML.isMap(doc.getIn(path.slice(0, -1))))) return entry
+  doc.setIn(path, doc.createNode(entry.part === 'rules' ? { type: 'list', check: [words.eventsDone] } : [LIST_GROWS]))
+  return { ...entry, content: doc.toString({ lineWidth: 0 }).trim() }
 }
 
 /**
@@ -421,14 +560,15 @@ const STATE_WORDS = {
     ],
     bookRule: names => `- 册子（${names}）一行一个键：加一行用 add，路径写到这一行的名字；删一行用 remove；改一项用 replace，路径写到那一项。`,
     bookRow: '这一行的名字', rowKey: '每行记',
-    rulesKey: '变量更新规则', anyChange: '按剧情更新',
+    rulesKey: '变量更新规则', anyChange: '按剧情更新', eventsDone: '事件条目里的事真正写进故事的那一轮，把事件名加进来；加过的不删',
     hideFromModel: '对模型隐藏变量更新', hideFromPlayer: '对玩家隐藏变量更新',
     hidePlaceholder: '对模型隐藏状态栏', statusBar: '状态栏',
     mvuInfo: 'MVU 变量框架：在 SillyTavern 里按回复末尾的变量更新改变量、显示状态栏（需要酒馆助手）。CicaTavern 不运行它，自带同样的功能。',
     with: '与<user>：', colon: '：', separator: '；',
+    gender: { female: '女性', male: '男性' },
     creator: '由 CicaTavern「创作角色卡」生成。',
     playerName: name => `主角名：${name}。在 CicaTavern 里用这张卡开的对话会自动用这个名字；在 SillyTavern 里，把用户名（Persona）设成「${name}」。`,
-    ejsInfo: '这张卡用了 EJS（随数值分阶段的性格、到了某个程度才触发的事件）：在 SillyTavern 里需要装「提示词模板」扩展（ST-Prompt-Template），否则这几条会原样发出去。CicaTavern 自带，不用装。',
+    ejsInfo: '这张卡用了 EJS（随数值分阶段的性格、到了某个程度才触发或只发生一次的事件）：在 SillyTavern 里需要装「提示词模板」扩展（ST-Prompt-Template），否则这几条会原样发出去。CicaTavern 自带，不用装。',
   },
   en: {
     formatLead: 'At the end of every reply, write how the variables changed this turn, like this:',
@@ -439,14 +579,15 @@ const STATE_WORDS = {
     ],
     bookRule: names => `- Books (${names}) keep a key per row: add a row with add, its path ending in the row's name; take one out with remove; change one item with replace, its path ending in that item.`,
     bookRow: 'name of the row', rowKey: 'each row keeps',
-    rulesKey: 'Variable update rules', anyChange: 'changes with the story',
+    rulesKey: 'Variable update rules', anyChange: 'changes with the story', eventsDone: "add an event entry's name in the turn the story really shows it; never take one out",
     hideFromModel: 'Hide variable updates from the model', hideFromPlayer: 'Hide variable updates from the player',
     hidePlaceholder: 'Hide the status bar from the model', statusBar: 'Status bar',
     mvuInfo: 'MVU variable framework: in SillyTavern it applies the variable updates at the end of each reply and shows the status bar (needs Tavern Helper). CicaTavern does not run it; it has the same built in.',
     with: 'with <user>: ', colon: ': ', separator: '; ',
+    gender: { female: 'female', male: 'male' },
     creator: "Made with CicaTavern's card creator.",
     playerName: name => `The player's name: ${name}. Chats on this card in CicaTavern use it; in SillyTavern, set your persona's name to "${name}".`,
-    ejsInfo: 'This card uses EJS (a personality in stages by a tracked value, events that wait for a value): SillyTavern needs the ST-Prompt-Template extension for them, or those entries go out as written. CicaTavern runs them itself.',
+    ejsInfo: 'This card uses EJS (a personality in stages by a tracked value, events that wait for a value or happen once): SillyTavern needs the ST-Prompt-Template extension for them, or those entries go out as written. CicaTavern runs them itself.',
   },
 }
 const stateWords = plan => STATE_WORDS[englishCard(planLanguage(plan)) ? 'en' : 'zh']
@@ -482,7 +623,9 @@ function rulesEntry(plan) {
     if (variable.check) out.check = [variable.check]
     return Object.keys(out).length ? out : words.anyChange
   }
-  return YAML.stringify({ [words.rulesKey]: nested(plan.tracking.variables, rule) }, { lineWidth: 0 }).trim()
+  const done = eventsDone(planLanguage(plan))
+  const events = Object.hasOwn(initialState(plan), done) ? { [done]: { type: 'list', check: [words.eventsDone] } } : {}
+  return YAML.stringify({ [words.rulesKey]: { ...nested(plan.tracking.variables, rule), ...events } }, { lineWidth: 0 }).trim()
 }
 
 /** The four state entries' text, filled in when writing starts. */
@@ -585,8 +728,52 @@ function describe(plan) {
     .filter(c => c.kind === 'core')
     .slice(0, 2)
     .map(c => `${c.name}${words.colon}${[c.identity, c.relationship && `${words.with}${c.relationship}`].filter(Boolean).join(words.separator)}`)
-  if (plan.user_role.identity) lines.push(`<user>${words.colon}${plan.user_role.identity}`)
+  const player = playerLine(plan)
+  if (player) lines.push(player)
   return lines.slice(0, 3).join('\n')
+}
+
+/** The description's line for <user>: the gender up front, for the model playing the card as much as for the ones writing it. */
+function playerLine(plan, identity = plan.user_role.identity) {
+  const words = stateWords(plan)
+  const player = [words.gender[plan.user_role.gender], identity].filter(Boolean)
+  return player.length ? `<user>${words.colon}${player.join(words.separator)}` : ''
+}
+
+/**
+ * What a description line the code wrote for <user> says after the gender, or null for any other line. Found
+ * by its form, not by the whole line: the card may have been written from an earlier plan (revised since, or
+ * another of three versions) with another identity, and the description is not rewritten for that.
+ */
+function playerRest(line, plan) {
+  const words = stateWords(plan)
+  const head = `<user>${words.colon}`
+  if (!line.startsWith(head)) return null
+  const rest = line.slice(head.length)
+  for (const gender of Object.values(words.gender)) {
+    if (rest === gender) return ''
+    if (rest.startsWith(gender + words.separator)) return rest.slice(gender.length + words.separator.length)
+  }
+  // No gender up front: the code wrote it so only when the plan had none.
+  return plan.user_role.gender ? null : rest
+}
+
+/**
+ * A written card after the player's gender changed on the plan: the description is built in code and written
+ * nowhere else, so its <user> line gets the new gender, the identity as the card has it. A description edited
+ * by hand keeps the rest, and keeps a <user> line whose gender up front was taken out by hand.
+ */
+export function redescribe(card, before, plan) {
+  if (playerLine(before) === playerLine(plan)) return card
+  if (card.description === describe(before)) return { ...card, description: describe(plan) }
+  const lines = card.description.split('\n')
+  const at = lines.findIndex(line => playerRest(line, before) !== null)
+  if (at < 0) return card
+  const now = playerLine(plan, playerRest(lines[at], before))
+  if (now === lines[at]) return card
+  // Not with() or toSpliced(): the phone's Node 18 has neither.
+  const changed = lines.map((line, i) => (i === at ? now : line)).filter((line, i) => i !== at || now)
+  return { ...card, description: changed.join('\n') }
 }
 
 // ─── The card ─────────────────────────────────────────────────────────────
@@ -662,12 +849,18 @@ export function stagedText(text, plan, owner) {
  */
 export function wrapped(entry, plan = null) {
   let content = entry.staged && plan ? stagedText(entry.content, plan, entry.owner) : entry.content.trim()
-  // An event stays in while its condition holds: the story is told it happens once.
-  if (entry.type === '事件' && plan) content = `${ownWords(planLanguage(plan)).eventOnce}\n${content}`
+  const event = entry.type === '事件' && plan
+  const once = event && marksEvents(plan)
+  const language = planLanguage(plan)
+  // An event stays in while its condition holds and, with variables, until it is on the list of what happened.
+  if (event) content = `${once ? onceMarked(language, eventItem(entry.name)) : ownWords(language).eventOnce}\n${content}`
   const wrap = WRAP[entry.type]?.(entry)
   const text = wrap ? `${wrap[0]}\n${content}\n${wrap[1]}` : content
-  const conditions = entry.type === '事件' && plan ? eventConditions(plan, plan.events?.[entry.event]) : null
-  return conditions ? `@@if ${conditions.map(conditionExpression).join(' && ')}\n${text}` : text
+  const tests = [
+    ...((event ? eventConditions(plan, plan.events?.[entry.event]) : null) ?? []).map(conditionExpression),
+    ...(once ? [notHappened(language, eventItem(entry.name))] : []),
+  ]
+  return tests.length ? `@@if ${tests.join(' && ')}\n${text}` : text
 }
 
 /**
@@ -716,7 +909,7 @@ const planRulebook = game => cleanRulebook({ level: 'full', ...kitBook(game), ..
  *   card is theirs alone, and its notes end by saying where it came from.
  */
 export function cardJson(plan, card, { author = '', credits = [] } = {}) {
-  const entries = [...card.entries].sort((a, b) => a.order - b.order).map((entry, i) => toBookEntry({ ...entry, content: wrapped(entry, plan) }, i))
+  const entries = [...card.entries].sort((a, b) => a.order - b.order).map((entry, i) => toBookEntry({ ...entry, content: wrapped(withListedEvents(entry, plan), plan) }, i))
   const greetings = card.greetings.map((_, i) => greetingText(plan, card, i)).filter(Boolean)
   const words = stateWords(plan)
   const status = statusSpecOf(plan)

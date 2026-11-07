@@ -47,6 +47,8 @@
     if (r && /^(hei|kai|fang)$/.test(r.font)) root.style.setProperty('--story-font', `var(--font-${r.font})`)
     if (r && r.font === 'custom' && /^[^"'\\;{}<>\r\n\t]{1,60}$/.test(r.custom)) root.style.setProperty('--story-font', `"${r.custom}", var(--serif)`)
     if (s >= .8 && s <= 1.6 && s !== 1) root.style.setProperty('--story-scale', String(s))
+    const l = Number(r && r.leading)
+    if (l >= .8 && l <= 1.4 && l !== 1) root.style.setProperty('--story-leading', String(l))
     // 正文宽度 on this device (theme.js applyReading).
     const w = Number(r && r.width)
     if (w >= 480 && w <= 1600) root.style.setProperty('--read', w + 'px')
@@ -72,15 +74,18 @@
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m12 5-5 5 5 5" /></svg>
         </button>
       </header>
+      <div class="pane-actions">
       <label class="import" title="SillyTavern 角色卡（PNG/JSON）、世界书或预设（JSON），也可以直接把文件拖进窗口">
         <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v10m0 0-4-4m4 4 4-4M4 16h12" /></svg>
-        <span>导入角色卡、世界书或预设</span>
+        <span class="wide-label">导入角色卡、世界书或预设</span>
+        <span class="short-label">导入</span>
         <input type="file" id="import-input" accept=".png,.json,image/png,application/json" multiple hidden>
       </label>
       <button class="import forge-open" id="forge-open" type="button" title="和创作向导聊一聊，把一个模糊的想法慢慢聊成一张完整的角色卡">
         <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 16c3.5-.6 6.3-2.4 8.4-5.4L16 5l-1-1-5.6 3.6C6.4 9.7 4.6 12.5 4 16Z" /><path d="M8.5 11.5 4 16" /></svg>
         <span>创作角色卡</span>
       </button>
+      </div>
       <div class="section-title row">
         <span>角色卡</span>
         <span class="row-actions">
@@ -88,6 +93,7 @@
         </span>
       </div>
       <ul class="card-list" id="card-list"></ul>
+      <div class="list-split" id="list-split" role="separator" aria-orientation="horizontal" aria-label="角色卡和对话列表的高度" title="上下拖动调整角色卡和对话列表的高度，双击恢复默认" tabindex="0"><i></i></div>
       <div class="section-title row">
         <span>对话</span>
         <span class="row-actions">
@@ -118,6 +124,7 @@
         <button class="pill" id="compact-chat" title="把前面的剧情压缩成一份存档，之后在新的上下文里接着写" hidden>压缩<span class="wide-only">上下文</span><span class="ctx-use" id="context-meter" hidden></span></button>
         <button class="pill" id="memory-book" title="长期记忆（Beta）：记忆簿" hidden>记忆<span class="ctx-use" id="memory-count" hidden></span></button>
         <select class="pill model-select" id="chat-model" title="这个对话用的模型（缓存按模型区分，切换后下一轮会重新写入缓存）" hidden></select>
+        <select class="pill think-select" id="chat-thinking" title="这个对话的回复思考多少。默认跟随设置和供应商；选了别的只管这个对话，下一轮起生效" hidden></select>
         <div class="quota" id="quota" hidden></div>
         <button class="vn-switch" id="vn-toggle" title="视觉小说模式：背景、立绘、一句一句地读（这张卡记住）" aria-pressed="false" hidden>
           <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13" rx="2.5" /><path d="M2.5 12h15M5.5 14.3h6" /></svg>
@@ -293,7 +300,7 @@
         </div>
         <label class="check-row"><input type="checkbox" name="showReasoning"> 显示模型的思考过程</label>
         <p class="hint">打开后，模型的思考过程折叠显示在回复上方，生成时可以展开看。GLM、DeepSeek、Kimi、OpenRouter、Claude（Anthropic 接口）本来就会发回来；Gemini 和 OpenAI（Responses 接口）只在要的时候给一份思考摘要，打开后会向它们要（有的中转不给）。只是显示，不会发回给模型，也不算进正文。模型没发思考过程时什么也不显示；努力程度是 low 时，有的模型（比如 GLM）遇到简单的回合会不思考。</p>
-        <p class="hint">随时生效。顶栏可以给每个对话单独选模型。</p>
+        <p class="hint">随时生效。顶栏可以给每个对话单独选模型和思考，单独选的思考优先于这里和供应商的设置。</p>
       </div>
       <!-- 这张卡用的角色和文风: filled by app.js from the two lists (web/personas.js). -->
       <div data-section="picks">
@@ -305,7 +312,7 @@
           <label>写作语言<input name="language"></label>
           <label>每轮回复字数（0 为不限）<input name="replyLength" type="number" min="0" max="8000" step="100"></label>
         </div>
-        <p class="hint">字数随时生效，不影响缓存；写作语言写进固定前缀，只对之后新开的对话生效。文风要求在「写作 → 文风」里。</p>
+        <p class="hint">字数随时生效，不影响缓存；写作语言写进固定前缀，只对之后新开的对话生效。文风要求在「写作 → 文风」里。用基础预设或视觉小说预设、又在预设里填了「正文字数」范围时，以预设的范围为准，这里的字数不用。</p>
       </div>
       <div data-section="scan">
         <div class="grid">
@@ -641,6 +648,10 @@
   <dialog id="memory-dialog" class="dialog wide">
     <form method="dialog" id="memory-form">
       <h2>记忆簿 <span class="chip">Beta</span></h2>
+      <div class="memory-switch">
+        <label class="check-row"><input type="checkbox" id="memory-on"> 打开长期记忆（所有对话）</label>
+        <button class="btn small ghost" type="button" id="memory-settings" title="设置 → 模型 → 长期记忆：边玩边整理、每次附上多少">更多设置</button>
+      </div>
       <p class="muted small" id="memory-meta"></p>
       <p class="small" id="memory-status" hidden></p>
       <div id="memory-list" class="memory-list"></div>

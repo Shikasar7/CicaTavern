@@ -91,6 +91,9 @@ const isPlain = value => Boolean(value) && typeof value === 'object' && !Array.i
 const shownEntries = object => Object.entries(object).filter(([key]) => !key.startsWith('$'))
 // MVU's mark on a list that may grow: without it, MVU refuses every addition ("不可扩展的数组").
 export const LIST_GROWS = '$__META_EXTENSIBLE__$'
+// Where a card made by 创作角色卡 keeps the events that already happened (a list of their names), by the card's language.
+export const EVENTS_DONE = { zh: '已发生事件', en: 'PastEvents' } // i18n-ignore: a variable's name in a card
+const EVENTS_DONE_KEYS = new Set(Object.values(EVENTS_DONE))
 const shownItems = list => list.filter(item => !(typeof item === 'string' && item.startsWith('$__META')))
 
 function guessShow(key, value) {
@@ -158,6 +161,8 @@ function hasDescribedNumbers(value, depth = 0) {
  */
 export function autoStatusSpec(state) {
   if (!isPlain(state)) return null
+  // The card creator's record of events that happened is for the card's own conditions, not for the player.
+  state = Object.fromEntries(Object.entries(state).filter(([key]) => !EVENTS_DONE_KEYS.has(key)))
   const read = hasDescribedNumbers(state) ? pairValue : unwrap
   const fields = []
   const add = (keys, raw, value) => {

@@ -1334,7 +1334,8 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     return resolveRef(ref, await store.getProviders())
   }
 
-  async function writeImagePrompt(chat, node, { reply, input }, signal) {
+  /** @param moment - `reply` is the part to picture (画 CG), so a prompt written in the chat's own context is told it too. */
+  async function writeImagePrompt(chat, node, { reply, input, moment = false }, signal) {
     const media = await settings()
     const card = await store.getCard(chat.cardId)
     const cardMedia = cleanCardMedia(card.media)
@@ -1350,7 +1351,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     let note = ''
     if (media.promptSource === 'chat' && askInContext) {
       const providers = await store.getProviders()
-      const instruction = contextImageInstruction({ promptStyle: media.promptStyle, style: cardMedia.style, passage: node.parent ? '' : reply, roster, userName: chat.names.user, detail, rules })
+      const instruction = contextImageInstruction({ promptStyle: media.promptStyle, style: cardMedia.style, passage: node.parent && !moment ? '' : reply, roster, userName: chat.names.user, detail, rules })
       const answer = await askInContext(chat.id, node.id, instruction, { maxTokens: promptMaxTokens(roster.length > 0, detail), signal })
       if (answer) {
         const prompt = clean(answer.text)

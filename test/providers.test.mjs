@@ -10,7 +10,7 @@ import { activePath, chatView, createChat, restoreFolded, rollbackTo } from '../
 import { createEngine } from '../server/engine.mjs'
 import { testSubscription } from './support/subscription.mjs'
 import { editPreset, normalizePreset } from '../server/presets.mjs'
-import { complete, draftProvider, exportProviders, googleRequest, importProviders, isGoogle, listRemoteModelDetails, listRemoteModels, normalizeProvider, providerChoices, providerError, publicProvider, reasoningFields, retryWait, thinkingOff } from '../server/providers.mjs'
+import { chatReasoning, complete, draftProvider, exportProviders, googleRequest, importProviders, isGoogle, listRemoteModelDetails, listRemoteModels, normalizeProvider, providerChoices, providerError, publicProvider, reasoningFields, retryWait, thinkingOff } from '../server/providers.mjs'
 import { createStore } from '../server/store.mjs'
 import { cleanScripts } from '../server/regex.mjs'
 
@@ -36,7 +36,7 @@ const KEY = 'sk-test-1234567890abcd'
 /** A provider that speaks all three protocols and records each request. */
 async function fakeProvider(t) {
   const requests = []
-  const flags = { rejectTtl: false, rejectReasoning: false, maxOutput: 0, contextLimit: 0, stopReason: 'end_turn', promptTokens: 100, summaryText: '', contextMessage: '', dropSystem: false, lateUsage: false, thinking: '' }
+  const flags = { rejectTtl: false, rejectReasoning: false, rejectField: '', maxOutput: 0, contextLimit: 0, stopReason: 'end_turn', promptTokens: 100, summaryText: '', contextMessage: '', dropSystem: false, lateUsage: false, thinking: '' }
   let count = 0
   const server = createServer(async (req, res) => {
     let body = ''
@@ -51,6 +51,10 @@ async function fakeProvider(t) {
     if (flags.rejectTtl && json?.system?.[0]?.cache_control?.ttl) {
       res.writeHead(400, { 'content-type': 'application/json' })
       return res.end(JSON.stringify({ error: { message: 'system.0.cache_control.ttl: Extra inputs are not permitted' } }))
+    }
+    if (flags.rejectField && json && flags.rejectField in json) {
+      res.writeHead(400, { 'content-type': 'application/json' })
+      return res.end(JSON.stringify({ error: { message: `${flags.rejectField}: Extra inputs are not permitted` } }))
     }
     if (flags.rejectReasoning && (json?.thinking || json?.output_config || json?.reasoning || json?.reasoning_effort)) {
       res.writeHead(400, { 'content-type': 'application/json' })
@@ -406,6 +410,69 @@ test('思考: 关闭 on a provider: each service in its own words, and nothing o
   assert.deepEqual(fake.requests.at(-1).body.chat_template_kwargs, { enable_thinking: false }, 'a helper call is asked too')
   assert.equal(normalizeProvider({ name: 'L', api: 'openai-completions', baseURL: 'http://127.0.0.1:8080/v1', models: [{ id: 'm' }], thinking: 'off' }).thinking, 'off')
   assert.equal(normalizeProvider({ name: 'L', api: 'openai-completions', baseURL: 'http://127.0.0.1:8080/v1', models: [{ id: 'm' }] }).thinking, '')
+})
+
+test("a chat's own 思考 wins over the provider's and the settings', for its replies only, changing neither", async t => {
+  const base = { id: 'p', api: 'openai-completions', baseURL: 'http://127.0.0.1:8080/v1', thinking: 'off' }
+  const settings = { thinking: 'off', effort: 'medium' }
+  assert.deepEqual(chatReasoning(base, settings, ''), { provider: base, reasoning: settings }, 'default: as before')
+  assert.deepEqual(chatReasoning(base, settings, null).reasoning, settings)
+  const high = chatReasoning(base, settings, 'high')
+  assert.deepEqual([high.provider.thinking, high.reasoning], ['', { thinking: 'adaptive', effort: 'high' }], 'an effort thinks, on a provider set to 关闭 too')
+  assert.equal(base.thinking, 'off', 'the provider as saved')
+  const off = chatReasoning({ ...base, thinking: '' }, settings, 'off')
+  assert.deepEqual([off.provider.thinking, off.reasoning], ['off', { thinking: 'off', effort: 'medium' }])
+  assert.deepEqual(chatReasoning(base, settings, 'nonsense').reasoning, settings)
+
+  const { fake, store, chat, turn, engine, provider } = await setup(t, 'openai-completions')
+  await store.saveSettings({ ...(await store.getSettings()), effort: 'low' })
+  await turn('你好')
+  assert.equal(fake.requests.at(-1).body.reasoning_effort, 'low', 'the settings until the chat picks')
+  await store.saveChat({ ...(await store.getChat(chat.id)), thinking: 'xhigh' })
+  await turn('再来')
+  assert.equal(fake.requests.at(-1).body.reasoning_effort, 'xhigh')
+  await store.saveChat({ ...(await store.getChat(chat.id)), thinking: 'off' })
+  await turn('快点')
+  const sent = fake.requests.at(-1).body
+  assert.deepEqual([sent.chat_template_kwargs, sent.reasoning_effort], [{ enable_thinking: false }, undefined], "off as the provider's 关闭 says it")
+  // The provider set to 关闭, the chat asking for thinking: the chat wins; its extra parameters still last.
+  await store.saveProviders([{ ...provider, thinking: 'off', extraBody: { reasoning_effort: 'minimal' } }])
+  await store.saveChat({ ...(await store.getChat(chat.id)), thinking: 'high' })
+  await turn('想想')
+  const asked = fake.requests.at(-1).body
+  assert.deepEqual([asked.chat_template_kwargs, asked.reasoning_effort], [undefined, 'minimal'])
+  assert.equal((await store.getProviders())[0].thinking, 'off', 'the provider is not changed')
+  // 正文字数 of the built-in preset goes with the turn, brought within the provider's output cap.
+  await store.saveProviders([{ ...provider, thinking: 'off', maxTokens: 3000 }])
+  await store.saveSettings({ ...(await store.getSettings()), replyLength: 500, basic: { lengthMin: 800, lengthMax: 4000 } })
+  await turn('写长点')
+  const said = JSON.stringify(fake.requests.at(-1).body.messages)
+  assert.match(said, /本轮正文 800–1000 字/)
+  assert.doesNotMatch(said, /约 500 字/)
+
+  // One chat's 关 refused by the relay is left out for that, not for the other chats' efforts or the settings'.
+  // (Its own id: what is refused is kept per provider and model, for the whole process.)
+  const { fake: relay, provider: first } = await setup(t, 'openai-completions')
+  const p2 = { ...first, id: 'relay' }
+  relay.flags.rejectField = 'chat_template_kwargs'
+  const say = { system: '规则', messages: [{ role: 'user', content: '你好' }] }
+  const quiet = chatReasoning(p2, { thinking: 'off', effort: 'low' }, 'off')
+  await complete(quiet.provider, 'm1', { ...say, reasoning: quiet.reasoning })
+  assert.equal(relay.requests.at(-1).body.chat_template_kwargs, undefined, 'sent again without it')
+  const loud = chatReasoning(p2, { thinking: 'off', effort: 'low' }, 'high')
+  await complete(loud.provider, 'm1', { ...say, reasoning: loud.reasoning })
+  assert.equal(relay.requests.at(-1).body.reasoning_effort, 'high')
+  await complete(p2, 'm1', { ...say, reasoning: { thinking: 'off', effort: 'low' } })
+  assert.equal(relay.requests.at(-1).body.reasoning_effort, 'low', "the settings' effort still goes")
+  const asks = relay.requests.length
+  await complete(quiet.provider, 'm1', { ...say, reasoning: quiet.reasoning })
+  assert.equal(relay.requests.length, asks + 1, 'the refused one is not tried again')
+
+  // A helper call on this chat (a title, a summary) goes by the provider and the settings.
+  const sentBefore = fake.requests.length
+  await engine.askInContext(chat.id, activePath(await store.getChat(chat.id)).at(-1).id, '一句话总结', { maxTokens: 50 })
+  assert.equal(fake.requests.length, sentBefore + 1)
+  assert.deepEqual(fake.requests.at(-1).body.chat_template_kwargs, { enable_thinking: false })
 })
 
 test('Anthropic Messages provider: /v1 added, x-api-key, cache breakpoints, usage', async t => {
@@ -980,6 +1047,10 @@ test('image prompt inside the conversation: same prefix as the next turn, so the
   // The opening is not in the history, so it rides along in the instruction.
   assert.match(contextImageInstruction({ promptStyle: 'tags', style: '水彩', passage: '欢迎光临～' }), /<latest_passage>\n欢迎光临～[\s\S]*画面里一定要有人[\s\S]*画风会自动加上[^\n]*水彩[\s\S]*逗号分隔/)
 
+  // 画 CG: the lines on screen are what to picture, so the instruction carries them even though the reply is in the history.
+  await media.writeImagePrompt(await store.getChat(chat.id), tip, { reply: '她放下杯子。', input: '', moment: true })
+  assert.match(fake.requests.at(-1).body.messages.at(-1).content, /<latest_passage>\n她放下杯子。/)
+
   // A chat on the subscription cannot lend its context: the helper model takes over.
   const saved = await store.getChat(chat.id)
   saved.model = 'claude-sonnet-5-5'
@@ -1391,6 +1462,15 @@ test("Gemini's own API: system instruction, turns taking turns, thinking level a
   assert.equal(result.truncated, false)
   assert.deepEqual(result.search.queries, ['今晚 东京 天气'])
   assert.deepEqual(result.search.sources, [{ url: 'https://weather.example/tokyo', title: '东京天气' }])
+
+  // 思考：关 (a chat's own, or the provider's 关闭) in Gemini's words: none for 2.x Flash, the least the others take.
+  const hush = chatReasoning(provider, { thinking: 'off', effort: 'high' }, 'off')
+  await complete(hush.provider, 'gemini-3.8-flash', { messages: [{ role: 'user', content: '你好' }], reasoning: hush.reasoning })
+  assert.deepEqual(seen.at(-1).body.generationConfig.thinkingConfig, { thinkingLevel: 'minimal' })
+  await complete({ ...provider, thinking: 'off' }, 'gemini-2.5-flash', { messages: [{ role: 'user', content: '你好' }], reasoning: { effort: 'high' } })
+  assert.deepEqual(seen.at(-1).body.generationConfig.thinkingConfig, { thinkingBudget: 0 })
+  const kinds = providerChoices([{ ...provider, thinking: 'off', models: [{ id: 'gemini-3.8-flash' }, { id: 'gemini-2.5-flash' }] }]).map(c => [c.thinkingOff, c.alwaysThinks])
+  assert.deepEqual(kinds, [[true, true], [true, undefined]], 'the menu says which cannot stop')
 
   // Gemini 2.x thinks to a budget; no thinking shown, no search: none asked for. A Base URL for the OpenAI-compatible
   // address (…/v1beta/openai) reaches the same place.

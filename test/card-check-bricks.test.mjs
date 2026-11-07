@@ -8,6 +8,7 @@ import { eventDraw, readDraw } from '../server/forge/bricks.mjs'
 import { applyFinding, changedPieces, restorePieces, snapshot, staleChange, withEdits } from '../server/forge/check-apply.mjs'
 import { checkRequest, readCheck, vetSuggestions } from '../server/forge/check-model.mjs'
 import { cardFacts, checkCard, statusLines } from '../server/forge/check.mjs'
+import { creationOf, randomSheet } from '../server/forge/creation.mjs'
 import { cleanCardOptions, normalizePlan, withCardOptions } from '../server/forge/prompts.mjs'
 import { OWN_STATUS_SCRIPT } from '../server/forge/status.mjs'
 import { cardJson, newCard } from '../server/forge/write.mjs'
@@ -526,4 +527,207 @@ test('a form that cannot show, that nothing opens on, or that no rule reads', ()
   const unread = newBrickCard()
   unread.book.entries = unread.book.entries.filter(entry => !entry.keys.includes('【建角】'))
   assert.ok(checkCard(unread).some(item => item.rule === 'creation-rule'))
+})
+
+// 世界动态 and 建角页 in 让模型再看看: what the model is shown of them, and what it may change.
+const askModel = (card, body) => readCheck(`<reply>x</reply>${body}`, card, { shown: card.book.entries.map(entry => entry.uid) }).suggestions
+const suggestion = (title, changes) => `<suggestion title="${title}" level="tip"><why>x</why>${changes}</suggestion>`
+const worldRule = card => brickEntry(card, 'world_move_rules')
+const creationRule = card => brickEntry(card, 'creation_rules')
+
+test('the model sees 世界动态 and 建角页 in <bricks>, and is told what of them is the code\'s', () => {
+  const card = newBrickCard()
+  const { request } = checkRequest(card, [])
+  const sent = request.messages[0].content
+  assert.match(sent, new RegExp(`世界动态：uid=${worldRule(card).uid}，`))
+  assert.match(sent, /<world_moves rate="normal">\n台风：还远 → 逼近 → 登陆\n文化祭：筹备 → 排练 → 开幕\n<\/world_moves>/)
+  assert.match(sent, new RegExp(`建角页：规则 uid=${creationRule(card).uid}，`))
+  assert.match(sent, /<creation>\{"fields":\[\{"label":"身份","kind":"pick","note":"","options":\["转学生","本地人"\]\},\{"label":"来历","kind":"text","note":""\}\]\}<\/creation>/)
+  assert.match(sent, /（世界动态抽哪件事，见 <bricks>）/)
+  assert.match(sent, /（建角页的表，见 <bricks>）/)
+  assert.doesNotMatch(sent, /\{\{random::台风|var SPEC=/)
+  assert.match(request.system, /\[WORLD_MOVE\] 和每行开头的「名字（变量 …）：」原样保留/)
+  assert.match(request.system, /<CreationPage\/>、规则的关键词 【建角】/)
+  assert.match(request.system, /<world_moves rate="normal">/)
+  assert.match(request.system, /<creation>\{"fields"/)
+  // The first four bricks alone get no word of the two that came after, and the other way round.
+  const older = checkRequest(madeCard().card, []).request.system
+  assert.doesNotMatch(older, /<world_moves|<creation>|\[WORLD_MOVE\]/)
+  assert.doesNotMatch(request.system, /<events group/)
+})
+
+test('stages and how often the world moves, as the model writes them: only for what the rule has, from where it starts', () => {
+  const card = newBrickCard()
+  const [moves] = askModel(card, suggestion('台风走得更细', `<world_moves rate="often">
+- 台风：还远 → 进了警戒区 → 逼近 → 登陆
+文化祭：开始筹备 → 开幕
+地震：没动静 → 来了
+</world_moves>`))
+  const [rule, draw] = moves.changes
+  assert.equal(rule.id, `entry:${worldRule(card).uid}`)
+  assert.match(rule.after, /^- 台风（变量 世界\.台风）：还远 → 进了警戒区 → 逼近 → 登陆$/m)
+  assert.match(rule.after, /^- 文化祭（变量 世界\.文化祭）：筹备 → 排练 → 开幕$/m, 'a line that starts somewhere else is not taken')
+  assert.doesNotMatch(rule.after, /地震/)
+  assert.equal(draw.sid, 'cicatavern-world-move')
+  assert.equal(draw.replaceAfter, `{{random::台风::文化祭${'::无'.repeat(4)}}}`)
+  assert.equal(vetSuggestions(card, [moves])[0].broken, undefined)
+  const after = taken(card, moves)
+  assert.ok(!rules(checkCard(after)).some(rule => rule.startsWith('draw-')))
+  assert.deepEqual(readDraw(brickScript(after, 'cicatavern-world-move').replaceString), { items: ['台风', '文化祭'], rate: 'often' })
+  // Nothing it can take: a list just as it is, a name the card does not have.
+  assert.deepEqual(askModel(card, suggestion('照旧', '<world_moves>\n台风：还远 → 逼近 → 登陆\n地震：没动静 → 来了\n</world_moves>'))[0].changes, [])
+})
+
+test('a form\'s options and notes, as the model writes them: the page is the code\'s, and a name or kind stays', () => {
+  const card = newBrickCard()
+  const [form] = askModel(card, suggestion('身份多几种', `<creation>{"fields": [
+  {"label": "身份", "kind": "text", "options": ["转学生", "本地人", "交换生", "交换生"], "note": "定了就改不了"},
+  {"label": "来历", "options": ["不该有"], "note": "一两句，写\${{user}}从哪来"},
+  {"label": "不存在", "options": ["甲", "乙"]}
+]}</creation>`))
+  assert.equal(form.changes.length, 1)
+  assert.equal(form.changes[0].sid, 'cicatavern-creation-page')
+  assert.equal(vetSuggestions(card, [form])[0].broken, undefined)
+  const after = taken(card, form)
+  const spec = creationOf(after.regexScripts)
+  assert.deepEqual(spec.fields, [
+    { label: '身份', kind: 'pick', options: ['转学生', '本地人', '交换生'], note: '定了就改不了' },
+    { label: '来历', kind: 'text', options: [], note: '一两句，写   user  从哪来' },
+  ])
+  assert.equal(spec.mark, '【建角】')
+  assert.ok(brickScript(after, 'cicatavern-creation-page').replaceString.startsWith('```html\n<!DOCTYPE html>'))
+  assert.ok(!rules(checkCard(after)).some(rule => rule.startsWith('creation-')))
+  assert.match(randomSheet(spec, () => 0.99), /^【建角】身份：交换生；来历：/)
+  assert.deepEqual(askModel(card, suggestion('照旧', '<creation>{"fields": [{"label": "身份", "options": ["转学生", "本地人"]}]}</creation>'))[0].changes, [])
+})
+
+test('a suggestion that breaks 世界动态 or 建角页 cannot be taken; one that changes what they hold can', () => {
+  const card = newBrickCard()
+  const world = worldRule(card)
+  const creation = creationRule(card)
+  const answer = [
+    suggestion('去掉标签', `<entry uid="${world.uid}">${world.content.replace(/<\/?world_move_rules>\n?/g, '')}</entry>`),
+    suggestion('改个名字', `<patch target="entry:${world.uid}"><old>- 台风（变量</old><new>- 飓风（变量</new></patch>`),
+    suggestion('抽别的', '<regex id="cicatavern-world-move"><find>/\\[WORLD_MOVE\\]/g</find><replace>{{random::地震::无::无}}</replace></regex>'),
+    suggestion('不写变量', `<patch target="entry:${creation.uid}"><old>- 把这些值写进变量：</old><new>- 记住这些：</new></patch>`),
+    suggestion('表不要了', '<regex id="cicatavern-creation-page"><find><CreationPage/></find><replace></replace></regex>'),
+    suggestion('台风说细点', `<patch target="entry:${world.uid}"><old>逼近 → 登陆</old><new>逼近海岸 → 登陆</new></patch>`),
+    suggestion('开场改一句', '<patch target="greeting:1"><old>先定几件事。</old><new>开始之前，先定下你是谁。</new></patch>'),
+  ].join('\n')
+  const vetted = vetSuggestions(card, askModel(card, answer))
+  const broken = vetted.map(item => item.broken ?? [])
+  assert.ok(broken[0].includes('世界动态的规则架子被改坏了'), broken[0].join())
+  assert.ok(broken[1].includes('世界动态的规则架子被改坏了'), broken[1].join())
+  assert.ok(broken[2].includes('世界动态抽的事和规则里的对不上'), broken[2].join())
+  assert.ok(broken[3].includes('建角页的规则架子被改坏了'), broken[3].join())
+  assert.ok(broken[4].includes('程序写的正则「建角页」被改坏了'), broken[4].join())
+  assert.deepEqual(broken.slice(5), [[], []])
+})
+
+test('a 世界动态 thing added, or started elsewhere, by a patch or a whole entry cannot be taken', () => {
+  const card = newBrickCard()
+  const world = worldRule(card)
+  const added = '- 地震（变量 世界.地震）：没动静 → 来了'
+  const answer = [
+    suggestion('台风更远', `<patch target="entry:${world.uid}"><old>还远 → 逼近</old><new>很远 → 逼近</new></patch>`),
+    suggestion('加一件', `<patch target="entry:${world.uid}"><old>- 台风（变量</old><new>${added}\n- 台风（变量</new></patch>`),
+    suggestion('整条重写', `<entry uid="${world.uid}">${world.content.replace('</world_move_rules>', `${added}\n</world_move_rules>`)}</entry>`),
+    suggestion('后面改细', `<entry uid="${world.uid}">${world.content.replace('排练 → 开幕', '排练 → 彩排 → 开幕')}</entry>`),
+  ].join('\n')
+  const broken = vetSuggestions(card, askModel(card, answer)).map(item => item.broken ?? [])
+  const moved = '世界动态加了新的事，或者改了第一步'
+  assert.deepEqual(broken, [[moved], [moved], [moved], []])
+})
+
+test('a script of the code\'s that was already broken can be put right, but only with what it is for', () => {
+  const { card, helpers } = madeCard()
+  const fixes = (broken, change) => {
+    const [vetted] = vetSuggestions(broken, askModel(broken, suggestion('修好', change)), { helpers })
+    return [vetted.broken ?? [], checkCard(taken(broken, vetted), { helpers }).map(item => item.id)]
+  }
+  // A list lost: the model writes it in <events>, the code draws it.
+  const empty = edited(card, 'cicatavern-event-1', { replaceString: '' })
+  assert.deepEqual(fixes(empty, '<events group="1" rate="rare">下雨了\n来了个转学生</events>'), [[], []])
+  // A token the script no longer answers to: its pattern goes back.
+  const nine = edited(card, 'cicatavern-event-1', { findRegex: String.raw`/\[RANDOM_EVENT_9\]/g` })
+  assert.deepEqual(rules(checkCard(nine, { helpers })), ['draw-missing', 'draw-unread'])
+  assert.deepEqual(fixes(nine, String.raw`<regex id="cicatavern-event-1"><find>/\[RANDOM_EVENT_1\]/g</find></regex>`), [[], []])
+  // Something that is no list to draw is still held back.
+  assert.deepEqual(fixes(empty, String.raw`<regex id="cicatavern-event-1"><find>/\[RANDOM_EVENT_1\]/g</find><replace>下雨了</replace></regex>`)[0], ['程序写的正则「随机事件抽取 1」被改坏了'])
+  // A pattern other than the code's: the finding it had stays the same, so only this says it got worse. One that takes
+  // every group's token takes group 2's too, and one over the rule's tags empties the rule.
+  const broke = '程序写的正则「随机事件抽取 1」被改坏了'
+  assert.deepEqual(fixes(nine, String.raw`<regex id="cicatavern-event-1"><find>/\[RANDOM_EVENT_\d+\]/g</find></regex>`)[0], [broke])
+  assert.deepEqual(fixes(empty, String.raw`<regex id="cicatavern-event-1"><find>/<random_event_rules>[\s\S]*?<\/random_event_rules>/g</find></regex>`)[0], [broke])
+  assert.deepEqual(fixes(nine, String.raw`<regex id="cicatavern-event-1" enabled="false"><find>/\[RANDOM_EVENT_1\]/g</find></regex>`)[0], [broke])
+  // Its list alone may change, broken as it is; a script turned off is still the code's.
+  assert.deepEqual(fixes(nine, '<events group="1">下雨了\n来了个转学生</events>')[0], [])
+  const off = edited(card, 'cicatavern-event-1', { disabled: true })
+  assert.deepEqual(fixes(off, String.raw`<regex id="cicatavern-event-1" enabled="true"><find>/\[RANDOM_EVENT_1\]/g</find></regex>`), [[], []])
+  assert.deepEqual(fixes(off, String.raw`<regex id="cicatavern-event-1" enabled="true"><find>/\[RANDOM_EVENT_\d+\]/g</find></regex>`)[0], [broke])
+
+  const world = newBrickCard()
+  const still = edited(world, 'cicatavern-world-move', { replaceString: '' })
+  const fill = items => String.raw`<regex id="cicatavern-world-move"><find>/\[WORLD_MOVE\]/g</find><replace>{{random::${items}::无::无::无::无}}</replace></regex>`
+  assert.deepEqual(fixes(still, fill('台风::文化祭')), [[], []])
+  assert.deepEqual(fixes(still, fill('地震'))[0], ['世界动态抽的事和规则里的对不上'])
+  // One that works is kept working: its pattern cannot move.
+  assert.deepEqual(fixes(world, String.raw`<regex id="cicatavern-world-move"><find>/\[WORLD\]/g</find></regex>`)[0].includes('程序写的正则「世界动向抽取」被改坏了'), true)
+})
+
+// ─── Events that happen once ──────────────────────────────────────────────
+
+const EVENTS = [
+  { name: '告白', when: '好感很高的时候', requires: { path: '林小满.好感度', op: '>=', value: '80' }, content: '她在天台说出口' },
+  { name: '借伞', when: '提到下雨', keywords: ['下雨'], content: '她把伞塞给你' },
+]
+const ONCE_OLD = '只发生一次：前文已经写过这件事，就把它当作发生过的事，不再重演。'
+const eventEntries = card => card.book.entries.filter(item => item.content.includes('<event name='))
+
+/** The card as 创作角色卡 made it before events were kept to once by a list: the reminder in words, no list. */
+function beforeTheList(card) {
+  const older = text => {
+    if (text.includes('<event name=')) {
+      return text.split('\n')
+        .map(line => (line.startsWith('只发生一次：') ? ONCE_OLD : line.replace(/ && !JSON\.stringify\(.*$/, '')))
+        .filter(line => !line.startsWith('@@if !JSON.stringify('))
+        .join('\n')
+    }
+    if (!text.includes('已发生事件:')) return text
+    const state = YAML.parse(text)
+    if (!state?.已发生事件) return text.split('\n').filter((line, i, all) => !/^ {2}已发生事件:$/.test(line) && !/^ {4}(type: list|check:)$/.test(line) && !/^ {6}- 事件条目里/.test(line)).join('\n')
+    delete state.已发生事件
+    return YAML.stringify(state, { lineWidth: 0 }).trim()
+  }
+  const opening = text => text.replace(/\n已发生事件:\n {2}- \$__META_EXTENSIBLE__\$/, '')
+  return { ...card, firstMes: opening(card.firstMes), alternateGreetings: card.alternateGreetings.map(opening), book: { ...card.book, entries: card.book.entries.map(item => ({ ...item, content: older(item.content) })) } }
+}
+
+test('events kept to once by a list: a card made now has nothing to say about them', () => {
+  const { card, helpers } = madeCard(planWith(EVERY_BRICK, { events: EVENTS }))
+  assert.equal(eventEntries(card).length, 2)
+  assert.ok(eventEntries(card).every(item => item.content.startsWith('@@if ') && item.content.includes('"path": "/已发生事件/-"')))
+  assert.deepEqual(checkCard(card, { helpers }), [])
+})
+
+test('events told only in words to happen once: a card made here can move to the list, as a choice', () => {
+  const { card, helpers } = madeCard(planWith(EVERY_BRICK, { events: EVENTS }))
+  const older = beforeTheList(card)
+  assert.ok(eventEntries(older).every(item => item.content.includes(ONCE_OLD) && !item.content.includes('已发生事件')))
+  const [found, ...rest] = checkCard(older, { helpers })
+  assert.deepEqual([found.rule, found.level, found.risky, rest.length], ['event-once', 'tip', true, 0])
+  assert.match(found.title, /2 个事件/)
+  assert.deepEqual(found.changes.map(change => change.kind), ['entry', 'entry', 'entry', 'greeting'], 'the two events, the starting values, the opening with values of its own')
+  const fixed = taken(older, found)
+  assert.deepEqual(checkCard(fixed, { helpers }), [])
+  // The events come out as a card made now has them; the list starts empty and can grow.
+  assert.deepEqual(eventEntries(fixed).map(item => item.content), eventEntries(card).map(item => item.content))
+  const init = fixed.book.entries.find(item => item.content.includes('林小满:') && !item.content.includes('<') && !item.content.includes('type:'))
+  assert.deepEqual(YAML.parse(init.content).已发生事件, ['$__META_EXTENSIBLE__$'])
+  assert.match(fixed.alternateGreetings[0], /<initvar>[\s\S]*已发生事件:\n {2}- \$__META_EXTENSIBLE__\$[\s\S]*<\/initvar>/)
+  // Someone else's card, or one with no variables, is left as it is.
+  assert.deepEqual(checkCard({ ...older, creator: '别人' }, { helpers: helpers.map(item => ({ ...item, id: 'someone-elses' })) }), [])
+  const words = madeCard(planWith({ format: 'text' }, { tracking: { enabled: false, variables: [] }, events: [EVENTS[1]] }))
+  assert.ok(eventEntries(words.card)[0].content.includes(ONCE_OLD))
+  assert.deepEqual(rules(checkCard(words.card, { helpers: words.helpers })).filter(rule => rule === 'event-once'), [])
 })

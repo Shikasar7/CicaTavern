@@ -14,7 +14,7 @@
 //   one, 对话修改 (talk-dialog.js) has them written from a few words, previewed first.
 import { t } from '/i18n.js'
 import { currentLook, lookNames, setLook } from '/game-look.js'
-import { APPEARANCE_DEFAULTS, PALETTE_KEYS, READING_DEFAULTS, READ_WIDTH, STORY_FONTS, STORY_SCALE, STYLES, UI_SCALE, cleanAppearance, cleanColor, cleanCustom, cleanFontName, cleanPalette, cleanReading, paletteCss, paletteIssues, storyFontOf } from '/shared/appearance.js'
+import { APPEARANCE_DEFAULTS, PALETTE_KEYS, READING_DEFAULTS, READ_WIDTH, STORY_FONTS, STORY_LEADING, STORY_SCALE, STYLES, UI_SCALE, cleanAppearance, cleanColor, cleanCustom, cleanFontName, cleanPalette, cleanReading, paletteCss, paletteIssues, storyFontOf } from '/shared/appearance.js'
 
 const MODES = ['auto', 'light', 'dark']
 const MODE_LABEL = { auto: t`跟随系统`, light: t`浅色`, dark: t`深色` }
@@ -145,6 +145,8 @@ export function applyReading(value) {
   else root.style.removeProperty('--story-font')
   if (reading.scale === READING_DEFAULTS.scale) root.style.removeProperty('--story-scale')
   else root.style.setProperty('--story-scale', String(reading.scale))
+  if (reading.leading === READING_DEFAULTS.leading) root.style.removeProperty('--story-leading')
+  else root.style.setProperty('--story-leading', String(reading.leading))
   if (reading.width === READING_DEFAULTS.width) root.style.removeProperty('--read')
   else root.style.setProperty('--read', `${reading.width}px`)
   remember(READING_KEY, JSON.stringify(reading))
@@ -325,7 +327,33 @@ export function initTheme({ api, el, toast, guard, getSettings, setSettings, onR
       el('div', { class: 'theme-reading' }, [
         el('label', { class: 'theme-opacity' }, [el('span', { class: 'theme-size-a', 'aria-hidden': 'true', text: 'A' }), size, el('span', { class: 'theme-size-a big', 'aria-hidden': 'true', text: 'A' }), shown]),
         el('p', { class: 'theme-reading-sample', text: t`雨下得正紧，她把伞往你这边偏了偏：「今晚怕是回不去了。」` }),
-        el('div', { class: 'row between' }, [el('p', { class: 'hint', text: t`字体和字号只改故事正文：回复、你的输入和视觉小说的文本框。只记在这台设备上，电脑和手机可以各用各的。` }), usual]),
+        el('div', { class: 'row between' }, [el('p', { class: 'hint', text: t`字体、字号和行距只改故事正文：回复、你的输入和视觉小说的文本框。只记在这台设备上，电脑和手机可以各用各的。` }), usual]),
+      ]),
+    ])
+  }
+
+  /** 行距: a slider from tight to loose; the sample above shows it too. */
+  function leadingRow(reading) {
+    const percent = value => `${Math.round(value * 100)}%`
+    const leading = el('input', { type: 'range', min: String(STORY_LEADING.min * 100), max: String(STORY_LEADING.max * 100), step: String(STORY_LEADING.step * 100), value: String(Math.round(reading.leading * 100)), 'aria-label': t`行距` })
+    const shown = el('span', { class: 'theme-opacity-value', text: percent(reading.leading) })
+    const usual = el('button', { type: 'button', class: 'btn small ghost', text: t`默认行距`, disabled: reading.leading === READING_DEFAULTS.leading })
+    leading.addEventListener('input', () => {
+      setReading({ leading: leading.value / 100 })
+      shown.textContent = percent(leading.value / 100)
+      usual.disabled = currentReading().leading === READING_DEFAULTS.leading
+    })
+    usual.addEventListener('click', () => {
+      setReading({ leading: READING_DEFAULTS.leading })
+      render()
+    })
+    return el('div', { class: 'theme-row' }, [
+      el('span', { class: 'theme-label', text: t`行距` }),
+      el('div', { class: 'theme-reading' }, [
+        el('div', { class: 'row between' }, [
+          el('label', { class: 'theme-opacity' }, [el('span', { class: 'theme-leading-mark', 'aria-hidden': 'true', text: t`紧` }), leading, el('span', { class: 'theme-leading-mark', 'aria-hidden': 'true', text: t`松` }), shown]),
+          usual,
+        ]),
       ]),
     ])
   }
@@ -336,7 +364,7 @@ export function initTheme({ api, el, toast, guard, getSettings, setSettings, onR
     return Math.max(READ_WIDTH.min, Math.min(READ_WIDTH.max, document.querySelector('.reader').getBoundingClientRect().width / pageZoom() - padding))
   }
   // Even: the column stays centred on a whole pixel.
-  const fitColumn = width => Math.round(Math.min(widestColumn(), Math.max(READ_WIDTH.min, width)) / 2) * 2
+  const fitColumn = (width, widest = widestColumn()) => Math.round(Math.min(widest, Math.max(READ_WIDTH.min, width)) / 2) * 2
 
   /** 正文宽度: the same as dragging the column's edges, for a phone-sized hand or a keyboard; not on a phone, where the column is the screen. */
   function widthRow(reading) {
@@ -365,6 +393,8 @@ export function initTheme({ api, el, toast, guard, getSettings, setSettings, onR
   /**
    * The column's two edges. The column stays centred, so an edge moved one way takes the other with it and stays under the
    * finger; the place being read stays where it is while the lines above it change. Saved when let go.
+   * A mouse moves the column as it goes, once a frame. A finger moves the edges only and the story follows when let go:
+   * every width lays out the whole story again, which a phone cannot do as fast as a finger moves.
    */
   function bindReadEdges() {
     const root = document.documentElement
@@ -401,20 +431,35 @@ export function initTheme({ api, el, toast, guard, getSettings, setSettings, onR
         edge.classList.add('dragging')
         const from = columnNow()
         const startX = event.clientX
+        const zoom = pageZoom()
+        const widest = widestColumn()
+        const live = event.pointerType === 'mouse'
         const putBack = holdPlace()
         let width = 0
+        let frame = 0
+        const show = () => {
+          frame = 0
+          if (live) {
+            root.style.setProperty('--read', `${width}px`)
+            putBack()
+          } else for (const each of Object.values(edges)) each.style.setProperty('--read', `${width}px`)
+        }
         const move = moved => {
-          width = fitColumn(from + (2 * outward * (moved.clientX - startX)) / pageZoom())
-          root.style.setProperty('--read', `${width}px`)
-          putBack()
+          width = fitColumn(from + (2 * outward * (moved.clientX - startX)) / zoom, widest)
+          frame ||= requestAnimationFrame(show)
         }
         const end = () => {
+          cancelAnimationFrame(frame)
           edge.removeEventListener('pointermove', move)
           edge.removeEventListener('pointerup', end)
           edge.removeEventListener('pointercancel', end)
           edge.classList.remove('dragging')
+          for (const each of Object.values(edges)) each.style.removeProperty('--read')
           // A press that did not move leaves the column as it was.
-          if (width) setReading({ width })
+          if (width) {
+            setReading({ width })
+            putBack()
+          }
           say()
         }
         edge.addEventListener('pointermove', move)
@@ -662,13 +707,15 @@ export function initTheme({ api, el, toast, guard, getSettings, setSettings, onR
     })
     opacity.addEventListener('change', guard(() => save({ backdropOpacity: opacity.value / 100 })))
 
-    dialog.replaceChildren(
+    // Rows a device does not have (正文宽度 on a phone) come as null: left out, not written out as text.
+    dialog.replaceChildren(...[
       el('button', { type: 'submit', class: 'btn small dialog-x', value: 'close', text: t`关闭` }),
       el('h2', { text: t`主题` }),
       el('div', { class: 'theme-row' }, [el('span', { class: 'theme-label', text: t`明暗` }), seg]),
       el('div', { class: 'theme-row top' }, [el('span', { class: 'theme-label', text: t`配色` }), el('div', { class: 'theme-colors' }, [styles, colorTools, tuning && current.custom ? tuner(current) : null])]),
       fontRow(currentReading()),
       sizeRow(currentReading()),
+      leadingRow(currentReading()),
       widthRow(currentReading()),
       interfaceRow(currentReading()),
       el('div', { class: 'theme-row' }, [
@@ -684,7 +731,7 @@ export function initTheme({ api, el, toast, guard, getSettings, setSettings, onR
           el('p', { class: 'hint', text: current.backdrop ? t`透明度越低，图越淡，字越好认。` : t`选一张图放在界面后面，存在酒馆的数据文件夹里。` }),
         ]),
       ]),
-    )
+    ].filter(Boolean))
   }
 
   button.addEventListener('click', () => {

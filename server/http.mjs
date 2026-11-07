@@ -24,11 +24,12 @@ import { createProxy, proxyOverride } from './proxy.mjs'
 import { createEngine } from './engine.mjs'
 import { createRulebooks } from './game.mjs'
 import { createMusic } from './music.mjs'
-import { APIS, draftProvider, exportProviders, importProviders, isProviderRef, listRemoteModelDetails, mergeDshProviders, normalizeProvider, providersFromDsh, providerChoices, providerError, publicProvider, refLabel } from './providers.mjs'
+import { APIS, CHAT_THINKING, draftProvider, exportProviders, importProviders, isProviderRef, listRemoteModelDetails, mergeDshProviders, normalizeProvider, providersFromDsh, providerChoices, providerError, publicProvider, refLabel } from './providers.mjs'
 import { initTemplates, templateSyntaxError } from './template.mjs'
 import { canonicalModel } from './models.mjs'
 import { createLedger } from './usage.mjs'
 import { createMedia, drawChoiceOf } from './media.mjs'
+import { createCodexDrawing } from './codex-drawing.mjs'
 import { createAppearance, imageKind } from './appearance.mjs'
 import { attachedSummary, createRegex, withAttachedScripts } from './regex.mjs'
 import { createPickLists } from './personas.mjs'
@@ -342,8 +343,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
   const rulebooks = createRulebooks(store)
   const music = createMusic(store)
   const engine = createEngine(store, isolation, ledger, { subscription, rulebooks })
-  // This install's own image backends (server/subscription/), offered beside the usual ones.
-  const ownBackends = features.subscription ? subscriptionBackend.imageBackends?.({ store, proxy: () => isolation.proxy }) ?? [] : []
+  // Image backends of this computer's own, offered beside the usual ones: Codex where the user has it (codex-drawing.mjs).
+  const ownBackends = features.codexDrawing ? [createCodexDrawing({ store, proxy: () => isolation.proxy })] : []
   // 抽图历史: the pictures a card's places had before they were drawn again (draw-history.mjs).
   const drawHistory = createDrawHistory(store, { keep: async () => (await media.settings()).drawHistory })
   const media = createMedia(store, { proxy: () => isolation.proxy, askInContext: engine.askInContext, features, ownBackends, history: drawHistory })
@@ -391,6 +392,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     storeBackdrop: buffer => appearance.storeBackdrop(buffer),
     rulebooks,
     writeChatState,
+    history: drawHistory,
   })
   // 设置 → 更多 → 更新. A restart after an update starts the server the way this one was started.
   let listenArg
@@ -479,11 +481,15 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     }
     const what = `${args.userNodeId ? msg`重新生成` : msg`生成回复`} · ${chatId}`
     try {
-      const turn = await engine.runTurn(chatId, args, send)
-      const { nodeId } = turn
-      const chat = await autoFill(chatId, turn.chat, nodeId, send, what)
-      send({ type: 'done', nodeId, chat: chatView(chat) })
+      const turn = await engine.runTurn(chatId, args, send, { keepCut: true })
+      const { nodeId, cut } = turn
+      // A reply that stopped partway stays as it is: nothing more is asked of a provider that just went, or of one told to stop.
+      const chat = cut ? turn.chat : await autoFill(chatId, turn.chat, nodeId, send, what)
+      const said = cut?.message ? localize(cut.message) : ''
+      if (said) await diagnostics.record({ source: 'turn', status: cut.status, message: said, stack: '', model: await turnModel(chatId), detail: cut.detail }).catch(() => {})
+      send({ type: 'done', nodeId, chat: chatView(chat), ...(cut ? { cut: { stopped: cut.stopped, message: said } } : {}) })
       await noteTurn(what, chat, chat.nodes[nodeId]).catch(() => {})
+      if (cut) return res.end()
       // 边玩边整理 (长期记忆), on its own once the turn is in: the pages hear when it starts and when it ends.
       let tidyStarted = false
       engine
@@ -522,7 +528,9 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     const seconds = node.timing?.totalMs ? `${(node.timing.totalMs / 1000).toFixed(1)} s` : ''
     const tokens = msg`输入 ${(usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0)}（缓存 ${usage.cacheRead ?? 0}） · 输出 ${usage.output ?? 0}`
     await diagnostics.note({ what, detail: [node.model, seconds, tokens].filter(Boolean).join(' · ') })
-    if (node.api?.truncated) await diagnostics.note({ level: 'warn', what, detail: node.api.truncated === 'paused' ? msg`联网搜索还没结束，回复停在了中途` : msg`回复写到了输出上限，后面被截断（末尾的选项、变量块可能缺了）` })
+    if (node.api?.truncated === 'stopped') await diagnostics.note({ what, detail: msg`已停止，写好的部分留下了` })
+    else if (node.api?.truncated === 'broken') await diagnostics.note({ level: 'warn', what, detail: msg`回复写到中途断了，写好的部分留下了` })
+    else if (node.api?.truncated) await diagnostics.note({ level: 'warn', what, detail: node.api.truncated === 'paused' ? msg`联网搜索还没结束，回复停在了中途` : msg`回复写到了输出上限，后面被截断（末尾的选项、变量块可能缺了）` })
     // A cut-off reply already says its update block may be missing.
     else if (await engine.missesUpdate(chat, node)) await diagnostics.note({ level: 'warn', what, detail: node.updateUnread ? msg`这张 MVU 卡的回复写了变量更新块，但一条也读不出来，状态没跟着这一轮变（回复下方有「补写变量」）` : msg`这张 MVU 卡的回复没写变量更新块（<UpdateVariable>），状态没跟着这一轮变（回复下方有「补写变量」）` })
     if (node.templateErrors?.length) await diagnostics.note({ level: 'warn', what, detail: msg`回复里的 EJS 模板出错：${node.templateErrors.map(String).join(' / ').slice(0, 400)}` })
@@ -653,7 +661,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
         ...(useSubscription ? subscription.choices().map(m => ({ ...m, group: msg`Claude 订阅`, subscription: true })) : []),
         ...providerChoices(await store.getProviders()),
       ].map(choice => ({ ...choice, context: contextInfo(choice.id, { settings, learned }) }))
-      return { choices, defaultModel: modelRef(settings.model), accountError, subscription: useSubscription }
+      // 设置 → 模型's 思考 and 努力程度: what a chat's 思考 follows until it picks its own.
+      return { choices, defaultModel: modelRef(settings.model), accountError, subscription: useSubscription, reasoning: { thinking: settings.thinking, effort: settings.effort } }
     }],
     ['GET', /^\/api\/usage$/, async (_, __, url) => {
       const days = Math.min(Math.max(Number(url.searchParams.get('days')) || 7, 1), 90)
@@ -975,7 +984,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['PUT', /^\/api\/forge\/([\w-]+)$/, ([id], body) => forge.update(id, body ?? {})],
     ['DELETE', /^\/api\/forge\/([\w-]+)$/, ([id]) => forge.remove(id)],
     ['POST', /^\/api\/forge\/([\w-]+)\/say$/, ([id], body) => forge.say(id, body ?? {})],
-    ['POST', /^\/api\/forge\/([\w-]+)\/retry$/, ([id]) => forge.retry(id)],
+    ['POST', /^\/api\/forge\/([\w-]+)\/retry$/, ([id], body) => forge.retry(id, body ?? {})],
+    ['GET', /^\/api\/forge\/([\w-]+)\/retry$/, ([id], _, url) => forge.retryEstimate(id, { model: String(url.searchParams.get('model') ?? '') })],
     ['POST', /^\/api\/forge\/([\w-]+)\/undo$/, ([id]) => forge.undo(id)],
     ['POST', /^\/api\/forge\/([\w-]+)\/plan$/, ([id], body) => forge.plan(id, body ?? {})],
     ['POST', /^\/api\/forge\/([\w-]+)\/revise$/, ([id], body) => forge.revise(id, body ?? {})],
@@ -1157,6 +1167,10 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       const { session, subject, applied, prefix, chat, lost } = await forge.talkApply('card', id, body ?? {})
       return { session, applied, prefix, card: cardEditView(subject), ...(chat ? { chat: chatView(chat), lost } : {}) }
     }],
+    ['POST', /^\/api\/cards\/([\w-]+)\/assistant\/undo$/, async ([id]) => {
+      const { session, subject, prefix, chatKept } = await forge.talkUndo('card', id)
+      return { session, prefix, chatKept, card: cardEditView(subject) }
+    }],
     // 角色卡自检 (web/card-check.js): what the program finds, worked out on each read; the model is asked only by /ask.
     ['GET', /^\/api\/cards\/([\w-]+)\/check$/, ([id]) => forge.checkGet(id)],
     ['PUT', /^\/api\/cards\/([\w-]+)\/check$/, ([id], body) => forge.checkUpdate(id, body ?? {})],
@@ -1168,8 +1182,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['POST', /^\/api\/cards\/([\w-]+)\/trial\/run$/, ([id]) => forge.trialRun(id)],
     ['POST', /^\/api\/cards\/([\w-]+)\/trial\/stop$/, ([id]) => forge.trialStop(id)],
     ['POST', /^\/api\/cards\/([\w-]+)\/check\/apply$/, async ([id], body) => {
-      const { view, card, applied, prefix } = await forge.checkApply(id, body ?? {})
-      return { check: view, card: cardEditView(card), applied, prefix }
+      const { view, card, applied, taken, skipped, prefix, chatGaps } = await forge.checkApply(id, body ?? {})
+      return { check: view, card: cardEditView(card), applied, taken, skipped, prefix, chatGaps }
     }],
     ['POST', /^\/api\/cards\/([\w-]+)\/check\/undo$/, async ([id], body) => {
       const { view, card, prefix } = await forge.checkUndo(id, body ?? {})
@@ -1412,6 +1426,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       if (body.model !== undefined) chat.model = body.model ? modelRef(body.model) : null
       // 联网: the provider searches the web for this chat's turns when the model asks (models that can).
       if (body.webSearch !== undefined) chat.webSearch = Boolean(body.webSearch)
+      // Its own 思考 for its replies (providers.mjs chatReasoning); empty follows the provider and the settings.
+      if (body.thinking !== undefined) chat.thinking = CHAT_THINKING.includes(body.thinking) ? body.thinking : null
       return { ...chatView(await store.saveChat(chat)), running: engine.isRunning(id) }
     })],
     ['DELETE', /^\/api\/chats\/([\w-]+)$/, async ([id]) => {
@@ -1974,7 +1990,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       if (kind === 'image-prompt') {
         const reply = typeof body.reply === 'string' && body.reply.trim() ? body.reply : node.display ?? node.text
         const input = node.parent ? chat.nodes[node.parent]?.text ?? '' : ''
-        return sendJson(res, 200, await media.writeImagePrompt(chat, node, { reply, input }, signal))
+        return sendJson(res, 200, await media.writeImagePrompt(chat, node, { reply, input, moment: body.moment === true }, signal))
       }
       const image = await media.generateImage(chat, nodeId, body.prompt, signal, drawChoiceOf(body))
       // 重画 (`replace`): in that picture's place, which becomes one of its old ones (抽图历史);

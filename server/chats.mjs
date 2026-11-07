@@ -615,6 +615,11 @@ export function activePath(chat) {
   return path
 }
 
+/** The variables the chat is at: its latest reply's, as the side panel and that reply's status bar show them; null before any. */
+export function latestState(chat) {
+  return [...activePath(chat)].reverse().find(node => node.role === 'assistant' && !node.deleted)?.state ?? null
+}
+
 /** Turns hidden behind a rollback at the end of the active path. */
 export function foldedTurns(chat) {
   const last = activePath(chat).at(-1)
@@ -895,6 +900,8 @@ export function chatView(chat) {
     title: chat.title,
     names: chat.names,
     model: chat.model ?? null,
+    // Its own 思考 for its replies ('off' or an effort), null following the provider and the settings.
+    thinking: chat.thinking ?? null,
     webSearch: Boolean(chat.webSearch),
     presetId: chat.presetId ?? null,
     presetName: chat.presetName ?? null,

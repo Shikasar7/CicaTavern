@@ -551,6 +551,14 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
       if (result.chat?.id === getChat()?.id) onChatChanged(result.chat)
       await onCardChanged?.(state.card.id)
     },
+    undo: true,
+    async onUndone(result) {
+      absorb(result.card)
+      renderMain()
+      saved(result.prefix, t`已撤销这次修改`)
+      toast(result.chatKept ? t`已撤销这次修改。写进对话的变量没有改回去，要改可以在右栏「状态」里改。` : t`已撤销这次修改`, result.chatKept ? 7000 : undefined)
+      await onCardChanged?.(state.card.id)
+    },
   })
 
   /** 按意见改: the next request is kept to this piece. */
@@ -572,7 +580,8 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
   dialog.addEventListener('cancel', () => document.activeElement?.blur?.())
 
   return {
-    open: guard(async cardId => {
+    /** @param options.say - words to put in 对话修改's box, which opens. */
+    open: guard(async (cardId, { say = '' } = {}) => {
       if (!view.main) layout()
       const switching = state.card?.id !== cardId
       const [card, session] = await Promise.all([api(`/api/cards/${cardId}/edit`), api(`/api/cards/${cardId}/assistant`), talk.loadModels()])
@@ -587,11 +596,12 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
         view.main.scrollTop = 0
       }
       absorb(card)
-      showPane(state.pane)
+      showPane(say ? 'assist' : state.pane)
       renderMain()
       loadKept(cardId)
       talk.load(session)
       if (!dialog.open) dialog.showModal()
+      if (say) talk.say(say)
       // The talk opens at its latest turn (it has no size until the window shows).
       talk.scroll()
     }),

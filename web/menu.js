@@ -286,15 +286,16 @@ export function createMenu({ dialog, form, el, title: menuTitle, edits = countsA
     const dirtyNote = el('span', { class: 'menu-dirty', hidden: true, text: t`有改动还没保存` })
     const saveButton = save ? el('button', { type: 'button', class: 'btn primary', text: save.text ?? t`保存`, onclick: save.onClick }) : null
     const closeButton = el('button', { type: 'button', class: 'btn', text: t`关闭`, onclick: () => up() })
+    const head = el('div', { class: 'menu-head' }, [back, el('div', { class: 'menu-titles' }, [crumb, title]), finder])
     form.replaceChildren(
-      el('div', { class: 'menu-head' }, [back, el('div', { class: 'menu-titles' }, [crumb, title]), finder]),
+      head,
       body,
       el('div', { class: 'menu-foot' }, [
         el('div', { class: 'row' }, footStart),
         el('div', { class: 'row' }, [dirtyNote, ...footEnd, closeButton, saveButton]),
       ]),
     )
-    view = { home, homeTitle, panels: panelNodes, panes, back, crumb, title, body, found, finder, entries, dirtyNote, saveButton, closeButton }
+    view = { home, homeTitle, head, panels: panelNodes, panes, back, crumb, title, body, found, finder, entries, dirtyNote, saveButton, closeButton }
     setDirty(dirty)
     show(sections.some(s => s.id === current && !s.action) ? current : null)
   }
@@ -343,6 +344,8 @@ export function createMenu({ dialog, form, el, title: menuTitle, edits = countsA
     view.home.hidden = Boolean(section)
     for (const pane of view.panes) pane.hidden = pane.dataset.section !== current
     view.back.hidden = !section
+    // On a phone a page's title row puts the search box below (style.css), whatever its names' length.
+    view.head.classList.toggle('on-page', Boolean(section))
     view.crumb.hidden = !section?.crumb
     view.crumb.textContent = section?.crumb ?? ''
     view.title.textContent = section ? section.title : view.homeTitle

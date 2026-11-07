@@ -48,15 +48,17 @@ function referenceTip(item) {
  * References as chips, each with what it is when that was worked out from the file.
  * @param open - a tap on one: what the model reads of it. @param drop - its ×.
  * @param locked - they cannot be taken off for now. @param label - what goes before them.
+ * @param studied - the wizard's: a card it only studies says so, and how little of it the model reads (`brief`).
  */
-export function referenceChips(el, items, { open, drop, locked = false, label = t`向导读：` }) {
+export function referenceChips(el, items, { open, drop, locked = false, label = t`向导读：`, studied = false }) {
   const kind = item => (item.kind === 'card' ? t`角色卡` : item.kind === 'book' ? t`世界书` : '')
+  const onlyShape = item => studied && Boolean(item.structure) && item.mode !== 'content'
   return [
     el('span', { class: 'ce-refs-note', text: label }),
     ...items.map(item => el('span', { class: 'ce-ref' }, [
-      el('button', { type: 'button', class: 'ce-ref-name', title: referenceTip(item), onclick: () => open(item) }, [
+      el('button', { type: 'button', class: 'ce-ref-name', title: onlyShape(item) ? t`只学结构：向导读不到这张卡的内容，只读到它的规模和玩法（${chars(item.brief?.length ?? 0)} 字）。点开看向导读到的内容；要用原文，选下面的「使用原文…」` : referenceTip(item), onclick: () => open(item) }, [
         el('span', { text: item.name }),
-        el('small', { text: kind(item) ? t`${kind(item)} · ${chars(item.chars)} 字` : t`${chars(item.chars)} 字` }),
+        el('small', { text: onlyShape(item) ? t`角色卡 · 只学结构` : kind(item) ? t`${kind(item)} · ${chars(item.chars)} 字` : t`${chars(item.chars)} 字` }),
       ]),
       el('button', { type: 'button', class: 'ce-ref-off', disabled: locked, 'aria-label': t`去掉「${item.name}」`, title: t`去掉`, text: '×', onclick: () => drop(item) }),
     ])),
@@ -509,6 +511,12 @@ export function createTalk({ api, el, guard, openProviders }, spec) {
     load,
     aim,
     scroll,
+    /** Words for the box, for the user to read and send. */
+    say(text) {
+      view.composer.value = text
+      view.composer.dispatchEvent(new Event('input', { bubbles: true }))
+      view.composer.focus()
+    },
     /** A fresh start when the talk turns to another card, book or preset. */
     reset() {
       clearTimeout(state.poll)

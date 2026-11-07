@@ -29,6 +29,16 @@ const MAX_GREETING = 3000
 // However many entries a book has, each gets at least this much (the ones past the limit then stay out).
 const MIN_SHARE = 300
 const KINDS = { file: '文件', chat: '对话', card: '角色卡', book: '世界书' }
+// What gives a card's file away when it cannot be read as one: fields no other file has, written as keys. name,
+// description and the like are in any settings file, so on their own they say nothing: see opensAsCard.
+const CARD_KEY = /\b(first_?mes|mes_?example|alternate_?greetings|character_?book|creator_?notes|post_?history_?instructions|char_?greeting|char_?persona|world_?scenario|example_?dialogue)(\\?["'])?\s*:/gi
+const CARD_SPEC = /\bspec\\?["']?\s*:\s*\\?["']?chara_card_v/i
+// What a card's JSON opens with. SillyTavern writes these first and spec far below, so a file cut short has only them.
+const CARD_FIELDS = new Set(['name', 'description', 'personality', 'scenario'])
+// One inside a value has its quotes escaped.
+const JSON_KEY = /(?<!\\)"([^"\\]*)"\s*:/g
+// Where the card in unwrapWorkspace's shell starts. The shell's other keys can be in any order, and kind can come after.
+const WORKSPACE_RAW = /(?<!\\)"raw"\s*:\s*(?=\{)/g
 
 const newRef = () => randomBytes(6).toString('hex')
 const clip = (text, max) => (text.length > max ? `${text.slice(0, max)}…` : text)
@@ -133,10 +143,16 @@ export function fileReference({ name, text } = {}) {
 
 /** A card PNG, its bytes in base64. */
 function pictureReference({ filename, data }) {
-  const { raw } = parseCardFile(String(filename ?? ''), Buffer.from(data, 'base64'))
-  const card = importOwnCard(raw)?.card ?? normalizeCard(raw)
-  const { text, whole } = cardText(card)
-  return { ...textReference('card', filename, text, whole), structure: cardStructure(card) }
+  try {
+    const { raw } = parseCardFile(String(filename ?? ''), Buffer.from(data, 'base64'))
+    const card = importOwnCard(raw)?.card ?? normalizeCard(raw)
+    const { text, whole } = cardText(card)
+    return { ...textReference('card', filename, text, whole), structure: cardStructure(card) }
+  } catch (error) {
+    // Its data cut short or garbled: the parser's own words say nothing to the player.
+    if (error.status) throw error
+    throw httpError(400, msg`这张 PNG 里的角色卡数据损坏了，读不出来。换一份完好的文件再附`)
+  }
 }
 
 /** What the page sends for a file: its text, or `data`, the bytes of a picture with a card in it. */
@@ -225,7 +241,8 @@ export function cleanReferences(list) {
 }
 
 /** A reference as the page lists it, without its text. */
-export const referenceView = ({ id, kind, chatId, name, chars, total, rounds, at, structure, mode }) => ({ id, kind, ...(chatId ? { chatId } : {}), ...(structure ? { structure, mode: mode ?? 'structure' } : {}), name, chars, total, ...(rounds === undefined ? {} : { rounds }), at })
+// `brief`: what the model reads of a card it only studies (structureText), for the page to show in place of its text.
+export const referenceView = ({ id, kind, chatId, name, chars, total, rounds, at, structure, mode }) => ({ id, kind, ...(chatId ? { chatId } : {}), ...(structure ? { structure, mode: mode ?? 'structure', brief: structureText(structure) } : {}), name, chars, total, ...(rounds === undefined ? {} : { rounds }), at })
 
 // The material's own text cannot close the block it is in.
 const inBlock = text => text.replace(/<(\/?)(references?)\b/gi, '＜$1$2')
@@ -236,6 +253,50 @@ const inBlock = text => text.replace(/<(\/?)(references?)\b/gi, '＜$1$2')
  */
 export const studying = reference => reference.mode === 'structure'
 export const asMaterial = reference => (reference.kind === 'card' && reference.structure ? { ...reference, mode: reference.mode === 'content' && reference.confirmed === true ? 'content' : 'structure' } : reference)
+
+/**
+ * Whether a JSON object starts the way a card does. Two fields are enough when nothing else follows, as cardOfJson takes
+ * a whole file with name and description for a card; with something else after them it takes three, or a broken
+ * settings file would be one.
+ */
+function startsAsCard(text) {
+  const fields = new Set()
+  for (const [, key] of text.replace(/^\{\s*"data"\s*:\s*/, '').matchAll(JSON_KEY)) {
+    if (!CARD_FIELDS.has(key) || fields.has(key)) return fields.size > 2
+    fields.add(key)
+  }
+  return fields.size > 1
+}
+
+/** Only the top of the file counts, or of what a workspace shell holds: a settings file can have people with these fields further in. */
+function opensAsCard(text) {
+  if (!text.startsWith('{')) return false
+  return startsAsCard(text) || [...text.matchAll(WORKSPACE_RAW)].some(found => startsAsCard(text.slice(found.index + found[0].length)))
+}
+
+/**
+ * Whether what was read as plain text is a card all the same: broken JSON, a card nested in something else, or one
+ * with no name. In what is meant to be JSON one field is enough; a note on how cards are written can have one, so
+ * anywhere else it takes two.
+ */
+function looksLikeCard(name, text) {
+  if (CARD_SPEC.test(text) || text.includes(CARD_FORMAT) || opensAsCard(text)) return true
+  const keys = [...text.matchAll(CARD_KEY)]
+  if (new Set(keys.map(([, key]) => key.replace(/_/g, '').toLowerCase())).size > 1) return true
+  return (/\.json$/i.test(name) || /^[{[]/.test(text)) && keys.some(([, , quote]) => quote)
+}
+
+/** As material a card is only learned from, so one that cannot be read as a card stays out: as text, all of it would go. */
+function materialOf(reference, text) {
+  if (reference.kind === 'file' && looksLikeCard(reference.name, text)) throw httpError(400, msg`「${reference.name}」看起来是角色卡，但文件损坏了，读不出来。创作角色卡时不会把它当普通文本读，修好或换一份完好的文件再附`)
+  return asMaterial(reference)
+}
+
+/** A file for 创作角色卡. All of it is looked at: what gives a card away can be past what a reference keeps. */
+export const readMaterial = body => materialOf(readReference(body), String(body?.text ?? '').trim())
+
+/** What the page kept until there was a draft. */
+export const keptMaterial = list => cleanReferences(list).map(reference => materialOf(reference, reference.text))
 
 /** A card as the player has decided: `content` only with their word that the author allows it. */
 export function withMode(reference, { mode, confirmed } = {}) {

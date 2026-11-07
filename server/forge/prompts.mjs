@@ -104,6 +104,12 @@ export const CARD_CHOICES = {
     male: { talk: '核心角色是男性。', plan: '核心角色都是男性（配角不限）。' },
     mixed: { talk: '核心角色男女都有。', plan: '核心角色男女都有。' },
   },
+  // The player's own (<user>): how the card calls and refers to them. Not picked, nothing is said and the rule
+  // against 他/她 for <user> stands, as it always did.
+  userGender: {
+    female: { talk: '<user> 是女性：样例和试写里指代 <user> 用「她」，称呼按女性来。', plan: '<user> 是女性：指代 <user> 用「她」（别的语言用对应的代词），称呼和关系的叫法也按女性来。' },
+    male: { talk: '<user> 是男性：样例和试写里指代 <user> 用「他」，称呼按男性来。', plan: '<user> 是男性：指代 <user> 用「他」（别的语言用对应的代词），称呼和关系的叫法也按男性来。' },
+  },
   play: {
     bond: '好感与关系阶段（好感、信任这类关系数值，核心角色的性格随它分阶段）',
     growth: '成长与能力（等级、修为、技能这类会提升的数值，以及提升的条件）',
@@ -159,6 +165,8 @@ export function cleanCardOptions(raw, cardType = '') {
     cast: pick(value.cast, 'cast'),
     world: value.world === true,
     gender: pick(value.gender, 'gender'),
+    // Only when picked: a draft from before it, or one left at 不限, keeps its options as they were.
+    ...(pick(value.userGender, 'userGender') ? { userGender: value.userGender } : {}),
     play,
     format,
     statusTheme: format === 'mvu-ui' && LOOKS.includes(value.statusTheme) ? value.statusTheme : format === 'mvu-ui' ? 'plain' : '',
@@ -183,6 +191,7 @@ export function optionLines(options, language = DEFAULT_LANGUAGE) {
     o.cast && CARD_CHOICES.cast[o.cast].talk,
     o.world && WORLD_TALK,
     o.gender && CARD_CHOICES.gender[o.gender].talk,
+    o.userGender && CARD_CHOICES.userGender[o.userGender].talk,
     playList && (o.format === 'text'
       ? `玩法：${playList}。这是纯文本卡，玩法靠叙述体现，不记录数值。`
       : `玩法：${playList}。要和用户商量清楚记录哪些会变化的数值、怎么涨落、到了什么程度剧情会变；不必问要不要记录。`),
@@ -195,6 +204,7 @@ export function optionLines(options, language = DEFAULT_LANGUAGE) {
     o.cast ? CARD_CHOICES.cast[o.cast].plan : o.world ? '核心角色 1 到 2 个关键人物（同伴、引路人或对手）；配角 3 到 8 个。' : '',
     o.world && WORLD_PLAN,
     o.gender && CARD_CHOICES.gender[o.gender].plan,
+    o.userGender && CARD_CHOICES.userGender[o.userGender].plan,
     playList && (o.format === 'text'
       ? `玩法写进扮演准则，由叙述体现：${playList}。`
       : `tracking.enabled 为 true，变量围绕这些玩法：${playList}；check 写清什么事让它怎么变；扮演准则写明数值到了什么程度剧情或角色态度会变。`),
@@ -221,7 +231,14 @@ export function withCardOptions(plan, options) {
   const game = o.play.includes('battle') ? plan.game ?? cleanKit({}) : null
   const palette = o.statusTheme === 'auto' ? plan.status_colors ?? null : null
   const status = { ui: o.format !== 'mvu', theme: o.statusTheme || 'plain', ...(palette ? { palette } : {}), ...(o.statusPages ? { pages: true } : {}) }
-  return withBricks({ ...plan, tracking, game, status }, o)
+  return withBricks({ ...editUserGender(plan, o.userGender), tracking, game, status }, o)
+}
+
+/** The plan with the player's gender set ('' = not said: no field, as plans were before it). */
+export function editUserGender(plan, gender) {
+  const role = { ...plan.user_role }
+  delete role.gender
+  return { ...plan, user_role: Object.hasOwn(CARD_CHOICES.userGender, gender ?? '') ? { ...role, gender } : role }
 }
 
 const BOOK_WORDS = {
@@ -356,6 +373,23 @@ export function cleanUserName(value) {
 /** The name the player chose in the talk (sketch item user_name); '' = the one in settings. */
 export const chosenUserName = brief => cleanUserName(brief?.items?.find(item => item.key === 'user_name')?.value)
 
+// The player's gender, when not picked in 卡的设定: the guide asks it with the name, the answer is the sketch item
+// user_gender, and the draft's pick follows it (index.mjs), so the plan and the writers get it the one way they do.
+const USER_GENDER_TALK = '- 同一轮或下一轮再问一句 <user> 在故事里是男是女，选项给「女」「男」「不限」，不限的 detail 写「不写明，角色不用他或她指代你」；sample 写一句角色按这个性别称呼 <user> 的话，不限的用不带性别的叫法。用户开口就说了自己是男是女，就直接记下，不再问。用户选了、说了或让你定了，草图里记一项 key 为 user_gender：value 只写「女」「男」或「不限」（草图不是中文就用对应的词）。'
+
+/**
+ * The player's gender as the talk settled it (sketch item user_gender): 'female', 'male', '' for 不限 or
+ * anything unclear, null when it was not talked about. In whatever language the sketch is written.
+ */
+export function chosenUserGender(brief) {
+  const item = brief?.items?.find(item => item.key === 'user_gender')
+  if (!item) return null
+  const value = String(item.value ?? '')
+  const female = /女|\b(female|woman|girl)\b/i.test(value)
+  const male = /男|\b(male|man|boy)\b/i.test(value)
+  return female === male ? '' : female ? 'female' : 'male'
+}
+
 /** Where the player's own tracked values live in a card of this language. */
 export const playerRoot = language => (englishCard(language) ? 'Protagonist' : '主角')
 
@@ -366,7 +400,8 @@ const discussSystem = (languages, settingsName = '', options = null) => `你是�
 - 提问的先后：先定舞台（世界）和核心角色是谁，再定 <user> 的身份、和角色的关系、互动方式与玩法，然后是基调、文风和开场，最后才是要不要记录会变化的数值。已经定下的不再问。
 - 定 <user> 的身份时，顺带问一句 <user> 在这个故事里叫什么。第一个选项是「用设置里的名字」，detail 写「${settingsName ? `设置里填的是「${settingsName}」，以后改了设置，故事里也跟着变` : '设置里还没填名字，故事里就叫你「你」；以后在设置里填了，就跟着变'}」；再给两三个合这个世界的名字，sample 写一句角色喊这个名字的话。用户选了、说了或让你定了名字，草图里记一项 key 为 user_name：value 只写名字本身，用设置里的名字就写「用设置里的名字」。
 - 除了这一问，不替 <user> 起名字；选项的样例和试写里，玩家角色写 <user>，不写名字。
-- 每个问题给 3 到 4 个彼此差别明显的选项。每个选项都要具体，并附一句样例：角色可能说的一句话，或一两句小场景，让用户凭感觉挑。样例要像活人说的话。
+${options?.userGender ? '' : `${USER_GENDER_TALK}
+`}- 每个问题给 3 到 4 个彼此差别明显的选项。每个选项都要具体，并附一句样例：角色可能说的一句话，或一两句小场景，让用户凭感觉挑。样例要像活人说的话。
 - 文风、语气这类难以描述的东西，用 kind 为 taste 的问题：给两到三段同一情境、不同写法的短试写（每段 60 到 120 字），让用户挑喜欢的一段。
 - 用户可能选「你来定」：那就由你挑最合适的一项，在回复里说你选了什么、为什么，并在草图里把这一项的 by 写成 "assistant"。
 - 不偷偷替用户拿主意。你自己补出来的设想写进草图时 by 写 "assistant"；用户亲口说的、选的，by 写 "user"，并尽量保留他的原话。谁补的只写在 by 里，value 只写设定本身，不加「谁补的」「随时可改」这类注明，界面会标出来。
@@ -389,7 +424,7 @@ ${talkWriting(languages)}
 </brief>
 
 kind 取 single（选一个）、multi（可多选）或 taste（试写挑一段，options 的 sample 放试写正文，label 写「第一段」「第二段」）。
-草图的 key 尽量用：stage 舞台、lead 核心角色、user 你的身份、user_name 你的名字、bond 你们的关系、play 玩法、tone 基调、style 文风、cast 配角、track 记录的数值、opening 开场；还没谈到的不要写。`
+草图的 key 尽量用：stage 舞台、lead 核心角色、user 你的身份、user_name 你的名字、user_gender 你的性别、bond 你们的关系、play 玩法、tone 基调、style 文风、cast 配角、track 记录的数值、opening 开场；还没谈到的不要写。`
 
 const LIMITS = { questions: 4, options: 5, items: 14, open: 6 }
 const BY = new Set(['user', 'assistant'])
@@ -783,6 +818,7 @@ const OWN_WORDS = {
     updateRules: '[mvu_update]变量更新规则', updateRulesPurpose: '每个变量什么时候、怎么变',
     updateFormat: '[mvu_update]变量输出格式', updateFormatPurpose: '让模型在回复末尾写出变量更新',
     event: name => `事件_${name}`, eventOnce: '只发生一次：前文已经写过这件事，就把它当作发生过的事，不再重演。',
+    eventOnceMarked: op => `只发生一次：这件事真正写进故事的那一轮，在变量更新的 JSONPatch 里加上 ${op}，之后这一条就不再出现。前文已经写过这件事的，当作发生过的事，不再重演，也照样加上。`,
     perspective: '第三人称', greeting: n => `开场 ${n}`, separator: '；',
   },
   en: {
@@ -801,6 +837,7 @@ const OWN_WORDS = {
     updateRules: '[mvu_update] Variable update rules', updateRulesPurpose: 'when and how each variable changes',
     updateFormat: '[mvu_update] Variable output format', updateFormatPurpose: 'has the model write the variable updates at the end of its reply',
     event: name => `Event_${name}`, eventOnce: 'This happens once: if the story has already shown it, treat it as something that happened and do not play it again.',
+    eventOnceMarked: op => `This happens once: in the turn the story really shows it, put ${op} in the JSONPatch of the variable update, and this entry will not come again. If the story has already shown it, treat it as something that happened, do not play it again, and add it all the same.`,
     perspective: 'Third person', greeting: n => `Greeting ${n}`, separator: '; ',
   },
 }

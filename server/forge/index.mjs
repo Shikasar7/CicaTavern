@@ -22,26 +22,31 @@ import { createHash } from 'node:crypto'
 import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import YAML from 'yaml'
-import { cardSummary, normalizeCard, rulebookOf, writeCardPng } from '../cards.mjs'
+import { cardSummary, normalizeCard, pictureMark, rulebookOf, writeCardPng } from '../cards.mjs'
+import { madeAt } from '../draw-history.mjs'
+import { helperSummary } from '../helper-scripts.mjs'
 import { cleanCardMedia, drawChoiceOf } from '../media.mjs'
 import { complete, isProviderRef, providerError, refLabel, resolveRef } from '../providers.mjs'
+import { estimateTokens } from '../context.mjs'
+import { estimateCost } from '../models.mjs'
 import { httpError, newId } from '../store.mjs'
 import { renderTemplate } from '../template.mjs'
-import { PLAN_ANGLES, chosenUserName, cleanCardOptions, cleanGreetingCount, discussRequest, editBrief, editTracking, editUserName, emptyBrief, englishCard, forgeLanguages, ideaSeeds, ideasRequest, partialReply, planLanguage, planRequest, readDiscussion, readIdeas, readPlan, reviseRequest, withCardOptions } from './prompts.mjs'
+import { PLAN_ANGLES, chosenUserGender, chosenUserName, cleanCardOptions, cleanGreetingCount, discussRequest, editBrief, editTracking, editUserGender, editUserName, emptyBrief, englishCard, forgeLanguages, ideaSeeds, ideasRequest, partialReply, planLanguage, planRequest, readDiscussion, readIdeas, readPlan, reviseRequest, withCardOptions } from './prompts.mjs'
 import { brickCost } from './bricks.mjs'
-import { alignCard, applyIssues, cardJson, entriesRequest, greetingsRequest, initialState, lintCard, matchWritten, newCard, previewDynamics, readIssues, readTagged, retrack, reviewRequest, rewriteRequest, stepDone, userTagged, writeSteps } from './write.mjs'
+import { alignCard, applyIssues, cardJson, entriesRequest, greetingsRequest, initialState, lintCard, matchWritten, newCard, previewDynamics, readIssues, readTagged, redescribe, retrack, reviewRequest, rewriteRequest, stepDone, userTagged, writeSteps } from './write.mjs'
 import { applyChanges, editRequest, ensureBook, readEdit } from './edit.mjs'
 import { claimsChanges, missingNote } from './blocks.mjs'
 import { applyBookChanges, bookEditRequest, bookTooLong, pickRequest, readBookEdit, readPicked } from './book-edit.mjs'
 import { applyPresetChanges, presetEditRequest, presetPickRequest, presetTooLong, readPickedPrompts, readPresetEdit } from './preset-edit.mjs'
 import { applyRegexChanges, readRegexEdit, regexEditRequest, tryChanges } from './regex-edit.mjs'
 import { cleanThemeContext, readThemeEdit, themeApplier, themeEditRequest } from './theme-edit.mjs'
-import { createCheck } from './check-session.mjs'
-import { createTrial } from './trial.mjs'
+import { createCheck, helpersOf } from './check-session.mjs'
+import { createTrial, trialSessionId } from './trial.mjs'
 import { cleanScripts } from '../regex.mjs'
 import { isBuiltinPreset } from '../../web/shared/basic.js'
 import { currentLanguage, msg } from '../i18n.mjs'
-import { asMaterial, chatReference, cleanReferences, creditsOf, readReference, referenceView, withMode, withReference } from './references.mjs'
+import { chatReference, creditsOf, keptMaterial, readMaterial, readReference, referenceView, studying, withMode, withReference } from './references.mjs'
+import { structureText } from './structure.mjs'
 
 const ID = /^[a-zA-Z0-9_-]{1,64}$/
 const EDIT = 'edit-'
@@ -57,8 +62,16 @@ const FIX_PIECES = 6
 const STEP_TRIES = 2
 
 const clip = (value, max) => (typeof value === 'string' ? value.trim().slice(0, max) : '')
+const sum = (list, key) => list.reduce((total, item) => total + (item[key] ?? 0), 0)
 /** A draft's picks about the card (a draft from before them: its card type, mapped). */
 const optionsOf = draft => cleanCardOptions(draft.options, draft.cardType)
+/** What a save writes from a draft, to tell the page the draft changed after it (试玩体检 plays the saved card). */
+const savedStamp = draft => createHash('sha1').update(JSON.stringify([draft.plan, draft.card.entries, draft.card.greetings, draft.card.description, draft.card.creatorNotes, draft.card.avatar?.at ?? null])).digest('hex').slice(0, 16)
+// What of the saved card a save writes over from the draft (配图, worldbooks, group stay): changed here since the
+// last save means it was edited elsewhere (修改角色卡, 检查这张卡), and saving again would undo that. The picture
+// is too, and is marked apart (savedPicture, pictureMark).
+const WRITTEN = ['name', 'description', 'personality', 'scenario', 'firstMes', 'alternateGreetings', 'mesExample', 'systemPrompt', 'postHistoryInstructions', 'creatorNotes', 'creator', 'tags', 'book', 'regexScripts', 'depthPrompt', 'mvuSchema', 'statusBar', 'userName']
+const writtenMark = card => createHash('sha1').update(JSON.stringify(WRITTEN.map(key => card[key] ?? null))).digest('hex').slice(0, 16)
 
 /** The image type of a picture's bytes. */
 function imageType(buffer) {
@@ -78,8 +91,9 @@ function imageType(buffer) {
  *   配图 is set up; storeBackdrop(buffer) → its file name (主题 → 对话修改, theme-edit.mjs).
  * @param writeChatState - (chatId, [{ path, value }]) → { chat, lost }: variables a proposal puts into a chat it read;
  *   `lost`, the ones the card's variable rules will not keep.
+ * @param history - createDrawHistory() (抽图历史): where a saved card's picture goes when 更新这张卡 replaces one set elsewhere.
  */
-export function createForge(store, { proxyNow = () => null, ledger = null, engine = null, draw = null, drawBackdrop = null, storeBackdrop = null, rulebooks = null, writeChatState = null } = {}) {
+export function createForge(store, { proxyNow = () => null, ledger = null, engine = null, draw = null, drawBackdrop = null, storeBackdrop = null, rulebooks = null, writeChatState = null, history = null } = {}) {
   const dir = path.join(store.dirs.root, 'forge')
   const fileOf = id => {
     if (!ID.test(String(id))) throw httpError(400, msg`无效的 ID`)
@@ -159,6 +173,8 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
       id: step.id,
       label: step.label,
       state: stepDone(step, draft.card) ? 'done' : job?.step === step.id ? 'running' : step === next && draft.error?.kind === 'write' ? 'failed' : 'waiting',
+      // Written by a model picked for a retry, not the draft's own.
+      by: stepDone(step, draft.card) ? draft.card.stepModels?.[step.id] ?? null : null,
     }))
   }
 
@@ -208,6 +224,8 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
             avatar: card.avatar,
             savedCardId: card.savedCardId,
             savedAt: card.savedAt ?? null,
+            // A draft saved before the stamp was kept: not known, so not said.
+            changedSinceSave: Boolean(card.savedCardId && card.savedStamp) && card.savedStamp !== savedStamp(draft),
             writtenAt: card.writtenAt ?? null,
           }
         : null,
@@ -238,12 +256,16 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
     return null
   }
 
-  /** The provider model the draft talks to: its own pick, else the default model. */
-  async function target(draft) {
-    const ref = draft.model || (await store.getSettings()).model
+  /** The provider model the draft talks to: its own pick, else the default model; `other`, one picked for a retry instead. */
+  async function target(draft, other = '') {
+    const ref = other || draft.model || (await store.getSettings()).model
     if (!isProviderRef(ref)) throw httpError(400, msg`先选一个模型：在「模型供应商」里添加供应商，再在这里或设置里选一个模型`)
-    return { ...resolveRef(ref, await store.getProviders()), ref }
+    const providers = await store.getProviders()
+    return { ...resolveRef(ref, providers), ref, label: refLabel(ref, providers) ?? ref }
   }
+
+  /** Tokens a request comes to, roughly, before it is sent. */
+  const requestTokens = request => estimateTokens(`${request.system ?? ''}${(request.messages ?? []).map(m => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content))).join('')}`)
 
   /**
    * Run a job in the background. `work(ctx)` gets:
@@ -252,35 +274,50 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
    *   ctx.step(id): which step it is at, for the page;
    *   ctx.signal, ctx.label (the model's name);
    *   ctx.languages: the guide's (the page's) and the card's (写作语言), see prompts.mjs.
-   * A failure lands on the draft as its error, for the page to show.
+   * A failure lands on the draft as its error, for the page to show, with the model that failed and what the
+   * step's calls came to (to price a retry with another model).
+   * `other`: a model picked for this retry only. It writes the step the job starts at; when the job moves on
+   * to the next step the draft's own model takes over, so the retry costs what the page said it would.
    */
-  async function run(draft, kind, work, { model = true } = {}) {
+  async function run(draft, kind, work, { model = true, other = '' } = {}) {
     if (jobs.has(draft.id)) throw httpError(409, msg`上一步还在进行，等它写完或先停下`)
-    const chosen = model ? await target(draft) : null
-    const label = chosen ? (refLabel(chosen.ref, await store.getProviders()) ?? chosen.ref) : ''
+    const swapped = model && other ? await target(draft, other) : null
+    let chosen = model && !swapped ? await target(draft) : swapped
+    let first = null
     const languages = forgeLanguages(currentLanguage(), (await store.getSettings()).language)
-    const job = { kind, step: null, controller: new AbortController(), partial: '', startedAt: new Date().toISOString() }
+    const job = { kind, step: null, controller: new AbortController(), partial: '', startedAt: new Date().toISOString(), sizes: [] }
     jobs.set(draft.id, job)
     draft.job = { kind, startedAt: job.startedAt }
     draft.error = null
     await serial(draft.id, () => save(draft))
     const ctx = {
-      label,
+      get label() {
+        return chosen?.label ?? ''
+      },
       languages,
       signal: job.controller.signal,
       step: id => {
+        if (swapped && first === null) first = id
+        else if (swapped && id !== first && chosen === swapped) chosen = null
+        if (id !== job.step) job.sizes = []
         job.step = id
       },
       async call(request) {
+        chosen ??= await target(draft)
+        const used = chosen
         job.partial = ''
+        // What this call comes to: the provider's count once it answers, the request and its output cap till then.
+        const size = { input: requestTokens(request), output: request.maxTokens ?? 0, measured: false }
+        job.sizes.push(size)
         let result
         try {
-          result = await complete(chosen.provider, chosen.modelId, { ...request, signal: job.controller.signal, onDelta: delta => (job.partial += delta), onRestart: () => (job.partial = '') }, { proxy: proxyNow() })
+          result = await complete(used.provider, used.modelId, { ...request, signal: job.controller.signal, onDelta: delta => (job.partial += delta), onRestart: () => (job.partial = '') }, { proxy: proxyNow() })
         } catch (error) {
           if (job.controller.signal.aborted || error.status) throw error
-          throw httpError(502, providerError(chosen.provider, error))
+          throw httpError(502, providerError(used.provider, error))
         }
-        unrecorded.push(result)
+        if (result.usage) Object.assign(size, { input: (result.usage.input ?? 0) + (result.usage.cacheRead ?? 0) + (result.usage.cacheWrite ?? 0) || size.input, output: result.usage.output ?? size.output, measured: true })
+        unrecorded.push({ result, ref: used.ref })
         return result
       },
       async update(fn) {
@@ -292,7 +329,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
     // Usage is recorded after the answer is in the draft, so it carries the draft's name.
     const unrecorded = []
     const flush = async () => {
-      for (const result of unrecorded.splice(0)) await record(draft.id, result, chosen.ref).catch(() => {})
+      for (const { result, ref } of unrecorded.splice(0)) await record(draft.id, result, ref).catch(() => {})
     }
     ;(async () => {
       let failure = null
@@ -306,7 +343,18 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
       try {
         await mutate(draft.id, fresh => {
           fresh.job = null
-          if (failure) fresh.error = { kind, message: failure }
+          if (failure) {
+            fresh.error = { kind, message: failure }
+            if (model) {
+              fresh.error.model = chosen?.ref ?? ''
+              if (job.sizes.length) fresh.error.size = { input: sum(job.sizes, 'input'), output: sum(job.sizes, 'output'), measured: job.sizes.every(s => s.measured) }
+            }
+          }
+          // A writing step done by the other model: the page says which model wrote it.
+          if (swapped && kind === 'write' && first && fresh.plan && fresh.card) {
+            const step = writeSteps(fresh.plan, fresh.card).find(s => s.id === first)
+            if (step && stepDone(step, fresh.card)) fresh.card.stepModels = { ...fresh.card.stepModels, [first]: swapped.label }
+          }
         }).catch(() => {})
         await flush()
       } finally {
@@ -347,7 +395,9 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
       const read = readDiscussion(result.text, fresh.brief)
       if (!read.reply && !read.questions.length) throw new Error(msg`${ctx.label} 这次没有回出能读的内容${cutNote(result)}，再试一次，或者换个模型`)
       fresh.rounds.at(-1).assistant = { raw: result.text, reply: read.reply, questions: read.questions, model: ctx.label, at: new Date().toISOString(), unreadable: !read.readable }
+      const briefBefore = fresh.brief
       fresh.brief = read.brief
+      followGender(fresh, briefBefore)
     })
   }
 
@@ -413,6 +463,22 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
   /** The draft's plan changed by hand: the version it was picked from follows, so going back to it keeps the change. */
   function keepPick(draft) {
     if (draft.planOptions?.[draft.planPick]) draft.planOptions[draft.planPick].plan = draft.plan
+  }
+
+  /**
+   * 你的性别 is one value for the talk, the plan and the card. Said in the talk (the sketch's user_gender, when
+   * that changed), the picks take it; the plan follows the picks (unless `plan` is false: a step is writing from
+   * it), and a written card's description, built in code and rewritten nowhere else, follows the plan.
+   */
+  function followGender(draft, briefBefore, plan = true) {
+    const said = chosenUserGender(draft.brief)
+    if (said !== null && said !== chosenUserGender(briefBefore)) draft.options = cleanCardOptions({ ...optionsOf(draft), userGender: said })
+    const gender = optionsOf(draft).userGender ?? ''
+    if (!plan || !draft.plan || (draft.plan.user_role.gender ?? '') === gender) return
+    const before = draft.plan
+    draft.plan = editUserGender(draft.plan, gender)
+    keepPick(draft)
+    if (draft.card) draft.card = redescribe(draft.card, before, draft.plan)
   }
 
   /** What the user picked in a round, checked against that round's questions. */
@@ -483,7 +549,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
   }
 
   async function review(ctx, plan, card) {
-    const result = await ctx.call(reviewRequest(card, lintCard(card, plan.verbatim), planLanguage(plan)))
+    const result = await ctx.call(reviewRequest(card, lintCard(card, plan.verbatim), planLanguage(plan), plan))
     const issues = readIssues(result.text)
     await ctx.update(fresh => {
       const left = applyIssues(fresh.card, issues, planLanguage(plan))
@@ -574,13 +640,13 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
     return draft
   }
 
-  async function startWrite(draft) {
+  async function startWrite(draft, other = '') {
     draft.stage = 'write'
-    await run(draft, 'write', ctx => writeWork(ctx, draft.id))
+    await run(draft, 'write', ctx => writeWork(ctx, draft.id), { other })
     return view(draft)
   }
 
-  async function startRewrite(draft, target, note) {
+  async function startRewrite(draft, target, note, other = '') {
     const pieces = piecesOf(draft.card, { [target]: [{ type: '', original: '', suggestion: note }] }).map(p => ({ ...p, issues: null, note }))
     if (!pieces.length) throw httpError(400, msg`找不到要改的那一段，或者它还是空的`)
     draft.lastRewrite = { target, note }
@@ -592,7 +658,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
         fresh.card.checks = lintCard(fresh.card, fresh.plan.verbatim)
         fresh.lastRewrite = null
       })
-    })
+    }, { other })
     return view(draft)
   }
 
@@ -635,9 +701,12 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
       title: name => msg`修改：${name}`,
       async load(id) {
         const card = await store.getCard(id)
-        return { subject: card, name: card.name }
+        const scripts = await helpersOf(store, card)
+        const list = scripts ? helperSummary(scripts) : card.helperList ?? []
+        return { subject: card, name: card.name, helpers: { list, scripts } }
       },
       save: loaded => store.saveCard(loaded.subject),
+      restore: (loaded, snapshot) => snapshot,
       request: editRequest,
       read: readEdit,
       // A variable for the chat that was read goes there; the rest into the card.
@@ -648,6 +717,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
         const { chat, lost } = await writeChatState(variables[0].chatId, variables)
         return { ...done, applied: done.applied + variables.length, chat, lost }
       },
+      undo: true,
       references: true,
     },
     book: {
@@ -837,7 +907,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
       asked.picked = spec.readPick(looked.text, loaded.subject)
     }
     ctx.step('edit')
-    const { request, shown } = spec.request(loaded.subject, asked)
+    const { request, shown } = spec.request(loaded.subject, { ...asked, helpers: loaded.helpers })
     const readAnswer = answer => spec.read(answer.text, loaded.subject, { shown, target: turn.user.target, own: loaded.own === true, context: asked.context, references })
     let result = await ctx.call(request)
     let read = readAnswer(result)
@@ -863,8 +933,8 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
 
   return {
     // 角色卡自检: a session of its own beside the card's 对话修改 one.
-    ...createCheck({ store, load, save, serial, run, jobs, removeFile: id => rm(fileOf(id), { force: true }), cutNote }),
-    ...createTrial({ store, engine, load, save, serial, run, jobs, removeFile: id => rm(fileOf(id), { force: true }), cutNote }),
+    ...createCheck({ store, load, save, serial, run, jobs, removeFile: id => rm(fileOf(id), { force: true }), cutNote, trialReport: async cardId => (await load(trialSessionId(cardId)).catch(() => null))?.report ?? null }),
+    ...createTrial({ store, engine, load, save, serial, run, jobs, removeFile: id => rm(fileOf(id), { force: true }), cutNote, rulebooks }),
 
     busy: () => jobs.size > 0,
 
@@ -937,10 +1007,12 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
         if (!chosen.length) throw httpError(400, msg`先勾选要采用的修改`)
         const before = spec.undo ? structuredClone(loaded.subject) : null
         const { applied, prefix, chat, lost } = await spec.apply(loaded.subject, changes, chosen)
+        // Only a chat's variables went in: the card is as it was, and those are not this undo's to take back.
+        const touched = before && stamp(before) !== stamp(loaded.subject)
         await spec.save(loaded)
         const at = new Date().toISOString()
         turn.outcome = { applied: chosen, at }
-        session.undo = before ? { at, before, after: stamp(loaded.subject), prefix } : null
+        session.undo = touched ? { at, before, after: stamp(loaded.subject), prefix, ...(chat ? { chatKept: true } : {}) } : null
         return { session: talkView(session), subject: loaded.subject, holder: loaded.holder ?? null, applied, prefix, chat, lost }
       }).finally(() => talkBusy.delete(key))
     },
@@ -958,7 +1030,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
         await spec.save(loaded)
         turn.outcome = { ...turn.outcome, undone: true }
         session.undo = null
-        return { session: talkView(session), subject: loaded.subject, holder: loaded.holder ?? null, prefix: undo.prefix }
+        return { session: talkView(session), subject: loaded.subject, holder: loaded.holder ?? null, prefix: undo.prefix, chatKept: undo.chatKept === true }
       })
     },
 
@@ -1044,7 +1116,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
      * @param references - what readReference gave the page before there was a draft.
      */
     async create({ text, model, cardType, options, references } = {}) {
-      const kept = cleanReferences(references).map(asMaterial)
+      const kept = keptMaterial(references)
       const idea = clip(text, MAX_TEXT) || (kept.length ? msg`我附了一些资料，想用它们做一张卡` : '')
       if (!idea) throw httpError(400, msg`先说说你想要一张什么样的卡，一句话也行`)
       const now = new Date().toISOString()
@@ -1054,11 +1126,15 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
       return view(draft)
     },
 
-    /** A file read before there is a draft to put it on: the page keeps it. `have`, how long the ones it keeps are. */
+    /**
+     * A file read before there is a draft to put it on: the page keeps it. `have`, how long the ones it keeps are.
+     * `direct`, for 直连对话 and not a card to make: what is attached there is read as it is.
+     */
     readReference(body = {}) {
-      const reference = asMaterial(readReference(body))
+      const reference = body.direct === true ? readReference(body) : readMaterial(body)
       withReference((Array.isArray(body.have) ? body.have : []).map(chars => ({ chars: Number(chars) || 0 })), reference)
-      return reference
+      // A card the wizard only studies: what the model gets of it, for the page to show (its text stays for 使用原文).
+      return reference.structure && body.direct !== true ? { ...reference, brief: structureText(reference.structure) } : reference
     },
 
     /**
@@ -1078,7 +1154,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
     /** More material for a draft: the next round, plan and writing read it too. */
     async addReference(id, body = {}) {
       if (jobs.has(id)) throw httpError(409, msg`上一步还在进行，等它写完或先停下`)
-      const reference = asMaterial(readReference(body))
+      const reference = readMaterial(body)
       return view(await mutate(id, draft => {
         draft.references = withReference(draft.references ?? [], reference)
       }))
@@ -1088,7 +1164,8 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
     async referenceText(id, referenceId) {
       const reference = ((await load(id)).references ?? []).find(item => item.id === referenceId)
       if (!reference) throw httpError(404, msg`这份资料已经去掉了`)
-      return { ...referenceView(reference), text: reference.text }
+      // Only its structure goes to the model: that is what there is to read.
+      return { ...referenceView(reference), text: studying(reference) ? structureText(reference.structure) : reference.text }
     },
 
     async dropReference(id, referenceId) {
@@ -1112,18 +1189,39 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
       return view(draft)
     },
 
-    /** Do the failed (or interrupted) job again; in talk, a round can also be asked again for other questions. */
-    async retry(id) {
+    /**
+     * Do the failed (or interrupted) job again; in talk, a round can also be asked again for other questions.
+     * `model`: another model for this retry only (the draft keeps its own; nothing is sent until the user asks).
+     */
+    async retry(id, { model } = {}) {
       const draft = await load(id)
+      const other = clip(model, 200)
       const kind = draft.error?.kind ?? (draft.stage === 'plan' ? 'plan' : 'discuss')
-      if (kind === 'plan') return draft.planPending ? this.revise(id, draft.planPending) : this.plan(id, { variants: draft.planVariants === true })
-      if (kind === 'write') return startWrite(draft)
-      if (kind === 'rewrite' && draft.lastRewrite) return startRewrite(draft, draft.lastRewrite.target, draft.lastRewrite.note)
+      if (kind === 'plan') return draft.planPending ? this.revise(id, draft.planPending, { other }) : this.plan(id, { variants: draft.planVariants === true }, { other })
+      if (kind === 'write') {
+        // Same as 接着写: another version may have been picked since, so the card follows the plan first.
+        if (draft.card && draft.plan) draft.card = alignCard(draft.card, draft.plan)
+        return startWrite(draft, other)
+      }
+      if (kind === 'rewrite' && draft.lastRewrite) return startRewrite(draft, draft.lastRewrite.target, draft.lastRewrite.note, other)
       if (kind === 'avatar') return startAvatar(draft, draft.lastAvatar?.description, draft.lastAvatar?.choice)
       const last = draft.rounds.at(-1)
       if (last.assistant) last.assistant = null
-      await run(draft, 'discuss', ctx => discussWork(ctx, draft))
+      await run(draft, 'discuss', ctx => discussWork(ctx, draft), { other })
       return view(draft)
+    },
+
+    /**
+     * What 换这个模型重写 would come to: the failed step's calls as they went last time, priced for `model`
+     * (cost null for a model with no known price; tokens null for an error saved before they were kept).
+     */
+    async retryEstimate(id, { model } = {}) {
+      const draft = await load(id)
+      const other = clip(model, 200)
+      if (!other) throw httpError(400, msg`先选一个模型`)
+      const chosen = await target(draft, other)
+      const size = draft.error?.size ?? null
+      return { model: chosen.label, input: size?.input ?? null, output: size?.output ?? null, measured: size?.measured === true, cost: size ? estimateCost(chosen.modelId, size) : null }
     },
 
     /** Take back the last exchange: the user's answer and the reply to it. */
@@ -1139,9 +1237,10 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
     },
 
     /** The user's edits: the model to use, the sketch (values, locks, title), the stage to look at. */
-    async update(id, { model, brief, stage, tracking, userName, cardType, options, greetingCount, planPick } = {}) {
-      if (((tracking && typeof tracking === 'object') || typeof userName === 'string' || planPick !== undefined) && jobs.has(id)) throw httpError(409, msg`上一步还在进行，等它写完或先停下`)
+    async update(id, { model, brief, stage, tracking, userName, userGender, cardType, options, greetingCount, planPick } = {}) {
+      if (((tracking && typeof tracking === 'object') || typeof userName === 'string' || typeof userGender === 'string' || planPick !== undefined) && jobs.has(id)) throw httpError(409, msg`上一步还在进行，等它写完或先停下`)
       const draft = await mutate(id, draft => {
+        const briefBefore = draft.brief
         if (typeof model === 'string') draft.model = clip(model, 200)
         if (brief && typeof brief === 'object') draft.brief = editBrief(draft.brief, brief)
         // What kind of card, and how many openings: the next round and the next plan go by them.
@@ -1155,6 +1254,14 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
           draft.planPick = Number(planPick)
           draft.plan = option.plan
         }
+        // The player's gender set in the plan: the picks take it too, so a revision keeps it.
+        if (typeof userGender === 'string') {
+          if (!draft.plan) throw httpError(409, msg`还没有方案`)
+          draft.options = cleanCardOptions({ ...optionsOf(draft), userGender })
+        }
+        // 你的性别 is one pick for the talk, the plan and the card: they follow it wherever it was changed (the
+        // sketch's picks or its item, the plan, another version), unless a step is still writing from the plan.
+        followGender(draft, briefBefore, !jobs.has(id))
         // The plan's status bar editor: variables edited by hand, no model call. A card
         // already written gets its state entries again from them.
         if (tracking && typeof tracking === 'object') {
@@ -1181,7 +1288,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
      * Write the talk up as a plan; `variants` (出三版来挑): three versions at once, to pick one;
      * `missing`: only the versions that did not come last time, added to the others.
      */
-    async plan(id, { variants = false, missing = false } = {}) {
+    async plan(id, { variants = false, missing = false } = {}, { other = '' } = {}) {
       const draft = await load(id)
       if (!draft.rounds.some(r => r.assistant)) throw httpError(409, msg`先聊一轮再出方案`)
       // The last answer may still be waiting for a reply: plan from what was said.
@@ -1193,7 +1300,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
       draft.planVariants = variants === true
       await run(draft, 'plan', ctx => (variants === true
         ? planOptionsWork(ctx, rounds, draft.brief, options, names, only)
-        : planWork(ctx, planRequest(rounds, draft.brief, ctx.languages, options), ctx.languages.card, names)))
+        : planWork(ctx, planRequest(rounds, draft.brief, ctx.languages, options), ctx.languages.card, names)), { other })
       return view(draft)
     },
 
@@ -1221,7 +1328,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
     },
 
     /** Revise the plan by the user's comments (per section and overall). */
-    async revise(id, { text, notes } = {}) {
+    async revise(id, { text, notes } = {}, { other = '' } = {}) {
       const draft = await load(id)
       if (!draft.plan) throw httpError(409, msg`还没有方案`)
       const cleanNotes = (Array.isArray(notes) ? notes : []).map(n => ({ section: clip(n?.section, 40), text: clip(n?.text, 1000) })).filter(n => n.section && n.text)
@@ -1230,7 +1337,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
       draft.planNotes = [...(draft.planNotes ?? []), { at: new Date().toISOString(), text: general, notes: cleanNotes }].slice(-20)
       draft.planPending = { text: general, notes: cleanNotes }
       const names = { userName: draft.plan.user_role.name ?? '', said: [general, ...cleanNotes.map(n => n.text)].join('\n') }
-      await run(draft, 'plan', ctx => planWork(ctx, reviseRequest(draft.rounds.filter(r => r.assistant), draft.plan, { text: general, notes: cleanNotes }, { options: optionsOf(draft), references: draft.references }), planLanguage(draft.plan), names))
+      await run(draft, 'plan', ctx => planWork(ctx, reviseRequest(draft.rounds.filter(r => r.assistant), draft.plan, { text: general, notes: cleanNotes }, { options: optionsOf(draft), references: draft.references }), planLanguage(draft.plan), names), { other })
       return view(draft)
     },
 
@@ -1244,7 +1351,9 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
       if (!draft.card || restart) {
         const avatar = draft.card?.avatar ?? null
         const savedCardId = draft.card?.savedCardId ?? null
-        draft.card = { ...newCard(draft.plan), avatar, savedCardId }
+        // When it was saved stays: the card in the list is still that one, and the rewrite shows as not saved.
+        const saved = savedCardId ? { savedAt: draft.card.savedAt ?? null, savedStamp: draft.card.savedStamp ?? null, savedMark: draft.card.savedMark ?? null, savedPicture: draft.card.savedPicture ?? null } : {}
+        draft.card = { ...newCard(draft.plan), avatar, savedCardId, ...saved }
       } else {
         // The plan may have been revised since the card was started: what is written stays, the rest follows the plan.
         draft.card = alignCard(draft.card, draft.plan)
@@ -1318,17 +1427,28 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
      * Save as a card: the page sends the avatar as PNG (drawn, uploaded or a name
      * card it made), the card goes into it as SillyTavern does. Saving again
      * updates the same card in place; its chats and settings stay.
+     * `ask`: when the saved card was edited elsewhere since, nothing is saved and the answer says so, for the
+     * page to confirm and send again without it (a page from before this sends none and saves as it always did).
      */
-    async saveCard(id, { avatar } = {}) {
+    async saveCard(id, { avatar, ask = false } = {}) {
       const draft = await requireCard(id)
       if (jobs.has(id)) throw httpError(409, msg`正在写，等它写完再保存`)
       if (!draft.card.greetings.some(g => g.text)) throw httpError(409, msg`开场白还没写`)
       const match = IMAGE.exec(String(avatar ?? ''))
       if (!match || match[1] !== 'png') throw httpError(400, msg`头像要转成 PNG 再保存`)
+      const old = draft.card.savedCardId ? await store.getCard(draft.card.savedCardId).catch(() => null) : null
+      // The saved card's picture: the save writes the draft's over it, so one set elsewhere counts as an edit too.
+      const before = old?.hasAvatar ? await readFile(store.avatarPath(old.id)).catch(() => null) : null
+      const beforeMark = pictureMark(before)
+      // A draft saved before the marks were kept cannot tell, and is not asked about.
+      const textChanged = Boolean(old && draft.card.savedMark && draft.card.savedMark !== writtenMark(old))
+      const pictureChanged = Boolean(old && draft.card.savedPicture && draft.card.savedPicture !== beforeMark)
+      if (ask && (textChanged || pictureChanged)) return { changedElsewhere: true, pictureChanged, card: cardSummary(old) }
       const raw = cardJson(draft.plan, draft.card, { author: (await store.getPersona()).name, credits: creditsFor(draft) })
       const png = writeCardPng(Buffer.from(match[2], 'base64'), raw)
+      // The picture it replaces, when not the one the last save wrote, goes into 抽图历史 as 修改角色卡's 换头像 does.
+      if (beforeMark && beforeMark !== (draft.card.savedPicture ?? pictureMark(png))) await history?.push(old.id, 'avatar', { buffer: before, at: await madeAt(store.avatarPath(old.id)), source: 'avatar' })
       const card = normalizeCard(raw)
-      const old = draft.card.savedCardId ? await store.getCard(draft.card.savedCardId).catch(() => null) : null
       // The plan's art style becomes the card's 画风 (配图), so its sprites and backgrounds agree; one set in 配图 stays.
       const style = draft.plan.avatar?.style ?? ''
       if (old) Object.assign(card, { id: old.id, media: { ...old.media, style: old.media?.style || style, roster: cleanCardMedia({ roster: mergeRoster(old.media?.roster, draft.plan) }).roster }, worldbookIds: old.worldbookIds ?? [], importedAt: old.importedAt, group: old.group ?? '', archived: old.archived === true })
@@ -1341,6 +1461,10 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
       const saved = await mutate(id, fresh => {
         fresh.card.savedCardId = card.id
         fresh.card.savedAt = new Date().toISOString()
+        // Of the draft as written into the card (an edit that came in during the save shows as changed).
+        fresh.card.savedStamp = savedStamp(draft)
+        fresh.card.savedMark = writtenMark(card)
+        fresh.card.savedPicture = pictureMark(png)
       })
       return { card: cardSummary(card), updated: Boolean(old), draft: view(saved) }
     },

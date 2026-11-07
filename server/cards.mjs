@@ -1,5 +1,6 @@
 // SillyTavern character card import: PNG (tEXt/iTXt "ccv3" or "chara") and
 // raw JSON (V1 flat, V2/V3 `{ spec, data }`).
+import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { inflateSync } from 'node:zlib'
 import { normalizeBook } from './worldbook.mjs'
@@ -9,6 +10,7 @@ import { DIRECT_CARD } from '../web/shared/basic.js'
 import { cleanStatusSpec } from '../web/shared/status.js'
 import { msg } from './i18n.mjs'
 import { usesMvu } from './mvu.mjs'
+import { cleanHelperList, helperSummary } from './helper-scripts.mjs'
 import { helperScriptsOf, schemaScript } from './schema.mjs'
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
@@ -86,7 +88,15 @@ function chunk(type, data) {
  */
 export function writeCardPng(png, card) {
   if (png.length < 8 || !png.subarray(0, 8).equals(PNG_SIGNATURE)) throw httpError(400, msg`头像不是 PNG`)
-  const kept = [png.subarray(0, 8)]
+  const kept = [png.subarray(0, 8), ...pictureChunks(png)]
+  const text = (keyword, value) => chunk('tEXt', Buffer.concat([Buffer.from(keyword, 'latin1'), Buffer.from([0]), Buffer.from(Buffer.from(JSON.stringify(value), 'utf8').toString('base64'), 'latin1')]))
+  const v2 = { ...card, spec: 'chara_card_v2', spec_version: '2.0' }
+  return Buffer.concat([...kept, text('chara', v2), text('ccv3', card), chunk('IEND', Buffer.alloc(0))])
+}
+
+/** A PNG's chunks before IEND, less the card ones: the picture itself. */
+function pictureChunks(png) {
+  const kept = []
   let offset = 8
   while (offset + 12 <= png.length) {
     const length = png.readUInt32BE(offset)
@@ -100,9 +110,19 @@ export function writeCardPng(png, card) {
     }
     kept.push(whole)
   }
-  const text = (keyword, value) => chunk('tEXt', Buffer.concat([Buffer.from(keyword, 'latin1'), Buffer.from([0]), Buffer.from(Buffer.from(JSON.stringify(value), 'utf8').toString('base64'), 'latin1')]))
-  const v2 = { ...card, spec: 'chara_card_v2', spec_version: '2.0' }
-  return Buffer.concat([...kept, text('chara', v2), text('ccv3', card), chunk('IEND', Buffer.alloc(0))])
+  return kept
+}
+
+/**
+ * A short hash of a card's picture apart from the card text in it, which every edit of the card rewrites;
+ * null for none. Not a PNG (a picture set by hand): the whole file.
+ */
+export function pictureMark(buffer) {
+  if (!buffer?.length) return null
+  const isPng = buffer.length >= 8 && buffer.subarray(0, 8).equals(PNG_SIGNATURE)
+  const hash = createHash('sha1')
+  for (const part of isPng ? pictureChunks(buffer) : [buffer]) hash.update(part)
+  return hash.digest('hex').slice(0, 16)
 }
 
 function decodeCardPayload(text) {
@@ -178,6 +198,7 @@ function ownCardFields(card) {
     regexScripts: withUniqueIds(normalizeScripts(card.regexScripts)),
     depthPrompt: str(card.depthPrompt),
     helperScripts: Number.isInteger(card.helperScripts) && card.helperScripts > 0 ? card.helperScripts : 0,
+    helperList: cleanHelperList(card.helperList),
     statusBar: cleanStatusSpec(card.statusBar),
     userName: str(card.userName).trim().slice(0, 24),
   }
@@ -236,6 +257,8 @@ export function normalizeCard(raw) {
     depthPrompt: str(extensions.depth_prompt?.prompt),
     // Tavern Helper scripts are not run; MVU behaviour is built in, and a schema among them is kept to (schema.mjs).
     helperScripts: helperScriptsOf(extensions).length,
+    // What they are, for a card whose picture is not the file it came in (a JSON, an avatar changed since).
+    helperList: helperSummary(helperScriptsOf(extensions)),
     mvuSchema: schemaScript(extensions),
     // The status bar layout a card creator card carries (web/shared/status.js); the page draws it.
     statusBar: cleanStatusSpec(extensions.cicatavern?.status_bar),

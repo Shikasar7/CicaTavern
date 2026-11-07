@@ -39,7 +39,17 @@ export const BASIC_DEFAULTS = Object.freeze({
   choices: 'four',
   timeBox: 'on',
   statusBar: 'auto',
+  // 正文字数: the range a reply's story picks its length from, in characters; 0 is no bound on that side.
+  lengthMin: 0,
+  lengthMax: 0,
 })
+
+/** The most 正文字数 can ask for. */
+export const MAX_LENGTH = 20000
+const lengthCount = value => {
+  const n = Math.round(Number(value))
+  return Number.isFinite(n) && n > 0 ? Math.min(n, MAX_LENGTH) : 0
+}
 
 // Values that went, and the closest one left. 白描 (up to 2.3.2) read the same as 淡然 and 电影感.
 const REPLACED = Object.freeze({ style: { plain: 'calm' } })
@@ -51,8 +61,16 @@ export function cleanBasic(value, options = BASIC_OPTIONS, defaults = BASIC_DEFA
     const saved = REPLACED[key]?.[value?.[key]] ?? value?.[key]
     out[key] = values.includes(saved) ? saved : defaults[key]
   }
+  // 正文字数 is a number, not one of a list; a lower bound above the upper one is the upper one.
+  if ('lengthMax' in defaults) {
+    const max = lengthCount(value?.lengthMax)
+    const min = lengthCount(value?.lengthMin)
+    out.lengthMin = max && min > max ? max : min
+    out.lengthMax = max
+  }
   return out
 }
+
 
 // The visual novel preset (视觉小说预设): the built-in preset's options, saved apart
 // (settings.vn), and its own on how the story is told: more dialogue, short narration,

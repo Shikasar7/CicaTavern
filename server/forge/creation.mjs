@@ -29,9 +29,14 @@ const WORDS = {
 }
 const wordsOf = english => WORDS[english ? 'en' : 'zh']
 
-export const CREATION_TALK = '这张卡开局先让玩家填一张表或抽一抽，再开始故事。和用户商量开局要定哪几件事、每件事有哪些选项。用户说交给你，就按这张卡定。'
+// A points option is part of a variable's path; a pick option goes into one line of a slash command.
+const optionOf = kind => item => (kind === 'points' ? name(String(item ?? ''), 12) : clip(String(item ?? ''), 24).replace(/[|{}$]/g, ' ').trim())
+const optionsOf = (list, kind) => [...new Set((Array.isArray(list) ? list : []).map(optionOf(kind)).filter(Boolean))].slice(0, MAX_OPTIONS)
+const totalOf = value => Math.min(MAX_TOTAL, Math.max(1, Math.round(Number(value)) || 10))
 
-export const creationPlan = root => `方案里多写一个 creation 字段：{"intro": "开局前对玩家说的一句话", "fields": [{"label": "这一项的名字，几个字", "kind": "pick", "options": ["选项"], "note": "一句说明，可以空着", "path": "tracking 里已经有的变量 path，没有就空着"}]}。kind 有三种：pick 从 options 里选一个，text 玩家自己写一小段，points 把 total 点分给 options 里的几项（比如 "total": 10）。fields 2 到 6 个，pick 的 options 3 到 8 个，每个选项写成这个故事里具体的东西，选了会真的改变开局。不问玩家的名字，名字另有地方填，path 用「${root}.这一项」。`
+export const CREATION_TALK ='这张卡开局先让玩家填一张表或抽一抽，再开始故事。和用户商量开局要定哪几件事、每件事有哪些选项。用户说交给你，就按这张卡定。'
+
+export const creationPlan = root => `方案里多写一个 creation 字段：{"intro": "开局前对玩家说的一句话", "fields": [{"label": "这一项的名字，几个字", "kind": "pick", "options": ["选项"], "note": "一句说明，可以空着", "path": "tracking 里已经有、意思就是这一项的变量 path（比如「出身」对「主角.出身」），意思不同的不要借用，没有就空着，会另建一个"}]}。kind 有三种：pick 从 options 里选一个，text 玩家自己写一小段，points 把 total 点分给 options 里的几项（比如 "total": 10）。fields 2 到 6 个，pick 的 options 3 到 8 个，每个选项写成这个故事里具体的东西，选了会真的改变开局。不问玩家的名字，名字另有地方填，path 用「${root}.这一项」。`
 
 /** The form as a plan keeps it, or null when the model wrote none. */
 export function cleanCreation(raw) {
@@ -41,14 +46,14 @@ export function cleanCreation(raw) {
     .filter(field => field && typeof field === 'object')
     .map(field => {
       const kind = KINDS.includes(field.kind) ? field.kind : 'pick'
-      const options = [...new Set((Array.isArray(field.options) ? field.options : []).map(item => (kind === 'points' ? name(String(item ?? ''), 12) : clip(String(item ?? ''), 24).replace(/[|{}$]/g, ' ').trim())).filter(Boolean))].slice(0, MAX_OPTIONS)
+      const options = optionsOf(field.options, kind)
       const path = clip(field.path, 60).replace(/[{}\s]+/g, '')
       return {
         label: name(field.label, 10),
         kind,
         options: kind === 'text' ? [] : options,
         note: clip(field.note, 60),
-        ...(kind === 'points' ? { total: Math.min(MAX_TOTAL, Math.max(1, Math.round(Number(field.total)) || 10)) } : {}),
+        ...(kind === 'points' ? { total: totalOf(field.total) } : {}),
         ...(path && kind !== 'points' ? { path } : {}),
       }
     })
@@ -83,16 +88,27 @@ export function creationEntry(plan, english) {
   return { name: words.entry, type: '状态', part: 'creation', keywords: [words.mark.trim()], purpose: words.purpose }
 }
 
-/** Where the story starts once the form is in: the first opening the plan has. */
-function startOf(plan) {
+/** Where the story starts once the form is in: the first opening the plan has, its parts apart and the whole closed. */
+function startOf(plan, english) {
   const opening = plan.greetings?.[0]
-  return [opening?.start, opening?.scene, opening?.situation].filter(Boolean).join(' ')
+  const parts = [opening?.start, opening?.scene, opening?.situation].map(part => String(part ?? '').trim().replace(/[。.;；，,\s]+$/, '')).filter(Boolean)
+  return parts.length ? `${parts.join(english ? '; ' : '；')}${english ? '.' : '。'}` : ''
+}
+
+/**
+ * Where each value goes, said so a list keeps being one: a pick written over a list (到过的地方) left it a string for
+ * the rest of the story.
+ */
+function targetLine({ label, path }, kinds, english) {
+  if (kinds.get(path) !== 'list') return `${label} → ${path}`
+  return english ? `${label} → ${path} (a list: add the value to it as one more item, do not replace the list)` : `${label} → ${path}（这是列表：把值加成其中一项，不要把整个列表换掉）`
 }
 
 export function creationText(plan, english, root) {
   const { mark } = wordsOf(english)
-  const map = targets(plan.creation, root).map(({ label, path }) => (english ? `${label} → ${path}` : `${label} → ${path}`)).join(english ? '; ' : '；')
-  const start = startOf(plan)
+  const kinds = new Map((plan.tracking?.variables ?? []).map(variable => [variable.path, variable.type]))
+  const map = targets(plan.creation, root).map(target => targetLine(target, kinds, english)).join(english ? '; ' : '；')
+  const start = startOf(plan, english)
   return english
     ? [
       '<creation_rules>',
@@ -106,7 +122,7 @@ export function creationText(plan, english, root) {
     : [
       '<creation_rules>',
       `这条只在玩家的消息以${mark}开头时有效：那是玩家开局前填好的表，其余时候这条作废。`,
-      '- 表里的值是玩家定的，照用，不改，也不替他补别的。',
+      '- 表里的值是玩家定的，照用，不改，也不替玩家补别的。',
       `- 把这些值写进变量：${map}`,
       `- 这一轮写故事的开场。${start ? `从这里开始：${start}` : ''}玩家选的东西要在开场里看得出来。`,
       '- 表上定了的事不要再问玩家。',
@@ -219,16 +235,44 @@ export function creationScripts(plan, english) {
   ]
 }
 
+/** The script that shows the form, by the id the code gave it; null without one. */
+export const formScript = scripts => (scripts ?? []).find(item => item.id === PAGE_SCRIPT) ?? null
+
+const SPEC_AT = /var SPEC=(\{.*?\});\n/s
+
 /** The form a card carries, from its scripts; null without one. */
 export function creationOf(scripts) {
-  const script = (scripts ?? []).find(item => item.id === PAGE_SCRIPT)
-  const found = /var SPEC=(\{.*?\});\n/s.exec(script?.replaceString ?? '')
+  const found = SPEC_AT.exec(formScript(scripts)?.replaceString ?? '')
   if (!found) return null
   try {
     return JSON.parse(found[1])
   } catch {
     return null
   }
+}
+
+/** The page's text with another form in it; the look around it stays. */
+export const withCreationSpec = (text, spec) => text.replace(SPEC_AT, () => `var SPEC=${JSON.stringify(spec).replace(/</g, '\\u003c')};\n`)
+
+/**
+ * A form with what a model wrote over it ({ fields: [{ label, options?, note?, total? }] }), or null when nothing
+ * changed. A label and its kind stay: the rule and the variables go by them, and a points option is a variable too.
+ */
+export function editCreation(spec, written) {
+  const asked = (Array.isArray(written?.fields) ? written.fields : []).filter(field => field && typeof field === 'object')
+  const fields = spec.fields.map(field => {
+    const ask = asked.find(item => name(String(item.label ?? ''), 10) === field.label)
+    if (!ask) return field
+    const options = field.kind === 'pick' ? optionsOf(ask.options, 'pick') : []
+    return {
+      ...field,
+      ...(options.length >= 2 ? { options } : {}),
+      // Shown with textContent, but it goes through a regex replacement first.
+      ...(typeof ask.note === 'string' ? { note: clip(ask.note, 60).replace(/[{}$]/g, ' ').trim() } : {}),
+      ...(field.kind === 'points' && ask.total !== undefined ? { total: totalOf(ask.total) } : {}),
+    }
+  })
+  return JSON.stringify(fields) === JSON.stringify(spec.fields) ? null : { ...spec, fields }
 }
 
 /** The message the form sends, filled in by chance: what 试玩体检 opens with. */

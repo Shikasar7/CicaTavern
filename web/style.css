@@ -32,6 +32,8 @@
      Each stack ends in Song, which the story always had. */
   --story-font: var(--serif);
   --story-scale: 1;
+  /* 行距 on this device (theme.js applyReading): each story text's line height times this. */
+  --story-leading: 1;
   /* 界面大小 on a computer (theme.js): a zoomed page multiplies viewport lengths too, so each one here is divided by it. */
   --page-zoom: 1;
   --font-hei: "PingFang SC", "HarmonyOS Sans SC", "MiSans", "Microsoft YaHei", "Noto Sans SC", "Noto Sans CJK SC", "Source Han Sans SC", sans-serif;
@@ -288,7 +290,19 @@ label.list-search input[type="search"], label.list-search input[type="search"]:f
 .preset-list li.list-none:hover { background: none; }
 .book-hits { color: var(--accent); font-weight: 600; }
 .card-list, .chat-list { list-style: none; margin: 0; padding: 0 10px; overflow-y: auto; }
-.card-list { max-height: calc(38vh / var(--page-zoom)); }
+.card-list { max-height: var(--card-list-h, calc(38vh / var(--page-zoom))); }
+.short-label { display: none; }
+.pane-actions { display: flex; flex-direction: column; }
+/* Between the two lists: moves the line between them (app.js bindListSplit). */
+.list-split { position: relative; z-index: 1; flex: none; height: 12px; margin-bottom: -6px; display: grid; place-items: center; cursor: ns-resize; touch-action: none; -webkit-user-select: none; user-select: none; }
+.list-split i { width: 44px; height: 3px; border-radius: 3px; background: var(--line); opacity: 0; transition: opacity .2s, width .2s var(--ease), background .15s; }
+.pane.left:hover .list-split i { opacity: .8; }
+.list-split:hover i, .list-split:focus-visible i, .list-split.dragging i { opacity: 1; width: 64px; background: var(--accent); }
+.list-split:focus-visible { outline: none; }
+@media (hover: none) {
+  .list-split { height: 22px; margin-bottom: -10px; }
+  .list-split i { opacity: .7; }
+}
 .chat-list { flex: 1; min-height: 60px; }
 .card-list li, .chat-list li {
   position: relative; display: flex; align-items: center; gap: 12px; padding: 8px 10px; border-radius: 12px; cursor: pointer;
@@ -353,6 +367,8 @@ li:hover .item-del, .item-del:focus-visible { opacity: 1; }
 .pill:hover:not(:disabled) { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); color: var(--ink); }
 .topbar .pill { flex-shrink: 0; }
 .topbar #chat-model { flex-shrink: 1; min-width: 110px; }
+/* The chat's own 思考 (app.js renderThinkingSelect): short, so it keeps its words while the model's pill gives way. */
+.topbar #chat-thinking { flex-shrink: 0; max-width: 180px; }
 select.pill { appearance: none; padding-right: 28px; background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%); background-position: right 14px center, right 10px center; background-size: 4px 4px; background-repeat: no-repeat; }
 .pill.unset { border-style: dashed; }
 /* How full the chat's context is, inside the 压缩 pill (renderChat): tinted from the threshold on. */
@@ -415,7 +431,7 @@ select.pill { appearance: none; padding-right: 28px; background-image: linear-gr
 .msg-head .name { font: 600 13px var(--serif); color: var(--muted); letter-spacing: .06em; }
 .msg.assistant .msg-head .name { color: var(--accent); }
 .msg-body { overflow-wrap: anywhere; }
-.msg.assistant .msg-body { font: calc(17px * var(--story-scale))/2 var(--story-font); letter-spacing: .015em; }
+.msg.assistant .msg-body { font: calc(17px * var(--story-scale))/calc(2 * var(--story-leading)) var(--story-font); letter-spacing: .015em; }
 .msg.assistant .story p { margin: 0 0 .85em; text-indent: 2em; }
 .msg-body p:last-child { margin-bottom: 0; }
 .msg-body strong { font-weight: 600; }
@@ -428,7 +444,7 @@ select.pill { appearance: none; padding-right: 28px; background-image: linear-gr
 .msg-body .q.reading { background: color-mix(in srgb, var(--lamp) 20%, transparent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--lamp) 20%, transparent); }
 .msg-body .story + .story, .msg-body .card-frame + .story, .msg-body .story + .card-frame { margin-top: .85em; }
 .msg.user { padding: 2px 0 2px 16px; border-left: 2px solid color-mix(in srgb, var(--accent) 55%, transparent); }
-.msg.user .msg-body { font: calc(15px * var(--story-scale))/1.8 var(--ui); color: var(--ink); }
+.msg.user .msg-body { font: calc(15px * var(--story-scale))/calc(1.8 * var(--story-leading)) var(--ui); color: var(--ink); }
 .msg.user .msg-body p { margin: 0 0 .5em; }
 .card-frame { display: block; width: 100%; border: 0; margin: 6px 0; background: transparent; color-scheme: normal; }
 .msg-body pre.code { margin: .6em 0; padding: 10px 12px; background: var(--surface); border: 1px solid var(--line-soft); border-radius: 10px; overflow-x: auto; font: 12px/1.6 var(--mono); white-space: pre-wrap; text-indent: 0; }
@@ -462,6 +478,8 @@ select.pill { appearance: none; padding-right: 28px; background-image: linear-gr
 .status-bar.collapsed { padding-bottom: 10px; }
 .status-bar.collapsed .status-head { margin-bottom: 0; }
 .status-bar.collapsed .status-body { display: none; }
+/* A page of the bar with nothing in this state to show (web/status.js). */
+.status-empty { margin: 4px 0 2px; font-size: 12.5px; color: var(--faint); }
 .status-group + .status-group { margin-top: 9px; padding-top: 9px; border-top: 1px dashed var(--line); }
 .status-group-name { font-size: 11.5px; color: var(--faint); letter-spacing: .12em; margin-bottom: 3px; }
 .status-row { display: grid; grid-template-columns: minmax(3.6em, max-content) minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 26px; }
@@ -965,6 +983,13 @@ html[data-ui-lang="en"] .roll-tier { font-size: 42px; }
 .msg.enter { animation: rise .36s var(--ease) both; }
 .msg.swap .msg-body { animation: fade .3s ease both; }
 /* 长期记忆（Beta）: the 记忆簿 window. */
+/* 正文字数 in the built-in preset's options (basic-options.js basicRange). */
+.range-boxes { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.range-box, .dialog label.range-box { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; margin: 0; font-size: 13px; color: var(--muted); }
+.range-box input { width: 5.6em; }
+.range-dash { color: var(--faint); }
+.memory-switch { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap; margin: 0 0 6px; }
+.memory-switch .check-row { margin: 0; }
 .memory-list { display: flex; flex-direction: column; gap: 14px; max-height: min(calc(62vh / var(--page-zoom)), 640px); overflow: auto; margin: 6px 0 12px; }
 .memory-group h3 { margin: 0 0 6px; font-size: 13px; color: var(--muted); font-weight: 600; }
 .memory-entry { border: 1px solid var(--line-soft); border-radius: 10px; padding: 8px 10px; margin-bottom: 6px; }
@@ -1021,7 +1046,7 @@ html[data-ui-lang="en"] .roll-tier { font-size: 42px; }
   box-shadow: var(--shadow-2); transition: border-color .2s, box-shadow .25s;
 }
 .composer-box:focus-within { border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); box-shadow: var(--shadow-2), 0 0 0 4px var(--accent-soft); }
-.composer textarea { flex: 1; min-width: 0; border: 0; background: transparent; resize: none; outline: none; padding: 7px 0; font: calc(15px * var(--story-scale))/1.7 var(--ui); max-height: calc(40vh / var(--page-zoom)); overflow-y: auto; }
+.composer textarea { flex: 1; min-width: 0; border: 0; background: transparent; resize: none; outline: none; padding: 7px 0; font: calc(15px * var(--story-scale))/calc(1.7 * var(--story-leading)) var(--ui); max-height: calc(40vh / var(--page-zoom)); overflow-y: auto; }
 .composer textarea::placeholder { color: var(--faint); }
 .send {
   width: 38px; height: 38px; flex: none; border-radius: 50%; border: 0; background: var(--accent); color: var(--accent-ink);
@@ -1253,6 +1278,8 @@ dl.usage dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; 
 /* A long preset name wraps; the tags follow it instead of sitting on top of it. */
 .preset-list .item-main { min-width: 0; overflow-wrap: anywhere; }
 .preset-list .tag { font-size: 11px; font-weight: 500; color: var(--accent); background: var(--accent-soft); border-radius: 999px; padding: 0 7px; flex: none; }
+/* A book the chosen card uses (web/books.js navTag). */
+.preset-list .tag.on { color: var(--ok); background: color-mix(in srgb, var(--ok) 13%, transparent); }
 .preset-list .tag.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 13%, transparent); }
 .preset-list .tag.off { color: var(--faint); background: var(--line-soft); }
 .preset-nav-note { padding: 10px 8px 0; margin: 0; color: var(--faint); }
@@ -1408,6 +1435,7 @@ dl.usage dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; 
   .topbar-title { min-width: 60px; }
   .topbar .pill { max-width: 120px; min-width: 0; flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .topbar #chat-model { min-width: 72px; }
+  .topbar #chat-thinking { flex-shrink: 1; min-width: 64px; max-width: 120px; }
   .vn-switch-label { display: none; }
 }
 /* Phones, and what opens out wider than one: a folding phone or a small tablet has the card list as a drawer too.
@@ -1419,6 +1447,12 @@ dl.usage dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; 
     transform: translateX(-105%); transition: transform .32s var(--ease), visibility 0s linear .32s; visibility: hidden;
   }
   .app.show-left .pane.left { transform: none; visibility: visible; transition: transform .32s var(--ease), visibility 0s; }
+  /* The drawer is short: its two big buttons share a row, and the card list leaves the chats more room. */
+  .pane-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 0 14px; }
+  .pane-actions .import { margin: 0; min-width: 0; }
+  .pane-actions .wide-label { display: none; }
+  .pane-actions .short-label { display: inline; }
+  .card-list { max-height: var(--card-list-h, calc(30vh / var(--page-zoom))); }
   .btn.pane-toggle.left { width: 32px; padding: 6px; border-width: 1px; margin: 0; opacity: 1; visibility: visible; transition-delay: 0s; }
   .pane-toggle .drawer-icon { display: block; }
   .pane-toggle .dock-icon { display: none; }
@@ -1429,7 +1463,7 @@ dl.usage dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; 
   .transcript { padding: 12px 16px 24px; }
   .reader .read-edge { --gutter: 32px; }
   .composer { padding: 0 12px calc(12px + env(safe-area-inset-bottom) + var(--kb, 0px)); }
-  .msg.assistant .msg-body { font-size: calc(16px * var(--story-scale)); line-height: 1.9; }
+  .msg.assistant .msg-body { font-size: calc(16px * var(--story-scale)); line-height: calc(1.9 * var(--story-leading)); }
   .preset-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
   .preset-nav { border-right: 0; border-bottom: 1px solid var(--line-soft); max-height: calc(34vh / var(--page-zoom)); }
   .preset-head { padding: 16px 56px 12px 18px; }
@@ -1599,12 +1633,17 @@ button.chip.on { background: var(--accent); border-color: var(--accent); color: 
 /* Settings windows (web/menu.js): a menu of panels, each row opening one part
    on its own page or another window; the title row and the save row stay in
    place while the middle scrolls. */
-.menu-dialog { padding: 0; overflow: hidden; }
+/* Its rows pad themselves: the phone rule giving every window 18px (.dialog, below) must not add to that. */
+.dialog.menu-dialog { padding: 0; overflow: hidden; }
 .menu-form { display: flex; flex-direction: column; max-height: calc(calc(100 * var(--dvh) / var(--page-zoom)) - 34px); }
-.menu-head { display: flex; align-items: center; gap: 6px; min-height: 64px; padding: 14px 22px 12px; border-bottom: 1px solid var(--line-soft); }
-.menu-titles { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+/* The title row: back, where the page sits and its name, the search box. When the names and the box don't fit
+   side by side (a phone, a long card name), the box takes a row of its own below, full width, rather than
+   squeezing the names into a column of two characters: the names take the free space first (flex-grow 1000),
+   the box only what is left on its own row. */
+.menu-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 6px; min-height: 64px; padding: 14px 22px 12px; border-bottom: 1px solid var(--line-soft); }
+.menu-titles { flex: 1000 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .menu-titles h2 { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dialog .menu-search { flex: 0 1 230px; min-width: 110px; width: auto; }
+.dialog .menu-search { flex: 1 1 230px; min-width: 0; width: auto; }
 .menu-found { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; padding-bottom: 12px; }
 .menu-found mark { padding: 0 1px; border-radius: 3px; background: color-mix(in srgb, var(--lamp) 34%, transparent); color: inherit; }
 .menu-found[hidden] { display: none; }
@@ -1612,7 +1651,7 @@ button.chip.on { background: var(--accent); border-color: var(--accent); color: 
 /* Where the search brought the player. */
 .menu-hit { border-radius: 10px; animation: menu-hit 2.8s ease-out; }
 @keyframes menu-hit { 0%, 55% { box-shadow: 0 0 0 3px var(--accent); background: var(--accent-soft); } 100% { box-shadow: 0 0 0 3px transparent; background: transparent; } }
-.menu-crumb { font-size: 11.5px; color: var(--faint); letter-spacing: .04em; }
+.menu-crumb { font-size: 11.5px; color: var(--faint); letter-spacing: .04em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .menu-crumb[hidden], .menu-back[hidden], .menu-dirty[hidden], .menu-home[hidden], .menu-pill[hidden], .menu-entry[hidden] { display: none; }
 .menu-back { margin-left: -8px; width: 36px; height: 36px; display: grid; place-items: center; }
 .menu-back svg, .menu-panel-icon svg, .menu-entry-go svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
@@ -1686,6 +1725,10 @@ button.chip.on { background: var(--accent); border-color: var(--accent); color: 
 
 @media (max-width: 560px) {
   .menu-head { padding: 12px 14px 10px; min-height: 56px; }
+  /* Every page alike, so the row doesn't change height from one page to the next. */
+  .dialog .menu-search { flex-basis: 170px; }
+  .menu-head.on-page .menu-search { flex-basis: 100%; }
+  .menu-back { margin-left: -4px; }
   .menu-body { padding: 12px 12px 6px; }
   .menu-foot { padding: 10px 14px; }
   .menu-panel { border-radius: 14px; }
@@ -1706,6 +1749,15 @@ button.chip.on { background: var(--accent); border-color: var(--accent); color: 
 .source-state { flex: none; font-size: 11.5px; color: var(--faint); }
 .voice-source-name { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
 /* Where to sign up for a picture or voice service, and how it is reached from mainland China. */
+.own-guide-box { margin: 6px 0 10px; font-size: 13px; }
+.own-guide-box summary { cursor: pointer; color: var(--muted); }
+.own-guide-title { margin: 0 0 4px; font-weight: 600; }
+.own-guide { margin: 4px 0 8px; padding-left: 20px; display: grid; gap: 8px; }
+.own-command { display: flex; align-items: center; gap: 6px; margin-top: 4px; flex-wrap: wrap; }
+.own-command code { font: 12.5px/1.5 var(--mono); padding: 3px 8px; border-radius: 6px; background: var(--surface); border: 1px solid var(--line-soft); user-select: all; }
+.own-guide-foot { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.own-guide-foot a { color: var(--accent); text-decoration: none; }
+.own-guide-foot a:hover { text-decoration: underline; }
 .service-links { display: grid; gap: 4px; margin: 2px 0 10px; font-size: 12px; color: var(--muted); }
 .service-site { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
 .service-name { color: var(--ink); font-weight: 500; }
@@ -1822,7 +1874,10 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
   .topbar .pill { order: 4; max-width: none; }
   .topbar #chat-preset { flex: 0 1 auto; max-width: 45%; }
   .topbar #compact-chat { flex: none; }
-  .topbar #chat-model { flex: 1 1 0; }
+  /* The model and its 思考 share a row of their own when the pills before them leave too little (half the row each
+     at most, with the gap between them), rather than the model squeezed to a few letters. */
+  .topbar #chat-model { flex: 1 1 48%; min-width: 0; }
+  .topbar #chat-thinking { flex: 0 1 auto; min-width: 0; max-width: 46%; }
 }
 /* Dialog button rows wrap instead of running off the screen; the closing pair stays on the right. */
 @media (max-width: 780px) {
@@ -1995,6 +2050,8 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .reader:hover .read-edge i { opacity: .8; }
 .read-edge:hover i, .read-edge:focus-visible i, .read-edge.dragging i { opacity: 1; height: 72px; background: var(--accent); }
 .read-edge:focus-visible { outline: none; }
+/* Where the column will come to, while a finger holds the edge (the story follows when let go). */
+.read-edge.dragging::before { content: ''; position: absolute; top: 0; bottom: 0; left: 50%; width: 1px; background: var(--accent); opacity: .45; }
 .stage.vn-on .read-edge { display: none; }
 /* A finger has nothing to hover with: the grip shows, and is wider to catch. */
 @media (hover: none) {
@@ -2256,6 +2313,10 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .forge .dots { flex: none; width: 24px; height: 6px; background: radial-gradient(circle, var(--accent) 2.5px, transparent 3px) 0 0 / 8px 6px repeat-x; animation: pulse 1.2s ease-in-out infinite; }
 .forge-error { border: 1px solid color-mix(in srgb, var(--bad) 35%, var(--line)); background: color-mix(in srgb, var(--bad) 6%, var(--surface)); border-radius: 12px; padding: 10px 14px; font-size: 13px; }
 .forge-error p { margin: 0 0 8px; color: var(--bad); }
+.forge-other { margin-top: 10px; padding-top: 8px; border-top: 1px dashed color-mix(in srgb, var(--bad) 25%, var(--line)); }
+.forge-error .forge-other p { color: var(--muted); font-size: 12.5px; line-height: 1.6; }
+.forge-other .row { flex-wrap: wrap; }
+.dialog .forge-other .forge-model { flex: 1 1 12em; max-width: 22em; margin-right: 0; }
 
 /* A question and its options */
 .forge-q { border: 1px solid var(--line-soft); background: var(--surface); border-radius: 16px; padding: 14px 16px 12px; margin-top: 14px; box-shadow: var(--shadow-1); }
@@ -2451,6 +2512,7 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 
 /* 创作角色卡: writing progress and the card to polish. */
 .forge-write { max-width: 36rem; margin: calc(4vh / var(--page-zoom)) auto 0; }
+.forge-write .forge-error { margin-bottom: 12px; }
 .write-steps { list-style: none; margin: 18px 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .write-steps li { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 12px; font-size: 14px; color: var(--faint); transition: background .2s, color .2s; }
 .write-steps .mark { width: 22px; height: 22px; flex: none; border-radius: 50%; border: 1px solid var(--line); display: grid; place-items: center; font-size: 12px; }
@@ -2668,6 +2730,15 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .dialog .cc-summary h3 { margin: 0 0 4px; font: 600 18px/1.4 var(--serif); }
 .cc-facts { margin: 0 0 6px; font-size: 13px; color: var(--muted); }
 .dialog .cc-summary .hint { margin: 2px 0 0; }
+.cc-helpers { margin: 8px 0; font-size: 13px; }
+.cc-helpers summary { cursor: pointer; color: var(--ink); }
+.cc-helpers ul { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 8px; }
+.cc-helper { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
+.cc-helper-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.cc-helper-head .btn { margin-left: auto; }
+.cc-helper-tag { padding: 0 8px; border-radius: 999px; background: color-mix(in srgb, var(--muted) 16%, transparent); color: var(--muted); font-size: 12px; }
+.cc-helper.some .cc-helper-tag { background: color-mix(in srgb, #b7791f 18%, transparent); color: #b7791f; }
+.cc-helper.lost .cc-helper-tag { background: color-mix(in srgb, #b0413a 16%, transparent); color: #b0413a; }
 .cc-group.error { border-color: color-mix(in srgb, var(--bad) 40%, var(--line-soft)); }
 .cc-group.warn { border-color: color-mix(in srgb, var(--lamp) 40%, var(--line-soft)); }
 .dialog .cc-group > .hint { margin: 0 0 8px; }
@@ -2676,6 +2747,9 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .cc-item .ce-change-head { flex-wrap: wrap; }
 .cc-item .ce-change-title { flex: 1 1 12em; overflow-wrap: anywhere; }
 .cc-why { margin: 6px 0 0; font-size: 13px; line-height: 1.7; color: var(--muted); }
+.cc-quote { margin: 6px 0 0; padding-left: 10px; border-left: 2px solid var(--line-soft); color: var(--muted); font-size: 13px; }
+/* A change the model gave for a trial's problem, under that problem. */
+.cc-trial-fix { margin-left: 18px; }
 .cc-change { margin-top: 8px; }
 .cc-change .ce-change-note { margin: 0; }
 .dialog .cc-change input, .dialog .cc-change select { font-size: 13px; padding: 5px 8px; min-width: 0; }
@@ -2689,12 +2763,14 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .cc-status-row code { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cc-status-row.paged { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, .8fr) auto; }
 .cc-status-preview { margin-top: 6px; }
+.dialog .cc-change select.cc-status-add { margin-top: 6px; max-width: 100%; }
 .dialog .cc-change .var-colors input[type="color"] { padding: 0; }
 .dialog label.check-row.cc-status-paged { flex-wrap: wrap; gap: 2px 8px; margin: 6px 0 0; }
 .cc-status-paged small { margin: 0; font-size: 11.5px; }
 .cc-focus-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 14px; margin: 4px 0 8px; }
 .dialog label.check-row.cc-focus { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0 8px; margin: 0; }
 .cc-focus small { grid-column: 2; font-size: 11.5px; line-height: 1.5; color: var(--faint); }
+.dialog label.check-row.cc-whole { margin-bottom: 8px; }
 .cc-estimate { margin: 0 0 8px; font-size: 12.5px; line-height: 1.7; color: var(--muted); }
 .cc-send, .cc-running { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .cc-running .forge-working { flex: 1; margin: 0; }
@@ -2909,7 +2985,8 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .theme-font.missing { color: var(--faint); }
 .theme-size-a { flex: none; font: 13px/1 var(--serif); color: var(--muted); }
 .theme-size-a.big { font-size: 20px; }
-.theme-reading-sample { margin: 0; padding: 10px 14px; border-radius: 10px; border: 1px solid var(--line-soft); background: var(--surface); color: var(--ink); font: calc(17px * var(--story-scale))/1.9 var(--story-font); }
+.theme-leading-mark { font-size: 12px; color: var(--muted); }
+.theme-reading-sample { margin: 0; padding: 10px 14px; border-radius: 10px; border: 1px solid var(--line-soft); background: var(--surface); color: var(--ink); font: calc(17px * var(--story-scale))/calc(1.9 * var(--story-leading)) var(--story-font); }
 @media (max-width: 780px) { .theme-reading-sample { font-size: calc(16px * var(--story-scale)); } }
 @media (max-width: 560px) {
   .theme-row, .theme-row.top { flex-direction: column; align-items: stretch; gap: 8px; }
@@ -3181,7 +3258,17 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .vn-cg { position: absolute; inset: 0; z-index: 3; display: grid; place-items: center; background: rgb(0 0 0 / .82); cursor: zoom-out; }
 .vn-cg[hidden] { display: none; }
 .vn-cg img { max-width: 100%; max-height: 100%; object-fit: contain; }
-.vn-cg-tools { position: absolute; top: 12px; right: 12px; display: flex; gap: 6px; }
+.vn-cg-tools { position: absolute; top: 12px; right: 12px; left: 12px; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; pointer-events: none; }
+.vn-cg-tools > * { pointer-events: auto; }
+.vn-cg-row { display: flex; align-items: flex-end; gap: 6px; }
+.vn-cg-note { flex-basis: 100%; text-align: right; color: #fff; font: 12px/1.5 var(--ui); text-shadow: 0 1px 2px rgb(0 0 0 / .6); }
+.vn-cg-note[hidden] { display: none; }
+.vn-cg-note.bad { color: #ffb4a8; }
+.vn-pop-cast { display: grid; gap: 6px; margin-top: 10px; font: 13px var(--ui); }
+.vn-pop-cast small { display: block; color: var(--muted); font-size: 11px; }
+.vn-pop-cast-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.vn-pop-cast-list button { display: inline-flex; align-items: baseline; gap: 4px; padding: 3px 10px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.vn-pop-cast-list button[aria-pressed="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 18%, transparent); }
 .vn-cg-count { align-self: center; padding: 0 8px; color: #fff; font: 12px/1.5 var(--ui); text-shadow: 0 1px 2px rgb(0 0 0 / .6); }
 /* CG 回廊: every picture on the story's path, a wall of thumbnails. */
 .vn-cg[data-mode="gallery"] { cursor: default; background: rgb(0 0 0 / .55); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
@@ -3229,7 +3316,7 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
   display: flex; flex-direction: column; width: min(920px, calc(100% - 32px)); min-height: 132px; max-height: min(40%, 260px); overflow-y: auto;
   padding: 18px 24px 8px; border-radius: 16px; border: 1px solid var(--line);
   background: color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
-  box-shadow: var(--shadow-2); font: calc(17px * var(--story-scale))/1.85 var(--story-font); color: var(--ink); cursor: pointer;
+  box-shadow: var(--shadow-2); font: calc(17px * var(--story-scale))/calc(1.85 * var(--story-leading)) var(--story-font); color: var(--ink); cursor: pointer;
 }
 .vn-name {
   align-self: flex-start; margin: -6px 0 6px -6px; padding: 2px 14px; border-radius: 999px;
@@ -3411,7 +3498,7 @@ label.cast-voice, .dialog label.cast-voice { display: grid; grid-template-column
 .vn-log-result.close { border-left-color: var(--lamp); color: var(--lamp); }
 .vn-log-result.fail { border-left-color: var(--bad); color: var(--bad); }
 .vn-log-body .game-changes { margin: 8px 0 14px; animation: none; }
-.vn-log-body { flex: 1; overflow-y: auto; padding: 12px 18px 18px; font: calc(15px * var(--story-scale))/1.8 var(--story-font); }
+.vn-log-body { flex: 1; overflow-y: auto; padding: 12px 18px 18px; font: calc(15px * var(--story-scale))/calc(1.8 * var(--story-leading)) var(--story-font); }
 .vn-log-body > p, .vn-log-line { margin: 0 0 .5em; }
 .vn-log-line p { margin: 0; }
 /* Where the story is from here on: a quiet divider. */
@@ -3449,7 +3536,7 @@ label.cast-voice, .dialog label.cast-voice { display: grid; grid-template-column
   background: color-mix(in srgb, var(--bg) 74%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); box-shadow: var(--shadow-2);
 }
 .stage.vn-on.vn-compose .composer .composer-box { max-width: none; padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none; }
-.stage.vn-on.vn-compose .composer textarea { font: calc(17px * var(--story-scale))/1.7 var(--story-font); color: var(--ink); }
+.stage.vn-on.vn-compose .composer textarea { font: calc(17px * var(--story-scale))/calc(1.7 * var(--story-leading)) var(--story-font); color: var(--ink); }
 .stage.vn-on.vn-compose .composer-row { display: none; }
 /* The switch in the top bar: a labelled pill with a track, in the dialogue colour so it is seen; once tried, it stops pulsing. */
 .vn-switch {
@@ -3477,7 +3564,7 @@ label.cast-voice, .dialog label.cast-voice { display: grid; grid-template-column
 @media (max-width: 560px) {
   .topbar #vn-toggle { order: 2; }
   .vn-switch { height: 30px; padding: 0 7px 0 9px; gap: 5px; font-size: 12px; }
-  .vn-box { font-size: calc(16px * var(--story-scale)); line-height: 1.8; min-height: 112px; max-height: 42%; padding: 14px 16px 6px; }
+  .vn-box { font-size: calc(16px * var(--story-scale)); line-height: calc(1.8 * var(--story-leading)); min-height: 112px; max-height: 42%; padding: 14px 16px 6px; }
   .vn.choosing .vn-box { max-height: min(30%, 200px); }
   .vn-actor, .vn-actors[data-count="3"] .vn-actor { height: 72%; }
   .vn-actor img { max-width: calc(92vw / var(--page-zoom)); }

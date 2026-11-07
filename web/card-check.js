@@ -2,7 +2,8 @@
 // The program's findings show as soon as the window opens and cost nothing (server/forge/check.mjs); the model is asked
 // only by the button here, after it says which model and about how much (check-model.mjs). Each finding shows as before
 // and after, and can be taken in as it is, written over first, or ignored; what was taken in can be taken back, one by
-// one or all that went in together. Only safe fixes come ticked for 一键采用.
+// one or all that went in together. Only safe fixes come ticked for 一键采用. The last 试玩体检's problems have a
+// section of their own: a model is asked for changes to them only by their buttons, and they can be fixed by hand.
 import { t } from '/i18n.js'
 import { SHOWS, STATUS_THEMES, cleanStatusSpec, statusPages } from '/shared/status.js'
 import { statusBar } from '/status.js'
@@ -22,13 +23,36 @@ const FOCUS = [['rules', t`玩法和变量`, t`规则打架、变量没写清、
 const SHOW_TEXT = { meter: t`进度条`, number: t`数字`, rating: t`星级`, text: t`文字`, long: t`长文字`, badge: t`徽章`, tags: t`标签`, list: t`列表`, stats: t`数值表`, table: t`表格`, flag: t`是或否`, hidden: t`不显示` }
 const THEME_TEXT = { plain: t`朴素`, paper: t`纸张`, neon: t`霓虹`, pastel: t`柔和`, ink: t`水墨`, parchment: t`羊皮卷`, gothic: t`暗夜`, terminal: t`终端`, ocean: t`深海`, [OWN_COLORS]: t`按卡配色` }
 const BRICK_TEXT = { books: t`册子`, selfcheck: t`写前自查`, events: t`随机事件`, judge: t`裁判表`, world: t`世界动态`, creation: t`建角页` }
+// What a Tavern Helper script's absence comes to (server/helper-scripts.mjs).
+const HELPER_EFFECT = { none: t`不受影响`, some: t`部分影响`, lost: t`功能缺失` }
+const HELPER_KIND = {
+  mvu: t`MVU 框架：变量更新和状态栏已经内置。`,
+  schema: t`变量规则：已经读进来，每轮照规则检查变量。`,
+  'schema-remote': t`变量规则放在网上，读不到：变量照常更新，但范围和默认值不生效。`,
+  upkeep: t`管 SillyTavern 里世界书和正则设置的小工具，这里用不上。`,
+  updater: t`检查作者更新的工具：这里不会自动更新，出新版要重新导入。`,
+}
+const HELPER_USE = { buttons: t`脚本按钮`, events: t`跟着对话自动执行的操作`, book: t`读写世界书`, model: t`自己调用模型`, vars: t`改变量`, messages: t`改聊天消息`, page: t`页面上加的界面` }
+// What the trial's reader calls a problem (server/forge/trial.mjs).
+const KIND_TEXT = { 抢话: t`抢话`, 出戏: t`出戏`, 矛盾: t`矛盾`, 放水: t`放水`, 重复: t`重复`, 数值: t`数值`, 事件: t`事件`, 其他: t`其他` }
 // Findings about an entry's keywords: their box is the keywords, not its text.
 const KEY_RULES = new Set(['key-joined', 'key-invalid', 'key-single', 'entry-unreachable'])
 
 const count = n => n.toLocaleString()
 
-/** @param deps - { api, el, toast, guard, getChat, isGenerating, openProviders, onChatChanged(chat), onCardChanged(cardId) } */
-export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, openProviders, onChatChanged, onCardChanged }) {
+/** What one script's absence means here, in a sentence or two. */
+function helperWords(script) {
+  if (!script.on) return t`作者关着，SillyTavern 里也不运行。`
+  if (script.kind !== 'custom') return HELPER_KIND[script.kind]
+  const uses = script.uses.map(use => HELPER_USE[use]).filter(Boolean).join(t`、`)
+  const lost = script.remote
+    ? t`从网址加载（${script.hosts.join(t`、`)}），内容不在卡里，看不出具体做什么，它做的事这里都没有。`
+    : uses ? t`这里不运行，这些用不了：${uses}。` : t`这里不运行，它做的事这里都没有。`
+  return script.buttons.length ? `${lost}${t`按钮用不了：${script.buttons.join(t`、`)}。`}` : lost
+}
+
+/** @param deps - { api, el, toast, guard, getChat, isGenerating, openProviders, openTalk(cardId, words), openTrial(cardId), onChatChanged(chat), onCardChanged(cardId) } */
+export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, openProviders, openTalk, openTrial, onChatChanged, onCardChanged }) {
   const dialog = document.getElementById('card-check-dialog')
   const view = {}
   const state = {
@@ -41,9 +65,11 @@ export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, op
     seen: new Set(), // findings already given their first tick
     opened: new Set(), // findings shown open
     editing: new Map(), // finding id → { change id: what was written over it }
+    tuning: null, // 调整状态栏 open: what statusEditor keeps, { spec, paged }
     stale: false, // something taken in reached the prefix; the open chat on this card has not applied it
     poll: null,
     busy: false,
+    whole: false, // 全本检查 ticked: the entries the ask leaves out go after it, in batches
     shown: '', // what the list last showed: a poll with nothing new leaves it, and any box being typed in, alone
   }
   const url = (path = '') => `/api/cards/${state.cardId}/check${path}`
@@ -123,8 +149,10 @@ export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, op
       el('div', { class: 'cc-page' }, [
         prefixBar(),
         summary(),
+        tunePanel(),
         ...LEVELS.map(([level, title, note]) => group(level, title, note, findings.filter(item => item.from === 'program' && item.level === level))),
-        modelSection(findings.filter(item => item.from === 'model')),
+        trialSection(findings.filter(item => item.from === 'trial'), findings.filter(item => item.from === 'model' && item.trial)),
+        modelSection(findings.filter(item => item.from === 'model' && !item.trial)),
         records.length ? takenSection(records) : null,
         ignored.length ? ignoredSection(ignored) : null,
       ]),
@@ -171,8 +199,9 @@ export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, op
       facts.bricks?.length ? t`玩法积木：${facts.bricks.map(brick => BRICK_TEXT[brick]).join(t`、`)}` : '',
     ].filter(Boolean).join(t` · `)
     const notes = [
-      facts.helperScripts ? t`这张卡带了 ${facts.helperScripts} 个酒馆助手脚本，这里不运行，自检也读不到、改不了。` : '',
-      facts.schema ? t`变量由卡里的脚本规定，是否能加新项不用查。` : '',
+      facts.helperScripts && !facts.helperList?.length ? t`这张卡带了 ${facts.helperScripts} 个酒馆助手脚本，这里不运行。读不到它们各是什么：卡图换过，或者是早先用 JSON 导入的。` : '',
+      facts.schema ? t`变量规则由卡里的脚本决定，自检不判断变量有没有写漏。` : '',
+      state.data.ownBar ? t`这张卡的状态栏是它自己的正则或脚本画的，这里调不了样式。` : '',
       facts.attachedBooks ? t`另外挂了 ${facts.attachedBooks} 本独立世界书，这里只查卡自带的。` : '',
       facts.remote.length ? t`美化要联网加载：${facts.remote.slice(0, 3).join(t`、`)}${facts.remote.length > 3 ? t` 等 ${facts.remote.length} 处` : ''}。` : '',
       state.fromForge ? t`这张卡是「创作角色卡」做的：在那边再点「更新这张卡」，会换回草稿里的内容，这里的修改不保留。` : '',
@@ -180,7 +209,53 @@ export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, op
     return el('section', { class: 'cc-summary' }, [
       el('h3', { text: verdict(findings) }),
       el('p', { class: 'cc-facts', text: line }),
+      helperList(facts.helperList),
       ...notes.map(text => el('p', { class: 'hint', text })),
+      state.data.statusTune && !state.tuning
+        ? el('div', { class: 'cc-actions' }, [el('button', { type: 'button', class: 'btn small', text: t`调整状态栏`, title: t`直接改状态栏的主题、颜色和显示的内容，不用模型`, onclick: () => { state.tuning = {}; render() } })])
+        : null,
+    ].filter(Boolean))
+  }
+
+  /** 调整状态栏: the bar's editor on its own, whether or not anything was found about it. */
+  function tunePanel() {
+    const tune = state.data.statusTune
+    if (!state.tuning || !tune) return null
+    const [change] = tune.changes
+    return el('section', { class: 'plan-card cc-tune' }, [
+      el('header', {}, [el('h4', { text: t`调整状态栏` })]),
+      el('p', { class: 'hint', text: change.before ? t`只改显示，不动变量，也不发给模型。保存后这张卡的对话都按新样式显示。` : t`这张卡还没有自己的状态栏，这是按变量排的一个。保存后它跟着卡走，导出到 SillyTavern 也在。` }),
+      el('div', { class: 'cc-change' }, statusEditor(change, state.tuning, tune.fields)),
+      el('div', { class: 'cc-actions' }, [
+        el('button', { type: 'button', class: 'btn ghost small', text: t`取消`, onclick: () => { state.tuning = null; render() } }),
+        el('span', { class: 'grow' }),
+        el('button', { type: 'button', class: 'btn primary small', disabled: Boolean(state.data.job), title: state.data.job ? t`模型还在看这张卡，等它看完或先停下` : '', text: t`保存`, onclick: () => take([{ id: tune.id, edits: { [change.id]: { spec: state.tuning.spec } } }], t`状态栏已保存`) }),
+      ]),
+    ])
+  }
+
+  /** 酒馆助手脚本: each one and what its absence means; those something is missing for can be taken to 对话修改. */
+  function helperList(scripts) {
+    if (!scripts?.length) return null
+    const tally = Object.keys(HELPER_EFFECT).map(effect => [effect, scripts.filter(script => script.effect === effect).length]).filter(([, n]) => n)
+    const redo = script => {
+      const words = t`「${script.name}」这个酒馆助手脚本在这里不运行。看看它做什么，用世界书、变量或开场白做出差不多的效果。`
+      dialog.close()
+      openTalk(state.cardId, words)
+    }
+    const rows = scripts.map(script => el('li', { class: `cc-helper ${script.effect}` }, [
+      el('div', { class: 'cc-helper-head' }, [
+        el('b', { text: script.name || t`没有名字的脚本` }),
+        el('span', { class: 'cc-helper-tag', text: HELPER_EFFECT[script.effect] }),
+        script.on && script.kind === 'custom' ? el('button', { type: 'button', class: 'btn ghost small', text: t`用对话重做`, title: t`到「对话修改」里，让向导用世界书、变量和开场白做差不多的效果`, onclick: () => redo(script) }) : null,
+      ].filter(Boolean)),
+      el('p', { class: 'hint', text: helperWords(script) }),
+      script.about ? el('p', { class: 'hint', text: t`作者说明：${script.about}` }) : null,
+    ].filter(Boolean)))
+    return el('details', { class: 'cc-helpers', open: tally.some(([effect]) => effect === 'lost') }, [
+      el('summary', { text: t`酒馆助手脚本 ${scripts.length} 个：${tally.map(([effect, n]) => `${HELPER_EFFECT[effect]} ${n}`).join(t`，`)}` }),
+      el('ul', {}, rows),
+      el('p', { class: 'hint', text: t`脚本不在这里运行，本身也改不了。功能缺失的可以用「对话修改」做差不多的效果，按钮和自动执行做不了。` }),
     ])
   }
 
@@ -251,6 +326,8 @@ export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, op
         ? el('input', { type: 'checkbox', checked: state.ticked.has(item.id), 'aria-label': t`采用「${item.title}」`, onchange: event => { event.target.checked ? state.ticked.add(item.id) : state.ticked.delete(item.id); updateFoot() } })
         : el('span', { class: 'ce-mark', text: '–' }),
       el('button', { type: 'button', class: 'ce-change-title', 'aria-expanded': String(open), onclick: toggle, text: item.title }),
+      item.from === 'trial' ? el('span', { class: 'strategy key', text: item.round ? t`试玩 · 第 ${item.round} 回合 · ${KIND_TEXT[item.kind] ?? item.kind}` : t`试玩` }) : null,
+      item.outdated ? el('span', { class: 'strategy off', title: t`试玩之后卡改过了，这条可能已经改好，再试玩一次可以确认。`, text: t`可能已过期` }) : null,
       item.from === 'model' ? el('span', { class: 'strategy key', text: t`模型` }) : null,
       item.risky && canTake ? el('span', { class: 'strategy off', title: t`这条会改变卡的玩法，看过再勾`, text: t`看过再勾` }) : null,
     ])
@@ -263,6 +340,8 @@ export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, op
     return el('div', { class: 'ce-change cc-item' }, [
       head,
       item.why ? el('p', { class: 'cc-why', text: item.why }) : null,
+      item.quote ? el('blockquote', { class: 'cc-quote', text: item.quote }) : null,
+      item.fix ? el('p', { class: 'cc-why', text: t`审读的改法：${item.fix}` }) : null,
       ...warnings.map(text => el('p', { class: 'ce-outcome warn', text })),
       ...(editing ? editBlocks(item) : item.manual ? [] : item.changes.map(changeBlock)),
       itemActions(item, canTake, editing),
@@ -270,6 +349,7 @@ export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, op
   }
 
   function itemActions(item, canTake, editing) {
+    if (item.from === 'trial') return trialActions(item)
     const canEdit = item.changes.length > 0 && !item.stale && item.changes.some(change => !/^remove/.test(change.kind))
     if (editing) {
       return el('div', { class: 'cc-actions' }, [
@@ -324,7 +404,7 @@ export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, op
   }
 
   /** The bar's settings, the fields a row each: what it shows, how and on which page. It never turns into HTML to write by hand. */
-  function statusEditor(change, edit) {
+  function statusEditor(change, edit, spare = []) {
     edit.spec ??= structuredClone(change.spec)
     edit.paged ??= statusPages(edit.spec).length > 0
     const { spec } = edit
@@ -367,9 +447,79 @@ export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, op
       const drop = el('button', { type: 'button', class: 'btn ghost small', 'aria-label': t`去掉「${field.path}」`, title: t`去掉`, text: '×', onclick: () => { spec.fields.splice(index, 1); redraw() } })
       return el('div', { class: `cc-status-row${edit.paged ? ' paged' : ''}` }, [el('code', { text: field.path }), label, show, edit.paged ? page : null, drop])
     }
+    // What the card's variables could show and the bar does not.
+    const left = spare.filter(field => !spec.fields.some(shown => shown.path === field.path))
+    const adding = el('select', { class: 'cc-status-add', 'aria-label': t`加一项`, onchange: () => {
+      spec.fields.push(structuredClone(left.find(field => field.path === adding.value)))
+      redraw()
+    } }, [el('option', { value: '', text: t`加一项…` }), ...left.map(field => el('option', { value: field.path, text: field.label ? `${field.label} (${field.path})` : field.path }))])
     drawPreview()
-    return [preview, el('div', { class: 'cc-status-top' }, [title, theme]), spec.palette ? colors() : null, paging, el('div', { class: 'cc-status-rows' }, spec.fields.map(row))]
+    return [preview, el('div', { class: 'cc-status-top' }, [title, theme]), spec.palette ? colors() : null, paging, el('div', { class: 'cc-status-rows' }, spec.fields.map(row)), left.length ? adding : null]
   }
+
+  // ─── What a trial found ───────────────────────────────────────────────
+  /** A trial's problem in words for 对话修改, with where it showed and what the reader would change. */
+  function trialWords(item) {
+    const where = item.round ? t`第 ${item.round} 回合 · ${KIND_TEXT[item.kind] ?? item.kind}：` : ''
+    const quote = item.quote ? t`（原文：${item.quote}）` : ''
+    const fix = item.fix ? t`审读的改法：${item.fix}。` : ''
+    return t`试玩体检查出这个问题：${where}${item.title}${quote}。${fix}改这张卡来解决它，改之前先给我看改前改后。`
+  }
+
+  function trialActions(item) {
+    const estimate = state.data.trial?.estimate
+    const job = state.data.job
+    return el('div', { class: 'cc-actions' }, [
+      el('button', { type: 'button', class: 'btn ghost small', text: t`忽略`, title: t`以后不再提这一条，可以在最下面恢复`, onclick: () => setIgnored(item, true) }),
+      el('span', { class: 'grow' }),
+      el('button', { type: 'button', class: 'btn small', text: t`用对话改`, title: t`到「对话修改」里，带着这个问题让向导改`, onclick: () => {
+        dialog.close()
+        openTalk(state.cardId, trialWords(item))
+      } }),
+      estimate ? el('button', { type: 'button', class: 'btn primary small', disabled: !estimate.ready || Boolean(job), title: job ? t`模型还在看这张卡，等它看完或先停下` : '', text: t`让模型出改法`, onclick: () => askTrial([item.id]) }) : null,
+    ].filter(Boolean))
+  }
+
+  /** The problems, each followed by the changes the model gave for it; changes for no problem still shown come last. */
+  function trialSection(items, fixes) {
+    const trial = state.data.trial
+    if (!items.length && !fixes.length) return null
+    const job = state.data.job
+    const estimate = trial?.estimate
+    const shown = new Set()
+    const blocks = items.flatMap(item => {
+      const mine = fixes.filter(fix => fix.answers?.includes(item.id))
+      for (const fix of mine) shown.add(fix.id)
+      return [itemBlock(item), ...mine.map(fix => el('div', { class: 'cc-trial-fix' }, [itemBlock(fix)]))]
+    })
+    const rest = fixes.filter(fix => !shown.has(fix.id))
+    const takeableFixes = fixes.filter(takeable)
+    return el('section', { class: 'plan-card cc-model cc-trial' }, [
+      el('header', {}, [
+        el('h4', { text: t`试玩发现 · ${items.length}` }),
+        takeableFixes.length > 1 ? el('button', { type: 'button', class: 'btn ghost small', text: t`改法都勾上`, onclick: () => tickGroup(takeableFixes, true) }) : null,
+        openTrial ? el('button', { type: 'button', class: 'btn ghost small', text: t`再试玩一次`, onclick: () => { dialog.close(); openTrial(state.cardId) } }) : null,
+      ].filter(Boolean)),
+      el('p', { class: 'hint', text: trial ? t`最近一次试玩体检（${trial.model}，${new Date(trial.at).toLocaleString()}）查出的问题。程序没有现成的改法：可以让模型出改法，看过改前改后再采用；也可以用对话自己改，不用改的就忽略。` : t`这些是给试玩问题出的改法，那份报告已经换掉了。` }),
+      trial?.outdated ? el('p', { class: 'ce-outcome warn', text: t`试玩之后卡改过了，下面的问题可能已经改好，再试玩一次可以确认。` }) : null,
+      estimate ? el('p', { class: 'cc-estimate', text: estimateLine({ estimate }, true) }) : null,
+      job?.kind === 'check-trial'
+        ? el('div', { class: 'cc-running' }, [el('div', { class: 'forge-working' }, [el('span', { class: 'dots' }), (view.jobLine = el('span', { text: jobText(job) }))]), el('button', { type: 'button', class: 'btn small', text: t`停下`, onclick: () => stop() })])
+        : items.length > 1 && estimate
+          ? el('div', { class: 'cc-send' }, [el('span', { class: 'grow' }), el('button', { type: 'button', class: 'btn small', disabled: !estimate.ready || Boolean(job), text: t`${items.length} 条都让模型出改法`, onclick: () => askTrial(items.map(item => item.id)) })])
+          : null,
+      state.data.error?.kind === 'check-trial' ? el('div', { class: 'forge-error' }, [el('p', { text: state.data.error.message })]) : null,
+      trial?.reply ? el('div', { class: 'forge-voice cc-reply' }, trial.reply.split(/\n+/).filter(Boolean).map(text => el('p', { text }))) : null,
+      trial?.askedModel ? el('div', { class: 'forge-by', text: trial.askedModel }) : null,
+      el('div', { class: 'cc-items' }, [...blocks, ...rest.map(itemBlock)]),
+    ].filter(Boolean))
+  }
+
+  const askTrial = guard(async ids => {
+    const replacing = state.data.findings.some(item => item.trial && (!item.answers?.length || item.answers.some(id => ids.includes(id))))
+    if (replacing && !confirm(t`再出一次改法会换掉这些问题还没采用的改法，继续？`)) return
+    load(await api(url('/ask'), { method: 'POST', body: { trial: ids } }))
+  })
 
   // ─── The model ────────────────────────────────────────────────────────
   function modelChoice() {
@@ -391,11 +541,40 @@ export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, op
     return select
   }
 
-  function estimateLine({ estimate }) {
+  /** @param trial - for the trial's problems: each click sends once, the problems along with the card. */
+  function estimateLine({ estimate }, trial = false) {
     if (!estimate.ready) return t`先在「模型供应商」里添加供应商，再选一个模型。`
     const money = estimate.cost == null ? '' : t`，大约 $${estimate.cost.toFixed(3)}`
     const whole = estimate.shown < estimate.entries ? t`世界书只附上 ${estimate.shown} 条全文，其余 ${estimate.entries - estimate.shown} 条给目录。` : ''
+    if (trial) return t`点了才发送，点一次发一次。发给 ${estimate.model}：卡的内容约 ${count(estimate.chars)} 字加上这些问题，一共大约 ${count(estimate.input + estimate.output)} token${money}。${whole}`
+    const rest = estimate.rest && state.whole ? estimate.rest : null
+    if (rest) {
+      const restMoney = rest.cost == null ? '' : t`，大约 $${rest.cost.toFixed(3)}`
+      const both = estimate.cost == null || rest.cost == null ? '' : t`两项合计大约 $${(estimate.cost + rest.cost).toFixed(3)}。`
+      return t`点了才发送。发给 ${estimate.model}：先看整张卡，大约 ${count(estimate.input + estimate.output)} token${money}；再分 ${rest.parts} 批看其余 ${rest.entries} 条，大约 ${count(rest.input + rest.output)} token${restMoney}。${both}`
+    }
     return t`点了才发送。发给 ${estimate.model}：卡的内容约 ${count(estimate.chars)} 字，一共大约 ${count(estimate.input + estimate.output)} token${money}。${whole}`
+  }
+
+  /** 全本检查: only for a card the ask does not read whole; ticked, the button sends the batches after it. */
+  function wholeChoice(rest, job) {
+    if (!rest) return null
+    const notes = [
+      rest.long ? t`有 ${rest.long} 条单条超过 2 万字，不附上。` : '',
+      rest.left ? t`最多分 ${rest.parts} 批，还有 ${rest.left} 条排不进。` : '',
+    ].join('')
+    return el('label', { class: 'check-row cc-focus cc-whole' }, [
+      el('input', { type: 'checkbox', checked: state.whole, disabled: Boolean(job), onchange: event => { state.whole = event.target.checked; render() } }),
+      el('span', { text: t`全本检查` }),
+      el('small', { text: t`其余 ${rest.entries} 条分 ${rest.parts} 批再发给模型，每批带上规则、变量和目录。花得多，默认不勾。${notes}` }),
+    ])
+  }
+
+  /** How far the last 全本检查 got. */
+  function wholeLine(whole, job) {
+    if (!whole || (job && job.kind !== 'check-trial')) return null
+    const stopped = whole.done < whole.total ? t`中途停下了，看完的几批的建议都留着。` : ''
+    return el('p', { class: 'hint cc-whole-done', text: t`全本检查：其余 ${whole.entries} 条分 ${whole.total} 批，看完了 ${whole.done} 批。${stopped}` })
   }
 
   function modelSection(items) {
@@ -416,19 +595,25 @@ export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, op
       ]),
       el('p', { class: 'hint', text: t`程序查的是写法，模型看的是内容：哪些常驻可以改关键词、规则有没有打架、状态栏怎么排更好。模型的建议都要你看过再采用。` }),
       el('div', { class: 'cc-focus-list' }, boxes),
+      wholeChoice(data.estimate.rest, job),
       el('p', { class: 'cc-estimate', text: estimateLine(data) }),
-      job
+      job && job.kind !== 'check-trial'
         ? el('div', { class: 'cc-running' }, [el('div', { class: 'forge-working' }, [el('span', { class: 'dots' }), (view.jobLine = el('span', { text: jobText(job) }))]), el('button', { type: 'button', class: 'btn small', text: t`停下`, onclick: () => stop() })])
-        : el('div', { class: 'cc-send' }, [modelChoice(), el('span', { class: 'grow' }), el('button', { type: 'button', class: 'btn primary small', disabled: !data.estimate.ready, text: data.askedAt ? t`再看一次` : t`发给模型看看`, onclick: () => ask() })]),
-      data.error ? el('div', { class: 'forge-error' }, [el('p', { text: data.error.message })]) : null,
+        : el('div', { class: 'cc-send' }, [modelChoice(), el('span', { class: 'grow' }), el('button', { type: 'button', class: 'btn primary small', disabled: !data.estimate.ready || Boolean(job), text: data.askedAt ? t`再看一次` : t`发给模型看看`, onclick: () => ask() })]),
+      data.error && data.error.kind !== 'check-trial' ? el('div', { class: 'forge-error' }, [el('p', { text: data.error.message })]) : null,
       data.reply ? el('div', { class: 'forge-voice cc-reply' }, data.reply.split(/\n+/).filter(Boolean).map(text => el('p', { text }))) : null,
       data.askedModel ? el('div', { class: 'forge-by', text: data.askedModel }) : null,
+      wholeLine(data.whole, job),
       items.length ? el('div', { class: 'cc-items' }, items.map(item => itemBlock(item))) : null,
     ])
   }
 
   function jobText(job) {
-    if (job.chars) return t`模型正在写，已经写了 ${count(job.chars)} 字…`
+    // 全本检查's batches: part:<i>:<n>.
+    const [, at, total] = /^part:(\d+):(\d+)$/.exec(job.step ?? '') ?? []
+    const part = at ? t`全本检查第 ${at}/${total} 批：` : ''
+    if (job.chars) return `${part}${t`模型正在写，已经写了 ${count(job.chars)} 字…`}`
+    if (part) return t`${part}模型正在读这一批条目。停下的话，看完的几批的建议都留着。`
     return t`模型正在读这张卡，已经 ${Math.round((Date.now() - Date.parse(job.startedAt)) / 1000)} 秒。可能要几分钟，关掉窗口也会接着看。`
   }
 
@@ -437,8 +622,8 @@ export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, op
   }
 
   const ask = guard(async () => {
-    if (state.data.findings.some(item => item.from === 'model') && !confirm(t`再看一次会换掉还没采用的模型建议，继续？`)) return
-    load(await api(url('/ask'), { method: 'POST', body: { focus: state.data.focus } }))
+    if (state.data.findings.some(item => item.from === 'model' && !item.trial) && !confirm(t`再看一次会换掉还没采用的模型建议，继续？`)) return
+    load(await api(url('/ask'), { method: 'POST', body: { focus: state.data.focus, whole: state.whole && Boolean(state.data.estimate.rest) } }))
   })
 
   const stop = guard(async () => {
@@ -469,7 +654,7 @@ export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, op
     render()
   }
 
-  const take = guard(async items => {
+  const take = guard(async (items, said = '') => {
     if (state.busy) return
     state.busy = true
     updateFoot()
@@ -483,21 +668,28 @@ export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, op
     for (const { id } of items) {
       state.editing.delete(id)
       state.ticked.delete(id)
+      if (id === state.data.statusTune?.id) state.tuning = null
     }
-    await afterChange(result, t`已改进卡里：${result.applied} 处`)
+    // Counted by suggestion, as they were ticked; one that could not go in with the others is named, still in the list.
+    const kept = result.skipped?.length ? t`。「${result.skipped.join(t`」「`)}」要改的那段已经被前面一条改了，没能一起改，还留在列表里，可以让模型再看看` : ''
+    const done = (said || (result.taken ? t`已采用 ${result.taken} 条` : t`已改进卡里：${result.applied} 处`)) + kept
+    const gaps = result.chatGaps
+    const names = gaps ? gaps.labels.slice(0, 3).join(t`、`) + (gaps.labels.length > 3 ? t` 等 ${gaps.labels.length} 处` : '') : ''
+    await afterChange(result, gaps ? t`${done}。状态栏新加的「${names}」在 ${gaps.chats} 段已有对话里还没有这些变量，那里先显示不出来：等回复写上，或在右栏「状态」点「编辑」补上` : done, Boolean(gaps))
   })
 
   const takeTicked = () => take([...state.ticked].map(id => ({ id, ...(state.editing.has(id) ? { edits: state.editing.get(id) } : {}) })))
 
   /** What every change to the card is followed by: the list again, and the prefix of a chat on it. */
-  async function afterChange(result, message) {
+  async function afterChange(result, message, long = false) {
     load(result.check)
     if (result.prefix) {
       if (getChat()?.cardId === state.cardId) {
         state.stale = true
         render()
-      } else toast(t`${message}。改的内容在对话开局时的固定前缀里：新对话直接用新的，进行中的对话要在「设置 → 更多」里重建前缀才会用上。`, 7000)
-    } else toast(message)
+        if (long) toast(message, 9000)
+      } else toast(t`${message}。改的内容在对话开局时的固定前缀里：新对话直接用新的，进行中的对话要在「设置 → 更多」里重建前缀才会用上。`, long ? 11000 : 7000)
+    } else toast(message, long ? 9000 : undefined)
     await onCardChanged?.(state.cardId)
   }
 
@@ -549,7 +741,9 @@ export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, op
         state.seen = new Set()
         state.opened = new Set()
         state.editing = new Map()
+        state.tuning = null
         state.stale = false
+        state.whole = false
         view.main.scrollTop = 0
       }
       const [data, edit] = await Promise.all([api(url()), api(`/api/cards/${cardId}/edit`), loadModels()])

@@ -105,14 +105,27 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
   // The open chat's prefix is behind this book: edited, or taken on or let go of by its card.
   const staleInChat = id => state.stale.has(id) && (chatUses(getChat(), id) || (Boolean(getChat()) && state.remounted.has(id)))
 
-  /** The nav from the imported books (GET /api/worldbooks); the card's own book keeps its place and counts. */
+  /**
+   * The nav from the imported books (GET /api/worldbooks); the card's own book keeps its place and counts. With a card,
+   * what it uses comes first: its own book, then the ones it mounts and the global ones, then the rest.
+   */
   function setBooks(list) {
     const card = state.card
     const own = state.books.find(b => b.own)
+    const imported = list.map(b => ({ id: b.id, name: b.name, description: b.description ?? '', own: false, global: Boolean(b.global), counts: { entries: b.entries, enabled: b.enabled, constant: b.constant } }))
+    const inUse = b => b.global || state.mounted.has(b.id)
     state.books = [
-      ...(card && (card.bookEntries || own) ? [own ?? { id: `card-${card.id}`, name: t`卡里自带`, own: true, counts: { entries: card.bookEntries, enabled: card.bookEnabled, constant: card.bookConstant } }] : []),
-      ...list.map(b => ({ id: b.id, name: b.name, description: b.description ?? '', own: false, global: Boolean(b.global), counts: { entries: b.entries, enabled: b.enabled, constant: b.constant } })),
+      ...(card && (card.bookEntries || own) ? [own ?? { id: `card-${card.id}`, name: t`卡里自带（${card.name}）`, own: true, counts: { entries: card.bookEntries, enabled: card.bookEnabled, constant: card.bookConstant } }] : []),
+      ...(card ? [...imported.filter(inUse), ...imported.filter(b => !inUse(b))] : imported),
     ]
+  }
+
+  /** What a book is to the card the window is for (or, with none, to the cards): its tag in the nav. */
+  function navTag(b) {
+    if (b.own) return t`自带 · 在用`
+    if (state.card) return b.global ? t`全局 · 在用` : state.mounted.has(b.id) ? t`在用` : ''
+    const users = usedBy(b.id).length
+    return b.global ? t`全局` : users ? t`${users} 张卡在用` : ''
   }
 
   // Searching the books: a name or note matches at once; entries match once every book has been read.
@@ -194,11 +207,11 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
     for (const b of state.books) {
       const hits = terms.length ? hitsIn(b, terms) : 0
       if (terms.length && !hits && !matchesTerms(`${b.name}\n${b.description ?? ''}`, terms)) continue
-      const users = b.own ? 0 : usedBy(b.id).length
-      const tag = b.own ? t`始终生效` : b.global ? t`全局` : state.card ? (state.mounted.has(b.id) ? t`已挂载` : '') : users ? t`${users} 张卡在用` : ''
+      const tag = navTag(b)
+      const using = Boolean(state.card) && (b.own || b.global || state.mounted.has(b.id))
       // Opened from the search, a book shows the entries it found.
       rows.push(el('li', { class: state.selected === b.id ? 'active' : '', onclick: () => guard(select)(b.id, hits ? state.find.trim() : '') }, [
-        el('div', { class: 'item-title' }, [el('span', { class: 'item-main', text: b.name }), tag ? el('span', { class: 'tag', text: tag }) : null]),
+        el('div', { class: 'item-title' }, [el('span', { class: 'item-main', text: b.name }), tag ? el('span', { class: `tag${using ? ' on' : ''}`, text: tag }) : null]),
         el('div', { class: 'item-sub' }, [hits ? el('span', { class: 'book-hits', text: t`${hits} 条匹配` }) : null, hits ? ' · ' : null, countText(b.counts)]),
       ]))
     }

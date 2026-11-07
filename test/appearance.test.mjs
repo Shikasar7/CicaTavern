@@ -41,8 +41,10 @@ test('appearance values: unknown styles, names and opacities fall back', () => {
 })
 
 test('the story font and size: unknown fonts and sizes fall back, a typed name cannot break out of its quotes', () => {
-  assert.deepEqual(cleanReading(null), { font: 'song', custom: '', ui: 1, scale: 1, width: 0 })
-  assert.deepEqual(cleanReading({ font: 'kai', scale: 1.234 }), { font: 'kai', custom: '', ui: 1, scale: 1.23, width: 0 })
+  assert.deepEqual(cleanReading(null), { font: 'song', custom: '', ui: 1, scale: 1, leading: 1, width: 0 })
+  assert.deepEqual(cleanReading({ font: 'kai', scale: 1.234 }), { font: 'kai', custom: '', ui: 1, scale: 1.23, leading: 1, width: 0 })
+  // 行距: 80% to 140% of each text's usual line height.
+  assert.deepEqual([0.1, 1.234, 9, 'loose', undefined].map(leading => cleanReading({ leading }).leading), [0.8, 1.23, 1.4, 1, 1])
   // 正文宽度: 0 is the page's own; the rest kept to the range.
   assert.deepEqual([0, -5, 'wide', 100, 700.4, 9000].map(width => cleanReading({ width }).width), [0, 0, 0, 480, 700, 1600])
   assert.deepEqual([0.1, 1.15, 9, 'big'].map(ui => cleanReading({ ui }).ui), [0.85, 1.15, 1.3, 1])

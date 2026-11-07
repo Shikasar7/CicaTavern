@@ -131,3 +131,43 @@ test('视觉小说格式: a mark\'s words to an expression and effects; the stag
   assert.deepEqual(stageAt(loud, 0, { names }).effects, { screen: 'flash', actor: null })
   assert.deepEqual(stageAt([line('narration', null, '轰隆一声，门被撞开。')], 0, { names }).effects, { screen: 'shake', actor: null })
 })
+
+test('stageAt: 常驻 stay on stage, and with detection off nobody else steps on', () => {
+  const names = [{ name: '林青禾', keys: ['林青禾'] }, { name: '周管事', keys: ['周管事'] }, { name: '沈砚', keys: ['沈砚'] }, { name: '你', keys: ['你'], player: true }]
+  const say = (kind, speaker, plain, extra = {}) => ({ type: 'line', kind, speaker, plain, ...extra })
+  const steps = [
+    say('narration', null, '雨下了一下午。', { where: { place: '茶馆' } }),
+    say('dialogue', '周管事', '周管事皱起眉：「账不对。」'),
+    say('narration', null, '林青禾离开了茶馆。'),
+    say('dialogue', '林青禾', '林青禾笑了笑：「来了？」'),
+    say('narration', null, '他们到了后院。', { where: { place: '后院' } }),
+    ...Array.from({ length: 14 }, () => say('narration', null, '雨还在下。')),
+  ]
+  const isActor = name => name !== '你'
+  const who = (index, options) => stageAt(steps, index, { names, isActor, ...options }).members.map(member => member.name)
+
+  // Here from the first line, whoever speaks joining them.
+  assert.deepEqual(who(0, { fixed: ['林青禾'] }), ['林青禾'])
+  assert.deepEqual(who(1, { fixed: ['林青禾'] }), ['林青禾', '周管事'])
+  // Leaving, a new place and a long silence take the others, not them.
+  assert.deepEqual(who(2, { fixed: ['林青禾'] }), ['林青禾', '周管事'])
+  assert.deepEqual(who(4, { fixed: ['林青禾'] }), ['林青禾'])
+  assert.deepEqual(who(steps.length - 1, { fixed: ['林青禾'] }), ['林青禾'])
+  // They still get their expressions and the light when they speak.
+  const speaking = stageAt(steps, 3, { names, isActor, fixed: ['林青禾'] })
+  assert.equal(speaking.speaker, '林青禾')
+  assert.equal(speaking.members[0].expression, 'smile')
+
+  // Detection off: speaking brings nobody on.
+  assert.deepEqual(who(1, { auto: false }), [])
+  assert.deepEqual(who(3, { auto: false, fixed: ['林青禾'] }), ['林青禾'])
+  assert.equal(stageAt(steps, 1, { names, isActor, auto: false, fixed: ['林青禾'] }).speaker, null)
+
+  // The player, or someone with no picture, cannot be kept there.
+  assert.deepEqual(who(0, { fixed: ['你'] }), [])
+
+  // More than there is room for: the first ones stand, one left over takes a place when they speak, and nobody else does.
+  assert.deepEqual(who(0, { fixed: ['沈砚', '林青禾'], max: 1 }), ['沈砚'])
+  assert.deepEqual(who(3, { fixed: ['沈砚', '林青禾'], max: 1 }), ['林青禾'])
+  assert.deepEqual(who(1, { fixed: ['沈砚'], max: 1 }), ['沈砚'])
+})

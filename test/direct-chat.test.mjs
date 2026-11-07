@@ -90,6 +90,24 @@ test('a file goes with its message and stays in the history; the chat keeps its 
   assert.match(seen[1].messages.find(message => message.role === 'user').content, /听雨茶馆只卖清茶/)
 })
 
+test('what is attached here is read as it is, whole or broken; 创作角色卡 turns the broken one away', async t => {
+  const { call, turn, seen } = await setup(t)
+  const chat = await call('/api/chats', { method: 'POST', body: { cardId: DIRECT_CARD } })
+  const whole = JSON.stringify({ spec: 'chara_card_v3', data: { name: '别人的卡', description: '听雨茶馆只卖清茶。', first_mes: '你来了。' } })
+  const broken = whole.slice(0, -3)
+  const card = await call('/api/forge/references', { method: 'POST', body: { name: 'a.json', text: whole, direct: true } })
+  const file = await call('/api/forge/references', { method: 'POST', body: { name: 'b.json', text: broken, direct: true } })
+  await turn(chat.id, { parentId: chat.path.at(-1).id, input: '总结一下', files: [card, file] })
+  assert.equal(sent(seen[0]).match(/听雨茶馆只卖清茶/g).length, 2)
+  await assert.rejects(call('/api/forge/references', { method: 'POST', body: { name: 'b.json', text: broken } }), /看起来是角色卡/)
+  await assert.rejects(call('/api/forge', { method: 'POST', body: { text: '做张卡', references: [{ kind: 'file', name: 'b.json', text: broken }] } }), /看起来是角色卡/)
+  // As SillyTavern exports one: cut before anything but the plain fields.
+  const cut = '{"name":"别人的卡","description":"听雨茶馆只卖清茶。","personality":"话少","scenario":"雨夜'
+  assert.equal((await call('/api/forge/references', { method: 'POST', body: { name: 'c.json', text: cut, direct: true } })).kind, 'file')
+  await assert.rejects(call('/api/forge/references', { method: 'POST', body: { name: 'c.json', text: cut } }), /看起来是角色卡/)
+  await assert.rejects(call('/api/forge', { method: 'POST', body: { text: '做张卡', references: [{ kind: 'file', name: 'c.json', text: cut }] } }), /看起来是角色卡/)
+})
+
 test('编辑重发 gets a message\'s files back, and a compaction there writes a summary, not a story', async t => {
   const { call, turn } = await setup(t)
   const chat = await call('/api/chats', { method: 'POST', body: { cardId: DIRECT_CARD } })

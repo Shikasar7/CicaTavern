@@ -79,6 +79,8 @@ const OPTION_GROUPS = [
   { key: 'cast', kind: 'one', label: t`人物`, values: [['', t`不定`], ['single', t`一个主角`], ['ensemble', t`几个主角（群像）`]], hint: t`群像：两到四个主要角色，各有目的，彼此之间也有关系。` },
   { key: 'world', kind: 'flag', label: t`世界观`, values: [[false, t`不强调`], [true, t`重世界观`]], hint: t`地点、势力、规则写得具体，模型兼任叙述者，适合冒险、探索、模拟。可以和群像、玩法一起选。` },
   { key: 'gender', kind: 'one', label: t`角色性别`, values: [['', t`不限`], ['female', t`女性`], ['male', t`男性`], ['mixed', t`男女都有`]], hint: t`核心角色的性别；给我灵感和交给 Cica 也按它来。` },
+  // <user>'s own: how the card calls them. 不限 sends nothing; the summary says whose gender it is.
+  { key: 'userGender', kind: 'one', label: t`你的性别`, values: [['', t`不限`], ['female', t`女`], ['male', t`男`]], short: label => t`你是${label}`, hint: t`你在故事里是男是女：角色怎么称呼你、用「他」还是「她」都按它写。这里不选，向导聊到你的身份时会问，你在聊天里说了也算。方案页还能改。` },
   { key: 'play', kind: 'many', label: t`玩法`, values: [['bond', t`好感与关系阶段`], ['growth', t`成长与能力`], ['resources', t`经营与资源`], ['countdown', t`倒计时与事件`], ['explore', t`探索与线索`], ['battle', t`战斗与成长`]], hint: t`可多选。每种玩法记录对应的数值：好感和信任（性格随它分阶段）、等级和修为、金钱和物资、剩余天数、解锁的地点和线索。战斗与成长用应用内置的规则，不占变量，开局就有检定、回合制战斗、背包和升级。` },
   { key: 'format', kind: 'one', label: t`格式`, values: [['', t`向导定`], ['text', t`纯文本卡`], ['mvu', t`MVU 变量卡`], ['mvu-ui', t`MVU + 美化状态栏`]], hint: t`纯文本：不记录数值。MVU：记录数值，每条回复下面有状态栏。美化状态栏：在 SillyTavern 里也显示成好看的面板（要装酒馆助手）。` },
   { key: 'statusTheme', kind: 'one', label: t`状态栏样式`, values: [['plain', t`简洁`], ['paper', t`古风纸笺`], ['neon', t`赛博霓虹`], ['pastel', t`柔和手账`]], when: options => options.format === 'mvu-ui' },
@@ -101,7 +103,7 @@ const OPTION_GROUPS = [
 // Words that ask for another card's own text. Asked for with a card only being learned from, the page asks first.
 const COPY_WORDS = /照搬|照抄|抄过来|搬过来|原文|原样|原封不动|一模一样|复制(这张|那张|它|原)|照着(它|这张|那张|原卡)写|直接用(它|这张|那张|原卡|原来)/
 const OPTION_GROUPS_LABELS = Object.fromEntries(OPTION_GROUPS.find(group => group.key === 'bricks').values)
-const NO_OPTIONS = { cast: '', world: false, gender: '', play: [], format: '', statusTheme: 'plain', bricks: [], eventRate: '', judgeDice: '', worldRate: '', scale: '', statusPages: false }
+const NO_OPTIONS = { cast: '', world: false, gender: '', userGender: '', play: [], format: '', statusTheme: 'plain', bricks: [], eventRate: '', judgeDice: '', worldRate: '', scale: '', statusPages: false }
 /** The examples that fit the picks (EXAMPLES is by the old kinds). */
 const exampleKind = options => (options.play?.length || options.format.startsWith('mvu') ? 'game' : options.world ? 'world' : options.cast || '')
 /** The picks in a few words, for the sketch's folded row. */
@@ -111,7 +113,8 @@ function optionsSummary(options) {
     const value = options[group.key]
     if (group.kind === 'many') return value.map(v => group.values.find(([key]) => key === v)?.[1]).filter(Boolean)
     if (group.kind === 'flag') return value ? [group.values[1][1]] : []
-    return value && !(group.key === 'statusTheme' && value === 'plain') ? [group.values.find(([key]) => key === value)?.[1]].filter(Boolean) : []
+    const label = value && !(group.key === 'statusTheme' && value === 'plain') ? group.values.find(([key]) => key === value)?.[1] : ''
+    return label ? [group.short ? group.short(label) : label] : []
   })
   return words.length ? words.join(t`、`) : t`都交给向导`
 }
@@ -190,9 +193,9 @@ export async function pngOf(url) {
 
 /**
  * @param deps - { api, el, toast, guard, openProviders, onCardSaved, startChatWith, makeVisualNovel(cardId, places),
- *   pickDraw(options) (web/draw-choice.js: the 画图方式 and model for the avatar) }
+ *   pickDraw(options) (web/draw-choice.js: the 画图方式 and model for the avatar), openTrial(cardId, { changed }) (试玩体检) }
  */
-export function initForge({ api, el, toast, guard, saveDownload = null, openProviders, onCardSaved, startChatWith, makeVisualNovel, pickDraw, onClosed }) {
+export function initForge({ api, el, toast, guard, saveDownload = null, openProviders, onCardSaved, startChatWith, makeVisualNovel, pickDraw, openTrial, onClosed }) {
   const $ = id => document.getElementById(id)
   const dialog = $('forge-dialog')
   const state = {
@@ -217,6 +220,7 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
     cicaBusy: false, // 交给 Cica: one idea being thought of
     previewValues: {}, // 数值预览: draft id → path → value where the sliders are
     homeModel: '',
+    retryPick: { key: '', model: '' }, // 换个模型重写: the model picked under an error (key: the draft and the error)
     poll: null,
     shown: '', // what the main area last showed, to re-render only on change
     open: new Set(), // entries shown in full on the polish view
@@ -273,6 +277,8 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
     view.toPlanBack = el('button', { type: 'button', class: 'btn ghost', text: t`回到方案`, onclick: () => setStage('plan') })
     view.saved = el('span', { class: 'forge-count' })
     view.chat = el('button', { type: 'button', class: 'btn', text: t`开始对话`, onclick: () => startChat() })
+    // Opens the window only: nothing is sent until 开始试玩 there (every run costs).
+    view.trial = el('button', { type: 'button', class: 'btn', text: t`试玩体检`, onclick: () => startTrial() })
     view.vn = el('button', { type: 'button', class: 'btn', text: t`做成视觉小说`, title: t`保存这张卡，开一个新对话进入视觉小说模式：选画图方式，备齐角色名册、立绘和表情，再给方案里的地点画背景`, onclick: () => startVn() })
     view.png = el('a', { class: 'btn', text: t`导出 PNG`, title: t`图片里带着整张卡，SillyTavern 可以直接导入`, onclick: event => {
       // The phone app saves it itself (saveDownload).
@@ -282,7 +288,7 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
       saveDownload(link.pathname + link.search, view.png.download, 'image/png')
     } })
     view.save = el('button', { type: 'button', class: 'btn primary', text: t`保存为角色卡`, onclick: () => saveCard() })
-    view.polishFoot = el('div', { class: 'forge-foot' }, [el('div', { class: 'forge-actions' }, [view.toPlanBack, el('span', { class: 'grow' }), view.saved, view.png, view.vn, view.chat, view.save])])
+    view.polishFoot = el('div', { class: 'forge-foot' }, [el('div', { class: 'forge-actions' }, [view.toPlanBack, el('span', { class: 'grow' }), view.saved, view.png, view.trial, view.vn, view.chat, view.save])])
     view.discussFoot = el('div', { class: 'forge-foot' }, [view.composer, el('div', { class: 'forge-actions' }, [view.attach, view.pickCount, el('span', { class: 'grow' }), view.undo, view.toPlans, view.toPlan, view.send])])
     view.planFoot = el('div', { class: 'forge-foot' }, [view.planText, el('div', { class: 'forge-actions' }, [view.back, view.attachPlan, el('span', { class: 'grow' }), view.rewriteAll, view.revise, view.write])])
     view.body = el('div', { class: 'forge-body' }, [view.main, view.sketch])
@@ -377,7 +383,7 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
     if (key === state.refsShown) return
     state.refsShown = key
     if (!list.some(item => item.id === state.readingRef)) closeReading()
-    view.refList.replaceChildren(...(list.length ? referenceChips(el, list, { open: toggleReading, drop: dropReference, locked: Boolean(draft.job) }) : []))
+    view.refList.replaceChildren(...(list.length ? referenceChips(el, list, { open: toggleReading, drop: dropReference, locked: Boolean(draft.job), studied: true }) : []))
     view.refStudy.replaceChildren(...list.filter(item => item.structure).map(item => studyRow(item, { locked: Boolean(draft.job), change: changeDraftMode })))
   }
 
@@ -564,7 +570,7 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
       idea.focus()
     }
     const study = state.references.filter(item => item.structure).map(item => studyRow(item, { change: changeHomeMode, take: takeStructure }))
-    const attached = state.references.length ? el('div', { class: 'ce-refs' }, referenceChips(el, state.references, { open: toggleHomeReading, drop: dropHomeReference })) : null
+    const attached = state.references.length ? el('div', { class: 'ce-refs' }, referenceChips(el, state.references, { open: toggleHomeReading, drop: dropHomeReference, studied: true })) : null
     const reading = state.references.find(item => item.id === state.homeReading)
     if (attached) idea.placeholder = t`想怎么用这些资料？也可以不写，向导读完会问你`
     const kinds = optionsPanel(state.options, next => {
@@ -596,7 +602,8 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
       idea,
       attached,
       study.length ? el('div', { class: 'forge-study-list' }, study) : null,
-      reading ? el('div', { class: 'ce-ref-text' }, el('pre', { text: reading.text })) : null,
+      // A card it only studies: what the model gets of it, not the card's text.
+      reading ? el('div', { class: 'ce-ref-text' }, el('pre', { text: reading.structure && reading.mode !== 'content' && reading.brief ? reading.brief : reading.text })) : null,
       el('div', { class: 'forge-attach-row' }, [attachButton(), el('span', { class: 'hint', text: t`手上有设定或小说？附上它，向导会照着聊，写卡时也照着写。附别人的卡时默认只学结构，不读内容。` })]),
       el('div', { class: 'forge-ideas-head' }, [
         el('span', { class: 'hint', text: state.ideas.length ? t`点一个填进上面，可以再改` : t`没想好？` }),
@@ -695,7 +702,53 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
     return el('div', { class: 'forge-error' }, [
       el('p', { text: error.message }),
       el('div', { class: 'row' }, [el('button', { type: 'button', class: 'btn small', text: t`重试`, onclick: () => retry() })]),
+      otherModel(error),
     ])
+  }
+
+  /**
+   * 换个模型重写: another model for the failed step, this once (the draft keeps its own). Nothing is sent
+   * until the button is clicked, and the line above it says what that would come to; never switched by itself.
+   */
+  function otherModel(error) {
+    if (!error.kind || error.kind === 'avatar' || !state.draft) return null
+    const choices = state.models.filter(m => m.id !== error.model)
+    if (!choices.length) return null
+    const id = state.draft.id
+    // The failed model is in the key: a swapped model can fail with the very same message.
+    const key = `${id}:${error.kind}:${error.model || ''}:${error.message}`
+    if (state.retryPick.key !== key || !choices.some(m => m.id === state.retryPick.model)) state.retryPick = { key, model: '' }
+    const pick = state.retryPick
+    const line = el('p', { class: 'hint forge-other-cost' })
+    const go = el('button', { type: 'button', class: 'btn small', text: t`换这个模型重写`, onclick: () => retry(pick.model) })
+    const select = el('select', { class: 'forge-model', 'aria-label': t`换哪个模型重写这一步`, onchange: () => choose(select.value) }, [
+      el('option', { value: '', text: t`换个模型…` }),
+      ...choices.map(m => el('option', { value: m.id, selected: m.id === pick.model, text: `${m.group} · ${m.label}` })),
+    ])
+    const choose = async model => {
+      pick.model = model
+      go.disabled = !model
+      line.textContent = model ? t`正在估算…` : t`这一步写坏了可以换个模型重写：只这一次用它，草稿的模型不变。`
+      if (!model) return
+      try {
+        const estimate = await api(`/api/forge/${id}/retry?model=${encodeURIComponent(model)}`)
+        if (pick.model !== model) return
+        line.textContent = otherCost(estimate)
+      } catch (failure) {
+        if (pick.model === model) line.textContent = failure.message
+      }
+    }
+    choose(pick.model)
+    return el('div', { class: 'forge-other' }, [line, el('div', { class: 'row' }, [select, go])])
+  }
+
+  /** What a retry with another model would come to, as 换这个模型重写 says it. */
+  function otherCost(estimate) {
+    const lead = t`点了才发送，只这一步用 ${estimate.model}，草稿的模型不变。`
+    if (estimate.input == null) return lead + t`这一步上次的用量没有记下，估不出要花多少。`
+    const tokens = (estimate.input + estimate.output).toLocaleString()
+    const money = estimate.cost == null ? t`（这个模型没有单价，估不出金额）` : t`，大约 $${estimate.cost.toFixed(3)}`
+    return lead + (estimate.measured ? t`按这一步上次的用量，大约 ${tokens} token${money}。` : t`按这一步发出的内容和输出上限估算，最多大约 ${tokens} token${money}。`)
   }
 
   function pickOf(id) {
@@ -804,7 +857,12 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
       view.png.href = `/api/cards/${savedId}/png?v=${encodeURIComponent(card.savedAt ?? '')}`
       view.png.download = `${draft.title}.png`
     }
-    view.saved.textContent = savedId ? t`已保存 ${ago(card.savedAt)}` : ''
+    view.saved.textContent = !savedId ? '' : card.changedSinceSave ? t`已保存 ${ago(card.savedAt)}，之后的改动还没保存` : t`已保存 ${ago(card.savedAt)}`
+    view.trial.hidden = !savedId || !openTrial
+    view.trial.disabled = busy
+    view.trial.title = card?.changedSinceSave
+      ? t`试玩的是上次保存的卡，之后的改动不在里面；想试最新的，先点「更新这张卡」`
+      : t`让模型替你玩几回合，查变量和格式，再挑抢话和出戏。点开不发送，开始试玩才花额度`
     view.toPlanBack.disabled = busy
   }
 
@@ -986,7 +1044,7 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
       plan.assumptions.length
         ? section(t`向导补的设定`, [el('p', { class: 'hint', text: t`这些是你没说过、向导替你补上的。不合意的，在下面写一句就会改掉。` }), bullets(plan.assumptions, 'assumed')], 'lamp')
         : null,
-      section(t`你的身份`, [nameField(draft), fields([[t`身份`, plan.user_role.identity], [t`限制`, plan.user_role.constraints]])]),
+      section(t`你的身份`, [nameField(draft), genderField(draft), fields([[t`身份`, plan.user_role.identity], [t`限制`, plan.user_role.constraints]])]),
       section(t`舞台`, [
         fields([[t`类型`, WORLD_KIND.get(plan.world.kind) ?? plan.world.kind], [t`概述`, plan.world.overview]]),
         plan.world.rules.length ? el('h5', { text: t`和常识不同的规则` }) : null,
@@ -1091,6 +1149,23 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
     return el('dl', { class: 'plan-fields' }, [
       el('dt', { text: t`名字` }),
       el('dd', {}, [box, el('p', { class: 'hint', text: t`空着就用设置里「你的名字」，以后改了设置也跟着变。填一个名字，用这张卡开的对话里你就叫这个名字。卡里写的都是 {{user}}，导到 SillyTavern 也一样。` })]),
+    ])
+  }
+
+  /** The player's gender in this card (卡的设定 你的性别, kept with the plan too): how it calls and refers to them. */
+  function genderField(draft) {
+    const now = draft.plan.user_role.gender ?? ''
+    const group = OPTION_GROUPS.find(g => g.key === 'userGender')
+    const buttons = group.values.map(([key, label]) => el('button', {
+      type: 'button', text: label, disabled: Boolean(draft.job), 'aria-pressed': String(now === key),
+      onclick: guard(async () => key !== now && apply(await api(`/api/forge/${draft.id}`, { method: 'PUT', body: { userGender: key } }))),
+    }))
+    return el('dl', { class: 'plan-fields' }, [
+      el('dt', { text: t`性别` }),
+      el('dd', {}, [
+        el('div', { class: 'seg', role: 'group', 'aria-label': t`你的性别` }, buttons),
+        el('p', { class: 'hint', text: draft.card ? t`角色怎么称呼你、用「他」还是「她」按它写。卡的简介会跟着改；已经写好的条目和开场白不会，要改就重写。` : t`角色怎么称呼你、用「他」还是「她」按它写。不限就不写明。` }),
+      ]),
     ])
   }
 
@@ -1349,7 +1424,7 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
     const job = draft.job
     const steps = draft.writing.map(step => {
       const mark = { done: '✓', running: '', failed: '!', waiting: '' }[step.state]
-      const extra = step.state === 'running' && job?.chars ? t`已写 ${job.chars} 字` : step.state === 'failed' ? t`没写成` : ''
+      const extra = step.state === 'running' && job?.chars ? t`已写 ${job.chars} 字` : step.state === 'failed' ? t`没写成` : step.by ? t`由 ${step.by} 重写` : ''
       return el('li', { class: step.state }, [el('span', { class: 'mark', text: mark }), el('span', { class: 'label', text: step.label }), extra ? el('span', { class: 'extra', text: extra }) : null])
     })
     const written = draft.card.entries.filter(e => e.content && e.type !== zh`状态`)
@@ -1366,7 +1441,7 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
       overall,
       el('p', { class: 'forge-lead', text: running ? t`按方案一步步写：先写世界和角色，后面的参照前面的保持一致；最后检查一遍套话和前后矛盾。可以关掉窗口，回来再看。` : t`已经写好的部分都留着，从停下的地方接着写。` }),
       el('ol', { class: 'write-steps' }, steps),
-      draft.error ? el('div', { class: 'forge-error' }, [el('p', { text: draft.error.message })]) : null,
+      draft.error ? el('div', { class: 'forge-error' }, [el('p', { text: draft.error.message }), running ? null : otherModel(draft.error)]) : null,
       el('div', { class: 'row' }, [
         running ? el('button', { type: 'button', class: 'btn', text: t`停下`, onclick: () => stopJob() }) : el('button', { type: 'button', class: 'btn primary', text: t`接着写`, onclick: () => startWrite() }),
       ]),
@@ -1745,7 +1820,8 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
     apply(next)
   })
 
-  const retry = guard(async () => apply(await api(`/api/forge/${state.draft.id}/retry`, { method: 'POST' })))
+  // `model`: 换这个模型重写, another model for this retry only.
+  const retry = guard(async (model = '') => apply(await api(`/api/forge/${state.draft.id}/retry`, { method: 'POST', body: model ? { model } : {} })))
   const undo = guard(async () => {
     if (!confirm(t`撤回你上一次的回答和向导对它的回复？`)) return
     apply(await api(`/api/forge/${state.draft.id}/undo`, { method: 'POST' }))
@@ -1802,7 +1878,13 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
   const saveCard = guard(async () => {
     const draft = state.draft
     const avatar = draft.card.avatar ? await pngOf(`/api/forge/${draft.id}/avatar?t=${encodeURIComponent(draft.card.avatar.at)}`) : nameCard(draft.plan.name)
-    const result = await api(`/api/forge/${draft.id}/save`, { method: 'POST', body: { avatar } })
+    let result = await api(`/api/forge/${draft.id}/save`, { method: 'POST', body: { avatar, ask: true } })
+    // Edited since in 修改角色卡 or 检查这张卡 (say from 试玩体检 here): updating puts the draft back over that.
+    if (result.changedElsewhere) {
+      const picture = result.pictureChanged ? `\n\n${t`头像在别处换过：更新会换回向导里的头像，现在这张收进「旧图」，在「修改角色卡」里还能换回来。`}` : ''
+      if (!confirm(t`「${result.card.name}」保存之后在别处改过（比如「修改角色卡」「检查这张卡」）。更新会用向导里的内容整张换掉，那些修改会没有。还要更新吗？` + picture)) return
+      result = await api(`/api/forge/${draft.id}/save`, { method: 'POST', body: { avatar } })
+    }
     apply(result.draft)
     await onCardSaved?.(result.card.id)
     if (result.updated) toast(t`「${result.card.name}」已更新，原来的对话都还在。`)
@@ -1814,6 +1896,13 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
     if (!id) return
     dialog.close()
     await startChatWith?.(id)
+  })
+
+  // 试玩体检 on the saved card, over this window: closing it comes back here.
+  const startTrial = guard(async () => {
+    const card = state.draft?.card
+    if (!card?.savedCardId) return
+    await openTrial?.(card.savedCardId, { changed: Boolean(card.changedSinceSave), forge: true })
   })
 
   // 做成视觉小说: a new chat with the card, in the mode, and its pictures drawn (the plan's places get backgrounds).

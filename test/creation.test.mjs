@@ -7,7 +7,10 @@ import { cleanCardOptions, emptyBrief, normalizePlan, planRequest, withCardOptio
 import { cardJson, newCard } from '../server/forge/write.mjs'
 import { applyScripts } from '../server/regex-guard.mjs'
 import { displayText } from '../server/state.mjs'
-import { PLACEMENT } from '../web/shared/regex.js'
+import { normalizeCard } from '../server/cards.mjs'
+import { segments } from '../web/render.js'
+import { PLACEMENT, applyScripts as applyOnPage } from '../web/shared/regex.js'
+import { isCreationPage } from '../web/shared/vn.js'
 
 const form = {
   intro: '开局前先定几件事。',
@@ -57,6 +60,16 @@ test('the rule is there for one message only, and says where the story starts', 
   const [entry] = configureEntries([creationEntry(plan, false)])
   assert.equal(entry.strategy, 'keyword')
   assert.deepEqual(entry.keywords, ['【建角】'])
+})
+
+test('a pick going into a list says to add to it; the player is no 他; the start reads as sentences', () => {
+  const plan = { creation: cleanCreation({ fields: [{ label: '第一家', options: ['钟表铺', '杂货铺'], path: '主角.到过的地方' }, { label: '缘由', options: ['找人', '躲债'] }] }), tracking: { variables: [{ path: '主角.到过的地方', type: 'list' }] }, greetings: [{ start: '钟表铺门口。', scene: '雨夜', situation: '她刚到' }] }
+  const zh = creationText(plan, false, '主角')
+  assert.match(zh, /第一家 → 主角\.到过的地方（这是列表：把值加成其中一项，不要把整个列表换掉）/)
+  assert.match(zh, /缘由 → 主角\.缘由\s/, 'not a list: as before')
+  assert.match(zh, /从这里开始：钟表铺门口；雨夜；她刚到。玩家选的/)
+  assert.doesNotMatch(zh, /替他/)
+  assert.match(creationText(plan, true, '主角'), /a list: add the value to it as one more item/)
 })
 
 test('it takes up no room between turns', () => {
@@ -117,4 +130,22 @@ test('not picked, no form: the planner is not told and the card is as it was', (
   assert.match(planRequest([], emptyBrief(), {}, { options: cleanCardOptions({ bricks: ['creation'] }) }).system, /creation 字段/)
   const plan = withCardOptions(normalizePlan(rawPlan), cleanCardOptions({}))
   assert.equal(plan.creation, undefined)
+})
+
+// 视觉小说模式 (web/vn.js stepsOf) shows HTML after a reply's words only behind 状态; the form is a step instead.
+test('in 视觉小说模式 the form is told apart from the opening and from a status bar', () => {
+  const plan = withCardOptions(normalizePlan({ ...rawPlan, tracking: { enabled: true, variables: [{ path: '她.好感', label: '好感', type: 'number', initial: '1' }] } }), cleanCardOptions({ bricks: ['creation'], format: 'mvu-ui' }))
+  const draft = newCard(plan)
+  draft.greetings = [{ title: '开场', text: '第一段开场' }]
+  const raw = cardJson(plan, draft)
+  const { regexScripts } = normalizeCard(raw)
+  const shown = text => segments(applyOnPage(text, regexScripts, { placement: PLACEMENT.AI_OUTPUT, target: 'display', depth: 0, macros: value => value }))
+  const opening = shown(raw.data.first_mes)
+  assert.deepEqual(opening.map(part => part.kind), ['story', 'html'])
+  assert.equal(isCreationPage(opening[0]), false)
+  assert.equal(isCreationPage(opening[1]), true)
+  const bar = shown('她点了点头。\n\n<StatusPlaceHolderImpl/>')
+  assert.equal(bar.at(-1).kind, 'html')
+  assert.equal(isCreationPage(bar.at(-1)), false)
+  assert.equal(isCreationPage(undefined), false)
 })

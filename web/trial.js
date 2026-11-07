@@ -7,14 +7,15 @@ const ICON_CLOSE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12
 const MANAGE_PROVIDERS = '__manage__'
 const count = n => Math.round(n).toLocaleString()
 const MARK = { ok: '✓', warn: '!', error: '✕' }
-const KIND_TEXT = { 抢话: t`抢话`, 出戏: t`出戏`, 矛盾: t`矛盾`, 放水: t`放水`, 重复: t`重复`, 其他: t`其他` }
+const KIND_TEXT = { 抢话: t`抢话`, 出戏: t`出戏`, 矛盾: t`矛盾`, 放水: t`放水`, 重复: t`重复`, 数值: t`数值`, 事件: t`事件`, 其他: t`其他` }
 const INTENT_TEXT = { go: t`顺着玩`, use: t`用东西`, ask: t`追问`, push: t`硬闯`, claim: t`说假话`, hand: t`让对方决定` }
 
-/** @param deps - { api, el, toast, guard, copyText(text), openProviders, openEdit(cardId) } */
-export function initTrial({ api, el, toast, guard, copyText, openProviders, openEdit }) {
+/** @param deps - { api, el, toast, guard, copyText(text), openProviders, openEdit(cardId), openCheck(cardId) } */
+export function initTrial({ api, el, toast, guard, copyText, openProviders, openEdit, openCheck }) {
   const dialog = document.getElementById('trial-dialog')
   const view = {}
-  const state = { cardId: '', data: null, models: [], defaultModel: '', poll: null }
+  // forge: opened from 创作角色卡; changed: with edits made there after the save (the trial plays the saved card).
+  const state = { cardId: '', data: null, models: [], defaultModel: '', poll: null, changed: false, forge: false }
   const url = (path = '') => `/api/cards/${state.cardId}/trial${path}`
 
   function layout() {
@@ -97,10 +98,11 @@ export function initTrial({ api, el, toast, guard, copyText, openProviders, open
       el('h3', { text: t`让模型替你玩几回合` }),
       el('p', { class: 'hint', text: t`用这张卡真实地跑几回合：一个模型演卡，一个模型扮玩家，中途会故意试探，比如硬闯、说假话、让它替你决定。这一局不进你的对话列表，玩完就删。` }),
       el('p', { class: 'hint', text: note }),
+      state.changed ? el('p', { class: 'ce-outcome warn', text: t`创作向导里还有没保存的改动：这里试玩的是上次保存的卡。想试最新的，先关掉这里，在向导里点「更新这张卡」。` }) : null,
       job
         ? el('div', { class: 'cc-send' }, [el('span', { class: 'hint', text: stepText(job.step) }), el('span', { class: 'grow' }), el('button', { type: 'button', class: 'btn ghost small', text: t`停下`, onclick: guard(stop) })])
         : el('div', { class: 'cc-send' }, [modelChoice(), roundsChoice(), el('span', { class: 'grow' }), el('button', { type: 'button', class: 'btn primary small', text: report ? t`再玩一次` : t`开始试玩`, disabled: !estimate.ready, onclick: guard(start) })]),
-    ])
+    ].filter(Boolean))
   }
 
   function stepText(step) {
@@ -153,25 +155,35 @@ export function initTrial({ api, el, toast, guard, copyText, openProviders, open
     const issues = data.issues.length
       ? data.issues.map(issueView)
       : [el('p', { class: 'hint', text: data.stopped ? t`提前停下了，没有读这一局。` : data.unread ? t`模型的审读没能读出来，上面程序查的结果不受影响。` : t`读下来没有挑出毛病。` })]
+    const problems = data.issues.length + data.lines.filter(line => line.level !== 'ok').length
     return el('div', { class: 'cc-page-part' }, [
       el('section', { class: 'plan-card' }, [
         el('h3', { text: t`结果` }),
         el('p', { class: 'hint', text: t`${data.model} · 玩了 ${data.rounds.length} 回合${data.stopped ? t`（提前停下）` : ''} · 这一局用了 ${count(data.tokens.input)} 输入、${count(data.tokens.output)} 输出 token` }),
+        data.outdated ? el('p', { class: 'ce-outcome warn', text: t`这份报告之后卡改过了，有些问题可能已经改好，再玩一次可以确认。` }) : null,
         data.summary ? el('p', { text: data.summary }) : null,
         el('ul', { class: 'trial-lines' }, data.lines.map(line => el('li', { class: `trial-line ${line.level}` }, [el('span', { class: 'trial-dot', text: MARK[line.level] }), el('span', { text: line.text })]))),
       ].filter(Boolean)),
       el('section', { class: 'plan-card' }, [el('h3', { text: t`读下来的问题` }), ...issues]),
       el('section', { class: 'plan-card' }, [el('h3', { text: t`这一局` }), ...data.rounds.map(roundView)]),
+      // These fix the saved card, which the wizard's next 更新这张卡 writes over from its draft.
+      state.forge ? el('p', { class: 'ce-outcome warn', text: t`「去修改这张卡」「在检查里修」改的是已经保存的卡，不是向导里的草稿。改完再在向导里点「更新这张卡」，会用草稿整张换掉这些修改。想留在向导里改，关掉这里，在开场白或条目上点「编辑」或「按意见重写」。` }) : null,
       el('div', { class: 'cc-send' }, [
         el('button', { type: 'button', class: 'btn ghost small', text: t`复制问题清单`, onclick: guard(async () => {
           await copyText(reportText(data))
-          toast(t`已复制，可以贴到「对话修改」里让向导改。`)
+          toast(state.forge ? t`已复制，可以对照着在向导里改开场白和条目。` : t`已复制，可以贴到「对话修改」里让向导改。`)
         }) }),
         el('button', { type: 'button', class: 'btn ghost small', text: t`去修改这张卡`, onclick: () => {
           dialog.close()
           openEdit(state.cardId)
         } }),
-      ]),
+        // A page from before 检查这张卡 took the trial's problems has nothing to open them with.
+        openCheck && problems ? el('span', { class: 'grow' }) : null,
+        openCheck && problems ? el('button', { type: 'button', class: 'btn primary small', text: t`在检查里修`, title: t`这些问题会列在「检查这张卡」里：可以让模型出改法，改前改后看过再采用，采用后能撤销`, onclick: () => {
+          dialog.close()
+          openCheck(state.cardId)
+        } }) : null,
+      ].filter(Boolean)),
     ])
   }
 
@@ -190,9 +202,11 @@ export function initTrial({ api, el, toast, guard, copyText, openProviders, open
   layout()
 
   return {
-    /** Opens the window on a card. */
-    async open(cardId) {
+    /** Opens the window on a card. `forge`: from 创作角色卡; `changed`: it has edits not saved into the card yet. */
+    async open(cardId, { changed = false, forge = false } = {}) {
       state.cardId = cardId
+      state.changed = changed
+      state.forge = forge
       state.data = null
       await loadModels()
       load(await api(url()))

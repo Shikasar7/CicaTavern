@@ -292,6 +292,23 @@ function worldText({ lines }, english) {
     ].join('\n')
 }
 
+// A line of 世界动态's rule as worldText writes it: the head (name and variable) is the code's, the stages the card's.
+const WORLD_RULE_LINE = /^(- (.+?)(?:（变量 | \(variable ).+?[）)](?:：|: ))(.+)$/
+
+/** The lines a 世界动态 rule lists: [{ head, name, stages }]. */
+export function worldLines(content) {
+  return String(content ?? '').split('\n').flatMap(line => {
+    const found = WORLD_RULE_LINE.exec(line)
+    return found ? [{ head: found[1], name: found[2], stages: found[3].split(' → ') }] : []
+  })
+}
+
+/** A 世界动态 rule with other stages for some of its lines: `stages` maps a name to them. */
+export const withWorldStages = (content, stages) => content.split('\n').map(line => {
+  const found = WORLD_RULE_LINE.exec(line)
+  return found && stages.has(found[2]) ? `${found[1]}${stages.get(found[2]).join(' → ')}` : line
+}).join('\n')
+
 /** A brick entry's text. */
 export function brickContent(part, plan, english, root = english ? 'Protagonist' : '主角') {
   if (part === 'selfcheck') return selfCheckText(plan.selfcheck, english)

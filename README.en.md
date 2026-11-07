@@ -149,10 +149,12 @@ If you can't quite say what you want, the creator guides you round by round:
 
 <br clear="right">
 
-## Latest changes [2.4.0]
+## Latest changes [2.4.1]
 
 <p align="center"><img src="web/whatsnew/2.4.0-battle.webp" alt="A turn-based fight: two wolves and a bandit chief on a mountain road, the chief taking a 17-point critical hit" width="720"></p>
 
+- **2.4.1: tune it as you chat**: a Thinking pick per chat in the top bar (default, off, low to max); a story length range in the basic preset; line spacing in the theme; Memory in the top bar turns long-term memory on or off; World books marks the books the card brings and uses.
+- **2.4.1: checks, trial runs and the card creator**: Adjust status bar, Check the whole card for big cards, trial problems fixed from the check list, trial runs that check values; the card creator asks your gender, reviews against the plan, keeps one-time events one-time and redoes a failed step with another model; a reply cut off partway keeps what was written; Draw CG in visual novel mode; Codex (this PC) as a drawing method on computers.
 - **iPhone and iPad beta**: [install it through TestFlight](https://testflight.apple.com/join/wsT7kT4b). It runs on the device by itself and needs iOS 16 or later.
 - **2.4.0: direct chat**: talk to a model with no character card, from the top of the left column, with text files, web search and replies shown as Markdown.
 - **2.4.0: game rules (in development)**: a card's ⋯ menu has Game rules, on per card and off by default. It brings checks and dice, a pack, turn-based fights, levels and achievements, with success worked out by the program.

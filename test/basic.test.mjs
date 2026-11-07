@@ -8,8 +8,8 @@ import { BASIC_DEFAULTS, BASIC_OPTIONS, VN_DEFAULTS, VN_ID, choicesOf, cleanBasi
 import { autoStatusSpec, cleanStatusSpec, compactText, statusGroups } from '../web/shared/status.js'
 import { applyScripts, PLACEMENT } from '../web/shared/regex.js'
 import { streamingText, withoutOwnStatus } from '../web/render.js'
-import { basicDetail, basicPreset, basicRules } from '../server/basic.mjs'
-import { buildChatPrompt, everyTurnReminder } from '../server/prompt.mjs'
+import { basicDetail, basicPreset, basicRules, lengthRule } from '../server/basic.mjs'
+import { buildChatPrompt, buildTurnPrompt, everyTurnReminder } from '../server/prompt.mjs'
 import { hasPrefixRules } from '../server/presets.mjs'
 import { displayText } from '../server/state.mjs'
 import { createStore } from '../server/store.mjs'
@@ -22,6 +22,29 @@ const CARD = {
 }
 const PERSONA = { name: '旅人', description: '' }
 const build = options => buildChatPrompt({ card: CARD, persona: PERSONA, settings: { language: '简体中文' }, books: [], hasState: false, preset: basicPreset({ basic: options }) }).systemPrompt
+
+test('正文字数: a range in characters, kept sane, asked for each turn over 语言与字数, within the output cap', () => {
+  assert.deepEqual([BASIC_DEFAULTS.lengthMin, BASIC_DEFAULTS.lengthMax, VN_DEFAULTS.lengthMax], [0, 0, 0], 'off unless set, in both presets')
+  const kept = cleanBasic({ lengthMin: '800', lengthMax: 1500.4 })
+  assert.deepEqual([kept.lengthMin, kept.lengthMax], [800, 1500])
+  assert.deepEqual([cleanBasic({ lengthMin: 3000, lengthMax: 1000 }).lengthMin, cleanBasic({ lengthMin: -5, lengthMax: 'x' }).lengthMax], [1000, 0], 'a lower bound above the upper one is the upper one')
+  assert.equal(cleanBasic({ lengthMax: 99999 }).lengthMax, 20000)
+  assert.equal(cleanVn({ lengthMin: 300 }).lengthMin, 300)
+
+  assert.match(lengthRule({ lengthMin: 800, lengthMax: 1500 }), /^本轮正文 800–1500 字。在这个范围里按剧情需要定长短/)
+  assert.match(lengthRule({ lengthMin: 800 }), /^本轮正文不少于 800 字/)
+  assert.match(lengthRule({ lengthMax: 600 }), /^本轮正文不超过 600 字/)
+  assert.equal(lengthRule({}), '')
+  // A provider's output cap of 3000 holds about 1000 characters: the range comes down to it.
+  assert.match(lengthRule({ lengthMin: 800, lengthMax: 4000 }, 3000), /^本轮正文 800–1000 字/)
+  assert.match(lengthRule({ lengthMin: 2000, lengthMax: 4000 }, 3000), /^本轮正文约 1000 字/)
+  assert.match(lengthRule({ lengthMin: 800, lengthMax: 1500 }, 0), /800–1500/, 'no cap: as set')
+
+  const both = buildTurnPrompt({ names: { user: '你', char: '小雨' }, input: '你好', replyLength: 500, replyRange: lengthRule({ lengthMin: 800, lengthMax: 1500 }) })
+  assert.match(both, /<回复要求>\s+本轮正文 800–1500 字/)
+  assert.doesNotMatch(both, /约 500 字/, 'the range wins over 语言与字数')
+  assert.match(buildTurnPrompt({ names: { user: '你', char: '小雨' }, input: '你好', replyLength: 500 }), /约 500 字/)
+})
 
 test('options: unknown keys go, unknown values fall back to the defaults', () => {
   assert.deepEqual(cleanBasic(null), BASIC_DEFAULTS)

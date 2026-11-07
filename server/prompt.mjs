@@ -381,6 +381,7 @@ export function webSearchNote() {
  * @param stateText - JSON of the current state when it should be refreshed.
  * @param input - the player's input (already prompt-processed).
  * @param replyLength - target reply length in characters, 0 for none.
+ * @param replyRange - the built-in preset's 正文字数 (shared/basic.js lengthRule): in place of replyLength when set.
  * @param presetText - the preset's per-turn paragraphs, rendered for this turn.
  * @param reminder - one line pointing at the prefix's every-turn rules.
  * @param marks - ask for the 视觉小说格式 (dialogueFormat).
@@ -391,7 +392,7 @@ export function openingBlock(opening, names) {
   return `<开场>\n以下是故事的开场，已作为第一段正文展示给玩家：\n${replaceMacros(opening, names)}\n</开场>`
 }
 
-export function buildTurnPrompt({ names, opening, recap = '', entries = [], memory = '', dynamic = [], characterNote = '', stateText, input, replyLength = 0, presetText = '', reminder = '', marks = false, game = '' }) {
+export function buildTurnPrompt({ names, opening, recap = '', entries = [], memory = '', dynamic = [], characterNote = '', stateText, input, replyLength = 0, replyRange = '', presetText = '', reminder = '', marks = false, game = '' }) {
   const parts = []
   const block = (tag, items) => {
     const body = items.filter(item => item.text).map(item => titled(item.title, item.text)).join('\n\n')
@@ -407,7 +408,8 @@ export function buildTurnPrompt({ names, opening, recap = '', entries = [], memo
   block('动态设定', dynamic)
   if (stateText) parts.push(`<当前状态>\n${stateText}\n</当前状态>`)
   if (characterNote) parts.push(`<角色备注>\n${characterNote}\n</角色备注>`)
-  if (replyLength > 0) parts.push(`<回复要求>\n本轮正文约 ${replyLength} 字（上下浮动两成以内），只计叙事正文，不含状态栏、变量更新等标签块。\n</回复要求>`)
+  if (replyRange) parts.push(`<回复要求>\n${replyRange}\n</回复要求>`)
+  else if (replyLength > 0) parts.push(`<回复要求>\n本轮正文约 ${replyLength} 字（上下浮动两成以内），只计叙事正文，不含状态栏、变量更新等标签块。\n</回复要求>`)
   parts.push(`<玩家输入>\n${replaceMacros(input, names)}\n</玩家输入>`)
   // After the input, like SillyTavern's post-history prompts.
   if (presetText) parts.push(`<预设指令>\n${presetText}\n</预设指令>`)

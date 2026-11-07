@@ -7,11 +7,11 @@
 import { readFile } from 'node:fs/promises'
 import { activePath, booksForCard, chatPicks, childrenOf, compactBlock, editMessage as editChatMessage, forgetDeleted, pathTo, playerOf, presetFor, scriptsOf, selectNode } from './chats.mjs'
 import { hasPrefixRules, renderPresetTail } from './presets.mjs'
-import { asksChoices, asksSelfCheck, choicesInstruction, choicesRequest, extractChoices, replyScripts, withChoices } from './basic.mjs'
-import { DIRECT_CARD, choicesOf, isBuiltinPreset } from '../web/shared/basic.js'
+import { asksChoices, asksSelfCheck, choicesInstruction, choicesRequest, extractChoices, lengthRule, replyScripts, withChoices } from './basic.mjs'
+import { DIRECT_CARD, VN_ID, BASIC_ID, builtinOptions, choicesOf, isBuiltinPreset } from '../web/shared/basic.js'
 import { cleanReferences, referenceBlock } from './forge/references.mjs'
 import { buildTurnPrompt, chatTemplates, drawnEntries, everyTurnReminder, openingBlock, renderEntry, replaceMacros, templateText, webSearchNote } from './prompt.mjs'
-import { applyStateUpdates, applyWrites, displayText, writeLabels } from './state.mjs'
+import { applyStateUpdates, applyWrites, displayText, withoutOpenEnd, writeLabels } from './state.mjs'
 import { choiceFights, cutAtGate, withoutGameMarks } from '../web/shared/game/marks.js'
 import { applyOps, checkExperience, checkLine, cleanCheck, cleanOps, gateKinds, keptSheet, opWrites, pausesOn, rankNow, rollCheck, rulesOn, sheetOf, sheetOnPath } from '../web/shared/game/sheet.js'
 import { cleanFight, encounterSetup, fightLine, fightResult } from '../web/shared/game/encounter.js'
@@ -24,7 +24,7 @@ import { applyScripts } from './regex-guard.mjs'
 import { replaceVariableMacros } from '../web/shared/vars.js'
 import { decoratorsOf, hasEjs, hasTemplate, stripTemplates, templateSession } from './template.mjs'
 import { accumulatedDynamic, compactThreshold, dynamicMemory, planDynamic, stripDynamicText } from './dynamic.mjs'
-import { complete, CONTEXT_FULL, isProviderRef, providerError, resolveRef, unreadReply, webSearchKind } from './providers.mjs'
+import { chatReasoning, complete, CONTEXT_FULL, isProviderRef, providerError, resolveRef, unreadReply, webSearchKind } from './providers.mjs'
 import { canonicalModel } from './models.mjs'
 import { directSummaryInstruction, extractSummary, keptArchive, looksLikeArchive, MIN_TURNS, recapBlock, recentExchanges, storyPath, storyTurns, summaryInstruction, turnsSinceCompaction, withoutHidden } from './recap.mjs'
 import { contextUsed, limitFromError, thresholdFor, windowOf } from './context.mjs'
@@ -177,6 +177,26 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     return { settings: await store.getSettings(), prompt: [recap, referenceBlock(files), input].filter(Boolean).join('\n\n'), input, injected: [], injectedTitles: [], templateErrors: [], shouldCompact: false }
   }
 
+  /**
+   * The built-in preset's 正文字数 for this chat's turn, over 语言与字数's 字数; '' when the chat has another preset or
+   * no range is set. Kept within the output cap of the provider the chat's model is on.
+   */
+  async function replyRange(chat, settings) {
+    if (!ownPreset(chat)) return ''
+    const options = builtinOptions(settings, chat.presetId === VN_ID ? VN_ID : BASIC_ID)
+    if (!options.lengthMin && !options.lengthMax) return ''
+    const ref = modelFor(chat, settings)
+    let maxTokens = 0
+    if (isProviderRef(ref)) {
+      try {
+        maxTokens = Number(resolveRef(ref, await store.getProviders()).provider.maxTokens) || 0
+      } catch {
+        // A provider gone: the turn fails on it later, with its own message.
+      }
+    }
+    return lengthRule(options, maxTokens)
+  }
+
   async function preparePrompt(chat, parent, input, options = {}) {
     if (chat.cardId === DIRECT_CARD) return directPrompt(chat, parent, input, options.files)
     const templates = { session: null }
@@ -320,6 +340,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       stateText: refreshState ? JSON.stringify(writes.state, null, 1) : '',
       input: resolve(promptInput),
       replyLength: Number(settings.replyLength) || 0,
+      replyRange: await replyRange(chat, settings),
       presetText: resolve(presetText),
       reminder: [everyTurnReminder(chat.systemPrompt, books, { presetRules: hasPrefixRules(preset), mvu: usesMvu(card, books), choices: asksChoices(chat), selfCheck: asksSelfCheck(chat), scripts }), game?.reminder].filter(Boolean).join(''),
       marks,
@@ -571,11 +592,20 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
    */
   async function generateApi(target, request, signal, onText) {
     const [{ thinking, effort, showReasoning }, words] = await Promise.all([store.getSettings(), store.getBlockWords()])
+    // A story turn carries its chat's own 思考 (顶栏), over the provider's and the settings'.
+    const { chatThinking, ...asked } = request
+    const { provider, reasoning: asks } = chatReasoning(target.provider, { thinking, effort }, chatThinking)
     // 显示思考过程: a story turn's native thinking (request.onReasoning) goes to the page and stays with the reply.
     const onReasoning = showReasoning ? request.onReasoning : undefined
     let result
+    // Text came: whatever went wrong came after the address and the key had worked.
+    let begun = false
+    const onDelta = onText && (delta => {
+      begun = true
+      onText(delta)
+    })
     try {
-      result = await complete(target.provider, target.modelId, { ...blockRequest(request, words), reasoning: { thinking, effort }, signal, onDelta: onText, onReasoning }, { proxy: isolation.proxy })
+      result = await complete(provider, target.modelId, { ...blockRequest(asked, words), reasoning: asks, signal, onDelta, onReasoning }, { proxy: isolation.proxy })
     } catch (error) {
       if (signal.aborted || error.status) throw error
       // Too long for the model (413 is a request too big for the provider at all): marked for the page
@@ -586,7 +616,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       const text = String(error.message ?? '')
       const blocked = PROHIBITED.test(text) ? filteredReply(target.provider.name, text.match(PROHIBITED)[0]) : null
       // detail: the provider's answer whole, for the error log (the message quotes only its start).
-      throw Object.assign(httpError(502, blocked ?? providerError(target.provider, error)), { detail: error.body || text }, contextFull ? { contextFull: true } : {})
+      throw Object.assign(httpError(502, blocked ?? providerError(target.provider, error, { begun })), { detail: error.body || text }, contextFull ? { contextFull: true } : {})
     }
     if (!result.text.trim()) {
       const reason = String(result.stopReason ?? '')
@@ -619,9 +649,11 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
    * @param parentId - the assistant node to continue from.
    * @param userNodeId - reuse an existing user node (regenerate) instead of creating one.
    * @param marks - ask for the 视觉小说格式 (a regenerated turn keeps what it asked).
+   * @param options.keepCut - a provider's reply stopped partway (by the player, or by a failure) is saved as far as it
+   *   went, marked (api.truncated 'stopped' or 'broken'), and the result's `cut` says why. Without it such a turn fails whole.
    */
   /** @param files - 直连对话: what came with the message, as read for the page (forge/references.mjs). */
-  async function runTurn(chatId, { parentId, input, userNodeId, marks = false, game = null, files: attached = [] }, emit) {
+  async function runTurn(chatId, { parentId, input, userNodeId, marks = false, game = null, files: attached = [] }, emit, { keepCut = false } = {}) {
     if (running.has(chatId)) throw httpError(409, msg`这个对话正在生成`)
     const abortController = new AbortController()
     running.set(chatId, abortController)
@@ -698,21 +730,42 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
 
       const started = Date.now()
       let firstToken = 0
+      // What has been shown of the reply and of its thinking, for a reply that stops partway.
+      let shown = ''
+      let thought = ''
       const onText = delta => {
         if (!firstToken) firstToken = Date.now() - started
+        shown += delta
         emit({ type: 'delta', text: delta })
       }
       // The relay lost the system prompt, seen only at the end: the page drops what it showed, and the answer comes again.
-      const onRestart = () => emit({ type: 'restart' })
+      const onRestart = () => {
+        shown = ''
+        thought = ''
+        emit({ type: 'restart' })
+      }
       // The model's own thinking as it comes (显示思考过程 on): shown above the reply, never sent back to the model.
-      const onReasoning = delta => emit({ type: 'reasoning', text: delta })
+      const onReasoning = delta => {
+        thought += delta
+        emit({ type: 'reasoning', text: delta })
+      }
       // A busy provider (Vertex AI's 429) asked again after a wait: the page says so meanwhile.
       const onRetry = info => emit({ type: 'retrying', provider: target.provider?.name, ...info })
       let outcome
+      let cut = null
       if (target.api) {
         const history = await apiMessages(chat, parent, { stripAll: Boolean(compacted || userNode?.dynamic?.compacted) })
         const cap = await replyCap(chat, target.provider)
-        outcome = await generateApi(target, { system: chat.systemPrompt, messages: [...history, { role: 'user', content: prepared.prompt }], ...cap, webSearch, onRestart, onRetry, onReasoning }, abortController.signal, onText)
+        try {
+          outcome = await generateApi(target, { system: chat.systemPrompt, messages: [...history, { role: 'user', content: prepared.prompt }], ...cap, webSearch, onRestart, onRetry, onReasoning, chatThinking: chat.thinking }, abortController.signal, onText)
+        } catch (error) {
+          // The provider tells the tokens at the end of an answer, so this one has none. An update block it finished still counts.
+          const kept = keepCut ? withoutOpenEnd(shown) : ''
+          if (!displayText(kept)) throw error
+          const stopped = abortController.signal.aborted
+          cut = stopped ? { stopped } : { stopped, status: error.status ?? 500, message: error.message, detail: error.detail }
+          outcome = { reply: kept, model: target.model, tokens: null, sdk: null, api: { provider: target.provider.id, model: target.modelId, truncated: stopped ? 'stopped' : 'broken' }, search: null, ...(thought.trim() ? { reasoning: thought.trim() } : {}) }
+        }
       } else {
         // The turn's message as the session will hold it: the 屏蔽词 applied (the system prompt in beforeTurn).
         const sent = blockSent(prepared.prompt, await store.getBlockWords())
@@ -824,8 +877,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         if (globalWrites.length) {
           await store.updateSettings(current => ({ globalVars: applyWrites(current.globalVars ?? {}, globalWrites) })).catch(() => {})
         }
-        await ledger?.recordTurn(fresh, node).catch(() => {})
-        return { chat: fresh, nodeId: node.id }
+        if (node.usage) await ledger?.recordTurn(fresh, node).catch(() => {})
+        return { chat: fresh, nodeId: node.id, ...(cut ? { cut } : {}) }
       })
     } catch (error) {
       if (resumedInPlace) await subscription.forgetTip(chatId, resumedInPlace)
@@ -1206,15 +1259,22 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
    * imported before schemas were kept has its script in its picture only: read from there once.
    */
   async function keptToSchema(chat, state) {
-    const card = await store.getCard(chat.cardId).catch(() => null)
+    const card = await cardWithSchema(chat.cardId)
     if (!card) return { state }
+    return keepToSchema(card.mvuSchema, state)
+  }
+
+  /** The card with its mvuSchema filled in from its picture if it had none yet; checks no state. */
+  async function cardWithSchema(cardId) {
+    const card = await store.getCard(cardId).catch(() => null)
+    if (!card) return null
     if (typeof card.mvuSchema !== 'string') {
       const picture = card.hasAvatar ? await readFile(store.avatarPath(card.id)).catch(() => null) : null
       const raw = picture ? rawOfPicture(picture) : null
       card.mvuSchema = schemaScript((raw?.data ?? raw)?.extensions)
       await store.saveCard(card)
     }
-    return keepToSchema(card.mvuSchema, state)
+    return card
   }
 
   /**
@@ -1491,6 +1551,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     fillUpdate,
     missesUpdate,
     keptToSchema,
+    cardWithSchema,
     rewriteChoices,
     previewTurn,
     sortThings,

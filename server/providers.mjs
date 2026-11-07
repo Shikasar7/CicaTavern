@@ -390,8 +390,26 @@ export function providerChoices(providers) {
       provider: provider.id,
       listed: true,
       search: webSearchKind(provider, model.id),
+      // What its 思考 follows by default, for the chat's own pick (顶栏): the provider set to 关闭; a Claude model
+      // on the Anthropic API going by 设置's 思考; one that thinks whatever it is told.
+      ...(provider.thinking === 'off' && (provider.api === 'google-generative' || Object.keys(thinkingOff(provider, model.id)).length) ? { thinkingOff: true } : {}),
+      ...thinkingKind(provider, model.id),
     })),
   )
+}
+
+/**
+ * How a model's 思考 goes, for the chat's own pick: a Claude model behind the Anthropic API follows 设置's 思考
+ * (`claude`), some think whatever they are told (`alwaysThinks`: Opus 5.5, Fable 5.1, Gemini 3 and 2.5 Pro on
+ * Gemini's own API), and one takes none of it (`noThinking`: Haiku 4.5, thinking by budget). Nothing for the rest.
+ */
+function thinkingKind(provider, modelId) {
+  if (provider.api === 'google-generative') return /gemini/i.test(modelId) && !geminiStops(modelId) ? { alwaysThinks: true } : {}
+  if (provider.api !== 'anthropic-messages') return {}
+  const info = claudeInfo(modelId)
+  if (!info) return {}
+  if (info.thinking === 'budget') return { claude: true, noThinking: true }
+  return { claude: true, ...(info.thinking === 'always' ? { alwaysThinks: true } : {}) }
 }
 
 /**
@@ -1039,6 +1057,21 @@ const PAUSED_ROUNDS = 3
 
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
 
+/** 思考 a chat can pick for its own replies (the top bar beside its model): none, or thinking at an effort. */
+export const CHAT_THINKING = ['off', ...EFFORTS]
+
+/**
+ * A chat's own 思考 over the provider's and the settings'. '' (or anything else) follows them: the provider's 思考: 关闭,
+ * else 设置 → 模型's 思考 and 努力程度. 'off' asks for no thinking the way 思考: 关闭 does (Claude through its 思考 field,
+ * with the settings' effort). An effort thinks at it, on a provider set to 关闭 too. The provider's 额外请求参数 still
+ * come last (requestBody). Neither the provider nor the settings change. → { provider, reasoning } for complete().
+ */
+export function chatReasoning(provider, { thinking, effort } = {}, choice = '') {
+  if (choice === 'off') return { provider: { ...provider, thinking: 'off' }, reasoning: { thinking: 'off', effort } }
+  if (EFFORTS.includes(choice)) return { provider: { ...provider, thinking: '' }, reasoning: { thinking: 'adaptive', effort: choice } }
+  return { provider, reasoning: { thinking, effort } }
+}
+
 /** The catalog entry behind a relay's id: "anthropic/claude-opus-5.5", "claude-opus-4-6-20260201". */
 function claudeInfo(modelId) {
   const id = String(modelId).split('/').pop().replace(/[:[].*$/, '').replace(/(\d)\.(\d)/g, '$1-$2')
@@ -1112,7 +1145,8 @@ function thoughtFields(provider, fields, effort, mode) {
 const THOUGHTS = new Map()
 const THOUGHTS_REFUSED = /summar|thinking_config|thinking_level|include_thoughts|extra_body|thought/i
 
-// Provider + model pairs that refused the reasoning fields once: sent without them from then on.
+// Provider + model pairs that refused the reasoning fields once, with the fields they refused: sent without those from
+// then on. Per fields, since a chat's own 思考 sends others: one chat's refused 关 or max takes nothing from the rest.
 const NO_REASONING = new Set()
 const REASONING_REFUSED = /thinking|effort|reasoning|chat_template|output_config|extra inputs|unknown (field|param)|unrecognized|not (supported|permitted|allowed)|unsupported/i
 
@@ -1122,6 +1156,16 @@ const GEMINI_SAFETY = ['HARM_CATEGORY_HARASSMENT', 'HARM_CATEGORY_HATE_SPEECH', 
 // Gemini 2.x thinks to a token budget, where Gemini 3 takes a level.
 const GEMINI_BUDGETS = { low: 1024, medium: 8192, high: 24576, xhigh: 24576, max: 24576 }
 
+/**
+ * 思考: 关闭 on Gemini's own API, as far as each model goes: none for Gemini 2.x Flash, the least the others take
+ * (2.5 Pro thinks at least 128 tokens; Gemini 3 has no off, Flash goes down to minimal). geminiStops tells which stop.
+ */
+function geminiLeast(modelId) {
+  if (/gemini-2\./i.test(modelId)) return { thinkingBudget: /flash/i.test(modelId) ? 0 : 128 }
+  return { thinkingLevel: /flash/i.test(modelId) ? 'minimal' : 'low' }
+}
+const geminiStops = modelId => /gemini-2\.[^/]*flash/i.test(modelId)
+
 /** The model as Gemini's own API names it in the address, without the `models/` its list puts before it. */
 const geminiModel = modelId => String(modelId).replace(/^models\//, '')
 
@@ -1130,7 +1174,7 @@ const geminiModel = modelId => String(modelId).replace(/^models\//, '')
  * turns in a row joined, as it wants them taking turns), the thinking in its own words (`thoughts`: the
  * thinking asked to be shown; 'nolevel', a model that refused the level), its filters at their loosest.
  */
-function geminiBody(provider, modelId, { system, messages, maxTokens, effort, thoughts, search }) {
+function geminiBody(provider, modelId, { system, messages, maxTokens, effort, off = false, thoughts, search }) {
   const contents = []
   for (const m of messages) {
     const role = m.role === 'assistant' ? 'model' : 'user'
@@ -1139,7 +1183,7 @@ function geminiBody(provider, modelId, { system, messages, maxTokens, effort, th
     if (last?.role === role) last.parts[0].text += `\n\n${said}`
     else contents.push({ role, parts: [{ text: said }] })
   }
-  const level = effort && thoughts !== 'nolevel' ? (/gemini-2\./i.test(modelId) ? { thinkingBudget: GEMINI_BUDGETS[effort] } : { thinkingLevel: GEMINI_LEVELS[effort] }) : {}
+  const level = off ? geminiLeast(modelId) : effort && thoughts !== 'nolevel' ? (/gemini-2\./i.test(modelId) ? { thinkingBudget: GEMINI_BUDGETS[effort] } : { thinkingLevel: GEMINI_LEVELS[effort] }) : {}
   const thinkingConfig = { ...(thoughts ? { includeThoughts: true } : {}), ...level }
   const generationConfig = {
     ...(maxTokens ? { maxOutputTokens: maxTokens } : {}),
@@ -1166,8 +1210,10 @@ function requestBody(provider, modelId, { system, messages, maxTokens: cap, reas
   const search = webSearch ? webSearchKind(provider, modelId) : null
   if (search === 'openrouter' && !/:online$/.test(modelId)) modelId = `${modelId}:online`
   if (provider.api === 'google-generative') {
-    const effort = withReasoning && GEMINI_LEVELS[reasoning?.effort] ? reasoning.effort : null
-    return geminiBody(provider, modelId, { system, messages, maxTokens, effort, thoughts: withReasoning ? thoughts : null, search })
+    // 思考: 关闭 (the provider's, or a chat's own 关) in Gemini's words, and no effort beside it.
+    const off = withReasoning && provider.thinking === 'off'
+    const effort = withReasoning && !off && GEMINI_LEVELS[reasoning?.effort] ? reasoning.effort : null
+    return geminiBody(provider, modelId, { system, messages, maxTokens, effort, off, thoughts: withReasoning ? thoughts : null, search })
   }
   // 思考: 关闭 on the provider takes the place of the thinking settings, the effort too: no thinking, nothing to weigh.
   const off = withReasoning ? thinkingOff(provider, modelId) : {}
@@ -1260,7 +1306,10 @@ export async function complete(provider, modelId, original, { proxy = null } = {
   const pair = `${provider.id}/${modelId}`
   // Kept apart with 联网 on: a relay may refuse thinking only alongside the search tool.
   const refusedKey = request.webSearch ? `${pair} 联网` : pair
-  const reasoning = !NO_REASONING.has(refusedKey) && (Object.keys(thinkingOff(provider, modelId)).length > 0 || (request.reasoning && Object.keys(reasoningFields(provider.api, modelId, request.reasoning)).length > 0))
+  const offFields = thinkingOff(provider, modelId)
+  const asked = Object.keys(offFields).length ? offFields : request.reasoning ? reasoningFields(provider.api, modelId, request.reasoning) : {}
+  const reasonKey = `${refusedKey} ${JSON.stringify(asked)}${provider.api === 'google-generative' && provider.thinking === 'off' ? ' off' : ''}`
+  const reasoning = !NO_REASONING.has(reasonKey) && (Object.keys(asked).length > 0 || (provider.api === 'google-generative' && provider.thinking === 'off'))
   const short = request.maxTokens > 0 && request.maxTokens < THINKING_ROOM
   const attempt = async () => {
     // 显示思考过程 on (the caller takes the thinking): asked for where it must be, as far as this pair allows.
@@ -1330,10 +1379,10 @@ export async function complete(provider, modelId, original, { proxy = null } = {
       // Refused the same way without them: it was something else (the search tool, say), and thinking stays as it
       // was. Refused for another reason, or not at all: they were the trouble, and are left out from now on.
       await failIfBad(res).catch(retryError => {
-        if (dropReasoning && !REASONING_REFUSED.test(retryError.message)) NO_REASONING.add(refusedKey)
+        if (dropReasoning && !REASONING_REFUSED.test(retryError.message)) NO_REASONING.add(reasonKey)
         throw searchHint(contextHint(retryError), request)
       })
-      if (dropReasoning) NO_REASONING.add(refusedKey)
+      if (dropReasoning) NO_REASONING.add(reasonKey)
       used = { options: { ...fixed, ...(dropReasoning ? { withReasoning: false } : {}) }, body }
     }
     let result = withPrompt(await protocol.read(provider, request, res))
@@ -1700,8 +1749,8 @@ export function withCode(text, error) {
 }
 
 /** Plain-language provider errors, with what to do about one (`hint`, see searchHint) after the provider's words. */
-export function providerError(provider, error) {
-  return `${plainError(provider, error)}${error?.hint ?? ''}`
+export function providerError(provider, error, { begun = false } = {}) {
+  return `${plainError(provider, error, begun)}${error?.hint ?? ''}`
 }
 
 /** How long the provider says to wait ("Please retry in 17h56m59s", "try again in 20s", "retryDelay": "33s"), in words, or ''. */
@@ -1738,7 +1787,7 @@ export function unreadReply(provider, result) {
   return msg`${provider.name} 的回复读不出来：这个中转站可能不支持 Responses 接口。在「模型供应商」里把接口类型改成「OpenAI 兼容（Chat Completions）」再试。`
 }
 
-function plainError(provider, error) {
+function plainError(provider, error, begun = false) {
   const text = String(error?.message ?? error ?? '')
   const status = error?.providerStatus
   const name = provider?.name ?? msg`供应商`
@@ -1751,12 +1800,16 @@ function plainError(provider, error) {
   if (status === 429) return rateLimited(name, text, `${text} ${error?.body ?? ''}`)
   if (status === 503 || status === 529 || (status >= 500 && /overloaded|high demand|UNAVAILABLE|capacity/i.test(text))) return msg`${name} 那边的模型现在太忙了（${status}，对方服务器繁忙，不是你的网络或设置的问题）。过几分钟再试，或者先换个模型。（${text.slice(0, 160)}）`
   if (status >= 500) return msg`${name} 的服务器出错了（${status}，是对方的问题，不是你的设置）。稍后重试，或者先换个模型。（${text.slice(0, 160)}）`
+  const network = /ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNRESET|EHOSTUNREACH|ENETUNREACH|socket hang up|secure TLS connection|请求超时|Request timed out/i.test(`${errorCode(error)} ${text}`)
+  // An answer under way when its connection went: the address and the key worked. Node calls that 'aborted', even before any text.
+  if (network && (begun || (text === 'aborted' && errorCode(error) === 'ECONNRESET'))) {
+    return withCode(msg`${name} 的回复写到中途，连接被上游（对方服务器，或中间的代理、网络）断开了。这不是 Base URL 或 Key 的问题，再试一次；总是这样就换个代理节点或模型。`, error)
+  }
   // Reached, then nothing for as long as it may take: the provider busy or queueing, not the network.
   if (error?.reached && (errorCode(error) === 'ETIMEDOUT' || /请求超时|Request timed out/i.test(text))) {
     return withCode(msg`${name} 连上了，但一直没开始回答（请求超时）：多半是对方太忙、在排队，或者模型思考得太久。稍后再试、调低「努力程度」，或者先换个模型。`, error)
   }
-  if (/ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNRESET|EHOSTUNREACH|ENETUNREACH|socket hang up|secure TLS connection|请求超时|Request timed out/i.test(`${errorCode(error)} ${text}`)) {
-    return withCode(msg`连不上 ${name}：检查 Base URL、网络和代理设置。（${text.slice(0, 160)}）`, error)
-  }
+  if (network) return withCode(msg`连不上 ${name}：检查 Base URL、网络和代理设置。（${text.slice(0, 160)}）`, error)
+  if (begun) return withCode(msg`${name} 写到中途报错了，这是上游返回的错误：${text.slice(0, 240)}`, error)
   return withCode(msg`${name}：${text.slice(0, 240)}`, error)
 }

@@ -434,6 +434,18 @@ test('按卡配色 goes from the plan to both bars; by hand too', () => {
   assert.equal(edited.status_colors.bg, '#000000')
 })
 
+test('the SillyTavern bar draws a list a line each, as the app does, and tags by their marks', () => {
+  const html = statusBarHtml({ fields: [{ path: '主角.线索簿', show: 'list' }] })
+  // Its helpers, run on their own: everything from unwrap up to the DOM helper.
+  const script = html.slice(html.indexOf('const unwrap='), html.indexOf('const h='))
+  const { lines, tags } = new Function(`${script}; return { lines, tags }`)()
+  const clues = '岑秀兰：煤油，一卷油布\n路线本批注：寄临水县，挂号信'
+  assert.deepEqual(lines(clues), ['岑秀兰：煤油，一卷油布', '路线本批注：寄临水县，挂号信'])
+  assert.deepEqual(lines(['甲', '乙']), ['甲', '乙'])
+  assert.deepEqual(tags('甲、乙，丙'), ['甲', '乙', '丙'])
+  assert.match(html, /f\.show==='list'\)\{[^}]*lines\(value\)/)
+})
+
 test('a new look reaches both bars', () => {
   const plan = planOf({}, cleanCardOptions({ format: 'mvu-ui', statusTheme: 'gothic' }))
   const spec = statusSpecOf(plan)

@@ -10,8 +10,8 @@ import { createApp } from '../server/http.mjs'
 import { normalizeCard, sillyTavernCard } from '../server/cards.mjs'
 import { initTemplates } from '../server/template.mjs'
 import { initialState } from '../server/worldbook.mjs'
-import { cardFacts, checkCard } from '../server/forge/check.mjs'
-import { applyFinding, changedPieces, restorePieces, snapshot, staleChange, withEdits } from '../server/forge/check-apply.mjs'
+import { cardFacts, checkCard, statusChange } from '../server/forge/check.mjs'
+import { applyFinding, changedPieces, rebaseText, rebased, restorePieces, snapshot, staleChange, withEdits } from '../server/forge/check-apply.mjs'
 import { checkRequest, cleanFocus, readCheck, vetSuggestions } from '../server/forge/check-model.mjs'
 
 await initTemplates()
@@ -257,6 +257,32 @@ test('a card that draws its own status bar is not offered a layout by the model'
   assert.deepEqual(suggestions[0].changes, [])
 })
 
+test('two suggestions on one entry go in together; one whose words were changed is not forced in', () => {
+  const rules = `扮演准则：
+- 不替玩家说话。`
+  // Both add a line at the end: the second goes in after the first has.
+  assert.equal(rebaseText(`${rules}
+- 不写玩家内心。`, rules, `${rules}
+- 结尾不总结。`), `${rules}
+- 结尾不总结。
+- 不写玩家内心。`)
+  // A word changed right next to it: found again with less around it.
+  assert.equal(rebaseText('她叫林小语。她笑了。', '她叫林小雨。她笑了。', '她叫林小雨。她哭了。'), '她叫林小语。她哭了。')
+  // The same words changed, or the place found twice: no telling, left out.
+  assert.equal(rebaseText('她叫林小语。', '她叫林小雨。', '她叫林小月。'), null)
+  assert.equal(rebaseText('笑了。笑了。', '笑了。', '哭了。'), null)
+
+  const card = cardOf({ entries: [entry(0, '扮演准则', `${rules}
+- 不写玩家内心。`, { constant: true })] })
+  const second = { id: 'b', title: '加一条', changes: [{ id: 'entry:0', kind: 'entry', uid: '0', before: rules, after: `${rules}
+- 结尾不总结。` }] }
+  const again = rebased(card, second)
+  assert.equal(again.changes[0].before, card.book.entries[0].content)
+  applyFinding(card, again)
+  assert.match(card.book.entries[0].content, /结尾不总结[\s\S]*不写玩家内心/)
+  assert.equal(rebased(card, { ...second, changes: [{ ...second.changes[0], before: '扮演准则：完全不同', after: '扮演准则：别的' }] }), null)
+})
+
 test('a change gone out of date', () => {
   const card = cardOf({ first: '开场。', entries: [entry(0, '老周', '船夫。', { keys: ['老周'] })], scripts: [script('a', '甲', '/甲/')] })
   const fresh = [
@@ -338,6 +364,18 @@ test('reading a suggestion: patches, keywords, a status bar; what it may not wri
   const bad = vetSuggestions(card, [{ id: 'm', title: '改坏', changes: [{ id: 'entry:0', kind: 'entry', uid: '0', title: '[initvar]初始变量', before: INIT.content, after: 'a: [1' }] }])
   assert.equal(bad[0].broken.length, 1, 'it would break the format, so it cannot be taken')
   assert.equal(card.book.entries[0].content, INIT.content, 'tried on a copy')
+  // A bar showing what no variable holds stays empty in play: one already off by one does not let more through.
+  const offByOne = structuredClone(card)
+  offByOne.statusBar = { fields: [{ path: '好感度', label: '好感度', show: 'meter' }, { path: '心情', label: '心情', show: 'text' }] }
+  const bar = fields => [{ id: 'b', title: '加栏', changes: [statusChange(offByOne.statusBar, { ...offByOne.statusBar, fields })] }]
+  const more = vetSuggestions(offByOne, bar([...offByOne.statusBar.fields, { path: '宠物', label: '宠物', show: 'tags' }]))
+  assert.deepEqual(more[0].broken, ['状态栏要显示的「宠物」在初始变量里没有'])
+  assert.equal(vetSuggestions(offByOne, bar([...offByOne.statusBar.fields, { path: '背包', label: '背包', show: 'tags' }]))[0].broken, undefined, 'one the variables have')
+  assert.equal(vetSuggestions(offByOne, bar([offByOne.statusBar.fields[0]]))[0].broken, undefined, 'fixing the old one')
+  const sound = structuredClone(card)
+  sound.statusBar = { fields: [offByOne.statusBar.fields[0]] }
+  const once = vetSuggestions(sound, [{ id: 'b', title: '加栏', changes: [statusChange(sound.statusBar, { fields: [...sound.statusBar.fields, ...['宠物', '金币', '声望', '称号'].map(path => ({ path, label: path, show: 'text' }))] })] }])
+  assert.deepEqual(once[0].broken, ['状态栏要显示的「宠物、金币、声望 等 4 处」在初始变量里没有'], 'said once, by name, with how many')
   assert.deepEqual(cleanFocus(['style', 'nope']), ['style'])
   assert.deepEqual(cleanFocus([]), ['rules', 'tokens', 'look'])
 })
