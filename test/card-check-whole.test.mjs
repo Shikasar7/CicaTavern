@@ -225,7 +225,8 @@ test('over HTTP: 全本检查 stopped part way keeps what the batches before fou
   await call(`/api/cards/${id}/check/ask`, { method: 'POST', body: { whole: true } })
   await until(id, item => item.job?.step === `part:2:${parts}` && model.seen.some(seen => seen.part === 2))
   assert.equal((await call(`/api/cards/${id}/check/stop`, { method: 'POST' })).body.stopped, true)
-  const view = await until(id, item => !item.job)
+  // The job goes before its error is written: on a fast machine a look in between saw neither.
+  const view = await until(id, item => !item.job && item.error)
   assert.equal(view.error.message, '已经停下了。')
   assert.deepEqual(view.whole, { ...view.whole, total: parts, done: 1 })
   assert.equal(view.reply, '整张卡看过了。')
