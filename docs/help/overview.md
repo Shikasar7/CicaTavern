@@ -10,11 +10,12 @@ CicaTavern 是 Agent 式的 SillyTavern 角色卡酒馆：导入 SillyTavern 的
 
 ## 支持哪些平台 {#overview-platforms}
 
-- 也叫：电脑版、手机版、安卓版、苹果、iPhone、Mac 版、系统要求
+- 也叫：电脑版、手机版、安卓版、苹果、iPhone、iPad、iOS、TestFlight、Mac 版、系统要求
 
 - **Windows**：下载 zip，解压后双击「CicaTavern.exe」，自带运行环境，不用另外安装。
 - **Mac（测试版）**：dmg 安装包，分 Apple 芯片（arm64）和 Intel（x64）两种，要求 macOS 13.5 以上，已签名并经过 Apple 公证。
 - **安卓**：apk 安装包，要求 Android 10 以上的 64 位手机，在手机上独立运行，不用开电脑。
+- **iPhone 和 iPad（测试版）**：通过 TestFlight 安装，要求 iOS 16 以上，在设备上独立运行，不用开电脑。
 - **手机浏览器**：电脑上开着 CicaTavern 时，在「设置 → 连接 → 手机访问」打开局域网访问，手机（包括 iPhone）用浏览器打开带口令的链接就能玩，用的是电脑上的模型和数据。iPhone 没有单独的应用。
 
 ## 最新版本和下载 {#overview-download}
@@ -25,6 +26,7 @@ CicaTavern 是 Agent 式的 SillyTavern 角色卡酒馆：导入 SillyTavern 的
 
 - GitHub 发布页：https://github.com/Shikasar7/CicaTavern/releases/latest
 - 国内镜像（同样的文件）：https://cnb.cool/cicatavern/CicaTavern/-/releases
+- iPhone 和 iPad（TestFlight 测试版）：https://testflight.apple.com/join/wsT7kT4b
 
 1.4.0 以后的版本可以在应用里直接更新：设置 → 更多 → 更新。每个版本改了什么见 versions.md。
 

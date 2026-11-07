@@ -38,9 +38,23 @@ CicaTavern 读的是 SillyTavern 的格式：角色卡、世界书、预设、�
 
 ## 苹果手机能玩吗 {#faq-iphone}
 
-- 也叫：iPhone、iOS、苹果、iPad、有没有苹果版
+- 也叫：iPhone、iOS、苹果、iPad、有没有苹果版、TestFlight、iOS 怎么装、苹果怎么下载
 
-没有 iPhone 应用。iPhone 和 iPad 可以连电脑上的 CicaTavern 玩：电脑上打开 设置 → 连接 → 手机访问，用 Safari 打开带口令的链接，再「添加到主屏幕」，之后像 App 一样全屏打开（见 [手机访问](features.md#lan-access)）。用的是电脑上的模型和数据，玩的时候电脑要开着。苹果电脑有 Mac 版（测试版）。
+能。iPhone 和 iPad 有 TestFlight 测试版：https://testflight.apple.com/join/wsT7kT4b
+
+需要 iOS 16 以上，iPhone 和 iPad 都能装，在设备上独立运行，不用开电脑。
+
+1. 在 App Store 安装苹果官方的 TestFlight。
+2. 在 iPhone 或 iPad 上打开 https://testflight.apple.com/join/wsT7kT4b ，按提示接受邀请并安装 CicaTavern。
+3. 打开 CicaTavern，添加模型供应商，导入角色卡，用法和其他版本一样。
+
+- 更新：新版本在 TestFlight 里更新，应用里没有「更新」。每个测试版最长能用 90 天，到期前会发新版。
+- 后台：切到别的应用几秒后，iOS 会暂停 CicaTavern，回复写到一半可能中断。等回复时留在应用里，断了重试就行。
+- 数据：只存在这台设备上，卸载应用会一起删掉，重要的对话和角色卡先导出。
+- 没有的功能：「手机访问」「网络代理」和「桌面快捷方式」。
+- 带模板的角色卡每轮会比电脑慢零点几秒。
+
+不想装的话，iPhone 和 iPad 也可以连电脑上的 CicaTavern 玩：电脑上打开 设置 → 连接 → 手机访问，用 Safari 打开带口令的链接，再「添加到主屏幕」（见 [手机访问](features.md#lan-access)）。这时用的是电脑上的模型和数据，玩的时候电脑要开着。苹果电脑有 Mac 版（测试版）。
 
 ## 手机和电脑的存档通不通 {#faq-phone-pc-data}
 

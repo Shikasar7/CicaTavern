@@ -131,6 +131,7 @@ If you can't quite say what you want, the creator guides you round by round:
 
 - On the same Wi-Fi or over Tailscale, open the passcode link in your phone's browser and play with the models and data on your computer.
 - Or install the Android app, which runs on the phone by itself, no computer needed.
+- iPhone and iPad have a beta: [install it through TestFlight](https://testflight.apple.com/join/wsT7kT4b), no computer needed
 - On iPhone (Safari) or Android (Chrome), add the link to the home screen: it opens full screen like an app, no passcode to type again.
 - The interface is laid out for phone screens, and the settings windows are grouped menus.
 
@@ -138,6 +139,7 @@ If you can't quite say what you want, the creator guides you round by round:
 
 ## Latest changes [2.4.0]
 
+- **iPhone and iPad beta**: [install it through TestFlight](https://testflight.apple.com/join/wsT7kT4b). It runs on the device by itself and needs iOS 16 or later.
 - **2.4.0: direct chat**: talk to a model with no character card, from the top of the left column, with text files, web search and replies shown as Markdown.
 - **2.4.0: game rules (in development)**: a card's ⋯ menu has Game rules, on per card and off by default. It brings checks and dice, a pack, turn-based fights, levels and achievements, with success worked out by the program.
 - **2.4.0: check a card, trial run**: the program finds format problems and a model suggests changes, each one taken or undone by itself; a model can also play the card for a few rounds and report. The card creator gained reference files, gameplay blocks and card sizes.
@@ -255,6 +257,20 @@ Play on your phone without the computer: download `CicaTavern-<version>-android-
 - Voice input: there is no browser recognition in the app, so use a provider's transcription API (with browser recognition picked, the provider picked with it under Voice input is used instead) or a whisper server on your computer. The first time you click the microphone, Android asks whether the app may record audio; if you refused, turn the microphone on under the phone's Settings → Apps → CicaTavern → Permissions.
 - Updates: 设置 → 更多 → 更新 shows the new version and its notes; 下载并安装 (Download and install) downloads it in the app, checks it against the SHA-256 and signature on the release page, and opens the system installer to install over the old version; all data is kept. The first update asks you to allow CicaTavern to "install unknown apps".
 - How to build it and more: [android/README.md](android/README.md).
+
+## iPhone and iPad (TestFlight beta)
+
+Needs iOS 16 or later, on iPhone or iPad. It runs on the device by itself, with no computer on.
+
+1. Install Apple's **TestFlight** from the App Store.
+2. On the iPhone or iPad, open https://testflight.apple.com/join/wsT7kT4b , accept the invitation and install CicaTavern.
+3. Open CicaTavern, add a model provider and import a card, as in the other versions.
+
+- **Updates** come through TestFlight; the app has no Update page. Each beta build works for up to 90 days, and a new one comes before it ends.
+- **In the background**, iOS pauses CicaTavern a few seconds after you switch away, so a reply can stop halfway. Stay in the app while one is being written, and try again if it stops.
+- **Your data** stays on this device and goes with the app if you delete it. Export the chats and cards you care about first.
+- **Not in this version**: phone access, the network proxy and the desktop shortcut.
+- Cards with templates take a few tenths of a second longer each turn than on a computer.
 
 ## Data
 
@@ -459,6 +475,7 @@ flowchart LR
 
 - 同一 Wi-Fi 或 Tailscale 下，手机浏览器打开带口令的链接就能玩，用的是电脑上的模型和数据。
 - 也可以装安卓版，在手机上独立运行，不用开电脑。
+- iPhone 和 iPad 有测试版：[通过 TestFlight 安装](https://testflight.apple.com/join/wsT7kT4b)，不用开电脑
 - iPhone 用 Safari、安卓用 Chrome 打开链接后可以「添加到主屏幕」，像 App 一样全屏打开，不用再输口令。
 - 界面专门适配了手机屏幕，设置窗口都改成了分组菜单。
 
@@ -466,6 +483,7 @@ flowchart LR
 
 ## 最新版本变动[2.4.0]
 
+- **iPhone 和 iPad 测试版**：[通过 TestFlight 安装](https://testflight.apple.com/join/wsT7kT4b)，在设备上独立运行，要求 iOS 16 以上。
 - **2.4.0：直连对话**：不用角色卡也能直接和模型聊，入口在左栏最上面，可以附文本文件、联网搜索，回复按 Markdown 显示。
 - **2.4.0：游戏规则（开发中）**：角色卡的「⋯」里多了「游戏规则…」，按卡开启，默认关。打开后有检定和掷骰、行囊、回合制战斗、等级和成就，成败由程序计算。
 - **2.4.0：检查这张卡、试玩体检**：程序查格式问题，模型提建议，可以逐条采用和撤销；还能让模型替你把卡玩几回合再出报告。创作向导多了参考文件、玩法积木和卡的规模。
@@ -583,6 +601,20 @@ Fish 和 MiniMax 的密钥存在数据目录的 `voice-keys.json`，页面只看
 - 语音输入：应用里没有浏览器识别，请用供应商的转写接口（选了浏览器识别的话，自动改用「语音输入」里一起选的供应商），或电脑上的 whisper 服务。第一次点麦克风时安卓会问是否允许录音；拒绝了的话，到手机的「设置 → 应用 → CicaTavern → 权限」里打开麦克风。
 - 更新：设置 → 更多 →「更新」显示新版本和发布说明，点「下载并安装」在应用里下载，核对发布页公布的 SHA-256 和签名后打开系统的安装界面，覆盖安装，数据都保留。第一次更新要按提示允许 CicaTavern「安装未知应用」。
 - 构建方法和更多说明见 [android/README.md](android/README.md)。
+
+## iPhone 和 iPad（TestFlight 测试版）
+
+需要 iOS 16 以上，iPhone 和 iPad 都能装，在设备上独立运行，不用开电脑。
+
+1. 在 App Store 安装苹果官方的 **TestFlight**。
+2. 在 iPhone 或 iPad 上打开 https://testflight.apple.com/join/wsT7kT4b ，按提示接受邀请并安装 CicaTavern。
+3. 打开 CicaTavern，添加模型供应商，导入角色卡，用法和其他版本一样。
+
+- **更新**：新版本在 TestFlight 里更新，应用里没有「更新」。每个测试版最长能用 90 天，到期前会发新版。
+- **后台**：切到别的应用几秒后，iOS 会暂停 CicaTavern，回复写到一半可能中断。等回复时留在应用里，断了重试就行。
+- **数据**：只存在这台设备上，卸载应用会一起删掉，重要的对话和角色卡先导出。
+- **没有的功能**：「手机访问」「网络代理」和「桌面快捷方式」。
+- 带模板的角色卡每轮会比电脑慢零点几秒。
 
 ## 数据
 

@@ -130,6 +130,7 @@ If you can't quite say what you want, the creator guides you round by round:
 
 - On the same Wi-Fi or over Tailscale, open the passcode link in your phone's browser and play with the models and data on your computer.
 - Or install the Android app, which runs on the phone by itself, no computer needed.
+- iPhone and iPad have a beta: [install it through TestFlight](https://testflight.apple.com/join/wsT7kT4b), no computer needed
 - On iPhone (Safari) or Android (Chrome), add the link to the home screen: it opens full screen like an app, no passcode to type again.
 - The interface is laid out for phone screens, and the settings windows are grouped menus.
 
@@ -137,6 +138,7 @@ If you can't quite say what you want, the creator guides you round by round:
 
 ## Latest changes [2.4.0]
 
+- **iPhone and iPad beta**: [install it through TestFlight](https://testflight.apple.com/join/wsT7kT4b). It runs on the device by itself and needs iOS 16 or later.
 - **2.4.0: direct chat**: talk to a model with no character card, from the top of the left column, with text files, web search and replies shown as Markdown.
 - **2.4.0: game rules (in development)**: a card's ⋯ menu has Game rules, on per card and off by default. It brings checks and dice, a pack, turn-based fights, levels and achievements, with success worked out by the program.
 - **2.4.0: check a card, trial run**: the program finds format problems and a model suggests changes, each one taken or undone by itself; a model can also play the card for a few rounds and report. The card creator gained reference files, gameplay blocks and card sizes.
@@ -254,6 +256,20 @@ Play on your phone without the computer: download `CicaTavern-<version>-android-
 - Voice input: there is no browser recognition in the app, so use a provider's transcription API (with browser recognition picked, the provider picked with it under Voice input is used instead) or a whisper server on your computer. The first time you click the microphone, Android asks whether the app may record audio; if you refused, turn the microphone on under the phone's Settings → Apps → CicaTavern → Permissions.
 - Updates: 设置 → 更多 → 更新 shows the new version and its notes; 下载并安装 (Download and install) downloads it in the app, checks it against the SHA-256 and signature on the release page, and opens the system installer to install over the old version; all data is kept. The first update asks you to allow CicaTavern to "install unknown apps".
 - How to build it and more: [android/README.md](android/README.md).
+
+## iPhone and iPad (TestFlight beta)
+
+Needs iOS 16 or later, on iPhone or iPad. It runs on the device by itself, with no computer on.
+
+1. Install Apple's **TestFlight** from the App Store.
+2. On the iPhone or iPad, open https://testflight.apple.com/join/wsT7kT4b , accept the invitation and install CicaTavern.
+3. Open CicaTavern, add a model provider and import a card, as in the other versions.
+
+- **Updates** come through TestFlight; the app has no Update page. Each beta build works for up to 90 days, and a new one comes before it ends.
+- **In the background**, iOS pauses CicaTavern a few seconds after you switch away, so a reply can stop halfway. Stay in the app while one is being written, and try again if it stops.
+- **Your data** stays on this device and goes with the app if you delete it. Export the chats and cards you care about first.
+- **Not in this version**: phone access, the network proxy and the desktop shortcut.
+- Cards with templates take a few tenths of a second longer each turn than on a computer.
 
 ## Data
 
