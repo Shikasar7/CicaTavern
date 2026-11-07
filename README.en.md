@@ -49,7 +49,7 @@ From the author's own long chats (October 2026):
 
 ### Long-term memory (Beta): what was compacted comes back when it matters
 
-<p align="center"><img src="web/whatsnew/2.4.0-battle.webp" alt="A turn-based fight: two wolves and a bandit chief on a mountain road, the chief taking a 17-point critical hit" width="880"></p>
+<p align="center"><img src="web/whatsnew/2.3.0-memory.webp" alt="Long-term memory: mentioning the pier recalls the promise made in rounds 5–6; the memory book keeps people, events and promises as separate entries" width="880"></p>
 
 A long story has to compact its context sooner or later: the story so far becomes a story archive, and after a few rounds of that the oldest details blur. A promise made long ago, a side character's name, where some object came from: the model no longer knows. Long-term memory writes those details down as separate entries and puts them back in front of the model when the story brings them up again.
 
@@ -103,6 +103,19 @@ Turn it on in Settings → Model → Long-term memory (Beta); it is off by defau
 - **Plays like a game**: the choices open in the middle of the picture and number keys pick them; backlog, auto, skip, full screen and line-by-line reading are all there, and the ▾ beside Read and Pictures changes voices, models and drawing without leaving.
 - **CG gallery**: every picture on the storyline in one place, each marked with its turn, to browse full size.
 
+### Game rules mode (in development)
+
+<p align="center"><img src="docs/screenshots/rules-themes.jpg" alt="One story in five looks: choices, dice, a fight, a skill and victory, in Simple dark, Simple light, Classical, Retro console and Bold" width="880"></p>
+<p align="center"><img src="docs/screenshots/rules-dice.jpg" alt="A dice check: the twenty-sided die shows 17, plus 1 makes 18 against 12, a success" width="49%"> <img src="docs/screenshots/rules-battle.jpg" alt="The fight screen: two wolves and a bandit chief on a mountain road, with health, energy and the attack, skill, item, guard and flee actions below" width="49%"></p>
+
+On per card and off by default; off, nothing sent to the model changes. On, the program decides success and the model writes what happened.
+
+- **Dice checks**: a risky choice shows its attribute, odds and risk. Pick it and the dice roll, and the result goes to the model with the turn, at no extra request. Rolls come from a seed, so regenerating, rolling back or loading a save changes nothing.
+- **Turn-based fights**: when the story comes to blows you fight it out with attacks, skills, items, guarding or fleeing, without calling the model, which then writes on from the result. Foes differ in strength, and wounds stay with you.
+- **A pack and growth**: your character, items, quests, a map and achievements. Wins bring experience and levels, and new foes go into a bestiary. A card's own health, inventory and quest variables can be bound to the rules.
+- **Four looks**: Simple, Classical, Retro console and Bold, with choices, dice, fights, skills and victory all changing together.
+- **It travels with the card**: exported PNGs and JSON carry the rules. With Fights and growth picked in the card creator, the guide settles starting attributes, skills, items and common foes with you.
+
 ### Characters keep their look
 
 - **Character roster**: each character's fixed face, everyday outfit, a reference picture and a LoRA. When several characters share a picture, each is described separately, so faces don't blend.
@@ -137,6 +150,8 @@ If you can't quite say what you want, the creator guides you round by round:
 <br clear="right">
 
 ## Latest changes [2.4.0]
+
+<p align="center"><img src="web/whatsnew/2.4.0-battle.webp" alt="A turn-based fight: two wolves and a bandit chief on a mountain road, the chief taking a 17-point critical hit" width="720"></p>
 
 - **iPhone and iPad beta**: [install it through TestFlight](https://testflight.apple.com/join/wsT7kT4b). It runs on the device by itself and needs iOS 16 or later.
 - **2.4.0: direct chat**: talk to a model with no character card, from the top of the left column, with text files, web search and replies shown as Markdown.

@@ -50,7 +50,7 @@ From the author's own long chats (October 2026):
 
 ### Long-term memory (Beta): what was compacted comes back when it matters
 
-<p align="center"><img src="web/whatsnew/2.4.0-battle.webp" alt="A turn-based fight: two wolves and a bandit chief on a mountain road, the chief taking a 17-point critical hit" width="880"></p>
+<p align="center"><img src="web/whatsnew/2.3.0-memory.webp" alt="Long-term memory: mentioning the pier recalls the promise made in rounds 5–6; the memory book keeps people, events and promises as separate entries" width="880"></p>
 
 A long story has to compact its context sooner or later: the story so far becomes a story archive, and after a few rounds of that the oldest details blur. A promise made long ago, a side character's name, where some object came from: the model no longer knows. Long-term memory writes those details down as separate entries and puts them back in front of the model when the story brings them up again.
 
@@ -104,6 +104,19 @@ Turn it on in Settings → Model → Long-term memory (Beta); it is off by defau
 - **Plays like a game**: the choices open in the middle of the picture and number keys pick them; backlog, auto, skip, full screen and line-by-line reading are all there, and the ▾ beside Read and Pictures changes voices, models and drawing without leaving.
 - **CG gallery**: every picture on the storyline in one place, each marked with its turn, to browse full size.
 
+### Game rules mode (in development)
+
+<p align="center"><img src="docs/screenshots/rules-themes.jpg" alt="One story in five looks: choices, dice, a fight, a skill and victory, in Simple dark, Simple light, Classical, Retro console and Bold" width="880"></p>
+<p align="center"><img src="docs/screenshots/rules-dice.jpg" alt="A dice check: the twenty-sided die shows 17, plus 1 makes 18 against 12, a success" width="49%"> <img src="docs/screenshots/rules-battle.jpg" alt="The fight screen: two wolves and a bandit chief on a mountain road, with health, energy and the attack, skill, item, guard and flee actions below" width="49%"></p>
+
+On per card and off by default; off, nothing sent to the model changes. On, the program decides success and the model writes what happened.
+
+- **Dice checks**: a risky choice shows its attribute, odds and risk. Pick it and the dice roll, and the result goes to the model with the turn, at no extra request. Rolls come from a seed, so regenerating, rolling back or loading a save changes nothing.
+- **Turn-based fights**: when the story comes to blows you fight it out with attacks, skills, items, guarding or fleeing, without calling the model, which then writes on from the result. Foes differ in strength, and wounds stay with you.
+- **A pack and growth**: your character, items, quests, a map and achievements. Wins bring experience and levels, and new foes go into a bestiary. A card's own health, inventory and quest variables can be bound to the rules.
+- **Four looks**: Simple, Classical, Retro console and Bold, with choices, dice, fights, skills and victory all changing together.
+- **It travels with the card**: exported PNGs and JSON carry the rules. With Fights and growth picked in the card creator, the guide settles starting attributes, skills, items and common foes with you.
+
 ### Characters keep their look
 
 - **Character roster**: each character's fixed face, everyday outfit, a reference picture and a LoRA. When several characters share a picture, each is described separately, so faces don't blend.
@@ -138,6 +151,8 @@ If you can't quite say what you want, the creator guides you round by round:
 <br clear="right">
 
 ## Latest changes [2.4.0]
+
+<p align="center"><img src="web/whatsnew/2.4.0-battle.webp" alt="A turn-based fight: two wolves and a bandit chief on a mountain road, the chief taking a 17-point critical hit" width="720"></p>
 
 - **iPhone and iPad beta**: [install it through TestFlight](https://testflight.apple.com/join/wsT7kT4b). It runs on the device by itself and needs iOS 16 or later.
 - **2.4.0: direct chat**: talk to a model with no character card, from the top of the left column, with text files, web search and replies shown as Markdown.
@@ -394,7 +409,7 @@ Windows 解压即用，也有安卓版；界面有简体中文和英文。数据
 
 ### 长期记忆（Beta）：压缩掉的剧情，提到时会想起来
 
-<p align="center"><img src="web/whatsnew/2.4.0-battle.webp" alt="回合制战斗：两头灰狼和山贼头目站在山路上，头目吃了一记 17 点暴击" width="880"></p>
+<p align="center"><img src="web/whatsnew/2.3.0-memory.webp" alt="长期记忆：提到「码头」时想起第 5–6 轮许下的看灯之约；记忆簿把人物、事件、约定记成一条条" width="880"></p>
 
 长对话迟早要压缩上下文：前面的剧情压成一份剧情存档，压过几次，越早的细节越模糊。很久以前许下的约定、配角的名字、某件东西的来历，模型就不记得了。长期记忆把这些细节记成一条条，等剧情又提到它们时，再放回模型眼前。
 
@@ -448,6 +463,19 @@ flowchart LR
 - **像游戏一样玩**：选项在画面中央弹出，按数字键就选；回看、自动、跳过、全屏、逐句朗读都有，「朗读」「配图」旁边的 ▾ 不用退出就能改音色、模型和画法。
 - **CG 回廊**：这条故事线上所有的配图收在一处，标着是第几轮，全屏翻看。
 
+### 游戏规则模式（开发中）
+
+<p align="center"><img src="docs/screenshots/rules-themes.jpg" alt="同一场故事在五种界面下的对比：选项、掷骰、战斗、放技能、胜利，分别是简约深色、简约浅色、古风、怀旧游戏机和酷炫" width="880"></p>
+<p align="center"><img src="docs/screenshots/rules-dice.jpg" alt="掷骰检定：二十面骰掷出 17，灵巧 +1，共 18，需要 12，成功" width="49%"> <img src="docs/screenshots/rules-battle.jpg" alt="战斗界面：两头灰狼和山贼头目站在山路上，下方是生命、内力和攻击、技能、道具、防御、逃跑" width="49%"></p>
+
+按卡开启，默认关，关着时发给模型的内容不变。打开后成败由程序计算，模型只负责把结果写好。
+
+- **掷骰检定**：有风险的选项写着属性、成功率和风险，点了就掷骰，结果随这一轮发给模型，不多花请求。点数由种子决定，重新生成、回滚、读档都不变。
+- **回合制战斗**：故事打起来时进入战斗，攻击、技能、道具、防御、逃跑，全程不调用模型，打完模型按结果接着写。敌人有强弱，受的伤会留下来。
+- **行囊和成长**：角色、背包、任务、地图和成就都在「行囊」里。打赢得经验，升级加属性，新敌人记进图鉴。卡已有的体力、背包、任务变量可以绑定成规则的字段。
+- **四种界面**：简约、古风、怀旧游戏机、酷炫，选项、掷骰、战斗、放技能、胜利一起换。
+- **跟着卡走**：导出的 PNG、JSON 带着规则。创作角色卡选「战斗与成长」时，向导会商量开局属性、技能、物品和常见敌人。
+
 ### 角色有固定的形象
 
 - **角色名册**：给每个角色记下固定的长相、平时的衣着、一张人设图（参考图）和 LoRA。多人同框时逐个描述，不会串脸。
@@ -482,6 +510,8 @@ flowchart LR
 <br clear="right">
 
 ## 最新版本变动[2.4.0]
+
+<p align="center"><img src="web/whatsnew/2.4.0-battle.webp" alt="回合制战斗：两头灰狼和山贼头目站在山路上，头目吃了一记 17 点暴击" width="720"></p>
 
 - **iPhone 和 iPad 测试版**：[通过 TestFlight 安装](https://testflight.apple.com/join/wsT7kT4b)，在设备上独立运行，要求 iOS 16 以上。
 - **2.4.0：直连对话**：不用角色卡也能直接和模型聊，入口在左栏最上面，可以附文本文件、联网搜索，回复按 Markdown 显示。
