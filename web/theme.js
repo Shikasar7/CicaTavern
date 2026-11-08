@@ -14,6 +14,8 @@
 //   one, 对话修改 (talk-dialog.js) has them written from a few words, previewed first.
 import { t } from '/i18n.js'
 import { currentLook, lookNames, setLook } from '/game-look.js'
+import { createReveal } from '/stream-reveal.js'
+import { REVEAL_MODES } from '/shared/reveal.js'
 import { APPEARANCE_DEFAULTS, PALETTE_KEYS, READING_DEFAULTS, READ_WIDTH, STORY_FONTS, STORY_LEADING, STORY_SCALE, STYLES, UI_SCALE, cleanAppearance, cleanColor, cleanCustom, cleanFontName, cleanPalette, cleanReading, paletteCss, paletteIssues, storyFontOf } from '/shared/appearance.js'
 
 const MODES = ['auto', 'light', 'dark']
@@ -28,6 +30,17 @@ const KEY_LABEL = {
 const PALETTE_KEY = 'appearance-palette'
 const FONT_LABEL = { song: t`宋体`, hei: t`黑体`, kai: t`楷体`, fang: t`仿宋`, custom: t`自选` }
 const READING_KEY = 'reading'
+// 出字效果 (web/stream-reveal.js), with what each looks like.
+const REVEAL_LABEL = { fade: t`淡入`, ink: t`墨晕`, type: t`打字机`, sentence: t`逐句`, none: t`直接显示` }
+const REVEAL_HINT = {
+  fade: t`新写出的字轻轻浮现，节奏均匀。`,
+  ink: t`像墨落在纸上，字由虚到实。`,
+  type: t`一个字一个字打出来，末尾跟着光标。`,
+  sentence: t`写完一句，整句浮现，读起来不被半句话打断。`,
+  none: t`来多少显示多少，不加动效。`,
+}
+// The sample a choice plays: sent in lumps with gaps, as a relay sends a reply, so the evening-out shows too.
+const REVEAL_SAMPLE = t`雨还没停。她把伞靠在门边，抖了抖袖口上的水，抬头看了你一眼。“你也是来避雨的？”`
 // Each style's page and accent colours, light then dark (style.css has the full sets).
 const SWATCH = {
   lamp: [['#eceeea', '#2b5869'], ['#0f1417', '#8dbfcb']],
@@ -355,6 +368,47 @@ export function initTheme({ api, el, toast, guard, getSettings, setSettings, onR
           usual,
         ]),
       ]),
+    ])
+  }
+
+  /** 出字效果: how a reply being written comes onto the page; a choice plays the sample in its way. */
+  let playing = null // the sample being played
+  function revealRow(reading) {
+    const box = el('div', { class: 'msg-body theme-reveal-sample', 'aria-hidden': 'true' })
+    const play = mode => {
+      playing?.stop()
+      box.replaceChildren()
+      const quote = text => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/(“[^”]*”?)/g, '<span class="q">$1</span>')
+      const reveal = createReveal({ target: () => (box.isConnected ? box : null), html: text => `<p>${quote(text)}</p>`, source: text => text, scroller: box, following: () => false, mode })
+      playing = reveal
+      let at = 0
+      const send = () => {
+        if (playing !== reveal || !box.isConnected) return
+        at = Math.min(REVEAL_SAMPLE.length, at + 9 + Math.floor(Math.random() * 10))
+        reveal.push(REVEAL_SAMPLE.slice(0, at))
+        if (at < REVEAL_SAMPLE.length) setTimeout(send, 260 + Math.random() * 260)
+        else reveal.finish()
+      }
+      setTimeout(send, 150)
+    }
+    const choices = el('div', { class: 'theme-styles theme-reveals' }, REVEAL_MODES.map(mode => {
+      const b = el('button', { type: 'button', class: 'theme-style', 'aria-pressed': String(mode === reading.reveal), title: REVEAL_HINT[mode], text: REVEAL_LABEL[mode] })
+      b.addEventListener('click', () => {
+        setReading({ reveal: mode })
+        for (const other of choices.children) other.setAttribute('aria-pressed', String(other === b))
+        hint.textContent = REVEAL_HINT[mode]
+        play(mode)
+      })
+      return b
+    }))
+    const hint = el('p', { class: 'hint', text: REVEAL_HINT[reading.reveal] })
+    const again = el('button', { type: 'button', class: 'btn small ghost', text: t`再看一遍` })
+    again.addEventListener('click', () => play(currentReading().reveal))
+    // Shown as it stands when the dialog opens, played on a choice.
+    box.innerHTML = `<p>${REVEAL_SAMPLE.replace(/(“[^”]*”)/g, '<span class="q">$1</span>')}</p>`
+    return el('div', { class: 'theme-row top' }, [
+      el('span', { class: 'theme-label', text: t`出字效果` }),
+      el('div', { class: 'theme-reading' }, [choices, box, el('div', { class: 'row between' }, [hint, again])]),
     ])
   }
 
@@ -716,6 +770,7 @@ export function initTheme({ api, el, toast, guard, getSettings, setSettings, onR
       fontRow(currentReading()),
       sizeRow(currentReading()),
       leadingRow(currentReading()),
+      revealRow(currentReading()),
       widthRow(currentReading()),
       interfaceRow(currentReading()),
       el('div', { class: 'theme-row' }, [

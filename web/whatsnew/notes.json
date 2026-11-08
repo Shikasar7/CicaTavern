@@ -1072,6 +1072,46 @@
           }
         }
       ]
+    },
+    {
+      "version": "2.4.2",
+      "date": "2026-11",
+      "after": true,
+      "items": [
+        {
+          "image": "2.4.2-party.webp",
+          "zh": {
+            "title": "队伍战斗",
+            "text": "开了「完整」游戏规则的卡，可以带同伴一起打，最多 4 人上场，像 RPG Maker 那样每回合给每个人选指令，敌我按速度出手。每个同伴有自己的属性、生命、技能、等级和经验，回血和药能给别人，倒下的人能救起来。\n行囊里的「队伍」页安排谁出战、谁待命；规则窗口的「队伍名册」写同伴和他们的技能。故事里有人入队、离队、负伤，模型会记下来。"
+          },
+          "en": {
+            "title": "Party fights",
+            "text": "On a card with the full game rules, companions fight beside you, up to four in all: each round you give everyone a command, as in an RPG Maker game, and both sides act by speed. Each companion has their own attributes, life, skills, level and experience; healing and potions can go to someone else, and the fallen can be revived.\nThe Party tab in the pack says who fights and who stands by; Party roster in the rule window lists the companions and their skills. When someone joins, leaves or is hurt in the story, the model records it."
+          }
+        },
+        {
+          "image": "2.4.2-words.webp",
+          "zh": {
+            "title": "每张卡自己的叫法，出字效果",
+            "text": "游戏规则多了「叫法」：属性、生命、敌人档位、技能、行囊、经验、队伍都能按卡改名，比如力量、HP、BOSS、必杀技、伙伴，界面和发给模型的规则一起换。「题材」多了怪兽养成、网游、末日求生、日常。\n主题里多了「出字效果」：回复按均匀的节奏写出来，可以选淡入、墨晕、打字机、逐句或直接显示。"
+          },
+          "en": {
+            "title": "A card's own words, and how replies appear",
+            "text": "The game rules gain Names: attributes, life, foe tiers, skills, the pack, experience and the party can each take the card's own name, such as Strength, HP, BOSS or Special move, in the interface and in the rules the model is told. Genre now offers Monster raising, Online game, Apocalypse survival and Everyday life.\nThe theme gains Text reveal: a reply comes out at an even pace, as Fade in, Ink, Typewriter, By sentence or Instant."
+          }
+        },
+        {
+          "icon": "⚡",
+          "zh": {
+            "title": "长对话不再越聊越卡",
+            "text": "几百轮的对话，切换角色卡、打开对话从一秒多降到一百毫秒左右，点发送和逐字写出也不再卡一下；手机上快得更明显。\n还卡的话，打开「设置 → 更多 → 性能记录」，它会记下每一步花了多久，可以复制下来发给开发者。默认关着，不影响速度。"
+          },
+          "en": {
+            "title": "Long chats stay quick",
+            "text": "In a chat hundreds of turns long, switching cards or opening the chat now takes about a tenth of a second instead of more than one, and sending and replies being written no longer stall; the gain is larger on phones.\nIf it still feels slow, turn on Settings > More > Performance log: it records how long each step took, to copy and send to the developer. It is off by default and costs nothing while off."
+          }
+        }
+      ]
     }
   ]
 }

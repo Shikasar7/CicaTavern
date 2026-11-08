@@ -5,7 +5,7 @@ import { t } from '/i18n.js'
 import { reachedWith } from '/shared/game/achievements.js'
 import { foeSheets } from '/shared/game/battle.js'
 import { changeWords, choiceChecks, choiceFights, cutAtGate, parseChoice, replyMarks, withoutGameMarks } from '/shared/game/marks.js'
-import { AID_BONUS, ATTRIBUTES, aidFor, applyOps, chanceFor, checkExperience, checkLine, dcFor, effectOf, gateKinds, levelNeeds, nothingToRestore, rankNow, rollCheck, sheetOf, sheetOnPath, startSheet, turnSheet, usableNow } from '/shared/game/sheet.js'
+import { AID_BONUS, ATTRIBUTES, MAX_FIELDED, aidFor, applyOps, chanceFor, checkExperience, checkLine, dcFor, effectOf, fieldedOf, gateKinds, levelNeeds, nothingToRestore, rankNow, rollCheck, sheetOf, sheetOnPath, startSheet, turnSheet, usableNow } from '/shared/game/sheet.js'
 import { chanceToWin, encounterSetup, foesLine } from '/shared/game/encounter.js'
 import { ailsOn, modifierOf, riskOf } from '/shared/game/dice.js'
 import { latestPlace, matchScene, normalizePlace, visitedPlaces } from '/shared/vn.js'
@@ -49,23 +49,31 @@ export function sheetFor(chat, book, ops = []) {
 }
 
 /** The attributes as the 行囊 shows them. */
-export const attributesOf = sheet => ATTRIBUTES.map(item => ({ id: item.id, name: item.name, value: sheet.attributes[item.id], modifier: modifierOf(sheet.attributes[item.id]) }))
-export { levelNeeds }
+/** An attribute's name as the card calls it (sheet.named, from sheetOf), else the rules' own. */
+const attributeName = (sheet, id) => sheet?.named?.[id] || ATTRIBUTES.find(item => item.id === id)?.name
+
+export const attributesOf = sheet => ATTRIBUTES.map(item => ({ id: item.id, name: attributeName(sheet, item.id), value: sheet.attributes[item.id], modifier: modifierOf(sheet.attributes[item.id]) }))
+
+/** A word the card has its own name for (book.words), else the app's: the caller gives that, in the page's language. */
+export const cardWord = (book, key, fallback) => book?.words?.[key] || fallback
+export { MAX_FIELDED, fieldedOf, levelNeeds }
 
 /** What holds the player back, as the 行囊 shows it. */
 export const ailsOf = sheet => (sheet.conditions ?? []).map(item => ({
   name: item.name,
   shown: ailName(item.name),
-  effect: `${ATTRIBUTES.find(attribute => attribute.id === item.stat)?.name ?? t`所有属性`} −${ailsOn([item], item.stat)[0].by}`,
+  effect: `${attributeName(sheet, item.stat) ?? t`所有属性`} −${ailsOn([item], item.stat)[0].by}`,
   days: item.days,
   turns: item.turns,
 }))
 
 /** What low sanity does, as the 行囊 shows it. */
-export const strainOf = sheet => (sheet.strain ?? []).map(item => t`${ailName(item.name)}：${ATTRIBUTES.find(attribute => attribute.id === item.stat).name} −${ailsOn([item], item.stat)[0].by}`)
+export const strainOf = sheet => (sheet.strain ?? []).map(item => t`${ailName(item.name)}：${attributeName(sheet, item.stat)} −${ailsOn([item], item.stat)[0].by}`)
 
 /** The same in a line, for the HUD. */
 export const ailLine = sheet => (sheet.conditions ?? []).map(item => ailName(item.name)).join(t`、`)
+
+const PARTY_LABELS = () => ({ join: name => t`${name}入队`, leave: name => t`${name}离队`, bench: name => t`${name}待命`, field: name => t`${name}出战`, up: name => t`${name}前移`, back: name => t`${name}归队` })
 
 /** A turn's operation as its tag by the input box. */
 export function opLabel(op) {
@@ -75,7 +83,9 @@ export function opLabel(op) {
   if (op.op === 'life') return t`生命改为 ${op.value}`
   if (op.op === 'energy') return t`气力改为 ${op.value}`
   if (op.op === 'sanity') return t`理智改为 ${op.value}`
+  if (op.op === 'point' && op.who) return t`${op.who}加点 ${ATTRIBUTES.find(item => item.id === op.id)?.name ?? ''}`
   if (op.op === 'point') return t`加点 ${ATTRIBUTES.find(item => item.id === op.id)?.name ?? ''}`
+  if (op.op === 'party') return PARTY_LABELS()[op.act]?.(op.name) ?? op.name
   if (op.op === 'mend') return t`解除 ${ailName(op.name)}`
   return op.status === 'new' ? t`新任务 ${op.name}` : op.status === 'done' ? t`完成 ${op.name}` : t`失败 ${op.name}`
 }
@@ -123,7 +133,7 @@ export function sheetNotes(sheetBefore, after, book, replyText = '') {
     const delta = (after[field] ?? 0) - (before[field] ?? 0)
     if (delta && !bindings[field]) notes.push({ kind: delta > 0 ? 'up' : 'down', field, label, delta })
   }
-  moved('life', t`生命`)
+  moved('life', cardWord(book, 'life', t`生命`))
   if (after.sanity !== undefined && before.sanity !== undefined) {
     // Broken by a shock it comes back up a little: no gain to report.
     const broke = after.sanity > before.sanity && replyMarks(replyText).some(mark => mark.kind === 'sanity' && !mark.back)
@@ -134,7 +144,7 @@ export function sheetNotes(sheetBefore, after, book, replyText = '') {
     moved('energy', book.energyName || t`气力`)
     // A rank the story raised is no experience earned, whatever the levels add up to.
     const earned = replyMarks(replyText).some(mark => mark.kind === 'promote') ? 0 : earnedBy(after) - earnedBy(before)
-    if (earned > 0) notes.push({ kind: 'up', field: 'experience', label: t`经验`, delta: earned })
+    if (earned > 0) notes.push({ kind: 'up', field: 'experience', label: cardWord(book, 'experience', t`经验`), delta: earned })
     if ((after.level ?? 1) > (before.level ?? 1) && !bindings.level && !bindings.rank) notes.push({ kind: 'level', icon: '⭐', text: t`升到 ${after.level} 级，有属性点可以加` })
     const rank = rankNow(after, book)
     if (rank !== rankNow(before, book) && !bindings.level && !bindings.rank) notes.push({ kind: 'level', icon: '⭐', text: t`晋升：${rank}` })
@@ -149,6 +159,20 @@ export function sheetNotes(sheetBefore, after, book, replyText = '') {
     notes.push({ kind: quest.status === 'failed' ? 'lose' : 'gain', icon: '📜', text })
   }
   for (const skill of after.skills) if (!before.skills.includes(skill)) notes.push({ kind: 'gain', icon: '✨', text: t`学会：${skill}` })
+  // 队伍: who came, who went, who is hurt, and what they learned or rose to.
+  const was = new Map((before.party ?? []).map(member => [member.name, member]))
+  const now = new Map((after.party ?? []).map(member => [member.name, member]))
+  for (const [name, member] of now) {
+    const old = was.get(name)
+    if (!old) notes.push({ kind: 'gain', icon: '🤝', text: book.words?.party ? t`${name}加入了${book.words.party}` : t`${name}加入了队伍` })
+    else {
+      if (member.hurt && !old.hurt) notes.push({ kind: 'lose', icon: '🩹', text: t`${name}负伤，暂时不能上场` })
+      if (!member.hurt && old.hurt) notes.push({ kind: 'gain', icon: '🌿', text: t`${name}伤好了` })
+      if (member.level > old.level) notes.push({ kind: 'level', icon: '⭐', text: t`${name}升到 ${member.level} 级` })
+      for (const skill of member.skills) if (!old.skills.includes(skill)) notes.push({ kind: 'gain', icon: '✨', text: t`${name}学会：${skill}` })
+    }
+  }
+  for (const name of was.keys()) if (!now.has(name)) notes.push({ kind: 'lose', icon: '👋', text: book.words?.party ? t`${name}离开了${book.words.party}` : t`${name}离开了队伍` })
   const named = (list, item) => (list ?? []).some(other => other.name === item.name)
   for (const item of after.conditions ?? []) if (!named(before.conditions, item)) notes.push({ kind: 'lose', icon: '🩹', text: t`状态：${ailName(item.name)}` })
   for (const item of before.conditions ?? []) if (!named(after.conditions, item)) notes.push({ kind: 'gain', icon: '🌿', text: t`恢复：${ailName(item.name)}` })
@@ -206,7 +230,7 @@ function encounterWarning(foes) {
   return foes.some(foe => foe.noEscape) ? t`差距太大，硬打赢不了，也逃不掉。想想别的办法。` : t`差距太大，硬打赢不了。打不过就逃，或者想想别的办法。`
 }
 
-export function encounterCards(el, setup, shown = () => ({ picture: '' })) {
+export function encounterCards(el, setup, shown = () => ({ picture: '' }), words = {}) {
   const kinds = new Map()
   const foes = foeSheets(setup)
   for (const foe of foes) {
@@ -224,10 +248,10 @@ export function encounterCards(el, setup, shown = () => ({ picture: '' })) {
       el('span', { class: 'encounter-face', 'aria-hidden': 'true' }, picture ? cutOutImage(el, picture) : foe.name.slice(0, 1)),
       el('span', { class: 'encounter-who' }, [
         el('b', { text: foe.count > 1 ? `${foe.name} ×${foe.count}` : foe.name }),
-        el('small', { text: [FOE_TIERS()[foe.tier], foe.rank, GAP_NOTES()[foe.gap], traits].filter(Boolean).join(' · ') }),
+        el('small', { text: [words[foe.tier] || FOE_TIERS()[foe.tier], foe.rank, GAP_NOTES()[foe.gap], traits].filter(Boolean).join(' · ') }),
       ]),
       stat(t`等级`, known ? foe.level : UNKNOWN),
-      stat(t`生命`, known ? foe.life : UNKNOWN),
+      stat(words.life || t`生命`, known ? foe.life : UNKNOWN),
       stat(t`攻击`, known ? foe.attack : UNKNOWN),
     ])
   }), warning ? el('p', { class: 'encounter-warn', text: warning }) : null].filter(Boolean))
@@ -235,11 +259,11 @@ export function encounterCards(el, setup, shown = () => ({ picture: '' })) {
 
 const FIGHT_ENDS = () => ({ won: t`胜利`, lost: t`战败`, fled: t`逃脱` })
 
-/** A fight as the transcript shows it. */
-export function battleLine(battle) {
+/** A fight as the transcript shows it, life and experience in the card's words (`book`). */
+export function battleLine(battle, book = null) {
   if (battle.over === 'story') return t`没有开打，交给了剧情：${battle.foes}`
-  const gained = battle.experience ? t` · 经验 +${battle.experience}` : ''
-  return t`战斗 · ${FIGHT_ENDS()[battle.over]} · ${battle.rounds} 回合 · 生命 ${battle.life}/${battle.maxLife}${gained}`
+  const gained = battle.experience ? ` · ${cardWord(book, 'experience', t`经验`)} +${battle.experience}` : ''
+  return t`战斗 · ${FIGHT_ENDS()[battle.over]} · ${battle.rounds} 回合 · ${cardWord(book, 'life', t`生命`)} ${battle.life}/${battle.maxLife}${gained}`
 }
 
 /** A roll in words: 掷出 14，灵巧 +2，共 16，需要 12. */
@@ -266,7 +290,7 @@ export function rollLine(result) {
 /** What kept showing while the model writes on from a roll. → { tier, text } */
 export function rollOutcome(result, book) {
   const earned = checkExperience(book, result)
-  return { tier: result.tier, text: `${rollLine(result)}${earned ? ` · ${t`经验 +${earned}`}` : ''}` }
+  return { tier: result.tier, text: `${rollLine(result)}${earned ? ` · ${cardWord(book, 'experience', t`经验`)} +${earned}` : ''}` }
 }
 
 /** The same for a fight. `over` is how it ended. → { tier, text } */
@@ -303,7 +327,7 @@ export function showRoll(el, result, sound = null, book = null) {
   const sum = el('div', { class: 'roll-sum', text: rollSum(result) })
   const tier = el('div', { class: 'roll-tier' }, letters(el, TIER_WORDS()[result.tier]))
   const earned = book ? checkExperience(book, result) : 0
-  const hint = [result.lacks ? t`缺${result.lacks}，做不到` : TIER_HINTS()[result.tier], earned ? t`经验 +${earned}` : ''].filter(Boolean).join(' · ')
+  const hint = [result.lacks ? t`缺${result.lacks}，做不到` : TIER_HINTS()[result.tier], earned ? `${cardWord(book, 'experience', t`经验`)} +${earned}` : ''].filter(Boolean).join(' · ')
   const dial = el('canvas', { class: 'roll-dial', 'aria-hidden': 'true' })
   const big = el('div', { class: 'roll-big', 'aria-hidden': 'true' })
   const line = (i, label, value) => el('div', { class: 'roll-line', style: `--i: ${i}` }, [el('span', { text: label }), el('b', { text: String(value) })])

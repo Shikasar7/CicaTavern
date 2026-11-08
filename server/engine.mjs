@@ -36,6 +36,7 @@ import { rawRequest } from './frames.mjs'
 import { blockRequest, blockSent } from './blockwords.mjs'
 import { blockText } from '../web/shared/blockwords.js'
 import { memoryOf, memoryOnlyInstruction, memoryRequest, memoryText, mergeEntries, parseEntries, placeEntries, recallEntries, recalledSince, snapshotOf, TIDY_FIRST_MAX, tidyInContext, tidyRequest, turnTexts } from './memory.mjs'
+import { span } from './perf.mjs'
 
 // The preset's per-turn block in a turn's message (buildTurnPrompt).
 const PRESET_BLOCK = /\n*<预设指令>\n[\s\S]*?\n<\/预设指令>/
@@ -681,9 +682,11 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
 
       // Regenerating reuses the recorded prompt verbatim, so the fork's prefix
       // (and its worldbook injections) matches the original attempt exactly.
+      const preparing = span('prompt')
       let prepared = userNode
         ? { settings: await store.getSettings(), prompt: userNode.prompt, injected: userNode.injected, injectedTitles: userNode.injectedTitles, templateWrites: userNode.templateWrites ?? [] }
         : await preparePrompt(chat, parent, text, { marks, rules, files })
+      preparing()
       const target = await targetFor(modelFor(chat, prepared.settings), prepared.settings)
       // 联网: the provider's own search, when this chat has it on and the model has one. A new turn's
       // message says when to search (kept with the turn, so a regenerate sends the same).
@@ -729,12 +732,17 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       })
 
       const started = Date.now()
+      const waiting = span('model.first')
+      const writing = span('model')
       let firstToken = 0
       // What has been shown of the reply and of its thinking, for a reply that stops partway.
       let shown = ''
       let thought = ''
       const onText = delta => {
-        if (!firstToken) firstToken = Date.now() - started
+        if (!firstToken) {
+          firstToken = Date.now() - started
+          waiting()
+        }
         shown += delta
         emit({ type: 'delta', text: delta })
       }
@@ -754,7 +762,9 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       let outcome
       let cut = null
       if (target.api) {
+        const building = span('prompt.history')
         const history = await apiMessages(chat, parent, { stripAll: Boolean(compacted || userNode?.dynamic?.compacted) })
+        building()
         const cap = await replyCap(chat, target.provider)
         try {
           outcome = await generateApi(target, { system: chat.systemPrompt, messages: [...history, { role: 'user', content: prepared.prompt }], ...cap, webSearch, onRestart, onRetry, onReasoning, chatThinking: chat.thinking }, abortController.signal, onText)
@@ -772,11 +782,13 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         outcome = await subscription.generate(sent, run, { onText, onRate: info => emit({ type: 'rate_limit', info }) })
         if (!outcome.sdk) throw httpError(502, msg`模型没有返回正文`)
       }
+      writing()
       const written = outcome.reply
       if (!written.trim()) throw httpError(502, msg`模型没有返回正文`)
 
       // Re-read and saved with no other change to the chat in between (a picture drawn, the card's variables):
       // what came meanwhile stays.
+      const settling = span('settle')
       return await store.withChat(chatId, async () => {
         const fresh = await store.getChat(chatId)
         const now = new Date().toISOString()
@@ -878,6 +890,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
           await store.updateSettings(current => ({ globalVars: applyWrites(current.globalVars ?? {}, globalWrites) })).catch(() => {})
         }
         if (node.usage) await ledger?.recordTurn(fresh, node).catch(() => {})
+        settling()
         return { chat: fresh, nodeId: node.id, ...(cut ? { cut } : {}) }
       })
     } catch (error) {
@@ -1460,6 +1473,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       own,
       safe: game?.safe === true && !settling,
       spot: `${chat.id}:${parent.id}`,
+      companions: Object.keys(book.companions ?? {}).length > 0,
+      words: book.words ?? {},
     }
   }
 

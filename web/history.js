@@ -110,8 +110,15 @@ export function initHistory({ el, getChat, settleScroll }) {
 
   function addTag(article, n) {
     const head = article.querySelector('.msg-head')
-    if (!head || head.querySelector('.round-tag')) return
-    head.append(el('span', { class: 'round-tag', text: t`第 ${n} 轮` }))
+    if (!head) return
+    const text = t`第 ${n} 轮`
+    // A message kept from the last drawing (app.js drawMessages) has its tag: renumbered when a round before it went.
+    const tag = head.querySelector('.round-tag')
+    if (tag) {
+      if (tag.textContent !== text) tag.textContent = text
+      return
+    }
+    head.append(el('span', { class: 'round-tag', text }))
   }
 
   const last = () => state.rounds.at(-1)?.n ?? 0

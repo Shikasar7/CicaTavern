@@ -22,7 +22,7 @@ CicaTavern 是 Agent 式的 SillyTavern 角色卡酒馆：导入 SillyTavern 的
 
 - 也叫：下载地址、安装包、最新版、更新、国内下载、镜像
 
-最新版本是 **2.4.1**（2026-11-08）。下载：
+最新版本是 **2.4.2**（2026-11-09）。下载：
 
 - GitHub 发布页：https://github.com/Shikasar7/CicaTavern/releases/latest
 - 国内镜像（同样的文件）：https://cnb.cool/cicatavern/CicaTavern/-/releases

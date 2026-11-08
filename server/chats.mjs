@@ -585,15 +585,31 @@ function localStamp(date) {
   return `${date.getMonth() + 1}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
+const byCreated = (a, b) => String(a.createdAt ?? '').localeCompare(String(b.createdAt ?? ''))
+
 export function childrenOf(chat, id) {
-  return Object.values(chat.nodes)
-    .filter(node => node.parent === id)
-    .sort((a, b) => String(a.createdAt ?? '').localeCompare(String(b.createdAt ?? '')))
+  return Object.values(chat.nodes).filter(node => node.parent === id).sort(byCreated)
+}
+
+/**
+ * Every node's children (childrenOf for all of them), in one pass: a long chat walked
+ * node by node with childrenOf went through all its nodes at each step.
+ * Built for one look at the chat: a node added or moved afterwards is not in it.
+ */
+export function childIndex(chat) {
+  const index = new Map()
+  for (const node of Object.values(chat.nodes)) {
+    const kids = index.get(node.parent)
+    if (kids) kids.push(node)
+    else index.set(node.parent, [node])
+  }
+  for (const kids of index.values()) kids.sort(byCreated)
+  return index
 }
 
 /** The child a node continues into: its `sel`, else the newest. */
-function nextOf(chat, node) {
-  const kids = childrenOf(chat, node.id)
+function nextOf(index, node) {
+  const kids = index.get(node.id) ?? []
   return kids.find(kid => kid.id === node.sel) ?? kids.at(-1) ?? null
 }
 
@@ -601,8 +617,9 @@ function nextOf(chat, node) {
  * Follow `sel` pointers from the root; falls back to the newest child. A node
  * marked `cut` (rolled back to) ends the path; what follows it is kept, folded.
  * A node met again (a damaged chat file) ends it too.
+ * @param index - childIndex(chat), when the caller has one for the chat as it is.
  */
-export function activePath(chat) {
+export function activePath(chat, index = childIndex(chat)) {
   const path = []
   const seen = new Set()
   let node = chat.nodes.root
@@ -610,7 +627,7 @@ export function activePath(chat) {
     seen.add(node)
     path.push(node)
     if (node.cut) break
-    node = nextOf(chat, node)
+    node = nextOf(index, node)
   }
   return path
 }
@@ -621,12 +638,12 @@ export function latestState(chat) {
 }
 
 /** Turns hidden behind a rollback at the end of the active path. */
-export function foldedTurns(chat) {
-  const last = activePath(chat).at(-1)
+export function foldedTurns(chat, index = childIndex(chat), path = activePath(chat, index)) {
+  const last = path.at(-1)
   if (!last?.cut) return 0
   let turns = 0
   const seen = new Set([last])
-  for (let node = nextOf(chat, last); node && !seen.has(node); node = node.cut ? null : nextOf(chat, node)) {
+  for (let node = nextOf(index, last); node && !seen.has(node); node = node.cut ? null : nextOf(index, node)) {
     seen.add(node)
     if (node.role === 'user') turns++
   }
@@ -836,8 +853,10 @@ function swapInput(prompt, before, next) {
 
 /** Client view: the active path plus sibling counts for swipe controls. */
 export function chatView(chat) {
-  const path = activePath(chat).filter(node => !node.deleted).map(node => {
-    const siblings = node.parent ? childrenOf(chat, node.parent).filter(kid => !kid.deleted) : [node]
+  const index = childIndex(chat)
+  const active = activePath(chat, index)
+  const path = active.filter(node => !node.deleted).map(node => {
+    const siblings = node.parent ? (index.get(node.parent) ?? []).filter(kid => !kid.deleted) : [node]
     return {
       id: node.id,
       parent: node.parent,
@@ -890,9 +909,10 @@ export function chatView(chat) {
   path.forEach((node, index) => {
     if (node.role === 'user' && path[index + 1]?.hidden) node.hidden = true
   })
-  const active = activePath(chat)
-  const lastAssistant = [...active].reverse().find(n => n.role === 'assistant')
+  const lastAssistant = active.findLast(n => n.role === 'assistant')
   const tip = active.at(-1)
+  const tipHasKids = Boolean(index.get(tip.id)?.length)
+  const blocked = compactBlock(chat, active)
   const sinceCompaction = turnsSinceCompaction(active)
   return {
     id: chat.id,
@@ -913,11 +933,11 @@ export function chatView(chat) {
     path,
     // What the next turn follows: the latest reply, even one deleted (it is not in `path` then).
     replyTip: lastAssistant?.id ?? null,
-    folded: foldedTurns(chat),
+    folded: foldedTurns(chat, index, active),
     // Turns a manual compaction would fold into a summary; 0 when there is nothing worth it, and why
     // (compactBlock). A subscription session cannot reach turns folded behind a rollback: 'session'.
-    compactable: !compactBlock(chat, active) && !(tip.sdk && childrenOf(chat, tip.id).length) ? sinceCompaction : 0,
-    compactBlock: compactBlock(chat, active) || (tip.sdk && childrenOf(chat, tip.id).length ? 'session' : ''),
+    compactable: !blocked && !(tip.sdk && tipHasKids) ? sinceCompaction : 0,
+    compactBlock: blocked || (tip.sdk && tipHasKids ? 'session' : ''),
     state: lastAssistant?.state ?? {},
     // The chat variables (Tavern Helper's chat scope, the templates' local scope), for the card's frames.
     frameVars: chat.frameVars ?? {},

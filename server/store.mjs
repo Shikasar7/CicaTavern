@@ -1,7 +1,7 @@
 // Plain JSON-file storage under one data root. Every write goes through a
 // temp file + rename so a crash mid-write never leaves a half-written JSON.
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import path from 'node:path'
@@ -10,6 +10,7 @@ import { cleanBasic, cleanVn } from '../web/shared/basic.js'
 import { cleanAppearance } from '../web/shared/appearance.js'
 import { cleanList, DEFAULT_ITEM, defaultOf } from '../web/shared/personas.js'
 import { cleanCompaction, cleanMemory } from './context.mjs'
+import { span } from './perf.mjs'
 
 /** @param dir - the edition's folder under the home directory (edition.mjs dataDir). */
 export function defaultDataRoot(dir = '.agent-tavern') {
@@ -211,6 +212,8 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
   const cardFile = id => path.join(dirs.cards, checkId(id), 'card.json')
   const bookFile = id => path.join(dirs.books, `${checkId(id)}.json`)
   const chatFile = id => path.join(dirs.chats, `${checkId(id)}.json`)
+  // chatHeads: a chat file's summary, kept while the file stays as it was read (its time and size).
+  const headCache = new Map()
   const presetFile = id => path.join(dirs.presets, `${checkId(id)}.json`)
   const locked = createLocks()
   // Told of each chat and card saved or deleted (http.mjs passes it on to the open pages: a phone's turn shows on the computer).
@@ -479,14 +482,55 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
         .filter(chat => !cardId || chat.cardId === cardId)
         .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     },
+    /**
+     * The chats of a card (all with no `cardId`), newest first, as `summarize(chat)` puts each, with its `trial`.
+     * A chat file read once is not read again until it changes: the list is asked for at each switch of card,
+     * and reading every long chat whole for it took longer than opening one.
+     */
+    async chatHeads(cardId, summarize) {
+      const timing = span('chat.list')
+      let read = 0
+      let names
+      try {
+        names = await readdir(dirs.chats)
+      } catch (error) {
+        if (error.code === 'ENOENT') return []
+        throw error
+      }
+      const heads = []
+      const present = new Set()
+      for (const name of names) {
+        if (!name.endsWith('.json')) continue
+        const file = path.join(dirs.chats, name)
+        present.add(file)
+        const info = await stat(file).catch(() => null)
+        if (!info) continue
+        let head = headCache.get(file)
+        if (!head || head.mtimeMs !== info.mtimeMs || head.size !== info.size || head.summarize !== summarize) {
+          const chat = await readJson(file, null)
+          read++
+          if (!chat) continue
+          head = { mtimeMs: info.mtimeMs, size: info.size, summarize, cardId: chat.cardId, trial: Boolean(chat.trial), id: chat.id, updatedAt: String(chat.updatedAt ?? ''), summary: summarize(chat) }
+          headCache.set(file, head)
+        }
+        if (!cardId || head.cardId === cardId) heads.push(head)
+      }
+      for (const file of headCache.keys()) if (!present.has(file)) headCache.delete(file)
+      timing({ files: present.size, read })
+      return heads.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    },
     async getChat(id) {
+      const timing = span('chat.read')
       const chat = await readJson(chatFile(id), null)
+      timing({ nodes: chat ? Object.keys(chat.nodes ?? {}).length : 0 })
       if (!chat) throw httpError(404, '对话不存在')
       return chat
     },
     async saveChat(chat) {
       chat.updatedAt = new Date().toISOString()
+      const timing = span('chat.write')
       await writeJson(chatFile(chat.id), chat)
+      timing()
       changed({ kind: 'chat', id: chat.id, cardId: chat.cardId })
       return chat
     },

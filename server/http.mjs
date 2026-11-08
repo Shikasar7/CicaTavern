@@ -60,6 +60,7 @@ import { accessCookie, hostAllowed, isLoopback, lanAddresses, loginPage, signedI
 import { createDiagnostics } from './diagnostics.mjs'
 import { relayRequest } from './relay.mjs'
 import { onSlowPattern } from './regex-guard.mjs'
+import { span, trace, traced, traceReport } from './perf.mjs'
 
 const WEB_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'web')
 // The Windows launcher (launcher/): in a package, or built at a checkout's root.
@@ -121,6 +122,8 @@ const STATIC = {
   '/shared/draw.js': ['shared/draw.js', 'text/javascript; charset=utf-8'],
   '/vn.js': ['vn.js', 'text/javascript; charset=utf-8'],
   '/shared/vn.js': ['shared/vn.js', 'text/javascript; charset=utf-8'],
+  '/stream-reveal.js': ['stream-reveal.js', 'text/javascript; charset=utf-8'],
+  '/shared/reveal.js': ['shared/reveal.js', 'text/javascript; charset=utf-8'],
   '/shared/stage.js': ['shared/stage.js', 'text/javascript; charset=utf-8'],
   '/shared/zip.js': ['shared/zip.js', 'text/javascript; charset=utf-8'],
   '/shared/hud.js': ['shared/hud.js', 'text/javascript; charset=utf-8'],
@@ -148,6 +151,7 @@ const STATIC = {
   '/whatsnew.js': ['whatsnew.js', 'text/javascript; charset=utf-8'],
   '/shared/whatsnew.js': ['shared/whatsnew.js', 'text/javascript; charset=utf-8'],
   '/diagnostics.js': ['diagnostics.js', 'text/javascript; charset=utf-8'],
+  '/perf-panel.js': ['perf-panel.js', 'text/javascript; charset=utf-8'],
   '/blockwords.js': ['blockwords.js', 'text/javascript; charset=utf-8'],
   '/shared/blockwords.js': ['shared/blockwords.js', 'text/javascript; charset=utf-8'],
   '/dictation.js': ['dictation.js', 'text/javascript; charset=utf-8'],
@@ -221,8 +225,13 @@ function sendJson(res, status, value) {
   if (typeof value?.error === 'string') value = { ...value, error: localize(value.error) }
   // For the error log, once the answer has gone (createApp's server).
   if (status >= 400 && typeof value?.error === 'string') res.errorText = value.error
-  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
-  res.end(JSON.stringify(value))
+  const timing = span('json')
+  const text = JSON.stringify(value)
+  timing({ bytes: text.length })
+  // 性能记录: what this request cost here, for the page's table.
+  const report = traceReport()
+  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...(report ? { 'x-perf-trace': encodeURIComponent(JSON.stringify(report)) } : {}) })
+  res.end(text)
 }
 
 function decodeUpload(body) {
@@ -472,6 +481,13 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
   }
 
   /** Stream one generation as server-sent events. */
+  /** What a chat's card frames read (compat.js): its books' names, its variables, the persona, the avatar's key. */
+  async function frameInfoOf(chat) {
+    const [card, settings] = await Promise.all([store.getCard(chat.cardId), store.getSettings()])
+    const [books, { persona }] = await Promise.all([booksForCard(store, card, settings), chatPicks(store, chat, card)])
+    return { books: bookNames(books, card, settings.globalBookIds ?? [], chat), vars: chat.frameVars ?? {}, globalVars: settings.globalVars ?? {}, persona: { description: playerOf(card, persona, chat.names.user).description ?? '' }, avatarKey: avatarKey(chat.cardId) }
+  }
+
   async function streamTurn(res, chatId, args) {
     res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', 'x-accel-buffering': 'no' })
     const send = event => {
@@ -487,7 +503,10 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       const chat = cut ? turn.chat : await autoFill(chatId, turn.chat, nodeId, send, what)
       const said = cut?.message ? localize(cut.message) : ''
       if (said) await diagnostics.record({ source: 'turn', status: cut.status, message: said, stack: '', model: await turnModel(chatId), detail: cut.detail }).catch(() => {})
-      send({ type: 'done', nodeId, chat: chatView(chat), ...(cut ? { cut: { stopped: cut.stopped, message: said } } : {}) })
+      const viewing = span('chat.view')
+      const view = chatView(chat)
+      viewing({ messages: view.path.length })
+      send({ type: 'done', nodeId, chat: view, ...(cut ? { cut: { stopped: cut.stopped, message: said } } : {}), ...(trace() ? { perf: traceReport() } : {}) })
       await noteTurn(what, chat, chat.nodes[nodeId]).catch(() => {})
       if (cut) return res.end()
       // 边玩边整理 (长期记忆), on its own once the turn is in: the pages hear when it starts and when it ends.
@@ -1406,9 +1425,9 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
 
     // A 试玩体检's chat is the window's, and goes when it ends, or here when the app did not live through it.
     ['GET', /^\/api\/chats$/, async (_, __, url) => {
-      const chats = await store.listChats(url.searchParams.get('cardId'))
-      for (const chat of chats) if (chat.trial && !forge.trialRunning(chat.cardId)) await store.deleteChat(chat.id).catch(() => {})
-      return chats.filter(chat => !chat.trial).map(chatSummary)
+      const heads = await store.chatHeads(url.searchParams.get('cardId'), chatSummary)
+      for (const head of heads) if (head.trial && !forge.trialRunning(head.cardId)) await store.deleteChat(head.id).catch(() => {})
+      return heads.filter(head => !head.trial).map(head => head.summary)
     }],
     ['POST', /^\/api\/chats$/, async (_, body) => chatView(await createChat(store, String(body.cardId), Number(body.greetingIndex) || 0))],
     // A card's welcome page switching the first message to another of its openings (before the first turn).
@@ -1417,7 +1436,15 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       if (engine.isRunning(id)) throw httpError(409, msg`正在生成，先停止`)
       return store.withChat(id, async () => chatView(await switchOpening(store, await store.getChat(id), Number(body?.index))))
     }],
-    ['GET', /^\/api\/chats\/([\w-]+)$/, async ([id]) => ({ ...chatView(await store.getChat(id)), running: engine.isRunning(id), ...tidyState(id) })],
+    // `frameInfo=1`: what its card's frames read too (frame-info), from the same reading of a long chat's file.
+    ['GET', /^\/api\/chats\/([\w-]+)$/, async ([id], _, url) => {
+      const chat = await store.getChat(id)
+      const viewing = span('chat.view')
+      const view = chatView(chat)
+      viewing({ messages: view.path.length })
+      const frameInfo = url.searchParams.get('frameInfo') === '1' ? { frameInfo: await frameInfoOf(chat) } : {}
+      return { ...view, running: engine.isRunning(id), ...tidyState(id), ...frameInfo }
+    }],
     ['PUT', /^\/api\/chats\/([\w-]+)$/, ([id], body) => store.withChat(id, async () => {
       const chat = await store.getChat(id)
       if (typeof body.title === 'string' && body.title.trim()) chat.title = body.title.trim().slice(0, 80)
@@ -1585,12 +1612,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     }],
     // ── What a card's own HTML reads and writes besides the turns (server/frames.mjs, web/compat.js) ──
     // The names of the books this chat uses, the app's global variables, the player's description.
-    ['GET', /^\/api\/chats\/([\w-]+)\/frame-info$/, async ([id]) => {
-      const chat = await store.getChat(id)
-      const [card, settings] = await Promise.all([store.getCard(chat.cardId), store.getSettings()])
-      const [books, { persona }] = await Promise.all([booksForCard(store, card, settings), chatPicks(store, chat, card)])
-      return { books: bookNames(books, card, settings.globalBookIds ?? [], chat), vars: chat.frameVars ?? {}, globalVars: settings.globalVars ?? {}, persona: { description: playerOf(card, persona, chat.names.user).description ?? '' }, avatarKey: avatarKey(chat.cardId) }
-    }],
+    ['GET', /^\/api\/chats\/([\w-]+)\/frame-info$/, async ([id]) => frameInfoOf(await store.getChat(id))],
     // Tavern Helper's chat variables (the templates' local scope): `vars` whole, or a card UI's
     // { set, unset } over those saved now (patchVars), so two UIs open at once keep each other's keys.
     ['PUT', /^\/api\/chats\/([\w-]+)\/frame-vars$/, ([id], body) => store.withChat(id, async () => {
@@ -1655,7 +1677,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     const avatarOf = req.method === 'GET' ? FRAME_AVATAR.exec(url.pathname)?.[1] : null
     if (avatarOf && tokensEqual(url.searchParams.get('fk') ?? '', avatarKey(avatarOf))) return true
     const token = accessToken ?? (await store.ensureAccessToken())
-    if (signedIn(req.headers.cookie, token) || tokensEqual(String(req.headers['x-agent-tavern-key'] ?? ''), token)) return true
+    // Before the cookie is looked at: a link opened from another app (a QR scanner) brings the page without the
+    // SameSite=Strict cookie, and the page's own request then carries it, so a signed-in phone gets here too.
     if (req.method === 'POST' && url.pathname === '/api/access/unlock') {
       // Asked before the token is known: a few bytes are all it takes.
       const body = await readBody(req, 4096)
@@ -1667,6 +1690,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       sendJson(res, 200, { ok: true })
       return false
     }
+    if (signedIn(req.headers.cookie, token) || tokensEqual(String(req.headers['x-agent-tavern-key'] ?? ''), token)) return true
     if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/login')) {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
       res.end(loginPage(features.appName))
@@ -1692,7 +1716,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
   /** Each request runs in the language of the page that sent it (server/i18n.mjs). */
   async function handle(req, res) {
     uiLanguage ??= (await store.getSettings()).uiLanguage
-    return withLanguage(requestLanguage(uiLanguage, req), () => serve(req, res))
+    // 性能记录: a page recording asks for each request's timings (x-perf); others are not timed.
+    return traced(req.headers['x-perf'] === '1', () => withLanguage(requestLanguage(uiLanguage, req), () => serve(req, res)))
   }
 
   async function serve(req, res) {

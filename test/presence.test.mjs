@@ -156,6 +156,36 @@ test('unlocking with the key takes a few bytes: a big body is refused, not held 
   assert.equal((await unlock('x'.repeat(100_000))).status, 413)
 })
 
+test('a browser already signed in can unlock again: a link from another app brings the login page without the cookie', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'tavern-presence-'))
+  const key = 'k'.repeat(32)
+  const app = createApp({ dataRoot: root, proxy: 'off', edition: 'release', accessToken: key })
+  const server = await app.listen({ port: 0, listen: 'lan', host: '127.0.0.1' })
+  t.after(async () => {
+    app.network.stop()
+    server.closeAllConnections?.()
+    server.close()
+    await rm(root, { recursive: true, force: true })
+  })
+  const base = `http://127.0.0.1:${server.address().port}`
+  const unlock = (token, headers = {}) => fetch(`${base}/api/access/unlock`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify({ token }) })
+  const cookie = (await unlock(key)).headers.get('set-cookie').split(';')[0]
+
+  const again = await unlock(key, { cookie })
+  assert.equal(again.status, 200)
+  assert.deepEqual(await again.json(), { ok: true })
+  assert.equal(again.headers.get('set-cookie').split(';')[0], cookie)
+
+  const wrong = await unlock('wrong', { cookie })
+  assert.equal(wrong.status, 403, 'the cookie does not make a wrong key right')
+  assert.equal(wrong.headers.get('set-cookie'), null)
+  assert.equal((await unlock('wrong', { 'x-agent-tavern-key': key })).status, 403)
+
+  // Everything else still goes by the cookie.
+  assert.equal((await fetch(`${base}/api/settings`, { headers: { cookie } })).status, 200)
+  assert.equal((await fetch(`${base}/api/settings`)).status, 401)
+})
+
 test('a card frame reads its card\'s avatar with the key it is given, with no cookie; nothing else opens with it', async t => {
   const root = await mkdtemp(path.join(tmpdir(), 'tavern-presence-'))
   const key = 'k'.repeat(32)

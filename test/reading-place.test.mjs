@@ -11,7 +11,7 @@ const read = file => readFileSync(path.join(web, file), 'utf8').replace(/\r\n/g,
 
 test('a message near the screen has its real height, or a fast wheel comes on a guess', () => {
   assert.match(read('style.css'), /\.transcript > \.msg\.near \{ content-visibility: visible; \}/)
-  assert.match(read('app.js'), /new IntersectionObserver\([\s\S]{0,160}toggle\('near'[\s\S]{0,60}root: box/)
+  assert.match(read('app.js'), /new IntersectionObserver\([\s\S]{0,160}toggle\('near'[\s\S]{0,120}root: box/)
 })
 
 test('what loads late on screen is watched, and only pulls the page while the reader goes up', () => {

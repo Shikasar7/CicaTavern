@@ -7,7 +7,8 @@
 //   【获得|铜钥匙×1】 【失去|伞】     things
 //   【任务|新|标题|一句话】 【任务|完成|标题】 【任务|失败|标题】
 //   【受伤|轻】 【恢复|中】           life outside a fight (轻 中 重)
-//   【学会|技能名】
+//   【学会|技能名】 【学会|技能名|同伴名】
+//   【同伴|加入|温小棠】 【同伴|离开|温小棠】 【同伴|负伤|楚怀瑾】 【同伴|归队|楚怀瑾】   who travels with the player
 //   【异常|扭伤左脚|灵巧|中】 【异常|解除|扭伤左脚】   what holds the player back, on one attribute or all of them (轻 中 重)
 //   【晋升|筑基】                    the player has risen to a rank of the card's
 //   【理智|中】 【理智|回复|轻】       the mind shaken or calmed, on a card that counts it (轻 中 重)
@@ -18,7 +19,7 @@ import { otherChoices } from '../basic.js'
 
 // Models do write them in the wrong brackets (<检定|灵巧|DC12>): the page would swallow that as a tag, and the story would
 // stop with nothing to do. The kind and the bar are what tell it from anything else.
-const MARK = /(?:\*\*)?[【<\[［〖〔]\s*(检定|战斗|获得|失去|任务|受伤|恢复|学会|异常|晋升|理智)\s*[|｜]\s*([^【】<>\[\]［］〖〗〔〕\n]{0,80}?)\s*[】>\]］〗〕](?:\*\*)?/g
+const MARK = /(?:\*\*)?[【<\[［〖〔]\s*(检定|战斗|获得|失去|任务|受伤|恢复|学会|异常|晋升|理智|同伴)\s*[|｜]\s*([^【】<>\[\]［］〖〗〔〕\n]{0,80}?)\s*[】>\]］〗〕](?:\*\*)?/g
 // Where a mark is not the story's: the model's thinking, the update blocks, the action choices.
 const SEALED = /<(think|thinking|reasoning|choices|UpdateVariable|state)\b[^>]*>[\s\S]*?(?:<\/\1\s*>|$)/gi
 const KEYCAP_LINE = /^[ \t]*[1-9]️?⃣.*$/gm
@@ -31,6 +32,7 @@ const OPTION_LABEL = /^\s*(?:[-*•]\s*)?(?:[A-Ia-i1-9①-⑨][.、．:：)）]\
 const QUEST = { 新: 'new', 完成: 'done', 失败: 'failed' }
 const SIZE = { 轻: 'light', 中: 'medium', 重: 'heavy' }
 const TIERS = { 杂兵: 'minion', 普通: 'normal', 精英: 'elite', 首领: 'boss' }
+const PARTY = { 加入: 'join', 入队: 'join', 离开: 'leave', 离队: 'leave', 负伤: 'hurt', 归队: 'back' }
 
 const DEFAULT_DC = 12
 const MAX_FOES = 4
@@ -94,7 +96,8 @@ function readMark(kind, body) {
     const size = fields.slice(1).find(field => SIZE[field])
     return fields[0] ? { kind: 'ail', name: clip(fields[0]), stat: fields.slice(1).find(field => field && field !== size) ?? '', size: SIZE[size] ?? 'light' } : null
   }
-  return fields[0] ? { kind: 'learn', name: clip(fields[0]) } : null
+  if (kind === '同伴') return PARTY[fields[0]] && fields[1] ? { kind: 'party', act: PARTY[fields[0]], name: clip(fields[1]) } : null
+  return fields[0] ? { kind: 'learn', name: clip(fields[0]), ...(fields[1] ? { who: clip(fields[1]) } : {}) } : null
 }
 
 const blank = text => text.replace(/[^\n]/g, ' ')

@@ -158,12 +158,19 @@ export function loginPage(appName = 'CicaTavern') {
     form.addEventListener('submit', async event => {
       event.preventDefault()
       err.textContent = ''
+      // The whole link pasted in works as well as what comes after its #k=.
+      const typed = form.token.value.trim()
+      const inLink = /#k=([^&]+)/.exec(typed)
       const res = await fetch('/api/access/unlock', {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-agent-tavern': '1' },
-        body: JSON.stringify({ token: form.token.value.trim() }),
+        body: JSON.stringify({ token: inLink ? inLink[1] : typed }),
       })
-      if (!res.ok) { err.textContent = ${JSON.stringify(msg`口令不对`)}; return }
+      if (!res.ok) {
+        const reply = await res.json().catch(() => null)
+        err.textContent = (reply && reply.error) || ${JSON.stringify(msg`口令不对`)}
+        return
+      }
       // In iPhone Safari the link keeps its key, so「添加到主屏幕」saves one that opens without asking again.
       const keepKey = /iP(hone|od|ad)/.test(navigator.userAgent) && !navigator.standalone
       location.replace(keepKey ? location.pathname + location.hash : location.pathname)

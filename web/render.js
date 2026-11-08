@@ -375,9 +375,14 @@ function frameDocument(body, id, context) {
   return /<\/body>/i.test(withHead) ? withHead.replace(/<\/body>/i, `${report}</body>`) : `${withHead}${report}`
 }
 
+// The frames drawn, by id, for their height reports (a long chat's frames each report a few times as they load).
+const framesById = new Map()
+
 export function htmlFrame(body, context = null) {
   const id = `f${++frameCounter}`
   const frame = document.createElement('iframe')
+  if (framesById.size > 400) for (const [key, kept] of framesById) if (!kept.isConnected) framesById.delete(key)
+  framesById.set(id, frame)
   frame.className = 'card-frame'
   frame.dataset.frame = id
   frame.dataset.key = hash(body)
@@ -391,6 +396,34 @@ export function htmlFrame(body, context = null) {
   frame.style.height = `${heights.get(frame.dataset.key) ?? 80}px`
   frame.srcdoc = frameDocument(body, id, context)
   return frame
+}
+
+// A frame not near the screen yet: a box of its height, made a frame when it comes near (fillFrameSlots). A long chat
+// drew hundreds of frames at each redraw, and a frame costs the page far more to put in or take out than a box.
+const slotParts = new WeakMap() // slot → { body, context }
+
+/** A frame's place: `context` is asked for when the frame is made, so it reads the chat as it is then. */
+export function frameSlot(body, context = () => null) {
+  const slot = document.createElement('div')
+  slot.className = 'frame-slot'
+  slot.dataset.key = hash(body)
+  slot.style.height = `${heights.get(slot.dataset.key) ?? 80}px`
+  slotParts.set(slot, { body, context })
+  return slot
+}
+
+/** The frames in `root` still waiting as slots, made now. */
+export function fillFrameSlots(root) {
+  for (const slot of root.querySelectorAll('.frame-slot')) {
+    const part = slotParts.get(slot)
+    if (part) slot.replaceWith(htmlFrame(part.body, part.context()))
+  }
+}
+
+/** What a slot will show, as text (复制 on a reply whose frame was not made yet). */
+export function slotText(slot) {
+  const part = slotParts.get(slot)
+  return part ? readableText(new DOMParser().parseFromString(part.body, 'text/html').body) : ''
 }
 
 const textAsked = new Map() // frame id → resolve, while 复制 waits for its text
@@ -418,11 +451,186 @@ export function listenForFrameHeights() {
   window.addEventListener('message', event => {
     const id = event.data?.agentTavernFrame
     if (typeof id !== 'string') return
-    const frame = document.querySelector(`iframe[data-frame="${CSS.escape(id)}"]`)
-    if (!frame || event.source !== frame.contentWindow) return
+    const frame = framesById.get(id)
+    if (!frame?.isConnected || event.source !== frame.contentWindow) return
+    // Loaded: the frames told of changes (compat.js broadcast*) are the ones that can hear.
+    frame.dataset.loaded = ''
     if (typeof event.data.text === 'string') return textAsked.get(id)?.(event.data.text)
     const height = Math.min(Math.max(Number(event.data.height) || 0, 20), FRAME_MAX)
     frame.style.height = `${height}px`
     heights.set(frame.dataset.key, height)
   })
+}
+
+// ─── 性能记录 ───────────────────────────────────────────────────────────
+// 设置 → 更多 → 性能记录 (web/perf-panel.js shows it): how long what the page does takes, for a player to send us when a long chat feels
+// slow. An action (切换角色卡, 打开对话, 一次回复) gathers the spans timed while it is open: the drawing and its parts
+// (正则, Markdown, 状态栏, 视觉小说…), the requests and what the server says they cost it (server/perf.mjs), long
+// tasks, and for a reply the frames while it streamed. Off (the default), start() and begin() give back a function
+// that does nothing, and nothing else runs: no observer, no frame loop, no header on requests.
+const NOOP = () => {}
+const MAX_ACTIONS = 60
+const perfState = { on: false, actions: [], open: [], observer: null, listeners: new Set() }
+
+const roundMs = ms => Math.round(ms * 10) / 10
+
+function addSpan(action, name, ms, detail) {
+  const same = action.spans.find(item => item.name === name)
+  if (same) {
+    same.ms += ms
+    same.count += 1
+    same.max = Math.max(same.max, ms)
+    if (detail) Object.assign(same, detail)
+  } else {
+    action.spans.push({ name, ms, count: 1, max: ms, ...detail })
+  }
+}
+
+const perfChanged = () => {
+  for (const listener of perfState.listeners) listener()
+}
+
+/** The action spans go to: the latest one still open. */
+const openAction = () => perfState.open.at(-1) ?? null
+
+function watchLongTasks(on) {
+  if (!on) {
+    perfState.observer?.disconnect()
+    perfState.observer = null
+    return
+  }
+  try {
+    perfState.observer = new PerformanceObserver(list => {
+      for (const entry of list.getEntries()) {
+        // A long task belongs to the actions open while it ran.
+        for (const action of perfState.open) addSpan(action, 'longtask', entry.duration)
+      }
+    })
+    perfState.observer.observe({ type: 'longtask' })
+  } catch {
+    // An old WebView without long tasks: the table goes without them.
+    perfState.observer = null
+  }
+}
+
+export const perf = {
+  get on() {
+    return perfState.on
+  },
+  /** Recording or not; turning it on starts an empty table. */
+  setOn(on) {
+    perfState.on = Boolean(on)
+    perfState.open = []
+    if (perfState.on) perfState.actions = []
+    watchLongTasks(perfState.on)
+    perfChanged()
+  },
+  clear() {
+    perfState.actions = perfState.actions.filter(action => !action.done)
+    perfChanged()
+  },
+  actions: () => perfState.actions,
+  onChange(listener) {
+    perfState.listeners.add(listener)
+    return () => perfState.listeners.delete(listener)
+  },
+
+  /**
+   * Starts an action (`kind`: switch, open, reply…; `label`: which card or chat). The function it gives ends it,
+   * once the page has drawn what it did (the next frame). Inside another action of `within`, it is part of that one.
+   */
+  begin(kind, label = '', { within = [] } = {}) {
+    if (!perfState.on) return NOOP
+    if (within.includes(openAction()?.kind)) return NOOP
+    const action = { kind, label, at: new Date().toISOString(), startedAt: performance.now(), total: 0, spans: [], server: [], done: false }
+    perfState.actions.unshift(action)
+    if (perfState.actions.length > MAX_ACTIONS) perfState.actions.length = MAX_ACTIONS
+    perfState.open.push(action)
+    let ended = false
+    return (extra = {}) => {
+      if (ended) return
+      ended = true
+      const finish = () => {
+        action.total = performance.now() - action.startedAt
+        Object.assign(action, extra, { done: true })
+        perfState.open = perfState.open.filter(item => item !== action)
+        perfChanged()
+      }
+      // After the browser has laid it out and painted: the time the player waited to see it.
+      requestAnimationFrame(() => setTimeout(finish, 0))
+    }
+  },
+
+  /** Times `name` in the open action; the function it gives ends it (`extra`: counts to show beside it). */
+  start(name, detail) {
+    if (!perfState.on) return NOOP
+    const action = openAction()
+    if (!action) return NOOP
+    const startedAt = performance.now()
+    return extra => addSpan(action, name, performance.now() - startedAt, detail || extra ? { ...detail, ...extra } : null)
+  },
+
+  /** A stretch of the open action from its start to now (e.g. 等到第一个字), once. */
+  mark(name) {
+    if (!perfState.on) return
+    const action = openAction()
+    if (action && !action.spans.some(item => item.name === name)) addSpan(action, name, performance.now() - action.startedAt)
+  },
+
+  /** What the server says a request cost it (its x-perf-trace, or a reply's `perf`), added to the open action. */
+  server(path, report) {
+    if (!perfState.on || !report) return
+    const action = openAction()
+    if (action) action.server.push({ path: String(path).replace(/[?#].*$/, ''), total: report.total, spans: report.spans ?? [] })
+  },
+
+  /** The gaps between frames until the function it gives is called (a reply streaming): how smooth it was. */
+  watchFrames() {
+    if (!perfState.on) return NOOP
+    const action = openAction()
+    if (!action) return NOOP
+    const gaps = []
+    let last = performance.now()
+    let running = true
+    const tick = now => {
+      gaps.push(now - last)
+      last = now
+      if (running) requestAnimationFrame(tick)
+    }
+    requestAnimationFrame(tick)
+    return () => {
+      running = false
+      const sorted = gaps.slice(1).sort((a, b) => a - b)
+      if (!sorted.length) return
+      action.frames = {
+        count: sorted.length,
+        p50: roundMs(sorted[Math.floor(sorted.length / 2)]),
+        p95: roundMs(sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))]),
+        max: roundMs(sorted.at(-1)),
+        over50: sorted.filter(gap => gap > 50).length,
+        over100: sorted.filter(gap => gap > 100).length,
+      }
+    }
+  },
+}
+
+/** The headers a request carries while recording: the server times it then. */
+export const perfHeaders = () => (perfState.on ? { 'x-perf': '1' } : null)
+
+/** The table as JSON, for 导出 (the page's size and what it runs on, to read it by). */
+export function perfReport(about = {}) {
+  return {
+    recordedAt: new Date().toISOString(),
+    userAgent: navigator.userAgent,
+    screen: `${screen.width}x${screen.height}@${devicePixelRatio}`,
+    cores: navigator.hardwareConcurrency ?? null,
+    ...about,
+    actions: perfState.actions.filter(action => action.done).map(action => ({
+      ...action,
+      startedAt: undefined,
+      done: undefined,
+      total: roundMs(action.total),
+      spans: action.spans.map(item => ({ ...item, ms: roundMs(item.ms), max: roundMs(item.max) })),
+    })),
+  }
 }

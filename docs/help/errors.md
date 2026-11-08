@@ -948,7 +948,7 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 - 英文：Wrong access code
 - 出现在：手机浏览器打开电脑上酒馆的链接时
 - 原因：链接没带口令或口令不对。手机访问的链接 # 后面带着口令，复制时少了一截，或者手动输入的地址没有口令，就会要你填。
-- 解决：在电脑上打开 设置 → 连接 → 手机访问，把链接整条复制到手机上打开。不要把这个链接发到群里：拿到链接的人能用你的模型额度。
+- 解决：在电脑上打开 设置 → 连接 → 手机访问，把链接整条复制到手机上打开，或者整条粘贴到口令框里。不要把这个链接发到群里：拿到链接的人能用你的模型额度。
 
 ## 手机打不开电脑上的链接 {#err-lan-unreachable}
 
@@ -1134,11 +1134,13 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 - 原文：屏蔽词要重启后台服务后才能用：关掉所有窗口等一分钟，再从桌面图标打开。
 - 原文：你的角色和文风要重启后台服务后才能用：关掉所有窗口等一分钟，再从桌面图标打开。
 - 原文：语音输入要重启后台服务后才能用：关掉所有窗口等一分钟，再从桌面图标打开。
+- 原文：性能记录要重启后台服务后才能用：关掉所有窗口等一分钟，再从桌面图标打开。
 - 原文：要重启后台服务后才能用：关掉所有窗口等一分钟，再从桌面图标打开。
 - 英文：The error log works once the background server restarts: close every window, wait a minute, then open it from the desktop icon.
 - 英文：Blocked words work once the background server restarts: close every window, wait a minute, then open it from the desktop icon.
 - 英文：Personas and styles work after the background service restarts: close every window, wait a minute, then open it from the desktop icon again.
 - 英文：Voice input works once the background server restarts: close every window, wait a minute, then open it from the desktop icon.
+- 英文：The performance log needs the background service restarted: close all windows, wait a minute, then open the app from its desktop icon again.
 - 英文：This works once the background server restarts: close every window, wait a minute, then open it from the desktop icon.
 - 出现在：手动更新之后打开新功能时
 - 原因：页面已经是新版本，后台还在跑旧版本的服务。

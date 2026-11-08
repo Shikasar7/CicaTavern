@@ -1,5 +1,5 @@
 // Agent Tavern web UI. Plain DOM, no build step.
-import { markdownHtml, blockShown, displayOf, frameText, htmlFrame, listenForFrameHeights, readableText, nameMacros, segments, streamingText, useBlockWords, usesStatusPlaceholder, withoutOwnStatus, useGameMarks } from '/render.js'
+import { markdownHtml, blockShown, displayOf, fillFrameSlots, frameSlot, frameText, htmlFrame, listenForFrameHeights, perf, perfHeaders, perfReport, slotText, readableText, nameMacros, segments, streamingText, useBlockWords, usesStatusPlaceholder, withoutOwnStatus, useGameMarks } from '/render.js'
 import { choiceList, statusBar, timeBox } from '/status.js'
 import { BASIC_ID, DIRECT_CARD, VN_ID, builtinKey, builtinOptions, choiceLetter, choicesOf, isBuiltinPreset, otherChoices, timeBoxOf } from '/shared/basic.js'
 import { autoStatusSpec, withNewcomers } from '/shared/status.js'
@@ -15,7 +15,8 @@ import { initForge } from '/forge.js'
 import { initUpdate } from '/update.js'
 import { initWhatsNew } from '/whatsnew.js'
 import { connectionList, showPrivacyNotice } from '/privacy.js'
-import { initTheme, pageZoom, zoomedQuery } from '/theme.js'
+import { currentReading, initTheme, pageZoom, zoomedQuery } from '/theme.js'
+import { createReveal } from '/stream-reveal.js'
 import { byGroup, findSettings, markPlace, markWords, markedParts, pageItems, snippetOf } from '/settings-search.js'
 import { initRegex } from '/regex.js'
 import { countText, initBooks, matchesTerms, searchBox, searchTerms } from '/books.js'
@@ -27,7 +28,7 @@ import { initCardPermissions } from '/card-permissions.js'
 import { createFramePermissions } from '/shared/frame-permissions.js'
 import { initVn } from '/vn.js'
 import { FOLD_TAG, markSpeakers } from '/shared/vn.js'
-import { chatScriptList, isRegexFile, scriptsInFile } from '/shared/regex.js'
+import { PLACEMENT, chatScriptList, depthWindow, isRegexFile, scriptsInFile } from '/shared/regex.js'
 import { lang, locale, t, zh } from '/i18n.js'
 import { pickLanguage } from '/shared/i18n.js'
 
@@ -201,12 +202,18 @@ function openUsage() {
 
 // ─── API ────────────────────────────────────────────────────────────────
 async function api(path, { method = 'GET', body } = {}) {
+  const timing = perf.start('fetch')
   const res = await fetch(path, {
     method,
-    headers: method === 'GET' ? {} : { 'content-type': 'application/json', 'x-agent-tavern': '1' },
+    headers: { ...(method === 'GET' ? {} : { 'content-type': 'application/json', 'x-agent-tavern': '1' }), ...perfHeaders() },
     body: body === undefined ? undefined : JSON.stringify(body),
   })
   const data = await res.json().catch(() => ({}))
+  if (perf.on) {
+    timing()
+    const report = res.headers.get('x-perf-trace')
+    if (report) try { perf.server(path, JSON.parse(decodeURIComponent(report))) } catch {}
+  }
   if (!res.ok) throw Object.assign(new Error(data.error || t`请求失败（${res.status}）`), { status: res.status, contextFull: data.contextFull === true })
   return data
 }
@@ -215,7 +222,7 @@ async function api(path, { method = 'GET', body } = {}) {
 async function stream(path, body, onEvent) {
   const res = await fetch(path, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-agent-tavern': '1' },
+    headers: { 'content-type': 'application/json', 'x-agent-tavern': '1', ...perfHeaders() },
     body: JSON.stringify(body),
   })
   if (!res.ok || !res.body) {
@@ -353,6 +360,14 @@ const openErrorLog = guard(async () => {
   openDiagnostics({ api, el, toast, saveFile, getChat: () => ui.chat })
 })
 
+/** 设置 → 更多 → 性能记录 (web/perf-panel.js, loaded when first opened; the timing itself is render.js perf). */
+const openPerfLog = guard(async () => {
+  const { openPerf } = await import('/perf-panel.js').catch(() => {
+    throw Object.assign(new Error(t`性能记录要重启后台服务后才能用：关掉所有窗口等一分钟，再从桌面图标打开。`), { status: 404 })
+  })
+  openPerf({ el, toast, perf, perfReport, saveFile, about: () => ({ version: ui.appVersion ?? '', edition: document.documentElement.dataset.edition ?? '', zoom: pageZoom(), messages: ui.chat?.path.length ?? 0 }) })
+})
+
 /** 屏蔽词 for what the page shows (render.js), with their matcher once there are any. */
 async function showBlockWords(words) {
   ui.blockWords = words
@@ -397,6 +412,8 @@ const SAFE_COLOR = /^(#[0-9a-f]{3,8}|[a-z]{3,20}|rgba?\([\d\s.,%]+\))$/i
 // Reasoning a model writes in its own tag (shared/vn.js FOLD_TAG), with no regex to hide it: folded, not spread over the page.
 const FOLD_BLOCK = new RegExp(`<(${FOLD_TAG})>([\\s\\S]*?)</\\1>`, 'gi')
 const FOLD_OPEN = new RegExp(`<(${FOLD_TAG})>(?![\\s\\S]*</\\1>)([\\s\\S]*)$`, 'i')
+// A fold's tag by its name alone (出字效果 passes over what is folded away).
+const FOLD_NAME = new RegExp(`^(?:${FOLD_TAG})$`, 'i')
 
 function inlineTag(closing, name, attrs) {
   const tag = name.toLowerCase()
@@ -427,7 +444,16 @@ function renderAnswer(text) {
 /** A reply as it is being written. */
 const liveHtml = (chat, text) => (chat?.cardId === DIRECT_CARD ? renderAnswer(streamingText(text)) : renderStory(streamingText(text), { partial: true }))
 
-function renderStory(text, { partial = false } = {}) {
+function renderStory(text, options) {
+  const timing = perf.start('markdown')
+  try {
+    return storyHtml(text, options)
+  } finally {
+    timing()
+  }
+}
+
+function storyHtml(text, { partial = false } = {}) {
   const folds = []
   // A fold's place is held by a private-use character the text cannot bring in (it is taken out first).
   const fold = (label, body) => (body.trim() ? `\n\n\uE020${folds.push({ label, body: body.trim() }) - 1}\uE020\n\n` : '')
@@ -452,6 +478,8 @@ function renderStory(text, { partial = false } = {}) {
     .replace(/(^|[^*])\*([^*\n]+?)\*/g, '$1<em>$2</em>')
     .replace(/(“[^”\n]*”|「[^」\n]*」|&quot;[^&\n]*?&quot;)/g, '<span class="q">$1</span>')
     .replace(/<span class="q">([^<]*)<\/span>([^<]*)/g, '<span class="q" data-emotion="$2">$1</span>')
+    // Still being written, a line already in quotes is lamp-coloured already, not ink that changes as it closes.
+    .replace(/(“[^”\n]*|「[^」\n]*)$/, line => (partial ? `<span class="q">${line}</span>` : line))
     .replace(/[^]*/g, '')
     .replace(CHOICE_LINE, (_, indent, n, body) => `${indent}<button type="button" class="choice" data-choice="${body.replace(/<[^>]+>/g, '').replace(/"/g, '&quot;')}"><b>${n}</b><span class="choice-text">${body}</span></button>`)
   return html
@@ -761,6 +789,15 @@ async function refreshChats() {
 
 /** @param options.byHand - picked in the list: a card with no chat yet then asks whether to start one. */
 const selectCard = guard(async (id, { byHand = false } = {}) => {
+  const recorded = perf.begin('switch', ui.cards.find(card => card.id === id)?.name ?? id)
+  try {
+    await showCard(id, byHand)
+  } finally {
+    recorded()
+  }
+})
+
+async function showCard(id, byHand) {
   ui.cardId = id
   mediaUi.setCard(id)
   // The chosen card shows in the list, even when it sits in a folded group or the archive.
@@ -777,7 +814,7 @@ const selectCard = guard(async (id, { byHand = false } = {}) => {
   closeDrawers()
   // 直连对话 starts one without asking: its 联网 and model are the chat's, to be set before the first message.
   if (byHand && !ui.chats[0] && ui.cardId === id && (id === DIRECT_CARD || (await dialogAnswer($('start-dialog'), 'no')) === 'yes')) await newChat()
-})
+}
 
 /** The chosen card's author, tags, notes and scripts, under the card list. */
 function showCardInfo(card) {
@@ -1292,11 +1329,27 @@ function setChat(chat) {
 }
 
 const openChat = guard(async id => {
-  const [view] = await Promise.all([api(`/api/chats/${id}`), loadFrameInfo(id)])
+  const recorded = perf.begin('open', ui.chats.find(chat => chat.id === id)?.title ?? id, { within: ['switch'] })
+  try {
+    await showChat(id)
+  } finally {
+    recorded({ messages: ui.chat?.id === id ? ui.chat.path.length : undefined })
+  }
+})
+
+async function showChat(id) {
+  // With what its frames read: a long chat's file read once for both.
+  ui.frameInfo = { chatId: id }
+  const { frameInfo, ...view } = await api(`/api/chats/${id}?frameInfo=1`)
+  if (ui.frameInfo.chatId === id) ui.frameInfo = frameInfo ? { ...frameInfo, chatId: id } : ui.frameInfo
+  // A server from before frameInfo=1 answers without it.
+  if (!frameInfo) await loadFrameInfo(id)
+  // What the drawing depends on (the card's regex and rules), before it: a long chat drawn once, not again as each arrives.
+  await Promise.all([loadRules(view), loadCardDetail(view.cardId), loadPresetDetail(view.presetId)])
   followServerTurn(view)
   setChat(view)
   closeDrawers()
-})
+}
 
 const newChat = guard(async () => {
   const card = await api(`/api/cards/${ui.cardId}`)
@@ -1490,6 +1543,8 @@ function renderQueue() {
   row.replaceChildren(...queueChips())
   row.hidden = !row.childNodes.length
   $('open-bag').hidden = !rulesRunning()
+  // What the card calls its 行囊.
+  $('open-bag').textContent = rules.book?.words?.bag || t`行囊`
 }
 
 const openBag = guard(async tab => {
@@ -1766,6 +1821,9 @@ const startFight = guard(async () => {
     foeShown: foeShown(chat.cardId),
     background: await sceneBehind(chat),
     energyName: rules.book.energyName,
+    words: rules.book.words ?? {},
+    // A companion's face from the visual novel's cast: their name, or one the card's rules say they go by.
+    faceFor: name => [name, ...(rules.book.companions?.[name]?.keys ?? [])].map(one => vnUi.pictureFor(one)).find(Boolean) ?? '',
     setup: encounterOf(chat, ops),
     forced: !gate.choice,
     resume: fightsKept()[spot] ?? null,
@@ -1799,7 +1857,7 @@ const rollGate = guard(async () => {
 })
 
 /** The panel in front of the fight the story is waiting at. */
-const encounterPanel = chat => rules.play.encounterCards(el, encounterOf(chat, queueOf(chat)), foeShown(chat.cardId))
+const encounterPanel = chat => rules.play.encounterCards(el, encounterOf(chat, queueOf(chat)), foeShown(chat.cardId), rules.book.words ?? {})
 
 function gateCard(chat) {
   prepareFoes(chat)
@@ -1868,12 +1926,21 @@ function showLiveReasoning(article, job) {
 }
 
 /** Message body: story text as markdown-lite, HTML in sandboxed frames, code as <pre>. */
-/** @param options.answer - a 直连对话 reply: Markdown, and HTML in it is text, not a frame to run. */
-function messageBody(text, frameContext = null, { answer = false } = {}) {
+/**
+ * @param frameContext - what its frames may read (frameContextFor), or a function that gives it when a frame is made.
+ * @param options.answer - a 直连对话 reply: Markdown, and HTML in it is text, not a frame to run.
+ * @param options.lazy - its frames wait as slots until the message comes near the screen (render.js frameSlot).
+ */
+function messageBody(text, frameContext = null, { answer = false, lazy = false } = {}) {
   const body = el('div', { class: 'msg-body' })
+  const context = typeof frameContext === 'function' ? frameContext : () => frameContext
   if (answer && text) body.append(el('div', { class: 'story direct-text', html: renderAnswer(text) }))
   else for (const part of segments(text)) {
-    if (part.kind === 'html') body.append(htmlFrame(part.body, frameContext))
+    if (part.kind === 'html') {
+      const timing = perf.start(lazy ? 'slots' : 'frames')
+      body.append(lazy ? frameSlot(part.body, context) : htmlFrame(part.body, context()))
+      timing()
+    }
     else if (part.kind === 'code') body.append(el('pre', { class: 'code' }, el('code', { text: part.body })))
     else body.append(el('div', { class: 'story', html: renderStory(part.body.trim()) }))
   }
@@ -1882,6 +1949,15 @@ function messageBody(text, frameContext = null, { answer = false } = {}) {
 }
 
 function renderChat() {
+  const timing = perf.start('render')
+  try {
+    drawChat()
+  } finally {
+    timing()
+  }
+}
+
+function drawChat() {
   const box = $('transcript')
   const chat = ui.chat
   renderQueue()
@@ -1941,7 +2017,7 @@ function renderChat() {
   const lastAssistant = [...chat.path].reverse().find(n => n.role === 'assistant')
   // 直连对话 opens with nothing: there is no opening to show.
   const blank = node => chat.cardId === DIRECT_CARD && node.id === 'root' && !node.compaction
-  const nodes = chat.path.map((node, index) => (blank(node) ? null : renderNode(chat, node, node === lastAssistant, chat.path.length - 1 - index))).filter(Boolean)
+  const nodes = drawMessages(chat, lastAssistant, blank)
   if (chat.folded > 0) {
     nodes.push(
       el('div', { class: 'folded-note' }, [
@@ -1953,7 +2029,10 @@ function renderChat() {
   // Reading a finished reply from its start: drawn again, it stays there, or where the reader has got to.
   const reading = ui.readFrom?.chatId === chat.id ? ui.readFrom : null
   const back = reading?.moved || (ui.busy.has(chat.id) && !follow.on) ? rememberPlace() : null
-  box.replaceChildren(...nodes, ...liveNodes(chat))
+  const drawnAt = perf.start('dom', { messages: nodes.length })
+  placeChildren(box, [...nodes, ...liveNodes(chat)])
+  lockWhileWriting(box)
+  drawnAt()
   if (!box.children.length) showEmpty()
   markPicked()
   renderBranchNote()
@@ -1962,9 +2041,100 @@ function renderChat() {
     if (!reading) follow.on = true
     settleScroll(() => (reading ? showReplyStart(reading.nodeId) : (box.scrollTop = box.scrollHeight)))
   }
+  const historyTiming = perf.start('history')
   historyUi.refresh()
+  historyTiming()
+  const vnTiming = perf.start('vn')
   vnUi.render(chat)
+  vnTiming()
 }
+
+// ─── Drawing a long chat again ──────────────────────────────────────────
+// renderChat draws the transcript whenever something changes (a turn sent or written, the rules loaded, a change from
+// another page). A message that shows the same as last time is kept as it was drawn instead of drawn anew: in a chat of
+// hundreds of rounds, drawing them all again at each turn's start and end was what made the page stall.
+// What a message shows comes from the message (its view from the server), its place (the latest reply, how deep for a
+// regex with a depth range) and what is the same for the whole chat (drawingKey). The latest reply and what follows it
+// are always drawn again; so is a message with a frame made already (it reads the latest floor and variables).
+const EAGER_FRAMES = 3 // the newest messages' frames (a card's live panel) are made at once; older ones wait as slots
+const KEPT_DRAWINGS = 3 // chats whose messages are kept, the open one and the last ones opened before it
+const drawing = { lazy: false, chats: new Map() } // chat id → { key, messages: Map(node id → { sig, article }) }
+
+/** What every message of `chat` is drawn with: when it changes, they are all drawn again. */
+function drawingKey(chat, scripts) {
+  return JSON.stringify([
+    chat.id, chat.cardId, chat.names, chat.presetId ?? null, chat.frameVars ?? null,
+    ui.frameInfo?.chatId === chat.id ? ui.frameInfo.globalVars ?? null : null,
+    scripts, ui.settings ?? null, ui.blockWords ?? null, rules.book ?? null, Boolean(rules.play),
+    ui.cards.find(card => card.id === chat.cardId) ?? null, mediaUi.settings?.() ?? null, ui.appVersion ?? '', document.documentElement.lang,
+  ])
+}
+
+/** The articles for `chat.path`: kept ones where nothing they show changed, the rest drawn (renderNode). */
+function drawMessages(chat, lastAssistant, blank) {
+  const timing = perf.start('messages', { messages: chat.path.length })
+  const scripts = scriptsFor(chat)
+  const key = drawingKey(chat, scripts)
+  // A display regex limited to a depth draws a message differently as the chat grows under it, down to this depth.
+  const deepest = Math.max(...[PLACEMENT.USER_INPUT, PLACEMENT.AI_OUTPUT].map(placement => depthWindow(scripts, { placement, target: 'display' })))
+  const before = drawing.chats.get(chat.id)
+  const kept = before?.key === key ? before.messages : new Map()
+  const messages = new Map()
+  const lastAt = chat.path.indexOf(lastAssistant)
+  const lastCompaction = chat.path.findLastIndex(node => node.compaction)
+  let reused = 0
+  drawing.lazy = true
+  try {
+    const out = []
+    chat.path.forEach((node, index) => {
+      if (blank(node)) return
+      const depth = chat.path.length - 1 - index
+      const fresh = lastAt < 0 || index >= lastAt || node.id === 'pending-user'
+      // Everything renderNode reads of this message and its place.
+      const sig = fresh ? '' : JSON.stringify([node, depth <= deepest ? depth : null, index > lastCompaction, chat.path[index - 1]?.recalled ?? null])
+      const old = kept.get(node.id)
+      if (!fresh && old && old.sig === sig && !old.article.querySelector('iframe')) {
+        reused++
+        // Put back from another chat's turn: an entrance or a highlight it had played would play again.
+        if (!old.article.isConnected) old.article.classList.remove('enter', 'swap', 'found')
+        messages.set(node.id, old)
+        return out.push(old.article)
+      }
+      const article = renderNode(chat, node, node === lastAssistant, depth)
+      if (!fresh) messages.set(node.id, { sig, article })
+      out.push(article)
+    })
+    drawing.chats.delete(chat.id)
+    drawing.chats.set(chat.id, { key, messages })
+    while (drawing.chats.size > KEPT_DRAWINGS) drawing.chats.delete(drawing.chats.keys().next().value)
+    timing({ reused })
+    return out
+  } finally {
+    drawing.lazy = false
+  }
+}
+
+/**
+ * `box` holding `children`, in that order, moving as little as it can: what stays where it is is not taken out and
+ * put back (a frame taken out starts over; hundreds of messages taken out and put back cost the page a stall).
+ */
+function placeChildren(box, children) {
+  const wanted = new Set(children)
+  for (const child of [...box.childNodes]) if (!wanted.has(child)) child.remove()
+  let cursor = box.firstChild
+  for (const child of children) {
+    if (child === cursor) cursor = cursor.nextSibling
+    else box.insertBefore(child, cursor)
+  }
+}
+
+/** Buttons that do nothing while a turn is being written (data-busy): disabled then, on messages kept from before too. */
+function lockWhileWriting(box) {
+  for (const button of box.querySelectorAll('[data-busy]')) button.disabled = ui.generating || button.dataset.busy === 'always'
+}
+
+/** A button's `disabled` and its data-busy mark: off while a turn is written, and while `off` too. */
+const busyOff = (off = false) => ({ disabled: off || ui.generating, 'data-busy': off ? 'always' : 'writing' })
 
 /** The transcript with this reply's first line at the top. */
 function showReplyStart(nodeId) {
@@ -2018,7 +2188,10 @@ const NEAR_SCREEN = '3000px 0px'
 {
   const box = $('transcript')
   const near = new IntersectionObserver(entries => {
-    for (const { target, isIntersecting } of entries) target.classList.toggle('near', isIntersecting)
+    for (const { target, isIntersecting } of entries) {
+      target.classList.toggle('near', isIntersecting)
+      if (isIntersecting) fillFrameSlots(target)
+    }
   }, { root: box, rootMargin: NEAR_SCREEN })
   const heights = new WeakMap()
   const growing = new ResizeObserver(entries => {
@@ -2100,7 +2273,8 @@ function liveNodes(chat, { animate = false } = {}) {
     // What the player's action came to stays in sight while the story is written on from it.
     job.outcome ? el('div', { class: `roll-record ${job.outcome.tier}`, text: job.outcome.text }) : null,
     job.reasoning ? reasoningFold(job.reasoning, { thinking: !job.text }) : null,
-    el('div', { class: 'msg-body', html: job.text ? liveHtml(chat, job.text) : '' }),
+    // As far as 出字效果 has shown it: drawn again (switching back), the reply does not jump ahead.
+    el('div', { class: 'msg-body', html: job.text ? liveHtml(chat, job.reveal ? job.reveal.text() : job.text) : '' }),
   ])
   nodes.push(live)
   return nodes
@@ -2208,6 +2382,7 @@ function replyParts(article, choices) {
     if (child.classList.contains('msg-body')) {
       for (const part of child.children) {
         if (part.classList.contains('card-frame')) parts.push({ kind: 'status', text: () => frameText(part) })
+        else if (part.classList.contains('frame-slot')) parts.push({ kind: 'status', text: async () => slotText(part) })
         // A ``` block: where many cards that write their status into the story put it.
         else if (part.matches('pre.code')) parts.push({ kind: 'status', text: async () => shownText(part) })
         else if (!part.classList.contains('muted')) parts.push({ kind: 'story', text: async () => shownText(part) })
@@ -2253,24 +2428,24 @@ function renderNode(chat, node, isLastAssistant, depth = 0) {
   const { shown, raw, time, choices, checks, fights, cardStatus } = replyDisplay(chat, node, isLastAssistant, depth)
   if (node.siblingCount > 1) {
     tools.push(
-      el('button', { title: t`上一个版本`, text: '‹', disabled: node.siblingIndex === 0 || ui.generating, onclick: () => selectNode(node.siblingIds[node.siblingIndex - 1]) }),
+      el('button', { title: t`上一个版本`, text: '‹', ...busyOff(node.siblingIndex === 0), onclick: () => selectNode(node.siblingIds[node.siblingIndex - 1]) }),
       el('span', { class: 'swipe', text: `${node.siblingIndex + 1}/${node.siblingCount}` }),
-      el('button', { title: t`下一个版本`, text: '›', disabled: node.siblingIndex === node.siblingCount - 1 || ui.generating, onclick: () => selectNode(node.siblingIds[node.siblingIndex + 1]) }),
+      el('button', { title: t`下一个版本`, text: '›', ...busyOff(node.siblingIndex === node.siblingCount - 1), onclick: () => selectNode(node.siblingIds[node.siblingIndex + 1]) }),
     )
   }
   if (node.id !== 'root' && node.id !== 'pending-user' && !node.compaction && !node.auto) {
-    tools.push(el('button', { text: t`修改`, title: t`直接改这条消息的原文，模型之后看到的也是改过的；不重新生成`, disabled: ui.generating, onclick: event => openEditor(chat, node, event.currentTarget.closest('.msg')) }))
+    tools.push(el('button', { text: t`修改`, title: t`直接改这条消息的原文，模型之后看到的也是改过的；不重新生成`, ...busyOff(), onclick: event => openEditor(chat, node, event.currentTarget.closest('.msg')) }))
   }
   if (node.id !== 'pending-user') tools.push(el('button', { text: t`复制`, title: isUser ? t`复制这条消息的文字` : t`复制这条回复：全部，或只要正文、状态、选项`, onclick: event => copyMenu(event.currentTarget, node, choices) }))
   // With the player's message deleted there is nothing to write it from again.
   if (!isUser && node.id !== 'root' && isLastAssistant && chat.path.some(other => other.id === node.parent)) {
-    tools.push(el('button', { text: t`重新生成`, disabled: ui.generating, onclick: () => regenerate(node.parent) }))
+    tools.push(el('button', { text: t`重新生成`, ...busyOff(), onclick: () => regenerate(node.parent) }))
   }
   if (!isUser && isLastAssistant && (node.id !== 'root' || node.compaction)) {
-    tools.push(el('button', { text: t`导出存档`, title: t`把剧情存档、最近几轮原文和变量存成文件，可以在新对话或新版本的角色卡里接着写`, disabled: ui.generating, onclick: () => exportStory(node) }))
+    tools.push(el('button', { text: t`导出存档`, title: t`把剧情存档、最近几轮原文和变量存成文件，可以在新对话或新版本的角色卡里接着写`, ...busyOff(), onclick: () => exportStory(node) }))
   }
   if (!isUser && (node.id !== 'root' || node.compaction)) {
-    tools.push(el('button', { text: t`分支到新对话`, title: t`开一个新对话，只带上到这一条为止的剧情（之后的对话和其他版本都不带），原对话不变`, disabled: ui.generating, onclick: () => forkChat(node.id) }))
+    tools.push(el('button', { text: t`分支到新对话`, title: t`开一个新对话，只带上到这一条为止的剧情（之后的对话和其他版本都不带），原对话不变`, ...busyOff(), onclick: () => forkChat(node.id) }))
   }
   // 隐藏这一轮: replies after the last compaction (the model reads the ones before only as its archive).
   const at = chat.path.findIndex(n => n.id === node.id)
@@ -2281,7 +2456,7 @@ function renderNode(chat, node, isLastAssistant, depth = 0) {
         title: node.hidden
           ? t`这一轮重新发给模型`
           : t`这一轮（你的输入和这条回复）留在对话里，但之后不再发给模型，比如一直触发模型内容审查的一轮。变量不会回退；隐藏中间的回合，下一轮会重新写一次缓存。重新生成这条回复后，新版本照常发送`,
-        disabled: ui.generating,
+        ...busyOff(),
         onclick: () => hideRound(node.id, !node.hidden),
       }),
     )
@@ -2295,11 +2470,11 @@ function renderNode(chat, node, isLastAssistant, depth = 0) {
     tools.push(el('button', { type: 'button', class: 'chip warn', title: chat.memoryError, text: t`⚠ 整理记忆没成功`, onclick: () => openMemory() }))
   }
   if (!isUser && !isLastAssistant) {
-    tools.push(el('button', { text: t`回滚到这里`, title: t`收起之后的对话，状态也回到这一轮；随时可以恢复`, disabled: ui.generating, onclick: () => rollbackTo(node.id) }))
-    tools.push(el('button', { text: t`从这里分支`, disabled: ui.generating, onclick: () => branchFrom(node.id, t`从「${node.text.slice(0, 16)}…」之后分支`) }))
+    tools.push(el('button', { text: t`回滚到这里`, title: t`收起之后的对话，状态也回到这一轮；随时可以恢复`, ...busyOff(), onclick: () => rollbackTo(node.id) }))
+    tools.push(el('button', { text: t`从这里分支`, ...busyOff(), onclick: () => branchFrom(node.id, t`从「${node.text.slice(0, 16)}…」之后分支`) }))
   }
   if (isUser && !node.auto) {
-    tools.push(el('button', { text: t`编辑重发`, disabled: ui.generating, onclick: guard(async () => {
+    tools.push(el('button', { text: t`编辑重发`, ...busyOff(), onclick: guard(async () => {
       $('input').value = node.text
       branchFrom(node.parent, t`编辑重发：将作为这一轮的新版本`)
       // 直连对话: the message's files come back with it, to send again or take off.
@@ -2311,7 +2486,7 @@ function renderNode(chat, node, isLastAssistant, depth = 0) {
     if (node.injected?.length) tools.push(el('span', { class: 'chips' }, node.injected.map(name => el('span', { class: 'chip', title: t`本轮注入的世界书`, text: `📖 ${name}` }))))
   }
   if (node.id !== 'root' && node.id !== 'pending-user' && !node.compaction && !node.auto) {
-    tools.push(el('button', { text: t`删除`, title: t`删掉这一条，你说的或模型写的都行。模型之后不再看到它，变量不回退`, disabled: ui.generating, onclick: () => deleteMessage(node.id) }))
+    tools.push(el('button', { text: t`删除`, title: t`删掉这一条，你说的或模型写的都行。模型之后不再看到它，变量不回退`, ...busyOff(), onclick: () => deleteMessage(node.id) }))
   }
   if (!isUser && node.id !== 'pending-user') tools.push(mediaUi.toolsFor(node))
   if (!isUser && node.stateChanges?.length) {
@@ -2335,7 +2510,7 @@ function renderNode(chat, node, isLastAssistant, depth = 0) {
   if (!isUser && isLastAssistant && node.id !== 'root' && !node.compaction && !node.gate && missingUpdate(chat, node)) {
     const filling = ui.busy.get(chat.id)?.kind === 'fill'
     tools.push(el('span', { class: 'chip warn', title: node.updateUnread ? t`这一轮模型写了变量更新块，但格式坏得一条也读不出来，状态没跟着剧情变。「补写变量」让模型重写这一块，正文不动。` : t`这张卡每轮结尾要写 <UpdateVariable> 变量更新块，这一轮模型没写，状态不会跟着剧情变。「补写变量」让模型只补这一块，正文不动。`, text: node.updateUnread ? t`⚠ 变量更新读不出来` : t`⚠ 这轮没写变量更新` }))
-    tools.push(el('button', { text: filling ? t`补写中…` : t`补写变量`, title: t`按这张卡的变量规则，让模型为这一轮补写变量更新，补完状态立即更新`, disabled: ui.generating, onclick: () => fillUpdate(node.id) }))
+    tools.push(el('button', { text: filling ? t`补写中…` : t`补写变量`, title: t`按这张卡的变量规则，让模型为这一轮补写变量更新，补完状态立即更新`, ...busyOff(), onclick: () => fillUpdate(node.id) }))
   }
   if (!isUser && isLastAssistant && node.schemaProblem) tools.push(el('span', { class: 'chip warn', title: `${t`这一轮的变量不符合卡的变量规则，所以规则这轮整个没生效：数值范围、默认值和清理都没做，变量先按模型写的留着。不改掉的话下一轮还会这样。可以重新生成这一轮，或者在状态面板里改掉下面这些字段。`}\n\n${node.schemaProblem}`, text: t`⚠ 变量规则这轮没生效` }))
   if (node.edited) tools.push(el('span', { class: 'chip', title: t`${new Date(node.edited.at).toLocaleString(locale)} 改过${node.edited.count > 1 ? t` ${node.edited.count} 次` : ''}`, text: t`已修改` }))
@@ -2366,9 +2541,9 @@ function renderNode(chat, node, isLastAssistant, depth = 0) {
     time ? timeBox(el, time) : null,
     !isUser && node.reasoning && ui.settings?.showReasoning ? reasoningFold(node.reasoning) : null,
     node.files ? el('div', { class: 'msg-files', text: t`附文件：${node.files.map(file => file.name).join(t`、`)}` }) : null,
-    node.auto ? null : withChoiceNotes(messageBody(shown, frameContextFor(chat, node), { answer: !isUser && chat.cardId === DIRECT_CARD }), choiceNoteOf(chat, { checks, fights })),
+    node.auto ? null : withChoiceNotes(messageBody(shown, () => frameContextNow(chat, node), { answer: !isUser && chat.cardId === DIRECT_CARD, lazy: drawing.lazy && depth > EAGER_FRAMES }), choiceNoteOf(chat, { checks, fights })),
     node.check ? el('div', { class: `roll-record ${node.check.tier}`, text: rules.play?.rollLine(node.check) ?? node.text }) : null,
-    node.battle ? el('div', { class: 'roll-record', text: rules.play?.battleLine(node.battle) ?? node.text }) : null,
+    node.battle ? el('div', { class: 'roll-record', text: rules.play?.battleLine(node.battle, rules.book) ?? node.text }) : null,
     isLastAssistant && !isUser ? sheetChanges(chat, node) : null,
     isUser ? null : mediaUi.gallery(chat, node),
     bar,
@@ -2404,7 +2579,9 @@ function replyDisplay(chat, node, isLastAssistant, depth = 0) {
   const scripts = scriptsFor(chat)
   const cardStatus = usesStatusPlaceholder(scripts)
   const variables = { local: chat.frameVars ?? {}, global: ui.frameInfo?.chatId === chat.id ? ui.frameInfo.globalVars ?? {} : {} }
+  const regexTiming = perf.start('regex')
   let shown = renderedDisplay(chat, node, displayOf(node, { scripts, names: chat.names, depth, withStatus: isLastAssistant && cardStatus, variables }))
+  regexTiming()
   // The time box and choice buttons are shown too: the 屏蔽词 apply to them.
   const raw = blockShown(node.raw ?? node.text)
   let choices = !isUser && isLastAssistant ? choicesOf(raw) : []
@@ -2497,14 +2674,18 @@ function renderedDisplay(chat, node, shown) {
 // Until the render comes back: a message already on screen is drawn without the EJS, so the card frames in it
 // that stay the same keep running; a new one waits (a moment), so its frames start once, with the rendered text.
 function heldDisplay(node, shown) {
-  const onScreen = $('transcript').querySelector(`.msg[data-id="${CSS.escape(node.id)}"] iframe.card-frame`)
+  const at = `.msg[data-id="${CSS.escape(node.id)}"]`
+  const onScreen = $('transcript').querySelector(`${at} iframe.card-frame, ${at} .frame-slot`)
   return onScreen ? shown.replace(EJS, '') : '…'
 }
 
 /** The built-in status bar under a reply, or null (cards that draw their own use their regex). */
 function statusFor(chat, node) {
+  const timing = perf.start('status')
   const spec = statusSpecFor(chat, node)
-  return spec ? statusBar(el, spec, node.state ?? {}, { previous: previousState(chat, node) }) : null
+  const bar = spec ? statusBar(el, spec, node.state ?? {}, { previous: previousState(chat, node) }) : null
+  timing()
+  return bar
 }
 
 // ─── Editing a message in place ─────────────────────────────────────────
@@ -2635,6 +2816,12 @@ const FRAME_HISTORY_CHARS = 300_000
  * latest two floors, where a card's live UI is; nearby ones elsewhere),
  * variables, the books this chat uses and saved storage.
  */
+/** frameContextFor as the chat is when a frame is made (a slot made into one later reads the chat as it is by then). */
+function frameContextNow(chat, node) {
+  const now = ui.chat?.id === chat.id ? ui.chat : chat
+  return frameContextFor(now, now.path.find(item => item.id === node.id) ?? node)
+}
+
 function frameContextFor(chat, node) {
   const index = chat.path.findIndex(n => n.id === node.id)
   if (index < 0) return null
@@ -4157,6 +4344,15 @@ function tipId() {
  * @returns true when the turn was saved.
  */
 async function generate(endpoint, body, echoUserText, outcome = null) {
+  const recorded = perf.begin('reply', ui.chat.title)
+  try {
+    return await writeTurn(endpoint, body, echoUserText, outcome)
+  } finally {
+    recorded({ messages: ui.chat?.path.length })
+  }
+}
+
+async function writeTurn(endpoint, body, echoUserText, outcome) {
   const chatId = ui.chat.id
   const title = ui.chat.title
   const tipBefore = ui.chat.path.at(-1)?.id
@@ -4167,11 +4363,32 @@ async function generate(endpoint, body, echoUserText, outcome = null) {
   markTurn(true)
   renderChat()
   renderChats()
+  perf.mark('turn.shown')
+  const frames = perf.watchFrames()
   const box = $('transcript')
   // The freshly drawn turn animates in once; later redraws do not.
   box.querySelectorAll('.msg.streaming, .msg[data-id="pending-user"]').forEach(node => node.classList.add('enter'))
   const viewing = () => ui.chat?.id === chatId
-  const live = () => (viewing() ? box.querySelector('.msg.streaming') : null)
+  // The reply being written, looked up again only once it is gone (drawn anew): a long chat was searched at every chunk.
+  let liveArticle = null
+  const live = () => {
+    if (!viewing()) return null
+    if (!liveArticle?.isConnected || !liveArticle.classList.contains('streaming')) liveArticle = box.querySelector('.msg.streaming')
+    return liveArticle
+  }
+  // 出字效果 (主题): the reply comes onto the page at an even pace, whatever lumps the model sends it in.
+  // In the visual novel the transcript is out of sight, and the lines type out their own way (vn.js).
+  job.reveal = createReveal({
+    target: () => live()?.querySelector('.msg-body') ?? null,
+    html: text => liveHtml(ui.chat, text),
+    source: streamingText,
+    scroller: box,
+    following: () => follow.on,
+    mode: vnUi.isOn(ui.chat.cardId) ? 'none' : currentReading().reveal,
+    folds: FOLD_NAME,
+    // 性能记录: each drawing, as 逐字刷新.
+    timer: () => perf.start('live'),
+  })
   let finished = null
   let finishedNode = null
   // A reply that stopped partway, kept as far as it went: { stopped, message }.
@@ -4204,18 +4421,16 @@ async function generate(endpoint, body, echoUserText, outcome = null) {
         // restart: the relay lost the system prompt (the card), and the answer is being asked for again.
         job.text = event.type === 'restart' ? '' : job.text + event.text
         if (event.type === 'restart') job.reasoning = ''
+        perf.mark('turn.first')
+        if (event.type === 'restart') job.reveal.reset()
         if (viewing()) vnUi.streamed()
-        const target = live()?.querySelector('.msg-body')
-        if (target) {
-          target.innerHTML = liveHtml(ui.chat, job.text)
-          showLiveReasoning(live(), job)
-          if (follow.on) box.scrollTop = box.scrollHeight
-        }
+        job.reveal.push(job.text)
+        showLiveReasoning(live(), job)
       } else if (event.type === 'reasoning') {
         // 显示思考过程: the model's own thinking, before its answer.
         job.reasoning = (job.reasoning ?? '') + event.text
         showLiveReasoning(live(), job)
-        if (follow.on && live()) box.scrollTop = box.scrollHeight
+        job.reveal.nudge()
       } else if (event.type === 'rate_limit') {
         ui.rateLimit = event.info
         renderQuota(event.info)
@@ -4233,6 +4448,7 @@ async function generate(endpoint, body, echoUserText, outcome = null) {
       } else if (event.type === 'compact_failed') {
         if (viewing()) toast(t`自动压缩没成功，这一轮照常发出：${event.message}`, 9000, { log: true })
       } else if (event.type === 'done') {
+        perf.server(`/api/chats/${chatId}/${endpoint}`, event.perf)
         finished = event.chat
         finishedNode = event.nodeId
         cutShort = event.cut ?? null
@@ -4244,7 +4460,12 @@ async function generate(endpoint, body, echoUserText, outcome = null) {
     failure = { message: error.message }
     dropped = !error.status
   }
+  frames()
+  perf.mark('turn.streamed')
   if (!finished && !failure) dropped = true
+  // What is still to be shown comes on quickly (a fraction of a second) before the reply is drawn as written.
+  if (finished && viewing()) await job.reveal.finish()
+  else job.reveal.stop()
   ui.busy.delete(chatId)
   markTurn(false)
   if (dropped) {
@@ -4964,6 +5185,10 @@ function layOutSettings({ form, card, providers, presets }) {
       summary: () => t`出了问题时导出来发给开发者：版本、设置概要和最近的出错记录`,
     },
     {
+      id: 'perf', title: t`性能记录`, look: 'shared', action: () => openPerfLog(),
+      summary: () => (perf.on ? t`正在记录：切换角色卡、打开对话、回复各花了多久` : t`对话很长后变卡时，记下切换角色卡、打开对话、回复各花了多久，导出来发给开发者`),
+    },
+    {
       id: 'shortcut', title: t`桌面快捷方式`, look: 'shared', action: () => makeShortcut(), hidden: () => !ui.launcher,
       summary: () => t`在桌面放一个 CicaTavern 图标，指向这个文件夹里的 CicaTavern.exe`,
     },
@@ -4994,7 +5219,7 @@ function layOutSettings({ form, card, providers, presets }) {
     { id: 'media', title: t`配图与朗读`, icon: MENU_ICONS.picture, rows: ['media-image', 'media-voice', 'dictation'] },
     { id: 'books', title: t`世界书与状态`, icon: MENU_ICONS.book, rows: ['scan', 'manage-books', cardRow, 'books'] },
     { id: 'link', title: t`连接`, icon: MENU_ICONS.link, rows: ['network', 'access'] },
-    { id: 'more', title: t`更多`, icon: MENU_ICONS.tools, rows: ['reading', 'background', 'interface', 'update', 'privacy', 'errors', 'shortcut', 'show-prompt', 'rebuild-prompt', 'stop-server'] },
+    { id: 'more', title: t`更多`, icon: MENU_ICONS.tools, rows: ['reading', 'background', 'interface', 'update', 'privacy', 'errors', 'perf', 'shortcut', 'show-prompt', 'rebuild-prompt', 'stop-server'] },
   ]
   settingsMenu.mount({
     panels,
@@ -5279,7 +5504,7 @@ const mediaUi = initMedia({
 
 const historyUi = initHistory({ el, getChat: () => ui.chat, settleScroll })
 const vnUi = initVn({
-  api, el, toast, guard, renderStory,
+  api, el, toast, guard, renderStory, perf,
   // 一键备齐 / 做成视觉小说 ask how to draw first (web/draw-choice.js).
   pickDraw: drawChoice.pick,
   // 视觉小说预设, offered on going into the mode: the chat's prefix rebuilt with it.
@@ -5302,7 +5527,7 @@ const vnUi = initVn({
     const sheet = sheetAt(node)
     const { bindings, level } = rules.book
     const own = [
-      bindings.life ? null : { path: '$game.life', label: t`生命`, show: 'meter', min: 0, max: sheet.maxLife },
+      bindings.life ? null : { path: '$game.life', label: rules.book.words?.life || t`生命`, show: 'meter', min: 0, max: sheet.maxLife },
       !rules.book.sanity || bindings.sanity ? null : { path: '$game.sanity', label: t`理智`, show: 'meter', min: 0, max: sheet.maxSanity ?? 100 },
       level !== 'full' || bindings.energy ? null : { path: '$game.energy', label: rules.book.energyName || t`气力`, show: 'meter', min: 0, max: sheet.maxEnergy },
       level !== 'full' || bindings.level || bindings.rank ? null : { path: '$game.level', label: t`等级`, show: 'number' },
@@ -5327,7 +5552,7 @@ const vnUi = initVn({
     if (!rules.play || !node) return []
     const used = (node.gameOps ?? []).filter(op => op.op !== 'battle' && op.op !== 'grow').map(op => ({ tier: '', text: rules.play.opLabel(op) }))
     if (node.check) return [...used, rules.play.rollOutcome(node.check, rules.book ?? {})]
-    return node.battle ? [...used, { tier: rules.play.fightOutcome(node.battle.over).tier, text: rules.play.battleLine(node.battle) }] : used
+    return node.battle ? [...used, { tier: rules.play.fightOutcome(node.battle.over).tier, text: rules.play.battleLine(node.battle, rules.book) }] : used
   },
   rulesLevel: cardId => api(`/api/cards/${cardId}/game`).then(book => book.level, () => null),
   openRules: () => {
@@ -5352,6 +5577,12 @@ const vnUi = initVn({
     if (!gate) return null
     prepareFoes(ui.chat)
     return { kind: gate.kind, line: gateLineOf(ui.chat), choice: gate.choice ?? '', resumes: Boolean(fightsKept()[fightSpot(gate, ui.chat.path.at(-1))]), panel: gate.kind === 'battle' ? () => encounterPanel(ui.chat) : null }
+  },
+  // This round's foes, never 酷炫's figure for the player: the fight the story stops at, and the bestiary's.
+  foeNames: () => {
+    if (!rulesRunning()) return []
+    const gate = pendingGate()
+    return [...(gate?.kind === 'battle' ? (gate.foes ?? []).map(foe => foe.name) : []), ...Object.keys(rules.book?.foes ?? {})]
   },
   dropFight: () => dropPickedFight(),
   rollGate: () => rollGate(),

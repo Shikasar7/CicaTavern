@@ -1107,12 +1107,21 @@ const NEXT_DAY = /^[\s*_#>【[(（]*(?:次日|翌日|第二天(?![就要还得�
 /** Whether a line opens on the next day. */
 export const opensNextDay = text => NEXT_DAY.test(plainOf(text).trim())
 
+// timesIn's answers for the replies read lately: a long story is read through again at each turn (storyDay).
+const knownTimes = new Map()
+const KNOWN_TIMES = 2000
+
 /** The times a reply gives: its time box, then every header line in it. */
 export function timesIn(text) {
   const raw = String(text ?? '')
+  const known = knownTimes.get(raw)
+  if (known) return known.slice()
   const box = placeOf(timeBoxOf(raw)).time
   const headers = raw.split('\n').map(line => headerPlace(line)?.time).filter(Boolean)
-  return [box, ...headers].filter(Boolean)
+  const times = [box, ...headers].filter(Boolean)
+  if (knownTimes.size >= KNOWN_TIMES) knownTimes.clear()
+  knownTimes.set(raw, times)
+  return times.slice()
 }
 
 /** The time a chat's variables give (系统.当前时间), or ''. */
@@ -1123,9 +1132,10 @@ export const stateTime = state => (state && typeof state === 'object' ? stateVal
  * or { text, time } with the time its variables gave): the first date seen is
  * day 1 (or the day it counts, 第3天), each later date counts on from it, and a
  * reply with no date that opens a paragraph on 次日 is one day more. → { day, date }.
+ * @param from - where the replies before these reached (an earlier storyDay), to count on from there.
  */
-export function storyDay(replies) {
-  let at = { day: 1, date: null }
+export function storyDay(replies, from = { day: 1, date: null }) {
+  let at = from
   for (const reply of replies) {
     const text = typeof reply === 'string' ? reply : reply?.text
     const times = timesIn(text)

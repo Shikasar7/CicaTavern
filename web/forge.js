@@ -1325,6 +1325,7 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
         [t`技能`, game.skills.map(skill => skill.name)],
         [t`开局物品`, game.things.map(thing => (thing.count > 1 ? `${thing.name} ×${thing.count}` : thing.name))],
         [t`常见敌人`, game.foes.map(foe => foe.name)],
+        [t`同伴`, (game.companions ?? []).map(companion => (companion.start ? companion.name : t`${companion.name}（之后入队）`))],
         [t`气力叫作`, game.energyName],
         [t`等级阶梯`, game.ranks?.join(' → ')],
         [t`阶梯跨度`, game.ranks?.length ? (game.rankSpan === 'narrow' ? t`小：差几级才打不过` : t`大：差一级就很难打`) : ''],

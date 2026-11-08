@@ -2,7 +2,8 @@
 // effects, and who stands on the stage line by line.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { effectsOf, EXPRESSION_LOOK, EXPRESSIONS, FACE_WORDS, faceOf, guessExpression, markEffects, packFaces, stageAt } from '../web/shared/stage.js'
+import { effectsOf, EXPRESSION_LOOK, EXPRESSIONS, FACE_WORDS, faceOf, guessExpression, markEffects, heroOf, packFaces, stageAt } from '../web/shared/stage.js'
+import { speakerNames } from '../web/shared/vn.js'
 
 test('an expression from the narration around a line, else from the voice', () => {
   assert.equal(guessExpression('林青禾笑了笑：「来了？」'), 'smile')
@@ -170,4 +171,30 @@ test('stageAt: 常驻 stay on stage, and with detection off nobody else steps on
   assert.deepEqual(who(0, { fixed: ['沈砚', '林青禾'], max: 1 }), ['沈砚'])
   assert.deepEqual(who(3, { fixed: ['沈砚', '林青禾'], max: 1 }), ['林青禾'])
   assert.deepEqual(who(1, { fixed: ['沈砚'], max: 1 }), ['沈砚'])
+})
+
+test("heroOf: 酷炫's figure is the player's side, never this round's foe", () => {
+  const names = speakerNames({ char: '楚怀瑾', user: '你', roster: [{ id: 'p1', name: '主角', player: true }, { id: 'f1', name: '黑鹞子' }, { id: 'a1', name: '沈青' }] })
+  const line = (speaker, plain = '「……」') => ({ type: 'line', kind: 'dialogue', speaker, plain })
+  const steps = [line('楚怀瑾'), { type: 'line', kind: 'narration', plain: '夜风吹过城头。' }, line('沈青'), line('黑鹞子', '「拿命来！」')]
+  const all = () => true
+  const player = names.find(entry => entry.player).name
+  // The player's own entry, when there is a picture of it, before anyone.
+  assert.equal(heroOf(steps, 3, { names, foes: ['黑鹞子'], pictured: all }), player)
+  const notPlayer = name => name !== player
+  // The foe spoke last: the one of the player's side who spoke before.
+  assert.equal(heroOf(steps, 3, { names, foes: ['黑鹞子'], pictured: notPlayer }), '沈青')
+  // A foe by its full name in the bestiary is still that foe.
+  assert.equal(heroOf(steps, 3, { names, foes: ['黑鹞子·左使'], pictured: notPlayer }), '沈青')
+  // Not a foe this round: whoever spoke last.
+  assert.equal(heroOf(steps, 3, { names, foes: [], pictured: notPlayer }), '黑鹞子')
+  // Only who has a picture, up to the line on screen.
+  assert.equal(heroOf(steps, 3, { names, foes: ['黑鹞子'], pictured: name => name === '楚怀瑾' }), '楚怀瑾')
+  assert.equal(heroOf(steps, 1, { names, foes: ['黑鹞子'], pictured: notPlayer }), '楚怀瑾')
+  // Nobody of their side in this reply: the one from before, unless a foe now; else nobody.
+  const foeOnly = [line('黑鹞子')]
+  assert.equal(heroOf(foeOnly, 0, { names, foes: ['黑鹞子'], pictured: notPlayer, before: '沈青' }), '沈青')
+  assert.equal(heroOf(foeOnly, 0, { names, foes: ['黑鹞子'], pictured: notPlayer, before: '黑鹞子' }), null)
+  assert.equal(heroOf(foeOnly, 0, { names, foes: ['黑鹞子'], pictured: notPlayer }), null)
+  assert.equal(heroOf([], 0, { names: [], pictured: all }), null)
 })

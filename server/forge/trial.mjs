@@ -22,7 +22,7 @@ import { getPath, unwrap } from '../../web/shared/vars.js'
 import { booksForCard, chatScripts, createChat, pathTo, presetFor } from '../chats.mjs'
 import { asksChoices } from '../basic.mjs'
 import { constantEntries, isConstant, lateEntries } from '../worldbook.mjs'
-import { autoAction, startBattle, step } from '../../web/shared/game/battle.js'
+import { autoCommands, startBattle, step } from '../../web/shared/game/battle.js'
 import { encounterSetup } from '../../web/shared/game/encounter.js'
 import { rulesOn, sheetOf, sheetOnPath } from '../../web/shared/game/sheet.js'
 import { CREATION_TAG, creationOf, randomSheet } from './creation.mjs'
@@ -129,7 +129,7 @@ export function autoFight(book, chat, stop) {
   let state = startBattle(setup)
   const actions = []
   while (!state.over) {
-    const action = autoAction(state)
+    const action = autoCommands(state)
     actions.push(action)
     state = step(state, action).state
   }

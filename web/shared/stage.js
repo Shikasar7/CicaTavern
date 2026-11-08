@@ -189,6 +189,33 @@ export function stageAt(steps, index, { names = [], max = 3, isActor = () => tru
   }
 }
 
+/**
+ * Who stands for the player where a look wants a figure (酷炫's skill banner, roll and win): the player's own entry
+ * when there is a picture of it; else whoever spoke last, up to line `index`, who is not one of this round's foes;
+ * else `before` (the one from an earlier reply), unless a foe now; else nobody.
+ * @param steps - the reply's steps, as for stageAt.
+ * @param options.names - speakerNames(): name, keys (aliases), player.
+ * @param options.foes - this round's foes by name: the fight the story stops at, the bestiary.
+ * @param options.pictured - (name) → whether there is a picture of them.
+ * @returns the name, or null.
+ */
+export function heroOf(steps, index, { names = [], foes = [], pictured = () => true, before = null } = {}) {
+  const player = names.find(entry => entry.player)
+  if (player && pictured(player.name)) return player.name
+  const foeKeys = new Set(foes.flatMap(foe => {
+    const name = String(foe ?? '').trim()
+    return name ? [name, name.split(/[-－·|｜_ ]/)[0].trim()] : []
+  }).filter(Boolean))
+  const keysOf = name => [name, ...(names.find(entry => entry.name === name)?.keys ?? [])]
+  const friend = name => Boolean(name) && name !== player?.name && !keysOf(name).some(key => foeKeys.has(key)) && pictured(name)
+  const last = Math.min(index, (steps?.length ?? 0) - 1)
+  for (let i = last; i >= 0; i--) {
+    const step = steps[i]
+    if (step?.type === 'line' && step.kind === 'dialogue' && friend(step.speaker)) return step.speaker
+  }
+  return friend(before) ? before : null
+}
+
 // ─── 用辅助模型判断表情 (server/media.mjs labelExpressions) ─────────────────
 
 /**

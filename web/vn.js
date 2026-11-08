@@ -11,7 +11,7 @@ import { htmlFrame, segments, streamingText } from '/render.js'
 import { timeBox } from '/status.js'
 import { advanceDay, isCreationPage, latestPlace, matchScene, normalizePlace, opensNextDay, placeIn, sameLine, speakerNames, splitLines, stateTime, storyDay, timeOfDay, timesIn, weatherOf } from '/shared/vn.js'
 import { cutOut, spriteFrame } from '/shared/cutout.js'
-import { EXPRESSIONS, PACK_PICTURE, packFaces, stageAt } from '/shared/stage.js'
+import { EXPRESSIONS, PACK_PICTURE, heroOf, packFaces, stageAt } from '/shared/stage.js'
 import { initVnSaves } from '/vn-saves.js'
 import { initVnHud, noteChips } from '/vn-hud.js'
 import { changeNotes } from '/shared/hud.js'
@@ -1106,7 +1106,10 @@ export function initVn(deps) {
     if (!state.on || frame) return
     frame = requestAnimationFrame(() => {
       frame = 0
+      // 性能记录 (render.js perf), when the page passes it: the visual novel's share of a reply streaming.
+      const timing = deps.perf?.start('vn') ?? (() => {})
       render(getChat())
+      timing()
     })
   }
 
@@ -2087,7 +2090,8 @@ export function initVn(deps) {
   // ─── 立绘: the ones in the scene, cut out of a plain background ──────
   // lists: { entryId: 立绘 }; faces: { entryId: { smile: … } } (表情差分); none: names with no picture at all;
   // why: a picture's address → why it could not be cut out (cutOut's why, or 'load').
-  const cast = { lists: new Map(), faces: new Map(), loading: new Map(), cuts: new Map(), why: new Map(), token: 0, missing: null, none: new Map() }
+  // pictures: `${cardId}:${name}` → the picture last shown of them (and the player's), for 酷炫's figure; hero: who it was.
+  const cast = { lists: new Map(), faces: new Map(), loading: new Map(), cuts: new Map(), why: new Map(), token: 0, missing: null, none: new Map(), pictures: new Map(), hero: null }
 
   /** A sprites view from the server (GET, a drawing, an upload) becomes the lists. */
   function takeSprites(cardId, view) {
@@ -2207,11 +2211,18 @@ export function initVn(deps) {
     if (!cardId || step?.type !== 'line' || choice.off) return clearStage()
     const narrow = matchMedia(zoomedQuery(NARROW)).matches
     const layout = stageAt(state.steps, state.index, { names: state.names, max: narrow ? 2 : 3, isActor, labels: faceLabels.get(state.key), auto: !choice.manual, fixed: choice.fixed ?? [] })
-    const members = await Promise.all(layout.members.map(async member => {
-      const entry = state.names.find(item => item.name === member.name)
-      return { ...member, entry, src: entry ? await actorPicture(cardId, entry, member.expression) : null }
-    }))
+    const player = state.names.find(entry => entry.player)
+    const [members, playerSrc] = await Promise.all([
+      Promise.all(layout.members.map(async member => {
+        const entry = state.names.find(item => item.name === member.name)
+        return { ...member, entry, src: entry ? await actorPicture(cardId, entry, member.expression) : null }
+      })),
+      // Never on the stage, but 酷炫's figure for the player when there is a picture of them.
+      player ? actorPicture(cardId, player, 'neutral').catch(() => null) : null,
+    ])
     if (token !== cast.token || !state.on) return
+    for (const member of members) if (member.src) cast.pictures.set(`${cardId}:${member.name}`, member.src)
+    if (player) cast.pictures.set(`${cardId}:${player.name}`, playerSrc)
     // No picture at all: off the stage (a 立绘 drawn later brings them back); the speaker may get one drawn (自动 / 先问).
     const missing = members.filter(member => !member.src)
     if (missing.length) {
@@ -2253,8 +2264,31 @@ export function initVn(deps) {
     clearFaces()
     const speaker = members.find(member => member.name === layout.speaker)
     showHead(speaker?.src)
-    if (speaker?.src ?? members[0]?.src) setHero(speaker?.src ?? members[0].src)
+    heroPicture()
+    setHero(heroPicture)
     if (effects) playEffects(layout)
+  }
+
+  /**
+   * 酷炫's figure for the player (web/game-look.js heroNow: the skill banner, the roll, the win), worked out when asked:
+   * the player's entry with a picture, else whoever of their side spoke last, never one of this round's foes. → URL or ''.
+   */
+  function heroPicture() {
+    const cardId = state.cardId
+    if (!state.on || !cardId) return ''
+    const pictureOf = name => cast.pictures.get(`${cardId}:${name}`) || ''
+    const before = cast.hero?.cardId === cardId ? cast.hero.name : null
+    const name = heroOf(state.steps, state.index, { names: state.names, foes: deps.foeNames?.() ?? [], pictured: name => Boolean(pictureOf(name)), before })
+    if (name) cast.hero = { cardId, name }
+    return name ? pictureOf(name) : ''
+  }
+
+  /** A companion's picture, for a fight's party window: by their name or one the cast knows them by. → URL or ''. */
+  function pictureFor(name) {
+    const cardId = state.cardId
+    if (!cardId || !name) return ''
+    const entry = (state.names ?? []).find(item => item.name === name || (item.keys ?? []).includes(name))
+    return cast.pictures.get(`${cardId}:${entry?.name ?? name}`) || ''
   }
 
   /** The speaker's head in its frame; nobody speaking, none. */
@@ -3266,5 +3300,5 @@ export function initVn(deps) {
     if (state.on) compose(true)
   }
 
-  return { render, streamed, isOn, turnFlags, marks, makeReady, picturesChanged, refreshEnd, compose: openCompose, drawFoe }
+  return { render, streamed, isOn, turnFlags, marks, makeReady, picturesChanged, refreshEnd, compose: openCompose, drawFoe, pictureFor }
 }

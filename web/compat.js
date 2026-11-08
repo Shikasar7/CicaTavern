@@ -1102,22 +1102,26 @@ export function installFrameBridge(handlers) {
   })
 }
 
+// The frames that have loaded (render.js marks them at their first height report): one still loading reads all
+// this from what it was made with, and a long chat's hundreds of frames each told at every keystroke slowed typing.
+const loadedFrames = () => document.querySelectorAll('iframe.card-frame[data-loaded]')
+
 /** Tell every card frame the chat's state changed, so the latest floor's variables and MVU listeners follow. */
 export function broadcastState(state) {
-  for (const frame of document.querySelectorAll('iframe.card-frame')) frame.contentWindow?.postMessage({ agentTavernState: { state } }, '*')
+  for (const frame of loadedFrames()) frame.contentWindow?.postMessage({ agentTavernState: { state } }, '*')
 }
 
 /** Tell every card frame the chat's variables as saved, so a frame's copy has what another wrote (or /setvar). */
 export function broadcastChatVars(vars) {
-  for (const frame of document.querySelectorAll('iframe.card-frame')) frame.contentWindow?.postMessage({ agentTavernChatVars: { vars } }, '*')
+  for (const frame of loadedFrames()) frame.contentWindow?.postMessage({ agentTavernChatVars: { vars } }, '*')
 }
 
 /** Tell every card frame the addresses its card may now reach through the app (frameFetch's `allow`). */
 export function broadcastRelay(origins) {
-  for (const frame of document.querySelectorAll('iframe.card-frame')) frame.contentWindow?.postMessage({ agentTavernRelay: origins }, '*')
+  for (const frame of loadedFrames()) frame.contentWindow?.postMessage({ agentTavernRelay: origins }, '*')
 }
 
 /** Tell every card frame what the input box now holds, so `#send_textarea.value` reads true. */
 export function broadcastInput(text) {
-  for (const frame of document.querySelectorAll('iframe.card-frame')) frame.contentWindow?.postMessage({ agentTavernInput: String(text) }, '*')
+  for (const frame of loadedFrames()) frame.contentWindow?.postMessage({ agentTavernInput: String(text) }, '*')
 }

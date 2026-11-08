@@ -150,10 +150,13 @@ If you can't quite say what you want, the creator guides you round by round:
 
 <br clear="right">
 
-## Latest changes [2.4.1]
+## Latest changes [2.4.2]
 
-<p align="center"><img src="web/whatsnew/2.4.0-battle.webp" alt="A turn-based fight: two wolves and a bandit chief on a mountain road, the chief taking a 17-point critical hit" width="720"></p>
+<p align="center"><img src="web/whatsnew/2.4.2-party.webp" alt="A party fight: you and two companions against two wolves and a bandit chief, in the bold, retro console and ink looks, with a companion's portrait across the screen as she uses a skill" width="720"></p>
 
+- **2.4.2: party fights**: on a card with the full game rules, companions fight beside you, up to four in all, acting by speed as in an RPG Maker game. The Party tab in the pack says who fights, and a companion using a skill gets their portrait in the banner.
+- **2.4.2: a card's own words, more kinds of story**: attributes, life, foe tiers, skills and the rest can take the card's own names (HP, BOSS, Special move, Partners), and Genre adds Monster raising, Online game, Apocalypse survival and Everyday life.
+- **2.4.2: long chats stay quick, replies flow**: switching cards and sending no longer stall in chats hundreds of turns long; replies come out at an even pace, with five Text reveal effects in the theme; Settings > More > Performance log records how long each step took.
 - **2.4.1: tune it as you chat**: a Thinking pick per chat in the top bar (default, off, low to max); a story length range in the basic preset; line spacing in the theme; Memory in the top bar turns long-term memory on or off; World books marks the books the card brings and uses.
 - **2.4.1: checks, trial runs and the card creator**: Adjust status bar, Check the whole card for big cards, trial problems fixed from the check list, trial runs that check values; the card creator asks your gender, reviews against the plan, keeps one-time events one-time and redoes a failed step with another model; a reply cut off partway keeps what was written; Draw CG in visual novel mode; Codex (this PC) as a drawing method on computers.
 - **iPhone and iPad beta**: [install it through TestFlight](https://testflight.apple.com/join/wsT7kT4b). It runs on the device by itself and needs iOS 16 or later.
@@ -511,10 +514,13 @@ flowchart LR
 
 <br clear="right">
 
-## 最新版本变动[2.4.1]
+## 最新版本变动[2.4.2]
 
-<p align="center"><img src="web/whatsnew/2.4.0-battle.webp" alt="回合制战斗：两头灰狼和山贼头目站在山路上，头目吃了一记 17 点暴击" width="720"></p>
+<p align="center"><img src="web/whatsnew/2.4.2-party.webp" alt="队伍战斗：你、沈知微和老周三人对两头灰狼和山贼头目，酷炫、怀旧游戏机和古风三种界面，沈知微放技能时横幅换上她的立绘" width="720"></p>
 
+- **2.4.2：队伍战斗**：开了「完整」游戏规则的卡可以带同伴一起打，最多 4 人上场，按速度轮流出手，像 RPG Maker 的回合制。行囊里的「队伍」页安排谁出战，同伴放技能时换上他的立绘。
+- **2.4.2：每张卡自己的叫法、更多题材**：游戏规则的属性、生命、敌人档位、技能这些词可以按卡改名（比如 HP、BOSS、必杀技、伙伴），「题材」多了怪兽养成、网游、末日求生、日常。
+- **2.4.2：长对话不卡、出字更顺**：几百轮的对话切卡、发送不再卡；回复按均匀的节奏写出来，主题里有五种出字效果可选；「设置 → 更多 → 性能记录」能记下每一步的耗时。
 - **2.4.1：聊着天随手调**：顶栏给每个对话单独选思考（默认、关、low 到 max）；基础预设能填正文字数范围；主题里多了行距；顶栏「记忆」直接开关长期记忆；「世界书」标出这张卡自带和在用的书。
 - **2.4.1：检查、试玩和创作向导**：「调整状态栏」、大卡「全本检查」、试玩问题一键修、试玩查数值；创作向导选玩家性别、审稿对照方案、事件只发生一次、写坏一步换模型重写；回复中途断开也留下已写内容；视觉小说「画 CG」；电脑版能用「Codex（本机）」画图。
 - **iPhone 和 iPad 测试版**：[通过 TestFlight 安装](https://testflight.apple.com/join/wsT7kT4b)，在设备上独立运行，要求 iOS 16 以上。

@@ -3,7 +3,7 @@
 // it records how it was called and answers as the prompt's MODE= says.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { mkdir, mkdtemp, readdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -93,7 +93,8 @@ test('the account\'s models, the one drawn with when none is picked, and finding
   await mkdir(linked, { recursive: true })
   const script = path.join(bin, 'node_modules', '@openai', 'codex', 'bin', 'codex.js')
   const made = await symlink(script, path.join(linked, 'codex')).then(() => true, () => false)
-  if (made) assert.deepEqual(findCodex({ PATH: linked }, 'darwin', []), [process.execPath, script])
+  // As the link resolves: on a Mac the temporary folder is /var, which is /private/var.
+  if (made) assert.deepEqual(findCodex({ PATH: linked }, 'darwin', []), [process.execPath, realpathSync(script)])
 })
 
 test('a picture: the model always passed, references as -i, the size asked for, read from the path in the answer', async t => {

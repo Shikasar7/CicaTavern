@@ -149,10 +149,13 @@ If you can't quite say what you want, the creator guides you round by round:
 
 <br clear="right">
 
-## Latest changes [2.4.1]
+## Latest changes [2.4.2]
 
-<p align="center"><img src="web/whatsnew/2.4.0-battle.webp" alt="A turn-based fight: two wolves and a bandit chief on a mountain road, the chief taking a 17-point critical hit" width="720"></p>
+<p align="center"><img src="web/whatsnew/2.4.2-party.webp" alt="A party fight: you and two companions against two wolves and a bandit chief, in the bold, retro console and ink looks, with a companion's portrait across the screen as she uses a skill" width="720"></p>
 
+- **2.4.2: party fights**: on a card with the full game rules, companions fight beside you, up to four in all, acting by speed as in an RPG Maker game. The Party tab in the pack says who fights, and a companion using a skill gets their portrait in the banner.
+- **2.4.2: a card's own words, more kinds of story**: attributes, life, foe tiers, skills and the rest can take the card's own names (HP, BOSS, Special move, Partners), and Genre adds Monster raising, Online game, Apocalypse survival and Everyday life.
+- **2.4.2: long chats stay quick, replies flow**: switching cards and sending no longer stall in chats hundreds of turns long; replies come out at an even pace, with five Text reveal effects in the theme; Settings > More > Performance log records how long each step took.
 - **2.4.1: tune it as you chat**: a Thinking pick per chat in the top bar (default, off, low to max); a story length range in the basic preset; line spacing in the theme; Memory in the top bar turns long-term memory on or off; World books marks the books the card brings and uses.
 - **2.4.1: checks, trial runs and the card creator**: Adjust status bar, Check the whole card for big cards, trial problems fixed from the check list, trial runs that check values; the card creator asks your gender, reviews against the plan, keeps one-time events one-time and redoes a failed step with another model; a reply cut off partway keeps what was written; Draw CG in visual novel mode; Codex (this PC) as a drawing method on computers.
 - **iPhone and iPad beta**: [install it through TestFlight](https://testflight.apple.com/join/wsT7kT4b). It runs on the device by itself and needs iOS 16 or later.

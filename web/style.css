@@ -442,11 +442,14 @@ select.pill { appearance: none; padding-right: 28px; background-image: linear-gr
 .msg[data-id] .story .q { cursor: pointer; border-radius: 3px; transition: background-color .2s; }
 @media (hover: hover) { .msg[data-id] .story .q:hover { background: color-mix(in srgb, var(--lamp) 12%, transparent); } }
 .msg-body .q.reading { background: color-mix(in srgb, var(--lamp) 20%, transparent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--lamp) 20%, transparent); }
-.msg-body .story + .story, .msg-body .card-frame + .story, .msg-body .story + .card-frame { margin-top: .85em; }
+.msg-body .story + .story, .msg-body .card-frame + .story, .msg-body .story + .card-frame,
+.msg-body .frame-slot + .story, .msg-body .story + .frame-slot { margin-top: .85em; }
 .msg.user { padding: 2px 0 2px 16px; border-left: 2px solid color-mix(in srgb, var(--accent) 55%, transparent); }
 .msg.user .msg-body { font: calc(15px * var(--story-scale))/calc(1.8 * var(--story-leading)) var(--ui); color: var(--ink); }
 .msg.user .msg-body p { margin: 0 0 .5em; }
 .card-frame { display: block; width: 100%; border: 0; margin: 6px 0; background: transparent; color-scheme: normal; }
+/* A frame not made yet (web/render.js frameSlot): its place, at the height it had. */
+.frame-slot { display: block; width: 100%; margin: 6px 0; }
 .msg-body pre.code { margin: .6em 0; padding: 10px 12px; background: var(--surface); border: 1px solid var(--line-soft); border-radius: 10px; overflow-x: auto; font: 12px/1.6 var(--mono); white-space: pre-wrap; text-indent: 0; }
 
 .msg-tools {
@@ -713,6 +716,30 @@ select.pill { appearance: none; padding-right: 28px; background-image: linear-gr
 .battle-meter b { justify-self: end; font-size: 32px; font-weight: 400; line-height: 1; font-variant-numeric: lining-nums tabular-nums; white-space: nowrap; }
 .battle-meter b small { margin-left: 3px; font-size: 14px; opacity: .6; }
 .battle-meter .battle-bar { grid-column: 1 / -1; grid-row: 2; }
+/* 队伍: each of the party a line, the one choosing marked; the round's order across the top. */
+.battle-party { position: relative; display: grid; gap: 4px; min-width: 0; max-width: 460px; }
+.battle-member { position: relative; display: grid; grid-template-columns: 30px minmax(48px, auto) minmax(0, 1fr) auto; grid-template-rows: auto auto; align-items: center; column-gap: 10px; row-gap: 3px; padding: 4px 10px 4px 6px; border: 0; border-left: 2px solid transparent; background: none; color: var(--bone); font: 15px var(--serif); text-align: left; transition: background .25s, border-color .25s, opacity .3s; }
+.battle-member:disabled { cursor: default; }
+.member-face { grid-row: 1 / 3; width: 30px; height: 30px; display: grid; place-items: center; border-radius: 50%; background: rgb(var(--bone-c) / .12) center 12% / 170% auto no-repeat; color: var(--gold); font-size: 14px; }
+.member-name { grid-row: 1 / 3; letter-spacing: .1em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.battle-member .battle-bar.life { grid-column: 3; grid-row: 1; align-self: end; }
+.battle-member .battle-bar.energy { grid-column: 3; grid-row: 2; align-self: start; height: 2px; }
+.member-life { grid-column: 4; grid-row: 1 / 3; font-size: 19px; font-weight: 400; font-variant-numeric: lining-nums tabular-nums; white-space: nowrap; }
+.member-life small { margin-left: 2px; font-size: 12px; opacity: .6; }
+.member-tag { position: absolute; right: 10px; top: -8px; font-size: 11px; letter-spacing: .1em; color: var(--gold); }
+.battle-member.acting { border-left-color: var(--gold); background: linear-gradient(90deg, rgb(var(--gold-c) / .16), transparent); }
+.battle-member.told .member-name::after { content: " ✓"; color: var(--gold); font-size: 12px; }
+.battle-member.down { opacity: .42; }
+.battle.giving .battle-member:not(:disabled) { cursor: pointer; background: rgb(var(--bone-c) / .06); }
+.battle.giving .battle-member:not(:disabled):hover, .battle.giving .battle-member:not(:disabled):focus-visible { border-left-color: var(--malachite); background: rgb(var(--bone-c) / .12); outline: none; }
+.battle-who { display: flex; align-items: center; justify-content: flex-end; gap: 14px; margin-bottom: 6px; font-size: 14px; letter-spacing: .2em; color: var(--gold); }
+.battle-who .battle-back { width: auto; min-height: 30px; margin: 0; padding: 0 4px; }
+.battle-order { display: flex; align-items: center; gap: 5px; margin-left: 16px; }
+.order-chip { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 50%; background: rgb(var(--bone-c) / .14); color: var(--bone); font-size: 12px; transition: transform .2s, opacity .2s; }
+.order-chip.foe { background: rgb(160 58 41 / .62); }
+.order-chip.now { outline: 1px solid var(--gold); transform: scale(1.2); }
+.order-chip.gone { opacity: .35; }
+.battle-hero.away { opacity: 0; transition: opacity .2s; }
 /* What you can do stands in ruled columns. */
 .battle-actions { display: grid; grid-auto-flow: column; grid-auto-columns: 66px; justify-content: end; }
 .battle-action { position: relative; min-height: 144px; display: flex; flex-direction: column-reverse; align-items: center; justify-content: flex-end; gap: 10px; padding: 16px 0 12px; border: 0; border-left: 1px solid var(--rule); background: none; color: var(--bone); font: 500 21px/1 var(--serif); cursor: pointer; transition: color .2s, background .3s; }
@@ -811,6 +838,12 @@ html[data-ui-lang="en"] .battle-end-card h2 { writing-mode: horizontal-tb; borde
   .battle-meter b { font-size: 24px; }
   .battle-meter b small { font-size: 12px; }
   .battle-meter > span:first-child { font-size: 13px; letter-spacing: .16em; }
+  .battle-party { max-width: none; gap: 2px; }
+  .battle-member { grid-template-columns: 24px minmax(40px, auto) minmax(0, 1fr) auto; column-gap: 8px; padding: 2px 6px 2px 4px; font-size: 13px; }
+  .member-face { width: 24px; height: 24px; font-size: 12px; }
+  .member-life { font-size: 15px; }
+  .battle-order { margin-left: 8px; gap: 3px; }
+  .order-chip { width: 20px; height: 20px; font-size: 11px; }
   .battle-actions { grid-auto-columns: minmax(0, 1fr); }
   .battle-action { min-height: 92px; padding: 10px 0 8px; font-size: 17px; }
   .battle-key { display: none; }
@@ -879,6 +912,21 @@ html[data-ui-lang="en"] .battle-end-card h2 { writing-mode: horizontal-tb; borde
 .bag-effect { display: flex; flex-wrap: wrap; gap: 6px; }
 .bag-effect select { max-width: 100%; font-size: 12px; }
 .bag-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.bag-member { display: grid; gap: 8px; padding: 12px 2px; border-bottom: 1px solid var(--line-soft); }
+.bag-member-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.bag-member-head .bag-actions { margin-left: auto; }
+.bag-member .hint { margin: 0; }
+.bag-member.hurt .bag-name { opacity: .6; }
+/* 游戏规则's 队伍名册: one companion to a fold. */
+.game-companion { border-bottom: 1px solid var(--line-soft); padding: 4px 0; }
+/* 游戏规则's 叫法: the default on the left, the card's own beside it, two to a row where there is room. */
+.game-words { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px 12px; margin: 4px 0 10px; }
+.card-permissions .game-word-row { display: grid; gap: 2px; margin: 0; text-align: left; }
+.card-permissions .game-word-row > span { justify-self: start; font-size: 13px; opacity: .72; }
+.card-permissions .game-word { width: 100%; min-width: 0; min-height: 34px; padding: 4px 10px; }
+.game-companion > summary { display: flex; align-items: baseline; gap: 10px; padding: 8px 2px; cursor: pointer; }
+.game-companion > summary b { font-weight: 600; }
+.game-companion[open] > summary { color: var(--accent, inherit); }
 .bag-add { display: flex; gap: 6px; margin-top: 10px; }
 .bag-add input { flex: 1; min-width: 0; }
 .bag-foot { margin: 12px 0 0; font-size: 12px; }
@@ -1028,6 +1076,18 @@ html[data-ui-lang="en"] .roll-tier { font-size: 42px; }
   border-radius: 2px; background: var(--lamp); animation: caret-blink 1.1s ease-in-out infinite;
 }
 .msg.streaming .msg-body:empty::after { margin-left: 2em; }
+/* 出字效果 (stream-reveal.js): the characters just shown, for the fraction of a second they take to come in.
+   淡入 fades them up; 墨晕 lets them come out of a blur, like ink taking to paper; 逐句 is a slower fade of a
+   whole sentence; 打字机 has no fade, only a caret at the end, blinking while the model is quiet. */
+.msg-body .rv { animation: rv-fade var(--rv-ms, 380ms) cubic-bezier(.25, .6, .3, 1) both; }
+.msg-body[data-reveal="ink"] .rv { animation-name: rv-ink; animation-timing-function: cubic-bezier(.3, .5, .35, 1); }
+.msg-body[data-reveal="sentence"] .rv { animation-name: rv-dawn; animation-timing-function: ease-out; }
+@keyframes rv-fade { from { opacity: 0; } }
+@keyframes rv-ink { 0% { opacity: 0; filter: blur(3px); } 35% { opacity: .85; filter: blur(.7px); } 100% { opacity: 1; filter: none; } }
+@keyframes rv-dawn { 0% { opacity: 0; filter: blur(1.5px); } 100% { opacity: 1; filter: none; } }
+.msg-body .rv-caret { display: inline-block; width: 2px; height: 1.1em; margin-left: 2px; vertical-align: -.2em; border-radius: 1px; background: var(--lamp); }
+.msg-body .rv-caret.waiting { animation: caret-blink 1.1s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .msg-body .rv, .msg-body .rv-caret.waiting { animation: none; } }
 /* That something is on its way: in the transcript's live note, and in the visual novel's wait. */
 .live-dots { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; }
 .live-dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--lamp); animation: live-dot 1.2s ease-in-out infinite; }
@@ -1202,6 +1262,21 @@ dl.usage dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; 
 .dialog.diagnostics .diag-actions { margin-top: 12px; flex-wrap: wrap; gap: 8px; align-items: center; }
 .dialog.diagnostics .diag-count { margin: 0; }
 .dialog.diagnostics .grow { flex: 1; }
+/* 性能记录 (web/perf-panel.js) */
+.dialog.perf-log { width: min(880px, calc(calc(100vw / var(--page-zoom)) - 32px)); }
+.dialog.perf-log .hint { margin: 0 0 10px; }
+.dialog.perf-log .grow { flex: 1; }
+.dialog.perf-log .perf-table-wrap { max-height: min(calc(38 * var(--dvh) / var(--page-zoom)), 340px); overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+.perf-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.perf-table th, .perf-table td { padding: 5px 8px; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.perf-table th { position: sticky; top: 0; background: var(--raised); font-weight: 600; }
+.perf-table td.num, .perf-table th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.perf-table td.perf-what { max-width: 12em; overflow: hidden; text-overflow: ellipsis; }
+.perf-table td.perf-main { white-space: normal; min-width: 18em; color: var(--muted); }
+.perf-table tbody tr { cursor: pointer; }
+.perf-table tbody tr:hover, .perf-table tbody tr.picked { background: var(--accent-soft); }
+.dialog.perf-log .perf-empty { margin: 10px 0 0; }
+.dialog.perf-log .perf-detail { margin: 10px 0 0; padding: 8px 10px; max-height: 220px; overflow: auto; font: 12px/1.55 ui-monospace, "Cascadia Mono", Consolas, monospace; white-space: pre-wrap; background: var(--surface); border: 1px solid var(--line-soft); border-radius: 8px; }
 
 /* 屏蔽词 (web/blockwords.js): the form, the list with a switch per word, the test box. */
 .dialog.blockwords { position: relative; width: min(640px, calc(calc(100vw / var(--page-zoom)) - 32px)); overflow-y: auto; }
@@ -2988,6 +3063,12 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .theme-leading-mark { font-size: 12px; color: var(--muted); }
 .theme-reading-sample { margin: 0; padding: 10px 14px; border-radius: 10px; border: 1px solid var(--line-soft); background: var(--surface); color: var(--ink); font: calc(17px * var(--story-scale))/calc(1.9 * var(--story-leading)) var(--story-font); }
 @media (max-width: 780px) { .theme-reading-sample { font-size: calc(16px * var(--story-scale)); } }
+/* 出字效果: the five as chips, and the sample a choice plays (two lines kept, so playing it moves nothing). */
+.theme-reveals { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+.theme-reveals .theme-style { padding: 9px 2px; white-space: nowrap; }
+.theme-reveal-sample { min-height: calc(2 * 17px * 1.9 * var(--story-scale) * var(--story-leading) + 20px); padding: 10px 14px; border-radius: 10px; border: 1px solid var(--line-soft); background: var(--surface); color: var(--ink); font: calc(17px * var(--story-scale))/calc(1.9 * var(--story-leading)) var(--story-font); }
+.theme-reveal-sample p { margin: 0; }
+@media (max-width: 780px) { .theme-reveal-sample { font-size: calc(16px * var(--story-scale)); } }
 @media (max-width: 560px) {
   .theme-row, .theme-row.top { flex-direction: column; align-items: stretch; gap: 8px; }
   .theme-label { flex-basis: auto; padding-top: 0; }

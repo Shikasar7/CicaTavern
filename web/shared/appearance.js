@@ -82,7 +82,12 @@ export const BACKDROP_FILE = /^backdrop-[a-z0-9]{4,16}\.(jpg|png|webp)$/
 export const STORY_FONTS = ['song', 'hei', 'kai', 'fang', 'custom']
 
 // width 0 is the page's own (style.css --read).
-export const READING_DEFAULTS = Object.freeze({ font: 'song', custom: '', scale: 1, leading: 1, ui: 1, width: 0 })
+// 出字效果: how a reply being written comes onto the page (淡入, 墨晕, 打字机, 逐句, 直接显示; web/stream-reveal.js).
+// Here, not in shared/reveal.js, so the server's copy of this file needs nothing beside it.
+export const REVEAL_MODES = ['fade', 'ink', 'type', 'sentence', 'none']
+export const REVEAL_DEFAULT = 'fade'
+
+export const READING_DEFAULTS = Object.freeze({ font: 'song', custom: '', scale: 1, leading: 1, ui: 1, width: 0, reveal: REVEAL_DEFAULT })
 
 export const STORY_SCALE = Object.freeze({ min: 0.8, max: 1.6, step: 0.05 })
 
@@ -114,6 +119,8 @@ export function cleanReading(value) {
     scale: Number.isFinite(scale) ? Math.min(STORY_SCALE.max, Math.max(STORY_SCALE.min, Math.round(scale * 100) / 100)) : READING_DEFAULTS.scale,
     leading: raw.leading !== undefined && Number.isFinite(leading) ? Math.min(STORY_LEADING.max, Math.max(STORY_LEADING.min, Math.round(leading * 100) / 100)) : READING_DEFAULTS.leading,
     width: width > 0 ? Math.min(READ_WIDTH.max, Math.max(READ_WIDTH.min, Math.round(width))) : READING_DEFAULTS.width,
+    // 出字效果: how a reply being written comes onto the page (shared/reveal.js).
+    reveal: REVEAL_MODES.indexOf(raw.reveal) >= 0 ? raw.reveal : READING_DEFAULTS.reveal,
   }
 }
 

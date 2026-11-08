@@ -3,7 +3,7 @@
 // with the next turn (app.js), so a rollback or a branch takes it back like everything else.
 import { t } from '/i18n.js'
 
-const TABS = () => [['self', t`角色`], ['bag', t`背包`], ['quests', t`任务`], ['map', t`地图`], ['deeds', t`成就`], ['sound', t`声音`]]
+const TABS = () => [['self', t`角色`], ['party', t`队伍`], ['bag', t`背包`], ['quests', t`任务`], ['map', t`地图`], ['deeds', t`成就`], ['sound', t`声音`]]
 const LAYER_WORDS = () => [['effects', t`音效`], ['ambience', t`环境音`], ['music', t`音乐`]]
 const MAX_TRACK = 28 * 1024 * 1024
 const EFFECT_WORDS = () => ({ heal: t`回血`, energy: t`回气力`, calm: t`回复理智`, damage: t`攻击`, cure: t`解除异常`, boost: t`增益`, none: t`只有剧情用途` })
@@ -20,9 +20,10 @@ export function openBag({ el, api, toast, chat, tab: firstTab = 'self', book: fi
   let tab = firstTab
   const body = el('div', { class: 'bag-body' })
   const tabs = el('div', { class: 'bag-tabs', role: 'tablist' })
-  const dialog = el('dialog', { class: 'dialog game-bag', 'aria-label': t`行囊` }, [
+  const said = (key, fallback) => book.words?.[key] || fallback
+  const dialog = el('dialog', { class: 'dialog game-bag', 'aria-label': said('bag', t`行囊`) }, [
     el('button', { type: 'button', class: 'btn small dialog-x', text: t`关闭`, onclick: () => dialog.close() }),
-    el('div', { class: 'bag-head' }, [el('h2', { text: t`行囊` }), tabs]),
+    el('div', { class: 'bag-head' }, [el('h2', { text: said('bag', t`行囊`) }), tabs]),
     body,
     el('p', { class: 'hint bag-foot', text: t`这里做的改动随下一轮一起生效，输入框上方可以取消。` }),
   ])
@@ -61,7 +62,7 @@ export function openBag({ el, api, toast, chat, tab: firstTab = 'self', book: fi
   function selfPage() {
     const now = sheet()
     return [
-      meter(t`生命`, 'life', now.maxLife),
+      meter(said('life', t`生命`), 'life', now.maxLife),
       brokenNote('life'),
       now.sanity === undefined ? null : meter(t`理智`, 'sanity', now.maxSanity),
       brokenNote('sanity'),
@@ -71,7 +72,7 @@ export function openBag({ el, api, toast, chat, tab: firstTab = 'self', book: fi
       bound('money') ? el('div', { class: 'bag-row' }, [el('span', { class: 'bag-name', text: t`金钱` }), el('b', { text: String(now.money ?? 0) })]) : null,
       book.level === 'full' ? el('div', { class: 'bag-row' }, [
         el('span', { class: 'bag-name', text: [t`等级 ${now.level}`, play.rankNow(now, book)].filter(Boolean).join(' · ') }),
-        bound('rank') || bound('level') ? el('span', { class: 'hint', text: t`来自变量 ${book.bindings.rank ?? book.bindings.level}` }) : el('span', { class: 'hint', text: t`经验 ${now.experience ?? 0} / ${play.levelNeeds(now.level)}` }),
+        bound('rank') || bound('level') ? el('span', { class: 'hint', text: t`来自变量 ${book.bindings.rank ?? book.bindings.level}` }) : el('span', { class: 'hint', text: `${said('experience', t`经验`)} ${now.experience ?? 0} / ${play.levelNeeds(now.level)}` }),
       ]) : null,
       brokenNote('rank'),
       ...ailRows(),
@@ -82,8 +83,61 @@ export function openBag({ el, api, toast, chat, tab: firstTab = 'self', book: fi
         el('span', { class: 'hint', text: item.modifier < 0 ? `−${-item.modifier}` : `+${item.modifier}` }),
         now.points ? el('button', { type: 'button', class: 'btn small', text: '+', 'aria-label': t`加到${item.name}`, onclick: () => act({ op: 'point', id: item.id }) }) : null,
       ]))),
-      now.skills.length ? el('h3', { text: t`技能` }) : null,
+      now.skills.length ? el('h3', { text: said('skill', t`技能`) }) : null,
       now.skills.length ? el('p', { text: now.skills.join(t`、`) }) : null,
+    ]
+  }
+
+  /**
+   * 队伍: who fights beside the player (出战, three at most, in this order) and who travels with them but sits a fight
+   * out (待命). Changes go with the next turn like everything else here, and the next fight is fought by them already.
+   */
+  function partyPage() {
+    const now = sheet()
+    const party = now.party ?? []
+    const fielded = play.fieldedOf(now)
+    const resting = party.filter(member => !fielded.includes(member))
+    const known = Object.keys(book.companions ?? {}).filter(name => !party.some(member => member.name === name))
+    const full = fielded.length >= play.MAX_FIELDED
+    const memberCard = (member, fighting) => {
+      const stats = play.attributesOf({ ...member, named: now.named })
+      const at = fielded.indexOf(member)
+      return el('div', { class: `bag-member${member.hurt ? ' hurt' : ''}` }, [
+        el('div', { class: 'bag-member-head' }, [
+          el('b', { class: 'bag-name', text: member.name }),
+          el('span', { class: 'hint', text: [t`${member.level} 级`, `${said('life', t`生命`)} ${member.life}/${member.maxLife}`, member.hurt ? t`负伤` : ''].filter(Boolean).join(' · ') }),
+          el('span', { class: 'bag-actions' }, [
+            fighting && at > 0 ? el('button', { type: 'button', class: 'btn small', text: t`前移`, onclick: () => act({ op: 'party', act: 'up', name: member.name }) }) : null,
+            fighting ? el('button', { type: 'button', class: 'btn small', text: t`待命`, onclick: () => act({ op: 'party', act: 'bench', name: member.name }) }) : null,
+            !fighting && member.bench && !member.hurt ? el('button', { type: 'button', class: 'btn small', text: t`出战`, disabled: full, title: full ? t`出战最多 ${play.MAX_FIELDED} 人，先让一个人待命` : '', onclick: () => act({ op: 'party', act: 'field', name: member.name }) }) : null,
+            member.hurt ? el('button', { type: 'button', class: 'btn small', text: t`已经好了`, title: t`故事里伤已经好了，让${member.name}能上场`, onclick: () => act({ op: 'party', act: 'back', name: member.name }) }) : null,
+            el('button', { type: 'button', class: 'btn small', text: t`离队`, onclick: () => act({ op: 'party', act: 'leave', name: member.name }) }),
+          ]),
+        ]),
+        el('div', { class: 'bag-stats' }, stats.map(item => el('div', { class: 'bag-stat' }, [
+          el('span', { text: item.name }),
+          el('b', { text: String(item.value) }),
+          el('span', { class: 'hint', text: item.modifier < 0 ? `−${-item.modifier}` : `+${item.modifier}` }),
+          member.points ? el('button', { type: 'button', class: 'btn small', text: '+', 'aria-label': t`给${member.name}加到${item.name}`, onclick: () => act({ op: 'point', id: item.id, who: member.name }) }) : null,
+        ]))),
+        el('p', { class: 'hint', text: [member.skills.length ? t`${said('skill', t`技能`)}：${member.skills.join(t`、`)}` : '', member.points ? t`还有 ${member.points} 点可加` : '', `${said('experience', t`经验`)} ${member.experience ?? 0} / ${play.levelNeeds(member.level)}`].filter(Boolean).join(' · ') }),
+      ])
+    }
+    return [
+      el('p', { class: 'hint', text: t`出战的人和你一起上场，最多 ${play.MAX_FIELDED} 人，按这里的顺序排。待命的人跟着走，但不上场。` }),
+      book.level === 'full' ? null : el('p', { class: 'hint warn', text: t`这张卡的规则没开「完整」，没有战斗，这一页暂时用不上。` }),
+      el('h3', { text: t`出战（${fielded.length}/${play.MAX_FIELDED}）` }),
+      ...(fielded.length ? fielded.map(member => memberCard(member, true)) : [el('p', { class: 'hint', text: t`现在只有你一个人上场。` })]),
+      resting.length ? el('h3', { text: t`待命` }) : null,
+      ...resting.map(member => memberCard(member, false)),
+      known.length ? el('h3', { text: t`还没入队` }) : null,
+      ...known.map(name => el('div', { class: 'bag-row' }, [
+        el('span', { class: 'bag-name', text: name }),
+        el('span', { class: 'hint', text: t`故事里加入时会自动入队，也可以现在就加` }),
+        el('button', { type: 'button', class: 'btn small', text: t`入队`, onclick: () => act({ op: 'party', act: 'join', name }) }),
+      ])),
+      party.length || known.length ? null : el('p', { class: 'hint', text: t`这张卡还没有同伴。可以在角色卡的「游戏规则」里加；故事里有人入队时，也会自动加进来。` }),
+      adder(t`名字`, t`让谁入队`, name => act({ op: 'party', act: 'join', name })),
     ]
   }
 
@@ -306,8 +360,8 @@ export function openBag({ el, api, toast, chat, tab: firstTab = 'self', book: fi
   }
 
   function render() {
-    tabs.replaceChildren(...TABS().map(([key, label]) => el('button', { type: 'button', role: 'tab', 'aria-selected': String(key === tab), class: key === tab ? 'on' : '', text: label, onclick: () => { tab = key; render() } })))
-    const page = { self: selfPage, bag: bagPage, quests: questsPage, map: mapPage, deeds: deedsPage, sound: soundPage }[tab]
+    tabs.replaceChildren(...TABS().map(([key, label]) => [key, key === 'party' ? said('party', label) : key === 'bag' ? said('bag', label) : label]).map(([key, label]) => el('button', { type: 'button', role: 'tab', 'aria-selected': String(key === tab), class: key === tab ? 'on' : '', text: label, onclick: () => { tab = key; render() } })))
+    const page = { self: selfPage, party: partyPage, bag: bagPage, quests: questsPage, map: mapPage, deeds: deedsPage, sound: soundPage }[tab]
     body.replaceChildren(...page().filter(Boolean))
     if (tab === 'bag') sortThings()
   }

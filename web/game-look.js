@@ -190,8 +190,11 @@ export function slideSlab(el, list, rows) {
 
 let hero = ''
 
-/** Who stands for the player where a look wants a figure: whoever was last on the stage. */
-export const heroNow = () => hero
+/**
+ * Who stands for the player where a look wants a figure: a picture, or a function that finds it when asked (the
+ * visual novel's: one of the player's side, never this round's foe). → the picture's URL, or ''.
+ */
+export const heroNow = () => (typeof hero === 'function' ? hero() || '' : hero)
 export const setHero = url => {
   hero = url || ''
 }

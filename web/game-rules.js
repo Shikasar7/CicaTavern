@@ -1,6 +1,6 @@
 // 游戏规则 (角色卡菜单): how far this card's rules go. Each change is kept at once and counts from the card's next turn.
 import { t } from '/i18n.js'
-import { ATTRIBUTES, ATTRIBUTE_POINTS, AVERAGE, MIN_ATTRIBUTE, effectOf, startSheet } from '/shared/game/sheet.js'
+import { ATTRIBUTES, ATTRIBUTE_POINTS, AVERAGE, MAX_FIELDED, MIN_ATTRIBUTE, WORD_KEYS, effectOf, startSheet } from '/shared/game/sheet.js'
 import { skillKindOf } from '/shared/game/battle.js'
 import { fitsField, guessBindings, variablePaths } from '/shared/game/bindings.js'
 
@@ -9,7 +9,13 @@ const ATTRIBUTES_HINT = () => ({ body: t`力量、耐力、硬抗`, grace: t`敏
 const BINDING_WORDS = () => [['life', t`生命`], ['maxLife', t`生命上限`], ['energy', t`气力`], ['maxEnergy', t`气力上限`], ['sanity', t`理智`], ['level', t`等级`], ['rank', t`等级（文字）`], ['money', t`金钱`], ['things', t`背包`], ['quests', t`任务`]]
 
 const SKILL_KINDS = () => ({ strike: t`重击`, sweep: t`群攻`, flurry: t`连击`, poison: t`中毒`, stun: t`眩晕`, heal: t`治疗`, boost: t`增益` })
-/** 题材: what a kind of story calls energy and the skills it starts with. Nothing else changes. */
+// 叫法: what each word is, in the page's language, and what it is called unless the card says otherwise.
+const WORD_LABELS = () => ({ body: t`体魄`, grace: t`灵巧`, mind: t`心智`, charm: t`魅力`, life: t`生命`, minion: t`杂兵`, normal: t`普通`, elite: t`精英`, boss: t`首领`, skill: t`技能`, bag: t`行囊`, experience: t`经验`, party: t`队伍` })
+
+/**
+ * 题材: a template for a kind of story. What it calls energy and the rest (words), the skills it starts with.
+ * The rules underneath are the same for all of them; only what things are called, and what one starts with, change.
+ */
 const THEMES = () => ({
   plain: { label: t`通用`, energyName: '', skills: { [t`强击`]: 'strike', [t`横扫`]: 'sweep' } },
   wuxia: { label: t`武侠`, energyName: t`内力`, skills: { [t`裂石掌`]: 'strike', [t`扫堂腿`]: 'sweep', [t`连环剑`]: 'flurry' } },
@@ -18,6 +24,10 @@ const THEMES = () => ({
   modern: { label: t`现代`, energyName: t`精力`, skills: { [t`重拳`]: 'strike', [t`连打`]: 'flurry', [t`包扎`]: 'heal' } },
   scifi: { label: t`科幻`, energyName: t`能量`, skills: { [t`过载射击`]: 'strike', [t`脉冲波`]: 'sweep', [t`能量护盾`]: 'boost' } },
   horror: { label: t`克苏鲁`, energyName: t`精力`, sanity: true, skills: { [t`开枪`]: 'strike', [t`猛击`]: 'strike', [t`急救`]: 'heal' } },
+  monster: { label: t`怪兽养成`, energyName: t`能量`, words: { body: t`力量`, grace: t`速度`, mind: t`智力`, charm: t`羁绊`, life: 'HP', minion: t`野生`, boss: 'BOSS', skill: t`必杀技`, bag: t`道具`, party: t`伙伴` }, skills: { [t`猛撞`]: 'strike', [t`连续攻击`]: 'flurry', [t`冲击波`]: 'sweep' } },
+  netgame: { label: t`网游`, energyName: 'MP', words: { body: t`力量`, grace: t`敏捷`, mind: t`智力`, charm: t`魅力`, life: 'HP', minion: t`小怪`, elite: t`精英怪`, boss: 'BOSS', bag: t`背包`, party: t`小队` }, skills: { [t`重击`]: 'strike', [t`旋风斩`]: 'sweep', [t`治疗术`]: 'heal' } },
+  apocalypse: { label: t`末日求生`, energyName: t`体力`, words: { minion: t`游荡者`, boss: t`首领`, bag: t`物资` }, skills: { [t`重击`]: 'strike', [t`扫射`]: 'sweep', [t`包扎`]: 'heal' } },
+  daily: { label: t`日常`, energyName: t`精力`, words: { body: t`体力`, grace: t`手巧`, mind: t`头脑`, charm: t`人缘`, bag: t`随身物品` }, skills: {} },
 })
 
 /** @param deps - { el, api, toast, chatId (an open chat with the card, or ''), state (its variables, or null), drawFoe (name, done), onChange (the rules changed) } */
@@ -120,6 +130,90 @@ export async function openGameRules(card, deps) {
     return input
   }
   showSkillKinds()
+  // 队伍名册: who on the card stands with the player, each with their own attributes and skills.
+  const roster = el('div')
+  const splitWords = text => text.split(/[、，,\s]+/).map(word => word.trim()).filter(Boolean)
+  function companionBox(name) {
+    const companion = book.companions[name]
+    const put = change => save({ companions: { ...book.companions, [name]: { ...companion, ...change } } }).then(showRoster, failed)
+    const starts = (book.start.party ?? []).includes(name)
+    const startBox = el('input', { type: 'checkbox', checked: starts, 'aria-label': t`开局就在队里` })
+    startBox.addEventListener('change', () => {
+      const party = (book.start.party ?? []).filter(other => other !== name)
+      save({ start: { ...book.start, party: startBox.checked ? [...party, name] : party } }).then(showRoster, failed)
+    })
+    const keys = el('input', { type: 'text', value: companion.keys.join(t`、`), 'aria-label': t`别名`, placeholder: t`挽霜、霜姐姐` })
+    keys.addEventListener('change', () => put({ keys: splitWords(keys.value) }))
+    const skills = el('input', { type: 'text', value: Object.keys(companion.skills).join(t`、`), 'aria-label': t`${name}的技能`, placeholder: t`强击、横扫` })
+    skills.addEventListener('change', () => put({ skills: Object.fromEntries(splitWords(skills.value).map(skill => [skill, companion.skills[skill] ?? ''])) }))
+    const level = el('input', { type: 'number', min: 1, max: 99, value: companion.level ?? '', placeholder: t`同你`, 'aria-label': t`${name}的等级`, class: 'game-attribute' })
+    level.addEventListener('change', () => {
+      const value = Math.round(Number(level.value))
+      const { level: _was, ...rest } = companion
+      save({ companions: { ...book.companions, [name]: value >= 1 ? { ...rest, level: Math.min(99, value) } : rest } }).then(showRoster, failed)
+    })
+    // Their attributes share out the same points over the average as the player's.
+    const spareOf = attributes => ATTRIBUTE_POINTS - ATTRIBUTES.reduce((sum, item) => sum + attributes[item.id] - AVERAGE, 0)
+    const stat = ({ id, name: label }) => {
+      const input = el('input', { type: 'number', min: MIN_ATTRIBUTE, max: AVERAGE + ATTRIBUTE_POINTS, value: companion.attributes[id], 'aria-label': t`${name}的${label}`, class: 'game-attribute' })
+      input.addEventListener('change', () => {
+        const next = Math.round(Number(input.value))
+        const most = companion.attributes[id] + spareOf(companion.attributes)
+        const value = Math.max(MIN_ATTRIBUTE, Math.min(Number.isFinite(next) ? next : AVERAGE, most))
+        put({ attributes: { ...companion.attributes, [id]: value } })
+      })
+      return row(label, ATTRIBUTES_HINT()[id], input)
+    }
+    const remove = () => {
+      const { [name]: _gone, ...rest } = book.companions
+      save({ companions: rest, start: { ...book.start, party: (book.start.party ?? []).filter(other => other !== name) } }).then(showRoster, failed)
+    }
+    const summary = [starts ? t`开局在队里` : '', Object.keys(companion.skills).join(t`、`)].filter(Boolean).join(' · ')
+    return el('details', { class: 'game-companion' }, [
+      el('summary', {}, [el('b', { text: name }), el('span', { class: 'hint', text: summary })]),
+      row(t`开局就在队里`, t`新故事一开始就同行。最多 ${MAX_FIELDED} 人上场，多的待命。`, startBox),
+      row(t`别名`, t`故事里也这么叫他，用来认出是谁入队、立绘用哪张。`, keys),
+      row(t`技能`, t`战斗里他能用的招，用逗号分开。空着就给强击。`, skills),
+      ...Object.keys(companion.skills).map(skill => row(skill, '', choice(t`${skill}的效果`, companion.skills[skill] || skillKindOf(skill), Object.entries(SKILL_KINDS()), kind => ({ companions: { ...book.companions, [name]: { ...companion, skills: { ...companion.skills, [skill]: kind } } } })))),
+      row(t`等级`, t`入队时的等级，空着就和你一样。`, level),
+      el('p', { class: 'hint', text: t`属性：10 是常人，还可以分配 ${spareOf(companion.attributes)} 点。` }),
+      ...ATTRIBUTES.map(stat),
+      el('div', { class: 'row end' }, [el('button', { type: 'button', class: 'btn small danger', text: t`从名册删掉`, onclick: remove })]),
+    ])
+  }
+  function showRoster() {
+    const name = el('input', { type: 'text', maxlength: 40, placeholder: t`名字`, 'aria-label': t`同伴的名字` })
+    const add = () => {
+      const said = name.value.trim()
+      if (!said || book.companions[said]) return
+      save({ companions: { ...book.companions, [said]: { keys: [], attributes: {}, skills: {} } } }).then(showRoster, failed)
+    }
+    name.addEventListener('keydown', event => {
+      if (event.key === 'Enter') {
+        event.preventDefault()
+        add()
+      }
+    })
+    roster.replaceChildren(
+      ...Object.keys(book.companions).map(companionBox),
+      el('div', { class: 'bag-add' }, [name, el('button', { type: 'button', class: 'btn small', text: t`加一个同伴`, onclick: add })]),
+    )
+  }
+  showRoster()
+  // 叫法: the card's own names for things, each kept as it is typed; empty is the app's.
+  const wordRow = key => {
+    const input = el('input', { type: 'text', maxlength: 8, value: book.words?.[key] ?? '', placeholder: WORD_LABELS()[key], 'aria-label': t`「${WORD_LABELS()[key]}」的叫法`, class: 'game-word' })
+    input.addEventListener('change', () => {
+      const words = { ...book.words }
+      const word = input.value.trim()
+      if (word) words[key] = word
+      else delete words[key]
+      save({ words }).catch(failed)
+    })
+    return el('label', { class: 'game-word-row' }, [el('span', { text: WORD_LABELS()[key] }), input])
+  }
+  const wordsBox = el('div', { class: 'game-words' }, WORD_KEYS.map(wordRow))
+
   // What the window shows was read when it opened: after a change to many of them at once, it opens again.
   const again = async () => {
     await openGameRules(card, deps)
@@ -127,21 +221,23 @@ export async function openGameRules(card, deps) {
   }
   const pickTheme = id => {
     const theme = THEMES()[id]
-    save({ theme: id, energyName: theme.energyName, skills: { ...book.skills, ...theme.skills }, start: { ...book.start, skills: Object.keys(theme.skills) }, ...(theme.sanity ? { sanity: true } : {}) }).then(again).catch(failed)
+    save({ theme: id, energyName: theme.energyName, words: theme.words ?? {}, skills: { ...book.skills, ...theme.skills }, start: { ...book.start, skills: Object.keys(theme.skills) }, ...(theme.sanity ? { sanity: true } : {}) }).then(again).catch(failed)
   }
   const themeSelect = el('select', { 'aria-label': t`题材` }, Object.entries(THEMES()).map(([id, theme]) => el('option', { value: id, text: theme.label, selected: id === (book.theme || 'plain') })))
   themeSelect.addEventListener('change', () => pickTheme(themeSelect.value))
   // The helper's proposal: shown, and kept only if taken.
   const proposal = el('div')
   const showProposal = found => {
-    const take = () => save({ ...found, foes: { ...found.foes, ...book.foes }, skills: { ...book.skills, ...found.skills }, items: { ...book.items, ...found.items }, bindings: { ...book.bindings, ...found.bindings } }).then(again).catch(failed)
+    const take = () => save({ ...found, foes: { ...found.foes, ...book.foes }, skills: { ...book.skills, ...found.skills }, items: { ...book.items, ...found.items }, bindings: { ...book.bindings, ...found.bindings }, companions: { ...(found.companions ?? {}), ...book.companions }, words: { ...(found.words ?? {}), ...book.words } }).then(again).catch(failed)
     const attributes = ATTRIBUTES.map(item => `${item.name} ${found.attributes[item.id]}`).join(t`、`)
     const lines = [
       [t`题材`, THEMES()[found.theme].label + (found.energyName ? t`（${found.energyName}）` : '')],
+      [t`叫法`, Object.entries(found.words ?? {}).map(([key, word]) => `${WORD_LABELS()[key]} → ${word}`).join(t`、`)],
       [t`属性`, attributes],
       [t`技能`, found.start.skills.join(t`、`)],
       [t`开局物品`, found.start.things.map(thing => (thing.count > 1 ? `${thing.name} ×${thing.count}` : thing.name)).join(t`、`)],
       [t`常见敌人`, Object.keys(found.foes).join(t`、`)],
+      [t`同伴`, Object.keys(found.companions ?? {}).join(t`、`)],
       [t`等级阶梯`, (found.ranks ?? []).join(t`、`)],
       [t`理智`, found.sanity ? t`开` : ''],
       [t`绑定变量`, Object.entries(found.bindings).map(([field, path]) => `${BINDING_WORDS().find(([key]) => key === field)[1]} → ${path}`).join(t`、`)],
@@ -176,6 +272,9 @@ export async function openGameRules(card, deps) {
     row(t`等级阶梯`, t`这个世界的等级，从低到高，用逗号分开。填了以后敌人按等级算差距；不填时由模型写敌人比你强多少。`, ranksInput()),
     book.ranks.length ? row(t`阶梯跨度`, t`大：差一级就很难打，比如修仙的境界。小：差几级才打不过，比如段位、军衔。`, choice(t`阶梯跨度`, book.rankSpan, [['wide', t`大`], ['narrow', t`小`]], rankSpan => ({ rankSpan }))) : null,
     book.ranks.length ? row(t`开局等级`, t`玩家从哪一级开始，只影响新故事。绑定了「等级（文字）」的卡按变量来。`, choice(t`开局等级`, book.start.rank || book.ranks[0], book.ranks.map(rank => [rank, rank]), rank => ({ start: { ...book.start, rank } }))) : null,
+    el('h3', { text: t`队伍名册` }),
+    el('p', { class: 'hint', text: t`和你一起打架的人：各有各的属性和技能，在行囊的「队伍」里安排谁上场。故事里写到有人入队时，名册里没有的人按常人加进来。` }),
+    roster,
   ])
   levelChoice.addEventListener('change', () => { fightSettings.hidden = levelChoice.value !== 'full' })
   const dialog = el('dialog', { class: 'dialog card-permissions', 'aria-label': t`游戏规则` }, [
@@ -189,8 +288,11 @@ export async function openGameRules(card, deps) {
       row(t`剧情暂停`, t`让模型在有风险的地方停下来等你掷骰。导入的预设有自己的输出格式，可能和这个冲突，所以默认不开，只有选项上的检定。`, choice(t`剧情暂停`, book.pause === null ? 'auto' : book.pause ? 'on' : 'off', [['auto', t`自动`], ['on', t`开`], ['off', t`关`]], value => ({ pause: value === 'auto' ? null : value === 'on' }))),
       row(t`理智`, t`恐怖题材用：目睹恐怖时理智下降，很难恢复，低了影响心智，归零时发疯。`, choice(t`理智`, book.sanity ? 'on' : 'off', [['off', t`关`], ['on', t`开`]], value => ({ sanity: value === 'on' }))),
       fightSettings,
-      row(t`题材`, t`决定气力的叫法和开局技能，只影响新故事。`, themeSelect),
-      row(t`辅助模型配置`, t`让辅助模型读这张卡，给出题材、属性、技能、物品、常见敌人、等级阶梯和变量绑定，你看过再采用。`, askHelper),
+      row(t`题材`, t`套一个模板：属性、生命、敌人档位这些的叫法，气力的叫法和开局技能。规则本身不变。叫法马上生效，开局技能只影响新故事。`, themeSelect),
+      el('h3', { text: t`叫法` }),
+      el('p', { class: 'hint', text: t`这张卡怎么叫这些东西，界面和发给模型的规则一起换。只换名字，数值和存档不变；空着就用默认的叫法。` }),
+      wordsBox,
+      row(t`辅助模型配置`, t`让辅助模型读这张卡，给出题材、叫法、属性、技能、物品、常见敌人、同伴、等级阶梯和变量绑定，你看过再采用。`, askHelper),
       proposal,
       row(t`试打一场`, t`用这张卡的属性打一场，看看战斗怎么玩。什么都不会保存。`, el('span', { class: 'battle-trial' }, [trial, el('button', { type: 'button', class: 'btn small', text: t`开始`, onclick: () => tryFight().catch(failed) })])),
       row(t`开局技能`, t`战斗里能用的技能，用逗号分开。效果先按名字猜，下面可以改。空着就给强击和横扫。`, skillsInput()),
