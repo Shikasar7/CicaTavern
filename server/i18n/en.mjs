@@ -35,6 +35,7 @@ export default {
   "这张旧图已经不在了": "That earlier picture is gone",
   "头像在「修改角色卡」里换回来": "Bring an avatar back in Edit card",
   "这张旧图不能在这里换回来": "That earlier picture can't be brought back here",
+  "正在画头像，等它画完": "The avatar is being drawn; wait for it to finish",
   "图片不存在": "Image not found",
   "缺少请求头": "Missing request header",
   "图片太大": "Image is too large",
@@ -211,6 +212,10 @@ export default {
   "「{0}」太长了": "\"{0}\" is too long",
   "世界书要有名字": "A lorebook needs a name",
   "卡片的变量规则": "The card's variable rules",
+  "{0}（连续 {1} 次出错，这次运行里不再检查这张卡的变量规则）": "{0} (failed {1} times in a row; the card's variable rules are not checked again until the app restarts)",
+  "卡片的脚本「{0}」": "The card's script \"{0}\"",
+  "缺少事件名": "No event name given",
+  "事件带的数据太大": "The event carries too much data",
   "自动补写变量没成功：{0}": "Filling in the variable update on its own failed: {0}",
   "这张 MVU 卡的回复写了变量更新块，但一条也读不出来，状态没跟着这一轮变（回复下方有「补写变量」）": "The reply of this MVU card has a variable update nothing could be read from, so the state did not follow this turn (Fill in is below the reply)",
   "这个对话的卡新建的世界书太多了（最多 {0} 本）": "The card has made too many lorebooks in this chat (at most {0})",
@@ -950,6 +955,7 @@ export default {
   "程序写的正则「{0}」被改坏了": "Breaks the regex \"{0}\" the code wrote",
   "世界动态抽的事和规则里的对不上": "The world moves drawn don't match the ones in the rule",
   "世界动态加了新的事，或者改了第一步": "Adds a world move, or changes where one starts",
+  "不认识的正则操作": "Unknown regex operation",
 }
 
 // Whole messages from the modules bin/launch.mjs loads on its own (store.mjs,
@@ -987,5 +993,4 @@ export const whole = {
   "解压后太大": "too large once unpacked",
   "顶层应该只有一个文件夹": "there should be just one top folder",
   "顶层文件夹是 {0}，应该是 {1}": "the top folder is {0}, it should be {1}",
-
 }

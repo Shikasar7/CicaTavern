@@ -2,8 +2,10 @@
 
 export const LOOKS = ['plain', 'ink', 'console', 'bold']
 export const PALETTES = { plain: [], ink: ['ink', 'qing'], console: ['blue', 'teal', 'plum'], bold: ['gold', 'ice', 'night'] }
-/** 场景滤镜 (酷炫): how much of the scene its colour wash takes, in percent. */
-export const STRENGTH = 45
+/** 场景滤镜 (撞色): how much of the scene its colour wash takes, in percent. The page squares it (washStrength). */
+export const STRENGTH = 65
+// Every save used to keep the strength, untouched or not: a 45 kept without `chose` is that old default, not a choice.
+const OLD_STRENGTH = 45
 
 // What is solid in a cut-out picture, and how much of a row counts as the figure starting.
 const SOLID = 40
@@ -21,14 +23,18 @@ const HEAD_BY_SHAPE = 0.6
 
 const clamp = (value, low, high) => Math.min(high, Math.max(low, value))
 
-/** What was kept, made safe: a look it knows, a palette of that look, a strength in range. */
+/** What was kept, made safe: a look it knows, a palette of that look, a strength in range (the default unless one was chosen). */
 export function cleanLook(saved) {
   const look = LOOKS.includes(saved?.look) ? saved.look : 'plain'
   const palettes = PALETTES[look]
   const palette = palettes.includes(saved?.palette) ? saved.palette : palettes[0] ?? ''
-  const strength = Number.isFinite(saved?.strength) ? clamp(Math.round(saved.strength), 0, 100) : STRENGTH
+  const chosen = Number.isFinite(saved?.strength) && (saved.chose === true || saved.strength !== OLD_STRENGTH)
+  const strength = chosen ? clamp(Math.round(saved.strength), 0, 100) : STRENGTH
   return { look, palette, strength }
 }
+
+/** How much the wash covers for a strength in percent: squared, so the low half of the slider stays light and 100% is all of it. */
+export const washStrength = strength => (strength / 100) ** 2
 
 /** Skin as pictures draw it: warm, neither grey nor the yellow of fair hair. `dark` lets in browner skin, and browner hair with it. */
 function isSkin(r, g, b, dark) {

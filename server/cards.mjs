@@ -420,6 +420,8 @@ export function cardSummary(card) {
     // Cards imported before 0.2 stored only a count.
     regexScripts: Array.isArray(card.regexScripts) ? card.regexScripts.length : Number(card.regexScripts) || 0,
     helperScripts: card.helperScripts ?? 0,
+    // Scripts the page runs while the card's chat is open, and 脚本按钮 above the input box (web/card-scripts.js).
+    pageScripts: Boolean(card.helperList?.some(item => item.on && (item.kind === 'custom' || (item.kind === 'hooks' && item.buttons?.length)))),
     hasSchema: Boolean(card.mvuSchema),
     // Replies end with an <UpdateVariable> block (the page offers 补写变量 when one does not).
     mvu: usesMvu(card, card.book ? [card.book] : []),

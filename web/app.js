@@ -4,7 +4,8 @@ import { choiceList, statusBar, timeBox } from '/status.js'
 import { BASIC_ID, DIRECT_CARD, VN_ID, builtinKey, builtinOptions, choiceLetter, choicesOf, isBuiltinPreset, otherChoices, timeBoxOf } from '/shared/basic.js'
 import { autoStatusSpec, withNewcomers } from '/shared/status.js'
 import { basicField, fieldsOf } from '/basic-options.js'
-import { allowLibraries, broadcastChatVars, broadcastInput, broadcastRelay, broadcastState, installFrameBridge, storedFrameStorage, storedVariables } from '/compat.js'
+import { allowLibraries, broadcastChatVars, broadcastEvent, broadcastInput, cardAudio, broadcastRelay, broadcastState, installFrameBridge, storedFrameStorage, storedVariables } from '/compat.js'
+import { TAVERN_EVENTS } from '/shared/th-api.js'
 import { renderUsage } from '/usage.js'
 import { initPresets } from '/presets.js'
 import { initProviders } from '/providers.js'
@@ -823,7 +824,7 @@ function showCardInfo(card) {
     card.tags?.length && t`标签：${card.tags.join(t`、`)}`,
     card.creatorNotes,
     card.regexScripts ? t`正则脚本 ${card.regexScripts} 条（已生效；设置 → 写作 → 正则 里可以开关和修改）` : '',
-    card.helperScripts ? (card.hasSchema ? t`酒馆助手脚本 ${card.helperScripts} 个（不执行；MVU 变量更新和变量规则已内置）` : t`酒馆助手脚本 ${card.helperScripts} 个（不执行；MVU 变量更新已内置）`) : '',
+    card.helperScripts ? (card.hasSchema ? t`酒馆助手脚本 ${card.helperScripts} 个（MVU 和变量规则已内置；哪些在这里运行见「检查这张卡」）` : t`酒馆助手脚本 ${card.helperScripts} 个（MVU 已内置；哪些在这里运行见「检查这张卡」）`) : '',
   ].filter(Boolean).join('\n\n') || '—'
 }
 
@@ -1307,6 +1308,7 @@ const importFiles = guard(async files => {
 
 // ─── Chat ───────────────────────────────────────────────────────────────
 function setChat(chat) {
+  const switched = chat && chat.id !== ui.chat?.id
   ui.chat = chat
   if (chat) {
     loadRules(chat)
@@ -1326,6 +1328,33 @@ function setChat(chat) {
   renderChat()
   renderChats()
   renderSide()
+  showScriptButtons(chat)
+  if (switched) broadcastEvent(TAVERN_EVENTS.CHAT_CHANGED, chat.id)
+}
+
+/** One of SillyTavern's events about a message of the open chat, with its floor, to the card frames (compat.js). */
+function messageEvent(type, nodeId) {
+  const at = ui.chat?.path.findIndex(node => node.id === nodeId) ?? -1
+  broadcastEvent(type, at >= 0 ? at : (ui.chat?.path.length ?? 1) - 1)
+}
+
+// 脚本按钮 (web/card-scripts.js): loaded the first time a card with such buttons is opened, so every other card (and a
+// server from before the file) goes without it.
+let cardScriptsUi = null
+async function showScriptButtons(chat) {
+  const card = chat ? ui.cards.find(item => item.id === chat.cardId) : null
+  if (!card?.pageScripts && !cardScriptsUi) return
+  if (!cardScriptsUi) {
+    const module = await import('/card-scripts.js').catch(() => null)
+    if (!module || cardScriptsUi) return cardScriptsUi?.show(ui.chat)
+    cardScriptsUi = module.initCardScripts({
+      api, el, toast,
+      getChat: () => ui.chat,
+      frameContext: open => frameContextNow(open, open.path.at(-1)),
+      serverEvent: (type, args) => sendScriptEvent(type, args, { redraw: true }),
+    })
+  }
+  await cardScriptsUi.show(card?.pageScripts ? ui.chat : null)
 }
 
 const openChat = guard(async id => {
@@ -1411,7 +1440,7 @@ const startChat = guard(async greetingIndex => {
 /** Regex scripts: the global ones, the chat's preset's, its card's, then the 正则集 on its card (all cached), as the server applies them. */
 function scriptsFor(chat) {
   const card = ui.cardDetails.get(chat?.cardId)
-  const scripts = chatScriptList({ global: ui.globalRegex, preset: ui.presetDetails.get(chat?.presetId)?.regexScriptList ?? [], card: card?.regexScriptList ?? [], cardId: chat?.cardId, sets: ui.regexSets })
+  const scripts = chatScriptList({ global: ui.globalRegex, preset: ui.presetDetails.get(chat?.presetId)?.regexScriptList ?? [], card: card?.regexScriptList ?? [], cardId: chat?.cardId, sets: ui.regexSets, changes: chat?.regexChanges ?? null })
   // A card creator card's bar is drawn here from its layout; its SillyTavern copy stays out.
   return card?.statusBar ? withoutOwnStatus(scripts) : scripts
 }
@@ -1814,6 +1843,9 @@ const startFight = guard(async () => {
   const spot = fightSpot(gate, tip)
   const ops = queueToSend(chat, tip.id)
   const { openBattle } = await import('/game-battle.js')
+  // The companions' pictures, those who have not stood on the stage yet too: a figure each in the party band.
+  const companions = rules.book.companions ?? {}
+  await vnUi.loadPictures?.(Object.entries(companions).flatMap(([name, companion]) => [name, ...(companion?.keys ?? [])]))
   rules.sound?.setFighting(true)
   fightOn = openBattle({
     el,
@@ -2761,6 +2793,7 @@ function openEditor(chat, node, article) {
       const view = await api(`/api/chats/${chat.id}/messages/${node.id}`, { method: 'PUT', body: { text } })
       const outcome = view.edit ?? {}
       setChat(view)
+      messageEvent(TAVERN_EVENTS.MESSAGE_EDITED, node.id)
       back()
       $('transcript').querySelector(`[data-id="${node.id}"]`)?.classList.add('swap')
       toast(
@@ -3284,7 +3317,71 @@ function base64Of(bytes) {
 // the open one (the player may have opened another meanwhile, and the next message would go to the wrong chat).
 const stillOpen = chatId => ui.chat?.id === chatId
 
+// The card's own event names its scripts on the server listen for, by card (asked at most once a minute).
+const scriptEventLists = new Map()
+function ownScriptEvents(cardId) {
+  const kept = scriptEventLists.get(cardId)
+  if (kept && Date.now() - kept.at < 60_000) return kept.events
+  const events = api(`/api/cards/${cardId}/script-events`).then(answer => answer.events ?? []).catch(() => [])
+  scriptEventLists.set(cardId, { at: Date.now(), events })
+  return events
+}
+
+/** What the card's scripts on the server said (their toastr) and played (their audio calls), after a turn or an event. */
+function showScriptNotes(notes) {
+  const list = Array.isArray(notes) ? notes : []
+  for (const note of list) if (note.level === 'audio' && note.audio) cardAudio(note.audio)
+  for (const note of list.filter(item => item.level !== 'audio' && item.text).slice(0, 3)) toast(note.text, 5000)
+}
+
+/**
+ * A card event to its scripts on the server (a frame's own event, or a 脚本按钮 of a script run there).
+ * @param redraw - draw the chat again with what they changed (a button's press: no frame of the chat asked, so none
+ *   starts over, and a status bar written with variable macros shows the new values).
+ */
+async function sendScriptEvent(type, args = [], { redraw = false } = {}) {
+  const chat = ui.chat
+  if (!chat) return
+  if (ui.generating) return toast(t`正在生成，稍后再试`)
+  const chatId = chat.id
+  const answer = await api(`/api/chats/${chatId}/script-event`, { method: 'POST', body: { type, args } }).catch(error => (toast(error.message, 6000), null))
+  if (!answer?.handled) return
+  showScriptNotes(answer.notes)
+  if (!stillOpen(chatId)) return
+  if (redraw) return setChat(answer.chat)
+  ui.chat = answer.chat
+  renderSide()
+  broadcastState(answer.chat.state ?? {})
+}
+
 const frameHandlers = {
+  // A card frame's own event (compat.js eventEmit, a status bar's 重随): to the card's scripts on the server when
+  // they listen for it. What they make of the latest floor's variables is saved, and the frames follow it.
+  async scriptEvent({ type, args }, context = {}) {
+    const chat = ui.chat
+    if (!chat || (context.card && context.card !== chat.cardId)) return
+    // The card's scripts on the page that listen for it (脚本按钮), then those on the server.
+    await cardScriptsUi?.deliver(type, args, context.frame)
+    if (!(await ownScriptEvents(chat.cardId)).includes(type)) return
+    await sendScriptEvent(type, args)
+  },
+  // A frame's Tavern Helper regex functions (the chat's, changed for it only): a replacement draws the chat again.
+  async regex(args) {
+    if (!ui.chat) throw new Error(t`没有打开的对话`)
+    const chatId = ui.chat.id
+    const answer = await api(`/api/chats/${chatId}/regexes`, { method: 'POST', body: args })
+    if (answer.chat && stillOpen(chatId)) setChat(answer.chat)
+    return answer.value
+  },
+  // Tavern Helper's audio calls from a frame: the page's player for card scripts.
+  audio: args => cardAudio(args),
+  // injectPrompts / uninjectPrompts in a frame: kept on the chat for its next turns (server/injections.mjs).
+  async inject({ prompts, once, uninject }) {
+    if (!ui.chat) throw new Error(t`没有打开的对话`)
+    await api(`/api/chats/${ui.chat.id}/injections`, { method: 'POST', body: Array.isArray(uninject) ? { uninject } : { prompts, once: once === true } })
+  },
+  // A script frame of 脚本按钮 has something to show, or nothing more (web/card-scripts.js).
+  scriptView: (view, context) => cardScriptsUi?.scriptView(view, context),
   // The latest floor's variables (Mvu.replaceMvuData, replaceVariables on the message): saved as 编辑状态 saves
   // them, without drawing the chat again (the frame that wrote them would start over).
   async state({ state }) {
@@ -3332,7 +3429,10 @@ const frameHandlers = {
     if (ui.generating) throw new Error(t`正在生成，稍后再试`)
     const chatId = ui.chat.id
     const view = await api(`/api/chats/${chatId}/messages/${node.id}`, { method: 'PUT', body: { text: String(text ?? '') } })
-    if (stillOpen(chatId)) setChat(view)
+    if (stillOpen(chatId)) {
+      setChat(view)
+      messageEvent(TAVERN_EVENTS.MESSAGE_EDITED, node.id)
+    }
   },
   // The character's messages are added to the end of the latest reply (a subscription session can only carry on
   // from replies it wrote); the player's go into the input box for the card's /trigger.
@@ -3516,6 +3616,7 @@ function renderBranchNote() {
 const selectNode = guard(async nodeId => {
   const back = rememberPlace()
   setChat(await api(`/api/chats/${ui.chat.id}/select`, { method: 'POST', body: { nodeId } }))
+  messageEvent(TAVERN_EVENTS.MESSAGE_SWIPED, nodeId)
   // Swiping keeps the reader where they were and fades the new version in.
   back()
   $('transcript').querySelector(`[data-id="${nodeId}"]`)?.classList.add('swap')
@@ -3524,6 +3625,7 @@ const selectNode = guard(async nodeId => {
 const rollbackTo = guard(async nodeId => {
   ui.branchFrom = null
   setChat(await api(`/api/chats/${ui.chat.id}/rollback`, { method: 'POST', body: { nodeId } }))
+  messageEvent(TAVERN_EVENTS.MESSAGE_DELETED, nodeId)
   toast(t`已回滚，收起了 ${ui.chat.folded} 轮`)
 })
 
@@ -3539,6 +3641,7 @@ const deleteMessage = guard(async nodeId => {
     return null
   })
   if (!view) return
+  broadcastEvent(TAVERN_EVENTS.MESSAGE_DELETED, ui.chat?.path.findIndex(node => node.id === nodeId) ?? -1)
   setChat(view)
   back()
   toast(t`已删除，模型之后不再看到这一条`, 8000, { action: { text: t`撤销`, run: guard(async () => {
@@ -4400,6 +4503,11 @@ async function writeTurn(endpoint, body, echoUserText, outcome) {
     await stream(`/api/chats/${chatId}/${endpoint}`, body, event => {
       if (event.type === 'start') {
         job.sheet = event.sheet ?? null
+        if (viewing()) {
+          const sent = ui.chat?.path.length ?? 1
+          broadcastEvent(TAVERN_EVENTS.MESSAGE_SENT, sent)
+          broadcastEvent(TAVERN_EVENTS.GENERATION_STARTED, 'normal', {}, false)
+        }
         if (viewing()) vnUi.streamed()
         job.note = event.newSession ? t`接着存档续写` : event.api ? t`${event.api} 续写` : event.fork ? t`分支续写` : t`续写`
         const note = live()?.querySelector('.live-note')
@@ -4486,10 +4594,16 @@ async function writeTurn(endpoint, body, echoUserText, outcome) {
       // Someone who scrolled away stays where they are; 回复写完后回到它的开头 is for those who followed it down.
       if ((!follow.on || ui.settings?.replyToTop !== false) && !vnUi.isOn(finished.cardId)) ui.readFrom = { chatId, nodeId: finishedNode, moved: !follow.on }
       setChat(finished)
+      const received = finished.path.length - 1
+      broadcastEvent(TAVERN_EVENTS.GENERATION_ENDED, received)
+      broadcastEvent(TAVERN_EVENTS.MESSAGE_RECEIVED, received, 'normal')
+      broadcastEvent(TAVERN_EVENTS.CHARACTER_MESSAGE_RENDERED, received)
       // Drawing and reading aloud wait for a whole reply.
       if (!cutShort) mediaUi.afterTurn(finishedNode, vnUi.turnFlags(finished.cardId))
       remindCompaction(finished)
       if (brokeOff) toast(brokeOff, 12000, { log: true })
+      // What the card's own scripts said this turn (their toastr), as a frame's toasts show.
+      showScriptNotes(finished.path?.find(node => node.id === finishedNode)?.scriptNotes)
     } else {
       toast(brokeOff ? t`「${title}」：${brokeOff}` : t`「${title}」这一轮写好了`, brokeOff ? 12000 : 5000, brokeOff ? { log: true } : undefined)
     }
@@ -5578,7 +5692,7 @@ const vnUi = initVn({
     prepareFoes(ui.chat)
     return { kind: gate.kind, line: gateLineOf(ui.chat), choice: gate.choice ?? '', resumes: Boolean(fightsKept()[fightSpot(gate, ui.chat.path.at(-1))]), panel: gate.kind === 'battle' ? () => encounterPanel(ui.chat) : null }
   },
-  // This round's foes, never 酷炫's figure for the player: the fight the story stops at, and the bestiary's.
+  // This round's foes, never 撞色's figure for the player: the fight the story stops at, and the bestiary's.
   foeNames: () => {
     if (!rulesRunning()) return []
     const gate = pendingGate()
@@ -6212,13 +6326,31 @@ function bind() {
   $('chat-title').addEventListener('click', () => { if (ui.chat) renameChat(ui.chat) })
   $('scrim').addEventListener('click', closeDrawers)
   if (window.visualViewport) {
+    // The keyboard's height, from what the visual viewport leaves, and only while something takes typing: in the
+    // iPhone app a keyboard that went down while the app was away sent no resize, and the gap it left held the
+    // input box up over an empty band. Looked at again when the page shows and when typing ends.
+    const typing = () => {
+      const node = document.activeElement
+      return !!node && (node.isContentEditable || node.tagName === 'TEXTAREA' || (node.tagName === 'INPUT' && !/^(checkbox|radio|button|submit|reset|range|color|file|image)$/.test(node.type)))
+    }
     const syncKeyboard = () => {
       const viewport = window.visualViewport
-      const gap = Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop)
+      const gap = typing() ? Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop) : 0
       document.documentElement.style.setProperty('--kb', `${gap}px`)
+      return gap
     }
     window.visualViewport.addEventListener('resize', syncKeyboard)
     window.visualViewport.addEventListener('scroll', syncKeyboard)
+    document.addEventListener('focusout', () => setTimeout(syncKeyboard, 150))
+    // Back on screen: the page itself never scrolls (.app is the screen's height), but a keyboard can leave it moved up.
+    const settle = () => {
+      if (!syncKeyboard() && window.scrollY) window.scrollTo(0, 0)
+    }
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) return
+      settle()
+      setTimeout(settle, 400)
+    })
   }
   $('chat-model').addEventListener('change', changeChatModel)
   $('chat-thinking').addEventListener('change', changeChatThinking)

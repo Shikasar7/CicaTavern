@@ -21,10 +21,13 @@ import { decoratorsOf, hasTemplate, splitDecorators, templateSyntaxError } from 
 import { EXTENSIBLE_MARK, entryText, initialState, inPrefix, isConstant, isDynamic, isInitvar } from '../worldbook.mjs'
 import { DICE_TOKEN, JUDGE, KEPT_DEPTH, RULE_TAGS, SELF_CHECK, WORLD_TOKEN, diceLine, diceScript, eventLine, eventScript, eventToken, judgeScripts, readDraw, selfCheckScripts, tokenFind, worldLine, worldMoveScript } from './bricks.mjs'
 import { CREATION_TAG, creationOf } from './creation.mjs'
+import { drawsOwnBar, statusChange, statusLines } from './status.mjs'
 import { onOf } from './regex-edit.mjs'
 import { INIT_BLOCK, madeHere } from './st-export.mjs'
 import { ownWords } from './prompts.mjs'
 import { eventItem, eventsDone, notHappened, onceMarked } from './write.mjs'
+
+export { drawsOwnBar, statusChange, statusLines }
 
 // Past these a card costs more than it needs to on every chat (固定前缀 is cached, what is sent each turn is not).
 const HEAVY_PREFIX = 30_000
@@ -68,22 +71,6 @@ export const newScript = (script, more = {}) => ({
   ...(script.placement.includes(PLACEMENT.WORLD_INFO) ? { world: true } : {}), ...(script.minDepth === null ? {} : { minDepth: script.minDepth }), ...more,
 })
 
-const themeNames = () => ({ paper: msg`纸张`, neon: msg`霓虹`, pastel: msg`柔和`, ink: msg`水墨`, parchment: msg`羊皮卷`, gothic: msg`暗夜`, terminal: msg`终端`, ocean: msg`深海` })
-
-/** A layout in lines, as a change's before and after read: all of it, a change gone out of date is told by these. */
-export function statusLines(spec) {
-  if (!spec) return ''
-  const { palette } = spec
-  const head = [
-    spec.title ? `${msg`标题`}: ${spec.title}` : '',
-    spec.theme ? `${msg`主题`}: ${themeNames()[spec.theme] ?? spec.theme}` : '',
-    palette ? `${msg`配色`}: ${msg`背景`} ${palette.bg} · ${msg`文字`} ${palette.ink} · ${msg`强调`} ${palette.accent}` : '',
-  ].filter(Boolean)
-  return [...head, ...spec.fields.map(field => `${field.label || field.path} (${field.path}): ${field.show}${field.page ? ` · ${msg`页`}: ${field.page}` : ''}`)].join('\n')
-}
-
-export const statusChange = (before, after, more = {}) => ({ id: 'statusBar', kind: 'statusBar', spec: after, before: statusLines(before), after: statusLines(after), ...more })
-
 /**
  * What the checks read of a card, worked out once.
  * @param helpers - the scripts its file carries ({ name, content }; helperScriptsOf), null when it was not read.
@@ -105,12 +92,29 @@ function factsOf(card, helpers = null) {
   return { card, entries, live, initvars, state, known, scripts, texts, made, bricks: bricksOf(card), schema: Boolean(schema) || unknownSchema, mvu: usesMvu(card, books), variables: Object.keys(known).length > 0 }
 }
 
+// What the card's rules made of the last few starting states. A big card's rules take seconds in the sandbox, and one
+// look at a card asks for them several times (the checks, the status bar, the facts at the top, the estimate), and
+// again on each read of the window. A run that gave no answer (out of time) counts for a while too, then is tried again:
+// a busy machine may have been all it was.
+const schemaAnswers = []
+const SCHEMA_ANSWERS_KEPT = 4
+const NO_ANSWER_MS = 2 * 60_000
+
 function filledBySchema(source, state) {
+  const text = JSON.stringify(state ?? {})
+  const at = schemaAnswers.findIndex(answer => answer.source === source && answer.text === text)
+  const known = schemaAnswers[at]
+  if (known && (known.state || Date.now() - known.at < NO_ANSWER_MS)) return known.state ? structuredClone(known.state) : state
+  if (known) schemaAnswers.splice(at, 1)
+  let filled
   try {
-    return keepToSchema(source, state).state ?? state
+    filled = keepToSchema(source, state).state ?? state
   } catch {
-    return state
+    filled = state
   }
+  schemaAnswers.unshift({ source, text, at: Date.now(), state: filled === state ? null : structuredClone(filled) })
+  schemaAnswers.length = Math.min(schemaAnswers.length, SCHEMA_ANSWERS_KEPT)
+  return filled
 }
 
 /** `root` has every key of a path. */
@@ -494,12 +498,6 @@ function eventOnceFindings({ card, live, initvars, made, mvu }) {
   return [finding('event-once', 'card', 'tip', msg`有 ${old.length} 个事件只靠文字提醒「只发生一次」`, msg`模型不一定记得一件事已经写过，到了时机可能再写一遍。可以改成用变量记下：事件写进故事的那一轮，模型把它加进「${key}」，之后这一条就不再发出去。在这里已经开始的聊天也照样记。在 SillyTavern 里要装提示词模板扩展（ST-Prompt-Template）才生效，最好从新的聊天开始。`, changes, { risky: true })]
 }
 
-/** Whether a card shows a status bar of its own making: a regex or a script draws it, not a layout. */
-export function drawsOwnBar(card) {
-  const scripts = Array.isArray(card.regexScripts) ? card.regexScripts : []
-  return scripts.some(script => !script.disabled && /StatusPlaceHolderImpl|状态栏|status/i.test(`${script.findRegex}${script.scriptName}`))
-}
-
 function statusFindings({ card, state, known, scripts, mvu, variables, initvars, bricks }) {
   const out = []
   const spec = card.statusBar
@@ -749,6 +747,9 @@ export function checkCard(card, { helpers = null } = {}) {
   const found = [...regexFindings(facts), ...keyFindings(facts), ...entryFindings(facts), ...greetingFindings(facts), ...macroFindings(facts), ...variableFindings(facts), ...pathFindings(facts), ...eventOnceFindings(facts), ...statusFindings(facts), ...selfCheckFindings(facts), ...drawFindings(facts), ...creationFindings(facts), ...judgeFindings(facts), ...heavyFindings(facts)]
   return found.sort((a, b) => LEVELS[a.level] - LEVELS[b.level])
 }
+
+/** What checkCard finds about the status bar alone (修改角色卡 → 状态栏), without running every other check. */
+export const statusCheck = (card, { helpers = null } = {}) => statusFindings(factsOf(card, helpers)).sort((a, b) => LEVELS[a.level] - LEVELS[b.level])
 
 /** The variables as they start, for a status bar's preview. */
 export const startingState = (card, { helpers = null } = {}) => factsOf(card, helpers).known

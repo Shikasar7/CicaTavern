@@ -14,9 +14,17 @@
 // cast, sprites, scenes and picture settings stay. A chat renders the card into
 // its frozen prefix when it starts: an edit that reaches it leaves an open chat
 // on the old text until applied (the bar the preset and entries windows show).
+//
+// 状态栏: the card's bar as 检查这张卡 has it (GET /api/cards/:id/check/status), its
+// look and rows edited with the same editor (card-check.js statusEditor, imported
+// when it is first opened) and saved as 调整状态栏 is there, so it shows in that
+// window's 已采用 and can be taken back from either. 对话修改 can change it too:
+// the model writes the layout, it shows as a preview and before and after.
 import { t } from '/i18n.js'
 import { pngOf } from '/forge.js'
 import { CARD_FIELDS } from '/shared/card-edit.js'
+import { cleanStatusSpec } from '/shared/status.js'
+import { statusBar } from '/status.js'
 import { createTalk } from '/talk.js'
 import { historyStrip, keptItems } from '/draw-choice.js'
 
@@ -37,7 +45,9 @@ const FIELD_TEXT = {
   tags: [t`标签`, ''],
 }
 const inPrefix = key => CARD_FIELDS.find(f => f.key === key)?.prefix === true
-const IDEAS = [t`让她说话更冷淡一点`, t`加一个青梅竹马的 NPC 条目`, t`开场白短一点，结尾留个悬念`, t`把对话里后来出场的角色加进设定和变量`]
+const IDEAS = [t`让她说话更冷淡一点`, t`加一个青梅竹马的 NPC 条目`, t`开场白短一点，结尾留个悬念`, t`把对话里后来出场的角色加进设定和变量`, t`状态栏换成暗色的配色，好感度用进度条`]
+// 对话修改 kept to the status bar: the id its change has (server/forge/edit.mjs STATUS_TARGET).
+const STATUS = 'statusBar'
 
 /**
  * @param deps - { api, el, toast, guard, saveFile, getChat, isGenerating, openProviders, openCheck(cardId) (检查这张卡),
@@ -57,6 +67,8 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
     drawn: null, // 生成头像: { busy, picked } while drawing, then { image, backend, note, history, picked } to take or drop
     kept: [], // 抽图历史: the avatars kept (replaced, or drawn and not taken), newest first
     withRegex: false, // the exports take the 正则集 attached to the card along (?regex=sets)
+    status: null, // 状态栏: GET /api/cards/:id/check/status; null while it is read, or from a server without it
+    tuning: null, // 调整样式 open: what statusEditor keeps, { spec, paged }
   }
   const view = {}
 
@@ -75,6 +87,8 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
       talk.thread,
       talk.compose,
     ])
+    // 应用到当前对话: above both halves, so a phone showing 对话修改 sees it too.
+    view.apply = el('div', { class: 'ce-apply-slot', 'aria-live': 'polite' })
     view.body = el('div', { class: 'ce-body' }, [view.main, view.assist])
     dialog.replaceChildren(
       el('div', { class: 'forge ce' }, [
@@ -83,6 +97,7 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
           view.tabs,
           el('div', { class: 'forge-tools' }, [view.status, talk.model, close]),
         ]),
+        view.apply,
         view.body,
       ]),
     )
@@ -116,7 +131,6 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
     const card = state.card
     view.main.replaceChildren(
       el('div', { class: 'forge-polish ce-card' }, [
-        prefixBar(),
         hero(card),
         el('section', { class: 'plan-card' }, [
           el('header', {}, [el('h4', { text: t`角色定义` })]),
@@ -125,6 +139,7 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
         ]),
         greetingsSection(card),
         bookSection(card),
+        (view.statusBox = el('div', { class: 'ce-status-slot' })),
         el('section', { class: 'plan-card' }, [
           el('header', {}, [el('h4', { text: t`给模型的指示` })]),
           ...['systemPrompt', 'postHistoryInstructions', 'depthPrompt'].map(key => fieldBlock(key, { rows: 3 })),
@@ -133,6 +148,7 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
       ]),
     )
     syncKept()
+    renderStatus()
     view.main.scrollTop = top
   }
 
@@ -152,6 +168,11 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
     const drawn = next.querySelector('.ce-drawn')
     if (drawn) keptBox.before(drawn)
     syncKept()
+  }
+
+  function showApply() {
+    const bar = prefixBar()
+    view.apply.replaceChildren(...(bar ? [bar] : []))
   }
 
   function prefixBar() {
@@ -309,6 +330,123 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
     ])
   }
 
+  // ─── 状态栏 ───────────────────────────────────────────────────────────
+  /** Read the card's status bar part again; a server without it (not restarted yet) leaves the section out. */
+  async function loadStatus(id = state.card?.id) {
+    if (!id) return
+    const status = await api(`/api/cards/${id}/check/status`).catch(() => null)
+    if (state.card?.id !== id) return
+    state.status = status
+    renderStatus()
+  }
+
+  /** Only the 状态栏 section again: a field being typed in elsewhere stays. */
+  function renderStatus() {
+    if (!view.statusBox?.isConnected || !state.card) return
+    view.statusBox.replaceChildren(...(state.status ? [statusSection(state.status)] : []))
+  }
+
+  /** The bar as it shows at the start of a chat, or a line saying there is none. */
+  function barPreview(spec, variables, note = t`预览 · 初始值`) {
+    const shown = cleanStatusSpec(spec)
+    return el('div', { class: 'status-preview cc-status-preview' }, [(shown && statusBar(el, shown, variables, { collapsible: false, note })) || el('p', { class: 'hint', text: t`还没有要显示的项。` })])
+  }
+
+  function statusSection(data) {
+    const tune = data.statusTune
+    const busy = Boolean(state.statusBusy)
+    const head = el('header', {}, [
+      el('h4', { text: t`状态栏` }),
+      el('span', { class: 'grow' }),
+      data.ownBar ? null : askButton(STATUS, t`状态栏`),
+    ])
+    if (data.ownBar) return el('section', { class: 'plan-card ce-statusbar' }, [head, el('p', { class: 'hint', text: t`这张卡的状态栏是它自己的正则或脚本画的，这里调不了样式。` })])
+    if (!tune) return el('section', { class: 'plan-card ce-statusbar' }, [head, el('p', { class: 'hint', text: t`这张卡没有变量，也就没有状态栏。想要的话点「按意见改」说说要记什么，比如：加一个好感度，显示在状态栏里。` })])
+    const [change] = tune.changes
+    // What is wrong with it (状态栏有几项对不上变量): fixed here as in 检查这张卡. A bar laid out from the variables is 调整样式's.
+    const problems = data.findings.filter(item => item.level !== 'tip' && item.changes.length && !item.manual)
+    const last = data.records.at(-1)
+    if (state.tuning) {
+      return el('section', { class: 'plan-card ce-statusbar' }, [
+        head,
+        el('p', { class: 'hint', text: change.before ? t`只改显示，不动变量，也不发给模型。保存后这张卡的对话都按新样式显示。` : t`这张卡还没有自己的状态栏，这是按变量排的一个。保存后它跟着卡走，导出到 SillyTavern 也在。` }),
+        el('div', { class: 'cc-change' }, view.editor.statusEditor(el, change, state.tuning, { spare: tune.fields, state: data.state, redraw: renderStatus })),
+        el('div', { class: 'cc-actions' }, [
+          el('button', { type: 'button', class: 'btn ghost small', text: t`取消`, onclick: () => { state.tuning = null; renderStatus() } }),
+          el('span', { class: 'grow' }),
+          el('button', { type: 'button', class: 'btn primary small', disabled: busy, text: t`保存`, onclick: () => takeStatus([{ id: tune.id, edits: { [change.id]: { spec: state.tuning.spec } } }], t`状态栏已保存`) }),
+        ]),
+      ])
+    }
+    return el('section', { class: 'plan-card ce-statusbar' }, [
+      head,
+      el('p', { class: 'hint', text: data.statusBar ? t`主题、配色、标题、每项的名字和显示方式、分页都可以改，只改显示，不动变量。也可以点「按意见改」说给向导听。` : t`这张卡还没有自己的状态栏，对话里按变量自动排。点「调整样式」会按变量排一个给你改，保存后跟着卡走。` }),
+      data.statusBar ? barPreview(data.statusBar, data.state) : null,
+      ...problems.map(item => el('div', { class: 'ce-outcome-row' }, [
+        el('p', { class: 'ce-outcome warn', text: item.why ? t`${item.title}：${item.why}` : item.title }),
+        el('button', { type: 'button', class: 'btn small', disabled: busy, text: t`修好`, title: t`照「检查这张卡」的改法改，可以撤销`, onclick: () => takeStatus([{ id: item.id }], t`状态栏已修好`) }),
+      ])),
+      el('div', { class: 'cc-actions' }, [
+        el('button', { type: 'button', class: 'btn small', text: t`调整样式`, title: t`直接改状态栏的主题、颜色和显示的内容，不用模型`, onclick: () => openTuning() }),
+        el('span', { class: 'grow' }),
+        last ? el('button', { type: 'button', class: 'btn ghost small', disabled: busy, text: t`撤销「${last.title}」`, title: t`改回这次调整之前的样子（也可以在「检查这张卡」的「已采用」里撤销）`, onclick: () => undoStatus(last.id) }) : null,
+      ]),
+    ].filter(Boolean))
+  }
+
+  /** 调整样式: the editor 检查这张卡 has, loaded the first time (it lives with that window's code). */
+  const openTuning = guard(async () => {
+    view.editor ??= await import('/card-check.js')
+    state.tuning = {}
+    renderStatus()
+  })
+
+  /** Into the card through 检查这张卡's taking in (POST …/check/apply): it is kept there, to take back. */
+  const takeStatus = guard(async (items, message) => {
+    if (state.statusBusy) return
+    const id = state.card.id
+    state.statusBusy = true
+    renderStatus()
+    let result
+    try {
+      await state.saving
+      result = await queue(() => api(`/api/cards/${id}/check/apply`, { method: 'POST', body: { items } }))
+    } finally {
+      state.statusBusy = false
+      renderStatus()
+    }
+    if (state.card?.id !== id) return
+    state.tuning = null
+    absorb(result.card)
+    saved(result.prefix, message)
+    const gaps = result.chatGaps
+    if (gaps) {
+      const names = gaps.labels.slice(0, 3).join(t`、`) + (gaps.labels.length > 3 ? t` 等 ${gaps.labels.length} 处` : '')
+      toast(t`${message}。状态栏新加的「${names}」在 ${gaps.chats} 段已有对话里还没有这些变量，那里先显示不出来：等回复写上，或在右栏「状态」点「编辑」补上`, 9000)
+    }
+    await loadStatus(id)
+    await onCardChanged?.(id)
+  })
+
+  const undoStatus = guard(async record => {
+    const id = state.card.id
+    state.statusBusy = true
+    renderStatus()
+    let result
+    try {
+      await state.saving
+      result = await queue(() => api(`/api/cards/${id}/check/undo`, { method: 'POST', body: { record } }))
+    } finally {
+      state.statusBusy = false
+      renderStatus()
+    }
+    if (state.card?.id !== id) return
+    absorb(result.card)
+    saved(result.prefix, t`已撤销`)
+    await loadStatus(id)
+    await onCardChanged?.(id)
+  })
+
   // ─── Saving ───────────────────────────────────────────────────────────
   /** Save a patch (PUT /api/cards/:id/edit); `redraw` draws the card again (greetings change shape). */
   function save(patch, { redraw = false } = {}) {
@@ -343,9 +481,7 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
     if (!prefix) return
     if (getChat()?.cardId === state.card.id) {
       state.stale = true
-      const bar = view.main.querySelector('.ce-apply')
-      if (bar) bar.replaceWith(prefixBar())
-      else view.main.querySelector('.ce-card')?.prepend(prefixBar())
+      showApply()
     } else if (!state.told) {
       state.told = true
       toast(t`已保存。改的内容在对话开局时的固定前缀里：新对话直接用新的，这张卡进行中的对话要在「设置 → 更多」里重建前缀才会用上。`, 7000)
@@ -358,7 +494,7 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
     const fresh = await api(`/api/chats/${chat.id}/preset`, { method: 'POST', body: {} })
     state.stale = false
     onChatChanged(fresh)
-    view.main.querySelector('.ce-apply')?.remove()
+    showApply()
     toast(t`已重建固定前缀，下一轮生效`)
   }
 
@@ -493,6 +629,7 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
     if (change.kind === 'field') return FIELD_TEXT[change.key]?.[0] ?? change.key
     if (change.kind === 'greeting') return change.index < state.card.greetings.length || change.before ? t`开场白 ${change.index + 1}` : t`开场白 ${change.index + 1}（新加）`
     if (change.kind === 'chatState') return `${KIND_TEXT.chatState} · ${change.path}`
+    if (change.kind === 'statusBar') return change.before ? t`状态栏` : t`状态栏（新排）`
     const name = change.kind === 'newEntry' ? change.name : change.title || t`未命名条目`
     return `${KIND_TEXT[change.kind]} · ${name}`
   }
@@ -506,6 +643,7 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
     }
     if (change.kind === 'greeting') return [t`新对话`, 'off', t`开新对话时选`]
     if (change.kind === 'chatState') return [t`这段对话`, 'key', t`写进读到的这段对话现在的变量，下一轮发给模型`]
+    if (change.kind === 'statusBar') return [t`只改显示`, 'off', t`不发给模型；这张卡的对话都按新样式显示`]
     if (change.initvar) return [t`初始变量`, 'on', t`新对话从这些值开始；还没有变量的对话点「应用到当前对话」后补上，已经有变量的对话不会变`]
     return change.constant ? [t`常驻`, 'on', t`写进对话开局时的固定前缀`] : [t`关键词`, 'key', t`最近的对话提到关键词时随消息发送`]
   }
@@ -519,7 +657,14 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
     return notes
   }
 
+  /** A status bar change: how it will look, then its settings before and after. */
+  function changeBody(change, { diffBox }) {
+    if (change.kind !== 'statusBar') return null
+    return [barPreview(change.spec, state.status?.state ?? {}, t`预览 · 初始值（采用后的样子）`), change.before === change.after ? null : diffBox(change.before ?? '', change.after ?? '')].filter(Boolean)
+  }
+
   function targetLabel(id) {
+    if (id === STATUS) return t`状态栏`
     const [kind, rest] = [id.slice(0, id.indexOf(':')), id.slice(id.indexOf(':') + 1)]
     if (kind === 'field') return FIELD_TEXT[rest]?.[0] ?? rest
     if (kind === 'greeting') return t`开场白 ${Number(rest) + 1}`
@@ -531,11 +676,12 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
     isOpen: () => dialog.open,
     intro: () => t`说说想怎么改：向导会把要改的地方整段写出来，改前改后对照着给你看，勾上的才会改进卡里。`,
     ideas: () => IDEAS,
-    placeholder: target => (target ? t`「${target.label}」想怎么改，比如：再短一点，语气冷一些` : t`说说想怎么改，比如：让她说话更冷淡一点`),
+    placeholder: target => (target?.id === STATUS ? t`状态栏想怎么改，比如：换成暗色的配色，好感度用进度条，分成两页` : target ? t`「${target.label}」想怎么改，比如：再短一点，语气冷一些` : t`说说想怎么改，比如：让她说话更冷淡一点`),
     busy: job => (job.chars ? t`正在改，已经写了 ${job.chars.toLocaleString()} 字…` : t`正在读这张卡…`),
     changeTitle,
     changeWhere,
     changeNotes,
+    changeBody,
     targetLabel,
     // A request waits for the fields still saving.
     beforeAsk: () => state.saving,
@@ -549,6 +695,7 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
       saved(result.prefix, t`已改进卡里：${result.applied} 处`)
       toast(result.lost?.length ? t`已改进卡里：${result.applied} 处。这张卡的变量规则里没有 ${result.lost.join(t`、`)}，下一条回复后会被去掉` : t`已改进卡里：${result.applied} 处`, result.lost?.length ? 9000 : undefined)
       if (result.chat?.id === getChat()?.id) onChatChanged(result.chat)
+      loadStatus()
       await onCardChanged?.(state.card.id)
     },
     undo: true,
@@ -557,6 +704,7 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
       renderMain()
       saved(result.prefix, t`已撤销这次修改`)
       toast(result.chatKept ? t`已撤销这次修改。写进对话的变量没有改回去，要改可以在右栏「状态」里改。` : t`已撤销这次修改`, result.chatKept ? 7000 : undefined)
+      loadStatus()
       await onCardChanged?.(state.card.id)
     },
   })
@@ -572,6 +720,7 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
     if (!dialog.open || !state.card) return
     absorb(await api(`/api/cards/${state.card.id}/edit`))
     renderMain()
+    loadStatus()
   })
   $('book-dialog')?.addEventListener('close', readAgain)
   $('card-check-dialog')?.addEventListener('close', readAgain)
@@ -592,13 +741,17 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
         state.drawn = null
         state.kept = []
         state.withRegex = false
+        state.status = null
+        state.tuning = null
         talk.reset()
         view.main.scrollTop = 0
       }
       absorb(card)
       showPane(say ? 'assist' : state.pane)
       renderMain()
+      showApply()
       loadKept(cardId)
+      loadStatus(cardId)
       talk.load(session)
       if (!dialog.open) dialog.showModal()
       if (say) talk.say(say)

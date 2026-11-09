@@ -173,7 +173,7 @@ test('stageAt: 常驻 stay on stage, and with detection off nobody else steps on
   assert.deepEqual(who(1, { fixed: ['沈砚'], max: 1 }), ['沈砚'])
 })
 
-test("heroOf: 酷炫's figure is the player's side, never this round's foe", () => {
+test("heroOf: 撞色's figure is the player's side, never this round's foe", () => {
   const names = speakerNames({ char: '楚怀瑾', user: '你', roster: [{ id: 'p1', name: '主角', player: true }, { id: 'f1', name: '黑鹞子' }, { id: 'a1', name: '沈青' }] })
   const line = (speaker, plain = '「……」') => ({ type: 'line', kind: 'dialogue', speaker, plain })
   const steps = [line('楚怀瑾'), { type: 'line', kind: 'narration', plain: '夜风吹过城头。' }, line('沈青'), line('黑鹞子', '「拿命来！」')]

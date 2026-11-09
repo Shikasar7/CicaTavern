@@ -110,3 +110,22 @@ test('the sandbox is kept for the card in play and replaced for another', () => 
   closeSchema()
   assert.equal(schemaSandboxOpen(), false)
 })
+
+test("a schema finds the lodash card scripts get (a transform's _.cloneDeep)", () => {
+  const cloning = `${IMPORT}\nexport const Schema = z.object({ 物品: z.array(z.string()).prefault([]) }).transform(data => _.cloneDeep({ ...data, 数: _.sumBy([{ n: 1 }, { n: 2 }], 'n') }));\n$(() => { registerMvuSchema(Schema); });`
+  assert.deepEqual(keepToSchema(cloning, { 物品: ['剑'] }).state, { 物品: ['剑'], 数: 3 })
+  assert.deepEqual(problems, [])
+})
+
+test('a schema that keeps throwing is left alone for the run; one that only rejects a state is not', () => {
+  const throwing = `${IMPORT}\nexport const Schema = z.object({}).transform(() => { throw new Error('坏了') });\n$(() => { registerMvuSchema(Schema); });`
+  for (let i = 0; i < 3; i++) assert.equal(keepToSchema(throwing, { a: i }).problem, '坏了')
+  assert.match(problems.at(-1), /连续 3 次/)
+  const state = { a: 9 }
+  assert.deepEqual(keepToSchema(throwing, state), { state }, 'not run again: no problem said, the state as it was')
+  assert.equal(problems.length, 3)
+  // Rejecting states is the schema doing its job, however often.
+  const strict = `${IMPORT}\nexport const Schema = z.object({ n: z.number() });\n$(() => { registerMvuSchema(Schema); });`
+  for (let i = 0; i < 4; i++) assert.ok(keepToSchema(strict, { n: 'x' }).problem)
+  assert.deepEqual(keepToSchema(strict, { n: 1 }).state, { n: 1 })
+})

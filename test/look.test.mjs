@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { LOOKS, PALETTES, STRENGTH, cleanLook, faceOf, headCrop } from '../web/shared/look.js'
+import { LOOKS, PALETTES, STRENGTH, cleanLook, faceOf, headCrop, washStrength } from '../web/shared/look.js'
 
 const SKIN = [250, 222, 200]
 const HAIR = [40, 34, 38]
@@ -34,6 +34,17 @@ test('the strength stays in range and whole', () => {
   assert.equal(cleanLook({ strength: -3 }).strength, 0)
   assert.equal(cleanLook({ strength: 33.6 }).strength, 34)
   assert.equal(cleanLook({ strength: '80' }).strength, STRENGTH)
+})
+
+test('场景滤镜: the old default kept by every save is not a choice; a chosen one stays, and the wash is its square', () => {
+  assert.equal(STRENGTH, 65)
+  assert.equal(cleanLook({ look: 'bold', strength: 45 }).strength, STRENGTH)
+  assert.equal(cleanLook({ look: 'bold', strength: 45, chose: true }).strength, 45)
+  assert.equal(cleanLook({ look: 'bold', strength: 60 }).strength, 60)
+  assert.equal(cleanLook({ look: 'bold', strength: 0 }).strength, 0)
+  assert.equal(washStrength(0), 0)
+  assert.equal(washStrength(100), 1)
+  assert.ok(Math.abs(washStrength(65) - 0.4225) < 1e-9)
 })
 
 test('every look has its palettes listed', () => {

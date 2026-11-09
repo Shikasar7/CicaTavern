@@ -17,7 +17,7 @@ import { initialState } from '../worldbook.mjs'
 import { getPath, splitPath } from '../../web/shared/vars.js'
 import { applyFinding, changedPieces, rebased, restorePieces, snapshot, staleChange, withEdits } from './check-apply.mjs'
 import { DEFAULT_FOCUS, checkRequest, cleanFocus, readCheck, restRequests, unreadable, vetSuggestions, withinPart } from './check-model.mjs'
-import { STATUS_TUNE, cardFacts, checkCard, drawsOwnBar, startingState, statusTuning } from './check.mjs'
+import { STATUS_TUNE, cardFacts, checkCard, drawsOwnBar, startingState, statusCheck, statusTuning } from './check.mjs'
 import { reportOutdated, trialFindings } from './trial.mjs'
 
 const PREFIX = 'edit-check-'
@@ -224,10 +224,35 @@ export function createCheck({ store, load, save, serial, run, jobs, removeFile, 
     if (jobs.has(idOf(cardId))) throw httpError(409, msg`模型还在看这张卡，等它看完或先停下`)
   }
 
+  /**
+   * Only the status bar, for 修改角色卡: what 调整状态栏 edits (statusTune, null when there is no bar to adjust), the
+   * variables as they start for its preview, whether the card draws its own, what the program finds about it (not
+   * ignored), and what was taken in about it, latest last, to take back. No estimate, no model, no trial.
+   */
+  async function statusView(card, session) {
+    const helpers = await helpersOf(store, card)
+    const ignored = new Set(session.ignored ?? [])
+    const about = id => id === STATUS_TUNE || /^status-/.test(id)
+    return {
+      cardId: card.id,
+      statusBar: card.statusBar ?? null,
+      statusTune: statusTuning(card, { helpers }),
+      state: startingState(card, { helpers }),
+      ownBar: !card.statusBar && drawsOwnBar(card),
+      findings: statusCheck(card, { helpers }).filter(item => about(item.id) && !ignored.has(item.id)),
+      records: (session.records ?? []).filter(item => about(item.finding)).map(({ id, title, at }) => ({ id, title, at })),
+    }
+  }
+
   return {
     async checkGet(cardId) {
       const { card, session } = await loadCheck(cardId)
       return view(card, session)
+    },
+
+    async checkStatus(cardId) {
+      const { card, session } = await loadCheck(cardId)
+      return statusView(card, session)
     },
 
     /** The model to ask, the things to look at, and what is ignored or brought back. */

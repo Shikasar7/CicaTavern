@@ -8,6 +8,8 @@
 // filling or sending the input, toasts, and saving global variables / storage.
 // Calling the model, editing messages or reaching the real page is not offered.
 
+import { IFRAME_EVENTS, MVU_EVENTS, TAVERN_EVENTS, olderLorebooks } from './shared/th-api.js'
+
 const STORAGE_KEY = 'agent-tavern:frame-storage'
 const VARS_KEY = 'agent-tavern:th-vars'
 const MAX_STORED = 1_000_000
@@ -41,6 +43,7 @@ let librariesAllowed = true
 export function allowLibraries(on) {
   librariesAllowed = Boolean(on)
 }
+export const librariesOn = () => librariesAllowed
 
 // A card's UI kept on GitHub or a CDN: $('body').load(url), or fetching a page.
 const REMOTE_PAGE = /\.load\(\s*["'`]https?:\/\/|fetch\(\s*["'`]https?:\/\/[^"'`]+\.html?\b/
@@ -124,8 +127,8 @@ function saveFrameStorage(cardId, key, value) {
  */
 export function frameShim(ctx) {
   // `<` escaped so a `</script>` inside the story text cannot end the tag.
-  const json = JSON.stringify(ctx).replace(/</g, '\\u003c')
-  return `<script>(${shimMain.toString()})(${json}, ${frameFetch.toString()})<\/script>`
+  const json = JSON.stringify({ ...ctx, events: { tavern: TAVERN_EVENTS, iframe: IFRAME_EVENTS, mvu: MVU_EVENTS } }).replace(/</g, '\\u003c')
+  return `<script>(${shimMain.toString()})(${json}, ${frameFetch.toString()}, ${olderLorebooks.toString()})<\/script>`
 }
 
 /**
@@ -248,7 +251,7 @@ export function frameFetch({ direct, post, call, fetches, frame, appOrigin, rela
 }
 
 /* Runs inside the frame. Self-contained: it is serialised with toString(). `makeFetch` is frameFetch. */
-function shimMain(ctx, makeFetch) {
+function shimMain(ctx, makeFetch, olderLorebooks) {
   const host = window.parent
   const post = (op, args) => host.postMessage({ agentTavernCall: ctx.frame, op, args }, '*')
   let seq = 0
@@ -276,6 +279,10 @@ function shimMain(ctx, makeFetch) {
     if (data && data.agentTavernChatVars && typeof data.agentTavernChatVars === 'object') {
       chatExtras = clone(data.agentTavernChatVars.vars || {})
       buckets.chat = chatShape()
+    }
+    // One of SillyTavern's events, as the page tells every frame (broadcastEvent): to this frame's listeners.
+    if (data && data.agentTavernEvent && typeof data.agentTavernEvent.type === 'string') {
+      eventEmit(data.agentTavernEvent.type, ...(Array.isArray(data.agentTavernEvent.args) ? data.agentTavernEvent.args : [])).catch(error => console.error(error))
     }
     // A model call this frame asked for (generate): the text so far, then the end.
     if (data && data.agentTavernStream && data.agentTavernStream.frame === ctx.frame) {
@@ -515,8 +522,10 @@ function shimMain(ctx, makeFetch) {
     data: clone(messageVars.get(m.message_id) || mvuShape(m.state)),
     extra: {},
   })
-  const substitudeMacros = text =>
-    String(text ?? '')
+  // The frame's scripts' own macros (registerMacroLike), after the usual ones.
+  const macroLikes = []
+  const substitudeMacros = text => {
+    let out = String(text ?? '')
       .replace(/\{\{user\}\}/gi, ctx.names.user)
       .replace(/\{\{char\}\}/gi, ctx.names.char)
       .replace(/\{\{lastMessageId\}\}/gi, String(ctx.lastId))
@@ -524,6 +533,19 @@ function shimMain(ctx, makeFetch) {
         const value = getPath(buckets.chat, key.trim())
         return value === undefined ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value)
       })
+    for (const macro of macroLikes) {
+      const regex = new RegExp(macro.regex.source, macro.regex.flags.includes('g') ? macro.regex.flags : `${macro.regex.flags}g`)
+      out = out.replace(regex, (...found) => {
+        try {
+          return String(macro.replace({ message_id: ctx.messageId, role: 'assistant' }, ...found))
+        } catch (error) {
+          console.error(error)
+          return found[0]
+        }
+      })
+    }
+    return out
+  }
   const getChatMessages = (range, option = {}) => {
     const text = substitudeMacros(range)
     const match = /^(-?\d+)(?:-(-?\d+))?$/.exec(text.trim())
@@ -561,20 +583,24 @@ function shimMain(ctx, makeFetch) {
   }
   const eventEmit = async (type, ...data) => {
     for (const fn of [...(listeners.get(type) || [])]) await fn(...data)
+    // An event of the card's own (a status bar's 重随 button) reaches the card's scripts on the server too, as in
+    // SillyTavern it reaches its script frames; the page sends on only the names they listen for.
+    if (typeof type === 'string' && type && !KNOWN_EVENTS.has(type)) {
+      let args = []
+      try {
+        args = JSON.parse(JSON.stringify(data))
+      } catch {
+        // what cannot be sent as data stays here
+      }
+      post('scriptEvent', { type, args })
+    }
   }
-  // SillyTavern's event names, as Tavern Helper lists them (cards look them up by key; few ever fire here).
-  const tavern_events = Object.fromEntries(
-    'APP_READY EXTRAS_CONNECTED MESSAGE_SWIPED MESSAGE_SENT MESSAGE_RECEIVED MESSAGE_EDITED MESSAGE_DELETED MESSAGE_UPDATED MESSAGE_FILE_EMBEDDED MESSAGE_REASONING_EDITED MESSAGE_REASONING_DELETED MESSAGE_SWIPE_DELETED MORE_MESSAGES_LOADED IMPERSONATE_READY GENERATION_STARTED GENERATION_STOPPED GENERATION_ENDED SD_PROMPT_PROCESSING EXTENSIONS_FIRST_LOAD EXTENSION_SETTINGS_LOADED SETTINGS_LOADED SETTINGS_UPDATED MOVABLE_PANELS_RESET SETTINGS_LOADED_BEFORE SETTINGS_LOADED_AFTER CHATCOMPLETION_SOURCE_CHANGED CHATCOMPLETION_MODEL_CHANGED OAI_PRESET_CHANGED_BEFORE OAI_PRESET_CHANGED_AFTER OAI_PRESET_EXPORT_READY OAI_PRESET_IMPORT_READY WORLDINFO_SETTINGS_UPDATED WORLDINFO_UPDATED CHARACTER_EDITOR_OPENED CHARACTER_EDITED CHARACTER_PAGE_LOADED USER_MESSAGE_RENDERED CHARACTER_MESSAGE_RENDERED FORCE_SET_BACKGROUND CHAT_DELETED CHAT_CREATED GENERATE_BEFORE_COMBINE_PROMPTS GENERATE_AFTER_COMBINE_PROMPTS GENERATE_AFTER_DATA WORLD_INFO_ACTIVATED TEXT_COMPLETION_SETTINGS_READY CHAT_COMPLETION_SETTINGS_READY CHAT_COMPLETION_PROMPT_READY CHARACTER_FIRST_MESSAGE_SELECTED CHARACTER_DUPLICATED CHARACTER_RENAMED CHARACTER_RENAMED_IN_PAST_CHAT STREAM_REASONING_DONE FILE_ATTACHMENT_DELETED WORLDINFO_FORCE_ACTIVATE OPEN_CHARACTER_LIBRARY ONLINE_STATUS_CHANGED IMAGE_SWIPED CONNECTION_PROFILE_LOADED CONNECTION_PROFILE_CREATED CONNECTION_PROFILE_DELETED CONNECTION_PROFILE_UPDATED TOOL_CALLS_PERFORMED TOOL_CALLS_RENDERED SECRET_WRITTEN SECRET_DELETED SECRET_ROTATED SECRET_EDITED PRESET_CHANGED PRESET_DELETED PRESET_RENAMED PRESET_RENAMED_BEFORE MAIN_API_CHANGED WORLDINFO_ENTRIES_LOADED WORLDINFO_SCAN_DONE MEDIA_ATTACHMENT_DELETED'
-      .split(' ')
-      .map(key => [key, key.toLowerCase()]),
-  )
-  Object.assign(tavern_events, { CHAT_CHANGED: 'chat_id_changed', SMOOTH_STREAM_TOKEN_RECEIVED: 'stream_token_received', STREAM_TOKEN_RECEIVED: 'stream_token_received' })
-  const iframe_events = {
-    MESSAGE_IFRAME_RENDER_STARTED: 'message_iframe_render_started', MESSAGE_IFRAME_RENDER_ENDED: 'message_iframe_render_ended',
-    GENERATION_REQUESTED: 'js_generation_requested', GENERATION_STARTED: 'js_generation_started', STREAM_TOKEN_RECEIVED_FULLY: 'js_stream_token_received_fully',
-    STREAM_TOKEN_RECEIVED_INCREMENTALLY: 'js_stream_token_received_incrementally', REASONING_TOKEN_RECEIVED_FULLY: 'js_reasoning_token_received_fully',
-    REASONING_TOKEN_RECEIVED_INCREMENTALLY: 'js_reasoning_token_received_incrementally', GENERATION_ENDED: 'js_generation_ended',
-  }
+  // The event names (web/shared/th-api.js); the page tells the frames SillyTavern's as they happen (broadcastEvent).
+  const tavern_events = { ...((ctx.events && ctx.events.tavern) || {}) }
+  const iframe_events = { ...((ctx.events && ctx.events.iframe) || {}) }
+  const mvu_events = { ...((ctx.events && ctx.events.mvu) || {}) }
+  // SillyTavern's, Tavern Helper's and MVU's names: never a card's own.
+  const KNOWN_EVENTS = new Set([...Object.values(tavern_events), ...Object.values(iframe_events), ...Object.values(mvu_events)])
 
   // ── Toasts, errors, slash commands ──
   const toast = level => (message, title) => post('toast', { level, text: String(message ?? ''), title: title ? String(title) : '' })
@@ -654,40 +680,6 @@ function shimMain(ctx, makeFetch) {
     const worldbook = await replaceWorldbook(name, entries.filter((_e, i) => !marks[i]))
     return { worldbook, deleted_entries: entries.filter((_e, i) => marks[i]) }
   }
-  const deepMerge = (base, change) => {
-    const out = clone(base)
-    for (const [key, value] of Object.entries(change || {})) out[key] = isObject(value) && isObject(out[key]) ? deepMerge(out[key], value) : clone(value)
-    return out
-  }
-  // The older lorebook entry shape ⇄ today's worldbook entry.
-  const legacyOf = (e, index) => ({
-    uid: e.uid, display_index: index, comment: e.name, enabled: e.enabled, type: e.strategy?.type ?? 'selective',
-    position: e.position?.type ?? 'before_character_definition', depth: e.position?.type === 'at_depth' ? e.position.depth : null, order: e.position?.order ?? 100,
-    probability: e.probability ?? 100, keys: e.strategy?.keys ?? [], logic: e.strategy?.keys_secondary?.logic ?? 'and_any', filters: e.strategy?.keys_secondary?.keys ?? [],
-    scan_depth: e.strategy?.scan_depth ?? 'same_as_global', case_sensitive: 'same_as_global', match_whole_words: 'same_as_global', use_group_scoring: 'same_as_global',
-    automation_id: null, exclude_recursion: Boolean(e.recursion?.prevent_incoming), prevent_recursion: Boolean(e.recursion?.prevent_outgoing), delay_until_recursion: e.recursion?.delay_until ?? false,
-    content: e.content ?? '', group: '', group_prioritized: false, group_weight: 100, sticky: e.effect?.sticky ?? null, cooldown: e.effect?.cooldown ?? null, delay: e.effect?.delay ?? null,
-  })
-  const fromLegacy = l => {
-    const out = {}
-    if (l.uid !== undefined) out.uid = Number(l.uid)
-    if (l.comment !== undefined) out.name = l.comment
-    if (l.enabled !== undefined) out.enabled = l.enabled
-    if (l.content !== undefined) out.content = l.content
-    if (l.probability !== undefined) out.probability = l.probability
-    const strategy = {}
-    if (l.type !== undefined) strategy.type = l.type
-    if (l.keys !== undefined) strategy.keys = l.keys
-    if (l.scan_depth !== undefined) strategy.scan_depth = l.scan_depth
-    if (l.logic !== undefined || l.filters !== undefined) strategy.keys_secondary = { ...(l.logic !== undefined ? { logic: l.logic } : {}), ...(l.filters !== undefined ? { keys: l.filters } : {}) }
-    if (Object.keys(strategy).length) out.strategy = strategy
-    const position = {}
-    if (l.position !== undefined) position.type = l.position
-    if (l.depth !== undefined && l.depth !== null) position.depth = l.depth
-    if (l.order !== undefined) position.order = l.order
-    if (Object.keys(position).length) out.position = position
-    return out
-  }
 
   // ── Model calls ──
   let generations = 0
@@ -718,10 +710,7 @@ function shimMain(ctx, makeFetch) {
 
   // ── MVU ──
   const Mvu = {
-    events: {
-      VARIABLE_INITIALIZED: 'mag_variable_initiailized', VARIABLE_UPDATE_STARTED: 'mag_variable_update_started', COMMAND_PARSED: 'mag_command_parsed',
-      VARIABLE_UPDATE_ENDED: 'mag_variable_update_ended', BEFORE_MESSAGE_UPDATE: 'mag_before_message_update',
-    },
+    events: { ...mvu_events },
     getMvuData: option => getVariables(option || { type: 'message', message_id: 'latest' }),
     replaceMvuData: async (data, option) => replaceVariables(data, option || { type: 'message', message_id: 'latest' }),
     // The update commands in `message` applied to `oldData`, by the app's own parser; nothing is saved.
@@ -766,7 +755,7 @@ function shimMain(ctx, makeFetch) {
     eventMakeLast: (type, fn) => on(type, fn),
     eventMakeFirst: (type, fn) => on(type, fn, true),
     eventOnce,
-    eventOnButton: () => {},
+    eventOnButton: (name, fn) => on(String(name), fn),
     eventEmit,
     eventEmitAndWait: (type, ...data) => void eventEmit(type, ...data),
     eventRemoveListener: removeListener,
@@ -797,6 +786,53 @@ function shimMain(ctx, makeFetch) {
     },
     // Only the last messages, folded away as 回滚 does (they can be brought back).
     deleteChatMessages: async ids => call('deleteMessages', { ids: (Array.isArray(ids) ? ids : [ids]).map(id => messageIdOf(id)) }),
+
+    // ── Audio: the page's player for card scripts (cardAudio below). What it reports comes back as promises (await them) ──
+    playAudio: (type, audio) => post('audio', { action: 'play', type, audio }),
+    pauseAudio: type => post('audio', { action: 'pause', type }),
+    replaceAudioList: (type, list) => post('audio', { action: 'replace', type, list }),
+    appendAudioList: (type, list) => post('audio', { action: 'append', type, list }),
+    setAudioSettings: (type, settings) => post('audio', { action: 'settings', type, settings }),
+    getAudioList: type => call('audio', { action: 'list', type }),
+    getAudioSettings: type => call('audio', { action: 'getSettings', type }),
+    getCurrentAudio: type => call('audio', { action: 'current', type }),
+
+    // ── A script's own macros: in this frame's substitudeMacros (the page's messages and prompts are the server's) ──
+    registerMacroLike: (regex, replace) => {
+      if (!(regex instanceof RegExp) || typeof replace !== 'function') return { unregister() {} }
+      helper.unregisterMacroLike(regex)
+      macroLikes.push({ regex, replace })
+      return { unregister: () => helper.unregisterMacroLike(regex) }
+    },
+    unregisterMacroLike: regex => {
+      const at = macroLikes.findIndex(macro => macro.regex === regex || String(macro.regex) === String(regex))
+      if (at >= 0) macroLikes.splice(at, 1)
+    },
+
+    // ── Regex, changed for this chat only (web/shared/regex.js). Through the page, so these answer as promises (await them) ──
+    getTavernRegexes: (option = { type: 'character' }) => call('regex', { action: 'get', option }),
+    replaceTavernRegexes: async (regexes, option = { type: 'character' }) => {
+      await call('regex', { action: 'replace', list: Array.isArray(regexes) ? regexes : [], option })
+    },
+    updateTavernRegexesWith: async (updater, option = { type: 'character' }) => {
+      const list = await call('regex', { action: 'get', option })
+      const result = await updater(list)
+      await call('regex', { action: 'replace', list: result === undefined ? list : result, option })
+      return call('regex', { action: 'get', option })
+    },
+    isCharacterTavernRegexesEnabled: () => true,
+    formatAsTavernRegexedString: (text, source, destination, option = {}) => call('regex', { action: 'format', text: String(text ?? ''), source, destination, depth: option && option.depth }),
+
+    // ── Prompts for the next turns, kept on this chat (server/injections.mjs); a `filter` cannot be kept: such a prompt counts as on ──
+    injectPrompts: (prompts, options = {}) => {
+      const list = (Array.isArray(prompts) ? prompts : [prompts]).filter(p => p && p.id !== undefined && p.id !== null)
+        .map(p => ({ id: String(p.id), position: p.position, depth: p.depth, role: p.role, content: String(p.content ?? ''), should_scan: p.should_scan === true }))
+      call('inject', { prompts: list, once: Boolean(options && options.once) }).catch(error => console.warn('[酒馆] 注入没有保存：', error.message)) // i18n-ignore: for the card's scripts, inside its frame
+      return { uninject: () => helper.uninjectPrompts(list.map(p => p.id)) }
+    },
+    uninjectPrompts: ids => {
+      call('inject', { uninject: (Array.isArray(ids) ? ids : [ids]).map(String) }).catch(() => {})
+    },
     rotateChatMessages: unsupported('rotateChatMessages'),
 
     // ── Worldbooks: the books this chat uses; what a card writes is kept for this chat ──
@@ -816,32 +852,12 @@ function shimMain(ctx, makeFetch) {
     rebindCharWorldbooks: unsupported('rebindCharWorldbooks'),
     rebindChatWorldbook: unsupported('rebindChatWorldbook'),
     getOrCreateChatWorldbook: unsupported('getOrCreateChatWorldbook'),
-    // The older lorebook names for the same books.
-    getLorebooks: () => bookNames(),
-    createLorebook: name => createWorldbook(name),
-    getCharLorebooks: () => ({ primary: books.own || null, additional: [...books.mounted] }),
-    getCurrentCharPrimaryLorebook: () => books.own || null,
-    getChatLorebook: () => null,
-    getLorebookEntries: async name => (await getWorldbook(name)).map(legacyOf),
-    replaceLorebookEntries: async (name, entries) => void (await replaceWorldbook(name, (entries || []).map(fromLegacy))),
-    updateLorebookEntriesWith: async (name, updater) => (await updateWorldbookWith(name, async list => ((await updater(list.map(legacyOf))) || []).map(fromLegacy))).map(legacyOf),
-    setLorebookEntries: async (name, entries) => {
-      const changes = new Map((entries || []).filter(e => e && e.uid !== undefined).map(e => [Number(e.uid), fromLegacy(e)]))
-      await updateWorldbookWith(name, list => list.map(e => (changes.has(e.uid) ? deepMerge(e, changes.get(e.uid)) : e)))
-    },
-    createLorebookEntries: async (name, entries) => {
-      const { worldbook, new_entries } = await createWorldbookEntries(name, (entries || []).map(fromLegacy))
-      return { entries: worldbook.map(legacyOf), new_uids: new_entries.map(e => e.uid) }
-    },
-    createLorebookEntry: async (name, entry) => {
-      const { new_entries } = await createWorldbookEntries(name, [fromLegacy(entry || {})])
-      return new_entries[0]?.uid
-    },
-    deleteLorebookEntries: async (name, uids) => {
-      const drop = new Set((uids || []).map(Number))
-      const { worldbook, deleted_entries } = await deleteWorldbookEntries(name, e => drop.has(e.uid))
-      return { entries: worldbook.map(legacyOf), delete_occurred: deleted_entries.length > 0 }
-    },
+    // The older lorebook names for the same books (web/shared/th-api.js).
+    ...olderLorebooks({
+      getWorldbook, replaceWorldbook, updateWorldbookWith, createWorldbookEntries, deleteWorldbookEntries, createWorldbook,
+      names: bookNames,
+      charBooks: () => ({ primary: books.own || null, additional: [...books.mounted] }),
+    }),
 
     // ── Model calls the card asks for (the user allows each card once) ──
     generate: config => generate(config, false),
@@ -931,6 +947,43 @@ function shimMain(ctx, makeFetch) {
   // Which app this is, for cards that want to know; no Tavern Helper version is claimed (it would promise all of it).
   const CicaTavern = { compat: { app: ctx.app || '', target: 'Tavern Helper 4.x, in part', functions: Object.keys(helper).sort() } }
   Object.assign(window, helper, { TavernHelper, SillyTavern, Mvu, EjsTemplate, toastr, tavern_events, iframe_events, CicaTavern })
+
+  // A card script with buttons of its own, in a frame of its own (web/card-scripts.js): a press is its button's event,
+  // and the page shows the frame as a window while the script has something on it (what it puts on "the page").
+  if (ctx.scriptFrame) {
+    window.addEventListener('message', event => {
+      if (event.source === host && event.data && typeof event.data.agentTavernButton === 'string') eventEmit(event.data.agentTavernButton, ...(Array.isArray(event.data.args) ? event.data.args : [])).catch(error => console.error(error))
+    })
+    // By what is there, not by its size: the frame is not laid out while the page keeps it put away.
+    const shown = () => {
+      if (document.querySelector('dialog[open]')) return true
+      for (const item of document.body?.children ?? []) {
+        if (/^(SCRIPT|STYLE|LINK|TEMPLATE|DIALOG)$/.test(item.tagName) || item.hidden) continue
+        const style = getComputedStyle(item)
+        if (style.display === 'none' || style.visibility === 'hidden') continue
+        if (item.childElementCount || item.textContent.trim() || /^(IMG|CANVAS|VIDEO|SVG|IFRAME)$/i.test(item.tagName)) return true
+      }
+      return false
+    }
+    let seen = null
+    const check = () => {
+      const visible = shown()
+      if (visible !== seen) post('scriptView', { visible })
+      seen = visible
+    }
+    // Not requestAnimationFrame: a frame put away is not drawn, and would never call it back.
+    let queued = false
+    const later = () => {
+      if (queued) return
+      queued = true
+      setTimeout(() => {
+        queued = false
+        check()
+      }, 30)
+    }
+    new MutationObserver(later).observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['open', 'style', 'class', 'hidden'] })
+    window.addEventListener('load', later)
+  }
   // Tavern Helper's avatar classes.
   if (ctx.card?.avatar) {
     const style = document.createElement('style')
@@ -1060,7 +1113,7 @@ function shimMain(ctx, makeFetch) {
  */
 export function installFrameBridge(handlers) {
   // What the frames may ask the page for, each answered with its result (handlers in web/app.js).
-  const ANSWERED = ['state', 'chatVars', 'mvuParse', 'editMessage', 'createMessages', 'deleteMessages', 'worldbook', 'generate', 'stopGenerate', 'ejs', 'fetch', 'fetchCancel', 'fetchAllow']
+  const ANSWERED = ['state', 'chatVars', 'mvuParse', 'editMessage', 'createMessages', 'deleteMessages', 'worldbook', 'generate', 'stopGenerate', 'ejs', 'fetch', 'fetchCancel', 'fetchAllow', 'inject', 'regex', 'audio']
   window.addEventListener('message', async event => {
     const data = event.data
     const id = data?.agentTavernCall
@@ -1085,6 +1138,9 @@ export function installFrameBridge(handlers) {
         reply(true)
       } else if (data.op === 'slash') reply(true, await handlers.slash(String(args.command ?? ''), context))
       else if (data.op === 'opening') reply(true, await handlers.opening(Number(args.index)))
+      else if (data.op === 'scriptEvent') await handlers.scriptEvent({ type: String(args.type ?? ''), args: Array.isArray(args.args) ? args.args : [] }, context)
+      else if (data.op === 'scriptView') handlers.scriptView?.({ visible: args.visible === true }, context)
+      else if (data.op === 'audio' && !data.id) handlers.audio?.(args)
       else if (ANSWERED.includes(data.op)) reply(true, await handlers[data.op](args, context))
       else if (data.op === 'storage') {
         // Kept under the card the frame was made for (render.js htmlFrame), never one it names itself.
@@ -1105,6 +1161,101 @@ export function installFrameBridge(handlers) {
 // The frames that have loaded (render.js marks them at their first height report): one still loading reads all
 // this from what it was made with, and a long chat's hundreds of frames each told at every keystroke slowed typing.
 const loadedFrames = () => document.querySelectorAll('iframe.card-frame[data-loaded]')
+
+// ─── Card scripts' audio (Tavern Helper's playAudio and the rest) ──────────
+// Two channels, background music and ambient sound, each a playlist and settings, played on this page. Scripts in
+// frames reach it through the bridge; scripts on the server through their notes (app.js). Only web and data addresses.
+const AUDIO_TYPES = ['bgm', 'ambient']
+const AUDIO_MODES = ['repeat_one', 'repeat_all', 'shuffle', 'play_one_and_stop']
+const players = new Map()
+
+function audioPlayer(type) {
+  const kind = AUDIO_TYPES.includes(type) ? type : 'bgm'
+  if (!players.has(kind)) {
+    const audio = typeof Audio === 'undefined' ? null : new Audio()
+    const player = { audio, list: [], index: -1, settings: { enabled: true, mode: 'repeat_all', muted: false, volume: 100 } }
+    audio?.addEventListener('ended', () => {
+      const { mode } = player.settings
+      if (mode === 'play_one_and_stop' || !player.list.length) return
+      if (mode === 'repeat_one') playIndex(player, player.index)
+      else if (mode === 'shuffle') playIndex(player, Math.floor(Math.random() * player.list.length))
+      else playIndex(player, (player.index + 1) % player.list.length)
+    })
+    players.set(kind, player)
+  }
+  return players.get(kind)
+}
+
+const audioUrl = url => (typeof url === 'string' && /^(https?:|data:audio\/)/i.test(url.trim()) ? url.trim() : '')
+const titled = item => ({ url: audioUrl(item?.url), title: String(item?.title || decodeURIComponent(String(item?.url ?? '').split(/[?#]/)[0].split('/').pop() || '')) })
+
+function playIndex(player, index) {
+  const item = player.list[index]
+  if (!item || !player.audio || !player.settings.enabled) return
+  player.index = index
+  player.audio.src = item.url
+  player.audio.volume = Math.max(0, Math.min(1, player.settings.volume / 100))
+  player.audio.muted = player.settings.muted
+  player.audio.play().catch(() => {})
+}
+
+/** One of Tavern Helper's audio calls: { action, type, audio?, list?, settings? } → what it returns. */
+export function cardAudio({ action, type, audio, list, settings } = {}) {
+  const player = audioPlayer(type)
+  const items = value => (Array.isArray(value) ? value : []).map(titled).filter(item => item.url)
+  switch (action) {
+    case 'play': {
+      const item = titled(audio)
+      if (!item.url) return null
+      let at = player.list.findIndex(known => known.url === item.url)
+      if (at < 0) at = player.list.push(item) - 1
+      playIndex(player, at)
+      return null
+    }
+    case 'pause':
+      player.audio?.pause()
+      return null
+    case 'replace':
+      player.list = items(list)
+      player.index = -1
+      return null
+    case 'append':
+      for (const item of items(list)) if (!player.list.some(known => known.url === item.url || known.title === item.title)) player.list.push(item)
+      return null
+    case 'settings': {
+      const next = settings && typeof settings === 'object' ? settings : {}
+      if (typeof next.enabled === 'boolean') player.settings.enabled = next.enabled
+      if (AUDIO_MODES.includes(next.mode)) player.settings.mode = next.mode
+      if (typeof next.muted === 'boolean') player.settings.muted = next.muted
+      if (Number.isFinite(next.volume)) player.settings.volume = Math.max(0, Math.min(100, next.volume))
+      if (player.audio) {
+        player.audio.muted = player.settings.muted
+        player.audio.volume = player.settings.volume / 100
+        if (!player.settings.enabled) player.audio.pause()
+      }
+      return null
+    }
+    case 'list':
+      return player.list.map(item => ({ ...item }))
+    case 'getSettings':
+      return { ...player.settings }
+    case 'current': {
+      const item = player.list[player.index]
+      const audioNow = player.audio
+      return { src: item?.url ?? '', title: item?.title ?? '', playing: Boolean(audioNow && !audioNow.paused), progress: audioNow?.duration ? Math.round((audioNow.currentTime / audioNow.duration) * 100) : 0 }
+    }
+    default:
+      return null
+  }
+}
+
+/**
+ * Tell every card frame one of SillyTavern's events as it happens (a reply received, the chat changed): their scripts'
+ * listeners run. `type` is a value of web/shared/th-api.js TAVERN_EVENTS.
+ */
+export function broadcastEvent(type, ...args) {
+  for (const frame of loadedFrames()) frame.contentWindow?.postMessage({ agentTavernEvent: { type, args } }, '*')
+}
 
 /** Tell every card frame the chat's state changed, so the latest floor's variables and MVU listeners follow. */
 export function broadcastState(state) {

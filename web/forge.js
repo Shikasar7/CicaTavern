@@ -14,6 +14,7 @@ import { EVENT_RATES, bookValue, cleanPath, cleanStatusSpec, rangeOf, settlePick
 import { splitPath } from '/shared/vars.js'
 import { statusBar } from '/status.js'
 import { REFERENCE_FILES, referenceBody, referenceChips } from '/talk.js'
+import { historyStrip } from '/draw-choice.js'
 
 // On a phone the keyboard's Enter key starts a new line (it has no Shift+Enter); the button sends.
 const touchKeyboard = matchMedia('(hover: none) and (pointer: coarse)')
@@ -1679,6 +1680,12 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
           el('button', { type: 'button', class: 'btn ghost', text: t`上传图片`, disabled: Boolean(draft.job), onclick: () => upload.click() }),
           upload,
         ]),
+        // 抽图历史: the avatars it had before; one taken back is the avatar, the one now joins them.
+        historyStrip(el, (card.avatarHistory ?? []).map(entry => ({ ...entry, src: `/api/forge/${draft.id}/history/${entry.file}` })), {
+          title: t`以前的头像`,
+          onPick: item => takeKeptAvatar(item),
+          onRemove: item => dropKeptAvatar(item),
+        }),
       ]),
     ])
   }
@@ -1864,6 +1871,13 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
     if (!picked) return
     apply(await api(`/api/forge/${state.draft.id}/avatar`, { method: 'POST', body: { description, ...picked.body } }))
   })
+
+  const takeKeptAvatar = guard(async item => {
+    if (state.draft.job) return
+    apply(await api(`/api/forge/${state.draft.id}/history/${item.file}/use`, { method: 'POST' }))
+  })
+
+  const dropKeptAvatar = guard(async item => apply(await api(`/api/forge/${state.draft.id}/history/${item.file}`, { method: 'DELETE' })))
 
   const uploadAvatar = guard(async file => {
     if (!file) return

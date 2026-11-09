@@ -190,7 +190,7 @@ export function stageAt(steps, index, { names = [], max = 3, isActor = () => tru
 }
 
 /**
- * Who stands for the player where a look wants a figure (酷炫's skill banner, roll and win): the player's own entry
+ * Who stands for the player where a look wants a figure (撞色's skill banner, roll and win): the player's own entry
  * when there is a picture of it; else whoever spoke last, up to line `index`, who is not one of this round's foes;
  * else `before` (the one from an earlier reply), unless a foe now; else nobody.
  * @param steps - the reply's steps, as for stageAt.

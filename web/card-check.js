@@ -25,6 +25,10 @@ const THEME_TEXT = { plain: t`朴素`, paper: t`纸张`, neon: t`霓虹`, pastel
 const BRICK_TEXT = { books: t`册子`, selfcheck: t`写前自查`, events: t`随机事件`, judge: t`裁判表`, world: t`世界动态`, creation: t`建角页` }
 // What a Tavern Helper script's absence comes to (server/helper-scripts.mjs).
 const HELPER_EFFECT = { none: t`不受影响`, some: t`部分影响`, lost: t`功能缺失` }
+// A script that only follows the variables runs here, in a sandbox on the server (server/card-scripts.mjs).
+const HELPER_HOOKS = t`在这里运行：每轮变量更新前后照 MVU 的方式执行（在服务器的沙盒里，手机和视觉小说里也一样）。`
+// Any other runs on the page while the chat is open (web/card-scripts.js).
+const HELPER_PAGE = t`在这里运行：打开对话时在页面上启动，在它自己的隔离框架里；它自己画的界面显示在右下角的小窗。`
 const HELPER_KIND = {
   mvu: t`MVU 框架：变量更新和状态栏已经内置。`,
   schema: t`变量规则：已经读进来，每轮照规则检查变量。`,
@@ -32,7 +36,6 @@ const HELPER_KIND = {
   upkeep: t`管 SillyTavern 里世界书和正则设置的小工具，这里用不上。`,
   updater: t`检查作者更新的工具：这里不会自动更新，出新版要重新导入。`,
 }
-const HELPER_USE = { buttons: t`脚本按钮`, events: t`跟着对话自动执行的操作`, book: t`读写世界书`, model: t`自己调用模型`, vars: t`改变量`, messages: t`改聊天消息`, page: t`页面上加的界面` }
 // What the trial's reader calls a problem (server/forge/trial.mjs).
 const KIND_TEXT = { 抢话: t`抢话`, 出戏: t`出戏`, 矛盾: t`矛盾`, 放水: t`放水`, 重复: t`重复`, 数值: t`数值`, 事件: t`事件`, 其他: t`其他` }
 // Findings about an entry's keywords: their box is the keywords, not its text.
@@ -43,12 +46,79 @@ const count = n => n.toLocaleString()
 /** What one script's absence means here, in a sentence or two. */
 function helperWords(script) {
   if (!script.on) return t`作者关着，SillyTavern 里也不运行。`
+  // The Tavern Helper functions it calls that are not where it runs: that step of it fails.
+  const lacking = script.missing?.length ? t`它用到的这些酒馆助手函数这里没有，用到时那一步会失败：${script.missing.join(t`、`)}。` : ''
+  if (script.kind === 'hooks') {
+    const notes = [script.uses.includes('model') ? t`它会自己调用模型：要在下面允许才行。` : '', script.buttons.length ? t`它的按钮在输入框上方。` : '', lacking]
+    return [HELPER_HOOKS, ...notes].filter(Boolean).join('')
+  }
   if (script.kind !== 'custom') return HELPER_KIND[script.kind]
-  const uses = script.uses.map(use => HELPER_USE[use]).filter(Boolean).join(t`、`)
-  const lost = script.remote
-    ? t`从网址加载（${script.hosts.join(t`、`)}），内容不在卡里，看不出具体做什么，它做的事这里都没有。`
-    : uses ? t`这里不运行，这些用不了：${uses}。` : t`这里不运行，它做的事这里都没有。`
-  return script.buttons.length ? `${lost}${t`按钮用不了：${script.buttons.join(t`、`)}。`}` : lost
+  if (script.remote) return t`从网址加载（${script.hosts.join(t`、`)}），内容不在卡里：打开对话时在页面上运行，要在「设置 → 更多 → 隐私与网络」里开着「加载酒馆助手脚本库」。看不出它具体做什么，用到的功能这里不一定都有。`
+  return [
+    HELPER_PAGE,
+    script.buttons.length ? t`它的按钮在输入框上方。` : '',
+    script.stPage ? t`它要改 SillyTavern 自己页面上的东西（消息列表、菜单），这部分不起作用。` : '',
+    lacking,
+  ].filter(Boolean).join('')
+}
+
+/**
+ * The bar's settings, the fields a row each: what it shows, how and on which page. It never turns into HTML to write by
+ * hand. Also 修改角色卡's (web/card-edit.js, which imports it when its 状态栏 is opened).
+ * @param change - a statusBar change ({ spec }); `edit` keeps what is written over it, { spec, paged }
+ * @param options - { spare: fields the card's variables could show and the bar does not, state: the variables as they
+ *   start (the preview), redraw(): draw it again (a row added or gone, the look changed) }
+ */
+export function statusEditor(el, change, edit, { spare = [], state = {}, redraw }) {
+  edit.spec ??= structuredClone(change.spec)
+  edit.paged ??= statusPages(edit.spec).length > 0
+  const { spec } = edit
+  const preview = el('div', { class: 'status-preview cc-status-preview' })
+  const drawPreview = () => {
+    const shown = cleanStatusSpec(spec)
+    preview.replaceChildren((shown && statusBar(el, shown, state, { collapsible: false, note: t`预览 · 初始值` })) || el('p', { class: 'hint', text: t`还没有要显示的项。` }))
+  }
+  const pickLook = name => {
+    if (name === OWN_COLORS) {
+      spec.palette ??= change.spec.palette ?? FIRST_COLORS
+      delete spec.theme
+    } else {
+      delete spec.palette
+      spec.theme = name === 'plain' ? undefined : name
+    }
+    redraw()
+  }
+  const title = el('input', { value: spec.title ?? '', placeholder: t`标题，可以不写`, 'aria-label': t`状态栏标题`, oninput: () => { spec.title = title.value; drawPreview() } })
+  const look = spec.palette ? OWN_COLORS : spec.theme ?? 'plain'
+  const theme = el('select', { 'aria-label': t`主题`, onchange: () => pickLook(theme.value) }, [...STATUS_THEMES, OWN_COLORS].map(name => el('option', { value: name, selected: look === name, text: THEME_TEXT[name] ?? name })))
+  const colors = () => el('div', { class: 'var-colors' }, [['bg', t`背景`], ['ink', t`文字`], ['accent', t`强调`]].map(([key, label]) => {
+    const box = el('input', { type: 'color', value: spec.palette[key], 'aria-label': label, oninput: () => { spec.palette = { ...spec.palette, [key]: box.value }; drawPreview() } })
+    return el('label', {}, [box, el('span', { text: label })])
+  }))
+  const paging = el('label', { class: 'check-row cc-status-paged' }, [
+    el('input', { type: 'checkbox', checked: edit.paged, onchange: event => {
+      edit.paged = event.target.checked
+      if (!edit.paged) for (const field of spec.fields) delete field.page
+      redraw()
+    } }),
+    el('span', { text: t`分几页` }),
+    el('small', { class: 'hint', text: t`没写页名的放在第一页，至少要有两页。` }),
+  ])
+  const row = (field, index) => {
+    const label = el('input', { value: field.label ?? '', placeholder: field.path, 'aria-label': t`「${field.path}」的名字`, oninput: () => { field.label = label.value; drawPreview() } })
+    const show = el('select', { 'aria-label': t`「${field.path}」的显示方式`, onchange: () => { field.show = show.value; redraw() } }, SHOWS.map(name => el('option', { value: name, selected: field.show === name, text: SHOW_TEXT[name] ?? name })))
+    const page = el('input', { value: field.page ?? '', maxlength: 8, placeholder: t`第几页的页名`, 'aria-label': t`「${field.path}」在状态栏哪一页`, oninput: () => { field.page = page.value; drawPreview() } })
+    const drop = el('button', { type: 'button', class: 'btn ghost small', 'aria-label': t`去掉「${field.path}」`, title: t`去掉`, text: '×', onclick: () => { spec.fields.splice(index, 1); redraw() } })
+    return el('div', { class: `cc-status-row${edit.paged ? ' paged' : ''}` }, [el('code', { text: field.path }), label, show, edit.paged ? page : null, drop])
+  }
+  // What the card's variables could show and the bar does not.
+  const left = spare.filter(field => !spec.fields.some(shown => shown.path === field.path))
+  const adding = el('select', { class: 'cc-status-add', 'aria-label': t`加一项`, onchange: () => {
+    spec.fields.push(structuredClone(left.find(field => field.path === adding.value)))
+    redraw()
+  } }, [el('option', { value: '', text: t`加一项…` }), ...left.map(field => el('option', { value: field.path, text: field.label ? `${field.label} (${field.path})` : field.path }))])
+  drawPreview()
+  return [preview, el('div', { class: 'cc-status-top' }, [title, theme]), spec.palette ? colors() : null, paging, el('div', { class: 'cc-status-rows' }, spec.fields.map(row)), left.length ? adding : null]
 }
 
 /** @param deps - { api, el, toast, guard, getChat, isGenerating, openProviders, openTalk(cardId, words), openTrial(cardId), onChatChanged(chat), onCardChanged(cardId) } */
@@ -69,6 +139,8 @@ export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, op
     stale: false, // something taken in reached the prefix; the open chat on this card has not applied it
     poll: null,
     busy: false,
+    pending: '', // 'check' or 'check-trial' from the click till the server says the model has it
+    loading: null, // the timer of 正在检查 while the first read is on its way
     whole: false, // 全本检查 ticked: the entries the ask leaves out go after it, in batches
     shown: '', // what the list last showed: a poll with nothing new leaves it, and any box being typed in, alone
   }
@@ -97,6 +169,7 @@ export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, op
   const takeable = item => item.changes.length > 0 && !item.manual && !item.stale && !item.broken?.length
 
   function load(data) {
+    stopLoading()
     state.data = data
     const key = JSON.stringify({ ...data, job: Boolean(data.job) })
     if (key === state.shown) {
@@ -141,6 +214,49 @@ export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, op
   }
 
   // ─── The page ─────────────────────────────────────────────────────────
+  /**
+   * The window, before the card's first read is back: a card with big variable rules takes seconds, and the click
+   * should show it was heard. The seconds show once it is long enough to wonder.
+   */
+  function showLoading() {
+    stopLoading()
+    state.shown = ''
+    view.jobLine = null
+    const line = el('span', { text: t`正在检查这张卡…` })
+    const started = Date.now()
+    state.loading = setInterval(() => {
+      const seconds = Math.round((Date.now() - started) / 1000)
+      if (seconds >= 2) line.textContent = t`正在检查这张卡，已经 ${seconds} 秒。变量规则大的卡要多等一会儿。`
+    }, 1000)
+    view.main.replaceChildren(el('div', { class: 'cc-page cc-loading', role: 'status' }, [el('div', { class: 'forge-working' }, [el('span', { class: 'dots' }), line])]))
+    view.foot.hidden = true
+  }
+
+  function stopLoading() {
+    clearInterval(state.loading)
+    state.loading = null
+  }
+
+  /** Sent to the model: said at once, while the server gets the card ready, till the answer says the model has it. */
+  function sending() {
+    return el('div', { class: 'cc-running' }, [el('div', { class: 'forge-working' }, [el('span', { class: 'dots' }), el('span', { text: t`正在发给模型…` })])])
+  }
+
+  async function asking(kind, send) {
+    state.pending = kind
+    render()
+    try {
+      const data = await send()
+      state.pending = ''
+      state.shown = ''
+      load(data)
+    } catch (error) {
+      state.pending = ''
+      render()
+      throw error
+    }
+  }
+
   function render() {
     const top = view.main.scrollTop
     const { findings, records, ignored } = state.data
@@ -225,7 +341,7 @@ export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, op
     return el('section', { class: 'plan-card cc-tune' }, [
       el('header', {}, [el('h4', { text: t`调整状态栏` })]),
       el('p', { class: 'hint', text: change.before ? t`只改显示，不动变量，也不发给模型。保存后这张卡的对话都按新样式显示。` : t`这张卡还没有自己的状态栏，这是按变量排的一个。保存后它跟着卡走，导出到 SillyTavern 也在。` }),
-      el('div', { class: 'cc-change' }, statusEditor(change, state.tuning, tune.fields)),
+      el('div', { class: 'cc-change' }, statusEditor(el, change, state.tuning, { spare: tune.fields, state: state.data.state, redraw: render })),
       el('div', { class: 'cc-actions' }, [
         el('button', { type: 'button', class: 'btn ghost small', text: t`取消`, onclick: () => { state.tuning = null; render() } }),
         el('span', { class: 'grow' }),
@@ -239,7 +355,7 @@ export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, op
     if (!scripts?.length) return null
     const tally = Object.keys(HELPER_EFFECT).map(effect => [effect, scripts.filter(script => script.effect === effect).length]).filter(([, n]) => n)
     const redo = script => {
-      const words = t`「${script.name}」这个酒馆助手脚本在这里不运行。看看它做什么，用世界书、变量或开场白做出差不多的效果。`
+      const words = t`「${script.name}」这个酒馆助手脚本在这里有些功能用不了。看看它做什么，用世界书、变量或开场白做出差不多的效果。`
       dialog.close()
       openTalk(state.cardId, words)
     }
@@ -247,16 +363,37 @@ export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, op
       el('div', { class: 'cc-helper-head' }, [
         el('b', { text: script.name || t`没有名字的脚本` }),
         el('span', { class: 'cc-helper-tag', text: HELPER_EFFECT[script.effect] }),
-        script.on && script.kind === 'custom' ? el('button', { type: 'button', class: 'btn ghost small', text: t`用对话重做`, title: t`到「对话修改」里，让向导用世界书、变量和开场白做差不多的效果`, onclick: () => redo(script) }) : null,
+        script.on && script.kind === 'custom' && script.effect !== 'none' ? el('button', { type: 'button', class: 'btn ghost small', text: t`用对话重做`, title: t`到「对话修改」里，让向导用世界书、变量和开场白做差不多的效果`, onclick: () => redo(script) }) : null,
       ].filter(Boolean)),
       el('p', { class: 'hint', text: helperWords(script) }),
       script.about ? el('p', { class: 'hint', text: t`作者说明：${script.about}` }) : null,
     ].filter(Boolean)))
-    return el('details', { class: 'cc-helpers', open: tally.some(([effect]) => effect === 'lost') }, [
+    // A script run here that calls the model does so only once the player says so (server/card-scripts.mjs).
+    const callsModel = scripts.some(script => script.on && script.kind === 'hooks' && script.uses.includes('model'))
+    return el('details', { class: 'cc-helpers', open: tally.some(([effect]) => effect !== 'none') || callsModel }, [
       el('summary', { text: t`酒馆助手脚本 ${scripts.length} 个：${tally.map(([effect, n]) => `${HELPER_EFFECT[effect]} ${n}`).join(t`，`)}` }),
       el('ul', {}, rows),
-      el('p', { class: 'hint', text: t`脚本不在这里运行，本身也改不了。功能缺失的可以用「对话修改」做差不多的效果，按钮和自动执行做不了。` }),
-    ])
+      callsModel ? modelPermit() : null,
+      el('p', { class: 'hint', text: t`跟着变量的脚本在服务器上运行，其余的打开对话时在页面上运行；脚本本身改不了。用不了的部分可以用「对话修改」做差不多的效果。` }),
+    ].filter(Boolean))
+  }
+
+  /** Whether this card's scripts may call the model themselves, as the player sets it. */
+  function modelPermit() {
+    const box = el('input', { type: 'checkbox', disabled: true })
+    const url = `/api/cards/${state.cardId}/script-permissions`
+    api(url).then(permissions => {
+      box.checked = permissions.model
+      box.disabled = false
+    }).catch(() => {})
+    box.addEventListener('change', () => {
+      const wanted = box.checked
+      api(url, { method: 'PUT', body: { model: wanted } }).then(permissions => { box.checked = permissions.model }).catch(error => {
+        box.checked = !wanted
+        toast(error.message, 6000)
+      })
+    })
+    return el('label', { class: 'cc-permit' }, [box, el('span', { text: t`允许这张卡的脚本自己调用模型（每次按一次对话计费，每分钟最多 6 次）` })])
   }
 
   function group(level, title, note, items) {
@@ -372,7 +509,7 @@ export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, op
     const edit = change => (edits[change.id] ??= {})
     return item.changes.filter(change => !/^remove/.test(change.kind)).map(change => el('div', { class: 'cc-change' }, [
       el('p', { class: 'ce-change-note', text: changeLabel(change) }),
-      ...(change.kind === 'statusBar' ? statusEditor(change, edit(change)) : change.kind === 'regex' || change.kind === 'newRegex' ? regexEditor(change, edit(change)) : textEditor(item, change, edit(change))),
+      ...(change.kind === 'statusBar' ? statusEditor(el, change, edit(change), { state: state.data.state, redraw: render }) : change.kind === 'regex' || change.kind === 'newRegex' ? regexEditor(change, edit(change)) : textEditor(item, change, edit(change))),
     ]))
   }
 
@@ -401,60 +538,6 @@ export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, op
       replace.length <= MAX_EDIT ? el('label', { class: 'cc-label', text: t`替换成` }) : null,
       replace.length <= MAX_EDIT ? textBox(edit.replace ?? replace, t`替换成`, value => { edit.replace = value }) : el('p', { class: 'hint', text: t`替换内容太长（${count(replace.length)} 字），这里不改。` }),
     ]
-  }
-
-  /** The bar's settings, the fields a row each: what it shows, how and on which page. It never turns into HTML to write by hand. */
-  function statusEditor(change, edit, spare = []) {
-    edit.spec ??= structuredClone(change.spec)
-    edit.paged ??= statusPages(edit.spec).length > 0
-    const { spec } = edit
-    const redraw = () => render()
-    const preview = el('div', { class: 'status-preview cc-status-preview' })
-    const drawPreview = () => {
-      const shown = cleanStatusSpec(spec)
-      preview.replaceChildren((shown && statusBar(el, shown, state.data.state, { collapsible: false, note: t`预览 · 初始值` })) || el('p', { class: 'hint', text: t`还没有要显示的项。` }))
-    }
-    const pickLook = name => {
-      if (name === OWN_COLORS) {
-        spec.palette ??= change.spec.palette ?? FIRST_COLORS
-        delete spec.theme
-      } else {
-        delete spec.palette
-        spec.theme = name === 'plain' ? undefined : name
-      }
-      redraw()
-    }
-    const title = el('input', { value: spec.title ?? '', placeholder: t`标题，可以不写`, 'aria-label': t`状态栏标题`, oninput: () => { spec.title = title.value; drawPreview() } })
-    const look = spec.palette ? OWN_COLORS : spec.theme ?? 'plain'
-    const theme = el('select', { 'aria-label': t`主题`, onchange: () => pickLook(theme.value) }, [...STATUS_THEMES, OWN_COLORS].map(name => el('option', { value: name, selected: look === name, text: THEME_TEXT[name] ?? name })))
-    const colors = () => el('div', { class: 'var-colors' }, [['bg', t`背景`], ['ink', t`文字`], ['accent', t`强调`]].map(([key, label]) => {
-      const box = el('input', { type: 'color', value: spec.palette[key], 'aria-label': label, oninput: () => { spec.palette = { ...spec.palette, [key]: box.value }; drawPreview() } })
-      return el('label', {}, [box, el('span', { text: label })])
-    }))
-    const paging = el('label', { class: 'check-row cc-status-paged' }, [
-      el('input', { type: 'checkbox', checked: edit.paged, onchange: event => {
-        edit.paged = event.target.checked
-        if (!edit.paged) for (const field of spec.fields) delete field.page
-        redraw()
-      } }),
-      el('span', { text: t`分几页` }),
-      el('small', { class: 'hint', text: t`没写页名的放在第一页，至少要有两页。` }),
-    ])
-    const row = (field, index) => {
-      const label = el('input', { value: field.label ?? '', placeholder: field.path, 'aria-label': t`「${field.path}」的名字`, oninput: () => { field.label = label.value; drawPreview() } })
-      const show = el('select', { 'aria-label': t`「${field.path}」的显示方式`, onchange: () => { field.show = show.value; redraw() } }, SHOWS.map(name => el('option', { value: name, selected: field.show === name, text: SHOW_TEXT[name] ?? name })))
-      const page = el('input', { value: field.page ?? '', maxlength: 8, placeholder: t`第几页的页名`, 'aria-label': t`「${field.path}」在状态栏哪一页`, oninput: () => { field.page = page.value; drawPreview() } })
-      const drop = el('button', { type: 'button', class: 'btn ghost small', 'aria-label': t`去掉「${field.path}」`, title: t`去掉`, text: '×', onclick: () => { spec.fields.splice(index, 1); redraw() } })
-      return el('div', { class: `cc-status-row${edit.paged ? ' paged' : ''}` }, [el('code', { text: field.path }), label, show, edit.paged ? page : null, drop])
-    }
-    // What the card's variables could show and the bar does not.
-    const left = spare.filter(field => !spec.fields.some(shown => shown.path === field.path))
-    const adding = el('select', { class: 'cc-status-add', 'aria-label': t`加一项`, onchange: () => {
-      spec.fields.push(structuredClone(left.find(field => field.path === adding.value)))
-      redraw()
-    } }, [el('option', { value: '', text: t`加一项…` }), ...left.map(field => el('option', { value: field.path, text: field.label ? `${field.label} (${field.path})` : field.path }))])
-    drawPreview()
-    return [preview, el('div', { class: 'cc-status-top' }, [title, theme]), spec.palette ? colors() : null, paging, el('div', { class: 'cc-status-rows' }, spec.fields.map(row)), left.length ? adding : null]
   }
 
   // ─── What a trial found ───────────────────────────────────────────────
@@ -503,12 +586,14 @@ export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, op
       el('p', { class: 'hint', text: trial ? t`最近一次试玩体检（${trial.model}，${new Date(trial.at).toLocaleString()}）查出的问题。程序没有现成的改法：可以让模型出改法，看过改前改后再采用；也可以用对话自己改，不用改的就忽略。` : t`这些是给试玩问题出的改法，那份报告已经换掉了。` }),
       trial?.outdated ? el('p', { class: 'ce-outcome warn', text: t`试玩之后卡改过了，下面的问题可能已经改好，再试玩一次可以确认。` }) : null,
       estimate ? el('p', { class: 'cc-estimate', text: estimateLine({ estimate }, true) }) : null,
-      job?.kind === 'check-trial'
+      state.pending === 'check-trial'
+        ? sending()
+        : job?.kind === 'check-trial'
         ? el('div', { class: 'cc-running' }, [el('div', { class: 'forge-working' }, [el('span', { class: 'dots' }), (view.jobLine = el('span', { text: jobText(job) }))]), el('button', { type: 'button', class: 'btn small', text: t`停下`, onclick: () => stop() })])
         : items.length > 1 && estimate
-          ? el('div', { class: 'cc-send' }, [el('span', { class: 'grow' }), el('button', { type: 'button', class: 'btn small', disabled: !estimate.ready || Boolean(job), text: t`${items.length} 条都让模型出改法`, onclick: () => askTrial(items.map(item => item.id)) })])
+          ? el('div', { class: 'cc-send' }, [el('span', { class: 'grow' }), el('button', { type: 'button', class: 'btn small', disabled: !estimate.ready || Boolean(job) || Boolean(state.pending), text: t`${items.length} 条都让模型出改法`, onclick: () => askTrial(items.map(item => item.id)) })])
           : null,
-      state.data.error?.kind === 'check-trial' ? el('div', { class: 'forge-error' }, [el('p', { text: state.data.error.message })]) : null,
+      state.data.error?.kind === 'check-trial' && !state.pending ? el('div', { class: 'forge-error' }, [el('p', { text: state.data.error.message })]) : null,
       trial?.reply ? el('div', { class: 'forge-voice cc-reply' }, trial.reply.split(/\n+/).filter(Boolean).map(text => el('p', { text }))) : null,
       trial?.askedModel ? el('div', { class: 'forge-by', text: trial.askedModel }) : null,
       el('div', { class: 'cc-items' }, [...blocks, ...rest.map(itemBlock)]),
@@ -518,7 +603,7 @@ export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, op
   const askTrial = guard(async ids => {
     const replacing = state.data.findings.some(item => item.trial && (!item.answers?.length || item.answers.some(id => ids.includes(id))))
     if (replacing && !confirm(t`再出一次改法会换掉这些问题还没采用的改法，继续？`)) return
-    load(await api(url('/ask'), { method: 'POST', body: { trial: ids } }))
+    await asking('check-trial', () => api(url('/ask'), { method: 'POST', body: { trial: ids } }))
   })
 
   // ─── The model ────────────────────────────────────────────────────────
@@ -526,7 +611,7 @@ export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, op
     const { model } = state.data
     const known = state.models.find(item => item.id === state.defaultModel)
     const label = item => `${item.group} · ${item.label}`
-    const select = el('select', { class: 'forge-model', title: t`让哪个模型看`, disabled: Boolean(state.data.job), onchange: guard(async () => {
+    const select = el('select', { class: 'forge-model', title: t`让哪个模型看`, disabled: Boolean(state.data.job) || Boolean(state.pending), onchange: guard(async () => {
       if (select.value === MANAGE_PROVIDERS) {
         select.value = model
         openProviders?.()
@@ -564,7 +649,7 @@ export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, op
       rest.left ? t`最多分 ${rest.parts} 批，还有 ${rest.left} 条排不进。` : '',
     ].join('')
     return el('label', { class: 'check-row cc-focus cc-whole' }, [
-      el('input', { type: 'checkbox', checked: state.whole, disabled: Boolean(job), onchange: event => { state.whole = event.target.checked; render() } }),
+      el('input', { type: 'checkbox', checked: state.whole, disabled: Boolean(job) || Boolean(state.pending), onchange: event => { state.whole = event.target.checked; render() } }),
       el('span', { text: t`全本检查` }),
       el('small', { text: t`其余 ${rest.entries} 条分 ${rest.parts} 批再发给模型，每批带上规则、变量和目录。花得多，默认不勾。${notes}` }),
     ])
@@ -581,7 +666,7 @@ export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, op
     const data = state.data
     const job = data.job
     const boxes = FOCUS.map(([key, label, note]) => el('label', { class: 'check-row cc-focus', title: note }, [
-      el('input', { type: 'checkbox', checked: data.focus.includes(key), disabled: Boolean(job), onchange: guard(async event => {
+      el('input', { type: 'checkbox', checked: data.focus.includes(key), disabled: Boolean(job) || Boolean(state.pending), onchange: guard(async event => {
         const focus = FOCUS.map(([name]) => name).filter(name => (name === key ? event.target.checked : data.focus.includes(name)))
         load(await api(url(), { method: 'PUT', body: { focus } }))
       }) }),
@@ -597,10 +682,12 @@ export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, op
       el('div', { class: 'cc-focus-list' }, boxes),
       wholeChoice(data.estimate.rest, job),
       el('p', { class: 'cc-estimate', text: estimateLine(data) }),
-      job && job.kind !== 'check-trial'
+      state.pending === 'check'
+        ? sending()
+        : job && job.kind !== 'check-trial'
         ? el('div', { class: 'cc-running' }, [el('div', { class: 'forge-working' }, [el('span', { class: 'dots' }), (view.jobLine = el('span', { text: jobText(job) }))]), el('button', { type: 'button', class: 'btn small', text: t`停下`, onclick: () => stop() })])
         : el('div', { class: 'cc-send' }, [modelChoice(), el('span', { class: 'grow' }), el('button', { type: 'button', class: 'btn primary small', disabled: !data.estimate.ready || Boolean(job), text: data.askedAt ? t`再看一次` : t`发给模型看看`, onclick: () => ask() })]),
-      data.error && data.error.kind !== 'check-trial' ? el('div', { class: 'forge-error' }, [el('p', { text: data.error.message })]) : null,
+      data.error && data.error.kind !== 'check-trial' && !state.pending ? el('div', { class: 'forge-error' }, [el('p', { text: data.error.message })]) : null,
       data.reply ? el('div', { class: 'forge-voice cc-reply' }, data.reply.split(/\n+/).filter(Boolean).map(text => el('p', { text }))) : null,
       data.askedModel ? el('div', { class: 'forge-by', text: data.askedModel }) : null,
       wholeLine(data.whole, job),
@@ -623,7 +710,7 @@ export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, op
 
   const ask = guard(async () => {
     if (state.data.findings.some(item => item.from === 'model' && !item.trial) && !confirm(t`再看一次会换掉还没采用的模型建议，继续？`)) return
-    load(await api(url('/ask'), { method: 'POST', body: { focus: state.data.focus, whole: state.whole && Boolean(state.data.estimate.rest) } }))
+    await asking('check', () => api(url('/ask'), { method: 'POST', body: { focus: state.data.focus, whole: state.whole && Boolean(state.data.estimate.rest) } }))
   })
 
   const stop = guard(async () => {
@@ -728,7 +815,10 @@ export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, op
     ])
   }
 
-  dialog.addEventListener('close', () => clearTimeout(state.poll))
+  dialog.addEventListener('close', () => {
+    clearTimeout(state.poll)
+    stopLoading()
+  })
 
   return {
     open: guard(async cardId => {
@@ -744,12 +834,27 @@ export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, op
         state.tuning = null
         state.stale = false
         state.whole = false
+        state.pending = ''
+        state.data = null
         view.main.scrollTop = 0
       }
-      const [data, edit] = await Promise.all([api(url()), api(`/api/cards/${cardId}/edit`), loadModels()])
-      state.fromForge = edit.fromForge === true
+      // Open at once: another card's list, or none yet, says 正在检查 till this one's is in; the same card's shows
+      // as it was while it is read again.
+      if (!state.data) {
+        view.sub.textContent = ''
+        showLoading()
+      }
       if (!dialog.open) dialog.showModal()
-      load(data)
+      try {
+        const [data, edit] = await Promise.all([api(url()), api(`/api/cards/${cardId}/edit`), loadModels()])
+        state.fromForge = edit.fromForge === true
+        // Closed while it was read: nothing to show it in.
+        if (!dialog.open || state.cardId !== cardId) return
+        load(data)
+      } catch (error) {
+        if (!state.data) dialog.close()
+        throw error
+      }
     }),
   }
 }

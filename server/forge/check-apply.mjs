@@ -180,12 +180,20 @@ export function applyFinding(card, finding) {
     prefix ||= done.prefix
   }
   const status = finding.changes.find(change => change.kind === 'statusBar')
-  if (status) {
-    card.statusBar = cleanStatusSpec(status.spec)
-    syncStatusScripts(card, status.scripts === true)
-    applied++
-  }
+  if (status) applied += applyStatusChange(card, status)
   return { applied, prefix }
+}
+
+/**
+ * A layout change into the card, its SillyTavern copy kept in step (检查这张卡, 对话修改) → how many went in (0 or 1).
+ * It is display only: never in a chat's prefix.
+ */
+export function applyStatusChange(card, change) {
+  const spec = cleanStatusSpec(change.spec)
+  if (!spec) return 0
+  card.statusBar = spec
+  syncStatusScripts(card, change.scripts === true)
+  return 1
 }
 
 // ─── Taking it back ───────────────────────────────────────────────────────

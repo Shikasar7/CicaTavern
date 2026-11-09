@@ -18,7 +18,7 @@
 // Model calls run in the background: a request starts a job and returns the
 // draft at once; the page polls the draft until the job is done. Closing the
 // window loses nothing.
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import YAML from 'yaml'
@@ -34,13 +34,15 @@ import { renderTemplate } from '../template.mjs'
 import { PLAN_ANGLES, chosenUserGender, chosenUserName, cleanCardOptions, cleanGreetingCount, discussRequest, editBrief, editTracking, editUserGender, editUserName, emptyBrief, englishCard, forgeLanguages, ideaSeeds, ideasRequest, partialReply, planLanguage, planRequest, readDiscussion, readIdeas, readPlan, reviseRequest, withCardOptions } from './prompts.mjs'
 import { brickCost } from './bricks.mjs'
 import { alignCard, applyIssues, cardJson, entriesRequest, greetingsRequest, initialState, lintCard, matchWritten, newCard, previewDynamics, readIssues, readTagged, redescribe, retrack, reviewRequest, rewriteRequest, stepDone, userTagged, writeSteps } from './write.mjs'
-import { applyChanges, editRequest, ensureBook, readEdit } from './edit.mjs'
+import { STATUS_TARGET, applyChanges, editRequest, ensureBook, readEdit } from './edit.mjs'
 import { claimsChanges, missingNote } from './blocks.mjs'
 import { applyBookChanges, bookEditRequest, bookTooLong, pickRequest, readBookEdit, readPicked } from './book-edit.mjs'
 import { applyPresetChanges, presetEditRequest, presetPickRequest, presetTooLong, readPickedPrompts, readPresetEdit } from './preset-edit.mjs'
 import { applyRegexChanges, readRegexEdit, regexEditRequest, tryChanges } from './regex-edit.mjs'
 import { cleanThemeContext, readThemeEdit, themeApplier, themeEditRequest } from './theme-edit.mjs'
 import { createCheck, helpersOf } from './check-session.mjs'
+import { applyStatusChange } from './check-apply.mjs'
+import { drawsOwnBar, startingState } from './check.mjs'
 import { createTrial, trialSessionId } from './trial.mjs'
 import { cleanScripts } from '../regex.mjs'
 import { isBuiltinPreset } from '../../web/shared/basic.js'
@@ -91,7 +93,8 @@ function imageType(buffer) {
  *   配图 is set up; storeBackdrop(buffer) → its file name (主题 → 对话修改, theme-edit.mjs).
  * @param writeChatState - (chatId, [{ path, value }]) → { chat, lost }: variables a proposal puts into a chat it read;
  *   `lost`, the ones the card's variable rules will not keep.
- * @param history - createDrawHistory() (抽图历史): where a saved card's picture goes when 更新这张卡 replaces one set elsewhere.
+ * @param history - createDrawHistory() (抽图历史): where a saved card's picture goes when 更新这张卡 replaces one set elsewhere;
+ *   its keep() is also how many old avatars a draft keeps.
  */
 export function createForge(store, { proxyNow = () => null, ledger = null, engine = null, draw = null, drawBackdrop = null, storeBackdrop = null, rulebooks = null, writeChatState = null, history = null } = {}) {
   const dir = path.join(store.dirs.root, 'forge')
@@ -100,6 +103,10 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
     return id.startsWith(EDIT) ? path.join(dir, 'edits', `${id}.json`) : path.join(dir, `${id}.json`)
   }
   const avatarFile = id => fileOf(id).replace(/\.json$/, '.avatar')
+  // 抽图历史: a draft's avatars before the one it has, the pictures in <id>.history/,
+  // the list newest first in draft.card.avatarHistory ({ file, at, backend, source, description }).
+  const keptDir = id => fileOf(id).replace(/\.json$/, '.history')
+  const KEPT_FILE = /^avatar-[\w-]{1,40}\.(png|jpeg|webp)$/
   // id → { kind, step, controller, partial, startedAt } of the job in progress.
   const jobs = new Map()
   // Talk sessions a proposal is going into, or a new request is starting on (until its job is in `jobs`).
@@ -222,6 +229,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
             checks: card.checks,
             issuesFound: card.issuesFound ?? null,
             avatar: card.avatar,
+            avatarHistory: card.avatarHistory ?? [],
             savedCardId: card.savedCardId,
             savedAt: card.savedAt ?? null,
             // A draft saved before the stamp was kept: not known, so not said.
@@ -662,6 +670,32 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
     return view(draft)
   }
 
+  /**
+   * The avatar a draft has, moved into its 抽图历史 before another is written over it
+   * (with none kept, it is simply written over). → record(fresh): puts it on the list
+   * in ctx.update / mutate and returns the old ones past what is kept, to delete.
+   */
+  async function retireAvatar(id) {
+    const keep = (await history?.keep?.()) ?? 0
+    const avatar = (await load(id)).card?.avatar
+    if (!avatar || keep <= 0) return () => []
+    const file = `avatar-${Date.now().toString(36)}${randomBytes(3).toString('hex')}.${avatar.type}`
+    try {
+      await mkdir(keptDir(id), { recursive: true })
+      await rename(avatarFile(id), path.join(keptDir(id), file))
+    } catch {
+      return () => []
+    }
+    const entry = { file, at: avatar.at, backend: avatar.backend ?? '', source: avatar.source ?? '', description: avatar.description ?? '' }
+    return fresh => {
+      const list = [entry, ...(fresh.card.avatarHistory ?? [])]
+      fresh.card.avatarHistory = list.slice(0, keep)
+      return list.slice(keep)
+    }
+  }
+
+  const dropKept = (id, entries) => Promise.all(entries.filter(entry => KEPT_FILE.test(entry?.file ?? '')).map(entry => rm(path.join(keptDir(id), entry.file), { force: true })))
+
   async function startAvatar(draft, description, choice = {}) {
     if (!draw) throw httpError(400, msg`这里画不了图，上传一张吧`)
     const subject = avatarSubject(draft.plan, description)
@@ -672,11 +706,15 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
       async ctx => {
         ctx.step('avatar')
         const { buffer, backend } = await draw(subject, ctx.signal, choice)
+        const record = await retireAvatar(draft.id)
+        let dropped = []
         await writeFile(avatarFile(draft.id), buffer)
         await ctx.update(fresh => {
+          dropped = record(fresh)
           fresh.card.avatar = { at: new Date().toISOString(), type: imageType(buffer), backend, source: 'drawn', description: subject.scene }
           fresh.lastAvatar = null
         })
+        await dropKept(draft.id, dropped)
       },
       { model: false },
     )
@@ -697,7 +735,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
   const SUBJECTS = {
     card: {
       prefix: EDIT,
-      target: /^(field:[a-zA-Z]+|greeting:\d+|entry:[\w-]+)$/,
+      target: new RegExp(`^(field:[a-zA-Z]+|greeting:\\d+|entry:[\\w-]+|${STATUS_TARGET})$`),
       title: name => msg`修改：${name}`,
       async load(id) {
         const card = await store.getCard(id)
@@ -707,11 +745,18 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
       },
       save: loaded => store.saveCard(loaded.subject),
       restore: (loaded, snapshot) => snapshot,
-      request: editRequest,
+      // The variables as they start go along, for a status bar layout to pick its paths from: not for a request kept to
+      // another piece, or a card that draws its own bar (working them out runs the card's variable rules).
+      request: (card, asked) => {
+        const layout = asked.target ? asked.target === STATUS_TARGET : !(drawsOwnBar(card) && !card.statusBar)
+        return editRequest(card, { ...asked, state: layout ? startingState(card, { helpers: asked.helpers?.scripts ?? null }) : {} })
+      },
       read: readEdit,
-      // A variable for the chat that was read goes there; the rest into the card.
+      // A variable for the chat that was read goes there; the layout and the rest into the card.
       async apply(card, changes, chosen) {
         const done = applyChanges(card, changes, chosen)
+        const layout = changes.find(change => change.kind === 'statusBar' && chosen.includes(change.id))
+        if (layout) done.applied += applyStatusChange(card, layout)
         const variables = changes.filter(change => change.kind === 'chatState' && chosen.includes(change.id))
         if (!variables.length || !writeChatState) return done
         const { chat, lost } = await writeChatState(variables[0].chatId, variables)
@@ -1409,12 +1454,55 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
       if (!match) throw httpError(400, msg`只能用 PNG、JPEG 或 WebP 图片`)
       const buffer = Buffer.from(match[2], 'base64')
       if (buffer.length > MAX_IMAGE) throw httpError(400, msg`图片太大了（15 MB 以内）`)
+      if (jobs.get(id)?.kind === 'avatar') throw httpError(409, msg`正在画头像，等它画完`)
+      const record = await retireAvatar(id)
+      let dropped = []
       await writeFile(avatarFile(id), buffer)
       const saved = await mutate(id, fresh => {
+        dropped = record(fresh)
         fresh.card.avatar = { at: new Date().toISOString(), type: imageType(buffer), backend: '', source: 'upload', description: '' }
         if (fresh.error?.kind === 'avatar') fresh.error = null
       })
+      await dropKept(id, dropped)
       return view(saved)
+    },
+
+    /** 抽图历史: one of the draft's old avatars back as its avatar; the one it has now joins the old ones. */
+    async useKeptAvatar(id, file) {
+      const draft = await requireCard(id)
+      if (jobs.get(id)?.kind === 'avatar') throw httpError(409, msg`正在画头像，等它画完`)
+      const chosen = (draft.card.avatarHistory ?? []).find(entry => entry.file === file)
+      if (!chosen || !KEPT_FILE.test(chosen.file)) throw httpError(404, msg`这张旧图已经不在了`)
+      const now = draft.card.avatar
+      const back = `avatar-${Date.now().toString(36)}${randomBytes(3).toString('hex')}.${now?.type ?? 'png'}`
+      if (now) await rename(avatarFile(id), path.join(keptDir(id), back))
+      await rename(path.join(keptDir(id), chosen.file), avatarFile(id))
+      const saved = await mutate(id, fresh => {
+        const rest = (fresh.card.avatarHistory ?? []).filter(entry => entry.file !== chosen.file)
+        fresh.card.avatarHistory = now ? [{ file: back, at: now.at, backend: now.backend ?? '', source: now.source ?? '', description: now.description ?? '' }, ...rest] : rest
+        fresh.card.avatar = { at: chosen.at || new Date().toISOString(), type: chosen.file.split('.').pop(), backend: chosen.backend ?? '', source: chosen.source || 'drawn', description: chosen.description ?? '' }
+        if (fresh.error?.kind === 'avatar') fresh.error = null
+      })
+      return view(saved)
+    },
+
+    /** 抽图历史: one of the draft's old avatars deleted. */
+    async dropKeptAvatar(id, file) {
+      await requireCard(id)
+      if (!KEPT_FILE.test(String(file))) throw httpError(400, msg`文件名不对`)
+      const saved = await mutate(id, fresh => {
+        fresh.card.avatarHistory = (fresh.card.avatarHistory ?? []).filter(entry => entry.file !== file)
+      })
+      await rm(path.join(keptDir(id), file), { force: true })
+      return view(saved)
+    },
+
+    /** An old avatar's picture → { buffer, type }. */
+    async readKeptAvatar(id, file) {
+      if (!KEPT_FILE.test(String(file))) throw httpError(404, msg`这张旧图已经不在了`)
+      const buffer = await readFile(path.join(keptDir(id), file)).catch(() => null)
+      if (!buffer) throw httpError(404, msg`这张旧图已经不在了`)
+      return { buffer, type: `image/${file.split('.').pop()}` }
     },
 
     async readAvatar(id) {
@@ -1479,6 +1567,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
       jobs.get(id)?.controller.abort()
       await rm(fileOf(id), { force: true })
       await rm(avatarFile(id), { force: true })
+      await rm(keptDir(id), { recursive: true, force: true })
       return { ok: true }
     },
   }

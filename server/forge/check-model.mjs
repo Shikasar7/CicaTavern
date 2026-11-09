@@ -7,7 +7,7 @@
 import { createHash } from 'node:crypto'
 import YAML from 'yaml'
 import { greetingList } from '../../web/shared/card-edit.js'
-import { EVENT_RATES, STATUS_THEMES, SHOWS, cleanStatusSpec } from '../../web/shared/status.js'
+import { EVENT_RATES, cleanStatusSpec } from '../../web/shared/status.js'
 import { msg } from '../i18n.mjs'
 import { isInitvar } from '../worldbook.mjs'
 import { attr, readBlocks } from './blocks.mjs'
@@ -19,7 +19,7 @@ import { CREATION_TAG, creationOf, editCreation, formScript, withCreationSpec } 
 import { bookBlock, modeOf, readEdit, shownEntries } from './edit.mjs'
 import { LONG_TOKENS } from './prompts.mjs'
 import { effectOf, onOf, readRegexEdit } from './regex-edit.mjs'
-import { OWN_STATUS_SCRIPT } from './status.mjs'
+import { OWN_STATUS_SCRIPT, STATUS_FORMAT, readStatus, statusPart, variableLines } from './status.mjs'
 import { lintText } from './write.mjs'
 
 export const CHECK_FOCUS = ['rules', 'tokens', 'look', 'style']
@@ -130,9 +130,7 @@ level：warn 是可能出问题，tip 是改了更好。一条建议里可以有
 <new_entry name="条目名" keys="关键词一, 关键词二" mode="keyword">新条目的正文</new_entry>
 <remove_entry uid="5"></remove_entry>
 <regex id="已有脚本的 id"><find>/改好的表达式/g</find></regex>
-<status_bar>{"title": "标题，可空", "theme": "paper", "fields": [{"path": "变量路径", "label": "短名", "show": "meter", "min": 0, "max": 100, "page": "页名，两三个字，可不写"}]}</status_bar>
-  show 可选：${SHOWS.join('、')}。meter 要写 min 和 max，rating 要写 max。theme 可选：${STATUS_THEMES.join('、')}。写全所有要显示的变量。
-  按这张卡配色时不写 theme，写 "palette": {"bg": "#101820", "ink": "#f2f2f2", "accent": "#e0a030"}，三个都是六位颜色，分别是背景、文字、强调。theme、palette 和 page 不改就不写，原样留着。
+${STATUS_FORMAT()}
 ${bricks ? brickFormat(bricks) : ''}
 没有改法、只能提醒的，<suggestion> 里只写 <why>。整段改写的内容要写完整，不写省略号。`
 
@@ -174,11 +172,6 @@ function scriptsPart(scripts, inBricks) {
   return lines.length ? `<regexes>\n${lines.join('\n')}${left ? `\n（还有 ${left} 条没有列出）` : ''}\n</regexes>` : '（这张卡没有正则）'
 }
 
-function statusPart(card) {
-  if (card.statusBar) return `<status_bar>${JSON.stringify(card.statusBar)}</status_bar>`
-  return drawsOwnBar(card) ? '（这张卡用自己的正则或脚本画状态栏，不要写 <status_bar>）' : '（这张卡还没有状态栏布局）'
-}
-
 /**
  * What of 世界动态 and 建角页 a model can change: { world: the rule's lines and how often it moves, form: the form }.
  * Either is null when the card has none, or has it in a shape the code did not write.
@@ -206,11 +199,6 @@ function bricksPart({ selfcheck, events, judge, books, draws, world, creation },
     editable.form && `<creation>${JSON.stringify({ fields: editable.form.fields.map(({ options, ...field }) => (field.kind === 'text' ? field : { ...field, options })) })}</creation>`,
   ].filter(Boolean)
   return lines.length ? `<bricks>\n${lines.join('\n')}\n</bricks>` : ''
-}
-
-function variableLines(value, keys = []) {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) return keys.length ? [`${keys.join('.')}: ${JSON.stringify(value)}`] : []
-  return Object.entries(value).filter(([key]) => !key.startsWith('$')).flatMap(([key, item]) => variableLines(item, [...keys, key]))
 }
 
 /** Entries not sent in full, a line each; enough to say which to change the keywords of. */
@@ -393,29 +381,6 @@ function readPatches(body, card) {
     changes.set(piece.id, change)
   }
   return { changes: [...changes.values()], missed }
-}
-
-/** A layout as written, over what it says nothing of: the look and the pages stay as the card has them. */
-function withOwnLook(spec, written, before) {
-  if (!before) return spec
-  const look = written.theme === undefined && !spec.palette ? { ...(before.theme ? { theme: before.theme } : {}), ...(before.palette ? { palette: before.palette } : {}) } : {}
-  const paged = written.fields.some(field => field?.page !== undefined)
-  const pageOf = field => before.fields.find(item => item.path === field.path)?.page
-  return { ...spec, ...look, fields: paged ? spec.fields : spec.fields.map(field => (pageOf(field) ? { ...field, page: pageOf(field) } : field)) }
-}
-
-function readStatus(body, card) {
-  if (drawsOwnBar(card) && !card.statusBar) return []
-  const text = /<status_bar\b[^>]*>([\s\S]*?)(?:<\/status_bar>|$)/i.exec(body)?.[1]?.trim().replace(/^```\w*\n?|\n?```$/g, '')
-  if (!text) return []
-  let written
-  try {
-    written = YAML.parse(text)
-  } catch {
-    return []
-  }
-  const spec = cleanStatusSpec(written)
-  return spec ? [statusChange(card.statusBar ?? null, withOwnLook(spec, written, card.statusBar), card.statusBar ? {} : { scripts: true })] : []
 }
 
 /** The <events> blocks of a suggestion as what draws them: the model writes the list, the code the draw and its script. */

@@ -598,7 +598,11 @@ select.pill { appearance: none; padding-right: 28px; background-image: linear-gr
 .battle-top-button:hover, .battle-top-button.on { color: var(--gold); }
 .battle-top-button.on { box-shadow: inset 0 -1px var(--gold); }
 .battle-top-button:focus-visible, .battle-foe:focus-visible, .battle-action:focus-visible, .battle-row:focus-visible, .battle-back:focus-visible { outline: 1px solid var(--gold); outline-offset: 2px; }
-.battle-field { min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 4px 16px; overflow: hidden auto; }
+.battle-field { min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 16px; padding: 4px 16px; overflow: hidden auto; }
+/* Centred, but a field too short for its foes (a party band at the bottom, a small window) loses their feet to the scroll,
+   never the tops of their heads: centring with justify-content would push the top out of reach. */
+.battle-field > :first-child { margin-top: auto; }
+.battle-field > :last-child { margin-bottom: auto; }
 /* The foes stand on the ground of the scene, not in boxes. */
 .battle-foes { width: 100%; max-width: 1240px; display: flex; justify-content: center; align-items: flex-end; gap: clamp(4px, 2.4vw, 40px); }
 .battle-foe { position: relative; flex: 0 1 auto; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 0 4px; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; transition: opacity .5s; animation: battle-foe-in .8s var(--ease) both; animation-delay: calc(.55s + var(--i, 0) * 120ms); }
@@ -726,6 +730,7 @@ select.pill { appearance: none; padding-right: 28px; background-image: linear-gr
 .battle-member .battle-bar.energy { grid-column: 3; grid-row: 2; align-self: start; height: 2px; }
 .member-life { grid-column: 4; grid-row: 1 / 3; font-size: 19px; font-weight: 400; font-variant-numeric: lining-nums tabular-nums; white-space: nowrap; }
 .member-life small { margin-left: 2px; font-size: 12px; opacity: .6; }
+.member-energy { display: none; }
 .member-tag { position: absolute; right: 10px; top: -8px; font-size: 11px; letter-spacing: .1em; color: var(--gold); }
 .battle-member.acting { border-left-color: var(--gold); background: linear-gradient(90deg, rgb(var(--gold-c) / .16), transparent); }
 .battle-member.told .member-name::after { content: " ✓"; color: var(--gold); font-size: 12px; }
@@ -1087,7 +1092,17 @@ html[data-ui-lang="en"] .roll-tier { font-size: 42px; }
 @keyframes rv-dawn { 0% { opacity: 0; filter: blur(1.5px); } 100% { opacity: 1; filter: none; } }
 .msg-body .rv-caret { display: inline-block; width: 2px; height: 1.1em; margin-left: 2px; vertical-align: -.2em; border-radius: 1px; background: var(--lamp); }
 .msg-body .rv-caret.waiting { animation: caret-blink 1.1s ease-in-out infinite; }
-@media (prefers-reduced-motion: reduce) { .msg-body .rv, .msg-body .rv-caret.waiting { animation: none; } }
+/* 写完再显示: three lines of shimmer while the reply is written out of sight; then it all fades in at once. */
+.msg-body .rv-wait { display: grid; gap: 10px; padding: 6px 0 4px; }
+.msg-body .rv-wait i { display: block; height: .8em; border-radius: 6px; background: var(--line-soft); animation: rv-wait-pulse 1.6s ease-in-out infinite; }
+@supports (background: color-mix(in srgb, red, blue)) {
+  .msg-body .rv-wait i { background: linear-gradient(90deg, var(--line-soft) 25%, color-mix(in srgb, var(--lamp) 30%, var(--line-soft)) 50%, var(--line-soft) 75%) 0 0 / 300% 100%; animation-name: rv-wait; }
+}
+.msg-body .rv-wait i:nth-child(2) { width: 92%; animation-delay: .12s; }
+.msg-body .rv-wait i:nth-child(3) { width: 58%; animation-delay: .24s; }
+@keyframes rv-wait { from { background-position: 100% 0; } to { background-position: 0 0; } }
+@keyframes rv-wait-pulse { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .msg-body .rv, .msg-body .rv-caret.waiting, .msg-body .rv-wait i { animation: none; } }
 /* That something is on its way: in the transcript's live note, and in the visual novel's wait. */
 .live-dots { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; }
 .live-dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--lamp); animation: live-dot 1.2s ease-in-out infinite; }
@@ -1123,6 +1138,27 @@ html[data-ui-lang="en"] .roll-tier { font-size: 42px; }
 /* Phones send with the button: Enter / Shift+Enter is a keyboard's hint. */
 @media (hover: none) and (pointer: coarse) { #composer-hint { display: none; } }
 .branch-note { font-size: 12px; color: var(--accent); animation: rise .25s var(--ease); }
+/* 脚本按钮 (web/card-scripts.js): a card script's own buttons above the input box, and the window its frame shows in. */
+.cc-permit { display: flex; align-items: center; gap: 8px; margin: 8px 0 4px; font-size: 13px; color: var(--ink); cursor: pointer; }
+.script-bar { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.script-bar[hidden] { display: none; }
+.script-bar .script-btn { border-radius: 999px; padding: 3px 12px; }
+/* Always laid out, put away by being invisible: the script frames keep their size while the window is away. */
+.script-layer { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 16px; background: rgba(0, 0, 0, .35); visibility: hidden; pointer-events: none; opacity: 0; transition: opacity .15s; }
+.script-layer.open { visibility: visible; pointer-events: auto; opacity: 1; }
+.script-window { width: min(960px, 94vw); padding: 12px 14px 14px; border-radius: 16px; background: var(--raised); box-shadow: 0 18px 50px rgba(0, 0, 0, .3); }
+.script-window-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.script-window-title { margin: 0; font: 600 15px/1.3 var(--serif); }
+.script-window-body { position: relative; height: min(78vh, 820px); }
+.script-window-body iframe.script-frame { position: absolute; inset: 0; width: 100%; height: 100% !important; border: 0; border-radius: 10px; background: var(--surface); visibility: hidden; }
+.script-window-body iframe.script-frame.shown { visibility: inherit; }
+.script-window-tools { display: flex; gap: 4px; }
+/* What a script shows by itself (no button pressed): a small panel bottom right, the story still usable behind it. */
+/* Above the input box and the script buttons (--dock-bottom, web/card-scripts.js). */
+.script-layer.docked { background: none; place-items: end; padding: 12px 12px var(--dock-bottom, 124px); pointer-events: none; }
+.script-layer.docked .script-window { width: min(380px, calc(100vw - 24px)); padding: 8px 10px 10px; pointer-events: auto; box-shadow: 0 10px 30px rgba(0, 0, 0, .25); }
+.script-layer.docked .script-window-body { height: min(320px, 42vh); }
+@media (max-width: 700px) { .script-layer.docked .script-window-body { height: min(260px, 30vh); } }
 .branch-note button { border: 0; background: none; color: var(--muted); cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
 
 /* ─── Right pane ─────────────────────────────────────────────────── */
@@ -2670,14 +2706,17 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 }
 
 /* 修改角色卡 (card-edit.js): the card on the left, 对话修改 on the right; on a phone one at a time. */
-.forge.ce { grid-template-rows: auto minmax(0, 1fr); }
+.forge.ce { grid-template-rows: auto auto minmax(0, 1fr); }
 .ce-tabs { display: none; }
 .ce-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 400px); min-height: 0; }
 .ce-main { padding-top: 18px; }
 .ce-card { max-width: 46rem; }
 .ce-status { font-size: 12px; color: var(--ok); margin-right: 8px; white-space: nowrap; }
-/* Stays in sight while the card scrolls under it. */
-.dialog .preset-apply.ce-apply { margin: 0; position: sticky; top: -18px; z-index: 2; box-shadow: var(--shadow-1); background: color-mix(in srgb, var(--lamp) 14%, var(--surface)); }
+/* Under the title, over both halves: in sight whichever one a phone shows, and while the card scrolls. */
+.ce-apply-slot { padding: 10px 18px 0; border-bottom: 1px solid var(--line-soft); }
+.ce-apply-slot:empty { display: none; }
+.dialog .preset-apply.ce-apply { margin: 0 0 10px; padding: 8px 12px; box-shadow: var(--shadow-1); background: color-mix(in srgb, var(--lamp) 14%, var(--surface)); }
+@media (max-width: 560px) { .dialog .preset-apply.ce-apply { flex-wrap: wrap; } .ce-apply-slot { padding: 8px 12px 0; } }
 .ce-hero .hero-body { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .ce-name-row { display: flex; align-items: center; gap: 8px; }
 .dialog .ce-name { flex: 1; min-width: 0; font: 600 20px/1.3 var(--serif); padding: 4px 8px; }
@@ -2775,6 +2814,9 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .ce-target[hidden] { display: none; }
 .ce-outcome-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .ce-outcome-row .ce-outcome { margin: 0; flex: 1; }
+/* 修改角色卡 → 状态栏: what is wrong with the bar, and 修好 beside it. */
+.ce-statusbar .ce-outcome-row { align-items: flex-start; }
+.ce-statusbar .ce-outcome-row .btn { flex: none; }
 
 /* 检查这张卡 (card-check.js): findings as a list, each like a change in the talk. */
 .dialog.card-check-dialog { width: min(860px, calc(calc(100vw / var(--page-zoom)) - 32px)); }
@@ -2849,6 +2891,7 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .cc-estimate { margin: 0 0 8px; font-size: 12.5px; line-height: 1.7; color: var(--muted); }
 .cc-send, .cc-running { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .cc-running .forge-working { flex: 1; margin: 0; }
+.cc-loading { padding: 28px 4px; }
 .cc-reply { margin-top: 10px; }
 .cc-model .cc-items { margin-top: 10px; }
 .cc-reply p { font-size: 14px; line-height: 1.8; }
@@ -3064,7 +3107,7 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .theme-reading-sample { margin: 0; padding: 10px 14px; border-radius: 10px; border: 1px solid var(--line-soft); background: var(--surface); color: var(--ink); font: calc(17px * var(--story-scale))/calc(1.9 * var(--story-leading)) var(--story-font); }
 @media (max-width: 780px) { .theme-reading-sample { font-size: calc(16px * var(--story-scale)); } }
 /* 出字效果: the five as chips, and the sample a choice plays (two lines kept, so playing it moves nothing). */
-.theme-reveals { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+.theme-reveals { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
 .theme-reveals .theme-style { padding: 9px 2px; white-space: nowrap; }
 .theme-reveal-sample { min-height: calc(2 * 17px * 1.9 * var(--story-scale) * var(--story-leading) + 20px); padding: 10px 14px; border-radius: 10px; border: 1px solid var(--line-soft); background: var(--surface); color: var(--ink); font: calc(17px * var(--story-scale))/calc(1.9 * var(--story-leading)) var(--story-font); }
 .theme-reveal-sample p { margin: 0; }
@@ -3607,7 +3650,7 @@ label.cast-voice, .dialog label.cast-voice { display: grid; grid-template-column
 .stage.vn-on .reader > :is(#rail, #whereabouts) { display: none; }
 .stage.vn-on .composer { position: absolute; left: 0; right: 0; bottom: 0; z-index: 8; }
 .stage.vn-on .composer::before { display: none; }
-.stage.vn-on:not(.vn-compose) .composer :is(.composer-box, .composer-row, .branch-note) { display: none; }
+.stage.vn-on:not(.vn-compose) .composer :is(.composer-box, .composer-row, .branch-note, .script-bar) { display: none; }
 .vn-compose-close { display: none; }
 /* Writing an action: a row of its own between the choices and the text box, in the choices' glass, the line still there to read. */
 .stage.vn-on.vn-compose .vn-compose-close { display: block; position: absolute; right: 14px; bottom: 13px; }
@@ -3806,6 +3849,12 @@ label.cast-voice, .dialog label.cast-voice { display: grid; grid-template-column
   .whatsnew-dots { flex-basis: 100%; justify-content: center; margin: 0; }
   .whatsnew-foot > .btn, .whatsnew-foot > form { flex: 1 1 0; }
   .whatsnew-foot form .btn { width: 100%; }
+}
+/* A phone on its side: the card list, a scroller, gave all its height up to what is around it and went to nothing.
+   It keeps its own; the drawer scrolls as a whole when the two lists do not fit. */
+@media (orientation: landscape) and (max-height: 520px) {
+  .pane.left { overflow-y: auto; }
+  .pane.left .card-list { flex: none; }
 }
 /* A phone on its side: the picture alone would be taller than the screen, so the words go beside it. */
 @media (orientation: landscape) and (max-height: 520px) {

@@ -1112,6 +1112,79 @@
           }
         }
       ]
+    },
+    {
+      "version": "2.4.3",
+      "date": "2026-11",
+      "after": true,
+      "items": [
+        {
+          "image": "2.4.3-scripts.webp",
+          "zh": {
+            "title": "卡自带的脚本能运行了",
+            "text": "角色卡里作者开着的酒馆助手脚本现在会跑：跟着变量走的（开局随机属性、更新后补算数值、按变量开关世界书）在后台照 MVU 的方式执行，手机和视觉小说里也一样；其余的打开对话时在页面上启动，自己画的界面在右下角的小窗，按钮在输入框上方。\n「检查这张卡」逐个写明每个脚本在哪运行、缺哪些函数；脚本想自己调用模型，要先在那里允许。"
+          },
+          "en": {
+            "title": "A card's own scripts now run",
+            "text": "The Tavern Helper scripts a card's author left on now run. Those that follow the variables (random stats at the start, values worked out after an update, lorebook entries switched by variables) run in the background the way MVU runs them, on phones and in the visual novel too; the rest start on the page when the chat opens, with their own panels in a small window at the bottom right and their buttons above the input box.\nCheck this card says where each script runs and what it lacks here; a script that wants to call the model must be allowed there first."
+          }
+        },
+        {
+          "image": "2.4.3-status.webp",
+          "zh": {
+            "title": "修改角色卡里改状态栏",
+            "text": "修改角色卡多了「状态栏」一节：预览、「调整样式」（主题或配色、标题、每项的显示方式、分页），对不上变量时一键修好，改完能撤销。\n也可以点「按意见改」说一句，比如「换成暗色的配色，好感度用进度条，分成两页」，采用前先看预览和改前改后。"
+          },
+          "en": {
+            "title": "The status bar, in the card editor",
+            "text": "The card editor has a Status bar section: a preview, Adjust style (theme or colours, title, how each item shows, pages), a one-click fix when items don't match the variables, and undo.\nOr press Change by request and say it, such as \"dark colours, a bar for affection, two pages\", and look at the preview and the before and after before taking it."
+          }
+        },
+        {
+          "image": "2.4.3-history.webp",
+          "zh": {
+            "title": "重画过的图，旧的不丢",
+            "text": "配图、人设图、立绘和表情、场景图、卡的头像重画或换掉之后，之前的排在下面一行小图里：点一张换回来，× 删掉不要的。留几张在「配图与朗读 → 画图方式 → 重画后留几张旧图」里改，默认 5 张。\n叙述下面配图的「重画」现在在原位换掉这张图；修改角色卡和创作角色卡里换掉的头像也都留着。"
+          },
+          "en": {
+            "title": "Redrawn pictures keep the earlier ones",
+            "text": "After a picture, reference picture, sprite or expression, scene or card avatar is redrawn or replaced, the earlier ones line up in a row below it: pick one to take it back, or × to delete it. How many are kept is Earlier pictures to keep under Pictures & voice > Image backend, 5 by default.\nRedraw under a story picture now replaces it in place, and avatars replaced in the card editor or the card creator are kept too."
+          }
+        },
+        {
+          "image": "2.4.3-bold.webp",
+          "zh": {
+            "title": "撞色的队伍状态栏",
+            "text": "视觉小说主题「酷炫」改名「撞色」。队伍战斗里己方状态栏变成底部一条斜带，每人一格，轮到谁选指令，谁那一格就变宽、变红；平时不站大立绘，有人出手时才冲上来。\n背景去掉斜条和色块，只按「场景滤镜」染一层。"
+          },
+          "en": {
+            "title": "A new party bar for Color block",
+            "text": "The visual novel theme Bold is now Color block. In party fights your side's status becomes a slanted band along the bottom, one cell each, and whoever is choosing a command gets a wider, red cell; a full sprite steps forward only when someone acts.\nThe background loses its stripes and blocks of colour and is only tinted by Scene filter."
+          }
+        },
+        {
+          "icon": "📱",
+          "zh": {
+            "title": "iPhone 切到后台也接着写",
+            "text": "iPhone 版（TestFlight，iOS 26 以上）回复写到一半切到别的 App 或锁屏，不再半分钟后就被暂停：灵动岛和锁屏上显示进度条，也能在那里取消，写完回到 App 就能看到。\n切回来不再要重新输口令，输入框也不再错位；供应商自己的报错（比如 429）照原样显示。"
+          },
+          "en": {
+            "title": "iPhone keeps writing in the background",
+            "text": "On iPhone (TestFlight, iOS 26 or later) a reply no longer stops half a minute after you switch apps or lock the screen: a progress bar shows in the Dynamic Island and on the lock screen, where you can also cancel it, and the reply is waiting when you come back.\nComing back no longer asks for the key again or leaves the input box out of place, and a provider's own error (such as a 429) is shown as it is."
+          }
+        },
+        {
+          "icon": "🧩",
+          "zh": {
+            "title": "还有这些",
+            "text": "ComfyUI 有了「负面提示词」，导入的工作流和简单模式都能用，卡的「画风负面」也会加上。出字效果多了「写完再显示」。\n30 MB 以上的 PNG 大卡能导入了（上限约 110 MB）；检查这张卡点了马上有反应，大卡再打开不到半秒。"
+          },
+          "en": {
+            "title": "And also",
+            "text": "ComfyUI gains a Negative prompt, for imported workflows and the simple mode alike, and the card's art style negative is added too. Text reveal gains When done.\nPNG cards over 30 MB import now (up to about 110 MB), and Check this card opens at once, under half a second for a big card the second time."
+          }
+        }
+      ]
     }
   ]
 }

@@ -105,7 +105,7 @@ Turn it on in Settings → Model → Long-term memory (Beta); it is off by defau
 
 ### Game rules mode (in development)
 
-<p align="center"><img src="docs/screenshots/rules-themes.jpg" alt="One story in five looks: choices, dice, a fight, a skill and victory, in Simple dark, Simple light, Classical, Retro console and Bold" width="880"></p>
+<p align="center"><img src="docs/screenshots/rules-themes.jpg" alt="One story in five looks: choices, dice, a fight, a skill and victory, in Simple dark, Simple light, Classical, Retro console and Color block" width="880"></p>
 <p align="center"><img src="docs/screenshots/rules-dice.jpg" alt="A dice check: the twenty-sided die shows 17, plus 1 makes 18 against 12, a success" width="49%"> <img src="docs/screenshots/rules-battle.jpg" alt="The fight screen: two wolves and a bandit chief on a mountain road, with health, energy and the attack, skill, item, guard and flee actions below" width="49%"></p>
 
 On per card and off by default; off, nothing sent to the model changes. On, the program decides success and the model writes what happened.
@@ -113,14 +113,14 @@ On per card and off by default; off, nothing sent to the model changes. On, the 
 - **Dice checks**: a risky choice shows its attribute, odds and risk. Pick it and the dice roll, and the result goes to the model with the turn, at no extra request. Rolls come from a seed, so regenerating, rolling back or loading a save changes nothing.
 - **Turn-based fights**: when the story comes to blows you fight it out with attacks, skills, items, guarding or fleeing, without calling the model, which then writes on from the result. Foes differ in strength, and wounds stay with you.
 - **A pack and growth**: your character, items, quests, a map and achievements. Wins bring experience and levels, and new foes go into a bestiary. A card's own health, inventory and quest variables can be bound to the rules.
-- **Four looks**: Simple, Classical, Retro console and Bold, with choices, dice, fights, skills and victory all changing together.
+- **Four looks**: Simple, Classical, Retro console and Color block, with choices, dice, fights, skills and victory all changing together.
 - **It travels with the card**: exported PNGs and JSON carry the rules. With Fights and growth picked in the card creator, the guide settles starting attributes, skills, items and common foes with you.
 
 ### Characters keep their look
 
 - **Character roster**: each character's fixed face, everyday outfit, a reference picture and a LoRA. When several characters share a picture, each is described separately, so faces don't blend.
 - **Each card's own art style and negative prompt**, added to every picture for that card.
-- **Redraws keep the earlier pictures**: when a picture, reference image, sprite or expression, scene or avatar is redrawn or replaced, each keeps its last few (5 by default; set in Pictures & voice → Image backend) in a row beneath it: click one to bring it back, delete the ones you don't want.
+- **Redraws keep the earlier pictures**: when a picture, reference image, sprite or expression, scene or avatar (in Edit card and in the card creator) is redrawn or replaced, each keeps its last few (5 by default; set in Pictures & voice → Image backend) in a row beneath it: click one to bring it back, delete the ones you don't want.
 - **Each card's own dialogue and narrator voices**.
 - Cards made with the card creator get their roster built automatically.
 
@@ -149,10 +149,13 @@ If you can't quite say what you want, the creator guides you round by round:
 
 <br clear="right">
 
-## Latest changes [2.4.2]
+## Latest changes [2.4.3]
 
-<p align="center"><img src="web/whatsnew/2.4.2-party.webp" alt="A party fight: you and two companions against two wolves and a bandit chief, in the bold, retro console and ink looks, with a companion's portrait across the screen as she uses a skill" width="720"></p>
+<p align="center"><img src="web/whatsnew/2.4.3-scripts.webp" alt="A card's own scripts: a demo card's ledger panel in a small window at the bottom right, its buttons above the input box, and Check this card saying where each script runs" width="720"></p>
 
+- **2.4.3: a card's own scripts now run**: the Tavern Helper scripts a card's author left on now run. Those that follow the variables run in the background the way MVU runs them; the rest start on the page when the chat opens, with their own panels in a small window at the bottom right and their buttons above the input box. Check this card says where each one runs and what it lacks here.
+- **2.4.3: the status bar in the card editor, earlier pictures kept**: the card editor has a Status bar section to restyle it, or to change it by saying what you want; redrawn or replaced pictures, reference pictures, sprites, scenes and avatars stay, ready to take back.
+- **2.4.3: a new party bar, iPhone keeps writing**: Color block (once Bold) shows the party as a slanted band along the bottom in fights; on iPhone (iOS 26 or later) a reply goes on in the background with its progress in the Dynamic Island; plus a ComfyUI negative prompt, When done text reveal, and cards up to about 110 MB.
 - **2.4.2: party fights**: on a card with the full game rules, companions fight beside you, up to four in all, acting by speed as in an RPG Maker game. The Party tab in the pack says who fights, and a companion using a skill gets their portrait in the banner.
 - **2.4.2: a card's own words, more kinds of story**: attributes, life, foe tiers, skills and the rest can take the card's own names (HP, BOSS, Special move, Partners), and Genre adds Monster raising, Online game, Apocalypse survival and Everyday life.
 - **2.4.2: long chats stay quick, replies flow**: switching cards and sending no longer stall in chats hundreds of turns long; replies come out at an even pace, with five Text reveal effects in the theme; Settings > More > Performance log records how long each step took.

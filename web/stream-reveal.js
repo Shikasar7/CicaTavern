@@ -11,7 +11,7 @@
 import { createPacer, topLevel } from '/shared/reveal.js'
 
 // How long the animation of each effect runs (style.css .rv uses --rv-ms).
-const ANIMATION_MS = { fade: 380, ink: 520, sentence: 700, type: 0, none: 0 }
+const ANIMATION_MS = { fade: 380, ink: 520, sentence: 700, type: 0, none: 0, whole: 420 }
 // A draw that takes longer than this is done less often: every DRAW_GAP times its own cost.
 const CHEAP_DRAW_MS = 4
 const DRAW_GAP = 2.5
@@ -152,8 +152,25 @@ export function createReveal({ target, html, source, scroller, following, mode, 
     }
   }
 
+  /** 写完再显示: a loading mark where the reply will be, until it comes whole. */
+  function placeWait() {
+    if (node.querySelector(':scope > .rv-wait')) return
+    const wait = document.createElement('div')
+    wait.className = 'rv-wait'
+    wait.setAttribute('aria-hidden', 'true')
+    wait.innerHTML = '<i></i><i></i><i></i>'
+    node.append(wait)
+    // Nothing of the reply is on the page yet: when it comes, all of it is new and fades in.
+    drawnTotal = 0
+  }
+
   function paint(now) {
     const started = performance.now()
+    if (mode === 'whole') {
+      if (!pacer.ended) return placeWait()
+      const wait = node.querySelector(':scope > .rv-wait')
+      if (wait) wait.remove()
+    }
     const markup = html(pacer.source.slice(0, pacer.shown))
     if (markup === drawnHtml) return
     drawnHtml = markup
@@ -240,7 +257,8 @@ export function createReveal({ target, html, source, scroller, following, mode, 
     }
     const youngest = marks.length ? now - marks[marks.length - 1].at : Infinity
     const animating = youngest < animationMs
-    const allShown = pacer.shown >= pacer.source.length && pacer.shown === drawnShown
+    // 写完再显示 has nothing more to draw until the reply ends (finish wakes it).
+    const allShown = (mode === 'whole' && !pacer.ended && drawnShown === 0) || (pacer.shown >= pacer.source.length && pacer.shown === drawnShown)
     if (finishing && allShown && pacer.ended && (youngest >= Math.min(animationMs, SETTLE_MS) || !element)) return finishing.resolve()
     if (!allShown || moving || animating || finishing) frame = requestAnimationFrame(tick)
     else {

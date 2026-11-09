@@ -51,10 +51,29 @@ export function displayText(text) {
  * @returns { state, changes }, and `unread: true` when the reply has an update block and nothing in it could be read.
  */
 export function applyStateUpdates(state, text) {
+  const read = readUpdates(state, text)
+  const changes = runCommands(read.state, read.commands)
+  return { state: read.state, changes: [...new Set([...read.changes, ...changes])], ...(read.unread ? { unread: true } : {}) }
+}
+
+// MVU's names for what a JSON Patch operation does (its commands, as card scripts see them at COMMAND_PARSED).
+const COMMAND_OF = { replace: 'set', delta: 'add', add: 'insert', insert: 'insert', remove: 'delete', move: 'move', copy: 'copy' }
+
+/**
+ * A reply's update blocks read the way MVU reads them, without running them yet: card scripts may change the
+ * commands in between (card-scripts.mjs, MVU's COMMAND_PARSED), then applyCommands runs them.
+ * @returns { state, commands, changes, unread }: `state` a copy of `state` with the reply's <state> patches merged in
+ *   (they are no MVU commands), `changes` what those patches set; each command is { type, args, full_match, reason }
+ *   as MVU makes it (args are the source of each argument), with `exact` (not enumerable): the operation as read,
+ *   run as it was when a script left the command alone.
+ */
+export function readUpdates(state, text) {
   let next = structuredClone(state ?? {})
   const changes = []
+  const commands = []
   let wrote = false
   let read = false
+  const command = (type, args, fullMatch, exact) => Object.defineProperty({ type, args, full_match: fullMatch, reason: '' }, 'exact', { value: exact })
   const blocks = [...String(text ?? '').matchAll(UPDATE_BLOCK)]
   const isState = match => match[1].toLowerCase() === 'state'
   // <state> patches first, then MVU's updates.
@@ -71,8 +90,9 @@ export function applyStateUpdates(state, text) {
     for (const ops of jsonPatches(body)) {
       read = true
       for (const op of ops) {
-        const changed = applyPatchOp(next, op)
-        if (changed) changes.push(changed)
+        if (!op || typeof op !== 'object' || typeof op.path !== 'string') continue
+        const args = op.op === 'move' || op.op === 'copy' ? [String(op.from ?? ''), op.path] : op.op === 'remove' ? [op.path] : [op.path, JSON.stringify(op.value ?? null)]
+        commands.push(command(COMMAND_OF[op.op] ?? String(op.op), args, JSON.stringify(op), { op }))
       }
     }
     for (const call of body.matchAll(/_\.(set|add)\s*\(([\s\S]*?)\)\s*;/g)) {
@@ -87,18 +107,117 @@ export function applyStateUpdates(state, text) {
       if (typeof pathArg !== 'string') continue
       const keys = statKeys(pathArg)
       if (!keys.length) continue
-      if (call[1] === 'set') {
+      commands.push(command(call[1], args.map(arg => JSON.stringify(arg ?? null)), call[0], { call: call[1], keys, args, label: pathArg }))
+    }
+  }
+  return { state: next, commands, changes, unread: wrote && !read }
+}
+
+/**
+ * `commands` (readUpdates, maybe changed by card scripts) run on a copy of `state`.
+ * @returns { state, changes }: `changes` the paths they set.
+ */
+export function applyCommands(state, commands) {
+  const next = structuredClone(state ?? {})
+  return { state: next, changes: [...new Set(runCommands(next, commands))] }
+}
+
+/** Runs `commands` on `next` itself. → the paths they set. */
+function runCommands(next, commands) {
+  const changes = []
+  for (const command of commands ?? []) {
+    const exact = command?.exact
+    if (exact?.op) {
+      const changed = applyPatchOp(next, exact.op)
+      if (changed) changes.push(changed)
+    } else if (exact?.call) {
+      // As _.set and _.add have always been played: their path counts as set even when the value could not be added.
+      const { keys, args } = exact
+      if (exact.call === 'set') {
         setPath(next, keys, args.length >= 3 ? args[2] : args[1])
       } else {
         const current = Number(readValue(next, keys) ?? 0)
         const delta = Number(args[1])
         if (Number.isFinite(current) && Number.isFinite(delta)) setPath(next, keys, current + delta)
       }
-      changes.push(pathArg)
+      changes.push(exact.label)
+    } else {
+      const changed = runScriptCommand(next, command)
+      if (changed) changes.push(changed)
     }
   }
-  return { state: next, changes: [...new Set(changes)], ...(wrote && !read ? { unread: true } : {}) }
+  return changes
 }
+
+/** One argument of a command a card script wrote or changed: JSON, a JS literal, else the text as it is. */
+function argValue(source) {
+  if (typeof source !== 'string') return source
+  const text = source.trim()
+  try {
+    return JSON.parse(text)
+  } catch {
+    try {
+      const [value] = parseArgs(text)
+      return value === undefined ? text : value
+    } catch {
+      return text
+    }
+  }
+}
+
+/**
+ * A command in MVU's own shape, as a card script made or changed it: set, add, insert (assign), delete (remove),
+ * move and copy, with MVU's arguments (_.set takes the new value last, insert and delete may name a key).
+ * → the path it set, or null.
+ */
+function runScriptCommand(next, command) {
+  if (!command || typeof command !== 'object' || !Array.isArray(command.args)) return null
+  const values = command.args.map(argValue)
+  const keysOf = value => (typeof value === 'string' ? statKeys(value) : [])
+  const keys = keysOf(values[0])
+  if (!keys.length) return null
+  const label = keys.join('.')
+  switch (command.type) {
+    case 'set':
+      return values.length >= 2 && setPath(next, keys, values.length >= 3 ? values[2] : values[1]) ? label : null
+    case 'add': {
+      const target = readRaw(next, keys)
+      if (Array.isArray(target)) return insertPath(next, [...keys, '-'], values[1]) ? label : null
+      const current = Number(readValue(next, keys) ?? 0)
+      const delta = Number(values[1])
+      return Number.isFinite(current) && Number.isFinite(delta) && setPath(next, keys, current + delta) ? label : null
+    }
+    case 'insert':
+    case 'assign': {
+      if (values.length >= 3) return insertPath(next, [...keys, String(values[1])], values[2]) ? label : null
+      const target = readRaw(next, keys)
+      if (Array.isArray(target)) return insertPath(next, [...keys, '-'], values[1]) ? label : null
+      if (isPlainObject(target) && isPlainObject(values[1])) {
+        for (const [key, value] of Object.entries(values[1])) if (writablePath([key])) target[key] = value
+        return label
+      }
+      return insertPath(next, keys, values[1]) ? label : null
+    }
+    case 'delete':
+    case 'remove': {
+      if (values.length < 2) return removePath(next, keys) ? label : null
+      const target = readRaw(next, keys)
+      // A list loses the item named (or at the index given); anything else the key.
+      if (Array.isArray(target)) {
+        const found = typeof values[1] === 'number' ? values[1] : target.findIndex(item => JSON.stringify(item) === JSON.stringify(values[1]))
+        return found >= 0 && found < target.length && removePath(next, [...keys, String(found)]) ? label : null
+      }
+      return removePath(next, [...keys, String(values[1])]) ? label : null
+    }
+    case 'move':
+    case 'copy':
+      return applyPatchOp(next, { op: command.type, from: values[0], path: values[1] })
+    default:
+      return null
+  }
+}
+
+const isPlainObject = value => value !== null && typeof value === 'object' && !Array.isArray(value)
 
 /**
  * Variable writes from templates (template.mjs diffWrites: replace/remove on
@@ -126,6 +245,20 @@ export function applyWrites(state, writes) {
     }
   }
   return next
+}
+
+/**
+ * What turned `before` into `after`, as writes applyWrites plays back (a top-level key replaced or removed): how a
+ * change made outside the update blocks (a card script at a turn's start) is kept with the turn and played back.
+ */
+export function stateWrites(before, after) {
+  const pointer = key => `/${String(key).replace(/~/g, '~0').replace(/\//g, '~1')}`
+  const was = before ?? {}
+  const now = after ?? {}
+  const writes = []
+  for (const [key, value] of Object.entries(now)) if (JSON.stringify(value) !== JSON.stringify(was[key])) writes.push({ op: 'replace', path: pointer(key), value: structuredClone(value) })
+  for (const key of Object.keys(was)) if (!Object.hasOwn(now, key)) writes.push({ op: 'remove', path: pointer(key) })
+  return writes
 }
 
 /** The variables template writes touch, as dotted paths (for a turn's stateChanges). */

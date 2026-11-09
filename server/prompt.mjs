@@ -392,7 +392,7 @@ export function openingBlock(opening, names) {
   return `<开场>\n以下是故事的开场，已作为第一段正文展示给玩家：\n${replaceMacros(opening, names)}\n</开场>`
 }
 
-export function buildTurnPrompt({ names, opening, recap = '', entries = [], memory = '', dynamic = [], characterNote = '', stateText, input, replyLength = 0, replyRange = '', presetText = '', reminder = '', marks = false, game = '' }) {
+export function buildTurnPrompt({ names, opening, recap = '', entries = [], memory = '', dynamic = [], characterNote = '', stateText, input, replyLength = 0, replyRange = '', presetText = '', reminder = '', marks = false, game = '', injected = { before: [], after: [] } }) {
   const parts = []
   const block = (tag, items) => {
     const body = items.filter(item => item.text).map(item => titled(item.title, item.text)).join('\n\n')
@@ -410,7 +410,10 @@ export function buildTurnPrompt({ names, opening, recap = '', entries = [], memo
   if (characterNote) parts.push(`<角色备注>\n${characterNote}\n</角色备注>`)
   if (replyRange) parts.push(`<回复要求>\n${replyRange}\n</回复要求>`)
   else if (replyLength > 0) parts.push(`<回复要求>\n本轮正文约 ${replyLength} 字（上下浮动两成以内），只计叙事正文，不含状态栏、变量更新等标签块。\n</回复要求>`)
+  // A card script's injected prompts (injections.mjs): deeper ones before the input, depth 0 after it.
+  block('卡脚本提示', injected.before ?? [])
   parts.push(`<玩家输入>\n${replaceMacros(input, names)}\n</玩家输入>`)
+  block('卡脚本提示', injected.after ?? [])
   // After the input, like SillyTavern's post-history prompts.
   if (presetText) parts.push(`<预设指令>\n${presetText}\n</预设指令>`)
   if (marks) parts.push(dialogueFormat())

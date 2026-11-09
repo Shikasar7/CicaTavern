@@ -601,7 +601,7 @@ test('a newer version of a card takes over the older one\'s picture settings, ca
 })
 
 test('scenery (视觉小说 backgrounds): landscape, nobody in it, no reference picture or card LoRA', async t => {
-  const { fake, store, card, media } = await setup(t)
+  const { fake, store, chat, card, media } = await setup(t)
   // OpenAI-compatible with references on: still a plain generation, landscape; the helper hears the place and its lore.
   await store.saveSettings({ media: cleanMedia({ imageReference: true }, (await store.getSettings()).media) })
   const drawn = await media.drawScenery({ cardId: card.id, place: '旧城茶馆二楼', lore: '临窗的雅座，挂着竹帘' })
@@ -630,6 +630,11 @@ test('scenery (视觉小说 backgrounds): landscape, nobody in it, no reference 
   assert.equal(sent[6].inputs.text, 'watercolor, scenery, no humans, a pier at dusk')
   assert.match(sent[7].inputs.text, /people/)
   assert.doesNotMatch(comfy.note, /人物/, 'no reference picture, so no one in the background')
+  // {{negative}} on a picture of the story: the settings' 负面提示词, where it used to be left empty.
+  await store.saveSettings({ media: cleanMedia({ comfyNegative: 'lowres, watermark' }, (await store.getSettings()).media) })
+  await media.generateImage(chat, 'root', 'a quiet street')
+  assert.equal(fake.workflowSent()[7].inputs.text, 'lowres, watermark')
+  await store.saveSettings({ media: cleanMedia({ comfyNegative: '' }, (await store.getSettings()).media) })
 
   // The helper's tags start with scenery, no humans; the card's style goes first.
   const tagged = await media.drawScenery({ cardId: card.id, place: '码头' })
@@ -705,6 +710,13 @@ test("ComfyUI: a workflow with its size written in draws at the 画幅 asked for
   assert.deepEqual(size(), [1024, 1024])
   assert.equal(lora(), 'styleA.safetensors')
   assert.equal(sent()[7].inputs.text, 'lowres, bad anatomy', 'a picture of the story adds nothing to the negative')
+  // 负面提示词 in the ComfyUI settings and the card's 画风负面: after the workflow's own, on every picture.
+  await store.saveSettings({ media: cleanMedia({ comfyNegative: ' watermark, signature ' }, (await store.getSettings()).media) })
+  await media.saveCardMedia(card.id, { ...(await media.cardMediaView(card.id)), styleNegative: 'realistic, 3d' })
+  await media.generateImage(chat, 'root', 'a quiet street')
+  assert.equal(sent()[7].inputs.text, 'lowres, bad anatomy, watermark, signature, realistic, 3d')
+  await store.saveSettings({ media: cleanMedia({ comfyNegative: '' }, (await store.getSettings()).media) })
+  await media.saveCardMedia(card.id, { ...(await media.cardMediaView(card.id)), styleNegative: '' })
 
   // A 立绘 of someone without a LoRA of their own: upright whatever the 画幅, the card's LoRA, trigger and style,
   // and its negative after the workflow's.

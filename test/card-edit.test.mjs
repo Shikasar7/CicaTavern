@@ -107,10 +107,11 @@ test('the request: the card in full, entries the words name first, a target kept
   assert.match(content, /<entry uid="1" name="茶点" mode="keyword" keys="茶点, 点心">/)
   assert.match(content, /只改 <entry uid="1"> 这一处/)
   assert.match(request.system, /用English/)
-  // A card's own update format stays (a JSONPatch card was once rewritten to _.set), and a laid-out bar needs 调整状态栏.
+  // A card's own update format stays (a JSONPatch card was once rewritten to _.set), and a laid-out bar gets new
+  // variables by a <status_bar> the model writes.
   assert.match(request.system, /沿用它原来的写法/)
   assert.doesNotMatch(request.system, /只能用 <UpdateVariable> 这个标签和 _\.set/)
-  assert.match(request.system, /调整状态栏」里加上才显示/)
+  assert.match(request.system, /新变量要显示就写一个 <status_bar>，原来的项和新的项都写上/)
   // Past the budget, entries go by name only and their text can't be changed.
   const big = stored()
   big.book.entries[0].content = '长'.repeat(70000)

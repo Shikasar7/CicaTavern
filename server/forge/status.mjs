@@ -4,7 +4,9 @@
 // into the same bar in an HTML block, plus the MVU script that keeps the
 // variables there. This app leaves that regex out (web/render.js withoutOwnStatus)
 // and runs no helper scripts.
-import { cleanStatusSpec, paletteColors, rangeOf } from '../../web/shared/status.js'
+import YAML from 'yaml'
+import { SHOWS, STATUS_THEMES, cleanStatusSpec, paletteColors, rangeOf } from '../../web/shared/status.js'
+import { msg } from '../i18n.mjs'
 
 export const OWN_STATUS_SCRIPT = 'cicatavern-status-bar'
 
@@ -166,4 +168,69 @@ export function mvuHelper(words) {
     }],
     variables: {},
   }
+}
+
+// ─── A layout a model writes (检查这张卡, 对话修改) ─────────────────────────
+
+/** How a model writes a layout: the <status_bar> block and what goes in it, for the format part of a system prompt. */
+export const STATUS_FORMAT = () => `<status_bar>{"title": "标题，可空", "theme": "paper", "fields": [{"path": "变量路径", "label": "短名", "show": "meter", "min": 0, "max": 100, "page": "页名，两三个字，可不写"}]}</status_bar>
+  show 可选：${SHOWS.join('、')}。meter 要写 min 和 max，rating 要写 max。theme 可选：${STATUS_THEMES.join('、')}。写全所有要显示的变量。
+  按这张卡配色时不写 theme，写 "palette": {"bg": "#101820", "ink": "#f2f2f2", "accent": "#e0a030"}，三个都是六位颜色，分别是背景、文字、强调。theme、palette 和 page 不改就不写，原样留着。`
+
+const themeNames = () => ({ paper: msg`纸张`, neon: msg`霓虹`, pastel: msg`柔和`, ink: msg`水墨`, parchment: msg`羊皮卷`, gothic: msg`暗夜`, terminal: msg`终端`, ocean: msg`深海` })
+
+/** A layout in lines, as a change's before and after read: all of it, a change gone out of date is told by these. */
+export function statusLines(spec) {
+  if (!spec) return ''
+  const { palette } = spec
+  const head = [
+    spec.title ? `${msg`标题`}: ${spec.title}` : '',
+    spec.theme ? `${msg`主题`}: ${themeNames()[spec.theme] ?? spec.theme}` : '',
+    palette ? `${msg`配色`}: ${msg`背景`} ${palette.bg} · ${msg`文字`} ${palette.ink} · ${msg`强调`} ${palette.accent}` : '',
+  ].filter(Boolean)
+  return [...head, ...spec.fields.map(field => `${field.label || field.path} (${field.path}): ${field.show}${field.page ? ` · ${msg`页`}: ${field.page}` : ''}`)].join('\n')
+}
+
+export const statusChange = (before, after, more = {}) => ({ id: 'statusBar', kind: 'statusBar', spec: after, before: statusLines(before), after: statusLines(after), ...more })
+
+/** Whether a card shows a status bar of its own making: a regex or a script draws it, not a layout. */
+export function drawsOwnBar(card) {
+  const scripts = Array.isArray(card.regexScripts) ? card.regexScripts : []
+  return scripts.some(script => !script.disabled && /StatusPlaceHolderImpl|状态栏|status/i.test(`${script.findRegex}${script.scriptName}`))
+}
+
+/** The card's layout as a model reads it, or why there is none to write. */
+export function statusPart(card) {
+  if (card.statusBar) return `<status_bar>${JSON.stringify(card.statusBar)}</status_bar>`
+  return drawsOwnBar(card) ? '（这张卡用自己的正则或脚本画状态栏，不要写 <status_bar>）' : '（这张卡还没有状态栏布局）'
+}
+
+/** A layout as written, over what it says nothing of: the look and the pages stay as the card has them. */
+function withOwnLook(spec, written, before) {
+  if (!before) return spec
+  const look = written.theme === undefined && !spec.palette ? { ...(before.theme ? { theme: before.theme } : {}), ...(before.palette ? { palette: before.palette } : {}) } : {}
+  const paged = written.fields.some(field => field?.page !== undefined)
+  const pageOf = field => before.fields.find(item => item.path === field.path)?.page
+  return { ...spec, ...look, fields: paged ? spec.fields : spec.fields.map(field => (pageOf(field) ? { ...field, page: pageOf(field) } : field)) }
+}
+
+/** A model's <status_bar> in an answer as a change to the card's layout: [] when there is none, or it cannot be read. */
+export function readStatus(body, card) {
+  if (drawsOwnBar(card) && !card.statusBar) return []
+  const text = /<status_bar\b[^>]*>([\s\S]*?)(?:<\/status_bar>|$)/i.exec(body)?.[1]?.trim().replace(/^```\w*\n?|\n?```$/g, '')
+  if (!text) return []
+  let written
+  try {
+    written = YAML.parse(text)
+  } catch {
+    return []
+  }
+  const spec = cleanStatusSpec(written)
+  return spec ? [statusChange(card.statusBar ?? null, withOwnLook(spec, written, card.statusBar), card.statusBar ? {} : { scripts: true })] : []
+}
+
+/** Variables a line each, `path: value`, for a model to pick a layout's paths from. */
+export function variableLines(value, keys = []) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return keys.length ? [`${keys.join('.')}: ${JSON.stringify(value)}`] : []
+  return Object.entries(value).filter(([key]) => !key.startsWith('$')).flatMap(([key, item]) => variableLines(item, [...keys, key]))
 }

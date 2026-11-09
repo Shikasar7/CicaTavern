@@ -10,7 +10,7 @@ import { createApp } from '../server/http.mjs'
 import { normalizeCard, sillyTavernCard } from '../server/cards.mjs'
 import { initTemplates } from '../server/template.mjs'
 import { initialState } from '../server/worldbook.mjs'
-import { cardFacts, checkCard, statusChange } from '../server/forge/check.mjs'
+import { cardFacts, checkCard, startingState, statusChange } from '../server/forge/check.mjs'
 import { applyFinding, changedPieces, rebaseText, rebased, restorePieces, snapshot, staleChange, withEdits } from '../server/forge/check-apply.mjs'
 import { checkRequest, cleanFocus, readCheck, vetSuggestions } from '../server/forge/check-model.mjs'
 
@@ -486,4 +486,24 @@ test('over HTTP: found, ignored, taken in, taken back, and the model asked only 
 
   assert.equal((await call(`/api/cards/${id}`, { method: 'DELETE' })).status, 200)
   assert.equal((await call(`/api/cards/${id}/check`)).status, 404)
+})
+
+test("a card's variable rules run once for the same start, and each caller gets its own copy", () => {
+  // The rules count their own runs inside the sandbox: a big card's take seconds, and one look at it asks several times.
+  const card = cardOf({ entries: [entry(0, '[initvar]', '好感度: 10\n')], scripts: [BAR] })
+  card.mvuSchema = `import { registerMvuSchema } from 'https://testingcf.jsdelivr.net/gh/StageDog/tavern_resource/dist/util/mvu_zod.js';
+export const Schema = z.object({ 好感度: z.number().transform(n => { globalThis.__runs = (globalThis.__runs ?? 0) + 1; return n }), 次数: z.number().default(0).transform(() => globalThis.__runs) });
+$(() => { registerMvuSchema(Schema); });`
+  const first = startingState(card)
+  assert.equal(first.好感度, 10)
+  assert.equal(first.次数, 1, 'the rules ran')
+  checkCard(card)
+  cardFacts(card)
+  first.好感度 = 99
+  const again = startingState(card)
+  assert.equal(again.次数, 1, 'not again for the same start')
+  assert.equal(again.好感度, 10, 'a change to one copy is not the next one\'s')
+  // Another start is asked about.
+  card.book.entries[0].content = '好感度: 20\n'
+  assert.deepEqual(startingState(card), { 好感度: 20, 次数: 2 })
 })

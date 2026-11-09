@@ -82,9 +82,9 @@ export const BACKDROP_FILE = /^backdrop-[a-z0-9]{4,16}\.(jpg|png|webp)$/
 export const STORY_FONTS = ['song', 'hei', 'kai', 'fang', 'custom']
 
 // width 0 is the page's own (style.css --read).
-// 出字效果: how a reply being written comes onto the page (淡入, 墨晕, 打字机, 逐句, 直接显示; web/stream-reveal.js).
+// 出字效果: how a reply being written comes onto the page (淡入, 墨晕, 打字机, 逐句, 直接显示, 写完再显示; web/stream-reveal.js).
 // Here, not in shared/reveal.js, so the server's copy of this file needs nothing beside it.
-export const REVEAL_MODES = ['fade', 'ink', 'type', 'sentence', 'none']
+export const REVEAL_MODES = ['fade', 'ink', 'type', 'sentence', 'none', 'whole']
 export const REVEAL_DEFAULT = 'fade'
 
 export const READING_DEFAULTS = Object.freeze({ font: 'song', custom: '', scale: 1, leading: 1, ui: 1, width: 0, reveal: REVEAL_DEFAULT })

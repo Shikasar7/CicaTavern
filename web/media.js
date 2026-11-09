@@ -1289,6 +1289,11 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       field(t`工作流`, comfyMode),
       workflowBox,
       comfySimpleBox,
+      field(
+        t`负面提示词`,
+        el('textarea', { name: 'comfyNegative', rows: 2, spellcheck: 'false', text: media.comfyNegative ?? '', placeholder: t`例如 lowres, bad anatomy, bad hands, worst quality, watermark` }),
+        t`两种方式都用。导入的工作流里自己写的负面提示词照样保留，这里的加在后面；写了 %negative_prompt% 的就填在那里。CFG 是 1 时负面提示词不起作用。`,
+      ),
     ])
     const naiTokenHint = el('span', { class: 'hint nai-token-hint' })
     const showNaiToken = info => naiTokenText(naiTokenHint, info)
@@ -1614,7 +1619,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         body: [
           field(t`画风预设`, stylePick, t`选一个就把下面的画风换成它的词（照「提示词写法」用标签或句子），画风负面空着时也填上；换完还能改，自己写的画风照样用。`),
           field(t`画风（写进画面提示词；人设图、立绘也加，NovelAI、ComfyUI、SD WebUI 每张都加）`, styleBox),
-          field(t`画风负面（只用于 NovelAI，加在负面提示词后面）`, el('input', { name: 'styleNegative', value: card.styleNegative ?? '', placeholder: t`例如 realistic, 3d, chibi` })),
+          field(t`画风负面（加在负面提示词后面：NovelAI、ComfyUI、SD WebUI）`, el('input', { name: 'styleNegative', value: card.styleNegative ?? '', placeholder: t`例如 realistic, 3d, chibi` })),
           field(t`这张卡写提示词的额外要求（加在所有卡通用的后面）`, cardRules.box),
           cardRules.tools,
           field(
@@ -3045,6 +3050,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         comfyUrl: value('comfyUrl'),
         ...(form.elements.comfyMode ? Object.fromEntries(['comfyMode', 'comfyTemplate', 'comfyModel', 'comfyClip', 'comfyClip2', 'comfyClipType', 'comfyVae', 'comfySampler', 'comfyScheduler'].map(name => [name, value(name)])) : {}),
         ...(form.elements.comfySteps ? { comfySteps: Number(value('comfySteps') || 24), comfyCfg: Number(value('comfyCfg') || 0) } : {}),
+        ...(form.elements.comfyNegative ? { comfyNegative: value('comfyNegative') } : {}),
         geminiImageProvider: value('geminiImageProvider'),
         geminiImageModel: value('geminiImageModel'),
         geminiReference: checked('geminiReference'),

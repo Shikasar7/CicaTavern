@@ -30,10 +30,31 @@ export function nameMacros(text, names) {
     .replace(/\{\{user\}\}|<USER>/gi, names.user)
 }
 
+// What a card's page holds is not the story's bookkeeping: a fenced block or a script may well say <UpdateVariable>
+// (a prompt it sends, a parser), and an update block's open-end match would take the rest of the message with it.
+const GUARDED = /```[\s\S]*?```|<script\b[\s\S]*?<\/script>/gi
+
+/** A fenced block of nothing but the story's bookkeeping (a model that fenced its update block): no page's, so it goes. */
+function onlyHidden(fence) {
+  const body = fence.replace(/^```[^\n]*\n?/, '').replace(/```$/, '')
+  if (!body.trim()) return false
+  let rest = body
+  for (const re of HIDDEN) rest = rest.replace(re, '')
+  return !rest.trim()
+}
+
+/** `strip` run on `text` with its guarded pieces out of reach; a guarded piece inside a removed block goes with it. */
+function guarded(text, strip) {
+  const kept = []
+  const out = strip(text.replace(GUARDED, match => (match.startsWith('```') && onlyHidden(match) ? '' : `\u0000${kept.push(match) - 1}\u0000`)))
+  return kept.length ? out.replace(/\u0000(\d+)\u0000/g, (_, i) => kept[i]) : out
+}
+
 function stripHidden(text) {
-  let out = text
-  for (const re of HIDDEN) out = out.replace(re, '')
-  return out.replace(/\n{3,}/g, '\n\n').trim()
+  return guarded(text, out => {
+    for (const re of HIDDEN) out = out.replace(re, '')
+    return out.replace(/\n{3,}/g, '\n\n').trim()
+  })
 }
 
 // 屏蔽词 (设置 → 屏蔽词) that change what is shown, with their matcher (web/shared/blockwords.js
@@ -61,7 +82,7 @@ export function blockShown(text, partial = false) {
 
 /** Text streamed so far, with finished bookkeeping blocks removed and an unfinished one hidden. */
 export function streamingText(text) {
-  const written = stripHidden(String(text ?? '')).replace(OPEN_HIDDEN, '').trimEnd()
+  const written = guarded(stripHidden(String(text ?? '')), out => out.replace(OPEN_HIDDEN, '')).trimEnd()
   // What comes after a stop will not be kept: it does not show on the way either.
   return blockShown(shownMarks ? shownMarks.strip(shownMarks.cut(written)) : written, true)
 }
@@ -256,13 +277,23 @@ export function segments(text) {
     if (part.trim()) splitProse(part, out)
   }
   let last = 0
+  // Text not yet split: a code block inside a block still open (a card's <details> folding its update block) stays
+  // inside it, as the folded block's code, the way SillyTavern's Markdown shows it.
+  let pending = ''
   for (const match of text.matchAll(FENCE)) {
-    pushText(text.slice(last, match.index))
+    const before = text.slice(last, match.index)
     const [, lang, body] = match
-    out.push(HTML_LIKE.test(body) || /^html?$/i.test(lang) ? { kind: 'html', body } : { kind: 'code', body })
     last = match.index + match[0].length
+    const html = HTML_LIKE.test(body) || /^html?$/i.test(lang)
+    if (!html && openBlocks(pending + before) > 0) {
+      pending += `${before}<pre><code>${escaped(body.replace(/\n$/, ''))}</code></pre>`
+      continue
+    }
+    pushText(pending + before)
+    pending = ''
+    out.push(html ? { kind: 'html', body } : { kind: 'code', body })
   }
-  pushText(text.slice(last))
+  pushText(pending + text.slice(last))
   return mergeInvisible(out)
 }
 

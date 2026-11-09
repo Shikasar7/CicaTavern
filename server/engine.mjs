@@ -11,7 +11,7 @@ import { asksChoices, asksSelfCheck, choicesInstruction, choicesRequest, extract
 import { DIRECT_CARD, VN_ID, BASIC_ID, builtinOptions, choicesOf, isBuiltinPreset } from '../web/shared/basic.js'
 import { cleanReferences, referenceBlock } from './forge/references.mjs'
 import { buildTurnPrompt, chatTemplates, drawnEntries, everyTurnReminder, openingBlock, renderEntry, replaceMacros, templateText, webSearchNote } from './prompt.mjs'
-import { applyStateUpdates, applyWrites, displayText, withoutOpenEnd, writeLabels } from './state.mjs'
+import { applyStateUpdates, applyWrites, displayText, stateWrites, withoutOpenEnd, writeLabels } from './state.mjs'
 import { choiceFights, cutAtGate, withoutGameMarks } from '../web/shared/game/marks.js'
 import { applyOps, checkExperience, checkLine, cleanCheck, cleanOps, gateKinds, keptSheet, opWrites, pausesOn, rankNow, rollCheck, rulesOn, sheetOf, sheetOnPath } from '../web/shared/game/sheet.js'
 import { cleanFight, encounterSetup, fightLine, fightResult } from '../web/shared/game/encounter.js'
@@ -37,6 +37,8 @@ import { blockRequest, blockSent } from './blockwords.mjs'
 import { blockText } from '../web/shared/blockwords.js'
 import { memoryOf, memoryOnlyInstruction, memoryRequest, memoryText, mergeEntries, parseEntries, placeEntries, recallEntries, recalledSince, snapshotOf, TIDY_FIRST_MAX, tidyInContext, tidyRequest, turnTexts } from './memory.mjs'
 import { span } from './perf.mjs'
+import { cardScriptsFor } from './card-scripts.mjs'
+import { afterTurn, turnInjections } from './injections.mjs'
 
 // The preset's per-turn block in a turn's message (buildTurnPrompt).
 const PRESET_BLOCK = /\n*<预设指令>\n[\s\S]*?\n<\/预设指令>/
@@ -129,6 +131,12 @@ const ownPreset = chat => !chat.presetId || isBuiltinPreset(chat.presetId)
 
 export function createEngine(store, isolation, ledger = null, { subscription = null, rulebooks = null } = {}) {
   const running = new Map()
+  // The card's own scripts that follow its variables (card-scripts.mjs): around each reply's update. Those the player
+  // has let call the model (Tavern Helper generate) get it here.
+  const cardScripts = cardScriptsFor(store)
+  cardScripts.useModel((chat, request, signal) => generateFor(chat, { ...request, borrow: false }, signal))
+  // Cards whose schema was looked for in their picture again this run (cardWithSchema).
+  const schemaReread = new Set()
 
   function scanWindow(path, depth, input) {
     const recent = path.slice(-Math.max(1, depth)).map(node => (node.role === 'user' ? node.text : node.display ?? node.text))
@@ -208,11 +216,11 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     }
   }
 
-  async function buildPrompt(chat, parent, input, { forceFull = false, marks = false, rules = null }, templates) {
+  async function buildPrompt(chat, parent, input, { forceFull = false, marks = false, rules = null, startWrites = [] }, templates) {
     const [settings, card, preset, globalScripts, regexSets] = await Promise.all([store.getSettings(), store.getCard(chat.cardId), presetFor(store, chat.presetId), store.getRegex(), store.getRegexSets()])
     const { persona } = await chatPicks(store, chat, card)
     const books = await booksForCard(store, card, settings, chat)
-    const scripts = scriptsOf(card, preset, globalScripts, regexSets)
+    const scripts = scriptsOf(card, preset, globalScripts, regexSets, chat.regexChanges)
     const names = chat.names
     const macros = text => replaceMacros(text, names)
     const path = pathTo(chat, parent.id)
@@ -227,8 +235,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     // the frozen prefix: everything the history used to carry is sent again.
     const newSession = Boolean(path[start].compaction) && opens
     if (newSession) forceFull = true
-    // What the rules settle this turn is already so: the card's own lists show it.
-    const state = applyWrites(parent.state ?? {}, rules?.writes)
+    // What the rules settle this turn is already so: the card's own lists show it. So is what the card's scripts set as it began.
+    const state = applyWrites(parent.state ?? {}, [...startWrites, ...(rules?.writes ?? [])])
     const templateErrors = []
     const story = storyPath(path)
     // The turn's sandbox, opened by the first template: getwi reads these books;
@@ -271,11 +279,13 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       return { title: entry.comment, text }
     }
 
+    // What the card's scripts injected for this chat (injections.mjs): sent with the turn, and scanned when they say so.
+    const injections = turnInjections(chat)
     // A book may look further back or less far than the setting (世界书 → 扫描深度).
     const windows = new Map()
     const scanFor = book => {
       const depth = book.scanDepth || settings.scanDepth
-      if (!windows.has(depth)) windows.set(depth, scanWindow(withoutHidden(story), depth, said))
+      if (!windows.has(depth)) windows.set(depth, scanWindow(withoutHidden(story), depth, injections.scan ? `${said}\n${injections.scan}` : said))
       return windows.get(depth)
     }
     const hits = triggeredEntries(turnBooks, scanFor, newSession ? new Set() : recentRefs(seen, settings.reinjectAfter))
@@ -346,10 +356,13 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       reminder: [everyTurnReminder(chat.systemPrompt, books, { presetRules: hasPrefixRules(preset), mvu: usesMvu(card, books), choices: asksChoices(chat), selfCheck: asksSelfCheck(chat), scripts }), game?.reminder].filter(Boolean).join(''),
       marks,
       game: game?.text,
+      injected: { before: injections.before.map(item => ({ ...item, text: resolve(item.text) })), after: injections.after.map(item => ({ ...item, text: resolve(item.text) })) },
     })
+    // The card's scripts' own macros (registerMacroLike), over the whole message.
+    const withMacros = await cardScripts.applyMacros(card, prompt, { role: 'user', messageId: path.length })
     return {
       settings,
-      prompt,
+      prompt: withMacros,
       // The input as the turn keeps it (its own templates run).
       input: resolve(said),
       injected: sent.map(hit => hit.ref),
@@ -358,8 +371,9 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       recalled: recalled.map(entry => entry.id),
       recalledTitles: recalled.map(entry => entry.title),
       templateErrors,
-      // What the templates wrote: the chat state (kept on the user node), chat-wide and app-wide variables.
-      templateWrites: writes.message,
+      // What the templates wrote: the chat state (kept on the user node), chat-wide and app-wide variables. The card's scripts'
+      // changes at the turn's start go first.
+      templateWrites: [...startWrites, ...writes.message],
       localWrites: writes.local,
       globalWrites: writes.global,
       // A new session holds no earlier <动态设定>, so the pile-up count restarts here.
@@ -379,7 +393,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     const books = await booksForCard(store, card, settings, chat)
     const story = storyPath(pathTo(chat, nodeId)).filter(node => !node.deleted)
     return chatTemplates({
-      names: chat.names, card, preset, books, scripts: scriptsOf(card, preset, globalScripts, regexSets), state,
+      names: chat.names, card, preset, books, scripts: scriptsOf(card, preset, globalScripts, regexSets, chat.regexChanges), state,
       local: chat.frameVars ?? {},
       global: settings.globalVars ?? {},
       messages: [...story.map(node => ({ role: node.role, text: node.text ?? '' })), ...extra],
@@ -486,7 +500,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
    */
   async function apiMessages(chat, parent, { stripAll = false } = {}) {
     const [card, preset, globalScripts, regexSets] = await Promise.all([store.getCard(chat.cardId).catch(() => null), presetFor(store, chat.presetId), store.getRegex(), store.getRegexSets()])
-    const scripts = scriptsOf(card, preset, globalScripts, regexSets)
+    const scripts = scriptsOf(card, preset, globalScripts, regexSets, chat.regexChanges)
     const macros = text => replaceMacros(text, chat.names)
     const path = pathTo(chat, parent.id)
     let start = 0
@@ -680,12 +694,29 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         }
       }
 
+      // The card's scripts at a new turn's start (MESSAGE_SENT and after): what they inject goes into this turn, and the
+      // variables they set are what it starts from, kept with the turn as its template writes are (a regenerate replays them).
+      // What else they change on the chat (its variables, injections, books, prompt) is kept with the reply, on the chat as
+      // it is read then: a turn that fails keeps none of it, and what came meanwhile (a card frame's writes) stays.
+      let startWrites = []
+      let startNotes = []
+      let startSide = null
+      if (!userNode && chat.cardId !== DIRECT_CARD) {
+        const sides = () => new Map(Object.keys(chat).filter(key => key !== 'nodes').map(key => [key, JSON.stringify(chat[key])]))
+        const before = sides()
+        const started = await cardScripts.turnStarting(await store.getCard(chat.cardId).catch(() => null), chat, [...pathTo(chat, parent.id), { role: 'user', text, state: parent.state ?? {} }])
+        if (started.state) startWrites = stateWrites(parent.state ?? {}, started.state)
+        startNotes = started.notes
+        const after = sides()
+        const changed = [...new Set([...before.keys(), ...after.keys()])].filter(key => before.get(key) !== after.get(key))
+        if (changed.length) startSide = Object.fromEntries(changed.map(key => [key, chat[key]]))
+      }
       // Regenerating reuses the recorded prompt verbatim, so the fork's prefix
       // (and its worldbook injections) matches the original attempt exactly.
       const preparing = span('prompt')
       let prepared = userNode
         ? { settings: await store.getSettings(), prompt: userNode.prompt, injected: userNode.injected, injectedTitles: userNode.injectedTitles, templateWrites: userNode.templateWrites ?? [] }
-        : await preparePrompt(chat, parent, text, { marks, rules, files })
+        : await preparePrompt(chat, parent, text, { marks, rules, files, startWrites })
       preparing()
       const target = await targetFor(modelFor(chat, prepared.settings), prepared.settings)
       // 联网: the provider's own search, when this chat has it on and the model has one. A new turn's
@@ -791,6 +822,11 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       const settling = span('settle')
       return await store.withChat(chatId, async () => {
         const fresh = await store.getChat(chatId)
+        // What the card's scripts changed on the chat as the turn began, now that the turn has its reply.
+        for (const [key, value] of Object.entries(startSide ?? {})) {
+          if (value === undefined) delete fresh[key]
+          else fresh[key] = value
+        }
         const now = new Date().toISOString()
         let globalWrites = []
         if (!userNode) {
@@ -829,7 +865,12 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         const { text: reply, gate } = cutAtGate(written, stops)
         const gameWrites = userNode.gameWrites ?? []
         const turnWrites = [...(userNode.templateWrites ?? []), ...gameWrites]
-        const updated = applyStateUpdates(applyWrites(parent.state, turnWrites), reply)
+        const replyFrom = applyWrites(parent.state, turnWrites)
+        // A card whose scripts follow its variables has them run around the reply's update, as MVU runs them; any
+        // other card's update is applied as it always was.
+        const turnCard = await store.getCard(fresh.cardId).catch(() => null)
+        const scripted = await cardScripts.update(turnCard, fresh, { before: replyFrom, text: reply, path: pathTo(fresh, parent.id), received: true })
+        const updated = scripted ?? applyStateUpdates(replyFrom, reply)
         // The reply's own templates run once and the rendered text is what is kept, shown and
         // sent back later; what they write lands after the reply's own update blocks.
         const evaluated = hasEjs(reply) ? await evaluateReply(fresh, userNode, reply, updated.state) : null
@@ -840,7 +881,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         // reply's own writes, so 补写变量 keeps them too. A bag is not among them: what the reply put in it stays.
         const replyWrites = [...(evaluated?.writes.message ?? []), ...gameWrites.filter(write => typeof write.value === 'number')]
         // The card's variable rules have the last word on the state, so the sheet reads what they kept.
-        const kept = await keptToSchema(fresh, applyWrites(updated.state, replyWrites))
+        const kept = await keptToSchema(fresh, applyWrites(updated.state, replyWrites), turnCard)
         const finalState = kept.state
         const sheet = ruled ? settledSheet(book, pathTo(fresh, parent.id), userNode, replyText, finalState) : null
         const node = {
@@ -855,6 +896,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
           stateChanges: [...new Set([...writeLabels(turnWrites), ...updated.changes, ...writeLabels(evaluated?.writes.message)])],
           ...(updated.unread ? { updateUnread: true } : {}),
           ...(kept.problem ? { schemaProblem: kept.problem } : {}),
+          ...(startNotes.length || scripted?.notes.length ? { scriptNotes: [...startNotes, ...(scripted?.notes ?? [])] } : {}),
           ...(replyWrites.length ? { templateWrites: replyWrites } : {}),
           ...(evaluated?.errors.length ? { templateErrors: evaluated.errors } : {}),
           sdk: outcome.sdk ?? null,
@@ -874,6 +916,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         // A chat from before replies kept their choices: this one and those after it do, the older ones stay as sent.
         fresh.choicesKept ??= now
         fresh.nodes[node.id] = node
+        // A card script's injection for the next turn only has been sent.
+        if (!userNodeId) afterTurn(fresh)
         // Also lifts a rollback on the parent: the new turn is now the visible branch.
         selectNode(fresh, node.id)
         if (!target.api) subscription.afterTurn(fresh, outcome)
@@ -1174,7 +1218,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     // A reply that carries a compaction has no history after it: its summary and last turns stand in, as for the next turn.
     if (node.compaction) {
       const [card, preset, globalScripts, regexSets] = await Promise.all([store.getCard(chat.cardId).catch(() => null), presetFor(store, chat.presetId), store.getRegex(), store.getRegexSets()])
-      instruction = `${compactionRecap(node, storyPath(pathTo(chat, node.id)), chat.names, scriptsOf(card, preset, globalScripts, regexSets), chat)}\n\n${instruction}`
+      instruction = `${compactionRecap(node, storyPath(pathTo(chat, node.id)), chat.names, scriptsOf(card, preset, globalScripts, regexSets, chat.regexChanges), chat)}\n\n${instruction}`
     }
     const started = Date.now()
     const result = await generateApi(target, { system: chat.systemPrompt, messages: [...history, { role: 'user', content: instruction }], maxTokens }, signal ?? new AbortController().signal, onText)
@@ -1193,14 +1237,23 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
    */
   async function frameGenerate(chatId, { raw = false, config = {} }, signal, onText) {
     if (running.has(chatId)) throw httpError(409, msg`正在生成，先停止`)
-    const chat = await store.getChat(chatId)
+    return generateFor(await store.getChat(chatId), { raw, config, borrow: true }, signal, onText)
+  }
+
+  /**
+   * frameGenerate's work on `chat` as it is: also for a card's scripts on the server (card-scripts.mjs), in the middle of
+   * a turn. `borrow`: a plain generate may ask inside the chat's own conversation (askInContext); a turn under way
+   * keeps its conversation to itself.
+   */
+  async function generateFor(chat, { raw = false, config = {}, borrow = false }, signal, onText = () => {}) {
+    const chatId = chat.id
     const path = activePath(chat)
     const tip = path.at(-1)
     const input = String(config.user_input ?? '').trim()
     const maxTokens = 4000
     // The card shows what it gets back: the 屏蔽词 that change what is shown apply to it.
     const shown = async text => blockText(text, await store.getBlockWords(), { target: 'display' })
-    if (!raw && tip.role === 'assistant') {
+    if (borrow && !raw && tip.role === 'assistant') {
       const asked = await askInContext(chatId, tip.id, input || '继续。', { maxTokens, signal, onText })
       if (asked) return shown(asked.text)
     }
@@ -1255,7 +1308,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     const next = hasEjs(text) && chat.nodes[nodeId] ? (await renderAtNode(chat, nodeId, [String(text)], { runType: 'render_permanent' })).texts[0] : text
     // The input as its turn sent it (buildPrompt: the card's prompt-side regex at depth 0, then macros).
     const [card, preset, globalScripts, regexSets] = await Promise.all([store.getCard(chat.cardId).catch(() => null), presetFor(store, chat.presetId), store.getRegex(), store.getRegexSets()])
-    const scripts = scriptsOf(card, preset, globalScripts, regexSets)
+    const scripts = scriptsOf(card, preset, globalScripts, regexSets, chat.regexChanges)
     const macros = input => replaceMacros(input, chat.names)
     const sentInput = input => macros(applyScripts(input, scripts, { placement: PLACEMENT.USER_INPUT, target: 'prompt', depth: 0, macros }))
     const edit = editChatMessage(chat, nodeId, next, { sentInput })
@@ -1271,17 +1324,23 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
    * The state as the chat's card's schema makes it, as { state, problem } (keepToSchema). A card
    * imported before schemas were kept has its script in its picture only: read from there once.
    */
-  async function keptToSchema(chat, state) {
-    const card = await cardWithSchema(chat.cardId)
+  async function keptToSchema(chat, state, read = null) {
+    const card = await cardWithSchema(chat.cardId, read)
     if (!card) return { state }
     return keepToSchema(card.mvuSchema, state)
   }
 
-  /** The card with its mvuSchema filled in from its picture if it had none yet; checks no state. */
-  async function cardWithSchema(cardId) {
-    const card = await store.getCard(cardId).catch(() => null)
+  /**
+   * The card with its mvuSchema filled in from its picture if it had none yet; checks no state. One imported while
+   * schemas were held to 300 KB kept none of a bigger one: read once more (once a run, in case it is still too big).
+   */
+  async function cardWithSchema(cardId, read = null) {
+    // The card as the caller just read it (a turn reads it once for its scripts and its rules).
+    const card = read?.id === cardId ? read : await store.getCard(cardId).catch(() => null)
     if (!card) return null
-    if (typeof card.mvuSchema !== 'string') {
+    const missed = card.mvuSchema === '' && card.helperList?.some(script => script.kind === 'schema' && script.on) && !schemaReread.has(card.id)
+    if (missed) schemaReread.add(card.id)
+    if (typeof card.mvuSchema !== 'string' || missed) {
       const picture = card.hasAvatar ? await readFile(store.avatarPath(card.id)).catch(() => null) : null
       const raw = picture ? rawOfPicture(picture) : null
       card.mvuSchema = schemaScript((raw?.data ?? raw)?.extensions)
@@ -1351,7 +1410,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       return await store.withChat(chatId, async () => {
         const fresh = await store.getChat(chatId)
         const edit = editChatMessage(fresh, nodeId, `${fresh.nodes[nodeId].text.trimEnd()}\n\n${block}`)
-        const { state, changes, unread } = applyStateUpdates(before, edit.node.text)
+        const scripted = await cardScripts.update(card, fresh, { before, text: edit.node.text, path: pathTo(fresh, turn?.id ?? 'root') })
+        const { state, changes, unread } = scripted ?? applyStateUpdates(before, edit.node.text)
         if (unread) edit.node.updateUnread = true
         else delete edit.node.updateUnread
         // The reply's own template writes land after its update blocks again.
@@ -1566,6 +1626,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     fillUpdate,
     missesUpdate,
     keptToSchema,
+    cardScripts,
     cardWithSchema,
     rewriteChoices,
     previewTurn,

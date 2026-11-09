@@ -55,7 +55,7 @@ export function normalizeScripts(list) {
  * A script an attached set shares with the card (the same id: a card exported with its sets and imported again)
  * runs once, as the card has it.
  */
-export function chatScriptList({ global = [], preset = [], card = [], cardId = '', sets = [] }) {
+export function chatScriptList({ global = [], preset = [], card = [], cardId = '', sets = [], changes = null }) {
   const seen = new Set(card.map(s => s.id))
   const attached = []
   for (const set of setsOfCard(sets, cardId)) {
@@ -65,7 +65,98 @@ export function chatScriptList({ global = [], preset = [], card = [], cardId = '
       attached.push(script)
     }
   }
-  return [...global, ...preset, ...card, ...attached]
+  return withRegexChanges([...global, ...preset, ...card, ...attached], changes)
+}
+
+// ─── A chat's own changes (Tavern Helper's regex functions in a card's script) ───
+// A card's script that turns a regex on or off, or rewrites one, changes it for the chat it runs in (chat.regexChanges),
+// never the card or the app's settings: the card's other chats and its export stay as they were, as with its books.
+// { changed: { [id]: fields }, added: [script] }; a script left out of a replacement list is turned off.
+
+/** `scripts` with a chat's changes: changed fields over each, the chat's own after them all. */
+export function withRegexChanges(scripts, changes) {
+  if (!changes || typeof changes !== 'object') return scripts
+  const changed = changes.changed && typeof changes.changed === 'object' ? changes.changed : {}
+  const own = scripts.map(script => (Object.prototype.hasOwnProperty.call(changed, script.id) ? { ...script, ...changed[script.id] } : script))
+  return [...own, ...normalizeScripts(Array.isArray(changes.added) ? changes.added : [])]
+}
+
+// Tavern Helper's sources, by SillyTavern's placement numbers.
+const SOURCES = { user_input: 1, ai_output: 2, slash_command: 3, world_info: 5, reasoning: 6 }
+
+/** A script as Tavern Helper's getTavernRegexes gives it. */
+export function thRegex(script) {
+  return {
+    id: script.id,
+    script_name: script.scriptName,
+    enabled: !script.disabled,
+    find_regex: script.findRegex,
+    replace_string: script.replaceString,
+    trim_strings: script.trimStrings.slice(),
+    source: Object.fromEntries(Object.entries(SOURCES).map(([key, n]) => [key, script.placement.includes(n)])),
+    destination: { display: !script.promptOnly, prompt: !script.markdownOnly },
+    run_on_edit: script.runOnEdit === true,
+    min_depth: script.minDepth,
+    max_depth: script.maxDepth,
+  }
+}
+
+/** A Tavern Helper regex back as a script, over `base` (the one of the same id); null for one without a pattern. */
+export function scriptFromTh(regex, base = null) {
+  if (!regex || typeof regex !== 'object') return null
+  const was = base ?? {}
+  const destination = regex.destination && typeof regex.destination === 'object' ? regex.destination : null
+  const [script] = normalizeScripts([{
+    ...was,
+    id: String(regex.id ?? was.id ?? ''),
+    scriptName: String(regex.script_name ?? was.scriptName ?? ''),
+    findRegex: typeof regex.find_regex === 'string' ? regex.find_regex : was.findRegex,
+    replaceString: typeof regex.replace_string === 'string' ? regex.replace_string : was.replaceString,
+    trimStrings: Array.isArray(regex.trim_strings) ? regex.trim_strings : was.trimStrings,
+    placement: regex.source && typeof regex.source === 'object' ? Object.entries(SOURCES).filter(([key]) => regex.source[key]).map(([, n]) => n) : was.placement,
+    disabled: typeof regex.enabled === 'boolean' ? !regex.enabled : was.disabled,
+    markdownOnly: destination ? destination.display === true && destination.prompt !== true : was.markdownOnly,
+    promptOnly: destination ? destination.prompt === true && destination.display !== true : was.promptOnly,
+    minDepth: regex.min_depth !== undefined ? regex.min_depth : was.minDepth,
+    maxDepth: regex.max_depth !== undefined ? regex.max_depth : was.maxDepth,
+  }])
+  return script ?? null
+}
+
+const FIELDS = ['scriptName', 'findRegex', 'replaceString', 'trimStrings', 'placement', 'disabled', 'markdownOnly', 'promptOnly', 'minDepth', 'maxDepth']
+
+/**
+ * A chat's changes after a script replaced the list `base` (one scope's scripts as saved) with `list` (Tavern Helper
+ * regexes): `previous` (the chat's changes so far) with this scope's taken anew. A script of `base` not in `list` is
+ * turned off; one new to `base` becomes the chat's own. The order is not kept.
+ * @param options.own - `base` is the scope the chat's own scripts are listed in (the card's, 'character'): the list
+ *   names all of them, so one of its own left out of it is gone. Another scope's replacement leaves them be.
+ */
+export function regexChanges(base, list, previous = null, { own = false } = {}) {
+  const ids = new Set(base.map(script => script.id))
+  const changed = Object.fromEntries(Object.entries(previous?.changed ?? {}).filter(([id]) => !ids.has(id)))
+  const added = own ? [] : (previous?.added ?? []).filter(script => !ids.has(script.id) && !(list ?? []).some(regex => String(regex?.id ?? '') === script.id))
+  const byId = new Map(base.map(script => [script.id, script]))
+  const kept = new Set()
+  for (const regex of Array.isArray(list) ? list : []) {
+    const was = byId.get(String(regex?.id ?? ''))
+    const script = scriptFromTh(regex, was)
+    if (!script) continue
+    if (!was) {
+      added.push(script)
+      continue
+    }
+    kept.add(was.id)
+    const diff = Object.fromEntries(FIELDS.filter(key => JSON.stringify(script[key]) !== JSON.stringify(was[key])).map(key => [key, script[key]]))
+    if (Object.keys(diff).length) changed[was.id] = diff
+  }
+  for (const script of base) if (!kept.has(script.id) && !script.disabled) changed[script.id] = { disabled: true }
+  return Object.keys(changed).length || added.length ? { changed, added } : null
+}
+
+/** Tavern Helper's sources and destinations as applyScripts' placement and target. */
+export function regexTarget(source, destination) {
+  return { placement: SOURCES[source] ?? SOURCES.ai_output, target: destination === 'prompt' ? 'prompt' : 'display' }
 }
 
 /** The 正则集 attached to a card, in their order. */

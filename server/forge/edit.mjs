@@ -11,6 +11,7 @@ import { CARD_FIELDS, cleanTags, editCard, greetingList } from '../../web/shared
 import { LONG_TOKENS, WRITING_RULES } from './prompts.mjs'
 import { attr, bodyFor, historyLines, readBlocks, splitKeys } from './blocks.mjs'
 import { CHAT_STATE_RULES, REFERENCE_RULES, referenceBlock } from './references.mjs'
+import { STATUS_FORMAT, readStatus, statusPart, variableLines } from './status.mjs'
 import { cleanPath } from '../../web/shared/status.js'
 import { getPath, splitPath, writablePath } from '../../web/shared/vars.js'
 
@@ -117,12 +118,18 @@ export function bookBlock(entries, shown, empty = '（这张卡还没有世界�
     .join('\n\n')
 }
 
+// A request kept to the status bar's layout: the id its change has (status.mjs statusChange).
+export const STATUS_TARGET = 'statusBar'
+// Variables listed for a layout to pick paths from, at most.
+const MAX_VARIABLES = 80
+
 /** Where a change is, as its block opens: field:description → <field name="description">. */
 function targetTag(target) {
   const [kind, id] = [target.slice(0, target.indexOf(':')), target.slice(target.indexOf(':') + 1)]
   if (kind === 'field') return `<field name="${FIELD_TAGS[id] ?? id}">`
   if (kind === 'greeting') return `<greeting index="${Number(id) + 1}">`
   if (kind === 'entry') return `<entry uid="${id}">`
+  if (target === STATUS_TARGET) return '<status_bar>'
   return ''
 }
 
@@ -137,7 +144,8 @@ const editSystem = reply => `你是角色卡编辑。用户在 SillyTavern 一�
 - 要加变量（好感度一类的数值、状态栏、改成 MVU 卡）时，这个应用会自己记录变量、显示状态栏、需要时把当前变量发给模型，只要写两样：
   1. 初始变量：<new_entry name="[initvar]初始变量" mode="initvar">，正文用 YAML 写出每个变量和初始值；卡里已经有 initvar 条目就改那一条。
   2. 更新规则：一条 mode="constant" 的条目，写每个变量的含义、范围、什么时候怎么变，并要求每次回复末尾写一个 <UpdateVariable> 块，没有变化就不写。卡里已经有写变量更新格式的条目（里面有 <UpdateVariable>、<JSONPatch> 或 _.set）时，沿用它原来的写法，把新变量加进去，不要换成别的写法；JSONPatch 和 _.set、_.add 这个应用都认。卡里还没有时，用 _.set('变量路径', 旧值, 新值);//原因 一行一个（数字增减也可以写 _.add('变量路径', 增量);）。
-  不用另写状态栏界面、正则或脚本，也不用 {{getvar}}、{{get_message_variable}} 这类宏。卡还没有状态栏布局时，新变量会自动显示在状态栏里；卡已经有自己的状态栏布局（创作向导做的卡，或在「检查这张卡」里调过的）时，新变量要在「检查这张卡 → 调整状态栏」里加上才显示，在 <reply> 里提醒用户，不要说它会自动出现。
+  不用另写状态栏界面、正则或脚本，也不用 {{getvar}}、{{get_message_variable}} 这类宏。卡还没有状态栏布局时，新变量会自动显示在状态栏里；卡已经有自己的状态栏布局（<status_bar> 里）时，新变量要显示就写一个 <status_bar>，原来的项和新的项都写上。
+- 状态栏的样子（显示哪些变量、名字、显示方式、分页、主题、配色）只写 <status_bar>，不写 HTML、CSS 或正则。路径用 <variables> 里的，或这次新加的变量的。卡用自己的正则或脚本画状态栏时不能改，在 <reply> 里说明。
 - 要求含糊时，按最可能的意思改，在 <reply> 里说你是怎么理解的。不需要改或者做不到的，在 <reply> 里说明，不输出改动。
 ${WRITING_RULES.filter(rule => !rule.includes('<user>')).map(rule => `- ${rule}`).join('\n')}
 
@@ -150,6 +158,7 @@ ${WRITING_RULES.filter(rule => !rule.includes('<user>')).map(rule => `- ${rule}`
 <entry uid="3">改好之后的完整条目正文</entry>
 <new_entry name="条目名" keys="关键词一, 关键词二" mode="keyword">新条目的正文</new_entry>
 <remove_entry uid="5"></remove_entry>
+${STATUS_FORMAT()}
 
 - field 的 name 用这些：${Object.values(FIELD_TAGS).join('、')}。tags 写成逗号分开的一行。
 - greeting 的 index 和卡里一致；写一个比现有开场白多一的序号，就是新加一条。
@@ -163,7 +172,7 @@ ${WRITING_RULES.filter(rule => !rule.includes('<user>')).map(rule => `- ${rule}`
  * entries sent in full: only those can be changed by the answer.
  * `helpers`: the card's scripts (helperBlock), told about when the request is about them.
  */
-export function editRequest(card, { text, target = '', turns = [], reply = '简体中文', references = [], helpers = null } = {}) {
+export function editRequest(card, { text, target = '', turns = [], reply = '简体中文', references = [], helpers = null, state = {} } = {}) {
   const entries = card.book?.entries ?? []
   const shown = shownEntries(entries, `${text}\n${target}`, target)
   const history = historyLines(turns)
@@ -173,12 +182,19 @@ export function editRequest(card, { text, target = '', turns = [], reply = '简�
     material,
     `<card>\n${cardBlock(card)}\n</card>`,
     `<worldbook>\n${bookBlock(entries, shown)}\n</worldbook>`,
+    statusBlock(card, state),
     helperBlock(helpers, text),
     history.length ? `之前的几次修改（上面的卡已经是处理之后的样子）：\n${history.join('\n')}` : '',
     `这次的要求：\n${text}`,
     target ? `只改 ${targetTag(target)} 这一处，别的不动。` : '',
   ].filter(Boolean).join('\n\n')
   return { request: { system: editSystem(reply) + rules, messages: [{ role: 'user', content }], maxTokens: LONG_TOKENS, softCap: true }, shown: [...shown] }
+}
+
+/** The card's status bar layout and the variables it can show (`state`: as they start). */
+function statusBlock(card, state) {
+  const lines = variableLines(state).slice(0, MAX_VARIABLES)
+  return [statusPart(card), lines.length ? `<variables>\n开局时的变量：\n${lines.join('\n')}\n</variables>` : ''].filter(Boolean).join('\n\n')
 }
 
 /** The chat a proposal's <chat_state> goes to: the one read last. */
@@ -211,6 +227,7 @@ const TAGS = ['field', 'greeting', 'entry', 'new_entry', 'remove_entry', 'chat_s
  *   { id, kind: 'newEntry', name, keys, constant, initvar?, after }
  *   { id, kind: 'removeEntry', uid, title, constant, before }
  *   { id, kind: 'chatState', chatId, chat, path, value, before, after }  (a variable for the chat that was read)
+ *   { id: 'statusBar', kind: 'statusBar', spec, before, after, scripts? } (the layout; before and after as lines, status.mjs)
  * Pieces the same as before, entries not sent in full (`shown`), and with a
  * `target` anything else, are left out; `dropped` (only when there are any)
  * says which blocks could not be taken and why: [{ reason, name }], reason
@@ -305,6 +322,8 @@ export function readEdit(text, card, { shown = null, target = '', references = [
       if (body) newEntry(attrs, body)
     }
   }
+  // The layout, read as 检查这张卡 reads it: a look or pages it says nothing of stay as they are.
+  for (const change of readStatus(text, card)) if (change.before !== change.after) changes.set(change.id, change)
   const list = [...changes.values()]
   return { reply, changes: target ? list.filter(change => change.id === target) : list, ...(dropped.length ? { dropped } : {}) }
 }

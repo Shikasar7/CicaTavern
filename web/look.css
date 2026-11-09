@@ -13,7 +13,7 @@
 .vn-look-strength input { width: 130px; }
 .vn-look-strength b { min-width: 3em; font-weight: 600; text-align: right; }
 
-.vn-seal, .vn-face { display: none; }
+.vn-seal, .vn-box-face { display: none; }
 /* A fight opening: what is under it shows until the cover has come over. */
 .battle.entering { background: transparent !important; }
 .battle.entering::backdrop { background: transparent !important; }
@@ -296,9 +296,9 @@ html[data-look="console"] .vn-box { width: calc(100% - 44px); max-width: 1180px;
 @keyframes console-pop { from { transform: translateX(-50%) scaleY(.1); opacity: 0; } }
 html[data-look="console"] .vn-box.faced { padding-left: 158px; }
 html[data-look="console"] .vn-name { position: absolute; left: 26px; top: -21px; z-index: 1; margin: 0; padding: 1px 22px; border: 4px solid #fff; border-radius: 7px; background: var(--tab); box-shadow: 0 0 0 3px var(--win-deep); color: var(--hit); font: 700 20px/1.5 var(--ui); }
-html[data-look="console"] .vn-face { display: block; position: absolute; left: 26px; top: 26px; width: 112px; height: 112px; border: 4px solid #fff; border-radius: 6px; background-color: var(--tab); background-repeat: no-repeat; }
-html[data-look="console"] .vn-face[hidden] { display: none; }
-html[data-look="console"] .vn-box.talking .vn-face { animation: console-talk .26s steps(2) infinite; }
+html[data-look="console"] .vn-box-face { display: block; position: absolute; left: 26px; top: 26px; width: 112px; height: 112px; border: 4px solid #fff; border-radius: 6px; background-color: var(--tab); background-repeat: no-repeat; }
+html[data-look="console"] .vn-box-face[hidden] { display: none; }
+html[data-look="console"] .vn-box.talking .vn-box-face { animation: console-talk .26s steps(2) infinite; }
 @keyframes console-talk { 50% { transform: translateY(1px); } }
 html[data-look="console"] .vn-box .vn-text { padding-bottom: 28px; color: #fff; }
 html[data-look="console"] .vn-box[data-kind="dialogue"] .vn-text .q { color: #fff; }
@@ -475,7 +475,7 @@ html[data-look="console"] .roll-hint { margin-top: 10px; color: #fff; text-shado
   html[data-look="console"] .vn-box { width: calc(100% - 20px); min-height: 150px; padding: 22px 14px 44px; border-width: 4px; font-size: calc(18px * var(--story-scale)); }
   html[data-look="console"] .vn-box.faced { padding-left: 100px; }
   html[data-look="console"] .vn-name { left: 12px; top: -18px; padding: 0 14px; font-size: 16px; }
-  html[data-look="console"] .vn-face { left: 12px; top: 22px; width: 78px; height: 78px; }
+  html[data-look="console"] .vn-box-face { left: 12px; top: 22px; width: 78px; height: 78px; }
   html[data-look="console"] .vn-quickbar { right: 8px; bottom: 6px; gap: 3px; }
   html[data-look="console"] .vn-quickbar .vn-btn { padding: 0 6px; font-size: 12px; }
   html[data-look="console"] .vn-box .vn-text { padding-bottom: 0; }
@@ -507,7 +507,7 @@ html[data-look="console"] .roll-hint { margin-top: 10px; color: #fff; text-shado
 @media (max-height: 520px) and (orientation: landscape) {
   html[data-look="console"] .vn-box { min-height: 112px; padding: 16px 14px 34px; border-width: 4px; font-size: calc(16px * var(--story-scale)); }
   html[data-look="console"] .vn-box.faced { padding-left: 90px; }
-  html[data-look="console"] .vn-face { left: 12px; top: 16px; width: 66px; height: 66px; }
+  html[data-look="console"] .vn-box-face { left: 12px; top: 16px; width: 66px; height: 66px; }
   html[data-look="console"] .vn-quickbar .vn-btn { padding: 0 6px; font-size: 12px; }
   html[data-look="console"] .battle[open] { grid-template-rows: auto minmax(0, 1fr); grid-template-columns: minmax(0, 1fr) 300px; }
   html[data-look="console"] .battle-line { top: 8px; max-width: 46%; font-size: 14px; }
@@ -522,7 +522,7 @@ html[data-look="console"] .roll-hint { margin-top: 10px; color: #fff; text-shado
   html[data-look="console"] .roll-tier { font-size: 30px; min-height: 42px; }
 }
 
-/* ─── 酷炫: three colours and a hard edge. Flat fields that change shape between screens, framed black windows, one slab that slides to what
+/* ─── 撞色: three colours and a hard edge. Flat fields that change shape between screens, framed black windows, one slab that slides to what
    is chosen, a banner when something big happens. Long easing tails, nothing bounces. ─── */
 html[data-look="bold"] {
   --look-hot: #a3122f; --look-hot-c: 163 18 47;
@@ -545,7 +545,7 @@ html[data-look="bold"] :is(.vn, .battle, .roll-layer, .game-bag, .vn-saves, .sta
 /* The fields under everything: the scene washed in the two colours, through which its own colours show as far as 场景滤镜 says. */
 .look-fields { display: none; }
 html[data-look="bold"] .look-fields { display: block; position: absolute; top: 0; right: 0; bottom: 0; left: 0; overflow: hidden; pointer-events: none; }
-.look-wash { position: absolute; top: -3%; right: -3%; bottom: -3%; left: -3%; background: var(--gold); opacity: var(--look-strength, .45); transform: translate(var(--cx, 0), 0) scale(var(--cs, 1)); transition: transform 1s var(--out); }
+.look-wash { position: absolute; top: -3%; right: -3%; bottom: -3%; left: -3%; background: var(--gold); opacity: var(--look-strength, .4225); transform: translate(var(--cx, 0), 0) scale(var(--cs, 1)); transition: transform 1s var(--out); }
 .look-wash-picture { position: absolute; top: 0; right: 0; bottom: 0; left: 0; background: var(--vn-picture, none) center / cover no-repeat; filter: grayscale(1) contrast(1.18) brightness(1.2); mix-blend-mode: multiply; }
 .look-red { position: absolute; top: 0; right: 0; bottom: 0; left: 0; overflow: hidden; background: var(--look-hot); clip-path: var(--f2); transition: clip-path .9s var(--out); }
 .look-rays { position: absolute; right: -420px; top: -360px; width: 1300px; height: 1300px; border-radius: 50%; background: repeating-conic-gradient(rgb(255 255 255 / .07) 0 9deg, transparent 9deg 18deg); animation: bold-spin 46s linear infinite; }
@@ -681,6 +681,38 @@ html[data-look="bold"] .battle-self.struck { animation: none; }
 html[data-look="bold"] .battle-meter > span:first-child { color: var(--gold); font-size: 14px; font-weight: 800; letter-spacing: 0; }
 html[data-look="bold"] .battle-meter b { font: 400 42px/1.05 var(--look-display); }
 html[data-look="bold"] .battle-meter b small { font-size: 18px; opacity: .65; }
+/* 队伍: one slanted band across the foot, a slot each, the cut-outs' heads over its top edge; the one choosing widens and turns red. */
+html[data-look="bold"] .battle-bottom:has(> .battle-party) { grid-template-columns: minmax(0, 1fr) 216px; padding: 56px 34px 26px 0; }
+html[data-look="bold"] .battle-party { --lean: -16deg; display: flex; align-items: stretch; gap: 0; max-width: none; margin-left: -44px; padding: 0 0 0 44px; border-block: 4px solid var(--gold); background: var(--paper); box-shadow: 0 10px 0 0 var(--look-hot); transform: skewX(var(--lean)); transform-origin: 0 100%; animation: bold-enter .6s var(--out) .2s both; }
+html[data-look="bold"] .battle-member { flex: 1 1 0; min-width: 0; display: grid; grid-template-columns: 76px minmax(0, 1fr) auto; grid-template-rows: auto auto auto auto; align-items: end; column-gap: 8px; row-gap: 4px; padding: 8px 14px 9px 6px; border: 0; border-left: 5px solid var(--gold); background: none; color: var(--bone); font: 15px var(--ui); transition: flex-grow .35s var(--out), background .25s, filter .25s; }
+html[data-look="bold"] .battle-member:first-child { border-left: 0; }
+html[data-look="bold"] .battle-member > :not(.battle-bar) { transform: skewX(calc(var(--lean) * -1)); }
+/* The cut-out: its head (--head tall) rises --poke over the band; only the band's lower edge cuts it. */
+html[data-look="bold"] .member-face { --head: 42px; --poke: 32px; grid-column: 1; grid-row: 1 / -1; align-self: stretch; position: relative; width: auto; height: auto; margin: -8px 0 -9px; border-radius: 0; background: none; color: var(--gold); font: 400 34px var(--look-display); clip-path: inset(-200px -16px 0 0); transform-origin: 50% 100%; transition: scale .35s var(--out); }
+html[data-look="bold"] .member-face img { position: absolute; left: 50%; top: calc(var(--poke) * -1); height: calc(var(--head) / var(--face-side, .28)); max-width: none; transform: translate(calc(var(--face-x, .5) * -100%), calc((var(--face-y, .2) - var(--face-side, .28) / 2) * -100%)); filter: drop-shadow(2px 0 0 var(--bone)) drop-shadow(-2px 0 0 var(--bone)) drop-shadow(0 -2px 0 var(--bone)) drop-shadow(4px 3px 0 var(--look-hot)); pointer-events: none; }
+html[data-look="bold"] .member-name { grid-column: 2 / -1; grid-row: 1; justify-self: start; max-width: 100%; margin-top: -22px; padding: 0 9px; background: var(--gold); color: var(--paper); font: italic 800 13px/1.6 var(--ui); letter-spacing: 0; }
+html[data-look="bold"] .member-life { grid-column: 2; grid-row: 2; justify-self: start; color: var(--gold); font: 400 34px/1 var(--look-display); }
+html[data-look="bold"] .member-life small { margin-left: 1px; font-size: 14px; color: var(--bone); opacity: .7; }
+html[data-look="bold"] .member-energy { grid-column: 3; grid-row: 2; display: block; color: var(--bone); font: 400 20px/1 var(--look-display); }
+html[data-look="bold"] .battle-member .battle-bar.life { grid-column: 2 / -1; grid-row: 3; align-self: auto; height: 5px; transform: none; }
+html[data-look="bold"] .battle-member .battle-bar.energy { grid-column: 2 / -1; grid-row: 4; align-self: auto; height: 2px; transform: none; }
+html[data-look="bold"] .member-tag { top: -18px; right: 12px; padding: 0 7px; background: var(--look-hot); color: var(--gold); font: 800 12px/1.5 var(--ui); letter-spacing: 0; }
+html[data-look="bold"] .member-tag:empty { display: none; }
+html[data-look="bold"] .battle-member.acting { flex-grow: 1.4; border-left-color: var(--gold); background: var(--look-hot); }
+html[data-look="bold"] .battle-member.acting .member-face { scale: 1.12; }
+html[data-look="bold"] .battle-member.acting .member-name { background: var(--bone); }
+html[data-look="bold"] .battle-member.acting .member-tag { background: var(--paper); }
+html[data-look="bold"] .battle-party:has(.acting) .battle-member:not(.acting, .down) { filter: brightness(.72); }
+html[data-look="bold"] .battle-member.told .member-name::after { color: inherit; }
+html[data-look="bold"] .battle-member.down { opacity: 1; filter: grayscale(1) brightness(.5); }
+html[data-look="bold"] .battle.giving .battle-member:not(:disabled) { filter: none; }
+html[data-look="bold"] .battle.giving .battle-member:not(:disabled):hover, html[data-look="bold"] .battle.giving .battle-member:not(:disabled):focus-visible { border-left-color: var(--gold); background: rgb(var(--bone-c) / .16); outline: none; }
+/* With the faces in the band, the figure only steps in to strike and to win. */
+html[data-look="bold"] .battle:has(.battle-party) .battle-hero { opacity: 0; transition: transform .85s var(--out), opacity .2s; }
+html[data-look="bold"] .battle:has(.battle-party):is(.dashing, .ended) .battle-hero { opacity: 1; }
+/* A fight's scene shows nearly as it is: none of the field, stripe and dots (the win keeps them), only as much wash as 场景滤镜 says. Without a scene they stay, or there is nothing to look at. */
+html[data-look="bold"] .battle.scene :is(.look-red, .look-stripe, .look-dots) { transition: clip-path .9s var(--out), opacity .6s; }
+html[data-look="bold"] .battle.scene:not(.ended) :is(.look-red, .look-stripe, .look-dots) { opacity: 0; }
 html[data-look="bold"] .battle-panel.choose { padding: 8px; animation: bold-enter .6s var(--out) .28s both; }
 html[data-look="bold"] .battle-panel.target { min-width: 0; min-height: 0; padding: 10px 12px; text-align: left; }
 html[data-look="bold"] .battle-actions { position: relative; grid-auto-flow: row; grid-auto-columns: auto; justify-content: stretch; }
@@ -803,6 +835,19 @@ html[data-look="bold"] .roll-hint { position: absolute; left: 44px; bottom: 30px
   html[data-look="bold"] .battle-self { grid-template-columns: minmax(0, 1fr); align-self: end; max-width: 170px; gap: 4px; padding: 6px 12px 8px; }
   html[data-look="bold"] .battle-meter b { font-size: 30px; }
   html[data-look="bold"] .battle-meter b small { font-size: 14px; }
+  /* 队伍: one above another at the bottom left, the menu beside them; each its own short band, the bars hairlines. */
+  html[data-look="bold"] .battle-bottom:has(> .battle-party) { grid-template-columns: minmax(0, 1fr) 158px; padding: 24px 14px 16px 0; }
+  html[data-look="bold"] .battle-party { --lean: -12deg; flex-direction: column; align-self: end; gap: 18px; margin-left: -20px; padding: 0 0 0 20px; border: 0; background: none; box-shadow: none; transform: none; }
+  html[data-look="bold"] .battle-member { flex: none; grid-template-columns: 40px minmax(0, 1fr) auto; grid-template-rows: auto auto auto; column-gap: 6px; row-gap: 3px; padding: 4px 8px 5px 4px; border: 0; border-block: 2px solid var(--gold); background: var(--paper); box-shadow: 0 4px 0 0 var(--look-hot); transform: skewX(var(--lean)); transition: transform .3s var(--out), background .25s, filter .25s; }
+  html[data-look="bold"] .battle-member.acting { background: var(--look-hot); transform: translateX(8px) skewX(var(--lean)); }
+  html[data-look="bold"] .battle.giving .battle-member:not(:disabled):hover, html[data-look="bold"] .battle.giving .battle-member:not(:disabled):focus-visible { transform: translateX(8px) skewX(var(--lean)); }
+  html[data-look="bold"] .member-face { --head: 24px; --poke: 15px; margin: -4px 0 -5px; clip-path: inset(-200px -8px 0 0); font-size: 20px; }
+  html[data-look="bold"] .member-name { grid-column: 2; grid-row: 1; margin-top: -12px; padding: 0 4px; font-size: 10px; }
+  html[data-look="bold"] .member-life { grid-column: 3; grid-row: 1; font-size: 18px; }
+  html[data-look="bold"] :is(.member-life small, .member-energy) { display: none; }
+  html[data-look="bold"] .battle-member .battle-bar.life { grid-column: 2 / -1; grid-row: 2; height: 3px; }
+  html[data-look="bold"] .battle-member .battle-bar.energy { grid-column: 2 / -1; grid-row: 3; height: 2px; }
+  html[data-look="bold"] .member-tag { top: -11px; right: 6px; padding: 0 4px; font-size: 10px; }
   html[data-look="bold"] .battle-panel.choose { padding: 5px; }
   html[data-look="bold"] .battle-action { min-height: 30px; padding: 0 6px 0 22px; font-size: 16px; }
   html[data-look="bold"] .battle-float { font-size: 54px; }
@@ -840,6 +885,17 @@ html[data-look="bold"] .roll-hint { position: absolute; left: 44px; bottom: 30px
   html[data-look="bold"] .battle-bottom { grid-template-columns: minmax(0, 1fr); align-content: end; gap: 10px; padding: 6px 12px 10px; }
   html[data-look="bold"] .battle-self { gap: 12px; padding: 4px 10px 6px; }
   html[data-look="bold"] .battle-meter b { font-size: 24px; }
+  /* 队伍: the band across the foot of the field, the menu alone on the right; numbers of life only. */
+  html[data-look="bold"] .battle-bottom:has(> .battle-party) { position: static; grid-template-columns: minmax(0, 1fr); padding-top: 6px; }
+  html[data-look="bold"] .battle-party { --lean: -14deg; position: absolute; left: 0; right: 316px; bottom: 14px; margin: 0; padding-left: 34px; border-block-width: 3px; box-shadow: 0 6px 0 0 var(--look-hot); }
+  html[data-look="bold"] .battle-member { grid-template-columns: 42px minmax(0, 1fr); column-gap: 5px; row-gap: 3px; padding: 5px 8px 6px 4px; border-left-width: 3px; }
+  html[data-look="bold"] .member-face { --head: 26px; --poke: 19px; margin: -5px 0 -6px; clip-path: inset(-200px -8px 0 0); font-size: 20px; }
+  html[data-look="bold"] .member-name { margin-top: -15px; padding: 0 4px; font-size: 10px; }
+  html[data-look="bold"] .member-life { font-size: 20px; }
+  html[data-look="bold"] :is(.member-life small, .member-energy) { display: none; }
+  html[data-look="bold"] .battle-member .battle-bar.life { height: 3px; }
+  html[data-look="bold"] .battle-member .battle-bar.energy { height: 2px; }
+  html[data-look="bold"] .member-tag { top: -13px; right: 6px; padding: 0 4px; font-size: 10px; }
   html[data-look="bold"] .battle-action { min-height: 26px; font-size: 14px; }
   html[data-look="bold"] .battle-end-card h2 { font-size: 64px; margin-bottom: 8px; }
   html[data-look="bold"] .battle-tally { min-height: 30px; padding: 2px 0; }

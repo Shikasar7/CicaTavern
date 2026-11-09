@@ -13,8 +13,11 @@ import YAML from 'yaml'
 import { fileURLToPath } from 'node:url'
 import { backfillEntryPositions, cardSummary, cleanGroup, directCard, exportCard, greetingsOf, importOwnCard, normalizeCard, orderCards, organizeCard, parseCardFile, previousVersion, rawOfPicture, rulebookOf, sillyTavernCard, unwrapWorkspace, writeCardPng } from './cards.mjs'
 import { memoryWorldFile } from './memory.mjs'
-import { chatSummary, chatView, childrenOf, createChat, deleteMessage, selectNode, activePath, rebuildPrompt, restoreFolded, rollbackTo, hideRound, memoryView, saveMemory, editCompaction, dropCompaction, exportStory, importStory, importSillyTavern, forkChat, mountChange, switchOpening, booksForCard, playerOf, chatPicks, newChatPicks, switchPicks } from './chats.mjs'
+import { chatRegexes, chatSummary, chatView, childrenOf, createChat, deleteMessage, selectNode, activePath, rebuildPrompt, restoreFolded, rollbackTo, hideRound, memoryView, saveMemory, editCompaction, dropCompaction, exportStory, importStory, importSillyTavern, forkChat, mountChange, switchOpening, booksForCard, playerOf, chatPicks, newChatPicks, switchPicks } from './chats.mjs'
 import { onSchemaProblem } from './schema.mjs'
+import { cardScriptsFor, onCardScriptProblem } from './card-scripts.mjs'
+import { injectPrompts, uninjectPrompts } from './injections.mjs'
+import { TAVERN_EVENTS } from '../web/shared/th-api.js'
 import { bookByName, bookNames, chatBooks, createChatBook, fieldChange, parseUpdates, setFrameVars, thEntry, withChatChanges, writeChatBook } from './frames.mjs'
 import { editPreset, exportPreset, importOwnPreset, normalizePreset, presetDetail, presetSummary } from './presets.mjs'
 import { VN_ID, basicDetail } from './basic.mjs'
@@ -123,6 +126,8 @@ const STATIC = {
   '/vn.js': ['vn.js', 'text/javascript; charset=utf-8'],
   '/shared/vn.js': ['shared/vn.js', 'text/javascript; charset=utf-8'],
   '/stream-reveal.js': ['stream-reveal.js', 'text/javascript; charset=utf-8'],
+  '/card-scripts.js': ['card-scripts.js', 'text/javascript; charset=utf-8'],
+  '/shared/th-api.js': ['shared/th-api.js', 'text/javascript; charset=utf-8'],
   '/shared/reveal.js': ['shared/reveal.js', 'text/javascript; charset=utf-8'],
   '/shared/stage.js': ['shared/stage.js', 'text/javascript; charset=utf-8'],
   '/shared/zip.js': ['shared/zip.js', 'text/javascript; charset=utf-8'],
@@ -165,6 +170,10 @@ const STATIC = {
 // Fetched by a phone without the access cookie (the icon is read before anyone logs in).
 const OPEN_FILES = new Set(['/icon.png', '/favicon.ico', '/apple-touch-icon.png', '/icon-192.png', '/icon-512.png', '/manifest.webmanifest'])
 const MAX_BODY = 40 * 1024 * 1024
+// A card, worldbook or preset file comes base64, a third bigger than itself. A big MVU card's picture is 36 MB (it
+// carries the card twice, as V2 "chara" and V3 "ccv3", as SillyTavern writes it): these take a file up to about 110 MB.
+const MAX_UPLOAD = 150 * 1024 * 1024
+const UPLOADS = /^\/api\/(?:cards\/(?:import|inspect)|worldbooks\/import|presets\/import)$/
 
 /** `<provider>/<model>` stays as it is; subscription aliases become catalog ids. */
 const modelRef = ref => (isProviderRef(ref) ? ref : canonicalModel(ref))
@@ -326,6 +335,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
   const diagnostics = createDiagnostics(store.dirs.root, store, { version: VERSION, edition: features.edition, appName: features.appName })
   // A card's regex left out for running too long (regex-guard.mjs): said in the error log, so the card's author can be told.
   onSchemaProblem(message => diagnostics.record({ source: 'process', what: msg`卡片的变量规则`, message }).catch(() => {}))
+  // A card's own script that failed or ran too long (card-scripts.mjs): it sits out the rest of the run.
+  onCardScriptProblem((script, message) => diagnostics.record({ source: 'process', what: msg`卡片的脚本「${script}」`, message }).catch(() => {}))
   onSlowPattern(regex => diagnostics.record({ source: 'process', what: msg`卡片的正则`, message: msg`这条正则运行太久，已经跳过：/${regex.source.slice(0, 300)}/${regex.flags}` }).catch(() => {}))
   // A card or preset whose file is too damaged to list.
   const leftOut = (what, why) => diagnostics.note({ level: 'warn', what: msg`列表里跳过了读不了的 ${what}`, detail: why }).catch(() => {})
@@ -378,6 +389,21 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     // The model has not seen this edit; the next turn re-sends the full state.
     chat.stateDirty = true
     return kept.problem ? [] : lostPaths(state, kept.state)
+  }
+
+  /**
+   * One of SillyTavern's events after a change to `chat`'s messages (a reply switched, deleted, edited), to the card's
+   * scripts (card-scripts.mjs emit) with the floor it was at; what they make of the latest floor's variables is put in
+   * as 编辑状态 puts it. The chat is saved by the caller. → whether a script heard it.
+   * @param floor - where the message was, for one no longer on the path (deleted): looked up before it went.
+   */
+  async function afterMessages(chat, type, nodeId, floor = -1) {
+    const path = activePath(chat).filter(node => !node.deleted)
+    const at = floor >= 0 ? floor : path.findIndex(node => node.id === nodeId)
+    const card = await store.getCard(chat.cardId).catch(() => null)
+    const result = await engine.cardScripts.emit(card, chat, type, [at >= 0 ? at : path.length - 1], path)
+    if (result.handled && result.state) await putState(chat, result.state)
+    return result.handled
   }
 
   /** Variables a proposal of 对话修改 puts into the chat it read, each at its path. */
@@ -945,6 +971,13 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     // 做成视觉小说: whether the 画图方式 picked can draw a 表情 from the 立绘.
     ['POST', /^\/api\/media\/draws-from-picture$/, async (_, body) => ({ drawsFromPicture: await media.drawsFromPicture(await media.settingsFor(drawChoiceOf(body))) })],
     ['GET', /^\/api\/cards\/([\w-]+)\/media$/, ([id]) => media.cardMediaView(id)],
+    // What the player lets the card's scripts on the server do (检查这张卡): { model }.
+    ['GET', /^\/api\/cards\/([\w-]+)\/script-permissions$/, async ([id]) => engine.cardScripts.permissions((await store.getCard(id)).id)],
+    ['PUT', /^\/api\/cards\/([\w-]+)\/script-permissions$/, async ([id], body) => engine.cardScripts.permit((await store.getCard(id)).id, { model: body?.model === true })],
+    // 脚本按钮: the card's scripts with buttons of their own (card-scripts.mjs buttonsOf).
+    ['GET', /^\/api\/cards\/([\w-]+)\/script-buttons$/, async ([id]) => engine.cardScripts.buttonsOf(await store.getCard(id))],
+    // The card's own event names its scripts on the server listen for (card-scripts.mjs): a frame's are sent on.
+    ['GET', /^\/api\/cards\/([\w-]+)\/script-events$/, async ([id]) => ({ events: await engine.cardScripts.ownEvents(await store.getCard(id)) })],
     ['PUT', /^\/api\/cards\/([\w-]+)\/media$/, ([id], body) => media.saveCardMedia(id, body)],
     ['POST', /^\/api\/cards\/([\w-]+)\/roster\/draft$/, ([id]) => media.draftRoster(id, AbortSignal.timeout(180000))],
     // 从对话里补充: the characters in an open chat's recent turns that the list (`cast`, as the page
@@ -1014,6 +1047,9 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['PUT', /^\/api\/forge\/([\w-]+)\/card$/, ([id], body) => forge.editCard(id, body ?? {})],
     ['POST', /^\/api\/forge\/([\w-]+)\/avatar$/, ([id], body) => forge.drawAvatar(id, body ?? {})],
     ['PUT', /^\/api\/forge\/([\w-]+)\/avatar$/, ([id], body) => forge.uploadAvatar(id, body ?? {})],
+    // 抽图历史: a draft's old avatars (GET …/history/:file is the picture).
+    ['POST', /^\/api\/forge\/([\w-]+)\/history\/([\w.-]+)\/use$/, ([id, file]) => forge.useKeptAvatar(id, file)],
+    ['DELETE', /^\/api\/forge\/([\w-]+)\/history\/([\w.-]+)$/, ([id, file]) => forge.dropKeptAvatar(id, file)],
     ['POST', /^\/api\/forge\/([\w-]+)\/save$/, ([id], body) => forge.saveCard(id, body ?? {})],
     ['POST', /^\/api\/forge\/([\w-]+)\/stop$/, ([id]) => forge.stop(id)],
     // 错误日志: the page's own mistakes come in; the report goes out only as the player copies or saves it.
@@ -1076,6 +1112,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
           }
         }
         await store.saveCard(card, picture)
+        if (raw) await cardScriptsFor(store).remember(card.id, raw)
         await rulebooks.arrive(card.id, game)
         return { ...cardSummary(card), updated: old.name }
       }
@@ -1084,6 +1121,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       const previous = previousVersion(await store.listCards(), card)
       if (previous?.group) card.group = previous.group
       await store.saveCard(card, avatar)
+      // Its scripts that run here, kept now: a JSON card has no picture to read them from later.
+      if (raw) await cardScriptsFor(store).remember(card.id, raw)
       if (previous) {
         await media.inheritCardMedia(previous.id, card.id)
         await scenes.inherit(previous.id, card.id)
@@ -1192,6 +1231,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     }],
     // 角色卡自检 (web/card-check.js): what the program finds, worked out on each read; the model is asked only by /ask.
     ['GET', /^\/api\/cards\/([\w-]+)\/check$/, ([id]) => forge.checkGet(id)],
+    // Only the status bar part (修改角色卡 → 状态栏); taken in and back through /apply and /undo like the rest.
+    ['GET', /^\/api\/cards\/([\w-]+)\/check\/status$/, ([id]) => forge.checkStatus(id)],
     ['PUT', /^\/api\/cards\/([\w-]+)\/check$/, ([id], body) => forge.checkUpdate(id, body ?? {})],
     ['POST', /^\/api\/cards\/([\w-]+)\/check\/ask$/, ([id], body) => forge.checkAsk(id, body ?? {})],
     ['POST', /^\/api\/cards\/([\w-]+)\/check\/stop$/, ([id]) => forge.checkStop(id)],
@@ -1468,6 +1509,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       if (engine.isRunning(id)) throw httpError(409, msg`正在生成，先停止`)
       const chat = await store.getChat(id)
       selectNode(chat, String(body.nodeId))
+      await afterMessages(chat, TAVERN_EVENTS.MESSAGE_SWIPED, String(body.nodeId))
       return chatView(await store.saveChat(chat))
     })],
     // Rollback hides the later turns (kept as a branch); the next message forks
@@ -1476,6 +1518,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       if (engine.isRunning(id)) throw httpError(409, msg`正在生成，先停止`)
       const chat = await store.getChat(id)
       rollbackTo(chat, String(body.nodeId))
+      await afterMessages(chat, TAVERN_EVENTS.MESSAGE_DELETED, String(body.nodeId))
       return chatView(await store.saveChat(chat))
     })],
     // 长期记忆（Beta）: the 记忆簿 in force on the chat's active path (chats.mjs memoryView), the player's edits
@@ -1515,7 +1558,9 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['POST', /^\/api\/chats\/([\w-]+)\/delete-message$/, ([id], body) => store.withChat(id, async () => {
       if (engine.isRunning(id)) throw httpError(409, msg`正在生成，先停止`)
       const chat = await store.getChat(id)
+      const floor = activePath(chat).filter(node => !node.deleted).findIndex(node => node.id === String(body.nodeId))
       deleteMessage(chat, String(body.nodeId), body.deleted !== false)
+      if (body.deleted !== false) await afterMessages(chat, TAVERN_EVENTS.MESSAGE_DELETED, String(body.nodeId), floor)
       return chatView(await store.saveChat(chat))
     })],
     // 直连对话: what came with a message, for 编辑重发 to send it again.
@@ -1523,7 +1568,11 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     // Rewrite one message (shown and sent from now on); see engine.editMessage.
     ['PUT', /^\/api\/chats\/([\w-]+)\/messages\/([\w-]+)$/, async ([id, nodeId], body) => {
       const { chat, ...outcome } = await engine.editMessage(id, nodeId, body.text)
-      return { ...chatView(chat), edit: outcome }
+      const after = await store.withChat(id, async () => {
+        const fresh = await store.getChat(id)
+        return (await afterMessages(fresh, TAVERN_EVENTS.MESSAGE_EDITED, nodeId)) ? store.saveChat(fresh) : chat
+      })
+      return { ...chatView(after), edit: outcome }
     }],
     // A new chat with only the turns up to this reply; the original is untouched.
     ['POST', /^\/api\/chats\/([\w-]+)\/fork$/, async ([id], body) => {
@@ -1613,6 +1662,41 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     // ── What a card's own HTML reads and writes besides the turns (server/frames.mjs, web/compat.js) ──
     // The names of the books this chat uses, the app's global variables, the player's description.
     ['GET', /^\/api\/chats\/([\w-]+)\/frame-info$/, async ([id]) => frameInfoOf(await store.getChat(id))],
+    // A card frame's Tavern Helper regex functions (compat.js): the chat's lists, a replacement kept as the chat's own
+    // changes (chats.mjs chatRegexes), text run through them. → { value, chat? } (chat: after a replacement).
+    ['POST', /^\/api\/chats\/([\w-]+)\/regexes$/, ([id], body) => store.withChat(id, async () => {
+      const chat = await store.getChat(id)
+      const regexes = await chatRegexes(store, chat)
+      if (body?.action === 'get') return { value: regexes.get(body.option) }
+      if (body?.action === 'format') return { value: regexes.format(body.text, body.source, body.destination, body.depth) }
+      if (body?.action !== 'replace') throw httpError(400, msg`不认识的正则操作`)
+      if (!regexes.replace(body.list, body.option)) return { value: null }
+      return { value: null, chat: chatView(await store.saveChat(chat)) }
+    })],
+    // A card frame's injectPrompts / uninjectPrompts (compat.js): kept on the chat for its next turns (injections.mjs).
+    ['POST', /^\/api\/chats\/([\w-]+)\/injections$/, ([id], body) => store.withChat(id, async () => {
+      const chat = await store.getChat(id)
+      const changed = Array.isArray(body?.uninject) ? uninjectPrompts(chat, body.uninject) : injectPrompts(chat, body?.prompts, { once: body?.once === true })
+      if (changed) await store.saveChat(chat)
+      return { injections: chat.scriptInjections ?? [] }
+    })],
+    // A card frame's event of the card's own (compat.js eventEmit, a name that is none of SillyTavern's or MVU's) to the
+    // card's scripts on the server; what they make of the latest floor's variables is saved as 编辑状态 saves it.
+    // → { handled, chat?, notes? }
+    ['POST', /^\/api\/chats\/([\w-]+)\/script-event$/, ([id], body) => store.withChat(id, async () => {
+      const type = typeof body?.type === 'string' ? body.type.slice(0, 120) : ''
+      if (!type) throw httpError(400, msg`缺少事件名`)
+      if (engine.isRunning(id)) throw httpError(409, msg`正在生成，先停止`)
+      const chat = await store.getChat(id)
+      const card = await store.getCard(chat.cardId)
+      const args = Array.isArray(body.args) ? body.args.slice(0, 20) : []
+      if (JSON.stringify(args).length > 100_000) throw httpError(400, msg`事件带的数据太大`)
+      const path = activePath(chat).filter(node => !node.deleted)
+      const result = await engine.cardScripts.emit(card, chat, type, args, path)
+      if (!result.handled) return { handled: false }
+      if (result.state) await putState(chat, result.state)
+      return { handled: true, notes: result.notes, chat: chatView(await store.saveChat(chat)) }
+    })],
     // Tavern Helper's chat variables (the templates' local scope): `vars` whole, or a card UI's
     // { set, unset } over those saved now (patchVars), so two UIs open at once keep each other's keys.
     ['PUT', /^\/api\/chats\/([\w-]+)\/frame-vars$/, ([id], body) => store.withChat(id, async () => {
@@ -1872,6 +1956,16 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     }
 
     // The avatar of a card being created (创作角色卡).
+    const forgeKept = /^\/api\/forge\/([\w-]+)\/history\/([\w.-]+)$/.exec(url.pathname)
+    if (req.method === 'GET' && forgeKept) {
+      try {
+        const { buffer, type } = await forge.readKeptAvatar(forgeKept[1], forgeKept[2])
+        res.writeHead(200, { 'content-type': type, 'cache-control': 'max-age=31536000, immutable' })
+        return res.end(buffer)
+      } catch (error) {
+        return sendJson(res, error.status ?? 404, { error: error.message })
+      }
+    }
     const forgeAvatar = /^\/api\/forge\/([\w-]+)\/avatar$/.exec(url.pathname)
     if (req.method === 'GET' && forgeAvatar) {
       try {
@@ -2135,7 +2229,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       if (req.method !== method) continue
       const match = pattern.exec(url.pathname)
       if (!match) continue
-      const body = method === 'GET' ? {} : await readBody(req)
+      const body = method === 'GET' ? {} : await readBody(req, UPLOADS.test(url.pathname) ? MAX_UPLOAD : MAX_BODY)
       return sendJson(res, 200, await handler(match.slice(1), body, url))
     }
     res.logFailures = false

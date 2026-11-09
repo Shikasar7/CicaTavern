@@ -5,7 +5,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { mkdtemp, readdir, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { deflateSync } from 'node:zlib'
@@ -14,6 +14,10 @@ import { cleanMedia } from '../server/media.mjs'
 import { normalizeProvider } from '../server/providers.mjs'
 import { cleanKeep, dropImage, dropOldImage, pickImage, redrawImage, withoutOldImages } from '../server/draw-history.mjs'
 import { PACKAGE_MAGIC } from '../server/transfer.mjs'
+import { createForge } from '../server/forge/index.mjs'
+import { normalizePlan } from '../server/forge/prompts.mjs'
+import { newCard } from '../server/forge/write.mjs'
+import { createStore } from '../server/store.mjs'
 
 // PNG chunk checksums (zlib.crc32 needs Node 22).
 const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
@@ -311,4 +315,56 @@ test('a foe drawn for the bestiary: a picture of its own, from what the helper s
   assert.notEqual(again.foes.灰狼.file, book.foes.灰狼.file, 'drawn again, the new one takes its place')
   assert.equal((await call(`/api/cards/${cardId}/foes/draw`, { method: 'POST', body: { name: '山贼' } })).status, 400, 'nothing known of its looks')
   assert.equal((await call(`/api/cards/${cardId}/foes/draw`, { method: 'POST', body: { name: '没见过' } })).status, 404)
+})
+
+test('创作角色卡: a draft\'s avatar drawn or uploaded again keeps the ones before, to take back or delete, and goes with the draft', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'forge-history-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const store = createStore(root)
+  await store.init()
+  let drawn = 0
+  const forge = createForge(store, { draw: async () => ({ buffer: png(++drawn), backend: 'fake' }), history: { keep: async () => 2 } })
+  const plan = normalizePlan({ name: '雨宿', characters: [{ name: '林小雨', kind: 'core', appearance: ['black hair'] }] })
+  const now = new Date().toISOString()
+  await mkdir(path.join(root, 'forge'), { recursive: true })
+  await writeFile(path.join(root, 'forge', 'draftone.json'), JSON.stringify({ id: 'draftone', createdAt: now, updatedAt: now, stage: 'write', model: '', rounds: [], brief: { title: '雨宿', readiness: 80, items: [], open: [] }, plan, card: newCard(plan), job: null, error: null }))
+  const settled = async () => {
+    for (let i = 0; i < 300; i++) {
+      const draft = await forge.get('draftone')
+      if (!draft.job) return draft
+      await new Promise(resolve => setTimeout(resolve, 20))
+    }
+    throw new Error('the job never finished')
+  }
+  const kept = () => readdir(path.join(root, 'forge', 'draftone.history')).catch(() => [])
+  for (let i = 0; i < 4; i++) {
+    await forge.drawAvatar('draftone', { description: '1girl' })
+    await settled()
+  }
+  // Picture 4 is the avatar, 3 and 2 are kept, 1 is gone.
+  let draft = await forge.get('draftone')
+  assert.deepEqual((await forge.readAvatar('draftone')).buffer, png(4))
+  assert.equal(draft.card.avatarHistory.length, 2)
+  assert.deepEqual((await forge.readKeptAvatar('draftone', draft.card.avatarHistory[1].file)).buffer, png(2))
+  assert.equal((await kept()).length, 2)
+  assert.equal(draft.card.avatarHistory[0].source, 'drawn')
+
+  // 2 back as the avatar, 4 leads the kept ones.
+  draft = await forge.useKeptAvatar('draftone', draft.card.avatarHistory[1].file)
+  assert.deepEqual((await forge.readAvatar('draftone')).buffer, png(2))
+  assert.equal(draft.card.avatar.source, 'drawn')
+  assert.deepEqual(await Promise.all(draft.card.avatarHistory.map(async entry => (await forge.readKeptAvatar('draftone', entry.file)).buffer)), [png(4), png(3)])
+  await assert.rejects(forge.useKeptAvatar('draftone', 'avatar-nothere.png'), /不在了/)
+
+  // One deleted; an upload keeps the one it replaces.
+  draft = await forge.dropKeptAvatar('draftone', draft.card.avatarHistory[1].file)
+  assert.equal(draft.card.avatarHistory.length, 1)
+  assert.equal((await kept()).length, 1)
+  draft = await forge.uploadAvatar('draftone', { image: dataUrl(png(9)) })
+  assert.equal(draft.card.avatar.source, 'upload')
+  assert.deepEqual(await Promise.all(draft.card.avatarHistory.map(async entry => (await forge.readKeptAvatar('draftone', entry.file)).buffer)), [png(2), png(4)])
+
+  // The draft deleted: its kept avatars with it.
+  await forge.remove('draftone')
+  assert.deepEqual(await kept(), [])
 })

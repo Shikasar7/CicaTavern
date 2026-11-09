@@ -5,6 +5,7 @@
 // - it never falls further behind than MAX_LAG_MS of that pace, so a fast model is not held back;
 // - when the model pauses, what is left runs out at a slowing pace instead of stopping dead;
 // - at the end, whatever is left is shown within FINISH_MS.
+// 写完再显示 (whole) shows nothing until the reply has ended, then all of it.
 // Positions are indexes into the text as the page will show it (streamingText): the markup in it (a tag, a
 // 【name|look】 mark, the ** of bold) and a fold's insides (a model's thinking, shown folded) cost no time.
 // Old Android WebViews run this: no \p{} and nothing newer than Chrome 80 here.
@@ -175,6 +176,10 @@ export function createPacer({ mode = REVEAL_DEFAULT, folds = null } = {}) {
     tick(now, dt) {
       if (mode === 'none') {
         shown = source.length
+        return shown
+      }
+      if (mode === 'whole') {
+        shown = ended ? source.length : 0
         return shown
       }
       const left = source.length - shown

@@ -54,6 +54,8 @@ export const DEFAULT_MEDIA = Object.freeze({
   comfyVae: '', // '' = the checkpoint's own (needed for 'unet')
   comfySteps: 24,
   comfyCfg: 6,
+  // ComfyUI's 负面提示词, either mode: into %negative_prompt% where the workflow has it, else after the text of its own negative.
+  comfyNegative: '',
   comfySampler: 'euler',
   comfyScheduler: 'normal',
   geminiImageProvider: '', // a provider with Google's key: Gemini's own image models (generateContent)
@@ -97,7 +99,7 @@ export const DEFAULT_MEDIA = Object.freeze({
 // lora: a file in ComfyUI's models/loras, added to the workflow for this card (ComfyUI only).
 // roster: the cast for pictures (roster.mjs); a lone member with a LoRA of their own is drawn with theirs instead (loraFor).
 // style / styleNegative: the card's look; NovelAI puts them on every picture of the card, ComfyUI and SD WebUI
-// the style (styleFirst), the others get the style in the prompt (portraits and 立绘 too).
+// the style (styleFirst) and the negative after their own, the others get the style in the prompt (portraits and 立绘 too).
 // promptRules: this card's 写提示词的额外要求, after every card's (media.promptRules).
 export const DEFAULT_CARD_MEDIA = Object.freeze({ voice: '', narratorVoice: '', style: '', styleNegative: '', promptRules: '', lora: '', loraTrigger: '', loraStrength: 0.8, roster: [] })
 export const PROMPT_DETAILS = ['brief', 'standard', 'detailed']
@@ -271,6 +273,7 @@ export function cleanMedia(input, previous = DEFAULT_MEDIA, defaults = DEFAULT_M
   }
   if (source.comfySteps !== undefined && Number.isFinite(Number(source.comfySteps))) value.comfySteps = Math.min(150, Math.max(1, Math.round(Number(source.comfySteps))))
   if (source.comfyCfg !== undefined && Number.isFinite(Number(source.comfyCfg))) value.comfyCfg = Math.min(30, Math.max(0, Math.round(Number(source.comfyCfg) * 10) / 10))
+  if (typeof source.comfyNegative === 'string') value.comfyNegative = source.comfyNegative.trim().slice(0, 1500)
   text('ttsProvider', 40)
   if (typeof source.ttsModel === 'string') {
     const model = source.ttsModel.trim()
@@ -1580,7 +1583,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     const [width, height] = imageSize('sdwebui', media.imageShape).split('x').map(Number)
     const body = {
       prompt,
-      negative_prompt: [media.sdNegative, scenery ? SCENERY_NEGATIVE : ''].filter(Boolean).join(', '),
+      negative_prompt: [media.sdNegative, cardMedia.styleNegative, scenery ? SCENERY_NEGATIVE : ''].filter(Boolean).join(', '),
       steps: media.sdSteps,
       cfg_scale: media.sdCfg,
       sampler_name: media.sdSampler,
@@ -1642,7 +1645,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
       }
     }
     const [width, height] = imageSize('comfy', media.imageShape).split('x').map(Number)
-    const negatives = [scenery ? SCENERY_NEGATIVE : '', negative].filter(Boolean).join(', ')
+    const negatives = [media.comfyNegative, cardMedia.styleNegative, scenery ? SCENERY_NEGATIVE : '', negative].filter(Boolean).join(', ')
     const workflow = withNegative(fitSize(withOwner, width, height), negatives)
     prompt = styleFirst(prompt, cardMedia.style)
     if (owner) prompt = withTrigger(prompt, owner.loraTrigger)

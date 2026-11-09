@@ -2,7 +2,7 @@
 // this only asks what the player does and shows what comes of it, one event at a time. Timers, not animation frames: a
 // page out of sight still has to finish a round.
 import { t } from '/i18n.js'
-import { ailName, banner, countWord, currentLook, enterFight, fitFigure, heroNow, letters, lookFields, slideSlab, sweep } from '/game-look.js'
+import { ailName, banner, countWord, currentLook, enterFight, fitFigure, headIn, heroNow, letters, lookFields, slideSlab, sweep } from '/game-look.js'
 import { fightResult } from '/shared/game/encounter.js'
 import { aliveFoes, alivePartyOf, attemptSetup, autoCommands, canRally, foesOf, needsFriend, needsTarget, partyOf, playerOf, refusal, replay as replayFight, roundRefusal, skillCost, skillsOf, startBattle, step } from '/shared/game/battle.js'
 import { cutOut, spriteFrame } from '/shared/cutout.js'
@@ -241,13 +241,27 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
   function memberRow(unit) {
     const picture = pictureOf(unit)
     const face = el('span', { class: 'member-face', text: picture ? '' : (unit.id === 'player' ? t`你` : unit.name).slice(0, 1) })
-    if (picture) face.style.backgroundImage = `url("${picture}")`
+    if (picture && !bold) face.style.backgroundImage = `url("${picture}")`
+    // 撞色: the cut-out itself, its head over the band and cut only where the band ends, so its outline is the figure's own.
+    if (picture && bold) {
+      const figure = el('img', { src: picture, alt: '', draggable: 'false' })
+      face.append(figure)
+      headIn(picture).then(place => {
+        // A head found nearly half the picture's height is a hand or a sleeve: the style sheet's guess then.
+        if (!place || place.face.side > 0.45) return
+        figure.style.setProperty('--face-x', String(place.face.x))
+        figure.style.setProperty('--face-y', String(place.face.y))
+        figure.style.setProperty('--face-side', String(place.face.side))
+      })
+    }
     return el('button', { type: 'button', class: 'battle-member', 'data-id': unit.id, disabled: true, onclick: event => { event.stopPropagation(); giveTo(unit.id) } }, [
       face,
       el('span', { class: 'member-name', text: unit.id === 'player' ? t`你` : unit.name }),
       el('span', { class: 'battle-bar life' }, [el('i', { class: 'lag' }), el('i')]),
       el('b', { class: 'member-life' }),
       el('span', { class: 'battle-bar energy' }, el('i')),
+      // Only 撞色 shows the number beside its bar.
+      el('b', { class: 'member-energy', title: energyWord }),
       el('span', { class: 'member-tag' }),
     ])
   }
@@ -260,6 +274,7 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
     for (const node of [lag, bar]) node.style.width = `${(life / unit.maxLife) * 100}%`
     row.querySelector('.battle-bar.energy i').style.width = `${unit.maxEnergy ? (energy / unit.maxEnergy) * 100 : 0}%`
     row.querySelector('.member-life').replaceChildren(String(life), el('small', { text: `/${unit.maxLife}` }))
+    row.querySelector('.member-energy').textContent = unit.maxEnergy ? String(energy) : ''
     row.classList.toggle('down', life <= 0)
     row.querySelector('.member-tag').textContent = life <= 0 ? t`倒下` : unit.guarding ? t`防御` : unit.boost > 0 ? t`强化` : ''
   }
@@ -534,7 +549,7 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
   /** The kind of blow an action lands, for how it looks. */
   const blowOf = action => (action.kind === 'skill' ? skillsOf(state, unitOf(action.who)).find(item => item.name === action.name)?.kind : action.kind === 'item' ? state.things.find(item => item.name === action.name)?.effect.type : action.kind)
 
-  /** 酷炫: the skill's banner over a stopped picture, the face of whoever uses it. */
+  /** 撞色: the skill's banner over a stopped picture, the face of whoever uses it. */
   async function bannerFor(name, action) {
     const who = unitOf(action.who)
     const skill = skillsOf(state, who).find(item => item.name === action.name)
@@ -554,13 +569,13 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
     }))
   }
 
-  /** 酷炫: back to where the figure stands. */
+  /** 撞色: back to where the figure stands. */
   function stepBack() {
     dialog.classList.remove('dashing')
     for (const place of ['--hx', '--hy', '--hs']) heroBox?.style.removeProperty(place)
   }
 
-  /** 酷炫: across the screen in a blink; a big one turns the colours over as it lands. */
+  /** 撞色: across the screen in a blink; a big one turns the colours over as it lands. */
   async function dash(target, big) {
     const node = faceOf(target)
     if (heroBox && node) {
@@ -582,7 +597,7 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
     replay(dialog, 'quake')
   }
 
-  /** 酷炫: the one that strikes comes at the screen first. */
+  /** 撞色: the one that strikes comes at the screen first. */
   async function lunge(by) {
     const node = foeNode(by)
     if (node) replay(node, 'lunge')

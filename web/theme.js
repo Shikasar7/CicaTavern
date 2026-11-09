@@ -31,13 +31,14 @@ const PALETTE_KEY = 'appearance-palette'
 const FONT_LABEL = { song: t`宋体`, hei: t`黑体`, kai: t`楷体`, fang: t`仿宋`, custom: t`自选` }
 const READING_KEY = 'reading'
 // 出字效果 (web/stream-reveal.js), with what each looks like.
-const REVEAL_LABEL = { fade: t`淡入`, ink: t`墨晕`, type: t`打字机`, sentence: t`逐句`, none: t`直接显示` }
+const REVEAL_LABEL = { fade: t`淡入`, ink: t`墨晕`, type: t`打字机`, sentence: t`逐句`, none: t`直接显示`, whole: t`写完再显示` }
 const REVEAL_HINT = {
   fade: t`新写出的字轻轻浮现，节奏均匀。`,
   ink: t`像墨落在纸上，字由虚到实。`,
   type: t`一个字一个字打出来，末尾跟着光标。`,
   sentence: t`写完一句，整句浮现，读起来不被半句话打断。`,
   none: t`来多少显示多少，不加动效。`,
+  whole: t`写的时候只有加载动效，写完整段一起出现。`,
 }
 // The sample a choice plays: sent in lumps with gaps, as a relay sends a reply, so the evening-out shows too.
 const REVEAL_SAMPLE = t`雨还没停。她把伞靠在门边，抖了抖袖口上的水，抬头看了你一眼。“你也是来避雨的？”`

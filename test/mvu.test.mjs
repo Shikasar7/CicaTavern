@@ -227,6 +227,16 @@ test('display segments: prose stays prose, HTML blocks (even across blank lines)
   assert.deepEqual(lone.map(p => p.kind), ['html', 'story'], 'a style chunk with no adjacent markup is dropped')
   assert.equal(streamingText('正文<UpdateVariable><Analysis>想'), '正文', 'an unfinished update block is hidden while streaming')
   assert.equal(streamingText('正文<state>{}</state>后文'), '正文后文')
+  // A card's page that names the update block in its own code (a prompt it sends) keeps all of itself.
+  const page = '```html\n<html><body><script>const ask = "写 <UpdateVariable> 块"</script><p>页</p></body></html>\n```\n\n尾声。'
+  assert.equal(streamingText(`开场。\n\n${page}`), `开场。\n\n${page}`)
+  assert.equal(streamingText('正文<UpdateVariable>\n```yaml\na: 1\n```\n</UpdateVariable>后文'), '正文后文', 'a code block inside an update block goes with it')
+  // A model that fenced its update block: the fence holds nothing else, so it goes with the block.
+  assert.equal(streamingText('正文。\n\n```xml\n<UpdateVariable>\n_.set(\'a\', 1, 2);\n</UpdateVariable>\n```'), '正文。')
+  // A code block inside a block still open (a card's <details> folding its update block) folds with it.
+  const folded = segments('故事。\n\n<details><summary>行卷</summary>\n\n```yaml\na: <1>\n\nb: 2\n```\n\n</details>\n\n尾声。')
+  assert.deepEqual(folded.map(p => p.kind), ['story', 'html', 'story'])
+  assert.match(folded[1].body, /<pre><code>a: &lt;1&gt;\n\nb: 2<\/code><\/pre>\n\n<\/details>$/)
 })
 
 test('the status bar goes after the story wherever the model put its placeholder', async () => {

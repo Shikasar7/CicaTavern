@@ -16,9 +16,11 @@ import { readSillyTavernChat } from './st-chat.mjs'
 import { markSpeakers } from '../web/shared/vn.js'
 import { gateOf, withoutGameMarks } from '../web/shared/game/marks.js'
 import { sheetOnPath } from '../web/shared/game/sheet.js'
-import { chatScriptList } from '../web/shared/regex.js'
+import { chatScriptList, regexChanges, regexTarget, thRegex, withRegexChanges } from '../web/shared/regex.js'
+import { applyScripts } from './regex-guard.mjs'
 import { cardPick, DEFAULT_ITEM, defaultOf, itemOf, pickFor } from '../web/shared/personas.js'
 import { chatBooks, withChatChanges } from './frames.mjs'
+import { cardScriptsFor } from './card-scripts.mjs'
 import { cleanEntry, MAX_ENTRIES, memoryOf, snapshotOf } from './memory.mjs'
 
 /**
@@ -80,14 +82,46 @@ export async function presetFor(store, presetId) {
  * Regex scripts that apply to a chat: the global ones, then the preset's, then the card's, as in SillyTavern,
  * then the 正则集 (regex.mjs) attached to the card.
  */
-export function scriptsOf(card, preset, global = [], sets = []) {
-  return chatScriptList({ global, preset: preset?.regexScripts ?? [], card: Array.isArray(card?.regexScripts) ? card.regexScripts : [], cardId: card?.id ?? '', sets })
+/** @param changes - the chat's own changes to them (a card's script, web/shared/regex.js withRegexChanges), or null. */
+export function scriptsOf(card, preset, global = [], sets = [], changes = null) {
+  return chatScriptList({ global, preset: preset?.regexScripts ?? [], card: Array.isArray(card?.regexScripts) ? card.regexScripts : [], cardId: card?.id ?? '', sets, changes })
+}
+
+/**
+ * Tavern Helper's regex functions for `chat` (a card's script, on the server or in a frame): the lists it names as they
+ * are saved, the chat's own changes over them (web/shared/regex.js), and text run through them. Loaded once, then plain
+ * calls. `type`: 'global', 'preset' or 'character' (the card's own and its attached sets; a script's new ones go here).
+ */
+export async function chatRegexes(store, chat) {
+  const [card, preset, global, sets] = await Promise.all([store.getCard(chat.cardId).catch(() => null), presetFor(store, chat.presetId), store.getRegex(), store.getRegexSets()])
+  const base = type => (type === 'global' ? global : type === 'preset' ? preset?.regexScripts ?? [] : chatScriptList({ card: Array.isArray(card?.regexScripts) ? card.regexScripts : [], cardId: card?.id ?? '', sets }))
+  const typeOf = option => (['global', 'preset'].includes(option?.type) ? option.type : 'character')
+  return {
+    get(option) {
+      const type = typeOf(option)
+      const changes = type === 'character' ? chat.regexChanges : chat.regexChanges && { changed: chat.regexChanges.changed }
+      return withRegexChanges(base(type), changes).map(thRegex)
+    },
+    /** → whether the chat's changes are other than before. */
+    replace(list, option) {
+      const before = JSON.stringify(chat.regexChanges ?? null)
+      const type = typeOf(option)
+      const next = regexChanges(base(type), list, chat.regexChanges, { own: type === 'character' })
+      if (next) chat.regexChanges = next
+      else delete chat.regexChanges
+      return JSON.stringify(chat.regexChanges ?? null) !== before
+    },
+    format(text, source, destination, depth) {
+      const scripts = scriptsOf(card, preset, global, sets, chat.regexChanges)
+      return applyScripts(String(text ?? ''), scripts, { ...regexTarget(source, destination), depth: Number.isInteger(depth) ? depth : undefined, macros: value => replaceMacros(value, chat.names ?? {}) })
+    },
+  }
 }
 
 /** scriptsOf() for a chat's card and preset as they are now. */
 export async function chatScripts(store, chat) {
   const [card, preset, global, sets] = await Promise.all([store.getCard(chat.cardId).catch(() => null), presetFor(store, chat.presetId), store.getRegex(), store.getRegexSets()])
-  return scriptsOf(card, preset, global, sets)
+  return scriptsOf(card, preset, global, sets, chat.regexChanges)
 }
 
 /**
@@ -179,7 +213,7 @@ export async function rebuildPrompt(store, chat, presetId = chat.presetId ?? '')
     }
   }
   const hasState = Object.keys(chat.nodes.root.state ?? {}).length > 0
-  const scripts = scriptsOf(card, preset, globalScripts, regexSets)
+  const scripts = scriptsOf(card, preset, globalScripts, regexSets, chat.regexChanges)
   const prefix = prefixTemplates({
     names: chat.names, card, preset, books, scripts,
     state: chat.nodes.root.state ?? {}, local: chat.frameVars ?? {}, global: settings.globalVars ?? {},
@@ -204,7 +238,7 @@ export async function createChat(store, cardId, greetingIndex = 0) {
   return startChat(store, cardId, ({ card, state, open }) => {
     const greetings = greetingsOf(card)
     return open(state, greetings[Math.min(Math.max(0, greetingIndex), greetings.length - 1)] ?? '')
-  })
+  }, { initialize: true })
 }
 
 /** [InitVar]-style entries with their EJS run once, as ST-Prompt-Template renders @@initial_variables before reading it. */
@@ -280,9 +314,11 @@ export async function switchOpening(store, chat, index) {
   const [settings, { persona }, globalScripts, regexSets] = await Promise.all([store.getSettings(), chatPicks(store, chat, card), store.getRegex(), store.getRegexSets()])
   const preset = await presetFor(store, chat.presetId ?? '')
   const books = await booksForCard(store, card, settings, chat)
-  const ctx = { names: chat.names, card, preset, books, scripts: scriptsOf(card, preset, globalScripts, regexSets), local: chat.frameVars ?? {}, global: settings.globalVars ?? {} }
+  const ctx = { names: chat.names, card, preset, books, scripts: scriptsOf(card, preset, globalScripts, regexSets, chat.regexChanges), local: chat.frameVars ?? {}, global: settings.globalVars ?? {} }
   const opened = openWith(ctx, initialState(books, initvarText(chat.names)), greetings[index])
   Object.assign(chat.nodes.root, { text: opened.text, display: displayText(opened.text), state: opened.state })
+  // The card's scripts set the new opening's variables up as they did the first's (VARIABLE_INITIALIZED).
+  chat.nodes.root.state = await cardScriptsFor(store).initialized(card, chat, chat.nodes.root.state)
   if (opened.errors.length) chat.nodes.root.templateErrors = opened.errors
   else delete chat.nodes.root.templateErrors
   if (opened.local.length) chat.frameVars = applyWrites(chat.frameVars ?? {}, opened.local)
@@ -324,8 +360,10 @@ function openingInit(state, greeting) {
  * what they and the opening write is kept.
  * The persona and the style are the card's picks, else the defaults (newChatPicks).
  * @param options.userName - the player's name in this chat, instead of the card's or the persona's.
+ * @param options.initialize - a new opening (not a story brought in): the card's scripts set its variables up
+ *   (VARIABLE_INITIALIZED, card-scripts.mjs).
  */
-async function startChat(store, cardId, makeRoot, { userName = '' } = {}) {
+async function startChat(store, cardId, makeRoot, { userName = '', initialize = false } = {}) {
   const stored = await store.getCard(cardId)
   // 直连对话 answers under a name in the page's language, and without a preset's story rules.
   const card = stored.direct ? { ...stored, name: msg`助手` } : stored
@@ -395,6 +433,7 @@ async function startChat(store, cardId, makeRoot, { userName = '' } = {}) {
       },
     },
   }
+  if (initialize) chat.nodes.root.state = await cardScriptsFor(store).initialized(card, chat, chat.nodes.root.state)
   return store.saveChat(chat)
 }
 
@@ -892,6 +931,8 @@ export function chatView(chat) {
       stateChanges: node.stateChanges ?? undefined,
       updateUnread: node.updateUnread || undefined,
       schemaProblem: node.schemaProblem || undefined,
+      // What the card's own scripts said with this reply (their toastr, card-scripts.mjs).
+      scriptNotes: node.scriptNotes?.length ? node.scriptNotes : undefined,
       compaction: node.compaction ? compactionView(chat, node) : undefined,
       media: node.media?.images?.length ? node.media : undefined,
       // Brought in from SillyTavern (importSillyTavern): no model of ours wrote it.
@@ -941,6 +982,8 @@ export function chatView(chat) {
     state: lastAssistant?.state ?? {},
     // The chat variables (Tavern Helper's chat scope, the templates' local scope), for the card's frames.
     frameVars: chat.frameVars ?? {},
+    // The chat's own changes to the regex it runs (a card's script, web/shared/regex.js): the page draws with them too.
+    ...(chat.regexChanges ? { regexChanges: chat.regexChanges } : {}),
     // Its preset asks each reply for <choices>: the latest reply can have them written again (重写选项).
     asksChoices: asksChoices(chat),
     systemPromptChars: chat.systemPrompt.length,

@@ -7,13 +7,20 @@
 import { shouldInterruptAfterDeadline } from 'quickjs-emscripten'
 import { sandboxEngine } from './template.mjs'
 import { createZ } from './schema-z.mjs'
+import { createLodash } from './sandbox-lodash.mjs'
+import { msg } from './i18n.mjs'
 
-const MAX_SOURCE = 300_000
+// A schema script carries the whole of Zod and lodash bundled in: 650 KB for a big card's (武侠·江湖), run in 80 ms.
+const MAX_SOURCE = 2_000_000
 const MAX_STATE = 2_000_000
 const MEMORY_LIMIT = 64 * 1024 * 1024
 // Slow on a phone without WebAssembly (iOS).
 const LOAD_MS = 5_000
-const CHECK_MS = 2_000
+// A schema may do real work in its transforms (武侠·江湖's evicts old passers-by and trims its logs: 2.8 s here).
+const CHECK_MS = 10_000
+// A schema that throws or runs out of time this many times in a row is left alone for the rest of the run: it would
+// only cost each turn the same seconds and say the same thing in the error log.
+const BREAK_AFTER = 3
 const IDLE_MS = 5 * 60_000
 
 const isRecord = value => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
@@ -32,33 +39,17 @@ export function schemaScript(extensions) {
   return script && script.content.length <= MAX_SOURCE ? script.content : ''
 }
 
-// What the card's script finds as globals. Schemas use little of lodash (of 32 on hand: clamp, pickBy, one chain).
+// What the card's script finds as globals: the app's small Zod, and the lodash card scripts get (sandbox-lodash.mjs).
 const GLOBALS = String.raw`
 globalThis.z = (${createZ})()
-const entries = o => Object.entries(o ?? {})
-const tools = {
-  clamp: (n, lo, hi) => Math.min(Math.max(n, lo), hi),
-  pickBy: (o, f = Boolean) => Object.fromEntries(entries(o).filter(([k, v]) => f(v, k))),
-  omitBy: (o, f) => Object.fromEntries(entries(o).filter(([k, v]) => !f(v, k))),
-  mapValues: (o, f) => Object.fromEntries(entries(o).map(([k, v]) => [k, f(v, k)])),
-  entries, toPairs: entries, keys: o => Object.keys(o ?? {}), values: o => Object.values(o ?? {}),
-  fromPairs: list => Object.fromEntries(list ?? []),
-  take: (list, n = 1) => (list ?? []).slice(0, n),
-  takeRight: (list, n = 1) => (n > 0 ? (list ?? []).slice(-n) : []),
-  isNil: v => v == null, isNumber: v => typeof v === 'number', isString: v => typeof v === 'string', isNaN: Number.isNaN,
-  isEmpty: v => v == null || (typeof v === 'object' ? Object.keys(v).length === 0 : v === ''),
-  get: (o, p, d) => { const v = String(p).split('.').reduce((a, k) => (a == null ? a : a[k]), o); return v === undefined ? d : v },
-  uniq: list => [...new Set(list ?? [])], round: (n, p = 0) => Math.round(n * 10 ** p) / 10 ** p,
-}
-const chain = value => new Proxy({}, { get: (_t, name) => (name === 'value' ? () => value : (...args) => chain(tools[name](value, ...args))) })
-globalThis._ = Object.assign(chain, tools)
+globalThis._ = (${createLodash})()
 globalThis.$ = fn => (typeof fn === 'function' ? fn() : undefined)
 globalThis.window = globalThis
 globalThis.__check = text => {
   try {
     const schema = typeof globalThis.__schema === 'function' ? globalThis.__schema() : globalThis.__schema
     const result = schema.safeParse(JSON.parse(text))
-    return JSON.stringify(result.success ? { data: result.data } : { error: String(result.error?.message ?? 'invalid').slice(0, 300) })
+    return JSON.stringify(result.success ? { data: result.data } : { invalid: String(result.error?.message ?? 'invalid').slice(0, 300) })
   } catch (error) {
     return JSON.stringify({ error: String(error?.message ?? error).slice(0, 300) })
   }
@@ -152,6 +143,8 @@ export function keepToSchema(source, state) {
   if (!source) return { state }
   const text = JSON.stringify(state ?? {})
   if (text.length > MAX_STATE) return { state }
+  const key = keyOf(source)
+  if ((failing.get(key) ?? 0) >= BREAK_AFTER) return { state }
   let sandbox
   try {
     sandbox = open(source)
@@ -169,14 +162,32 @@ export function keepToSchema(source, state) {
     const handle = run(sandbox.vm, sandbox.runtime, `__check(${JSON.stringify(text)})`)
     const answer = JSON.parse(sandbox.vm.dump(handle))
     handle.dispose()
-    if (answer.error === undefined) return { state: answer.data }
-    report(answer.error)
+    if (answer.error === undefined) failing.delete(key)
+    if (answer.data !== undefined) return { state: answer.data }
+    // A state the schema rejects: that one state's problem.
+    if (answer.invalid !== undefined) {
+      report(answer.invalid)
+      return { state, problem: answer.invalid }
+    }
+    failed(key, answer.error)
     return { state, problem: answer.error }
   } catch (error) {
     // Past its time or its memory: the sandbox may be in any state, so it does not stay.
     const problem = String(error?.message ?? error).slice(0, 300)
-    report(problem)
+    failed(key, problem)
     close()
     return { state, problem }
   }
+}
+
+// Schemas that threw or ran out of time, by their text: how many times in a row (BREAK_AFTER).
+const failing = new Map()
+
+// The schema's whole text: two schemas that differ anywhere are told apart (a Map keeps a string's hash on it).
+const keyOf = source => source
+
+function failed(key, problem) {
+  const times = (failing.get(key) ?? 0) + 1
+  failing.set(key, times)
+  report(times >= BREAK_AFTER ? msg`${problem}（连续 ${times} 次出错，这次运行里不再检查这张卡的变量规则）` : problem)
 }

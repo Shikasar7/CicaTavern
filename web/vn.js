@@ -208,7 +208,7 @@ export function initVn(deps) {
   // What reading needs, at the foot of the text box as a galgame has it (filled in below, with the controls).
   const quickBar = el('div', { class: 'vn-quickbar' })
   // 怀旧游戏机: who is speaking looks out of a frame beside the words.
-  const face = el('div', { class: 'vn-face', hidden: true, 'aria-hidden': 'true' })
+  const face = el('div', { class: 'vn-box-face', hidden: true, 'aria-hidden': 'true' })
   const box = el('div', { class: 'vn-box' }, [plate, face, voice, lineBox, nextMark, endRow, quickBar, spoken])
   const logBox = el('section', { class: 'vn-log', hidden: true, role: 'dialog', 'aria-label': t`回看` })
   const cgView = el('div', { class: 'vn-cg', hidden: true, role: 'dialog', 'aria-label': t`配图` })
@@ -512,7 +512,7 @@ export function initVn(deps) {
     else popShared.replaceChildren()
   }
 
-  /** 主题: the four looks, the colours of the one chosen, and how far 酷炫 washes the scene. */
+  /** 主题: the four looks, the colours of the one chosen, and how far 撞色 washes the scene. */
   function lookRows() {
     const now = currentLook()
     const choose = patch => {
@@ -2090,7 +2090,7 @@ export function initVn(deps) {
   // ─── 立绘: the ones in the scene, cut out of a plain background ──────
   // lists: { entryId: 立绘 }; faces: { entryId: { smile: … } } (表情差分); none: names with no picture at all;
   // why: a picture's address → why it could not be cut out (cutOut's why, or 'load').
-  // pictures: `${cardId}:${name}` → the picture last shown of them (and the player's), for 酷炫's figure; hero: who it was.
+  // pictures: `${cardId}:${name}` → the picture last shown of them (and the player's), for 撞色's figure; hero: who it was.
   const cast = { lists: new Map(), faces: new Map(), loading: new Map(), cuts: new Map(), why: new Map(), token: 0, missing: null, none: new Map(), pictures: new Map(), hero: null }
 
   /** A sprites view from the server (GET, a drawing, an upload) becomes the lists. */
@@ -2217,7 +2217,7 @@ export function initVn(deps) {
         const entry = state.names.find(item => item.name === member.name)
         return { ...member, entry, src: entry ? await actorPicture(cardId, entry, member.expression) : null }
       })),
-      // Never on the stage, but 酷炫's figure for the player when there is a picture of them.
+      // Never on the stage, but 撞色's figure for the player when there is a picture of them.
       player ? actorPicture(cardId, player, 'neutral').catch(() => null) : null,
     ])
     if (token !== cast.token || !state.on) return
@@ -2270,7 +2270,7 @@ export function initVn(deps) {
   }
 
   /**
-   * 酷炫's figure for the player (web/game-look.js heroNow: the skill banner, the roll, the win), worked out when asked:
+   * 撞色's figure for the player (web/game-look.js heroNow: the skill banner, the roll, the win), worked out when asked:
    * the player's entry with a picture, else whoever of their side spoke last, never one of this round's foes. → URL or ''.
    */
   function heroPicture() {
@@ -2284,6 +2284,21 @@ export function initVn(deps) {
   }
 
   /** A companion's picture, for a fight's party window: by their name or one the cast knows them by. → URL or ''. */
+  /**
+   * Pictures of `names` (a fight's party) kept as the stage keeps those who stood on it, so pictureFor finds one who has
+   * not appeared in the story yet: in the party band they would be a letter instead of a figure.
+   */
+  async function loadPictures(names) {
+    const cardId = state.cardId
+    if (!cardId) return
+    await Promise.all([...new Set(names)].map(async name => {
+      const entry = (state.names ?? []).find(item => item.name === name || (item.keys ?? []).includes(name))
+      if (!entry || entry.player || cast.pictures.get(`${cardId}:${entry.name}`)) return
+      const src = await actorPicture(cardId, entry, 'neutral').catch(() => null)
+      if (src && state.cardId === cardId) cast.pictures.set(`${cardId}:${entry.name}`, src)
+    }))
+  }
+
   function pictureFor(name) {
     const cardId = state.cardId
     if (!cardId || !name) return ''
@@ -3300,5 +3315,5 @@ export function initVn(deps) {
     if (state.on) compose(true)
   }
 
-  return { render, streamed, isOn, turnFlags, marks, makeReady, picturesChanged, refreshEnd, compose: openCompose, drawFoe, pictureFor }
+  return { render, streamed, isOn, turnFlags, marks, makeReady, picturesChanged, refreshEnd, compose: openCompose, drawFoe, pictureFor, loadPictures }
 }

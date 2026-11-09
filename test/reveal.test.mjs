@@ -32,7 +32,7 @@ function relay(text = TEXT, size = 60, every = 500) {
 }
 
 test('the modes, and the setting kept with the reading settings (default 淡入)', () => {
-  assert.deepEqual(REVEAL_MODES, ['fade', 'ink', 'type', 'sentence', 'none'])
+  assert.deepEqual(REVEAL_MODES, ['fade', 'ink', 'type', 'sentence', 'none', 'whole'])
   assert.equal(REVEAL_DEFAULT, 'fade')
   assert.equal(cleanReading(null).reveal, 'fade')
   assert.equal(cleanReading({ reveal: 'ink' }).reveal, 'ink')
@@ -106,6 +106,15 @@ test('when the model pauses, the rest runs out at a slowing pace instead of stop
 test('直接显示 shows everything at once', () => {
   const { frames } = play('none', relay(), { endAt: 10000 })
   for (const frame of frames) assert.equal(frame.shown, frame.length)
+})
+
+test('写完再显示 shows nothing while the reply is written, then all of it at once', () => {
+  const { pacer, frames } = play('whole', relay(), { endAt: 10000 })
+  for (const frame of frames.filter(f => f.now < 10000)) assert.equal(frame.shown, 0)
+  assert.ok(frames.some(f => f.now < 10000 && f.length > 0), 'text did arrive meanwhile')
+  assert.equal(frames.at(-1).shown, TEXT.length)
+  assert.ok(pacer.done)
+  assert.equal(cleanReading({ reveal: 'whole' }).reveal, 'whole')
 })
 
 test('逐句 shows whole sentences, and an unfinished one after a while', () => {

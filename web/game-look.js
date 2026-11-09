@@ -2,7 +2,7 @@
 // data-look-palette, with data-look-tone for the app's light or dark; web/look.css does the rest. The moves that want more than a
 // style sheet (a fight opening, the banner across the screen) are here.
 import { lang, t, zh } from '/i18n.js'
-import { PALETTES, cleanLook, faceOf, headCrop } from '/shared/look.js'
+import { PALETTES, cleanLook, faceOf, headCrop, washStrength } from '/shared/look.js'
 
 const KEY = 'cicatavern.look'
 const root = document.documentElement
@@ -10,7 +10,7 @@ const root = document.documentElement
 /** What holds the player back, as named: the two the rules give have words of their own. */
 export const ailName = name => ({ 重伤: t`重伤`, 透支: t`透支`, 疯狂: t`疯狂`, 动摇: t`动摇`, 濒临崩溃: t`濒临崩溃` })[name] ?? name
 
-export const lookNames = () => ({ plain: t`简约`, ink: t`古风`, console: t`怀旧游戏机`, bold: t`酷炫` })
+export const lookNames = () => ({ plain: t`简约`, ink: t`古风`, console: t`怀旧游戏机`, bold: t`撞色` })
 export const lookHints = () => ({
   plain: t`安静克制，跟随应用的浅色和深色`,
   ink: t`水墨和宣纸，竹简、罗盘和朱印`,
@@ -28,6 +28,8 @@ function recall() {
 }
 
 let current = cleanLook(recall())
+// Whether 场景滤镜 was moved: only then is the strength kept, so a new default reaches everyone who never touched it.
+let chose = recall()?.chose === true
 
 export const currentLook = () => current
 export const palettesOf = look => PALETTES[look]
@@ -46,16 +48,18 @@ function applyLook() {
   document.fonts?.load(current.look === 'bold' ? '16px "Look Display"' : current.look === 'ink' ? '16px "Look Brush"' : '16px serif').catch(() => {})
   root.dataset.look = current.look
   root.dataset.lookPalette = current.palette
-  root.style.setProperty('--look-strength', String(current.strength / 100))
+  root.style.setProperty('--look-strength', String(washStrength(current.strength)))
   applyTone()
 }
 
 export function setLook(patch) {
   // Another look starts from its own first palette.
   const palette = patch.look && patch.look !== current.look ? undefined : current.palette
-  current = cleanLook({ ...current, palette, ...patch })
+  current = cleanLook({ ...current, palette, ...patch, chose: true })
+  if (patch.strength !== undefined) chose = true
+  const { strength: _default, ...rest } = current
   try {
-    localStorage.setItem(KEY, JSON.stringify(current))
+    localStorage.setItem(KEY, JSON.stringify(chose ? { ...current, chose } : rest))
   } catch {
     // Private mode: for this visit only.
   }
@@ -159,7 +163,7 @@ export async function banner(el, host, { text, small = '', picture = '', ms = 12
   box.remove()
 }
 
-/** The fields under the 酷炫 look, for a page to put behind what it shows. */
+/** The fields under the 撞色 look, for a page to put behind what it shows. */
 export function lookFields(el) {
   const washed = () => el('i', { class: 'look-wash-picture' })
   return el('div', { class: 'look-fields', 'aria-hidden': 'true' }, [
@@ -169,7 +173,7 @@ export function lookFields(el) {
   ])
 }
 
-/** One slab under a list, going to the row in hand. Only 酷炫 shows it; what it marks works by the keys and the mouse alike. */
+/** One slab under a list, going to the row in hand. Only 撞色 shows it; what it marks works by the keys and the mouse alike. */
 export function slideSlab(el, list, rows) {
   const slab = el('i', { class: 'look-slab', 'aria-hidden': 'true' })
   list.prepend(slab)
