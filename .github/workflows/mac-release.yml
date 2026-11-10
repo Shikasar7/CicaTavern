@@ -1,0 +1,219 @@
+# macOS release: CicaTavern.app for Apple silicon (arm64) and Intel (x64), built
+# from this repository's source on a GitHub-hosted Mac. With the Developer ID in
+# the mac-signing environment's secrets (as in mac-test.yml) the apps and disk images are
+# signed with it and notarized; without them they are signed ad hoc and people
+# open them once through 系统设置 → 隐私与安全性 →「仍要打开」.
+#
+#   Steps 1, 3, 4 and 5 are scripts/mac-build.sh, which mac-test.yml also runs
+#   before it opens the app on GitHub's Macs and takes screenshots.
+#   1. Official Node.js for both architectures, checked against the SHASUMS256.txt
+#      nodejs.org publishes.
+#   2. npm ci, npm test (with the Node that matches the runner).
+#   3. For each architecture: scripts/stage-release.mjs --platform mac writes the
+#      app folder; swiftc builds the launcher (launcher/mac/main.swift); they
+#      become CicaTavern.app with Info.plist and an icns from
+#      docs/brand/icon-mac-1024.png (icon-1024.png on Apple's 824/1024 grid).
+#   4. codesign seals the bundle (Developer ID and notarized, or ad hoc: mac-build.sh's
+#      Signing); runtime/node keeps the Node.js Foundation's own signature (no --deep). ditto packs
+#      CicaTavern-<version>-mac-<arch>.zip: unlike server/update/zip.mjs it keeps
+#      the executable bits.
+#   4b. scripts/mac-build.sh dmg puts each app in CicaTavern-<version>-mac-<arch>.dmg,
+#      whose window shows it beside a link to Applications (drag to install): what
+#      people download, and what the in-app update unpacks. The zip is only for step 5.
+#   5. Each zip is unpacked again and its own Node started: bin/start.mjs, then
+#      bin/launch.mjs --no-window (what the app runs); /api/status must give the
+#      version, POST /api/shutdown stops the server.
+#   6. Both disk images go to the tag's DRAFT Release, with their SHA-256 in the notes.
+#      The Windows workflow (windows-release.yml) adds to the same draft; whichever
+#      gets there first creates it, and the concurrency group lets one job at a
+#      time touch it. The maintainer adds the APK and the notes, then publishes.
+#
+# Runs when a version tag (v1.8.0) is pushed, or by hand: for an existing tag, or
+# with "upload" off for any branch or tag (build and smoke test only; the disk images stay
+# with the run).
+name: macOS release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Version tag to build, e.g. v1.8.0 (with upload off, any branch or tag)
+        required: true
+      upload:
+        description: Put the disk images on the tag's draft Release
+        type: boolean
+        default: true
+
+permissions:
+  contents: write # the draft Release and its disk images
+
+env:
+  NODE_VERSION: v24.22.0
+  # Node 24's own minimum (its BUILDING.md); launcher/mac/Info.plist says the same.
+  MACOS_MIN: '13.5'
+  TAG: ${{ inputs.tag || github.ref_name }}
+  UPLOAD: ${{ github.event_name == 'push' || inputs.upload }}
+
+jobs:
+  mac:
+    runs-on: macos-latest
+    # One job at a time makes or adds to the tag's draft Release (windows-release.yml
+    # uses the same group). Both architectures are in this one job, so the group
+    # never holds more than one waiting job (a second would cancel the first).
+    concurrency:
+      group: draft-release-${{ inputs.tag || github.ref_name }}
+      cancel-in-progress: false
+    # The signing secrets live in this environment, which only mac-test and v* tags may
+    # use and whose runs wait for the maintainer's approval: until then no step sees them.
+    environment: mac-signing
+    env:
+      SIGNING: ${{ secrets.MAC_CERT_P12 != '' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Version matches the tag
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [ "$UPLOAD" = true ] && [ "v$version" != "$TAG" ]; then echo "package.json says $version, the tag is $TAG"; exit 1; fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Rosetta, for the x64 Node on an Apple silicon runner
+        run: |
+          if [ "$(uname -m)" = arm64 ] && ! arch -x86_64 /usr/bin/true 2>/dev/null; then
+            sudo softwareupdate --install-rosetta --agree-to-license
+          fi
+          arch -x86_64 /usr/bin/true || [ "$(uname -m)" = x86_64 ]
+
+      - name: Official Node.js, checked against nodejs.org's SHASUMS256
+        run: |
+          bash scripts/mac-build.sh node "$RUNNER_TEMP/node" arm64 x64
+          host=$([ "$(uname -m)" = arm64 ] && echo arm64 || echo x64)
+          echo "$RUNNER_TEMP/node/node-${NODE_VERSION}-darwin-${host}/bin" >> "$GITHUB_PATH"
+
+      - name: Install and test
+        run: |
+          node --version
+          node -p "process.platform + ' ' + process.arch"
+          npm ci
+          npm test
+
+      - name: dmgbuild, for the disk image (pinned by hash)
+        run: |
+          python3 -m venv "$RUNNER_TEMP/dmgbuild"
+          "$RUNNER_TEMP/dmgbuild/bin/pip" install --disable-pip-version-check --require-hashes -r scripts/dmg-requirements.txt
+          echo "DMG_PYTHON=$RUNNER_TEMP/dmgbuild/bin/python" >> "$GITHUB_ENV"
+
+      - name: Developer ID keychain and notary key
+        if: env.SIGNING == 'true'
+        env:
+          MAC_CERT_P12: ${{ secrets.MAC_CERT_P12 }}
+          MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          NOTARY_KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          sign="$RUNNER_TEMP/sign"
+          mkdir -m 700 "$sign"
+          printf '%s' "$MAC_CERT_P12" | base64 --decode > "$sign/cert.p12"
+          printf '%s\n' "$NOTARY_KEY_P8" > "$sign/notary.p8"
+          identity=$(bash scripts/mac-build.sh keychain "$sign/cert.p12" "$sign/signing.keychain-db")
+          rm "$sign/cert.p12"
+          echo "signing as $identity"
+          {
+            echo "MAC_SIGN_IDENTITY=$identity"
+            echo "MAC_KEYCHAIN=$sign/signing.keychain-db"
+            echo "NOTARY_KEY=$sign/notary.p8"
+            echo "NOTARY_KEY_ID=$NOTARY_KEY_ID"
+            echo "NOTARY_ISSUER_ID=$NOTARY_ISSUER_ID"
+          } >> "$GITHUB_ENV"
+
+      - name: Build CicaTavern.app, sign, zip
+        run: |
+          for arch in arm64 x64; do
+            bash scripts/mac-build.sh app "$arch" "$RUNNER_TEMP/node" "$RUNNER_TEMP/build-$arch" "$RUNNER_TEMP/dist"
+          done
+
+      - name: Disk images (drag CicaTavern into Applications)
+        run: |
+          for arch in arm64 x64; do
+            bash scripts/mac-build.sh dmg "$RUNNER_TEMP/build-$arch/CicaTavern.app" "$RUNNER_TEMP/dist" "$arch"
+          done
+
+      - name: Delete the keychain and the notary key
+        if: always() && env.SIGNING == 'true'
+        run: |
+          [ -z "${MAC_KEYCHAIN:-}" ] || bash scripts/mac-build.sh keychain-remove "$MAC_KEYCHAIN" || true
+          rm -rf "$RUNNER_TEMP/sign"
+
+      - name: Smoke test the packaged Node
+        run: |
+          for arch in arm64 x64; do
+            bash scripts/mac-build.sh smoke "$RUNNER_TEMP/dist/CicaTavern-${VERSION}-mac-${arch}.zip" 8799 "$RUNNER_TEMP/data-$arch"
+          done
+
+      - name: Keep the arm64 disk image with this run
+        uses: actions/upload-artifact@v7
+        with:
+          name: CicaTavern-${{ env.VERSION }}-mac-arm64.dmg
+          path: ${{ runner.temp }}/dist/CicaTavern-${{ env.VERSION }}-mac-arm64.dmg
+          archive: false
+
+      - name: Keep the x64 disk image with this run
+        uses: actions/upload-artifact@v7
+        with:
+          name: CicaTavern-${{ env.VERSION }}-mac-x64.dmg
+          path: ${{ runner.temp }}/dist/CicaTavern-${{ env.VERSION }}-mac-x64.dmg
+          archive: false
+
+      - name: Draft Release
+        if: env.UPLOAD == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          dmgfile() { echo "$RUNNER_TEMP/dist/CicaTavern-${VERSION}-mac-$1.dmg"; }
+          arm64_dmg=$(shasum -a 256 "$(dmgfile arm64)" | cut -d' ' -f1)
+          x64_dmg=$(shasum -a 256 "$(dmgfile x64)" | cut -d' ' -f1)
+          for sha in "$arm64_dmg" "$x64_dmg"; do
+            if ! [[ "$sha" =~ ^[0-9a-f]{64}$ ]]; then echo "unexpected SHA-256: $sha"; exit 1; fi
+          done
+          # The Mac lines of the notes: the placeholder, or the hash of an earlier run of this tag.
+          fill() {
+            sed -E -e "s/[{][{]VERSION[}][}]/${VERSION}/g" -e "s/[{][{]NODE_VERSION[}][}]/${NODE_VERSION}/g" \
+              -e "/CicaTavern-${VERSION}-mac-arm64\.dmg/s/[{][{]MAC_ARM64_DMG_SHA256[}][}]|[0-9a-f]{64}/${arm64_dmg}/" \
+              -e "/CicaTavern-${VERSION}-mac-x64\.dmg/s/[{][{]MAC_X64_DMG_SHA256[}][}]|[0-9a-f]{64}/${x64_dmg}/"
+          }
+          if draft=$(gh release view "$TAG" --json isDraft -q .isDraft 2>/dev/null); then
+            # A published release keeps its files.
+            if [ "$draft" != "true" ]; then echo "$TAG is already published; not replacing its disk images"; exit 1; fi
+            # The Windows workflow made it (or an earlier run of this one): fill in the Mac lines.
+            gh release view "$TAG" --json body -q .body | fill > "$RUNNER_TEMP/notes.md"
+            gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
+          else
+            fill < docs/release-notes-template.md > "$RUNNER_TEMP/notes.md"
+            gh release create "$TAG" --draft --verify-tag --title "CicaTavern ${VERSION}" --notes-file "$RUNNER_TEMP/notes.md"
+          fi
+          gh release upload "$TAG" "$(dmgfile arm64)" "$(dmgfile x64)" --clobber
+          {
+            echo "### CicaTavern ${VERSION} for macOS"
+            echo ""
+            if [ "$SIGNING" = true ]; then echo "- CicaTavern.app: signed with ${MAC_SIGN_IDENTITY}, notarized"; else echo "- CicaTavern.app: signed ad hoc, not notarized"; fi
+            echo "- SHA-256 \`${arm64_dmg}\`  $(basename "$(dmgfile arm64)")"
+            echo "- SHA-256 \`${x64_dmg}\`  $(basename "$(dmgfile x64)")"
+            echo "- Draft Release: add the APK and the notes, then publish."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build only
+        if: env.UPLOAD != 'true'
+        run: |
+          {
+            echo "### CicaTavern ${VERSION} for macOS (build only, from ${TAG})"
+            echo ""
+            for file in mac-arm64.dmg mac-x64.dmg; do echo "- SHA-256 \`$(shasum -a 256 "$RUNNER_TEMP/dist/CicaTavern-${VERSION}-${file}" | cut -d' ' -f1)\`  CicaTavern-${VERSION}-${file}"; done
+            echo "- The disk images are this run's artifacts; nothing was put on a Release."
+          } >> "$GITHUB_STEP_SUMMARY"
