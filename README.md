@@ -150,10 +150,13 @@ If you can't quite say what you want, the creator guides you round by round:
 
 <br clear="right">
 
-## Latest changes [2.4.3]
+## Latest changes [2.4.4]
 
-<p align="center"><img src="web/whatsnew/2.4.3-scripts.webp" alt="A card's own scripts: a demo card's ledger panel in a small window at the bottom right, its buttons above the input box, and Check this card saying where each script runs" width="720"></p>
+<p align="center"><img src="web/whatsnew/2.4.4-bar.webp" alt="The top bar on a phone: two rows, with the preset, compress, memory, model and thinking pills in one row; in full screen the bar is tucked away with a small arrow at the top that pulls it down" width="720"></p>
 
+- **2.4.4: imported SillyTavern presets work more like they do in SillyTavern**: User and AI assistant entries before Chat History are sent as messages of their own, and newly imported presets default to Like SillyTavern, so the jailbreak and output format follow your message each turn; on Claude-format APIs the history stays unchanged and caching costs as little as In the prefix. The preset window now explains which option to pick.
+- **2.4.4: a two-row top bar and full screen on phones**: on a phone the chat's top bar takes two rows, with a Full screen button that tucks it away to give the story more room; the small arrow at the top pulls it back down.
+- **2.4.4: Vertex's native API, and fixes**: Gemini Agent Platform (once Vertex AI) chats through Gemini's native API by default, with the thinking shown and Google Search; fixes for dragging cards into order on Android, unreadable visual novel text and missing game choices on old Android WebViews, in-app updates that installed the old version on some phones, and a blank window when the interface size wasn't 100%.
 - **2.4.3: a card's own scripts now run**: the Tavern Helper scripts a card's author left on now run. Those that follow the variables run in the background the way MVU runs them; the rest start on the page when the chat opens, with their own panels in a small window at the bottom right and their buttons above the input box. Check this card says where each one runs and what it lacks here.
 - **2.4.3: the status bar in the card editor, earlier pictures kept**: the card editor has a Status bar section to restyle it, or to change it by saying what you want; redrawn or replaced pictures, reference pictures, sprites, scenes and avatars stay, ready to take back.
 - **2.4.3: a new party bar, iPhone keeps writing**: Color block (once Bold) shows the party as a slanted band along the bottom in fights; on iPhone (iOS 26 or later) a reply goes on in the background with its progress in the Dynamic Island; plus a ComfyUI negative prompt, When done text reveal, and cards up to about 110 MB.
@@ -517,10 +520,13 @@ flowchart LR
 
 <br clear="right">
 
-## 最新版本变动[2.4.3]
+## 最新版本变动[2.4.4]
 
-<p align="center"><img src="web/whatsnew/2.4.3-scripts.webp" alt="卡自带的脚本：林青禾这张卡的「茶客簿」小窗显示在右下角，「翻账本」「看黄历」按钮在输入框上方，「检查这张卡」写明每个脚本在哪运行" width="720"></p>
+<p align="center"><img src="web/whatsnew/2.4.4-bar.webp" alt="手机上的顶栏：平时两行，预设、压缩、记忆、模型和思考排成一行；全屏时顶栏收起，顶上留一个小箭头，点开顶栏滑下来" width="720"></p>
 
+- **2.4.4：导入的酒馆预设更像在酒馆里用**：聊天记录前的「用户」「AI 助手」条目作为单独的消息发送，新导入的预设默认「同酒馆」，破限和输出格式每轮紧跟在你的消息后面；用 Claude 格式的接口时历史不改，缓存和「放进前缀」一样省。预设窗口里写清了每个选项怎么选。
+- **2.4.4：手机顶栏两行、全屏**：手机上聊天页的顶栏缩成两行，多了「全屏」：顶栏收起来，正文多占一些地方，点顶上的小箭头再拉出来。
+- **2.4.4：Vertex 原生接口和一批修复**：Gemini Agent Platform（原 Vertex AI）默认走 Gemini 原生接口，能显示思考、用 Google 搜索；修了安卓拖动排序、旧系统 WebView 上视觉小说的字看不清和游戏卡选项出不来、部分手机应用内更新装不上、界面大小不是 100% 时打开一片空白。
 - **2.4.3：卡自带的脚本能运行了**：角色卡里作者开着的酒馆助手脚本现在会跑：跟着变量走的在后台照 MVU 的方式执行，其余的打开对话时在页面上启动，自己画的界面在右下角小窗，按钮在输入框上方。「检查这张卡」写明每个脚本在哪运行、缺哪些函数。
 - **2.4.3：修改角色卡里改状态栏、抽图历史**：修改角色卡多了「状态栏」一节，能调整样式，也能用「按意见改」说一句让向导改；重画或换掉的配图、人设图、立绘、场景和头像都留着，点一张换回来。
 - **2.4.3：撞色队伍状态栏、iPhone 后台接着写**：撞色主题的队伍战斗换成底部一条斜带；iPhone 版（iOS 26 以上）切到后台也接着写，灵动岛显示进度；还有 ComfyUI 负面提示词、「写完再显示」、110 MB 以内的大卡导入。

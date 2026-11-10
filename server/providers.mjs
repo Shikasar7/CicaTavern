@@ -122,7 +122,10 @@ function cleanKey(value) {
   return typed
 }
 
-/** Vertex AI's address names the Google Cloud project: the template's PROJECT_ID is filled in from the JSON credential. */
+/**
+ * Vertex AI's address (either of them: …/endpoints/openapi or …/publishers/google) names the Google Cloud project:
+ * the template's PROJECT_ID is filled in from the JSON credential.
+ */
 function withProject(baseURL, key) {
   const projectId = googleCredential(key)?.projectId
   return projectId ? baseURL.replace('/projects/PROJECT_ID/', `/projects/${encodeURIComponent(projectId)}/`) : baseURL
@@ -1166,8 +1169,11 @@ function geminiLeast(modelId) {
 }
 const geminiStops = modelId => /gemini-2\.[^/]*flash/i.test(modelId)
 
-/** The model as Gemini's own API names it in the address, without the `models/` its list puts before it. */
-const geminiModel = modelId => String(modelId).replace(/^models\//, '')
+/**
+ * The model as Gemini's own API names it in the address, without the `models/` its list puts before it, or the
+ * `google/` (or `publishers/google/models/`) Vertex AI's OpenAI-compatible address and its Model Garden write.
+ */
+const geminiModel = modelId => String(modelId).replace(/^(?:models\/|publishers\/google\/models\/|google\/)/, '')
 
 /**
  * A request to Gemini's own API: the system prompt as systemInstruction, the turns as contents (one side's
@@ -1229,8 +1235,10 @@ function requestBody(provider, modelId, { system, messages, maxTokens: cap, reas
     // request reads the previous request's cached prefix and extends it. A message
     // marked `cache` (the newest one later turns will not rewrite) gets a third. So does
     // the `cacheHead` first characters of a message, what the next requests will start with word for word.
-    // The newest message of the conversation itself: a paused reply sent back after it (its blocks) has none.
-    const last = messages.findLastIndex(m => !Array.isArray(m.content))
+    // The newest message of the conversation itself: a paused reply sent back after it (its blocks) has none, nor do
+    // the preset's after-history entries sent after it for this turn only (`tail`, engine.mjs turnMessages): the next
+    // turn has them no more, so it reads the cache up to the turn's message.
+    const last = messages.findLastIndex(m => !Array.isArray(m.content) && !m.tail)
     const cache = ttl === '1h' ? { type: 'ephemeral', ttl: '1h' } : { type: 'ephemeral' }
     // Only Claude takes the breakpoints. Relays that put other models (DeepSeek, Kimi…) behind this
     // API cache by themselves, and some drop the system prompt when a message comes as marked blocks.
@@ -1268,7 +1276,8 @@ function requestBody(provider, modelId, { system, messages, maxTokens: cap, reas
     }
   }
   return {
-    model: modelId,
+    // Vertex AI's OpenAI-compatible address wants google/<model>: a provider switched back from the native type keeps bare IDs.
+    model: isVertex(provider) && !modelId.includes('/') ? `google/${modelId}` : modelId,
     messages: [...(String(system ?? '').trim() ? [{ role: 'system', content: system }] : []), ...messages.map(m => ({ role: m.role, content: m.content }))],
     stream: true,
     stream_options: { include_usage: true },
@@ -1434,7 +1443,11 @@ const BUSY_RETRIES = 2
 const BUSY_WAITS_MS = [2000, 5000]
 const BUSY_MAX_MS = 20_000
 
-const isVertex = provider => /\/endpoints\/openapi\/?$/i.test(provider.baseURL)
+/**
+ * Vertex AI (Agent Platform): its OpenAI-compatible address (…/locations/<place>/endpoints/openapi), or its own
+ * one for Google's models (…/locations/<place>/publishers/google), which the Gemini native type takes.
+ */
+const isVertex = provider => /\/endpoints\/openapi\/?$|\/locations\/[^/]+\/publishers\/google\/?$/i.test(String(provider?.baseURL ?? ''))
 
 /** How long to wait before asking a busy Vertex AI again, or null to give up (Google asks for longer than we wait). */
 function busyWait(res, retry) {
@@ -1653,7 +1666,7 @@ const CONTEXT_FIELDS = ['context_length', 'context_window', 'inputTokenLimit', '
 
 /** The provider's model list: { models: ids, contexts: { id: tokens } } for the models whose entry says. */
 export async function listRemoteModelDetails(provider, { proxy = null, signal } = {}) {
-  if (/\/endpoints\/openapi\/?$/i.test(provider.baseURL)) return vertexModels(provider, { proxy, signal })
+  if (isVertex(provider)) return vertexModels(provider, { proxy, signal })
   const target = provider.api === 'anthropic-messages' ? anthropicUrl(provider.baseURL, '/models?limit=1000') : provider.api === 'google-generative' ? joinUrl(googleBase(provider), '/models?pageSize=1000') : joinUrl(provider.baseURL, '/models')
   const res = await send(target, { headers: await headersFor(provider, { accept: 'application/json' }, { proxy, signal }), signal, proxy: provider.proxy === 'direct' ? null : proxy })
   await failIfBad(res)
@@ -1673,8 +1686,8 @@ export async function listRemoteModelDetails(provider, { proxy = null, signal } 
 }
 
 /**
- * Vertex AI's OpenAI-compatible address lists no models: Google's own models come from its Model Garden
- * (publishers/google), Gemini only, written the way that address takes them (google/<model>).
+ * Vertex AI lists no models at either address: Google's own models come from its Model Garden (publishers/google),
+ * Gemini only, written the way the provider's type takes them (vertexId).
  */
 async function vertexModels(provider, { proxy = null, signal } = {}) {
   // The Model Garden takes no API key: the models written in and the ones Google offered when this was written are
@@ -1692,13 +1705,16 @@ async function vertexModels(provider, { proxy = null, signal } = {}) {
     const json = parseJson(await readText(res, 8 * 1024 * 1024))
     for (const item of json?.publisherModels ?? []) {
       const id = String(item?.name ?? '').replace(/^publishers\/google\/models\//, '')
-      if (/^gemini-/i.test(id) && !NOT_CHAT.test(id) && !/transcribe|translate|-live/i.test(id)) ids.add(`google/${id}`)
+      if (/^gemini-/i.test(id) && !NOT_CHAT.test(id) && !/transcribe|translate|-live/i.test(id)) ids.add(vertexId(provider, id))
     }
     page = typeof json?.nextPageToken === 'string' ? json.nextPageToken : ''
     if (!page) break
   }
   return { models: [...ids].sort((a, b) => a.localeCompare(b)), contexts: {} }
 }
+
+/** A Vertex AI model as the provider's type writes it: google/<model> for the OpenAI-compatible address, bare for the native one. */
+const vertexId = (provider, id) => provider.api === 'google-generative' ? id : `google/${id}`
 
 // Agent Platform's Gemini models as its Model Garden listed them (2026-11), tried when only an API key is there to ask with.
 const AGENT_PLATFORM_MODELS = [
@@ -1712,8 +1728,8 @@ const AGENT_PLATFORM_MODELS = [
  * error says why (the key, the project, the network).
  */
 async function triedModels(provider, { proxy = null, signal } = {}) {
-  const written = (provider.models ?? []).map(model => String(model.id ?? '').replace(/^google\//, '')).filter(Boolean)
-  if (!written.length) throw httpError(400, msg`先在「模型」里填一个模型 ID（比如 google/gemini-3.1-pro-preview），用它检查连接`)
+  const written = (provider.models ?? []).map(model => geminiModel(model.id ?? '')).filter(Boolean)
+  if (!written.length) throw httpError(400, msg`先在「模型」里填一个模型 ID（比如 ${vertexId(provider, 'gemini-3.1-pro-preview')}），用它检查连接`)
   const candidates = [...new Set([...written, ...AGENT_PLATFORM_MODELS])]
   const results = new Array(candidates.length)
   let next = 0
@@ -1731,7 +1747,7 @@ async function triedModels(provider, { proxy = null, signal } = {}) {
     }
   }
   await Promise.all(Array.from({ length: 6 }, worker))
-  const models = candidates.filter((_, i) => results[i]?.ok).map(id => `google/${id}`)
+  const models = candidates.filter((_, i) => results[i]?.ok).map(id => vertexId(provider, id))
   if (!models.length) throw results.find(result => result?.error && result.error.providerStatus !== 404)?.error ?? results[0].error
   return { models: models.sort((a, b) => a.localeCompare(b)), contexts: {} }
 }

@@ -500,7 +500,7 @@ export default {
   "响应太大": "Response too large",
   "供应商": "The provider",
   "{0} 不认地址里的项目：Base URL 里要填 Google Cloud 项目 ID（控制台顶部项目选择器里的「ID」，不是项目名称），并且 API Key 属于这个项目。（{1}）": "{0} does not accept the project in the address: the Base URL needs the Google Cloud project ID (the \"ID\" in the project picker at the top of the console, not the project name), and the API key must belong to that project. ({1})",
-  "先在「模型」里填一个模型 ID（比如 google/gemini-3.1-pro-preview），用它检查连接": "Write a model ID under Models first (google/gemini-3.1-pro-preview, say): the connection is checked with it",
+  "先在「模型」里填一个模型 ID（比如 {0}），用它检查连接": "Write a model ID under Models first ({0}, say): the connection is checked with it",
   "{0} 拒绝了请求：API Key 无效或没有权限。（{1}）": "{0} rejected the request: the API key is invalid or lacks permission. ({1})",
   "{0} 返回 404：检查 Base URL 和接口类型，或者模型 ID 是否写对。（{1}）": "{0} returned 404: check the Base URL and API type, and that the model ID is spelled correctly. ({1})",
   "{0} 这个 Key 今天的额度用完了（429），约 {1}后恢复。换一个 Key，或者给它开通付费。（{2}）": "{0}: this key's quota for today has run out (429); it comes back in about {1}. Use another key, or turn on billing for it. ({2})",

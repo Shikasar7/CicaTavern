@@ -6,7 +6,7 @@
 // (this machine's own install: server/subscription/); without one they are refused.
 import { readFile } from 'node:fs/promises'
 import { activePath, booksForCard, chatPicks, childrenOf, compactBlock, editMessage as editChatMessage, forgetDeleted, pathTo, playerOf, presetFor, scriptsOf, selectNode } from './chats.mjs'
-import { hasPrefixRules, renderPresetTail } from './presets.mjs'
+import { hasPrefixRules, renderPresetTailParts } from './presets.mjs'
 import { asksChoices, asksSelfCheck, choicesInstruction, choicesRequest, extractChoices, lengthRule, replyScripts, withChoices } from './basic.mjs'
 import { DIRECT_CARD, VN_ID, BASIC_ID, builtinOptions, choicesOf, isBuiltinPreset } from '../web/shared/basic.js'
 import { cleanReferences, referenceBlock } from './forge/references.mjs'
@@ -108,6 +108,61 @@ function closeGaps(messages) {
   }
   if (messages[0]?.role === 'assistant') messages.unshift(standIn('user'))
   if (messages.at(-1)?.role === 'user') messages.push(standIn('assistant'))
+}
+
+/**
+ * The preset's 用户 / AI 助手 entries before the history (chats.mjs presetLead), as messages ahead of it, the way
+ * SillyTavern sends them. A first one from AI 助手 gets a short user line before it (a conversation starts with the
+ * player's side); a last one from 用户 goes at the front of the history's first message, so the sides keep taking
+ * turns. They read the same every turn: the cache reads past them.
+ */
+export function withLead(chat, messages) {
+  const lead = (chat.presetLead ?? []).filter(m => String(m.content ?? '').trim()).map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content }))
+  if (!lead.length) return messages
+  if (lead[0].role === 'assistant') lead.unshift({ role: 'user', content: '开始。' })
+  const first = messages[0]
+  if (lead.at(-1).role === 'user' && first?.role === 'user' && typeof first.content === 'string') {
+    return [...lead.slice(0, -1), { ...first, content: `${lead.at(-1).content}\n\n${first.content}` }, ...messages.slice(1)]
+  }
+  return [...lead, ...messages]
+}
+
+// Providers and models that turned a system message after the turn's away (400): the entries go in a user message.
+const refusesSystemTail = new Set()
+// The Claude models that take a system message after the conversation's start (Anthropic's mid-conversation
+// system messages; not Claude Sonnet 5 or older); only Anthropic's own API is known to pass one on as it is.
+const SYSTEM_TAIL_MODELS = /^claude-(opus-5(?![\d.])|opus-5-5|opus-4-8|fable-|mythos-|sonnet-5-5|haiku-5-5)/i
+
+/** Whether this turn sends its preset's 系统 after-history entries as a system message of their own. */
+function sendsSystemTail(target, prepared) {
+  return Boolean(prepared.presetTail?.system.trim()) && target.provider?.api === 'anthropic-messages' && /(^|\.)api\.anthropic\.com$/i.test(hostOf(target.provider.baseURL))
+    && SYSTEM_TAIL_MODELS.test(target.modelId) && !refusesSystemTail.has(`${target.provider.id}/${target.modelId}`)
+}
+const hostOf = url => {
+  try {
+    return new URL(url).hostname
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * The turn's message for a provider API. 同酒馆 (prepared.presetTail) on Claude's own Messages API: the message
+ * without its <预设指令>, as the history keeps it, then the after-history entries as messages of their own: the 用户 and
+ * AI 助手 ones in a user message (the API joins it to the turn's), the 系统 ones as a system message where the model takes
+ * one (`system`), else with the others. They are marked `tail`: the cache mark stays on the turn's message, so the next
+ * turn, which no longer has them, reads the cache up to there. Elsewhere, the message as it is, the entries in it.
+ */
+export function turnMessages(target, prepared, system = true) {
+  const tail = target.provider?.api === 'anthropic-messages' ? prepared.presetTail : null
+  if (!tail) return [{ role: 'user', content: prepared.prompt }]
+  const asSystem = system && sendsSystemTail(target, prepared)
+  const inline = [asSystem ? '' : tail.system, tail.user].filter(text => text.trim()).join('\n\n')
+  return [
+    { role: 'user', content: prepared.prompt.replace(PRESET_BLOCK, '') },
+    ...(inline ? [{ role: 'user', content: `<预设指令>\n${inline}\n</预设指令>`, tail: true }] : []),
+    ...(asSystem ? [{ role: 'system', content: tail.system, tail: true }] : []),
+  ]
 }
 
 function compactionRecap(node, story, names, scripts, chat) {
@@ -313,9 +368,10 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       ? replaceMacros(replaceVariableMacros(note, templates.session ? templates.session.currentState() : state, templates.session ? templates.session.currentVariables() : { local: chat.frameVars ?? {}, global: settings.globalVars ?? {} }), names).trim()
       : ''
     const presetRender = text => (hasEjs(text) ? templateText(session(), text, templateErrors, msg`预设提示词`) : text)
-    const presetText = preset
-      ? renderPresetTail(preset, { card, persona: playerOf(card, persona, names.user), names, vars: chat.presetVars, input: promptInput, lastChar: seen.at(-1).display ?? seen.at(-1).text, render: presetRender })
-      : ''
+    const presetParts = preset
+      ? renderPresetTailParts(preset, { card, persona: playerOf(card, persona, names.user), names, vars: chat.presetVars, input: promptInput, lastChar: seen.at(-1).display ?? seen.at(-1).text, render: presetRender })
+      : { text: '', system: '', user: '' }
+    const presetText = presetParts.text
     // Entries the templates asked for (activewi) join the keyword hits, rendered in the same sandbox.
     const taken = new Set([...hits.map(hit => hit.ref), ...dynamic.map(entry => refOf(entry))])
     for (let round = 0; round < ACTIVATION_ROUNDS && templates.session; round++) {
@@ -360,9 +416,14 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     })
     // The card's scripts' own macros (registerMacroLike), over the whole message.
     const withMacros = await cardScripts.applyMacros(card, prompt, { role: 'user', messageId: path.length })
+    // 同酒馆: the same after-history entries by role, for a provider that takes them as messages of their own after the
+    // turn's message (tailMessages); the turn's message then goes without its <预设指令>, as the history keeps it.
+    const tailOf = async text => (text.trim() ? cardScripts.applyMacros(card, resolve(text), { role: 'user', messageId: path.length }) : '')
+    const presetTail = preset?.postMode === 'latest' && presetText.trim() ? { system: await tailOf(presetParts.system), user: await tailOf(presetParts.user) } : null
     return {
       settings,
       prompt: withMacros,
+      ...(presetTail ? { presetTail } : {}),
       // The input as the turn keeps it (its own templates run).
       input: resolve(said),
       injected: sent.map(hit => hit.ref),
@@ -555,7 +616,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     // newest, xcode and modelflare's Claude (2026-10-29, three turns of 15k characters) bill exactly
     // what they do without it, so it stays: without it a depth window rewrites the history's cache every turn.
     if (Number.isFinite(settled) && settled >= 0) messages[settled].cache = true
-    return messages
+    return withLead(chat, messages)
   }
 
   /**
@@ -715,7 +776,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       // (and its worldbook injections) matches the original attempt exactly.
       const preparing = span('prompt')
       let prepared = userNode
-        ? { settings: await store.getSettings(), prompt: userNode.prompt, injected: userNode.injected, injectedTitles: userNode.injectedTitles, templateWrites: userNode.templateWrites ?? [] }
+        ? { settings: await store.getSettings(), prompt: userNode.prompt, injected: userNode.injected, injectedTitles: userNode.injectedTitles, templateWrites: userNode.templateWrites ?? [], ...(userNode.presetTail ? { presetTail: userNode.presetTail } : {}) }
         : await preparePrompt(chat, parent, text, { marks, rules, files, startWrites })
       preparing()
       const target = await targetFor(modelFor(chat, prepared.settings), prepared.settings)
@@ -798,7 +859,15 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         building()
         const cap = await replyCap(chat, target.provider)
         try {
-          outcome = await generateApi(target, { system: chat.systemPrompt, messages: [...history, { role: 'user', content: prepared.prompt }], ...cap, webSearch, onRestart, onRetry, onReasoning, chatThinking: chat.thinking }, abortController.signal, onText)
+          // 同酒馆 on a provider that takes them: the turn's message as the history will keep it, its after-history
+          // entries after it as messages of their own (tailMessages); the cache mark stays on the turn's message.
+          const ask = system => generateApi(target, { system: chat.systemPrompt, messages: [...history, ...turnMessages(target, prepared, system)], ...cap, webSearch, onRestart, onRetry, onReasoning, chatThinking: chat.thinking }, abortController.signal, onText)
+          outcome = await ask(true).catch(error => {
+            // A model or relay that refuses a system message after the turn's: the entries go with the turn's message.
+            if (!sendsSystemTail(target, prepared) || error.status !== 400 || !/system/i.test(error.message ?? '')) throw error
+            refusesSystemTail.add(`${target.provider.id}/${target.modelId}`)
+            return ask(false)
+          })
         } catch (error) {
           // The provider tells the tokens at the end of an answer, so this one has none. An update block it finished still counts.
           const kept = keepCut ? withoutOpenEnd(shown) : ''
@@ -836,6 +905,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
             role: 'user',
             text: prepared.input ?? text,
             prompt: prepared.prompt,
+            // 同酒馆's entries by role, so a regenerate sends them as this turn did.
+            ...(prepared.presetTail ? { presetTail: prepared.presetTail } : {}),
             injected: prepared.injected,
             injectedTitles: prepared.injectedTitles,
             ...(prepared.recalled?.length ? { recalled: prepared.recalled, recalledTitles: prepared.recalledTitles } : {}),

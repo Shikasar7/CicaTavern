@@ -124,6 +124,58 @@ function renderModelSelect() {
   ].filter(Boolean))
   select.disabled = ui.generating
   renderThinkingSelect()
+  fadePills()
+}
+
+/** On a phone the pills scroll sideways in their row: it fades at the right edge while there are more that way. */
+function fadePills() {
+  requestAnimationFrame(() => {
+    const row = document.querySelector('.topbar-pills')
+    row?.classList.toggle('more', row.scrollWidth - row.scrollLeft - row.clientWidth > 4)
+  })
+}
+
+// ─── 全屏 on a phone: the top bar tucked away above the window, more of the story in view ───────────
+// The tab hanging under the bar pulls it down over the text and back; a tap anywhere else tucks it away again. The
+// 全屏 button in the bar turns it on and off, remembered on this device.
+const BAR_KEY = 'cicatavern.barTucked'
+function tuckBar(on) {
+  const stage = document.querySelector('.stage')
+  stage.classList.toggle('bar-tucked', on)
+  pullBar(false)
+  const button = $('topbar-full')
+  button.setAttribute('aria-pressed', String(on))
+  button.title = on ? t`退出全屏：顶栏回到原处` : t`全屏：收起顶栏，正文多占一些地方；点上面的小箭头再拉出来`
+  button.setAttribute('aria-label', on ? t`退出全屏` : t`全屏`)
+  try {
+    localStorage.setItem(BAR_KEY, on ? '1' : '0')
+  } catch {
+    // Not remembered: this visit only.
+  }
+}
+function pullBar(out) {
+  document.querySelector('.stage').classList.toggle('bar-out', out)
+  const tab = $('topbar-pull')
+  tab.setAttribute('aria-expanded', String(out))
+  tab.title = out ? t`收起顶栏` : t`拉出顶栏`
+  tab.setAttribute('aria-label', tab.title)
+}
+function initBar() {
+  let tucked = false
+  try {
+    tucked = localStorage.getItem(BAR_KEY) === '1'
+  } catch {
+    // As the page starts: the bar in place.
+  }
+  if (tucked) tuckBar(true)
+  $('topbar-full').addEventListener('click', () => tuckBar(!document.querySelector('.stage').classList.contains('bar-tucked')))
+  $('topbar-pull').addEventListener('click', () => pullBar(!document.querySelector('.stage').classList.contains('bar-out')))
+  document.addEventListener('pointerdown', event => {
+    if (document.querySelector('.stage.bar-out') && !event.target.closest?.('.topbar')) pullBar(false)
+  }, true)
+  const row = document.querySelector('.topbar-pills')
+  row.addEventListener('scroll', fadePills, { passive: true })
+  addEventListener('resize', fadePills)
 }
 
 /**
@@ -938,8 +990,9 @@ function initCardDrag(list) {
     target(boxes.filter((box, i) => i !== from && (box.top + box.bottom) / 2 < at).length)
   }
 
-  const slot = to => {
-    const { boxes, from } = sort
+  // s: the drag in hand (finish passes its own: `sort` is already cleared there).
+  const slot = (to, s = sort) => {
+    const { boxes, from } = s
     return to > from ? boxes[to].bottom - boxes[from].bottom : to < from ? boxes[to].top - boxes[from].top : 0
   }
   function target(to) {
@@ -969,7 +1022,7 @@ function initCardDrag(list) {
       const after = order[s.to - 1]?.at(-1)
       if (after) after.after(...own)
       else order[1][0].before(...own)
-      const from = s.follow ? s.dy - slot(s.to) : 0
+      const from = s.follow ? s.dy - slot(s.to, s) : 0
       for (const n of own) n.style.transform = from ? `translateY(${from}px)` : ''
       void list.offsetHeight
       for (const n of all) n.style.transition = ''
@@ -2006,6 +2059,7 @@ function drawChat() {
   renderQuickButton()
   renderSearchButton()
   renderDictateButton()
+  $('topbar-row').hidden = !chat
   const presetPill = $('chat-preset')
   presetPill.hidden = !chat
   if (chat) {
@@ -6324,6 +6378,7 @@ function bind() {
   })
   $('chat-preset').addEventListener('click', () => presetsUi.open(ui.chat?.presetId))
   $('chat-title').addEventListener('click', () => { if (ui.chat) renameChat(ui.chat) })
+  initBar()
   $('scrim').addEventListener('click', closeDrawers)
   if (window.visualViewport) {
     // The keyboard's height, from what the visual viewport leaves, and only while something takes typing: in the

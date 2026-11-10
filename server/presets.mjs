@@ -127,7 +127,9 @@ export function normalizePreset(json, fallbackName = '预设') {
     helperScripts: countHelperScripts(json.extensions?.tavern_helper),
     // Sampling knobs: only maxTokens is used (for provider models, see engine replyCap).
     params: { temperature: num(json.temperature), topP: num(json.top_p), maxTokens: num(json.openai_max_tokens), maxContext: num(json.openai_max_context) },
-    postMode: 'prefix',
+    // As SillyTavern sends them: the after-history entries with the newest message (同酒馆). Presets imported
+    // before keep what they had (a missing one reads as 'prefix').
+    postMode: 'latest',
     importedAt: new Date().toISOString(),
   }
 }
@@ -490,9 +492,12 @@ function historyWrapper(preset, sections) {
  * The preset's part of the frozen system prompt.
  * @param data - { card, persona, names, worldBefore, worldAfter } with the
  *   constant worldbook text already rendered.
- * @returns { text, rules, vars }: `text` is the part before the chat history,
+ * @returns { text, rules, vars, lead }: `text` is the part before the chat history,
  *   `rules` the post-history prompts that read the same every turn (prefix
- *   mode), `vars` the macro variables every later turn starts from.
+ *   mode), `vars` the macro variables every later turn starts from, `lead` the
+ *   entries before the history marked 用户 or AI 助手, in order ([{ role, content }]):
+ *   messages of their own ahead of the history, as SillyTavern sends them. They read
+ *   the same every turn, so they stay in the cached prefix.
  */
 export function renderPresetPrefix(preset, { card, persona, names, worldBefore = '', worldAfter = '', render = text => text }) {
   const sections = sectionsOf(preset)
@@ -515,6 +520,7 @@ export function renderPresetPrefix(preset, { card, persona, names, worldBefore =
     worldInfoAfter: () => (worldAfter ? preset.formats.wi.replace('{0}', () => worldAfter) : ''),
   }
   const parts = []
+  const lead = []
   let placedWorld = false
   preset.prompts.forEach((p, i) => {
     if (!p.enabled) return
@@ -533,20 +539,23 @@ export function renderPresetPrefix(preset, { card, persona, names, worldBefore =
       content = card.systemPrompt
     }
     const text = m(content)
-    if (text) parts.push(text)
+    if (!text) return
+    if (p.role === 'user' || p.role === 'assistant') lead.push({ role: p.role, content: text })
+    else parts.push(text)
   })
   // A preset without worldbook markers would otherwise drop the constant entries.
   if (!placedWorld && (worldBefore || worldAfter)) parts.push([worldBefore, worldAfter].filter(Boolean).join('\n\n'))
   const rules = renderPost(preset, ctx, 'prefix')
-  return { text: parts.join('\n\n'), rules, vars }
+  return { text: parts.join('\n\n'), rules, vars, lead }
 }
 
 /**
  * The post-history prompts' paragraphs for one side: 'prefix' takes those that
  * read the same every turn, 'turn' those that change (in turn mode, all of
  * them). Depth injections come first, deepest first, as SillyTavern orders them.
+ * @returns [{ text, role }] in that order
  */
-function renderPost(preset, ctx, side) {
+function postItems(preset, ctx, side) {
   const render = ctx.render ?? (text => text)
   const sections = sectionsOf(preset)
   const unwrapped = historyWrapper(preset, sections)
@@ -569,17 +578,31 @@ function renderPost(preset, ctx, side) {
     }
     const text = texts.filter(Boolean).join('\n\n')
     if (!text) return
-    if (p.absolute) injected.push({ text, depth: p.depth })
-    else relative.push(text)
+    const item = { text, role: ROLES.has(p.role) ? p.role : 'system' }
+    if (p.absolute) injected.push({ ...item, depth: p.depth })
+    else relative.push(item)
   })
   injected.sort((a, b) => b.depth - a.depth)
-  return [...injected.map(x => x.text), ...relative].join('\n\n')
+  return [...injected, ...relative]
 }
+
+const joinItems = items => items.map(item => item.text).join('\n\n')
+const renderPost = (preset, ctx, side) => joinItems(postItems(preset, ctx, side))
 
 /**
  * The preset's part of one turn's message: the paragraphs that change per turn (all post-history ones in turn mode).
  * @param render - text => text, their templates through the turn's sandbox.
  */
-export function renderPresetTail(preset, { card, persona, names, vars = {}, input = '', lastChar = '', render = text => text }) {
-  return renderPost(preset, { names, vars: { ...vars }, card, persona, lastUser: input, lastChar, render }, 'turn')
+export function renderPresetTail(preset, options) {
+  return renderPresetTailParts(preset, options).text
+}
+
+/**
+ * The same, rendered once, whole (`text`, as it goes in the turn's message) and by role, for a provider that takes
+ * them as messages of their own after that message (engine.mjs tailMessages): `system` the 系统 entries, `user` the
+ * 用户 and AI 助手 ones (a reply cannot start from an AI 助手 line: the current Claude models refuse a prefill).
+ */
+export function renderPresetTailParts(preset, { card, persona, names, vars = {}, input = '', lastChar = '', render = text => text }) {
+  const items = postItems(preset, { names, vars: { ...vars }, card, persona, lastUser: input, lastChar, render }, 'turn')
+  return { text: joinItems(items), system: joinItems(items.filter(item => item.role === 'system')), user: joinItems(items.filter(item => item.role !== 'system')) }
 }

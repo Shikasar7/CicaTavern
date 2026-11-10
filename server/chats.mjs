@@ -191,6 +191,11 @@ export async function switchPicks(store, chat, { personaId, styleId } = {}) {
  * preset as they are now. The next turn writes the cache once more. Templates
  * there render with the opening's state again; what they write is not kept.
  */
+/** The preset's 用户 / AI 助手 entries before the history, their templates' placeholders filled as the system prompt's. */
+const leadOf = (built, prefix) => (built.presetLead ?? []).map(m => ({ role: m.role, content: prefix.resolve(m.content) })).filter(m => m.content.trim())
+const leadText = chat => (chat.presetLead ?? []).map(m => m.content).join('\n\n')
+const leadChars = chat => leadText(chat).length
+
 export async function rebuildPrompt(store, chat, presetId = chat.presetId ?? '') {
   const card = await store.getCard(chat.cardId)
   const [picks, settings, chosen, globalScripts, regexSets] = await Promise.all([chatPicks(store, chat, card), store.getSettings(), presetFor(store, presetId ?? ''), store.getRegex(), store.getRegexSets()])
@@ -223,11 +228,14 @@ export async function rebuildPrompt(store, chat, presetId = chat.presetId ?? '')
   try {
     built = buildChatPrompt({ card, persona: playerOf(card, picks.persona, chat.names.user), style: picks.style.text, settings, books: fixedWorldBooks(books, scripts, chat.names), hasState, preset, render: prefix.render })
     built.systemPrompt = prefix.resolve(built.systemPrompt)
+    built.presetLead = leadOf(built, prefix)
   } finally {
     prefix.dispose()
   }
   chat.systemPrompt = built.systemPrompt
   chat.presetVars = built.presetVars
+  if (built.presetLead.length) chat.presetLead = built.presetLead
+  else delete chat.presetLead
   chat.presetId = preset?.id ?? null
   chat.presetName = preset?.name ?? null
   chat.bookIds = books.map(b => b.id)
@@ -385,6 +393,7 @@ async function startChat(store, cardId, makeRoot, { userName = '', initialize = 
   try {
     built = buildChatPrompt({ card, persona: player, style: picks.style.text, settings, books: fixedWorldBooks(books, ctx.scripts, names), hasState: Object.keys(root.state).length > 0, preset, render: prefix.render })
     built.systemPrompt = prefix.resolve(built.systemPrompt)
+    built.presetLead = leadOf(built, prefix)
     const writes = prefix.writes()
     root.state = applyWrites(root.state, writes.message)
     frameVars = applyWrites(frameVars, writes.local)
@@ -406,6 +415,7 @@ async function startChat(store, cardId, makeRoot, { userName = '', initialize = 
     presetId: preset?.id ?? null,
     presetName: preset?.name ?? null,
     presetVars: built.presetVars,
+    ...(built.presetLead.length ? { presetLead: built.presetLead } : {}),
     bookIds: books.map(b => b.id),
     // 你的角色 and 文风 it was started with: kept when the card's picks or the defaults change (chatPicks).
     personaId: picks.persona.id,
@@ -986,9 +996,9 @@ export function chatView(chat) {
     ...(chat.regexChanges ? { regexChanges: chat.regexChanges } : {}),
     // Its preset asks each reply for <choices>: the latest reply can have them written again (重写选项).
     asksChoices: asksChoices(chat),
-    systemPromptChars: chat.systemPrompt.length,
+    systemPromptChars: chat.systemPrompt.length + leadChars(chat),
     // What compaction cannot shrink (card, constant worldbook entries, preset): the page warns when it is most of the threshold.
-    systemPromptTokens: estimateTokens(chat.systemPrompt),
+    systemPromptTokens: estimateTokens(chat.systemPrompt) + estimateTokens(leadText(chat)),
     // 长期记忆: how many entries the 记忆簿 in force has.
     memoryEntries: memoryOf(active)?.entries.length ?? 0,
   }

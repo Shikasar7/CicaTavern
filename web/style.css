@@ -1974,21 +1974,44 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .proxy-row label { flex: 1 1 200px; }
 .proxy-row .proxy-url[hidden] { display: none; }
 
-/* Phones. The top bar becomes two rows: menu, title and panel toggle, then the
-   preset / compress / model pills with the whole width to themselves. */
+/* The pills' row and the 全屏 button with it (index.html): on a phone a row of its own; wider, the pills sit in the top
+   bar as they always have, and 全屏 and its tab are not there. */
+.topbar-row, .topbar-pills { display: contents; }
+.topbar-row[hidden] { display: none; }
+.topbar .topbar-full, .topbar .topbar-pull { display: none; }
+.topbar-full .leave, .topbar-full[aria-pressed="true"] .enter { display: none; }
+.topbar-full[aria-pressed="true"] .leave { display: block; }
+
+/* Phones. The top bar is two rows: menu, title, 视觉小说 and the panel toggles, then the preset / compress / memory /
+   model / 思考 pills in one row that scrolls sideways when they do not all fit (fading at the edge then), 全屏 after it. */
 @media (max-width: 560px) {
   .topbar { flex-wrap: wrap; row-gap: 8px; padding: 8px 12px; }
   .topbar #toggle-left { order: 0; }
   .topbar-title { order: 1; flex: 1 1 0; }
   .topbar #toggle-right { order: 2; }
   .topbar::after { content: ""; order: 3; flex-basis: 100%; height: 0; }
-  .topbar .pill { order: 4; max-width: none; }
-  .topbar #chat-preset { flex: 0 1 auto; max-width: 45%; }
-  .topbar #compact-chat { flex: none; }
-  /* The model and its 思考 share a row of their own when the pills before them leave too little (half the row each
-     at most, with the gap between them), rather than the model squeezed to a few letters. */
-  .topbar #chat-model { flex: 1 1 48%; min-width: 0; }
-  .topbar #chat-thinking { flex: 0 1 auto; min-width: 0; max-width: 46%; }
+  .topbar-row { order: 4; display: flex; align-items: center; gap: 2px; flex: 1 1 100%; min-width: 0; margin-right: -6px; }
+  .topbar-pills { display: flex; align-items: center; gap: 6px; flex: 1 1 0; min-width: 0; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scrollbar-width: none; }
+  .topbar-pills::-webkit-scrollbar { display: none; }
+  .topbar-pills.more { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
+  .topbar .pill { flex: none; min-width: 0; max-width: 150px; }
+  .topbar #chat-preset { max-width: 128px; }
+  .topbar #chat-model { flex: none; min-width: 0; max-width: 132px; }
+  .topbar #chat-thinking { flex: none; min-width: 0; max-width: 140px; }
+  .topbar .topbar-full { display: inline-flex; flex: none; width: 32px; height: 32px; padding: 6px; }
+
+  /* 全屏: the bar tucked away above the window; the tab hanging under it pulls it down over the text, and back. */
+  .topbar-pull { position: absolute; top: 100%; left: calc(50% - 24px); z-index: 1; align-items: center; justify-content: center; width: 48px; height: 20px; padding: 0; border: 1px solid var(--line); border-top: 0; border-radius: 0 0 12px 12px; background: var(--surface); color: var(--muted); opacity: .9; cursor: pointer; }
+  .topbar-pull svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; transition: transform .24s var(--ease); }
+  .stage.bar-tucked .topbar { position: absolute; top: 0; left: 0; right: 0; z-index: 40; background: var(--bg); transform: translateY(-100%); transition: transform .24s var(--ease), box-shadow .24s; }
+  .stage.bar-tucked .topbar-pull { display: flex; }
+  /* The first lines clear the tab. */
+  .stage.bar-tucked .transcript { padding-top: 26px; }
+  .stage.bar-tucked.bar-out .topbar { transform: none; box-shadow: var(--shadow-2); }
+  .stage.bar-tucked.bar-out .topbar-pull svg { transform: rotate(180deg); }
+}
+@media (max-width: 560px) and (prefers-reduced-motion: reduce) {
+  .stage.bar-tucked .topbar, .topbar-pull svg { transition: none; }
 }
 /* Dialog button rows wrap instead of running off the screen; the closing pair stays on the right. */
 @media (max-width: 780px) {

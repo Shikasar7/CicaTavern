@@ -149,10 +149,13 @@ If you can't quite say what you want, the creator guides you round by round:
 
 <br clear="right">
 
-## Latest changes [2.4.3]
+## Latest changes [2.4.4]
 
-<p align="center"><img src="web/whatsnew/2.4.3-scripts.webp" alt="A card's own scripts: a demo card's ledger panel in a small window at the bottom right, its buttons above the input box, and Check this card saying where each script runs" width="720"></p>
+<p align="center"><img src="web/whatsnew/2.4.4-bar.webp" alt="The top bar on a phone: two rows, with the preset, compress, memory, model and thinking pills in one row; in full screen the bar is tucked away with a small arrow at the top that pulls it down" width="720"></p>
 
+- **2.4.4: imported SillyTavern presets work more like they do in SillyTavern**: User and AI assistant entries before Chat History are sent as messages of their own, and newly imported presets default to Like SillyTavern, so the jailbreak and output format follow your message each turn; on Claude-format APIs the history stays unchanged and caching costs as little as In the prefix. The preset window now explains which option to pick.
+- **2.4.4: a two-row top bar and full screen on phones**: on a phone the chat's top bar takes two rows, with a Full screen button that tucks it away to give the story more room; the small arrow at the top pulls it back down.
+- **2.4.4: Vertex's native API, and fixes**: Gemini Agent Platform (once Vertex AI) chats through Gemini's native API by default, with the thinking shown and Google Search; fixes for dragging cards into order on Android, unreadable visual novel text and missing game choices on old Android WebViews, in-app updates that installed the old version on some phones, and a blank window when the interface size wasn't 100%.
 - **2.4.3: a card's own scripts now run**: the Tavern Helper scripts a card's author left on now run. Those that follow the variables run in the background the way MVU runs them; the rest start on the page when the chat opens, with their own panels in a small window at the bottom right and their buttons above the input box. Check this card says where each one runs and what it lacks here.
 - **2.4.3: the status bar in the card editor, earlier pictures kept**: the card editor has a Status bar section to restyle it, or to change it by saying what you want; redrawn or replaced pictures, reference pictures, sprites, scenes and avatars stay, ready to take back.
 - **2.4.3: a new party bar, iPhone keeps writing**: Color block (once Bold) shows the party as a slanted band along the bottom in fights; on iPhone (iOS 26 or later) a reply goes on in the background with its progress in the Dynamic Island; plus a ComfyUI negative prompt, When done text reveal, and cards up to about 110 MB.

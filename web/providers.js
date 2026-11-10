@@ -13,8 +13,16 @@ const URL_HINT = {
   'openai-completions': t`写到 /v1 为止（DeepSeek、Kimi、智谱、OpenRouter、本机中转都是这种）。请求发到 …/chat/completions。`,
   'openai-responses': t`写到 /v1 为止。请求发到 …/responses，不在对方服务器保存对话。`,
   'anthropic-messages': t`可以省略 /v1。请求发到 …/v1/messages，自动加缓存断点。`,
-  'google-generative': t`写到 /v1beta 为止（写成 OpenAI 兼容的 …/v1beta/openai 也行）。请求发到 …/models/模型:streamGenerateContent，安全过滤设为最宽松，联网用 Google 搜索。`,
+  'google-generative': t`写到 /v1beta 为止（写成 OpenAI 兼容的 …/v1beta/openai 也行）；Agent Platform（Vertex AI）写到 …/locations/global/publishers/google。请求发到 …/models/模型:streamGenerateContent，安全过滤设为最宽松，联网用 Google 搜索。`,
 }
+
+// Agent Platform's setup (one line each).
+const AGENT_PLATFORM_STEPS = [
+  t`先在控制台启用 Agent Platform API，再二选一：`,
+  t`① API Key（推荐）：在「API 和服务 → 凭据」创建，粘贴进来；把地址里的 PROJECT_ID 换成项目 ID（项目选择器里的「ID」，不是项目名称）。`,
+  t`② JSON 凭据（组织不让建 API Key 时）：服务账号的 JSON 密钥（「IAM → 服务账号」新建，角色选「Vertex AI 用户」，在「密钥」页添加），项目 ID 自动读取；或者 gcloud auth application-default login 生成的 application_default_credentials.json（Windows 在 %APPDATA% 下的 gcloud 文件夹里），地址里的 PROJECT_ID 要手动换。`,
+]
+const AGENT_PLATFORM_CHECK = t`获取模型列表：用 API Key 时会把常见的 Gemini 模型逐个试一遍（不花钱），列出这个项目能用的；更新的模型手动填。`
 
 // Starting points for a new provider. Model ids change often: the note asks to
 // check them with 「从接口获取模型列表」 once the key is in. site = where to sign
@@ -46,19 +54,21 @@ const TEMPLATES = [
     note: t`Google AI Studio 的 Gemini API（原生接口，和 SillyTavern 的「Google AI Studio」一样），密钥在 aistudio.google.com 创建，需要走代理。以前用 OpenAI 兼容接口建的，可以在这里把「接口类型」改成「Gemini 原生」，Base URL 不用动。`,
   },
   // Agent Platform (once Vertex AI): an API key, or a JSON credential where an organization allows none (accounts: where
-  // that is made). check: what to say of the model list, in place of the usual line.
+  // that is made). check: what to say of the model list, in place of the usual line. Gemini native by default (the thinking
+  // shown, Google Search, the loosest filters); OpenAI-compatible for the Model Garden's other models (vertexAddress).
   {
-    name: 'Gemini Agent Platform', api: 'openai-completions', baseURL: 'https://aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/global/endpoints/openapi', apiKeyEnv: '', proxy: 'global',
+    name: 'Gemini Agent Platform', api: 'google-generative', baseURL: 'https://aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/global/publishers/google', apiKeyEnv: '', proxy: 'global',
     site: 'https://console.cloud.google.com/vertex-ai', keys: 'https://console.cloud.google.com/apis/credentials', accounts: 'https://console.cloud.google.com/iam-admin/serviceaccounts',
-    models: [{ id: 'google/gemini-4-argon' }, { id: 'google/gemini-3.1-pro-preview' }],
+    models: [{ id: 'gemini-4-argon' }, { id: 'gemini-3.1-pro-preview' }],
     // One line each (the note keeps its line breaks).
     note: [
-      t`Google Cloud 的 Agent Platform（原 Vertex AI）。新账号的 300 美元赠金能用在这里，AI Studio 的密钥不行。需要走代理，模型 ID 写成「google/模型」。`,
-      t`先在控制台启用 Agent Platform API，再二选一：`,
-      t`① API Key（推荐）：在「API 和服务 → 凭据」创建，粘贴进来；把地址里的 PROJECT_ID 换成项目 ID（项目选择器里的「ID」，不是项目名称）。`,
-      t`② JSON 凭据（组织不让建 API Key 时）：服务账号的 JSON 密钥（「IAM → 服务账号」新建，角色选「Vertex AI 用户」，在「密钥」页添加），项目 ID 自动读取；或者 gcloud auth application-default login 生成的 application_default_credentials.json（Windows 在 %APPDATA% 下的 gcloud 文件夹里），地址里的 PROJECT_ID 要手动换。`,
+      t`Google Cloud 的 Agent Platform（原 Vertex AI）。新账号的 300 美元赠金能用在这里，AI Studio 的密钥不行。需要走代理，模型 ID 直接写「gemini-…」。`,
+      t`走 Gemini 原生接口：能显示思考过程、用 Google 搜索联网，安全过滤设为最宽松。`,
+      t`要用 Model Garden 里 Gemini 以外的开放模型（Llama、DeepSeek 等），把「接口类型」改成「OpenAI 兼容」，地址会自动换，模型 ID 写成「厂商/模型」。`,
+      t`以前用 OpenAI 兼容地址（…/endpoints/openapi）建的供应商照常能用，想要上面这些，把接口类型改成「Gemini 原生」就行。`,
+      ...AGENT_PLATFORM_STEPS,
     ].join('\n'),
-    check: t`获取模型列表：用 API Key 时会把常见的 Gemini 模型逐个试一遍（不花钱），列出这个项目能用的；更新的模型手动填。`,
+    check: AGENT_PLATFORM_CHECK,
   },
   {
     name: 'OpenRouter', api: 'openai-completions', baseURL: 'https://openrouter.ai/api/v1', apiKeyEnv: 'OPENROUTER_API_KEY', proxy: 'global',
@@ -118,10 +128,19 @@ const TEMPLATES = [
     note: t`本机跑的开源模型，不用密钥。直接点「从接口获取模型列表」，选你已经 pull 下来的模型。LM Studio 把端口换成 1234。`,
   },
 ]
+/** An Agent Platform (Vertex AI) address as the API type takes it; any other address as it is. */
+function vertexAddress(url, api) {
+  if (!/aiplatform\.googleapis\.com/i.test(url)) return url
+  if (api === 'google-generative') return url.replace(/\/endpoints\/openapi(\/?)$/i, '/publishers/google$1')
+  if (api === 'openai-completions') return url.replace(/\/locations\/([^/]+)\/publishers\/google(\/?)$/i, '/locations/$1/endpoints/openapi$2')
+  return url
+}
+
 /** The template whose address this is, for its sign-up links. */
 function templateFor(baseURL) {
-  // Agent Platform's address has the project in it (the template's PROJECT_ID until it is saved).
-  const clean = url => String(url ?? '').trim().replace(/\/+$/, '').toLowerCase().replace(/\/projects\/[^/]+\//, '/projects/project_id/')
+  // Agent Platform's address has the project in it (the template's PROJECT_ID until it is saved), and ends in
+  // …/publishers/google (Gemini native) or …/endpoints/openapi (OpenAI-compatible): both are its template's.
+  const clean = url => vertexAddress(String(url ?? '').trim().replace(/\/+$/, ''), 'google-generative').toLowerCase().replace(/\/projects\/[^/]+\//, '/projects/project_id/')
   return TEMPLATES.find(tpl => tpl.site && clean(tpl.baseURL) === clean(baseURL))
 }
 const TEMPLATE_CHECK = t`模型 ID 更新得很快，填好 Key 后点「从接口获取模型列表」核对一遍。`
@@ -241,6 +260,12 @@ export function initProviders({ api, el, toast, guard, saveFile, onChanged }) {
     apiSelect.addEventListener('change', () => {
       baseURL.placeholder = PLACEHOLDER[apiSelect.value]
       urlHint.textContent = URL_HINT[apiSelect.value]
+      // Agent Platform has an address for each type: Gemini native takes …/publishers/google, OpenAI-compatible …/endpoints/openapi.
+      const swapped = vertexAddress(baseURL.value, apiSelect.value)
+      if (swapped !== baseURL.value) {
+        baseURL.value = swapped
+        syncLinks()
+      }
       syncCache()
     })
     syncCache()

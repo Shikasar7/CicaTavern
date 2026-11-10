@@ -13,10 +13,12 @@ const listId = chat => (chat?.presetId === BASIC_ID ? '' : chat?.presetId ?? '')
 
 // What each placement of the prompts after the chat history means for the player.
 const POST_MODE_NOTES = {
-  prefix: t`按原顺序放进固定前缀的末尾，每轮附一句提醒；只有骰子、引用玩家输入这类每轮变化的段落随消息发送。缓存最省，但离回复远，选项、状态这类正文后的块容易被漏掉。`,
-  latest: t`和 SillyTavern 一样：每轮跟在最新一条消息后面，之前几轮的不再重发。选项、格式要求最不容易被漏；每轮多写一条玩家消息的缓存，很便宜。改了之后下一轮会重写一次缓存。历史会变，要在历史里多打一个缓存点：一些低价 Claude 中转处理不好，会多算 token、缓存时有时无，用这类中转时选「每轮都留」。`,
-  turn: t`全部每轮随玩家消息发送，发过的留在历史里，每轮都会让上下文变长。历史不变，只在最新一条上打缓存点，各家中转都能稳定命中。`,
+  prefix: t`「放进前缀」：这些条目只在开局写一次，放在系统提示的最后，之后每轮只附一句提醒（骰子、引用你输入这类每轮会变的段落除外）。最省钱，但它们离模型正要写的回复最远，模型容易不当回事：破限的效果、选项和状态栏这类格式要求最容易打折扣。`,
+  latest: t`「同酒馆」（新导入的预设默认用这个）：和 SillyTavern 一样，每轮把这些条目重新发在你这条消息的后面，紧挨着模型要写的回复，效果最接近在酒馆里用；上一轮发的会拿掉，不在历史里越攒越多。用 Claude 格式的接口（Anthropic 官方或 Claude 中转）时，它们作为单独的消息跟在后面，历史一字不改，缓存和「放进前缀」一样省；其他接口附在你这条消息里，每轮多一点缓存写入，很便宜。少数低价 Claude 中转对这种方式处理不好（多算 token、缓存时有时无），遇到这种情况换「每轮都留」。`,
+  turn: t`「每轮都留」：也是每轮附在你这条消息的最后，效果和「同酒馆」差不多。区别是发过的会留在历史里不拿掉：历史从来不改，各家中转都能稳定命中缓存；但条目每轮都多存一份，上下文涨得快，条目越长越明显。`,
 }
+// Which to pick, under the three.
+const POST_MODE_ADVICE = t`怎么选：导入的 SillyTavern 预设想要和在酒馆里一样的效果（破限、输出格式），选「同酒馆」；最在意省钱选「放进前缀」；用的中转缓存不稳时选「每轮都留」。`
 
 // Only where the subscription exists (the personal edition): what 同酒馆 does there.
 const SUBSCRIPTION_NOTE = t`只对自定义供应商生效，Claude 订阅下同「每轮都留」。`
@@ -211,6 +213,7 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
         el('span', { class: 'seg-label', text: t`聊天记录之后的条目` }),
         mode,
         el('p', { class: 'seg-note', text: modeNote(detail.postMode) }),
+        el('p', { class: 'seg-note', text: POST_MODE_ADVICE }),
       ]),
       el('ul', { class: 'prompt-list', id: 'prompt-list' }, detail.prompts.map(promptRow)),
     )
@@ -362,7 +365,8 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
           editorField(t`位置`, position),
           depthField,
         ]),
-        el('p', { class: 'prompt-note', text: t`发给模型的是合并后的文本：角色只是标记（对照 SillyTavern 用），不会拆成单独的用户 / AI 消息。「聊天中」的条目排进聊天记录之后的规则，深度大的在前；聊天记录之前的条目，位置和深度不起作用。` }),
+        el('p', { class: 'prompt-note', text: t`角色：这条以谁的身份发给模型。「聊天记录」上面的：「系统」写进系统提示；「用户」「AI 助手」和 SillyTavern 一样，作为单独的消息排在聊天记录前面（开局写好，缓存照样命中），对话要点「应用到当前对话」才用上。「聊天记录」下面的（选「同酒馆」时）：用 Anthropic 官方接口的较新 Claude 模型，「系统」条目作为单独的系统消息跟在你这条消息后面；其他情况都附在你这条消息后面。现在的 Claude 模型不接受以「AI 助手」结尾的请求（预填），所以末尾的「AI 助手」条目也按文字附上。` }),
+        el('p', { class: 'prompt-note', text: t`位置：「相对」按列表里的顺序摆：在「聊天记录」上面的，开局写进固定前缀；在下面的，按上方「聊天记录之后的条目」的选法发送。「聊天中 @深度」在 SillyTavern 里是插进聊天记录、离最新一条消息 N 条的地方（0 就是紧挨着最新一条）；CicaTavern 不管它在列表哪里，都当作聊天记录之后的条目，深度大的排在前面。` }),
         area,
         el('div', { class: 'prompt-actions' }, [
           el('button', { type: 'button', class: 'btn small ghost', text: t`↑ 上移`, disabled: index <= 0, onclick: guard(() => move(p.id, -1)) }),

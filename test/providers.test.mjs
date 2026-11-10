@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { normalizeCard } from '../server/cards.mjs'
 import { activePath, chatView, createChat, restoreFolded, rollbackTo } from '../server/chats.mjs'
-import { createEngine } from '../server/engine.mjs'
+import { createEngine, turnMessages, withLead } from '../server/engine.mjs'
 import { testSubscription } from './support/subscription.mjs'
 import { editPreset, normalizePreset } from '../server/presets.mjs'
 import { chatReasoning, complete, draftProvider, exportProviders, googleRequest, importProviders, isGoogle, listRemoteModelDetails, listRemoteModels, normalizeProvider, providerChoices, providerError, publicProvider, reasoningFields, retryWait, thinkingOff } from '../server/providers.mjs'
@@ -698,15 +698,47 @@ test('rebuilt history as SillyTavern sends it: preset block on the newest messag
   await turn('三')
   const messages = fake.requests.at(-1).body.messages
   const text = m => (typeof m.content === 'string' ? m.content : m.content[0].text)
-  assert.equal(messages.length, 5)
-  assert.match(text(messages[4]), /<预设指令>\n正文后写选项\n<\/预设指令>/, 'the newest message carries the preset block')
-  assert.doesNotMatch(text(messages[0]) + text(messages[2]), /预设指令/, 'older messages do not')
+  // The newest message as the history will keep it, the preset's entries in a message of their own after it.
+  assert.equal(messages.length, 6)
+  assert.equal(messages[5].content, '<预设指令>\n正文后写选项\n</预设指令>', 'the preset block comes after the newest message, unmarked')
+  assert.doesNotMatch(text(messages[0]) + text(messages[2]) + text(messages[4]), /预设指令/, 'no message of the history carries it')
   assert.equal(text(messages[1]), '第 1 次回复', 'depth 3: not wrapped')
   assert.equal(text(messages[3]), '<last>第 2 次回复</last>', 'depth 1: wrapped')
   // The reply at depth 3 never changes again: the next turn reads the cache up to it.
   assert.ok(messages[1].content[0].cache_control)
   assert.equal(typeof messages[3].content, 'string')
-  assert.ok(messages[4].content[0].cache_control)
+  assert.ok(messages[4].content[0].cache_control, 'the newest message keeps the mark: the next turn reads up to it')
+})
+
+test('同酒馆 on Claude: the after-history entries after the turn, 系统 ones as a system message on Anthropic’s own API', () => {
+  const prepared = { prompt: '<玩家输入>\n走\n</玩家输入>\n\n<预设指令>\n规则\n\n提醒\n</预设指令>', presetTail: { system: '规则', user: '提醒' } }
+  const target = (baseURL, modelId) => ({ provider: { id: 'p', api: 'anthropic-messages', baseURL }, modelId })
+  const official = turnMessages(target('https://api.anthropic.com/v1', 'claude-haiku-5-5'), prepared)
+  assert.deepEqual(official.map(m => [m.role, m.content, Boolean(m.tail)]), [
+    ['user', '<玩家输入>\n走\n</玩家输入>', false],
+    ['user', '<预设指令>\n提醒\n</预设指令>', true],
+    ['system', '规则', true],
+  ])
+  // A relay, a model without mid-conversation system messages, or one that turned it away: all of it in the user message.
+  for (const sent of [turnMessages(target('https://relay.example/v1', 'claude-haiku-5-5'), prepared), turnMessages(target('https://api.anthropic.com/v1', 'claude-sonnet-5'), prepared), turnMessages(target('https://api.anthropic.com/v1', 'claude-haiku-5-5'), prepared, false)]) {
+    assert.deepEqual(sent.map(m => m.role), ['user', 'user'])
+    assert.equal(sent[1].content, '<预设指令>\n规则\n\n提醒\n</预设指令>')
+  }
+  // Other protocols: the turn's message as it is, the entries in it.
+  assert.deepEqual(turnMessages({ provider: { api: 'openai-completions' } }, prepared), [{ role: 'user', content: prepared.prompt }])
+  assert.deepEqual(turnMessages(target('https://api.anthropic.com/v1', 'claude-haiku-5-5'), { prompt: 'x' }), [{ role: 'user', content: 'x' }])
+})
+
+test('the preset’s 用户 / AI 助手 entries before the history go ahead of it as messages, taking turns', () => {
+  const history = [{ role: 'user', content: '开场', cache: true }, { role: 'assistant', content: '回复' }]
+  assert.deepEqual(withLead({}, history), history, 'none: the history as it is')
+  assert.deepEqual(withLead({ presetLead: [{ role: 'user', content: '照规范写' }, { role: 'assistant', content: '明白' }] }, history), [
+    { role: 'user', content: '照规范写' }, { role: 'assistant', content: '明白' }, ...history,
+  ])
+  // An AI line first gets a user line before it; a user line last joins the history's first message (its mark kept).
+  assert.deepEqual(withLead({ presetLead: [{ role: 'assistant', content: '明白' }, { role: 'user', content: '开始吧' }] }, history), [
+    { role: 'user', content: '开始。' }, { role: 'assistant', content: '明白' }, { role: 'user', content: '开始吧\n\n开场', cache: true }, history[1],
+  ])
 })
 
 test('cache marks: turn mode keeps the history fixed and marks only the newest message; latest adds one settled reply', async t => {
@@ -1298,6 +1330,92 @@ test('Agent Platform with an API key: sent in x-goog-api-key, models found by co
   })
   assert.ok(seen.length <= 6, 'the project turned away: no more models asked than were under way')
   assert.throws(() => at('PROJECT_ID'), /PROJECT_ID/, 'the template\'s placeholder left in the address')
+})
+
+test('Vertex AI through its own API (Gemini native): google/ model IDs stripped, a key or a JSON credential, its Model Garden for the list', async t => {
+  const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
+  const seen = { chat: [], counted: [], lists: [], tokens: 0 }
+  let busy = 0
+  const server = createServer(async (req, res) => {
+    let body = ''
+    for await (const chunk of req) body += chunk
+    const json = (status, value) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(value))
+    if (req.url === '/token') {
+      seen.tokens += 1
+      return json(200, { access_token: `ya29.native-${seen.tokens}`, expires_in: 3599, token_type: 'Bearer' })
+    }
+    const auth = { key: req.headers['x-goog-api-key'], bearer: req.headers.authorization }
+    if (req.url.startsWith('/v1beta1/publishers/google/models')) {
+      seen.lists.push({ url: req.url, project: req.headers['x-goog-user-project'], ...auth })
+      return json(200, { publisherModels: [{ name: 'publishers/google/models/gemini-x' }, { name: 'publishers/google/models/gemini-4-argon' }, { name: 'publishers/google/models/imagen-4.0' }] })
+    }
+    if (req.url.endsWith(':countTokens')) {
+      seen.counted.push({ url: req.url, ...auth })
+      return /\/(gemini-x|gemini-4-argon):countTokens$/.test(req.url) ? json(200, { totalTokens: 1 }) : json(404, { error: { code: 404, message: 'Publisher model was not found or your project does not have access to it.' } })
+    }
+    seen.chat.push({ url: req.url, body: JSON.parse(body), ...auth })
+    if (req.url.endsWith('/chat/completions')) {
+      res.writeHead(200, { 'content-type': 'text/event-stream' })
+      res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: '你好' }, finish_reason: 'stop' }] })}\n\n`)
+      return res.end('data: [DONE]\n\n')
+    }
+    if (busy > 0) {
+      busy -= 1
+      return json(429, [{ error: { code: 429, message: 'Resource exhausted. Please try again later.', status: 'RESOURCE_EXHAUSTED', details: [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '0.05s' }] } }])
+    }
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    const send = piece => res.write(`data: ${JSON.stringify(piece)}\r\n\r\n`)
+    send({ candidates: [{ content: { role: 'model', parts: [{ text: '先想想。', thought: true }] } }] })
+    send({ candidates: [{ content: { role: 'model', parts: [{ text: '你好' }] }, finishReason: 'STOP' }], usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 2, totalTokenCount: 12 } })
+    res.end()
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => server.close())
+  const origin = `http://127.0.0.1:${server.address().port}`
+  const native = `${origin}/v1/projects/P/locations/global/publishers/google`
+  const chatUrl = '/v1/projects/P/locations/global/publishers/google/models/gemini-x:streamGenerateContent?alt=sse'
+  const ask = (provider, model, extra = {}) => complete(provider, model, { system: 's', messages: [{ role: 'user', content: 'hi' }], ...extra })
+
+  // An API key: in Google's own header; the model as the OpenAI-compatible address writes it works too.
+  const byKey = normalizeProvider({ name: 'Gemini Agent Platform', api: 'google-generative', baseURL: native, apiKey: 'AQ.key', models: [{ id: 'google/gemini-x' }] })
+  assert.equal(isGoogle(byKey), true)
+  const thought = []
+  const reply = await ask(byKey, 'google/gemini-x', { webSearch: true, onReasoning: d => thought.push(d) })
+  assert.deepEqual([reply.text, thought], ['你好', ['先想想。']], 'its thinking shown')
+  const call = seen.chat.at(-1)
+  assert.deepEqual([call.url, call.key, call.bearer], [chatUrl, 'AQ.key', undefined])
+  assert.deepEqual(call.body.tools, [{ google_search: {} }], 'Google Search grounding')
+  assert.ok(call.body.safetySettings.every(s => s.threshold === 'BLOCK_NONE'), 'filters at their loosest')
+  for (const id of ['gemini-x', 'publishers/google/models/gemini-x', 'models/gemini-x']) {
+    await ask(byKey, id)
+    assert.equal(seen.chat.at(-1).url, chatUrl, id)
+  }
+  // The OpenAI-compatible address kept after the type was changed: the same place.
+  await ask({ ...byKey, baseURL: `${origin}/v1/projects/P/locations/global/endpoints/openapi` }, 'google/gemini-x')
+  assert.equal(seen.chat.at(-1).url, chatUrl)
+  // Switched back to the OpenAI-compatible type: a bare ID goes as google/<model>, as that address wants it.
+  await ask({ ...byKey, api: 'openai-completions', baseURL: `${origin}/v1/projects/P/locations/global/endpoints/openapi` }, 'gemini-x')
+  assert.deepEqual([seen.chat.at(-1).url, seen.chat.at(-1).body.model], ['/v1/projects/P/locations/global/endpoints/openapi/chat/completions', 'google/gemini-x'])
+  // Busy (429): asked again, as on the OpenAI-compatible address.
+  busy = 1
+  seen.chat.length = 0
+  assert.equal((await ask(byKey, 'gemini-x')).text, '你好')
+  assert.equal(seen.chat.length, 2, 'asked again once')
+  // The list: the Model Garden takes no key, so the models are counted, named bare.
+  assert.deepEqual(await listRemoteModels(byKey), ['gemini-4-argon', 'gemini-x'])
+  assert.equal(seen.counted[0].url, '/v1/projects/P/locations/global/publishers/google/models/gemini-x:countTokens', 'the one written in first, without google/')
+  assert.ok(seen.counted.every(hit => hit.key === 'AQ.key'))
+  await assert.rejects(listRemoteModels({ ...byKey, models: [] }), /比如 gemini-3\.1-pro-preview）/)
+
+  // A JSON credential: the project from it, a token after Bearer, the Model Garden's list.
+  const keyFile = JSON.stringify({ type: 'service_account', project_id: 'P', private_key: privateKey.export({ type: 'pkcs8', format: 'pem' }), client_email: 'tavern@P.iam.gserviceaccount.com', token_uri: `${origin}/token` })
+  const byCredential = normalizeProvider({ name: 'Gemini Agent Platform', api: 'google-generative', baseURL: `${origin}/v1/projects/PROJECT_ID/locations/global/publishers/google`, apiKey: keyFile, models: [{ id: 'gemini-x' }] })
+  assert.equal(byCredential.baseURL, native, 'PROJECT_ID filled in from the credential')
+  assert.equal((await ask(byCredential, 'gemini-x')).text, '你好')
+  assert.deepEqual([seen.chat.at(-1).url, seen.chat.at(-1).key, seen.chat.at(-1).bearer], [chatUrl, undefined, 'Bearer ya29.native-1'])
+  const listed = await listRemoteModelDetails(byCredential)
+  assert.deepEqual(listed.models, ['gemini-4-argon', 'gemini-x'], 'Gemini chat models, without google/')
+  assert.deepEqual([seen.lists[0].url, seen.lists[0].project, seen.lists[0].bearer], ['/v1beta1/publishers/google/models?pageSize=200', 'P', 'Bearer ya29.native-1'])
 })
 
 test('a busy Vertex AI (429) is asked again after a wait, twice at most; other providers are not', async t => {

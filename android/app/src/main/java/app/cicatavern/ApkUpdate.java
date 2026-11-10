@@ -80,6 +80,8 @@ final class ApkUpdate {
     // On the main thread: whether the activity is in front, and an install waiting for it to be.
     private boolean foreground;
     private boolean pendingInstall;
+    // The downloaded APK's version (check), for the address the installer is handed (ApkProvider.uri).
+    private volatile PackageInfo ready;
     private String state = "{\"step\":\"idle\"}";
 
     private ApkUpdate(Context context) {
@@ -88,10 +90,35 @@ final class ApkUpdate {
 
     /** The app's update, now reporting to this activity's page. */
     static synchronized ApkUpdate attach(Activity activity, Listener listener) {
-        if (shared == null) shared = new ApkUpdate(activity.getApplicationContext());
+        if (shared == null) {
+            shared = new ApkUpdate(activity.getApplicationContext());
+            shared.dropInstalled();
+        }
         shared.activity = activity;
         shared.listener = listener;
         return shared;
+    }
+
+    /**
+     * A download this version already is (or is past): installed, or left from an
+     * earlier update. Gone, so no installer is ever handed it again.
+     */
+    private void dropInstalled() {
+        File apk = file(context);
+        if (!apk.isFile()) return;
+        new Thread(() -> {
+            synchronized (this) {
+                if (thread != null && thread.isAlive()) return;
+                try {
+                    PackageManager pm = context.getPackageManager();
+                    PackageInfo next = pm.getPackageArchiveInfo(apk.getPath(), 0);
+                    long self = pm.getPackageInfo(context.getPackageName(), 0).getLongVersionCode();
+                    if (next == null || next.getLongVersionCode() <= self) apk.delete();
+                } catch (PackageManager.NameNotFoundException ignored) {
+                    // Keeps it; the next download replaces it anyway.
+                }
+            }
+        }, "apk-cleanup").start();
     }
 
     /** The activity is gone: the download carries on, and reports to the next one. */
@@ -162,7 +189,7 @@ final class ApkUpdate {
                 download(url, out, sha256);
             }
             report(step("verifying"));
-            check(out);
+            ready = check(out);
             main.post(this::install);
         } catch (Cancelled e) {
             out.delete();
@@ -265,7 +292,7 @@ final class ApkUpdate {
     }
 
     /** This app, a newer version, signed with the same certificate (the installer refuses another one anyway). */
-    private void check(File apk) throws Problem {
+    private PackageInfo check(File apk) throws Problem {
         PackageManager pm = context.getPackageManager();
         PackageInfo next = pm.getPackageArchiveInfo(apk.getPath(), PackageManager.GET_SIGNING_CERTIFICATES);
         if (next == null) throw new Problem("package", "");
@@ -280,6 +307,7 @@ final class ApkUpdate {
         Set<String> theirs = signers(next.signingInfo);
         if (mine != null && theirs != null && !mine.equals(theirs)) throw new Problem("signature", "");
         if (next.getLongVersionCode() <= self.getLongVersionCode()) throw new Problem("older", String.valueOf(next.versionName));
+        return next;
     }
 
     /** The signing certificates' SHA-256, or null when the system did not read them. */
@@ -318,8 +346,14 @@ final class ApkUpdate {
             }
             return;
         }
+        PackageInfo next = ready;
+        if (next == null) next = context.getPackageManager().getPackageArchiveInfo(file(context).getPath(), 0);
+        if (next == null) {
+            report(step("error").put("error", "package"));
+            return;
+        }
         Intent intent = new Intent(Intent.ACTION_VIEW)
-            .setDataAndType(ApkProvider.uri(context), APK_TYPE)
+            .setDataAndType(ApkProvider.uri(context, next.versionName, next.getLongVersionCode()), APK_TYPE)
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         try {
             front.startActivity(intent);

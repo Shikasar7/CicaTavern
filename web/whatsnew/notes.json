@@ -1185,6 +1185,57 @@
           }
         }
       ]
+    },
+    {
+      "version": "2.4.4",
+      "date": "2026-11",
+      "after": true,
+      "items": [
+        {
+          "image": "2.4.4-bar.webp",
+          "zh": {
+            "title": "手机顶栏两行，还能全屏",
+            "text": "手机上聊天页的顶栏缩成两行：第一行是菜单、标题、视觉小说开关和两侧面板；预设、压缩、记忆、模型、思考排在第二行，放不下时左右滑动。\n第二行末尾的「全屏」把顶栏收起来，正文多占一些地方；点顶上的小箭头再拉出来，点别处收回去。这台设备会记住。"
+          },
+          "en": {
+            "title": "A two-row top bar on phones, and Full screen",
+            "text": "On a phone the chat's top bar is now two rows: the menu, the title, the Visual novel switch and the side panels on the first; Presets, Compact, Memory, the model and Thinking on the second, scrolling sideways when they don't fit.\nFull screen at the end of the second row tucks the bar away to give the story more room; the small arrow at the top pulls it back down, and a tap anywhere else tucks it away again. This device remembers it."
+          }
+        },
+        {
+          "image": "2.4.4-preset.webp",
+          "zh": {
+            "title": "导入的预设，照酒馆的方式发",
+            "text": "导入的 SillyTavern 预设发给模型的方式更接近酒馆，破限和输出格式的效果更好：聊天记录之前的「用户」「AI 助手」条目作为单独的消息排在前面；新导入的默认「同酒馆」，用 Claude 格式的接口时历史不改，缓存和「放进前缀」一样省。\n「放进前缀 / 同酒馆 / 每轮都留」和条目的「角色」「位置」都有了说明，写明怎么选。正在玩的对话点「应用到当前对话」后用上。"
+          },
+          "en": {
+            "title": "Imported presets, sent the SillyTavern way",
+            "text": "Imported SillyTavern presets now reach the model much as SillyTavern sends them, so jailbreaks and output formats work better: User and AI Assistant entries before Chat History go as messages of their own, and new imports default to Like SillyTavern, which on a Claude-format API leaves the history unchanged and caches as cheaply as In the prefix.\nIn the prefix, Like SillyTavern and Keep every turn now say what they do and which to pick, and an entry opened with ✎ explains its role and Position. A chat in progress needs Apply to this chat."
+          }
+        },
+        {
+          "image": "2.4.4-vertex.webp",
+          "zh": {
+            "title": "Agent Platform 改用 Gemini 原生接口",
+            "text": "「Gemini Agent Platform」模板（Google Cloud，原 Vertex AI）默认走 Gemini 原生接口：能显示思考过程，「联网」用 Google 搜索，安全过滤设为最宽松。\n要用 Gemini 以外的开放模型，把「接口类型」改成「OpenAI 兼容」，地址自动换；以前用 OpenAI 兼容地址建的照常能用。"
+          },
+          "en": {
+            "title": "Agent Platform uses Gemini's native API",
+            "text": "The Gemini Agent Platform template (Google Cloud, formerly Vertex AI) now uses Gemini's native API by default: the thinking can be shown, web search uses Google Search, and the safety filters are at their loosest.\nFor open models other than Gemini, set API type to OpenAI-compatible and the address changes to match; providers set up earlier with the OpenAI-compatible address keep working."
+          }
+        },
+        {
+          "icon": "🔧",
+          "zh": {
+            "title": "修好的",
+            "text": "安卓：拖动角色卡排序后卡片发白、又变回原来的顺序；旧系统 WebView 上，游戏卡遭遇战出不来选项，视觉小说默认外观的文字框和选项透明看不清；应用内更新有的手机装完还是原来的版本。\n电脑：「界面大小」不是 100% 时，下次打开列表是空的、设置打不开。"
+          },
+          "en": {
+            "title": "Fixed",
+            "text": "Android: dragging cards into a new order turned them white and they snapped back; on older system WebViews, game cards gave no choices at an encounter, and the visual novel's default text box and choices were see-through and hard to read; the in-app update left some phones on the old version.\nDesktop: with Interface size other than 100%, the lists came up empty and Settings would not open."
+          }
+        }
+      ]
     }
   ]
 }

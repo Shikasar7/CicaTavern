@@ -2,7 +2,10 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
-import { editPreset, expandMacros, exportPreset, importOwnPreset, isPresetJson, normalizePreset, placementsOf, presetDetail, renderPresetPrefix, renderPresetTail } from '../server/presets.mjs'
+import { editPreset, expandMacros, exportPreset, importOwnPreset, isPresetJson, normalizePreset, placementsOf, presetDetail, renderPresetPrefix, renderPresetTail, renderPresetTailParts } from '../server/presets.mjs'
+
+// The tests below look at 放进前缀 (the placement before imports defaulted to 同酒馆) unless they pick another.
+const inPrefix = (...args) => ({ ...normalizePreset(...args), postMode: 'prefix' })
 import { buildChatPrompt, buildTurnPrompt, everyTurnReminder } from '../server/prompt.mjs'
 
 const CARD = {
@@ -50,11 +53,32 @@ test('normalizePreset reads the 100001 order, markers, injections and bundled re
   assert.equal(preset.prompts.find(p => p.id === 'deep').absolute, true)
   assert.equal(preset.regexScripts.length, 1)
   assert.equal(preset.params.maxTokens, 4000)
-  assert.equal(preset.postMode, 'prefix')
+  // Imported as SillyTavern sends it (同酒馆); one saved before that setting existed reads as 放进前缀.
+  assert.equal(preset.postMode, 'latest')
+  assert.equal(presetDetail({ ...preset, postMode: undefined }).postMode, 'prefix')
+})
+
+test('用户 / AI 助手 entries before the history become the lead messages; after it, the turn’s entries split by role', () => {
+  const preset = normalizePreset({
+    prompts: [
+      { identifier: 'main', role: 'system', content: '你是{{char}}的叙述者。' },
+      { identifier: 'ask', role: 'user', content: '照规范写给{{user}}看。' },
+      { identifier: 'ack', role: 'assistant', content: '明白。' },
+      { identifier: 'chatHistory', marker: true },
+      { identifier: 'rule', role: 'system', content: '正文后写选项。' },
+      { identifier: 'note', role: 'user', content: '（短一点）' },
+    ],
+  })
+  const prefix = renderPresetPrefix(preset, { card: CARD, persona: PERSONA, names: NAMES })
+  assert.equal(prefix.text, '你是小雨的叙述者。')
+  assert.deepEqual(prefix.lead, [{ role: 'user', content: '照规范写给旅人看。' }, { role: 'assistant', content: '明白。' }])
+  const tail = renderPresetTailParts(preset, { card: CARD, persona: PERSONA, names: NAMES, vars: prefix.vars, input: '你好' })
+  assert.deepEqual(tail, { text: '正文后写选项。\n\n（短一点）', system: '正文后写选项。', user: '（短一点）' })
+  assert.equal(renderPresetTail(preset, { card: CARD, persona: PERSONA, names: NAMES, input: '你好' }), tail.text)
 })
 
 test('static post-history prompts join the prefix; per-turn ones go to the turn', () => {
-  const preset = normalizePreset(PRESET)
+  const preset = inPrefix(PRESET)
   const byId = Object.fromEntries(preset.prompts.map((p, i) => [p.id, placementsOf(preset)[i]]))
   assert.equal(byId.main, 'prefix')
   assert.equal(byId.style, 'prefix')
@@ -66,7 +90,7 @@ test('static post-history prompts join the prefix; per-turn ones go to the turn'
 })
 
 test('prompt editor: name, role, position, depth, add, remove and reorder', () => {
-  const preset = normalizePreset(PRESET)
+  const preset = inPrefix(PRESET)
   editPreset(preset, { prompts: [{ id: 'style', title: ' 文风·改 ', role: 'assistant', absolute: true, depth: 7.9 }] })
   const style = preset.prompts.find(p => p.id === 'style')
   assert.deepEqual([style.name, style.role, style.absolute, style.depth], ['文风·改', 'assistant', true, 7])
@@ -96,7 +120,7 @@ test('prompt editor: name, role, position, depth, add, remove and reorder', () =
 })
 
 test('the prefix follows the preset order, expands markers and carries variables', () => {
-  const preset = normalizePreset(PRESET)
+  const preset = inPrefix(PRESET)
   const prefix = renderPresetPrefix(preset, { card: CARD, persona: PERSONA, names: NAMES, worldBefore: '常驻设定A' })
   const text = prefix.text
   assert.ok(text.indexOf('你是小雨的叙述者。') < text.indexOf('一个爱下雨天的姑娘。'))
@@ -118,7 +142,7 @@ test('only the wrapper around the chat history goes: what shares its prompts sta
   const json = structuredClone(PRESET)
   json.prompts.find(p => p.identifier === 'open').content = '保持第三人称。\n<历史>\n以下是过往记录'
   json.prompts.find(p => p.identifier === 'close').content = '</历史>\n\n输出要求：结尾必须写<UpdateVariable>块，并附四个选项。'
-  const prefix = renderPresetPrefix(normalizePreset(json), { card: CARD, persona: PERSONA, names: NAMES })
+  const prefix = renderPresetPrefix(inPrefix(json), { card: CARD, persona: PERSONA, names: NAMES })
   assert.match(prefix.text, /保持第三人称。$/)
   assert.doesNotMatch(prefix.text, /<历史>|过往记录/)
   assert.equal(prefix.rules, '注意节奏\n\n输出要求：结尾必须写<UpdateVariable>块，并附四个选项。\n\n白描为主，每轮约800字。')
@@ -127,7 +151,7 @@ test('only the wrapper around the chat history goes: what shares its prompts sta
 test('a prompt mixing fixed and per-turn paragraphs is split between prefix and turn', () => {
   const json = structuredClone(PRESET)
   json.prompts.find(p => p.identifier === 'style').content = '白描为主。\n\n---\n本轮骰子：{{roll:d20}}\n\n不要替玩家说话。'
-  const preset = normalizePreset(json)
+  const preset = inPrefix(json)
   assert.equal(placementsOf(preset)[preset.prompts.findIndex(p => p.id === 'style')], 'split')
   const prefix = renderPresetPrefix(preset, { card: CARD, persona: PERSONA, names: NAMES })
   assert.equal(prefix.rules, '注意节奏\n\n白描为主。\n\n不要替玩家说话。')
@@ -142,7 +166,7 @@ test('a per-turn paragraph that sets a variable sets it for the prefix prompts a
   json.prompts.find(p => p.identifier === 'style').content = '选项不超过{{random::4::5}}个，用<w2g>包起来。{{setvar::order::<w2g>}}'
   json.prompts.push({ identifier: 'format', name: '检查格式', role: 'system', content: '输出顺序：正文{{getvar::order}}' })
   json.prompt_order[1].order.push({ identifier: 'format', enabled: true })
-  const preset = normalizePreset(json)
+  const preset = inPrefix(json)
   const prefix = renderPresetPrefix(preset, { card: CARD, persona: PERSONA, names: NAMES })
   assert.match(prefix.rules, /输出顺序：正文<w2g>$/)
   assert.doesNotMatch(prefix.rules, /选项不超过/)
@@ -171,12 +195,12 @@ test('late worldbook entries go last in the prefix, with a one-line reminder eac
   assert.equal(everyTurnReminder('## 每轮回复都要遵守 只有预设', [], { presetRules: true }), '本轮回复同样要遵守系统提示末尾「每轮回复都要遵守」一节的全部要求，尤其是预设规定的输出格式和顺序（正文之后要求附加的内容块一个都不能省）。')
   const turn = buildTurnPrompt({ names: NAMES, input: '你好', reminder: '提醒一句' })
   assert.match(turn, /<\/玩家输入>\n\n<本轮提醒>提醒一句<\/本轮提醒>$/)
-  const withPreset = buildChatPrompt({ card: CARD, persona: PERSONA, settings: {}, books, hasState: false, preset: normalizePreset(PRESET) }).systemPrompt
+  const withPreset = buildChatPrompt({ card: CARD, persona: PERSONA, settings: {}, books, hasState: false, preset: inPrefix(PRESET) }).systemPrompt
   assert.match(withPreset, /## 每轮回复都要遵守\n注意节奏\n\n白描为主，每轮约800字。\n\n【\[mvu_update\]变量输出格式】/)
 })
 
 test('buildChatPrompt puts preset rules last and buildTurnPrompt appends the preset block', () => {
-  const preset = normalizePreset(PRESET)
+  const preset = inPrefix(PRESET)
   const built = buildChatPrompt({ card: CARD, persona: PERSONA, settings: { language: '简体中文', writingRules: '' }, books: [], hasState: false, preset })
   assert.match(built.systemPrompt, /^你是小雨的叙述者。/)
   assert.match(built.systemPrompt, /## 本应用的消息格式/)
@@ -189,12 +213,12 @@ test('buildChatPrompt puts preset rules last and buildTurnPrompt appends the pre
 })
 
 test('card main prompt overrides the preset main, with {{original}}', () => {
-  const preset = normalizePreset(PRESET)
+  const preset = inPrefix(PRESET)
   const card = { ...CARD, systemPrompt: '卡作者：{{original}}再加一句' }
   const { text } = renderPresetPrefix(preset, { card, persona: PERSONA, names: NAMES })
   assert.match(text, /^卡作者：你是小雨的叙述者。再加一句/)
   // 阻止覆盖 on the preset's main prompt: it stays, the card's goes unused.
-  const blocked = normalizePreset({ ...PRESET, prompts: PRESET.prompts.map(p => (p.identifier === 'main' ? { ...p, forbid_overrides: true } : p)) })
+  const blocked = inPrefix({ ...PRESET, prompts: PRESET.prompts.map(p => (p.identifier === 'main' ? { ...p, forbid_overrides: true } : p)) })
   assert.match(renderPresetPrefix(blocked, { card, persona: PERSONA, names: NAMES }).text, /^你是小雨的叙述者。/)
 })
 
@@ -220,7 +244,7 @@ test('every real preset on this machine imports and renders', { skip: !existsSyn
   for (const name of readdirSync(REAL).filter(f => f.endsWith('.json'))) {
     const json = JSON.parse(readFileSync(path.join(REAL, name), 'utf8'))
     if (!isPresetJson(json)) continue
-    const preset = normalizePreset(json, name)
+    const preset = inPrefix(json, name)
     const prefix = renderPresetPrefix(preset, { card: CARD, persona: PERSONA, names: NAMES })
     const tail = renderPresetTail(preset, { card: CARD, persona: PERSONA, names: NAMES, vars: prefix.vars, input: '我推门进去' })
     assert.ok(prefix.text.includes('一个爱下雨天的姑娘。') || !preset.prompts.some(p => p.id === 'charDescription' && p.enabled), name)
@@ -229,7 +253,7 @@ test('every real preset on this machine imports and renders', { skip: !existsSyn
 })
 
 test('preset export and import: edits made here travel, the copy gets its own id', () => {
-  const preset = normalizePreset(PRESET)
+  const preset = inPrefix(PRESET)
   editPreset(preset, { postMode: 'turn', prompts: [{ id: 'style', title: '文风·改' }] })
   const archive = JSON.parse(JSON.stringify(exportPreset(preset)))
   const copy = importOwnPreset(archive)

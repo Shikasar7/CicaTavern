@@ -195,6 +195,15 @@ function zoomQueries(rules, zoom) {
   }
 }
 
+/** A stylesheet's rules, or none for one the page may not read: another site's (the web font's) throws on cssRules. */
+function rulesOf(sheet) {
+  try {
+    return sheet.cssRules ?? []
+  } catch {
+    return []
+  }
+}
+
 /**
  * 界面大小. On a touch screen: the page laid out for a narrower screen and shown larger, as a browser's own zoom does, so
  * everything grows together and the layout still fits; again when the screen changes (turned, folded). In the Mac app: its
@@ -215,7 +224,7 @@ function fitInterface(ui) {
     root.style.zoom = ui === 1 ? '' : String(ui)
     if (ui === 1) root.style.removeProperty('--page-zoom')
     else root.style.setProperty('--page-zoom', String(ui))
-    for (const sheet of document.styleSheets) zoomQueries(sheet.cssRules, ui)
+    for (const sheet of document.styleSheets) zoomQueries(rulesOf(sheet), ui)
   }
 }
 
@@ -801,7 +810,12 @@ export function initTheme({ api, el, toast, guard, getSettings, setSettings, onR
   })
   // Following the system: the bar colour follows it too.
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', syncThemeColor)
-  applyReading(currentReading())
+  // A look that fails to apply must not stop the page from starting (its cards, chats and settings come after this).
+  try {
+    applyReading(currentReading())
+  } catch (error) {
+    console.error(error)
+  }
   addEventListener('resize', () => fitInterface(currentReading().ui))
   renderButton()
   bindReadEdges()

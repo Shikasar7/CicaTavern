@@ -344,7 +344,8 @@ export function buildChatPrompt({ card, persona, style = '', settings, books, ha
   ]
     .filter(Boolean)
     .join('\n\n')
-  return { systemPrompt, presetVars: prefix.vars }
+  // The preset's 用户 / AI 助手 entries before the history: messages ahead of it (engine.mjs leadMessages).
+  return { systemPrompt, presetVars: prefix.vars, presetLead: prefix.lead }
 }
 
 /**
