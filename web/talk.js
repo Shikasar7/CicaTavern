@@ -111,6 +111,7 @@ export function createTalk({ api, el, guard, openProviders }, spec) {
     applying: false, // a proposal is going in: no new request meanwhile
     referencesShown: '', // the references last listed
     readingId: '', // the reference open below the list
+    otherPick: { key: '', model: '' }, // 换个模型重写: the model picked under the latest turn (key: which turn)
   }
   const view = {}
   view.thread = el('div', { class: 'ce-thread' })
@@ -184,7 +185,7 @@ export function createTalk({ api, el, guard, openProviders }, spec) {
   // ─── The thread ───────────────────────────────────────────────────────
   function renderThread() {
     const session = state.session
-    const key = JSON.stringify([spec.url(), session?.turns.map(turn => [turn.user.at, turn.assistant?.at, turn.outcome?.at, turn.outcome?.undone]), session?.job?.startedAt, session?.job?.step, session?.error, session?.undo, [...state.folded].join()])
+    const key = JSON.stringify([spec.url(), session?.turns.map(turn => [turn.user.at, turn.assistant?.at, turn.outcome?.at, turn.outcome?.undone]), session?.job?.startedAt, session?.job?.step, session?.error, session?.undo, [...state.folded].join(), state.models.length])
     view.clear.hidden = !session?.turns.length
     if (key === state.shown) {
       if (session?.job) fillBusy(session.job)
@@ -221,17 +222,43 @@ export function createTalk({ api, el, guard, openProviders }, spec) {
   }
 
   function turnBlock(turn, last) {
-    const job = last && !turn.assistant ? state.session.job : null
-    const error = last && !turn.assistant && !job ? state.session.error : null
+    // The latest answer written again (换个模型重写) stays while the new one is on its way, and when that fails.
+    const job = last ? state.session.job : null
+    const error = last && !job && !turn.outcome ? state.session.error : null
     return el('div', { class: 'ce-turn' }, [
       el('div', { class: 'forge-you' }, [
         turn.user.target ? el('div', { class: 'ce-aimed', text: t`只改：${state.labels.get(turn.user.target) ?? spec.targetLabel(turn.user.target)}` }) : null,
         el('p', { text: turn.user.text }),
       ]),
-      job ? busyBlock() : null,
-      error ? el('div', { class: 'forge-error' }, [el('p', { text: error.message }), el('button', { type: 'button', class: 'btn small', text: t`重试`, onclick: () => retry() })]) : null,
       turn.assistant ? answerBlock(turn, last) : null,
+      job ? busyBlock() : null,
+      error ? el('div', { class: 'forge-error' }, [el('p', { text: error.message }), el('div', { class: 'row' }, [el('button', { type: 'button', class: 'btn small', text: t`重试`, onclick: () => retry() })]), otherModel(turn, error)]) : null,
+      last && turn.assistant && !turn.outcome && !job && !error ? otherModel(turn, null) : null,
     ])
+  }
+
+  /**
+   * 换个模型重写: the latest request answered again by another model, this once (the talk keeps its own). Under an
+   * error, and under an answer whose changes have not been taken or set aside. Nothing is sent till the button.
+   */
+  function otherModel(turn, error) {
+    const choices = state.models.filter(m => m.id !== error?.model)
+    if (!choices.length) return null
+    const key = `${spec.url()}:${turn.user.at}:${turn.assistant?.at ?? ''}:${error?.message ?? ''}`
+    if (state.otherPick.key !== key || !choices.some(m => m.id === state.otherPick.model)) state.otherPick = { key, model: '' }
+    const pick = state.otherPick
+    const go = el('button', { type: 'button', class: 'btn small', disabled: !pick.model, text: t`换这个模型重写`, onclick: () => retry(pick.model, Boolean(turn.assistant)) })
+    const select = el('select', { class: 'forge-model', 'aria-label': t`换哪个模型重写这一次`, onchange: () => {
+      pick.model = select.value
+      go.disabled = !pick.model
+    } }, [
+      el('option', { value: '', text: t`换个模型…` }),
+      ...choices.map(m => el('option', { value: m.id, selected: m.id === pick.model, text: `${m.group} · ${m.label}` })),
+    ])
+    const words = turn.assistant && !error
+      ? t`不满意可以换个模型重写这一次：只这一次用它，这里的模型不变；新的写出来之前，上面这份还在。`
+      : t`可以换个模型重写这一次：只这一次用它，这里的模型不变。`
+    return el('div', { class: 'forge-other' }, [el('p', { class: 'hint forge-other-cost', text: words }), el('div', { class: 'row' }, [select, go])])
   }
 
   function busyBlock() {
@@ -254,7 +281,9 @@ export function createTalk({ api, el, guard, openProviders }, spec) {
 
   function answerBlock(turn, last) {
     const { reply, changes, model } = turn.assistant
-    const waiting = last && changes.length && !turn.outcome
+    // Being written again (换个模型重写): it shows, with nothing to decide till the new one is in.
+    const redoing = last && Boolean(state.session.job)
+    const waiting = last && changes.length && !turn.outcome && !redoing
     const applied = new Set(turn.outcome?.undone ? [] : turn.outcome?.applied ?? [])
     const undo = spec.undo && last && state.session.undo
     return el('div', { class: 'forge-say' }, [
@@ -268,7 +297,7 @@ export function createTalk({ api, el, guard, openProviders }, spec) {
             el('span', { class: 'grow' }),
             (view.applyPicked = el('button', { type: 'button', class: 'btn primary small', onclick: () => applyPicked() })),
           ])
-        : changes.length
+        : changes.length && !redoing
           ? el('div', { class: 'ce-outcome-row' }, [
               el('p', { class: 'ce-outcome', text: outcomeOf(turn, changes) }),
               undo ? el('button', { type: 'button', class: 'btn ghost small', text: t`撤销这次修改`, title: t`改回采用之前的样子`, onclick: () => undoApplied() }) : null,
@@ -453,7 +482,12 @@ export function createTalk({ api, el, guard, openProviders }, spec) {
     scroll()
   })
 
-  const retry = guard(async () => load(await api(`${spec.url()}/retry`, { method: 'POST' })))
+  // `model`: 换这个模型重写, another model for this once. `redo`: over an answer that is there.
+  const retry = guard(async (model = '', redo = false) => {
+    await spec.beforeAsk?.()
+    load(await api(`${spec.url()}/retry`, { method: 'POST', body: { model, redo } }))
+    scroll()
+  })
 
   // The same request again, as a new turn (the one before came back without changes).
   const askAgain = guard(async turn => {

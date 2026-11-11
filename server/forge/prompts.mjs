@@ -4,11 +4,12 @@
 // say out loud what was assumed, keep the lore terse and concrete), written
 // here in this app's own words.
 import { configureEntries } from './configure.mjs'
+import { httpError } from '../store.mjs'
 import { DISCUSS_REFERENCE_RULES, DISCUSS_STRUCTURE_RULES, PLAN_REFERENCE_RULES, PLAN_STRUCTURE_RULES, referenceBlock, referenceRules, userMessage } from './references.mjs'
 import { defaultShow } from './status.mjs'
 import { BRICKS, EVENT_RATES, SHOWS, STATUS_THEMES, bookText, bookValue, cleanPalette, cleanPath, cleanScale, limitsOf, needsVariables } from '../../web/shared/status.js'
 import { cleanCreation, creationVariables } from './creation.mjs'
-import { BRICK_TALK, brickEntries, brickGaps, brickPlanLines, cleanEvents, cleanJudge, cleanWorld, fallbackChecks, worldPath } from './bricks.mjs'
+import { BRICK_TALK, brickEntries, brickGaps, brickPlanLines, cleanEvents, cleanJudge, cleanRelations, cleanRoutes, cleanSchedule, cleanWorld, fallbackChecks, relationPath, routePaths, schedulePaths, worldPath } from './bricks.mjs'
 import { ATTRIBUTES, ATTRIBUTE_POINTS, AVERAGE, EFFECTS, STRENGTHS, cleanKit } from '../../web/shared/game/sheet.js'
 import { SKILLS } from '../../web/shared/game/battle.js'
 import { msg } from '../i18n.mjs'
@@ -242,8 +243,8 @@ export function editUserGender(plan, gender) {
 }
 
 const BOOK_WORDS = {
-  zh: { name: '背包', columns: ['数量', '说明'], check: '得到东西加一行，用掉或失去就减数量或删掉这一行', level: '等级', levelCheck: '随故事升降', worldCheck: '世界动向抽中这件事时改成下一步', worldPage: '世界' },
-  en: { name: 'Bag', columns: ['Count', 'Note'], check: 'add a row when something is gained; lower the count or remove the row when it is used or lost', level: 'Rank', levelCheck: 'moves with the story', worldCheck: 'set to the next step when the world move draws this', worldPage: 'World' },
+  zh: { name: '背包', columns: ['数量', '说明'], check: '得到东西加一行，用掉或失去就减数量或删掉这一行', level: '等级', levelCheck: '随故事升降', worldCheck: '世界动向抽中这件事时改成下一步', worldPage: '世界', day: '第几天', dayCheck: '过了最后一个时段 +1', period: '时段', periodCheck: '照日程规则往后走，没过那么久就不改', bondCheck: '两人的关系真的变了才改，几个字', bondPage: '关系', route: '路线', routeCheck: '照路线规则改：走上一条线、换线或退回未定', reached: '节点', reachedCheck: '当前这条线上真的走到一个节点，把它的名字加进来' },
+  en: { name: 'Bag', columns: ['Count', 'Note'], check: 'add a row when something is gained; lower the count or remove the row when it is used or lost', level: 'Rank', levelCheck: 'moves with the story', worldCheck: 'set to the next step when the world move draws this', worldPage: 'World', day: 'Day', dayCheck: '+1 after the last period of a day', period: 'Time', periodCheck: 'moves on by the schedule rule; unchanged when that much time has not passed', bondCheck: 'changes only when the two really stand differently, in a few words', bondPage: 'Bonds', route: 'Route', routeCheck: 'set by the route rule: onto a route, to another, or back to undecided', reached: 'Marks', reachedCheck: 'add a mark of the current route when the story really reaches it' },
 }
 
 /**
@@ -252,7 +253,7 @@ const BOOK_WORDS = {
  */
 function withBricks(plan, o) {
   const picked = o.bricks ?? []
-  const fields = { selfcheck: 'selfcheck', events: 'random_events', judge: 'judge', world: 'world_moves', creation: 'creation' }
+  const fields = { selfcheck: 'selfcheck', events: 'random_events', judge: 'judge', world: 'world_moves', schedule: 'schedule', relations: 'relations', routes: 'routes', creation: 'creation' }
   const stray = Object.entries(fields).filter(([brick, field]) => !picked.includes(brick) && plan[field])
   if (!picked.length && !stray.length && !o.scale) return plan
   const next = { ...plan, ...(picked.length ? { bricks: picked } : {}), ...(o.scale ? { scale: o.scale } : {}) }
@@ -283,6 +284,25 @@ function withBricks(plan, o) {
       const path = worldPath(name, english)
       if (!variables.some(v => v.path === path)) variables.push({ path, label: clip(name, 12), type: 'string', initial: stages[0], range: '', check: words.worldCheck, show: 'badge', ...(o.statusPages ? { page: words.worldPage } : {}) })
     }
+  }
+  // 日程: the day and the period, where the rule reads and writes them.
+  if (picked.includes('schedule') && next.schedule?.periods.length) {
+    const paths = schedulePaths(english)
+    if (!variables.some(v => v.path === paths.day)) variables.push({ path: paths.day, label: words.day, type: 'number', initial: '1', range: '', check: words.dayCheck, show: 'number', ...(o.statusPages ? { page: words.worldPage } : {}) })
+    if (!variables.some(v => v.path === paths.period)) variables.push({ path: paths.period, label: words.period, type: 'string', initial: next.schedule.periods[0], range: '', check: words.periodCheck, show: 'badge', ...(o.statusPages ? { page: words.worldPage } : {}) })
+  }
+  // 关系网: a variable for each pair, starting as the plan says they stand.
+  if (picked.includes('relations') && next.relations) {
+    for (const pair of next.relations.pairs) {
+      const path = relationPath(pair, english)
+      if (!variables.some(v => v.path === path)) variables.push({ path, label: clip(english ? `${pair.a} & ${pair.b}` : `${pair.a}和${pair.b}`, 12), type: 'string', initial: pair.now, range: '', check: words.bondCheck, show: 'text', ...(o.statusPages ? { page: words.bondPage } : {}) })
+    }
+  }
+  // 路线与结局: which route, and the marks reached. Kept off the bar: shown, they would tell the player what is coming.
+  if (picked.includes('routes') && next.routes?.routes.length) {
+    const paths = routePaths(english)
+    if (!variables.some(v => v.path === paths.current)) variables.push({ path: paths.current, label: words.route, type: 'string', initial: paths.none, range: '', check: words.routeCheck, show: 'hidden' })
+    if (!variables.some(v => v.path === paths.reached)) variables.push({ path: paths.reached, label: words.reached, type: 'list', initial: '', range: '', check: words.reachedCheck, show: 'hidden' })
   }
   if (picked.includes('creation') && next.creation) variables.push(...creationVariables(next.creation, root, variables, english))
   const enabled = next.tracking.enabled || (needsVariables(picked) && variables.length > 0)
@@ -721,6 +741,7 @@ ${optionLines(options, language).plan.length ? optionLines(options, language).pl
 - 玩家角色一律写 <user>。用户没说 <user> 是男是女，就不用「他」「她」指代 <user>，也不写出 <user> 的性别（男友、前女友这类称呼同样不用）。不替 <user> 起名字：用户没定名字，user_role.name 就留空；定了名字也只写在 user_role.name，其余地方照样写 <user>。
 - 只有用户想要记录好感、体力、金钱这类会变化的数值时，tracking.enabled 才为 true；变量路径用「角色名.变量名」，<user> 自己的一律用「${playerRoot(language)}.变量名」，不要用 <user>、{{user}} 或他的名字当键名。
 - 这些变量会显示在每条回复下面的状态栏里。label 是状态栏上的短名（2 到 4 个字）；show 是显示方式：meter 进度条（有范围的数值）、number 数字、rating 星级（范围写 0~5）、text 一句话、badge 徽章（阶段、关系这类短词）、long 长文字（内心独白、近况）、tags 标签（物品、状态这类短词列表）、list 列表（一行一条的记录）、flag 是或否、hidden 只给模型看不显示。状态栏放玩家最在意的项，每个角色 3 到 8 项，其余用 hidden；角色多时状态栏会按人分开显示。
+- 故事里不会变、只是摆在状态栏里给人看或给规则引用的量（上限、名号、定死的数字），在那个变量里多写 "locked": true：它是只读的，模型改不了。会变的量不要写。
 - 开场白${greetings ? ` ${greetings} 个` : '默认 2 个，用户要别的数目就按他的'}。每个开场是一个不同的起点，不只是换个地点：故事的不同时刻、关系的不同阶段或不同的处境，也可以是另一条故事线（比如已经在一起、刚刚闹翻、多年后重逢）；title 让人一眼看出差别。每个都要有悬念或张力，并让 <user> 一开口就有话可接。
 - 记录数值时，开场的处境和默认初始值对不上（比如关系已经很近），就在这个开场的 state 里写出不同的那几项，键是变量的 path，值照 initial 的写法；对得上就写 {}。
 - 记录了和核心角色关系有关的数值（好感、信任这类）、她会随着关系明显变样时，可以让她的性格分阶段：stage_by 写那个数值变量的 path，stages 2 到 4 个，按数值从低到高排，until 是这个阶段的上限（不含），最后一个阶段不写 until。底色不随阶段变；每个阶段的主色调和点缀写这个阶段最常露出的样子，后一个阶段不是前一个的加强版。用户没要、关系也不会大变时不分阶段，stage_by 留空、stages 写 []。
@@ -760,11 +781,62 @@ export const PLAN_ANGLES = {
  * The plan, in the card's language (languages from forgeLanguages).
  * @param options - cardType and greetings (how many) as the player set them; angle, a PLAN_ANGLES key; references, the draft's.
  */
-export function planRequest(rounds, brief, { card = DEFAULT_LANGUAGE } = {}, { cardType = '', options = null, greetings = 0, angle = '', references = [] } = {}) {
+export function planRequest(rounds, brief, { card = DEFAULT_LANGUAGE } = {}, { cardType = '', options = null, greetings = 0, angle = '', outline = null, references = [] } = {}) {
   const material = referenceBlock(references)
   const picked = cleanCardOptions(options, cardType)
-  const content = `<discussion>\n${transcript(rounds)}\n</discussion>\n\n<sketch>\n${JSON.stringify(brief)}\n</sketch>\n\n按上面的讨论和草图写出创作方案。${PLAN_ANGLES[angle] ?? ''}${PLAN_FORMAT}`
+  // 出三版来挑: the outline picked is what this plan fills out.
+  const chosen = outline ? `\n\n用户从三版提纲里挑中了这一版，照它写：卡名、核心角色的名字和开场照提纲定的来，提纲没写到的按它的走向补。\n<outline>\n${JSON.stringify({ name: outline.name, summary: outline.summary, differs: outline.differs, cast: outline.cast, openings: outline.openings })}\n</outline>` : ''
+  const content = `<discussion>\n${transcript(rounds)}\n</discussion>\n\n<sketch>\n${JSON.stringify(brief)}\n</sketch>\n\n按上面的讨论和草图写出创作方案。${PLAN_ANGLES[angle] ?? ''}${chosen}${PLAN_FORMAT}`
   return { system: planSystem(card, { options: picked, greetings: cleanGreetingCount(greetings) }) + referenceRules(references, PLAN_REFERENCE_RULES, PLAN_STRUCTURE_RULES), messages: [userMessage(material, content)], maxTokens: planTokens(picked), softCap: true }
+}
+
+// ─── 出三版来挑 ───────────────────────────────────────────────────────────
+// Three outlines in one small answer; the one picked is then written as a whole plan (planRequest's `outline`).
+// Three whole plans at once cost three times a plan, and two of them were thrown away.
+
+const OUTLINE_CAST = 4
+const OUTLINE_OPENINGS = 6
+
+/** Three outlines of the card, one from each angle, in the card's language. */
+export function outlineRequest(rounds, brief, { card = DEFAULT_LANGUAGE } = {}, { cardType = '', options = null, greetings = 0, references = [] } = {}) {
+  const material = referenceBlock(references)
+  const picked = optionLines(cleanCardOptions(options, cardType), card).talk
+  const count = cleanGreetingCount(greetings) || 2
+  const system = `你给一张 SillyTavern 角色卡出提纲。你和用户已经聊完了想法，先不写完整方案，只写三版提纲给用户挑；挑中的那一版之后再写成完整方案。
+
+三版各取一个角度，angle 照写：
+- close：${PLAN_ANGLES.close}
+- bold：${PLAN_ANGLES.bold}
+- shift：${PLAN_ANGLES.shift}
+
+要求：
+- 讨论里定下的一切，三版都照着来。
+- 三版要让人一眼看出差别：核心矛盾、关系的起点或开场的处境不同，不是换个名字。
+- name 是卡名。summary 两三句：谁、在哪、和 <user> 是什么关系、故事的钩子在哪。differs 一句话：这一版和另外两版最不一样的地方。
+- cast 写核心角色，1 到 ${OUTLINE_CAST} 个，每个一句「名字：身份和性子」。名字在这里定好，写具体的名字。
+- openings 写开场白的名字，${count} 个，每个让人看出是故事的哪一刻。
+- 玩家角色一律写 <user>，不替 <user> 起名字。
+${picked.length ? `- 用户开始前选好了这些，三版都要符合：${picked.join('')}\n` : ''}
+${plainWriting(card)}
+
+只输出一段 <outlines> 包着的 JSON 数组，三项：
+<outlines>
+[{"angle": "close", "name": "卡名", "summary": "两三句", "differs": "一句话", "cast": ["名字：身份和性子"], "openings": ["开场的名字"]}]
+</outlines>`
+  const content = `<discussion>\n${transcript(rounds)}\n</discussion>\n\n<sketch>\n${JSON.stringify(brief)}\n</sketch>\n\n按上面的讨论和草图写三版提纲。只输出 <outlines>，不写别的说明。`
+  return { system: system + referenceRules(references, PLAN_REFERENCE_RULES, PLAN_STRUCTURE_RULES), messages: [userMessage(material, content)], maxTokens: TALK_TOKENS, softCap: true }
+}
+
+/** The outlines in an answer, one for an angle at most, in the angles' order. One that names no angle takes its place's. */
+export function readOutlines(text) {
+  const raw = looseJson(section(text, 'outlines') || text)
+  const angles = Object.keys(PLAN_ANGLES)
+  const seen = new Set()
+  return (Array.isArray(raw) ? raw : [])
+    .filter(item => item && typeof item === 'object' && clip(item.name, 40))
+    .map((item, i) => ({ angle: angles.includes(item.angle) ? item.angle : angles[i], name: clip(item.name, 40), summary: clip(item.summary, 400), differs: clip(item.differs, 160), cast: list(item.cast, OUTLINE_CAST, 80), openings: list(item.openings, OUTLINE_OPENINGS, 40) }))
+    .filter(item => item.angle && !seen.has(item.angle) && seen.add(item.angle))
+    .sort((a, b) => angles.indexOf(a.angle) - angles.indexOf(b.angle))
 }
 
 /** Changes to a plan: the current plan and what the user wants different, in the plan's language. */
@@ -892,6 +964,8 @@ export function cleanVariables(variables, most = MAX_VARIABLES) {
       variable.show = SHOWS.includes(v.show) ? v.show : defaultShow(variable)
       // 状态栏分页: the page it shows on.
       if (clip(v.page, 8)) variable.page = clip(v.page, 8)
+      // 只读: the story never changes it (a cap, a fixed fact shown in the bar). A book is rows that come and go.
+      if (v.locked === true && type !== 'book') variable.locked = true
       return variable
     })
     .filter(v => v.path && !seen.has(v.path) && seen.add(v.path))
@@ -904,7 +978,8 @@ function rawState(raw, most = MAX_VARIABLES) {
   const out = {}
   for (const [key, value] of Object.entries(raw).slice(0, most)) {
     const path = cleanPath(clip(key, 60).replace(/[{}\s]+/g, ''))
-    const text = Array.isArray(value) ? value.join('、') : value === null || typeof value === 'object' ? '' : String(value)
+    // A list written as text (`["伞", "表"]`, as models sometimes give an opening's own values) is its items.
+    const text = Array.isArray(value) ? value.join('、') : value === null || typeof value === 'object' ? '' : String(listText(value))
     if (path && text.trim()) out[path] = clip(text, 120)
   }
   return out
@@ -927,6 +1002,47 @@ function settleGreetingStates(plan) {
  * @param said - the player's words this plan answers (a revision's comments):
  *   a name the model put in user_role.name counts only when they contain it.
  */
+// One of the plan's people, places, factions and events as the plan keeps it: what a planner wrote, or what was
+// typed into the plan page (editPlanList).
+const cleanCharacter = c => ({
+  name: clip(c.name, 24),
+  kind: c.kind === 'npc' ? 'npc' : 'core',
+  aliases: list(c.aliases, 6, 24),
+  age: clip(String(c.age ?? ''), 20),
+  gender: clip(c.gender, 10),
+  identity: clip(c.identity, 120),
+  relationship: clip(c.relationship, 300),
+  appearance: list(c.appearance, 8, 80),
+  outfit: clip(c.outfit, 200),
+  personality: {
+    base: clip(c.personality?.base, 40),
+    main: list(c.personality?.main, 2, 40),
+    accent: list(c.personality?.accent, 4, 40),
+  },
+  facets: c.facets === true,
+  voice: clip(c.voice, 200),
+  role: clip(c.role, 200),
+  looks_tags: clip(c.looks_tags, 400),
+  outfit_tags: clip(c.outfit_tags, 300),
+  stage_by: cleanPath(clip(c.stage_by, 60).replace(/[{}\s]+/g, '')),
+  stages: (Array.isArray(c.stages) ? c.stages : [])
+    .filter(s => s && typeof s === 'object' && clip(s.name, 12))
+    .slice(0, 5)
+    .map(s => ({ name: clip(s.name, 12), until: clip(String(s.until ?? ''), 12), main: list(s.main, 2, 40), accent: list(s.accent, 3, 40), shift: clip(s.shift, 200) })),
+})
+const cleanPlace = p => ({ name: clip(p.name, 24), aliases: list(p.aliases, 4, 24), description: clip(p.description, 400), scenes: list(p.scenes, 8, 40) })
+const cleanFaction = f => ({ name: clip(f.name, 24), description: clip(f.description, 400), members: list(f.members, 8, 24) })
+const cleanEvent = e => ({
+  name: clip(e.name, 20),
+  when: clip(e.when, 200),
+  keywords: list(e.keywords, 6, 24),
+  requires: requirementsOf(e)
+    .filter(r => r && typeof r === 'object' && clip(r.path, 60))
+    .slice(0, 3)
+    .map(r => ({ path: cleanPath(clip(r.path, 60).replace(/[{}\s]+/g, '')), op: clip(r.op, 4), value: clip(String(r.value ?? ''), 60) })),
+  content: clip(e.content, 600),
+})
+
 export function normalizePlan(raw, { language = DEFAULT_LANGUAGE, userName, said = '', scale = '' } = {}) {
   if (!raw || typeof raw !== 'object') return null
   const most = limitsOf(scale)
@@ -936,32 +1052,7 @@ export function normalizePlan(raw, { language = DEFAULT_LANGUAGE, userName, said
     // The player is no character of the card, and a placeholder (第三方（未命名）) no one yet.
     .filter(c => c && typeof c === 'object' && clip(c.name, 24) && !PLAYER_KEYS.has(clip(c.name, 24).toLowerCase()) && !/未命名|待定|unnamed|tbd/i.test(c.name))
     .slice(0, most.characters)
-    .map(c => ({
-      name: clip(c.name, 24),
-      kind: c.kind === 'npc' ? 'npc' : 'core',
-      aliases: list(c.aliases, 6, 24),
-      age: clip(String(c.age ?? ''), 20),
-      gender: clip(c.gender, 10),
-      identity: clip(c.identity, 120),
-      relationship: clip(c.relationship, 300),
-      appearance: list(c.appearance, 8, 80),
-      outfit: clip(c.outfit, 200),
-      personality: {
-        base: clip(c.personality?.base, 40),
-        main: list(c.personality?.main, 2, 40),
-        accent: list(c.personality?.accent, 4, 40),
-      },
-      facets: c.facets === true,
-      voice: clip(c.voice, 200),
-      role: clip(c.role, 200),
-      looks_tags: clip(c.looks_tags, 400),
-      outfit_tags: clip(c.outfit_tags, 300),
-      stage_by: cleanPath(clip(c.stage_by, 60).replace(/[{}\s]+/g, '')),
-      stages: (Array.isArray(c.stages) ? c.stages : [])
-        .filter(s => s && typeof s === 'object' && clip(s.name, 12))
-        .slice(0, 5)
-        .map(s => ({ name: clip(s.name, 12), until: clip(String(s.until ?? ''), 12), main: list(s.main, 2, 40), accent: list(s.accent, 3, 40), shift: clip(s.shift, 200) })),
-    }))
+    .map(cleanCharacter)
   if (!characters.some(c => c.kind === 'core')) {
     if (!characters.length) return null
     characters[0].kind = 'core'
@@ -979,11 +1070,11 @@ export function normalizePlan(raw, { language = DEFAULT_LANGUAGE, userName, said
       places: (Array.isArray(world.places) ? world.places : [])
         .filter(p => p && clip(p.name, 24))
         .slice(0, most.places)
-        .map(p => ({ name: clip(p.name, 24), aliases: list(p.aliases, 4, 24), description: clip(p.description, 400), scenes: list(p.scenes, 8, 40) })),
+        .map(cleanPlace),
       factions: (Array.isArray(world.factions) ? world.factions : [])
         .filter(f => f && clip(f.name, 24))
         .slice(0, most.factions)
-        .map(f => ({ name: clip(f.name, 24), description: clip(f.description, 400), members: list(f.members, 8, 24) })),
+        .map(cleanFaction),
       history: (Array.isArray(world.history) ? world.history : [])
         .filter(h => h && clip(h.event, 200))
         .slice(0, most.history)
@@ -1007,16 +1098,7 @@ export function normalizePlan(raw, { language = DEFAULT_LANGUAGE, userName, said
     events: (Array.isArray(raw.events) ? raw.events : [])
       .filter(e => e && typeof e === 'object' && clip(e.name, 20))
       .slice(0, most.events)
-      .map(e => ({
-        name: clip(e.name, 20),
-        when: clip(e.when, 200),
-        keywords: list(e.keywords, 6, 24),
-        requires: requirementsOf(e)
-          .filter(r => r && typeof r === 'object' && clip(r.path, 60))
-          .slice(0, 3)
-          .map(r => ({ path: cleanPath(clip(r.path, 60).replace(/[{}\s]+/g, '')), op: clip(r.op, 4), value: clip(String(r.value ?? ''), 60) })),
-        content: clip(e.content, 600),
-      })),
+      .map(cleanEvent),
     avatar: { character: clip(raw.avatar?.character, 24) || characters[0].name, description: clip(raw.avatar?.description, 400), tags: clip(raw.avatar?.tags, 400), style: clip(raw.avatar?.style, 200) },
     assumptions: list(raw.assumptions, 20, 200),
     verbatim: list(raw.verbatim, 12, 300),
@@ -1033,6 +1115,12 @@ export function normalizePlan(raw, { language = DEFAULT_LANGUAGE, userName, said
   if (judge) plan.judge = judge
   const moves = cleanWorld(raw.world_moves)
   if (moves) plan.world_moves = moves
+  const schedule = cleanSchedule(raw.schedule)
+  if (schedule) plan.schedule = schedule
+  const relations = cleanRelations(raw.relations)
+  if (relations) plan.relations = relations
+  const routes = cleanRoutes(raw.routes)
+  if (routes) plan.routes = routes
   const creation = cleanCreation(raw.creation)
   if (creation) plan.creation = creation
   const colors = cleanPalette(raw.status_colors)
@@ -1093,7 +1181,7 @@ function settleUserName(plan, name, others) {
     // A guess about the name is no setting of the story.
     plan.assumptions = plan.assumptions.filter(a => !(names.some(n => a.includes(n)) && /定名|起名|取名|名字|叫|name/i.test(a)))
     for (const key of ['summary', 'world', 'characters', 'style', 'play_rules', 'greetings', 'assumptions', 'verbatim']) plan[key] = mapText(plan[key], strip)
-    for (const key of ['selfcheck', 'random_events', 'judge', 'world_moves', 'creation']) if (plan[key]) plan[key] = mapText(plan[key], strip)
+    for (const key of ['selfcheck', 'random_events', 'judge', 'world_moves', 'schedule', 'relations', 'routes', 'creation']) if (plan[key]) plan[key] = mapText(plan[key], strip)
     plan.user_role.identity = strip(plan.user_role.identity)
     plan.user_role.constraints = plan.user_role.constraints.map(strip)
     plan.avatar.description = strip(plan.avatar.description)
@@ -1268,6 +1356,64 @@ export function editTracking(plan, edit) {
   return next
 }
 
+// ─── The plan's lists, changed by hand ────────────────────────────────────
+// 方案页 adds, changes and removes people, places, factions and events without asking a model: one of a big plan's
+// dozens changed is not worth a plan written again. What is typed goes through the planner's own cleaning.
+
+/** What of each kind can be typed in; the rest of an item (a core character's palette, an event's conditions) stays as it was. */
+const LIST_FIELDS = {
+  places: ['description'],
+  factions: ['description'],
+  characters: ['identity', 'relationship', 'gender'],
+  events: ['when', 'keywords', 'content'],
+}
+const LIST_CLEAN = { places: cleanPlace, factions: cleanFaction, characters: cleanCharacter, events: cleanEvent }
+export const PLAN_LISTS = Object.keys(LIST_FIELDS)
+const typed = (list, value) => Object.fromEntries(LIST_FIELDS[list].filter(key => value?.[key] !== undefined).map(key => [key, key === 'keywords' ? splitWords(value[key]) : value[key]]))
+const splitWords = value => (Array.isArray(value) ? value : String(value ?? '').split(/[,，、]/)).map(word => String(word).trim()).filter(Boolean)
+
+/**
+ * The plan with one of its lists changed: `{ list, add: { name, … } }`, `{ list, change: { name, … } }` (the fields
+ * typed over the item of that name; its name stays, other things go by it) or `{ list, remove: name }`.
+ * @returns { plan, touched: the names of entries whose text no longer fits what they are written from }
+ */
+export function editPlanList(plan, { list, add, change, remove } = {}) {
+  if (!PLAN_LISTS.includes(list)) throw httpError(400, msg`方案里没有这一类`)
+  const inWorld = list === 'places' || list === 'factions'
+  const items = (inWorld ? plan.world[list] : plan[list]) ?? []
+  const at = name => items.findIndex(item => item.name === name)
+  const gone = () => httpError(409, msg`方案里已经没有这一项了，刷新一下再看`)
+  let next
+  let changed = ''
+  if (typeof remove === 'string') {
+    if (at(remove) < 0) throw gone()
+    if (list === 'characters' && items[at(remove)].kind === 'core' && items.filter(c => c.kind === 'core').length === 1) throw httpError(400, msg`至少要留一个核心角色`)
+    next = items.filter(item => item.name !== remove)
+  } else if (change && typeof change === 'object') {
+    const index = at(change.name)
+    if (index < 0) throw gone()
+    next = items.map((item, i) => (i === index ? LIST_CLEAN[list]({ ...item, ...typed(list, change) }) : item))
+    changed = change.name
+  } else if (add && typeof add === 'object') {
+    const most = limitsOf(plan.scale)[list]
+    if (items.length >= most) throw httpError(400, msg`这张卡的规模最多 ${most} 个，先去掉一个；想要更多，在「卡的设定 → 高级选项」里选大一档的规模再出方案`)
+    // Someone added by hand is a side character: a core one's palette and voice take a planner.
+    const item = LIST_CLEAN[list]({ ...typed(list, add), name: add.name, ...(list === 'characters' ? { kind: 'npc' } : {}) })
+    if (!item.name) throw httpError(400, msg`先写个名字`)
+    if (at(item.name) >= 0) throw httpError(400, msg`已经有叫「${item.name}」的了`)
+    next = [...items, item]
+  } else throw httpError(400, msg`没说要改什么`)
+  const edited = inWorld ? { ...plan, world: { ...plan.world, [list]: next } } : { ...plan, [list]: next }
+  // The picture is of someone still in the card.
+  if (list === 'characters' && !next.some(c => c.name === edited.avatar?.character)) edited.avatar = { ...edited.avatar, character: next.find(c => c.kind === 'core')?.name ?? next[0].name }
+  edited.entries = planEntries(edited)
+  edited.warnings = planWarnings(edited)
+  // What is written from the item changed: its own entries, by owner (a person), by name (a place, a faction), by place in the list (an event).
+  const index = changed ? next.findIndex(item => item.name === changed) : -1
+  const touched = changed ? edited.entries.filter(entry => (list === 'events' ? entry.type === '事件' && entry.event === index : list === 'characters' ? entry.owner === changed : entry.type === '地理' && entry.name === changed)).map(entry => entry.name) : []
+  return { plan: edited, touched }
+}
+
 /** Things worth a look before writing: placeholder names, missing pieces. */
 export function planWarnings(plan) {
   const warnings = []
@@ -1280,7 +1426,16 @@ export function planWarnings(plan) {
     if (!c.relationship) warnings.push(msg`${c.name}和 <user> 的关系还空着`)
   }
   if (!plan.user_role.identity) warnings.push(msg`<user> 的身份还没定`)
-  for (const brick of brickGaps(plan)) warnings.push(brick === 'events' ? msg`随机事件的名单还是空的，这块积木不会写进卡里` : brick === 'world' ? msg`世界动态的几件事还是空的，这块积木不会写进卡里` : brick === 'creation' ? msg`建角页没有能用的项目，这块积木不会写进卡里` : msg`裁判表的等级或差距还没写全，这块积木不会写进卡里`)
+  const gapWords = {
+    events: () => msg`随机事件的名单还是空的，这块积木不会写进卡里`,
+    world: () => msg`世界动态的几件事还是空的，这块积木不会写进卡里`,
+    creation: () => msg`建角页没有能用的项目，这块积木不会写进卡里`,
+    judge: () => msg`裁判表的等级或差距还没写全，这块积木不会写进卡里`,
+    schedule: () => msg`日程的时段或人还没写全，这块积木不会写进卡里`,
+    relations: () => msg`关系网里还没有能用的一对，这块积木不会写进卡里`,
+    routes: () => msg`路线还不到两条，或者有的路线没写节点和结局，这块积木不会写进卡里`,
+  }
+  for (const brick of brickGaps(plan)) warnings.push(gapWords[brick]())
   if (plan.scale) {
     const owners = new Map()
     for (const entry of plan.entries ?? []) for (const word of new Set(entry.keywords ?? [])) owners.set(word, [...(owners.get(word) ?? []), entry.owner || entry.name])

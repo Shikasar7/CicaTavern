@@ -213,7 +213,7 @@ test('裁判表: ranks without numbers get them, in the words the rule has now',
   const old = now
     .replace('等级从低到高：1 同学、2 朋友、3 恋人', '等级从低到高：同学 < 朋友 < 恋人')
     .replace('已知的等级：牵手 朋友（2）', '已知的等级：牵手 朋友')
-    .replace('差距是两边等级的序号相减：', '差距按这张表数格子：')
+    .replace('差距是两边等级的序号相减。做的是一件事、不是和人较量时，「对方的等级」就是这件事要求的等级：', '差距按这张表数格子：')
     .replace('对比：<user>的等级（序号）对 对方的等级（序号）', '对比：<user>的等级 对 对方的等级')
   assert.equal(linesGone(old, now), 4, 'every line the old rule had')
   const older = rewritten(card, 'judge_rules', () => old)
@@ -237,7 +237,7 @@ test('裁判表 in English numbers its ranks the same way', () => {
   const old = now
     .replace('Ranks, low to high: 1 Stranger, 2 Friend, 3 Partner', 'Ranks, low to high: Stranger < Friend < Partner')
     .replace('Known ranks: Holding hands Friend (2)', 'Known ranks: Holding hands Friend')
-    .replace('The gap is the two rank numbers subtracted:', 'Count the steps between the two on that list:')
+    .replace('The gap is the two rank numbers subtracted. When what is tried is a feat and not a contest with someone, the other side\'s rank is the rank the feat calls for:', 'Count the steps between the two on that list:')
     .replace('Match: rank of <user> (its number) against the other side (its number)', 'Match: rank of <user> against the other side')
   assert.equal(linesGone(old, now), 4, 'every line the old rule had')
   const found = checkCard(rewritten(card, 'judge_rules', () => old), { helpers }).find(item => item.rule === 'judge-unnumbered')

@@ -162,7 +162,8 @@ test('in the card creator: picked in the sketch or set on the plan, one value fo
     const json = JSON.parse(Buffer.concat(chunks).toString('utf8'))
     seen.push(json)
     const system = json.messages[0]?.content ?? ''
-    const text = system.includes('角色卡策划') ? `<plan>\n${JSON.stringify(PLAN)}\n</plan>` : TALK
+    const outlines = '<outlines>[{"angle": "close", "name": "雨宿"}, {"angle": "bold", "name": "雨债"}, {"angle": "shift", "name": "晴天"}]</outlines>'
+    const text = system.includes('角色卡策划') ? `<plan>\n${JSON.stringify(PLAN)}\n</plan>` : system.includes('出提纲') ? outlines : TALK
     res.writeHead(200, { 'content-type': 'application/json' })
     res.end(JSON.stringify({ model: json.model, choices: [{ message: { content: text }, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1 } }))
   })
@@ -218,6 +219,11 @@ test('in the card creator: picked in the sketch or set on the plan, one value fo
   await forge.plan(draft.id, { variants: true })
   draft = await settled(draft.id)
   assert.ok(draft.planOptions.length > 1)
+  for (const option of [1, 0]) {
+    await forge.plan(draft.id, { option })
+    draft = await settled(draft.id)
+  }
+  assert.equal(draft.plan.user_role.gender, 'male')
   draft = await forge.update(draft.id, { userGender: 'female' })
   draft = await forge.update(draft.id, { planPick: 1 })
   assert.equal(draft.plan.user_role.gender, 'female')

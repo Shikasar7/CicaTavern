@@ -6,10 +6,10 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { cleanProxySetting } from './proxy.mjs'
-import { cleanBasic, cleanVn } from '../web/shared/basic.js'
+import { cleanBasic, cleanBuiltinEdits, cleanVn } from '../web/shared/basic.js'
 import { cleanAppearance } from '../web/shared/appearance.js'
 import { cleanList, DEFAULT_ITEM, defaultOf } from '../web/shared/personas.js'
-import { cleanCompaction, cleanMemory } from './context.mjs'
+import { cleanCompaction, cleanMemory, cleanToolPrompts } from './context.mjs'
 import { span } from './perf.mjs'
 
 /** @param dir - the edition's folder under the home directory (edition.mjs dataDir). */
@@ -151,15 +151,19 @@ export const DEFAULT_SETTINGS = Object.freeze({
   scanDepth: 4,
   reinjectAfter: 6,
   stateRefreshEvery: 5,
+  statePresent: true, // 只发在场角色的变量: a long state goes without the groups of characters not around (present.mjs)
   autoFillUpdate: true, // 自动补写变量: a reply without a readable update block gets one right after the turn
   replyToTop: true, // a reply written to its end is shown from its first line (not in the visual novel mode)
   dynamicStrip: 'rare', // when piled-up <动态设定> copies are stripped: 'often' | 'rare' | 'off' (dynamic.mjs)
   compaction: null, // 自动压缩: { auto, percent, cap, windows } (context.mjs cleanCompaction); null = its defaults
   memory: null, // 长期记忆（Beta）: { enabled, tidy: { enabled, every, model }, budget } (memory.mjs cleanMemory); null = all off
+  toolPrompts: null, // 内置功能的附加提示词: { memory, check, forge, helper } (context.mjs cleanToolPrompts); null = none
   replyLength: 0, // target reply length in characters; 0 = no requirement
   presetId: '', // SillyTavern preset for new chats; empty = the built-in preset (basic.mjs)
   basic: null, // the built-in preset's options (web/shared/basic.js); null = their defaults
   vn: null, // the visual novel preset's (视觉小说预设, the same file); null = its defaults
+  basicEdits: null, // the built-in presets' own edits: rewritten and switched-off paragraphs, added entries, own regex
+  vnEdits: null, // (web/shared/basic.js cleanBuiltinEdits); null = none; written through PUT /api/presets/basic|vn
   listen: 'local', // 'local' or 'lan'; applied on the next start
   subscription: 'on', // 'off' hides the Claude subscription models (API providers only)
   proxy: null, // 'none' | 'system' | an http(s) URL; null = the edition's default (proxy.mjs)
@@ -243,7 +247,7 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
 
     async getSettings() {
       const saved = { ...DEFAULT_SETTINGS, ...(await readJson(path.join(root, 'settings.json'), {})) }
-      return lockSettings({ ...saved, basic: cleanBasic(saved.basic), vn: cleanVn(saved.vn), appearance: cleanAppearance(saved.appearance), globalBookIds: cleanIds(saved.globalBookIds), globalVars: cleanVars(saved.globalVars), compaction: cleanCompaction(saved.compaction), memory: cleanMemory(saved.memory) })
+      return lockSettings({ ...saved, basic: cleanBasic(saved.basic), vn: cleanVn(saved.vn), basicEdits: cleanBuiltinEdits(saved.basicEdits), vnEdits: cleanBuiltinEdits(saved.vnEdits), appearance: cleanAppearance(saved.appearance), globalBookIds: cleanIds(saved.globalBookIds), globalVars: cleanVars(saved.globalVars), compaction: cleanCompaction(saved.compaction), memory: cleanMemory(saved.memory), toolPrompts: cleanToolPrompts(saved.toolPrompts) })
     },
     /** Settings worked out from the saved ones and saved, with no other save in between (template global writes). */
     updateSettings(change, options) {
@@ -264,9 +268,11 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
         next.proxy = cleanProxySetting(next.proxy)
         if (!['often', 'rare', 'off'].includes(next.dynamicStrip)) next.dynamicStrip = 'rare'
         next.autoFillUpdate = next.autoFillUpdate !== false
+        next.statePresent = next.statePresent !== false
         next.replyToTop = next.replyToTop !== false
         next.compaction = cleanCompaction(next.compaction)
         next.memory = cleanMemory(next.memory)
+        next.toolPrompts = cleanToolPrompts(next.toolPrompts)
         if (!['auto', 'zh', 'en'].includes(next.uiLanguage)) next.uiLanguage = 'auto'
         next.showReasoning = next.showReasoning === true
         next.webFonts = next.webFonts !== false
@@ -274,6 +280,8 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
         next.privacyNotice = Math.max(0, Math.floor(Number(next.privacyNotice) || 0))
         next.basic = cleanBasic(next.basic)
         next.vn = cleanVn(next.vn)
+        next.basicEdits = cleanBuiltinEdits(next.basicEdits)
+        next.vnEdits = cleanBuiltinEdits(next.vnEdits)
         next.globalBookIds = cleanIds(next.globalBookIds)
         next.globalVars = cleanVars(next.globalVars)
         // The picture's file name only changes with the picture (setBackdrop below).
@@ -368,6 +376,10 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
     },
     avatarPath(id) {
       return path.join(dirs.cards, checkId(id), 'avatar.png')
+    },
+    /** 开场页的图: the picture the card's cover shows behind it, picked in 修改角色卡 (card.coverArt says when). */
+    coverArtPath(id) {
+      return path.join(dirs.cards, checkId(id), 'cover.jpg')
     },
     async deleteCard(id) {
       await rm(path.join(dirs.cards, checkId(id)), { recursive: true, force: true })

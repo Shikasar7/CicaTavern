@@ -41,7 +41,8 @@ const RECENT_ROUNDS = 3
 const MAX_STOPS = 3
 // What a round comes to beyond the card's own text, from the real runs of 2026-11: a reply and its thinking, the story so
 // far growing by about this much a round, and the stand-in player.
-const REPLY_TOKENS = 2500
+// (2500 till the runs of 2026-11-08 showed 1100 to 1400 a reply: the estimate read about 1.8 times too high.)
+const REPLY_TOKENS = 1500
 const GROWTH_TOKENS = 1500
 const PRESET_TOKENS = 3000
 const PLAYER_INPUT = 2500
@@ -69,16 +70,40 @@ const INTENT_ORDER = {
 }
 
 export const cleanRounds = value => (TRIAL_ROUNDS.includes(Number(value)) ? Number(value) : DEFAULT_ROUNDS)
+
+// Who the stand-in is: no one in particular (''), a kind of player cards meet, or one the user describes ('own').
+// What each round tries stays as it is; this is how it is played.
+const PLAYERS = {
+  eager: '急性子，爱行动，不耐烦等，总想把事情往前推。',
+  quiet: '话很少，每次只说很短的一句，常常只有几个字，从不多描写。',
+  bargain: '爱计较，总想多要一点好处、少付一点代价，会找规矩里的空子。',
+  heart: '只在意人，不大在意事：总想靠近眼前的人，问对方的心思，说亲近的话。',
+  wild: '不按常理来，爱做出格的、和眼前的事不大相干的举动。',
+}
+export const PLAYER_KINDS = ['', ...Object.keys(PLAYERS), 'own']
+const MAX_PLAYER = 200
+
+/** The stand-in as kept: { kind, text } (`text` only for 'own'; with nothing written it is no one in particular). */
+export function cleanPlayer(value) {
+  const kind = PLAYER_KINDS.includes(value?.kind) ? value.kind : ''
+  const text = kind === 'own' && typeof value.text === 'string' ? value.text.replace(/\s+/g, ' ').trim().slice(0, MAX_PLAYER) : ''
+  return kind === 'own' && !text ? { kind: '', text: '' } : { kind, text }
+}
+
+/** The stand-in in a sentence, as the models are told; '' for no one in particular. */
+export const playerWords = player => (player?.kind === 'own' ? `${player.text}${/[。！？.!?]$/.test(player.text) ? '' : '。'}` : PLAYERS[player?.kind] ?? '')
 const clip = (text, max) => (text.length > max ? `${text.slice(0, max)}…` : text)
 const valueOf = (state, field) => getPath(state ?? {}, cleanPath(field.path))
 
 /** The stand-in player's line for a round. @param story - [{ you, reply }], the rounds so far, the opening first. */
-export function playerRequest(card, story, intent) {
+export function playerRequest(card, story, intent, player = null) {
   const recent = story.slice(-RECENT_ROUNDS).map(({ you, reply }) => [you ? `玩家：${you}` : '', `故事：${clip(reply, MAX_TEXT)}`].filter(Boolean).join('\n')).join('\n\n')
+  const who = playerWords(player)
   const system = `你在替一位玩家试玩角色卡《${card.name}》。写这位玩家这一轮说的话或做的事：
-- 一到三句，第一人称，用故事的语言写。
+- ${player?.kind === 'quiet' ? '一句，越短越好' : '一到三句'}，第一人称，用故事的语言写。
 - 只写玩家自己的话和动作，不写别人的反应，不写结果。
-- 不解释，不写括号里的说明。这一轮要做的事不要点破，当作玩家本来就想这么做。`
+- 不解释，不写括号里的说明。这一轮要做的事不要点破，当作玩家本来就想这么做。${who ? `
+- 这位玩家是这样的人：${who}每一轮都照这个性子说话做事；这一轮要做的事还是要做，用这个人的方式做。` : ''}`
   return { system, messages: [{ role: 'user', content: `<故事>\n${recent}\n</故事>\n\n这一轮：${INTENTS[intent] ?? INTENTS.go}\n\n只输出玩家这一轮的话。` }], maxTokens: TALK_TOKENS, softCap: true }
 }
 
@@ -418,7 +443,7 @@ export function valueChecks(rounds, { start = {}, fields = [], events = [], sand
  * go on from (without it a thing it set up read as a contradiction). `game`: the card plays by 游戏规则, its rolls and
  * fights played by the program, not written by the card.
  */
-export function reviewRequest(card, rounds, { reply = '简体中文', rules = '', values = '', opening = '', game = false } = {}) {
+export function reviewRequest(card, rounds, { reply = '简体中文', rules = '', values = '', opening = '', game = false, player = null } = {}) {
   const story = rounds.map((round, i) => `【第 ${i + 1} 回合】\n玩家：${round.input}\n回复：${clip(round.told ?? round.shown, MAX_TEXT)}`).join('\n\n')
   // The values are the program's to count; whether they moved with the story, and whether an event came, are the reader's.
   const valueKinds = values
@@ -435,7 +460,8 @@ export function reviewRequest(card, rounds, { reply = '简体中文', rules = ''
 - 放水：玩家做明显做不到或规矩不许的事，却轻易成功。
 - 重复：句式、桥段、结尾的写法一再出现。${valueKinds}${opening ? `
 - <开场> 是故事开头玩家看到的那段，前文从这里算起：开场里有的人物、东西和说法，后面再提不算矛盾。` : ''}${game ? `
-- 回复里括号写的掷骰和战斗结果，是程序按游戏规则替玩家掷骰、自动打完的，不是卡写的：没让玩家选怎么打、打赢打输，都不算抢话或放水。故事和这个结果对不上（比如结果是全部击败，故事里却有人逃了）算矛盾。` : ''}
+- 回复里括号写的掷骰和战斗结果，是程序按游戏规则替玩家掷骰、自动打完的，不是卡写的：没让玩家选怎么打、打赢打输，都不算抢话或放水。故事和这个结果对不上（比如结果是全部击败，故事里却有人逃了）算矛盾。` : ''}${playerWords(player) ? `
+- 这一局的玩家是照这个性子扮的：${playerWords(player)}玩家自己的话短、怪、出格都不算卡的毛病；看的是卡怎么接这样的玩家：接不住、被带着走、替他把话说完，才是。` : ''}
 
 只记真的有的，拿不准就不记，最多 ${MAX_ISSUES} 条。没有毛病就让 issues 为空。fix 写这张卡该怎么改，不写这一局该怎么写。
 
@@ -549,6 +575,9 @@ export function createTrial({ store, engine, load, save, serial, run, jobs, remo
       model: session.model ?? '',
       rounds,
       choices: TRIAL_ROUNDS,
+      // Who the stand-in plays as, and the kinds there are to pick from.
+      player: cleanPlayer(session.player),
+      players: PLAYER_KINDS,
       estimate: { ready, model: ready ? (refLabel(ref, await store.getProviders()) ?? ref) : '', input, output, cost: ready ? estimateCost(ref.slice(ref.indexOf('/') + 1), { input, output }) : null },
       job: job ? { step: job.step, startedAt: job.startedAt } : null,
       error: session.error ?? null,
@@ -623,6 +652,8 @@ export function createTrial({ store, engine, load, save, serial, run, jobs, remo
       // played on other rules does not replay. Rules turned off leave the stop as it is.
       const book = await rulebooks?.read(chat.cardId).catch(() => null)
       if (!rulesOn(book)) break
+      // 停下 pressed while this reply was being written: the roll is not settled, nothing more is asked of the model.
+      if (ctx.signal.aborted) break
       stops.push(node.gate.kind)
       const game = node.gate.kind === 'battle' ? { settle: true, battle: autoFight(book, turn.chat, node) } : { settle: true }
       turn = await engine.runTurn(chat.id, { parentId: node.id, game }, () => {})
@@ -664,7 +695,7 @@ export function createTrial({ store, engine, load, save, serial, run, jobs, remo
     }
   }
 
-  async function trialWork(ctx, cardId, rounds) {
+  async function trialWork(ctx, cardId, rounds, player = null) {
     // A card saved before schemas were kept gets one on its first turn: filled in first, the mark is of the card as played.
     // Only filled in: checking an empty state against the schema would log a false error.
     await engine.cardWithSchema(cardId)
@@ -699,7 +730,7 @@ export function createTrial({ store, engine, load, save, serial, run, jobs, remo
         }
         ctx.step(`round:${i + 1}:${rounds}:player`)
         // A card that opens on a form starts by filling it in, as a player would.
-        const said = i === 0 && form ? { text: randomSheet(form) } : await ctx.call(playerRequest(card, story, intents[i]))
+        const said = i === 0 && form ? { text: randomSheet(form) } : await ctx.call(playerRequest(card, story, intents[i], player))
         const input = playerLine(said.text)
         if (!input) throw new Error(msg`${ctx.label} 没有写出玩家的话${cutNote(said)}，再试一次，或者换个模型`)
         ctx.step(`round:${i + 1}:${rounds}:reply`)
@@ -721,7 +752,7 @@ export function createTrial({ store, engine, load, save, serial, run, jobs, remo
       if (!stopped && !ctx.signal.aborted) {
         ctx.step('review')
         const rules = standing(held.books).filter(entry => /每轮|规则|rule/i.test(entry.comment ?? '')).map(entry => entry.content).join('\n')
-        const answer = await ctx.call(reviewRequest(card, done, { reply: ctx.languages.reply, rules, values: values.notes, opening: story[0].reply, game: Boolean(held.book) }))
+        const answer = await ctx.call(reviewRequest(card, done, { reply: ctx.languages.reply, rules, values: values.notes, opening: story[0].reply, game: Boolean(held.book), player }))
         read = readReview(answer.text, done.length)
       }
       const lines = [...summaryLines(done, { needs: held.needs, fields: held.fields, start, keyed: held.keyed, ruled: Boolean(held.book) }), ...values.lines]
@@ -731,6 +762,7 @@ export function createTrial({ store, engine, load, save, serial, run, jobs, remo
           mark: playedMark(card),
           model: ctx.label,
           asked: rounds,
+          player,
           stopped,
           lines,
           summary: read?.summary ?? '',
@@ -761,11 +793,12 @@ export function createTrial({ store, engine, load, save, serial, run, jobs, remo
       return view(card, session)
     },
 
-    /** The model to play on, and how many rounds. */
-    trialUpdate(cardId, { model, rounds } = {}) {
+    /** The model to play on, how many rounds, and who the stand-in plays as. */
+    trialUpdate(cardId, { model, rounds, player } = {}) {
       return change(cardId, (_, session) => {
         if (typeof model === 'string') session.model = model.trim().slice(0, 200)
         if (rounds !== undefined) session.rounds = cleanRounds(rounds)
+        if (player !== undefined) session.player = cleanPlayer(player)
       })
     },
 
@@ -777,7 +810,8 @@ export function createTrial({ store, engine, load, save, serial, run, jobs, remo
         return (await loadTrial(cardId)).session
       })
       const rounds = cleanRounds(session.rounds)
-      await run(session, 'trial', ctx => trialWork(ctx, cardId, rounds))
+      const player = cleanPlayer(session.player)
+      await run(session, 'trial', ctx => trialWork(ctx, cardId, rounds, player))
       const { card, session: fresh } = await loadTrial(cardId)
       return view(card, fresh)
     },

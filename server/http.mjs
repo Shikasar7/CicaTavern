@@ -6,7 +6,7 @@
 import { createHmac, randomBytes } from 'node:crypto'
 import { createServer } from 'node:http'
 import { existsSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
+import { copyFile, readFile, rm, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import YAML from 'yaml'
@@ -20,8 +20,8 @@ import { injectPrompts, uninjectPrompts } from './injections.mjs'
 import { TAVERN_EVENTS } from '../web/shared/th-api.js'
 import { bookByName, bookNames, chatBooks, createChatBook, fieldChange, parseUpdates, setFrameVars, thEntry, withChatChanges, writeChatBook } from './frames.mjs'
 import { editPreset, exportPreset, importOwnPreset, normalizePreset, presetDetail, presetSummary } from './presets.mjs'
-import { VN_ID, basicDetail } from './basic.mjs'
-import { DIRECT_CARD } from '../web/shared/basic.js'
+import { VN_ID, basicDetail, editBuiltin, ownTexts } from './basic.mjs'
+import { DIRECT_CARD, builtinKey, editsKey } from '../web/shared/basic.js'
 import { appVersion, featuresOf } from './edition.mjs'
 import { createProxy, proxyOverride } from './proxy.mjs'
 import { createEngine } from './engine.mjs'
@@ -97,6 +97,9 @@ const STATIC = {
   '/update.js': ['update.js', 'text/javascript; charset=utf-8'],
   '/privacy.js': ['privacy.js', 'text/javascript; charset=utf-8'],
   '/status.js': ['status.js', 'text/javascript; charset=utf-8'],
+  '/cover.js': ['cover.js', 'text/javascript; charset=utf-8'],
+  '/card-art.js': ['card-art.js', 'text/javascript; charset=utf-8'],
+  '/shared/cover.js': ['shared/cover.js', 'text/javascript; charset=utf-8'],
   '/basic-options.js': ['basic-options.js', 'text/javascript; charset=utf-8'],
   '/i18n.js': ['i18n.js', 'text/javascript; charset=utf-8'],
   '/i18n/en.js': ['i18n/en.js', 'text/javascript; charset=utf-8'],
@@ -157,7 +160,9 @@ const STATIC = {
   '/shared/whatsnew.js': ['shared/whatsnew.js', 'text/javascript; charset=utf-8'],
   '/diagnostics.js': ['diagnostics.js', 'text/javascript; charset=utf-8'],
   '/perf-panel.js': ['perf-panel.js', 'text/javascript; charset=utf-8'],
+  '/regex-vet.js': ['regex-vet.js', 'text/javascript; charset=utf-8'],
   '/blockwords.js': ['blockwords.js', 'text/javascript; charset=utf-8'],
+  '/tool-prompts.js': ['tool-prompts.js', 'text/javascript; charset=utf-8'],
   '/shared/blockwords.js': ['shared/blockwords.js', 'text/javascript; charset=utf-8'],
   '/dictation.js': ['dictation.js', 'text/javascript; charset=utf-8'],
   '/icon.png': ['icon.png', 'image/png'],
@@ -170,6 +175,10 @@ const STATIC = {
 // Fetched by a phone without the access cookie (the icon is read before anyone logs in).
 const OPEN_FILES = new Set(['/icon.png', '/favicon.ico', '/apple-touch-icon.png', '/icon-192.png', '/icon-512.png', '/manifest.webmanifest'])
 const MAX_BODY = 40 * 1024 * 1024
+// 导出文本 handed over for the Android app to fetch (POST /api/text-exports): token → { type, text, at }.
+const textExports = new Map()
+const TEXT_EXPORT_KEPT_MS = 10 * 60 * 1000
+const TEXT_EXPORT_TYPES = new Set(['text/plain', 'text/markdown'])
 // A card, worldbook or preset file comes base64, a third bigger than itself. A big MVU card's picture is 36 MB (it
 // carries the card twice, as V2 "chara" and V3 "ccv3", as SillyTavern writes it): these take a file up to about 110 MB.
 const MAX_UPLOAD = 150 * 1024 * 1024
@@ -204,7 +213,7 @@ async function readBody(req, max = MAX_BODY) {
 
 // Requests that change nothing worth retracing, or come too often to read (a card frame's own
 // writes, previews, checks, read-aloud): left out of the operations log. Turns are logged by streamTurn.
-const UNLOGGED = /^\/api\/(diagnostics|presence|tts|frame-fetch|ejs\/check|mvu\/parse|vn\/expressions|cards\/inspect|providers\/models|media\/(voices\/|transcribe|novelai\/check|comfy\/models|draws-from-picture)|chats\/[\w-]+\/(turn|regenerate|preview|display-render|frame-vars|stop)$)/
+const UNLOGGED = /^\/api\/(diagnostics|presence|tts|frame-fetch|ejs\/check|mvu\/parse|vn\/expressions|cards\/inspect|providers\/models|media\/(voices\/|transcribe|novelai\/check|comfy\/models|draws-from-picture)|chats\/[\w-]+\/(turn|regenerate|continue|preview|display-render|frame-vars|stop)$)/
 // Settings whose short values are worth seeing (which model, which proxy mode), not only that they changed.
 const VALUES_SHOWN = /^\/api\/(settings|media\/settings|update\/settings)$/
 
@@ -281,11 +290,14 @@ function cardEditView(card) {
     postHistoryInstructions: card.postHistoryInstructions,
     depthPrompt: card.depthPrompt ?? '',
     creatorNotes: card.creatorNotes,
+    cover: card.cover ?? null,
+    statusBar: card.statusBar ?? null,
     greetings: greetingList(card),
   }
 }
 
 const PNG_IMAGE = /^data:image\/png;base64,([A-Za-z0-9+/=\s]+)$/
+const JPEG_IMAGE = /^data:image\/jpeg;base64,([A-Za-z0-9+/=\s]+)$/
 const MAX_AVATAR = 15 * 1024 * 1024
 
 /** An uploaded card file (SillyTavern PNG/JSON, or this app's own export) → { card, avatar }. */
@@ -300,7 +312,7 @@ function summaryOrNone(summarize, item, kind, warn = () => {}) {
   }
 }
 
-/** → { card, avatar, raw, game }: `raw` the SillyTavern JSON it was read from (null for this app's own export), `game` its rule book. */
+/** → { card, avatar, raw, game, coverArt }: `raw` the SillyTavern JSON it was read from (null for this app's own export), `game` its rule book, `coverArt` 开场页的图 (only this app's own export has one). */
 function readCardUpload(body) {
   const { filename, buffer } = decodeUpload(body)
   const { raw, avatar } = parseCardFile(filename, buffer)
@@ -521,7 +533,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       if (event.type === 'start') tellPages({ kind: 'chat', id: chatId, running: true })
       res.write(`data: ${JSON.stringify(event)}\n\n`)
     }
-    const what = `${args.userNodeId ? msg`重新生成` : msg`生成回复`} · ${chatId}`
+    const what = `${args.continueId ? msg`继续生成` : args.userNodeId ? msg`重新生成` : msg`生成回复`} · ${chatId}`
     try {
       const turn = await engine.runTurn(chatId, args, send, { keepCut: true })
       const { nodeId, cut } = turn
@@ -669,6 +681,12 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
   async function withRulebook(card) {
     const game = await rulebooks.portable(card.id)
     return game ? { ...card, game } : card
+  }
+
+  /** 开场页的图 (a JPEG) written beside a saved card, which says when (save the card after). */
+  async function writeCoverArt(card, jpeg) {
+    await writeFile(store.coverArtPath(card.id), jpeg)
+    card.coverArt = Date.now()
   }
 
   const routes = [
@@ -1052,6 +1070,11 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['DELETE', /^\/api\/forge\/([\w-]+)\/history\/([\w.-]+)$/, ([id, file]) => forge.dropKeptAvatar(id, file)],
     ['POST', /^\/api\/forge\/([\w-]+)\/save$/, ([id], body) => forge.saveCard(id, body ?? {})],
     ['POST', /^\/api\/forge\/([\w-]+)\/stop$/, ([id]) => forge.stop(id)],
+    // 定制外观 in the plan's status bar: a look a model writes, a draft beside the draft till it is put on (PUT /api/forge/:id look).
+    ['GET', /^\/api\/forge\/([\w-]+)\/skin$/, ([id]) => forge.skinGet(id)],
+    ['POST', /^\/api\/forge\/([\w-]+)\/skin$/, ([id], body) => forge.skinAsk(id, body ?? {})],
+    ['POST', /^\/api\/forge\/([\w-]+)\/skin\/stop$/, ([id]) => forge.skinStop(id)],
+    ['DELETE', /^\/api\/forge\/([\w-]+)\/skin$/, ([id]) => forge.skinDrop(id)],
     // 错误日志: the page's own mistakes come in; the report goes out only as the player copies or saves it.
     ['GET', /^\/api\/diagnostics$/, async () => ({ count: (await diagnostics.list()).length })],
     ['POST', /^\/api\/diagnostics\/page$/, async (_, body) => {
@@ -1095,10 +1118,14 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     // linked worldbooks stay). Otherwise a new card, which still takes over the settings and
     // reference pictures of an older version of itself, so deleting that one loses nothing.
     ['POST', /^\/api\/cards\/import$/, async (_, body) => {
-      const { card, avatar, raw = null, game = null } = readCardUpload(body)
+      const { card, avatar, raw = null, game = null, coverArt = null } = readCardUpload(body)
       if (typeof body.replace === 'string' && body.replace) {
         const old = await store.getCard(body.replace)
         Object.assign(card, { id: old.id, media: old.media, worldbookIds: old.worldbookIds ?? [], hasAvatar: Boolean(avatar) || old.hasAvatar, group: old.group ?? '', archived: old.archived === true, pinned: old.pinned === true, favorite: old.favorite === true })
+        // 开场页的图 stays, unless the file brings one of its own.
+        if (coverArt) await writeCoverArt(card, coverArt)
+        else if (old.coverArt) card.coverArt = old.coverArt
+        else delete card.coverArt
         // A new version from a file without a picture keeps the old picture, with the new version's card data in it:
         // exports take what the app does not keep (character_version, Tavern Helper scripts…) from there.
         let picture = avatar
@@ -1120,7 +1147,12 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       // A new version of a card goes into the same group as the old one.
       const previous = previousVersion(await store.listCards(), card)
       if (previous?.group) card.group = previous.group
+      delete card.coverArt
       await store.saveCard(card, avatar)
+      // 开场页的图: the file's own, else the older version's.
+      if (coverArt) await writeCoverArt(card, coverArt)
+      else if (previous?.coverArt && (await copyFile(store.coverArtPath(previous.id), store.coverArtPath(card.id)).then(() => true, () => false))) card.coverArt = Date.now()
+      if (card.coverArt) await store.saveCard(card)
       // Its scripts that run here, kept now: a JSON card has no picture to read them from later.
       if (raw) await cardScriptsFor(store).remember(card.id, raw)
       if (previous) {
@@ -1147,11 +1179,12 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
         // With ids the editor can tell apart (normalizeScripts: one missing or repeated in an imported file gets its own).
         regexScriptList: withUniqueIds(normalizeScripts(card.regexScripts)),
         statusBar: card.statusBar ?? null,
+        cover: card.cover ?? null,
       }
     }],
     ['GET', /^\/api\/cards\/([\w-]+)\/export$/, async ([id]) => {
       const card = await withRulebook(await store.getCard(id))
-      return exportCard(card, card.hasAvatar ? await readFile(store.avatarPath(id)).catch(() => null) : null)
+      return exportCard(card, card.hasAvatar ? await readFile(store.avatarPath(id)).catch(() => null) : null, card.coverArt ? await readFile(store.coverArtPath(id)).catch(() => null) : null)
     }],
     ['DELETE', /^\/api\/cards\/([\w-]+)$/, async ([id]) => {
       await store.deleteCard(id)
@@ -1202,6 +1235,25 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       await store.saveCard(card, file)
       return cardEditView(card)
     }],
+    // 修改角色卡 → 开场页 → 背景图: a picture of the player's own (JPEG; the page converts others and makes it smaller),
+    // shown behind the cover instead of the scene the chat is at. DELETE goes back to that.
+    ['PUT', /^\/api\/cards\/([\w-]+)\/cover-art$/, async ([id], body) => {
+      const match = JPEG_IMAGE.exec(String(body?.image ?? ''))
+      if (!match) throw httpError(400, msg`开场页的图要转成 JPEG 再保存`)
+      const jpeg = Buffer.from(match[1], 'base64')
+      if (jpeg.length > MAX_AVATAR) throw httpError(400, msg`图片太大了（15 MB 以内）`)
+      const card = await store.getCard(id)
+      await writeCoverArt(card, jpeg)
+      await store.saveCard(card)
+      return cardEditView(card)
+    }],
+    ['DELETE', /^\/api\/cards\/([\w-]+)\/cover-art$/, async ([id]) => {
+      const card = await store.getCard(id)
+      await rm(store.coverArtPath(id), { force: true })
+      delete card.coverArt
+      await store.saveCard(card)
+      return cardEditView(card)
+    }],
     // 修改角色卡 → 生成头像: drawn with the 画图方式 and model picked for it, kept in 抽图历史 (its
     // file is `history`); the page shows it, and taking it is PUT /api/cards/:id/avatar like an upload.
     ['POST', /^\/api\/cards\/([\w-]+)\/avatar\/draw$/, ([id], body) => media.drawAvatar(id, AbortSignal.timeout(600000), drawChoiceOf(body))],
@@ -1218,7 +1270,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['PUT', /^\/api\/cards\/([\w-]+)\/assistant$/, ([id], body) => forge.talkUpdate('card', id, body ?? {})],
     ['POST', /^\/api\/cards\/([\w-]+)\/assistant$/, ([id], body) => forge.talkAsk('card', id, body ?? {})],
     ['DELETE', /^\/api\/cards\/([\w-]+)\/assistant$/, ([id]) => forge.talkClear('card', id)],
-    ['POST', /^\/api\/cards\/([\w-]+)\/assistant\/retry$/, ([id]) => forge.talkRetry('card', id)],
+    ['POST', /^\/api\/cards\/([\w-]+)\/assistant\/retry$/, ([id], body) => forge.talkRetry('card', id, body ?? {})],
     ['POST', /^\/api\/cards\/([\w-]+)\/assistant\/stop$/, ([id]) => forge.talkStop('card', id)],
     ['POST', /^\/api\/cards\/([\w-]+)\/assistant\/discard$/, ([id]) => forge.talkDiscard('card', id)],
     ['POST', /^\/api\/cards\/([\w-]+)\/assistant\/apply$/, async ([id], body) => {
@@ -1236,6 +1288,21 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['PUT', /^\/api\/cards\/([\w-]+)\/check$/, ([id], body) => forge.checkUpdate(id, body ?? {})],
     ['POST', /^\/api\/cards\/([\w-]+)\/check\/ask$/, ([id], body) => forge.checkAsk(id, body ?? {})],
     ['POST', /^\/api\/cards\/([\w-]+)\/check\/stop$/, ([id]) => forge.checkStop(id)],
+    // 加玩法积木: a model fills in one brick for this card; it comes back as a suggestion in the check's list.
+    ['POST', /^\/api\/cards\/([\w-]+)\/check\/brick$/, ([id], body) => forge.checkBrick(id, body ?? {})],
+    ['POST', /^\/api\/cards\/([\w-]+)\/check\/interview$/, ([id], body) => forge.checkInterview(id, body ?? {})],
+    // 定制外观 (状态栏): a look a model writes for the card's bar, a draft till the bar is saved with it; sent only by POST.
+    ['GET', /^\/api\/cards\/([\w-]+)\/check\/skin$/, ([id]) => forge.checkSkinGet(id)],
+    ['POST', /^\/api\/cards\/([\w-]+)\/check\/skin$/, ([id], body) => forge.checkSkinAsk(id, body ?? {})],
+    ['DELETE', /^\/api\/cards\/([\w-]+)\/check\/skin$/, ([id]) => forge.checkSkinDrop(id)],
+    // 从小说抽取世界书 (web/books.js): a long text read a stretch at a time into worldbook entries; sent only by /run.
+    ['GET', /^\/api\/novel$/, () => forge.novelGet()],
+    ['POST', /^\/api\/novel$/, (_, body) => forge.novelStart(body ?? {})],
+    ['PUT', /^\/api\/novel$/, (_, body) => forge.novelUpdate(body ?? {})],
+    ['POST', /^\/api\/novel\/run$/, () => forge.novelRun()],
+    ['POST', /^\/api\/novel\/stop$/, () => forge.novelStop()],
+    ['POST', /^\/api\/novel\/save$/, (_, body) => forge.novelSave(body ?? {})],
+    ['DELETE', /^\/api\/novel$/, () => forge.novelDrop()],
     // 试玩体检 (web/trial.js): the card played for a few rounds in a chat nobody sees; sent only by /run.
     ['GET', /^\/api\/cards\/([\w-]+)\/trial$/, ([id]) => forge.trialGet(id)],
     ['PUT', /^\/api\/cards\/([\w-]+)\/trial$/, ([id], body) => forge.trialUpdate(id, body ?? {})],
@@ -1261,7 +1328,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['PUT', /^\/api\/talk\/(book|preset|regex|theme)\/([\w-]+)$/, ([kind, id], body) => forge.talkUpdate(kind, id, body ?? {})],
     ['POST', /^\/api\/talk\/(book|preset|regex|theme)\/([\w-]+)$/, ([kind, id], body) => forge.talkAsk(kind, id, body ?? {})],
     ['DELETE', /^\/api\/talk\/(book|preset|regex|theme)\/([\w-]+)$/, ([kind, id]) => forge.talkClear(kind, id)],
-    ['POST', /^\/api\/talk\/(book|preset|regex|theme)\/([\w-]+)\/retry$/, ([kind, id]) => forge.talkRetry(kind, id)],
+    ['POST', /^\/api\/talk\/(book|preset|regex|theme)\/([\w-]+)\/retry$/, ([kind, id], body) => forge.talkRetry(kind, id, body ?? {})],
     ['POST', /^\/api\/talk\/(book|preset|regex|theme)\/([\w-]+)\/stop$/, ([kind, id]) => forge.talkStop(kind, id)],
     ['POST', /^\/api\/talk\/(book|preset|regex|theme)\/([\w-]+)\/discard$/, ([kind, id]) => forge.talkDiscard(kind, id)],
     ['POST', /^\/api\/talk\/(book|preset|regex|theme)\/([\w-]+)\/(apply|undo)$/, async ([kind, id, action], body) => {
@@ -1453,6 +1520,16 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     // The built-in preset: its options live in the settings (PUT /api/settings { basic }).
     ['GET', /^\/api\/presets\/basic$/, async () => basicDetail(await store.getSettings())],
     ['GET', /^\/api\/presets\/vn$/, async () => basicDetail(await store.getSettings(), VN_ID)],
+    // Its entries as the player edits them (basic.mjs editBuiltin), kept in the settings; `reset: 'all'` puts
+    // the options, the texts, the player's entries and their regex back as the app comes.
+    ['PUT', /^\/api\/presets\/(basic|vn)$/, async ([id], body) => {
+      const key = editsKey(id)
+      const settings = await store.updateSettings(current =>
+        body?.reset === 'all'
+          ? { [key]: null, [builtinKey(id)]: null }
+          : { [key]: editBuiltin(current[key], body ?? {}, ownTexts(current, id)) })
+      return basicDetail(settings, id)
+    }],
     ['GET', /^\/api\/presets\/([\w-]+)$/, async ([id]) => presetDetail(await store.getPreset(id))],
     ['PUT', /^\/api\/presets\/([\w-]+)$/, async ([id], body) => presetDetail(await store.savePreset(editPreset(await store.getPreset(id), body)))],
     ['DELETE', /^\/api\/presets\/([\w-]+)$/, async ([id]) => {
@@ -1653,6 +1730,16 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     // 楼层渲染: { nodeId, texts } → { texts, errors? }, the EJS in what a card's display regex made
     // for one message, rendered at that message; nothing the templates write is kept (engine.renderForDisplay).
     ['POST', /^\/api\/chats\/([\w-]+)\/display-render$/, ([id], body) => engine.renderForDisplay(id, body ?? {})],
+    // 导出文本 in the Android app: the page writes the file; the app fetches it from here into Downloads (saveDownload),
+    // since its own saveFile marks every file as JSON. Kept a few minutes.
+    ['POST', /^\/api\/text-exports$/, (_, body) => {
+      const type = TEXT_EXPORT_TYPES.has(body?.type) ? body.type : 'text/plain'
+      const now = Date.now()
+      for (const [token, file] of textExports) if (now - file.at > TEXT_EXPORT_KEPT_MS) textExports.delete(token)
+      const token = randomBytes(12).toString('hex')
+      textExports.set(token, { type, text: String(body?.text ?? ''), at: now })
+      return { path: `/api/text-exports/${token}` }
+    }],
     // EjsTemplate.getSyntaxErrorInfo in a card's frame.
     ['POST', /^\/api\/ejs\/check$/, async (_, body) => {
       const code = String(body?.code ?? '')
@@ -1844,6 +1931,18 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
         return sendJson(res, error.status ?? 404, { error: error.status ? error.message : msg`没有头像` })
       }
     }
+    // 开场页的图: its address changes with the picture (?v=), so it can stay cached.
+    const coverArt = /^\/api\/cards\/([\w-]+)\/cover-art$/.exec(url.pathname)
+    if (req.method === 'GET' && coverArt) {
+      try {
+        const data = await readFile(store.coverArtPath(coverArt[1]))
+        res.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': url.searchParams.has('v') ? 'max-age=31536000, immutable' : 'no-cache' })
+        return res.end(data)
+      } catch {
+        res.logFailures = false // a card without one: nothing failed
+        return sendJson(res, 404, { error: msg`这张卡没有选开场页的图` })
+      }
+    }
     const avatar = /^\/api\/cards\/([\w-]+)\/avatar$/.exec(url.pathname)
     if (req.method === 'GET' && avatar) {
       try {
@@ -1982,6 +2081,15 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       const data = await media.readRosterRef(rosterRef[1], rosterRef[2]).catch(() => null)
       if (!data) return sendJson(res, 404, { error: msg`这个角色还没有人设图` })
       res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'no-cache' })
+      return res.end(data)
+    }
+
+    const textExport = /^\/api\/text-exports\/([\w-]+)$/.exec(url.pathname)
+    if (req.method === 'GET' && textExport) {
+      const file = textExports.get(textExport[1])
+      if (!file || Date.now() - file.at > TEXT_EXPORT_KEPT_MS) return sendJson(res, 404, { error: msg`导出的文件已经过期，请重新导出` })
+      const data = Buffer.from(file.text, 'utf8')
+      res.writeHead(200, { 'content-type': `${file.type}; charset=utf-8`, 'content-length': data.length, 'cache-control': 'no-store', 'content-disposition': 'attachment' })
       return res.end(data)
     }
 
@@ -2216,12 +2324,12 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       })
     }
 
-    const turn = /^\/api\/chats\/([\w-]+)\/(turn|regenerate)$/.exec(url.pathname)
+    const turn = /^\/api\/chats\/([\w-]+)\/(turn|regenerate|continue)$/.exec(url.pathname)
     if (req.method === 'POST' && turn) {
       const body = await readBody(req)
       const args = turn[2] === 'turn'
         ? { parentId: String(body.parentId), input: body.input, marks: body.marks === true, game: body.game ?? null, files: body.files }
-        : { userNodeId: String(body.userNodeId) }
+        : turn[2] === 'continue' ? { continueId: String(body.nodeId) } : { userNodeId: String(body.userNodeId) }
       return streamTurn(res, turn[1], args)
     }
 

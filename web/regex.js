@@ -9,6 +9,7 @@
 // tells the player the next turn writes the cache once more; display-only
 // scripts never touch it.
 import { t } from '/i18n.js'
+import { VN_ID } from '/shared/basic.js'
 import { applyScripts, effectFlags, effectOf, PLACEMENT, regexFromString, scriptsInFile, stScripts } from '/shared/regex.js'
 import { HTML_LIKE } from '/render.js'
 import { matchesTerms, searchTerms } from '/books.js'
@@ -60,7 +61,7 @@ export function initRegex({ api, el, toast, guard, saveFile, context, getCards, 
     return [
       { key: 'global', kind: 'global', name: t`全局`, scripts: state.global, editable: true },
       // The built-in preset's name is its Chinese data name: shown in the page's language.
-      ...(state.preset ? [{ key: 'preset', kind: 'preset', name: state.preset.builtin ? t`基础预设` : state.preset.name, scripts: state.preset.scripts, editable: !state.preset.builtin }] : []),
+      ...(state.preset ? [{ key: 'preset', kind: 'preset', name: state.preset.builtin ? (state.preset.id === VN_ID ? t`视觉小说预设` : t`基础预设`) : state.preset.name, scripts: state.preset.scripts, editable: true }] : []),
       ...(state.card ? [{ key: 'card', kind: 'card', name: state.card.name, scripts: state.card.scripts, editable: true }] : []),
       ...state.sets.map(set => ({ key: `set-${set.id}`, kind: 'set', name: set.name, scripts: set.scripts, editable: true, set })),
     ]
@@ -172,7 +173,7 @@ export function initRegex({ api, el, toast, guard, saveFile, context, getCards, 
   /** Where the place runs, and in what order. */
   function whereText(place) {
     if (place.kind === 'global') return t`所有对话都用，最先运行。`
-    if (place.kind === 'preset') return state.preset.builtin ? t`基础预设自带的正则：旧回复里的行动选项不再发给模型。不能改，也不能关。` : t`用这个预设的对话都用，在全局之后运行。`
+    if (place.kind === 'preset') return state.preset.builtin ? t`用这个预设的对话都用，在全局之后运行。这里列的是你自己加的；预设本身带的 ${state.preset.fixed ?? 0} 条（旧回复里的行动选项、写前自查不再发给模型）不在列表里，总是先运行，不能改也不能关。` : t`用这个预设的对话都用，在全局之后运行。`
     if (place.kind === 'card') return t`这张卡的每个对话都用，在全局和预设之后运行。重新导入这张卡来更新时，会换成文件里的版本，这里的修改不保留。`
     const users = usedBy(place.set)
     if (!users.length) return t`还没挂到卡上，不生效：在下面「用到它的卡」里勾上，就只对那几张卡生效。`

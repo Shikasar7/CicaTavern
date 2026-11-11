@@ -176,7 +176,12 @@ export function applyBookChanges(book, changes, ids) {
     }))
   if (edits.length) prefix = editBook(book, { entries: edits }).prefix || prefix
   const added = chosen.filter(c => c.kind === 'newEntry')
-  for (const change of added) prefix = editBook(book, { add: { comment: change.name, keys: change.keys, content: change.after, constant: change.constant } }).prefix || prefix
+  for (const change of added) {
+    const done = editBook(book, { add: { comment: change.name, keys: change.keys, content: change.after, constant: change.constant } })
+    prefix = done.prefix || prefix
+    // A rule for every turn (a brick's, brick-add.mjs): sent late, at depth, as 创作角色卡 places its own.
+    if (change.late) book.entries.find(entry => entry.uid === done.added).position = 4
+  }
   const removed = chosen.filter(c => c.kind === 'removeEntry' && exists(c.uid)).map(c => c.uid)
   if (removed.length) prefix = editBook(book, { remove: removed }).prefix || prefix
   return { applied: applied + edits.length + added.length + removed.length, prefix }

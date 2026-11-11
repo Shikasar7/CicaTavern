@@ -123,7 +123,9 @@ test('imports go into the group asked for, or a new set; scripts copy and move b
   assert.equal(fresh.set.name, 'regex-美化')
   assert.deepEqual(fresh.scripts.map(s => [s.id, s.scriptName, s.promptOnly]), file.map(s => [s.id, s.scriptName, s.promptOnly]), 'exported and imported again: the same scripts')
   assert.deepEqual((await call('/api/regex/import', { method: 'POST', body: { scripts: file } })).body.to, 'global', 'global unless said')
-  assert.equal((await call('/api/regex/import', { method: 'POST', body: { scripts: file, to: 'preset-basic' } })).status, 400)
+  // The built-in preset takes the player's own, after its two (kept in the settings).
+  assert.deepEqual((await call('/api/regex/import', { method: 'POST', body: { scripts: file, to: 'preset-basic' } })).body.scripts.map(s => s.scriptName), ['one', 'two'])
+  assert.deepEqual((await app.store.getSettings()).basicEdits.regexScripts.map(s => s.scriptName), ['one', 'two'])
 
   // Copied from the card's own into the set: ids of their own. Moved out of the set into the card: they keep theirs.
   const own = (await app.store.getCard('c1')).regexScripts

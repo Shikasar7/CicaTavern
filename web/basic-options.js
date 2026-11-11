@@ -279,6 +279,25 @@ export const VN_FIELDS = [
 /** A built-in preset's fields: the visual novel one's, else the basic one's. */
 export const fieldsOf = id => (id === 'vn' ? VN_FIELDS : BASIC_FIELDS)
 
+// A built-in preset's own paragraphs that no option names (server/basic.mjs basicParts, narratorParts).
+const OWN_SLOT = {
+  intro: t`开场身份`,
+  rules: t`基本规则`,
+  'vn-intro': t`视觉小说`,
+  format: t`回复格式`,
+  jailbreakTail: t`破限（结尾确认）`,
+}
+
+/** A built-in preset's own entry by what it comes from: the option and the value picked (文风 · 电影感). */
+export function ownEntryName(presetId, { id, slot }) {
+  if (OWN_SLOT[slot]) return OWN_SLOT[slot]
+  const field = fieldsOf(presetId).find(f => f.key === slot.replace(/^vn-/, ''))
+  if (!field) return slot
+  const value = String(id).split(':')[1]?.replace(/-open$/, '')
+  const label = field.values.find(([v]) => v === value)?.[1]
+  return label ? `${field.label} · ${label}` : field.label
+}
+
 // The note an option's button shows: one on the page at a time, inside the button's dialog so it sits above it.
 const TIP_DELAY = 220
 const TIP_GAP = 8

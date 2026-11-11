@@ -24,6 +24,7 @@ import { complete, fetchBytes, googleRequest, isProviderRef, postJson, providerE
 import { chatMaterial, cleanFrame, cleanLora, cleanRoster, cleanStrength, countTags, draftMaterial, flattenFrame, frameFormat, isFramePrompt, isRosterId, leadOf, naiCharacters, parseFrame, parseRosterChat, parseRosterDraft, rosterBrief, rosterChatRequest, rosterDraftRequest, withSomeone } from './roster.mjs'
 import { httpError, newId } from './store.mjs'
 import { blockRequest } from './blockwords.mjs'
+import { toolNote, withToolNote } from './context.mjs'
 import { FISH_MODELS } from './voice/cloud.mjs'
 import { KEYED, cleanVoiceKey, cleanVoiceList, createVoices } from './voice/index.mjs'
 import { DEFAULT_LISTEN, cleanListen, createListen, readAudio } from './voice/listen.mjs'
@@ -1238,6 +1239,9 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     return cleanMedia((await store.getSettings()).media ?? {}, defaults, defaults, { backends })
   }
 
+  /** The player's 附加提示词 for the helper calls here (角色名册, 判断表情, 场景背景): context.mjs toolNote. */
+  const helperNote = async () => toolNote(await store.getSettings(), 'helper')
+
   /** A settings form or patch over the saved settings (PUT /api/media/settings). */
   const cleanSettings = (input, previous) => cleanMedia(input, previous, defaults, { backends })
 
@@ -2025,7 +2029,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     const { provider, modelId } = await helperTarget({ model: '' }, media)
     let result
     try {
-      result = await complete(provider, modelId, { ...rosterDraftRequest(draftMaterial(card, books.filter(Boolean))), signal }, { proxy: proxyNow() })
+      result = await complete(provider, modelId, withToolNote({ ...rosterDraftRequest(draftMaterial(card, books.filter(Boolean))), signal }, await helperNote()), { proxy: proxyNow() })
     } catch (error) {
       if (error.status) throw error
       throw httpError(502, providerError(provider, error))
@@ -2063,7 +2067,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     const { provider, modelId } = await helperTarget({ model: '' }, media)
     let result
     try {
-      result = await complete(provider, modelId, { ...rosterChatRequest(material, { cast: list, userName: chat.user, setting: card.scenario || card.description || '' }), signal }, { proxy: proxyNow() })
+      result = await complete(provider, modelId, withToolNote({ ...rosterChatRequest(material, { cast: list, userName: chat.user, setting: card.scenario || card.description || '' }), signal }, await helperNote()), { proxy: proxyNow() })
     } catch (error) {
       if (error.status) throw error
       throw httpError(502, providerError(provider, error))
@@ -2260,7 +2264,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     const { provider, modelId } = await helperTarget({ model: '' }, media)
     let result
     try {
-      result = await complete(provider, modelId, { ...expressionRequest(list), signal }, { proxy: proxyNow() })
+      result = await complete(provider, modelId, withToolNote({ ...expressionRequest(list), signal }, await helperNote()), { proxy: proxyNow() })
     } catch (error) {
       if (error.status) throw error
       throw httpError(502, providerError(provider, error))
@@ -2306,7 +2310,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     if (target) {
       const books = await Promise.all((card.worldbookIds ?? []).map(id => store.getBook(id).catch(() => null)))
       try {
-        const result = await complete(target.provider, target.modelId, { ...rosterDraftRequest(draftMaterial(card, books.filter(Boolean))), signal }, { proxy: proxyNow() })
+        const result = await complete(target.provider, target.modelId, withToolNote({ ...rosterDraftRequest(draftMaterial(card, books.filter(Boolean))), signal }, await helperNote()), { proxy: proxyNow() })
         const drafted = parseRosterDraft(result.text)
         const entry = own(drafted) ?? drawable(drafted)[0]
         if (entry) return { entry, from: 'draft', model: `${target.provider.name} · ${target.modelId}` }
@@ -2363,7 +2367,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
         const request = sceneryPromptRequest({ place, lore, passage, setting: card.scenario, style: cardMedia.style, promptStyle: media.promptStyle })
         let result
         try {
-          result = await complete(provider, modelId, { ...request, signal }, { proxy: proxyNow() })
+          result = await complete(provider, modelId, withToolNote({ ...request, signal }, await helperNote()), { proxy: proxyNow() })
         } catch (error) {
           if (error.status) throw error
           throw httpError(502, providerError(provider, error))

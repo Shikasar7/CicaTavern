@@ -4,7 +4,7 @@
 // opaque origin: it cannot read this page, its storage, or call the local API.
 import { applyScripts, PLACEMENT } from './shared/regex.js'
 import { replaceVariableMacros, UPDATE_BLOCK } from './shared/vars.js'
-import { CHOICES_BLOCK, SELF_CHECK_BLOCK, TIME_BOX_BLOCK } from './shared/basic.js'
+import { CHOICES_BLOCK, REASONING, SELF_CHECK_BLOCK, TIME_BOX_BLOCK } from './shared/basic.js'
 import { frameShim, libraryTags, replaceViewportHeight } from './compat.js'
 
 const PLACEHOLDER = /<StatusPlaceHolderImpl\s*\/>/i
@@ -32,7 +32,9 @@ export function nameMacros(text, names) {
 
 // What a card's page holds is not the story's bookkeeping: a fenced block or a script may well say <UpdateVariable>
 // (a prompt it sends, a parser), and an update block's open-end match would take the rest of the message with it.
-const GUARDED = /```[\s\S]*?```|<script\b[\s\S]*?<\/script>/gi
+// So may the model's thinking (「结尾输出 <choices>…」): taken for a choices block, the mention would hide the story up to
+// the real </choices>, and the thinking's closing tag with it (the story then folded away under 思考中…).
+const GUARDED = new RegExp(`\`\`\`[\\s\\S]*?\`\`\`|<script\\b[\\s\\S]*?<\\/script>|${REASONING.source}`, 'gi')
 
 /** A fenced block of nothing but the story's bookkeeping (a model that fenced its update block): no page's, so it goes. */
 function onlyHidden(fence) {
@@ -664,4 +666,52 @@ export function perfReport(about = {}) {
       spans: action.spans.map(item => ({ ...item, ms: roundMs(item.ms), max: roundMs(item.max) })),
     })),
   }
+}
+
+// ─── 导出文本 ──────────────────────────────────────────────────────────────
+// A whole conversation as a .txt or .md file (the ⇩ on its row in the chat list). The page sorts each message into
+// parts the way 复制 does (app.js replyParts: story, status, choices) and hands them here; this only picks and lays them
+// out, so it runs in the tests as well.
+
+/**
+ * What a message keeps: with `storyOnly` (仅正文) its story parts, else all of them. A message with no story part at
+ * all (a card that draws its whole reply in its own page) keeps what it has, as 复制 then offers only 全部.
+ * @param parts - [{ kind: 'story' | 'status' | 'choices', text }]
+ */
+export function messageText(parts, storyOnly) {
+  const story = parts.filter(part => part.kind === 'story')
+  const kept = storyOnly && story.length ? story : parts
+  return kept.map(part => String(part.text ?? '').trim()).filter(Boolean).join('\n\n')
+}
+
+const TEXT_MARKS = { name: name => `【${name}】`, note: text => `（${text}）` } // i18n-ignore: app.js passes the page's own
+
+/**
+ * The text of a chat's branch, from the opening to the latest reply, each message under its speaker's name.
+ * Hidden rounds (隐藏这一轮: the player's message and the reply both carry `hidden`) are left out; deleted messages are
+ * not in the path. A message with nothing left to show is skipped.
+ * @param path - the branch on screen (the chat view's `path`).
+ * @param options.format - 'txt' or 'md' (a title, **名字** lines, --- between turns).
+ * @param options.nameOf - node → the speaker's name.
+ * @param options.partsOf - node → its parts (see messageText).
+ * @param options.notesOf - node → { before, after }: a line said about it (a compaction point), or nothing.
+ * @param options.marks - in a .txt, { name, note }: how a speaker's name and a note are written (the page's language).
+ */
+export function chatText(path, { format = 'txt', storyOnly = true, title = '', date = '', nameOf, partsOf, notesOf = () => null, marks = TEXT_MARKS }) {
+  const md = format === 'md'
+  const blocks = []
+  const note = text => blocks.push(md ? text.split('\n').map(line => `> ${line}`).join('\n') : marks.note(text))
+  for (const node of path) {
+    if (node.hidden) continue
+    const { before, after } = notesOf(node) ?? {}
+    if (before) note(before)
+    const text = messageText(partsOf(node) ?? [], storyOnly)
+    // Markdown joins lines that only a line break parts (a reply written a line at a time, a status list): kept apart
+    // with a hard break (two spaces at the end of the line).
+    if (text) blocks.push(md ? `**${nameOf(node)}**\n\n${text.replace(/([^\n])\n(?=[^\n])/g, '$1  \n')}` : `${marks.name(nameOf(node))}\n${text}`)
+    if (after) note(after)
+  }
+  const head = md ? [title && `# ${title}`, date].filter(Boolean).join('\n\n') : [title, date].filter(Boolean).join('\n')
+  const body = blocks.join(md ? '\n\n---\n\n' : '\n\n')
+  return `${[head, body].filter(Boolean).join(md ? '\n\n---\n\n' : '\n\n\n')}\n`
 }

@@ -4,7 +4,7 @@
 // into every turn, so toggling those takes effect on the next message.
 import { t } from '/i18n.js'
 import { BASIC_ID, VN_ID, builtinKey } from '/shared/basic.js'
-import { basicField, fieldsOf } from '/basic-options.js'
+import { basicField, fieldsOf, ownEntryName } from '/basic-options.js'
 
 // The built-in preset is '' in this list (the default setting); chats name it BASIC_ID. The visual novel
 // preset is VN_ID in both.
@@ -99,7 +99,7 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
       ])
     }
     $('preset-list').replaceChildren(
-      item('', t`基础预设`, t`应用自带，轻量，选项可调`),
+      item('', t`基础预设`, t`应用自带，轻量，选项和条目可改`),
       item(VN_ID, t`视觉小说预设`, t`应用自带，对白多、旁白短，适合视觉小说模式`),
       ...state.list.map(p => item(p.id, p.name, t`启用 ${p.enabled}/${p.prompts} 条${p.regexScripts ? t`　正则 ${p.regexScripts}` : ''}`)),
     )
@@ -125,6 +125,7 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
       detail.builtin ? null : el('button', { class: 'btn small', type: 'button', text: t`对话修改`, title: t`说说想怎么改，或者问问某一条在做什么：向导把要改的条目整条写出来，勾上的才会改进预设`, onclick: () => talkAbout() }),
       detail.builtin ? null : el('button', { class: 'btn small', type: 'button', text: t`导出`, title: t`连同在这里做的修改存成文件，用来搬到另一台设备（手机版）`, onclick: guard(exportPreset) }),
       detail.builtin ? null : el('button', { class: 'btn small danger', type: 'button', text: t`删除`, onclick: guard(remove) }),
+      detail.builtin ? el('button', { class: 'btn small', type: 'button', text: t`恢复默认`, title: t`选项、改过的文字、自己加的条目和正则都回到应用自带的样子`, onclick: guard(resetBasic) }) : null,
     ])
     const applyBar = stale ? el('div', { class: 'preset-apply' }, [
       el('span', { text: detail.builtin && !chat.presetId ? t`当前对话开始时还没有基础预设，用的是旧的内置规则。应用后改用基础预设，下一轮会重新写入一次缓存。` : t`当前对话的固定前缀还是改动前的版本。应用后，下一轮会重新写入一次缓存。` }),
@@ -166,7 +167,7 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
     ]
   }
 
-  /** The built-in preset's page: its options, and what they add to the prompt. */
+  /** The built-in preset's page: its options, then its entries (its own paragraphs and the player's), editable. */
   function renderBasic(main, head) {
     const detail = state.detail
     // Every pick so far: each save sends all of them (the server keeps the options whole), or a second pick
@@ -182,14 +183,210 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
       if (field?.prompt !== false && !field?.perTurn) markStale()
       renderHead()
       rules.textContent = state.detail.rules
+      // An option picks which of its paragraphs is in the list.
+      $('prompt-list')?.replaceChildren(...state.detail.prompts.map(basicRow))
     })
     const rules = el('pre', { class: 'basic-rules', text: detail.rules })
     main.replaceChildren(...[
       head,
-      el('div', { class: 'basic-options' }, fields.map(field => basicField(el, field, field.kind === 'range' ? detail.options : detail.options[field.key], { onPick: pick }))),
-      el('details', { class: 'basic-preview' }, [el('summary', { text: t`这些选项加进提示词的内容` }), rules]),
-      state.list.length ? null : el('p', { class: 'basic-import', text: t`想用 SillyTavern 的预设：在它的「AI 响应配置」里导出预设 JSON（或用 SillyTavern/data/default-user/OpenAI Settings 里的文件），点左上角「导入」或拖进窗口。` }),
+      el('div', { class: 'basic-body' }, [
+        el('div', { class: 'basic-options' }, fields.map(field => basicField(el, field, field.kind === 'range' ? detail.options : detail.options[field.key], { onPick: pick }))),
+        el('div', { class: 'preset-tools' }, [
+          el('span', { class: 'basic-section', text: t`条目` }),
+          el('button', { type: 'button', class: 'btn small', text: t`＋ 新增条目`, onclick: guard(addBasicPrompt) }),
+          el('p', { class: 'seg-note', text: t`上面的选项决定用哪几段，每段的文字都可以点开改，改过的会标「已改」，点「恢复默认」回到原文。改的是这个选项值下的那一段：比如改了「文风 · 电影感」，换成别的文风时用那种文风的原文，换回来还是你改的。角色卡、你的角色设定和世界书由卡决定，不在这里改。` }),
+        ]),
+        el('ul', { class: 'prompt-list', id: 'prompt-list' }, detail.prompts.map(basicRow)),
+        el('details', { class: 'basic-preview' }, [el('summary', { text: t`选项和条目加进「每轮回复都要遵守」一节的内容` }), rules]),
+        state.list.length ? null : el('p', { class: 'basic-import', text: t`想用 SillyTavern 的预设：在它的「AI 响应配置」里导出预设 JSON（或用 SillyTavern/data/default-user/OpenAI Settings 里的文件），点左上角「导入」或拖进窗口。` }),
+      ]),
     ].filter(Boolean))
+  }
+
+  // A built-in preset's entries the card fills in.
+  const BASIC_MARKER = {
+    card: t`状态说明、文风、你的角色、角色卡、作者的指示、常驻设定`,
+    everyTurn: t`「每轮回复都要遵守」一节从这里开始`,
+    cardLate: t`角色卡的每轮指示、放在后面的常驻设定`,
+    chatHistory: t`聊天记录`,
+  }
+  const BASIC_PLACE = [['top', t`开头（基本规则后）`], ['rules', t`每轮回复都要遵守`], ['turn', t`每轮随消息发送`]]
+  const placeBadge = place => (place === 'turn' ? [t`每轮`, 'turn', PLACEMENT.turn[1]] : [t`前缀`, 'prefix', PLACEMENT.prefix[1]])
+
+  /** An own entry's name: the option it comes from and the value picked (文风 · 电影感). */
+  const basicName = p => ownEntryName(state.detail.id, p)
+
+  function basicRow(p) {
+    if (p.kind === 'marker') return el('li', { class: `prow marker${p.slot === 'chatHistory' ? ' chatlog' : ''}`, 'data-id': p.id, text: BASIC_MARKER[p.slot] ?? p.slot })
+    const name = p.kind === 'own' ? basicName(p) : p.name
+    let row = null
+    const toggle = el('input', { type: 'checkbox', class: 'switch', checked: p.enabled, 'aria-label': t`启用「${name}」` })
+    toggle.addEventListener('change', guard(async () => {
+      const enabled = toggle.checked
+      row.classList.toggle('off', !enabled)
+      try {
+        await saveBasic({ prompts: [{ id: p.id, enabled }] }, false)
+        p.enabled = enabled
+        if (p.place !== 'turn') markStale()
+        renderHead()
+      } catch (error) {
+        toggle.checked = !enabled
+        row.classList.toggle('off', enabled)
+        throw error
+      }
+    }))
+    const [label, kind, tip] = placeBadge(p.place)
+    const open = state.open.has(p.id)
+    const title = el('button', { type: 'button', class: 'prow-name', text: name, title: t`展开编辑`, 'aria-expanded': String(open) })
+    const pencil = el('button', { type: 'button', class: 'prow-edit', title: t`编辑内容`, 'aria-label': t`编辑「${name}」`, text: '✎' })
+    const more = el('div', { class: 'prow-more' }, el('div'))
+    row = el('li', { class: `prow${p.enabled ? '' : ' off'}${open ? ' open' : ''}`, 'data-id': p.id }, [
+      el('div', { class: 'prow-line' }, [
+        toggle,
+        title,
+        p.kind === 'added' ? el('span', { class: 'badge role', text: t`自己加的` }) : null,
+        p.edited ? el('span', { class: 'badge role edited', text: t`已改` }) : null,
+        el('span', { class: `badge place ${kind}`, title: tip, text: label }),
+        el('span', { class: 'prow-size', text: t`${p.content.length.toLocaleString()} 字` }),
+        pencil,
+      ]),
+      more,
+    ])
+    if (open) fillBasicEditor(more, p)
+    const expand = () => {
+      const opening = !row.classList.contains('open')
+      if (opening) {
+        fillBasicEditor(more, p)
+        state.open.add(p.id)
+        requestAnimationFrame(() => row.classList.add('open'))
+      } else {
+        state.open.delete(p.id)
+        row.classList.remove('open')
+      }
+      title.setAttribute('aria-expanded', String(opening))
+    }
+    title.addEventListener('click', expand)
+    pencil.addEventListener('click', expand)
+    return row
+  }
+
+  function fillBasicEditor(more, p) {
+    const holder = more.firstChild
+    if (holder.firstChild) return
+    const area = el('textarea', { spellcheck: 'false' })
+    area.value = p.content
+    area.addEventListener('change', guard(async () => {
+      if (area.value === p.content) return
+      await saveBasic({ prompts: [{ id: p.id, content: area.value }] })
+      if (p.place !== 'turn') markStale()
+      toast(t`已保存这条内容`)
+    }))
+    const notes = []
+    if (p.slot === 'format') notes.push(t`这段告诉模型回复里要写哪些块。<time_box>、<choices>、<self_check> 这些标签名和格式是页面认的：改了名字或格式，时间框、行动选项就显示不出来，写前自查也藏不住。只想改措辞时别动标签；改坏了点「恢复默认」。`)
+    if (p.kind === 'own') notes.push(t`{{user}} 是你的角色名，{{char}} 是角色卡名，发送时换成名字。`)
+    const actions = []
+    let fields = null
+    if (p.kind === 'own') {
+      actions.push(el('button', {
+        type: 'button', class: 'btn small ghost', text: t`恢复默认`, disabled: !p.edited && p.enabled,
+        onclick: guard(async () => {
+          await saveBasic({ reset: p.id })
+          if (p.place !== 'turn') markStale()
+          toast(t`「${basicName(p)}」已恢复默认`)
+        }),
+      }))
+    } else {
+      const title = el('input', { value: p.name, maxlength: '80', 'aria-label': t`名称` })
+      title.addEventListener('change', guard(async () => {
+        if (!title.value.trim() || title.value.trim() === p.name) {
+          title.value = p.name
+          return
+        }
+        await saveBasic({ prompts: [{ id: p.id, title: title.value }] })
+      }))
+      const place = el('select', { 'aria-label': t`位置` }, BASIC_PLACE.map(([value, text]) => el('option', { value, text, selected: p.place === value })))
+      place.addEventListener('change', guard(async () => {
+        await saveBasic({ prompts: [{ id: p.id, place: place.value }] })
+        markStale()
+      }))
+      fields = el('div', { class: 'prompt-fields' }, [editorField(t`名称`, title), editorField(t`位置`, place)])
+      notes.push(t`位置：「开头」写在基本规则后面；「每轮回复都要遵守」写在选项那几段后面，和它们一样每轮提醒模型；这两种开局写进固定前缀，改了要对当前对话点「应用」。「每轮随消息发送」附在你每条消息的后面，下一轮就生效，发过的留在历史里。`)
+      const mine = state.detail.prompts.filter(x => x.kind === 'added')
+      const index = mine.findIndex(x => x.id === p.id)
+      actions.push(
+        el('button', { type: 'button', class: 'btn small ghost', text: t`↑ 上移`, disabled: index <= 0, onclick: guard(() => moveBasic(p.id, -1)) }),
+        el('button', { type: 'button', class: 'btn small ghost', text: t`↓ 下移`, disabled: index >= mine.length - 1, onclick: guard(() => moveBasic(p.id, 1)) }),
+        el('button', {
+          type: 'button', class: 'btn small danger', text: t`删除条目`,
+          onclick: guard(async () => {
+            if (!confirm(t`删除条目「${p.name}」？`)) return
+            state.open.delete(p.id)
+            await saveBasic({ remove: [p.id] })
+            if (p.place !== 'turn') markStale()
+            toast(t`已删除「${p.name}」`)
+          }),
+        }),
+      )
+    }
+    holder.append(el('div', { class: 'prompt-editor' }, [fields, ...notes.map(text => el('p', { class: 'prompt-note', text })), area, el('div', { class: 'prompt-actions' }, actions)]))
+  }
+
+  /** Save an edit to the built-in preset shown; with `redraw`, its list again where it was. */
+  async function saveBasic(patch, redraw = true) {
+    const fresh = await api(`/api/presets/${state.detail.id}`, { method: 'PUT', body: patch })
+    onPresetEdited?.(state.detail.id)
+    if (!redraw) {
+      state.detail.rules = fresh.rules
+      state.detail.edited = fresh.edited
+      const rules = document.querySelector('#preset-main .basic-rules')
+      if (rules) rules.textContent = fresh.rules
+      return
+    }
+    state.detail = fresh
+    const list = $('prompt-list')
+    const scroll = document.querySelector('#preset-main .basic-body')?.scrollTop ?? 0
+    list?.replaceChildren(...fresh.prompts.map(basicRow))
+    const rules = document.querySelector('#preset-main .basic-rules')
+    if (rules) rules.textContent = fresh.rules
+    renderHead()
+    const body = document.querySelector('#preset-main .basic-body')
+    if (body) body.scrollTop = scroll
+  }
+
+  async function addBasicPrompt() {
+    const before = new Set(state.detail.prompts.map(p => p.id))
+    await saveBasic({ add: { name: t`新条目`, content: '', place: 'rules' } })
+    const added = state.detail.prompts.find(p => !before.has(p.id))
+    if (!added) return
+    state.open.add(added.id)
+    $('prompt-list')?.replaceChildren(...state.detail.prompts.map(basicRow))
+    const row = document.querySelector(`#prompt-list .prow[data-id="${CSS.escape(added.id)}"]`)
+    row?.classList.add('open')
+    row?.scrollIntoView({ block: 'center' })
+    row?.querySelector('.prompt-field input')?.select()
+  }
+
+  async function moveBasic(id, step) {
+    const order = state.detail.prompts.filter(p => p.kind === 'added').map(p => p.id)
+    const from = order.indexOf(id)
+    const to = from + step
+    if (from < 0 || to < 0 || to >= order.length) return
+    order.splice(to, 0, order.splice(from, 1)[0])
+    await saveBasic({ order })
+  }
+
+  /** 恢复默认: the options, the texts, the player's entries and regex as the app comes. */
+  async function resetBasic() {
+    const name = state.detail.id === VN_ID ? t`视觉小说预设` : t`基础预设`
+    if (!confirm(t`把「${name}」恢复成应用自带的样子？选项回到默认，改过的文字、自己加的条目和正则都会删掉，不能撤销。`)) return
+    const fresh = await api(`/api/presets/${state.detail.id}`, { method: 'PUT', body: { reset: 'all' } })
+    state.detail = fresh
+    state.open.clear()
+    onPresetEdited?.(fresh.id)
+    onBasicChanged?.(await api('/api/settings'))
+    markStale()
+    renderMain()
+    toast(t`「${name}」已恢复默认`)
   }
 
   function renderMain() {

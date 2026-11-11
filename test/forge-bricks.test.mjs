@@ -231,8 +231,13 @@ test('随机事件: drawn each turn by the code, in groups by where the story is
   const plan = planOf({ random_events: EVENTS, tracking: { enabled: false, variables: [] } }, cleanCardOptions({ format: 'text', bricks: ['events'] }))
   assert.equal(plan.tracking.enabled, false)
   const raw = cardJson(plan, newCard(plan))
-  const scripts = raw.data.extensions.regex_scripts.filter(script => script.id.startsWith('cicatavern-event-'))
+  const scripts = raw.data.extensions.regex_scripts.filter(script => /^cicatavern-event-\d+$/.test(script.id))
   assert.equal(scripts.length, 2)
+  // A copy of the rule a model writes back is kept from the player, and from what the model reads back.
+  const echo = raw.data.extensions.regex_scripts.filter(script => script.id.startsWith('cicatavern-event-echo'))
+  assert.deepEqual(echo.map(script => [script.promptOnly, script.markdownOnly]), [[true, false], [false, true]])
+  const copied = '她点了点头。\n\n<random_event_rules>\n本轮抽到：班长来借笔记\n</random_event_rules>'
+  for (const script of echo) assert.equal(applyScripts(copied, [script], { placement: PLACEMENT.AI_OUTPUT, target: script.promptOnly ? 'prompt' : 'display', depth: 0 }).trim(), '她点了点头。')
   assert.deepEqual(scripts[0].placement, [5])
   assert.equal(scripts[0].promptOnly, true)
   const loaded = normalizeCard(raw)
@@ -247,9 +252,13 @@ test('随机事件: drawn each turn by the code, in groups by where the story is
 test('the rule says when it is void, and offers nothing in its place', () => {
   const plan = planOf({ random_events: EVENTS }, cleanCardOptions({ bricks: ['events'] }))
   const text = stateContent({ part: 'events' }, plan)
-  assert.match(text, /抽到「无」：这条作废/)
-  assert.match(text, /这条作废，也不要换成别的事/)
-  assert.ok(!/改放|改成|窗外|动静/.test(text))
+  assert.match(text, /- 抽到「无」：这条作废，这一轮不安排任何意外。\n/, 'a draw of nothing offers nothing')
+  assert.match(text, /才作废，也不要换成别的事/)
+  // A drawn event is not voided by a tense scene: it comes in smaller, it is in this turn's story, and the model looks back for it.
+  assert.match(text, /场面再紧、话正说到一半也不作废/)
+  assert.match(text, /否则这件事这一轮必须写进正文/)
+  assert.match(text, /写完回头看一眼：正文里有没有这件事？没有就补上再交。\n<\/random_event_rules>$/)
+  assert.ok(!/改放|改成|窗外|照抄|本轮抽到[^：]/.test(text), 'no other event in its place, and no word about copying the rule')
 })
 
 test('how often is the odds of the draw, and the pick beats the planner', () => {
@@ -284,7 +293,9 @@ test('裁判表 compares whatever the card says: the ladder, the gaps, the known
   assert.match(text, /靠「关系」定成败/)
   assert.match(text, /1 同学、2 朋友、3 恋人/)
   assert.match(text, /差 2 及以上：她翻脸走人/)
-  assert.match(text, /其余时候这条作废/)
+  assert.match(text, /每次动笔前先问自己一句：这一轮里，是不是<user>想让她做超出现在关系的事？是，就必须先写下面的 <judge> 块再写正文/)
+  assert.match(text, /不是，这条作废：整个 <judge> 块都不写，也不写「本轮无判定」这类话。/)
+  assert.match(text, /做的是一件事、不是和人较量时，「对方的等级」就是这件事要求的等级：/)
   assert.match(text, /\[JUDGE_DICE\]/)
 })
 

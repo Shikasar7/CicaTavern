@@ -14,10 +14,14 @@ import { isProviderRef, refLabel } from '../providers.mjs'
 import { helperScriptsOf } from '../schema.mjs'
 import { httpError, newId } from '../store.mjs'
 import { initialState } from '../worldbook.mjs'
+import { cleanPalette, cleanSkinCss, cleanStatusSpec } from '../../web/shared/status.js'
 import { getPath, splitPath } from '../../web/shared/vars.js'
 import { applyFinding, changedPieces, rebased, restorePieces, snapshot, staleChange, withEdits } from './check-apply.mjs'
 import { DEFAULT_FOCUS, checkRequest, cleanFocus, readCheck, restRequests, unreadable, vetSuggestions, withinPart } from './check-model.mjs'
-import { STATUS_TUNE, cardFacts, checkCard, drawsOwnBar, startingState, statusCheck, statusTuning } from './check.mjs'
+import { STATUS_TUNE, bricksOf, cardFacts, checkCard, drawsOwnBar, startingState, statusCheck, statusTuning } from './check.mjs'
+import { BRICK_OUTPUT, CARD_BRICKS, brickFinding, brickName, brickRequest, cleanBrickWish, readBrick } from './brick-add.mjs'
+import { INTERVIEW_OUTPUT, cleanInterviewWish, cleanScenes, interviewFinding, interviewRequest, readInterview } from './interview.mjs'
+import { SKIN_OUTPUT, cleanProblems, cleanWish, readSkin, skinRequest } from './skin.mjs'
 import { reportOutdated, trialFindings } from './trial.mjs'
 
 const PREFIX = 'edit-check-'
@@ -93,6 +97,58 @@ export function createCheck({ store, load, save, serial, run, jobs, removeFile, 
     }
   }
 
+  /** 加玩法积木 for the page: which bricks the card lacks, and what filling one in costs (about the same for each). */
+  async function brickAddOf(card, session, helpers) {
+    const has = bricksOf(card)
+    const open = CARD_BRICKS.filter(brick => !has[brick])
+    if (!open.length) return { open, estimate: null }
+    const request = brickRequest(card, open[0], { state: startingState(card, { helpers }) })
+    const input = estimateTokens(`${request.system}${request.messages[0].content}`)
+    const ref = session.model || (await store.getSettings()).model || ''
+    const ready = isProviderRef(ref)
+    return { open, estimate: { ready, model: ready ? (refLabel(ref, await store.getProviders()) ?? ref) : '', input, output: BRICK_OUTPUT, cost: ready ? estimateCost(ref.slice(ref.indexOf('/') + 1), { input, output: BRICK_OUTPUT }) : null } }
+  }
+
+  /** 角色采访 for the page: what asking a model for a few example exchanges comes to, and whether the card has examples yet. */
+  async function interviewOf(card, session, helpers) {
+    const request = interviewRequest(card, { state: startingState(card, { helpers }) })
+    const input = estimateTokens(`${request.system}${request.messages[0].content}`)
+    const ref = session.model || (await store.getSettings()).model || ''
+    const ready = isProviderRef(ref)
+    return { has: Boolean(String(card.mesExample ?? '').trim()), estimate: { ready, model: ready ? (refLabel(ref, await store.getProviders()) ?? ref) : '', input, output: INTERVIEW_OUTPUT, cost: ready ? estimateCost(ref.slice(ref.indexOf('/') + 1), { input, output: INTERVIEW_OUTPUT }) : null } }
+  }
+
+  /** A model writes the card's character into a few moments; the examples come as one suggestion, in place of an earlier one not taken in. */
+  async function interviewWork(ctx, cardId, scenes, wish) {
+    const { card } = await loadCheck(cardId)
+    const helpers = await helpersOf(store, card)
+    ctx.step('interview')
+    const result = await ctx.call(interviewRequest(card, { scenes, wish, state: startingState(card, { helpers }) }))
+    const found = interviewFinding(card, readInterview(result.text, card))
+    if (!found) throw new Error(`${msg`${ctx.label} 没有写出能用的内容，再试一次，或者换个模型`}${cutNote(result)}`)
+    const [suggestion] = vetSuggestions(card, [found], { helpers })
+    await ctx.update(draft => {
+      draft.suggestions = [...(draft.suggestions ?? []).filter(item => item.taken || item.id !== suggestion.id), suggestion]
+    })
+  }
+
+  /** A model fills in one brick for the card; what comes of it is a suggestion in the list, in place of an earlier one for that brick not taken in. */
+  async function brickWork(ctx, cardId, brick, wish) {
+    const { card } = await loadCheck(cardId)
+    const helpers = await helpersOf(store, card)
+    if (bricksOf(card)[brick]) throw new Error(msg`这张卡已经有「${brickName(brick)}」了`)
+    const state = startingState(card, { helpers })
+    ctx.step('brick')
+    const result = await ctx.call(brickRequest(card, brick, { wish, state }))
+    const plan = readBrick(result.text, brick, { state })
+    const found = plan ? brickFinding(card, brick, plan) : null
+    if (!found) throw new Error(`${msg`${ctx.label} 没有写出能用的内容，再试一次，或者换个模型`}${cutNote(result)}`)
+    const [suggestion] = vetSuggestions(card, [found], { helpers })
+    await ctx.update(draft => {
+      draft.suggestions = [...(draft.suggestions ?? []).filter(item => item.taken || item.id !== suggestion.id), suggestion]
+    })
+  }
+
   /** The session as the page sees it: every finding, program's and model's, those ignored and those taken in apart. */
   /**
    * A status bar taken in that shows variables the card's chats under way don't have (an older card's chats keep
@@ -136,6 +192,12 @@ export function createCheck({ store, load, save, serial, run, jobs, removeFile, 
       state: startingState(card, { helpers }),
       statusTune: statusTuning(card, { helpers }),
       ownBar: !card.statusBar && drawsOwnBar(card),
+      // The card's 开场页, for a look being designed to be drawn on it too.
+      cover: card.cover ?? null,
+      // 加玩法积木: the bricks this card can still be given, and what asking a model to fill one in comes to.
+      brickAdd: await brickAddOf(card, session, helpers),
+      // 角色采访: what asking a model for example exchanges comes to.
+      interview: await interviewOf(card, session, helpers),
       findings: all.filter(item => !ignored.has(item.id)),
       ignored: all.filter(item => ignored.has(item.id)),
       reply: session.reply ?? '',
@@ -151,6 +213,8 @@ export function createCheck({ store, load, save, serial, run, jobs, removeFile, 
             at: trial.report.at,
             model: trial.report.model ?? '',
             outdated: reportOutdated(trial.report, card),
+            // A report from before marks were kept cannot tell whether the card has changed since.
+            dated: Boolean(trial.report.mark),
             reply: session.trialReply ?? '',
             askedModel: session.trialAskedModel ?? '',
             estimate: trialOpen.length ? await estimateOf(card, session, found, trialOpen) : null,
@@ -174,7 +238,7 @@ export function createCheck({ store, load, save, serial, run, jobs, removeFile, 
     ctx.step('read')
     const state = initialState(card.book ? [card.book] : [])
     const { request, shown, clipped } = checkRequest(card, found, { focus: session.focus, reply: ctx.languages.reply, state, trial: asked, outdated: Boolean(asked?.some(item => item.outdated)) })
-    const result = await ctx.call(request)
+    const result = await ctx.call(request, 'check')
     const read = readCheck(result.text, card, { shown, clipped })
     if (!read.reply && !read.suggestions.length) throw new Error(`${unreadable(ctx.label)}${cutNote(result)}`)
     ctx.step('vet')
@@ -185,7 +249,7 @@ export function createCheck({ store, load, save, serial, run, jobs, removeFile, 
     const rest = whole && !asked ? restRequests(card, shown, { focus: session.focus, reply: ctx.languages.reply, state }) : { parts: [], long: 0, left: 0 }
     const askedIds = new Set(asked?.map(item => item.id))
     // What was taken in stays, to be undone; of the rest, what the new answer is about gives way to it.
-    const replaced = item => (asked ? item.trial && (!item.answers?.length || item.answers.some(id => askedIds.has(id))) : !item.trial)
+    const replaced = item => (asked ? item.trial && (!item.answers?.length || item.answers.some(id => askedIds.has(id))) : !item.trial && !item.brick && !item.interview)
     await ctx.update(draft => {
       draft.suggestions = [...(draft.suggestions ?? []).filter(item => item.taken || (!replaced(item) && !fresh.has(item.id))), ...suggestions]
       const at = new Date().toISOString()
@@ -196,7 +260,7 @@ export function createCheck({ store, load, save, serial, run, jobs, removeFile, 
     for (const [i, part] of rest.parts.entries()) {
       ctx.step(`part:${i + 1}:${rest.parts.length}`)
       try {
-        const answer = await ctx.call(part.request)
+        const answer = await ctx.call(part.request, 'check')
         const more = readCheck(answer.text, card, { shown: part.uids })
         if (!more.reply && !more.suggestions.length) throw new Error(`${unreadable(ctx.label)}${cutNote(answer)}`)
         const kept = vetSuggestions(card, withinPart(more.suggestions, part.uids), { helpers }).map(({ for: _, ...item }) => item)
@@ -235,6 +299,9 @@ export function createCheck({ store, load, save, serial, run, jobs, removeFile, 
     const about = id => id === STATUS_TUNE || /^status-/.test(id)
     return {
       cardId: card.id,
+      // The card's 开场页, for a look being designed to be drawn on it too.
+      cardName: card.name,
+      cover: card.cover ?? null,
       statusBar: card.statusBar ?? null,
       statusTune: statusTuning(card, { helpers }),
       state: startingState(card, { helpers }),
@@ -244,7 +311,78 @@ export function createCheck({ store, load, save, serial, run, jobs, removeFile, 
     }
   }
 
+  // ─── 定制外观 ───────────────────────────────────────────────────────────
+  // A look for the card's bar, written by a model (skin.mjs). It waits in the session as a draft the page draws and
+  // checks; it is in the card only once the user saves the bar with it, through checkApply like any other change.
+
+  /** The bar a look is designed for: the one being edited, the card's, or one laid out from its variables. */
+  const barFor = (card, helpers, spec) => cleanStatusSpec(spec) ?? card.statusBar ?? statusTuning(card, { helpers })?.changes[0]?.spec ?? null
+
+  /** 定制外观 as the page sees it: the draft, whether a model is at it, and what asking comes to. */
+  async function skinView(card, session) {
+    const helpers = await helpersOf(store, card)
+    const bar = barFor(card, helpers)
+    const job = jobs.get(session.id)
+    const ref = session.model || (await store.getSettings()).model || ''
+    const ready = isProviderRef(ref)
+    const request = bar ? skinRequest(card, bar, startingState(card, { helpers })) : null
+    const input = request ? estimateTokens(`${request.system}${request.messages[0].content}`) : 0
+    return {
+      cardId: card.id,
+      skin: session.skin ?? null,
+      job: job?.kind === 'check-skin' ? { startedAt: job.startedAt, chars: job.partial.length } : null,
+      // The model is reading the card for 检查这张卡: one thing at a time.
+      busy: Boolean(job) && job.kind !== 'check-skin',
+      error: session.error?.kind === 'check-skin' ? session.error.message : '',
+      estimate: { ready, model: ready ? (refLabel(ref, await store.getProviders()) ?? ref) : '', input, output: SKIN_OUTPUT, cost: ready ? estimateCost(ref.slice(ref.indexOf('/') + 1), { input, output: SKIN_OUTPUT }) : null },
+    }
+  }
+
+  async function skinWork(ctx, cardId, { spec, wish, previous, problems }) {
+    const { card } = await loadCheck(cardId)
+    const helpers = await helpersOf(store, card)
+    const bar = barFor(card, helpers, spec)
+    if (!bar) throw new Error(msg`这张卡没有可以设计外观的状态栏`)
+    ctx.step('skin')
+    const result = await ctx.call(skinRequest(card, bar, startingState(card, { helpers }), { wish, previous, problems, reply: ctx.languages.reply }))
+    const read = readSkin(result.text, { palette: previous?.palette ?? bar.palette })
+    if (!read) throw new Error(`${msg`${ctx.label} 没有写出能用的样式，再试一次，或者换个模型`}${cutNote(result)}`)
+    await ctx.update(draft => {
+      draft.skin = { ...read, wish, fixed: problems.length > 0, at: new Date().toISOString(), model: ctx.label }
+    })
+  }
+
   return {
+    async checkSkinGet(cardId) {
+      const { card, session } = await loadCheck(cardId)
+      return skinView(card, session)
+    },
+
+    /**
+     * Ask a model for a look: sent only by this. `spec`: the bar as the editor has it now; `wish`: what the user wants;
+     * `previous`: a look to work from ({ name, palette, css }); `problems`: what drawing `previous` showed, to put right.
+     */
+    async checkSkinAsk(cardId, { spec, wish, previous, problems } = {}) {
+      const session = await serial(idOf(cardId), async () => {
+        refuseWhileBusy(cardId)
+        return (await loadCheck(cardId)).session
+      })
+      const css = cleanSkinCss(previous?.css)
+      const asked = { spec, wish: cleanWish(wish), previous: css ? { name: String(previous.name ?? '').slice(0, 24), palette: cleanPalette(previous.palette), css } : null, problems: css ? cleanProblems(problems) : [] }
+      await run(session, 'check-skin', ctx => skinWork(ctx, cardId, asked))
+      const fresh = await loadCheck(cardId)
+      return skinView(fresh.card, fresh.session)
+    },
+
+    /** The draft, not wanted: nothing of it is in the card. */
+    checkSkinDrop(cardId) {
+      return change(cardId, (card, session) => {
+        session.skin = null
+        if (session.error?.kind === 'check-skin') session.error = null
+        return skinView(card, session)
+      })
+    },
+
     async checkGet(cardId) {
       const { card, session } = await loadCheck(cardId)
       return view(card, session)
@@ -282,6 +420,31 @@ export function createCheck({ store, load, save, serial, run, jobs, removeFile, 
         return session
       })
       await run(session, trialIds ? 'check-trial' : 'check', ctx => checkWork(ctx, cardId, trialIds, whole === true && !trialIds))
+      const { card, session: fresh } = await loadCheck(cardId)
+      return view(card, fresh)
+    },
+
+    /** 角色采访: ask a model for example exchanges of this card's character (sent only by this). `scenes`: which moments. */
+    async checkInterview(cardId, { scenes, wish } = {}) {
+      const session = await serial(idOf(cardId), async () => {
+        refuseWhileBusy(cardId)
+        return (await loadCheck(cardId)).session
+      })
+      await run(session, 'check-interview', ctx => interviewWork(ctx, cardId, cleanScenes(scenes), cleanInterviewWish(wish)))
+      const { card, session: fresh } = await loadCheck(cardId)
+      return view(card, fresh)
+    },
+
+    /** 加玩法积木: ask a model to fill in one brick for this card (sent only by this). `wish`: what the user wants of it. */
+    async checkBrick(cardId, { brick, wish } = {}) {
+      if (!CARD_BRICKS.includes(brick)) throw httpError(400, msg`这块积木不能这样加`)
+      const session = await serial(idOf(cardId), async () => {
+        refuseWhileBusy(cardId)
+        const { card, session } = await loadCheck(cardId)
+        if (bricksOf(card)[brick]) throw httpError(409, msg`这张卡已经有「${brickName(brick)}」了`)
+        return session
+      })
+      await run(session, 'check-brick', ctx => brickWork(ctx, cardId, brick, cleanBrickWish(wish)))
       const { card, session: fresh } = await loadCheck(cardId)
       return view(card, fresh)
     },

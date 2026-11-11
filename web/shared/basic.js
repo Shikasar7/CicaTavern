@@ -8,6 +8,53 @@
 //   …
 //   </choices>
 
+// Reasoning in its own tag (web/app.js folds it, server/state.mjs leaves it out of the story text):
+// <thinking>, <think>, <cot_reasoning>, <draft>, <CoT>, <思考>, <思考过程>, <思维链>, <推理>… Matched
+// without case; a tag name only, for <(…)>…</\1>. Here rather than in vn.js, which imports this file.
+export const FOLD_TAG = '[\\w~-]*(?:think|draft|reasoning)[\\w~-]*|cot(?:[_~-][\\w~-]*)?|[\\w~-]*[_~-]cot|思考(?:过程)?|思维链?|推理(?:过程)?|草稿' // i18n-ignore: a pattern
+// A reasoning block, and one still open at the end. Thinking often names the blocks it plans to write (「结尾
+// <choices>…」): a mention there is no block.
+export const REASONING = new RegExp(`<(${FOLD_TAG})>[\\s\\S]*?</\\1>|<(${FOLD_TAG})>(?![\\s\\S]*</\\2>)[\\s\\S]*$`, 'gi')
+/** `text` without its reasoning blocks. */
+export const outsideReasoning = text => String(text ?? '').replace(REASONING, '')
+
+const REASONING_CLOSED = new RegExp(`<(${FOLD_TAG})>[\\s\\S]*?</\\1>`, 'gi')
+/** Where `text`'s closed reasoning blocks are: [{ inner, close, end }], the offsets of what is inside, of the closing tag, and after it. */
+export function reasoningSpans(text) {
+  const spans = []
+  for (const match of String(text ?? '').matchAll(REASONING_CLOSED)) {
+    const end = match.index + match[0].length
+    spans.push({ inner: match.index + match[1].length + 2, close: end - match[1].length - 3, end })
+  }
+  return spans
+}
+
+const TAG_LIKE = /<(\/?)([A-Za-z_][\w~:.-]*)([^<>\n]*)>/g
+/**
+ * `text` with the tags its thinking only names written ＜like this＞, where the same tag is a real block outside the
+ * thinking: what a card's page reads with its own `<fox_selc>([\s\S]*?)</fox_selc>` (getChatMessages) then finds the
+ * real block, not the mention (「结尾输出<fox_selc>」) and the story after it. The thinking reads the same.
+ */
+export function quietMentions(text) {
+  const source = String(text ?? '')
+  const spans = reasoningSpans(source)
+  if (!spans.length) return source
+  const outside = new Set()
+  let last = 0
+  for (const span of [...spans, { inner: source.length, close: source.length, end: source.length }]) {
+    for (const match of source.slice(last, span.inner).matchAll(TAG_LIKE)) outside.add(match[2].toLowerCase())
+    last = span.end
+  }
+  let out = ''
+  last = 0
+  for (const span of spans) {
+    const inner = source.slice(span.inner, span.close).replace(TAG_LIKE, (whole, slash, name, rest) => (outside.has(name.toLowerCase()) ? `＜${slash}${name}${rest}＞` : whole)) // i18n-ignore: full-width brackets
+    out += source.slice(last, span.inner) + inner
+    last = span.close
+  }
+  return out + source.slice(last)
+}
+
 export const BASIC_ID = 'basic'
 
 /** Each option's values; the first listed is not necessarily the default (see BASIC_DEFAULTS). */
@@ -109,6 +156,43 @@ export const builtinKey = id => (id === VN_ID ? 'vn' : 'basic')
 /** A built-in preset's options as saved. */
 export const builtinOptions = (settings, id) => (id === VN_ID ? cleanVn(settings?.vn) : cleanBasic(settings?.basic))
 
+/** Where a built-in preset's own edits are saved in the settings (cleanBuiltinEdits). */
+export const editsKey = id => (id === VN_ID ? 'vnEdits' : 'basicEdits')
+
+// Where a player's own entry in a built-in preset goes: 'top' after the narrator's rules, 'rules' in the
+// every-turn section after the options' paragraphs, 'turn' with each turn's message (as a preset's
+// after-history entries go).
+export const ADDED_PLACES = ['top', 'rules', 'turn']
+export const MAX_ADDED = 60
+const MAX_TEXT = 40000
+const isRecord = value => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+const text = value => (typeof value === 'string' ? value.slice(0, MAX_TEXT) : '')
+
+/**
+ * A built-in preset's edits as kept (settings.basicEdits / vnEdits): `texts` its own paragraphs rewritten, by
+ * the key of the paragraph with the option it was written for (server/basic.mjs basicParts); `off` those
+ * switched off; `added` the player's own entries; `regexScripts` the player's own regex, after the preset's two.
+ */
+export function cleanBuiltinEdits(value) {
+  const saved = isRecord(value) ? value : {}
+  const texts = {}
+  if (isRecord(saved.texts)) for (const [key, body] of Object.entries(saved.texts)) if (/^[\w:,-]{1,80}$/.test(key) && typeof body === 'string') texts[key] = text(body)
+  const off = Array.isArray(saved.off) ? [...new Set(saved.off.filter(key => typeof key === 'string' && /^[\w:,-]{1,80}$/.test(key)))].slice(0, 200) : []
+  const seen = new Set()
+  const added = (Array.isArray(saved.added) ? saved.added : [])
+    .filter(entry => isRecord(entry) && typeof entry.id === 'string' && /^[\w-]{1,60}$/.test(entry.id) && !seen.has(entry.id) && seen.add(entry.id))
+    .slice(0, MAX_ADDED)
+    .map(entry => ({
+      id: entry.id,
+      name: text(entry.name).trim().slice(0, 80) || '新条目', // i18n-ignore: a saved name, only when one went missing
+      content: text(entry.content),
+      enabled: entry.enabled !== false,
+      place: ADDED_PLACES.includes(entry.place) ? entry.place : 'rules',
+    }))
+  const regexScripts = Array.isArray(saved.regexScripts) ? saved.regexScripts.filter(isRecord) : []
+  return { texts, off, added, regexScripts }
+}
+
 // A time box the model closed with another tag, or not at all, ends with its line;
 // choices the model did not close yet (still streaming, or cut off) run to the end.
 const TIME_BOX_SOURCE = '<time_box>(?:([\\s\\S]*?)<\\/time_box>|([^\\n]*?)(?:<\\/[\\w-]+>|$))'
@@ -127,7 +211,7 @@ export const choiceLetter = i => String.fromCharCode(65 + i)
 
 /** The time box's parts (time, place, weather…), or null when the reply has none. */
 export function timeBoxOf(text) {
-  const match = TIME_BOX.exec(String(text ?? ''))
+  const match = TIME_BOX.exec(outsideReasoning(text))
   if (!match) return null
   const parts = (match[1] ?? match[2]).split(/[｜|]/).map(part => part.trim()).filter(Boolean)
   return parts.length ? parts : null
@@ -138,7 +222,7 @@ export function timeBoxOf(text) {
  * did not close yet (still streaming) counts too.
  */
 export function choicesOf(text) {
-  const match = CHOICES.exec(String(text ?? ''))
+  const match = CHOICES.exec(outsideReasoning(text))
   if (!match) return []
   const lines = match[1].split('\n').map(line => line.trim()).filter(Boolean)
   const marked = lines.filter(line => ITEM.test(line))

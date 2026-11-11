@@ -116,5 +116,29 @@ test('global scripts, imports, a card\'s switches; the built-in preset\'s stays 
   assert.equal(off[0].disabled, true)
   assert.equal((await app.store.getCard('c1')).regexScripts[0].disabled, true)
 
-  assert.equal((await call('/api/presets/basic/regex', { method: 'PUT', body: { scripts: [] } })).status, 400)
+  // The built-in preset's: the player's own after its two, which stay as they are.
+  const own = (await call('/api/presets/basic/regex', { method: 'PUT', body: { scripts: [script('mine')] } })).body.scripts
+  assert.deepEqual(own.map(s => s.scriptName), ['mine'])
+  const scripts = await chatScripts(app.store, { cardId: 'gone', presetId: 'basic' })
+  assert.deepEqual(scripts.map(s => s.scriptName), ['one', 'two', '2.1.0 及以前的回复：行动选项不发给模型', 'mine'])
+})
+
+test('a script does not take a tag the thinking only names for the block (no match runs out of thinking or a fence)', async () => {
+  const { applyScripts: guarded } = await import('../server/regex-guard.mjs')
+  const reply = '<think_fox~>\n结尾输出<choices>及<fox_selc>、<fox_tip>。\n</think_fox~>\n<content>\n寒风卷着碎雪。\n</content>\n<fox_selc>\nA. 拔刀\n</fox_selc>\n<fox_tip>\n唔～\n</fox_tip>'
+  const scripts = normalizeScripts([
+    { findRegex: '<fox_tip>[\\s\\S]*?<\\/fox_tip>', replaceString: '', placement: [PLACEMENT.AI_OUTPUT] },
+    // A page made of the thinking (its own text inside, in a fence), then one made of the choices.
+    { findRegex: '/([\\s\\S]*)<\\/(think_?fox~?)>/', replaceString: '```\n<div>$1</div>\n```', placement: [PLACEMENT.AI_OUTPUT] },
+    { findRegex: '/<fox_selc>[\\s\\S]*?<\\/fox_selc>/g', replaceString: '[选项]', placement: [PLACEMENT.AI_OUTPUT] },
+  ])
+  for (const apply of [applyScripts, guarded]) {
+    const out = apply(reply, scripts, { placement: PLACEMENT.AI_OUTPUT, target: 'display' })
+    assert.ok(out.includes('寒风卷着碎雪。'), out)
+    assert.ok(out.includes('<div><think_fox~>\n结尾输出<choices>及<fox_selc>、<fox_tip>。\n</div>'), 'the thinking became its page, mentions and all')
+    assert.ok(out.includes('[选项]') && !out.includes('A. 拔刀') && !out.includes('唔～'), 'the real blocks still went')
+  }
+  // A match that starts where the thinking starts (hiding it) or stays inside it is as before.
+  const hide = normalizeScripts([{ findRegex: '/<think_fox~>[\\s\\S]*?<\\/think_fox~>\\s*/g', replaceString: '', placement: [PLACEMENT.AI_OUTPUT] }])
+  assert.equal(applyScripts(reply, hide, { placement: PLACEMENT.AI_OUTPUT, target: 'display' }).startsWith('<content>'), true)
 })

@@ -5,8 +5,9 @@
 // variables there. This app leaves that regex out (web/render.js withoutOwnStatus)
 // and runs no helper scripts.
 import YAML from 'yaml'
-import { SHOWS, STATUS_THEMES, cleanStatusSpec, paletteColors, rangeOf } from '../../web/shared/status.js'
+import { SHOWS, STATUS_THEMES, cleanStatusSpec, paletteColors, phoneApps, rangeOf, skinClass } from '../../web/shared/status.js'
 import { msg } from '../i18n.mjs'
+import { skinnedFrame } from './status-frame.mjs'
 
 export const OWN_STATUS_SCRIPT = 'cicatavern-status-bar'
 
@@ -27,6 +28,12 @@ export function statusSpecOf(plan) {
     title: plan.tracking.title,
     theme: plan.status?.theme,
     palette: plan.status?.palette,
+    skin: plan.status?.skin,
+    // 立绘, 场景图 and 动效 (方案页 → 状态栏 → 门面): the pictures are the app's, found where the bar is drawn.
+    portrait: plan.status?.portrait === true,
+    scene: plan.status?.scene === true,
+    effect: plan.status?.effect,
+    phone: plan.status?.phone === true,
     fields: plan.tracking.variables.map(v => ({ path: v.path, label: v.label, show: v.show || defaultShow(v), ...rangeOf(v.range), ...(plan.status?.pages && v.page ? { page: v.page } : {}) })),
   })
 }
@@ -127,12 +134,28 @@ export function barLook(spec) {
   return { theme, style }
 }
 
-/** The status bar as one HTML block for a SillyTavern regex replacement. */
-export function statusBarHtml(spec) {
+/**
+ * The status bar as one HTML block for a SillyTavern regex replacement.
+ * @param english - the card's language, for the few words a bar says itself.
+ */
+// A bar drawn by this app's own code in SillyTavern (it wears a look, has 动效, or a 小手机 with something in it) is a
+// whole page of tens of thousands of characters, made anew for every reply that has one. Only the latest replies get
+// it there (a regex's 最大深度): a long chat would otherwise open with a hundred of them.
+export const wholeFrame = spec => Boolean(spec?.skin || spec?.effect || (spec?.phone && phoneApps(spec).apps.length))
+export const STATUS_DEPTH = 2
+
+export function statusBarHtml(spec, { english = false } = {}) {
+  // A whole page: Tavern Helper leaves a code block as code unless it has html>, <head> or <body in it.
+  const page = (style, body) => ['```html', '<!DOCTYPE html>', '<html><head><meta charset="utf-8">', `<style>${style}</style>`, '</head><body>', body, '</body></html>', '```'].join('\n')
+  // 定制外观 is written for the bar this app draws: that bar's own drawing code goes into the frame (status-frame.mjs),
+  // a good deal longer than the plain one below.
+  if (wholeFrame(spec)) {
+    const frame = skinnedFrame(spec, { english, load: BAR_LOAD })
+    return page(frame.style, `<script>${frame.script}</script>`)
+  }
   const data = JSON.stringify(spec).replace(/</g, '\\u003c')
   const { theme, style } = barLook(spec)
-  // A whole page: Tavern Helper leaves a code block as code unless it has html>, <head> or <body in it.
-  return ['```html', '<!DOCTYPE html>', '<html><head><meta charset="utf-8">', `<style>${BAR_STYLE}</style>`, '</head><body>', `<div class="bar${theme}" id="bar"${style}></div>`, `<script>const SPEC=${data};${BAR_SCRIPT}</script>`, '</body></html>', '```'].join('\n')
+  return page(BAR_STYLE, `<div class="bar${theme}" id="bar"${style}></div>\n<script>const SPEC=${data};${BAR_SCRIPT}</script>`)
 }
 
 /** A regex script as a card keeps it. */
@@ -145,9 +168,15 @@ export const regexEntry = (id, scriptName, findRegex, replaceString, options) =>
 export function statusScripts(spec, words) {
   return [
     regexEntry(`${OWN_STATUS_SCRIPT}-hide`, words.hidePlaceholder, '<StatusPlaceHolderImpl/>', '', { promptOnly: true }),
-    regexEntry(OWN_STATUS_SCRIPT, words.statusBar, '<StatusPlaceHolderImpl/>', statusBarHtml(spec), { markdownOnly: true }),
+    regexEntry(OWN_STATUS_SCRIPT, words.statusBar, '<StatusPlaceHolderImpl/>', statusBarHtml(spec, { english: words.english === true }), { markdownOnly: true, ...(wholeFrame(spec) ? { maxDepth: STATUS_DEPTH } : {}) }),
   ]
 }
+
+/** A card's scripts with the bar's SillyTavern copy made again from `spec`: for a layout changed after they were written. */
+export const withStatusCopy = (scripts, spec, english) => (Array.isArray(scripts) ? scripts : []).map(script => (script.id === OWN_STATUS_SCRIPT
+  // How far back it is drawn follows what it is: a whole page for the latest replies only; a depth set by hand stays.
+  ? { ...script, replaceString: statusBarHtml(spec, { english }), maxDepth: wholeFrame(spec) ? script.maxDepth ?? STATUS_DEPTH : script.maxDepth === STATUS_DEPTH ? null : script.maxDepth ?? null }
+  : script))
 
 // MagVarUpdate, the script SillyTavern cards use to apply <UpdateVariable> blocks and
 // show the placeholder. Only Tavern Helper runs it; this app has the same built in.
@@ -182,11 +211,16 @@ const themeNames = () => ({ paper: msg`纸张`, neon: msg`霓虹`, pastel: msg`�
 /** A layout in lines, as a change's before and after read: all of it, a change gone out of date is told by these. */
 export function statusLines(spec) {
   if (!spec) return ''
-  const { palette } = spec
+  const { palette, skin } = spec
   const head = [
     spec.title ? `${msg`标题`}: ${spec.title}` : '',
     spec.theme ? `${msg`主题`}: ${themeNames()[spec.theme] ?? spec.theme}` : '',
+    // Its rules are not for reading in a line: which look it is tells one from another.
+    skin ? `${msg`定制外观`}: ${skin.name || msg`未命名`} (${skinClass(skin.css).slice(5)})` : '',
     palette ? `${msg`配色`}: ${msg`背景`} ${palette.bg} · ${msg`文字`} ${palette.ink} · ${msg`强调`} ${palette.accent}` : '',
+    spec.portrait || spec.scene ? `${msg`图片`}: ${[spec.portrait ? msg`立绘` : '', spec.scene ? msg`场景图` : ''].filter(Boolean).join(' · ')}` : '',
+    spec.effect ? `${msg`动效`}: ${spec.effect}` : '',
+    spec.phone ? msg`小手机` : '',
   ].filter(Boolean)
   return [...head, ...spec.fields.map(field => `${field.label || field.path} (${field.path}): ${field.show}${field.page ? ` · ${msg`页`}: ${field.page}` : ''}`)].join('\n')
 }
@@ -201,7 +235,12 @@ export function drawsOwnBar(card) {
 
 /** The card's layout as a model reads it, or why there is none to write. */
 export function statusPart(card) {
-  if (card.statusBar) return `<status_bar>${JSON.stringify(card.statusBar)}</status_bar>`
+  if (card.statusBar) {
+    // A look of the card's own is long and not the model's to rewrite here: said in a line.
+    const { skin, ...layout } = card.statusBar
+    const kept = skin ? `\n（这张卡的状态栏有一套定制外观${skin.name ? `「${skin.name}」` : ''}，改布局时程序会原样留着，不用写；写了 theme 就会换掉它。）` : ''
+    return `<status_bar>${JSON.stringify(layout)}</status_bar>${kept}`
+  }
   return drawsOwnBar(card) ? '（这张卡用自己的正则或脚本画状态栏，不要写 <status_bar>）' : '（这张卡还没有状态栏布局）'
 }
 
@@ -209,9 +248,11 @@ export function statusPart(card) {
 function withOwnLook(spec, written, before) {
   if (!before) return spec
   const look = written.theme === undefined && !spec.palette ? { ...(before.theme ? { theme: before.theme } : {}), ...(before.palette ? { palette: before.palette } : {}) } : {}
+  // 定制外观 stays till a theme is written in its place.
+  const skin = written.theme === undefined && before.skin ? { skin: before.skin } : {}
   const paged = written.fields.some(field => field?.page !== undefined)
   const pageOf = field => before.fields.find(item => item.path === field.path)?.page
-  return { ...spec, ...look, fields: paged ? spec.fields : spec.fields.map(field => (pageOf(field) ? { ...field, page: pageOf(field) } : field)) }
+  return { ...spec, ...look, ...skin, fields: paged ? spec.fields : spec.fields.map(field => (pageOf(field) ? { ...field, page: pageOf(field) } : field)) }
 }
 
 /** A model's <status_bar> in an answer as a change to the card's layout: [] when there is none, or it cannot be read. */

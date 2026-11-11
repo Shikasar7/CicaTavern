@@ -13,8 +13,11 @@ export const RECENT_TURNS = 2
 /** Fewer turns than this since the last compaction: not worth a summary call. */
 export const MIN_TURNS = 2
 
-/** @param extra - more to write after the archive (长期记忆's entries, memory.mjs memoryRequest), or ''. */
-export function summaryInstruction(names, extra = '') {
+/**
+ * @param extra - more to write after the archive (长期记忆's entries, memory.mjs memoryRequest), or ''.
+ * @param note - the player's 附加提示词 for it (context.mjs toolNote), before the format, or ''.
+ */
+export function summaryInstruction(names, extra = '', note = '') {
   const text = replaceMacros(
     `【暂停扮演：剧情存档】
 这一条不是剧情，是系统请求，请不要续写故事。
@@ -27,14 +30,14 @@ export function summaryInstruction(names, extra = '') {
 5. 文风：叙述的人称、节奏和惯用手法，以及{{char}}一方说话的腔调，方便保持一致。
 
 不要写变量、数值和状态栏（另有记录），不要评论，不要续写。用简体中文。篇幅和剧情量相称：只有几轮时几百字就够，长篇剧情一般不超过 4000 字。
-只输出存档本身，放在 <剧情存档> 和 </剧情存档> 之间。`,
+${note ? `${note}\n` : ''}只输出存档本身，放在 <剧情存档> 和 </剧情存档> 之间。`,
     names,
   )
   return extra ? `${text.replace(/只输出存档本身，(放在 <剧情存档> 和 <\/剧情存档> 之间。)$/, '先写存档，$1')}\n\n${extra}` : text
 }
 
 /** The same for 直连对话: a conversation to carry on, not a story. The tags are the ones the archive is read by. */
-export const directSummaryInstruction = () => `【这一条是系统请求，不要回答之前的问题】
+export const directSummaryInstruction = (note = '') => `【这一条是系统请求，不要回答之前的问题】
 这段对话要换到新的上下文里继续，之前的记录会被这份摘要代替。请写一份摘要，包括：
 
 1. 用户想做什么、问过什么。
@@ -42,7 +45,7 @@ export const directSummaryInstruction = () => `【这一条是系统请求，不
 3. 用户附过的文件讲了什么。
 4. 还没解决的问题。
 
-篇幅和对话量相称，不要评论。只输出摘要本身，放在 <剧情存档> 和 </剧情存档> 之间。`
+篇幅和对话量相称，不要评论。${note ? `\n${note}\n` : ''}只输出摘要本身，放在 <剧情存档> 和 </剧情存档> 之间。`
 
 // The parts summaryInstruction asks for, as headings: an archive written without its tags still has them.
 const heading = words => new RegExp(`^\\s*(?:[#>*\\-]+\\s*|\\d+\\s*[.、．)]\\s*|【)?\\**(?:${words})\\**\\s*(?:】|[:：]|$)`, 'im')

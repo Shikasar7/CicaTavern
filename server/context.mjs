@@ -57,6 +57,35 @@ export function cleanMemory(value) {
   }
 }
 
+// 内置功能的附加提示词: the player's own words for the app's model calls outside the story, by group.
+// memory: 压缩 and 长期记忆; check: 检查这张卡; forge: 创作向导 and the 对话修改 talks; helper: the other
+// helper calls (游戏规则, 角色名册, 判断表情, 场景背景). 配图提示词 has its own (media.promptRules).
+export const TOOL_GROUPS = Object.freeze(['memory', 'check', 'forge', 'helper'])
+export const TOOL_PROMPT_MAX = 8000
+
+/** settings.toolPrompts as kept: a text per group, '' for none. */
+export function cleanToolPrompts(value) {
+  const saved = value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  return Object.fromEntries(TOOL_GROUPS.map(group => [group, typeof saved[group] === 'string' ? saved[group].slice(0, TOOL_PROMPT_MAX) : '']))
+}
+
+/**
+ * A group's 附加提示词 as a request carries it, or '' when there is none. The task's own instructions and
+ * output format win where they disagree: the reply is read by the app (JSON, tags), and a preset's rule
+ * pasted in ("end every reply with choices", "stay in character") would otherwise break it.
+ */
+export function toolNote(settings, group) {
+  const text = String(settings?.toolPrompts?.[group] ?? '').trim()
+  if (!text) return ''
+  return `<玩家的附加要求>\n${text}\n</玩家的附加要求>\n以上是玩家给这类任务加的要求，照着做；和这项任务本身的说明、输出格式冲突的地方，以任务说明和输出格式为准。`
+}
+
+/** A request with a group's 附加提示词 after its system prompt (unchanged when there is none). */
+export function withToolNote(request, note) {
+  if (!note) return request
+  return { ...request, system: request.system ? `${request.system}\n\n${note}` : note }
+}
+
 // Context windows as the vendors' own model pages gave them on 2026-10-27 (the maximum input where
 // that is lower), matched against the model id in lower case with any "vendor/" prefix left off.
 // The first match wins, so narrower patterns come first. A model not here is guessed (GUESSED_WINDOW).

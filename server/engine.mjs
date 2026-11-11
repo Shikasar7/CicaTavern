@@ -11,7 +11,7 @@ import { asksChoices, asksSelfCheck, choicesInstruction, choicesRequest, extract
 import { DIRECT_CARD, VN_ID, BASIC_ID, builtinOptions, choicesOf, isBuiltinPreset } from '../web/shared/basic.js'
 import { cleanReferences, referenceBlock } from './forge/references.mjs'
 import { buildTurnPrompt, chatTemplates, drawnEntries, everyTurnReminder, openingBlock, renderEntry, replaceMacros, templateText, webSearchNote } from './prompt.mjs'
-import { applyStateUpdates, applyWrites, displayText, stateWrites, withoutOpenEnd, writeLabels } from './state.mjs'
+import { applyStateUpdates, applyWrites, displayText, keepReadOnly, stateWrites, withoutOpenEnd, writeLabels } from './state.mjs'
 import { choiceFights, cutAtGate, withoutGameMarks } from '../web/shared/game/marks.js'
 import { applyOps, checkExperience, checkLine, cleanCheck, cleanOps, gateKinds, keptSheet, opWrites, pausesOn, rankNow, rollCheck, rulesOn, sheetOf, sheetOnPath } from '../web/shared/game/sheet.js'
 import { cleanFight, encounterSetup, fightLine, fightResult } from '../web/shared/game/encounter.js'
@@ -24,10 +24,14 @@ import { applyScripts } from './regex-guard.mjs'
 import { replaceVariableMacros } from '../web/shared/vars.js'
 import { decoratorsOf, hasEjs, hasTemplate, stripTemplates, templateSession } from './template.mjs'
 import { accumulatedDynamic, compactThreshold, dynamicMemory, planDynamic, stripDynamicText } from './dynamic.mjs'
+import { backNote, castNames, leftNote, presentState, returnedState } from './present.mjs'
 import { chatReasoning, complete, CONTEXT_FULL, isProviderRef, providerError, resolveRef, unreadReply, webSearchKind } from './providers.mjs'
 import { canonicalModel } from './models.mjs'
 import { directSummaryInstruction, extractSummary, keptArchive, looksLikeArchive, MIN_TURNS, recapBlock, recentExchanges, storyPath, storyTurns, summaryInstruction, turnsSinceCompaction, withoutHidden } from './recap.mjs'
-import { contextUsed, limitFromError, thresholdFor, windowOf } from './context.mjs'
+import { contextUsed, limitFromError, thresholdFor, toolNote, windowOf, withToolNote } from './context.mjs'
+
+/** An instruction asked inside the story with the player's 附加提示词 after it ({{user}} / {{char}} named). */
+const withNote = (text, note, names) => (note ? `${text}\n\n${replaceMacros(note, names)}` : text)
 import { msg } from './i18n.mjs'
 import { extractUpdate, fillInstruction, fillRequest, hasUpdateBlock, usesMvu } from './mvu.mjs'
 import { rawOfPicture } from './cards.mjs'
@@ -95,6 +99,24 @@ function friendlyError(message, subscription) {
 
 // The 联网 note as a new turn's message ends with it (webSearchNote).
 const SEARCH_NOTE = () => `\n\n${webSearchNote()}`
+
+// 继续生成: after the reply as far as it went, what the model is asked (SillyTavern's /continue nudge, said for a story).
+const CONTINUE_NUDGE = '（上一条回复写到这里断了。从断开的地方直接接着写：第一个字紧接着上面最后一个字，不要重复已经写过的内容，不要加任何说明。写到一半的标签或块接着写完，这条回复本来该有、还没写到的部分（比如变量更新、行动选项）照常写上。）'
+
+/** The reply as it was and what the model wrote on: a start that repeats the reply's last words goes. */
+export function joinContinued(before, more) {
+  const start = String(before ?? '')
+  let tail = String(more ?? '')
+  if (/\s$/.test(start)) tail = tail.replace(/^\s+/, '')
+  const end = start.slice(-400)
+  for (let n = Math.min(end.length, tail.length); n >= 8; n--) {
+    if (end.endsWith(tail.slice(0, n))) {
+      tail = tail.slice(n)
+      break
+    }
+  }
+  return start + tail
+}
 
 /** What a session from compaction point `node` opens with: its summary and the last turns of `story`, as the prompt sends them. */
 // How long an archive is at the least, or it was cut off. A summary of a short question and answer can be short.
@@ -396,6 +418,24 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     const plan = planDynamic({ rendered: resolve(renderedDynamic), ...dynamicMemory(seen), forceFull })
     const recap = newSession ? compactionRecap(path[start], storyPath(path.slice(0, start + 1)), names, scripts, chat) : ''
     const recalled = settings.memory?.enabled ? recallFor(path, said, settings, newSession) : []
+    // 只发在场角色的变量: a long state goes without the groups of characters not around; the turn one of them shows up,
+    // their group goes on its own. What was left out and not sent since rides on the turn's node (stateLeft).
+    const cast = settings.statePresent === false || cardShowsState ? null : castNames({ roster: card.media?.roster, books, player: [names.user, persona?.name] })
+    const around = cast ? scanWindow(withoutHidden(story), settings.scanDepth, said) : ''
+    const leftBefore = seen.findLast(node => Array.isArray(node.stateLeft))?.stateLeft ?? []
+    let stateText = ''
+    let stateLeft
+    if (refreshState) {
+      const shown = presentState(writes.state, { cast, text: around })
+      stateText = `${JSON.stringify(shown.state, null, 1)}${shown.left.length ? `\n${leftNote(shown.left)}` : ''}`
+      if (shown.left.length || leftBefore.length) stateLeft = shown.left
+    } else if (leftBefore.length) {
+      const returned = returnedState(writes.state, { cast, text: around, left: leftBefore })
+      if (returned.back.length) {
+        stateText = `${JSON.stringify(returned.state, null, 1)}\n${backNote()}`
+        stateLeft = leftBefore.filter(name => !returned.back.includes(name))
+      }
+    }
     const prompt = buildTurnPrompt({
       names,
       opening,
@@ -404,7 +444,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       memory: memoryText(recalled),
       dynamic: plan.text ? [{ title: '', text: plan.text }] : [],
       characterNote: resolve(characterNote),
-      stateText: refreshState ? JSON.stringify(writes.state, null, 1) : '',
+      stateText,
       input: resolve(promptInput),
       replyLength: Number(settings.replyLength) || 0,
       replyRange: await replyRange(chat, settings),
@@ -432,6 +472,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       recalled: recalled.map(entry => entry.id),
       recalledTitles: recalled.map(entry => entry.title),
       templateErrors,
+      // 只发在场角色的变量: who is still left out after this turn ([] once everyone has been sent).
+      ...(stateLeft ? { stateLeft } : {}),
       // What the templates wrote: the chat state (kept on the user node), chat-wide and app-wide variables. The card's scripts'
       // changes at the turn's start go first.
       templateWrites: [...startWrites, ...writes.message],
@@ -630,8 +672,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
    * @param options.onPart - called as each request goes out, for the page's progress
    */
   async function summarizeInParts(target, chat, history, signal, carry = '', depth = 0, options = {}) {
-    const { maxChars = Infinity, system = chat.systemPrompt, onPart = () => {}, extra = '' } = options
-    const instruction = { role: 'user', content: chat.cardId === DIRECT_CARD ? directSummaryInstruction() : summaryInstruction(chat.names, extra) }
+    const { maxChars = Infinity, system = chat.systemPrompt, onPart = () => {}, extra = '', note = '' } = options
+    const instruction = { role: 'user', content: chat.cardId === DIRECT_CARD ? directSummaryInstruction(note) : summaryInstruction(chat.names, extra, note) }
     const lead = carry
       ? [
           { role: 'user', content: `<前情提要>\n下面是这段故事更早部分的剧情存档，之后是接着发生的原文。写存档时把这份前情一并写进去。\n<剧情存档>\n${carry}\n</剧情存档>\n</前情提要>` },
@@ -724,12 +766,14 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
    * Run one turn. `emit` receives { type: 'delta', text } while streaming.
    * @param parentId - the assistant node to continue from.
    * @param userNodeId - reuse an existing user node (regenerate) instead of creating one.
+   * @param continueId - 继续生成: the reply to write on from where it stopped, from its turn's prompt as regenerate sends it;
+   *   the reply and what comes are saved as a new version of it, the one cut short kept among its versions.
    * @param marks - ask for the 视觉小说格式 (a regenerated turn keeps what it asked).
    * @param options.keepCut - a provider's reply stopped partway (by the player, or by a failure) is saved as far as it
    *   went, marked (api.truncated 'stopped' or 'broken'), and the result's `cut` says why. Without it such a turn fails whole.
    */
   /** @param files - 直连对话: what came with the message, as read for the page (forge/references.mjs). */
-  async function runTurn(chatId, { parentId, input, userNodeId, marks = false, game = null, files: attached = [] }, emit, { keepCut = false } = {}) {
+  async function runTurn(chatId, { parentId, input, userNodeId, continueId = null, marks = false, game = null, files: attached = [] }, emit, { keepCut = false } = {}) {
     if (running.has(chatId)) throw httpError(409, msg`这个对话正在生成`)
     const abortController = new AbortController()
     running.set(chatId, abortController)
@@ -738,6 +782,12 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     try {
       let chat = await store.getChat(chatId)
       const files = chat.cardId === DIRECT_CARD ? cleanReferences(attached) : []
+      const continued = continueId ? chat.nodes[continueId] : null
+      if (continueId) {
+        if (!continued || continued.role !== 'assistant' || continued.deleted) throw httpError(404, msg`要继续生成的回复不存在`)
+        if (chat.nodes[continued.parent]?.role !== 'user') throw httpError(400, msg`开场白不能继续生成，可以直接修改它`)
+        userNodeId = continued.parent
+      }
       let userNode = userNodeId ? chat.nodes[userNodeId] : null
       if (userNodeId && (!userNode || userNode.role !== 'user')) throw httpError(404, msg`要重新生成的回合不存在`)
       if (userNode?.deleted) throw httpError(400, msg`这条消息已经删除，不能从它重新生成`)
@@ -780,6 +830,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         : await preparePrompt(chat, parent, text, { marks, rules, files, startWrites })
       preparing()
       const target = await targetFor(modelFor(chat, prepared.settings), prepared.settings)
+      if (continued && !target.api) throw httpError(400, msg`订阅模型不能继续生成：换一个供应商的模型再试`)
       // 联网: the provider's own search, when this chat has it on and the model has one. A new turn's
       // message says when to search (kept with the turn, so a regenerate sends the same).
       const webSearch = Boolean(chat.webSearch && target.api && webSearchKind(target.provider, target.modelId))
@@ -861,7 +912,10 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         try {
           // 同酒馆 on a provider that takes them: the turn's message as the history will keep it, its after-history
           // entries after it as messages of their own (tailMessages); the cache mark stays on the turn's message.
-          const ask = system => generateApi(target, { system: chat.systemPrompt, messages: [...history, ...turnMessages(target, prepared, system)], ...cap, webSearch, onRestart, onRetry, onReasoning, chatThinking: chat.thinking }, abortController.signal, onText)
+          // 继续生成: the reply so far, then the ask to write on (a user message: not every model takes a reply to finish).
+          // Marked `tail`: the cache mark stays on the turn's message, which the next turn sends as it is.
+          const more = continued ? [{ role: 'assistant', content: continued.text, tail: true }, { role: 'user', content: CONTINUE_NUDGE, tail: true }] : []
+          const ask = system => generateApi(target, { system: chat.systemPrompt, messages: [...history, ...turnMessages(target, prepared, system), ...more], ...cap, webSearch, onRestart, onRetry, onReasoning, chatThinking: chat.thinking }, abortController.signal, onText)
           outcome = await ask(true).catch(error => {
             // A model or relay that refuses a system message after the turn's: the entries go with the turn's message.
             if (!sendsSystemTail(target, prepared) || error.status !== 400 || !/system/i.test(error.message ?? '')) throw error
@@ -870,11 +924,12 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
           })
         } catch (error) {
           // The provider tells the tokens at the end of an answer, so this one has none. An update block it finished still counts.
-          const kept = keepCut ? withoutOpenEnd(shown) : ''
-          if (!displayText(kept)) throw error
+          // 继续生成: what came on after the reply, kept with it; nothing new, and the turn fails (the reply stays as it was).
+          if (!keepCut || !displayText(withoutOpenEnd(shown))) throw error
+          const kept = withoutOpenEnd(continued ? joinContinued(continued.text, shown) : shown)
           const stopped = abortController.signal.aborted
           cut = stopped ? { stopped } : { stopped, status: error.status ?? 500, message: error.message, detail: error.detail }
-          outcome = { reply: kept, model: target.model, tokens: null, sdk: null, api: { provider: target.provider.id, model: target.modelId, truncated: stopped ? 'stopped' : 'broken' }, search: null, ...(thought.trim() ? { reasoning: thought.trim() } : {}) }
+          outcome = { reply: kept, model: target.model, tokens: null, sdk: null, api: { provider: target.provider.id, model: target.modelId, truncated: stopped ? 'stopped' : 'broken' }, search: null, joined: Boolean(continued), ...(thought.trim() ? { reasoning: thought.trim() } : {}) }
         }
       } else {
         // The turn's message as the session will hold it: the 屏蔽词 applied (the system prompt in beforeTurn).
@@ -883,8 +938,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         if (!outcome.sdk) throw httpError(502, msg`模型没有返回正文`)
       }
       writing()
-      const written = outcome.reply
-      if (!written.trim()) throw httpError(502, msg`模型没有返回正文`)
+      if (!outcome.reply.trim()) throw httpError(502, msg`模型没有返回正文`)
+      const written = continued && !outcome.joined ? joinContinued(continued.text, outcome.reply) : outcome.reply
 
       // Re-read and saved with no other change to the chat in between (a picture drawn, the card's variables):
       // what came meanwhile stays.
@@ -915,6 +970,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
             // What the turn's templates wrote to the chat state: a regenerate plays it back, never runs it twice.
             ...(prepared.templateWrites?.length ? { templateWrites: prepared.templateWrites } : {}),
             ...(prepared.dynamicState ? { dynamic: prepared.dynamicState } : {}),
+            ...(prepared.stateLeft ? { stateLeft: prepared.stateLeft } : {}),
             ...(rules?.check ? { check: rules.check } : {}),
             ...(rules?.battle ? { battle: rules.battle } : {}),
             ...(rules?.auto ? { auto: true } : {}),
@@ -941,7 +997,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         // other card's update is applied as it always was.
         const turnCard = await store.getCard(fresh.cardId).catch(() => null)
         const scripted = await cardScripts.update(turnCard, fresh, { before: replyFrom, text: reply, path: pathTo(fresh, parent.id), received: true })
-        const updated = scripted ?? applyStateUpdates(replyFrom, reply)
+        // 只读变量: what the card marks read-only stays as it was, whatever the reply wrote.
+        const updated = keepReadOnly(replyFrom, scripted ?? applyStateUpdates(replyFrom, reply), turnCard?.readOnly)
         // The reply's own templates run once and the rendered text is what is kept, shown and
         // sent back later; what they write lands after the reply's own update blocks.
         const evaluated = hasEjs(reply) ? await evaluateReply(fresh, userNode, reply, updated.state) : null
@@ -1086,7 +1143,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         target = model ? await targetFor(model, settings) : await compactionTarget(chat, tip, settings)
         if (target.api) {
           const extra = settings.memory?.enabled ? memoryRequest(chat.names, memoryOf(path)?.entries ?? []) : ''
-          used = await archiveByApi(target, chat, tip, abortController.signal, settings, extra)
+          used = await archiveByApi(target, chat, tip, abortController.signal, settings, extra, toolNote(settings, 'memory'))
         } else {
           // A subscription session holds the turns after it, which its summary would not reach.
           if (childrenOf(chat, tip.id).length) throw httpError(400, msg`回滚收起的回合还在这条后面：先恢复它们，或从这里接着写一轮再压缩`)
@@ -1119,17 +1176,17 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
    * prompt (the card and its always-on lore) may be most of what is sent: then in parts sized for
    * the model's window, under the start of that prompt only.
    */
-  async function archiveByApi(target, chat, tip, signal, settings, extra = '') {
+  async function archiveByApi(target, chat, tip, signal, settings, extra = '', note = '') {
     const history = await apiMessages(chat, tip)
     const onPart = () => compacting.set(chat.id, (compacting.get(chat.id) ?? 0) + 1)
     try {
-      return await summarizeInParts(target, chat, history, signal, '', 0, { maxChars: tip.imported ? IMPORTED_PART_CHARS : Infinity, onPart, extra })
+      return await summarizeInParts(target, chat, history, signal, '', 0, { maxChars: tip.imported ? IMPORTED_PART_CHARS : Infinity, onPart, extra, note })
     } catch (error) {
       if (!error.contextFull || signal.aborted) throw error
       const window = windowOf(`${target.provider.id}/${target.modelId}`, { settings, learned: await store.getModelContext() }).tokens
       const system = `${chat.systemPrompt.slice(0, LEAN_SYSTEM_CHARS)}\n\n（设定很长，这里只保留了开头部分。）`
       try {
-        return await summarizeInParts(target, chat, history, signal, '', 0, { maxChars: Math.max(20_000, Math.floor(window * 0.5)), system, onPart, extra })
+        return await summarizeInParts(target, chat, history, signal, '', 0, { maxChars: Math.max(20_000, Math.floor(window * 0.5)), system, onPart, extra, note })
       } catch (again) {
         if (!again.contextFull || signal.aborted) throw again
         // Not the turn's "compact it" advice: this is the compaction.
@@ -1153,7 +1210,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     if (!notes.length && target?.api) {
       const started = Date.now()
       const history = await apiMessages(chat, path.at(-1))
-      const again = await generateApi(target, { system: chat.systemPrompt, messages: [...history, { role: 'user', content: memoryOnlyInstruction(chat.names, entries) }] }, signal, () => {})
+      const ask = withNote(memoryOnlyInstruction(chat.names, entries), toolNote(await store.getSettings(), 'memory'), chat.names)
+      const again = await generateApi(target, { system: chat.systemPrompt, messages: [...history, { role: 'user', content: ask }] }, signal, () => {})
       await ledger?.recordTurn(chat, sideRecord(again, started)).catch(() => {})
       const note = parseEntries(again.reply)
       if (note) notes = [note]
@@ -1211,9 +1269,10 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       onStart()
       const entries = snapshot?.entries ?? []
       const { target, inContext } = await tidyTarget(chat, node, settings)
+      const note = toolNote(settings, 'memory')
       const request = inContext
-        ? { system: chat.systemPrompt, messages: [...(await apiMessages(chat, node)), { role: 'user', content: tidyInContext(chat.names, entries, turns.length, turns[0].user) }] }
-        : (({ system, user }) => ({ system, messages: [{ role: 'user', content: user }] }))(tidyRequest(chat.names, entries, turns))
+        ? { system: chat.systemPrompt, messages: [...(await apiMessages(chat, node)), { role: 'user', content: withNote(tidyInContext(chat.names, entries, turns.length, turns[0].user), note, chat.names) }] }
+        : (({ system, user }) => withToolNote({ system, messages: [{ role: 'user', content: user }] }, replaceMacros(note, chat.names)))(tidyRequest(chat.names, entries, turns))
       const begun = Date.now()
       const result = await generateApi(target, request, controller.signal, () => {})
       await ledger?.recordTurn(chat, sideRecord(result, begun)).catch(() => {})
@@ -1482,7 +1541,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         const fresh = await store.getChat(chatId)
         const edit = editChatMessage(fresh, nodeId, `${fresh.nodes[nodeId].text.trimEnd()}\n\n${block}`)
         const scripted = await cardScripts.update(card, fresh, { before, text: edit.node.text, path: pathTo(fresh, turn?.id ?? 'root') })
-        const { state, changes, unread } = scripted ?? applyStateUpdates(before, edit.node.text)
+        const { state, changes, unread } = keepReadOnly(before, scripted ?? applyStateUpdates(before, edit.node.text), card?.readOnly)
         if (unread) edit.node.updateUnread = true
         else delete edit.node.updateUnread
         // The reply's own template writes land after its update blocks again.
@@ -1627,7 +1686,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     const ref = [settings.media?.helperModel, chat && modelFor(chat, settings), settings.model].find(usable)
     if (!ref) throw httpError(400, msg`物品归类要用供应商的模型：在顶栏选一个，或在「配图与朗读」里选一个辅助模型`)
     const begun = Date.now()
-    const result = await generateApi(await targetFor(ref, settings), request, new AbortController().signal, () => {})
+    const result = await generateApi(await targetFor(ref, settings), withToolNote(request, toolNote(settings, 'helper')), new AbortController().signal, () => {})
     if (chat) await ledger?.recordTurn(chat, sideRecord(result, begun)).catch(() => {})
     return result.reply
   }

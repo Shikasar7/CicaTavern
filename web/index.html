@@ -320,9 +320,13 @@
       <section class="panel">
         <div class="panel-head">
           <span>状态</span>
-          <button class="btn small" id="edit-state" disabled>编辑</button>
+          <span class="panel-tools">
+            <button class="btn small ghost" id="state-mode" hidden></button>
+            <button class="btn small" id="edit-state" disabled>编辑</button>
+          </span>
         </div>
         <pre class="state" id="state-view">—</pre>
+        <div class="state-bar" id="state-bar" hidden></div>
         <div class="state-editor" id="state-editor" hidden>
           <textarea id="state-input" rows="10" spellcheck="false"></textarea>
           <div class="row end">
@@ -413,6 +417,8 @@
           </label>
         </div>
         <p class="hint">动态设定（变量列表）在历史里堆多了会一次性删掉；删的那一轮要重写整段历史的缓存。删得少更省，但上下文长得快些。</p>
+        <label class="check-row"><input type="checkbox" name="statePresent"> 变量很多时，只发在场角色的变量</label>
+        <p class="hint">角色很多、每人一组变量的卡，重发完整状态时把这几轮没出场的角色那几组省掉，只列出名字；谁出场了，下一轮补发他那一组。状态不长的卡不受影响。</p>
         <label class="check-row"><input type="checkbox" name="autoFillUpdate"> 模型漏写变量更新时自动补写</label>
       </div>
       <div data-section="compaction">
@@ -541,6 +547,7 @@
           <h2>世界书</h2>
           <span class="row-actions">
             <button type="button" class="btn small" id="book-new" title="新建一本空的世界书">新建</button>
+            <button type="button" class="btn small" id="book-novel" title="把一部小说或一份很长的设定分段读完，抽成一本世界书">从小说抽取</button>
             <label class="btn small" title="导入 SillyTavern 的世界书 JSON">导入
               <input type="file" id="book-import" accept=".json,application/json" multiple hidden>
             </label>

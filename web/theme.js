@@ -141,6 +141,29 @@ export function applyAppearance(value) {
   syncThemeColor()
 }
 
+// 卡片动效 on this device: off is kept, and marked on the page for the styles and the bar's code to read.
+const MOTION_KEY = 'cardMotion'
+export function cardMotion() {
+  try {
+    return localStorage.getItem(MOTION_KEY) !== 'off'
+  } catch {
+    return true
+  }
+}
+export function setCardMotion(on) {
+  try {
+    if (on) localStorage.removeItem(MOTION_KEY)
+    else localStorage.setItem(MOTION_KEY, 'off')
+  } catch {
+    // A private window: it lasts as long as the page.
+  }
+  if (on) delete document.documentElement.dataset.cardMotion
+  else document.documentElement.dataset.cardMotion = 'off'
+  // What is on the page was drawn the other way: whoever drew it draws it again.
+  window.dispatchEvent(new Event('cardmotion'))
+}
+if (!cardMotion()) document.documentElement.dataset.cardMotion = 'off'
+
 /** The story's font and size on this device, as index.html put them on the page at start. */
 export function currentReading() {
   try {
@@ -429,6 +452,23 @@ export function initTheme({ api, el, toast, guard, getSettings, setSettings, onR
   }
   // Even: the column stays centred on a whole pixel.
   const fitColumn = (width, widest = widestColumn()) => Math.round(Math.min(widest, Math.max(READ_WIDTH.min, width)) / 2) * 2
+
+  /** 卡片动效: what drifts over a card's status bar and cover, and how they come in. Off on this device for a slow phone or a tired eye. */
+  function motionRow() {
+    const box = el('input', { type: 'checkbox', 'aria-label': t`卡片动效` })
+    box.checked = cardMotion()
+    box.addEventListener('change', () => {
+      setCardMotion(box.checked)
+      onReading?.()
+    })
+    return el('div', { class: 'theme-row top' }, [
+      el('span', { class: 'theme-label', text: t`卡片动效` }),
+      el('div', { class: 'theme-reading' }, [
+        el('label', { class: 'front-check' }, [box, el('span', { text: t`显示` })]),
+        el('p', { class: 'hint', text: t`角色卡的状态栏和开场页上飘动的雨、雪、花瓣，立绘和文字出现时的动画，数值条的涨落。手机发热、耗电快或者觉得晃眼时关掉；所有卡都不动，卡本身不变。只记在这台设备上。` }),
+      ]),
+    ])
+  }
 
   /** 正文宽度: the same as dragging the column's edges, for a phone-sized hand or a keyboard; not on a phone, where the column is the screen. */
   function widthRow(reading) {
@@ -782,6 +822,7 @@ export function initTheme({ api, el, toast, guard, getSettings, setSettings, onR
       leadingRow(currentReading()),
       revealRow(currentReading()),
       widthRow(currentReading()),
+      motionRow(),
       interfaceRow(currentReading()),
       el('div', { class: 'theme-row' }, [
         el('span', { class: 'theme-label', text: t`游戏界面` }),

@@ -7,7 +7,7 @@ import { createServer } from 'node:http'
 import { createApp } from '../server/http.mjs'
 import { createStore } from '../server/store.mjs'
 import { normalizeCard } from '../server/cards.mjs'
-import { cleanRounds, createTrial, estimateRun, playerLine, playerRequest, readReview, reviewRequest, roundChecks, roundNeeds, stopLine, stopNeeds, summaryLines } from '../server/forge/trial.mjs'
+import { PLAYER_KINDS, cleanPlayer, cleanRounds, createTrial, estimateRun, playerLine, playerRequest, playerWords, readReview, reviewRequest, roundChecks, roundNeeds, stopLine, stopNeeds, summaryLines } from '../server/forge/trial.mjs'
 import { withLanguage } from '../server/i18n.mjs'
 
 const needs = roundNeeds({ mvu: true, choices: true, blocks: ['self_check', 'judge'], fields: [{ path: 'stat_data.a', label: '好感', min: 0, max: 100 }, { path: 'b', label: '钱' }] })
@@ -53,6 +53,33 @@ test('the stand-in player only speaks for the player, and quotes around its line
   assert.match(request.messages[0].content, /下一段/)
   assert.equal(playerLine('「我去门口看看。」'), '我去门口看看。')
   assert.equal(playerLine('玩家：我去门口看看。'), '我去门口看看。')
+})
+
+test('the stand-in can be a kind of player, or one described; the round is still tried, and the reader is told', () => {
+  assert.deepEqual(PLAYER_KINDS, ['', 'eager', 'quiet', 'bargain', 'heart', 'wild', 'own'])
+  assert.deepEqual(cleanPlayer({ kind: 'quiet', text: '多余的' }), { kind: 'quiet', text: '' })
+  assert.deepEqual(cleanPlayer({ kind: 'own', text: '  胆小，\n凡事先问清楚  ' }), { kind: 'own', text: '胆小， 凡事先问清楚' })
+  assert.deepEqual(cleanPlayer({ kind: 'own', text: ' ' }), { kind: '', text: '' }, 'nothing written is no one in particular')
+  assert.deepEqual(cleanPlayer({ kind: 'nobody' }), { kind: '', text: '' })
+  assert.deepEqual(cleanPlayer(undefined), { kind: '', text: '' })
+  assert.equal(cleanPlayer({ kind: 'own', text: '长'.repeat(500) }).text.length, 200)
+  const story = [{ you: '', reply: '开场' }]
+  // No one in particular: as it always was.
+  const plain = playerRequest({ name: '卡' }, story, 'push')
+  assert.equal(playerRequest({ name: '卡' }, story, 'push', cleanPlayer(null)).system, plain.system)
+  assert.match(plain.system, /一到三句/)
+  assert.doesNotMatch(plain.system, /这位玩家是这样的人/)
+  const quiet = playerRequest({ name: '卡' }, story, 'push', { kind: 'quiet', text: '' })
+  assert.match(quiet.system, /一句，越短越好/)
+  assert.match(quiet.system, /这位玩家是这样的人：话很少.*这一轮要做的事还是要做/)
+  assert.match(quiet.messages[0].content, /超出你本事或规矩/)
+  assert.match(playerRequest({ name: '卡' }, story, 'go', { kind: 'own', text: '胆小' }).system, /这位玩家是这样的人：胆小。每一轮/)
+  assert.equal(playerWords({ kind: 'own', text: '胆小！' }), '胆小！')
+  assert.equal(playerWords({ kind: '', text: '' }), '')
+  // The reader does not hold the player's ways against the card.
+  const rounds = [{ input: '嗯。', told: '她看着你。' }]
+  assert.doesNotMatch(reviewRequest({ name: '卡' }, rounds).system, /照这个性子扮的/)
+  assert.match(reviewRequest({ name: '卡' }, rounds, { player: { kind: 'wild', text: '' } }).system, /这一局的玩家是照这个性子扮的：不按常理来.*不算卡的毛病/)
 })
 
 test('the report opens with what was written, what went wrong and what never moved', () => {
@@ -268,7 +295,7 @@ async function gameRun(t, story, { during = null, settings = {} } = {}) {
   const card = (await call('/api/cards/import', { filename: 'c.json', data: file })).body
   cardId = card.id
   await call(`/api/cards/${card.id}/game`, { level: 'full' }, 'PUT')
-  await call(`/api/cards/${card.id}/trial`, { rounds: 3 }, 'PUT')
+  await call(`/api/cards/${card.id}/trial`, { rounds: 3, player: { kind: 'quiet' } }, 'PUT')
   assert.equal((await call(`/api/cards/${card.id}/trial/run`, {})).status, 200)
   let view
   for (let i = 0; i < 200; i++) {
@@ -276,6 +303,10 @@ async function gameRun(t, story, { during = null, settings = {} } = {}) {
     if (!view.job) break
     await new Promise(resolve => setTimeout(resolve, 50))
   }
+  // Who the stand-in played as is kept with the pick and with the report.
+  assert.deepEqual(view.player, { kind: 'quiet', text: '' })
+  assert.deepEqual(view.report?.player ?? view.player, { kind: 'quiet', text: '' })
+  assert.ok(view.players.includes('own'))
   return { view, told, root, cardId }
 }
 

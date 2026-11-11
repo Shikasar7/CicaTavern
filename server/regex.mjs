@@ -8,7 +8,7 @@
 // so the next turn writes the cache once more; display-only ones never do.
 import { randomUUID } from 'node:crypto'
 import { chatScriptList, normalizeScripts, setsOfCard } from '../web/shared/regex.js'
-import { isBuiltinPreset } from '../web/shared/basic.js'
+import { editsKey, isBuiltinPreset } from '../web/shared/basic.js'
 import { httpError, newId } from './store.mjs'
 import { msg } from './i18n.mjs'
 
@@ -106,7 +106,18 @@ export function createRegex(store) {
       }
     }
     if (key.startsWith('preset-')) {
-      if (isBuiltinPreset(key.slice(7))) throw httpError(400, msg`内置预设自带的正则不能改`)
+      // A built-in preset's: the player's own, after the two it comes with (basic.mjs), which stay as they are.
+      if (isBuiltinPreset(key.slice(7))) {
+        const field = editsKey(key.slice(7))
+        return {
+          key,
+          scripts: (await store.getSettings())[field].regexScripts,
+          async save(scripts) {
+            const saved = await store.updateSettings(current => ({ [field]: { ...current[field], regexScripts: cleanScripts(scripts) } }))
+            return saved[field].regexScripts
+          },
+        }
+      }
       const preset = await store.getPreset(key.slice(7))
       return {
         key,

@@ -1236,6 +1236,90 @@
           }
         }
       ]
+    },
+    {
+      "version": "2.5.0",
+      "date": "2026-11",
+      "items": [
+        {
+          "image": "2.5.0-front.webp",
+          "zh": {
+            "title": "卡有了门面：开场页和带立绘的状态栏",
+            "text": "新对话的开场白上面先有一页开场页：卡名一个字一个字出现，一句话和几行简介，每个开场是一张可以点的小卡片；故事开始以后收成最上面一行。背景是这张卡的场景图，旁边站着主要角色的立绘。\n状态栏顶上也放了立绘和当前地点的场景图，立绘跟着心情换表情；背包、任务这类列表收进下面的「小手机」，点开看；还能带一层雨、雪、花瓣这样的动效。创作角色卡做的卡默认带，别的卡在「修改角色卡」里勾上。"
+          },
+          "en": {
+            "title": "Cards get a front: a cover page and a status bar with portraits",
+            "text": "New chats open with a cover page above the greeting: the card's name appearing a character at a time, a line and a few sentences, and each opening as a card you can tap; once the story starts it folds into one line at the top. Behind it is the card's scene picture, beside it the main character's portrait.\nThe status bar now carries the portrait and the current place's scene on top, the face changing with the mood; lists like the bag and quests go into the Phone below, opened with a tap; and rain, snow, petals and the like can drift over it (Motion). Cards made with Create a card have all this; for others, tick it in Edit card."
+          }
+        },
+        {
+          "image": "2.5.0-look.webp",
+          "zh": {
+            "title": "状态栏的定制外观，八种风格",
+            "text": "修改角色卡 → 状态栏 → 调整样式 →「定制外观」：让模型给这张卡的状态栏写一套自己的样子，边框、纹饰、字体、进度条都换，开场页和小手机一起换。状态栏还是程序画的，变量照常显示。\n输入框上面一排风格：日系清新、金属光泽、日记手帐、像素风、赛璐璐平涂、水墨留白、赛博霓虹、童话绘本，点一个就写进要求。点了才发送，写好后程序按手机和电脑各查一遍，先看预览再用。"
+          },
+          "en": {
+            "title": "Custom looks for the status bar, in eight styles",
+            "text": "Edit card → Status bar → Adjust style → Custom look: the model writes the card's status bar a look of its own, with borders, ornaments, fonts and progress bars, and the cover page and Phone to match. The bar is still drawn by the app, so the variables show as always.\nAbove the box is a row of styles: Fresh and light, Metal, Journal, Pixel art, Flat cel, Ink wash, Neon and Picture book; pick one to put it in your request. Nothing is sent until you click, and the app checks the result at phone and computer widths before showing you a preview."
+          }
+        },
+        {
+          "image": "2.5.0-continue.webp",
+          "zh": {
+            "title": "继续生成",
+            "text": "回复写到一半停了（写到输出上限被截断、按了停止、中途断开），点最新回复下方的「继续生成」，或在输入框里只发 /continue，模型从停下的地方接着写，和 SillyTavern 的一样。\n写完的是这条回复的新版本，没写完的那版在 ‹ › 里还能切回去；变量和行动选项按整条重新算，重复的开头自动去掉。"
+          },
+          "en": {
+            "title": "Continue",
+            "text": "When a reply stops halfway (cut off at the output limit, stopped by you, or dropped), click Continue under the newest reply, or send just /continue, and the model picks up where it stopped, as SillyTavern's /continue does.\nThe finished reply is a new version of it, with the cut-off one still there under ‹ ›; variables and choices are worked out from the whole reply, and any repeated start is dropped."
+          }
+        },
+        {
+          "image": "2.5.0-preset.webp",
+          "zh": {
+            "title": "基础预设能改条目，内置功能有附加提示词",
+            "text": "基础预设和视觉小说预设多了「条目」：开场身份、基本规则和每个选项的那一段都能点开改、单独关掉，改过的标「已改」，「恢复默认」回到原文；「＋ 新增条目」加自己的，基础预设也能加自己的正则。\n设置 → 写作 →「内置功能的附加提示词」：压缩与记忆、检查这张卡、创作向导和其他辅助各写一段自己的要求，也能从预设里挑几条抄进来。"
+          },
+          "en": {
+            "title": "Edit the basic preset's entries, and extra prompts for built-in features",
+            "text": "The Basic preset and the Visual novel preset now list their Entries: the opening identity, the basic rules and each option's paragraph can be opened and edited or switched off on their own, marked Edited, with Reset to go back; + New entry adds your own, and the basic preset takes regex of your own too.\nSettings → Writing → Extra prompts for built-in features: write your own request for compaction and memory, Check this card, the card creator and other helpers, or pick entries from a preset to copy in."
+          }
+        },
+        {
+          "image": "2.5.0-forge.webp",
+          "zh": {
+            "title": "创作角色卡：门面、方案页直接改、新积木",
+            "text": "定方案页多了「门面」：开关开场页、立绘、场景图、小手机，选动效，下面是新对话打开时的成品预览。地点、势力、角色、事件旁边有「改」「删」和「＋ 加…」，不用模型。\n新玩法积木：日程、关系网、路线与结局；变量可以设成「只读」，或一键加一套变量模板。检查这张卡里，已有的卡也能加玩法积木、做角色采访写对话示例；试玩体检能选玩家是什么样的人。"
+          },
+          "en": {
+            "title": "Create a card: a front, a plan you edit directly, new modules",
+            "text": "The Plan page has a Front: turn the cover page, portrait, scene and Phone on or off, pick a Motion, and see it As it will open. Places, factions, characters and events can be edited, deleted or added by hand, without the model.\nNew Play modules: Schedule, Bonds, and Routes and endings; variables can be made Read-only, or added a set at a time from a template. In Check this card, cards you already have can get play bricks and a character interview for example dialogue; a Trial run lets you pick what kind of player to be."
+          }
+        },
+        {
+          "icon": "🔧",
+          "zh": {
+            "title": "还有这些",
+            "text": "世界书窗口能「从小说抽取」一本世界书；对话能导出成文本或 Markdown；右栏「状态」能换成状态栏，状态栏预览能试数值，「主题」里能关掉卡片动效。\n修好了：打开某段对话卡死、每次启动都卡住（下次先不自动打开，找出跑不完的正则跳过）；思考里提到的标签吃掉正文；切卡后没停在最新一轮；电脑上顶栏挤到右栏。"
+          },
+          "en": {
+            "title": "And also",
+            "text": "The Lorebook window can build a lorebook From a novel; chats export as Text (.txt) or Markdown (.md); the right column's state can show as the status bar, the status bar preview lets you Try values, and Card motion in Theme turns the motion off.\nFixed: a chat that froze the page every time the app opened (next time it stays closed while the regex that never finishes is found and skipped); tags mentioned in the thinking eating the reply; switching cards not landing on the newest turn; the desktop top bar spilling into the right column."
+          }
+        },
+        {
+          "recap": "2.4",
+          "image": "2.4.0-battle.webp",
+          "zh": {
+            "title": "2.4 加了什么",
+            "text": "游戏规则：回合制战斗、掷骰检定和行囊，后来又有了队伍战斗；视觉小说四种界面；直连对话；检查这张卡和试玩体检；文风重写；创作角色卡的高级选项；卡自带的脚本能运行；出字效果；手机顶栏两行和全屏；导入的预设照酒馆的方式发。"
+          },
+          "en": {
+            "title": "What 2.4 added",
+            "text": "Game rules: turn-based fights, dice checks and the pack, then party fights; four looks for the visual novel; direct chat; Check this card and Trial run; rewritten writing styles; advanced options in the card creator; a card's own scripts running; ways for replies to appear; a two-row top bar with Full screen on phones; imported presets sent the SillyTavern way."
+          }
+        }
+      ]
     }
   ]
 }

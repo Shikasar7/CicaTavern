@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { BASIC_DEFAULTS, BASIC_OPTIONS, VN_DEFAULTS, VN_ID, choicesOf, cleanBasic, cleanVn, timeBoxOf, withoutBasicBlocks } from '../web/shared/basic.js'
+import { BASIC_DEFAULTS, BASIC_OPTIONS, VN_DEFAULTS, VN_ID, choicesOf, cleanBasic, cleanVn, quietMentions, timeBoxOf, withoutBasicBlocks } from '../web/shared/basic.js'
 import { autoStatusSpec, cleanStatusSpec, compactText, statusGroups } from '../web/shared/status.js'
 import { applyScripts, PLACEMENT } from '../web/shared/regex.js'
 import { streamingText, withoutOwnStatus } from '../web/render.js'
@@ -283,4 +283,40 @@ test('亲密描写 强化: says what to write out, keeps to adults and leaves th
   assert.match(rules, /涉及性的角色一律是成年人/)
   assert.match(rules, /不替「\{\{user\}\}」决定高潮和结束/)
   assert.doesNotMatch(basicRules(cleanBasic({ intimacy: 'restrained' })), /涉及性的角色/)
+})
+
+test('a block the thinking only names takes no story with it (「结尾 <choices>…」 in a <think_fox~>)', () => {
+  const reply = [
+    '<think_fox~>',
+    '本轮要求：约 2600 字。',
+    '必须包含：结尾<choices>（带检定）及<fox_tip>，再输出<UpdateVariable>。',
+    '</think_fox~>',
+    '<content>',
+    '<time_box>腊月初三 黄昏｜雁回关外三十里｜小雪</time_box>',
+    '寒风卷着碎雪。',
+    '<choices>',
+    'A. 拔刀迎敌',
+    'B. 绕后偷袭',
+    '</choices>',
+    '</content>',
+    '<fox_tip>唔～</fox_tip>',
+  ].join('\n')
+  assert.deepEqual(choicesOf(reply), ['拔刀迎敌', '绕后偷袭'])
+  assert.deepEqual(timeBoxOf(reply), ['腊月初三 黄昏', '雁回关外三十里', '小雪'])
+  const shown = streamingText(reply)
+  assert.ok(shown.includes('寒风卷着碎雪。'), shown)
+  assert.ok(shown.includes('</think_fox~>'), 'the thinking stays closed, so it folds as 思考过程')
+  assert.ok(!shown.includes('A. 拔刀迎敌'))
+  assert.ok(shown.includes('<fox_tip>唔～</fox_tip>'))
+  const server = displayText(reply)
+  assert.ok(server.includes('寒风卷着碎雪。') && !server.includes('本轮要求') && !server.includes('A. 拔刀迎敌'), server)
+  // Thinking still being written: what it names is not a block yet.
+  assert.deepEqual(choicesOf('<thinking>\n结尾写 <choices>\nA. 不是选项\n'), [])
+  // What a card's page reads (getChatMessages): the mentions are quiet, the real blocks and the thinking's tags as they were.
+  const read = quietMentions(reply)
+  assert.ok(read.includes('结尾＜choices＞（带检定）及＜fox_tip＞，再输出<UpdateVariable>。'), 'a tag with no real block outside is left alone')
+  assert.equal(read.match(/<fox_tip>([\s\S]*?)<\/fox_tip>/)[1], '唔～')
+  assert.ok(read.startsWith('<think_fox~>') && read.includes('</think_fox~>\n<content>'))
+  assert.equal(read.slice(read.indexOf('</think_fox~>')), reply.slice(reply.indexOf('</think_fox~>')))
+  assert.equal(quietMentions('没有思考，<b>照旧</b>'), '没有思考，<b>照旧</b>')
 })

@@ -20,7 +20,7 @@ const TEXT_KINDS = new Set(['field', 'greeting'])
 const BOOK_KINDS = new Set(['entry', 'newEntry', 'removeEntry'])
 const REGEX_KINDS = new Set(['regex', 'newRegex', 'removeRegex'])
 const OWN_SCRIPTS = new Set([OWN_STATUS_SCRIPT, `${OWN_STATUS_SCRIPT}-hide`])
-const SCRIPT_WORDS = { zh: { hidePlaceholder: '对模型隐藏状态栏', statusBar: '状态栏' }, en: { hidePlaceholder: 'Hide the status bar from the model', statusBar: 'Status bar' } }
+const SCRIPT_WORDS = { zh: { hidePlaceholder: '对模型隐藏状态栏', statusBar: '状态栏' }, en: { hidePlaceholder: 'Hide the status bar from the model', statusBar: 'Status bar', english: true } }
 
 const scriptsOf = card => (Array.isArray(card.regexScripts) ? card.regexScripts : [])
 

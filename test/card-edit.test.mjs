@@ -275,6 +275,42 @@ test('editing over HTTP keeps the card\'s id, chats, cast and settings; an open 
   assert.equal((await call(`/api/cards/${card.id}/avatar`, { method: 'PUT', body: { image: 'data:image/jpeg;base64,AAAA' } })).status, 400)
 })
 
+test('开场页的图: picked for a card, served, carried by its own export and by a newer version, and taken off again', async t => {
+  const { call } = await tavern(t)
+  const card = (await call('/api/cards/import', { method: 'POST', body: { filename: 'c.json', data: Buffer.from(JSON.stringify(RAW)).toString('base64') } })).body
+  assert.equal(card.coverArt, 0)
+  assert.equal((await call(`/api/cards/${card.id}/cover-art`)).status, 404)
+  assert.equal((await call(`/api/cards/${card.id}/cover-art`, { method: 'PUT', body: { image: `data:image/png;base64,${PIXEL.toString('base64')}` } })).status, 400, 'the page sends a JPEG')
+
+  const jpeg = Buffer.from('ffd8ffe000104a46494600010100000100010000ffd9', 'hex')
+  const picked = (await call(`/api/cards/${card.id}/cover-art`, { method: 'PUT', body: { image: `data:image/jpeg;base64,${jpeg.toString('base64')}` } })).body
+  assert.ok(picked.coverArt > 0)
+  assert.deepEqual((await call(`/api/cards/${card.id}/cover-art?v=${picked.coverArt}`)).body, jpeg)
+  assert.equal((await call(`/api/cards/${card.id}`)).body.coverArt, picked.coverArt, 'the chat page knows of it')
+
+  // This app's own export takes it to another device.
+  const exported = (await call(`/api/cards/${card.id}/export`)).body
+  assert.equal(exported.coverArt, jpeg.toString('base64'))
+  const moved = (await call('/api/cards/import', { method: 'POST', body: { filename: 'own.json', data: Buffer.from(JSON.stringify({ ...exported, card: { ...exported.card, name: '别处的卡' } })).toString('base64') } })).body
+  assert.ok(moved.coverArt > 0)
+  assert.deepEqual((await call(`/api/cards/${moved.id}/cover-art`)).body, jpeg)
+  delete exported.coverArt
+  const bare = (await call('/api/cards/import', { method: 'POST', body: { filename: 'own.json', data: Buffer.from(JSON.stringify({ ...exported, card: { ...exported.card, name: '又一张卡' } })).toString('base64') } })).body
+  assert.equal(bare.coverArt, 0, 'an export without the picture does not claim one')
+
+  // A newer version of the card takes it over; a new file put in place of the card keeps it.
+  const newer = (await call('/api/cards/import', { method: 'POST', body: { filename: 'c.json', data: Buffer.from(JSON.stringify({ ...RAW, data: { ...RAW.data, name: '林青禾-v2' } })).toString('base64') } })).body
+  assert.ok(newer.coverArt > 0)
+  assert.deepEqual((await call(`/api/cards/${newer.id}/cover-art`)).body, jpeg)
+  const replaced = (await call('/api/cards/import', { method: 'POST', body: { filename: 'c.json', replace: card.id, data: Buffer.from(JSON.stringify(RAW)).toString('base64') } })).body
+  assert.equal(replaced.coverArt, picked.coverArt)
+
+  const cleared = (await call(`/api/cards/${card.id}/cover-art`, { method: 'DELETE' })).body
+  assert.equal(cleared.coverArt, 0)
+  assert.equal((await call(`/api/cards/${card.id}/cover-art`)).status, 404)
+  assert.ok((await call(`/api/cards/${newer.id}/cover-art`)).body.length, 'the newer version keeps its own copy')
+})
+
 test('a proposal taken in is taken back as a whole, once, and not after the card has changed since', async t => {
   const { app, call } = await tavern(t)
   const card = (await call('/api/cards/import', { method: 'POST', body: { filename: 'c.json', data: Buffer.from(JSON.stringify(RAW)).toString('base64') } })).body
@@ -444,6 +480,51 @@ test('still nothing after asking once more: no changes, and the turn says the an
   await call(`/api/cards/${card.id}/assistant`, { method: 'POST', body: { text: '再试试' } })
   for (let i = 0; i < 200 && (await call(`/api/cards/${card.id}/assistant`)).body.job; i++) await new Promise(resolve => setTimeout(resolve, 10))
   assert.match(model.seen[2].messages.at(-1).content, /已经改好了。（这次没有写出改动，内容没有变）/)
+})
+
+test('换个模型重写: a failed request, or the latest answer, written again by another model this once', async t => {
+  const second = '<reply>换了个写法。</reply><field name="personality">冷淡，话少。</field>'
+  const { call, model } = await tavern(t, ['', ANSWER, second])
+  const helper = (await call('/api/providers', { method: 'POST', body: { name: '另一家', api: 'openai-completions', baseURL: `${model.base}/v1`, apiKey: 'sk-test', models: ['helper'] } })).body
+  const card = (await call('/api/cards/import', { method: 'POST', body: { filename: 'c.json', data: Buffer.from(JSON.stringify(RAW)).toString('base64') } })).body
+  const url = `/api/cards/${card.id}/assistant`
+  const settled = async () => {
+    for (let i = 0; i < 300; i++) {
+      const session = (await call(url)).body
+      if (!session.job) return session
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    throw new Error('the talk never finished')
+  }
+  await call(url, { method: 'POST', body: { text: '让她说话冷淡一点' } })
+  let session = await settled()
+  assert.ok(session.error, 'nothing readable came back')
+  assert.equal(model.seen.at(-1).model, 'writer')
+
+  // Under the error: the other model, for this once.
+  assert.equal((await call(`${url}/retry`, { method: 'POST', body: { model: `${helper.id}/helper` } })).status, 200)
+  session = await settled()
+  assert.equal(model.seen.at(-1).model, 'helper')
+  assert.ok(session.turns[0].assistant.changes.length)
+  assert.match(session.turns[0].assistant.model, /helper/)
+  assert.equal(session.model, '', 'the talk keeps its own')
+  const first = session.turns[0].assistant
+
+  // An answer that is there is written again only when asked to be; it stays till the new one is in.
+  assert.equal((await call(`${url}/retry`, { method: 'POST', body: {} })).status, 409)
+  const redoing = (await call(`${url}/retry`, { method: 'POST', body: { model: `${helper.id}/helper`, redo: true } })).body
+  assert.deepEqual(redoing.turns[0].assistant, first)
+  session = await settled()
+  assert.equal(session.turns.length, 1, 'the same turn, not a new one')
+  assert.equal(session.turns[0].assistant.reply, '换了个写法。')
+  assert.equal(model.seen.at(-1).model, 'helper')
+
+  // Taken in, it is no longer there to write again; and the next request goes to the talk's own model.
+  await call(`${url}/apply`, { method: 'POST', body: { ids: session.turns[0].assistant.changes.map(change => change.id) } })
+  assert.equal((await call(`${url}/retry`, { method: 'POST', body: { redo: true } })).status, 409)
+  await call(url, { method: 'POST', body: { text: '再短一点' } })
+  await settled()
+  assert.equal(model.seen.at(-1).model, 'writer')
 })
 
 test('tags a model wrote escaped in a piece come out as tags, unless the piece had escapes of its own', () => {

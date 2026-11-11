@@ -10,7 +10,7 @@
 //             upload the avatar, save it as a card and export the PNG.
 // The model works in the background; the window polls the draft while it does.
 import { t, zh } from '/i18n.js'
-import { EVENT_RATES, bookValue, cleanPath, cleanStatusSpec, rangeOf, settlePicks } from '/shared/status.js'
+import { EFFECTS, EVENT_RATES, VARIABLE_TEMPLATES, bookValue, cleanPath, cleanStatusSpec, rangeOf, settlePicks, templateVariables } from '/shared/status.js'
 import { splitPath } from '/shared/vars.js'
 import { statusBar } from '/status.js'
 import { REFERENCE_FILES, referenceBody, referenceChips } from '/talk.js'
@@ -86,13 +86,16 @@ const OPTION_GROUPS = [
   { key: 'format', kind: 'one', label: t`格式`, values: [['', t`向导定`], ['text', t`纯文本卡`], ['mvu', t`MVU 变量卡`], ['mvu-ui', t`MVU + 美化状态栏`]], hint: t`纯文本：不记录数值。MVU：记录数值，每条回复下面有状态栏。美化状态栏：在 SillyTavern 里也显示成好看的面板（要装酒馆助手）。` },
   { key: 'statusTheme', kind: 'one', label: t`状态栏样式`, values: [['plain', t`简洁`], ['paper', t`古风纸笺`], ['neon', t`赛博霓虹`], ['pastel', t`柔和手账`]], when: options => options.format === 'mvu-ui' },
   // 高级选项: folded away, and nothing changes while none is picked. server/forge/bricks.mjs writes what the bricks put in a card.
-  { key: 'bricks', kind: 'many', advanced: true, label: t`玩法积木`, values: [['books', t`背包和册子`], ['selfcheck', t`写前自查`], ['events', t`随机事件`], ['judge', t`裁判表`], ['world', t`世界动态`], ['creation', t`建角页`]], about: {
+  { key: 'bricks', kind: 'many', advanced: true, label: t`玩法积木`, values: [['books', t`背包和册子`], ['selfcheck', t`写前自查`], ['events', t`随机事件`], ['judge', t`裁判表`], ['world', t`世界动态`], ['schedule', t`日程`], ['relations', t`关系网`], ['routes', t`路线与结局`], ['creation', t`建角页`]], about: {
     books: t`玩的时候能增能减的记录：物品、认识的人、任务、回忆、线索。向导按卡定一到三本，状态栏里显示成表格。`,
     selfcheck: t`模型写之前先过一遍这张卡最容易写崩的地方，比如人物说话走样、设定前后打架。玩家看不到这段，每轮多写一小段。`,
     events: t`程序每轮抽一次，抽中了就发生：路上碰到的人、日常小事、远处传来的消息。不用记数值，纯文本卡也能用。`,
     judge: t`用等级决定成败，不让模型放水：修为、关系深度、势力实力都能比。模型照表判定，SillyTavern 里也有效。和「战斗与成长」只能留一个。`,
     creation: t`开局先填一张表再开始故事：选出身、分点数、写一小段，也能全部随机。填完模型按你选的写开场，写进变量。不想填可以换到普通开场白。`,
     world: t`你不动，世界也在变：几件事各有进度，程序隔几轮推一件往前走一步，模型用一两句让你听到风声。状态栏里看得到走到哪一步。`,
+    schedule: t`一天分成几个时段，要紧的人各时段在哪、做什么是定好的：想找谁，得在对的时候去对的地方。状态栏里看得到现在是第几天、哪个时段。适合日常、校园、经营。`,
+    relations: t`记下角色彼此之间的关系，不只是他们和你：谁和谁亲、谁和谁有过节、有什么没解开的事。两人同场时模型照着写，关系变了会记下来。适合群像。`,
+    routes: t`几条路线各有结局：你做了什么决定走上哪一条，沿路的节点走完了才到结局。走到哪了模型自己记着，状态栏里不显示，免得剧透。`,
   } },
   { key: 'eventRate', kind: 'one', advanced: true, label: t`事件多常见`, values: [['', t`交给向导`], ['rare', t`偶尔`], ['normal', t`常见`], ['often', t`频繁`]], hint: t`偶尔：约八轮一次。常见：约五轮一次。频繁：约三轮一次。`, when: options => options.bricks.includes('events') },
   { key: 'judgeDice', kind: 'one', advanced: true, label: t`运气`, values: [['', t`交给向导`], ['on', t`平手看骰子`], ['off', t`不看运气`]], hint: t`等级一样时怎么定：程序掷骰子，或者由模型按故事判。`, when: options => options.bricks.includes('judge') },
@@ -139,6 +142,8 @@ const POSITION = { before: t`角色定义前`, after: t`角色定义后`, depth:
 const STAGE_TEXT = { discuss: t`聊想法`, plan: t`定方案`, write: t`动笔`, polish: t`打磨与头像` }
 // How a tracked variable shows in the status bar, and the value type each implies (hidden keeps its own).
 const SHOWS = [['meter', t`进度条`], ['number', t`数字`], ['rating', t`星级`], ['text', t`文字`], ['badge', t`徽章`], ['long', t`长文字`], ['tags', t`标签`], ['list', t`列表`], ['table', t`表格`], ['flag', t`是或否`], ['hidden', t`不显示`]]
+// 变量模板 (web/shared/status.js VARIABLE_TEMPLATES): a set of variables for a kind of story.
+const TEMPLATE_TEXT = { romance: t`恋爱日常`, adventure: t`冒险闯荡`, mystery: t`悬疑调查`, survival: t`荒野求生`, growth: t`修炼成长`, business: t`经营养成` }
 const SHOW_TYPE = { meter: 'number', number: 'number', rating: 'number', text: 'string', badge: 'string', long: 'string', tags: 'list', list: 'list', table: 'book', flag: 'boolean' }
 
 /** The variables' initial values as the card's [InitVar] will have them (server/forge/write.mjs typedValue). */
@@ -160,6 +165,8 @@ function initialOf(variables) {
   return root
 }
 const MANAGE_PROVIDERS = '__manage_providers__'
+// In the same list: the window of the player's 附加提示词 for the guide (web/tool-prompts.js).
+const TOOL_PROMPTS = '__tool_prompts__'
 const ICON_LOCK = '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="4.5" y="9" width="11" height="7.5" rx="2"/><path d="M7 9V6.5a3 3 0 0 1 6 0V9"/></svg>'
 const ICON_OPEN = '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="4.5" y="9" width="11" height="7.5" rx="2"/><path d="M7 9V6.5a3 3 0 0 1 5.6-1.5"/></svg>'
 const ICON_CLOSE = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15"/></svg>'
@@ -196,7 +203,7 @@ export async function pngOf(url) {
  * @param deps - { api, el, toast, guard, openProviders, onCardSaved, startChatWith, makeVisualNovel(cardId, places),
  *   pickDraw(options) (web/draw-choice.js: the 画图方式 and model for the avatar), openTrial(cardId, { changed }) (试玩体检) }
  */
-export function initForge({ api, el, toast, guard, saveDownload = null, openProviders, onCardSaved, startChatWith, makeVisualNovel, pickDraw, openTrial, onClosed }) {
+export function initForge({ api, el, toast, guard, saveDownload = null, openProviders, openToolPrompts = null, onCardSaved, startChatWith, makeVisualNovel, prepareArt = null, pickDraw, openTrial, onClosed }) {
   const $ = id => document.getElementById(id)
   const dialog = $('forge-dialog')
   const state = {
@@ -269,7 +276,7 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
     view.pickCount = el('span', { class: 'forge-count' })
     view.undo = el('button', { type: 'button', class: 'btn ghost small', text: t`撤回上一轮`, title: t`去掉你上一次的回答和向导对它的回复`, onclick: () => undo() })
     view.toPlan = el('button', { type: 'button', class: 'btn', text: t`差不多了，出方案`, onclick: () => makePlan() })
-    view.toPlans = el('button', { type: 'button', class: 'btn ghost', text: t`出三版来挑`, title: t`同一段讨论写出三版方案：贴着聊的、更大胆的、换个切入的，挑一版再改。花的额度和时间多一些。`, onclick: () => makePlan(true) })
+    view.toPlans = el('button', { type: 'button', class: 'btn ghost', text: t`出三版来挑`, title: t`同一段讨论先写三版提纲：贴着聊的、更大胆的、换个切入的，挑一版再写成完整方案。比直接出方案多一次很短的请求。`, onclick: () => makePlan(true) })
     view.send = el('button', { type: 'button', class: 'btn primary', text: t`继续聊`, onclick: () => send() })
     view.back = el('button', { type: 'button', class: 'btn ghost', text: t`回去接着聊`, onclick: () => setStage('discuss') })
     view.revise = el('button', { type: 'button', class: 'btn', text: t`按意见修改方案`, onclick: () => revise() })
@@ -499,6 +506,7 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
         ...state.models.map(m => el('option', { value: m.id, selected: m.id === current, text: label(m) })),
         current && !state.models.some(m => m.id === current) ? el('option', { value: current, selected: true, text: t`${current}（不可用）` }) : null,
         el('option', { value: MANAGE_PROVIDERS, text: t`管理模型供应商…` }),
+        openToolPrompts ? el('option', { value: TOOL_PROMPTS, text: t`附加提示词…` }) : null,
       ].filter(Boolean),
     )
   }
@@ -516,7 +524,7 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
   function mainKey(draft) {
     // The job counts by which one it is, not by its progress: fillBusy keeps that current.
     const job = draft?.job ? [draft.job.kind, draft.job.step, draft.job.startedAt] : null
-    return draft ? JSON.stringify([draft.id, draft.stage, draft.rounds.length, draft.rounds.at(-1)?.assistant?.at, job, draft.error, draft.plan ? draft.updatedAt : '', state.editing, state.noteFor, [...state.open].join()]) : `home:${state.list.length}:${state.list.map(d => d.updatedAt).join()}`
+    return draft ? JSON.stringify([draft.id, draft.stage, draft.rounds.length, draft.rounds.at(-1)?.assistant?.at, job, draft.error, draft.plan ? draft.updatedAt : '', draft.planOptions.map(option => option.written).join(), state.listEdit, state.editing, state.noteFor, [...state.open].join()]) : `home:${state.list.length}:${state.list.map(d => d.updatedAt).join()}`
   }
 
   function renderMain() {
@@ -633,6 +641,8 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
     else if (draft.error) items.push(errorBlock(draft.error))
     else if (!last.assistant) items.push(errorBlock({ message: t`这一轮还没有回复。` }))
     if (draft.stage === 'plan' && draft.job?.kind === 'discuss') items.push(el('p', { class: 'hint', text: t`方案会在这一轮聊完后保留。` }))
+    // 出三版来挑: the outlines come here, where they were asked for. Once one is a plan, they are on the plan page.
+    if (draft.planOptions.length && !draft.job && draft.stage === 'discuss') items.push(planOptions(draft))
     return el('div', { class: 'forge-thread' }, items)
   }
 
@@ -1035,6 +1045,62 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
     const npcs = plan.characters.filter(c => c.kind === 'npc')
     const fields = pairs => el('dl', { class: 'plan-fields' }, pairs.filter(([, v]) => v && (!Array.isArray(v) || v.length)).flatMap(([k, v]) => [el('dt', { text: k }), el('dd', { text: Array.isArray(v) ? v.join(t`；`) : v })]))
     const bullets = (items, cls = '') => el('ul', { class: `plan-list ${cls}` }, items.map(text => el('li', { text })))
+    // 直接改: the plan's people, places, factions and events added, changed and removed here, without a plan written again
+    // (server/forge/prompts.mjs editPlanList). One form is open at a time: state.listEdit = { list, name ('' = a new one) }.
+    const busy = Boolean(draft.job)
+    const written = Boolean(draft.card)
+    const putList = guard(async body => {
+      state.listEdit = null
+      apply(await api(`/api/forge/${draft.id}`, { method: 'PUT', body: { planList: body } }))
+    })
+    const LISTS = {
+      places: { add: t`＋ 加地点`, name: t`地点的名字`, fields: [['description', t`是什么样的地方`, true]] },
+      factions: { add: t`＋ 加势力`, name: t`势力的名字`, fields: [['description', t`是什么样的势力`, true]] },
+      characters: { add: t`＋ 加配角`, name: t`配角的名字`, fields: [['identity', t`身份，比如：便利店店长`], ['gender', t`性别`], ['relationship', t`和你的关系`]] },
+      events: { add: t`＋ 加事件`, name: t`事件的名字`, fields: [['when', t`什么时候发生`], ['keywords', t`对话里提到哪些词时交给模型，用顿号隔开`], ['content', t`发生什么`, true]] },
+    }
+    const editing = (list, name) => state.listEdit?.list === list && state.listEdit.name === name
+    /** 改 and 删 beside an item. */
+    const listTools = (list, item) => el('span', { class: 'plan-tools' }, [
+      el('button', { type: 'button', class: 'btn ghost small', disabled: busy, text: t`改`, title: t`直接改这一项，不用模型`, onclick: () => { state.listEdit = { list, name: item.name }; render() } }),
+      el('button', { type: 'button', class: 'btn ghost small', disabled: busy, text: t`删`, title: t`从方案里去掉`, onclick: () => {
+        if (confirm(written ? t`从方案里去掉「${item.name}」？已经为它写好的条目也会去掉。` : t`从方案里去掉「${item.name}」？`)) putList({ list, remove: item.name })
+      } }),
+    ])
+    /** The form for a new item, or over one being changed (its name stays: other things go by it). */
+    const listForm = (list, item = null) => {
+      const words = LISTS[list]
+      const name = el('input', { type: 'text', maxlength: 24, placeholder: words.name, 'aria-label': words.name, disabled: Boolean(item) })
+      name.value = item?.name ?? ''
+      const boxes = words.fields.map(([key, label, long]) => {
+        const box = el(long ? 'textarea' : 'input', { ...(long ? { rows: 2 } : { type: 'text' }), placeholder: label, 'aria-label': label })
+        box.value = Array.isArray(item?.[key]) ? item[key].join(t`、`) : item?.[key] ?? ''
+        return [key, box]
+      })
+      const save = () => {
+        if (!name.value.trim()) return name.focus()
+        const typed = Object.fromEntries(boxes.map(([key, box]) => [key, box.value]))
+        putList({ list, ...(item ? { change: { name: item.name, ...typed } } : { add: { name: name.value, ...typed } }) })
+      }
+      const note = item
+        ? written ? t`名字不在这里改。保存后，已经为它写好的条目要重写：回到「动笔」点「接着写」。` : t`名字不在这里改：要换名字，删掉再加，或者用「提意见」。`
+        : written ? t`保存后回到「动笔」点「接着写」，只写新加的这一项。` : ''
+      return el('div', { class: 'plan-list-form' }, [
+        name,
+        ...boxes.map(([, box]) => box),
+        note ? el('p', { class: 'hint', text: note }) : null,
+        el('div', { class: 'row' }, [
+          el('button', { type: 'button', class: 'btn ghost small', text: t`取消`, onclick: () => { state.listEdit = null; render() } }),
+          el('button', { type: 'button', class: 'btn primary small', disabled: busy, text: t`保存`, onclick: save }),
+        ]),
+      ])
+    }
+    /** ＋ 加…, or the form it opens. */
+    const listAdd = list => (editing(list, '')
+      ? listForm(list)
+      : el('button', { type: 'button', class: 'btn ghost small plan-list-add', disabled: busy, text: LISTS[list].add, onclick: () => { state.listEdit = { list, name: '' }; render() } }))
+    /** An item's own lines with its tools, or the form over it. */
+    const listItem = (list, item, shown) => (editing(list, item.name) ? listForm(list, item) : el('div', { class: 'plan-list-item' }, [shown, listTools(list, item)]))
     const sections = [
       section(t`概要`, [
         el('p', { class: 'plan-name', text: plan.name }),
@@ -1050,18 +1116,21 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
         fields([[t`类型`, WORLD_KIND.get(plan.world.kind) ?? plan.world.kind], [t`概述`, plan.world.overview]]),
         plan.world.rules.length ? el('h5', { text: t`和常识不同的规则` }) : null,
         plan.world.rules.length ? bullets(plan.world.rules) : null,
-        plan.world.places.length ? el('h5', { text: t`地点` }) : null,
-        ...plan.world.places.map(p => fields([[p.name, [p.description, p.scenes.length ? t`场所：${p.scenes.join(t`、`)}` : ''].filter(Boolean).join(' ')]])),
-        plan.world.factions.length ? el('h5', { text: t`势力` }) : null,
-        ...plan.world.factions.map(f => fields([[f.name, f.description]])),
+        el('h5', { text: t`地点` }),
+        ...plan.world.places.map(p => listItem('places', p, fields([[p.name, [p.description, p.scenes.length ? t`场所：${p.scenes.join(t`、`)}` : ''].filter(Boolean).join(' ') || '—']]))),
+        listAdd('places'),
+        el('h5', { text: t`势力` }),
+        ...plan.world.factions.map(f => listItem('factions', f, fields([[f.name, f.description || '—']]))),
+        listAdd('factions'),
         plan.world.history.length ? el('h5', { text: t`往事` }) : null,
         plan.world.history.length ? bullets(plan.world.history.map(h => [h.event, h.impact].filter(Boolean).join(t`：`))) : null,
       ]),
-      section(t`角色`, [...core.map(c => characterCard(c, fields, plan)), ...npcs.map(c => characterCard(c, fields, plan))]),
-      plan.events?.length ? section(t`事件`, [
+      section(t`角色`, [...[...core, ...npcs].map(c => listItem('characters', c, characterCard(c, fields, plan))), listAdd('characters')]),
+      section(t`事件`, [
         el('p', { class: 'hint', text: t`到了时机才交给模型的事：对话里提到关键词，或者数值到了某个程度。` }),
-        el('ul', { class: 'plan-list' }, plan.events.map((event, index) => eventRow(plan, event, index))),
-      ]) : null,
+        ...(plan.events ?? []).map((event, index) => listItem('events', event, el('ul', { class: 'plan-list' }, [eventRow(plan, event, index)]))),
+        listAdd('events'),
+      ]),
       section(t`文风与扮演`, [
         fields([[t`视角`, plan.style.perspective], [t`语言`, plan.style.tone], [t`氛围`, plan.style.mood], [t`参照`, plan.style.reference], [t`特别要求`, plan.style.special]]),
         plan.play_rules.length ? el('h5', { text: t`扮演准则` }) : null,
@@ -1070,6 +1139,7 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
       plan.game ? section(t`战斗与成长`, gameSection(plan.game, fields)) : null,
       plan.bricks?.length ? section(t`玩法积木`, brickSection(draft, fields, bullets)) : null,
       section(t`状态栏`, statusEditor(draft)),
+      section(t`门面`, frontEditor(draft)),
       section(t`开场白`, [
         plan.tracking.enabled ? el('p', { class: 'hint', text: t`每个开场是一个不同的起点。处境和状态栏初始值对不上的开场，带着自己的开局数值，玩家选这个开场时生效。` }) : null,
         el('ol', { class: 'plan-list' }, plan.greetings.map(g => el('li', {}, [
@@ -1088,40 +1158,39 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
       draft.job?.kind === 'plan' ? busyBlock(draft) : draft.error ? errorBlock(draft.error) : null,
       el('p', { class: 'forge-lead', text: t`方案出来了。哪里不合意，就在那一块点「提意见」写一句，写完点下面的「按意见修改方案」；也可以回去接着聊。` }),
       draft.planOptions.length > 1 ? planOptions(draft) : null,
-      draft.planMissing?.length && !draft.job ? planMissing(draft) : null,
       ...sections,
     ])
   }
 
-  /** 出三版来挑: the versions side by side; the one picked is the plan shown below. */
+  /**
+   * 出三版来挑: the versions side by side. One written as a plan can be looked at (the one picked is the plan shown
+   * below); one that is still an outline is written when asked for.
+   */
   function planOptions(draft) {
     const busy = Boolean(draft.job)
+    const written = draft.planOptions.filter(option => option.written).length
+    const total = draft.planOptions.length
     return el('section', { class: 'plan-card plan-options' }, [
-      el('header', {}, [el('h4', { text: t`${draft.planOptions.length} 版方案` })]),
-      el('p', { class: 'hint', text: t`同一段讨论写出的几版。选一版，下面就显示它的全文；提意见修改、开始写，都用选中的这一版。` }),
-      el('div', { class: 'plan-option-list' }, draft.planOptions.map((option, i) => el('button', {
-        type: 'button', class: `plan-option${option.picked ? ' on' : ''}`, 'aria-pressed': String(option.picked), disabled: busy,
-        onclick: () => !option.picked && pickPlan(i),
-      }, [
+      el('header', {}, [el('h4', { text: written ? t`${total} 版方案` : t`${total} 版提纲` })]),
+      el('p', { class: 'hint', text: written
+        ? t`同一段讨论写出的几版。写成方案的可以直接切换，下面显示选中那版的全文；提意见修改、开始写，都用选中的这一版。还只有提纲的，点「写这一版」再写（要再花一次出方案的用量）。`
+        : t`同一段讨论写出的几版提纲。挑一版写成完整方案；写完还想看别的版，可以回来再写。` }),
+      el('div', { class: 'plan-option-list' }, draft.planOptions.map((option, i) => el('div', { class: `plan-option${option.picked ? ' on' : ''}` }, [
         el('span', { class: 'tag', text: PLAN_ANGLE[option.angle] ?? option.angle }),
         el('b', { text: option.name }),
         option.summary ? el('span', { class: 'plan-option-text', text: option.summary }) : null,
+        option.differs ? el('span', { class: 'plan-option-text', text: t`不一样在：${option.differs}` }) : null,
         option.cast.length ? el('span', { class: 'hint', text: t`主要角色：${option.cast.join(t`、`)}` }) : null,
-        el('span', { class: 'hint', text: t`开场：${option.greetings.join(t` / `)}` }),
+        option.greetings.length ? el('span', { class: 'hint', text: t`开场：${option.greetings.join(t` / `)}` }) : null,
+        option.picked
+          ? el('span', { class: 'plan-option-now', text: t`下面是这一版` })
+          : el('button', { type: 'button', class: `btn small${option.written ? ' ghost' : ''}`, disabled: busy, text: option.written ? t`看这一版` : t`写这一版`, onclick: () => (option.written ? pickPlan(i) : writeOption(i)) }),
       ]))),
     ])
   }
 
-  /** Versions of 出三版来挑 that did not come (asked twice): which, why, and a way to ask for them again. */
-  function planMissing(draft) {
-    const which = draft.planMissing.map(m => PLAN_ANGLE[m.angle] ?? m.angle).join(t`、`)
-    return el('div', { class: 'forge-error' }, [
-      el('p', { text: t`「${which}」那版没写出来：${draft.planMissing[0].error}` }),
-      el('div', { class: 'row' }, [el('button', { type: 'button', class: 'btn small', text: t`再写一次`, onclick: guard(async () => apply(await api(`/api/forge/${draft.id}/plan`, { method: 'POST', body: { variants: true, missing: true } }))) })]),
-    ])
-  }
-
   const pickPlan = guard(async index => apply(await api(`/api/forge/${state.draft.id}`, { method: 'PUT', body: { planPick: index } })))
+  const writeOption = guard(async index => apply(await api(`/api/forge/${state.draft.id}/plan`, { method: 'POST', body: { option: index } })))
 
   /** An opening's own starting values, by their status bar names; nothing when it starts from the defaults. */
   function greetingState(plan, greeting) {
@@ -1180,8 +1249,8 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
     const busy = Boolean(draft.job)
     let variables = tracking.variables.map(v => ({ ...v }))
     const look = draft.plan.status ?? {}
-    // 按卡配色: the three colors the rest is worked out from, here to be changed by hand.
-    let palette = look.theme === 'auto' ? look.palette ?? { bg: '#f7f8f5', ink: '#1c2427', accent: '#2b5869' } : null
+    // 按卡配色, or under a look of the card's own (定制外观): the three colors the rest is worked out from, here to be changed by hand.
+    let palette = look.theme === 'auto' || look.skin ? look.palette ?? { bg: '#f7f8f5', ink: '#1c2427', accent: '#2b5869' } : null
     const save = guard(async ({ enabled = state.draft.plan.tracking.enabled, redraw = false } = {}) => {
       const body = { tracking: { enabled, title: title.value.trim(), variables: variables.filter(v => v.path.trim()), ...(palette ? { palette } : {}) } }
       const view = await api(`/api/forge/${draft.id}`, { method: 'PUT', body })
@@ -1191,11 +1260,13 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
     })
     const title = el('input', { type: 'text', class: 'var-title', maxlength: 30, disabled: busy, placeholder: t`状态栏标题（可不填）`, 'aria-label': t`状态栏标题` })
     title.value = tracking.title ?? ''
+    // The card's language and its main character: what a first variable, or a set of them, is named by.
+    const english = /^(en|english)/i.test(String(draft.plan.language ?? ''))
+    const lead = draft.plan.characters.find(c => c.kind === 'core')?.name ?? ''
 
     if (!tracking.enabled) {
       // A first variable to start from, in the card's language.
-      const english = /^(en|english)/i.test(String(draft.plan.language ?? ''))
-      const first = draft.plan.characters.find(c => c.kind === 'core')?.name ?? draft.plan.name
+      const first = lead || draft.plan.name
       const sample = english
         ? { path: `${first}.affection`, label: 'Affection' }
         : { path: `${first}.${zh`好感度`}`, label: zh`好感` }
@@ -1210,10 +1281,39 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
 
     const preview = el('div', { class: 'status-preview' })
     const rows = el('div', { class: 'var-rows' })
-    const drawPreview = () => {
+    const specNow = () => {
       const shown = variables.filter(v => v.path.trim())
-      const spec = cleanStatusSpec({ title: title.value.trim(), theme: look.theme, palette, fields: shown.map(v => ({ path: v.path, label: v.label, show: v.show, ...rangeOf(v.range), ...(look.pages && v.page ? { page: v.page } : {}) })) })
-      preview.replaceChildren(spec ? statusBar(el, spec, initialOf(shown), { collapsible: false, note: t`预览 · 初始值` }) ?? empty() : empty())
+      return cleanStatusSpec({ title: title.value.trim(), theme: look.theme, palette, skin: look.skin, portrait: look.portrait, scene: look.scene, effect: look.effect, phone: look.phone, fields: shown.map(v => ({ path: v.path, label: v.label, show: v.show, ...rangeOf(v.range), ...(look.pages && v.page ? { page: v.page } : {}) })) })
+    }
+    // What 调整状态栏 has for a bar's preview (web/card-check.js), once loaded: 试数值 and 定制外观.
+    let tools = null
+    const starting = () => initialOf(variables.filter(v => v.path.trim()))
+    const drawPreview = () => {
+      const spec = specNow()
+      const edit = state.skinEdit?.id === draft.id ? state.skinEdit : null
+      if (spec && edit) edit.spec = spec
+      const tried = tools && edit ? { values: tools.triedState(edit, starting()), note: tools.triedNote(edit) } : { values: starting(), note: t`预览 · 初始值` }
+      preview.replaceChildren(spec ? statusBar(el, spec, tried.values, { collapsible: false, note: tried.note }) ?? empty() : empty())
+    }
+    // 试数值 (the preview with other values) and 定制外观 (a model writes a look for this card's bar), for a plan with a bar to dress.
+    const tryout = el('div', {})
+    const design = el('div', {})
+    if (look.ui !== false && !busy) {
+      if (state.skinEdit?.id !== draft.id) state.skinEdit = { id: draft.id }
+      const edit = state.skinEdit
+      edit.spec = specNow() ?? { fields: [] }
+      edit.tryKey = `draft:${draft.id}`
+      const wear = guard(async () => apply(await api(`/api/forge/${draft.id}`, { method: 'PUT', body: { look: edit.spec.skin ? { palette: edit.spec.palette, skin: edit.spec.skin } : null, ...(edit.spec.skin && edit.spec.effect && edit.spec.effect !== look.effect ? { front: { effect: edit.spec.effect } } : {}) } })))
+      import('/card-check.js').then(loaded => {
+        if (!loaded.skinPanel || !loaded.tryoutBar || state.skinEdit !== edit) return
+        tools = loaded
+        tryout.replaceChildren(tools.tryoutBar(el, edit, { spec: () => edit.spec, state: starting(), key: edit.tryKey, onChange: () => {
+          drawPreview()
+          edit.look?.draw?.()
+        } }))
+        design.replaceChildren(tools.skinPanel(el, edit, { api, url: `/api/forge/${draft.id}/skin`, stopUrl: `/api/forge/${draft.id}/skin/stop`, state: starting(), redraw: wear, kept: look.skin?.css ?? '', instant: true, cover: draft.plan.cover ? { name: draft.plan.name, cover: draft.plan.cover } : null, busyWords: t`向导正在写，等它写完再设计外观。` }))
+        drawPreview()
+      }).catch(() => {})
     }
     const empty = () => el('p', { class: 'hint', text: t`还没有要显示的项。` })
     const drawRows = () => rows.replaceChildren(...variables.map(variableRow))
@@ -1237,6 +1337,22 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
       page.hidden = !look.pages
       const show = el('select', { class: 'var-show', disabled: busy, 'aria-label': t`显示方式` }, SHOWS.map(([value, label]) => el('option', { value, text: label })))
       show.value = v.show
+      // 只读: the story never changes it. How it changes then has nothing to say.
+      const check = input('check', { class: 'var-check', placeholder: t`什么事会让它怎么变`, 'aria-label': t`怎么变` })
+      const locked = el('input', { type: 'checkbox', disabled: busy })
+      locked.checked = v.locked === true
+      const lock = el('label', { class: 'var-lock', title: t`只读：故事里不会变的量，比如上限、名号。模型会被告知不要改它，回复里改了也会被改回来。` }, [locked, el('span', { text: t`只读` })])
+      const settleLock = () => {
+        lock.hidden = v.type === 'book'
+        check.disabled = busy || (v.locked === true && v.type !== 'book')
+        check.placeholder = check.disabled && !busy ? t`只读，不会变` : t`什么事会让它怎么变`
+      }
+      settleLock()
+      locked.addEventListener('change', () => {
+        v.locked = locked.checked
+        settleLock()
+        save()
+      })
       const row = el('div', { class: `var-row${v.show === 'hidden' ? ' quiet' : ''}` }, [
         el('div', { class: 'var-line' }, [
           input('path', { class: 'var-path', placeholder: t`谁的.什么，比如 林小雨.好感度`, 'aria-label': t`变量` }),
@@ -1254,7 +1370,8 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
           range,
           columns,
           page,
-          input('check', { class: 'var-check', placeholder: t`什么事会让它怎么变`, 'aria-label': t`怎么变` }),
+          check,
+          lock,
         ]),
       ])
       show.addEventListener('change', () => {
@@ -1264,6 +1381,7 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
         range.hidden = v.type !== 'number'
         columns.hidden = v.type !== 'book'
         columns.value = (v.columns ?? []).join(t`、`)
+        settleLock()
         row.classList.toggle('quiet', v.show === 'hidden')
         drawPreview()
         save()
@@ -1277,6 +1395,23 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
       box.addEventListener('change', () => save())
       return el('label', {}, [box, el('span', { text: label })])
     }))
+    // 变量模板: a set of variables for a kind of story, added to what is there; each is then changed like any other.
+    const templatePick = () => {
+      const pick = el('select', { class: 'var-template', disabled: busy, 'aria-label': t`加一套变量模板`, title: t`按题材一次加几项常用的变量，加进来以后可以逐项改、删。已经有的不会重复加。`, onchange: () => {
+        const id = pick.value
+        pick.value = ''
+        if (!id) return
+        const have = new Set(variables.map(v => v.path.trim()))
+        const added = templateVariables(id, { character: lead, english }).filter(v => !have.has(v.path))
+        if (!added.length) return toast(t`这套模板里的变量已经都有了`)
+        variables.push(...added)
+        drawRows()
+        drawPreview()
+        save()
+        toast(t`加了 ${added.length} 项，可以逐项改`)
+      } }, [el('option', { value: '', text: t`＋ 加一套模板…` }), ...VARIABLE_TEMPLATES.map(id => el('option', { value: id, text: TEMPLATE_TEXT[id] ?? id }))])
+      return pick
+    }
     title.addEventListener('input', drawPreview)
     title.addEventListener('change', () => save())
     drawRows()
@@ -1294,12 +1429,97 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
               drawRows()
               rows.lastElementChild?.querySelector('.var-path')?.focus()
             } }),
+            templatePick(),
             el('button', { type: 'button', class: 'btn ghost small', disabled: busy, text: t`不要状态栏`, onclick: () => save({ enabled: false, redraw: true }) }),
           ]),
         ]),
         preview,
       ]),
+      tryout,
+      design,
     ]
+  }
+
+  /**
+   * 门面: the card's 开场页 (web/cover.js) and what its status bar shows of pictures and motion. Each change is saved
+   * as it is made (the draft's `front`); the cover is shown as the card will open, without the pictures a saved card
+   * has.
+   */
+  function frontEditor(draft) {
+    const busy = Boolean(draft.job)
+    const cover = draft.plan.cover ?? null
+    const bar = draft.plan.status ?? {}
+    const hasBar = draft.plan.tracking.enabled && bar.ui !== false
+    const put = guard(async front => apply(await api(`/api/forge/${draft.id}`, { method: 'PUT', body: { front } })))
+    const check = (label, on, key, title) => {
+      const box = el('input', { type: 'checkbox', disabled: busy, onchange: () => put({ [key]: box.checked }) })
+      box.checked = on
+      return el('label', { class: 'front-check', title }, [box, el('span', { text: label })])
+    }
+    const names = { rain: t`雨`, snow: t`雪`, petals: t`花瓣`, embers: t`火星`, fireflies: t`萤火`, stars: t`星光`, dust: t`浮尘` }
+    const effect = el('select', { disabled: busy, 'aria-label': t`动效`, onchange: () => put({ effect: effect.value }) }, [el('option', { value: '', text: t`不要` }), ...EFFECTS.map(kind => el('option', { value: kind, text: names[kind] }))])
+    effect.value = (cover?.effect ?? bar.effect) || ''
+    const tagline = el('input', { type: 'text', maxlength: 60, disabled: busy, 'aria-label': t`卡名下面的一句`, placeholder: t`卡名下面的一句`, onchange: () => put({ tagline: tagline.value.trim() || null }) })
+    tagline.value = cover?.tagline ?? ''
+    const lines = el('textarea', { rows: 3, disabled: busy, 'aria-label': t`开场页上的几行字`, placeholder: t`再写几行，一行一句，最多 4 行`, onchange: () => {
+      const written = lines.value.split('\n').map(line => line.trim()).filter(Boolean)
+      put({ lines: written.length ? written : null })
+    } })
+    lines.value = (cover?.lines ?? []).join('\n')
+    // 成品预览: what a new chat with this card opens on, one under another: the cover, the start of the first opening,
+    // the status bar as the card starts. Without the pictures a saved card has.
+    const preview = el('div', { class: 'front-preview' })
+    const written = draft.card?.greetings?.find(greeting => greeting.text)?.text ?? ''
+    const start = written.replace(/<[^<>]{0,200}>/g, ' ').replace(/\n{3,}/g, '\n\n').trim()
+    const opening = el('div', { class: 'front-opening' }, [
+      el('small', { class: 'hint', text: t`开场白` }),
+      el('p', { text: start ? (start.length > 220 ? `${start.slice(0, 220)}…` : start) : t`（开场白写好以后显示在这里）` }),
+    ])
+    const shown = draft.plan.tracking.variables.filter(v => v.path.trim())
+    const spec = hasBar ? cleanStatusSpec({ title: draft.plan.tracking.title, theme: bar.theme, palette: bar.palette, skin: bar.skin, portrait: bar.portrait, scene: bar.scene, effect: bar.effect, phone: bar.phone, fields: shown.map(v => ({ path: v.path, label: v.label, show: v.show, ...rangeOf(v.range), ...(bar.pages && v.page ? { page: v.page } : {}) })) }) : null
+    const barNow = spec ? statusBar(el, spec, initialOf(shown), { collapsible: false, remembers: false }) : null
+    preview.replaceChildren(opening, ...(barNow ? [barNow] : []))
+    if (cover) {
+      import('/cover.js').then(({ coverPage }) => {
+        const page = coverPage(el, { name: draft.plan.name, by: (draft.plan.tags ?? []).slice(0, 3).join(' · '), cover, palette: bar.palette ?? null, skin: bar.skin ?? null, openings: (cover.openings ?? []).map(() => ''), picked: 0, onPick: async () => {} })
+        preview.prepend(page.node)
+      }).catch(() => {})
+    }
+    return [
+      el('p', { class: 'hint', text: t`开场页显示在开场白上面：卡名、几行字、可以选的开场。图片用这张卡在应用里已有的：卡的头像、角色名册里的立绘和表情（没有立绘时用人设图）、视觉小说的场景图。保存以后在「配图与朗读 → 角色名册」里画，或者点「做成视觉小说」一次备齐。开场页和图片只在 CicaTavern 里显示。` }),
+      el('div', { class: 'front-row' }, [
+        check(t`开场页`, Boolean(cover), 'cover', t`新对话的开场白上面先显示一页：卡名、简介和开场的选择`),
+        hasBar ? check(t`状态栏上放立绘`, bar.portrait === true, 'portrait', t`状态栏顶上显示主要角色的立绘；状态栏里有「心情」这类变量、又画了表情时，立绘跟着换表情`) : null,
+        hasBar ? check(t`状态栏上放场景图`, bar.scene === true, 'scene', t`回复写到一个有场景图的地点时，状态栏顶上显示那张图`) : null,
+        hasBar ? check(t`小手机`, bar.phone === true, 'phone', t`列表、表格、长段文字和第一页以后的各页不直接摆在状态栏上，变成一排图标，点开在一个小手机里看（背包、任务、情报这类）`) : null,
+        el('label', { class: 'front-check' }, [el('span', { text: t`动效` }), effect]),
+      ]),
+      cover ? el('div', { class: 'front-words' }, [tagline, lines]) : null,
+      cover ? el('div', { class: 'front-row' }, [check(t`导出到 SillyTavern 时带上开场页`, cover.st !== false, 'coverSt', t`带上：导出的卡第一条开场白是开场页（要装酒馆助手才显示；没装的人看到一行说明，要左右切换消息选开场）。不带：导出的卡和没有开场页时一样`)]) : null,
+      el('p', { class: 'front-whole-head' }, [el('strong', { text: t`成品预览` }), el('small', { class: 'hint', text: t`新对话打开时从上到下的样子：开场页、开场白的开头、状态栏。图片要保存以后才有。` })]),
+      preview,
+      // The pictures are a written card's: with one, they can be drawn from here, the same as 做成视觉小说 gets ready.
+      prepareArt && draft.card?.writtenAt ? pictureRow(draft, busy) : null,
+    ]
+  }
+
+  /** 备齐门面图 with what to draw beside it: the 立绘 always, 表情 and 场景 as ticked (kept while the window is open). */
+  function pictureRow(draft, busy) {
+    const want = (state.pictureWants ??= { faces: true, scenes: true })
+    const cast = draft.plan.characters.filter(c => c.looks_tags).length
+    const places = (draft.plan.world?.places ?? []).length
+    const tick = (key, label, title) => {
+      const box = el('input', { type: 'checkbox', disabled: busy, onchange: () => { want[key] = box.checked } })
+      box.checked = want[key]
+      return el('label', { class: 'front-check', title }, [box, el('span', { text: label })])
+    }
+    return el('div', { class: 'front-row' }, [
+      el('button', { type: 'button', class: 'btn small', disabled: busy, text: t`备齐门面图…`, title: t`给这张卡画立绘、表情和方案里各个地点的场景图（先保存这张卡）。开始前选画图方式，写明一共几张`, onclick: () => preparePictures(want) }),
+      el('span', { class: 'hint', text: t`立绘 ${cast} 张` }),
+      tick('faces', t`表情（每人 7 张）`, t`照着立绘给每个角色画七种表情，状态栏和视觉小说里立绘会换表情。画图方式不能照图改时不画`),
+      tick('scenes', t`场景 ${places} 张`, t`给方案里的每个地点画一张场景图，状态栏顶上和开场页的背景会用`),
+      el('small', { class: 'hint', text: t`用「配图与朗读」里设的画图方式，花的是画图那边的额度。头像在「打磨与头像」里画。` }),
+    ])
   }
 
   /** How a core character's stages read: names, and the range of the tracked value each covers. */
@@ -1342,6 +1562,9 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
     const events = plan.random_events
     const judge = plan.judge
     const moves = plan.world_moves
+    const schedule = plan.schedule
+    const relations = plan.relations
+    const routes = plan.routes
     const form = plan.creation
     const cost = draft.brickCost
     return [
@@ -1364,6 +1587,12 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
       ]) : null,
       moves?.lines.length ? el('h5', { text: t`世界动态（约 ${EVENT_RATES[moves.rate]} 轮动一步）` }) : null,
       moves?.lines.length ? fields(moves.lines.map(line => [line.name, line.stages.join(' → ')])) : null,
+      schedule?.people.length ? el('h5', { text: t`日程（${schedule.periods.join(' → ')}）` }) : null,
+      schedule?.people.length ? fields(schedule.people.map(person => [person.name, [...schedule.periods.map((period, i) => (person.slots[i] ? t`${period}：${person.slots[i]}` : '')).filter(Boolean), person.off ? t`不照日程的时候：${person.off}` : ''].filter(Boolean)])) : null,
+      relations?.pairs.length ? el('h5', { text: t`关系网` }) : null,
+      relations?.pairs.length ? fields(relations.pairs.map(pair => [t`${pair.a}和${pair.b}`, pair.knot ? t`${pair.now}。没解开的事：${pair.knot}` : pair.now])) : null,
+      routes?.routes.length ? el('h5', { text: t`路线与结局（状态栏里不显示）` }) : null,
+      routes?.routes.length ? fields(routes.routes.map(route => [route.name, [t`走上这条线：${route.enter || t`看故事怎么走`}`, t`节点：${route.marks.join(' → ')}`, t`结局：${route.ending}`]])) : null,
       form?.fields.length ? el('h5', { text: t`建角页` }) : null,
       form?.fields.length ? fields(form.fields.map(field => [field.label, field.kind === 'text' ? t`玩家自己写` : field.kind === 'points' ? t`${field.total} 点分给：${field.options.join(t`、`)}` : field.options])) : null,
     ]
@@ -1931,6 +2160,15 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
     await makeVisualNovel?.(id, places)
   })
 
+  /** 门面 → 备齐门面图: the card saved first (pictures are a saved card's), then its 立绘, 表情 and places drawn. */
+  const preparePictures = guard(async ({ faces = true, scenes = true } = {}) => {
+    if (!state.draft?.card?.savedCardId) await saveCard()
+    const id = state.draft?.card?.savedCardId
+    if (!id) return
+    const places = scenes ? (state.draft.plan?.world?.places ?? []).map(place => place.name) : []
+    await prepareArt(id, places, { faces })
+  })
+
   const setStage = guard(async stage => {
     if (!state.draft || stage === state.draft.stage || !STAGE_TEXT[stage]) return
     apply(await api(`/api/forge/${state.draft.id}`, { method: 'PUT', body: { stage } }))
@@ -1938,9 +2176,10 @@ export function initForge({ api, el, toast, guard, saveDownload = null, openProv
 
   const changeModel = guard(async () => {
     const value = view.model.value
-    if (value === MANAGE_PROVIDERS) {
+    if (value === MANAGE_PROVIDERS || value === TOOL_PROMPTS) {
       renderModels(true)
-      openProviders?.()
+      if (value === MANAGE_PROVIDERS) openProviders?.()
+      else openToolPrompts?.('forge')
       return
     }
     if (!state.draft) {

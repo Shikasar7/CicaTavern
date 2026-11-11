@@ -8,6 +8,7 @@
 // is applied again (the bar the preset window shows too); keyword entries and
 // templated ones are read every turn.
 import { t } from '/i18n.js'
+import { decodeTextFile } from '/shared/card-edit.js'
 
 // SillyTavern positions; 2–4 all go to the end of the context here (server/worldbook.mjs isLate).
 const POSITIONS = [[0, t`角色定义前`], [1, t`角色定义后`], [4, t`上下文末尾`]]
@@ -183,6 +184,7 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
   async function select(id, query = '') {
     // The book left keeps its entries as edited here, for the search across books.
     if (state.detail) state.everything.set(state.detail.id, state.detail.entries)
+    state.novelOpen = false
     state.selected = id
     state.query = query
     state.open.clear()
@@ -264,7 +266,168 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
     $('book-headwrap')?.replaceChildren(...headParts().filter(Boolean))
   }
 
+  // ─── 从小说抽取 ─────────────────────────────────────────────────────────
+  // A novel, or any long text, read a stretch at a time into entries (server/forge/novel.mjs). Nothing is sent till
+  // 开始抽取; it goes on in the background, is stopped and taken up again, and ends as a list to pick a new book from.
+  const NOVEL_TYPES = { 人物: t`人物`, 地点: t`地点`, 势力: t`势力`, 物品: t`物品`, 设定: t`设定`, 事件: t`事件` } // i18n-ignore: the kinds as the server names them
+  const count = n => Number(n ?? 0).toLocaleString()
+
+  async function openNovel() {
+    state.novelOpen = true
+    state.selected = null
+    state.detail = null
+    state.novel = await api('/api/novel').catch(() => null)
+    state.novelPicked = null
+    state.novelSeen = null
+    state.novelName = undefined
+    renderNav()
+    renderMain()
+    dialog.querySelector('.preset-layout').classList.add('show-main')
+    pollNovel()
+  }
+
+  function pollNovel() {
+    clearTimeout(state.novelPoll)
+    if (!state.novelOpen || !state.novel?.novel?.job || !dialog.open) return
+    state.novelPoll = setTimeout(async () => {
+      const data = await api('/api/novel').catch(() => null)
+      if (data && state.novelOpen) {
+        state.novel = data
+        renderMain()
+      }
+      pollNovel()
+    }, 2000)
+  }
+
+  const novelCall = (path, options) => guard(async () => {
+    state.novel = await api(`/api/novel${path}`, options)
+    renderMain()
+    pollNovel()
+  })()
+
+  async function pickNovel(file) {
+    if (!file) return
+    const text = decodeTextFile(await file.arrayBuffer())
+    state.novelPicked = null
+    state.novelSeen = null
+    state.novelName = undefined
+    await novelCall('', { method: 'POST', body: { name: file.name, text } })
+  }
+
+  function novelStepText(job) {
+    const [, kind, at, total] = /^(read|merge):(\d+):(\d+)$/.exec(job.step ?? '') ?? []
+    if (kind === 'read') return t`正在读第 ${at} / ${total} 段…可以关掉窗口，回来再看。`
+    if (kind === 'merge') return t`都读完了，正在把同一个名字的几段笔记合成一条：第 ${at} / ${total} 批…`
+    return t`正在发给模型…`
+  }
+
+  function renderNovel() {
+    const novel = state.novel?.novel
+    const head = el('header', { class: 'preset-head' }, [el('div', { class: 'preset-title' }, [el('h3', { text: t`从小说抽取世界书` })])])
+    if (!state.novel) {
+      $('book-main').replaceChildren(head, el('div', { class: 'preset-empty' }, [el('p', { text: t`这个功能要重启一次 CicaTavern 才能用。` })]))
+      return
+    }
+    if (!novel) {
+      const file = el('input', { type: 'file', accept: '.txt,.md,.text,text/plain,text/markdown', hidden: true, onchange: guard(async event => {
+        const [picked] = event.target.files
+        event.target.value = ''
+        await pickNovel(picked)
+      }) })
+      $('book-main').replaceChildren(head, el('div', { class: 'book-novel' }, [
+        el('p', { text: t`把一部小说、一份很长的设定整本读完，抽成一本世界书：人物、地点、势力、物品、设定和发生过的大事，一样一条，对话里提到名字时才发给模型。` }),
+        el('p', { class: 'hint', text: t`选一个文本文件（txt、md，UTF-8 和 GBK 都认，最多 300 万字）。选了只是切好段、估出用量，点「开始抽取」才发送。Word 和 PDF 先另存成 txt。` }),
+        el('label', { class: 'btn primary small' }, [t`选文件…`, file]),
+      ]))
+      return
+    }
+    const { job, estimate, stage } = novel
+    const busy = Boolean(job)
+    const limit = el('input', { type: 'number', min: 1, max: novel.stretches.length, value: novel.limit, disabled: busy, 'aria-label': t`读前几段`, onchange: () => novelCall('', { method: 'PUT', body: { limit: Number(limit.value) || 0 } }) })
+    const costs = part => (part.cost == null ? '' : t`，大约 $${part.cost.toFixed(2)}`)
+    // The part asked for is read and there is more of the text: it can go on to the end.
+    const more = stage === 'ready' && novel.rest?.stretches > 0 ? novel.rest : null
+    const left = !estimate.ready
+      ? stage === 'ready' && !more ? '' : t`还没有可用的模型：先在「设置 → 模型」里添加供应商，选一个默认模型。`
+      : stage === 'reading'
+        ? t`还要读 ${estimate.stretches} 段：发给 ${estimate.model}，大约 ${count(estimate.input)} 输入、${count(estimate.output)} 输出 token${costs(estimate)}。读完后合并同名的条目还要再花一两成。思考多的模型会更高。`
+        : stage === 'merging'
+          ? t`都读完了，还有 ${novel.toMerge} 批同名的笔记要让模型合成一条。`
+          : more ? t`后面还有 ${more.stretches} 段没读：都读完大约 ${count(more.input)} 输入、${count(more.output)} 输出 token${costs(more)}。` : ''
+    const found = Object.entries(novel.counts).filter(([, n]) => n).map(([type, n]) => t`${NOVEL_TYPES[type] ?? type} ${n}`).join(t` · `)
+    const top = el('div', { class: 'book-novel' }, [
+      el('p', {}, [el('b', { text: novel.name }), el('span', { class: 'hint', text: t` · ${count(novel.chars)} 字 · 切成 ${novel.stretches.length} 段` })]),
+      el('p', { class: 'hint', text: t`已经读了 ${novel.done} 段${found ? t`，记下：${found}` : ''}。` }),
+      novel.failed.length ? el('p', { class: 'ce-outcome warn', text: t`第 ${novel.failed.join(t`、`)} 段模型没有按格式回答，跳过了；里面的内容没有记下。` }) : null,
+      stage === 'reading' && !busy ? el('label', { class: 'book-novel-limit' }, [el('span', { text: t`只读前` }), limit, el('span', { text: t`段（共 ${novel.stretches.length} 段；想先试试，填个小的数）` })]) : null,
+      left ? el('p', { class: 'hint', text: left }) : null,
+      novel.error && !busy ? el('p', { class: 'ce-outcome warn', text: novel.error }) : null,
+      el('div', { class: 'row book-novel-actions' }, [
+        busy
+          ? el('span', { class: 'forge-working' }, [el('span', { class: 'dots' }), el('span', { text: novelStepText(job) })])
+          : stage !== 'ready'
+            ? el('button', { type: 'button', class: 'btn primary small', disabled: !estimate.ready, text: novel.done ? t`接着抽` : t`开始抽取`, onclick: () => novelCall('/run', { method: 'POST' }) })
+            : more
+              ? el('button', { type: 'button', class: 'btn small', disabled: !estimate.ready, text: t`把剩下的 ${more.stretches} 段也读完`, onclick: guard(async () => {
+                await api('/api/novel', { method: 'PUT', body: { limit: 0 } })
+                await novelCall('/run', { method: 'POST' })
+              }) })
+              : null,
+        busy ? el('button', { type: 'button', class: 'btn small', text: t`停下`, title: t`读完的几段都留着，之后可以接着抽`, onclick: guard(async () => {
+          await api('/api/novel/stop', { method: 'POST' })
+          state.novel = await api('/api/novel')
+          renderMain()
+          pollNovel()
+        }) }) : null,
+        el('span', { class: 'grow' }),
+        busy ? null : el('button', { type: 'button', class: 'btn ghost small', text: t`不要了`, title: t`丢掉这部小说和已经记下的内容`, onclick: () => { if (confirm(t`丢掉「${novel.name}」和已经记下的 ${novel.entries.length} 条？`)) novelCall('', { method: 'DELETE' }) } }),
+      ]),
+    ].filter(Boolean))
+    if (!novel.entries.length) {
+      $('book-main').replaceChildren(head, top)
+      return
+    }
+    // What was noted, a kind at a time: all of it picked till the user unpicks.
+    state.novelPicked ??= new Set(novel.entries.map(entry => entry.name))
+    for (const entry of novel.entries) if (!state.novelSeen?.has(entry.name)) state.novelPicked.add(entry.name)
+    state.novelSeen = new Set(novel.entries.map(entry => entry.name))
+    const picked = state.novelPicked
+    const name = el('input', { type: 'text', maxlength: 100, 'aria-label': t`世界书的名字`, placeholder: t`世界书的名字`, oninput: () => { state.novelName = name.value } })
+    name.value = state.novelName ?? novel.name
+    const save = el('button', { type: 'button', class: 'btn primary small', disabled: busy, text: t`把勾上的 ${[...picked].filter(item => state.novelSeen.has(item)).length} 条写成一本世界书`, onclick: guard(async () => {
+      const book = await api('/api/novel/save', { method: 'POST', body: { name: name.value, picked: [...picked] } })
+      await refreshBooks()
+      onChanged?.()
+      toast(t`已写成世界书「${book.name}」${book.entries} 条。小说和笔记还留着，不用了点「不要了」。`)
+      await select(book.id)
+    }) })
+    const groups = Object.keys(NOVEL_TYPES).flatMap(type => {
+      const list = novel.entries.filter(entry => entry.type === type)
+      if (!list.length) return []
+      return [el('details', { class: 'book-novel-group', open: type === Object.keys(NOVEL_TYPES)[0] }, [
+        el('summary', { text: t`${NOVEL_TYPES[type]} · ${list.length}` }),
+        el('ul', { class: 'book-novel-list' }, list.map(entry => el('li', {}, [
+          el('label', { class: 'check-row' }, [
+            el('input', { type: 'checkbox', checked: picked.has(entry.name), onchange: event => { if (event.target.checked) picked.add(entry.name); else picked.delete(entry.name); save.textContent = t`把勾上的 ${[...picked].filter(item => state.novelSeen.has(item)).length} 条写成一本世界书` } }),
+            el('b', { text: entry.name }),
+            entry.aliases.length ? el('span', { class: 'hint', text: entry.aliases.join(t`、`) }) : null,
+            entry.parts > 1 ? el('span', { class: 'hint', text: stage === 'ready' ? t`${entry.parts} 处合成` : t`${entry.parts} 处，还没合并` }) : null,
+          ]),
+          el('p', { class: 'book-novel-text', text: entry.content }),
+        ]))),
+      ])]
+    })
+    $('book-main').replaceChildren(head, top, el('div', { class: 'book-novel' }, [
+      stage === 'ready'
+        ? el('p', { class: 'hint', text: t`读完了。不要的条目去掉勾，写成世界书后每一条还能再改；它是一本单独的世界书，挂到卡上才生效。` })
+        : el('p', { class: 'hint', text: t`还没读完，下面是到现在记下的。现在就写成世界书也可以，同名的几段笔记会原样接在一起。` }),
+      el('div', { class: 'row book-novel-save' }, [name, save]),
+      ...groups,
+    ]))
+  }
+
   function renderMain() {
+    if (state.novelOpen) return renderNovel()
     const detail = state.detail
     if (!detail) {
       $('book-main').replaceChildren(el('div', { class: 'preset-empty' }, [
@@ -912,6 +1075,8 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
   }
 
   $('book-new').addEventListener('click', guard(newBook))
+  // A page from before this button (the server not restarted, the page cached) has none.
+  $('book-novel')?.addEventListener('click', guard(openNovel))
   $('book-import').addEventListener('change', guard(async event => {
     const files = [...event.target.files]
     event.target.value = ''

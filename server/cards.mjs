@@ -7,7 +7,8 @@ import { normalizeBook } from './worldbook.mjs'
 import { httpError, newId } from './store.mjs'
 import { normalizeScripts, withUniqueIds } from '../web/shared/regex.js'
 import { DIRECT_CARD } from '../web/shared/basic.js'
-import { cleanStatusSpec } from '../web/shared/status.js'
+import { cleanPath, cleanStatusSpec } from '../web/shared/status.js'
+import { COVER_HIDE_SCRIPT, COVER_MARK, COVER_SCRIPT, cleanCover } from '../web/shared/cover.js'
 import { msg } from './i18n.mjs'
 import { usesMvu } from './mvu.mjs'
 import { cleanHelperList, helperSummary } from './helper-scripts.mjs'
@@ -144,18 +145,19 @@ export function unwrapWorkspace(json) {
 // to move it to another device; import it like any card file.
 export const CARD_FORMAT = 'agent-tavern-card'
 
-export function exportCard(card, avatar = null) {
-  return { format: CARD_FORMAT, version: 1, exportedAt: new Date().toISOString(), card, avatar: avatar ? avatar.toString('base64') : null }
+export function exportCard(card, avatar = null, coverArt = null) {
+  return { format: CARD_FORMAT, version: 1, exportedAt: new Date().toISOString(), card, avatar: avatar ? avatar.toString('base64') : null, ...(coverArt ? { coverArt: coverArt.toString('base64') } : {}) }
 }
 
-/** An exported card → { card (fresh id, no media), avatar, game (its rule book) }; null when the file is not one. */
+/** An exported card → { card (fresh id, no media), avatar, coverArt (开场页的图), game (its rule book) }; null when the file is not one. */
 export function importOwnCard(json) {
   if (json?.format !== CARD_FORMAT) return null
   const card = json.card
   if (!card || typeof card !== 'object' || typeof card.name !== 'string' || !card.name.trim()) throw httpError(400, msg`角色卡文件不完整`)
-  const { media, game, ...rest } = card
+  const { media, game, coverArt: _picked, ...rest } = card
   const avatar = typeof json.avatar === 'string' && json.avatar ? Buffer.from(json.avatar, 'base64') : null
-  return { card: { ...rest, ...ownCardFields(card), id: newId(), worldbookIds: [], hasAvatar: Boolean(avatar), importedAt: new Date().toISOString() }, avatar, game }
+  const coverArt = typeof json.coverArt === 'string' && json.coverArt ? Buffer.from(json.coverArt, 'base64') : null
+  return { card: { ...rest, ...ownCardFields(card), id: newId(), worldbookIds: [], hasAvatar: Boolean(avatar), ...(coverArt ? { coverArt: Date.now() } : {}), importedAt: new Date().toISOString() }, avatar, coverArt, game }
 }
 
 const strings = value => (Array.isArray(value) ? value.filter(item => typeof item === 'string') : [])
@@ -200,8 +202,15 @@ function ownCardFields(card) {
     helperScripts: Number.isInteger(card.helperScripts) && card.helperScripts > 0 ? card.helperScripts : 0,
     helperList: cleanHelperList(card.helperList),
     statusBar: cleanStatusSpec(card.statusBar),
+    cover: cleanCover(card.cover),
     userName: str(card.userName).trim().slice(0, 24),
+    readOnly: cleanReadOnly(card.readOnly),
   }
+}
+
+/** 只读变量: the paths of the variables a card keeps as they are, whatever a reply writes (创作角色卡 marks them). */
+export function cleanReadOnly(paths) {
+  return [...new Set((Array.isArray(paths) ? paths : []).map(path => cleanPath(str(path).trim().slice(0, 60))).filter(Boolean))].slice(0, 200)
 }
 
 /** The hidden card 直连对话's chats hang on (DIRECT_CARD): it lists nowhere, and adds nothing to what the model reads. */
@@ -236,14 +245,17 @@ export function normalizeCard(raw) {
   if (!data || typeof data !== 'object' || !str(data.name)) throw httpError(400, msg`角色卡缺少 name 字段`)
   const extensions = data.extensions && typeof data.extensions === 'object' ? data.extensions : {}
   const book = data.character_book ? normalizeBook(data.character_book, `${data.name} 内嵌世界书`) : null
+  const openings = Array.isArray(data.alternate_greetings) ? data.alternate_greetings.filter(g => typeof g === 'string') : []
+  const covered = str(data.first_mes).startsWith(COVER_MARK) && Boolean(cleanCover(extensions.cicatavern?.cover))
   return {
     id: newId(),
     name: str(data.name).trim(),
     description: str(data.description),
     personality: str(data.personality),
     scenario: str(data.scenario),
-    firstMes: str(data.first_mes),
-    alternateGreetings: Array.isArray(data.alternate_greetings) ? data.alternate_greetings.filter(g => typeof g === 'string') : [],
+    // A card that went out with its cover as the first opening (forge/cover-frame.mjs) comes back with its own openings.
+    firstMes: covered ? openings[0] ?? '' : str(data.first_mes),
+    alternateGreetings: covered ? openings.slice(1) : openings,
     mesExample: str(data.mes_example),
     systemPrompt: str(data.system_prompt),
     postHistoryInstructions: str(data.post_history_instructions),
@@ -252,7 +264,7 @@ export function normalizeCard(raw) {
     tags: Array.isArray(data.tags) ? data.tags.filter(t => typeof t === 'string').slice(0, 20) : [],
     spec: str(raw.spec) || 'v1',
     book,
-    regexScripts: withUniqueIds(normalizeScripts(extensions.regex_scripts)),
+    regexScripts: withUniqueIds(normalizeScripts(extensions.regex_scripts)).filter(script => !covered || (script.id !== COVER_SCRIPT && script.id !== COVER_HIDE_SCRIPT)),
     // Character note inserted near the end of the context in SillyTavern; here: the tail of each turn.
     depthPrompt: str(extensions.depth_prompt?.prompt),
     // Tavern Helper scripts are not run; MVU behaviour is built in, and a schema among them is kept to (schema.mjs).
@@ -262,8 +274,12 @@ export function normalizeCard(raw) {
     mvuSchema: schemaScript(extensions),
     // The status bar layout a card creator card carries (web/shared/status.js); the page draws it.
     statusBar: cleanStatusSpec(extensions.cicatavern?.status_bar),
+    // 开场页 (web/shared/cover.js): what a card creator card shows above its opening; the page draws it.
+    cover: cleanCover(extensions.cicatavern?.cover),
     // The player's name a card creator card has of its own; '' = the one in settings.
     userName: str(extensions.cicatavern?.user_name).trim().slice(0, 24),
+    // The variables a card creator card marks read-only.
+    readOnly: cleanReadOnly(extensions.cicatavern?.read_only),
     worldbookIds: [],
     hasAvatar: false,
     importedAt: new Date().toISOString(),
@@ -360,7 +376,7 @@ export function sillyTavernCard(card, base = null) {
     extensions.regex_scripts = card.regexScripts.map((script, i) => ({ ...plain(before.find(s => s?.id && String(s.id) === script.id) ?? before[i]), ...script }))
   }
   extensions.depth_prompt = { depth: 4, role: 'system', ...plain(extensions.depth_prompt), prompt: card.depthPrompt ?? '' }
-  const own = { ...plain(extensions.cicatavern), ...(card.statusBar ? { status_bar: card.statusBar } : {}), ...(card.userName ? { user_name: card.userName } : {}), ...(card.game ? { game: card.game } : {}) }
+  const own = { ...plain(extensions.cicatavern), ...(card.statusBar ? { status_bar: card.statusBar } : {}), ...(card.cover ? { cover: card.cover } : {}), ...(card.userName ? { user_name: card.userName } : {}), ...(card.readOnly?.length ? { read_only: card.readOnly } : {}), ...(card.game ? { game: card.game } : {}) }
   if (Object.keys(own).length) extensions.cicatavern = own
   const data = {
     ...from,
@@ -410,6 +426,8 @@ export function cardSummary(card) {
     creator: card.creator,
     tags: card.tags,
     hasAvatar: card.hasAvatar,
+    // 开场页的图 picked for the card: when (a number for the picture's address to change with it), else 0.
+    coverArt: Number(card.coverArt) || 0,
     greetings: greetingsOf(card).length,
     bookEntries: card.book?.entries.length ?? 0,
     // Of those, the ones in use, and the always-on ones among them (the rest wait for their keywords).

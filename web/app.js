@@ -1,7 +1,7 @@
 // Agent Tavern web UI. Plain DOM, no build step.
-import { markdownHtml, blockShown, displayOf, fillFrameSlots, frameSlot, frameText, htmlFrame, listenForFrameHeights, perf, perfHeaders, perfReport, slotText, readableText, nameMacros, segments, streamingText, useBlockWords, usesStatusPlaceholder, withoutOwnStatus, useGameMarks } from '/render.js'
+import { chatText, markdownHtml, blockShown, displayOf, fillFrameSlots, frameSlot, frameText, htmlFrame, listenForFrameHeights, perf, perfHeaders, perfReport, slotText, readableText, nameMacros, segments, streamingText, useBlockWords, usesStatusPlaceholder, withoutOwnStatus, useGameMarks } from '/render.js'
 import { choiceList, statusBar, timeBox } from '/status.js'
-import { BASIC_ID, DIRECT_CARD, VN_ID, builtinKey, builtinOptions, choiceLetter, choicesOf, isBuiltinPreset, otherChoices, timeBoxOf } from '/shared/basic.js'
+import { BASIC_ID, DIRECT_CARD, VN_ID, builtinKey, builtinOptions, choiceLetter, choicesOf, isBuiltinPreset, otherChoices, quietMentions, timeBoxOf } from '/shared/basic.js'
 import { autoStatusSpec, withNewcomers } from '/shared/status.js'
 import { basicField, fieldsOf } from '/basic-options.js'
 import { allowLibraries, broadcastChatVars, broadcastEvent, broadcastInput, cardAudio, broadcastRelay, broadcastState, installFrameBridge, storedFrameStorage, storedVariables } from '/compat.js'
@@ -28,6 +28,9 @@ import { initDrawChoice } from '/draw-choice.js'
 import { initCardPermissions } from '/card-permissions.js'
 import { createFramePermissions } from '/shared/frame-permissions.js'
 import { initVn } from '/vn.js'
+import { initCardArt } from '/card-art.js'
+import { coverPage } from '/cover.js'
+import { pickedOpening } from '/shared/cover.js'
 import { FOLD_TAG, markSpeakers } from '/shared/vn.js'
 import { PLACEMENT, chatScriptList, depthWindow, isRegexFile, scriptsInFile } from '/shared/regex.js'
 import { lang, locale, t, zh } from '/i18n.js'
@@ -428,6 +431,14 @@ async function showBlockWords(words) {
   useBlockWords(words, matcher?.blockText ?? null)
 }
 
+/** 设置 → 写作 → 内置功能的附加提示词 (web/tool-prompts.js, loaded when first opened); `group` the one to go to. */
+const openToolPrompts = guard(async (group = '') => {
+  const { openToolPrompts: open } = await import('/tool-prompts.js').catch(() => {
+    throw Object.assign(new Error(t`附加提示词要重启后台服务后才能用：关掉所有窗口等一分钟，再从桌面图标打开。`), { status: 404 })
+  })
+  await open({ api, el, toast, guard, onSaved: settings => { ui.settings = settings; settingsMenu?.refresh() } }, group)
+})
+
 /** 设置 → 屏蔽词 (web/blockwords.js, loaded when first opened). */
 const openBlockWords = guard(async () => {
   const { openBlockWords: open } = await import('/blockwords.js').catch(() => {
@@ -811,12 +822,9 @@ function renderChats() {
         ]),
         document.documentElement.dataset.edition === 'android' && !android?.saveDownload
           ? null
-          : el('a', { class: 'item-del item-edit', title: t`打包整段对话（每一轮、每个分支和配图），在另一台设备上用「导入存档」导入`, text: '⇩', href: `/api/chats/${chat.id}/package`, download: '', onclick: event => {
+          : el('button', { class: 'item-del item-edit', title: t`导出这段对话：对话包，或文本、Markdown 文件`, text: '⇩', onclick: event => {
               event.stopPropagation()
-              // The phone app saves it itself, under the name the server gives it.
-              if (!android?.saveDownload) return
-              event.preventDefault()
-              savedToDownloads(android.saveDownload(`/api/chats/${chat.id}/package`, fileName(`${chat.title || chat.id}.tavernchat`), 'application/octet-stream'))
+              chatExportMenu(event.currentTarget, chat)
             } }),
         el('button', { class: 'item-del item-edit', title: t`重命名`, text: '✎', onclick: event => { event.stopPropagation(); renameChat(chat) } }),
         el('button', { class: 'item-del', title: t`删除对话`, text: '✕', onclick: event => { event.stopPropagation(); deleteChat(chat) } }),
@@ -840,17 +848,20 @@ async function refreshChats() {
   renderChats()
 }
 
-/** @param options.byHand - picked in the list: a card with no chat yet then asks whether to start one. */
-const selectCard = guard(async (id, { byHand = false } = {}) => {
+/**
+ * @param options.byHand - picked in the list: a card with no chat yet then asks whether to start one.
+ * @param options.held - { chatId, title }: a chat whose opening held the page last time, not opened by itself (正则限时).
+ */
+const selectCard = guard(async (id, { byHand = false, held = null } = {}) => {
   const recorded = perf.begin('switch', ui.cards.find(card => card.id === id)?.name ?? id)
   try {
-    await showCard(id, byHand)
+    await showCard(id, byHand, held)
   } finally {
     recorded()
   }
 })
 
-async function showCard(id, byHand) {
+async function showCard(id, byHand, held = null) {
   ui.cardId = id
   mediaUi.setCard(id)
   // The chosen card shows in the list, even when it sits in a folded group or the archive.
@@ -862,7 +873,8 @@ async function showCard(id, byHand) {
   const card = await api(`/api/cards/${id}`)
   ui.cardDetails.set(id, card)
   showCardInfo(card)
-  if (ui.chats[0]) await openChat(ui.chats[0].id)
+  if (ui.chats[0] && ui.chats[0].id === held?.chatId) await recoverHeldChat(held.chatId, ui.chats[0].title ?? held.title, held.fresh)
+  else if (ui.chats[0]) await openChat(ui.chats[0].id)
   else setChat(null)
   closeDrawers()
   // 直连对话 starts one without asking: its 联网 and model are the chat's, to be set before the first message.
@@ -895,7 +907,9 @@ function popMenu(anchor, entries) {
     entries.map(entry => {
       if (entry === '-') return el('hr')
       if (entry.header) return el('div', { class: 'pop-head', text: entry.header })
-      return el('button', { type: 'button', role: 'menuitem', class: [entry.danger ? 'danger' : '', entry.current ? 'current' : ''].filter(Boolean).join(' '), disabled: entry.current, title: entry.hint, onclick: () => { closeMenu(); entry.onClick() } }, [entry.current ? '✓ ' : '', entry.label])
+      // `checked` (true or false): an option the entry turns on and off.
+      const box = typeof entry.checked === 'boolean'
+      return el('button', { type: 'button', role: box ? 'menuitemcheckbox' : 'menuitem', 'aria-checked': box ? String(entry.checked) : null, class: [entry.danger ? 'danger' : '', entry.current ? 'current' : ''].filter(Boolean).join(' '), disabled: entry.current, title: entry.hint, onclick: () => { closeMenu(); entry.onClick() } }, [entry.current ? '✓ ' : box ? (entry.checked ? '☑ ' : '☐ ') : '', entry.label])
     }),
   )
   document.body.append(menu)
@@ -1429,6 +1443,7 @@ async function showChat(id) {
   // What the drawing depends on (the card's regex and rules), before it: a long chat drawn once, not again as each arrives.
   await Promise.all([loadRules(view), loadCardDetail(view.cardId), loadPresetDetail(view.presetId)])
   followServerTurn(view)
+  markOpening(view)
   setChat(view)
   closeDrawers()
 }
@@ -1494,8 +1509,164 @@ const startChat = guard(async greetingIndex => {
 function scriptsFor(chat) {
   const card = ui.cardDetails.get(chat?.cardId)
   const scripts = chatScriptList({ global: ui.globalRegex, preset: ui.presetDetails.get(chat?.presetId)?.regexScriptList ?? [], card: card?.regexScriptList ?? [], cardId: chat?.cardId, sets: ui.regexSets, changes: chat?.regexChanges ?? null })
-  // A card creator card's bar is drawn here from its layout; its SillyTavern copy stays out.
-  return card?.statusBar ? withoutOwnStatus(scripts) : scripts
+  // A card creator card's bar is drawn here from its layout; its SillyTavern copy stays out. One found never to finish
+  // on a chat's text (正则限时 below) is left out of what this page draws.
+  const shown = slowRegex.size ? scripts.filter(script => !slowRegex.has(script.findRegex)) : scripts
+  return card?.statusBar ? withoutOwnStatus(shown) : shown
+}
+
+// ─── 正则限时: a chat whose opening held the page ─────────────────────
+// A display regex runs in this page and cannot be stopped once it starts: one that backtracks without end (/^(a+)+$/
+// on a long run of a's) holds the page, and on a phone every card frame with it, so nothing answers a tap, and
+// the app, started again, opens the same chat again. The server bounds the time of the ones it runs
+// (server/regex-guard.mjs); here a chat being opened is marked until the page has been free for a moment after
+// drawing it. Still marked at the next start, it held the page: it is not opened by itself then, its display regex
+// is run in a worker (web/regex-vet.js) with a bound on each, and one that runs past it is left out of what this
+// page draws (kept in this browser, by its pattern: changed, it is tried again). With no regex at fault (a card's own
+// script that never ends, in a frame that shares the page's thread), the chat stays unopened at each start until it
+// is opened once without holding the page.
+const OPENING_KEY = 'cicatavern.opening'
+const HELD_KEY = 'cicatavern.heldChat'
+const OPEN_SETTLE_MS = 4000
+const SLOW_REGEX_KEY = 'cicatavern.slowDisplayRegex'
+const VET_START_MS = 15_000 // the worker's own start, slower on a phone
+const VET_STEP_MS = 3000 // one script on one message
+const VET_TOTAL_MS = 90_000
+const slowRegex = new Set((() => {
+  try {
+    const kept = JSON.parse(localStorage.getItem(SLOW_REGEX_KEY))
+    return Array.isArray(kept) ? kept.filter(item => typeof item === 'string') : []
+  } catch {
+    return []
+  }
+})())
+
+function keepSlowRegex(patterns) {
+  for (const pattern of patterns) slowRegex.add(pattern)
+  try {
+    localStorage.setItem(SLOW_REGEX_KEY, JSON.stringify([...slowRegex].slice(-50)))
+  } catch {
+    // Private mode: for this page only.
+  }
+}
+
+function clearOpening() {
+  clearTimeout(markOpening.timer)
+  try {
+    localStorage.removeItem(OPENING_KEY)
+  } catch {
+    // Nothing kept.
+  }
+}
+
+/**
+ * The chat about to be drawn, until the page has been free for OPEN_SETTLE_MS after it (a timer held up with it), or
+ * goes out of sight: an app put away right after it started was not held, and a page that is held runs nothing.
+ */
+function markOpening(chat) {
+  clearTimeout(markOpening.timer)
+  try {
+    localStorage.setItem(OPENING_KEY, JSON.stringify({ chatId: chat.id, title: chat.title ?? '' }))
+  } catch {
+    return
+  }
+  markOpening.timer = setTimeout(() => {
+    clearOpening()
+    try {
+      if (JSON.parse(localStorage.getItem(HELD_KEY))?.chatId === chat.id) localStorage.removeItem(HELD_KEY)
+    } catch {
+      // Nothing kept.
+    }
+  }, OPEN_SETTLE_MS)
+}
+document.addEventListener('visibilitychange', () => { if (document.hidden) clearOpening() })
+addEventListener('pagehide', clearOpening)
+
+/** The chat whose opening held the page ({ chatId, title }), until it is opened once without holding it. */
+function takeHeldOpening() {
+  try {
+    const opening = JSON.parse(localStorage.getItem(OPENING_KEY))
+    localStorage.removeItem(OPENING_KEY)
+    const fresh = typeof opening?.chatId === 'string'
+    if (fresh) localStorage.setItem(HELD_KEY, JSON.stringify(opening))
+    const held = JSON.parse(localStorage.getItem(HELD_KEY))
+    return typeof held?.chatId === 'string' ? { ...held, fresh } : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The display scripts that never finish on `chat`'s messages, each stopped after VET_STEP_MS; null when the worker
+ * could not run (an old app view, a server from before regex-vet.js).
+ */
+function vetDisplay(chat) {
+  const scripts = scriptsFor(chat)
+  const items = chat.path.map((node, index) => ({
+    text: blockShown(node.raw ?? node.text ?? ''),
+    placement: node.role === 'user' ? PLACEMENT.USER_INPUT : PLACEMENT.AI_OUTPUT,
+    depth: chat.path.length - 1 - index,
+  }))
+  const started = performance.now()
+  const found = []
+  return new Promise(resolve => {
+    let worker = null
+    let timer = null
+    const finish = result => {
+      clearTimeout(timer)
+      worker?.terminate()
+      resolve(result)
+    }
+    const run = () => {
+      if (!scripts.length) return finish(found)
+      if (performance.now() - started > VET_TOTAL_MS) return finish(found)
+      let running = null // { at, index }: the script that started last
+      try {
+        worker = new Worker('/regex-vet.js', { type: 'module' })
+      } catch {
+        return finish(null)
+      }
+      const arm = ms => {
+        clearTimeout(timer)
+        timer = setTimeout(() => {
+          worker.terminate()
+          if (!running) return finish(found.length ? found : null)
+          found.push(scripts[running.index])
+          run()
+        }, ms)
+      }
+      worker.onmessage = ({ data }) => {
+        if (data.done) return finish(found)
+        running = data
+        arm(VET_STEP_MS)
+      }
+      worker.onerror = () => finish(found.length ? found : null)
+      arm(VET_START_MS)
+      worker.postMessage({ scripts, items, names: chat.names ?? {}, skip: found.map(script => scripts.indexOf(script)) })
+    }
+    run()
+  })
+}
+
+/** A chat that held the page, not opened by itself: its display regex tried first, then opened if one was the cause. */
+async function recoverHeldChat(id, title, fresh) {
+  setChat(null)
+  const name = title || t`上次的对话`
+  if (fresh) reportError('freeze', { message: `打开对话时页面没有反应：${name}` }) // i18n-ignore: the error log is read in Chinese
+  toast(t`之前打开「${name}」时页面没有反应，正在检查原因…`, VET_TOTAL_MS)
+  const view = await api(`/api/chats/${id}`)
+  await Promise.all([loadCardDetail(view.cardId), loadPresetDetail(view.presetId)])
+  const slow = await vetDisplay(view)
+  if (slow?.length) {
+    keepSlowRegex(slow.map(script => script.findRegex))
+    for (const script of slow) reportError('slow-regex', { message: `${script.scriptName || '?'}: ${script.findRegex}`.slice(0, 500) }) // i18n-ignore: as written in the card
+    if (ui.cardId !== view.cardId) return
+    await openChat(id)
+    toast(t`正则「${slow.map(script => script.scriptName || script.findRegex.slice(0, 30)).join(t`、`)}」在这段对话上跑不完，卡住了页面，这台设备上显示时先跳过它。可以在 设置 → 写作 → 正则 里关掉或修改。`, 15_000)
+    return
+  }
+  if (ui.cardId !== view.cardId || ui.chat) return
+  toast(t`之前打开「${name}」时页面没有反应，这次没有自动打开它。可能是这张卡的界面脚本卡住了：可以先导出或删掉这段对话，或者再试一次。`, 30_000, { action: { text: t`仍然打开`, run: () => openChat(id) } })
 }
 
 /**
@@ -2102,7 +2273,9 @@ function drawChat() {
   }
   const lastAssistant = [...chat.path].reverse().find(n => n.role === 'assistant')
   // 直连对话 opens with nothing: there is no opening to show.
-  const blank = node => chat.cardId === DIRECT_CARD && node.id === 'root' && !node.compaction
+  // 继续生成: the reply being written on is out of sight meanwhile; the live one shows it with what comes.
+  const continuing = ui.busy.get(chat.id)?.hides
+  const blank = node => (chat.cardId === DIRECT_CARD && node.id === 'root' && !node.compaction) || node.id === continuing
   const nodes = drawMessages(chat, lastAssistant, blank)
   if (chat.folded > 0) {
     nodes.push(
@@ -2116,7 +2289,8 @@ function drawChat() {
   const reading = ui.readFrom?.chatId === chat.id ? ui.readFrom : null
   const back = reading?.moved || (ui.busy.has(chat.id) && !follow.on) ? rememberPlace() : null
   const drawnAt = perf.start('dom', { messages: nodes.length })
-  placeChildren(box, [...nodes, ...liveNodes(chat)])
+  const cover = coverFor(chat)
+  placeChildren(box, [...(cover ? [cover] : []), ...nodes, ...liveNodes(chat)])
   lockWhileWriting(box)
   drawnAt()
   if (!box.children.length) showEmpty()
@@ -2125,7 +2299,9 @@ function drawChat() {
   if (back) back()
   else {
     if (!reading) follow.on = true
-    settleScroll(() => (reading ? showReplyStart(reading.nodeId) : (box.scrollTop = box.scrollHeight)))
+    // A story not begun opens on its cover; anything else at its latest words.
+    const atCover = cover && chat.path.length === 1
+    settleScroll(() => (reading ? showReplyStart(reading.nodeId) : (box.scrollTop = atCover ? 0 : box.scrollHeight)))
   }
   const historyTiming = perf.start('history')
   historyUi.refresh()
@@ -2153,6 +2329,7 @@ function drawingKey(chat, scripts) {
     ui.frameInfo?.chatId === chat.id ? ui.frameInfo.globalVars ?? null : null,
     scripts, ui.settings ?? null, ui.blockWords ?? null, rules.book ?? null, Boolean(rules.play),
     ui.cards.find(card => card.id === chat.cardId) ?? null, mediaUi.settings?.() ?? null, ui.appVersion ?? '', document.documentElement.lang,
+    cardArtVersion, document.documentElement.dataset.cardMotion ?? '',
   ])
 }
 
@@ -2281,6 +2458,8 @@ const NEAR_SCREEN = '3000px 0px'
   }, { root: box, rootMargin: NEAR_SCREEN })
   const heights = new WeakMap()
   const growing = new ResizeObserver(entries => {
+    // Just opened (or drawn again) and nobody has touched it yet: the place settleScroll put the reader at holds.
+    if (keepPlace()) return
     const screen = box.getBoundingClientRect()
     const goingUp = performance.now() - follow.up < GOING_UP_MS
     for (const { target } of entries) {
@@ -2304,9 +2483,21 @@ const NEAR_SCREEN = '3000px 0px'
 }
 
 let settling = 0
+// A card's frame or a picture may get its height seconds after the chat is drawn (its page loads a library, the
+// frame is made again when the chat comes back from the server): long after the frames settleScroll watches. Until
+// the reader does something, or this long, each one that grows puts them back where settleScroll put them (the latest
+// reply), so opening a chat does not leave it a round or two up, by however long the card's frames took this time.
+const KEEP_PLACE_MS = 10_000
+let kept = null
+function keepPlace() {
+  if (!kept || kept.mine !== settling || performance.now() > kept.until) return false
+  kept.place()
+  return true
+}
 function settleScroll(place) {
   const box = $('transcript')
   const mine = ++settling
+  kept = { mine, place, until: performance.now() + KEEP_PLACE_MS }
   let height = -1
   let calm = 0
   let frames = 0
@@ -2325,6 +2516,10 @@ for (const type of ['wheel', 'touchstart', 'pointerdown', 'keydown']) {
     if (ui.readFrom) ui.readFrom.moved = true
   }, { passive: true })
 }
+// A click inside a card's frame reaches only the frame; the page loses focus to it.
+addEventListener('blur', () => {
+  if (document.activeElement?.tagName === 'IFRAME') settling++
+})
 
 /**
  * Where the reader is, for after the transcript is drawn again: the top message and how far it sits from the
@@ -2479,6 +2674,11 @@ function replyParts(article, choices) {
   return parts
 }
 
+/** A message's parts for 复制 and 导出文本: a reply's as replyParts sorts them, a player's message whole as its story. */
+function messageParts(article, node, choices) {
+  return node.role !== 'user' ? replyParts(article, choices) : [{ kind: 'story', text: async () => shownText(article.querySelector('.msg-body')) }]
+}
+
 /**
  * 复制 under a message: a user's message straight away; a reply all of it, or only its story, status or options.
  * Status is what the page can tell apart (the time box, the status bar, a card's panels, ``` blocks); one a card writes
@@ -2487,7 +2687,7 @@ function replyParts(article, choices) {
 function copyMenu(anchor, node, choices) {
   const article = anchor.closest('.msg')
   const reply = node.role !== 'user'
-  const parts = reply ? replyParts(article, choices) : [{ kind: 'story', text: async () => shownText(article.querySelector('.msg-body')) }]
+  const parts = messageParts(article, node, choices)
   const copy = kind => async () => {
     const texts = await Promise.all(parts.filter(part => !kind || part.kind === kind).map(part => part.text()))
     copyText(texts.filter(Boolean).join('\n\n') || node.text)
@@ -2506,10 +2706,14 @@ function copyMenu(anchor, node, choices) {
   popMenu(anchor, [{ header: t`复制` }, ...entries, ...note])
 }
 
+/** Who says a message: the player's persona or the card. The default persona name is the Chinese 你 (for the model); an English page says You. */
+function speakerName(chat, node) {
+  return node.role === 'user' ? (chat.names.user === zh`你` ? t`你` : chat.names.user) : chat.names.char
+}
+
 function renderNode(chat, node, isLastAssistant, depth = 0) {
   const isUser = node.role === 'user'
-  // The default persona name is the Chinese 你 (for the model); an English page says You.
-  const name = isUser ? (chat.names.user === zh`你` ? t`你` : chat.names.user) : chat.names.char
+  const name = speakerName(chat, node)
   const tools = []
   const { shown, raw, time, choices, checks, fights, cardStatus } = replyDisplay(chat, node, isLastAssistant, depth)
   if (node.siblingCount > 1) {
@@ -2526,6 +2730,7 @@ function renderNode(chat, node, isLastAssistant, depth = 0) {
   // With the player's message deleted there is nothing to write it from again.
   if (!isUser && node.id !== 'root' && isLastAssistant && chat.path.some(other => other.id === node.parent)) {
     tools.push(el('button', { text: t`重新生成`, ...busyOff(), onclick: () => regenerate(node.parent) }))
+    tools.push(el('button', { text: t`继续生成`, title: t`从这条回复停下的地方接着写（写到上限被截断、你停止了、或中途断开时用）。写完是这条回复的新版本，原来那版在 ‹ › 里还能翻到`, ...busyOff(), onclick: () => continueReply(node.id) }))
   }
   if (!isUser && isLastAssistant && (node.id !== 'root' || node.compaction)) {
     tools.push(el('button', { text: t`导出存档`, title: t`把剧情存档、最近几轮原文和变量存成文件，可以在新对话或新版本的角色卡里接着写`, ...busyOff(), onclick: () => exportStory(node) }))
@@ -2742,10 +2947,11 @@ function renderedDisplay(chat, node, shown) {
     return done ?? heldDisplay(node, shown)
   }
   displayRenders.set(key, null)
-  api(`/api/chats/${chat.id}/display-render`, { method: 'POST', body: { nodeId: node.id, texts: [shown] } })
+  const asked = api(`/api/chats/${chat.id}/display-render`, { method: 'POST', body: { nodeId: node.id, texts: [shown] } })
     .then(({ texts }) => displayRenders.set(key, typeof texts?.[0] === 'string' ? texts[0] : shown.replace(EJS, '')))
     .catch(() => displayRenders.set(key, shown.replace(EJS, '')))
     .finally(() => {
+      displayAsked.delete(asked)
       // Several messages come back together: drawn in one go.
       clearTimeout(displayRedraw)
       displayRedraw = setTimeout(() => {
@@ -2754,8 +2960,12 @@ function renderedDisplay(chat, node, shown) {
         if (vnUi.isOn(ui.chat.cardId)) vnUi.render(ui.chat)
       }, 30)
     })
+  displayAsked.add(asked)
   return heldDisplay(node, shown)
 }
+
+// The renders still on their way: 导出文本 waits for them (it reads messages that were never drawn).
+const displayAsked = new Set()
 
 // Until the render comes back: a message already on screen is drawn without the EJS, so the card frames in it
 // that stay the same keep running; a new one waits (a moment), so its frames start once, with the rendered text.
@@ -2769,9 +2979,86 @@ function heldDisplay(node, shown) {
 function statusFor(chat, node) {
   const timing = perf.start('status')
   const spec = statusSpecFor(chat, node)
-  const bar = spec ? statusBar(el, spec, node.state ?? {}, { previous: previousState(chat, node) }) : null
+  // 立绘 and 场景图 on top of it, where the layout asks and the card has the pictures.
+  const card = ui.cardDetails.get(chat.cardId)
+  const art = spec && card?.id ? cardArt.barArt(card, spec, chat, node) : null
+  const bar = spec ? statusBar(el, spec, node.state ?? {}, { previous: previousState(chat, node), art, seen: `${chat.id}:${node.id}` }) : null
   timing()
   return bar
+}
+
+// ─── 开场页 ──────────────────────────────────────────────────────────────
+// A card creator card's cover (web/cover.js), above the opening. Kept as drawn while what it shows stays the same:
+// the page is drawn again at every change, and the cover's letters should come in once.
+
+// What a card's bar and cover show of the app's pictures (web/card-art.js); a change in them draws the chat again.
+let cardArtVersion = 0
+const cardArt = initCardArt({
+  api,
+  onLoaded: cardId => {
+    cardArtVersion += 1
+    if (ui.chat?.cardId !== cardId) return
+    renderChat()
+    renderSide()
+  },
+})
+// Pictures are drawn and changed in windows (角色名册, 修改角色卡, 创作角色卡, 视觉小说的立绘和场景, a picture's own window):
+// one of those closing may have changed them. Any other window closing has not.
+const PICTURE_WINDOWS = /^(?:media|card-edit|forge|library|image|image-view|card-check)(?:-dialog)?$/
+document.addEventListener('close', event => {
+  const id = event.target?.id ?? ''
+  if (!id || PICTURE_WINDOWS.test(id) || event.target.closest?.('#vn')) cardArt.forget()
+}, true)
+
+// 卡片动效 turned on or off (主题): the bar and the cover on the page are drawn again, with or without what drifts.
+window.addEventListener('cardmotion', () => {
+  renderChat()
+  renderSide()
+})
+
+const coverDrawn = { key: '', page: null, picks: new Map(), folds: new Map() }
+const coverWatch = globalThis.IntersectionObserver ? new IntersectionObserver(entries => {
+  for (const entry of entries) entry.target.classList.toggle('offstage', !entry.isIntersecting)
+}) : null
+
+/** The cover above a chat's opening, or null (the card has none, or the chat no longer starts at its opening). */
+function coverFor(chat) {
+  const card = ui.cardDetails.get(chat.cardId)
+  const root = chat.path[0]
+  if (!card?.cover || chat.cardId === DIRECT_CARD || root?.id !== 'root' || root.compaction) return null
+  const openings = card.greetingTexts ?? []
+  const canPick = chat.path.length === 1 && !ui.generating
+  const art = cardArt.coverArt(card, chat)
+  const palette = card.statusBar?.palette ?? null
+  const skin = card.statusBar?.skin ?? null
+  const key = JSON.stringify([chat.id, card.name, card.creator, card.tags, card.cover, palette, skin?.css ?? '', art, document.documentElement.dataset.cardMotion ?? '', openings.length, canPick, document.documentElement.lang])
+  if (coverDrawn.key !== key) {
+    coverDrawn.page?.node && coverWatch?.unobserve(coverDrawn.page.node)
+    coverDrawn.key = key
+    coverDrawn.page = coverPage(el, {
+      name: card.name,
+      // What kind of story it is, over the name; a card with no tags says who made it.
+      by: (card.tags ?? []).slice(0, 3).join(' · ') || card.creator,
+      cover: card.cover,
+      palette,
+      skin,
+      art,
+      openings,
+      canPick,
+      foldable: true,
+      onFold: folded => coverDrawn.folds.set(chat.id, folded),
+      onPick: guard(async index => {
+        const view = await api(`/api/chats/${chat.id}/opening`, { method: 'POST', body: { index } })
+        coverDrawn.picks.set(chat.id, index)
+        if (stillOpen(chat.id)) setChat(view)
+      }),
+    })
+    coverWatch?.observe(coverDrawn.page.node)
+  }
+  coverDrawn.page.mark(coverDrawn.picks.get(chat.id) ?? pickedOpening(openings, root.raw ?? root.text))
+  // Once the story has begun the cover is one line at the top, till it is opened by hand (and as it was left after).
+  coverDrawn.page.fold(coverDrawn.folds.get(chat.id) ?? chat.path.length > 1)
+  return coverDrawn.page.node
 }
 
 // ─── Editing a message in place ─────────────────────────────────────────
@@ -2947,7 +3234,8 @@ function frameContextFor(chat, node) {
     },
     messages: floors.sort((a, b) => a - b).map(i => {
       const n = chat.path[i]
-      return { message_id: i, name: n.role === 'user' ? chat.names.user : chat.names.char, role: n.role, message: n.raw ?? n.text ?? '', state: n.state ?? {} }
+      // A tag the thinking only names is no block for a page that looks for one in the raw message (quietMentions).
+      return { message_id: i, name: n.role === 'user' ? chat.names.user : chat.names.char, role: n.role, message: quietMentions(n.raw ?? n.text ?? ''), state: n.state ?? {} }
     }),
     storage: storedFrameStorage(chat.cardId),
     // Direct API calls: this app's own address is never relayed; the addresses allowed for this card go through it at once.
@@ -3075,6 +3363,14 @@ async function runFrameSlash(command, context = {}) {
           if (tip?.role !== 'assistant' || user?.role !== 'user') throw new Error(t`没有可以重新生成的回复`)
           frameMaySend(context)
           await regenerate(user.id)
+          return ''
+        }
+        case 'continue': {
+          if (!ui.chat || ui.generating) throw new Error(t`正在生成，稍后再试`)
+          const [user, tip] = ui.chat.path.slice(-2)
+          if (tip?.role !== 'assistant' || user?.role !== 'user') throw new Error(t`没有可以继续生成的回复`)
+          frameMaySend(context)
+          await continueReply(tip.id)
           return ''
         }
         case 'stop':
@@ -4322,16 +4618,22 @@ function savedToDownloads(started) {
   toast(started ? t`正在保存到「下载」文件夹…` : t`保存失败`, 4000)
 }
 
-/** Save a JSON file, then toast `message` (one toast, so the Android note is not overwritten). */
-function saveFile(name, text, message = '') {
+/** Save a text file (JSON unless `type` says otherwise), then toast `message` (one toast, so the Android note is not overwritten). */
+async function saveFile(name, text, message = '', type = 'application/json') {
   const filename = name.replace(/[\\/:*?"<>|]+/g, ' ').trim()
   // The Android WebView ignores <a download>; the app saves to Downloads itself.
   if (android) {
+    // Its saveFile marks every file as JSON (Android then names a .txt "….txt.json"): other kinds are handed to the
+    // server for a moment and fetched from there, as the 对话包 is.
+    if (type !== 'application/json' && android.saveDownload) {
+      const { path } = await api('/api/text-exports', { method: 'POST', body: { type, text } })
+      return savedToDownloads(android.saveDownload(path, filename, type))
+    }
     const ok = android.saveFile(filename, text)
     toast(ok ? t`已保存到「下载」文件夹。${message}` : t`保存失败`, 9000)
     return
   }
-  const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }))
+  const url = URL.createObjectURL(new Blob([text], { type: type === 'application/json' ? type : `${type};charset=utf-8` }))
   const link = el('a', { href: url, download: filename })
   document.body.append(link)
   link.click()
@@ -4354,6 +4656,124 @@ async function downloadStory(nodeId, chatId = ui.chat.id) {
   saveFile(t`${archive.title} 剧情存档.json`, JSON.stringify(archive, null, 2),
     t`已导出：前 ${archive.turns} 轮的剧情存档、最近 ${archive.recent.filter(m => m.role === 'user').length} 轮原文和变量。在角色卡下点「导入存档」就能接着写。`)
 }
+
+// ─── 导出对话: the ⇩ on a chat's row ────────────────────────────────────
+// The 对话包 (every branch and picture, to import on another device), or the branch on screen as a text file to read
+// or keep: .txt, or .md for a notes app.
+const STORY_ONLY_KEY = 'cicatavern.textExportStoryOnly'
+function textStoryOnly() {
+  try {
+    return localStorage.getItem(STORY_ONLY_KEY) !== '0'
+  } catch {
+    return true
+  }
+}
+
+function chatExportMenu(anchor, chat) {
+  const storyOnly = textStoryOnly()
+  popMenu(anchor, [
+    { header: t`导出对话` },
+    { label: t`对话包（.tavernchat）`, hint: t`打包整段对话（每一轮、每个分支和配图），在另一台设备上用「导入存档」导入`, onClick: () => downloadPackage(chat) },
+    { label: t`文本（.txt）`, hint: t`屏幕上这一支对话，从开场到最新一条，每条写在说话人名字下面`, onClick: () => exportChatText(chat.id, 'txt') },
+    { label: t`Markdown（.md）`, hint: t`同文本，带标题和分隔线，适合放进笔记软件`, onClick: () => exportChatText(chat.id, 'md') },
+    '-',
+    {
+      label: t`仅正文`,
+      checked: storyOnly,
+      hint: t`文本和 Markdown 去掉时间地点、状态栏、行动选项和角色卡画的面板，和「复制 → 仅正文」一样`,
+      onClick: () => {
+        try {
+          localStorage.setItem(STORY_ONLY_KEY, storyOnly ? '0' : '1')
+        } catch {}
+        chatExportMenu(anchor, chat)
+        openMenu?.querySelector('[role="menuitemcheckbox"]')?.focus()
+      },
+    },
+  ])
+}
+
+function downloadPackage(chat) {
+  const path = `/api/chats/${chat.id}/package`
+  // The phone app saves it itself, under the name the server gives it.
+  if (android?.saveDownload) return savedToDownloads(android.saveDownload(path, fileName(`${chat.title || chat.id}.tavernchat`), 'application/octet-stream'))
+  const link = el('a', { href: path, download: '' })
+  document.body.append(link)
+  link.click()
+  link.remove()
+}
+
+/** What the text says at a compaction point: before the opening of a chat continued from a story archive, else after the reply. */
+function compactionNote(node) {
+  const done = node.compaction
+  if (!done) return null
+  if (done.imported) return { before: t`从剧情存档「${done.imported.title || done.imported.card || t`导入的故事`}」接着写：存档之前的 ${done.turns} 轮不在这个对话里` }
+  return { after: done.kept ? t`这里压缩了上下文` : t`这里压缩了上下文：前 ${done.turns} 轮写成了剧情存档` }
+}
+
+/**
+ * Each message's parts as 复制 sorts them (messageParts), for 导出文本. Every reply is read as the latest one would be,
+ * so its options and status come apart from its story; the messages are drawn off screen, a batch at a time, with
+ * their card frames left as slots (their text read from their HTML) and the 楼层渲染 they need waited for.
+ */
+async function exportParts(chat) {
+  const nodes = chat.path.filter(node => !node.hidden && node.id !== 'pending-user')
+  const depth = new Map(chat.path.map((node, i) => [node.id, chat.path.length - 1 - i]))
+  const displays = () => nodes.map(node => replyDisplay(chat, node, node.role !== 'user', depth.get(node.id)))
+  displays()
+  while (displayAsked.size) await Promise.all([...displayAsked])
+  const shown = displays()
+  const rolls = node => [
+    node.check ? rules.play?.rollLine(node.check) ?? node.text : null,
+    node.battle ? rules.play?.battleLine(node.battle, rules.book) ?? node.text : null,
+  ].filter(Boolean).map(text => ({ kind: 'status', text: async () => text }))
+  const out = new Map()
+  const sheet = document.body.appendChild(el('div', { class: 'export-sheet', 'aria-hidden': 'true' }))
+  try {
+    for (let at = 0; at < nodes.length; at += 100) {
+      const batch = nodes.slice(at, at + 100).map((node, i) => {
+        const display = shown[at + i]
+        const reply = node.role !== 'user'
+        const article = el('article', { class: 'msg' }, [
+          reply && display.time ? timeBox(el, display.time) : null,
+          node.auto ? null : messageBody(display.shown, null, { lazy: true }),
+          reply && !display.cardStatus ? statusFor(chat, node) : null,
+        ])
+        return { node, display, article }
+      })
+      sheet.replaceChildren(...batch.map(item => item.article))
+      // 视觉小说格式: the speaker before a line is drawn by CSS, out of the text: here it is written in.
+      for (const speaker of sheet.querySelectorAll('.speaker[data-name]')) speaker.textContent = t`${speaker.dataset.name}：`
+      for (const { node, display, article } of batch) {
+        // 直连对话: the reply's own Markdown, not what it draws.
+        const own = node.auto ? [] : chat.cardId === DIRECT_CARD ? [{ kind: 'story', text: async () => display.shown }] : messageParts(article, node, display.choices)
+        const parts = [...own, ...rolls(node)]
+        out.set(node.id, await Promise.all(parts.map(async part => ({ kind: part.kind, text: await part.text() }))))
+      }
+    }
+  } finally {
+    sheet.remove()
+  }
+  return out
+}
+
+/** 导出文本: the branch on screen, from the opening to the latest reply, as a .txt or .md file. */
+const exportChatText = guard(async (chatId, format) => {
+  const chat = ui.chat?.id === chatId ? ui.chat : await api(`/api/chats/${chatId}`)
+  await Promise.all([loadRules(chat), loadCardDetail(chat.cardId), loadPresetDetail(chat.presetId)])
+  const parts = await exportParts(chat)
+  const text = chatText(chat.path, {
+    format,
+    storyOnly: textStoryOnly(),
+    title: chat.title,
+    date: t`导出于 ${new Date().toLocaleString(locale)}`,
+    nameOf: node => speakerName(chat, node),
+    partsOf: node => parts.get(node.id),
+    notesOf: compactionNote,
+    marks: { name: name => t`【${name}】`, note: text => t`（${text}）`.trim() },
+  })
+  const name = `${chat.title || chat.id}.${format}`
+  await saveFile(name, text, t`已导出「${fileName(name)}」`, format === 'md' ? 'text/markdown' : 'text/plain')
+})
 
 /**
  * Export from the latest reply. The summary must cover the story: with two or
@@ -4500,20 +4920,21 @@ function tipId() {
  * back redraws what has arrived (liveNodes).
  * @returns true when the turn was saved.
  */
-async function generate(endpoint, body, echoUserText, outcome = null) {
+/** @param options - 继续生成: { prefix: the reply as it was, hides: its id }. */
+async function generate(endpoint, body, echoUserText, outcome = null, options = {}) {
   const recorded = perf.begin('reply', ui.chat.title)
   try {
-    return await writeTurn(endpoint, body, echoUserText, outcome)
+    return await writeTurn(endpoint, body, echoUserText, outcome, options)
   } finally {
     recorded({ messages: ui.chat?.path.length })
   }
 }
 
-async function writeTurn(endpoint, body, echoUserText, outcome) {
+async function writeTurn(endpoint, body, echoUserText, outcome, { prefix = '', hides = null } = {}) {
   const chatId = ui.chat.id
   const title = ui.chat.title
   const tipBefore = ui.chat.path.at(-1)?.id
-  const job = { kind: 'turn', text: '', note: '…', echo: echoUserText, outcome, startedAt: Date.now() }
+  const job = { kind: 'turn', text: prefix, note: '…', echo: echoUserText, outcome, hides, startedAt: Date.now() }
   ui.readFrom = null
   follow.on = true
   ui.busy.set(chatId, job)
@@ -4546,6 +4967,7 @@ async function writeTurn(endpoint, body, echoUserText, outcome) {
     // 性能记录: each drawing, as 逐字刷新.
     timer: () => perf.start('live'),
   })
+  if (prefix) job.reveal.begin(prefix)
   let finished = null
   let finishedNode = null
   // A reply that stopped partway, kept as far as it went: { stopped, message }.
@@ -4563,7 +4985,7 @@ async function writeTurn(endpoint, body, echoUserText, outcome) {
           broadcastEvent(TAVERN_EVENTS.GENERATION_STARTED, 'normal', {}, false)
         }
         if (viewing()) vnUi.streamed()
-        job.note = event.newSession ? t`接着存档续写` : event.api ? t`${event.api} 续写` : event.fork ? t`分支续写` : t`续写`
+        job.note = prefix ? (event.api ? t`${event.api} 继续生成` : t`继续生成`) : event.newSession ? t`接着存档续写` : event.api ? t`${event.api} 续写` : event.fork ? t`分支续写` : t`续写`
         const note = live()?.querySelector('.live-note')
         if (note) note.textContent = job.note
         if (event.compacted?.removedChars && viewing()) toast(t`已清掉历史里堆积的变量列表（${fmt(event.compacted.removedChars)} 字）。这一轮会重写对话历史的缓存，固定前缀还在。`)
@@ -4581,10 +5003,13 @@ async function writeTurn(endpoint, body, echoUserText, outcome) {
           if (note) note.textContent = job.note
         }
         // restart: the relay lost the system prompt (the card), and the answer is being asked for again.
-        job.text = event.type === 'restart' ? '' : job.text + event.text
+        job.text = event.type === 'restart' ? prefix : job.text + event.text
         if (event.type === 'restart') job.reasoning = ''
         perf.mark('turn.first')
-        if (event.type === 'restart') job.reveal.reset()
+        if (event.type === 'restart') {
+          job.reveal.reset()
+          if (prefix) job.reveal.begin(prefix)
+        }
         if (viewing()) vnUi.streamed()
         job.reveal.push(job.text)
         showLiveReasoning(live(), job)
@@ -4681,10 +5106,18 @@ async function writeTurn(endpoint, body, echoUserText, outcome) {
   return false
 }
 
+// Typed in the input box alone, as in SillyTavern: 继续生成 instead of a message.
+const CONTINUE_COMMAND = /^\/(?:continue|继续)$/i // i18n-ignore: a command
+
 const send = guard(async () => {
   const input = $('input')
   const text = input.value.trim() || (canDirect() && ui.directFiles.length ? t`请看附上的文件。` : '')
   if (!text || ui.generating || (!ui.chat && !canDirect())) return
+  if (ui.chat && CONTINUE_COMMAND.test(text)) {
+    input.value = ''
+    fitInput()
+    return continueLatest()
+  }
   if (!ui.chat) await openDirectChat()
   if (!ui.chat) return
   // 直连对话: the files go with this message, and come back to the box if it fails.
@@ -4729,6 +5162,24 @@ const regenerate = guard(async userNodeId => {
   if (ui.generating) return
   await generate('regenerate', { userNodeId }, null, outcomeOf(ui.chat.path.find(node => node.id === userNodeId)))
 })
+
+/**
+ * 继续生成 (SillyTavern's /continue): the model writes on from where the reply stopped, from its turn's prompt; the
+ * reply and what comes become a new version of it (engine.mjs runTurn continueId).
+ */
+const continueReply = guard(async nodeId => {
+  if (ui.generating || !ui.chat) return
+  const node = ui.chat.path.find(item => item.id === nodeId)
+  if (!node) return
+  await generate('continue', { nodeId }, null, null, { prefix: node.raw ?? node.text ?? '', hides: nodeId })
+})
+
+/** The latest reply written on (/continue typed in the box). */
+function continueLatest() {
+  const [user, tip] = ui.chat?.path.slice(-2) ?? []
+  if (tip?.role !== 'assistant' || user?.role !== 'user') return toast(t`没有可以继续生成的回复`)
+  return continueReply(tip.id)
+}
 
 const stop = guard(async () => {
   if (ui.chat) await api(`/api/chats/${ui.chat.id}/stop`, { method: 'POST', body: {} })
@@ -4815,12 +5266,46 @@ function bindListSplit() {
 bindListSplit()
 
 // ─── Right pane ─────────────────────────────────────────────────────────
+// 状态 in the right pane shows the variables as they are, or (状态栏) laid out as a status bar: the card's own bar
+// with its look, pictures and motion, else one laid out from the variables. Which, is kept on this device.
+const SIDE_STATE = 'sideState'
+const sideAsBar = () => {
+  try {
+    return localStorage.getItem(SIDE_STATE) === 'bar'
+  } catch {
+    return false
+  }
+}
+
+/** The latest state as a bar for the right pane, or null when there is nothing to lay out. */
+function sideBar(chat) {
+  const node = [...chat.path].reverse().find(n => n.role === 'assistant')
+  if (!node) return null
+  const shown = { ...node, state: chat.state ?? node.state ?? {} }
+  const laid = statusSpecFor(chat, shown) ?? autoStatusSpec(shown.state)
+  if (!laid) return null
+  // No 动效 here: the bar under the reply has it, and two layers at once are twice the work for nothing more to see.
+  const { effect: _, ...spec } = laid
+  const card = ui.cardDetails.get(chat.cardId)
+  const art = card?.id ? cardArt.barArt(card, spec, chat, node) : null
+  return statusBar(el, spec, shown.state, { previous: previousState(chat, node), art, collapsible: false, seen: `side:${chat.id}:${node.id}` })
+}
+
 function renderSide() {
   const chat = ui.chat
   const state = chat?.state ?? {}
-  $('state-view').textContent = chat ? (Object.keys(state).length ? JSON.stringify(state, null, 2) : t`（这张卡没有状态变量）`) : '—'
+  const has = Boolean(chat) && Object.keys(state).length > 0
+  $('state-view').textContent = chat ? (has ? JSON.stringify(state, null, 2) : t`（这张卡没有状态变量）`) : '—'
   $('state-editor').hidden = true
-  $('state-view').hidden = false
+  const asBar = has && sideAsBar()
+  const bar = asBar ? sideBar(chat) : null
+  $('state-bar').replaceChildren(...(asBar ? [bar ?? el('p', { class: 'hint', text: t`这些变量排不成状态栏，点「变量」看原样。` })] : []))
+  $('state-bar').hidden = !asBar
+  $('state-view').hidden = asBar
+  const mode = $('state-mode')
+  mode.hidden = !has
+  mode.textContent = asBar ? t`变量` : t`状态栏`
+  mode.title = asBar ? t`换回变量原样` : t`排成状态栏来看：卡自己的状态栏带着它的外观，别的卡按变量排一个`
   const last = chat ? [...chat.path].reverse().find(n => n.role === 'assistant' && n.usage) : null
   const dl = $('usage')
   if (!last) {
@@ -4864,6 +5349,7 @@ function renderQuota(info) {
 function editState() {
   $('state-input').value = JSON.stringify(ui.chat?.state ?? {}, null, 2)
   $('state-view').hidden = true
+  $('state-bar').hidden = true
   $('state-editor').hidden = false
 }
 
@@ -4903,6 +5389,7 @@ const openSettings = guard(async () => {
   fillProxy(form, ui.settings.proxy, await api('/api/network').catch(() => null))
   form.showReasoning.checked = ui.settings.showReasoning === true
   form.autoFillUpdate.checked = ui.settings.autoFillUpdate !== false
+  form.statePresent.checked = ui.settings.statePresent !== false
   form.replyToTop.checked = ui.settings.replyToTop !== false
   form.webFonts.checked = ui.settings.webFonts !== false
   form.cdnLibraries.checked = ui.settings.cdnLibraries !== false
@@ -5257,6 +5744,14 @@ function layOutSettings({ form, card, providers, presets }) {
       ].join(' · '),
     },
     {
+      id: 'tool-prompts', title: t`内置功能的附加提示词`, look: 'shared', tag: t`所有对话`, action: () => openToolPrompts(),
+      summary: () => {
+        const names = { memory: t`压缩与记忆`, check: t`检查这张卡`, forge: t`创作向导`, helper: t`其他辅助` }
+        const set = Object.entries(ui.settings?.toolPrompts ?? {}).filter(([, text]) => text.trim()).map(([group]) => names[group])
+        return set.length ? t`写了：${set.join(t`、`)}` : t`压缩、长期记忆、检查这张卡、创作向导用的提示词里加你自己的要求（比如破限）`
+      },
+    },
+    {
       id: 'blockwords', title: t`屏蔽词`, look: 'shared', tag: t`所有对话`, action: () => openBlockWords(),
       summary: () => {
         const on = ui.blockWords.filter(word => !word.disabled)
@@ -5383,7 +5878,7 @@ function layOutSettings({ form, card, providers, presets }) {
     : el('p', { class: 'menu-who none', text: t`选一张角色卡后，可以给它指定你的角色和文风。` })
   const panels = [
     { id: 'model', title: t`模型`, icon: MENU_ICONS.model, rows: ['model', 'providers', 'compaction', 'memory'] },
-    { id: 'write', title: t`写作`, icon: MENU_ICONS.write, rows: ['persona', 'styles', 'style', 'presets', 'regex', 'blockwords', cardPicksRow, 'picks'] },
+    { id: 'write', title: t`写作`, icon: MENU_ICONS.write, rows: ['persona', 'styles', 'style', 'presets', 'regex', 'blockwords', 'tool-prompts', cardPicksRow, 'picks'] },
     { id: 'media', title: t`配图与朗读`, icon: MENU_ICONS.picture, rows: ['media-image', 'media-voice', 'dictation'] },
     { id: 'books', title: t`世界书与状态`, icon: MENU_ICONS.book, rows: ['scan', 'manage-books', cardRow, 'books'] },
     { id: 'link', title: t`连接`, icon: MENU_ICONS.link, rows: ['network', 'access'] },
@@ -5415,6 +5910,7 @@ const saveSettings = guard(async () => {
         stateRefreshEvery: num('stateRefreshEvery'),
         dynamicStrip: form.dynamicStrip.value,
         autoFillUpdate: form.autoFillUpdate.checked,
+        statePresent: form.statePresent.checked,
         replyToTop: form.replyToTop.checked,
         compaction: compactionOf(form, num),
         memory: memorySettingsOf(form, num),
@@ -5807,7 +6303,8 @@ async function regexContext() {
   const names = ui.chat?.names ?? { char: card?.name ?? '', user: ui.persona?.name ?? '' }
   return {
     card: card?.name ? { id: cardId, name: card.name, scripts: card.regexScriptList ?? [] } : null,
-    preset: preset?.name ? { id: presetKey, name: preset.name, builtin: Boolean(preset.builtin), scripts: preset.regexScriptList ?? [] } : null,
+    // A built-in preset's own two stay out of the list: the window shows the player's, after them.
+    preset: preset?.name ? { id: presetKey, name: preset.name, builtin: Boolean(preset.builtin), fixed: preset.builtin ? preset.ownRegex ?? 0 : 0, scripts: (preset.regexScriptList ?? []).slice(preset.builtin ? preset.ownRegex ?? 0 : 0) } : null,
     sample: reply.slice(0, 4000),
     macros: text => nameMacros(text, names),
     names,
@@ -5820,7 +6317,8 @@ function regexChanged({ global, sets, card, preset }) {
   if (sets) ui.regexSets = sets
   for (const [details, saved] of [[ui.cardDetails, card], [ui.presetDetails, preset]]) {
     const detail = saved && details.get(saved.id)
-    if (detail) Object.assign(detail, { regexScriptList: saved.scripts, regexScripts: saved.scripts.length })
+    const fixed = detail?.builtin ? detail.regexScriptList.slice(0, detail.ownRegex ?? 0) : []
+    if (detail) Object.assign(detail, { regexScriptList: [...fixed, ...saved.scripts], regexScripts: fixed.length + saved.scripts.length })
   }
   if (ui.chat) renderChat()
 }
@@ -5839,6 +6337,7 @@ const forgeUi = initForge({
   saveDownload: phoneDownload(),
   guard,
   openProviders: () => providersUi.open(),
+  openToolPrompts: group => openToolPrompts(group),
   pickDraw: drawChoice.pick,
   async onCardSaved(id) {
     avatarVersions.set(id, Date.now())
@@ -5852,6 +6351,13 @@ const forgeUi = initForge({
     await newChat()
   },
   makeVisualNovel,
+  // 门面 → 备齐门面图: 立绘, 表情 and the plan's places drawn for the saved card; what the bar and the cover show is read again.
+  prepareArt: async (id, places, options) => {
+    const drawn = await vnUi.prepareArt(id, places, options)
+    cardArt.forget()
+    if (ui.chat?.cardId === id) renderChat()
+    return drawn
+  },
   openTrial: (cardId, options) => openTrial(cardId, options),
 })
 
@@ -5956,6 +6462,7 @@ const openCardCheck = guard(async id => {
     getChat: () => ui.chat,
     isGenerating: () => ui.generating,
     openProviders: () => providersUi.open(),
+    openToolPrompts: group => openToolPrompts(group),
     openTalk: (cardId, say) => cardEditUi.open(cardId, { say }),
     openTrial: cardId => openTrial(cardId),
     onChatChanged: chat => setChat(chat),
@@ -6357,6 +6864,14 @@ function bind() {
   })
   $('stop').addEventListener('click', stop)
   $('edit-state').addEventListener('click', editState)
+  $('state-mode').addEventListener('click', () => {
+    try {
+      localStorage.setItem(SIDE_STATE, sideAsBar() ? 'vars' : 'bar')
+    } catch {
+      // A private window: it shows the variables.
+    }
+    renderSide()
+  })
   $('cancel-state').addEventListener('click', renderSide)
   $('save-state').addEventListener('click', saveState)
   $('open-settings').addEventListener('click', openSettings)
@@ -6522,7 +7037,7 @@ async function boot() {
   // asked for. With no chat anywhere yet, on the top card of the list as it shows.
   const open = new Set([...ui.cards.filter(card => !card.archived).map(card => card.id), ...(ui.features?.direct ? [DIRECT_CARD] : [])])
   const first = chats.find(chat => open.has(chat.cardId))?.cardId ?? $('card-list').querySelector('li[data-id]')?.dataset.id ?? (ui.cards.length ? ui.cards[0].id : ui.features?.direct ? DIRECT_CARD : null)
-  if (first) await selectCard(first)
+  if (first) await selectCard(first, { held: takeHeldOpening() })
   else renderChat()
   sayTurnStopped()
   // After an update: what is new, once (someone with cards already has updated; a new player has not).

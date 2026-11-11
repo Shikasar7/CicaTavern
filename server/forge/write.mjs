@@ -11,6 +11,7 @@ import { creditText } from './structure.mjs'
 import { creationOpening, creationReady } from './creation.mjs'
 import { mvuHelper, statusScripts, statusSpecOf } from './status.mjs'
 import { EVENTS_DONE, LIST_GROWS } from '../../web/shared/status.js'
+import { cleanCover } from '../../web/shared/cover.js'
 import { brickContent, brickScripts } from './bricks.mjs'
 import { writablePath } from '../../web/shared/vars.js'
 import { cleanRulebook, kitBook, kitWorld } from '../../web/shared/game/sheet.js'
@@ -560,7 +561,7 @@ const STATE_WORDS = {
     ],
     bookRule: names => `- 册子（${names}）一行一个键：加一行用 add，路径写到这一行的名字；删一行用 remove；改一项用 replace，路径写到那一项。`,
     bookRow: '这一行的名字', rowKey: '每行记',
-    rulesKey: '变量更新规则', anyChange: '按剧情更新', eventsDone: '事件条目里的事真正写进故事的那一轮，把事件名加进来；加过的不删',
+    rulesKey: '变量更新规则', anyChange: '按剧情更新', readOnly: '只读：故事里不会变，不要写进更新', eventsDone: '事件条目里的事真正写进故事的那一轮，把事件名加进来；加过的不删',
     hideFromModel: '对模型隐藏变量更新', hideFromPlayer: '对玩家隐藏变量更新',
     hidePlaceholder: '对模型隐藏状态栏', statusBar: '状态栏',
     mvuInfo: 'MVU 变量框架：在 SillyTavern 里按回复末尾的变量更新改变量、显示状态栏（需要酒馆助手）。CicaTavern 不运行它，自带同样的功能。',
@@ -579,9 +580,9 @@ const STATE_WORDS = {
     ],
     bookRule: names => `- Books (${names}) keep a key per row: add a row with add, its path ending in the row's name; take one out with remove; change one item with replace, its path ending in that item.`,
     bookRow: 'name of the row', rowKey: 'each row keeps',
-    rulesKey: 'Variable update rules', anyChange: 'changes with the story', eventsDone: "add an event entry's name in the turn the story really shows it; never take one out",
+    rulesKey: 'Variable update rules', anyChange: 'changes with the story', readOnly: 'read-only: the story never changes it; never write it in an update', eventsDone: "add an event entry's name in the turn the story really shows it; never take one out",
     hideFromModel: 'Hide variable updates from the model', hideFromPlayer: 'Hide variable updates from the player',
-    hidePlaceholder: 'Hide the status bar from the model', statusBar: 'Status bar',
+    hidePlaceholder: 'Hide the status bar from the model', statusBar: 'Status bar', english: true,
     mvuInfo: 'MVU variable framework: in SillyTavern it applies the variable updates at the end of each reply and shows the status bar (needs Tavern Helper). CicaTavern does not run it; it has the same built in.',
     with: 'with <user>: ', colon: ': ', separator: '; ',
     gender: { female: 'female', male: 'male' },
@@ -594,7 +595,9 @@ const stateWords = plan => STATE_WORDS[englishCard(planLanguage(plan)) ? 'en' : 
 
 function formatEntry(plan) {
   const words = stateWords(plan)
-  const example = plan.tracking.variables.find(v => v.type === 'number') ?? plan.tracking.variables.find(v => v.type !== 'book')
+  // What the example changes is something that may change.
+  const open = plan.tracking.variables.filter(v => !v.locked)
+  const example = open.find(v => v.type === 'number') ?? open.find(v => v.type !== 'book')
   const books = plan.tracking.variables.filter(v => v.type === 'book')
   const change = example && `{ "op": "replace", "path": "/${example.path.split('.').join('/')}", "value": ${example.type === 'number' ? typedValue(example) + 2 : JSON.stringify(typedValue(example))} }`
   const added = books[0] && `{ "op": "add", "path": "/${books[0].path.split('.').join('/')}/${words.bookRow}", "value": ${JSON.stringify(Object.fromEntries(books[0].columns.map(column => [column, '…'])))} }`
@@ -616,6 +619,8 @@ function formatEntry(plan) {
 function rulesEntry(plan) {
   const words = stateWords(plan)
   const rule = variable => {
+    // 只读: said in place of how it changes, and kept by the app whatever a reply writes (cardJson's read_only).
+    if (variable.locked) return words.readOnly
     const out = {}
     if (variable.type !== 'string') out.type = variable.type
     if (variable.type === 'book') out[words.rowKey] = variable.columns
@@ -915,7 +920,10 @@ export function cardJson(plan, card, { author = '', credits = [] } = {}) {
   const status = statusSpecOf(plan)
   // A name of the card's own for the player (创作角色卡 asked); none = the one in settings.
   const userName = plan.user_role.name ?? ''
-  const own = { ...(status ? { status_bar: status } : {}), ...(userName ? { user_name: userName } : {}), ...(plan.game ? { game: planRulebook(plan.game) } : {}) }
+  const readOnly = plan.tracking.enabled ? plan.tracking.variables.filter(v => v.locked).map(v => v.path) : []
+  // 开场页 (方案页 → 门面): drawn by the app above the opening; another app does not show it.
+  const cover = cleanCover(plan.cover)
+  const own = { ...(status ? { status_bar: status } : {}), ...(cover ? { cover } : {}), ...(userName ? { user_name: userName } : {}), ...(readOnly.length ? { read_only: readOnly } : {}), ...(plan.game ? { game: planRulebook(plan.game) } : {}) }
   const scripts = plan.tracking.enabled ? [regexScript(words.hideFromModel, { promptOnly: true }), regexScript(words.hideFromPlayer, { markdownOnly: true })] : []
   scripts.push(...brickScripts(plan, englishCard(planLanguage(plan))))
   if (status) scripts.push(...statusScripts(status, words))

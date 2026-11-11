@@ -140,6 +140,14 @@ export function createPacer({ mode = REVEAL_DEFAULT, folds = null } = {}) {
       if (!speed) speed = Math.max(MIN_CPS, rate(now))
       if (!lastShow) lastShow = now
     },
+    /** Starts from text already there (继续生成: the reply as it was), shown at once; the pace is what comes after it. */
+    begin(text, now) {
+      source = String(text || '')
+      shown = source.length
+      arrivals.length = 0
+      arrivals.push([now - 250, source.length])
+      lastShow = now
+    },
     /** From the top again (the reply is being asked for again). */
     reset() {
       source = ''

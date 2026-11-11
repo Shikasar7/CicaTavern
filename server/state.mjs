@@ -3,6 +3,7 @@
 //   <UpdateVariable><JSONPatch>[{"op":"replace","path":"/好感","value":12}]</JSONPatch></UpdateVariable>
 //                                                               MVU (zod) JSON Patch
 //   <UpdateVariable> _.set('好感', 10, 12); </UpdateVariable>    MVU (classic) calls
+//                                                               (_.set, _.add, and _.insert / _.assign, _.remove / _.unset / _.delete)
 // The tag may also be spelled <update>; a block closed with another one's tag, or
 // left open at the end of a cut-off reply, still counts (UPDATE_BLOCK). Model
 // output is parsed as data by JSON/YAML parsers and a small literal parser — never evaluated.
@@ -13,9 +14,10 @@ import { CHOICES_BLOCK, SELF_CHECK_BLOCK, TIME_BOX_BLOCK } from '../web/shared/b
 import { FOLD_TAG } from '../web/shared/vn.js'
 
 const HIDDEN_BLOCKS = [
-  UPDATE_BLOCK,
-  // Reasoning in its own tag (<thinking>, <思考>…): folded on the page, not story for summaries or pictures.
+  // Reasoning in its own tag (<thinking>, <思考>…): folded on the page, not story for summaries or pictures. First, so
+  // an update or choices block the thinking only names (「结尾输出 <UpdateVariable>」) takes no story with it.
   new RegExp(`<(${FOLD_TAG})>[\\s\\S]*?</\\1>`, 'gi'),
+  UPDATE_BLOCK,
   /<StatusPlaceHolderImpl\s*\/>/gi,
   /<CreationPage\s*\/>/gi,
   // The built-in preset's time box and choices (web/shared/basic.js): the page draws them itself.
@@ -58,6 +60,8 @@ export function applyStateUpdates(state, text) {
 
 // MVU's names for what a JSON Patch operation does (its commands, as card scripts see them at COMMAND_PARSED).
 const COMMAND_OF = { replace: 'set', delta: 'add', add: 'insert', insert: 'insert', remove: 'delete', move: 'move', copy: 'copy' }
+// MVU's names for the calls a reply writes other than _.set and _.add.
+const CALL_OF = { insert: 'insert', assign: 'insert', remove: 'delete', unset: 'delete', delete: 'delete' }
 
 /**
  * A reply's update blocks read the way MVU reads them, without running them yet: card scripts may change the
@@ -95,7 +99,7 @@ export function readUpdates(state, text) {
         commands.push(command(COMMAND_OF[op.op] ?? String(op.op), args, JSON.stringify(op), { op }))
       }
     }
-    for (const call of body.matchAll(/_\.(set|add)\s*\(([\s\S]*?)\)\s*;/g)) {
+    for (const call of body.matchAll(/_\.(set|add|insert|assign|remove|unset|delete)\s*\(([\s\S]*?)\)\s*;/g)) {
       let args
       try {
         args = parseArgs(call[2])
@@ -107,7 +111,10 @@ export function readUpdates(state, text) {
       if (typeof pathArg !== 'string') continue
       const keys = statKeys(pathArg)
       if (!keys.length) continue
-      commands.push(command(call[1], args.map(arg => JSON.stringify(arg ?? null)), call[0], { call: call[1], keys, args, label: pathArg }))
+      const sources = args.map(arg => JSON.stringify(arg ?? null))
+      // MVU's other calls (a list gains or loses an item, a key is added or taken out) run as a card script's would.
+      const other = CALL_OF[call[1]]
+      commands.push(other ? { type: other, args: sources, full_match: call[0], reason: '' } : command(call[1], sources, call[0], { call: call[1], keys, args, label: pathArg }))
     }
   }
   return { state: next, commands, changes, unread: wrote && !read }
@@ -473,6 +480,36 @@ function parentOf(object, keys) {
     cursor = cursor[key]
   }
   return cursor
+}
+
+/**
+ * 只读变量: a reply's update with what the card marks read-only (paths) put back as it was before the reply.
+ * One the state did not have yet may still be written once (a chat from before the card had it).
+ * @param updated - { state, changes, … } as applyStateUpdates gives it. → the same, with `readOnlyKept`: the paths put back.
+ */
+export function keepReadOnly(before, updated, paths) {
+  if (!Array.isArray(paths) || !paths.length || !updated?.state) return updated
+  const read = (root, keys) => keys.reduce((at, key) => (at === null || typeof at !== 'object' ? undefined : at[key]), root)
+  const kept = []
+  let state = updated.state
+  for (const path of paths) {
+    const keys = splitPath(path)
+    if (!keys.length || !writablePath(keys)) continue
+    const was = read(before, keys)
+    if (was === undefined || JSON.stringify(was) === JSON.stringify(read(state, keys))) continue
+    if (!kept.length) state = structuredClone(state)
+    // The value as it was kept, its description with it: nothing of the reply's stays.
+    let at = state
+    for (const key of keys.slice(0, -1)) {
+      if (at[key] === null || typeof at[key] !== 'object') at[key] = {}
+      at = at[key]
+    }
+    at[keys.at(-1)] = structuredClone(was)
+    kept.push(path)
+  }
+  if (!kept.length) return updated
+  const named = new Set(kept.flatMap(path => [path, splitPath(path).join('.'), `/${splitPath(path).join('/')}`]))
+  return { ...updated, state, changes: (updated.changes ?? []).filter(change => !named.has(change)), readOnlyKept: kept }
 }
 
 /** `value` at a dotted path of `state`, the objects on the way made as needed; a path that is not a variable's is left. */

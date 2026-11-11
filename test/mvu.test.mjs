@@ -327,3 +327,21 @@ test('the opening cannot be switched while the first turn is being written', asy
   const after = await (await fetch(`${base}/api/chats/${chat.id}`)).json()
   assert.deepEqual(after.path.map(node => node.text ?? ''), ['蝉鸣。', '你好', '她抬起头。'])
 })
+
+test('MVU classic calls in a reply: _.insert and _.remove on lists and keys, with their other names', () => {
+  const state = { 店: { 来客: ['甲'], 账: { 茶: 2 } }, 随身: ['伞', '表'], 好感: 1 }
+  const reply = `正文
+<UpdateVariable>
+_.insert('店.来客', '乙');//来了第二位
+_.assign('店.账', '酒', 5);//记一笔
+_.remove('随身', '伞');//伞留在门口
+_.unset('店.账', '茶');//茶钱结了
+_.insert('随身', 0, '钥匙');//放在最前面
+_.add('好感', 2);//照旧
+_.delete('没有的', 'x');//没有这一项，不算
+</UpdateVariable>`
+  const { state: next, changes } = applyStateUpdates(state, reply)
+  assert.deepEqual(next, { 店: { 来客: ['甲', '乙'], 账: { 酒: 5 } }, 随身: ['钥匙', '表'], 好感: 3 })
+  assert.deepEqual(changes, ['店.来客', '店.账', '随身', '好感'])
+  assert.deepEqual(state.随身, ['伞', '表'], 'input state is not mutated')
+})

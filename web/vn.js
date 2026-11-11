@@ -2441,7 +2441,7 @@ export function initVn(deps) {
     }
   }
 
-  async function prepareSteps(cardId, { places = [] }) {
+  async function prepareSteps(cardId, { places = [], faces: wanted = true }) {
     const picked = deps.pickDraw
       ? await deps.pickDraw({ title: t`用什么画立绘、表情和场景`, action: t`下一步`, batch: true, note: t`还没配置画图接口的话，点左下角「设置画图方式…」。` })
       : { body: {}, label: '' }
@@ -2470,10 +2470,12 @@ export function initVn(deps) {
     const missingFaces = member => EXPRESSIONS.filter(name => name !== 'neutral' && !faces[member.id]?.[name])
     const sprites = roster.filter(member => !list[member.id])
     const fromPicture = (await api('/api/media/draws-from-picture', { method: 'POST', body: choice }).catch(() => null))?.drawsFromPicture !== false
-    const faceCount = fromPicture ? roster.reduce((n, member) => n + missingFaces(member).length, 0) : 0
+    // `faces: false` (创作角色卡's 备齐门面图, with 表情 not ticked): the 立绘 only.
+    const withFaces = wanted && fromPicture
+    const faceCount = withFaces ? roster.reduce((n, member) => n + missingFaces(member).length, 0) : 0
     const backgrounds = [...new Set(places.map(place => String(place ?? '').trim()).filter(Boolean))].filter(place => !matchScene(place, sceneList))
     const total = sprites.length + faceCount + backgrounds.length
-    const noFaces = fromPicture ? '' : t`选的画图方式不能照着立绘改表情（重画出来会像另一个人），表情先不画：可以换成能参考图片的画图方式，或者导入表情包。`
+    const noFaces = fromPicture || !wanted ? '' : t`选的画图方式不能照着立绘改表情（重画出来会像另一个人），表情先不画：可以换成能参考图片的画图方式，或者导入表情包。`
     if (!total) {
       toast(noFaces || t`立绘、表情和场景都已经齐了`, noFaces ? 8000 : undefined)
       return 0
@@ -2482,7 +2484,7 @@ export function initVn(deps) {
     const how = picked.label ? t`用「${picked.label}」` : t`用设置里的画图方式`
     if (!confirm([t`${how}画 ${counts}：先画立绘，某个人的立绘画好了才画他的表情；一张一张来，进度显示在「立绘」窗口顶部，可以随时取消。用付费接口时每张都会计费。开始？`, noFaces].filter(Boolean).join('\n\n'))) return 0
     const queueFaces = member => {
-      if (fromPicture) for (const name of missingFaces(member)) drawFace(cardId, entryOf(member), name, choice)
+      if (withFaces) for (const name of missingFaces(member)) drawFace(cardId, entryOf(member), name, choice)
     }
     for (const member of roster) {
       if (list[member.id]) queueFaces(member)
@@ -3315,5 +3317,7 @@ export function initVn(deps) {
     if (state.on) compose(true)
   }
 
-  return { render, streamed, isOn, turnFlags, marks, makeReady, picturesChanged, refreshEnd, compose: openCompose, drawFoe, pictureFor, loadPictures }
+  // 创作角色卡's 备齐门面图: the same pictures 做成视觉小说 gets ready, without entering the mode.
+  const prepareArt = (cardId, places = [], { faces = true } = {}) => prepare(cardId, { places, faces })
+  return { render, streamed, isOn, turnFlags, marks, makeReady, prepareArt, picturesChanged, refreshEnd, compose: openCompose, drawFoe, pictureFor, loadPictures }
 }

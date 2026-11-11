@@ -4,7 +4,10 @@
 // chat's prompt stays the same from turn to turn and is cached. Changing an
 // option takes effect in new chats, or in a chat after 用于当前对话 rebuilds
 // its prefix, as with any preset.
-import { BASIC_ID, VN_ID, choiceLetter, choicesOf, cleanBasic, cleanVn, isBuiltinPreset } from '../web/shared/basic.js'
+import { randomUUID } from 'node:crypto'
+import { ADDED_PLACES, BASIC_ID, MAX_ADDED, VN_ID, choiceLetter, choicesOf, cleanBasic, cleanBuiltinEdits, cleanVn, isBuiltinPreset } from '../web/shared/basic.js'
+import { httpError } from './store.mjs'
+import { msg } from './i18n.mjs'
 import { hiddenBlock } from './forge/bricks.mjs'
 
 export { BASIC_ID, VN_ID }
@@ -56,39 +59,145 @@ export function asksChoices(chat) {
 /** Whether a chat's frozen prompt asks each reply for 写前自查. */
 export const asksSelfCheck = chat => String(chat?.systemPrompt ?? '').includes('<self_check>')
 
-/** The built-in preset as a preset object: no prompts of its own, its options instead. */
+// The player's entries sent with each turn go after this marker, as a preset's after-history entries do
+// (presets.mjs renderPresetTailParts), kept in the history (每轮都留: the history never changes, so it caches).
+const HISTORY_MARKER = { id: 'chatHistory', name: 'Chat History', role: 'system', content: '', marker: true, absolute: false, depth: 4, enabled: true }
+const turnPrompts = edits => {
+  const turn = edits.added.filter(entry => entry.place === 'turn')
+  return turn.length ? [HISTORY_MARKER, ...turn.map(entry => ({ id: entry.id, name: entry.name, role: 'system', content: entry.content, marker: false, absolute: false, depth: 4, enabled: entry.enabled }))] : []
+}
+
+/** The built-in preset as a preset object: its options and the player's edits to it (`edits`), no prompts but the per-turn entries. */
 export function basicPreset(settings) {
-  return withScripts({
-    id: BASIC_ID,
+  return builtin({ id: BASIC_ID, name: '基础预设', options: cleanBasic(settings?.basic), edits: cleanBuiltinEdits(settings?.basicEdits) })
+}
+
+function builtin({ id, name, options, edits }) {
+  return {
+    id,
     builtin: true,
-    name: '基础预设',
-    options: cleanBasic(settings?.basic),
-    prompts: [],
+    name,
+    options,
+    edits,
+    prompts: turnPrompts(edits),
     formats: { wi: '{0}', scenario: '{{scenario}}', personality: '{{personality}}', exampleChat: '[Example Chat]' },
     helperScripts: 0,
     params: {},
-    postMode: 'prefix',
+    postMode: 'turn',
     importedAt: '',
-  })
+    regexScripts: [...ownScripts(options), ...edits.regexScripts],
+  }
 }
 
-const withScripts = preset => ({ ...preset, regexScripts: [CHOICES_HIDDEN, ...(preset.options.selfCheck === 'on' ? SELF_CHECK_HIDDEN : [])] })
+/** The scripts a built-in preset comes with, which the player cannot change. */
+const ownScripts = options => [CHOICES_HIDDEN, ...(options.selfCheck === 'on' ? SELF_CHECK_HIDDEN : [])]
 
 /**
  * The visual novel preset (视觉小说预设): the built-in preset with its own options,
  * telling the story as a visual novel or galgame tells it (vnRules, added to basicRules).
  */
 export function vnPreset(settings) {
-  return withScripts({ ...basicPreset(settings), id: VN_ID, name: '视觉小说预设', options: cleanVn(settings?.vn) })
+  return builtin({ id: VN_ID, name: '视觉小说预设', options: cleanVn(settings?.vn), edits: cleanBuiltinEdits(settings?.vnEdits) })
 }
 
 /** A built-in preset by id: the visual novel one, else the basic one. */
 export const builtinPreset = (settings, id) => (id === VN_ID ? vnPreset(settings) : basicPreset(settings))
 
-/** What the preset window shows: the options and the paragraphs they add (macros as written). */
+/**
+ * What the preset window shows: the options, the paragraphs they add (macros as written), and the preset as
+ * entries in the order the prompt has them: `prompts` [{ id, slot, kind: 'own' | 'added' | 'marker', content,
+ * original (own ones: the text as it comes), edited, enabled, place }].
+ */
 export function basicDetail(settings, id = BASIC_ID) {
   const preset = builtinPreset(settings, id)
-  return { id: preset.id, builtin: true, name: preset.name, options: preset.options, rules: basicRules(preset.options), regexScriptList: preset.regexScripts }
+  const { options, edits } = preset
+  const own = (parts, place) => editedParts(parts, edits).map((part, i) => ({ id: part.key, slot: part.slot, kind: 'own', content: part.text, original: parts[i].text, edited: part.key in edits.texts, enabled: part.enabled, place }))
+  const added = place => edits.added.filter(entry => entry.place === place).map(entry => ({ id: entry.id, name: entry.name, kind: 'added', content: entry.content, enabled: entry.enabled, place }))
+  const marker = slot => ({ id: `marker-${slot}`, slot, kind: 'marker', enabled: true })
+  const prompts = [
+    ...own(narratorParts(settings?.language), 'top'),
+    ...added('top'),
+    marker('card'),
+    marker('everyTurn'),
+    ...own(basicParts(options), 'rules'),
+    ...added('rules'),
+    marker('cardLate'),
+    marker('chatHistory'),
+    ...added('turn'),
+  ]
+  return {
+    id: preset.id,
+    builtin: true,
+    name: preset.name,
+    options,
+    rules: basicRules(options, edits),
+    regexScriptList: preset.regexScripts,
+    ownRegex: ownScripts(options).length,
+    prompts,
+    edited: Object.keys(edits.texts).length + edits.off.length + edits.added.length + edits.regexScripts.length,
+  }
+}
+
+/**
+ * Apply an edit from the preset window to a built-in preset's edits (cleanBuiltinEdits), as editPreset does for an
+ * imported one: per entry `enabled`, `content`, and for the player's own `title`, `place`; `add` an entry; `remove`
+ * the player's; `order` their ids; `reset` one entry's id (its text back as it comes, switched on). A text sent as
+ * it comes is no edit. `known`: the own entries the window shows, id → the text each comes with (ownTexts).
+ */
+export function editBuiltin(edits, patch, known) {
+  const next = { ...edits, texts: { ...edits.texts }, off: [...edits.off], added: edits.added.map(entry => ({ ...entry })) }
+  const setOff = (key, off) => {
+    next.off = next.off.filter(k => k !== key)
+    if (off) next.off.push(key)
+  }
+  for (const change of Array.isArray(patch.prompts) ? patch.prompts : []) {
+    const id = String(change?.id ?? '')
+    const mine = next.added.find(entry => entry.id === id)
+    if (mine) {
+      if (typeof change.enabled === 'boolean') mine.enabled = change.enabled
+      if (typeof change.content === 'string') mine.content = change.content
+      if (typeof change.title === 'string' && change.title.trim()) mine.name = change.title.trim().slice(0, 80)
+      if (ADDED_PLACES.includes(change.place)) mine.place = change.place
+      continue
+    }
+    if (!known.has(id)) continue
+    if (typeof change.enabled === 'boolean') setOff(id, !change.enabled)
+    if (typeof change.content === 'string') {
+      if (change.content === known.get(id)) delete next.texts[id]
+      else next.texts[id] = change.content
+    }
+  }
+  if (typeof patch.reset === 'string') {
+    delete next.texts[patch.reset]
+    setOff(patch.reset, false)
+  }
+  if (patch.add && typeof patch.add === 'object') {
+    if (next.added.length >= MAX_ADDED) throw httpError(400, msg`条目太多了（最多 ${MAX_ADDED} 条）`)
+    next.added.push({
+      id: `custom-${randomUUID()}`,
+      name: String(patch.add.name ?? '').trim().slice(0, 80) || msg`新条目`,
+      content: String(patch.add.content ?? ''),
+      enabled: true,
+      place: ADDED_PLACES.includes(patch.add.place) ? patch.add.place : 'rules',
+    })
+  }
+  if (Array.isArray(patch.remove)) {
+    const gone = new Set(patch.remove.map(String))
+    next.added = next.added.filter(entry => !gone.has(entry.id))
+  }
+  if (Array.isArray(patch.order)) {
+    const order = patch.order.map(String)
+    const ids = next.added.map(entry => entry.id)
+    if (order.length !== ids.length || new Set(order).size !== ids.length || !order.every(id => ids.includes(id))) throw httpError(409, msg`条目列表已经变了，刷新后再排`)
+    const byId = new Map(next.added.map(entry => [entry.id, entry]))
+    next.added = order.map(id => byId.get(id))
+  }
+  return next
+}
+
+/** A built-in preset's own entries as the window shows them: id → the text each comes with. */
+export function ownTexts(settings, id) {
+  return new Map(basicDetail(settings, id).prompts.filter(p => p.kind === 'own').map(p => [p.id, p.original]))
 }
 
 /** Whether the options ask for blocks around the story (the turn's reminder then names the output format). */
@@ -260,27 +369,97 @@ function formatRules(options) {
 }
 
 /**
- * The options' paragraphs for the prefix's every-turn section, macros not yet
- * expanded ({{user}}, {{char}}).
+ * The built-in preset's own paragraphs for these options, in order, macros not yet expanded ({{user}},
+ * {{char}}): { key, slot, text }. `key` names the paragraph with the option it was written for (style:cinematic),
+ * which is what an edit is kept by: a rewritten 电影感 stays with 电影感. The visual novel preset's paragraphs
+ * (slot vn-*) are joined line by line, the rest by blank lines (basicRules).
  */
-export function basicRules(options) {
+export function basicParts(options) {
   const style = STYLE[options.style]
+  const vn = options.dialogue
+    ? [
+        ['vn-intro', 'on', VN_INTRO],
+        ['vn-dialogue', options.dialogue, DIALOGUE[options.dialogue]],
+        ['vn-narration', options.narration, NARRATION[options.narration]],
+        ['vn-scenery', options.scenery, SCENERY[options.scenery]],
+        ['vn-paging', options.paging, PAGING[options.paging]],
+        ['vn-flavor', options.flavor, FLAVOR[options.flavor]],
+      ]
+    : []
   return [
-    PERSON[options.person],
-    style ? `文风——${style}${STYLE_FIRST}` : '',
-    vnRules(options),
-    PACE[options.pace],
-    IMPERSONATION[options.impersonation],
-    KNOWLEDGE[options.knowledge],
-    THEMES[options.themes],
-    JAILBREAK[options.jailbreak],
+    ['person', options.person, PERSON[options.person]],
+    ['style', options.style, style ? `文风——${style}${STYLE_FIRST}` : ''],
+    ...vn,
+    ['pace', options.pace, PACE[options.pace]],
+    ['impersonation', options.impersonation, IMPERSONATION[options.impersonation]],
+    ['knowledge', options.knowledge, KNOWLEDGE[options.knowledge]],
+    ['themes', options.themes, THEMES[options.themes]],
+    ['jailbreak', options.jailbreak, JAILBREAK[options.jailbreak]],
     // Said once is enough: 放开 already framed the story as adult fiction.
-    options.themes === 'open' ? INTIMACY[options.intimacy].replace(ADULT_FICTION, '') : INTIMACY[options.intimacy],
-    hasBasicFormat(options) ? formatRules(options) : '',
-    JAILBREAK_TAIL[options.jailbreak],
+    ['intimacy', `${options.intimacy}${options.themes === 'open' ? '-open' : ''}`, options.themes === 'open' ? INTIMACY[options.intimacy].replace(ADULT_FICTION, '') : INTIMACY[options.intimacy]],
+    ['format', `${options.selfCheck}-${options.timeBox}-${options.choices}`, hasBasicFormat(options) ? formatRules(options) : ''],
+    ['jailbreakTail', options.jailbreak, JAILBREAK_TAIL[options.jailbreak]],
   ]
-    .filter(Boolean)
-    .join('\n\n')
+    .filter(([, , text]) => text)
+    .map(([slot, value, text]) => ({ key: `${slot}:${value}`, slot, text }))
+}
+
+// prompt.mjs EVERY_TURN (that file imports this one).
+const EVERY_TURN_TITLE = '每轮回复都要遵守'
+
+/** The narrator's opening line and rules (prompt.mjs buildSystemPrompt), as the built-in presets have them. */
+export function narratorParts(language = '') {
+  return [
+    { key: 'intro', slot: 'intro', text: '你是一场互动小说的叙述者，同时扮演除玩家以外的所有角色。玩家扮演「{{user}}」。' },
+    {
+      key: 'rules',
+      slot: 'rules',
+      text: [
+        '## 基本规则',
+        `- 除了「${EVERY_TURN_TITLE}」一节要求的格式块，只写故事正文，不写解释、点评或任何元信息。`,
+        '- 每条玩家消息里，<玩家输入> 是玩家本轮想做的事或希望看到的发展。用你自己的叙述把它演出来，不要照抄原句，然后顺着情节自然推进。',
+        '- <世界书> 和 <动态设定> 是和当前情节相关的设定资料，<当前状态> 是游戏状态的最新值，<角色备注> 是作者给本轮的提醒，<本轮提醒> 指向系统提示里每轮都要执行的规则。它们不要原样复述。',
+        '- 角色按各自的人设行动和说话，可以有自己的意志，不必顺着玩家。',
+        '- 篇幅随情节而定；不要重复前文已经写过的内容。',
+        `- 使用${language || '简体中文'}写作。`,
+      ].join('\n'),
+    },
+  ]
+}
+
+/** The parts as written: a rewritten text in place of the default, those switched off left out. */
+export function editedParts(parts, edits) {
+  const off = new Set(edits?.off ?? [])
+  return parts.map(part => ({ ...part, text: edits?.texts?.[part.key] ?? part.text, enabled: !off.has(part.key) }))
+}
+
+const addedText = (edits, place) =>
+  (edits?.added ?? []).filter(entry => entry.enabled && entry.place === place && entry.content.trim()).map(entry => entry.content.trim())
+
+/**
+ * The options' paragraphs for the prefix's every-turn section, then the player's own entries placed there,
+ * macros not yet expanded ({{user}}, {{char}}). `edits`: the preset's (cleanBuiltinEdits), or none.
+ */
+export function basicRules(options, edits = null) {
+  const groups = []
+  let vnGroup = null
+  for (const part of editedParts(basicParts(options), edits)) {
+    if (!part.enabled || !part.text.trim()) continue
+    if (part.slot.startsWith('vn-')) {
+      if (vnGroup) vnGroup.push(part.text)
+      else groups.push((vnGroup = [part.text]))
+    } else {
+      vnGroup = null
+      groups.push([part.text])
+    }
+  }
+  return [...groups.map(lines => lines.join('\n')), ...addedText(edits, 'rules')].join('\n\n')
+}
+
+/** The narrator's opening line, rules and the player's entries after them (macros as written), as edited. */
+export function narratorText(language, edits = null) {
+  const parts = editedParts(narratorParts(language), edits).filter(part => part.enabled && part.text.trim())
+  return { intro: parts.find(part => part.slot === 'intro')?.text ?? '', rules: [...parts.filter(part => part.slot === 'rules').map(part => part.text), ...addedText(edits, 'top')].join('\n\n') }
 }
 
 /**

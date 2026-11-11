@@ -27,11 +27,11 @@ import { madeAt } from '../draw-history.mjs'
 import { helperSummary } from '../helper-scripts.mjs'
 import { cleanCardMedia, drawChoiceOf } from '../media.mjs'
 import { complete, isProviderRef, providerError, refLabel, resolveRef } from '../providers.mjs'
-import { estimateTokens } from '../context.mjs'
+import { estimateTokens, toolNote, withToolNote } from '../context.mjs'
 import { estimateCost } from '../models.mjs'
 import { httpError, newId } from '../store.mjs'
 import { renderTemplate } from '../template.mjs'
-import { PLAN_ANGLES, chosenUserGender, chosenUserName, cleanCardOptions, cleanGreetingCount, discussRequest, editBrief, editTracking, editUserGender, editUserName, emptyBrief, englishCard, forgeLanguages, ideaSeeds, ideasRequest, partialReply, planLanguage, planRequest, readDiscussion, readIdeas, readPlan, reviseRequest, withCardOptions } from './prompts.mjs'
+import { chosenUserGender, chosenUserName, cleanCardOptions, cleanGreetingCount, discussRequest, editBrief, editPlanList, editTracking, editUserGender, editUserName, emptyBrief, englishCard, forgeLanguages, ideaSeeds, ideasRequest, outlineRequest, partialReply, planLanguage, planRequest, readDiscussion, readIdeas, readOutlines, readPlan, reviseRequest, withCardOptions } from './prompts.mjs'
 import { brickCost } from './bricks.mjs'
 import { alignCard, applyIssues, cardJson, entriesRequest, greetingsRequest, initialState, lintCard, matchWritten, newCard, previewDynamics, readIssues, readTagged, redescribe, retrack, reviewRequest, rewriteRequest, stepDone, userTagged, writeSteps } from './write.mjs'
 import { STATUS_TARGET, applyChanges, editRequest, ensureBook, readEdit } from './edit.mjs'
@@ -41,11 +41,17 @@ import { applyPresetChanges, presetEditRequest, presetPickRequest, presetTooLong
 import { applyRegexChanges, readRegexEdit, regexEditRequest, tryChanges } from './regex-edit.mjs'
 import { cleanThemeContext, readThemeEdit, themeApplier, themeEditRequest } from './theme-edit.mjs'
 import { createCheck, helpersOf } from './check-session.mjs'
+import { SKIN_OUTPUT, cleanProblems, cleanWish, readSkin, skinRequest } from './skin.mjs'
+import { statusSpecOf, withStatusCopy } from './status.mjs'
+import { cleanEffect, cleanPalette, cleanSkin, cleanSkinCss, cleanStatusSpec, skinClass } from '../../web/shared/status.js'
+import { cleanCover, coverWords } from '../../web/shared/cover.js'
+import { FACE_WORDS } from '../../web/shared/stage.js'
 import { applyStatusChange } from './check-apply.mjs'
 import { drawsOwnBar, startingState } from './check.mjs'
 import { createTrial, trialSessionId } from './trial.mjs'
+import { createNovel } from './novel.mjs'
 import { cleanScripts } from '../regex.mjs'
-import { isBuiltinPreset } from '../../web/shared/basic.js'
+import { VN_ID, editsKey, isBuiltinPreset } from '../../web/shared/basic.js'
 import { currentLanguage, msg } from '../i18n.mjs'
 import { chatReference, creditsOf, keptMaterial, readMaterial, readReference, referenceView, studying, withMode, withReference } from './references.mjs'
 import { structureText } from './structure.mjs'
@@ -131,8 +137,85 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
     return draft
   }
 
+  /**
+   * 定制外观 picked for a draft's status bar ({ palette, skin }) is the draft's, not the plan's: a plan written
+   * again (revised, another of the three versions) wears it too, till the user takes it off.
+   */
+  function wearLook(draft) {
+    if (!draft.plan?.status) return
+    const { skin: _, ...status } = draft.plan.status
+    const look = status.ui !== false && draft.look?.skin ? draft.look : null
+    if (look) draft.plan = { ...draft.plan, status: { ...status, palette: look.palette, skin: look.skin } }
+    else if (draft.plan.status.skin) {
+      // Taken off: the three colors go with it unless the picks ask for colors of the card's own.
+      if (status.theme !== 'auto') delete status.palette
+      draft.plan = { ...draft.plan, status }
+    }
+  }
+
+  // A variable that holds a face (表情) or the place the story is at (the names the page reads them by:
+  // web/shared/cover.js moodPath, web/shared/vn.js latestPlace).
+  const FACE_KEY = /^(?:表情|神情|expression|face)$/i
+  const PLACE_KEY = /^(?:当前)?(?:地点|位置|所在地|所在位置|场景|地址|location|place)$/i
+  // Words that go into a card (variable names, rules), not onto the page.
+  const zhWord = (strings, ...values) => String.raw({ raw: strings }, ...values)
+
+  /**
+   * 门面 (方案页): the card's 开场页, and 立绘, 场景图 and 动效 on its status bar. The draft's, like the look: a plan
+   * written again keeps them. All on till the user turns one off; the cover's words are the plan's summary till the
+   * user writes others. A draft from before there was a front (none kept with it) has it all off till the user turns
+   * something on: a card being made does not change under its maker.
+   */
+  const NO_FRONT = { cover: false, portrait: false, scene: false, phone: false }
+  function wearFront(draft) {
+    if (!draft.plan) return
+    const front = draft.front ?? NO_FRONT
+    const effect = cleanEffect(front.effect)
+    const plan = { ...draft.plan }
+    if (plan.status) plan.status = { ...plan.status, portrait: front.portrait !== false, scene: front.scene !== false, phone: front.phone !== false, effect }
+    // What the pictures on the bar go by, given to the plan once (taken out by hand, they stay out): a face for the
+    // 立绘 to wear, from the words the faces are known by, and where the story is, for the 场景图. Neither shows on the bar.
+    if (plan.status && plan.status.ui !== false && plan.tracking?.enabled) {
+      const english = englishCard(planLanguage(plan))
+      const given = new Set(front.given ?? [])
+      const variables = [...plan.tracking.variables]
+      const lead = plan.characters?.find(character => character.kind === 'core')?.name ?? ''
+      const key = path => String(path).split('.').at(-1)
+      if (front.portrait !== false && lead && !given.has('face')) {
+        given.add('face')
+        if (!variables.some(v => FACE_KEY.test(key(v.path)))) {
+          const faces = Object.entries(FACE_WORDS).map(([id, word]) => (english ? id : word))
+          variables.push({ path: `${lead}.${english ? 'expression' : zhWord`表情`}`, label: english ? 'Face' : zhWord`表情`, type: 'string', initial: faces[0], range: '', show: 'hidden', check: english ? `the look on their face right now, one of: ${faces.join(', ')}` : zhWord`这一刻脸上的神情，从这几个词里选一个：${faces.join('、')}` })
+        }
+      }
+      const places = (plan.world?.places ?? []).map(place => place.name).filter(Boolean).slice(0, 12)
+      if (front.scene !== false && places.length && !given.has('place')) {
+        given.add('place')
+        if (!variables.some(v => PLACE_KEY.test(key(v.path)))) {
+          variables.push({ path: english ? 'World.location' : zhWord`世界.当前地点`, label: english ? 'Location' : zhWord`地点`, type: 'string', initial: '', range: '', show: 'hidden', check: english ? `where the story is now; changes when the place does. Use these names where they fit: ${places.join(', ')}` : zhWord`故事现在在哪，换了地方就改。到了这些地方就用它的名字：${places.join('、')}` })
+        }
+      }
+      if (variables.length !== plan.tracking.variables.length) {
+        plan.tracking = { ...plan.tracking, variables }
+        // A card already written gets its state entries again (the starting values, the rules), as when the
+        // variables are changed by hand: without it the new ones would be in the plan and nowhere in the card.
+        if (draft.card) draft.card = retrack(draft.card, plan)
+      }
+      if (given.size !== (front.given ?? []).length) draft.front = { ...front, given: [...given] }
+    }
+    const own = coverWords(plan.summary)
+    // 建角页 stands where the first opening would: the openings' names would not line up with what the card has.
+    const openings = plan.creation?.enabled ? [] : (plan.greetings ?? []).map(greeting => ({ title: greeting.title, brief: greeting.scene }))
+    plan.cover = front.cover === false ? null : cleanCover({ tagline: typeof front.tagline === 'string' ? front.tagline : own.tagline, lines: Array.isArray(front.lines) ? front.lines : own.lines, openings, effect, ...(front.coverSt === false ? { st: false } : {}) })
+    draft.plan = plan
+  }
+
   async function save(draft) {
     draft.updatedAt = new Date().toISOString()
+    if (!String(draft.id).startsWith(EDIT)) {
+      wearLook(draft)
+      wearFront(draft)
+    }
     const file = fileOf(draft.id)
     await mkdir(path.dirname(file), { recursive: true })
     const tmp = `${file}.${process.pid}.${newId()}.tmp`
@@ -210,16 +293,18 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
       // 玩法积木: what they add, for the plan page to say.
       brickCost: draft.plan?.bricks?.length ? brickCost(draft.plan, englishCard(planLanguage(draft.plan))) : null,
       planModel: draft.planModel ?? null,
-      // 出三版来挑: what tells the versions apart, for the page to pick one (draft.plan is the one picked).
+      // 出三版来挑: what tells the versions apart, for the page to pick one (draft.plan is the one picked). A version
+      // is an outline till it is written as a plan; one from before outlines came first is a plan only.
       planOptions: (draft.planOptions ?? []).map((option, i) => ({
         angle: option.angle,
         picked: i === draft.planPick,
-        name: option.plan.name,
-        summary: option.plan.summary,
-        cast: option.plan.characters.filter(c => c.kind === 'core').map(c => c.name),
-        greetings: option.plan.greetings.map(g => g.title),
+        written: Boolean(option.plan),
+        name: option.plan?.name ?? option.outline.name,
+        summary: option.plan?.summary ?? option.outline.summary,
+        differs: option.outline?.differs ?? '',
+        cast: option.plan ? option.plan.characters.filter(c => c.kind === 'core').map(c => c.name) : option.outline.cast,
+        greetings: option.plan ? option.plan.greetings.map(g => g.title) : option.outline.openings,
       })),
-      planMissing: draft.planMissing ?? [],
       card: card
         ? {
             entries: card.entries,
@@ -277,7 +362,8 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
 
   /**
    * Run a job in the background. `work(ctx)` gets:
-   *   ctx.call(request): one model call (streamed into the job's progress, counted in usage);
+   *   ctx.call(request, group = 'forge'): one model call (streamed into the job's progress, counted in usage),
+   *     with the player's 附加提示词 for `group` (context.mjs toolNote: 'check' for 检查这张卡);
    *   ctx.update(fn): change the draft on disk;
    *   ctx.step(id): which step it is at, for the page;
    *   ctx.signal, ctx.label (the model's name);
@@ -287,12 +373,17 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
    * `other`: a model picked for this retry only. It writes the step the job starts at; when the job moves on
    * to the next step the draft's own model takes over, so the retry costs what the page said it would.
    */
-  async function run(draft, kind, work, { model = true, other = '' } = {}) {
+  /**
+   * @param other - another model for this job only (换个模型重写): for its first step, or with `throughout` for all of
+   *   it (a talk's answer is one piece of work, whatever steps it takes).
+   */
+  async function run(draft, kind, work, { model = true, other = '', throughout = false } = {}) {
     if (jobs.has(draft.id)) throw httpError(409, msg`上一步还在进行，等它写完或先停下`)
     const swapped = model && other ? await target(draft, other) : null
     let chosen = model && !swapped ? await target(draft) : swapped
     let first = null
-    const languages = forgeLanguages(currentLanguage(), (await store.getSettings()).language)
+    const settings = await store.getSettings()
+    const languages = forgeLanguages(currentLanguage(), settings.language)
     const job = { kind, step: null, controller: new AbortController(), partial: '', startedAt: new Date().toISOString(), sizes: [] }
     jobs.set(draft.id, job)
     draft.job = { kind, startedAt: job.startedAt }
@@ -306,11 +397,12 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
       signal: job.controller.signal,
       step: id => {
         if (swapped && first === null) first = id
-        else if (swapped && id !== first && chosen === swapped) chosen = null
+        else if (swapped && !throughout && id !== first && chosen === swapped) chosen = null
         if (id !== job.step) job.sizes = []
         job.step = id
       },
-      async call(request) {
+      async call(asked, group = 'forge') {
+        const request = withToolNote(asked, toolNote(settings, group))
         chosen ??= await target(draft)
         const used = chosen
         job.partial = ''
@@ -377,12 +469,61 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
     if (!ledger || !result?.usage) return
     const draft = await load(id)
     // An edit session's calls count under its card, or under the book or preset it changes.
-    const chat = draft.kind && draft.kind !== 'card'
+    const chat = draft.kind === 'novel'
+      ? { id: `forge-${id}`, title: msg`从小说抽取：${draft.name}`, cardId: null }
+      : draft.kind && draft.kind !== 'card'
       ? { id: `forge-${id}`, title: SUBJECTS[draft.kind].title(draft.subjectName), cardId: null }
       : draft.cardId
         ? { id: `forge-${id}`, title: msg`修改：${draft.cardName}`, cardId: draft.cardId }
         : { id: `forge-${id}`, title: msg`创作：${draft.plan?.name || draft.brief.title || msg`未命名`}`, cardId: null }
     await ledger.recordTurn(chat, { model: ref, usage: result.usage, createdAt: new Date().toISOString() })
+  }
+
+  // ─── 定制外观 in the plan: the session beside a draft ────────────────────
+  const skinIdOf = id => `${EDIT}skin-${id}`
+
+  async function loadSkin(id) {
+    const draft = await load(id)
+    if (!draft.plan) throw httpError(409, msg`还没有方案`)
+    const session = await load(skinIdOf(id)).catch(error => {
+      if (error.status !== 404) throw error
+      const now = new Date().toISOString()
+      return { id: skinIdOf(id), createdAt: now, updatedAt: now, model: '', job: null, error: null, skin: null }
+    })
+    return { draft, session }
+  }
+
+  /** The bar a draft's plan lays out, the variables as they start, and the card as far as the plan tells it. */
+  function barOf(draft) {
+    const plan = draft.plan
+    const spec = plan?.tracking?.enabled ? statusSpecOf(plan) : null
+    const world = plan?.world ?? {}
+    const card = {
+      name: plan?.name ?? '',
+      tags: [],
+      description: [plan?.summary, world.kind, world.overview, plan?.style ? Object.values(plan.style).filter(value => typeof value === 'string' && value.trim()).join('；') : ''].filter(Boolean).join('\n'),
+      scenario: '',
+      firstMes: draft.card?.greetings?.find(greeting => greeting.text)?.text ?? '',
+      cover: plan?.cover ?? null,
+    }
+    return { spec, card, state: spec ? initialState(plan) : {} }
+  }
+
+  async function skinView({ draft, session }) {
+    const { spec, card, state } = barOf(draft)
+    const job = jobs.get(session.id)
+    const ref = draft.model || (await store.getSettings()).model || ''
+    const ready = isProviderRef(ref)
+    const request = spec ? skinRequest(card, spec, state) : null
+    const input = request ? estimateTokens(`${request.system}${request.messages[0].content}`) : 0
+    return {
+      skin: session.skin ?? null,
+      job: job ? { startedAt: job.startedAt, chars: job.partial.length } : null,
+      // The guide is writing (a plan, the card): one thing at a time.
+      busy: jobs.has(draft.id),
+      error: session.error?.message ?? '',
+      estimate: { ready, model: ready ? (refLabel(ref, await store.getProviders()) ?? ref) : '', input, output: SKIN_OUTPUT, cost: ready ? estimateCost(ref.slice(ref.indexOf('/') + 1), { input, output: SKIN_OUTPUT }) : null },
+    }
   }
 
   const cutNote = result => (result.truncated ? msg`（写到输出上限被截断了）` : result.stopReason && !/stop|end/i.test(result.stopReason) ? msg`（${result.stopReason}）` : '')
@@ -423,47 +564,42 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
       fresh.planModel = ctx.label
       fresh.planPending = null
       fresh.planOptions = null
-      fresh.planMissing = null
+      fresh.planWriting = null
       fresh.planPick = 0
       fresh.stage = 'plan'
     })
   }
 
   /**
-   * 出三版来挑: the plan written three times at once, each from its own angle
-   * (PLAN_ANGLES). The versions that could be read are kept; the first is picked.
+   * 出三版来挑: three outlines in one small answer, each from its own angle (PLAN_ANGLES), for the user to pick
+   * from. None is a plan yet: the one picked is written whole (planOptionWork), and so is any other asked for after.
    */
-  /** @param only - the angles to write again (the versions that did not come), added to those there. */
-  async function planOptionsWork(ctx, rounds, brief, options, names, only = null) {
-    const all = Object.keys(PLAN_ANGLES)
-    const angles = only ? all.filter(angle => only.includes(angle)) : all
-    const attempt = angle => ctx.call(planRequest(rounds, brief, ctx.languages, { ...options, angle })).then(
-      result => withCardOptions(readPlan(result.text, { language: ctx.languages.card, ...names, scale: options.options.scale }), options.options) ?? new Error(msg`${ctx.label} 写的方案读不出来，再试一次，或者换个模型`),
-      error => (error instanceof Error ? error : new Error(String(error))),
-    )
-    const results = await Promise.all(angles.map(attempt))
-    // A version that failed is asked once more on its own: a provider busy with three calls at once often turns one away.
-    for (const [i, result] of results.entries()) {
-      if (result instanceof Error && !ctx.signal.aborted) results[i] = await attempt(angles[i])
-    }
-    if (ctx.signal.aborted) throw new Error(msg`已经停下了。`)
-    const read = results.map((plan, i) => ({ angle: angles[i], plan })).filter(option => !(option.plan instanceof Error))
-    const failed = results.map((result, i) => ({ angle: angles[i], error: result instanceof Error ? clip(result.message, 300) : '' })).filter(f => f.error)
-    if (!read.length) throw results[0]
+  async function outlineWork(ctx, rounds, brief, options) {
+    const result = await ctx.call(outlineRequest(rounds, brief, ctx.languages, options))
+    const outlines = readOutlines(result.text)
+    if (outlines.length < 2) throw new Error(msg`${ctx.label} 写的提纲读不出来${cutNote(result)}，再试一次，或者换个模型`)
     await ctx.update(fresh => {
-      // The versions that did not come: the page says which and why.
-      fresh.planMissing = failed
-      if (only && fresh.planOptions?.length) {
-        const picked = fresh.planOptions[fresh.planPick]
-        fresh.planOptions = [...fresh.planOptions, ...read].sort((a, b) => all.indexOf(a.angle) - all.indexOf(b.angle))
-        fresh.planPick = Math.max(0, fresh.planOptions.indexOf(picked))
-        return
-      }
-      fresh.planOptions = read
-      fresh.planPick = 0
-      fresh.plan = read[0].plan
+      fresh.planOptions = outlines.map(outline => ({ angle: outline.angle, outline, plan: null }))
+      // None is the plan shown: a plan from before stays as it is till one of these is written.
+      fresh.planPick = -1
+      fresh.planPending = null
+    })
+  }
+
+  /** One of the outlines written as a whole plan: it becomes the plan, and stays with its outline. */
+  async function planOptionWork(ctx, index, request, language, names) {
+    const result = await ctx.call(request)
+    await ctx.update(fresh => {
+      const option = fresh.planOptions?.[index]
+      if (!option) throw new Error(msg`没有这一版方案`)
+      const plan = withCardOptions(readPlan(result.text, { language, ...names, scale: optionsOf(fresh).scale }), optionsOf(fresh))
+      if (!plan) throw new Error(msg`${ctx.label} 写的方案读不出来${cutNote(result)}，再试一次，或者换个模型`)
+      option.plan = plan
+      fresh.planPick = index
+      fresh.plan = plan
       fresh.planModel = ctx.label
       fresh.planPending = null
+      fresh.planWriting = null
       fresh.stage = 'plan'
     })
   }
@@ -826,7 +962,12 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
           const card = await store.getCard(id.slice(5))
           return { subject: { scripts: card.regexScripts ?? [] }, name: card.name, holder: card }
         }
-        if (id.startsWith('preset-') && !isBuiltinPreset(id.slice(7))) {
+        // A built-in preset's: the player's own, kept in the settings (the two it comes with are not for changing).
+        if (id.startsWith('preset-') && isBuiltinPreset(id.slice(7))) {
+          const field = editsKey(id.slice(7))
+          return { subject: { scripts: (await store.getSettings())[field].regexScripts }, name: id.slice(7) === VN_ID ? msg`视觉小说预设` : msg`基础预设`, field }
+        }
+        if (id.startsWith('preset-')) {
           const preset = await store.getPreset(id.slice(7))
           return { subject: { scripts: preset.regexScripts ?? [] }, name: preset.name, holder: preset, preset: true }
         }
@@ -841,6 +982,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
             return sets.map(s => (s.id === loaded.set ? { ...s, scripts } : s))
           })
         }
+        if (loaded.field) return store.updateSettings(current => ({ [loaded.field]: { ...current[loaded.field], regexScripts: loaded.subject.scripts } }))
         if (!loaded.holder) return store.saveRegex(loaded.subject.scripts)
         loaded.holder.regexScripts = loaded.subject.scripts
         return loaded.preset ? store.savePreset(loaded.holder) : store.saveCard(loaded.holder)
@@ -978,6 +1120,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
 
   return {
     // 角色卡自检: a session of its own beside the card's 对话修改 one.
+    ...createNovel({ store, load, save, serial, run, jobs, cutNote, fileOf }),
     ...createCheck({ store, load, save, serial, run, jobs, removeFile: id => rm(fileOf(id), { force: true }), cutNote, trialReport: async cardId => (await load(trialSessionId(cardId)).catch(() => null))?.report ?? null }),
     ...createTrial({ store, engine, load, save, serial, run, jobs, removeFile: id => rm(fileOf(id), { force: true }), cutNote, rulebooks }),
 
@@ -1020,11 +1163,17 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
       return talkView(session)
     },
 
-    /** Ask the last request again (after a failure or a stop). */
-    async talkRetry(kind, id) {
+    /**
+     * Ask the last request again (after a failure or a stop). `model`: another model for this once (换个模型重写), the
+     * session keeps its own. `redo`: the latest answer written again while its changes still wait; it stays till the
+     * new one is in, so one that fails takes nothing away.
+     */
+    async talkRetry(kind, id, { model, redo } = {}) {
       const { session } = await loadTalk(kind, id)
-      if (!session.turns.length || session.turns.at(-1).assistant) throw httpError(409, msg`没有要重试的`)
-      await run(session, 'edit', ctx => talkWork(ctx, kind, id))
+      const last = session.turns.at(-1)
+      if (!last) throw httpError(409, msg`没有要重试的`)
+      if (last.assistant && (last.outcome || !(redo === true || session.error))) throw httpError(409, msg`没有要重试的`)
+      await run(session, 'edit', ctx => talkWork(ctx, kind, id), { other: clip(model, 200), throughout: true })
       return talkView(session)
     },
 
@@ -1165,7 +1314,8 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
       const idea = clip(text, MAX_TEXT) || (kept.length ? msg`我附了一些资料，想用它们做一张卡` : '')
       if (!idea) throw httpError(400, msg`先说说你想要一张什么样的卡，一句话也行`)
       const now = new Date().toISOString()
-      const draft = { id: newId(), createdAt: now, updatedAt: now, stage: 'discuss', model: clip(model, 200), cardType: '', options: cleanCardOptions(options, cardType), greetingCount: 0, rounds: [{ user: { text: idea, picks: [], at: now }, assistant: null }], brief: emptyBrief(), references: kept, plan: null, card: null, job: null, error: null }
+      // `front`: a draft begun from now on has its 门面 (cover, pictures, phone) on till turned off; one from before has none.
+      const draft = { id: newId(), createdAt: now, updatedAt: now, stage: 'discuss', model: clip(model, 200), cardType: '', options: cleanCardOptions(options, cardType), greetingCount: 0, front: {}, rounds: [{ user: { text: idea, picks: [], at: now }, assistant: null }], brief: emptyBrief(), references: kept, plan: null, card: null, job: null, error: null }
       await save(draft)
       await run(draft, 'discuss', ctx => discussWork(ctx, draft))
       return view(draft)
@@ -1242,7 +1392,10 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
       const draft = await load(id)
       const other = clip(model, 200)
       const kind = draft.error?.kind ?? (draft.stage === 'plan' ? 'plan' : 'discuss')
-      if (kind === 'plan') return draft.planPending ? this.revise(id, draft.planPending, { other }) : this.plan(id, { variants: draft.planVariants === true }, { other })
+      if (kind === 'plan') {
+        if (draft.planPending) return this.revise(id, draft.planPending, { other })
+        return this.plan(id, Number.isInteger(draft.planWriting) ? { option: draft.planWriting } : { variants: draft.planVariants === true }, { other })
+      }
       if (kind === 'write') {
         // Same as 接着写: another version may have been picked since, so the card follows the plan first.
         if (draft.card && draft.plan) draft.card = alignCard(draft.card, draft.plan)
@@ -1282,8 +1435,8 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
     },
 
     /** The user's edits: the model to use, the sketch (values, locks, title), the stage to look at. */
-    async update(id, { model, brief, stage, tracking, userName, userGender, cardType, options, greetingCount, planPick } = {}) {
-      if (((tracking && typeof tracking === 'object') || typeof userName === 'string' || typeof userGender === 'string' || planPick !== undefined) && jobs.has(id)) throw httpError(409, msg`上一步还在进行，等它写完或先停下`)
+    async update(id, { model, brief, stage, tracking, userName, userGender, cardType, options, greetingCount, planPick, look, planList, front } = {}) {
+      if (((tracking && typeof tracking === 'object') || typeof userName === 'string' || typeof userGender === 'string' || planPick !== undefined || look !== undefined || planList !== undefined || front !== undefined) && jobs.has(id)) throw httpError(409, msg`上一步还在进行，等它写完或先停下`)
       const draft = await mutate(id, draft => {
         const briefBefore = draft.brief
         if (typeof model === 'string') draft.model = clip(model, 200)
@@ -1296,6 +1449,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
         if (planPick !== undefined) {
           const option = draft.planOptions?.[Number(planPick)]
           if (!option) throw httpError(400, msg`没有这一版方案`)
+          if (!option.plan) throw httpError(409, msg`这一版还只有提纲，先把它写成方案`)
           draft.planPick = Number(planPick)
           draft.plan = option.plan
         }
@@ -1312,8 +1466,51 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
         if (tracking && typeof tracking === 'object') {
           if (!draft.plan) throw httpError(409, msg`还没有方案`)
           draft.plan = editTracking(draft.plan, tracking)
+          // The three colors changed by hand under a look of the card's own are that look's.
+          if (draft.look && cleanPalette(tracking.palette)) draft.look = { ...draft.look, palette: cleanPalette(tracking.palette) }
           keepPick(draft)
           if (draft.card) draft.card = retrack(draft.card, draft.plan)
+        }
+        // The plan's people, places, factions and events, changed by hand (no model call). A card already written keeps
+        // what was written for what is still there; what was added, or is written from something changed, is to write (接着写).
+        if (planList !== undefined) {
+          if (!draft.plan) throw httpError(409, msg`还没有方案`)
+          const { plan, touched } = editPlanList(draft.plan, planList ?? {})
+          draft.plan = plan
+          keepPick(draft)
+          if (draft.card) {
+            const before = draft.card
+            const aligned = alignCard(before, draft.plan)
+            const again = new Set(touched)
+            let card = again.size ? { ...aligned, entries: aligned.entries.map(entry => (again.has(entry.name) && entry.content ? { ...entry, content: '' } : entry)), reviewed: false, fixed: false, pending: {}, checks: [] } : aligned
+            // Something only taken out leaves nothing to write or to check again: the card is as finished as it was.
+            if (typeof planList?.remove === 'string') card = { ...card, reviewed: before.reviewed, fixed: before.fixed, pending: before.pending, checks: before.checks }
+            // With anything left to write it is no finished card: the plan page offers 接着写, not 回到打磨.
+            if (writeSteps(draft.plan, card).some(step => !stepDone(step, card))) {
+              card = { ...card, writtenAt: null }
+              if (draft.stage === 'polish') draft.stage = 'write'
+            }
+            draft.card = card
+          }
+        }
+        // 定制外观 for the status bar: a look a model wrote ({ palette, skin }), put on or (null) taken off. save() dresses the plan.
+        if (look !== undefined) {
+          if (!draft.plan) throw httpError(409, msg`还没有方案`)
+          const skin = cleanSkin(look?.skin)
+          draft.look = skin ? { palette: cleanPalette(look.palette) ?? cleanPalette(draft.plan.status?.palette) ?? { bg: '#f7f8f5', ink: '#1c2427', accent: '#2b5869' }, skin } : null
+        }
+        // 门面: 开场页 on or off and its words, 立绘 / 场景图 / 动效 on the bar. save() puts them on the plan (wearFront).
+        if (front && typeof front === 'object') {
+          if (!draft.plan) throw httpError(409, msg`还没有方案`)
+          const next = { ...(draft.front ?? NO_FRONT) }
+          for (const key of ['cover', 'portrait', 'scene', 'phone', 'coverSt']) if (typeof front[key] === 'boolean') next[key] = front[key]
+          if (typeof front.effect === 'string') next.effect = cleanEffect(front.effect)
+          if (typeof front.tagline === 'string') next.tagline = clip(front.tagline, 60)
+          if (Array.isArray(front.lines)) next.lines = front.lines.filter(line => typeof line === 'string' && line.trim()).slice(0, 4).map(line => clip(line, 80))
+          // Words taken out again: back to the plan's own.
+          if (front.tagline === null) delete next.tagline
+          if (front.lines === null) delete next.lines
+          draft.front = next
         }
         // The player's name, set by hand in the plan ('' = the one in settings). The card
         // says <user> throughout, so a written card needs nothing more.
@@ -1330,21 +1527,30 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
     },
 
     /**
-     * Write the talk up as a plan; `variants` (出三版来挑): three versions at once, to pick one;
-     * `missing`: only the versions that did not come last time, added to the others.
+     * Write the talk up as a plan; `variants` (出三版来挑): three outlines first, to pick one from;
+     * `option`: the outline at this place written as a whole plan.
      */
-    async plan(id, { variants = false, missing = false } = {}, { other = '' } = {}) {
+    async plan(id, { variants = false, option } = {}, { other = '' } = {}) {
       const draft = await load(id)
       if (!draft.rounds.some(r => r.assistant)) throw httpError(409, msg`先聊一轮再出方案`)
       // The last answer may still be waiting for a reply: plan from what was said.
       const rounds = draft.rounds.filter(r => r.assistant || r === draft.rounds.at(-1))
       const options = { options: optionsOf(draft), greetings: draft.greetingCount, references: draft.references }
       const names = { userName: chosenUserName(draft.brief) }
-      const only = missing === true && draft.planOptions?.length && draft.planMissing?.length ? draft.planMissing.map(m => m.angle) : null
       draft.planPending = null
+      if (option !== undefined) {
+        const index = Number(option)
+        const picked = draft.planOptions?.[index]
+        if (!picked?.outline) throw httpError(400, msg`没有这一版方案`)
+        draft.planVariants = false
+        draft.planWriting = index
+        await run(draft, 'plan', ctx => planOptionWork(ctx, index, planRequest(rounds, draft.brief, ctx.languages, { ...options, angle: picked.angle, outline: picked.outline }), ctx.languages.card, names), { other })
+        return view(draft)
+      }
+      draft.planWriting = null
       draft.planVariants = variants === true
       await run(draft, 'plan', ctx => (variants === true
-        ? planOptionsWork(ctx, rounds, draft.brief, options, names, only)
+        ? outlineWork(ctx, rounds, draft.brief, options)
         : planWork(ctx, planRequest(rounds, draft.brief, ctx.languages, options), ctx.languages.card, names)), { other })
       return view(draft)
     },
@@ -1355,13 +1561,15 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
      */
     async ideas({ model, cardType, options, exclude, count = 5 } = {}) {
       const chosen = await target({ model: clip(model, 200) })
-      const languages = forgeLanguages(currentLanguage(), (await store.getSettings()).language)
+      const settings = await store.getSettings()
+      const languages = forgeLanguages(currentLanguage(), settings.language)
       const shown = (Array.isArray(exclude) ? exclude : []).map(title => clip(title, 30)).filter(Boolean).slice(-40)
       // An answer that cannot be read (a model now and then leaves the format) is asked for once more.
       for (let attempt = 0; attempt < 2; attempt++) {
         let result
         try {
-          result = await complete(chosen.provider, chosen.modelId, ideasRequest(ideaSeeds(Math.min(5, Math.max(1, Math.floor(Number(count)) || 5))), languages, { options: cleanCardOptions(options, cardType), exclude: shown }), { proxy: proxyNow() })
+          const request = ideasRequest(ideaSeeds(Math.min(5, Math.max(1, Math.floor(Number(count)) || 5))), languages, { options: cleanCardOptions(options, cardType), exclude: shown })
+          result = await complete(chosen.provider, chosen.modelId, withToolNote(request, toolNote(settings, 'forge')), { proxy: proxyNow() })
         } catch (error) {
           throw error.status ? error : httpError(502, providerError(chosen.provider, error))
         }
@@ -1537,6 +1745,15 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
       // The picture it replaces, when not the one the last save wrote, goes into 抽图历史 as 修改角色卡's 换头像 does.
       if (beforeMark && beforeMark !== (draft.card.savedPicture ?? pictureMark(png))) await history?.push(old.id, 'avatar', { buffer: before, at: await madeAt(store.avatarPath(old.id)), source: 'avatar' })
       const card = normalizeCard(raw)
+      // 定制外观 put on the saved card elsewhere (修改角色卡) dresses the bar, whatever it shows: it stays unless the draft
+      // has a look of its own. One the last save wrote from this draft, and the draft has since taken off, goes.
+      const ownLook = card.statusBar?.skin ? skinClass(card.statusBar.skin.css) : ''
+      const elsewhere = old?.statusBar?.skin && skinClass(old.statusBar.skin.css) !== (draft.card.savedLook ?? '')
+      if (elsewhere && card.statusBar && !ownLook) {
+        card.statusBar = cleanStatusSpec({ ...card.statusBar, palette: old.statusBar.palette ?? card.statusBar.palette, skin: old.statusBar.skin })
+        // Its SillyTavern copy was written from the plan, before the look came back on.
+        card.regexScripts = withStatusCopy(card.regexScripts, card.statusBar, englishCard(planLanguage(draft.plan)))
+      }
       // The plan's art style becomes the card's 画风 (配图), so its sprites and backgrounds agree; one set in 配图 stays.
       const style = draft.plan.avatar?.style ?? ''
       if (old) Object.assign(card, { id: old.id, media: { ...old.media, style: old.media?.style || style, roster: cleanCardMedia({ roster: mergeRoster(old.media?.roster, draft.plan) }).roster }, worldbookIds: old.worldbookIds ?? [], importedAt: old.importedAt, group: old.group ?? '', archived: old.archived === true })
@@ -1553,6 +1770,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
         fresh.card.savedStamp = savedStamp(draft)
         fresh.card.savedMark = writtenMark(card)
         fresh.card.savedPicture = pictureMark(png)
+        fresh.card.savedLook = ownLook
       })
       return { card: cardSummary(card), updated: Boolean(old), draft: view(saved) }
     },
@@ -1568,7 +1786,54 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
       await rm(fileOf(id), { force: true })
       await rm(avatarFile(id), { force: true })
       await rm(keptDir(id), { recursive: true, force: true })
+      jobs.get(skinIdOf(id))?.controller.abort()
+      await rm(fileOf(skinIdOf(id)), { force: true })
       return { ok: true }
+    },
+
+    // ─── 定制外观 in the plan ───────────────────────────────────────────────
+    // A look for the status bar of the card being made, asked of a model as for a saved card (skin.mjs,
+    // check-session.mjs). The answer waits in a session beside the draft; put on, it is the draft's (update's `look`).
+
+    async skinGet(id) {
+      return skinView(await loadSkin(id))
+    },
+
+    /** Sent only by this. `wish`: what the user wants; `previous`: a look to work from; `problems`: what drawing it showed. */
+    async skinAsk(id, { wish, previous, problems } = {}) {
+      const { draft, session } = await loadSkin(id)
+      if (!barOf(draft).spec) throw httpError(409, msg`这张卡没有可以设计外观的状态栏`)
+      if (jobs.has(id)) throw httpError(409, msg`上一步还在进行，等它写完或先停下`)
+      const css = cleanSkinCss(previous?.css)
+      const asked = { wish: cleanWish(wish), previous: css ? { name: clip(previous.name, 24), palette: cleanPalette(previous.palette), css } : null, problems: css ? cleanProblems(problems) : [] }
+      // The draft's own model, and its name for the usage panel.
+      Object.assign(session, { model: draft.model ?? '', plan: { name: draft.plan.name }, brief: { title: draft.brief?.title ?? '' } })
+      await run(session, 'skin', async ctx => {
+        const fresh = barOf(await load(id))
+        if (!fresh.spec) throw new Error(msg`这张卡没有可以设计外观的状态栏`)
+        const result = await ctx.call(skinRequest(fresh.card, fresh.spec, fresh.state, { ...asked, reply: ctx.languages.reply }))
+        const read = readSkin(result.text, { palette: asked.previous?.palette ?? fresh.spec.palette })
+        if (!read) throw new Error(`${msg`${ctx.label} 没有写出能用的样式，再试一次，或者换个模型`}${cutNote(result)}`)
+        await ctx.update(kept => {
+          kept.skin = { ...read, wish: asked.wish, fixed: asked.problems.length > 0, at: new Date().toISOString(), model: ctx.label }
+        })
+      })
+      return skinView(await loadSkin(id))
+    },
+
+    skinStop(id) {
+      const job = jobs.get(skinIdOf(id))
+      job?.controller.abort()
+      return { stopped: Boolean(job) }
+    },
+
+    async skinDrop(id) {
+      const { draft, session } = await loadSkin(id)
+      if (jobs.has(session.id)) throw httpError(409, msg`上一步还在进行，等它写完或先停下`)
+      session.skin = null
+      session.error = null
+      await serial(session.id, () => save(session))
+      return skinView({ draft, session })
     },
   }
 }

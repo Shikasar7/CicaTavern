@@ -136,8 +136,11 @@ test('a raw that holds no card is still only a broken file', () => {
 })
 
 test('a card that has only its plain fields is one too', () => {
+  // Whole and readable, it is a card to learn from, not a broken file: its text stays out all the same.
+  const whole = readMaterial({ name: 'a.json', text: JSON.stringify({ name: '别人的卡', personality: SECRET, scenario: SECRET }) })
+  assert.deepEqual([whole.kind, whole.mode], ['card', 'structure'])
+  assert.equal(readMaterial({ name: '学院.json', text: JSON.stringify({ name: '学院', scenario: SECRET, rooms: ['甲'] }) }).kind, 'card')
   const cases = {
-    'whole, with no opening': JSON.stringify({ name: '别人的卡', personality: SECRET, scenario: SECRET }),
     'cut in the personality': `{"name":"别人的卡","personality":"${SECRET}`,
     'no name': `{"description":"${SECRET}","personality":"${SECRET}`,
     'another field after them': `{"name":"别人的卡","description":"${SECRET}","personality":"${SECRET}","scenario":"${SECRET}","tags":[`,
@@ -152,6 +155,15 @@ test('a card that has only its plain fields is one too', () => {
 test('what the page kept goes through the same door', () => {
   const broken = JSON.stringify(raw).slice(0, -5)
   assert.throws(() => keptMaterial([{ kind: 'file', name: 'a.json', text: broken }]), /看起来是角色卡/)
+  // A long settings file that is not whole: taken as text when attached (all of it was looked at), and kept as text,
+  // though what a reference keeps of it ends inside its second field.
+  const long = `{"name":"世界","description":"${'设定'.repeat(35000)}","rooms":[{"a":1},],"x":1}`
+  const attached = readMaterial({ name: '世界.json', text: long })
+  assert.equal(attached.kind, 'file')
+  assert.ok(attached.total > attached.chars)
+  assert.deepEqual(keptMaterial([attached]).map(item => item.kind), ['file'])
+  // Short enough to be kept whole, a file that opens as a card and breaks off is still refused.
+  assert.throws(() => keptMaterial([{ kind: 'file', name: 'a.json', text: '{"name":"别人的卡","description":"x' }]), /看起来是角色卡/)
   const [card] = keptMaterial([asMaterial(fileReference({ name: 'a.json', text: JSON.stringify(raw) }))])
   assert.equal(card.mode, 'structure')
   assert.deepEqual(keptMaterial([{ kind: 'file', name: '设定.txt', text: '学院设定' }]).map(item => item.kind), ['file'])

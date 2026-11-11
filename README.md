@@ -79,7 +79,7 @@ Turn it on in Settings → Model → Long-term memory (Beta); it is off by defau
 - **World books**: always-on and keyword entries, with regex keys, secondary keys, probability and insertion position. Standalone world books can be attached to a card, and after import every entry can be searched, switched on or off and edited under View entries (查看条目).
 - **Regex**: the regex scripts in cards and presets work as they are. Settings → Writing → Regex also holds global scripts and regex sets: a set works only on the cards you put it on, after the card's own scripts. Each script has a test box, and a whole group or the scripts you select can be exported as SillyTavern regex files, copied, moved or switched on and off together.
 - **Presets**: a light built-in "Basic preset" with switches for point of view, style, not acting for you, limited knowledge, dark themes, intimacy, choices (tap to send) and a time box, so it plays well without importing anything. You can also import Chat Completion presets, toggle and edit their entries, and pin the ones you use most as quick switches.
-- **MVU variables and status bars**: `[InitVar]`, `<UpdateVariable>` / JSONPatch and the older `_.set()` are supported; EJS templates run in a QuickJS sandbox (with ST-Prompt-Template's `getwi`, `matchChatMessages` and the like). HTML UIs inside cards render in isolated iframes, with a compatibility layer for the common Tavern Helper (酒馆助手) functions: variables, lorebooks (changes kept for that chat only), calling the model (each card asks first) and sending messages. The libraries those UIs need, such as jQuery and Vue, load from jsDelivr, so some may be missing offline.
+- **MVU variables and status bars**: `[InitVar]`, `<UpdateVariable>` / JSONPatch and the older `_.set()`, `_.add()`, `_.insert()` and `_.remove()` are supported; EJS templates run in a QuickJS sandbox (with ST-Prompt-Template's `getwi`, `matchChatMessages` and the like). HTML UIs inside cards render in isolated iframes, with a compatibility layer for the common Tavern Helper (酒馆助手) functions: variables, lorebooks (changes kept for that chat only), calling the model (each card asks first) and sending messages. The libraries those UIs need, such as jQuery and Vue, load from jsDelivr, so some may be missing offline.
 - **SillyTavern chats**: import a .jsonl (drop it into the window or use Import archive) with every turn, every swipe and the MVU variables; a long one can be compacted into a story archive first.
 - **Web search**: the globe left of the input box turns it on per chat. It uses the provider's own search, like SillyTavern's "Enable web search": Claude on the Anthropic interface, the OpenAI Responses interface and OpenRouter models have it. When real-world facts are needed the model searches first and then writes; what it searched for and the pages it cited are listed under the reply. Searches cost extra.
 - **Blocked words**: Settings → Writing → Blocked words removes words, masks them with `*` or swaps them for words you choose, both in what the model is sent (card, preset, lorebooks, history and your messages) and in the replies shown; each word can be switched on or off and kept to one side. Only the copy being sent or shown changes, so switching a word off brings it back; Chinese has no spaces between words, so longer words to leave alone go under Exceptions. After a change, chats that use the word write the cache again from where it appears, and saving tells you from which turn.
@@ -132,7 +132,7 @@ On per card and off by default; off, nothing sent to the model changes. On, the 
 If you can't quite say what you want, the creator guides you round by round:
 
 1. **Talk it through**: each round it says how it understands your idea, then asks the two or three questions that matter most. Every option comes with a line the character might say, so you can pick by feel; the writing style is chosen from short samples. The sketch beside it updates with your choices; you can edit or lock any part.
-2. **Settle the plan**: characters, setting, style, status bar, greetings and world book entries at a glance. Anything the creator filled in for you is listed separately; write a sentence wherever you want a change. Which values the status bar tracks, how they show and how they change can be edited directly, with a live preview; the finished card has the same status bar in SillyTavern.
+2. **Settle the plan**: characters, setting, style, status bar, greetings and world book entries at a glance. Anything the creator filled in for you is listed separately; write a sentence wherever you want a change. Which values the status bar tracks, how they show and how they change can be edited directly, with a live preview; the model can also design a look of its own for it (pick a style, or say what you have in mind). The Front section decides how the card looks: a cover page above the greeting, the character's sprite and the scene on the status bar, a little phone that holds the inventory and the quests, and motion such as rain, snow or petals, with a preview of the whole thing below. The finished card has the same status bar, look and cover page in SillyTavern (Tavern Helper is needed there).
 3. **Write**: the full world book and greetings are written in a few steps from the plan, then checked for clichés and contradictions and fixed.
 4. **Polish and portrait**: edit any part directly, or write a note and let the creator rewrite it. The portrait is drawn by your image backend from the character's looks, or you can upload one. Save to start playing, or export a PNG that SillyTavern imports directly.
 
@@ -150,38 +150,19 @@ If you can't quite say what you want, the creator guides you round by round:
 
 <br clear="right">
 
-## Latest changes [2.4.4]
+## Latest changes [2.5.0]
 
-<p align="center"><img src="web/whatsnew/2.4.4-bar.webp" alt="The top bar on a phone: two rows, with the preset, compress, memory, model and thinking pills in one row; in full screen the bar is tucked away with a small arrow at the top that pulls it down" width="720"></p>
+<p align="center"><img src="web/whatsnew/2.5.0-front.webp" alt="A card's front: a cover page with the card's name, a few lines and two openings to pick, a portrait beside them; a status bar with the portrait and scene on top and the bag in the Phone" width="720"></p>
 
-- **2.4.4: imported SillyTavern presets work more like they do in SillyTavern**: User and AI assistant entries before Chat History are sent as messages of their own, and newly imported presets default to Like SillyTavern, so the jailbreak and output format follow your message each turn; on Claude-format APIs the history stays unchanged and caching costs as little as In the prefix. The preset window now explains which option to pick.
-- **2.4.4: a two-row top bar and full screen on phones**: on a phone the chat's top bar takes two rows, with a Full screen button that tucks it away to give the story more room; the small arrow at the top pulls it back down.
-- **2.4.4: Vertex's native API, and fixes**: Gemini Agent Platform (once Vertex AI) chats through Gemini's native API by default, with the thinking shown and Google Search; fixes for dragging cards into order on Android, unreadable visual novel text and missing game choices on old Android WebViews, in-app updates that installed the old version on some phones, and a blank window when the interface size wasn't 100%.
-- **2.4.3: a card's own scripts now run**: the Tavern Helper scripts a card's author left on now run. Those that follow the variables run in the background the way MVU runs them; the rest start on the page when the chat opens, with their own panels in a small window at the bottom right and their buttons above the input box. Check this card says where each one runs and what it lacks here.
-- **2.4.3: the status bar in the card editor, earlier pictures kept**: the card editor has a Status bar section to restyle it, or to change it by saying what you want; redrawn or replaced pictures, reference pictures, sprites, scenes and avatars stay, ready to take back.
-- **2.4.3: a new party bar, iPhone keeps writing**: Color block (once Bold) shows the party as a slanted band along the bottom in fights; on iPhone (iOS 26 or later) a reply goes on in the background with its progress in the Dynamic Island; plus a ComfyUI negative prompt, When done text reveal, and cards up to about 110 MB.
-- **2.4.2: party fights**: on a card with the full game rules, companions fight beside you, up to four in all, acting by speed as in an RPG Maker game. The Party tab in the pack says who fights, and a companion using a skill gets their portrait in the banner.
-- **2.4.2: a card's own words, more kinds of story**: attributes, life, foe tiers, skills and the rest can take the card's own names (HP, BOSS, Special move, Partners), and Genre adds Monster raising, Online game, Apocalypse survival and Everyday life.
-- **2.4.2: long chats stay quick, replies flow**: switching cards and sending no longer stall in chats hundreds of turns long; replies come out at an even pace, with five Text reveal effects in the theme; Settings > More > Performance log records how long each step took.
-- **2.4.1: tune it as you chat**: a Thinking pick per chat in the top bar (default, off, low to max); a story length range in the basic preset; line spacing in the theme; Memory in the top bar turns long-term memory on or off; World books marks the books the card brings and uses.
-- **2.4.1: checks, trial runs and the card creator**: Adjust status bar, Check the whole card for big cards, trial problems fixed from the check list, trial runs that check values; the card creator asks your gender, reviews against the plan, keeps one-time events one-time and redoes a failed step with another model; a reply cut off partway keeps what was written; Draw CG in visual novel mode; Codex (this PC) as a drawing method on computers.
+- **2.5.0: cards get a front**: new chats open with a cover page above the greeting: the card's name appearing a character at a time, a few lines, and each opening as a card you can tap, over the card's scene picture with the main character's portrait beside it. The status bar carries the portrait and the current place's scene on top, lists like the bag and quests go into the Phone, and rain, snow, petals and the like can drift over it. Cards made with Create a card have all this; for others, tick it in Edit card. Exports to SillyTavern take the cover page along.
+- **2.5.0: custom looks for the status bar**: the model writes the card's status bar a look of its own, with the cover page and Phone to match; above the box is a row of eight styles: Fresh and light, Metal, Journal, Pixel art, Flat cel, Ink wash, Neon and Picture book.
+- **2.5.0: Continue**: when a reply stops halfway (cut off at the output limit, stopped by you, or dropped), click Continue under the newest reply, or send just /continue, and the model picks up where it stopped, as SillyTavern's /continue does.
+- **2.5.0: edit the basic preset's entries, and extra prompts for built-in features**: every paragraph of the Basic and Visual novel presets can be edited, switched off or reset, with entries and regex of your own; Settings → Writing → Extra prompts for built-in features adds your own request to compaction, long-term memory, Check this card and the card creator.
+- **2.5.0: the card creator and Check this card**: edit the plan directly, with a Front section and a preview of how the chat opens; new Play modules Schedule, Bonds, and Routes and endings; Read-only variables and variable templates; play bricks and a character interview for cards you already have; a Trial run lets you pick what kind of player to be.
+- **2.5.0: and also**: build a lorebook From a novel; export a chat as Text or Markdown; fixed a chat that froze the page every time the app opened, tags mentioned in the thinking eating the reply, switching cards not landing on the newest turn, and the desktop top bar spilling into the right column.
 - **iPhone and iPad beta**: [install it through TestFlight](https://testflight.apple.com/join/wsT7kT4b). It runs on the device by itself and needs iOS 16 or later.
-- **2.4.0: direct chat**: talk to a model with no character card, from the top of the left column, with text files, web search and replies shown as Markdown.
-- **2.4.0: game rules (in development)**: a card's ⋯ menu has Game rules, on per card and off by default. It brings checks and dice, a pack, turn-based fights, levels and achievements, with success worked out by the program.
-- **2.4.0: check a card, trial run**: the program finds format problems and a model suggests changes, each one taken or undone by itself; a model can also play the card for a few rounds and report. The card creator gained reference files, gameplay blocks and card sizes.
-- **2.4.0: smoother to use**: delete a single message, a QR code for phone access, search in settings, side columns that fold away, a story column you can drag wider, rewritten writing styles. Going up after a jump no longer throws you to the end of a passage.
-- **2.3.2: the story stays put**: in 2.3.1, switching chats or finishing a new turn could leave you a few rounds above the latest one; you now land at the very bottom, and swiping or editing a message keeps you on the same line. The app opens on the chat you last played.
-- **2.3.2: native Gemini, MOSS voices, exports on Android**: providers can use Gemini's native API (generateContent), and the Gemini API template starts on it; MOSS joins the voice sources; the Android app exports chat packages and card PNGs. Errors tell a busy model, a rate limit and a used-up quota apart, and visual novel mode shows how a reply's picture is coming along.
-- **2.3.1: long chats stay smooth**: in a chat of two or three hundred rounds, messages out of view are no longer laid out, so a reply streaming in costs next to nothing to show, and long chats open several times faster. The rail beside the story spreads out only the ten or so rounds you are reading and folds the rest into a band at each end, unfolding as you scroll.
-- **2.3.1: card interfaces run more SillyTavern commands**: dozens of them, like /setvar, /if, /while, /sys, /cut, /gen and /buttons, with pipes and closures; a command this app lacks skips that step and the rest runs. Also fixed: the delete button of a chat not showing on phones, a Base URL with spaces inside not connecting, opening screens failing on /sys, and the whole chat flashing after a card interface saved its variables.
-- **Long-term memory (Beta)**: Settings → Model → Long-term memory (Beta), off by default. When the context is compacted, the same call that writes the story archive also notes the people, events, things and places, and promises and foreshadowing as separate entries in the chat's memory book; when a later round mentions them (by a keyword, an alias or similar wording), the matching entries go along with that round's message, and the reply says Recalled: …. They ride in that round's message only, so the frozen prefix stays as it is and the cache keeps hitting. Memory in the top bar reads, edits, pins, deletes and exports them as a world book, and Tidy while playing can note things down in the background every few rounds. The memory book follows branches, and Export archive carries it.
-- **Hide this round**: replies have Hide this round: the round stays in the chat, faded, but is no longer sent to the model, and you can unhide it any time. When one round keeps a content check refusing everything after it, hide it and play on; the latest round can be hidden too.
-- **Changing a card by talking, more dependable**: when the model says it made changes but wrote none out, it is asked once more; still nothing, and you are told why and can ask again. Asked to make a card an MVU card, it sets up the initial variables and the update rules, and a chat under way gets the variables when you apply the change to it.
-- **Fixes**: the error some cards' opening screens showed (Cannot read properties of undefined (reading '…')).
-- **Now licensed under the AGPL-3.0**: from this version on; see License below. Using it yourself is not affected.
-- **macOS test build (beta)**: the Mac app is signed with an Apple Developer ID and notarized; the release page has only dmg installers for the Mac (Apple silicon and Intel), which the in-app update uses too.
 
-2.2 added pinned, favorited and reordered cards and groups, dragging cards out to export them, picture prompts written your way with art style presets, Gemini Agent Platform, the model's thinking shown, phone and computer kept in step, and copying messages and picking several choices; 2.1 added grouped card creation settings, background writing and a values preview, making a card a visual novel with its own preset, and New choices; 2.0 added voice input, a drawing history, regex sets and personas chosen per card, the context usage bar, ComfyUI simple mode and clearing old versions after an update; 1.9 added web search, blocked words, card UIs that call the model and edit lorebooks, an error log, the visual novel HUD and speaker marks, and an update mirror in China; visual novel mode came in 1.8. Download from [Releases](https://github.com/Shikasar7/CicaTavern/releases/latest); 1.4.0 and later can update in the app. Everything that changed is in [CHANGELOG.md](CHANGELOG.md).
+2.4 added game rules (checks, a pack, turn-based and party fights), direct chat, Check this card and trial runs, the card creator's advanced options, four visual novel looks, rewritten writing styles, a card's own scripts running, text reveal effects, a two-row top bar and full screen on phones, and imported presets sent the way SillyTavern sends them; 2.3 added long-term memory (beta), hiding a turn, long chats that stay quick, more SillyTavern commands, Gemini's native API and MOSS read-aloud, moved to AGPL-3.0 and brought the macOS beta; 2.2 added pinned, favorited and reordered cards and groups, dragging cards out to export them, picture prompts written your way with art style presets, Gemini Agent Platform, the model's thinking shown, phone and computer kept in step, and copying messages and picking several choices; 2.1 added grouped card creation settings, background writing and a values preview, making a card a visual novel with its own preset, and New choices; 2.0 added voice input, a drawing history, regex sets and personas chosen per card, the context usage bar, ComfyUI simple mode and clearing old versions after an update; 1.9 added web search, blocked words, card UIs that call the model and edit lorebooks, an error log, the visual novel HUD and speaker marks, and an update mirror in China; visual novel mode came in 1.8. Download from [Releases](https://github.com/Shikasar7/CicaTavern/releases/latest); 1.4.0 and later can update in the app. Everything that changed is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Getting started (Windows)
 
@@ -363,13 +344,11 @@ CicaTavern is licensed under the [GNU AGPL-3.0](LICENSE), copyright Shikasar7.
 
 - Downloading and using it is free and unrestricted, commercial use included.
 - You may modify and redistribute it, but a modified version must also be released under the AGPL-3.0 with its complete source; running a modified CicaTavern on a server for others to use also means offering them the source.
-- Versions 2.2.4 and earlier were released under the MIT license, which still applies to them.
 - Before contributing code, please read [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Notes
 
 - This project is not affiliated with Anthropic, OpenAI, Google or any other model provider. When you use their APIs, follow their terms of service and usage policies; costs are billed to your own account.
-- To use Claude models, add Anthropic (an official API key) or OpenRouter as a provider. A Claude.ai subscription (Pro/Max) can't be used as an API key.
 - Character cards, world books and presets belong to their original authors.
 - What changed in each version: [CHANGELOG.md](CHANGELOG.md) (in Chinese).
 
@@ -449,7 +428,7 @@ flowchart LR
 - **世界书**：常驻条目和关键词条目，支持正则、次要关键词、概率和插入位置；也能导入独立的世界书挂到卡上；导入后在「查看条目」里逐条搜索、开关和修改。
 - **正则**：卡和预设自带的正则照常生效。「设置 → 写作 → 正则」里还能建全局正则和「正则集」：正则集挂到哪些卡上，就只对那几张卡生效，在卡自带的正则之后运行。每条带测试框，整组或选中的几条可以导出成 SillyTavern 的正则文件、复制、移动、成批开关。
 - **预设**：自带轻量的「基础预设」，人称、文风、防抢话、防全知、题材尺度、亲密描写、行动选项（点一下就发）、时间框都是开关，不导入预设也能玩得好；也能导入 Chat Completion 预设，在界面里开关、编辑条目，常用条目可以钉成快捷开关。
-- **MVU 变量和状态栏**：支持 `[InitVar]`、`<UpdateVariable>` / JSONPatch 和旧版 `_.set()`；EJS 模板在 QuickJS 沙箱里执行（含 ST-Prompt-Template 的 `getwi`、`matchChatMessages` 等）。卡里的 HTML 界面在隔离的 iframe 里渲染，酒馆助手的常用接口有兼容层：变量、世界书（改动只记在这个对话里）、调用模型（每张卡先问你）、发消息都能用（这类界面需要的 jQuery、Vue 等库会从 jsDelivr 加载，离线时可能缺东西）。
+- **MVU 变量和状态栏**：支持 `[InitVar]`、`<UpdateVariable>` / JSONPatch 和旧版 `_.set()`、`_.add()`、`_.insert()`、`_.remove()`；EJS 模板在 QuickJS 沙箱里执行（含 ST-Prompt-Template 的 `getwi`、`matchChatMessages` 等）。卡里的 HTML 界面在隔离的 iframe 里渲染，酒馆助手的常用接口有兼容层：变量、世界书（改动只记在这个对话里）、调用模型（每张卡先问你）、发消息都能用（这类界面需要的 jQuery、Vue 等库会从 jsDelivr 加载，离线时可能缺东西）。
 - **SillyTavern 的对话记录**：.jsonl 直接导入（拖进窗口或「导入存档」），每一轮、每个 swipe 和 MVU 变量都带过来；很长的可以先压缩成剧情存档再接着写。
 - **联网搜索**：输入框左边的地球图标，按对话开关。用供应商自己的搜索（和 SillyTavern 的「Enable web search」一样）：Anthropic 接口的 Claude、OpenAI Responses 接口、OpenRouter 的模型可以用。需要现实世界的信息时模型先搜网页再写，回复下面列出搜了什么和引用的网页；搜索按次另外收费。
 - **屏蔽词**：「设置 → 写作 → 屏蔽词」，把某些词去掉、遮成 `*` 或换成你自选的词，发给模型的（角色卡、预设、世界书、历史和你的输入）和显示出来的回复都管，每个词可以单独开关、只管其中一边。只在发送和显示时换，原文不变，关掉就恢复；中文没有词边界，不想动的长词写进「例外」。改动后用到这个词的对话从它出现的地方起重新写一次缓存，保存时会说清楚影响到哪一轮。
@@ -502,7 +481,7 @@ flowchart LR
 说不清想要什么也没关系，向导会一轮轮引导你：
 
 1. **聊想法**：每轮先说出它理解的样子，再问两三个最关键的问题。每个选项都附一句「她可能说的话」，凭感觉挑；文风用几段试写来挑。旁边的设定草图随选择更新，可以直接改，也可以锁定。
-2. **定方案**：角色、舞台、文风、状态栏、开场白、世界书条目一目了然，向导替你补的设定单独列出，哪里不合意就写一句，让它改。状态栏记哪些数值、怎么显示、怎么变，可以直接改，上面实时预览；做出来的卡在 SillyTavern 里也有同样的状态栏。
+2. **定方案**：角色、舞台、文风、状态栏、开场白、世界书条目一目了然，向导替你补的设定单独列出，哪里不合意就写一句，让它改。状态栏记哪些数值、怎么显示、怎么变，可以直接改，上面实时预览；还可以让模型给它设计一套自己的外观（点一个风格，或者说一句想要的样子）。「门面」一栏管卡看起来的样子：开场白上面的开场页、状态栏上的立绘和场景图、装背包和任务的小手机、雨雪花瓣这类动效，下面有成品预览。做出来的卡在 SillyTavern 里也有同样的状态栏、外观和开场页（要装酒馆助手）。
 3. **动笔**：按方案分几步写出完整的世界书和开场白，写完自动检查套话和前后矛盾，并改好。
 4. **打磨与头像**：每一段都能直接改，或者写一句意见让向导重写；头像用你的画图后端按角色长相画，也可以上传。保存后就能开局，也能导出成 SillyTavern 可以直接导入的 PNG。
 
@@ -520,38 +499,19 @@ flowchart LR
 
 <br clear="right">
 
-## 最新版本变动[2.4.4]
+## 最新版本变动[2.5.0]
 
-<p align="center"><img src="web/whatsnew/2.4.4-bar.webp" alt="手机上的顶栏：平时两行，预设、压缩、记忆、模型和思考排成一行；全屏时顶栏收起，顶上留一个小箭头，点开顶栏滑下来" width="720"></p>
+<p align="center"><img src="web/whatsnew/2.5.0-front.webp" alt="卡的门面：开场页上卡名、几行简介和两个开场卡片，旁边站着角色立绘；状态栏顶上是立绘和场景图，背包收在小手机里" width="720"></p>
 
-- **2.4.4：导入的酒馆预设更像在酒馆里用**：聊天记录前的「用户」「AI 助手」条目作为单独的消息发送，新导入的预设默认「同酒馆」，破限和输出格式每轮紧跟在你的消息后面；用 Claude 格式的接口时历史不改，缓存和「放进前缀」一样省。预设窗口里写清了每个选项怎么选。
-- **2.4.4：手机顶栏两行、全屏**：手机上聊天页的顶栏缩成两行，多了「全屏」：顶栏收起来，正文多占一些地方，点顶上的小箭头再拉出来。
-- **2.4.4：Vertex 原生接口和一批修复**：Gemini Agent Platform（原 Vertex AI）默认走 Gemini 原生接口，能显示思考、用 Google 搜索；修了安卓拖动排序、旧系统 WebView 上视觉小说的字看不清和游戏卡选项出不来、部分手机应用内更新装不上、界面大小不是 100% 时打开一片空白。
-- **2.4.3：卡自带的脚本能运行了**：角色卡里作者开着的酒馆助手脚本现在会跑：跟着变量走的在后台照 MVU 的方式执行，其余的打开对话时在页面上启动，自己画的界面在右下角小窗，按钮在输入框上方。「检查这张卡」写明每个脚本在哪运行、缺哪些函数。
-- **2.4.3：修改角色卡里改状态栏、抽图历史**：修改角色卡多了「状态栏」一节，能调整样式，也能用「按意见改」说一句让向导改；重画或换掉的配图、人设图、立绘、场景和头像都留着，点一张换回来。
-- **2.4.3：撞色队伍状态栏、iPhone 后台接着写**：撞色主题的队伍战斗换成底部一条斜带；iPhone 版（iOS 26 以上）切到后台也接着写，灵动岛显示进度；还有 ComfyUI 负面提示词、「写完再显示」、110 MB 以内的大卡导入。
-- **2.4.2：队伍战斗**：开了「完整」游戏规则的卡可以带同伴一起打，最多 4 人上场，按速度轮流出手，像 RPG Maker 的回合制。行囊里的「队伍」页安排谁出战，同伴放技能时换上他的立绘。
-- **2.4.2：每张卡自己的叫法、更多题材**：游戏规则的属性、生命、敌人档位、技能这些词可以按卡改名（比如 HP、BOSS、必杀技、伙伴），「题材」多了怪兽养成、网游、末日求生、日常。
-- **2.4.2：长对话不卡、出字更顺**：几百轮的对话切卡、发送不再卡；回复按均匀的节奏写出来，主题里有五种出字效果可选；「设置 → 更多 → 性能记录」能记下每一步的耗时。
-- **2.4.1：聊着天随手调**：顶栏给每个对话单独选思考（默认、关、low 到 max）；基础预设能填正文字数范围；主题里多了行距；顶栏「记忆」直接开关长期记忆；「世界书」标出这张卡自带和在用的书。
-- **2.4.1：检查、试玩和创作向导**：「调整状态栏」、大卡「全本检查」、试玩问题一键修、试玩查数值；创作向导选玩家性别、审稿对照方案、事件只发生一次、写坏一步换模型重写；回复中途断开也留下已写内容；视觉小说「画 CG」；电脑版能用「Codex（本机）」画图。
+- **2.5.0：卡有了门面**：新对话的开场白上面先有一页开场页：卡名一个字一个字出现，几行简介，每个开场一张可以点的小卡片，背景是这张卡的场景图，旁边站着立绘。状态栏顶上也放了立绘和当前地点的场景图，背包、任务这类列表收进「小手机」，还能带雨、雪、花瓣这样的动效。创作角色卡做的卡默认带，别的卡在「修改角色卡」里勾上；导出到 SillyTavern 也带开场页。
+- **2.5.0：状态栏的定制外观**：让模型给这张卡的状态栏写一套自己的样子，开场页和小手机一起换；输入框上面有日系清新、金属光泽、日记手帐、像素风、赛璐璐平涂、水墨留白、赛博霓虹、童话绘本八种风格。
+- **2.5.0：继续生成**：回复写到一半停了（写到输出上限、按了停止、中途断开），点最新回复下方的「继续生成」，或在输入框里只发 /continue，模型从停下的地方接着写，和 SillyTavern 的一样。
+- **2.5.0：基础预设能改条目，内置功能有附加提示词**：基础预设和视觉小说预设的每一段都能改、关、恢复默认，也能加自己的条目和正则；设置 → 写作 →「内置功能的附加提示词」给压缩、长期记忆、检查这张卡、创作向导各加一段自己的要求。
+- **2.5.0：创作角色卡和检查这张卡**：方案页直接加、改、删，有「门面」一栏和成品预览；新玩法积木日程、关系网、路线与结局；只读变量和变量模板；已有的卡也能加玩法积木、做角色采访写对话示例；试玩体检能选玩家是什么样的人。
+- **2.5.0：还有这些**：世界书能「从小说抽取」；对话能导出成文本或 Markdown；修了打开某段对话卡死、每次启动都卡住，思考里提到的标签吃掉正文，切卡后没停在最新一轮，电脑上顶栏挤到右栏。
 - **iPhone 和 iPad 测试版**：[通过 TestFlight 安装](https://testflight.apple.com/join/wsT7kT4b)，在设备上独立运行，要求 iOS 16 以上。
-- **2.4.0：直连对话**：不用角色卡也能直接和模型聊，入口在左栏最上面，可以附文本文件、联网搜索，回复按 Markdown 显示。
-- **2.4.0：游戏规则（开发中）**：角色卡的「⋯」里多了「游戏规则…」，按卡开启，默认关。打开后有检定和掷骰、行囊、回合制战斗、等级和成就，成败由程序计算。
-- **2.4.0：检查这张卡、试玩体检**：程序查格式问题，模型提建议，可以逐条采用和撤销；还能让模型替你把卡玩几回合再出报告。创作向导多了参考文件、玩法积木和卡的规模。
-- **2.4.0：用起来更顺**：能删除单条消息，手机访问有二维码，设置可以搜索，左右栏能收起，正文能拖宽，文风重写。跳到前面的对话再往上翻不再瞬移。
-- **2.3.2：修了正文往回弹**：2.3.1 里切换对话、写完新回合后，正文会停在最新几轮之前；现在都停在最底部，划动换版本、改消息时也留在原来那一行。打开应用时进的是最近聊过的对话。
-- **2.3.2：Gemini 原生接口、MOSS 朗读、安卓导出**：供应商多了「Gemini 原生（generateContent）」，「Gemini API」模板默认用它；朗读来源加了国内直连的 MOSS；安卓应用能导出对话包和角色卡 PNG。报错把模型繁忙、限流、额度用完分开说清楚，视觉小说模式左上角能看到配图进度。
-- **2.3.1：长对话不卡了**：两三百轮的对话，看不见的消息不再参与排版，模型一边写、页面一边重排的开销降到几乎为零，打开长对话也快了好几倍。正文右边的刻度条只铺开正在看的十轮左右，其余收进两头的细纹带，往上翻时一路展开。
-- **2.3.1：卡片界面能用更多 SillyTavern 命令**：/setvar、/if、/while、/sys、/cut、/gen、/buttons 等几十个，带管道和闭包；这里没有的命令跳过那一步、其余照常。另外修了手机上对话的删除按钮看不见、Base URL 中间多空格连不上、开局页 /sys 报不支持、卡片界面存变量后整个对话闪一下。
-- **长期记忆（Beta）**：设置 → 模型 → 长期记忆（Beta），默认关。压缩上下文时，写剧情存档的同一次调用顺带把人物、事件、物品与地点、约定与伏笔记成一条条，存进这个对话的「记忆簿」；之后哪一轮提到它们（关键词、别名或相近的说法），就把相关的几条附在这一轮的消息里，回复下面写着「想起：…」。只附在这一轮的消息里，不动固定前缀，缓存照常命中。顶栏「记忆」可以查看、修改、固定、删除、导出成世界书；可选「边玩边整理」，每隔几轮在后台记一次。记忆簿跟着分支走，「导出存档」也会带上。
-- **隐藏这一轮**：回复下面多了「隐藏这一轮」，这一轮留在对话里、变淡显示，但不再发给模型，随时可以取消。某一轮让模型的内容审查一直拦着后面的请求时，隐藏它就能接着玩，最新一轮也可以。
-- **对话修改角色卡更靠谱**：模型说「改好了」却没写出改动时，向导会追问一次；还是没有，就说清原因，可以「再问一次」。让它「改成 MVU 卡」时，会建好初始变量和更新规则，进行中的对话「应用到当前对话」后也补上变量。
-- **修复**：有些卡的开场界面报错「Cannot read properties of undefined (reading '…')」。
-- **许可证改为 AGPL-3.0**：从这一版起，见下面的「许可证」一节。自己使用不受影响。
-- **macOS 测试版（beta）**：Mac 版用 Apple 开发者证书签名并经过公证，发布页上 Mac 只有 dmg（Apple 芯片、Intel 各一个），应用内更新也用它。
 
-2.2 加了角色卡置顶、收藏、拖动排序和分组排序、拖出窗口导出、配图提示词的写法和画风预设、Gemini Agent Platform、显示模型的思考过程、手机和电脑自动同步、复制消息和选项多选；2.1 加了创作角色卡的分组设定、后台写卡和数值预览、做成视觉小说和视觉小说预设、行动选项「换一组」；2.0 加了语音输入、抽图历史、按卡指定的正则集和你的角色、上下文用量条、ComfyUI 简单模式和应用内更新后清理旧版本；1.9 加了联网搜索、屏蔽词、卡片界面调用模型和读写世界书、错误日志、视觉小说的 HUD 和对白标注、国内更新镜像；视觉小说模式在 1.8 加入。下载见 [Releases](https://github.com/Shikasar7/CicaTavern/releases/latest)，1.4.0 以后的版本可以在应用里直接更新；完整改动见 [CHANGELOG.md](CHANGELOG.md)。
+2.4 加了游戏规则（检定、行囊、回合制和队伍战斗）、直连对话、检查这张卡和试玩体检、创作向导的高级选项、视觉小说四种界面、文风重写、卡自带的脚本能运行、出字效果、手机顶栏两行和全屏、导入的预设照酒馆的方式发；2.3 加了长期记忆（Beta）、隐藏这一轮、长对话不卡、更多 SillyTavern 命令、Gemini 原生接口和 MOSS 朗读，许可证改为 AGPL-3.0，并有了 macOS 测试版；2.2 加了角色卡置顶、收藏、拖动排序和分组排序、拖出窗口导出、配图提示词的写法和画风预设、Gemini Agent Platform、显示模型的思考过程、手机和电脑自动同步、复制消息和选项多选；2.1 加了创作角色卡的分组设定、后台写卡和数值预览、做成视觉小说和视觉小说预设、行动选项「换一组」；2.0 加了语音输入、抽图历史、按卡指定的正则集和你的角色、上下文用量条、ComfyUI 简单模式和应用内更新后清理旧版本；1.9 加了联网搜索、屏蔽词、卡片界面调用模型和读写世界书、错误日志、视觉小说的 HUD 和对白标注、国内更新镜像；视觉小说模式在 1.8 加入。下载见 [Releases](https://github.com/Shikasar7/CicaTavern/releases/latest)，1.4.0 以后的版本可以在应用里直接更新；完整改动见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 快速开始（Windows）
 

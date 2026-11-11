@@ -9,7 +9,7 @@ import path from 'node:path'
 import YAML from 'yaml'
 import { createForge } from '../server/forge/index.mjs'
 import { createRulebooks } from '../server/game.mjs'
-import { cleanCardOptions, discussRequest, editTracking, emptyBrief, ideaSeeds, ideasRequest, normalizePlan, planRequest, readIdeas, withCardOptions } from '../server/forge/prompts.mjs'
+import { cleanCardOptions, discussRequest, editTracking, emptyBrief, ideaSeeds, ideasRequest, normalizePlan, outlineRequest, planRequest, readIdeas, readOutlines, withCardOptions } from '../server/forge/prompts.mjs'
 import { cardJson, greetingState, greetingsRequest, newCard } from '../server/forge/write.mjs'
 import { greetingState as openingState } from '../server/chats.mjs'
 import { normalizeProvider } from '../server/providers.mjs'
@@ -37,9 +37,17 @@ const PLAN = {
   avatar: { character: '林小雨' },
 }
 
+// The third names no angle: it takes its place's.
+const OUTLINES = `<outlines>[
+  {"angle": "close", "name": "雨宿", "summary": "深夜便利店里，只在雨夜出现的女孩。", "differs": "最安静的一版", "cast": ["林小雨：雨女，话少"], "openings": ["第一场雨", "第一百场雨"]},
+  {"angle": "bold", "name": "雨债", "summary": "她每避一次雨，店里就少一样东西。", "differs": "她是来讨债的", "cast": ["林小雨：讨雨债的"], "openings": ["欠条"]},
+  {"name": "晴天", "summary": "故事从她再也不来的那个晴天讲起。", "differs": "从分别讲起", "cast": ["林小雨：不告而别"], "openings": ["放晴"]},
+  {"angle": "bold", "name": "重复的角度不算"}
+]</outlines>`
+
 const IDEAS = '<ideas>[{"title": "雨宿", "pitch": "只在雨夜出现的女孩来便利店避雨。", "tags": ["都市", "安静"]}, {"title": "", "pitch": "没有名字也算一个"}, {"title": "空的"}]</ideas>'
 
-async function setup(t) {
+async function setup(t, { outlines = OUTLINES } = {}) {
   const root = await mkdtemp(path.join(tmpdir(), 'forge-options-'))
   const seen = []
   const server = createServer(async (req, res) => {
@@ -50,6 +58,7 @@ async function setup(t) {
     const system = json.messages[0]?.role === 'system' ? json.messages[0].content : ''
     let text = TALK
     if (system.includes('角色卡策划')) text = `<plan>\n${JSON.stringify({ ...PLAN, name: `雨宿${seen.length}` })}\n</plan>`
+    else if (system.includes('出提纲')) text = outlines
     else if (system.includes('找灵感')) text = IDEAS
     res.writeHead(200, { 'content-type': 'application/json' })
     res.end(JSON.stringify({ model: json.model, choices: [{ message: { content: text }, finish_reason: 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 5 } }))
@@ -133,17 +142,50 @@ test('the picks about the card (they combine) and how many openings shape the ta
   assert.deepEqual(draft.planOptions, [])
 })
 
-test('出三版来挑: three plans at once, one picked, hand edits kept with it, a revision settles on one', async t => {
+test('出三版来挑: three outlines in one request, the one picked written as a plan, hand edits kept with it, a revision settles on one', async t => {
+  const rounds = [{ user: { text: '雨夜', picks: [] }, assistant: null }]
+  const outline = outlineRequest(rounds, emptyBrief(), undefined, { options: { world: true }, greetings: 3 })
+  assert.match(outline.system, /出提纲[\s\S]*close：[\s\S]*bold：[\s\S]*shift：/)
+  assert.match(outline.system, /openings 写开场白的名字，3 个/)
+  assert.match(outline.system, /用户开始前选好了这些，三版都要符合：.*重世界观/)
+  assert.doesNotMatch(outline.system, /角色卡策划/, 'not the plan: a small answer')
+  assert.ok(outline.maxTokens < planRequest(rounds, emptyBrief()).maxTokens)
+  assert.deepEqual(readOutlines(OUTLINES).map(o => [o.angle, o.name]), [['close', '雨宿'], ['bold', '雨债'], ['shift', '晴天']])
+  assert.deepEqual(readOutlines('写不出来'), [])
+  // The outline picked goes into the plan's request with its angle.
+  const chosen = planRequest(rounds, emptyBrief(), undefined, { angle: 'bold', outline: readOutlines(OUTLINES)[1] }).messages.at(-1).content
+  assert.match(chosen, /这一版更大胆[\s\S]*照它写[\s\S]*<outline>[\s\S]*雨债[\s\S]*讨雨债的[\s\S]*欠条/)
+  assert.doesNotMatch(planRequest(rounds, emptyBrief()).messages.at(-1).content, /<outline>/)
+
   const { forge, seen } = await setup(t)
   let draft = await settled(forge, (await forge.create({ text: '雨夜' })).id)
   const before = seen.length
   await forge.plan(draft.id, { variants: true })
   draft = await settled(forge, draft.id)
-  const asked = seen.slice(before).map(r => r.messages.at(-1).content)
-  assert.equal(asked.length, 3)
-  assert.ok(asked.some(text => /更大胆/.test(text)) && asked.some(text => /换个切入/.test(text)))
-  assert.deepEqual(draft.planOptions.map(o => [o.angle, o.picked]), [['close', true], ['bold', false], ['shift', false]])
-  assert.equal(draft.plan.name, draft.planOptions[0].name)
+  assert.equal(seen.length - before, 1, 'one small request for all three')
+  assert.match(systemOf(seen.at(-1)), /出提纲/)
+  // Outlines only: nothing is the plan yet, and the talk is still where the draft is.
+  assert.deepEqual(draft.planOptions.map(o => [o.angle, o.picked, o.written]), [['close', false, false], ['bold', false, false], ['shift', false, false]])
+  assert.deepEqual([draft.planOptions[1].name, draft.planOptions[1].differs, draft.planOptions[1].cast, draft.planOptions[1].greetings], ['雨债', '她是来讨债的', ['林小雨：讨雨债的'], ['欠条']])
+  assert.ok(!draft.plan)
+  assert.equal(draft.stage, 'discuss')
+  await assert.rejects(forge.update(draft.id, { planPick: 1 }), /还只有提纲/)
+  await assert.rejects(forge.plan(draft.id, { option: 7 }), /没有这一版/)
+
+  // One written: it is the plan, and the others stay outlines.
+  await forge.plan(draft.id, { option: 2 })
+  draft = await settled(forge, draft.id)
+  assert.equal(seen.length - before, 2)
+  assert.match(seen.at(-1).messages.at(-1).content, /换个切入[\s\S]*<outline>[\s\S]*晴天/)
+  assert.deepEqual(draft.planOptions.map(o => [o.picked, o.written]), [[false, false], [false, false], [true, true]])
+  assert.equal(draft.stage, 'plan')
+  assert.equal(draft.plan.name, draft.planOptions[2].name)
+  assert.equal(draft.planOptions[2].differs, '从分别讲起', 'what set it apart stays with it')
+  // Another written after it; then the two switch without a request.
+  await forge.plan(draft.id, { option: 0 })
+  draft = await settled(forge, draft.id)
+  assert.deepEqual(draft.planOptions.map(o => [o.picked, o.written]), [[true, true], [false, false], [false, true]])
+  const requests = seen.length
 
   draft = await forge.update(draft.id, { planPick: 2 })
   assert.equal(draft.plan.name, draft.planOptions[2].name)
@@ -154,9 +196,23 @@ test('出三版来挑: three plans at once, one picked, hand edits kept with it,
   draft = await forge.update(draft.id, { planPick: 2 })
   assert.equal(draft.plan.user_role.name, '江砚')
 
+  assert.equal(seen.length, requests)
+
   await forge.revise(draft.id, { text: '短一点' })
   draft = await settled(forge, draft.id)
   assert.deepEqual(draft.planOptions, [])
+})
+
+test('出三版来挑: outlines that cannot be read are said, and asking again asks for outlines', async t => {
+  const { forge, seen } = await setup(t, { outlines: '<outlines>[{"angle": "close", "name": "只有一版"}]</outlines>' })
+  let draft = await settled(forge, (await forge.create({ text: '雨夜' })).id)
+  await forge.plan(draft.id, { variants: true })
+  draft = await settled(forge, draft.id)
+  assert.match(draft.error.message, /提纲读不出来/)
+  assert.deepEqual(draft.planOptions, [])
+  await forge.retry(draft.id)
+  draft = await settled(forge, draft.id)
+  assert.match(systemOf(seen.at(-1)), /出提纲/)
 })
 
 test('each opening its own start: values of its own, kept to what is tracked, in the card as MVU reads them', () => {

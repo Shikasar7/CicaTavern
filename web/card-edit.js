@@ -23,7 +23,9 @@
 import { t } from '/i18n.js'
 import { pngOf } from '/forge.js'
 import { CARD_FIELDS } from '/shared/card-edit.js'
-import { cleanStatusSpec } from '/shared/status.js'
+import { EFFECTS, cleanStatusSpec } from '/shared/status.js'
+import { coverWords } from '/shared/cover.js'
+import { coverPage } from '/cover.js'
 import { statusBar } from '/status.js'
 import { createTalk } from '/talk.js'
 import { historyStrip, keptItems } from '/draw-choice.js'
@@ -145,8 +147,10 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
           ...['systemPrompt', 'postHistoryInstructions', 'depthPrompt'].map(key => fieldBlock(key, { rows: 3 })),
         ]),
         el('section', { class: 'plan-card' }, [el('header', {}, [el('h4', { text: t`给玩家看的` })]), fieldBlock('creatorNotes', { rows: 3 })]),
+        (view.coverBox = el('section', { class: 'plan-card' })),
       ]),
     )
+    renderCover()
     syncKept()
     renderStatus()
     view.main.scrollTop = top
@@ -370,7 +374,7 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
       return el('section', { class: 'plan-card ce-statusbar' }, [
         head,
         el('p', { class: 'hint', text: change.before ? t`只改显示，不动变量，也不发给模型。保存后这张卡的对话都按新样式显示。` : t`这张卡还没有自己的状态栏，这是按变量排的一个。保存后它跟着卡走，导出到 SillyTavern 也在。` }),
-        el('div', { class: 'cc-change' }, view.editor.statusEditor(el, change, state.tuning, { spare: tune.fields, state: data.state, redraw: renderStatus })),
+        el('div', { class: 'cc-change' }, view.editor.statusEditor(el, change, state.tuning, { spare: tune.fields, state: data.state, redraw: renderStatus, design: { api, cardId: state.card.id, cover: state.card.cover ? { name: state.card.name, cover: state.card.cover } : null }, tryKey: state.card.id })),
         el('div', { class: 'cc-actions' }, [
           el('button', { type: 'button', class: 'btn ghost small', text: t`取消`, onclick: () => { state.tuning = null; renderStatus() } }),
           el('span', { class: 'grow' }),
@@ -380,7 +384,7 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
     }
     return el('section', { class: 'plan-card ce-statusbar' }, [
       head,
-      el('p', { class: 'hint', text: data.statusBar ? t`主题、配色、标题、每项的名字和显示方式、分页都可以改，只改显示，不动变量。也可以点「按意见改」说给向导听。` : t`这张卡还没有自己的状态栏，对话里按变量自动排。点「调整样式」会按变量排一个给你改，保存后跟着卡走。` }),
+      el('p', { class: 'hint', text: data.statusBar ? t`主题、配色、标题、每项的名字和显示方式、分页都可以改，还能让模型写一套这张卡自己的外观。只改显示，不动变量。也可以点「按意见改」说给向导听。` : t`这张卡还没有自己的状态栏，对话里按变量自动排。点「调整样式」会按变量排一个给你改，保存后跟着卡走。` }),
       data.statusBar ? barPreview(data.statusBar, data.state) : null,
       ...problems.map(item => el('div', { class: 'ce-outcome-row' }, [
         el('p', { class: 'ce-outcome warn', text: item.why ? t`${item.title}：${item.why}` : item.title }),
@@ -447,6 +451,128 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
     await onCardChanged?.(id)
   })
 
+  // ─── 开场页 ───────────────────────────────────────────────────────────
+  // What a new chat shows above the card's opening (web/cover.js): turned on, its words start as the creator's notes
+  // (else the description) and are changed here. Saved as it is changed, like the card's other fields.
+  function renderCover() {
+    const card = state.card
+    const cover = card.cover ?? null
+    const put = patch => save({ cover: patch === null ? null : { ...(cover ?? {}), ...patch } }).then(() => renderCover())
+    const box = el('input', { type: 'checkbox', onchange: () => {
+      if (!box.checked) return put(null)
+      const words = coverWords(card.creatorNotes || card.description)
+      return put({ tagline: words.tagline, lines: words.lines.slice(0, 3) })
+    } })
+    box.checked = Boolean(cover)
+    const names = { rain: t`雨`, snow: t`雪`, petals: t`花瓣`, embers: t`火星`, fireflies: t`萤火`, stars: t`星光`, dust: t`浮尘` }
+    const effect = el('select', { 'aria-label': t`动效`, onchange: () => put({ effect: effect.value }) }, [el('option', { value: '', text: t`不要` }), ...EFFECTS.map(kind => el('option', { value: kind, text: names[kind] }))])
+    effect.value = cover?.effect ?? ''
+    const tagline = el('input', { type: 'text', maxlength: 60, 'aria-label': t`卡名下面的一句`, placeholder: t`卡名下面的一句`, onchange: () => put({ tagline: tagline.value }) })
+    tagline.value = cover?.tagline ?? ''
+    const lines = el('textarea', { rows: 3, 'aria-label': t`开场页上的几行字`, placeholder: t`再写几行，一行一句，最多 4 行`, onchange: () => put({ lines: lines.value.split('\n') }) })
+    lines.value = (cover?.lines ?? []).join('\n')
+    const abroad = el('input', { type: 'checkbox', onchange: () => put({ st: abroad.checked ? undefined : false }) })
+    abroad.checked = cover?.st !== false
+    const figure = el('input', { type: 'checkbox', onchange: () => put({ figure: figure.checked ? undefined : false }) })
+    figure.checked = cover?.figure !== false
+    const openings = card.greetings.filter(text => text.trim())
+    const own = coverArtSrc(card)
+    const avatar = card.hasAvatar ? `/api/cards/${card.id}/avatar` : ''
+    // The preview has the picture picked for the cover, else the card's (the scenes and 立绘 show in a chat).
+    const art = own || avatar ? { backdrop: own || avatar, soft: !own, portrait: cover?.figure === false ? '' : avatar, zoom: false } : null
+    const page = cover ? coverPage(el, { name: card.name, by: (card.tags ?? []).slice(0, 3).join(' · ') || card.creator, cover, palette: card.statusBar?.palette ?? null, skin: card.statusBar?.skin ?? null, art, openings, picked: 0, onPick: async () => {} }) : null
+    view.coverBox.replaceChildren(
+      el('header', {}, [el('h4', { text: t`开场页` })]),
+      el('p', { class: 'hint', text: t`新对话的开场白上面先显示一页：卡名、几行字，卡有好几个开场时每个开场一张可以点的卡片。图片用这张卡已有的头像、立绘和场景图，也可以给它单独选一张背景图。导出到 SillyTavern 时，这一页放在第一条开场白里（要装酒馆助手才显示，不带图片）。` }),
+      el('div', { class: 'front-row' }, [
+        el('label', { class: 'front-check' }, [box, el('span', { text: t`开场页` })]),
+        cover ? el('label', { class: 'front-check' }, [el('span', { text: t`动效` }), effect]) : null,
+        cover ? el('label', { class: 'front-check', title: t`带上：导出的卡第一条开场白是开场页（要装酒馆助手才显示；没装的人看到一行说明，要左右切换消息选开场）。不带：导出的卡和没有开场页时一样` }, [abroad, el('span', { text: t`导出到 SillyTavern 时带上开场页` })]) : null,
+      ]),
+      ...(cover ? [coverArtRow(card, figure), el('div', { class: 'front-words' }, [tagline, lines]), el('div', { class: 'front-preview' }, page.node)] : []),
+    )
+  }
+
+  const coverArtSrc = card => (card.coverArt ? `/api/cards/${card.id}/cover-art?v=${card.coverArt}` : '')
+
+  /**
+   * 背景图: the picture behind the cover. Not picked, it is the scene the chat is at (else the card's picture, blurred);
+   * picked, it is one of the player's own or one this card already has (its picture, a scene, someone's 立绘 or 人设图),
+   * kept as the cover's own copy.
+   */
+  function coverArtRow(card, figure) {
+    const own = coverArtSrc(card)
+    const upload = el('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp', hidden: true, onchange: guard(async () => {
+      const file = upload.files[0]
+      upload.value = ''
+      if (file) await setCoverArt(file)
+    }) })
+    const shelf = el('div', { class: 'front-art-picks', hidden: true })
+    const choose = el('button', { type: 'button', class: 'btn small ghost', text: t`从这张卡的图里挑`, onclick: guard(async () => {
+      if (!shelf.hidden) return (shelf.hidden = true)
+      shelf.hidden = false
+      shelf.replaceChildren(el('p', { class: 'hint', text: t`正在找这张卡的图…` }))
+      const pictures = await cardPictures(card)
+      shelf.replaceChildren(...(pictures.length
+        ? pictures.map(item => el('button', { type: 'button', class: 'front-art-pick', title: item.label, onclick: guard(async () => {
+            shelf.hidden = true
+            await setCoverArt(await (await fetch(item.src)).blob())
+          }) }, [el('img', { src: item.src, alt: '', loading: 'lazy', draggable: 'false' }), el('span', { text: item.label })]))
+        : [el('p', { class: 'hint', text: t`这张卡还没有别的图：头像、场景图、立绘都没有。上传一张吧。` })]))
+    }) })
+    return el('div', { class: 'front-art' }, [
+      el('div', { class: 'front-row' }, [
+        el('span', { class: 'front-art-label', text: t`背景图` }),
+        own ? el('img', { class: 'front-art-now', src: own, alt: t`开场页的背景图` }) : el('span', { class: 'hint', text: t`自动：对话所在地点的场景图，没有就用头像虚化` }),
+        el('button', { type: 'button', class: 'btn small ghost', text: own ? t`换一张…` : t`上传图片…`, onclick: () => upload.click() }),
+        choose,
+        own ? el('button', { type: 'button', class: 'btn small ghost', text: t`用回自动的`, onclick: guard(() => clearCoverArt()) }) : null,
+        el('label', { class: 'front-check', title: t`选的图里已经画了角色时可以去掉，开场页旁边就不再站一个立绘` }, [figure, el('span', { text: t`旁边放立绘` })]),
+        upload,
+      ]),
+      shelf,
+    ])
+  }
+
+  /** The pictures this card already has, to pick one for the cover from: { src, label }. */
+  async function cardPictures(card) {
+    const [media, drawn, places] = await Promise.all([
+      api(`/api/cards/${card.id}/media`).catch(() => null),
+      api(`/api/cards/${card.id}/sprites`).catch(() => null),
+      api(`/api/cards/${card.id}/scenes`).catch(() => null),
+    ])
+    const list = card.hasAvatar ? [{ src: `/api/cards/${card.id}/avatar`, label: t`头像` }] : []
+    for (const scene of places?.scenes ?? []) if (scene.file) list.push({ src: `/api/scenes/${card.id}/${scene.file}`, label: scene.name || t`场景` })
+    for (const entry of media?.roster ?? []) {
+      const sprite = drawn?.sprites?.[entry.id]?.file
+      if (sprite) list.push({ src: `/api/sprites/${card.id}/${sprite}`, label: t`${entry.name}的立绘` })
+      if (entry.ref) list.push({ src: `/api/cards/${card.id}/roster/${entry.id}/ref`, label: t`${entry.name}的人设图` })
+    }
+    return list
+  }
+
+  /** A picture (a file, or one the card has) as the cover's: made a JPEG of at most 1920 px on its long side. */
+  async function setCoverArt(blob) {
+    const image = await jpegOf(blob)
+    const id = state.card.id
+    const result = await queue(() => api(`/api/cards/${id}/cover-art`, { method: 'PUT', body: { image } }))
+    if (state.card?.id !== id) return
+    absorb(result)
+    renderCover()
+    saved(false, t`开场页的图已换`)
+    await onCardChanged?.(id)
+  }
+
+  async function clearCoverArt() {
+    const id = state.card.id
+    const result = await queue(() => api(`/api/cards/${id}/cover-art`, { method: 'DELETE' }))
+    if (state.card?.id !== id) return
+    absorb(result)
+    renderCover()
+    saved(false, t`开场页用回自动的图`)
+    await onCardChanged?.(id)
+  }
+
   // ─── Saving ───────────────────────────────────────────────────────────
   /** Save a patch (PUT /api/cards/:id/edit); `redraw` draws the card again (greetings change shape). */
   function save(patch, { redraw = false } = {}) {
@@ -496,6 +622,18 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
     onChatChanged(fresh)
     showApply()
     toast(t`已重建固定前缀，下一轮生效`)
+  }
+
+  /** A picture as a JPEG data URL no larger than 1920 px on its long side (开场页的图). */
+  async function jpegOf(blob) {
+    const bitmap = await createImageBitmap(blob).catch(() => {
+      throw new Error(t`读不出这张图片，换一张 PNG、JPG 或 WebP 试试`)
+    })
+    const scale = Math.min(1, 1920 / Math.max(bitmap.width, bitmap.height))
+    const canvas = Object.assign(document.createElement('canvas'), { width: Math.round(bitmap.width * scale), height: Math.round(bitmap.height * scale) })
+    canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+    bitmap.close?.()
+    return canvas.toDataURL('image/jpeg', 0.88)
   }
 
   /**

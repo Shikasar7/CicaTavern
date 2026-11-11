@@ -112,7 +112,10 @@ function cardText(card) {
 function cardOfJson(json) {
   if (json.format === CARD_FORMAT) return importOwnCard(json).card
   const data = json.data && typeof json.data === 'object' ? json.data : json
-  return typeof data.name === 'string' && data.name && ('first_mes' in data || 'description' in data && !('entries' in data)) ? normalizeCard(json) : null
+  // A name with any of what a card says about its character, and no entries of a book's: 创作角色卡 only learns from it,
+  // so a settings file taken for one is not read by mistake, and a whole file is never called a broken one.
+  const told = ['description', 'personality', 'scenario'].some(key => key in data)
+  return typeof data.name === 'string' && data.name && ('first_mes' in data || (told && !('entries' in data))) ? normalizeCard(json) : null
 }
 
 /** A card or a book a text file holds, as a reference; null for any other text. */
@@ -259,19 +262,20 @@ export const asMaterial = reference => (reference.kind === 'card' && reference.s
  * a whole file with name and description for a card; with something else after them it takes three, or a broken
  * settings file would be one.
  */
-function startsAsCard(text) {
+function startsAsCard(text, cut = false) {
   const fields = new Set()
   for (const [, key] of text.replace(/^\{\s*"data"\s*:\s*/, '').matchAll(JSON_KEY)) {
     if (!CARD_FIELDS.has(key) || fields.has(key)) return fields.size > 2
     fields.add(key)
   }
-  return fields.size > 1
+  // Of a text cut short nothing says what followed: it is judged as if something did.
+  return fields.size > (cut ? 2 : 1)
 }
 
 /** Only the top of the file counts, or of what a workspace shell holds: a settings file can have people with these fields further in. */
-function opensAsCard(text) {
+function opensAsCard(text, cut = false) {
   if (!text.startsWith('{')) return false
-  return startsAsCard(text) || [...text.matchAll(WORKSPACE_RAW)].some(found => startsAsCard(text.slice(found.index + found[0].length)))
+  return startsAsCard(text, cut) || [...text.matchAll(WORKSPACE_RAW)].some(found => startsAsCard(text.slice(found.index + found[0].length), cut))
 }
 
 /**
@@ -279,24 +283,27 @@ function opensAsCard(text) {
  * with no name. In what is meant to be JSON one field is enough; a note on how cards are written can have one, so
  * anywhere else it takes two.
  */
-function looksLikeCard(name, text) {
-  if (CARD_SPEC.test(text) || text.includes(CARD_FORMAT) || opensAsCard(text)) return true
+function looksLikeCard(name, text, cut = false) {
+  if (CARD_SPEC.test(text) || text.includes(CARD_FORMAT) || opensAsCard(text, cut)) return true
   const keys = [...text.matchAll(CARD_KEY)]
   if (new Set(keys.map(([, key]) => key.replace(/_/g, '').toLowerCase())).size > 1) return true
   return (/\.json$/i.test(name) || /^[{[]/.test(text)) && keys.some(([, , quote]) => quote)
 }
 
 /** As material a card is only learned from, so one that cannot be read as a card stays out: as text, all of it would go. */
-function materialOf(reference, text) {
-  if (reference.kind === 'file' && looksLikeCard(reference.name, text)) throw httpError(400, msg`「${reference.name}」看起来是角色卡，但文件损坏了，读不出来。创作角色卡时不会把它当普通文本读，修好或换一份完好的文件再附`)
+function materialOf(reference, text, cut = false) {
+  if (reference.kind === 'file' && looksLikeCard(reference.name, text, cut)) throw httpError(400, msg`「${reference.name}」看起来是角色卡，但文件损坏了，读不出来。创作角色卡时不会把它当普通文本读，修好或换一份完好的文件再附`)
   return asMaterial(reference)
 }
 
 /** A file for 创作角色卡. All of it is looked at: what gives a card away can be past what a reference keeps. */
 export const readMaterial = body => materialOf(readReference(body), String(body?.text ?? '').trim())
 
-/** What the page kept until there was a draft. */
-export const keptMaterial = list => cleanReferences(list).map(reference => materialOf(reference, reference.text))
+/**
+ * What the page kept until there was a draft. A long file is kept only as far as a reference goes, and was looked at
+ * whole when it was attached: what its top alone would be taken for is not held against it.
+ */
+export const keptMaterial = list => cleanReferences(list).map(reference => materialOf(reference, reference.text, reference.total > reference.chars))
 
 /** A card as the player has decided: `content` only with their word that the author allows it. */
 export function withMode(reference, { mode, confirmed } = {}) {

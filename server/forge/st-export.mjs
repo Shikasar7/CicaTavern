@@ -3,13 +3,17 @@
 import YAML from 'yaml'
 import { LIST_GROWS } from '../../web/shared/status.js'
 import { isInitvar } from '../worldbook.mjs'
-import { BAR_LOAD, MVU_HELPER_ID, OWN_STATUS_SCRIPT } from './status.mjs'
+import { BAR_LOAD, MVU_HELPER_ID, OWN_STATUS_SCRIPT, STATUS_DEPTH } from './status.mjs'
+import { withCover } from './cover-frame.mjs'
 
 // The bar's loader as it was: it reads what Tavern Helper puts in a frame, and shows only its title in anyone else's.
 const OLD_LOAD = `async function load(){
   try{if(typeof waitGlobalInitialized==='function')await waitGlobalInitialized('Mvu')}catch(e){}
   try{const data=Mvu.getMvuData({type:'message',message_id:getCurrentMessageId()});draw((data&&data.stat_data)||{})}catch(e){draw({})}
 }`
+// A skinned bar's drawing as it was: into the body itself, which in Tavern Helper holds the page's styles too.
+const OLD_DRAW = 'function draw(stat){const bar=B.statusBar(el,SPEC,stat,{collapsible:false,remembers:false});document.body.replaceChildren(...(bar?[bar]:[]))}'
+const DRAW = 'const ROOT=document.createElement("div");document.body.append(ROOT);\nfunction draw(stat){const bar=B.statusBar(el,SPEC,stat,{collapsible:false,remembers:false});ROOT.replaceChildren(...(bar?[bar]:[]))}'
 const CODE_BLOCK = /^```html\n([\s\S]*)\n```$/
 const PAGE = /html>|<head>|<body/
 export const INIT_BLOCK = /<initvar>\n([\s\S]*?)\n<\/initvar>/
@@ -18,7 +22,7 @@ export const INIT_BLOCK = /<initvar>\n([\s\S]*?)\n<\/initvar>/
 function currentBar(html) {
   const block = CODE_BLOCK.exec(html)
   if (!block) return html
-  const body = block[1].replace(OLD_LOAD, () => BAR_LOAD)
+  const body = block[1].replace(OLD_LOAD, () => BAR_LOAD).replace(OLD_DRAW, () => DRAW)
   return ['```html', ...(PAGE.test(body) ? [body] : ['<!DOCTYPE html>', '<html><body>', body, '</body></html>']), '```'].join('\n')
 }
 
@@ -55,14 +59,16 @@ export function madeHere(card, helpers = null) {
  */
 export function forSillyTavern(card, raw = null) {
   const scripts = Array.isArray(card.regexScripts)
-    ? { regexScripts: card.regexScripts.map(script => (script.id === OWN_STATUS_SCRIPT ? { ...script, replaceString: currentBar(script.replaceString) } : script)) }
+    // A whole-page bar saved before it was kept to the latest replies goes out kept to them.
+    ? { regexScripts: card.regexScripts.map(script => (script.id === OWN_STATUS_SCRIPT ? { ...script, replaceString: currentBar(script.replaceString), ...(script.maxDepth == null && script.replaceString.includes('B.statusBar(') ? { maxDepth: STATUS_DEPTH } : {}) } : script)) }
     : {}
-  if (!madeHere(card, (raw?.data ?? raw)?.extensions?.tavern_helper?.scripts)) return { ...card, ...scripts }
-  return {
+  // 开场页: the cover goes out as the first of the card's openings (cover-frame.mjs), whoever made the card.
+  if (!madeHere(card, (raw?.data ?? raw)?.extensions?.tavern_helper?.scripts)) return withCover({ ...card, ...scripts })
+  return withCover({
     ...card,
     ...scripts,
     firstMes: growingOpening(card.firstMes),
     alternateGreetings: (card.alternateGreetings ?? []).map(growingOpening),
     ...(card.book ? { book: { ...card.book, entries: card.book.entries.map(entry => (isInitvar(entry) ? { ...entry, content: growingText(entry.content) } : entry)) } } : {}),
-  }
+  })
 }

@@ -1,5 +1,6 @@
 // SillyTavern regex scripts (card `extensions.regex_scripts`), shared by the
 // server (text sent to the model) and the web UI (text shown to the player).
+import { reasoningSpans } from './basic.js'
 
 export const PLACEMENT = Object.freeze({ USER_INPUT: 1, AI_OUTPUT: 2, WORLD_INFO: 5 })
 
@@ -242,6 +243,45 @@ export function patternOf(script, macros = t => t) {
   return regexFromString(source)
 }
 
+const FENCED = /```[\s\S]*?```/g
+/** The model's thinking blocks and the fenced blocks (a page an earlier script made of the thinking, say) in `text`. */
+function closedSpans(text) {
+  const spans = reasoningSpans(text)
+  for (const match of text.matchAll(FENCED)) spans.push({ inner: match.index + 3, close: match.index + match[0].length - 3, end: match.index + match[0].length })
+  return spans
+}
+
+/**
+ * `replace` that lets no match run out of the model's thinking. Thinking often names the blocks it plans to write
+ * (「结尾输出 <choices>…及<fox_tip>」), and a script's `<fox_tip>[\s\S]*?</fox_tip>` would take the mention for the block:
+ * from there to the real closing tag goes, the story with it, and the thinking's own closing tag too. So with a fenced
+ * block, which is where the thinking is once a script has made a page of it. A match that starts inside one and ends
+ * past its closing tag keeps that much as it is; the script then goes on over the rest of the match, as if it had
+ * looked again after the block.
+ */
+function outOfThinking(replace) {
+  const safe = (from, regex, replacer) => {
+    let spans = null
+    let spansOf = null
+    return replace(from, regex, (...args) => {
+      const named = typeof args.at(-1) === 'object' && args.at(-1) !== null
+      const offset = args.at(named ? -3 : -2)
+      const whole = args.at(named ? -2 : -1)
+      if (typeof offset !== 'number' || typeof whole !== 'string') return replacer(...args)
+      if (spansOf !== whole) {
+        spansOf = whole
+        spans = closedSpans(whole)
+      }
+      const end = offset + args[0].length
+      const span = spans.find(s => offset >= s.inner && offset < s.close && end > s.close)
+      if (!span) return replacer(...args)
+      const kept = span.end - offset
+      return args[0].slice(0, kept) + safe(args[0].slice(kept), new RegExp(regex.source, regex.flags), replacer)
+    })
+  }
+  return safe
+}
+
 /**
  * Run every applicable script over `text`, in order.
  * @param options.placement - a PLACEMENT.
@@ -251,7 +291,8 @@ export function patternOf(script, macros = t => t) {
  * @param options.replace - (text, regex, replacer) => text, String.prototype.replace by default; the server's runs
  *   a card's pattern with a bound on its time (server/regex-guard.mjs).
  */
-export function applyScripts(text, scripts, { placement, target, depth, macros = t => t, replace = (from, regex, replacer) => from.replace(regex, replacer) }) {
+export function applyScripts(text, scripts, { placement, target, depth, macros = t => t, replace: plain = (from, regex, replacer) => from.replace(regex, replacer) }) {
+  const replace = outOfThinking(plain)
   let out = String(text ?? '')
   for (const script of scripts) {
     if (!appliesTo(script, { placement, target, depth })) continue

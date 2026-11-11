@@ -7,6 +7,7 @@
 // the fields marked `prefix` reach an open chat only once its prefix is built
 // again. The character note goes with every turn; the openings only start new
 // chats; the notes, the creator and the tags never reach the model.
+import { cleanCover } from './cover.js'
 
 export const CARD_FIELDS = Object.freeze([
   { key: 'name', prefix: true, max: 200 },
@@ -57,6 +58,14 @@ export function editCard(card, patch = {}) {
       card.firstMes = first
       card.alternateGreetings = alternates
       changed.push('greetings')
+    }
+  }
+  // 开场页 (web/shared/cover.js): what shows above the opening; null takes it off. Display only, never in a prefix.
+  if (patch.cover !== undefined) {
+    const cover = cleanCover(patch.cover)
+    if (JSON.stringify(cover) !== JSON.stringify(card.cover ?? null)) {
+      card.cover = cover
+      changed.push('cover')
     }
   }
   if (patch.tags !== undefined) {

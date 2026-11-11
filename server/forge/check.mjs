@@ -555,7 +555,7 @@ export function bricksOf(card) {
   const opening = greetingList(card).some(text => text.includes(CREATION_TAG))
   const mark = creationOf(scripts)?.mark.trim() ?? ''
   const creation = page || opening ? { page, opening, mark, rule: live.find(entry => entry.keys.includes(mark)) ?? null } : null
-  return { selfcheck: rule(RULE_TAGS.selfcheck), events, judge: rule(RULE_TAGS.judge), world: rule(RULE_TAGS.world), worldDraw: scripts.find(script => drawName(script) === WORLD_NAME) ?? null, creation, books: booksInRules(live.map(entry => entry.content)), tokens, draws: draws.sort((a, b) => a.group - b.group) }
+  return { selfcheck: rule(RULE_TAGS.selfcheck), events, judge: rule(RULE_TAGS.judge), world: rule(RULE_TAGS.world), schedule: rule(RULE_TAGS.schedule), relations: rule(RULE_TAGS.relations), routes: rule(RULE_TAGS.routes), worldDraw: scripts.find(script => drawName(script) === WORLD_NAME) ?? null, creation, books: booksInRules(live.map(entry => entry.content)), tokens, draws: draws.sort((a, b) => a.group - b.group) }
 }
 
 /** Whether a script takes a whole block out of a reply. */
@@ -657,7 +657,7 @@ function drawFindings({ card, scripts, bricks }) {
     }
   }
   if (bricks.judge && scripts.some(script => drawName(script) === DICE_NAME) && unread([DICE_NAME]).length) {
-    const after = withLine(bricks.judge, diceLine(english), line => /^(要判定时|When you judge)/.test(line), `</${RULE_TAGS.judge}>`)
+    const after = withLine(bricks.judge, diceLine(english), line => /^(要判定时|要判定的那一轮|When you judge|On a turn you judge)/.test(line), `</${RULE_TAGS.judge}>`)
     out.push(finding('draw-unread', DICE_NAME, 'warn', msg`裁判表每轮掷的骰子没有用上`, msg`规则里已经没有 ${DICE_TOKEN}，平手时模型看不到点数。要的话放回规则里，不看运气就忽略这一条。`, [entryChange(bricks.judge, after === null ? {} : { after })], { where: nameOf(bricks.judge), risky: true, ...(after === null ? { manual: true } : {}) }))
   }
   if (bricks.world && scripts.some(script => drawName(script) === WORLD_NAME) && unread([WORLD_NAME]).length) {
@@ -687,8 +687,8 @@ const RANK_BREAK = /\s*(?:<|＜|→|、|，|,|；|;)\s*/
 const NUMBERED = /[（(]\d+[）)]$/
 // What the rule said before its ranks had numbers.
 const COUNTED_LINES = {
-  '差距按这张表数格子：': '差距是两边等级的序号相减：',
-  'Count the steps between the two on that list:': 'The gap is the two rank numbers subtracted:',
+  '差距按这张表数格子：': '差距是两边等级的序号相减。做的是一件事、不是和人较量时，「对方的等级」就是这件事要求的等级：',
+  'Count the steps between the two on that list:': 'The gap is the two rank numbers subtracted. When what is tried is a feat and not a contest with someone, the other side\'s rank is the rank the feat calls for:',
   '对比：<user>的等级 对 对方的等级': '对比：<user>的等级（序号）对 对方的等级（序号）',
   'Match: rank of <user> against the other side': 'Match: rank of <user> (its number) against the other side (its number)',
 }

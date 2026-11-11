@@ -194,7 +194,7 @@ test('the page: frames off the screen wait as slots, kept messages, one drawing 
   // (The options under the latest reply are drawn anew each time: they may read it directly.)
   assert.doesNotMatch(app.slice(app.indexOf('function renderNode('), app.indexOf('// When each reply\'s 想起 line')), /el\('button', \{[^\n]*disabled: ui\.generating/)
   // Its rules and the card's regex loaded before the chat is drawn, once.
-  assert.match(app, /await Promise\.all\(\[loadRules\(view\), loadCardDetail\(view\.cardId\), loadPresetDetail\(view\.presetId\)\]\)\s*\n\s*followServerTurn\(view\)\s*\n\s*setChat\(view\)/)
+  assert.match(app, /await Promise\.all\(\[loadRules\(view\), loadCardDetail\(view\.cardId\), loadPresetDetail\(view\.presetId\)\]\)\s*\n\s*followServerTurn\(view\)\s*\n\s*markOpening\(view\)\s*\n\s*setChat\(view\)/)
   // Told only to frames that have loaded.
   const compat = read('compat.js')
   assert.doesNotMatch(compat, /document\.querySelectorAll\('iframe\.card-frame'\)\) frame\.contentWindow/)

@@ -278,6 +278,12 @@ export function createReveal({ target, html, source, scroller, following, mode, 
       pacer.push(source(text), performance.now())
       wake()
     },
+    /** The reply starts from text already there (继续生成), shown at once. */
+    begin(text) {
+      pacer.begin(source(text), performance.now())
+      drawnShown = -1
+      wake()
+    },
     /** The reply is being asked for again: from nothing. */
     reset() {
       pacer.reset()

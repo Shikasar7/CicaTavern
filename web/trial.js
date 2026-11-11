@@ -82,6 +82,38 @@ export function initTrial({ api, el, toast, guard, copyText, openProviders, open
     return select
   }
 
+  // Who the stand-in plays as (server/forge/trial.mjs PLAYERS); 自己写 opens a line to describe one.
+  const PLAYER_TEXT = { '': t`玩家：不指定`, eager: t`玩家：急性子`, quiet: t`玩家：话很少`, bargain: t`玩家：爱计较`, heart: t`玩家：只在意人`, wild: t`玩家：不按常理`, own: t`玩家：自己写…` }
+  const PLAYER_HINT = { eager: t`爱行动，总想把事情往前推`, quiet: t`每次只说很短的一句，看卡能不能自己把故事撑起来`, bargain: t`总想多要好处、少付代价，看卡会不会放水`, heart: t`只想靠近眼前的人，看关系会不会进展得太快`, wild: t`爱做出格的事，看卡拉不拉得回来` }
+
+  function playerChoice() {
+    const { player, players, job } = state.data
+    if (!players) return null
+    const picked = state.ownPlayer ? 'own' : player.kind
+    const select = el('select', { class: 'forge-model', title: t`扮玩家的模型照什么性子玩`, disabled: Boolean(job), onchange: guard(async () => {
+      // 自己写: nothing to keep till something is written.
+      state.ownPlayer = select.value === 'own'
+      if (state.ownPlayer) return render()
+      load(await api(url(), { method: 'PUT', body: { player: { kind: select.value } } }))
+    }) }, players.map(kind => el('option', { value: kind, selected: kind === picked, text: PLAYER_TEXT[kind] ?? kind })))
+    return select
+  }
+
+  /** Under the pickers: what the kind picked is for, or the line to describe a player of one's own. */
+  function playerNote() {
+    const { player, players, job } = state.data
+    if (!players) return null
+    if (state.ownPlayer || player.kind === 'own') {
+      const box = el('input', { type: 'text', class: 'trial-player', maxlength: 200, disabled: Boolean(job), placeholder: t`这位玩家是什么样的人，比如：胆小，凡事先问清楚再动手`, 'aria-label': t`玩家是什么样的人`, onchange: guard(async () => {
+        state.ownPlayer = Boolean(box.value.trim())
+        load(await api(url(), { method: 'PUT', body: { player: { kind: 'own', text: box.value } } }))
+      }) })
+      box.value = player.kind === 'own' ? player.text : ''
+      return box
+    }
+    return PLAYER_HINT[player.kind] ? el('p', { class: 'hint', text: PLAYER_HINT[player.kind] }) : null
+  }
+
   function roundsChoice() {
     const { rounds, choices, job } = state.data
     const select = el('select', { class: 'forge-model', title: t`玩几回合`, disabled: Boolean(job), onchange: guard(async () => load(await api(url(), { method: 'PUT', body: { rounds: Number(select.value) } }))) },
@@ -101,7 +133,8 @@ export function initTrial({ api, el, toast, guard, copyText, openProviders, open
       state.changed ? el('p', { class: 'ce-outcome warn', text: t`创作向导里还有没保存的改动：这里试玩的是上次保存的卡。想试最新的，先关掉这里，在向导里点「更新这张卡」。` }) : null,
       job
         ? el('div', { class: 'cc-send' }, [el('span', { class: 'hint', text: stepText(job.step) }), el('span', { class: 'grow' }), el('button', { type: 'button', class: 'btn ghost small', text: t`停下`, onclick: guard(stop) })])
-        : el('div', { class: 'cc-send' }, [modelChoice(), roundsChoice(), el('span', { class: 'grow' }), el('button', { type: 'button', class: 'btn primary small', text: report ? t`再玩一次` : t`开始试玩`, disabled: !estimate.ready, onclick: guard(start) })]),
+        : el('div', { class: 'cc-send' }, [modelChoice(), roundsChoice(), playerChoice(), el('span', { class: 'grow' }), el('button', { type: 'button', class: 'btn primary small', text: report ? t`再玩一次` : t`开始试玩`, disabled: !estimate.ready, onclick: guard(start) })]),
+      job ? null : playerNote(),
     ].filter(Boolean))
   }
 
@@ -160,7 +193,9 @@ export function initTrial({ api, el, toast, guard, copyText, openProviders, open
       el('section', { class: 'plan-card' }, [
         el('h3', { text: t`结果` }),
         el('p', { class: 'hint', text: t`${data.model} · 玩了 ${data.rounds.length} 回合${data.stopped ? t`（提前停下）` : ''} · 这一局用了 ${count(data.tokens.input)} 输入、${count(data.tokens.output)} 输出 token` }),
-        data.outdated ? el('p', { class: 'ce-outcome warn', text: t`这份报告之后卡改过了，有些问题可能已经改好，再玩一次可以确认。` }) : null,
+        data.player?.kind ? el('p', { class: 'hint', text: data.player.kind === 'own' ? t`玩家是照这句话扮的：${data.player.text}` : PLAYER_TEXT[data.player.kind] }) : null,
+        // A report from before marks were kept (data.mark) cannot tell whether the card has changed since: said so, not as a fact.
+        data.outdated ? el('p', { class: 'ce-outcome warn', text: data.mark ? t`这份报告之后卡改过了，有些问题可能已经改好，再玩一次可以确认。` : t`这份报告是旧版本做的，看不出之后卡改过没有。有些问题可能已经改好，再玩一次可以确认。` }) : null,
         data.summary ? el('p', { text: data.summary }) : null,
         el('ul', { class: 'trial-lines' }, data.lines.map(line => el('li', { class: `trial-line ${line.level}` }, [el('span', { class: 'trial-dot', text: MARK[line.level] }), el('span', { text: line.text })]))),
       ].filter(Boolean)),
@@ -205,6 +240,7 @@ export function initTrial({ api, el, toast, guard, copyText, openProviders, open
     /** Opens the window on a card. `forge`: from 创作角色卡; `changed`: it has edits not saved into the card yet. */
     async open(cardId, { changed = false, forge = false } = {}) {
       state.cardId = cardId
+      state.ownPlayer = false
       state.changed = changed
       state.forge = forge
       state.data = null

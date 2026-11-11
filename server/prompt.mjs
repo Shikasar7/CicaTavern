@@ -12,7 +12,7 @@
 import { constantEntries, entryText, entryTitle, inPrefix, keywordEntries, lateEntries, preloadEntries, templateInitialVariables } from './worldbook.mjs'
 import { renderTemplate, stripTemplates, templateSession } from './template.mjs'
 import { renderPresetPrefix } from './presets.mjs'
-import { basicRules } from './basic.mjs'
+import { basicRules, narratorText } from './basic.mjs'
 import { hasVariableMacros, replaceVariableMacros } from '../web/shared/vars.js'
 import { PLACEMENT, worldScripts } from '../web/shared/regex.js'
 import { applyScripts } from './regex-guard.mjs'
@@ -191,7 +191,7 @@ export function replyBlocks(entries, scripts) {
  * whose paragraphs open the every-turn section; without them the rules read as
  * they did before that preset existed. `style`: the chat's 文风 (its text).
  */
-export function buildSystemPrompt({ card, persona, style = '', settings, books, hasState, options = null, render = text => text }) {
+export function buildSystemPrompt({ card, persona, style = '', settings, books, hasState, options = null, edits = null, render = text => text }) {
   const names = { char: card.name, user: persona.name || '你' }
   const m = text => replaceMacros(text, names)
   // The card's and the player's own text may hold templates (rendered once, see buildChatPrompt).
@@ -205,21 +205,22 @@ export function buildSystemPrompt({ card, persona, style = '', settings, books, 
     .join('\n\n')
   const authorSystem = f(card.systemPrompt.replace(/\{\{original\}\}/gi, ''))
 
+  // With a built-in preset, its narrator lines as the player left them (basic.mjs narratorText).
+  const narrator = options ? narratorText(settings.language, edits) : null
   return [
-    `你是一场互动小说的叙述者，同时扮演除玩家以外的所有角色。玩家扮演「${names.user}」。`,
-    [
-      '## 基本规则',
-      options
-        ? `- 除了「${EVERY_TURN}」一节要求的格式块，只写故事正文，不写解释、点评或任何元信息。`
-        : '- 只写故事正文，不写解释、点评、选项菜单或任何元信息。',
-      // With the built-in preset its 防抢话 option says this (or nothing, when it is off).
-      options ? '' : `- 不替玩家决定「${names.user}」的想法、台词和行动；可以写出他的行动带来的直接结果。`,
-      '- 每条玩家消息里，<玩家输入> 是玩家本轮想做的事或希望看到的发展。用你自己的叙述把它演出来，不要照抄原句，然后顺着情节自然推进。',
-      '- <世界书> 和 <动态设定> 是和当前情节相关的设定资料，<当前状态> 是游戏状态的最新值，<角色备注> 是作者给本轮的提醒，<本轮提醒> 指向系统提示里每轮都要执行的规则。它们不要原样复述。',
-      '- 角色按各自的人设行动和说话，可以有自己的意志，不必顺着玩家。',
-      '- 篇幅随情节而定；不要重复前文已经写过的内容。',
-      `- 使用${settings.language || '简体中文'}写作。`,
-    ].filter(Boolean).join('\n'),
+    narrator ? m(narrator.intro) : `你是一场互动小说的叙述者，同时扮演除玩家以外的所有角色。玩家扮演「${names.user}」。`,
+    narrator
+      ? m(narrator.rules)
+      : [
+          '## 基本规则',
+          '- 只写故事正文，不写解释、点评、选项菜单或任何元信息。',
+          `- 不替玩家决定「${names.user}」的想法、台词和行动；可以写出他的行动带来的直接结果。`,
+          '- 每条玩家消息里，<玩家输入> 是玩家本轮想做的事或希望看到的发展。用你自己的叙述把它演出来，不要照抄原句，然后顺着情节自然推进。',
+          '- <世界书> 和 <动态设定> 是和当前情节相关的设定资料，<当前状态> 是游戏状态的最新值，<角色备注> 是作者给本轮的提醒，<本轮提醒> 指向系统提示里每轮都要执行的规则。它们不要原样复述。',
+          '- 角色按各自的人设行动和说话，可以有自己的意志，不必顺着玩家。',
+          '- 篇幅随情节而定；不要重复前文已经写过的内容。',
+          `- 使用${settings.language || '简体中文'}写作。`,
+        ].join('\n'),
     stateProtocol(card, hasState),
     section('文风与写作要求', m(style)),
     section(`玩家角色：${names.user}`, f(persona.description)),
@@ -232,7 +233,7 @@ export function buildSystemPrompt({ card, persona, style = '', settings, books, 
     ].filter(Boolean).join('\n\n'),
     section('角色卡作者的指示', authorSystem),
     section('常驻设定', constants),
-    section(EVERY_TURN, [options ? m(basicRules(options)) : '', f(card.postHistoryInstructions), lateText(books, m)].filter(t => t.trim()).join('\n\n')),
+    section(EVERY_TURN, [options ? m(basicRules(options, edits)) : '', f(card.postHistoryInstructions), lateText(books, m)].filter(t => t.trim()).join('\n\n')),
   ].filter(Boolean).join('\n\n')
 }
 
@@ -317,7 +318,7 @@ function asksForOutput(entry) {
  */
 export function buildChatPrompt({ card, persona, style = '', settings, books, hasState, preset = null, render = text => text }) {
   if (card.direct) return { systemPrompt: DIRECT_SYSTEM, presetVars: {} }
-  if (!preset || preset.builtin) return { systemPrompt: buildSystemPrompt({ card, persona, style, settings, books, hasState, options: preset?.options ?? null, render }), presetVars: {} }
+  if (!preset || preset.builtin) return { systemPrompt: buildSystemPrompt({ card, persona, style, settings, books, hasState, options: preset?.options ?? null, edits: preset?.edits ?? null, render }), presetVars: {} }
   const names = { char: card.name, user: persona.name || '你' }
   const m = text => replaceMacros(text, names)
   const world = after =>

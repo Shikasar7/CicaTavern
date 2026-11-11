@@ -182,7 +182,10 @@ test('regex by talking: tried on the reply sent along, saved, undone; a card kee
   await ask(`/api/talk/regex/card-${card.id}`, { text: '加个框' })
   await call(`/api/talk/regex/card-${card.id}/apply`, { method: 'POST', body: { ids: ['new:0'] } })
   assert.equal((await app.store.getCard(card.id)).regexScripts[0].scriptName, '对白框')
-  assert.equal((await call('/api/talk/regex/preset-basic')).status, 404, "the built-in preset's script is not changed here")
+  // The built-in preset's: the player's own (its two stay out of reach), saved in the settings.
+  await ask('/api/talk/regex/preset-basic', { text: '加个框' })
+  await call('/api/talk/regex/preset-basic/apply', { method: 'POST', body: { ids: ['new:0'] } })
+  assert.deepEqual((await app.store.getSettings()).basicEdits.regexScripts.map(s => s.scriptName), ['对白框'])
   await call(`/api/cards/${card.id}`, { method: 'DELETE' })
   assert.equal((await call(`/api/talk/regex/card-${card.id}`)).status, 404)
 })
