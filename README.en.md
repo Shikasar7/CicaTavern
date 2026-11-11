@@ -362,12 +362,10 @@ CicaTavern is licensed under the [GNU AGPL-3.0](LICENSE), copyright Shikasar7.
 
 - Downloading and using it is free and unrestricted, commercial use included.
 - You may modify and redistribute it, but a modified version must also be released under the AGPL-3.0 with its complete source; running a modified CicaTavern on a server for others to use also means offering them the source.
-- Versions 2.2.4 and earlier were released under the MIT license, which still applies to them.
 - Before contributing code, please read [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Notes
 
 - This project is not affiliated with Anthropic, OpenAI, Google or any other model provider. When you use their APIs, follow their terms of service and usage policies; costs are billed to your own account.
-- To use Claude models, add Anthropic (an official API key) or OpenRouter as a provider. A Claude.ai subscription (Pro/Max) can't be used as an API key.
 - Character cards, world books and presets belong to their original authors.
 - What changed in each version: [CHANGELOG.md](CHANGELOG.md) (in Chinese).

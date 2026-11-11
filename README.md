@@ -733,12 +733,10 @@ CicaTavern 用 [GNU AGPL-3.0](LICENSE) 许可证，版权归 Shikasar7 所有。
 
 - 自己下载、使用不受影响，免费，也可以商用。
 - 可以修改、再发布，但修改后的版本也要用 AGPL-3.0 公开全部源码；把改过的 CicaTavern 架在服务器上给别人用，同样要向使用者提供源码。
-- 2.2.4 及以前的版本按 MIT 许可证发布，这些版本仍然适用 MIT。
 - 提交代码前请看 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 说明
 
 - 本项目与 Anthropic、OpenAI、Google 等模型服务商没有关联。使用各家 API 时，请遵守它们的服务条款和使用政策；费用按你自己的账号计费。
-- 使用 Claude 模型：在供应商里添加 Anthropic（官方 API Key）或 OpenRouter。Claude.ai 的订阅（Pro/Max）不能当 API Key 用。
 - 角色卡、世界书、预设的版权归原作者所有。
 - 各版本的改动见 [CHANGELOG.md](CHANGELOG.md)。
