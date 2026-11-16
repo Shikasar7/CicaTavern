@@ -194,7 +194,7 @@ export function levelLine(who, book) {
 
 // 形态: what a form asks for, in the page's words.
 const needText = (need, book, marked = true) => (need.kind === 'level' ? t`${need.need} 级` : need.kind === 'item' ? t`有「${need.need}」` : t`羁绊${[t`一档`, t`二档`, t`三档`][need.need - 1]}`) + (need.met && marked ? ' ✓' : '')
-/** A form in a few words: 暴龙兽（成熟期）. */
+/** A form in a few words: 炎角兽（成熟期）. */
 export const formName = form => (form ? (form.stage ? t`${form.name}（${form.stage}）` : form.name) : '')
 /** What a form gives, in a line: 伤害 +10%，会「超级火焰」. */
 export const formText = (form, book) => [...(form?.effects ?? []).map(effect => effectText(effect, wordsOf(book))), ...Object.keys(form?.skills ?? {}).map(name => t`会「${name}」`)].join(t`，`)
@@ -204,7 +204,24 @@ export const formText = (form, book) => [...(form?.effects ?? []).map(effect => 
  * of that is met. Nothing for one with no chain.
  * @param sheet - the player's sheet: a thing a form asks for is looked for in their bag.
  */
-export function formSection({ el, who, sheet, book, act, name = '' }) {
+/**
+ * The chain as a row of pictures, where any of its forms has one (`face(name)` → an address or ''): the one they are
+ * in marked, those not come to yet as shadows. Null when none has a picture: the chain is then a row of names.
+ */
+function formPictures(el, chain, at, face) {
+  const pictures = face ? chain.map(form => face(form.name)) : []
+  if (!pictures.some(Boolean)) return null
+  return el('div', { class: 'status-chain-row growth-chain' }, chain.flatMap((form, i) => {
+    const tile = el('div', { class: `status-form${i === at ? ' now' : i < at ? ' past' : ' later'}`, title: formName(form) }, [
+      el('span', { class: 'status-form-pic' }, pictures[i] ? el('img', { src: pictures[i], alt: '', draggable: 'false', loading: 'lazy' }) : el('i', { text: form.name.slice(0, 1) })),
+      form.stage ? el('span', { class: 'status-form-stage', text: form.stage }) : null,
+      el('span', { class: 'status-form-name', text: form.name }),
+    ])
+    return i ? [el('span', { class: `status-chain-arrow${i <= at ? ' done' : ''}`, 'aria-hidden': 'true', text: '›' }), tile] : [tile]
+  }))
+}
+
+export function formSection({ el, who, sheet, book, act, name = '', face = null }) {
   const chain = formsOf(who, book)
   if (!chain.length) return []
   const at = formAt(who, book)
@@ -218,7 +235,7 @@ export function formSection({ el, who, sheet, book, act, name = '' }) {
   const evolve = book.words?.evolve || t`进化`
   return [
     el('h3', { text: form }),
-    el('div', { class: 'growth-forms' }, chain.map((item, i) => el('span', { class: `growth-form${i === at ? ' on' : i < at && !fightOnly(item) ? ' done' : ''}${fightOnly(item) ? ' side' : ''}`, text: formName(item) }))),
+    formPictures(el, chain, at, face) ?? el('div', { class: 'growth-forms' }, chain.map((item, i) => el('span', { class: `growth-form${i === at ? ' on' : i < at && !fightOnly(item) ? ' done' : ''}${fightOnly(item) ? ' side' : ''}`, text: formName(item) }))),
     formText(chain[at], book) ? el('p', { class: 'hint', text: t`现在：${formText(chain[at], book)}` }) : null,
     next ? el('div', { class: 'bag-row growth-next-form' }, [
       el('span', { class: 'hint', text: [t`下一个：${formName(next)}`, formText(next, book), needs.length ? t`需要 ${needs.map(need => needText(need, book)).join(t`、`)}` : t`要等剧情里发生`, burst === next ? cost : ''].filter(Boolean).join(t`；`) }),

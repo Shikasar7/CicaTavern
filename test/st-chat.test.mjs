@@ -11,9 +11,9 @@ import { normalizeProvider } from '../server/providers.mjs'
 import { dateOf, readSillyTavernChat } from '../server/st-chat.mjs'
 
 const lines = rows => rows.map(row => JSON.stringify(row)).join('\n')
-const header = { user_name: '小蝉', character_name: '顾念念', create_date: '2026-08-04@04h35m41s', chat_metadata: { variables: {} } }
-const said = (mes, extra = {}) => ({ name: '小蝉', is_user: true, is_system: false, send_date: 'August 4, 2026 4:35am', mes, extra: {}, ...extra })
-const reply = (mes, extra = {}) => ({ name: '顾念念', is_user: false, is_system: false, send_date: 'August 4, 2026 4:36am', mes, extra: { reasoning: '先想想' }, ...extra })
+const header = { user_name: '小舟', character_name: '沈念念', create_date: '2026-08-04@04h35m41s', chat_metadata: { variables: {} } }
+const said = (mes, extra = {}) => ({ name: '小舟', is_user: true, is_system: false, send_date: 'August 4, 2026 4:35am', mes, extra: {}, ...extra })
+const reply = (mes, extra = {}) => ({ name: '沈念念', is_user: false, is_system: false, send_date: 'August 4, 2026 4:36am', mes, extra: { reasoning: '先想想' }, ...extra })
 
 test('reading: names from the header, hidden messages left out, two in a row as one, swipes and their variables', () => {
   const chat = readSillyTavernChat(lines([
@@ -24,8 +24,8 @@ test('reading: names from the header, hidden messages left out, two in a row as 
     { name: 'System', is_user: false, is_system: true, mes: '隐藏的备注' },
     reply('她笑了。', { swipes: ['她哭了。', '她笑了。'], swipe_id: 1 }),
   ]))
-  assert.equal(chat.userName, '小蝉')
-  assert.equal(chat.characterName, '顾念念')
+  assert.equal(chat.userName, '小舟')
+  assert.equal(chat.characterName, '沈念念')
   assert.deepEqual(chat.messages.map(m => [m.role, m.selected, m.versions.map(v => v.text)]), [
     ['assistant', 0, ['「师兄？」', '「师兄!」']],
     ['user', 0, ['我回头。\n\n（又看了她一眼）']],
@@ -35,7 +35,7 @@ test('reading: names from the header, hidden messages left out, two in a row as 
   assert.equal(chat.messages[0].versions[0].at, new Date('August 4, 2026 4:36').toISOString())
   // Newer SillyTavern: "unused" in the header, the names on the messages.
   const newer = readSillyTavernChat(lines([{ user_name: 'unused', character_name: 'unused', chat_metadata: {} }, reply('开场'), said('嗯')]))
-  assert.deepEqual([newer.userName, newer.characterName], ['小蝉', '顾念念'])
+  assert.deepEqual([newer.userName, newer.characterName], ['小舟', '沈念念'])
   assert.throws(() => readSillyTavernChat('not json'), /SillyTavern/)
   assert.throws(() => readSillyTavernChat(lines([header])), /没有对话消息/)
 })
@@ -78,7 +78,7 @@ async function tavern(t) {
     const res = await fetch(`${base}${pathname}`, { method: body ? 'POST' : 'GET', headers: { 'content-type': 'application/json', 'x-agent-tavern': '1' }, body: body ? JSON.stringify(body) : undefined })
     return { status: res.status, body: await res.json() }
   }
-  const card = { spec: 'chara_card_v2', data: { name: '顾念念', description: '小师妹', first_mes: '卡里的开场。', character_book: { entries: [{ keys: ['[InitVar]'], content: '{"好感": 0, "地点": "山门"}', enabled: false, comment: '[InitVar]' }] } } }
+  const card = { spec: 'chara_card_v2', data: { name: '沈念念', description: '小师妹', first_mes: '卡里的开场。', character_book: { entries: [{ keys: ['[InitVar]'], content: '{"好感": 0, "地点": "山门"}', enabled: false, comment: '[InitVar]' }] } } }
   const { id } = (await call('/api/cards/import', { filename: 'card.json', data: Buffer.from(JSON.stringify(card)).toString('base64') })).body
   return { asked, call, cardId: id, app }
 }
@@ -94,9 +94,9 @@ test('importing: every turn on one path, the other swipes beside it, variables k
     reply('<UpdateVariable><JSONPatch>[{"op":"replace","path":"/地点","value":"后山"}]</JSONPatch></UpdateVariable>她跟上来。'),
     said('还没回的一句。'),
   ])
-  const view = (await call('/api/chats/import-sillytavern', { cardId, filename: '顾念念 - 2026-08-04@04h35m41s023ms.jsonl', text })).body
-  assert.equal(view.title, '顾念念 - 2026-08-04@04h35m41s023ms（导入）')
-  assert.deepEqual(view.names, { char: '顾念念', user: '小蝉' })
+  const view = (await call('/api/chats/import-sillytavern', { cardId, filename: '沈念念 - 2026-08-04@04h35m41s023ms.jsonl', text })).body
+  assert.equal(view.title, '沈念念 - 2026-08-04@04h35m41s023ms（导入）')
+  assert.deepEqual(view.names, { char: '沈念念', user: '小舟' })
   assert.deepEqual(view.path.map(n => [n.role, n.raw]), [
     ['assistant', '「师兄？」'],
     ['user', '我回头。'],

@@ -64,7 +64,7 @@ async function provider(t, { story = '她点点头。', fills = true } = {}) {
   return { asked, baseURL: `http://127.0.0.1:${server.address().port}/v1` }
 }
 
-async function app(t, fake, { settings = {}, helper = null, rules = null } = {}) {
+async function app(t, fake, { settings = {}, helper = null, rules = null, initvar = '体力: 50' } = {}) {
   const dataRoot = await mkdtemp(path.join(tmpdir(), 'tavern-upkeep-'))
   t.after(() => rm(dataRoot, { recursive: true, force: true }))
   t.after(closeSchema)
@@ -79,7 +79,7 @@ async function app(t, fake, { settings = {}, helper = null, rules = null } = {})
       name: '小雨',
       first_mes: '你好',
       character_book: { entries: [
-        { id: 0, comment: '[InitVar]初始变量', content: '体力: 50', keys: [], constant: true, enabled: false },
+        { id: 0, comment: '[InitVar]初始变量', content: initvar, keys: [], constant: true, enabled: false },
         { id: 1, comment: '[mvu_update]变量输出格式', content: '每次回复结尾输出 <UpdateVariable><JSONPatch>…</JSONPatch></UpdateVariable>。', keys: [], constant: true, enabled: true },
       ] },
       extensions: helper ? { tavern_helper: { scripts: [helper] } } : {},
@@ -149,6 +149,18 @@ test('the card\'s schema holds the update, in a turn and in a fill', async t => 
   closeSchema()
   const filled = await provider(t)
   assert.equal(tipOf(await (await app(t, filled, { helper })).turn()).state.体力, 100)
+})
+
+test('variables the chat starts with that the card\'s rules do not name stay; one the model got wrong goes', async t => {
+  const helper = { name: 'Zod', content: SCHEMA, enabled: true }
+  const update = '<UpdateVariable>\n<JSONPatch>[{"op":"replace","path":"/体力","value":180},{"op":"replace","path":"/金手指/等级","value":3},{"op":"add","path":"/主角信息","value":{"体力":1}}]</JSONPatch>\n</UpdateVariable>'
+  const wrote = await provider(t, { story: `她点点头。\n${update}` })
+  const { turn, putState } = await app(t, wrote, { helper, initvar: '体力: 50\n金手指:\n  等级: 1' })
+  const state = tipOf(await turn()).state
+  assert.deepEqual([state.体力, state.金手指, state.主角信息], [100, { 等级: 3 }, undefined])
+  // One written by hand in the 状态 panel stays too.
+  const put = await putState({ ...state, 自己加的: 7 })
+  assert.deepEqual(put.lost, [])
 })
 
 test('with the game rules on, the card\'s schema still has the last word on the state', async t => {

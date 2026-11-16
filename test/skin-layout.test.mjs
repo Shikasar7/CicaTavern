@@ -47,7 +47,7 @@ const SPEC = {
     { path: '背包', label: '背包', show: 'list', page: '主页' },
   ],
 }
-const STATE = { 主角: { 体力: 72, 等级: 5, 称号: '见习御兽师' }, 宠兽: { 小焰: { 亲密: 40, 属性: ['火', '幼年'], 状态: '精神很好，围着你转' } }, 关系: { 林晚: { 好感: 35, 态度: '友善' } }, 背包: ['精灵球 ×3', '伤药', '旧地图'] }
+const STATE = { 主角: { 体力: 72, 等级: 5, 称号: '见习御兽师' }, 宠兽: { 小焰: { 亲密: 40, 属性: ['火', '幼年'], 状态: '精神很好，围着你转' } }, 关系: { 林晚: { 好感: 35, 态度: '友善' } }, 背包: ['收服球 ×3', '伤药', '旧地图'] }
 const PALETTES = { dark: { bg: '#0d1220', ink: '#e8eefc', accent: '#4f9dff' }, light: { bg: '#f7f5f2', ink: '#2a2422', accent: '#e8483a' } }
 // What a look is like when it dresses and leaves things where they are.
 const DRESS = `.status-bar { border-radius: 18px; border: 1px solid var(--line-soft) }

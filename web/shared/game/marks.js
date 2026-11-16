@@ -4,6 +4,7 @@
 //   【检定|心智|DC12|需要:铜钥匙】    with a thing it cannot be done without
 //   【战斗|灰狼×2:杂兵|狼王:精英】   a fight: at the end of a reply (no way round it), or of an action choice (the player's to take)
 //   【战斗|魔修长老:精英:远强】       how strong a foe is, after its tier: a word beside the player, or a rank of the card's
+//   【战斗|狼王:精英|开局:先手、狼王血60】   what the way in gives or costs: 先手 破绽 强化 被偷袭, 敌血70 (all of them) or 名字血60 (one)
 //   【获得|铜钥匙×1】 【失去|伞】     things
 //   【任务|新|标题|一句话】 【任务|完成|标题】 【任务|失败|标题】
 //   【受伤|轻】 【恢复|中】           life outside a fight (轻 中 重)
@@ -11,17 +12,19 @@
 //   【同伴|加入|温小棠】 【同伴|离开|温小棠】 【同伴|负伤|楚怀瑾】 【同伴|归队|楚怀瑾】   who travels with the player
 //   【异常|扭伤左脚|灵巧|中】 【异常|解除|扭伤左脚】   what holds the player back, on one attribute or all of them (轻 中 重)
 //   【晋升|筑基】                    the player has risen to a rank of the card's
-//   【进化|亚古兽|暴龙兽】 【进化|暴龙兽】   one of the party (or the player) has come to a 形态 of the card's
+//   【进化|火芽兽|炎角兽】 【进化|炎角兽】   one of the party (or the player) has come to a 形态 of the card's
 //   【理智|中】 【理智|回复|轻】       the mind shaken or calmed, on a card that counts it (轻 中 重)
 // A mark that makes no sense stays in the text as it was: it may be the card's own. Numbers are never
 // the model's: it writes sizes and names, and the rules work out the rest.
 import { clampDc } from './dice.js'
-import { otherChoices } from '../basic.js'
+import { cleanOpening } from './battle.js'
+import { REASONING, asideBlocks, optionWords, otherChoices, outsideReasoning, replyBlocks } from '../basic.js'
 
 // Models do write them in the wrong brackets (<检定|灵巧|DC12>): the page would swallow that as a tag, and the story would
 // stop with nothing to do. The kind and the bar are what tell it from anything else.
 const MARK = /(?:\*\*)?[【<\[［〖〔]\s*(检定|战斗|获得|失去|任务|受伤|恢复|学会|异常|晋升|理智|同伴|进化)\s*[|｜]\s*([^【】<>\[\]［］〖〗〔〕\n]{0,80}?)\s*[】>\]］〗〕](?:\*\*)?/g
-// Where a mark is not the story's: the model's thinking, the update blocks, the action choices.
+// Where a mark is not the story's: the model's thinking (by any of its names, <think_mist~> too: REASONING), the
+// update blocks, the action choices, and a preset's own blocks that are not the story (asideBlocks).
 const SEALED = /<(think|thinking|reasoning|choices|UpdateVariable|state)\b[^>]*>[\s\S]*?(?:<\/\1\s*>|$)/gi
 const KEYCAP_LINE = /^[ \t]*[1-9]️?⃣.*$/gm
 const DC = /^(?:DC|难度)?\s*[:：=]?\s*(\d{1,3})$/i
@@ -38,6 +41,36 @@ const PARTY = { 加入: 'join', 入队: 'join', 离开: 'leave', 离队: 'leave'
 const DEFAULT_DC = 12
 const MAX_FOES = 4
 const MAX_COUNT = 99
+const OPENING = /(?:^|[|｜])\s*开局\s*[:：](.*)$/
+const OPENING_WORDS = [
+  [/被偷袭|被伏击|中伏|中埋伏|措手不及|被包围|受制/, 'caught'],
+  [/先手|偷袭|突袭|伏击|先发制人|出其不意/, 'first'],
+  [/破绽|弱点|失衡/, 'open'],
+  [/强化|蓄势|蓄力|增益|士气/, 'boost'],
+]
+const OPENING_LIFE = /^(.*?)(?:的)?(?:血量|生命|血)\s*[:：]?\s*(\d{1,3})\s*[%％]?$/
+const ALL_FOES = /^(?:敌|敌人|敌方|对手|全体|全部|所有敌人)?$/
+
+/** '先手、狼王血60' → { first: true, lives: { 狼王: 0.6 } }: what is not one of the words is left out. */
+function readOpening(text, foes) {
+  const out = {}
+  for (const field of text.split(/[|｜,，、;；]+/)) {
+    const part = field.trim()
+    if (!part) continue
+    const life = OPENING_LIFE.exec(part)
+    if (life) {
+      const share = Number(life[2]) / 100
+      const name = life[1].trim()
+      if (!(share > 0 && share < 1)) continue
+      if (ALL_FOES.test(name)) out.life = share
+      else if (foes.some(foe => foe.name === name)) out.lives = { ...(out.lives ?? {}), [name]: share }
+      continue
+    }
+    const word = OPENING_WORDS.find(([words]) => words.test(part))
+    if (word) out[word[1]] = true
+  }
+  return cleanOpening(out)
+}
 const fieldsOf = body => body.split(/[|｜]/).map(field => field.trim())
 const clip = text => text.slice(0, 40)
 
@@ -78,8 +111,11 @@ function readMark(kind, body) {
     return { kind: 'check', stat: clip(stat), dc: dcField ? clampDc(Number(DC.exec(dcField)[1])) : DEFAULT_DC, ...(item ? { item: clip(item) } : {}), ...(needs ? { needs: clip(needs) } : {}) }
   }
   if (kind === '战斗') {
-    const foes = readFoes(body)
-    return foes.length ? { kind: 'battle', foes } : null
+    // 开局 is the last field, and has the same separators the foes do: it is read apart from them.
+    const cut = OPENING.exec(body)
+    const foes = readFoes(cut ? body.slice(0, cut.index) : body)
+    const opening = cut ? readOpening(cut[1], foes) : null
+    return foes.length ? { kind: 'battle', foes, ...(opening ? { opening } : {}) } : null
   }
   if (kind === '获得' || kind === '失去') {
     const { name, count } = counted(fields[0])
@@ -105,8 +141,9 @@ function readMark(kind, body) {
 const blank = text => text.replace(/[^\n]/g, ' ')
 
 /** The text with everything that is not the story blanked out, so places in it are places in the text. */
-function storyOnly(source) {
-  const open = source.replace(SEALED, blank).replace(KEYCAP_LINE, blank)
+function storyOnly(source, blocks) {
+  let open = source.replace(REASONING, blank).replace(SEALED, blank).replace(KEYCAP_LINE, blank)
+  for (const block of asideBlocks(source, blocks)) open = open.slice(0, block.start) + blank(open.slice(block.start, block.end)) + open.slice(block.end)
   const { choices } = otherChoices(open)
   if (!choices.length) return open
   return open.split('\n').map(line => (choices.some(choice => line.includes(choice)) ? blank(line) : line)).join('\n')
@@ -114,12 +151,13 @@ function storyOnly(source) {
 
 function storyMarks(text) {
   const source = String(text ?? '')
+  const blocks = replyBlocks(source)
   const marks = []
-  for (const match of storyOnly(source).matchAll(MARK)) {
+  for (const match of storyOnly(source, blocks).matchAll(MARK)) {
     const mark = readMark(match[1], match[2])
     if (mark) marks.push({ mark, start: match.index, end: match.index + match[0].length })
   }
-  return { source, marks }
+  return { source, marks, blocks }
 }
 
 const GATES = ['check', 'battle']
@@ -135,9 +173,12 @@ export function gateOf(text) {
  * @param kinds - the stops that count this turn; any other mark of the kind is left to fall out of what is shown.
  */
 export function cutAtGate(text, kinds = GATES) {
-  const { source, marks } = storyMarks(text)
+  const { source, marks, blocks } = storyMarks(text)
   const found = marks.find(item => kinds.includes(item.mark.kind))
-  return found ? { text: source.slice(0, found.end).trimEnd(), gate: found.mark } : { text: source, gate: null }
+  if (!found) return { text: source, gate: null }
+  // A stop inside the story's wrapper (<content>…) keeps its closing tag: a preset's regex looks for the pair.
+  const closing = blocks.filter(block => block.start < found.end && found.end <= block.close && block.end > block.close).map(block => source.slice(block.close, block.end))
+  return { text: [source.slice(0, found.end).trimEnd(), ...closing].join('\n'), gate: found.mark }
 }
 
 /** What the reply's story changes: the marks that are not a stop. */
@@ -170,12 +211,38 @@ export function parseChoice(text) {
   return { text: rest.trim(), check, ...(fight ? { fight } : {}) }
 }
 
-/** What a reply's action choices ask for, by the choice's text as shown. */
+/**
+ * A choice as compared: its words only, so the same choice sent by a preset's own page (the words in its <font>,
+ * maybe with the mark) or by a button (the words, the label taken off) finds what it asks for.
+ */
+export const choiceKey = text => optionWords(parseChoice(text).text.replace(OPTION_LABEL, '')).replace(/[^0-9A-Za-z㐀-鿿豈-﫿]/g, '')
+
+/** A reply's choices by their words as shown, found by those or by anything with the same choiceKey. */
+class ChoiceMap extends Map {
+  #loose = new Map()
+  set(key, value) {
+    const loose = choiceKey(key)
+    if (loose && !this.#loose.has(loose)) this.#loose.set(loose, key)
+    return super.set(key, value)
+  }
+  #own(key) {
+    return super.has(key) ? key : this.#loose.get(choiceKey(key))
+  }
+  get(key) {
+    const own = this.#own(key)
+    return own === undefined ? undefined : super.get(own)
+  }
+  has(key) {
+    return this.#own(key) !== undefined
+  }
+}
+
+/** What a reply's action choices ask for, by the choice's text as shown. Thinking that names one is no choice. */
 function choiceMarks(text, kind) {
-  const found = new Map()
-  for (const line of String(text ?? '').split('\n')) {
+  const found = new ChoiceMap()
+  for (const line of outsideReasoning(text).split('\n')) {
     const choice = parseChoice(line)
-    if (choice[kind]) found.set(choice.text.replace(OPTION_LABEL, '').trim(), choice[kind])
+    if (choice[kind]) found.set(optionWords(choice.text.replace(OPTION_LABEL, '')), choice[kind])
   }
   return found
 }

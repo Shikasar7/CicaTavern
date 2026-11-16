@@ -60,10 +60,10 @@ test('the helper is not shown a 武侠 example, and has kinds of story beyond it
   assert.match(content, /怪兽养成/)
   assert.match(content, /网游/)
   assert.match(content, /"words"/)
-  const found = parseSuggestion('{"theme":"monster","energy":"能量","words":{"body":"力量","grace":"速度","life":"HP","bad":"x"},"attributes":{"grace":14},"skills":[{"name":"小型火焰弹","kind":"strike"}],"things":[],"foes":[],"companions":[{"name":"亚古兽","skills":[{"name":"小型火焰弹","kind":"strike"}]}],"ranks":["成长期","成熟期","完全体","究极体"]}', [])
+  const found = parseSuggestion('{"theme":"monster","energy":"能量","words":{"body":"力量","grace":"速度","life":"HP","bad":"x"},"attributes":{"grace":14},"skills":[{"name":"小型火焰弹","kind":"strike"}],"things":[],"foes":[],"companions":[{"name":"火芽兽","skills":[{"name":"小型火焰弹","kind":"strike"}]}],"ranks":["成长期","成熟期","完全体","究极体"]}', [])
   assert.equal(found.theme, 'monster')
   assert.deepEqual(found.words, { body: '力量', grace: '速度', life: 'HP' })
-  assert.deepEqual(Object.keys(found.companions), ['亚古兽'])
+  assert.deepEqual(Object.keys(found.companions), ['火芽兽'])
   assert.deepEqual(found.ranks, ['成长期', '成熟期', '完全体', '究极体'])
 })
 

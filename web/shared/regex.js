@@ -253,7 +253,7 @@ function closedSpans(text) {
 
 /**
  * `replace` that lets no match run out of the model's thinking. Thinking often names the blocks it plans to write
- * (「结尾输出 <choices>…及<fox_tip>」), and a script's `<fox_tip>[\s\S]*?</fox_tip>` would take the mention for the block:
+ * (「结尾输出 <choices>…及<side_tip>」), and a script's `<side_tip>[\s\S]*?</side_tip>` would take the mention for the block:
  * from there to the real closing tag goes, the story with it, and the thinking's own closing tag too. So with a fenced
  * block, which is where the thinking is once a script has made a page of it. A match that starts inside one and ends
  * past its closing tag keeps that much as it is; the script then goes on over the rest of the match, as if it had

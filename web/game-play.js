@@ -4,7 +4,7 @@
 import { t } from '/i18n.js'
 import { reachedWith } from '/shared/game/achievements.js'
 import { foeSheets } from '/shared/game/battle.js'
-import { changeWords, choiceChecks, choiceFights, cutAtGate, parseChoice, replyMarks, withoutGameMarks } from '/shared/game/marks.js'
+import { changeWords, choiceChecks, choiceFights, choiceKey, cutAtGate, parseChoice, replyMarks, withoutGameMarks } from '/shared/game/marks.js'
 import { AID_BONUS, ATTRIBUTES, MAX_FIELDED, aidFor, applyOps, chanceFor, checkExperience, checkLine, dcFor, effectOf, fieldedOf, gateKinds, levelNeeds, nothingToRestore, rankNow, rollCheck, sheetOf, sheetOnPath, startSheet, turnSheet, usableNow } from '/shared/game/sheet.js'
 import { beneath, beyond, chanceToWin, encounterSetup, foesLine, playedOut } from '/shared/game/encounter.js'
 import { ailsOn, modifierOf, riskOf } from '/shared/game/dice.js'
@@ -18,7 +18,7 @@ import * as growth from '/game-growth.js'
 export { createSound } from '/game-sound.js'
 export { growth, levelUpCard, pendingOf }
 export { ACHIEVEMENTS, tallyOf, reachedBy } from '/shared/game/achievements.js'
-export { noteChips, latestPlace, matchScene, normalizePlace, visitedPlaces, applyOps, beneath, beyond, playedOut, changeWords, checkExperience, choiceChecks, choiceFights, checkLine, chanceToWin, cutAtGate, effectOf, encounterSetup, gateKinds, nothingToRestore, parseChoice, rankNow, rollCheck, turnSheet, usableNow, withoutGameMarks }
+export { noteChips, latestPlace, matchScene, normalizePlace, visitedPlaces, applyOps, beneath, beyond, playedOut, changeWords, checkExperience, choiceChecks, choiceFights, choiceKey, checkLine, chanceToWin, cutAtGate, effectOf, encounterSetup, gateKinds, nothingToRestore, parseChoice, rankNow, rollCheck, turnSheet, usableNow, withoutGameMarks }
 
 const TIER_WORDS = () => ({ crit: t`大成功`, success: t`成功`, close: t`险胜`, fail: t`失败` })
 const TIER_HINTS = () => ({ crit: t`超出预期`, success: '', close: t`差一点，做到了但有代价`, fail: t`没做到` })
@@ -219,11 +219,27 @@ function foesLevel(setup) {
   return foes.some(foe => foe.tier === 'boss') ? UNKNOWN : Math.max(...foes.map(foe => foe.level))
 }
 
+/** 开局 in a few words: 先手、敌人只剩 70%. What the way into a fight gives or costs, '' when it is a plain one. */
+export function openingWords(setup) {
+  const opening = setup.opening
+  if (!opening) return ''
+  const share = value => Math.round(value * 100)
+  return [
+    opening.first ? t`先手` : '',
+    opening.open ? t`敌人有破绽` : '',
+    opening.boost ? t`开场强化` : '',
+    opening.life ? t`敌人只剩 ${share(opening.life)}%` : '',
+    ...Object.entries(opening.lives ?? {}).map(([name, value]) => t`${name}只剩 ${share(value)}%`),
+    opening.caught ? t`被偷袭` : '',
+  ].filter(Boolean).join(t`、`)
+}
+const withOpening = (text, setup) => (openingWords(setup) ? t`${text} · 开局：${openingWords(setup)}` : text)
+
 /** A fight among the choices: ⚔ 战斗：灰狼 ×2 · 等级 1 · 胜算约 85%. → { text, short, risk }, `risk` as the note's classes. */
-export const fightNote = (setup, chance) => ({ text: t`⚔ 战斗：${foesLine(setup.foes)} · 等级 ${foesLevel(setup)} · 胜算约 ${chance}%`, short: t`战斗 ${chance}%`, risk: `${riskOf(chance)} fight` })
+export const fightNote = (setup, chance) => ({ text: withOpening(t`⚔ 战斗：${foesLine(setup.foes)} · 等级 ${foesLevel(setup)} · 胜算约 ${chance}%`, setup), short: t`战斗 ${chance}%`, risk: `${riskOf(chance)} fight` })
 
 /** What is waiting at a fight: 灰狼 ×2、狼王 · 胜算约 95%. */
-export const encounterLine = (setup, chance) => t`${foesLine(setup.foes)} · 胜算约 ${chance}%`
+export const encounterLine = (setup, chance) => withOpening(t`${foesLine(setup.foes)} · 胜算约 ${chance}%`, setup)
 
 /** The panel in front of a fight: each kind of foe, its level and what it is made of. A 首领's numbers are found out by fighting it. */
 /** A foe's picture, its white taken off as soon as that is done. */
@@ -328,17 +344,18 @@ function dieFor(look, canvas, result, { duration, still, font, told }) {
 
 /**
  * The die across the picture, landing on the roll. A click skips what is left. Timers, not animation frames: a
- * window out of sight still has to finish. `el` is the page's element maker; `book` says what the roll is worth.
+ * window out of sight still has to finish. `el` is the page's element maker; `book` says what the roll is worth;
+ * `into`, a modal window to show over (the page under it is hidden); `hint`, the line under it in place of the tier's.
  * → a promise, when it has gone.
  */
-export function showRoll(el, result, sound = null, book = null) {
+export function showRoll(el, result, sound = null, book = null, { into = null, hint: said = null } = {}) {
   const still = matchMedia('(prefers-reduced-motion: reduce)').matches
   const { look } = currentLook()
   sound?.play('dice')
   const sum = el('div', { class: 'roll-sum', text: rollSum(result) })
   const tier = el('div', { class: 'roll-tier' }, letters(el, TIER_WORDS()[result.tier]))
   const earned = book ? checkExperience(book, result) : 0
-  const hint = [result.lacks ? t`缺${result.lacks}，做不到` : TIER_HINTS()[result.tier], earned ? `${cardWord(book, 'experience', t`经验`)} +${earned}` : ''].filter(Boolean).join(' · ')
+  const hint = said ?? [result.lacks ? t`缺${result.lacks}，做不到` : TIER_HINTS()[result.tier], earned ? `${cardWord(book, 'experience', t`经验`)} +${earned}` : ''].filter(Boolean).join(' · ')
   const dial = el('canvas', { class: 'roll-dial', 'aria-hidden': 'true' })
   const big = el('div', { class: 'roll-big', 'aria-hidden': 'true' })
   const line = (i, label, value) => el('div', { class: 'roll-line', style: `--i: ${i}` }, [el('span', { text: label }), el('b', { text: String(value) })])
@@ -353,7 +370,7 @@ export function showRoll(el, result, sound = null, book = null) {
     hint ? el('div', { class: 'roll-hint', text: hint }) : null,
   ])
   // Full screen shows only what is inside it.
-  ;(document.fullscreenElement ?? document.body).append(layer)
+  ;(into ?? document.fullscreenElement ?? document.body).append(layer)
   const font = getComputedStyle(layer).fontFamily
   const die = dieFor(look, dial, result, { duration: SPIN_MS, still, font, told: n => { big.textContent = countWord(n) } })
   return new Promise(resolve => {

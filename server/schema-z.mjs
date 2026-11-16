@@ -15,6 +15,10 @@ export function createZ() {
     return error
   }
 
+  // A schema made from another (optional, default, a pipe…) keeps it as `inner`: server/schema.mjs follows it down to
+  // the object at the top, to know the variables the card's rules name.
+  const around = (schema, inner) => Object.assign(schema, { inner })
+
   // optin and optout say what a field does when its key is absent, as Zod's do: 'optional' (nothing needed),
   // 'defaulted' (it supplies a value), or undefined (the key is required). `values`: all it can be, when that is known.
   class Schema {
@@ -98,16 +102,16 @@ export function createZ() {
 
     optional() {
       const optin = this.optin === 'defaulted' ? 'defaulted' : 'optional'
-      return new Schema(value => {
+      return around(new Schema(value => {
         if (value !== undefined) return this.run(value)
         if (this.optin !== 'defaulted') return result(undefined)
         const out = this.run(undefined)
         return result(out.issues.length ? undefined : out.value)
-      }, { optin, optout: 'optional', values: withValue(this.values, undefined) })
+      }, { optin, optout: 'optional', values: withValue(this.values, undefined) }), this)
     }
 
     nullable() {
-      return new Schema(value => (value === null ? result(null) : this.run(value)), { optin: this.optin, optout: this.optout, values: withValue(this.values, null) })
+      return around(new Schema(value => (value === null ? result(null) : this.run(value)), { optin: this.optin, optout: this.optout, values: withValue(this.values, null) }), this)
     }
 
     nullish() {
@@ -115,30 +119,30 @@ export function createZ() {
     }
 
     default(fallback) {
-      return new Schema(value => {
+      return around(new Schema(value => {
         if (value === undefined) return result(made(fallback))
         const out = this.run(value)
         return out.value === undefined ? { ...out, value: made(fallback) } : out
-      }, { optin: 'defaulted', values: this.values })
+      }, { optin: 'defaulted', values: this.values }), this)
     }
 
     prefault(fallback) {
-      return new Schema(value => this.run(value === undefined ? made(fallback) : value), { optin: 'defaulted', values: this.values })
+      return around(new Schema(value => this.run(value === undefined ? made(fallback) : value), { optin: 'defaulted', values: this.values }), this)
     }
 
     catch(fallback) {
       const value = input => (typeof fallback === 'function' ? fallback(input) : fallback)
-      return new Schema(input => {
+      return around(new Schema(input => {
         const out = this.run(input)
         return out.issues.length ? result(value({ value: input, input, issues: out.issues, error: { issues: out.issues } })) : out
-      }, { optin: this.optin === 'defaulted' ? 'defaulted' : 'optional', optout: this.optout, values: this.values })
+      }, { optin: this.optin === 'defaulted' ? 'defaulted' : 'optional', optout: this.optout, values: this.values }), this)
     }
 
     pipe(next) {
-      return new Schema(value => {
+      return around(new Schema(value => {
         const left = this.run(value)
         return left.issues.length ? left : next.run(left.value)
-      }, { optin: this.optin, optout: next.optout, values: this.values })
+      }, { optin: this.optin, optout: next.optout, values: this.values }), this)
     }
 
     transform(change) {

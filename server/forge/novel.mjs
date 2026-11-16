@@ -16,12 +16,20 @@ import { looseJson, section } from './prompts.mjs'
 
 export const NOVEL_ID = 'edit-novel'
 /** The most of a text that is read (about three million characters is a very long novel). */
-export const MAX_NOVEL = 3_000_000
+export const MAX_NOVEL = 5_000_000
 const MIN_NOVEL = 200
 // A stretch: about this long, a chapter or a few together; one chapter longer than MAX_STRETCH is cut at a paragraph.
 const STRETCH = 12_000
 const MAX_STRETCH = 18_000
-const MAX_STRETCHES = 400
+// Stretches but the last of a chapter are at least half of STRETCH long, so MAX_NOVEL comes to fewer than this; a
+// text that cuts into more is not taken rather than read short.
+const MAX_STRETCHES = 1000
+// How many stretches are read at once (the player's pick, 1 to MAX_PARALLEL), and how many when they have not picked.
+export const MAX_PARALLEL = 8
+const PARALLEL = 3
+// Several at once: batches half the size of one at a time, so that the putting together goes faster too.
+const mergeSize = width => (width > 1 ? MERGE_CHARS / 2 : MERGE_CHARS)
+const parallelOf = session => Math.max(1, Math.min(MAX_PARALLEL, Math.round(Number(session.parallel)) || PARALLEL))
 const EXTRACT_TOKENS = 8000
 const MERGE_TOKENS = 12000
 // What an answer comes to with its thinking, for the estimate.
@@ -63,7 +71,7 @@ function cutLong(text, from, max) {
 }
 
 /**
- * A novel as stretches to read one at a time: [{ from, to, title }] over the text's characters. By its chapters when
+ * A novel as stretches, each read in a request of its own: [{ from, to, title }] over the text's characters. By its chapters when
  * it has headings (short ones together, a long one cut), else by length.
  */
 export function splitNovel(text) {
@@ -91,7 +99,8 @@ export function splitNovel(text) {
     else open = { ...part }
   }
   close()
-  return stretches.slice(0, MAX_STRETCHES).map((stretch, i) => ({ from: stretch.from, to: stretch.to, title: stretch.title ? (stretch.last && stretch.last !== stretch.title ? `${stretch.title} … ${stretch.last}` : stretch.title) : msg`第 ${i + 1} 段` }))
+  // Each with what it comes to (tokens), so the estimate is worked out without the text again.
+  return stretches.map((stretch, i) => ({ from: stretch.from, to: stretch.to, tokens: estimateTokens(text.slice(stretch.from, stretch.to)), title: stretch.title ? (stretch.last && stretch.last !== stretch.title ? `${stretch.title} … ${stretch.last}` : stretch.title) : msg`第 ${i + 1} 段` }))
 }
 
 const EXTRACT_SYSTEM = `你在把一部小说整理成角色扮演用的世界书。<text> 是其中的一段。把这一段里以后扮演用得上的东西抽出来，一条写一样：
@@ -170,16 +179,19 @@ export function gather(notes, found, at = 0) {
   return notes
 }
 
-/** The notes that take a model to put together, in batches a request holds: [[{ name, parts }]]. One noted once needs none. */
-export function mergeBatches(notes) {
+/**
+ * The notes that take a model to put together, in batches a request holds: [[{ name, parts }]]. One noted once needs
+ * none. @param max - how much a batch holds: less when several go at once, so that more of them can
+ */
+export function mergeBatches(notes, max = MERGE_CHARS) {
   const batches = []
   let open = []
   let size = 0
   for (const note of notes) {
     if (note.parts.length < 2) continue
     // A name with more notes than a request holds is put together a part at a time (mergeWork).
-    const chars = Math.min(note.parts.join('').length, MERGE_CHARS)
-    if (open.length && size + chars > MERGE_CHARS) {
+    const chars = Math.min(note.parts.join('').length, max)
+    if (open.length && size + chars > max) {
       batches.push(open)
       open = []
       size = 0
@@ -377,18 +389,45 @@ export function novelBook(name, entries, digest = '') {
   }, name, { standalone: true })
 }
 
-/** What reading comes to before it starts: { stretches, input, output } for the stretches still to read. */
+/**
+ * What reading comes to before it starts: { stretches, input, output, outputMost } for the stretches still to read.
+ * A stretch cut here carries its tokens; one kept from before that did not is worked out from `text`.
+ */
 export function novelEstimate(text, stretches, from = 0) {
   const left = stretches.slice(from)
   const system = estimateTokens(EXTRACT_SYSTEM)
+  const tokensOf = stretch => stretch.tokens ?? estimateTokens(text.slice(stretch.from, stretch.to))
   // A real run (2026-11-11, 62 000 characters in six stretches) took 1.35 times what the text alone is estimated at:
   // the names noted so far go with every stretch, and prose counts for more than the estimate allows.
-  const input = left.reduce((sum, stretch) => sum + Math.round(estimateTokens(text.slice(stretch.from, stretch.to)) * 1.35) + system + 300, 0)
+  const input = left.reduce((sum, stretch) => sum + Math.round(tokensOf(stretch) * 1.35) + system + 300, 0)
   // What is written back: a dense novel gives forty notes a stretch. A real run (2026-11-13, 298 000 characters in 34
   // stretches, deepseek-flash) wrote 413 000 tokens against 313 000 read, putting together and thinking included:
   // about 1.2 times the text. A sparse text writes less; the least a stretch is counted at is EXTRACT_OUTPUT.
-  const output = left.reduce((sum, stretch) => sum + Math.max(EXTRACT_OUTPUT, Math.round(estimateTokens(text.slice(stretch.from, stretch.to)) * 1.2)), 0)
-  return { stretches: left.length, input, output }
+  const output = left.reduce((sum, stretch) => sum + Math.max(EXTRACT_OUTPUT, Math.round(tokensOf(stretch) * 1.2)), 0)
+  // A model that thinks a lot writes about twice that: deepseek-v4.1-flash, 2026-11-16, 8 stretches of 73 000
+  // characters, 133 000 to 171 000 against 75 000 estimated.
+  return { stretches: left.length, input, output, outputMost: output * 2 + Math.round(input * 0.1) }
+}
+
+/**
+ * `task(item)` for each of `items`, `width` at a time, in their order. The first failure starts no more and is thrown
+ * once those under way are done (what they gave is kept); stopping starts no more either.
+ */
+async function pooled(items, width, signal, task) {
+  let next = 0
+  let failure = null
+  const worker = async () => {
+    while (!failure && !signal.aborted && next < items.length) {
+      const item = items[next++]
+      try {
+        await task(item)
+      } catch (error) {
+        failure ??= error
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(width, items.length) }, worker))
+  if (failure) throw failure
 }
 
 /**
@@ -408,14 +447,16 @@ export function createNovel({ store, load, save, serial, run, jobs, cutNote, fil
   async function view(session) {
     if (!session) return { novel: null }
     const job = jobs.get(NOVEL_ID)
-    const text = await readText()
+    // The text (up to 15 MB) only for stretches cut before they carried their tokens: the page asks every few seconds.
+    const text = session.stretches.every(stretch => stretch.tokens != null) ? '' : await readText()
     const limit = Math.min(session.limit || session.stretches.length, session.stretches.length)
     const ref = session.model || (await store.getSettings()).model || ''
     const ready = isProviderRef(ref)
     const estimate = novelEstimate(text, session.stretches.slice(0, limit), Math.min(session.done, limit))
     // What is past the part asked for: said when that part is read, for going on to the end.
     const rest = novelEstimate(text, session.stretches, Math.max(session.done, limit))
-    const costOf = ({ input, output }) => (ready ? estimateCost(ref.slice(ref.indexOf('/') + 1), { input, output }) : null)
+    const priced = (input, output) => (ready ? estimateCost(ref.slice(ref.indexOf('/') + 1), { input, output }) : null)
+    const costOf = ({ input, output, outputMost }) => ({ cost: priced(input, output), costMost: priced(input, outputMost) })
     const entries = entriesOf(session.notes)
     return {
       novel: {
@@ -426,7 +467,7 @@ export function createNovel({ store, load, save, serial, run, jobs, cutNote, fil
         done: session.done,
         // 'reading' till every stretch asked for is read, 'merging' till the names noted more than once are put together, then 'ready'.
         stage: session.done < limit ? 'reading' : session.merged ? 'ready' : 'merging',
-        toMerge: mergeBatches(session.notes.filter(note => !note.merged)).length,
+        toMerge: mergeBatches(session.notes.filter(note => !note.merged), mergeSize(parallelOf(session))).length,
         failed: session.failed ?? [],
         entries,
         // 梗概: '' till it is asked for; `digestStale` when more was read since it was written.
@@ -434,22 +475,58 @@ export function createNovel({ store, load, save, serial, run, jobs, cutNote, fil
         digestStale: Boolean(session.digest) && session.digestAt !== session.done,
         counts: Object.fromEntries(NOVEL_TYPES.map(type => [type, entries.filter(entry => entry.type === type).length])),
         model: session.model ?? '',
-        estimate: { ready, model: ready ? (refLabel(ref, await store.getProviders()) ?? ref) : '', ...estimate, cost: costOf(estimate) },
-        rest: { ...rest, cost: costOf(rest) },
+        parallel: parallelOf(session),
+        estimate: { ready, model: ready ? (refLabel(ref, await store.getProviders()) ?? ref) : '', ...estimate, ...costOf(estimate) },
+        rest: { ...rest, ...costOf(rest) },
         job: job ? { kind: job.kind, step: job.step, startedAt: job.startedAt } : null,
         error: session.error?.message ?? '',
       },
     }
   }
 
-  /** Read the stretches still to read, then put together what was noted more than once. Each stretch's notes are kept as they come. */
+  /**
+   * Read the stretches still to read, `parallel` at a time, then put together what was noted more than once, as many
+   * batches at a time. Each stretch's notes are kept as they come.
+   */
   async function work(ctx) {
     const text = await readText()
     let session = await load(NOVEL_ID)
     const limit = Math.min(session.limit || session.stretches.length, session.stretches.length)
-    for (let i = session.done; i < limit; i++) {
-      if (ctx.signal.aborted) return
-      ctx.step(`read:${i + 1}:${limit}`)
+    const width = parallelOf(session)
+    try {
+      await readStretches(ctx, text, session, limit, width)
+      session = await load(NOVEL_ID)
+      if (ctx.signal.aborted || session.done < limit) return
+      await mergeNotes(ctx, session, width)
+    } catch (error) {
+      // Several requests at once can be more than a provider lets through.
+      if (width > 1 && !ctx.signal.aborted && (error.status === 429 || /\b429\b|rate.?limit|too many requests|concurren|限流|并发|频率/i.test(error.message))) {
+        throw httpError(error.status || 502, msg`${error.message}（同时读的段多了，供应商可能限流：把「同时读」调小，再点「接着抽」）`)
+      }
+      throw error
+    }
+    if (ctx.signal.aborted) return
+    await ctx.update(draft => {
+      draft.merged = true
+    })
+  }
+
+  /**
+   * The stretches from `done` to `limit`, `width` at a time. A stretch read before the ones ahead of it waits in
+   * `ahead` (its notes, or null for one that would not read) till they are in, so the notes go in in the book's order
+   * as when they are read one at a time; a stretch already waiting there from a stopped run is not read again. A
+   * stretch is sent with the names gathered by then: read at once, a few miss the names of the ones beside them, which
+   * gathering by name and alias makes up for. With nothing gathered yet the first is read alone: the ones after it
+   * then have its names (a real run, 2026-11-16, four at once from the start: 167 entries for 126 one at a time, many
+   * of them the same person or thing under another name).
+   */
+  async function readStretches(ctx, text, session, limit, width) {
+    const waiting = session.ahead ?? {}
+    const todo = []
+    for (let i = session.done; i < limit; i++) if (!(i in waiting)) todo.push(i)
+    let finished = limit - todo.length
+    ctx.step(`read:${Math.min(finished + 1, limit)}:${limit}`)
+    const readOne = async i => {
       const stretch = session.stretches[i]
       // The names met most often first: with more of them than a request lists, those are the ones to keep to.
       const known = [...session.notes].sort((a, b) => b.parts.length - a.parts.length).map(note => note.name)
@@ -462,16 +539,29 @@ export function createNovel({ store, load, save, serial, run, jobs, cutNote, fil
         if (!found && attempt === 1 && result.truncated) found = []
       }
       session = await ctx.update(draft => {
-        if (found) gather(draft.notes, found, i + 1)
-        else draft.failed = [...(draft.failed ?? []), i + 1]
-        draft.done = i + 1
+        draft.ahead = { ...draft.ahead, [i]: found }
+        while (draft.done < limit && draft.done in draft.ahead) {
+          const notes = draft.ahead[draft.done]
+          delete draft.ahead[draft.done]
+          if (notes) gather(draft.notes, notes, draft.done + 1)
+          else draft.failed = [...(draft.failed ?? []), draft.done + 1]
+          draft.done += 1
+        }
         draft.merged = false
       })
+      finished += 1
+      ctx.step(`read:${Math.min(finished + 1, limit)}:${limit}`, { same: true })
     }
-    const batches = mergeBatches(session.notes.filter(note => !note.merged))
-    for (const [i, batch] of batches.entries()) {
-      if (ctx.signal.aborted) return
-      ctx.step(`merge:${i + 1}:${batches.length}`)
+    if (width > 1 && !session.notes.length && todo.length > 1) await pooled([todo.shift()], 1, ctx.signal, readOne)
+    await pooled(todo, width, ctx.signal, readOne)
+  }
+
+  /** The names noted more than once, each made one entry: the batches `width` at a time. */
+  async function mergeNotes(ctx, session, width) {
+    const batches = mergeBatches(session.notes.filter(note => !note.merged), mergeSize(width))
+    let finished = 0
+    if (batches.length) ctx.step(`merge:1:${batches.length}`)
+    await pooled(batches, width, ctx.signal, async batch => {
       // A name with more notes than a request holds: the notes a part at a time, then the parts.
       const items = []
       for (const note of batch) {
@@ -495,16 +585,15 @@ export function createNovel({ store, load, save, serial, run, jobs, cutNote, fil
       }
       const result = await ctx.call(mergeRequest(items))
       const merged = readMerge(result.text)
-      session = await ctx.update(draft => {
+      await ctx.update(draft => {
         for (const item of items) {
           const note = draft.notes.find(found => found.name === item.name)
           // What the model left out stays as its notes one after another: nothing is lost for it.
           if (note) note.merged = merged.get(keyOf(item.name)) ?? note.parts.join('\n')
         }
       })
-    }
-    await ctx.update(draft => {
-      draft.merged = true
+      finished += 1
+      ctx.step(`merge:${Math.min(finished + 1, batches.length)}:${batches.length}`, { same: true })
     })
   }
 
@@ -546,6 +635,7 @@ export function createNovel({ store, load, save, serial, run, jobs, cutNote, fil
       if (whole.length < MIN_NOVEL) throw httpError(400, msg`这个文件太短了，不用分段抽取：直接在世界书里「用对话来写」，把内容贴给向导`)
       if (whole.length > MAX_NOVEL) throw httpError(400, msg`这个文件有 ${whole.length.toLocaleString()} 字，最多读 ${MAX_NOVEL.toLocaleString()} 字。先拆成几个文件，一个一个来`)
       const stretches = splitNovel(whole)
+      if (stretches.length > MAX_STRETCHES) throw httpError(400, msg`这个文件切出来有 ${stretches.length} 段，最多读 ${MAX_STRETCHES} 段。先拆成几个文件，一个一个来`)
       const now = new Date().toISOString()
       const session = { id: NOVEL_ID, kind: 'novel', name: clip(String(name ?? '').replace(/\.(txt|md|text)$/i, ''), 80) || msg`小说`, chars: whole.length, createdAt: now, updatedAt: now, model: '', job: null, error: null, stretches, limit: 0, done: 0, notes: [], failed: [], merged: false }
       // The session first: saving it makes the folder the text goes in beside it.
@@ -554,14 +644,15 @@ export function createNovel({ store, load, save, serial, run, jobs, cutNote, fil
       return view(session)
     },
 
-    /** How many stretches to read (0 = all of them), and the model to read with. */
-    async novelUpdate({ limit, model, digest } = {}) {
+    /** How many stretches to read (0 = all of them), how many at once, and the model to read with. */
+    async novelUpdate({ limit, model, parallel, digest } = {}) {
       refuseWhileBusy()
       return serial(NOVEL_ID, async () => {
         const session = await loadNovel()
         if (!session) throw httpError(404, msg`还没有选小说`)
         if (limit !== undefined) session.limit = Math.max(0, Math.min(session.stretches.length, Math.round(Number(limit)) || 0))
         if (typeof model === 'string') session.model = model.trim().slice(0, 200)
+        if (parallel !== undefined) session.parallel = Math.max(1, Math.min(MAX_PARALLEL, Math.round(Number(parallel)) || PARALLEL))
         // The 梗概 as the player changed it: theirs from here on, for this much of the book.
         if (typeof digest === 'string') {
           session.digest = digest.trim().slice(0, MAX_DIGEST)

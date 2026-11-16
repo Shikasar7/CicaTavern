@@ -242,6 +242,8 @@ export function cleanForms(value) {
         ...(at > 0 && item.temp === true && item.drain === true ? { drain: true } : {}),
         // 类型克制: a form may be of another type than the one before it.
         ...(text(item.type, 8) ? { type: text(item.type, 8) } : {}),
+        // How it looks, for its picture (创作角色卡's 备齐门面图 draws each form as one of the cast).
+        ...(text(item.looks, 300) ? { looks: text(item.looks, 300) } : {}),
       })
       if (chain.length === MAX_FORMS) break
     }
@@ -660,7 +662,7 @@ export function formsTold(sheet, book) {
 
 /** What a model that lays out a card's rules is asked for about 形态: only for a world where somebody changes. */
 export function formsAsk() {
-  return `"forms" 只在这个世界有人或伙伴会换一副样子、换了以后能力也跟着换时写（变身、觉醒、解放、合体、附身、进化），没有就不写这个字段。只升不降、越升越强的等级（修为、段位、军衔这类）不是形态，那些写在 ranks 里；形态是「变成另一个样子」，可以变回去，也可以只在打斗时才变。写成 {"谁": [形态, 形态]}：谁是 companions 里的名字，玩家自己写 "玩家"；开了收服（tame）的世界，也可以给 foes 里能收服的敌人写，名字和 foes 里的一样，它被收服以后照这条链成长。每条链 2 到 ${MAX_FORMS} 个形态，从最初的样子写到最后的：{"name": "形态名", "stage": "阶段名", "effects": [{"id": "attack", "size": "medium"}], "skills": {"技能名": "strike"}, "at": {"level": 8, "item": "道具名", "bond": 2}, "temp": true}。第一个是最初的样子，不写 at 和 temp。stage 是阶段的叫法（二段变身、完全体），没有就不写。effects 是处在这个形态时的加成，写法同 perks，只算当前形态的，点数上限按第几个形态依次是 ${FORM_BUDGET.join('、')}。skills 是只有这个形态才会的 0 到 2 个技能，值是 kind。形态分两种，按这个世界里它是哪一种来写，不要都写成按等级永久变的：一种是变了就一直是（宠物进化、血脉觉醒、换了机体），写 at，at 是变成它要满足的条件，写了几样就都要满足：level 是等级，item 是背包里要有的道具，bond 是和玩家的羁绊档位（1 到 ${BOND_AT.length}，只有同伴能写），不写 at 也不写 temp 的只能由剧情给；另一种是只在打斗时才变、打完就变回去（变身英雄、魔法少女、机甲合体、爆发状态、超进化），写 "temp": true 并且不写 at，战斗里花气力变；这样的形态连着写两个时（变身 → 强化形态），第二个要先变成第一个、在同一场里再花一次气力才能变。temp 的形态如果在设定里是靠能量撑着、撑不住就解除的，再写 "drain": true：变了以后每回合耗气力，耗尽就变回去。这个世界对「形态」和「变」另有叫法时（变身、觉醒、合体），写在 words 的 form 和 evolve 里。`
+  return `"forms" 只在这个世界有人或伙伴会换一副样子、换了以后能力也跟着换时写（变身、觉醒、解放、合体、附身、进化），没有就不写这个字段。只升不降、越升越强的等级（修为、段位、军衔这类）不是形态，那些写在 ranks 里；形态是「变成另一个样子」，可以变回去，也可以只在打斗时才变。写成 {"谁": [形态, 形态]}：谁是 companions 里的名字，玩家自己写 "玩家"；开了收服（tame）的世界，也可以给 foes 里能收服的敌人写，名字和 foes 里的一样，它被收服以后照这条链成长。每条链 2 到 ${MAX_FORMS} 个形态，从最初的样子写到最后的：{"name": "形态名", "stage": "阶段名", "looks": "English description of how it looks", "effects": [{"id": "attack", "size": "medium"}], "skills": {"技能名": "strike"}, "at": {"level": 8, "item": "道具名", "bond": 2}, "temp": true}。第一个是最初的样子，不写 at 和 temp。looks 是这个形态长什么样的一句英文画图描述（体型、颜色、特征，不写名字），用来给它画图。stage 是阶段的叫法（二段变身、完全体），没有就不写。effects 是处在这个形态时的加成，写法同 perks，只算当前形态的，点数上限按第几个形态依次是 ${FORM_BUDGET.join('、')}。skills 是只有这个形态才会的 0 到 2 个技能，值是 kind。形态分两种，按这个世界里它是哪一种来写，不要都写成按等级永久变的：一种是变了就一直是（宠物进化、血脉觉醒、换了机体），写 at，at 是变成它要满足的条件，写了几样就都要满足：level 是等级，item 是背包里要有的道具，bond 是和玩家的羁绊档位（1 到 ${BOND_AT.length}，只有同伴能写），不写 at 也不写 temp 的只能由剧情给；另一种是只在打斗时才变、打完就变回去（变身英雄、魔法少女、机甲合体、爆发状态、超进化），写 "temp": true 并且不写 at，战斗里花气力变；这样的形态连着写两个时（变身 → 强化形态），第二个要先变成第一个、在同一场里再花一次气力才能变。temp 的形态如果在设定里是靠能量撑着、撑不住就解除的，再写 "drain": true：变了以后每回合耗气力，耗尽就变回去。这个世界对「形态」和「变」另有叫法时（变身、觉醒、合体），写在 words 的 form 和 evolve 里。`
 }
 
 /** 类型克制, 谁上场 and 收服, as a model that lays out a card's rules is asked for them: only for a world that has them. */

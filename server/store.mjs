@@ -246,6 +246,8 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
   // chatHeads: a chat file's summary, kept while the file stays as it was read (its time and size).
   const headCache = new Map()
   const presetFile = id => path.join(dirs.presets, `${checkId(id)}.json`)
+  // A preset's Tavern Helper scripts (server/preset-scripts.mjs), beside it rather than in it: the list reads every preset.
+  const presetScriptsFile = id => path.join(root, 'preset-scripts', `${checkId(id)}.json`)
   const locked = createLocks()
   // Told of each chat and card saved or deleted (http.mjs passes it on to the open pages: a phone's turn shows on the computer).
   const listeners = new Set()
@@ -445,6 +447,21 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
     },
     async deletePreset(id) {
       await rm(presetFile(id), { force: true })
+      await rm(presetScriptsFile(id), { force: true })
+    },
+    /** A preset's Tavern Helper scripts as imported ([{ id, name, content, enabled, button, info }]), [] for none. */
+    async getPresetScripts(id) {
+      const kept = await readJson(presetScriptsFile(id), null)
+      return Array.isArray(kept?.scripts) ? kept.scripts : []
+    },
+    async savePresetScripts(id, scripts) {
+      if (scripts.length) await writeJson(presetScriptsFile(id), { scripts })
+      else await rm(presetScriptsFile(id), { force: true })
+    },
+    /** When a preset's scripts file last changed ('' for none): what is read from it is kept until it does. */
+    async presetScriptsSign(id) {
+      const info = await stat(presetScriptsFile(id)).catch(() => null)
+      return info ? `${info.size}:${Math.round(info.mtimeMs)}` : ''
     },
     /** Regex scripts for every chat (regex.mjs, which cleans them before they are saved). */
     async getRegex() {

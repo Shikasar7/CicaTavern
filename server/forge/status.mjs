@@ -5,7 +5,7 @@
 // variables there. This app leaves that regex out (web/render.js withoutOwnStatus)
 // and runs no helper scripts.
 import YAML from 'yaml'
-import { SHOWS, STATUS_THEMES, cleanStatusSpec, paletteColors, phoneApps, rangeOf, skinClass } from '../../web/shared/status.js'
+import { SHOWS, STATUS_THEMES, cleanStatusSpec, paletteColors, phoneApps, planMap, rangeOf, skinClass } from '../../web/shared/status.js'
 import { msg } from '../i18n.mjs'
 import { skinnedFrame } from './status-frame.mjs'
 
@@ -35,6 +35,8 @@ export function statusSpecOf(plan) {
     effect: plan.status?.effect,
     phone: plan.status?.phone === true,
     layout: plan.status?.layout,
+    // 地图: the world's places, for a book of them shown as a map.
+    map: planMap(plan),
     fields: plan.tracking.variables.map(v => ({ path: v.path, label: v.label, show: v.show || defaultShow(v), ...rangeOf(v.range), ...(plan.status?.pages && v.page ? { page: v.page } : {}) })),
   })
 }
@@ -113,7 +115,7 @@ function draw(stat,page){
     else if(f.show==='rating'&&Number.isFinite(n)){const top=f.max||5,on=Math.max(0,Math.min(top,Math.round(n)));row.append(h('span','wide stars','★'.repeat(on)+'☆'.repeat(top-on)))}
     else if(f.show==='list'){const t=h('div','wide');const list=lines(value);if(!list.length)t.append(h('span','faint','—'));for(const x of list)t.append(h('div','line',x));row.append(t)}
     else if(f.show==='tags'||f.show==='stats'||f.show==='badge'){const t=h('span','tags wide');const list=tags(value);if(!list.length)t.append(h('span','faint','—'));for(const x of list)t.append(h('span','tag',x));row.append(t)}
-    else if(f.show==='table'){const t=h('div','wide');const rows=value&&typeof value==='object'?Object.entries(value).filter(([k])=>!k.startsWith('$')):[];if(!rows.length)t.append(h('span','faint','—'));for(const[k,x]of rows){const r=h('div','trow');r.append(h('b','',Array.isArray(value)?text(x):k));if(!Array.isArray(value))r.append(h('span','',text(x)));t.append(r)}row.append(t)}
+    else if(f.show==='table'||f.show==='map'||f.show==='forms'){const t=h('div','wide');const rows=value&&typeof value==='object'?Object.entries(value).filter(([k])=>!k.startsWith('$')):[];if(!rows.length)t.append(h('span','faint','—'));for(const[k,x]of rows){const r=h('div','trow');r.append(h('b','',Array.isArray(value)?text(x):k));if(!Array.isArray(value))r.append(h('span','',text(x)));t.append(r)}row.append(t)}
     else if(f.show==='flag'){const on=Boolean(value)&&value!=='false'&&value!=='否';row.append(h('span','wide '+(on?'on':'faint'),on?'✓':'—'))}
     else row.append(h('span','wide',text(value)||'—'));
     g.rows.push(row);
@@ -222,6 +224,8 @@ export function statusLines(spec) {
     spec.portrait || spec.scene ? `${msg`图片`}: ${[spec.portrait ? msg`立绘` : '', spec.scene ? msg`场景图` : ''].filter(Boolean).join(' · ')}` : '',
     spec.effect ? `${msg`动效`}: ${spec.effect}` : '',
     spec.phone ? msg`小手机` : '',
+    spec.layout ? `${msg`版式`}: ${spec.layout}` : '',
+    spec.map ? `${msg`地图`}: ${spec.map.places.map(place => (place.x === undefined ? place.name : `${place.name} (${place.x}, ${place.y})`)).join(' · ')}${spec.map.here ? ` · ${spec.map.here}` : ''}` : '',
   ].filter(Boolean)
   return [...head, ...spec.fields.map(field => `${field.label || field.path} (${field.path}): ${field.show}${field.page ? ` · ${msg`页`}: ${field.page}` : ''}`)].join('\n')
 }

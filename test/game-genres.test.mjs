@@ -207,7 +207,7 @@ test('the model hears of it only where it counts', () => {
   assert.match(told, /理智 40\/100（动摇）/)
   assert.doesNotMatch(rulesFor(), /理智/)
   assert.doesNotMatch(rulesFor({ sheet, bound: ['sanity'] }), /【理智\|轻】/, 'the card keeps it')
-  const said = { role: 'user', prompt: '<游戏规则>自己写的行动 战斗选项</游戏规则>' }
+  const said = { role: 'user', prompt: '<游戏规则>自己写的行动 战斗选项 |开局:</游戏规则>' }
   assert.match(gamePrompt({ sheet, pausing: true, fights: true, check: null }, [said]).reminder, /理智受到冲击没有/)
   assert.doesNotMatch(gamePrompt({ sheet, pausing: true, fights: true, check: null, bound: ['sanity'] }, [said]).reminder, /理智受到冲击/)
 })

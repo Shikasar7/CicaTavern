@@ -21,6 +21,18 @@ test('a frame that loads its page from elsewhere gets what Tavern Helper always 
   assert.match(libraryTags(`<script>fetch('https://cdn.jsdelivr.net/gh/a/b/ui.html').then(r => r.text())</script>`), /lodash/)
 })
 
+test("a script's own frame has jQuery and lodash, and the globals a bundled script takes: Vue, z, YAML", () => {
+  // Tavern Helper's template bundles name them only as globals (`module.exports = Vue`, `z.z.object`).
+  const bundled = 'var a={1(e){e.exports=Vue}};const s=z.object({});'
+  assert.doesNotMatch(libraryTags('<script>1</script>'), /jquery/, 'a message frame: only what it uses')
+  const tags = libraryTags(`<script type="module">${bundled}</script>`, true)
+  assert.match(tags, /jquery\.min\.js/)
+  assert.match(tags, /lodash/)
+  assert.match(tags, /vue\.global/)
+  assert.match(tags, /type="module">import \* as m from "[^"]+zod\/\+esm"; window\.z = m</, 'the whole module, set before the script runs')
+  assert.match(libraryTags('<script>YAML.parse(t)</script>'), /yaml\/\+esm"; window\.YAML/)
+})
+
 test('min-height in vh is pinned to the page viewport, other vh is left alone', () => {
   assert.equal(replaceViewportHeight('.a{min-height:100vh}'), '.a{min-height:var(--TH-viewport-height)}')
   assert.equal(replaceViewportHeight('<div style="min-height: 50vh">'), '<div style="min-height: calc(var(--TH-viewport-height) * 0.5)">')

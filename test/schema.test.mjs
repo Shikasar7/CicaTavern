@@ -48,18 +48,50 @@ test('a card without a schema loads nothing and gets its state back as it was', 
   assert.equal(schemaSandboxOpen(), false)
 })
 
-test('numbers are held to their range, bad ones replaced, missing fields filled, lists trimmed, unknown keys dropped', () => {
+test('numbers are held to their range, bad ones replaced, missing fields filled, lists trimmed, unknown keys inside dropped', () => {
   const { state: out, problem } = keepToSchema(SCHEMA, {
-    世界: { 冷却: 99 },
     主角: { 生命: 180, 背包: { 灵石: { 数量: 0 }, 丹药: { 数量: 2 } } },
     记录: { a: '1', b: '2', c: '3' },
-    多余: 1,
+    世界: { 冷却: 99, 多余: 1 },
   })
   assert.equal(problem, undefined)
   assert.deepEqual(out, { 世界: { 冷却: 15 }, 主角: { 生命: 100, 背包: { 丹药: { 数量: 2 } } }, 记录: { b: '2', c: '3' } })
   assert.deepEqual(keepToSchema(SCHEMA, {}).state, { 世界: { 冷却: 0 }, 主角: { 生命: 100, 背包: {} }, 记录: {} })
   assert.deepEqual(problems, [])
   assert.deepEqual(keepToSchema(SCHEMA, out).state, out, 'running it twice changes nothing')
+})
+
+test('variables at the top the rules do not name go round them as they are when kept: a lorebook attached beside the card', () => {
+  const extra = { 金手指: { 等级: 3, 技能: ['看破'] }, 积分: 120 }
+  const keep = Object.keys(extra)
+  // One the model got wrong (主角信息) is not kept: the rules drop it, as in SillyTavern.
+  const { state: out, problem } = keepToSchema(SCHEMA, { 主角: { 生命: 180 }, 主角信息: { 生命: 5 }, ...extra }, keep)
+  assert.equal(problem, undefined)
+  assert.deepEqual(out, { 世界: { 冷却: 0 }, 主角: { 生命: 100, 背包: {} }, 记录: {}, ...extra })
+  assert.deepEqual(keepToSchema(SCHEMA, { ...extra }).state, { 世界: { 冷却: 0 }, 主角: { 生命: 100, 背包: {} }, 记录: {} }, 'none kept unless asked')
+  // Strict rules, and rules wrapped at the top (prefault, a transform): the same.
+  for (const top of ['z.object({ 名字: z.string() }).strict()', "z.object({ 名字: z.string().prefault('无名') }).prefault({}).transform(v => ({ ...v, 名字: v.名字.trim() }))"]) {
+    closeSchema()
+    const source = `${IMPORT}
+export const Schema = ${top};
+$(() => { registerMvuSchema(Schema); });`
+    const kept = keepToSchema(source, { 名字: ' 阿青 ', ...extra }, keep)
+    assert.equal(kept.problem, undefined, top)
+    assert.deepEqual(kept.state, { 名字: top.includes('trim') ? '阿青' : ' 阿青 ', ...extra }, top)
+  }
+  // What the rules write at the top themselves stays theirs, though the chat had it from the turn before.
+  closeSchema()
+  const totals = `${IMPORT}
+export const Schema = z.object({ 物品: z.array(z.string()).prefault([]) }).transform(data => ({ ...data, 数: data.物品.length }));
+$(() => { registerMvuSchema(Schema); });`
+  assert.deepEqual(keepToSchema(totals, { 物品: ['剑', '盾'], 数: 1 }, ['数']).state, { 物品: ['剑', '盾'], 数: 2 })
+  // Rules that keep what they do not name anyway (passthrough) are left to do so.
+  closeSchema()
+  const loose = `${IMPORT}
+export const Schema = z.object({ 名字: z.string() }).passthrough();
+$(() => { registerMvuSchema(Schema); });`
+  assert.deepEqual(keepToSchema(loose, { 名字: 'a', ...extra }, keep).state, { 名字: 'a', ...extra })
+  assert.deepEqual(problems, [])
 })
 
 test('a state the schema rejects stays as it was, and says so', () => {

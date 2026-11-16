@@ -1,11 +1,19 @@
 // The pictures a card's status bar and 开场页 show (web/status.js artBlock, web/cover.js). They are the app's own, the
 // ones 配图与朗读 and 视觉小说 already keep for the card: each character's 立绘 and 表情 (or 人设图), the 场景 by
 // place, the card's picture, and the one picked for the cover in 修改角色卡. Nothing is drawn here; a card with none
-// of them shows none.
+// of them shows none. The rest of what a bar draws from is here too: a face for each person it names, the picture of the
+// card's map (the 场景 called 地图), and from the card's 游戏规则 what beats what and each companion's 形态.
+import { t } from '/i18n.js'
+import { sameName } from '/shared/status.js'
+import { formIndex } from '/status.js'
 import { faceOf } from '/shared/stage.js'
 import { latestPlace, matchScene } from '/shared/vn.js'
 import { moodPath } from '/shared/cover.js'
 import { getPath, unwrap } from '/shared/vars.js'
+
+// A word for the player in a card's variables, and what the 场景 that is the card's map is called.
+const PLAYER_WORD = /^(?:你|玩家|主角|我|you|player|protagonist|<user>|\{\{user\}\})$/i
+const MAP_NAME = /^(?:地图|世界地图|全图|大地图|map|world ?map)$/i
 
 const namesOf = entry => [entry.name, ...String(entry.aliases ?? '').split(/[,，、/|]/)].map(name => name.trim().toLowerCase()).filter(Boolean)
 
@@ -15,12 +23,15 @@ export function initCardArt({ api, onLoaded }) {
   const kept = new Map()
 
   async function load(cardId) {
-    const [media, drawn, places] = await Promise.all([
+    const [media, drawn, places, look] = await Promise.all([
       api(`/api/cards/${cardId}/media`).catch(() => null),
       api(`/api/cards/${cardId}/sprites`).catch(() => null),
       api(`/api/cards/${cardId}/scenes`).catch(() => null),
+      api(`/api/cards/${cardId}/look-pictures`).catch(() => null),
     ])
-    return { roster: media?.roster ?? [], sprites: drawn?.sprites ?? {}, expressions: drawn?.expressions ?? {}, scenes: places?.scenes ?? [] }
+    // 定制外观的图: { '--pic-…': address }, what web/status.js wear() fills the look's variables with.
+    const lookPictures = Object.fromEntries((look?.pictures ?? []).map(item => [item.token, item.url]))
+    return { roster: media?.roster ?? [], sprites: drawn?.sprites ?? {}, expressions: drawn?.expressions ?? {}, scenes: places?.scenes ?? [], lookPictures }
   }
 
   /**
@@ -78,17 +89,75 @@ export function initCardArt({ api, onLoaded }) {
     return scene?.file ? { src: `/api/scenes/${card.id}/${scene.file}`, place: where.place } : null
   }
 
-  /** The pictures on top of a bar under `node`, as the bar's layout asks (立绘, 场景图); null when there are none. */
-  function barArt(card, spec, chat, node) {
-    if (!card?.id || (!spec?.portrait && !spec?.scene)) return null
+  /** Whose chain of 形态 a name means: the companion's own name, one of its other names, or the name of one of its forms. */
+  function chainOf(book, name) {
+    const forms = book?.forms ?? {}
+    const owner = Object.keys(forms).find(key => key === name || (book.companions?.[key]?.keys ?? []).includes(name) || forms[key].some(form => form.name === name))
+      ?? Object.keys(forms).find(key => !key.startsWith('@') && sameName(key, name))
+    return owner ? { owner, chain: forms[owner] } : null
+  }
+
+  /** What a form asks for, in a few words. */
+  const needOf = form => [form.at?.level ? t`${form.at.level} 级` : '', form.at?.item ? t`有「${form.at.item}」` : '', form.at?.bond ? t`羁绊 ${form.at.bond} 档` : ''].filter(Boolean).join(t` · `)
+
+  /**
+   * What a bar draws from besides the pictures on top of it (web/status.js): a face for a name, the map, the types
+   * and the chains of 形态. `book`: the card's 游戏规则, when they are on.
+   */
+  function extras(card, data, chat, book) {
+    const userName = String(chat?.userName ?? '').trim().toLowerCase()
+    const entryOf = name => {
+      const wanted = String(name).trim().toLowerCase()
+      if (!wanted) return null
+      return data.roster.find(entry => namesOf(entry).includes(wanted))
+        ?? (PLAYER_WORD.test(wanted) || wanted === userName ? data.roster.find(entry => entry.player) : null)
+        ?? data.roster.find(entry => namesOf(entry).some(known => known.length > 1 && wanted.length > 1 && (wanted.includes(known) || known.includes(wanted))))
+        ?? null
+    }
+    const pictured = entry => {
+      if (!entry) return null
+      const file = data.sprites[entry.id]?.file
+      if (file) return { src: `/api/sprites/${card.id}/${file}`, zoom: true }
+      return entry.ref ? { src: `/api/cards/${card.id}/roster/${entry.id}/ref`, zoom: false } : null
+    }
+    // One who changes 形态 shows as the form its row says it is in, where that form has a picture of its own.
+    const face = (name, words = []) => {
+      const grown = chainOf(book, name)
+      const form = grown ? grown.chain[formIndex(grown.chain, [name, ...words])] : null
+      return (form && pictured(data.roster.find(entry => namesOf(entry).includes(form.name.toLowerCase())))) || pictured(entryOf(name)) || (grown ? pictured(entryOf(grown.owner)) : null)
+    }
+    const map = data.scenes.find(scene => scene.file && MAP_NAME.test(String(scene.name ?? '').trim()))
+    const beats = book?.types && Object.keys(book.types).length > 1 ? book.types : null
+    const typeOf = name => {
+      const grown = chainOf(book, name)
+      const owner = grown?.owner ?? Object.keys(book.companions ?? {}).find(key => key === name || (book.companions[key].keys ?? []).includes(name)) ?? ''
+      return grown?.chain.find(form => form.name === name)?.type ?? book.companions?.[owner]?.type ?? book.foes?.[name]?.type ?? (PLAYER_WORD.test(name) ? book.selfType : '') ?? ''
+    }
+    return {
+      face,
+      ...(Object.keys(data.lookPictures ?? {}).length ? { lookPictures: data.lookPictures } : {}),
+      ...(map ? { map: `/api/scenes/${card.id}/${map.file}` } : {}),
+      ...(beats ? { types: { beats, of: typeOf } } : {}),
+      ...(Object.keys(book?.forms ?? {}).length ? { chain: name => chainOf(book, name)?.chain.map(form => ({ name: form.name, stage: form.stage ?? '', need: needOf(form) })) ?? null } : {}),
+    }
+  }
+
+  /**
+   * What a bar under `node` draws from: the pictures on top of it as its layout asks (立绘, 场景图), and the faces, map,
+   * types and 形态 of `extras`. Null while the card's pictures are being asked for.
+   */
+  function barArt(card, spec, chat, node, book = null) {
+    if (!card?.id || !spec) return null
     const data = of(card.id)
     if (!data) return null
+    const more = extras(card, data, chat, book)
+    if (!spec.portrait && !spec.scene) return more
     const lead = spec.portrait ? leadOf(data, spec) : null
     const mood = lead ? unwrap(getPath(node?.state ?? {}, moodPath(spec, lead.name))) : ''
     const portrait = spec.portrait ? pictureOf(card, data, lead, typeof mood === 'string' ? faceOf(mood) : null) : null
     const scene = spec.scene ? sceneAt(card, data, chat, node) : null
-    if (!portrait && !scene) return null
-    return { portrait: portrait?.src ?? '', zoom: portrait?.zoom === true, scene: scene?.src ?? '', name: portrait ? lead?.name ?? card.name ?? '' : '', place: scene?.place ?? '' }
+    if (!portrait && !scene) return more
+    return { ...more, portrait: portrait?.src ?? '', zoom: portrait?.zoom === true, scene: scene?.src ?? '', name: portrait ? lead?.name ?? card.name ?? '' : '', place: scene?.place ?? '' }
   }
 
   /**
@@ -103,10 +172,17 @@ export function initCardArt({ api, onLoaded }) {
     const lead = data.roster.find(entry => !entry.player) ?? null
     const portrait = card.cover?.figure === false ? null : pictureOf(card, data, lead, null)
     const avatar = card.hasAvatar ? `/api/cards/${card.id}/avatar` : ''
-    if (!scene && !portrait) return null
+    const look = Object.keys(data.lookPictures ?? {}).length ? { lookPictures: data.lookPictures } : {}
+    if (!scene && !portrait) return look.lookPictures ? { backdrop: '', soft: false, portrait: '', zoom: false, ...look } : null
     // With no scene the card's picture is the backdrop, softened, and stands in front of it too.
-    return { backdrop: scene?.src ?? avatar, soft: !scene, portrait: portrait?.src ?? '', zoom: portrait?.zoom === true }
+    return { backdrop: scene?.src ?? avatar, soft: !scene, portrait: portrait?.src ?? '', zoom: portrait?.zoom === true, ...look }
   }
 
-  return { barArt, coverArt, forget }
+  /** A face for a name on this card (as a bar's: extras), for what is drawn outside a bar (行囊); null while the pictures are asked for. */
+  function faces(card, chat, book = null) {
+    const data = card?.id ? of(card.id) : null
+    return data ? extras(card, data, chat, book).face : null
+  }
+
+  return { barArt, coverArt, faces, forget }
 }

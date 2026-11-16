@@ -80,6 +80,6 @@ export function coverPage(el, { name, by = '', cover, palette = null, skin = nul
   }
   const wrap = el('div', { class: 'cover-wrap' }, box)
   if (palette) paint(wrap, paletteColors(palette))
-  if (skin?.css) wear(wrap, skin)
+  if (skin?.css) wear(wrap, skin, art?.lookPictures)
   return { node: wrap, mark, fold }
 }

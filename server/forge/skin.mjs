@@ -3,7 +3,7 @@
 // it writes is kept only as far as it may dress the bar (web/shared/status.js cleanSkinCss), and the page draws it
 // before the user sees it, to say what overflows or cannot be read (web/card-check.js); those go back here to be put
 // right. Nothing is in the card until the user saves the bar.
-import { EFFECTS, MAX_SKIN, cleanEffect, cleanPalette, cleanSkinCss, phoneApps, skinCut, statusGroups, statusPages, onPage } from '../../web/shared/status.js'
+import { EFFECTS, MAX_SKIN, cleanDecor, cleanEffect, cleanPalette, cleanSkinCss, phoneApps, skinCut, statusGroups, statusPages, onPage } from '../../web/shared/status.js'
 import { attr } from './blocks.mjs'
 import { looseJson, section } from './prompts.mjs'
 
@@ -88,14 +88,46 @@ const skinSystem = reply => `你给一张角色卡的状态栏设计外观。状
 
 动效：程序能在状态栏上画一层飘动的东西，从 ${EFFECTS.join('、')} 里挑一个最合这张卡气氛的写在 <effect> 里（依次是雨、雪、花瓣、火星、萤火、星光、浮尘）；都不合适就写 none。它很淡，在所有内容的下面，你的 CSS 不用管它，但 .status-bar 的背景不要用 z-index 压到负数。
 
-回答只写这五段，标签外不写别的：
+回答写这五段（下面另说的 <decor> 可以加在最后），标签外不写别的：
 <reply>对用户说的话，用${reply}，一两句：这套外观是什么感觉，取了这张卡的什么。</reply>
 <name>外观的名字，两到六个字</name>
 <palette>{"bg": "#101820", "ink": "#f2f2f2", "accent": "#e0a030"}</palette>
 <effect>rain</effect>
 <css>
 全部 CSS
-</css>`
+</css>
+<decor>{"corner": "英文的一句画图描述"}</decor>
+
+<decor> 是可选的第六段：这套外观想用、要另外画的装饰图，每种一句英文画图描述（材料、颜色、纹样，和外观的配色一致），只写用得上的几种，用不上就不写这一段。能画的四种：texture（能平铺的方形底纹）、corner（透明底的角花，花在左上角）、divider（透明底的横向分隔线，长条）、emblem（透明底的小徽记）。画好以后在 CSS 里用 var(--pic-decor-corner, none) 这样的变量；画好以前它是空的，所以一定要写 none 作后备。`
+
+// 外观的图: what each kind is, for the list the model is given.
+const DECOR_WORDS = { texture: '底纹，能平铺的方形', corner: '角花，透明底，花在左上角', divider: '分隔纹，透明底的横长条', emblem: '徽记，透明底的小方块' }
+
+/**
+ * The <pictures> block: the card's own pictures a look may name (look-pictures.mjs offered), and how to use them; ''
+ * with none. drawn: the decorations there are pictures for.
+ */
+export function picturesBlock(pictures = [], drawn = []) {
+  if (!pictures.length) return ''
+  const has = new Set(drawn)
+  const line = item => {
+    if (item.kind === 'decor') return `- ${item.token}：装饰图「${DECOR_WORDS[item.label] ?? item.label}」${has.has(item.token) ? '，已经画好' : '，还没画，画好以前是空的'}`
+    if (item.kind === 'scene') return `- ${item.token}：场景「${item.label}」，横图`
+    if (item.kind === 'sprite') return `- ${item.token}：「${item.label}」的立绘，竖图，背景透明`
+    if (item.kind === 'cover') return `- ${item.token}：开场页的图，横图`
+    return `- ${item.token}：这张卡的头像，竖图`
+  }
+  return `<pictures>
+这张卡有自己的图，外观可以用。写法是 var(--名字, none)，比如 background-image: linear-gradient(rgba(16, 24, 32, 0.82), rgba(16, 24, 32, 0.82)), var(--pic-scene-15d494, none)。程序只给下面这些名字填图，别的名字没有图，url() 也会被去掉：
+${pictures.map(line).join('\n')}
+怎么用：
+- 图只写在 background-image 里：状态栏、标题那一行、各块的底，或者 ::before、::after 的纹饰。
+- 有字的地方，图上面先压一层不透明度至少 0.75 的渐变或底色，字才看得清；整张场景图当底时尤其要压暗或压淡。
+- 立绘只放在不挡字的角上，用 opacity 调淡，background-size: contain，不要重复。
+- 每个 var() 都写上 none 作后备：去掉所有的图，这套外观也要好看。
+- 一套外观最多用四张图，不用也行。
+</pictures>`
+}
 
 const valueOf = row => {
   if (row.show === 'meter' || row.show === 'number') return row.words ?? String(row.value ?? '')
@@ -179,9 +211,10 @@ export const cleanProblems = problems => (Array.isArray(problems) ? problems : [
  * The request for a look.
  * @param spec - the bar it is for (what the editor shows now), cleaned
  * @param state - the variables as they start
- * @param options - { wish, previous: a look to work from ({ name, palette, css }), problems: what drawing it showed, reply }
+ * @param options - { wish, previous: a look to work from ({ name, palette, css }), problems: what drawing it showed, reply,
+ *   pictures: the card's own pictures it may name (look-pictures.mjs offered), drawn: the decorations already drawn }
  */
-export function skinRequest(card, spec, state, { wish = '', previous = null, problems = [], reply = '简体中文' } = {}) {
+export function skinRequest(card, spec, state, { wish = '', previous = null, problems = [], reply = '简体中文', pictures = [], drawn = [] } = {}) {
   const current = previous?.css
     ? `<current name="${attr(previous.name ?? '')}">\n<palette>${JSON.stringify(previous.palette ?? spec.palette ?? FIRST_COLORS)}</palette>\n<css>\n${previous.css}\n</css>\n</current>`
     : ''
@@ -192,7 +225,7 @@ export function skinRequest(card, spec, state, { wish = '', previous = null, pro
       : wish
         ? `用户想要的样子：${wish}`
         : '用户没有说想要什么样子，按这张卡的气氛定。'
-  const content = [cardLines(card), `<status_bar>\n这张卡的状态栏开局时是这样的（每行：短名 · 显示方式 · 现在的值）：\n${barOutline(spec, state)}\n</status_bar>`, card.cover ? COVER_PART : '', current, ask].filter(Boolean).join('\n\n')
+  const content = [cardLines(card), `<status_bar>\n这张卡的状态栏开局时是这样的（每行：短名 · 显示方式 · 现在的值）：\n${barOutline(spec, state)}\n</status_bar>`, card.cover ? COVER_PART : '', picturesBlock(pictures, drawn), current, ask].filter(Boolean).join('\n\n')
   return { system: skinSystem(reply), messages: [{ role: 'user', content }], maxTokens: SKIN_TOKENS, softCap: true }
 }
 
@@ -220,6 +253,8 @@ export function readSkin(text, { palette: fallback = null } = {}) {
     palette: cleanPalette(looseJson(section(source, 'palette'))) ?? cleanPalette(fallback) ?? FIRST_COLORS,
     // 动效 picked with the look ('' = none, or none said).
     effect: cleanEffect(section(source, 'effect').trim().toLowerCase()),
+    // 画装饰图: the decorations this look would have drawn, a prompt each.
+    ...(cleanDecor(looseJson(section(source, 'decor'))) ? { decor: cleanDecor(looseJson(section(source, 'decor'))) } : {}),
     css,
     cut,
   }

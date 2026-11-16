@@ -95,25 +95,25 @@ test('a companion who crosses a rank has a 大天赋 too: chosen for them, or th
 
 // ── 形态 ──────────────────────────────────────────────────────────────
 const FORMS = {
-  亚古兽: [
-    { name: '亚古兽', stage: '成长期', skills: { 小型火焰: 'strike' } },
-    { name: '暴龙兽', stage: '成熟期', at: { level: 3, bond: 1 }, effects: [{ id: 'attack', size: 'large' }, { id: 'life', size: 'medium' }], skills: { 超级火焰: 'sweep' } },
-    { name: '机械暴龙兽', stage: '完全体', at: { level: 9, item: '勇气徽章' }, temp: true, effects: [{ id: 'attack', size: 'large' }, { id: 'guard', size: 'large' }], skills: { 盖亚能量炮: 'finish' } },
+  火芽兽: [
+    { name: '火芽兽', stage: '成长期', skills: { 小型火焰: 'strike' } },
+    { name: '炎角兽', stage: '成熟期', at: { level: 3, bond: 1 }, effects: [{ id: 'attack', size: 'large' }, { id: 'life', size: 'medium' }], skills: { 超级火焰: 'sweep' } },
+    { name: '钢角兽', stage: '完全体', at: { level: 9, item: '勇气徽章' }, temp: true, effects: [{ id: 'attack', size: 'large' }, { id: 'guard', size: 'large' }], skills: { 盖亚能量炮: 'finish' } },
   ],
   玩家: [{ name: '凡人' }, { name: '假面形态', temp: true, effects: [{ id: 'attack', size: 'large' }, { id: 'guard', size: 'small' }], skills: { 骑士踢: 'finish' } }],
   只有一个: [{ name: '孤零零' }],
 }
-const MONSTERS = book({ forms: FORMS, companions: { 亚古兽: { attributes: { body: 14 }, skills: { 利爪: 'strike' } } }, start: { party: ['亚古兽'], things: [{ name: '勇气徽章', count: 1 }] } })
+const MONSTERS = book({ forms: FORMS, companions: { 火芽兽: { attributes: { body: 14 }, skills: { 利爪: 'strike' } } }, start: { party: ['火芽兽'], things: [{ name: '勇气徽章', count: 1 }] } })
 
 test('a card\'s 形态: chains of two and more, each form with as many points as it is far along, the player\'s under their own key', () => {
   const forms = cleanForms(FORMS)
-  assert.deepEqual(Object.keys(forms), ['亚古兽', PLAYER_FORMS])
-  assert.deepEqual(forms['亚古兽'][0], { name: '亚古兽', stage: '成长期', effects: [], skills: { 小型火焰: 'strike' } })
-  assert.deepEqual(forms['亚古兽'][1].at, { level: 3, bond: 1 })
-  assert.deepEqual(forms['亚古兽'][2].effects, [{ id: 'attack', size: 'large' }, { id: 'guard', size: 'large' }], 'six points for the third')
+  assert.deepEqual(Object.keys(forms), ['火芽兽', PLAYER_FORMS])
+  assert.deepEqual(forms['火芽兽'][0], { name: '火芽兽', stage: '成长期', effects: [], skills: { 小型火焰: 'strike' } })
+  assert.deepEqual(forms['火芽兽'][1].at, { level: 3, bond: 1 })
+  assert.deepEqual(forms['火芽兽'][2].effects, [{ id: 'attack', size: 'large' }, { id: 'guard', size: 'large' }], 'six points for the third')
   assert.deepEqual(cleanForms({ 甲: [{ name: '一' }, { name: '二', effects: [{ id: 'attack', size: 'large' }, { id: 'guard', size: 'large' }] }] })['甲'][1].effects, [{ id: 'attack', size: 'large' }, { id: 'guard', size: 'small' }], 'four for the second')
   assert.equal(forms[PLAYER_FORMS][1].temp, true)
-  assert.equal(forms['亚古兽'][0].temp, undefined)
+  assert.equal(forms['火芽兽'][0].temp, undefined)
   assert.deepEqual(FORM_BUDGET, [2, 4, 6, 8])
   assert.deepEqual(cleanRulebook(MONSTERS), MONSTERS)
   assert.equal(MONSTERS.skills['盖亚能量炮'], 'finish', 'a form\'s skills are the card\'s')
@@ -127,43 +127,43 @@ test('one starts in the first form with its skills; the next is come to when all
   const agu = start.party[0]
   assert.equal(formAt(agu, MONSTERS), 0)
   assert.deepEqual(agu.skills, ['利爪', '小型火焰'])
-  assert.deepEqual(formNeeds(MONSTERS.forms['亚古兽'][1], agu, start.things), [{ kind: 'level', need: 3, met: false }, { kind: 'bond', need: 1, met: false }])
+  assert.deepEqual(formNeeds(MONSTERS.forms['火芽兽'][1], agu, start.things), [{ kind: 'level', need: 3, met: false }, { kind: 'bond', need: 1, met: false }])
   assert.equal(formReady(agu, MONSTERS, start.things), null)
-  assert.deepEqual(applyOps(start, MONSTERS, cleanOps([{ op: 'form', who: '亚古兽' }])).dropped.length, 1, 'not yet')
+  assert.deepEqual(applyOps(start, MONSTERS, cleanOps([{ op: 'form', who: '火芽兽' }])).dropped.length, 1, 'not yet')
   const ready = { ...start, party: [{ ...agu, level: 3, bond: 3 }] }
-  assert.equal(formReady(ready.party[0], MONSTERS, ready.things).name, '暴龙兽')
-  const done = applyOps(ready, MONSTERS, cleanOps([{ op: 'form', who: '亚古兽' }]))
+  assert.equal(formReady(ready.party[0], MONSTERS, ready.things).name, '炎角兽')
+  const done = applyOps(ready, MONSTERS, cleanOps([{ op: 'form', who: '火芽兽' }]))
   const grey = done.sheet.party[0]
-  assert.equal(grey.form, '暴龙兽')
-  assert.equal(grey.name, '亚古兽', 'who they are stays')
+  assert.equal(grey.form, '炎角兽')
+  assert.equal(grey.name, '火芽兽', 'who they are stays')
   assert.deepEqual(grey.skills, ['利爪', '超级火焰'], 'the skill of the form left goes, the new one comes')
-  assert.match(done.lines[0], /亚古兽进化成了「暴龙兽」（成熟期）/)
+  assert.match(done.lines[0], /火芽兽进化成了「炎角兽」（成熟期）/)
   assert.equal(bonusOf(grey, MONSTERS).attack, bonusOf({ ...grey, form: undefined }, MONSTERS).attack + 0.1)
   assert.ok(grey.maxLife > ready.party[0].maxLife, 'more life at once')
   assert.equal(formOf(grey, MONSTERS).stage, '成熟期')
   // The third asks for a level and a thing in the bag.
-  assert.deepEqual(formNeeds(MONSTERS.forms['亚古兽'][2], { ...grey, level: 9 }, start.things).map(need => need.met), [true, true])
+  assert.deepEqual(formNeeds(MONSTERS.forms['火芽兽'][2], { ...grey, level: 9 }, start.things).map(need => need.met), [true, true])
   assert.equal(formReady({ ...grey, level: 9 }, MONSTERS, []), null, 'not without the thing')
   // One with no conditions is the story's alone to give.
   assert.equal(formReady(start, MONSTERS, start.things), null)
 })
 
 test('【进化】 puts one of the party into a form of their chain whatever it asks, and back to the first', () => {
-  assert.deepEqual(replyMarks('他变了。【进化|亚古兽|暴龙兽】'), [{ kind: 'form', who: '亚古兽', name: '暴龙兽' }])
+  assert.deepEqual(replyMarks('他变了。【进化|火芽兽|炎角兽】'), [{ kind: 'form', who: '火芽兽', name: '炎角兽' }])
   assert.deepEqual(replyMarks('【进化|假面形态】'), [{ kind: 'form', name: '假面形态' }])
   const start = at(MONSTERS, 1)
-  const after = settleReply(start, replyMarks('【进化|亚古兽|暴龙兽】'), { book: MONSTERS, ranks: RANKS })
-  assert.equal(after.party[0].form, '暴龙兽')
+  const after = settleReply(start, replyMarks('【进化|火芽兽|炎角兽】'), { book: MONSTERS, ranks: RANKS })
+  assert.equal(after.party[0].form, '炎角兽')
   assert.deepEqual(after.party[0].skills, ['利爪', '超级火焰'])
-  const unnamed = settleReply(start, replyMarks('【进化|机械暴龙兽】'), { book: MONSTERS, ranks: RANKS })
-  assert.equal(unnamed.party[0].form, '机械暴龙兽', 'whoever has a form by that name')
-  const back = settleReply(after, replyMarks('【进化|亚古兽|亚古兽】'), { book: MONSTERS, ranks: RANKS })
+  const unnamed = settleReply(start, replyMarks('【进化|钢角兽】'), { book: MONSTERS, ranks: RANKS })
+  assert.equal(unnamed.party[0].form, '钢角兽', 'whoever has a form by that name')
+  const back = settleReply(after, replyMarks('【进化|火芽兽|火芽兽】'), { book: MONSTERS, ranks: RANKS })
   assert.equal(back.party[0].form, undefined)
   assert.deepEqual(back.party[0].skills, ['利爪', '小型火焰'])
   const hero = settleReply(start, replyMarks('【进化|假面形态】'), { book: MONSTERS, ranks: RANKS })
   assert.equal(hero.form, '假面形态')
   assert.deepEqual(hero.skills, ['强击', '横扫', '骑士踢'])
-  assert.equal(settleReply(start, replyMarks('【进化|亚古兽|没有的】'), { book: MONSTERS, ranks: RANKS }).party[0].form, undefined)
+  assert.equal(settleReply(start, replyMarks('【进化|火芽兽|没有的】'), { book: MONSTERS, ranks: RANKS }).party[0].form, undefined)
 })
 
 test('临时进化: the next form, where the card lets it, is taken for one fight at a cost, and the sheet is as it was after', () => {
@@ -228,7 +228,7 @@ test('a card with no 形态 sets a fight up as it did, and one that does not cou
   const plain = book()
   const setup = encounterSetup(at(plain, 1), plain, { foes: [{ name: '贼', count: 1, tier: 'normal' }] }, 'c', 'n')
   assert.equal(setup.player.shift, undefined)
-  const off = cleanRulebook({ level: 'full', forms: FORMS, companions: MONSTERS.companions, start: { party: ['亚古兽'] } })
+  const off = cleanRulebook({ level: 'full', forms: FORMS, companions: MONSTERS.companions, start: { party: ['火芽兽'] } })
   assert.equal(formOf(at(off, 1).party[0], off), null)
   assert.deepEqual(at(off, 1).party[0].skills, ['利爪'])
   assert.equal(formsTold(at(off, 1), off), null)
@@ -236,23 +236,23 @@ test('a card with no 形态 sets a fight up as it did, and one that does not cou
 
 test('the models are told: who writes a card\'s rules is asked for 形态, who tells the story knows the forms and the mark', () => {
   assert.match(formsAsk(), /"forms"/)
-  assert.ok(suggestRequest({ description: '数码兽', book: { entries: [] } }, []).messages[0].content.includes(formsAsk()))
+  assert.ok(suggestRequest({ description: '电子兽', book: { entries: [] } }, []).messages[0].content.includes(formsAsk()))
   const kit = cleanKit({ forms: FORMS, perks: TEACH })
-  assert.deepEqual(Object.keys(kitBook(kit).forms), ['亚古兽', PLAYER_FORMS])
+  assert.deepEqual(Object.keys(kitBook(kit).forms), ['火芽兽', PLAYER_FORMS])
   assert.equal(cleanKit({}).forms, undefined)
   const sheet = at(MONSTERS, 1)
   const told = formsTold(sheet, MONSTERS)
-  assert.deepEqual(told.now, ['玩家现在是凡人', '亚古兽现在是亚古兽（成长期）'])
+  assert.deepEqual(told.now, ['玩家现在是凡人', '火芽兽现在是火芽兽（成长期）'])
   assert.deepEqual(told.story, [], 'a form for a fight only is not for the story to give')
   const lone = book({ forms: { 玩家: [{ name: '凡人' }, { name: '觉醒者', effects: [{ id: 'attack', size: 'medium' }] }] } })
   assert.deepEqual(formsTold(at(lone, 1), lone).story, ['玩家的觉醒者'])
   assert.match(gamePrompt({ sheet: at(lone, 1), ranks: RANKS, pausing: true, fights: true, forms: formsTold(at(lone, 1), lone) }, []).text, /玩家的觉醒者没有条件可达，只能由你在故事里给/)
   const prompt = gamePrompt({ sheet, ranks: RANKS, pausing: true, fights: true, forms: told, words: { evolve: '变身' } }, []).text
   assert.match(prompt, /【进化\|谁\|形态名】/)
-  assert.match(prompt, /亚古兽：亚古兽 → 暴龙兽 → 机械暴龙兽/)
+  assert.match(prompt, /火芽兽：火芽兽 → 炎角兽 → 钢角兽/)
   assert.match(prompt, /确实变身了/)
-  assert.match(prompt, /形态：玩家现在是凡人、亚古兽现在是亚古兽（成长期）/)
+  assert.match(prompt, /形态：玩家现在是凡人、火芽兽现在是火芽兽（成长期）/)
   assert.doesNotMatch(gamePrompt({ sheet, ranks: RANKS, pausing: true, fights: true }, []).text, /进化/)
-  const again = gamePrompt({ sheet, ranks: RANKS, pausing: true, fights: true, forms: told, battle: { over: 'won', foes: '怪人', downed: '怪人', rounds: 3, life: 80, maxLife: 100, used: {}, skills: [], shifted: [{ form: '假面形态' }, { who: '亚古兽', form: '暴龙兽' }] } }, []).text
-  assert.match(again, /玩家临时变成了假面形态，亚古兽临时变成了暴龙兽/)
+  const again = gamePrompt({ sheet, ranks: RANKS, pausing: true, fights: true, forms: told, battle: { over: 'won', foes: '怪人', downed: '怪人', rounds: 3, life: 80, maxLife: 100, used: {}, skills: [], shifted: [{ form: '假面形态' }, { who: '火芽兽', form: '炎角兽' }] } }, []).text
+  assert.match(again, /玩家临时变成了假面形态，火芽兽临时变成了炎角兽/)
 })

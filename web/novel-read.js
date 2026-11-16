@@ -32,23 +32,25 @@ export function novelPick(el, guard, pick) {
 /**
  * How far a novel is: its name and size, what was noted, how many stretches to read and what that comes to, and the
  * buttons that read on, stop and drop it.
- * @param on - { limit(n), run(), runAll(), stop(), drop(), model?(ref) }
+ * @param on - { limit(n), parallel(n), run(), runAll(), stop(), drop(), model?(ref) }
  * @param models - [{ id, label }] to read with, for a place that lets one be picked ('' is the default model)
  */
 export function novelTop(el, novel, on, { models = null } = {}) {
   const { job, estimate, stage } = novel
   const busy = Boolean(job)
   const limit = el('input', { type: 'number', min: 1, max: novel.stretches.length, value: novel.limit, disabled: busy, 'aria-label': t`读前几段`, onchange: () => on.limit(Number(limit.value) || 0) })
-  const costs = part => (part.cost == null ? '' : t`，大约 $${part.cost.toFixed(2)}`)
+  // Output as a range: a model that thinks a lot writes about twice as much (server/forge/novel.mjs novelEstimate).
+  const costs = part => (part.cost == null ? '' : t`，大约 $${part.cost.toFixed(2)}–$${(part.costMost ?? part.cost).toFixed(2)}`)
+  const outputs = part => (part.outputMost ? `${count(part.output)}–${count(part.outputMost)}` : count(part.output))
   // The part asked for is read and there is more of the text: it can go on to the end.
   const more = stage === 'ready' && novel.rest?.stretches > 0 ? novel.rest : null
   const left = !estimate.ready
     ? stage === 'ready' && !more ? '' : t`还没有可用的模型：先在「设置 → 模型」里添加供应商，选一个默认模型。`
     : stage === 'reading'
-      ? t`还要读 ${estimate.stretches} 段：发给 ${estimate.model}，大约 ${count(estimate.input)} 输入、${count(estimate.output)} 输出 token${costs(estimate)}。读完后合并同名的条目还要再花一两成。思考多的模型会更高。`
+      ? t`还要读 ${estimate.stretches} 段：发给 ${estimate.model}，大约 ${count(estimate.input)} 输入、${outputs(estimate)} 输出 token${costs(estimate)}。输出多少看模型想得多不多，思考多的接近上限；读完后合并同名的条目还要再花一两成。`
       : stage === 'merging'
         ? t`都读完了，还有 ${novel.toMerge} 批同名的笔记要让模型合成一条。`
-        : more ? t`后面还有 ${more.stretches} 段没读：都读完大约 ${count(more.input)} 输入、${count(more.output)} 输出 token${costs(more)}。` : ''
+        : more ? t`后面还有 ${more.stretches} 段没读：都读完大约 ${count(more.input)} 输入、${outputs(more)} 输出 token${costs(more)}。` : ''
   const found = Object.entries(novel.counts).filter(([, n]) => n).map(([type, n]) => t`${NOVEL_TYPES[type] ?? type} ${n}`).join(t` · `)
   // Reading is many requests: the model for it can be a cheaper one than the card is written with.
   const picker = models && on.model && stage !== 'ready' && !busy
@@ -61,12 +63,21 @@ export function novelTop(el, novel, on, { models = null } = {}) {
         el('span', { text: t`（读书的请求多，可以挑个便宜的）` }),
       ])
     : null
+  // Stretches read at once: faster, at the price of more requests a minute than some providers let through.
+  const width = !busy && (stage !== 'ready' || more)
+    ? el('label', { class: 'book-novel-limit' }, [
+        el('span', { text: t`同时读` }),
+        el('select', { 'aria-label': t`同时读几段`, onchange: event => on.parallel(Number(event.target.value)) }, [...new Set([1, 2, 3, 4, 6, 8, novel.parallel])].sort((a, b) => a - b).map(n => el('option', { value: n, text: String(n), selected: novel.parallel === n }))),
+        el('span', { text: t`段（越多读得越快；供应商报限流或请求太多，就调小）` }),
+      ])
+    : null
   return el('div', { class: 'book-novel' }, [
     el('p', {}, [el('b', { text: novel.name }), el('span', { class: 'hint', text: t` · ${count(novel.chars)} 字 · 切成 ${novel.stretches.length} 段` })]),
     el('p', { class: 'hint', text: t`已经读了 ${novel.done} 段${found ? t`，记下：${found}` : ''}。` }),
     novel.failed.length ? el('p', { class: 'ce-outcome warn', text: t`第 ${novel.failed.join(t`、`)} 段模型没有按格式回答，跳过了；里面的内容没有记下。` }) : null,
     stage === 'reading' && !busy ? el('label', { class: 'book-novel-limit' }, [el('span', { text: t`只读前` }), limit, el('span', { text: t`段（共 ${novel.stretches.length} 段；想先试试，填个小的数）` })]) : null,
     picker,
+    width,
     left ? el('p', { class: 'hint', text: left }) : null,
     novel.error && !busy ? el('p', { class: 'ce-outcome warn', text: novel.error }) : null,
     el('div', { class: 'row book-novel-actions' }, [

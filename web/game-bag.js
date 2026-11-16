@@ -15,7 +15,7 @@ const asked = new Set()
  * @param deps - { el, api, toast, chat, tab (the page to open on), book, play (web/game-play.js), sound (web/game-sound.js), queue () → the turn's
  *   operations, addOp (op), fill (text), onBook (book), onMusic () (the tracks changed), onClose () }
  */
-export function openBag({ el, api, toast, chat, tab: firstTab = 'self', book: firstBook, play, sound, queue, addOp, fill, onBook, onMusic, onClose }) {
+export function openBag({ el, api, toast, chat, tab: firstTab = 'self', book: firstBook, play, sound, queue, addOp, fill, onBook, onMusic, onClose, faceFor = null }) {
   let book = firstBook
   let tab = firstTab
   const body = el('div', { class: 'bag-body' })
@@ -93,7 +93,7 @@ export function openBag({ el, api, toast, chat, tab: firstTab = 'self', book: fi
       now.skills.length ? el('h3', { text: said('skill', t`技能`) }) : null,
       ...(now.skills.length && grows() ? growth.skillRows(el, now, book) : [now.skills.length ? el('p', { text: now.skills.join(t`、`) }) : null]),
       ...growth.perkSection({ el, who: now, book, seed: chat.id, word: said('perk', t`天赋`), act: take }),
-      ...growth.formSection({ el, who: now, sheet: now, book, act }),
+      ...growth.formSection({ el, who: now, sheet: now, book, act, face: faceFor }),
       ...growth.gearSection({ el, who: now, sheet: now, book, act }),
     ]
   }
@@ -132,7 +132,7 @@ export function openBag({ el, api, toast, chat, tab: firstTab = 'self', book: fi
         ]))),
         el('p', { class: 'hint', text: [member.skills.length ? t`${said('skill', t`技能`)}：${member.skills.map(name => (grows() ? growth.skillShown(name, member.mastery?.[name]) : name)).join(t`、`)}` : '', member.points ? t`还有 ${member.points} 点可加` : '', `${said('experience', t`经验`)} ${member.experience ?? 0} / ${play.levelNeeds(member.level, book)}`].filter(Boolean).join(' · ') }),
         growth.bondLine(member, book) ? el('p', { class: 'hint', text: growth.bondLine(member, book) }) : null,
-        ...growth.formSection({ el, who: member, sheet: sheet(), book, act, name: member.name }),
+        ...growth.formSection({ el, who: member, sheet: sheet(), book, act, name: member.name, face: faceFor }),
         ...growth.gearSection({ el, who: member, sheet: sheet(), book, act, name: member.name }),
         // Their 天赋: chosen for them unless the card leaves it to the player, who then chooses here.
         ...(growth.perksOn(book) && ((member.perks ?? []).length || growth.perksOwed(member, book) || growth.bigsOwed(member, book)) ? growth.perkSection({ el, who: member, book, seed: chat.id, word: said('perk', t`天赋`), act: take, name: member.name }) : []),

@@ -8,7 +8,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { createApp } from '../server/http.mjs'
-import { bookSource, digestMaterial, digestRequest, extractRequest, gather, mergeBatches, mergeRequest, novelBook, novelEstimate, novelMaterial, readDigest, readExtract, readMerge, rosterText, splitNovel } from '../server/forge/novel.mjs'
+import { bookSource, digestMaterial, digestRequest, extractRequest, gather, MAX_NOVEL, mergeBatches, mergeRequest, novelBook, novelEstimate, novelMaterial, readDigest, readExtract, readMerge, rosterText, splitNovel } from '../server/forge/novel.mjs'
 
 const chapter = (n, body = '她走进雨里，没有回头。\n') => `第${n}章 雨夜之${n}\n${body.repeat(380)}`
 const NOVEL = [1, 2, 3, 4, 5, 6].map(n => chapter(n)).join('\n')
@@ -186,11 +186,43 @@ test('a novel is cut and kept without a request, read as far as asked, taken up 
 test('a stretch that will not read is asked for once more, then left out and named; the rest goes on', async t => {
   const { call, seen, settled } = await tavern(t, (json, n) => (n <= 2 ? '我读不了。' : '[{"type": "地点", "name": "便利店", "content": "街角那家。"}]'))
   await call('/api/novel', { method: 'POST', body: { name: '雨宿.txt', text: NOVEL } })
+  // One at a time, so that the first two answers are the first stretch's.
+  assert.equal((await call('/api/novel', { method: 'PUT', body: { parallel: 1 } })).body.novel.parallel, 1)
   await call('/api/novel/run', { method: 'POST' })
   const read = await settled()
   assert.deepEqual([read.done, read.failed, read.stage], [3, [1], 'ready'])
   assert.equal(seen.length, 5, 'the first stretch twice, the other two, and the place noted twice put together')
   assert.deepEqual(read.entries.map(entry => [entry.name, entry.parts]), [['便利店', 2]])
+})
+
+test('stretches are read several at once, their notes still gathered in the book order', async t => {
+  const stretchOf = json => Number(/第(\d)章/.exec(json.messages.at(-1).content.split('<text')[1] ?? '')?.[1] ?? 0)
+  let open = 0
+  let most = 0
+  const { call, seen, settled } = await tavern(t, async json => {
+    if (json.messages[0].content.includes('整理世界书条目')) return '[{"name": "林小雨", "content": "合成的一条。"}]'
+    open += 1
+    most = Math.max(most, open)
+    const at = stretchOf(json)
+    // The second stretch answers after the third.
+    await new Promise(resolve => setTimeout(resolve, at === 3 ? 150 : 20))
+    open -= 1
+    return `[{"type": "人物", "name": "林小雨", "content": "第${at}章的笔记。"}]`
+  })
+  await call('/api/novel', { method: 'POST', body: { name: '雨宿.txt', text: NOVEL } })
+  assert.equal((await call('/api/novel')).body.novel.parallel, 3, 'three at once unless picked')
+  assert.equal((await call('/api/novel', { method: 'PUT', body: { parallel: 99 } })).body.novel.parallel, 8)
+  await call('/api/novel/run', { method: 'POST' })
+  const read = await settled()
+  assert.deepEqual([read.done, read.failed, read.stage, read.error], [3, [], 'ready', ''])
+  // The first alone, for its names; then the other two at once, each with them.
+  assert.equal(most, 2, 'the two after the first were out at once')
+  const reads = seen.filter(json => !json.messages[0].content.includes('整理世界书条目'))
+  assert.equal(reads[0].messages.at(-1).content.includes('<known>'), false)
+  assert.ok(reads.slice(1).every(json => json.messages.at(-1).content.includes('<known>\n林小雨\n</known>')))
+  const merge = seen.find(json => json.messages[0].content.includes('整理世界书条目'))
+  assert.match(merge.messages.at(-1).content, /【1】第1章的笔记。\n【2】第3章的笔记。\n【3】第5章的笔记。/, 'the slow second stretch still comes before the third')
+  assert.equal(read.entries[0].content, '合成的一条。')
 })
 
 // ─── 从小说开始 (plans/18): the 梗概 and 名录 a card is made from ───────────────────────────────────
@@ -329,6 +361,21 @@ test('a note goes to the one it names before one that shares an alias; an alias 
   const stretches = splitNovel(NOVEL)
   const estimate = novelEstimate(NOVEL, stretches)
   assert.ok(estimate.output > estimate.input * 0.5, 'a dense novel writes back about as much as it reads')
+  assert.ok(estimate.outputMost >= estimate.output * 2, 'a model that thinks a lot: about twice')
+  // Each stretch carries what it comes to: the estimate needs no text; one kept from before that does not, still reads it.
+  assert.ok(stretches.every(stretch => stretch.tokens > 0))
+  assert.deepEqual(novelEstimate('', stretches), estimate)
+  assert.deepEqual(novelEstimate(NOVEL, stretches.map(({ tokens, ...stretch }) => stretch)), estimate)
+})
+
+test('the longest novel read, in chapters a little over half a stretch, cuts into fewer stretches than are read', () => {
+  // Two such chapters do not fit in one stretch, so each is one: the most stretches 5 000 000 characters can make.
+  const chapter = i => `第${i + 1}章 雨\n${'雨一直下。\n'.repeat(1000)}`
+  const text = Array.from({ length: Math.floor(MAX_NOVEL / chapter(0).length) }, (_, i) => chapter(i)).join('')
+  assert.ok(text.length <= MAX_NOVEL)
+  const stretches = splitNovel(text)
+  assert.ok(stretches.length > 700 && stretches.length < 1000, String(stretches.length))
+  assert.equal(stretches.at(-1).to, text.length, 'the end of the book is read too')
 })
 
 test('what anyone may be called is no alias of one person; a name is never dropped for it', async () => {

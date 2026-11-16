@@ -72,7 +72,7 @@ test('stored scripts: each gets an id of its own; one without a pattern is dropp
   assert.throws(() => cleanScripts('nope'), /格式/)
   assert.throws(() => cleanScripts(Array.from({ length: 201 }, (_, i) => script(`s${i}`))), /最多/)
   // A beautifier's page of HTML (a preset's 行动选项美化 is 41 839 characters) is kept; only a runaway one is refused.
-  const page = `<div class="fox">${'<span>狐</span>'.repeat(3000)}</div>`
+  const page = `<div class="panel">${'<span>雾</span>'.repeat(3000)}</div>`
   assert.equal(cleanScripts([script('美化', { replaceString: page })])[0].replaceString.length, page.length)
   assert.throws(() => cleanScripts([script('太大', { replaceString: 'x'.repeat(2_000_001) })]), /太长了/)
 })
@@ -125,20 +125,20 @@ test('global scripts, imports, a card\'s switches; the built-in preset\'s stays 
 
 test('a script does not take a tag the thinking only names for the block (no match runs out of thinking or a fence)', async () => {
   const { applyScripts: guarded } = await import('../server/regex-guard.mjs')
-  const reply = '<think_fox~>\n结尾输出<choices>及<fox_selc>、<fox_tip>。\n</think_fox~>\n<content>\n寒风卷着碎雪。\n</content>\n<fox_selc>\nA. 拔刀\n</fox_selc>\n<fox_tip>\n唔～\n</fox_tip>'
+  const reply = '<think_mist~>\n结尾输出<choices>及<opt_sel>、<side_tip>。\n</think_mist~>\n<content>\n寒风卷着碎雪。\n</content>\n<opt_sel>\nA. 拔刀\n</opt_sel>\n<side_tip>\n唔～\n</side_tip>'
   const scripts = normalizeScripts([
-    { findRegex: '<fox_tip>[\\s\\S]*?<\\/fox_tip>', replaceString: '', placement: [PLACEMENT.AI_OUTPUT] },
+    { findRegex: '<side_tip>[\\s\\S]*?<\\/side_tip>', replaceString: '', placement: [PLACEMENT.AI_OUTPUT] },
     // A page made of the thinking (its own text inside, in a fence), then one made of the choices.
-    { findRegex: '/([\\s\\S]*)<\\/(think_?fox~?)>/', replaceString: '```\n<div>$1</div>\n```', placement: [PLACEMENT.AI_OUTPUT] },
-    { findRegex: '/<fox_selc>[\\s\\S]*?<\\/fox_selc>/g', replaceString: '[选项]', placement: [PLACEMENT.AI_OUTPUT] },
+    { findRegex: '/([\\s\\S]*)<\\/(think_?mist~?)>/', replaceString: '```\n<div>$1</div>\n```', placement: [PLACEMENT.AI_OUTPUT] },
+    { findRegex: '/<opt_sel>[\\s\\S]*?<\\/opt_sel>/g', replaceString: '[选项]', placement: [PLACEMENT.AI_OUTPUT] },
   ])
   for (const apply of [applyScripts, guarded]) {
     const out = apply(reply, scripts, { placement: PLACEMENT.AI_OUTPUT, target: 'display' })
     assert.ok(out.includes('寒风卷着碎雪。'), out)
-    assert.ok(out.includes('<div><think_fox~>\n结尾输出<choices>及<fox_selc>、<fox_tip>。\n</div>'), 'the thinking became its page, mentions and all')
+    assert.ok(out.includes('<div><think_mist~>\n结尾输出<choices>及<opt_sel>、<side_tip>。\n</div>'), 'the thinking became its page, mentions and all')
     assert.ok(out.includes('[选项]') && !out.includes('A. 拔刀') && !out.includes('唔～'), 'the real blocks still went')
   }
   // A match that starts where the thinking starts (hiding it) or stays inside it is as before.
-  const hide = normalizeScripts([{ findRegex: '/<think_fox~>[\\s\\S]*?<\\/think_fox~>\\s*/g', replaceString: '', placement: [PLACEMENT.AI_OUTPUT] }])
+  const hide = normalizeScripts([{ findRegex: '/<think_mist~>[\\s\\S]*?<\\/think_mist~>\\s*/g', replaceString: '', placement: [PLACEMENT.AI_OUTPUT] }])
   assert.equal(applyScripts(reply, hide, { placement: PLACEMENT.AI_OUTPUT, target: 'display' }).startsWith('<content>'), true)
 })

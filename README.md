@@ -150,14 +150,17 @@ If you can't quite say what you want, the creator guides you round by round:
 
 <br clear="right">
 
-## Latest changes [2.6.0]
+## Latest changes [2.6.1]
 
-<p align="center"><img src="web/whatsnew/2.6.0-growth.webp" alt="Growth in the game rules: a level-up with a breakthrough, the Growth page of the Pack, and a pick of three talents with a bigger one at a breakthrough" width="720"></p>
+<p align="center"><img src="web/whatsnew/2.6.1-statusart.webp" alt="Pictures on the status bar: small portraits before names, a book of places drawn as a map, a type-matchup wheel and a companion's form chain" width="720"></p>
 
+- **2.6.1: pictures on the status bar**: small portraits before names; a book of places drawn as a map (where you've been, where you can't go, what's unexplored, where you are), a Type chart and companions' Form chain.
+- **2.6.1: scripts in presets run too**: the floating balls, preset helpers and other Tavern Helper scripts an imported preset carries run in chats using it, just like a card's own scripts, with permissions asked once per preset.
+- **2.6.1: and also**: a Custom look can use the card's own pictures and drawn Decorations; Get the pictures ready also draws forms, a world map and character-creation options; the visual novel's battle screen has new enemy plates, and taming is a card with a dice roll; reading a novel runs several parts at once, two to three times faster; fixed variables from an extra lorebook being dropped by a card's variable rules, and game rules mistaking a preset's choices for checkpoints.
 - **2.6.0: Growth in the game rules**: the rules window has Growth (Full rules), off, Standard or Rich: health and stamina caps rise with your level and skills grow with use; a pick of three Talents every 3 levels and a bigger one at each breakthrough; a weapon, armour and trinket for you and each companion, Bonds from fights won together, Practice from passed checks, and Forms that evolve; the Pack has a Growth page. Cards that already used Full rules keep Growth off, with the same numbers.
 - **2.6.0: skill effects, type matchups and taming**: new skill kinds (execute, group heal, shield, rally, taunt) and extra effects such as damage over time, stun and drain; elites and bosses with move effects; types and what beats what, and taming enemies after a win; Leave it to the story for fights you can neither win nor escape, Settle it now for much weaker foes; Genre packs show what they change before you pick.
 - **2.6.0: layouts for the status bar and the cover page**: Card, Side rail and Scroll for the status bar, Title page and Painted scroll for the cover page, in any combination with the themes. The card creator gives the status bar and the front a step of their own.
-- **2.6.0: Start from a novel**: the card creator reads a whole novel (up to 3 million characters), writes a synopsis and makes a card from it, and can stop at any point in the book so later people and events stay out of the card.
+- **2.6.0: Start from a novel**: the card creator reads a whole novel (up to 5 million characters), writes a synopsis and makes a card from it, and can stop at any point in the book so later people and events stay out of the card.
 - **2.6.0: ask the assistant how things work**: in Direct chat the assistant answers questions about CicaTavern from the app's own help, without access to your cards, chats or API keys.
 - **2.6.0: and also**: Quick replies and commands like /hide in the box; recursive lorebook triggers; an imported preset's closing prefill sent the SillyTavern way; card export with sprites, scenes and settings; the Gallery, Image setups, My styles, several LoRAs and Qwen read-aloud; side columns you can drag wider; fixed MVU card panels not updating, the model taking health off again after a fight, turns the memory book skipped, and old Android phones not responding to taps.
 - **iPhone and iPad beta**: [install it through TestFlight](https://testflight.apple.com/join/wsT7kT4b). It runs on the device by itself and needs iOS 16 or later.
@@ -499,14 +502,17 @@ flowchart LR
 
 <br clear="right">
 
-## 最新版本变动[2.6.0]
+## 最新版本变动[2.6.1]
 
-<p align="center"><img src="web/whatsnew/2.6.0-growth.webp" alt="游戏规则的成长：升级突破的提示、行囊里的「成长」页，以及每 3 级三选一的天赋和突破时的大天赋" width="720"></p>
+<p align="center"><img src="web/whatsnew/2.6.1-statusart.webp" alt="状态栏上的图：人名前的小头像，记地点的册子画成的地图，以及类型克制图和同伴的形态链" width="720"></p>
 
+- **2.6.1：状态栏上的图**：名字前带小头像；记地点的册子能画成地图（去过的、受限的、没探明的、你在哪），还有类型克制图和同伴的形态链。
+- **2.6.1：预设里的酒馆助手脚本也运行了**：导入的预设带的悬浮球、预设助手这类脚本，在用这个预设的对话里和卡的脚本一样运行，权限每个预设问一次。
+- **2.6.1：还有这些**：定制外观能用卡自己的图、画装饰图；备齐门面图多画形态、世界地图和建角页的图；视觉小说战斗界面重做了敌人信息牌，收服换成卡片还会掷骰子；读小说同时读几段，快了两三倍；修了另挂世界书的变量被卡的变量规则删掉、自带选项格式的预设下游戏规则误把选项当关卡。
 - **2.6.0：游戏规则有了成长**：规则窗口多了「成长」（完整档），分关、标准、丰富三档：生命和气力上限跟着等级涨，技能越用越强；每 3 级三选一的天赋，突破时的大天赋；你和同伴各有武器、防具、饰品三件装备，并肩作战升羁绊，检定成功攒历练，形态能进化；行囊多了「成长」页。以前就开着完整规则的卡保持「关」，数值不变。
 - **2.6.0：技能效果、类型克制和收服**：技能多了斩杀、群体治疗、护盾、鼓舞全队、挑衅，还能加持续伤害、眩晕、吸取这些附加效果；精英和首领有招式效果；卡可以定义类型和克制，打赢以后能收服敌人；打不过的仗能「交给剧情」，太弱的敌人「直接了结」；题材包先列出会改什么再挑着套用。
 - **2.6.0：状态栏和开场页的版式**：状态栏多了卡片式、侧栏式、卷轴式三种排法，开场页多了书页式和画卷式；主题管颜色、版式管摆在哪，可以随便搭。创作角色卡的状态栏和门面也单独成了一步。
-- **2.6.0：创作角色卡从小说开始**：把一部小说整本读完（最多 300 万字），写一份全书梗概，照着它做卡；可以只带到书的某一段为止，后面的人物和剧情不进卡。
+- **2.6.0：创作角色卡从小说开始**：把一部小说整本读完（最多 500 万字），写一份全书梗概，照着它做卡；可以只带到书的某一段为止，后面的人物和剧情不进卡。
 - **2.6.0：直接问助手怎么用**：直连对话里的助手照应用自带的帮助资料回答 CicaTavern 本身的问题，读不到你的卡、聊天和 API Key。
 - **2.6.0：还有这些**：快捷回复和 /hide 等输入框命令；世界书递归触发；导入预设末尾的预填照 SillyTavern 的方式发；导出角色卡能带上立绘、场景图和设置；图库、生图方案、我的画风、多个 LoRA、通义千问朗读；左右栏能拖动调宽度；修了 MVU 卡的界面不更新、打完仗又扣一遍血、记忆簿漏记、旧安卓手机点不动。
 - **iPhone 和 iPad 测试版**：[通过 TestFlight 安装](https://testflight.apple.com/join/wsT7kT4b)，在设备上独立运行，要求 iOS 16 以上。

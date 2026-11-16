@@ -102,7 +102,7 @@ test('a card says what it has to take along, and a pack with everything puts it 
   assert.equal(sent.body.previous.id, id)
   const fresh = (await call('/api/cards/import', { method: 'POST', body: { pack: sent.body.pack } })).body
   assert.notEqual(fresh.id, id)
-  assert.deepEqual(fresh.arrived, { roster: 2, sprites: 2, scenes: 1, cover: true, rules: true, foes: 1, regexSets: 1, settings: true })
+  assert.deepEqual(fresh.arrived, { roster: 2, sprites: 2, scenes: 1, cover: true, look: 0, rules: true, foes: 1, regexSets: 1, settings: true })
   // The token is spent.
   assert.equal((await call('/api/cards/import', { method: 'POST', body: { pack: sent.body.pack } })).status, 410)
 
@@ -148,7 +148,7 @@ test('only what was ticked goes; without the settings the cast leaves its LoRAs 
   const sent = await upload(zip)
   const fresh = (await call('/api/cards/import', { method: 'POST', body: { pack: sent.body.pack } })).body
   // A new version of a card here inherits the older one's media; the pack's own parts are what `arrived` counts.
-  assert.deepEqual(fresh.arrived, { roster: 2, sprites: 2, scenes: 0, cover: false, rules: false, foes: 0, regexSets: 0, settings: false })
+  assert.deepEqual(fresh.arrived, { roster: 2, sprites: 2, scenes: 0, cover: false, look: 0, rules: false, foes: 0, regexSets: 0, settings: false })
 })
 
 test('a pack with nothing ticked is the card alone, and still imports', async t => {
@@ -196,7 +196,7 @@ test('a zip that is no pack is refused; files the manifest should not name are p
   const sent = await upload(zip)
   assert.equal(sent.status, 200)
   const fresh = (await call('/api/cards/import', { method: 'POST', body: { pack: sent.body.pack } })).body
-  assert.deepEqual(fresh.arrived, { roster: 1, sprites: 0, scenes: 1, cover: false, rules: false, foes: 0, regexSets: 0, settings: false })
+  assert.deepEqual(fresh.arrived, { roster: 1, sprites: 0, scenes: 1, cover: false, look: 0, rules: false, foes: 0, regexSets: 0, settings: false })
   const media = (await call(`/api/cards/${fresh.id}/media`)).body
   assert.equal(media.roster.length, 1)
   assert.equal(media.roster[0].ref, true)

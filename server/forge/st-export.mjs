@@ -1,7 +1,8 @@
 // What SillyTavern needs that older cards were made without. Only on the way out: the card kept here stays as it is, and
 // a card made elsewhere keeps its lists as its author left them.
 import YAML from 'yaml'
-import { LIST_GROWS } from '../../web/shared/status.js'
+import { LIST_GROWS, lookVars } from '../../web/shared/status.js'
+import { COVER_SCRIPT } from '../../web/shared/cover.js'
 import { isInitvar } from '../worldbook.mjs'
 import { BAR_LOAD, MVU_HELPER_ID, OWN_STATUS_SCRIPT, STATUS_DEPTH } from './status.mjs'
 import { withCover } from './cover-frame.mjs'
@@ -54,10 +55,27 @@ export function madeHere(card, helpers = null) {
 }
 
 /**
+ * 定制外观的图 in SillyTavern: the pictures a look names (card.lookPictures, { token: data URL }, look-pictures.mjs
+ * embedded) set as variables in the bar's and the 开场页's own styles, where wear() sets them in this app. A look's
+ * picture left out (over the cap) is a variable never set: its fallback shows.
+ */
+export function withLookPictures(card) {
+  const vars = lookVars(card.lookPictures)
+  if (!vars.length || !Array.isArray(card.regexScripts)) return card
+  const rule = `<style>.skinned{${vars.map(([token, value]) => `${token}:${value}`).join(';')}}</style>`
+  const dressed = text => (typeof text === 'string' && text.includes('<style>') ? text.replace('<style>', () => `${rule}<style>`) : text)
+  return { ...card, regexScripts: card.regexScripts.map(script => (script.id === OWN_STATUS_SCRIPT || script.id === COVER_SCRIPT ? { ...script, replaceString: dressed(script.replaceString) } : script)) }
+}
+
+/**
  * A card as SillyTavern should get it.
  * @param raw - the JSON the card came from (rawOfPicture), or null.
  */
 export function forSillyTavern(card, raw = null) {
+  return withLookPictures(stCard(card, raw))
+}
+
+function stCard(card, raw) {
   const scripts = Array.isArray(card.regexScripts)
     // A whole-page bar saved before it was kept to the latest replies goes out kept to them.
     ? { regexScripts: card.regexScripts.map(script => (script.id === OWN_STATUS_SCRIPT ? { ...script, replaceString: currentBar(script.replaceString), ...(script.maxDepth == null && script.replaceString.includes('B.statusBar(') ? { maxDepth: STATUS_DEPTH } : {}) } : script)) }

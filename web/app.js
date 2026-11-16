@@ -26,7 +26,7 @@ import { initTalkDialog } from '/talk-dialog.js'
 import { REFERENCE_FILES, referenceBody, referenceChips } from '/talk.js'
 import { initDrawChoice } from '/draw-choice.js'
 import { initCardPermissions } from '/card-permissions.js'
-import { createFramePermissions } from '/shared/frame-permissions.js'
+import { cleanEntry, createFramePermissions, decideEntry, entryDecision } from '/shared/frame-permissions.js'
 import { initVn } from '/vn.js'
 import { initCardArt } from '/card-art.js'
 import { coverPage } from '/cover.js'
@@ -1503,20 +1503,50 @@ function messageEvent(type, nodeId) {
 // 脚本按钮 (web/card-scripts.js): loaded the first time a card with such buttons is opened, so every other card (and a
 // server from before the file) goes without it.
 let cardScriptsUi = null
+// What a preset's scripts may do (scriptPermissions below), by preset id, as last read or given here.
+const presetAnswers = new Map()
+
+/**
+ * The chat's preset's scripts for the page, as its detail lists them: { id, name, sign } (sign changes with its
+ * scripts and their switches), or null when it has none (nearly always).
+ */
+function presetPageScripts(chat) {
+  const detail = chat?.presetId ? ui.presetDetails.get(chat.presetId) : null
+  const list = detail?.helperSaved && Array.isArray(detail.helperList) ? detail.helperList : []
+  if (!list.some(item => item.on && (item.kind === 'custom' || (item.kind === 'hooks' && item.buttons?.length)))) return null
+  return { id: chat.presetId, name: detail.name ?? '', sign: JSON.stringify([detail.helperReadAt ?? '', ...list.map(item => [item.name, item.on])]) }
+}
+
 async function showScriptButtons(chat) {
+  if (chat?.presetId) await loadPresetDetail(chat.presetId)
+  if (chat && ui.chat?.id !== chat.id) return
   const card = chat ? ui.cards.find(item => item.id === chat.cardId) : null
-  if (!card?.pageScripts && !cardScriptsUi) return
+  const preset = presetPageScripts(chat)
+  if (!card?.pageScripts && !preset && !cardScriptsUi) return
   if (!cardScriptsUi) {
     const module = await import('/card-scripts.js').catch(() => null)
-    if (!module || cardScriptsUi) return cardScriptsUi?.show(ui.chat)
-    cardScriptsUi = module.initCardScripts({
+    if (!module) return
+    if (!cardScriptsUi) cardScriptsUi = module.initCardScripts({
       api, el, toast,
       getChat: () => ui.chat,
       frameContext: open => frameContextNow(open, open.path.at(-1)),
-      serverEvent: (type, args) => sendScriptEvent(type, args, { redraw: true }),
+      // A preset's script keeps its storage and its addresses under the preset (preset:<id>), not the card.
+      ownerContext: owner => ({ storage: storedFrameStorage(owner), relay: scriptPermissions.allowedOrigins(owner) }),
+      serverEvent: (type, args, owner) => sendScriptEvent(type, args, { redraw: true, owner }),
+      onPresetChanged: presetChangedByScript,
     })
   }
-  await cardScriptsUi.show(card?.pageScripts ? ui.chat : null)
+  const open = ui.chat && (card?.pageScripts || preset) ? ui.chat : null
+  await cardScriptsUi.show(open, { card: Boolean(card?.pageScripts), preset })
+}
+
+/** A script changed a preset (replacePreset and the rest): the chat follows, its prefix built again when it uses it. */
+function presetChangedByScript(answer, chatId) {
+  const presetId = ui.chat?.id === chatId ? ui.chat.presetId : null
+  if (presetId) ui.presetDetails.delete(presetId)
+  if (answer.chat && stillOpen(chatId)) setChat(answer.chat)
+  else if (presetId) loadPresetDetail(presetId).then(renderQuickButton)
+  if (answer.rebuilt) toast(t`预设里的脚本改了这个预设的条目：下一轮会重写一次缓存`, 4000)
 }
 
 const openChat = guard(async id => {
@@ -1905,6 +1935,8 @@ const openBag = guard(async tab => {
   const { openBag: show } = await import('/game-bag.js')
   show({
     el, api, toast, chat, tab, book: rules.book, play: rules.play, sound: rules.sound,
+    // 形态: the picture of a stage, where 角色名册 has someone of its name.
+    faceFor: name => cardArt.faces(ui.cardDetails.get(chat.cardId), chat, rules.book)?.(name, [name])?.src ?? '',
     onMusic: () => loadMusic(chat.cardId),
     queue: () => queueOf(chat),
     addOp: op => setQueue(chat, [...queueOf(chat), op]),
@@ -2048,8 +2080,27 @@ function fightOfChoice(text, parentId) {
   return picksOf(text).map(pick => fights?.get(pick)).find(Boolean) ?? null
 }
 
+/**
+ * A choice as it is sent: its words, without the roll or the fight it asks for, as the built-in preset's buttons
+ * send it. A preset's own page (狐策) sends the line with its 【检定|…】; what it asks for is rolled here and told
+ * apart. Any other text goes as it was typed.
+ */
+function choiceWords(text, parentId) {
+  if (!rulesRunning() || parentId !== tipId() || !/[【<[［〖〔]/.test(text)) return text
+  const listed = replyDisplay(ui.chat, ui.chat.path.at(-1), true)
+  const chosen = onlyChoices(text, listed.picks) || picksOf(text).some(pick => listed.checks?.has(pick) || listed.fights?.has(pick))
+  return chosen ? rules.play.withoutGameMarks(text).trim() || text : text
+}
+
 /** Whether this text is only the reply's choices: the whole of it, or every line of it. */
-const onlyChoices = (text, choices) => Boolean(choices?.length) && (choices.includes(text) || String(text).split('\n').map(line => line.trim()).filter(Boolean).every(line => choices.includes(line)))
+const onlyChoices = (text, choices) => {
+  if (!choices?.length) return false
+  // A preset's own page sends a choice in its own way (the words in its <font>): it is the same choice by its words.
+  const keyOf = rules.play?.choiceKey ?? (choice => choice)
+  const keys = new Set(choices.map(keyOf))
+  const isChoice = line => choices.includes(line) || keys.has(keyOf(line))
+  return isChoice(text) || String(text).split('\n').map(line => line.trim()).filter(Boolean).every(isChoice)
+}
 
 // A fight picked from the choices, waiting for the player's word in front of its panel: { chatId, tip, gate }.
 let fightPicked = null
@@ -2277,7 +2328,10 @@ function sendChoice(text) {
 async function loadPresetDetail(presetId) {
   if (!presetId || ui.presetDetails.has(presetId)) return
   try {
-    ui.presetDetails.set(presetId, await api(`/api/presets/${presetId}`))
+    const detail = await api(`/api/presets/${presetId}`)
+    ui.presetDetails.set(presetId, detail)
+    // What its scripts may do, as the server keeps it now (another device may have answered).
+    if (detail.scriptPermissions) presetAnswers.set(presetId, cleanEntry(detail.scriptPermissions))
   } catch {
     ui.presetDetails.set(presetId, { regexScriptList: [] })
   }
@@ -3028,7 +3082,9 @@ function replyDisplay(chat, node, isLastAssistant, depth = 0) {
   // A choice with a roll shows as its words; what it rolls is looked up by them.
   const play = isLastAssistant && !isUser ? rules.play : null
   if (play) choices = choices.map(text => play.parseChoice(text).text)
-  return { shown, raw, cardStatus, time: isUser ? null : timeBoxOf(raw), choices, checks: play?.choiceChecks(raw) ?? null, fights: play?.choiceFights(raw) ?? null }
+  // The choices a sent text is matched against: those shown, or those a preset's display regex drew in a page of its own.
+  const picks = play && !choices.length ? otherChoices(raw).choices.map(text => play.parseChoice(text).text) : choices
+  return { shown, raw, cardStatus, time: isUser ? null : timeBoxOf(raw), choices, picks, checks: play?.choiceChecks(raw) ?? null, fights: play?.choiceFights(raw) ?? null }
 }
 
 // 楼层渲染: EJS left in what a message shows (a card's display regex writes `<%= getvar(…) %>`) is rendered
@@ -3134,7 +3190,7 @@ function statusFor(chat, node) {
   const spec = statusSpecFor(chat, node)
   // 立绘 and 场景图 on top of it, where the layout asks and the card has the pictures.
   const card = ui.cardDetails.get(chat.cardId)
-  const art = spec && card?.id ? cardArt.barArt(card, spec, chat, node) : null
+  const art = spec && card?.id ? cardArt.barArt(card, spec, chat, node, rules.cardId === chat.cardId ? rules.book : null) : null
   const bar = spec ? statusBar(el, spec, node.state ?? {}, { previous: previousState(chat, node), art, seen: `${chat.id}:${node.id}` }) : null
   timing()
   return bar
@@ -3449,7 +3505,11 @@ function frameMaySend(context) {
   // The player's own command (typed in the input box, a 快捷回复 button): theirs to send.
   const clicked = context.clicked === true || context.player === true
   context.clicked = false
-  if (!clicked && !permitted(cardId, 'send', t`「${cardName(cardId)}」的卡片界面想自己把输入框里的内容发出去（你没有点它），每发一次按一轮对话计费。\n\n允许这张卡这样做吗？`)) {
+  if (presetOwnerId(cardId)) {
+    if (!clicked && !permitted(cardId, 'send', t`预设「${presetNameOf(cardId)}」的酒馆助手脚本想自己把输入框里的内容发出去（你没有点它），每发一次按一轮对话计费。\n\n允许这个预设的脚本这样做吗？`)) {
+      throw new Error(t`没有允许这个预设的脚本自己发送`)
+    }
+  } else if (!clicked && !permitted(cardId, 'send', t`「${cardName(cardId)}」的卡片界面想自己把输入框里的内容发出去（你没有点它），每发一次按一轮对话计费。\n\n允许这张卡这样做吗？`)) {
     throw new Error(t`没有允许这张卡的界面自己发送`)
   }
   lastFrameSend = Date.now()
@@ -3765,14 +3825,47 @@ const framePermissions = createFramePermissions(
   })(),
 )
 const PERMISSION_NOTE = t`\n\n不管允许还是不允许，之后都不再问；要改的话，在角色卡菜单的「卡片界面权限」里改。`
+const PRESET_PERMISSION_NOTE = t`\n\n不管允许还是不允许，之后都不再问，用这个预设的对话都照这个来；要改的话，在「预设」里这个预设的「脚本权限」里改。`
 const cardName = cardId => ui.cards.find(c => c.id === cardId)?.name ?? ''
 
-/** The player's answer for this card: asked the first time, then kept (a no as well). */
+// A preset's scripts (web/card-scripts.js) ask as `preset:<id>`: their answers are kept with the preset on the server
+// (GET/PUT /api/presets/:id/script-permissions), so every chat that uses it, on this device or another, goes by them.
+// A card's answers do not cover its preset's scripts, nor the other way round.
+const presetOwnerId = owner => /^preset:([\w-]+)$/.exec(String(owner ?? ''))?.[1] ?? null
+const presetAnswersOf = id => presetAnswers.get(id) ?? cleanEntry(ui.presetDetails.get(id)?.scriptPermissions)
+const presetNameOf = owner => ui.presetDetails.get(presetOwnerId(owner))?.name ?? ''
+const scriptPermissions = {
+  decision(owner, kind, origin) {
+    const id = presetOwnerId(owner)
+    return id ? entryDecision(presetAnswersOf(id), kind, origin) : framePermissions.decision(owner, kind, origin)
+  },
+  decide(owner, kind, decision, origin) {
+    const id = presetOwnerId(owner)
+    if (!id) return framePermissions.decide(owner, kind, decision, origin)
+    presetAnswers.set(id, decideEntry(presetAnswersOf(id), kind, decision, origin))
+    api(`/api/presets/${id}/script-permissions`, { method: 'PUT', body: { kind, decision, origin } })
+      .then(saved => presetAnswers.set(id, cleanEntry(saved)))
+      .catch(error => toast(error.message, 6000))
+  },
+  allowedOrigins(owner, kind = 'relay') {
+    const id = presetOwnerId(owner)
+    if (!id) return framePermissions.allowedOrigins(owner, kind)
+    return Object.entries(presetAnswersOf(id)[kind] ?? {}).filter(([, decision]) => decision === 'allow').map(([origin]) => origin)
+  },
+  of(owner) {
+    const id = presetOwnerId(owner)
+    if (!id) return framePermissions.of(owner)
+    const entry = presetAnswersOf(id)
+    return { send: entry.send, generate: entry.generate, relay: { ...entry.relay }, local: { ...entry.local } }
+  },
+}
+
+/** The player's answer for this card (or preset): asked the first time, then kept (a no as well). */
 function permitted(cardId, kind, question, origin) {
-  const decided = framePermissions.decision(cardId, kind, origin)
+  const decided = scriptPermissions.decision(cardId, kind, origin)
   if (decided) return decided === 'allow'
-  const yes = confirm(question + PERMISSION_NOTE)
-  framePermissions.decide(cardId, kind, yes ? 'allow' : 'deny', origin)
+  const yes = confirm(question + (presetOwnerId(cardId) ? PRESET_PERMISSION_NOTE : PERMISSION_NOTE))
+  scriptPermissions.decide(cardId, kind, yes ? 'allow' : 'deny', origin)
   return yes
 }
 
@@ -3811,7 +3904,7 @@ function relayTargetOf(url) {
   }
 }
 
-const relayRefusal = target => new Error(t`没有允许这张卡经 CicaTavern 连接 ${target.origin}`)
+const relayRefusal = (target, owner) => new Error(presetOwnerId(owner) ? t`没有允许这个预设的脚本经 CicaTavern 连接 ${target.origin}` : t`没有允许这张卡经 CicaTavern 连接 ${target.origin}`)
 
 /**
  * Asks once per card and address whether the app may make a card frame's calls there, and keeps the answer; throws
@@ -3819,23 +3912,26 @@ const relayRefusal = target => new Error(t`没有允许这张卡经 CicaTavern �
  * address after address would keep the player answering).
  */
 function askRelay(cardId, target) {
-  const decided = framePermissions.decision(cardId, 'relay', target.origin)
+  const decided = scriptPermissions.decision(cardId, 'relay', target.origin)
   if (decided === 'allow') return
-  if (decided === 'deny' || relayQuiet.has(cardId)) throw relayRefusal(target)
+  if (decided === 'deny' || relayQuiet.has(cardId)) throw relayRefusal(target, cardId)
   const local = LOCAL_HOST.test(target.hostname)
   const how = local ? t`会直接连过去，不走应用的网络代理；` : t`会走应用的网络代理；`
   const warning = local ? t`\n\n这是这台电脑或局域网里的地址：只有你知道那里是什么服务时才允许。` : ''
-  if (!permitted(cardId, 'relay', t`「${cardName(cardId)}」的卡片界面要连接 ${target.origin}，浏览器直接连没有连上（多半是对方不让网页直接调用，或者网页够不着这个地址）。\n\n改由 CicaTavern 替它连接吗？${how}卡片界面发出的内容（包括它自己的 API Key）会经过 CicaTavern 发到这个地址。${warning}`, target.origin)) {
+  const question = presetOwnerId(cardId)
+    ? t`预设「${presetNameOf(cardId)}」的酒馆助手脚本要连接 ${target.origin}，浏览器直接连没有连上（多半是对方不让网页直接调用，或者网页够不着这个地址）。\n\n改由 CicaTavern 替它连接吗？${how}脚本发出的内容（包括它自己的 API Key）会经过 CicaTavern 发到这个地址。${warning}`
+    : t`「${cardName(cardId)}」的卡片界面要连接 ${target.origin}，浏览器直接连没有连上（多半是对方不让网页直接调用，或者网页够不着这个地址）。\n\n改由 CicaTavern 替它连接吗？${how}卡片界面发出的内容（包括它自己的 API Key）会经过 CicaTavern 发到这个地址。${warning}`
+  if (!permitted(cardId, 'relay', question, target.origin)) {
     relayQuiet.add(cardId)
-    throw relayRefusal(target)
+    throw relayRefusal(target, cardId)
   }
   // Frames already open learn it too: their next call goes through the app at once.
-  broadcastRelay(framePermissions.allowedOrigins(cardId))
+  broadcastRelay(scriptPermissions.allowedOrigins(cardId), cardId)
 }
 
 /** Whether the player let this card reach `target` knowing it is on this computer or the local network. */
 const relayLocalAllowed = (cardId, target) =>
-  framePermissions.decision(cardId, 'local', target.origin) === 'allow' || (LOCAL_HOST.test(target.hostname) && framePermissions.decision(cardId, 'relay', target.origin) === 'allow')
+  scriptPermissions.decision(cardId, 'local', target.origin) === 'allow' || (LOCAL_HOST.test(target.hostname) && scriptPermissions.decision(cardId, 'relay', target.origin) === 'allow')
 
 /**
  * The server found `target` on this computer or the local network, or could not tell where it leads
@@ -3843,10 +3939,15 @@ const relayLocalAllowed = (cardId, target) =>
  */
 function askRelayLocal(cardId, target, unverified = false) {
   const name = cardName(cardId)
-  const question = unverified
+  const preset = presetNameOf(cardId)
+  const question = presetOwnerId(cardId)
+    ? unverified
+      ? t`预设「${preset}」的酒馆助手脚本要连接的 ${target.origin}，CicaTavern 查不到它实际指向哪里（网络代理或 TUN 模式接管了域名解析），它也可能是这台电脑或局域网里的服务。\n\n只有你信任这个预设和这个地址时才允许：允许后，它的脚本能读到那里的回答。`
+      : t`预设「${preset}」的酒馆助手脚本要连接的 ${target.origin} 是这台电脑或局域网里的地址。\n\n只有你知道那里是什么服务时才允许：允许后，它的脚本能读到那个服务的回答。`
+    : unverified
     ? t`「${name}」的卡片界面要连接的 ${target.origin}，CicaTavern 查不到它实际指向哪里（网络代理或 TUN 模式接管了域名解析），它也可能是这台电脑或局域网里的服务。\n\n只有你信任这张卡和这个地址时才允许：允许后，这张卡能读到那里的回答。`
     : t`「${name}」的卡片界面要连接的 ${target.origin} 是这台电脑或局域网里的地址。\n\n只有你知道那里是什么服务时才允许：允许后，这张卡能读到那个服务的回答。`
-  if (!permitted(cardId, 'local', question, target.origin)) throw relayRefusal(target)
+  if (!permitted(cardId, 'local', question, target.origin)) throw relayRefusal(target, cardId)
 }
 
 /** The API's own headers, which the server sends as data (x-relay-headers) so that none of them acts on this app. */
@@ -3871,13 +3972,15 @@ function base64Of(bytes) {
 // the open one (the player may have opened another meanwhile, and the next message would go to the wrong chat).
 const stillOpen = chatId => ui.chat?.id === chatId
 
-// The card's own event names its scripts on the server listen for, by card (asked at most once a minute).
+// The own event names the scripts on the server of a chat's card and preset listen for, by card and preset (asked at
+// most once a minute).
 const scriptEventLists = new Map()
-function ownScriptEvents(cardId) {
-  const kept = scriptEventLists.get(cardId)
+function ownScriptEvents(chat) {
+  const key = `${chat.cardId}|${chat.presetId ?? ''}`
+  const kept = scriptEventLists.get(key)
   if (kept && Date.now() - kept.at < 60_000) return kept.events
-  const events = api(`/api/cards/${cardId}/script-events`).then(answer => answer.events ?? []).catch(() => [])
-  scriptEventLists.set(cardId, { at: Date.now(), events })
+  const events = api(`/api/cards/${chat.cardId}/script-events?presetId=${encodeURIComponent(chat.presetId ?? '')}`).then(answer => answer.events ?? []).catch(() => [])
+  scriptEventLists.set(key, { at: Date.now(), events })
   return events
 }
 
@@ -3893,12 +3996,12 @@ function showScriptNotes(notes) {
  * @param redraw - draw the chat again with what they changed (a button's press: no frame of the chat asked, so none
  *   starts over, and a status bar written with variable macros shows the new values).
  */
-async function sendScriptEvent(type, args = [], { redraw = false } = {}) {
+async function sendScriptEvent(type, args = [], { redraw = false, owner = null } = {}) {
   const chat = ui.chat
   if (!chat) return
   if (ui.generating) return toast(t`正在生成，稍后再试`)
   const chatId = chat.id
-  const answer = await api(`/api/chats/${chatId}/script-event`, { method: 'POST', body: { type, args } }).catch(error => (toast(error.message, 6000), null))
+  const answer = await api(`/api/chats/${chatId}/script-event`, { method: 'POST', body: { type, args, ...(owner ? { owner } : {}) } }).catch(error => (toast(error.message, 6000), null))
   if (!answer?.handled) return
   showScriptNotes(answer.notes)
   if (!stillOpen(chatId)) return
@@ -3913,11 +4016,19 @@ const frameHandlers = {
   // they listen for it. What they make of the latest floor's variables is saved, and the frames follow it.
   async scriptEvent({ type, args }, context = {}) {
     const chat = ui.chat
-    if (!chat || (context.card && context.card !== chat.cardId)) return
-    // The card's scripts on the page that listen for it (脚本按钮), then those on the server.
+    // From a frame of this chat's card, or of a script of its preset.
+    if (!chat || (context.card && context.card !== chat.cardId && context.card !== `preset:${chat.presetId}`)) return
+    // The scripts on the page that listen for it (the preset's and the card's), then those on the server.
     await cardScriptsUi?.deliver(type, args, context.frame)
-    if (!(await ownScriptEvents(chat.cardId)).includes(type)) return
+    if (!(await ownScriptEvents(chat)).includes(type)) return
     await sendScriptEvent(type, args)
+  },
+  // Tavern Helper's preset functions that change one (replacePreset and the rest): only a script's frame may.
+  async preset({ name, preset }, context = {}) {
+    if (!ui.chat) throw new Error(t`没有打开的对话`)
+    if (ui.generating) throw new Error(t`正在生成，稍后再试`)
+    if (!cardScriptsUi?.isScriptFrame(context.frame)) throw new Error(t`只有酒馆助手脚本能改预设，回复里的卡片界面不能`)
+    return cardScriptsUi.changePreset({ name, preset })
   },
   // A frame's Tavern Helper regex functions (the chat's, changed for it only): a replacement draws the chat again.
   async regex(args) {
@@ -4042,7 +4153,9 @@ const frameHandlers = {
     while (frameGenerationTimes.length && Date.now() - frameGenerationTimes[0] > 60000) frameGenerationTimes.shift()
     if (frameGenerationTimes.length >= GENERATE_PER_MINUTE) throw new Error(t`调用太频繁`)
     const cardId = card ?? chat.cardId
-    if (!permitted(cardId, 'generate', t`「${cardName(cardId)}」的卡片界面想自己调用模型（比如生成角色信息），每次都按一次对话计费。\n\n允许这张卡这样做吗？`)) throw new Error(t`用户没有允许这张卡调用模型`)
+    if (presetOwnerId(cardId)) {
+      if (!permitted(cardId, 'generate', t`预设「${presetNameOf(cardId)}」的酒馆助手脚本想自己调用模型，每次都按一次对话计费。\n\n允许这个预设的脚本这样做吗？（预设里在服务器上运行的脚本也照这个来）`)) throw new Error(t`用户没有允许这个预设的脚本调用模型`)
+    } else if (!permitted(cardId, 'generate', t`「${cardName(cardId)}」的卡片界面想自己调用模型（比如生成角色信息），每次都按一次对话计费。\n\n允许这张卡这样做吗？`)) throw new Error(t`用户没有允许这张卡调用模型`)
     frameGenerationTimes.push(Date.now())
     const controller = new AbortController()
     frameGenerations.set(id, controller)
@@ -5093,7 +5206,7 @@ async function importPackages(files) {
 // Past this many characters an imported chat is worth compacting before it continues.
 const LONG_IMPORT = 60000
 
-/** A card name without its version (顾念念-武当抽奖系统-v1.6 → 顾念念-武当抽奖系统). */
+/** A card name without its version (沈念念-青峰签到系统-v1.6 → 沈念念-青峰签到系统). */
 const unversioned = name => String(name ?? '').trim().replace(/[\s_-]*v?\d+(?:\.\d+)*$/i, '').trim()
 
 /**
@@ -5380,21 +5493,22 @@ const send = guard(async () => {
   input.value = ''
   fitInput()
   const chatId = ui.chat.id
-  const fight = fightOfChoice(text, parentId)
-  if (fight) return pickFight(ui.chat, text, fight)
+  const said = choiceWords(text, parentId)
+  const fight = fightOfChoice(said, parentId)
+  if (fight) return pickFight(ui.chat, said, fight)
   fightPicked = null
-  const check = choiceCheck(text, parentId)
+  const check = choiceCheck(said, parentId)
   const ops = rulesRunning() ? queueToSend(ui.chat, parentId) : []
-  const roll = check ? rules.play.rollCheck(rules.play.sheetFor(ui.chat, rules.book, ops), rules.book, check, chatId, parentId, text) : null
+  const roll = check ? rules.play.rollCheck(rules.play.sheetFor(ui.chat, rules.book, ops), rules.book, check, chatId, parentId, said) : null
   if (roll) rules.play.showRoll(el, roll, rules.sound, rules.book)
   if (ops.length) markQueueSent(ui.chat)
   // The way with no roll, picked over one that has it: the model is told it brings no more than it says.
   const listed = rulesRunning() && !check && parentId === tipId() ? replyDisplay(ui.chat, ui.chat.path.at(-1), true) : null
-  const safe = Boolean(listed?.checks?.size && onlyChoices(text, listed.choices))
+  const safe = Boolean(listed?.checks?.size && onlyChoices(said, listed.picks))
   // None of the choices: the player's own action, for the model to weigh against what they have.
-  const own = Boolean(rulesRunning()) && !check && !onlyChoices(text, listed?.choices)
+  const own = Boolean(rulesRunning()) && !check && !onlyChoices(said, listed?.picks)
   const game = check || ops.length || safe || own ? { game: { check, ops, safe, own } } : {}
-  const ok = await generate('turn', { parentId, input: text, marks: vnUi.marks(ui.chat), ...game, ...(files.length ? { files } : {}) }, text, roll ? rules.play.rollOutcome(roll, rules.book) : null)
+  const ok = await generate('turn', { parentId, input: said, marks: vnUi.marks(ui.chat), ...game, ...(files.length ? { files } : {}) }, said, roll ? rules.play.rollOutcome(roll, rules.book) : null)
   // Keep the draft so nothing is lost, unless you have moved on to another chat or typed anew.
   if (!ok && ui.chat?.id === chatId && !input.value.trim()) { input.value = text; fitInput() }
   if (!ok && files.length) {
@@ -5549,7 +5663,7 @@ function sideBar(chat) {
   // No 动效 here: the bar under the reply has it, and two layers at once are twice the work for nothing more to see.
   const { effect: _, ...spec } = laid
   const card = ui.cardDetails.get(chat.cardId)
-  const art = card?.id ? cardArt.barArt(card, spec, chat, node) : null
+  const art = card?.id ? cardArt.barArt(card, spec, chat, node, rules.cardId === chat.cardId ? rules.book : null) : null
   return statusBar(el, spec, shown.state, { previous: previousState(chat, node), art, collapsible: false, seen: `side:${chat.id}:${node.id}` })
 }
 
@@ -6426,7 +6540,7 @@ const showPrompt = guard(async () => {
 const drawChoice = initDrawChoice({ api, el, guard, openSettings: section => mediaUi.openSettings(section) })
 
 // 卡片界面权限 (角色卡菜单): what a card's interface may do without a click, as answered when it asked.
-const cardPermissions = initCardPermissions({ el, permissions: framePermissions, onRelayChange: cardId => broadcastRelay(framePermissions.allowedOrigins(cardId)) })
+const cardPermissions = initCardPermissions({ el, permissions: scriptPermissions, onRelayChange: cardId => broadcastRelay(scriptPermissions.allowedOrigins(cardId), cardId) })
 
 // Filled in once the visual novel is set up (below); the media code may call it before.
 const vnHooks = { picturesChanged: () => {} }
@@ -6675,8 +6789,14 @@ const presetsUi = initPresets({
   },
   onPresetEdited: id => {
     ui.presetDetails.delete(id)
-    if (ui.chat?.presetId === id) loadPresetDetail(id).then(renderQuickButton)
+    // Its scripts switched on or off, or read in: the chat's script bar and frames follow.
+    if (ui.chat?.presetId === id) loadPresetDetail(id).then(() => {
+      renderQuickButton()
+      showScriptButtons(ui.chat)
+    })
   },
+  // 脚本权限 of a preset: what its scripts may do, as asked once per preset.
+  openScriptPermissions: preset => cardPermissions.open({ id: `preset:${preset.id}`, name: preset.name, preset: true }),
   // The built-in preset's 状态栏 option shows at once.
   onBasicChanged: settings => {
     ui.settings = settings
@@ -6747,6 +6867,7 @@ const openCardCheck = guard(async id => {
     openProviders: () => providersUi.open(),
     openToolPrompts: group => openToolPrompts(group),
     openTalk: (cardId, say) => cardEditUi.open(cardId, { say }),
+    openStatus: cardId => cardEditUi.open(cardId, { status: true }),
     openTrial: cardId => openTrial(cardId),
     onChatChanged: chat => setChat(chat),
     async onCardChanged(cardId) {

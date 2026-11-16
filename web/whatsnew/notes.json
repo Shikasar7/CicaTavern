@@ -1404,6 +1404,68 @@
           }
         }
       ]
+    },
+    {
+      "version": "2.6.1",
+      "date": "2026-11",
+      "after": true,
+      "items": [
+        {
+          "image": "2.6.1-statusart.webp",
+          "zh": {
+            "title": "状态栏上的图：头像、地图、形态链",
+            "text": "每个人物组和表格每一行的名字前带小头像（角色名册里同名角色的立绘或人设图）。多了三种显示方式：「地图」把记地点的册子画成地图，去过的、受限的、还没探明的和你所在的地方一眼看清，点地点看详情；「克制图」按游戏规则的类型克制画一圈类型；「形态链」画出同伴各阶段的样子，没到的是剪影。\n地图是叫「地图」的场景，地点的位置在「修改角色卡 → 状态栏」里拖图钉摆；「创作角色卡」做的卡会自动画成地图，「备齐门面图」也会画一张。"
+          },
+          "en": {
+            "title": "Pictures on the status bar: faces, a map, form chains",
+            "text": "Each group of people and each row of a table now has a small face before the name (that character's sprite or Reference image from the Character roster). Three new ways to show things: Map draws a book of places on a map, with where you have been, where is shut, where is still unknown and where you are now, and a tap on a place for its details; Type chart draws the ring of types from the game rules; Form chain shows a companion's stages, the ones not reached yet as silhouettes.\nThe map is a scene called Map, and the places are pinned on it in Edit card → Status bar; cards made in Create a card get a map by themselves, and Get the pictures ready… draws one too."
+          }
+        },
+        {
+          "image": "2.6.1-vnbattle.webp",
+          "zh": {
+            "title": "视觉小说的战斗界面：信息牌和收服卡片",
+            "text": "敌人名字下面多了一块信息牌：精英、首领标在名字前（卡里另起了叫法就用卡的），类型单独一格，血条和身上的状态也在牌里。简约是半透明的牌子，古风是朱印，怀旧游戏机是小窗口，撞色是斜切的黑牌；大屏上敌人落在场景的地面上；撞色的队伍改成每人一张斜卡。\n打赢后能收服的敌人一个一张卡（头像、精英或首领、类型、看魅力的成功率），点了先掷骰，落定后盖上「收服成功」或「没能收服」，四个主题各有样子。撞色背景平时只有一种颜色，轮到你选选项或写行动时红色才从右边扫进来；出选项时立绘不再被挤出屏幕。"
+          },
+          "en": {
+            "title": "The visual novel's fights: foe plates and taming cards",
+            "text": "Each foe now has a plate under its name: Elite or Boss before the name (or the card's own word for them), its type in a box of its own, and its health bar and statuses on the plate. Simple has a see-through plate, Classical a red seal, Retro console a small window and Color block a slanted black plate; on a big screen the foes stand on the scene's ground, and Color block's party is one slanted card each.\nAfter a win, each foe you can tame gets a card (its face, Elite or Boss, its type and the chance from your Charm); Try taming rolls the dice first, then stamps Tamed or Not tamed, in each look's own style. Color block's background is one colour until it is your turn to pick a choice or write what you do, when the red sweeps in from the right; Sprites no longer get pushed off the screen when the Choices come up."
+          }
+        },
+        {
+          "image": "2.6.1-presetscripts.webp",
+          "zh": {
+            "title": "预设自带的酒馆助手脚本也运行了",
+            "text": "导入的 SillyTavern 预设带的脚本（悬浮球、预设助手这类面板，自动处理消息的脚本），在用这个预设的对话里和角色卡自己的脚本一样运行：按钮在输入框上方，先预设的、后卡的。换了预设，或在「预设 → 酒馆助手脚本」里关掉，就停。\n自己发送、调用模型、联网，每个预设问一次，在「脚本权限…」里改。以前导入的预设只记了脚本的个数，点「读入脚本…」选一次原文件就能运行。"
+          },
+          "en": {
+            "title": "An imported preset's Tavern Helper scripts now run",
+            "text": "The scripts an imported SillyTavern preset carries (floating balls and preset helper panels, scripts that handle messages) run in the chats that use the preset, just as a card's own scripts do: their buttons sit above the box, the preset's before the card's. Changing the preset, or turning a script off in Presets → Tavern Helper scripts, stops them.\nSending by themselves, calling a model and going online are asked once per preset, and changed in Script permissions…. Presets imported earlier only kept how many scripts they had: Read in scripts… and pick the original file once."
+          }
+        },
+        {
+          "image": "2.6.1-novel.webp",
+          "zh": {
+            "title": "读小说快了，上限 500 万字",
+            "text": "「从小说抽取」和创作角色卡的「从小说开始」默认同时读 3 段，「同时读 … 段」可以改成 1 到 8；第一段先单独读，后面的带着它记下的名字去读。实测同时读 4 段，8 段从 23.5 分钟缩到 9.9 分钟，记下的条目一样多。\n花费差不多，供应商报限流就调小；用量估计的输出改成一个范围。小说上限从 300 万字提到 500 万字。"
+          },
+          "en": {
+            "title": "Reading a novel is faster, up to 5 million characters",
+            "text": "From a novel and Start from a novel now read 3 parts at once by default, and Read … parts at once goes from 1 to 8; the first part is read alone, and the rest are read with the names it found. In a real test, 4 at once read 8 parts in 9.9 minutes instead of 23.5, with as many entries.\nThe cost is about the same; pick fewer if the provider says rate limit. The estimate now gives the output as a range. A novel can now be up to 5 million characters, up from 3 million."
+          }
+        },
+        {
+          "icon": "🔧",
+          "zh": {
+            "title": "还有这些，和修好的",
+            "text": "定制外观能用卡自己的图，还能画装饰图；「备齐门面图」多画形态、世界地图和建角页选项的图；「配图 ▾」里有了「你说话时也上台」；「检查这张卡」的「调整状态栏」直接打开修改角色卡的状态栏。\n修好：带变量规则的卡另挂世界书、写金手指时新变量被删掉；自带选项格式的预设下选项里的检定被当成关卡；视觉小说里快捷回复压住对话框；酒馆助手模板打包的脚本出错、脚本设置不保存、弹窗没反应、悬浮球不显示。"
+          },
+          "en": {
+            "title": "Also new, and fixed",
+            "text": "Custom looks can use the card's own pictures and have Decorations drawn; Get the pictures ready… also draws forms, a world map and pictures for the character creation page's choices; the image menu has You step on when you speak; Adjust status bar in Check this card now opens Edit card's status bar.\nFixed: new variables from a lorebook or cheat added beside a card with variable rules being dropped; checks in a preset's own choice blocks being taken for story gates; quick replies covering the visual novel's text box; scripts packed with the Tavern Helper template failing, script settings not being kept, popups not answering and floating balls not showing."
+          }
+        }
+      ]
     }
   ]
 }

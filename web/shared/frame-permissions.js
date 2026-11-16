@@ -16,22 +16,57 @@ const DECISIONS = new Set(['allow', 'deny'])
 const PER_ADDRESS = new Set(['relay', 'local'])
 const isObject = value => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 
-/** Only what this file writes: { [cardId]: { send, generate, relay: { [origin]: decision }, local: { … } } }. */
+/** One card's (or preset's) answers, only what this file writes: { send, generate, relay: { [origin]: decision }, local: { … } }. */
+export function cleanEntry(entry) {
+  if (!isObject(entry)) return {}
+  const kept = {}
+  for (const kind of ['send', 'generate']) if (DECISIONS.has(entry[kind])) kept[kind] = entry[kind]
+  for (const kind of PER_ADDRESS) {
+    if (!isObject(entry[kind])) continue
+    const origins = Object.fromEntries(Object.entries(entry[kind]).filter(([origin, decision]) => origin.length <= 300 && DECISIONS.has(decision)).slice(0, 200))
+    if (Object.keys(origins).length) kept[kind] = origins
+  }
+  return kept
+}
+
+/** Only what this file writes: { [cardId]: entry }. */
 function clean(all) {
   const out = {}
   if (!isObject(all)) return out
   for (const [cardId, entry] of Object.entries(all)) {
-    if (!isObject(entry)) continue
-    const kept = {}
-    for (const kind of ['send', 'generate']) if (DECISIONS.has(entry[kind])) kept[kind] = entry[kind]
-    for (const kind of PER_ADDRESS) {
-      if (!isObject(entry[kind])) continue
-      const origins = Object.fromEntries(Object.entries(entry[kind]).filter(([, decision]) => DECISIONS.has(decision)))
-      if (Object.keys(origins).length) kept[kind] = origins
-    }
+    const kept = cleanEntry(entry)
     if (Object.keys(kept).length) out[cardId] = kept
   }
   return out
+}
+
+/**
+ * `entry` with one answer kept; null forgets it (asked again next time). A changed answer for an address forgets its
+ * 'local' one too, so the question about this computer or the local network comes again.
+ */
+export function decideEntry(entry, kind, decision, origin) {
+  const next = { ...entry }
+  const value = DECISIONS.has(decision) ? decision : null
+  if (PER_ADDRESS.has(kind)) {
+    if (typeof origin !== 'string' || !origin) return cleanEntry(next)
+    const origins = { ...next[kind] }
+    if (value) origins[origin] = value
+    else delete origins[origin]
+    next[kind] = origins
+    if (kind === 'relay' && next.local) {
+      next.local = { ...next.local }
+      delete next.local[origin]
+    }
+  } else if (kind === 'send' || kind === 'generate') {
+    if (value) next[kind] = value
+    else delete next[kind]
+  }
+  return cleanEntry(next)
+}
+
+/** 'allow', 'deny', or undefined: `entry`'s answer for `kind` (and `origin`, for 'relay' and 'local'). */
+export function entryDecision(entry, kind, origin) {
+  return PER_ADDRESS.has(kind) ? entry?.[kind]?.[origin] : entry?.[kind]
 }
 
 /**
@@ -105,30 +140,13 @@ export function createFramePermissions(storage) {
   return {
     /** 'allow', 'deny', or undefined when the card has not been asked. `origin` for 'relay' and 'local'. */
     decision(cardId, kind, origin) {
-      const entry = load()[cardId]
-      return PER_ADDRESS.has(kind) ? entry?.[kind]?.[origin] : entry?.[kind]
+      return entryDecision(load()[cardId], kind, origin)
     },
 
-    /**
-     * Keep an answer; null forgets it (asked again next time). A changed answer for an address forgets its
-     * 'local' one too, so the question about this computer or the local network comes again.
-     */
+    /** Keep an answer; null forgets it (decideEntry). */
     decide(cardId, kind, decision, origin) {
       const all = load()
-      const entry = { ...all[cardId] }
-      const value = DECISIONS.has(decision) ? decision : null
-      if (PER_ADDRESS.has(kind)) {
-        const origins = { ...entry[kind] }
-        if (value) origins[origin] = value
-        else delete origins[origin]
-        entry[kind] = origins
-        if (kind === 'relay' && entry.local) {
-          entry.local = { ...entry.local }
-          delete entry.local[origin]
-        }
-      } else if (value) entry[kind] = value
-      else delete entry[kind]
-      save(clean({ ...all, [cardId]: entry }))
+      save(clean({ ...all, [cardId]: decideEntry(all[cardId], kind, decision, origin) }))
     },
 
     /** The addresses a card may reach through the app ('relay'), or those allowed as local ones ('local'). */

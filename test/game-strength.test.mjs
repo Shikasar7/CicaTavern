@@ -249,7 +249,7 @@ test('a rank in words is bound by its name, a number stays the level', () => {
   assert.deepEqual(guessBindings({ 主角: { 等级: '黄金' } }), { rank: '主角.等级' })
 })
 
-const said = { role: 'user', prompt: '<游戏规则>自己写的行动 战斗选项</游戏规则>' }
+const said = { role: 'user', prompt: '<游戏规则>自己写的行动 战斗选项 |开局:</游戏规则>' }
 const turn = (extra, turns = [said]) => gamePrompt({ sheet: startSheet({}), pausing: true, fights: true, check: null, ...extra }, turns)
 
 test('the rules say what the player\'s own actions can and cannot do', () => {

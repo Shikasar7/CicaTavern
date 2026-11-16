@@ -334,6 +334,29 @@ export function battleSetup(sheet, { foes, seed, difficulty = 'normal', effects 
   }
 }
 
+// 开局: what the way a fight was gone into gives or costs before the first blow. Never more than two of what helps, so
+// that a fight is still a fight; a foe is never brought in at less than a quarter of its life.
+export const OPENING_MOST = 2
+const OPENING_LIFE_LEAST = 0.25
+const OPENING_OPEN = 0.12
+const lifeShare = value => (Number.isFinite(Number(value)) && Number(value) > 0 ? Math.min(1, Math.max(OPENING_LIFE_LEAST, Number(value))) : 1)
+
+/**
+ * A fight's 开局 as the rules keep it, or null: { first?, open?, boost?, caught?, life?, lives? }.
+ * `first`: the foes lose their first turn. `open`: they start with a 破绽. `boost`: the party starts 强化.
+ * `caught`: the party loses its first turn, and only gets its guard up. `life`: every foe starts at this share of its life; `lives`: the named ones.
+ */
+export function cleanOpening(value) {
+  if (!value || typeof value !== 'object') return null
+  const lives = Object.fromEntries(Object.entries(value.lives && typeof value.lives === 'object' ? value.lives : {}).map(([name, share]) => [String(name).slice(0, 40), lifeShare(share)]).filter(([name, share]) => name && share < 1).slice(0, 4))
+  const life = lifeShare(value.life)
+  // Taken by surprise and striking first at once is neither.
+  const caught = value.caught === true && value.first !== true
+  const helps = [value.first === true && value.caught !== true ? 'first' : '', value.open === true ? 'open' : '', value.boost === true ? 'boost' : '', life < 1 || Object.keys(lives).length ? 'life' : ''].filter(Boolean).slice(0, OPENING_MOST)
+  const out = { ...Object.fromEntries(helps.filter(id => id !== 'life').map(id => [id, true])), ...(caught ? { caught: true } : {}), ...(helps.includes('life') && life < 1 ? { life } : {}), ...(helps.includes('life') && Object.keys(lives).length ? { lives } : {}) }
+  return Object.keys(out).length ? out : null
+}
+
 /** The same fight begun again: the dice are new. */
 export const attemptSetup = (setup, attempt) => (attempt ? { ...setup, seed: `${setup.seed}:${attempt}` } : setup)
 
@@ -353,13 +376,24 @@ export function startBattle(setup) {
     const adds = foe.adds ? cleanFoeAdds(foe.adds, foe.tier) : []
     return { id: `foe-${i}`, side: 'foe', name: foe.name, tier: foe.tier, gap: foe.gap ?? 0, life, maxLife: life, damage: (tier.damage / 100) * share * gap.damage * (foe.up?.damage ?? 1) * (adds.length ? 1 - FOE_ADD_WEIGHT * foeAddPoints(adds) : 1), pace: 1 + (PARTY_PACE[members] - 1) * (many ? 1 : LONE_PACE), tempo: 0, charging: false, poison: 0, stun: 0, ...(adds.length ? { adds } : {}), ...(foe.type ? { type: foe.type } : {}) }
   })
+  // 开局: what was won or lost before the first blow.
+  const opening = cleanOpening(setup.opening)
+  if (opening) {
+    for (const foe of foes) {
+      const share = Math.min(opening.life ?? 1, opening.lives?.[foe.name] ?? 1)
+      if (share < 1) foe.life = Math.max(1, Math.round(foe.maxLife * share))
+      if (opening.first) Object.assign(foe, { stun: 1, late: true })
+      if (opening.open) Object.assign(foe, { open: STATUS_ROUNDS, openBy: OPENING_OPEN })
+    }
+  }
+  const opened = unit => (unit.commander || !opening ? unit : { ...unit, ...(opening.boost ? { boost: BOOST_ROUNDS } : {}), ...(opening.caught ? { stun: 1, late: true, guarding: true } : {}) })
   const { player } = setup
   const allies = (setup.allies ?? []).slice(0, MAX_PARTY - 1).map((ally, i) => ({ id: `ally-${i}`, side: 'player', ally: true, name: ally.name, life: ally.life, maxLife: ally.maxLife, energy: ally.energy, maxEnergy: ally.maxEnergy, modifiers: ally.modifiers, skills: ally.skills, guarding: false, boost: 0, ...(ally.type ? { type: ally.type } : {}), ...(ally.shown ? { shown: ally.shown } : {}), ...(ally.bonus ? { bonus: ally.bonus } : {}), ...(ally.shift ? { shift: ally.shift } : {}) }))
   return {
     round: 1,
     rng: seedOf('battle', String(setup.seed)),
     difficulty: setup.difficulty,
-    units: [{ id: 'player', side: 'player', life: player.life, maxLife: player.maxLife, energy: player.energy, maxEnergy: player.maxEnergy, modifiers: player.modifiers, guarding: false, boost: 0, ...(setup.lead === 'command' && allies.length ? { commander: true } : {}), ...(player.type ? { type: player.type } : {}), ...(player.bonus ? { bonus: player.bonus } : {}), ...(player.shift ? { shift: player.shift } : {}) }, ...allies, ...foes],
+    units: [opened({ id: 'player', side: 'player', life: player.life, maxLife: player.maxLife, energy: player.energy, maxEnergy: player.maxEnergy, modifiers: player.modifiers, guarding: false, boost: 0, ...(setup.lead === 'command' && allies.length ? { commander: true } : {}), ...(player.type ? { type: player.type } : {}), ...(player.bonus ? { bonus: player.bonus } : {}), ...(player.shift ? { shift: player.shift } : {}) }), ...allies.map(opened), ...foes],
     ...(setup.types ? { types: setup.types } : {}),
     skills: player.skills,
     things: player.things.map(thing => ({ ...thing })),
@@ -733,7 +767,8 @@ function victimOf(state) {
 function foeActs(state, foe, events) {
   if (foe.stun > 0) {
     foe.stun -= 1
-    events.push({ type: 'stunned', by: foe.id })
+    events.push({ type: 'stunned', by: foe.id, ...(foe.late ? { late: true } : {}) })
+    delete foe.late
     return
   }
   const tier = TIERS[foe.tier]
@@ -994,7 +1029,8 @@ export function step(before, commands) {
     else if (unit.stun > 0) {
       // 眩晕: whatever they were told, the action is lost.
       unit.stun -= 1
-      events.push({ type: 'stunned', by: unit.id })
+      events.push({ type: 'stunned', by: unit.id, ...(unit.late ? { late: true } : {}) })
+      delete unit.late
     } else act(state, unit, told.get(unit.id), events)
   }
   if (!state.over && !lostAll(state)) endRound(state, events)

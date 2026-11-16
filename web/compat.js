@@ -19,7 +19,7 @@ const MAX_STORED = 1_000_000
 // frame that pulls its page in from elsewhere (REMOTE_PAGE), whose code cannot
 // be looked through beforehand.
 const LIBRARIES = [
-  { always: true, test: /\$\(|\$\.|jQuery/, tags: ['<script src="https://testingcf.jsdelivr.net/npm/jquery/dist/jquery.min.js"></script>'] },
+  { always: true, script: true, test: /\$\(|\$\.|jQuery/, tags: ['<script src="https://testingcf.jsdelivr.net/npm/jquery/dist/jquery.min.js"></script>'] },
   {
     test: /\.(draggable|sortable|resizable|droppable|selectable)\(/,
     tags: [
@@ -27,10 +27,15 @@ const LIBRARIES = [
       '<link rel="stylesheet" href="https://testingcf.jsdelivr.net/npm/jquery-ui/themes/base/theme.min.css">',
     ],
   },
-  { always: true, test: /\b_\.[a-zA-Z]+\(/, tags: ['<script src="https://testingcf.jsdelivr.net/npm/lodash/lodash.min.js"></script>'] },
-  { always: true, test: /\bVue\./, tags: ['<script src="https://testingcf.jsdelivr.net/npm/vue/dist/vue.global.prod.min.js"></script>'] },
+  { always: true, script: true, test: /\b_\.[a-zA-Z]+\(/, tags: ['<script src="https://testingcf.jsdelivr.net/npm/lodash/lodash.min.js"></script>'] },
+  // `Vue` alone too: a script bundled with Tavern Helper's template takes it as a global (`module.exports = Vue`).
+  { always: true, test: /\bVue\b/, tags: ['<script src="https://testingcf.jsdelivr.net/npm/vue/dist/vue.global.prod.min.js"></script>'] },
   { test: /\bVueRouter\b/, tags: ['<script src="https://testingcf.jsdelivr.net/npm/vue-router/dist/vue-router.global.prod.min.js"></script>'] },
-  { test: /\bYAML\./, tags: ['<script src="https://testingcf.jsdelivr.net/npm/yaml/browser/dist/index.min.js"></script>'] },
+  // Zod as Tavern Helper's frames have it, the global `z`: the whole module (a bundled script reads `z.z.object`, a
+  // hand-written one `z.object`), set by a module that runs before the frame's own (modules keep their order).
+  { test: /\bz\.[a-zA-Z]+\(/, tags: ['<script type="module">import * as m from "https://testingcf.jsdelivr.net/npm/zod/+esm"; window.z = m</script>'] },
+  // The yaml package's browser build is a module: the global `YAML` set the same way as `z`.
+  { test: /\bYAML\b/, tags: ['<script type="module">import * as m from "https://testingcf.jsdelivr.net/npm/yaml/+esm"; window.YAML = m.default ?? m</script>'] },
   { test: /class=["'][^"']*\bfa[srbl]?\s+fa-|\bfa-solid\b|\bfa-regular\b/, tags: ['<link rel="stylesheet" href="https://testingcf.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css">'] },
   {
     test: /class=["'][^"']*\b(?:flex|grid|p[xy]?-\d|m[xy]?-\d|bg-[a-z]+-\d{2,3}|text-(?:xs|sm|lg|[2-9]?xl)|rounded(?:-[a-z]+)?|gap-\d|w-full|items-center)\b/,
@@ -48,11 +53,15 @@ export const librariesOn = () => librariesAllowed
 // A card's UI kept on GitHub or a CDN: $('body').load(url), or fetching a page.
 const REMOTE_PAGE = /\.load\(\s*["'`]https?:\/\/|fetch\(\s*["'`]https?:\/\/[^"'`]+\.html?\b/
 
-/** `<script>`/`<link>` tags for the libraries a frame body seems to use. */
-export function libraryTags(body) {
+/**
+ * `<script>`/`<link>` tags for the libraries a frame body seems to use. A Tavern Helper script's own frame
+ * (`script`, web/card-scripts.js) always has jQuery and lodash, as in Tavern Helper: a script bundled with its
+ * template takes them as globals without naming them the way the tests look for.
+ */
+export function libraryTags(body, script = false) {
   if (!librariesAllowed) return ''
   const remote = REMOTE_PAGE.test(body)
-  return LIBRARIES.filter(lib => lib.test.test(body) || (remote && lib.always)).flatMap(lib => lib.tags).join('')
+  return LIBRARIES.filter(lib => lib.test.test(body) || (remote && lib.always) || (script && lib.script)).flatMap(lib => lib.tags).join('')
 }
 
 /**
@@ -94,11 +103,21 @@ export function storedVariables({ presetId, cardId }) {
   return { global: all.global ?? {}, preset: all.preset?.[presetId] ?? {}, character: all.character?.[cardId] ?? {} }
 }
 
+/**
+ * A Tavern Helper script's own variables (getVariables({ type: 'script' })), by its key in web/card-scripts.js
+ * (owner/name): as it last saved them in this browser, else as its author shipped them (`seed`, the script's data).
+ */
+export function storedScriptVariables(key, seed = {}) {
+  const kept = readJson(VARS_KEY).script?.[key]
+  return kept && typeof kept === 'object' ? kept : seed && typeof seed === 'object' ? seed : {}
+}
+
 function saveVariables(type, ids, value) {
   const all = readJson(VARS_KEY)
   if (type === 'global') all.global = value
   else if (type === 'preset' && ids.presetId) all.preset = { ...all.preset, [ids.presetId]: value }
   else if (type === 'character' && ids.cardId) all.character = { ...all.character, [ids.cardId]: value }
+  else if (type === 'script' && ids.script) all.script = { ...all.script, [ids.script]: value }
   else return
   writeJson(VARS_KEY, all)
 }
@@ -322,6 +341,8 @@ function shimMain(ctx, makeFetch, olderLorebooks) {
     }
     // Addresses this card may now reach through the app (see fetch below).
     if (data && Array.isArray(data.agentTavernRelay)) relayedFetch.allow(data.agentTavernRelay)
+    // The presets as they are now (a script changed the one in use, or the chat switched): getPreset reads these.
+    if (data && data.agentTavernPresets && typeof data.agentTavernPresets === 'object') presetInfo = data.agentTavernPresets
     // An API call the page made for this frame (see fetch below): its status and headers, the body in pieces, the end.
     if (data && data.agentTavernFetch && data.agentTavernFetch.frame === ctx.frame) {
       const { id, head, chunk, done } = data.agentTavernFetch
@@ -385,6 +406,20 @@ function shimMain(ctx, makeFetch, olderLorebooks) {
 
   // ── Small lodash-like helpers ──
   const clone = value => (value === undefined ? undefined : JSON.parse(JSON.stringify(value)))
+  // The presets as a script frame got them (web/card-scripts.js, GET /api/chats/:id/th-preset): { names, loaded,
+  // inUse, editable }. Only the one the chat uses is read whole; changes go to the app, which saves them.
+  var presetInfo = ctx.presets || null
+  const isInUse = name => name === undefined || name === null || name === 'in_use' || (presetInfo && name === presetInfo.loaded)
+  const readPreset = name => {
+    if (!presetInfo) throw new Error('这个界面读不到预设：只有脚本（酒馆助手脚本库里的）能读') // i18n-ignore: for the card's scripts, inside its frame
+    if (!isInUse(name)) throw new Error(`只能读这个对话正在用的预设，读不到「${name}」`) // i18n-ignore: for the card's scripts, inside its frame
+    return clone(presetInfo.inUse)
+  }
+  const writePreset = async (name, preset) => {
+    const answer = await call('preset', { name: isInUse(name) ? 'in_use' : String(name), preset: clone(preset) })
+    if (answer && answer.info) presetInfo = answer.info
+    return Boolean(answer && answer.changed)
+  }
   const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value)
   const toPath = path => (Array.isArray(path) ? path : String(path).replace(/\[(\w+)\]/g, '.$1').split('.').filter(Boolean))
   const getPath = (object, path) => toPath(path).reduce((at, key) => (at == null ? undefined : at[key]), object)
@@ -438,7 +473,8 @@ function shimMain(ctx, makeFetch, olderLorebooks) {
     global: clone(ctx.vars.global || {}),
     preset: clone(ctx.vars.preset || {}),
     character: clone(ctx.vars.character || {}),
-    script: {},
+    // A script frame's own (web/card-scripts.js): its author's settings, as last saved here.
+    script: clone(ctx.vars.script || {}),
     extension: {},
   }
   /**
@@ -512,7 +548,7 @@ function shimMain(ctx, makeFetch, olderLorebooks) {
     }
     // Kept in this browser between renders.
     if (type === 'global') post('vars', { type, value, ...changesOf(before, value) })
-    else if (type === 'preset' || type === 'character') post('vars', { type, value })
+    else if (type === 'preset' || type === 'character' || (type === 'script' && ctx.scriptFrame)) post('vars', { type, value })
   }
   const getVariables = option => clone(read(option))
   const replaceVariables = (variables, option) => write(option, clone(variables || {}))
@@ -837,9 +873,18 @@ function shimMain(ctx, makeFetch, olderLorebooks) {
     },
 
     // ── Regex, changed for this chat only (web/shared/regex.js). Through the page, so these answer as promises (await them) ──
-    getTavernRegexes: (option = { type: 'character' }) => call('regex', { action: 'get', option }),
+    // A script's frame has the chat's regex already (with the presets): the list at once, as in Tavern Helper. Any
+    // other frame asks the page (a promise of it).
+    getTavernRegexes: (option = { type: 'character' }) => {
+      const type = ['global', 'preset'].includes(option && option.type) ? option.type : 'character'
+      return presetInfo && presetInfo.regexes ? clone(presetInfo.regexes[type] || []) : call('regex', { action: 'get', option })
+    },
     replaceTavernRegexes: async (regexes, option = { type: 'character' }) => {
       await call('regex', { action: 'replace', list: Array.isArray(regexes) ? regexes : [], option })
+      if (presetInfo && presetInfo.regexes) {
+        const type = ['global', 'preset'].includes(option && option.type) ? option.type : 'character'
+        presetInfo.regexes[type] = await call('regex', { action: 'get', option })
+      }
     },
     updateTavernRegexesWith: async (updater, option = { type: 'character' }) => {
       const list = await call('regex', { action: 'get', option })
@@ -912,6 +957,31 @@ function shimMain(ctx, makeFetch, olderLorebooks) {
     updatePersonaWith: unsupported('updatePersonaWith'),
     deletePersona: unsupported('deletePersona'),
 
+    // ── Presets: the chat's, read when the frame was made; a change is saved to it and its fixed prefix built again ──
+    getPresetNames: () => (presetInfo ? [...presetInfo.names] : []),
+    getLoadedPresetName: () => (presetInfo ? presetInfo.loaded : ''),
+    getPreset: name => readPreset(name),
+    replacePreset: async (name, preset) => {
+      await writePreset(name, preset)
+    },
+    setPreset: async (name, partial) => {
+      const current = readPreset(name)
+      const part = isObject(partial) ? partial : {}
+      await writePreset(name, { ...current, ...part, settings: { ...current.settings, ...(isObject(part.settings) ? part.settings : {}) } })
+      return readPreset(name)
+    },
+    updatePresetWith: async (name, updater) => {
+      const current = readPreset(name)
+      const next = await updater(current)
+      await writePreset(name, next === undefined ? current : next)
+      return readPreset(name)
+    },
+    loadPreset: unsupported('loadPreset'),
+    createPreset: unsupported('createPreset'),
+    createOrReplacePreset: unsupported('createOrReplacePreset'),
+    deletePreset: unsupported('deletePreset'),
+    renamePreset: unsupported('renamePreset'),
+
     triggerSlashWithResult: triggerSlash,
     getAllEnabledScriptButtons: () => ({}),
     getScriptTrees: () => [],
@@ -934,6 +1004,47 @@ function shimMain(ctx, makeFetch, olderLorebooks) {
   // Cards read `characters[characterId]`; characterId is this card's id here, not an index, so the card sits under both.
   const characters = [helper.getCharData()]
   if (ctx.cardId) characters[ctx.cardId] = characters[0]
+  // SillyTavern's callGenericPopup as scripts use it to ask the player: text (or HTML, or an element), and for INPUT a
+  // field; resolves with POPUP_RESULT, or the text typed (false when cancelled), as SillyTavern's does.
+  const POPUP_TYPE = { TEXT: 1, CONFIRM: 2, INPUT: 3, DISPLAY: 4, CROP: 5 }
+  const POPUP_RESULT = { AFFIRMATIVE: 1, NEGATIVE: 0, CANCELLED: null }
+  const callGenericPopup = (content, type = POPUP_TYPE.TEXT, inputValue = '', options = {}) => new Promise(resolve => {
+    const dialog = document.createElement('dialog')
+    dialog.style.cssText = 'max-width:min(90vw,520px);border:1px solid #8886;border-radius:10px;padding:16px;background:Canvas;color:CanvasText'
+    const body = document.createElement('div')
+    if (content instanceof Node) body.append(content)
+    else body.innerHTML = String(content ?? '')
+    dialog.append(body)
+    const field = type === POPUP_TYPE.INPUT ? document.createElement(options && options.rows > 1 ? 'textarea' : 'input') : null
+    if (field) {
+      field.value = String(inputValue ?? '')
+      field.style.cssText = 'display:block;width:100%;box-sizing:border-box;margin-top:10px'
+      dialog.append(field)
+    }
+    const row = document.createElement('div')
+    row.style.cssText = 'display:flex;justify-content:flex-end;gap:8px;margin-top:14px'
+    const done = value => {
+      dialog.close()
+      dialog.remove()
+      resolve(value)
+    }
+    const button = (text, answer) => {
+      const node = document.createElement('button')
+      node.type = 'button'
+      node.textContent = text
+      node.onclick = () => done(answer())
+      row.append(node)
+    }
+    const ok = (options && typeof options.okButton === 'string' && options.okButton) || '确定' // i18n-ignore: a card script's popup, inside its frame
+    const cancel = (options && typeof options.cancelButton === 'string' && options.cancelButton) || '取消' // i18n-ignore: a card script's popup, inside its frame
+    if (type === POPUP_TYPE.CONFIRM || type === POPUP_TYPE.INPUT) button(cancel, () => (field ? false : POPUP_RESULT.NEGATIVE))
+    button(ok, () => (field ? field.value : POPUP_RESULT.AFFIRMATIVE))
+    dialog.append(row)
+    dialog.addEventListener('cancel', () => done(type === POPUP_TYPE.INPUT ? false : POPUP_RESULT.CANCELLED))
+    document.body.append(dialog)
+    dialog.showModal()
+    field?.focus()
+  })
   const SillyTavern = {
     name1: ctx.names.user,
     name2: ctx.names.char,
@@ -946,6 +1057,11 @@ function shimMain(ctx, makeFetch, olderLorebooks) {
     substituteParams: substitudeMacros,
     eventSource: { on: helper.eventOn, once: eventOnce, emit: eventEmit, removeListener },
     eventTypes: tavern_events,
+    uuidv4: helper.builtin.uuidv4,
+    // SillyTavern's own popup, drawn in this frame (a sandboxed frame may not use the browser's confirm and prompt).
+    POPUP_TYPE,
+    POPUP_RESULT,
+    callGenericPopup,
   }
   SillyTavern.getContext = () => SillyTavern
   const TavernHelper = { ...helper, Mvu }
@@ -984,7 +1100,9 @@ function shimMain(ctx, makeFetch, olderLorebooks) {
     // By what is there, not by its size: the frame is not laid out while the page keeps it put away.
     const shown = () => {
       if (document.querySelector('dialog[open]')) return true
-      for (const item of document.body?.children ?? []) {
+      // What it put on the page: in the body, or beside it (a floating button added to <html> itself).
+      const placed = [...(document.body?.children ?? []), ...[...document.documentElement.children].filter(item => item !== document.head && item !== document.body)]
+      for (const item of placed) {
         if (/^(SCRIPT|STYLE|LINK|TEMPLATE|DIALOG)$/.test(item.tagName) || item.hidden) continue
         const style = getComputedStyle(item)
         if (style.display === 'none' || style.visibility === 'hidden') continue
@@ -1140,7 +1258,7 @@ function shimMain(ctx, makeFetch, olderLorebooks) {
  */
 export function installFrameBridge(handlers) {
   // What the frames may ask the page for, each answered with its result (handlers in web/app.js).
-  const ANSWERED = ['state', 'chatVars', 'mvuParse', 'editMessage', 'createMessages', 'deleteMessages', 'worldbook', 'generate', 'stopGenerate', 'ejs', 'fetch', 'fetchCancel', 'fetchAllow', 'inject', 'regex', 'audio']
+  const ANSWERED = ['state', 'chatVars', 'mvuParse', 'editMessage', 'createMessages', 'deleteMessages', 'worldbook', 'generate', 'stopGenerate', 'ejs', 'fetch', 'fetchCancel', 'fetchAllow', 'inject', 'regex', 'audio', 'preset']
   window.addEventListener('message', async event => {
     const data = event.data
     const id = data?.agentTavernCall
@@ -1177,7 +1295,8 @@ export function installFrameBridge(handlers) {
         // Global variables are the app's (templates share them), saved as the keys the frame changed;
         // preset and character ones stay in this browser.
         if (args.type === 'global') await handlers.globalVars(value, args.set || args.unset ? { set: args.set, unset: args.unset } : null)
-        else saveVariables(args.type, handlers.ids(), value)
+        // A script's own variables are kept under the script its frame was made for, never one it names itself.
+        else saveVariables(args.type, { ...handlers.ids(), script: frame.dataset.script || '' }, value)
       }
     } catch (error) {
       reply(false, error?.message ?? error)
@@ -1302,9 +1421,12 @@ export function broadcastChatVars(vars) {
   for (const frame of loadedFrames()) frame.contentWindow?.postMessage({ agentTavernChatVars: { vars } }, '*')
 }
 
-/** Tell every card frame the addresses its card may now reach through the app (frameFetch's `allow`). */
-export function broadcastRelay(origins) {
-  for (const frame of loadedFrames()) frame.contentWindow?.postMessage({ agentTavernRelay: origins }, '*')
+/**
+ * Tell every card frame the addresses its card may now reach through the app (frameFetch's `allow`); with `owner`, only
+ * the frames of that card or preset (a preset's script frames are preset:<id>, render.js).
+ */
+export function broadcastRelay(origins, owner = null) {
+  for (const frame of loadedFrames()) if (!owner || frame.dataset.card === owner) frame.contentWindow?.postMessage({ agentTavernRelay: origins }, '*')
 }
 
 /** Tell every card frame what the input box now holds, so `#send_textarea.value` reads true. */

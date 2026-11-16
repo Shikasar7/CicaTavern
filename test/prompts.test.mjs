@@ -13,7 +13,7 @@ async function setup(t) {
   t.after(() => rm(root, { recursive: true, force: true }))
   const store = createStore(root)
   await store.init()
-  await store.saveCard({ id: 'card1', name: '顾念念', data: {} })
+  await store.saveCard({ id: 'card1', name: '沈念念', data: {} })
   const chat = {
     id: 'chat1',
     cardId: 'card1',
@@ -39,7 +39,7 @@ test('the first read fills the library from pictures already drawn, one entry pe
   assert.deepEqual(entries.map(e => e.prompt), ['girl, tea house', 'girl, sword, moonlight'], 'newest first')
   const sword = entries[1]
   assert.equal(sword.drawn, 2)
-  assert.equal(sword.cardName, '顾念念')
+  assert.equal(sword.cardName, '沈念念')
   assert.equal(sword.chatTitle, '武当')
   assert.equal(sword.hasImage, true)
   assert.deepEqual(await library.image(sword.id), PNG)

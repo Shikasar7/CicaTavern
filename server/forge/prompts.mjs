@@ -7,7 +7,7 @@ import { configureEntries } from './configure.mjs'
 import { httpError } from '../store.mjs'
 import { DISCUSS_NOVEL_RULES, DISCUSS_REFERENCE_RULES, DISCUSS_STRUCTURE_RULES, PLAN_NOVEL_RULES, PLAN_REFERENCE_RULES, PLAN_STRUCTURE_RULES, referenceBlock, referenceRules, userMessage } from './references.mjs'
 import { defaultShow } from './status.mjs'
-import { BRICKS, EVENT_RATES, SHOWS, STATUS_THEMES, bookText, bookValue, cleanPalette, cleanPath, cleanScale, limitsOf, needsVariables } from '../../web/shared/status.js'
+import { BRICKS, EVENT_RATES, SHOWS, STATUS_THEMES, bookText, bookValue, cleanPalette, cleanPath, cleanScale, isMapPath, limitsOf, needsVariables } from '../../web/shared/status.js'
 import { cleanCreation, creationVariables } from './creation.mjs'
 import { BRICK_TALK, brickEntries, brickGaps, brickPlanLines, cleanEvents, cleanJudge, cleanRelations, cleanRoutes, cleanSchedule, cleanWorld, fallbackChecks, relationPath, routePaths, schedulePaths, worldPath } from './bricks.mjs'
 import { ATTRIBUTES, ATTRIBUTE_POINTS, AVERAGE, EFFECTS, STRENGTHS, cleanKit } from '../../web/shared/game/sheet.js'
@@ -919,7 +919,7 @@ export const ownWords = language => OWN_WORDS[englishCard(language) ? 'en' : 'zh
 
 const VARIABLE_TYPES = ['number', 'string', 'boolean', 'list', 'book']
 // DeepSeek writes the way a variable shows as its type ("type": "meter"). Left as a string, a meter compares as text.
-const TYPE_OF_SHOW = { meter: 'number', rating: 'number', tags: 'list', flag: 'boolean' }
+const TYPE_OF_SHOW = { meter: 'number', rating: 'number', tags: 'list', flag: 'boolean', map: 'book', forms: 'book' }
 
 /** A list's starting items as text. A model may write them as JSON in a string, which would read as one item. */
 function listText(raw) {
@@ -962,6 +962,10 @@ export function cleanVariables(variables, most = MAX_VARIABLES) {
         variable.initial = bookText(v.initial, variable.columns)
       }
       variable.show = SHOWS.includes(v.show) ? v.show : defaultShow(variable)
+      // The three that draw a picture are for a book (map, forms) or a word (types): on anything else, the usual way.
+      if ((['map', 'forms'].includes(variable.show) && type !== 'book') || (variable.show === 'types' && type !== 'string')) variable.show = defaultShow(variable)
+      // A book of the story's places is drawn as a map.
+      if (variable.show === 'table' && isMapPath(variable.path)) variable.show = 'map'
       // 状态栏分页: the page it shows on.
       if (clip(v.page, 8)) variable.page = clip(v.page, 8)
       // 只读: the story never changes it (a cap, a fixed fact shown in the bar). A book is rows that come and go.

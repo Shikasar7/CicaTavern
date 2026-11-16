@@ -32,6 +32,21 @@ import { msg } from './i18n.mjs'
 import { HISTORY_DEFAULT, cleanKeep, madeAt } from './draw-history.mjs'
 import { EXPRESSION_LOOK, expressionRequest, parseExpressionLabels } from '../web/shared/stage.js'
 import { IMAGE_PRESET_KEYS, imagePresetOf } from '../web/shared/draw.js'
+import { DECOR_SLOTS } from '../web/shared/status.js'
+
+// 画装饰图: what each slot asks for around the look's own words. The clear ones on plain white, which the page cuts away.
+const DECOR_FRAMES = {
+  texture: 'A seamless, tileable background texture that fills the whole square evenly: no objects, no figures, no text, no border, nothing in the middle that stands out.',
+  corner: 'A single decorative corner ornament filling the top-left corner, isolated on a flat, clean, pure white background with nothing else on it: no text, no figures.',
+  divider: 'A single thin horizontal ornamental divider running across the middle from edge to edge, isolated on a flat, clean, pure white background with nothing else on it: no text, no figures.',
+  emblem: 'A single small emblem or crest in the middle, isolated on a flat, clean, pure white background with nothing else on it: no text, no letters, no figures.',
+}
+
+/** 画装饰图's prompt: the slot's frame and the look's own words (what it is made of, its colors and motif). */
+export function decorPrompt(slot, words = '') {
+  const own = String(words ?? '').replace(/\s+/g, ' ').trim().slice(0, 600)
+  return [DECOR_FRAMES[slot] ?? DECOR_FRAMES.emblem, own || 'Elegant, finely drawn, in muted colors.'].join(' ')
+}
 
 export const DEFAULT_MEDIA = Object.freeze({
   helperModel: '', // provider ref that writes image prompts; empty = the chat's model when it is a provider
@@ -1171,6 +1186,9 @@ const SPRITE_SCENE = 'solo, upper body, cowboy shot, looking at viewer, standing
 // on the white, and a workflow at CFG 1 has no negative prompt to stop them.
 // The framing first: read in order, it went unheeded at the end (whole figures, small on the stage).
 const SPRITE_SCENE_NATURAL = `A half-body character sprite framed from the mid-thighs up, the legs cut off by the bottom edge and the feet out of frame, ${SPRITE_SCENE.replace(', standing', '')}, isolated on a flat, clean, pure white background with nothing else on it`
+// One of the cast drawn whole (a 形态: a creature, a beast's stage): nothing cut off by the edges.
+const WHOLE_SCENE = 'solo, full body, simple background, white background, full color'
+const WHOLE_SCENE_NATURAL = `The whole figure in frame from head to feet or tail, nothing cut off by the edges, ${WHOLE_SCENE}, isolated on a flat, clean, pure white background with nothing else on it`
 const SPRITE_NEGATIVE = `multiple views, text, scenery, ${OFF_PLAIN}, frame, border, nsfw`
 // A 立绘 ends at the thighs: shoes and socks in the outfit (and "standing" to a model reading sentences) draw the whole figure.
 const FOOTWEAR = /\b(boots?|shoes?|sneakers?|heels?|sandals?|loafers?|slippers?|socks?|footwear|barefoot)\b|靴|鞋|袜|赤脚|光脚/i
@@ -2361,7 +2379,8 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     if (!entry.looks) throw httpError(400, msg`先在「配图与朗读 → 角色名册」里写${entry.name}的长相，再画立绘`)
     const media = await settingsFor(choice)
     const tags = media.promptStyle === 'tags'
-    const cast = { scene: [style, tags ? SPRITE_SCENE : SPRITE_SCENE_NATURAL].filter(Boolean).join(', '), characters: [{ entry, action: [spriteOutfit(entry.outfit), tags ? 'standing' : ''].filter(Boolean).join(', '), position: '' }], solo: entry, lead: entry }
+    const framing = entry.whole ? (tags ? WHOLE_SCENE : WHOLE_SCENE_NATURAL) : tags ? SPRITE_SCENE : SPRITE_SCENE_NATURAL
+    const cast = { scene: [style, framing].filter(Boolean).join(', '), characters: [{ entry, action: [spriteOutfit(entry.outfit), tags && !entry.whole ? 'standing' : ''].filter(Boolean).join(', '), position: '' }], solo: entry, lead: entry }
     const plain = { ...media, comfyPurpose: 'sprite', imageShape: 'portrait', naiNegative: [media.naiNegative, SPRITE_NEGATIVE].filter(Boolean).join(', '), sdNegative: [media.sdNegative, SPRITE_NEGATIVE].filter(Boolean).join(', ') }
     return render(plain, cardId, cast, cast, '', signal, { negative: SPRITE_NEGATIVE })
   }
@@ -2567,6 +2586,38 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     return { buffer, backend }
   }
 
+  /**
+   * 画装饰图: a decoration for a card's 定制外观 (look-pictures.mjs) from the look's own prompt, in the shape its slot
+   * takes; no card look and no references (it is an ornament, not a scene of the story). The page cuts the white away
+   * from the clear ones and makes it small before it is kept. → { buffer, backend, prompt }
+   */
+  async function drawDecor({ slot, prompt = '' }, signal, choice = {}) {
+    if (!DECOR_SLOTS[slot]) throw httpError(400, msg`外观里没有这种装饰图`)
+    const media = await settingsFor(choice)
+    const text = decorPrompt(slot, prompt)
+    const plain = { ...media, comfyPurpose: 'scene', imageShape: DECOR_SLOTS[slot].shape, imageReference: false, naiReference: false, geminiReference: false }
+    const { buffer, backend } = await render(plain, null, null, null, text, signal, { scenery: true, references: 'none' })
+    return { buffer, backend, prompt: text }
+  }
+
+  /**
+   * 建角页的图: a picture of one of a 建角页's options (a pet, a keepsake), in the card's 画风, from the plan's own words
+   * for it (or the option's name). Handed back, not kept: the page makes it small and puts it on the form.
+   */
+  async function drawOptionPicture(cardId, prompt, signal, choice = {}) {
+    const media = await settingsFor(choice)
+    const card = await store.getCard(cardId)
+    const cardMedia = await looksOf(cleanCardMedia(card.media))
+    const own = String(prompt ?? '').replace(/\s+/g, ' ').trim().slice(0, 600)
+    if (!own) throw httpError(400, msg`这个选项没有可画的描述`)
+    const base = `${own}, a single subject in the middle, simple plain background, no text, no letters`
+    // The card's 画风: in tags as the other pictures take it, in a sentence otherwise.
+    const text = media.promptStyle === 'tags' ? withStyle(base, cardMedia.style, 'tags') : cardMedia.style ? `${base}. Art style: ${cardMedia.style}` : base
+    const plain = { ...media, imageShape: 'square', imageReference: false, naiReference: false, geminiReference: false }
+    const { buffer, backend } = await render(plain, null, null, null, text, signal, { references: 'none' })
+    return { buffer, backend, prompt: text }
+  }
+
   async function readImage(chatId, file) {
     if (!FILE.test(file)) throw httpError(400, msg`文件名不对`)
     return readFile(path.join(mediaDir(chatId), file))
@@ -2635,5 +2686,5 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     return listen.transcribe({ media, audio: readAudio(audio, type), names: Array.isArray(names) ? names : [] }, signal)
   }
 
-  return { drawFoe, defaults, settings, cleanSettings, ownBackends: ownBackendViews, naiStatus, setNaiToken, naiCheck, cardMediaView, saveCardMedia, inheritCardMedia, draftRoster, draftRosterFromChat, drawPortrait, drawCardArt, drawAvatar, drawScenery, drawBackdrop, drawSprite, drawExpression, drawsFromPicture, settingsFor, labelExpressions, readRosterRef, saveRosterRef, removeRosterRef, writeImagePrompt, generateImage, readImage, removeImage, removeChatMedia, copyChatMedia, loras, voices: voices.list, personaList: voices.personaList, ttsKeyStatus: voices.ttsKeyStatus, setTtsKey: voices.setTtsKey, voiceKeys: voices.keyStatus, setVoiceKey: voices.setKey, speak, previewVoice, accountVoices, transcribe, loadWorkflow, saveWorkflow, describeWorkflow, purposeWorkflows, comfyModels }
+  return { drawDecor, drawOptionPicture, drawFoe, defaults, settings, cleanSettings, ownBackends: ownBackendViews, naiStatus, setNaiToken, naiCheck, cardMediaView, saveCardMedia, inheritCardMedia, draftRoster, draftRosterFromChat, drawPortrait, drawCardArt, drawAvatar, drawScenery, drawBackdrop, drawSprite, drawExpression, drawsFromPicture, settingsFor, labelExpressions, readRosterRef, saveRosterRef, removeRosterRef, writeImagePrompt, generateImage, readImage, removeImage, removeChatMedia, copyChatMedia, loras, voices: voices.list, personaList: voices.personaList, ttsKeyStatus: voices.ttsKeyStatus, setTtsKey: voices.setTtsKey, voiceKeys: voices.keyStatus, setVoiceKey: voices.setKey, speak, previewVoice, accountVoices, transcribe, loadWorkflow, saveWorkflow, describeWorkflow, purposeWorkflows, comfyModels }
 }

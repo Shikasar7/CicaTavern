@@ -48,7 +48,7 @@ export const BRICK_TALK = {
   routes: '这张卡有几条路线，各有结局：走上哪一条看 <user> 做了什么。和用户商量有哪几条线、各自怎么走上去、结局大致是什么。用户说交给你，就按这张卡定。',
 }
 
-const BOOKS_PLAN = root => `tracking.enabled 为 true。tracking.variables 里写一到三本册子，记玩的时候会增减的东西，一本一个变量：{"path": "${root}.册子名", "label": "短名", "type": "book", "show": "table", "columns": ["每行要记的项"], "initial": [{"name": "开局就有的一行", "项": "值"}], "check": "什么时候加一行、删一行、改一行"}。columns 1 到 3 个，不算名字：每行的 name 就是第一列。initial 可以是 []。一样东西只记一处：已经是单独变量的（比如钱、灯油），不再写进册子。记什么按这张卡定，不要只想到一种。`
+const BOOKS_PLAN = root => `tracking.enabled 为 true。tracking.variables 里写一到三本册子，记玩的时候会增减的东西，一本一个变量：{"path": "${root}.册子名", "label": "短名", "type": "book", "show": "table", "columns": ["每行要记的项"], "initial": [{"name": "开局就有的一行", "项": "值"}], "check": "什么时候加一行、删一行、改一行"}。columns 1 到 3 个，不算名字：每行的 name 就是第一列。initial 可以是 []。一样东西只记一处：已经是单独变量的（比如钱、灯油），不再写进册子。记什么按这张卡定，不要只想到一种。有两种册子可以画成图，show 换一个词就行：记下到过、听说过哪些地点的那一本，show 写 map（columns 用区域、通行、见闻这类；状态栏把它画成地图，标出去过的、受限的和当前所在，所以另有一个记当前地点的文字变量时效果最好）；记同伴的那一本，在卡带游戏规则、同伴有几个形态时，show 写 forms（画出各阶段的图）。`
 
 const SELFCHECK_PLAN = battle => `方案里多写一个 selfcheck 字段：["要查的一句话"]，3 到 6 条，每条写成能答是或否的问题，写这张卡最容易写崩的地方：人物的声口和分寸、这个世界的规矩、前后要连得上的事。通用的不写（不替 <user> 说话、角色不知道不该知道的事）${battle ? '，强弱和得失也不写（程序算）' : ''}。`
 

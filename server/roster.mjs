@@ -2,14 +2,15 @@
 // optional reference picture each (one entry may be the player character).
 // The helper model only says who is in the frame and what they do, as
 //   场景: <setting, camera, light>
-//   [顾念念] <outfit now, pose, action, expression> | left
+//   [沈念念] <outfit now, pose, action, expression> | left
 // and the looks are filled in from here, so a face stays the same picture
 // after picture and several people in one frame do not swap features.
 import { randomBytes } from 'node:crypto'
 import { httpError } from './store.mjs'
 import { msg } from './i18n.mjs'
 
-export const ROSTER_MAX = 24
+// Enough for a large cast and creatures with a picture for every form (a form takes the picture of the entry named like it).
+export const ROSTER_MAX = 48
 const KINDS = ['girl', 'boy', 'other']
 const ID = /^[a-z0-9]{6,16}$/
 // At most this many [Name] lines are used; more people go unnamed into the scene.
@@ -58,6 +59,8 @@ export function cleanRoster(input) {
       loraStrength: cleanStrength(raw.loraStrength),
       // Their lines read aloud in this voice ('' = the card's dialogue voice); as long as a card's.
       voice: text(raw.voice, 250),
+      // Drawn whole, not as a half-body sprite: a 形态 (a beast's stage), 创作角色卡 says so.
+      ...(raw.whole === true ? { whole: true } : {}),
     })
   }
   return out

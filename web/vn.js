@@ -19,6 +19,7 @@ import { shrink, zoomedQuery } from '/theme.js'
 import { currentLook, headIn, letters, lookFields, lookHints, lookNames, paletteNames, palettesOf, setHero, setLook, slideSlab } from '/game-look.js'
 import { VN_ID, isBuiltinPreset } from '/shared/basic.js'
 import { historyStrip, keptItems } from '/draw-choice.js'
+import { smaller } from '/look-pictures.js'
 
 // How long 自动 lets a roll be seen before throwing the die.
 const GATE_WAIT = 1200
@@ -35,7 +36,8 @@ const SMALLEST_STAGE = 0.42
 const ROOM_FOR_TITLE = 0.62
 // A scene drawn for one turn (画这一轮的场景) stays this chat's background while the place is the same.
 const PINS_KEY = 'cicatavern.vnPins'
-// Each card's 立绘 choices: { [cardId]: { off, manual, fixed: [names] } }; nothing kept: on, and whoever speaks steps on.
+// Each card's 立绘 choices: { [cardId]: { off, manual, fixed: [names], player } }; nothing kept: on, and whoever speaks
+// steps on (the player only with `player`: 你说话时也上台, or when one of the fixed).
 const STAGE_KEY = 'cicatavern.vnStage'
 // How much of the reply, up to the line on screen, 画 CG pictures.
 const MOMENT_LINES = 12
@@ -319,7 +321,10 @@ export function initVn(deps) {
   async function facesOnStage() {
     const shown = [...onStage.values()].filter(actor => actor.src)
     const places = await Promise.all(shown.map(actor => headIn(actor.src)))
-    const moved = ((parseFloat(getComputedStyle(actors).getPropertyValue('--stage-x')) || 0) / 100) * actors.offsetWidth
+    // A look may slide the stage over while choosing: only as far as keeps every picture inside the frame.
+    const room = roomOnRight(shown, places)
+    actors.style.setProperty('--vn-room', `${room}px`)
+    const moved = Math.min(((parseFloat(getComputedStyle(actors).getPropertyValue('--stage-x')) || 0) / 100) * actors.offsetWidth, room)
     return shown.flatMap((actor, i) => {
       if (!places[i]) return []
       const { face, ratio } = places[i]
@@ -328,6 +333,17 @@ export function initVn(deps) {
       const [x, y, half] = [moved + actor.box.offsetLeft + (face.x - 0.5) * width, root.offsetHeight - height + face.y * height, (face.side * height * FACE_SHOWN) / 2]
       return [{ left: x - half, right: x + half, top: y - half, bottom: y + half + half * 0.2, picture: root.offsetHeight - height }]
     })
+  }
+
+  /** How far right the stage can move before someone's picture reaches the right edge (where each stands, not where it is on its way). */
+  function roomOnRight(shown, places) {
+    const width = actors.offsetWidth
+    const edges = shown.flatMap((actor, i) => {
+      const image = actor.box.querySelector('img.show') ?? actor.box.querySelector('img')
+      const wide = image?.offsetWidth || (places[i] ? actor.box.offsetHeight / places[i].ratio : 0)
+      return wide ? [((parseFloat(actor.box.style.getPropertyValue('--x')) || 50) / 100) * width + wide / 2] : []
+    })
+    return edges.length ? Math.max(0, Math.round(width - Math.max(...edges) - FACE_GAP)) : width
   }
 
   /** Between `ceiling` and what is over them, how small the people have to stand, and how far up. Smaller keeps the top of the picture where it is. */
@@ -647,7 +663,10 @@ export function initVn(deps) {
     const rows = [switchRow(t`显示立绘`, !choice.off, on => setStage({ off: !on }), t`关掉后只看背景和文字（这张卡记住）`)]
     if (choice.off) return rows
     rows.push(switchRow(t`自动识别出场角色`, !choice.manual, on => setStage({ manual: !on }), t`谁说话谁上场；关掉后台上只有常驻角色`))
-    // The player too: never on the stage by themselves, but there when chosen here (a cast that likes to see them).
+    // The player too: never on the stage by themselves, but there when chosen here (a cast that likes to see them), or
+    // stepping on as they speak with 你说话时也上台.
+    const me = state.names.find(entry => entry.player)
+    if (me && !choice.manual) rows.push(switchRow(t`你说话时也上台`, choice.player, on => setStage({ player: on }), t`你说话时你的立绘也上场，和别的角色一样；要角色名册里有你自己的立绘`))
     const people = [...state.names.filter(entry => !entry.player), ...state.names.filter(entry => entry.player)]
     if (!people.length) return rows
     const fixed = choice.fixed ?? []
@@ -656,7 +675,7 @@ export function initVn(deps) {
     const buttons = people.map(entry => {
       const held = fixed.includes(entry.name)
       const bare = list && !spriteSources(cardId, entry, list).length
-      const title = bare ? t`还没有立绘，画好才能上台` : entry.player ? t`你自己：平时不上台，选上就一直站在台上` : ''
+      const title = bare ? t`还没有立绘，画好才能上台` : entry.player ? t`你自己：选上就一直站在台上；只想说话时上台，打开上面的「你说话时也上台」` : ''
       const b = el('button', { type: 'button', 'aria-pressed': String(held), title }, [entry.name, entry.player ? el('small', { text: t`你` }) : null, bare ? el('small', { text: t`无立绘` }) : null].filter(Boolean))
       b.addEventListener('click', () => setStage({ fixed: held ? fixed.filter(name => name !== entry.name) : [...fixed, entry.name] }))
       return b
@@ -2170,6 +2189,24 @@ export function initVn(deps) {
     })
   }
 
+  /** 建角页: a picture for one of its options, made small here and put on the page (the card's form keeps it). */
+  function drawOption(cardId, { label, option, prompt }, extra = {}) {
+    enqueue(cardId, {
+      key: `creation:${label}:${option}`,
+      label: option,
+      url: `/api/cards/${cardId}/creation/draw`,
+      body: { prompt, ...extra },
+      done: async data => {
+        try {
+          const image = await smaller(data.image, { side: OPTION_SIDE })
+          await api(`/api/cards/${cardId}/creation/picture`, { method: 'PUT', body: { label, option, image } })
+        } catch (error) {
+          toast(t`「${option}」的图没存上：${error.message}`, 6000)
+        }
+      },
+    })
+  }
+
   /** 画这一轮的场景: the helper reads the latest reply; the picture becomes this chat's background here. */
   function drawTurn(cardId) {
     const chat = getChat()
@@ -2294,12 +2331,14 @@ export function initVn(deps) {
 
   /**
    * Who may stand on the stage: someone in the cast, unless they turned out to have no picture. The player only when
-   * chosen as one of the 常驻角色: then they stand there too, and light up when the story has them speak.
+   * chosen as one of the 常驻角色 (then they stand there too, and light up when the story has them speak), or with
+   * 你说话时也上台, when they step on as they speak, like anyone else.
    */
   function isActor(name) {
     const entry = state.names.find(item => item.name === name)
     if (!entry || cast.none.has(`${state.cardId}:${name}`)) return false
-    return !entry.player || (stageOf(state.cardId).fixed ?? []).includes(name)
+    const choice = stageOf(state.cardId)
+    return !entry.player || Boolean(choice.player) || (choice.fixed ?? []).includes(name)
   }
 
   // name → { box, src }: the ones standing there now.
@@ -2548,7 +2587,12 @@ export function initVn(deps) {
     }
   }
 
-  async function prepareSteps(cardId, { places = [], faces: wanted = true }) {
+  /**
+   * @param options - { places: the plan's places (a scene each), faces: draw 表情 too, map: { prompt } for the world's
+   *   map (a scene called 地图, under the status bar's 地图), creation: [{ label, option, prompt }] the 建角页's pictures,
+   *   skipForms: leave the 形态 in the cast undrawn }
+   */
+  async function prepareSteps(cardId, { places = [], faces: wanted = true, skipForms = false, map = null, creation = [] }) {
     const picked = deps.pickDraw
       ? await deps.pickDraw({ title: t`用什么画立绘、表情和场景`, action: t`下一步`, batch: true, note: t`还没配置画图接口的话，点左下角「设置画图方式…」。` })
       : { body: {}, label: '' }
@@ -2574,20 +2618,27 @@ export function initVn(deps) {
     const chat = getChat()
     const names = speakerNames({ char: chat?.names?.char, user: chat?.names?.user, roster })
     const entryOf = member => names.find(item => item.id === member.id) ?? { name: member.name, id: member.id, keys: [] }
-    const missingFaces = member => EXPRESSIONS.filter(name => name !== 'neutral' && !faces[member.id]?.[name])
-    const sprites = roster.filter(member => !list[member.id])
+    // 形态 in the cast (a pet's stages, a hero's suits) are drawn once, without faces.
+    const book = await api(`/api/cards/${cardId}/game`).catch(() => null)
+    const formNames = new Set(Object.values((book?.book ?? book)?.forms ?? {}).flat().map(form => form.name))
+    const missingFaces = member => (formNames.has(member.name) ? [] : EXPRESSIONS.filter(name => name !== 'neutral' && !faces[member.id]?.[name]))
+    const sprites = roster.filter(member => !list[member.id] && !(skipForms && formNames.has(member.name)))
     const fromPicture = (await api('/api/media/draws-from-picture', { method: 'POST', body: choice }).catch(() => null))?.drawsFromPicture !== false
     // `faces: false` (创作角色卡's 备齐门面图, with 表情 not ticked): the 立绘 only.
     const withFaces = wanted && fromPicture
     const faceCount = withFaces ? roster.reduce((n, member) => n + missingFaces(member).length, 0) : 0
     const backgrounds = [...new Set(places.map(place => String(place ?? '').trim()).filter(Boolean))].filter(place => !matchScene(place, sceneList))
-    const total = sprites.length + faceCount + backgrounds.length
+    // 建角页的图 already on the form are not drawn again.
+    const had = creation.length ? (await api(`/api/cards/${cardId}/creation/pictures`).catch(() => null))?.pictures ?? {} : {}
+    creation = creation.filter(item => !had[item.label]?.includes(item.option))
+    const mapWanted = Boolean(map?.prompt) && !sceneList.some(scene => scene.file && /^(?:地图|世界地图|全图|大地图|map|world ?map)$/i.test(String(scene.name ?? '').trim()))
+    const total = sprites.length + faceCount + backgrounds.length + (mapWanted ? 1 : 0) + creation.length
     const noFaces = fromPicture || !wanted ? '' : t`选的画图方式不能照着立绘改表情（重画出来会像另一个人），表情先不画：可以换成能参考图片的画图方式，或者导入表情包。`
     if (!total) {
       toast(noFaces || t`立绘、表情和场景都已经齐了`, noFaces ? 8000 : undefined)
       return 0
     }
-    const counts = [sprites.length ? t`${sprites.length} 张立绘` : '', faceCount ? t`${faceCount} 个表情` : '', backgrounds.length ? t`${backgrounds.length} 张场景` : ''].filter(Boolean).join(t`、`)
+    const counts = [sprites.length ? t`${sprites.length} 张立绘` : '', faceCount ? t`${faceCount} 个表情` : '', backgrounds.length ? t`${backgrounds.length} 张场景` : '', mapWanted ? t`1 张地图` : '', creation.length ? t`${creation.length} 张建角页的图` : ''].filter(Boolean).join(t`、`)
     const how = picked.label ? t`用「${picked.label}」` : t`用设置里的画图方式`
     if (!confirm([t`${how}画 ${counts}：先画立绘，某个人的立绘画好了才画他的表情；一张一张来，进度显示在「立绘」窗口顶部，可以随时取消。用付费接口时每张都会计费。开始？`, noFaces].filter(Boolean).join('\n\n'))) return 0
     const queueFaces = member => {
@@ -2598,9 +2649,14 @@ export function initVn(deps) {
       else drawSprite(cardId, entryOf(member), choice, () => queueFaces(member))
     }
     for (const place of backgrounds) drawPlace(cardId, place, choice)
+    if (mapWanted) drawPlace(cardId, t`地图`, { ...choice, prompt: map.prompt })
+    for (const item of creation) drawOption(cardId, item, choice)
     if (library?.open) renderLibrary()
     return total
   }
+
+    // A 建角页 option's picture: its side, small enough for many to sit in the page's own code.
+  const OPTION_SIDE = 192
 
   // ─── The library (场景 / 立绘) ───────────────────────────────────────
   let library = null
@@ -3440,6 +3496,6 @@ export function initVn(deps) {
   }
 
   // 创作角色卡's 备齐门面图: the same pictures 做成视觉小说 gets ready, without entering the mode.
-  const prepareArt = (cardId, places = [], { faces = true } = {}) => prepare(cardId, { places, faces })
+  const prepareArt = (cardId, places = [], { faces = true, skipForms = false, map = null, creation = [] } = {}) => prepare(cardId, { places, faces, skipForms, map, creation })
   return { render, streamed, isOn, turnFlags, marks, makeReady, prepareArt, picturesChanged, refreshEnd, compose: openCompose, drawFoe, pictureFor, loadPictures }
 }

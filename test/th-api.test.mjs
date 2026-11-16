@@ -61,6 +61,32 @@ test('a card frame lacks just what th-api says it lacks', () => {
   assert.deepEqual(lacking, [...MISSING.page])
 })
 
+test("a script's frame: its own variables as shipped, the chat's preset, SillyTavern's popup", async () => {
+  const posted = []
+  const regexes = { global: [], preset: [{ id: 'r1', script_name: '正则 V2.1.6', enabled: true }], character: [] }
+  const presets = { names: ['甲', '乙'], loaded: '甲', inUse: { settings: {}, prompts: [{ id: 'main', enabled: true }], prompts_unused: [], extensions: {} }, editable: true, regexes }
+  const tag = frameShim({ names: { user: '你', char: 'x' }, frame: 'f1', scriptFrame: '面板', vars: { latest: {}, script: { should_enable: true } }, presets, viewport: { height: 800, width: 1200 }, events: {}, messages: [], lastId: 0 })
+  const context = frameWindow()
+  // The page the frame posts to.
+  context.parent = new Proxy(context.parent, { get: (target, key) => (key === 'postMessage' ? message => posted.push(message) : target[key]) })
+  vm.runInContext(tag.replace(/^<script>/, '').replace(/<\\?\/script>$/, ''), context, { timeout: 5000 })
+  const read = code => JSON.parse(vm.runInContext(`JSON.stringify(${code})`, context))
+  assert.deepEqual(read("getVariables({ type: 'script' })"), { should_enable: true })
+  vm.runInContext("replaceVariables({ should_enable: false }, { type: 'script' })", context)
+  assert.deepEqual(JSON.parse(JSON.stringify(posted.filter(m => m.op === 'vars').map(m => m.args))), [{ type: 'script', value: { should_enable: false } }], 'kept by the page, under this script')
+  assert.equal(vm.runInContext('getLoadedPresetName()', context), '甲')
+  assert.deepEqual(read('getPresetNames()'), ['甲', '乙'])
+  assert.equal(vm.runInContext("getPreset('in_use').prompts[0].id", context), 'main')
+  assert.throws(() => vm.runInContext("getPreset('乙')", context), /只能读这个对话正在用的预设/)
+  // The chat's regex at once, as Tavern Helper hands them (a script checks them without awaiting).
+  assert.deepEqual(read("getTavernRegexes({ type: 'preset', name: 'in_use' }).map(r => r.script_name)"), ['正则 V2.1.6'])
+  assert.equal(vm.runInContext('typeof SillyTavern.callGenericPopup', context), 'function')
+  assert.equal(vm.runInContext('SillyTavern.POPUP_RESULT.AFFIRMATIVE', context), 1)
+  // replacePreset goes to the page, the one in use by name as 'in_use'.
+  vm.runInContext("replacePreset('甲', getPreset('in_use'))", context)
+  assert.deepEqual(posted.filter(m => m.op === 'preset').map(m => m.args.name), ['in_use'])
+})
+
 test('the server sandbox lacks just what th-api says it lacks', async t => {
   const model = createServer((req, res) => res.end('{}'))
   await new Promise(resolve => model.listen(0, '127.0.0.1', resolve))

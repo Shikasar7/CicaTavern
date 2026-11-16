@@ -414,7 +414,7 @@ function frameDocument(body, id, context) {
   const css = getComputedStyle(document.documentElement)
   const color = css.getPropertyValue('--ink').trim() || '#222'
   // Tavern Helper's frame name: TH-message--<floor>--<n>.
-  const compat = context ? frameShim({ ...context, frame: id, frameName: `TH-message--${context.messageId}--${id.replace(/\D/g, '')}` }) + libraryTags(body) : ''
+  const compat = context ? frameShim({ ...context, frame: id, frameName: `TH-message--${context.messageId}--${id.replace(/\D/g, '')}` }) + libraryTags(body, Boolean(context.scriptFrame)) : ''
   if (context) body = replaceViewportHeight(body)
   // Measure the content, not the document: the document is never shorter than the frame, so a
   // block that collapses (a folded thinking panel, a re-render at a cached height) left a gap.
@@ -448,8 +448,9 @@ export function htmlFrame(body, context = null) {
   frame.className = 'card-frame'
   frame.dataset.frame = id
   frame.dataset.key = hash(body)
-  // Whose frame it is: the page keeps its localStorage under that card (compat.js storedFrameStorage).
-  if (context?.cardId) frame.dataset.card = context.cardId
+  // Whose frame it is: the page keeps its localStorage under that card (compat.js storedFrameStorage), and asks
+  // what it may do of that card; a preset's script is the preset's (`owner`, preset:<id>; web/card-scripts.js).
+  if (context?.owner || context?.cardId) frame.dataset.card = context.owner || context.cardId
   // And whose floor: a card may change its own message or the latest (compat.js setMessage, app.js editMessage).
   if (context?.nodeId) frame.dataset.node = context.nodeId
   frame.setAttribute('sandbox', 'allow-scripts allow-popups allow-popups-to-escape-sandbox')

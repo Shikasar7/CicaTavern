@@ -13,7 +13,7 @@
 // The model works in the background; the window polls the draft while it does.
 import { t, zh } from '/i18n.js'
 import { addsText } from '/game-growth.js'
-import { EFFECTS, EVENT_RATES, VARIABLE_TEMPLATES, bookValue, cleanPath, cleanStatusSpec, rangeOf, settlePicks, templateVariables } from '/shared/status.js'
+import { EFFECTS, EVENT_RATES, VARIABLE_TEMPLATES, bookValue, cleanPath, cleanStatusSpec, planMap, rangeOf, settlePicks, templateVariables } from '/shared/status.js'
 import { splitPath } from '/shared/vars.js'
 import { statusBar } from '/status.js'
 import { REFERENCE_FILES, cutShort, cutShortNote, referenceBody, referenceChips } from '/talk.js'
@@ -146,10 +146,10 @@ const STRATEGY = { constant: [t`常驻`, 'on'], keyword: [t`提到时`, 'key'], 
 const POSITION = { before: t`角色定义前`, after: t`角色定义后`, depth: t`上下文末尾` }
 const STAGE_TEXT = { discuss: t`聊想法`, plan: t`定方案`, look: t`状态栏与门面`, write: t`动笔`, polish: t`打磨与头像` }
 // How a tracked variable shows in the status bar, and the value type each implies (hidden keeps its own).
-const SHOWS = [['meter', t`进度条`], ['number', t`数字`], ['rating', t`星级`], ['text', t`文字`], ['badge', t`徽章`], ['long', t`长文字`], ['tags', t`标签`], ['list', t`列表`], ['table', t`表格`], ['flag', t`是或否`], ['hidden', t`不显示`]]
+const SHOWS = [['meter', t`进度条`], ['number', t`数字`], ['rating', t`星级`], ['text', t`文字`], ['badge', t`徽章`], ['long', t`长文字`], ['tags', t`标签`], ['list', t`列表`], ['table', t`表格`], ['flag', t`是或否`], ['map', t`地图`], ['forms', t`形态链`], ['types', t`克制图`], ['hidden', t`不显示`]]
 // 变量模板 (web/shared/status.js VARIABLE_TEMPLATES): a set of variables for a kind of story.
 const TEMPLATE_TEXT = { romance: t`恋爱日常`, adventure: t`冒险闯荡`, mystery: t`悬疑调查`, survival: t`荒野求生`, growth: t`修炼成长`, business: t`经营养成` }
-const SHOW_TYPE = { meter: 'number', number: 'number', rating: 'number', text: 'string', badge: 'string', long: 'string', tags: 'list', list: 'list', table: 'book', flag: 'boolean' }
+const SHOW_TYPE = { meter: 'number', number: 'number', rating: 'number', text: 'string', badge: 'string', long: 'string', tags: 'list', list: 'list', table: 'book', flag: 'boolean', map: 'book', forms: 'book', types: 'string' }
 
 /** The variables' initial values as the card's [InitVar] will have them (server/forge/write.mjs typedValue). */
 function initialOf(variables) {
@@ -624,7 +624,7 @@ export function initForge({ api, el, toast, guard, saveDownload = null, exportPa
     if (!novel) {
       return el('div', { class: 'forge-home' }, [head, el('div', { class: 'book-novel' }, [
         el('p', { text: t`把一部小说整本读完，照着它做一张卡。原文不会每轮都发给向导：先一段一段读，记下人物、地点、势力、物品、设定和发生过的大事，再写一份全书梗概，向导照着梗概和你聊。` }),
-        el('p', { class: 'hint', text: t`选一个文本文件（txt、md，UTF-8 和 GBK 都认，最多 300 万字）。选了只是切好段、估出用量，点「开始抽取」才发送。Word 和 PDF 先另存成 txt。` }),
+        el('p', { class: 'hint', text: t`选一个文本文件（txt、md，UTF-8 和 GBK 都认，最多 500 万字）。选了只是切好段、估出用量，点「开始抽取」才发送。Word 和 PDF 先另存成 txt。` }),
         el('p', { class: 'hint', text: t`小说的内容只用于自己玩。做出来的卡要公开发布，先确认原作允许。` }),
         novelPick(el, guard, async file => novelCall('', { method: 'POST', body: await novelFile(file) })),
       ])])
@@ -633,6 +633,7 @@ export function initForge({ api, el, toast, guard, saveDownload = null, exportPa
     const top = novelTop(el, novel, {
       limit: n => novelCall('', { method: 'PUT', body: { limit: n } }),
       model: ref => novelCall('', { method: 'PUT', body: { model: ref } }),
+      parallel: n => novelCall('', { method: 'PUT', body: { parallel: n } }),
       run: () => novelCall('/run', { method: 'POST' }),
       runAll: guard(async () => {
         await api('/api/novel', { method: 'PUT', body: { limit: 0 } })
@@ -760,7 +761,7 @@ export function initForge({ api, el, toast, guard, saveDownload = null, exportPa
       el('div', { class: 'forge-attach-row' }, [attachButton(), el('span', { class: 'hint', text: t`手上有设定或小说？附上它，向导会照着聊，写卡时也照着写。附别人的卡时默认只学结构，不读内容。` })]),
       // A file is read to 60 000 characters; a whole novel, or a worldbook kept here, is begun from instead.
       el('div', { class: 'forge-attach-row' }, [
-        el('button', { type: 'button', class: 'btn ghost small', text: t`从小说开始`, title: t`把一部小说整本读完（最多 300 万字），照着它做一张卡`, onclick: () => openNovel() }),
+        el('button', { type: 'button', class: 'btn ghost small', text: t`从小说开始`, title: t`把一部小说整本读完（最多 500 万字），照着它做一张卡`, onclick: () => openNovel() }),
         el('button', { type: 'button', class: 'btn ghost small', text: t`用已有的世界书`, title: t`照应用里存着的一本世界书做卡：它的条目会跟着这张卡`, onclick: () => openBookPick() }),
         el('span', { class: 'hint', text: t`整本小说别用「附文件」（一份只读前 6 万字）。` }),
       ]),
@@ -1490,7 +1491,7 @@ export function initForge({ api, el, toast, guard, saveDownload = null, exportPa
     const rows = el('div', { class: 'var-rows' })
     const specNow = () => {
       const shown = variables.filter(v => v.path.trim())
-      return cleanStatusSpec({ title: title.value.trim(), theme: look.theme, palette, skin: look.skin, portrait: look.portrait, scene: look.scene, effect: look.effect, phone: look.phone, layout: look.layout, fields: shown.map(v => ({ path: v.path, label: v.label, show: v.show, ...rangeOf(v.range), ...(look.pages && v.page ? { page: v.page } : {}) })) })
+      return cleanStatusSpec({ title: title.value.trim(), theme: look.theme, palette, skin: look.skin, portrait: look.portrait, scene: look.scene, effect: look.effect, phone: look.phone, layout: look.layout, map: planMap({ ...draft.plan, tracking: { ...tracking, variables: shown } }), fields: shown.map(v => ({ path: v.path, label: v.label, show: v.show, ...rangeOf(v.range), ...(look.pages && v.page ? { page: v.page } : {}) })) })
     }
     // What 调整状态栏 has for a bar's preview (web/card-check.js), once loaded: 试数值 and 定制外观.
     let tools = null
@@ -1500,7 +1501,7 @@ export function initForge({ api, el, toast, guard, saveDownload = null, exportPa
       const edit = state.skinEdit?.id === draft.id ? state.skinEdit : null
       if (spec && edit) edit.spec = spec
       const tried = tools && edit ? { values: tools.triedState(edit, starting()), note: tools.triedNote(edit) } : { values: starting(), note: t`预览 · 初始值` }
-      preview.replaceChildren(spec ? statusBar(el, spec, tried.values, { collapsible: false, note: tried.note }) ?? empty() : empty())
+      preview.replaceChildren(spec ? statusBar(el, spec, tried.values, { collapsible: false, note: tried.note, art: edit?.lookArt ?? null }) ?? empty() : empty())
     }
     // 试数值 (the preview with other values) and 定制外观 (a model writes a look for this card's bar), for a plan with a bar to dress.
     const tryout = el('div', {})
@@ -1518,7 +1519,9 @@ export function initForge({ api, el, toast, guard, saveDownload = null, exportPa
           drawPreview()
           edit.look?.draw?.()
         } }))
-        design.replaceChildren(tools.skinPanel(el, edit, { api, url: `/api/forge/${draft.id}/skin`, stopUrl: `/api/forge/${draft.id}/skin/stop`, state: starting(), redraw: wear, kept: look.skin?.css ?? '', instant: true, cover: draft.plan.cover ? { name: draft.plan.name, cover: draft.plan.cover } : null, busyWords: t`向导正在写，等它写完再设计外观。` }))
+        // 定制外观的图 are a saved card's: the card this draft was saved as.
+        edit.onArt = drawPreview
+        design.replaceChildren(tools.skinPanel(el, edit, { api, url: `/api/forge/${draft.id}/skin`, stopUrl: `/api/forge/${draft.id}/skin/stop`, state: starting(), redraw: wear, kept: look.skin?.css ?? '', instant: true, cover: draft.plan.cover ? { name: draft.plan.name, cover: draft.plan.cover } : null, busyWords: t`向导正在写，等它写完再设计外观。`, pictureCard: draft.card?.savedCardId ?? '', pickDraw }))
         drawPreview()
       }).catch(() => {})
     }
@@ -1685,7 +1688,7 @@ export function initForge({ api, el, toast, guard, saveDownload = null, exportPa
       el('p', { text: start ? (start.length > 220 ? `${start.slice(0, 220)}…` : start) : t`（开场白写好以后显示在这里）` }),
     ])
     const shown = draft.plan.tracking.variables.filter(v => v.path.trim())
-    const spec = hasBar ? cleanStatusSpec({ title: draft.plan.tracking.title, theme: bar.theme, palette: bar.palette, skin: bar.skin, portrait: bar.portrait, scene: bar.scene, effect: bar.effect, phone: bar.phone, layout: bar.layout, fields: shown.map(v => ({ path: v.path, label: v.label, show: v.show, ...rangeOf(v.range), ...(bar.pages && v.page ? { page: v.page } : {}) })) }) : null
+    const spec = hasBar ? cleanStatusSpec({ title: draft.plan.tracking.title, theme: bar.theme, palette: bar.palette, skin: bar.skin, portrait: bar.portrait, scene: bar.scene, effect: bar.effect, phone: bar.phone, layout: bar.layout, map: planMap({ ...draft.plan, tracking: { ...draft.plan.tracking, variables: shown } }), fields: shown.map(v => ({ path: v.path, label: v.label, show: v.show, ...rangeOf(v.range), ...(bar.pages && v.page ? { page: v.page } : {}) })) }) : null
     const barNow = spec ? statusBar(el, spec, initialOf(shown), { collapsible: false, remembers: false }) : null
     preview.replaceChildren(opening, ...(barNow ? [barNow] : []))
     if (cover) {
@@ -1730,9 +1733,10 @@ export function initForge({ api, el, toast, guard, saveDownload = null, exportPa
 
   /** 备齐门面图 with what to draw beside it: the 立绘 always, 表情 and 场景 as ticked (kept while the window is open). */
   function pictureRow(draft, busy) {
-    const want = (state.pictureWants = state.pictureWants ?? ({ faces: true, scenes: true }))
+    const want = (state.pictureWants = state.pictureWants ?? ({ faces: true, scenes: true, forms: true, map: true, creation: true }))
     const cast = draft.plan.characters.filter(c => c.looks_tags).length
     const places = (draft.plan.world?.places ?? []).length
+    const { forms, map, options } = extraPictures(draft.plan)
     const tick = (key, label, title) => {
       const box = el('input', { type: 'checkbox', disabled: busy, onchange: () => { want[key] = box.checked } })
       box.checked = want[key]
@@ -1743,8 +1747,29 @@ export function initForge({ api, el, toast, guard, saveDownload = null, exportPa
       el('span', { class: 'hint', text: t`立绘 ${cast} 张` }),
       tick('faces', t`表情（每人 7 张）`, t`照着立绘给每个角色画七种表情，状态栏和视觉小说里立绘会换表情。画图方式不能照图改时不画`),
       tick('scenes', t`场景 ${places} 张`, t`给方案里的每个地点画一张场景图，状态栏顶上和开场页的背景会用`),
+      forms ? tick('forms', t`形态 ${forms} 张`, t`给游戏规则里写了长相的每个形态画一张，状态栏的形态链和行囊里用；不画表情`) : null,
+      map ? tick('map', t`地图 1 张`, t`画一张这个世界的地图，作状态栏「地图」的底图；地点的位置画好后在「修改角色卡 → 状态栏」里拖`) : null,
+      options.length ? tick('creation', t`建角页 ${options.length} 张`, t`给建角页上写了长相的选项各画一张小图`) : null,
       el('small', { class: 'hint', text: t`用「配图与朗读」里设的画图方式，花的是画图那边的额度。头像在「打磨与头像」里画。` }),
     ])
+  }
+
+  /**
+   * What 备齐门面图 can draw beyond the cast and the places: the 形态 the rules give a look (they are in the cast once
+   * the card is saved), the world's map where the bar has one, the 建角页's options that have a look.
+   */
+  function extraPictures(plan) {
+    const forms = Object.values(plan.game?.forms ?? {}).flat().filter(form => form.looks).length
+    const map = plan.tracking?.variables?.some(variable => variable.show === 'map') ? mapPrompt(plan) : ''
+    const options = (plan.creation?.fields ?? []).filter(field => field.kind === 'pick').flatMap(field => field.options.filter(option => field.looks?.[option]).map(option => ({ label: field.label, option, prompt: field.looks[option] })))
+    return { forms, map, options }
+  }
+
+  /** The world's map, to be drawn: its places by name, nothing written on it (the bar puts the names on). */
+  function mapPrompt(plan) {
+    const places = (plan.world?.places ?? []).map(place => place.name).filter(Boolean).slice(0, 16)
+    const style = plan.avatar?.style ? `, ${plan.avatar.style}` : ''
+    return `An illustrated top-down map of the world of ${plan.name || 'this story'}, seen from above like an old fantasy map, with distinct regions for: ${places.join(', ')}. No text, no letters, no labels, no people${style}`
   }
 
   /** How a core character's stages read: names, and the range of the tracked value each covers. */
@@ -2398,12 +2423,14 @@ export function initForge({ api, el, toast, guard, saveDownload = null, exportPa
   })
 
   /** 门面 → 备齐门面图: the card saved first (pictures are a saved card's), then its 立绘, 表情 and places drawn. */
-  const preparePictures = guard(async ({ faces = true, scenes = true } = {}) => {
+  const preparePictures = guard(async ({ faces = true, scenes = true, forms = true, map = true, creation = true } = {}) => {
     if (!state.draft?.card?.savedCardId) await saveCard()
     const id = state.draft?.card?.savedCardId
     if (!id) return
     const places = scenes ? (state.draft.plan?.world?.places ?? []).map(place => place.name) : []
-    await prepareArt(id, places, { faces })
+    const extra = extraPictures(state.draft.plan)
+    // 形态 are in the cast once saved (rosterOf): not ticked, they are left undrawn for now.
+    await prepareArt(id, places, { faces, skipForms: !forms, map: map && extra.map ? { prompt: extra.map } : null, creation: creation ? extra.options : [] })
   })
 
   const setStage = guard(async stage => {

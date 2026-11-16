@@ -30,12 +30,12 @@ function unpack(buffer) {
 
 test('a chat travels whole: every node and picture, under the card and preset of the same name', async t => {
   const pc = await storeAt(t, 'pc')
-  await pc.store.saveCard({ id: 'pcCard', name: '顾念念', data: {} })
+  await pc.store.saveCard({ id: 'pcCard', name: '沈念念', data: {} })
   await pc.store.savePreset({ id: 'pcPreset', name: '捌', importedAt: '2026-10-01T00:00:00.000Z', prompts: [] })
-  await pc.store.saveProviders([{ id: 'modelflare', name: 'M', api: 'anthropic-messages', baseURL: 'https://x' }])
+  await pc.store.saveProviders([{ id: 'relay', name: 'M', api: 'anthropic-messages', baseURL: 'https://x' }])
   const chat = {
-    id: 'pcChat', cardId: 'pcCard', presetId: 'pcPreset', presetName: '捌', model: 'modelflare/claude-opus-5-5', title: '武当（分支）',
-    names: { user: '你', char: '顾念念' }, systemPrompt: '前缀', tips: { s1: 'u1' },
+    id: 'pcChat', cardId: 'pcCard', presetId: 'pcPreset', presetName: '捌', model: 'relay/claude-opus-5-5', title: '武当（分支）',
+    names: { user: '你', char: '沈念念' }, systemPrompt: '前缀', tips: { s1: 'u1' },
     nodes: {
       root: { id: 'root', role: 'assistant', text: '开场', createdAt: '2026-10-01T00:00:00.000Z' },
       u1: { id: 'u1', role: 'user', parent: 'root', text: '练剑', createdAt: '2026-10-01T00:01:00.000Z' },
@@ -48,12 +48,12 @@ test('a chat travels whole: every node and picture, under the card and preset of
   await writeFile(path.join(pc.root, 'media', 'pcChat', 'p1.png'), PNG)
 
   const { header, picture } = unpack(await chatPackage(pc.store, 'pcChat'))
-  assert.equal(header.cardName, '顾念念')
+  assert.equal(header.cardName, '沈念念')
   assert.deepEqual(header.media.map(m => m.file), ['p1.png'], 'a picture missing on disk is left out')
   assert.deepEqual(header.chat.tips, {})
 
   const phone = await storeAt(t, 'phone')
-  await phone.store.saveCard({ id: 'phoneCard', name: '顾念念', data: {} })
+  await phone.store.saveCard({ id: 'phoneCard', name: '沈念念', data: {} })
   await phone.store.savePreset({ id: 'phonePreset', name: '捌', importedAt: '2026-10-01T00:00:00.000Z', prompts: [] })
   const { media, ...rest } = header
   const { chat: imported, card, missingPreset } = await importChatPackage(phone.store, { header: rest, cardId: '' })
@@ -83,9 +83,9 @@ test('a package without its card on this device asks for the card; the preset is
 
 test('a package whose chat tree is broken is refused; one already on disk still opens', async t => {
   const { store } = await storeAt(t, 'tree')
-  await store.saveCard({ id: 'card', name: '顾念念', data: {} })
+  await store.saveCard({ id: 'card', name: '沈念念', data: {} })
   const at = '2026-10-01T00:00:00.000Z'
-  const header = nodes => ({ format: 'agent-tavern-chat', cardName: '顾念念', chat: { id: 'x', names: { user: '你', char: '顾念念' }, nodes } })
+  const header = nodes => ({ format: 'agent-tavern-chat', cardName: '沈念念', chat: { id: 'x', names: { user: '你', char: '沈念念' }, nodes } })
   for (const [label, nodes] of [
     ['a loop', { root: { id: 'root', parent: 'b', createdAt: at }, b: { id: 'b', parent: 'root', role: 'user', createdAt: at } }],
     ['a node calling itself root', { root: { id: 'root', parent: null, createdAt: at }, x: { id: 'root', parent: 'root', createdAt: at } }],
@@ -103,7 +103,7 @@ test('a package whose chat tree is broken is refused; one already on disk still 
   assert.ok(activePath(chat).length >= 2)
 
   // A chat file damaged some other way still opens: the walk stops where it would go round.
-  const damaged = { id: 'bad', cardId: 'card', names: { user: '你', char: '顾念念' }, nodes: { root: { id: 'root', parent: 'b', sel: 'b', createdAt: at }, b: { id: 'b', parent: 'root', sel: 'root', role: 'user', createdAt: at } } }
+  const damaged = { id: 'bad', cardId: 'card', names: { user: '你', char: '沈念念' }, nodes: { root: { id: 'root', parent: 'b', sel: 'b', createdAt: at }, b: { id: 'b', parent: 'root', sel: 'root', role: 'user', createdAt: at } } }
   assert.deepEqual(activePath(damaged).map(node => node.id), ['root', 'b'])
   assert.deepEqual(pathTo(damaged, 'b').map(node => node.id), ['root', 'b'])
   assert.equal(foldedTurns(damaged), 0)

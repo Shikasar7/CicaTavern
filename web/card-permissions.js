@@ -1,6 +1,7 @@
 // 卡片界面权限 (角色卡菜单): what this card's own interface may do without a click
 // from the player, as answered when it first asked (web/shared/frame-permissions.js),
-// changed here. Each change is kept at once.
+// changed here. Each change is kept at once. A preset's 脚本权限 (预设) is the same panel
+// for the Tavern Helper scripts the preset carries (web/card-scripts.js).
 import { t } from '/i18n.js'
 
 /**
@@ -22,6 +23,7 @@ export function initCardPermissions({ el, permissions, onRelayChange }) {
     return select
   }
 
+  /** @param card - { id, name }, or a preset's { id: 'preset:<id>', name, preset: true }. */
   function open(card) {
     dialog = dialog ?? (document.body.appendChild(el('dialog', { class: 'dialog card-permissions', 'aria-label': t`卡片界面权限` })))
     const render = () => {
@@ -45,12 +47,14 @@ export function initCardPermissions({ el, permissions, onRelayChange }) {
         : [el('p', { class: 'hint', text: t`还没有问过要连接哪个地址。` })]
       dialog.replaceChildren(
         el('form', { method: 'dialog', class: 'cp-form' }, [
-          el('h2', { text: t`「${card.name}」的卡片界面权限` }),
-          el('p', { class: 'hint', text: t`卡片界面（回复里卡片自带的网页界面）第一次要做这些事时会问你一次，之后照你的选择来，不再询问。选「用到时再问」，下次用到时重新问。` }),
-          row(t`自己发送输入框里的内容`, t`你没有点它、它自己发出去的时候；每发一次按一轮对话计费。在卡片界面里点它的按钮发送算你自己发的，不用问。`, choice(kept.send, t`自己发送输入框里的内容`, pick('send'))),
-          row(t`自己调用模型`, t`比如生成角色信息；每次按一次对话计费，内容不进对话。`, choice(kept.generate, t`自己调用模型`, pick('generate'))),
+          el('h2', { text: card.preset ? t`预设「${card.name}」的脚本权限` : t`「${card.name}」的卡片界面权限` }),
+          el('p', { class: 'hint', text: card.preset
+            ? t`这个预设带的酒馆助手脚本第一次要做这些事时会问你一次，之后用这个预设的对话都照你的选择来，不再询问；角色卡自己的权限管不到它，它的权限也管不到角色卡。选「用到时再问」，下次用到时重新问。`
+            : t`卡片界面（回复里卡片自带的网页界面）第一次要做这些事时会问你一次，之后照你的选择来，不再询问。选「用到时再问」，下次用到时重新问。` }),
+          row(t`自己发送输入框里的内容`, card.preset ? t`你没有点它、它自己发出去的时候；每发一次按一轮对话计费。在脚本的窗口里点它的按钮发送算你自己发的，不用问。` : t`你没有点它、它自己发出去的时候；每发一次按一轮对话计费。在卡片界面里点它的按钮发送算你自己发的，不用问。`, choice(kept.send, t`自己发送输入框里的内容`, pick('send'))),
+          row(t`自己调用模型`, card.preset ? t`每次按一次对话计费，内容不进对话。在服务器上运行的脚本也照这一项来，它们没法当场问你，没允许时会提示。` : t`比如生成角色信息；每次按一次对话计费，内容不进对话。`, choice(kept.generate, t`自己调用模型`, pick('generate'))),
           el('h3', { text: t`经 CicaTavern 连接的地址` }),
-          el('p', { class: 'hint', text: t`卡片界面自己的网络请求，浏览器直接连不上时改由 CicaTavern 替它连接，它发出的内容会经过 CicaTavern。` }),
+          el('p', { class: 'hint', text: card.preset ? t`脚本自己的网络请求，浏览器直接连不上时改由 CicaTavern 替它连接，它发出的内容会经过 CicaTavern。从网址加载的脚本，要先在 设置 → 更多 → 隐私与网络 里打开「加载酒馆助手脚本库」。` : t`卡片界面自己的网络请求，浏览器直接连不上时改由 CicaTavern 替它连接，它发出的内容会经过 CicaTavern。` }),
           ...addresses,
           el('div', { class: 'row end' }, [el('button', { class: 'btn primary', value: 'close', text: t`完成` })]),
         ]),

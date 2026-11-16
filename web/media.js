@@ -2189,7 +2189,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
 
   const KIND_TEXT = [['girl', t`女`], ['boy', t`男`], ['other', t`其他`]]
   // As many as the server keeps (server/roster.mjs ROSTER_MAX).
-  const ROSTER_MAX = 24
+  const ROSTER_MAX = 48
   /** 念念, 小师妹 → the names one by one, as the server splits them. */
   const splitNames = value => String(value ?? '').split(/[,，、/|]+/).map(name => name.trim()).filter(Boolean)
   const newEntryId = () => Array.from(crypto.getRandomValues(new Uint8Array(5)), b => b.toString(16).padStart(2, '0')).join('')
@@ -2280,6 +2280,8 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       loraTrigger: get('loraTrigger').value,
       loraStrength: Number(get('loraStrength').value || 0.8),
       ref: box.dataset.ref === '1',
+      // A 形态 from 创作角色卡: drawn whole (no field for it here; it stays as it was).
+      ...(box.dataset.whole === '1' ? { whole: true } : {}),
     }
   }
 
@@ -2318,7 +2320,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         const current = readEntry(node)
         viewPicture(img.src, t`${current.name}：${current.looks}${current.outfit ? t`；${current.outfit}` : ''}`, t`人设图`)
       }
-      const node = el('details', { class: 'roster-entry', 'data-id': entry.id, 'data-ref': entry.ref ? '1' : '', 'data-voice': entry.voice ?? '', 'data-flag': flag })
+      const node = el('details', { class: 'roster-entry', 'data-id': entry.id, 'data-ref': entry.ref ? '1' : '', 'data-voice': entry.voice ?? '', 'data-flag': flag, 'data-whole': entry.whole ? '1' : '' })
       node.open = open
       // The line it shows closed: a face, the name and the names it goes by, what is set.
       const face = el('span', { class: 'roster-face', 'aria-hidden': 'true' })

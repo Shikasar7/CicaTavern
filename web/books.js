@@ -320,7 +320,7 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
     if (!novel) {
       $('book-main').replaceChildren(head, el('div', { class: 'book-novel' }, [
         el('p', { text: t`把一部小说、一份很长的设定整本读完，抽成一本世界书：人物、地点、势力、物品、设定和发生过的大事，一样一条，对话里提到名字时才发给模型。` }),
-        el('p', { class: 'hint', text: t`选一个文本文件（txt、md，UTF-8 和 GBK 都认，最多 300 万字）。选了只是切好段、估出用量，点「开始抽取」才发送。Word 和 PDF 先另存成 txt。` }),
+        el('p', { class: 'hint', text: t`选一个文本文件（txt、md，UTF-8 和 GBK 都认，最多 500 万字）。选了只是切好段、估出用量，点「开始抽取」才发送。Word 和 PDF 先另存成 txt。` }),
         novelPick(el, guard, pickNovel),
       ]))
       return
@@ -329,6 +329,7 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
     const busy = Boolean(job)
     const top = novelTop(el, novel, {
       limit: n => novelCall('', { method: 'PUT', body: { limit: n } }),
+      parallel: n => novelCall('', { method: 'PUT', body: { parallel: n } }),
       run: () => novelCall('/run', { method: 'POST' }),
       runAll: guard(async () => {
         await api('/api/novel', { method: 'PUT', body: { limit: 0 } })

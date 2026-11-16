@@ -7,25 +7,35 @@
 // was just pressed, else as a small panel docked bottom right that does not cover the story (放大 makes it the big
 // window). Put away, the script keeps running. What it needs of SillyTavern's own page that the stand-in has not (its
 // chat list, its menus) does not work.
-// Loaded only for a card that has such scripts: app.js imports this when one does.
+//
+// The chat's preset may carry scripts too (server/preset-scripts.mjs): they start here the same way, before the card's
+// (SillyTavern's order), and stop when the chat moves to another preset or the preset switches them off. A preset's
+// script is the preset's own: its frame keeps its storage and asks what it may do under preset:<id>, not the card.
+// Both may have a button of the same name: each shows, and each press reaches only its own script.
+// Loaded only for a card or preset that has such scripts: app.js imports this when one does.
 import { t } from '/i18n.js'
 import { htmlFrame } from '/render.js'
-import { librariesOn } from '/compat.js'
+import { librariesOn, storedScriptVariables } from '/compat.js'
 
 const READY_MS = 8000
 // After the chat is drawn: its own frames first.
 const START_AFTER_MS = 800
 // What a script shows this soon after a press of its button is that button's window.
 const PRESS_SHOWS_MS = 5000
+// A script that uses Tavern Helper's preset or regex functions gets the chat's presets and regex in its frame (GET
+// /api/chats/:id/th-preset): Tavern Helper answers those at once, not later.
+const USES_PRESETS = /\b(?:getPreset|getLoadedPresetName|getPresetNames|replacePreset|updatePresetWith|setPreset|getTavernRegexes)\s*\(/
 
 /** `</script>` in a script's own text would end the tag it is put in. */
 const asModule = code => `<script type="module">${String(code).replace(/<\/script/gi, '<\\/script')}</script>`
 
 /**
  * @param deps - { api, el, toast, getChat: () => the open chat, frameContext(chat): the latest floor's frame
- *   context, serverEvent(type, args): a card event to the scripts on the server (app.js) }
+ *   context, ownerContext(owner): what a preset's script frame has of its own instead of the card's (its storage,
+ *   the addresses it may reach), serverEvent(type, args, owner): a button's event to the scripts on the server of
+ *   'card' or 'preset' (app.js), onPresetChanged(answer): a script changed the chat's preset (app.js) }
  */
-export function initCardScripts({ api, el, toast, getChat, frameContext, serverEvent }) {
+export function initCardScripts({ api, el, toast, getChat, frameContext, ownerContext, serverEvent, onPresetChanged }) {
   const bar = el('div', { class: 'script-bar', role: 'toolbar', 'aria-label': t`卡的脚本按钮`, hidden: true })
   document.querySelector('#composer .composer-box')?.before(bar)
   const title = el('h2', { class: 'script-window-title' })
@@ -94,10 +104,11 @@ export function initCardScripts({ api, el, toast, getChat, frameContext, serverE
     if (event.key === 'Escape' && isOpen() && !isDocked()) close()
   })
 
-  // For the chat open now: its card, its scripts, and the frames made so far (script name → { frame, ready, … }).
-  let shown = { chatId: '', cardId: '', list: null }
+  // For the chat open now: whose scripts (`owners`: its card and preset as they were read), the scripts, the frames
+  // made so far (script key → { frame, ready, … }) and the presets for the scripts that read them.
+  let shown = { chatId: '', owners: '', list: null, presets: null }
   const frames = new Map()
-  let showing = null // the script whose frame the window shows
+  let showing = null // the key of the script whose frame the window shows
   let starting = 0 // which start of the chat's scripts is current (a later chat drops an earlier one)
 
   function dropFrames() {
@@ -108,41 +119,68 @@ export function initCardScripts({ api, el, toast, getChat, frameContext, serverE
     starting++
   }
 
-  /** The bar for `chat` (null: none open). A chat of another card drops the frames of the one before. */
-  async function show(chat) {
-    const fresh = !chat || chat.cardId !== shown.cardId || chat.id !== shown.chatId
+  /** A list of the server's (buttonsOf) as this page keeps it: each script and button says whose it is. */
+  function tagged(list, owner) {
+    return {
+      page: (list?.page ?? []).map(script => ({ ...script, ...owner, key: `${owner.ownerKey}/${script.name}` })),
+      server: (list?.server ?? []).map(item => ({ ...item, ...owner })),
+    }
+  }
+
+  /**
+   * The bar for `chat` (null: none open). A chat of another card or preset, or a preset whose scripts changed, drops
+   * the frames of the one before and starts its own.
+   * @param which - { card: the card has scripts for the page, preset: { id, name, sign } when the chat's preset has
+   *   (sign changes with its scripts and switches), else null }
+   */
+  async function show(chat, which = {}) {
+    const preset = chat && which.preset ? which.preset : null
+    const owners = chat ? JSON.stringify([chat.cardId, which.card === true, preset?.id ?? '', preset?.sign ?? '']) : ''
+    const fresh = !chat || chat.id !== shown.chatId || owners !== shown.owners
     if (fresh) dropFrames()
     if (!chat) {
-      shown = { chatId: '', cardId: '', list: null }
+      shown = { chatId: '', owners: '', list: null, presets: null }
       bar.hidden = true
       return
     }
-    if (chat.cardId !== shown.cardId || !shown.list) {
-      shown = { chatId: chat.id, cardId: chat.cardId, list: null }
-      const list = await api(`/api/cards/${chat.cardId}/script-buttons`).catch(() => null)
-      if (shown.cardId !== chat.cardId) return
-      shown.list = list ?? { page: [], server: [] }
+    if (owners !== shown.owners || !shown.list) {
+      shown = { chatId: chat.id, owners, list: null, presets: null }
+      const none = { page: [], server: [] }
+      const [own, presetList] = await Promise.all([
+        which.card ? api(`/api/cards/${chat.cardId}/script-buttons`).catch(() => null) : none,
+        preset ? api(`/api/presets/${preset.id}/script-buttons`).catch(() => null) : none,
+      ])
+      if (shown.owners !== owners) return
+      const fromPreset = tagged(presetList, { owner: 'preset', ownerKey: `preset:${preset?.id}`, ownerName: preset?.name ?? '' })
+      const fromCard = tagged(own, { owner: 'card', ownerKey: chat.cardId, ownerName: '' })
+      shown.list = { page: [...fromPreset.page, ...fromCard.page], server: [...fromPreset.server, ...fromCard.server] }
     }
     shown.chatId = chat.id
+    const titleOf = item => (item.owner === 'preset' ? t`预设「${item.ownerName}」的「${item.script}」脚本的按钮` : t`「${item.script}」脚本的按钮`)
     const buttons = [
-      ...shown.list.server.map(item => ({ label: item.name, script: item.script, press: () => serverEvent(item.name, []) })),
-      ...shown.list.page.flatMap(script => script.buttons.map(name => ({ label: name, script: script.name, press: () => pressOnPage(script, name) }))),
+      ...shown.list.server.map(item => ({ label: item.name, title: titleOf(item), owner: item.owner, press: () => serverEvent(item.name, [], item.owner) })),
+      ...shown.list.page.flatMap(script => script.buttons.map(name => ({ label: name, title: titleOf({ ...script, script: script.name }), owner: script.owner, press: () => pressOnPage(script, name) }))),
     ]
     bar.replaceChildren(...buttons.map(item => el('button', {
       type: 'button',
-      class: 'btn small script-btn',
+      class: `btn small script-btn${item.owner === 'preset' ? ' from-preset' : ''}`,
       text: item.label,
-      title: t`「${item.script}」脚本的按钮`,
+      title: item.title,
       onclick: () => Promise.resolve(item.press()).catch(error => toast(error.message, 6000)),
     })))
     bar.hidden = !buttons.length
     if (fresh) startAll(chat.id)
   }
 
-  /** Every page script of the chat, started one after another once the chat is drawn. */
+  /** Every page script of the chat, started one after another once the chat is drawn: the preset's, then the card's. */
   async function startAll(chatId) {
     const run = starting
     await new Promise(resolve => setTimeout(resolve, START_AFTER_MS))
+    if (shown.list?.page.some(script => USES_PRESETS.test(script.content))) {
+      const presets = await api(`/api/chats/${chatId}/th-preset`).catch(() => null)
+      if (run !== starting) return
+      shown.presets = presets
+    }
     for (const script of shown.list?.page ?? []) {
       if (run !== starting || shown.chatId !== chatId) return
       if (script.remote && !librariesOn()) continue
@@ -156,15 +194,19 @@ export function initCardScripts({ api, el, toast, getChat, frameContext, serverE
 
   /** The script's frame, made when the chat opens or at its first press: loaded when `ready` resolves. */
   function frameOf(script) {
-    const made = frames.get(script.name)
+    const made = frames.get(script.key)
     if (made) return made
     const chat = getChat()
     const context = chat ? frameContext(chat) : null
     if (!context) throw new Error(t`没有打开的对话`)
-    const frame = htmlFrame(asModule(script.content), { ...context, scriptFrame: script.name })
+    const own = script.owner === 'preset' ? { owner: script.ownerKey, ...ownerContext(script.ownerKey) } : {}
+    const presets = shown.presets && USES_PRESETS.test(script.content) ? { presets: shown.presets } : {}
+    // Its own variables: what its author shipped (its data), as it last saved them here.
+    const vars = { ...context.vars, script: storedScriptVariables(script.key, script.data) }
+    const frame = htmlFrame(asModule(script.content), { ...context, ...own, ...presets, vars, scriptFrame: script.name })
     frame.classList.add('script-frame')
     frame.removeAttribute('loading')
-    frame.dataset.script = script.name
+    frame.dataset.script = script.key
     const ready = new Promise(resolve => {
       const timer = setTimeout(resolve, READY_MS)
       // Its own setup (`$(fn)`, after waitGlobalInitialized) runs right after it loads.
@@ -174,8 +216,9 @@ export function initCardScripts({ api, el, toast, getChat, frameContext, serverE
       }, { once: true })
     })
     body.append(frame)
-    const entry = { frame, ready, visible: false, pressedAt: 0, dismissed: false }
-    frames.set(script.name, entry)
+    const label = script.owner === 'preset' ? t`${script.name}（预设）` : script.name
+    const entry = { frame, ready, visible: false, pressedAt: 0, dismissed: false, label }
+    frames.set(script.key, entry)
     return entry
   }
 
@@ -193,19 +236,19 @@ export function initCardScripts({ api, el, toast, getChat, frameContext, serverE
   function showFrame(entry, docked) {
     for (const other of frames.values()) other.frame.classList.toggle('shown', other === entry)
     showing = entry.frame.dataset.script
-    title.textContent = showing
+    title.textContent = entry.label
     open(docked)
   }
 
   /**
-   * A card event another frame emitted (a status bar's button): to the page scripts that listen for it, their frame
-   * made if it is not yet. Not back to the frame it came from.
+   * A card event another frame emitted (a status bar's button): to the page scripts that listen for it, the preset's
+   * and the card's, their frame made if it is not yet. Not back to the frame it came from.
    */
   async function deliver(type, args = [], from = '') {
     for (const script of shown.list?.page ?? []) {
       if (!script.events.includes(type)) continue
       if (script.remote && !librariesOn()) continue
-      if (frames.get(script.name)?.frame.dataset.frame === from) continue
+      if (frames.get(script.key)?.frame.dataset.frame === from) continue
       await pressOnPage(script, type, args)
     }
   }
@@ -231,5 +274,24 @@ export function initCardScripts({ api, el, toast, getChat, frameContext, serverE
     showFrame(entry, isOpen() && showing === name ? isDocked() : true)
   }
 
-  return { show, scriptView, deliver, refresh: () => show(getChat()) }
+  /**
+   * A script asked to change a preset (replacePreset and the rest, compat.js): saved, the chat's prefix built again
+   * when it is the one in use, and every script frame that reads presets told of it.
+   */
+  async function changePreset({ name, preset }) {
+    const chat = getChat()
+    if (!chat) throw new Error(t`没有打开的对话`)
+    const answer = await api(`/api/chats/${chat.id}/th-preset`, { method: 'PUT', body: { name, preset } })
+    if (answer?.info) {
+      shown.presets = answer.info
+      for (const entry of frames.values()) entry.frame.contentWindow?.postMessage({ agentTavernPresets: answer.info }, '*')
+    }
+    if (answer?.changed) onPresetChanged?.(answer, chat.id)
+    return { changed: Boolean(answer?.changed), info: answer?.info ?? null }
+  }
+
+  /** Whether a frame is one of the scripts' (its owner is then the preset or the card it was made for). */
+  const isScriptFrame = frameId => [...frames.values()].some(entry => entry.frame.dataset.frame === frameId)
+
+  return { show, scriptView, deliver, changePreset, isScriptFrame }
 }

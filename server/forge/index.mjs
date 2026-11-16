@@ -44,6 +44,7 @@ import { applyPresetChanges, presetEditRequest, presetPickRequest, presetTooLong
 import { applyRegexChanges, readRegexEdit, regexEditRequest, tryChanges } from './regex-edit.mjs'
 import { cleanThemeContext, readThemeEdit, themeApplier, themeEditRequest } from './theme-edit.mjs'
 import { createCheck, helpersOf } from './check-session.mjs'
+import { keepOptionPictures } from './creation.mjs'
 import { SKIN_OUTPUT, cleanProblems, cleanWish, readSkin, skinRequest } from './skin.mjs'
 import { statusSpecOf, withStatusCopy } from './status.mjs'
 import { cleanEffect, cleanLayout, cleanPalette, cleanSkin, cleanSkinCss, cleanStatusSpec, layoutFor, skinClass } from '../../web/shared/status.js'
@@ -94,6 +95,20 @@ function imageType(buffer) {
 }
 
 /**
+ * The plan's characters as the card's cast (角色名册), so 配图 and the visual novel know their looks from the start;
+ * and each 形态 the rules give a look, as one of the cast too: the status bar's 形态链 and the 行囊 show a form by the
+ * picture of the one in the cast with its name (备齐门面图 draws them, without faces).
+ */
+export function rosterOf(plan) {
+  const people = plan.characters
+    .filter(c => c.looks_tags)
+    .map(c => ({ name: c.name, aliases: c.aliases.join('，'), kind: /女|female|woman|girl/i.test(c.gender) ? 'girl' : /男|male|man|boy/i.test(c.gender) ? 'boy' : 'other', looks: c.looks_tags, outfit: c.outfit_tags }))
+  const named = new Set(people.flatMap(entry => [entry.name, ...entry.aliases.split('，')]).filter(Boolean))
+  const forms = Object.values(plan.game?.forms ?? {}).flat().filter(form => form.looks && !named.has(form.name) && named.add(form.name))
+  return [...people, ...forms.map(form => ({ name: form.name, aliases: '', kind: 'other', looks: form.looks, outfit: '', whole: true }))]
+}
+
+/**
  * @param draw - (input, signal, choice) → { buffer, backend }: one picture from the image
  *   backend set up in 配图, or the one `choice` picks for it ({ backend, model },
  *   media.drawCardArt); without it, avatars are upload-only.
@@ -106,7 +121,9 @@ function imageType(buffer) {
  * @param history - createDrawHistory() (抽图历史): where a saved card's picture goes when 更新这张卡 replaces one set elsewhere;
  *   its keep() is also how many old avatars a draft keeps.
  */
-export function createForge(store, { proxyNow = () => null, ledger = null, engine = null, draw = null, drawBackdrop = null, storeBackdrop = null, rulebooks = null, writeChatState = null, history = null } = {}) {
+export function createForge(store, { proxyNow = () => null, ledger = null, engine = null, draw = null, drawBackdrop = null, storeBackdrop = null, rulebooks = null, writeChatState = null, history = null, lookPictures = null } = {}) {
+  // 定制外观的图: what a look may name on a saved card (look-pictures.mjs).
+  const lookPrompt = async cardId => (lookPictures ? lookPictures.forPrompt(cardId) : { pictures: [], drawn: [] })
   const dir = path.join(store.dirs.root, 'forge')
   const fileOf = id => {
     if (!ID.test(String(id))) throw httpError(400, msg`无效的 ID`)
@@ -379,7 +396,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
    *   ctx.call(request, group = 'forge'): one model call (streamed into the job's progress, counted in usage),
    *     with the player's 附加提示词 for `group` (context.mjs toolNote: 'check' for 检查这张卡);
    *   ctx.update(fn): change the draft on disk;
-   *   ctx.step(id): which step it is at, for the page;
+   *   ctx.step(id, { same }): which step it is at, for the page (`same`: the same step, only further on);
    *   ctx.signal, ctx.label (the model's name);
    *   ctx.languages: the guide's (the page's) and the card's (写作语言), see prompts.mjs.
    * A failure lands on the draft as its error, for the page to show, with the model that failed and what the
@@ -409,10 +426,11 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
       },
       languages,
       signal: job.controller.signal,
-      step: id => {
+      // `same`: only how far the step is changed (从小说抽取's read:3:8 → read:4:8): its calls so far still count to it.
+      step: (id, { same = false } = {}) => {
         if (swapped && first === null) first = id
         else if (swapped && !throughout && id !== first && chosen === swapped) chosen = null
-        if (id !== job.step) job.sizes = []
+        if (id !== job.step && !same) job.sizes = []
         job.step = id
       },
       async call(asked, group = 'forge') {
@@ -773,12 +791,6 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
     return { name: c.name, kind, looks: c.looks_tags || c.appearance.join(', '), outfit: c.outfit_tags || c.outfit, scene: clip(description, 400) || plan.avatar.tags }
   }
 
-  /** The plan's characters as the card's cast (角色名册), so 配图 and the visual novel know their looks from the start. */
-  function rosterOf(plan) {
-    return plan.characters
-      .filter(c => c.looks_tags)
-      .map(c => ({ name: c.name, aliases: c.aliases.join('，'), kind: /女|female|woman|girl/i.test(c.gender) ? 'girl' : /男|male|man|boy/i.test(c.gender) ? 'boy' : 'other', looks: c.looks_tags, outfit: c.outfit_tags }))
-  }
 
   /**
    * The cast of a card saved before, with the plan's: someone new is added; someone
@@ -791,7 +803,11 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
     for (const fresh of rosterOf(plan)) {
       const known = out.find(entry => !entry.player && names(entry).some(n => names(fresh).includes(n)))
       if (!known) out.push(fresh)
-      else for (const key of ['aliases', 'looks', 'outfit']) if (!String(known[key] ?? '').trim()) known[key] = fresh[key]
+      else {
+        for (const key of ['aliases', 'looks', 'outfit']) if (!String(known[key] ?? '').trim()) known[key] = fresh[key]
+        // A 形态 already in the cast learns it is drawn whole.
+        if (fresh.whole) known.whole = true
+      }
     }
     return out
   }
@@ -1141,7 +1157,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
   return {
     ...novel,
     // 角色卡自检: a session of its own beside the card's 对话修改 one.
-    ...createCheck({ store, load, save, serial, run, jobs, removeFile: id => rm(fileOf(id), { force: true }), cutNote, trialReport: async cardId => (await load(trialSessionId(cardId)).catch(() => null))?.report ?? null }),
+    ...createCheck({ store, load, save, serial, run, jobs, removeFile: id => rm(fileOf(id), { force: true }), cutNote, lookPrompt, trialReport: async cardId => (await load(trialSessionId(cardId)).catch(() => null))?.report ?? null }),
     ...createTrial({ store, engine, load, save, serial, run, jobs, removeFile: id => rm(fileOf(id), { force: true }), cutNote, rulebooks }),
 
     busy: () => jobs.size > 0,
@@ -1803,6 +1819,8 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
       if (old) Object.assign(card, { id: old.id, media: { ...old.media, style: old.media?.style || style, roster: cleanCardMedia({ roster: mergeRoster(old.media?.roster, draft.plan) }).roster }, worldbookIds: old.worldbookIds ?? [], importedAt: old.importedAt, group: old.group ?? '', archived: old.archived === true })
       else card.media = cleanCardMedia({ style, roster: rosterOf(draft.plan) })
       card.hasAvatar = true
+      // 建角页的图 drawn on the card before: the form written anew keeps them for the options it still has.
+      if (old) card.regexScripts = keepOptionPictures(card.regexScripts ?? [], old.regexScripts ?? [])
       await store.saveCard(card, png)
       // 战斗与成长: the plan's rules; what the bestiary has learned from play stays.
       const game = rulebookOf(raw)
@@ -1856,7 +1874,8 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
       await run(session, 'skin', async ctx => {
         const fresh = barOf(await load(id))
         if (!fresh.spec) throw new Error(msg`这张卡没有可以设计外观的状态栏`)
-        const result = await ctx.call(skinRequest(fresh.card, fresh.spec, fresh.state, { ...asked, reply: ctx.languages.reply }))
+        // The pictures of the card it was saved as: a draft not saved yet has none.
+        const result = await ctx.call(skinRequest(fresh.card, fresh.spec, fresh.state, { ...asked, ...(await lookPrompt(draft.card?.savedCardId)), reply: ctx.languages.reply }))
         const read = readSkin(result.text, { palette: asked.previous?.palette ?? fresh.spec.palette })
         if (!read) throw new Error(`${msg`${ctx.label} 没有写出能用的样式，再试一次，或者换个模型`}${cutNote(result)}`)
         await ctx.update(kept => {

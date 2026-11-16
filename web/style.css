@@ -504,7 +504,9 @@ select.pill { appearance: none; padding-right: 28px; background-image: linear-gr
 .status-bar [hidden] { display: none !important; }
 /* A page of the bar with nothing in this state to show (web/status.js). */
 .status-empty { margin: 4px 0 2px; font-size: 12.5px; color: var(--faint); }
-.status-group + .status-group { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--line); }
+/* The space above a group counts for nothing against a look of the card's own that gives its groups padding. */
+.status-group + .status-group { margin-top: 12px; border-top: 1px dashed var(--line); }
+:where(.status-group + .status-group) { padding-top: 12px; }
 .status-group-name { font-size: 12px; color: var(--faint); letter-spacing: .08em; margin-bottom: 4px; }
 .status-row { display: grid; grid-template-columns: minmax(3.6em, max-content) minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 28px; }
 .status-row > .status-text, .status-row > .status-tags, .status-row > .status-flag { grid-column: 2 / -1; }
@@ -529,7 +531,9 @@ select.pill { appearance: none; padding-right: 28px; background-image: linear-gr
 /* Several people: side by side where there is room. */
 .status-body.multi { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 12px 24px; }
 .status-body.multi > .status-tabs, .status-body.multi > .status-find, .status-body.multi > .status-overflow { grid-column: 1 / -1; }
-.status-body.multi > .status-group + .status-group { margin-top: 0; padding-top: 0; border-top: 0; }
+.status-body.multi > .status-group + .status-group { margin-top: 0; border-top: 0; }
+/* Side by side they start level: no more space above the second than above the first. */
+:where(.status-body.multi > .status-group + .status-group) { padding-top: 0; }
 .status-body.multi > .status-group > .status-group-name { padding-bottom: 4px; margin-bottom: 4px; border-bottom: 1px dashed var(--line); }
 .status-tabs { display: flex; flex-wrap: wrap; gap: 6px; max-height: 64px; overflow-y: auto; margin-bottom: 12px; }
 .status-tab { display: inline-flex; align-items: center; gap: 5px; padding: 0 10px; border: 1px solid var(--line-soft); border-radius: 999px; background: none; color: var(--muted); font: 12px/24px var(--ui); cursor: pointer; transition: color .15s, background .15s, border-color .15s; }
@@ -729,8 +733,9 @@ select.pill { appearance: none; padding-right: 28px; background-image: linear-gr
 .status-bar.layout-scroll .status-title { font: 400 34px/1.15 "Look Brush", var(--serif); letter-spacing: .08em; color: var(--ink); }
 .status-bar.layout-scroll.collapsed .status-title { font-size: 22px; }
 .status-bar.layout-scroll .status-where { flex: 1 1 100%; order: 3; }
-.status-bar.layout-scroll .status-toggle { align-self: flex-start; margin-left: auto; padding: 4px 8px; border-radius: 4px; background: var(--accent); color: var(--surface); font: 400 14px/1.2 "Look Brush", var(--serif); letter-spacing: .1em; }
-.status-bar.layout-scroll .status-toggle:hover { background: var(--accent); color: var(--surface); opacity: .88; }
+/* The tabs and 收起 of 卷轴式 weigh no more than a look of the card's own (定制外观) names them with: its rules, coming later, are the ones kept. */
+.status-bar:where(.layout-scroll) .status-toggle { align-self: flex-start; margin-left: auto; padding: 4px 8px; border-radius: 4px; background: var(--accent); color: var(--surface); font: 400 14px/1.2 "Look Brush", var(--serif); letter-spacing: .1em; }
+.status-bar:where(.layout-scroll) .status-toggle:hover { background: var(--accent); color: var(--surface); opacity: .88; }
 .status-bar.layout-scroll > .status-rail { padding: 16px 20px; }
 .status-bar.layout-scroll .status-g-main { gap: 16px; }
 .status-bar.layout-scroll .status-pic { border-radius: 2px; box-shadow: 0 0 0 1px var(--line-soft), 0 0 0 4px var(--raise), 0 0 0 5px var(--line-soft); margin: 5px; }
@@ -746,12 +751,106 @@ select.pill { appearance: none; padding-right: 28px; background-image: linear-gr
 .status-bar.layout-scroll .status-g:not(.has-pic) .status-gauge > .status-value { justify-content: flex-start; margin: 2px 0 8px; font: 600 24px/1.2 var(--serif); }
 .status-bar.layout-scroll .status-gauge > .status-meter, .status-bar.layout-scroll .status-gauge > .status-meter > i { height: 5px; border-radius: 0; }
 .status-bar.layout-scroll .status-pages { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 6px; margin: 0 20px; padding-bottom: 12px; border-bottom: 1px solid var(--accent); }
-.status-bar.layout-scroll .status-page { min-width: 0; padding: 6px 4px; border: 1px solid var(--line-soft); border-radius: 2px; background: none; color: var(--muted); font: 500 13px/1.5 var(--serif); letter-spacing: .16em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.status-bar.layout-scroll .status-page:hover { border-color: var(--accent); color: var(--accent); }
-.status-bar.layout-scroll .status-page[aria-selected="true"] { background: var(--accent); border-color: var(--accent); color: var(--surface); }
+.status-bar:where(.layout-scroll) .status-page { min-width: 0; padding: 6px 4px; border: 1px solid var(--line-soft); border-radius: 2px; background: none; color: var(--muted); font: 500 13px/1.5 var(--serif); letter-spacing: .16em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status-bar:where(.layout-scroll) .status-page:hover { border-color: var(--accent); color: var(--accent); }
+.status-bar:where(.layout-scroll) .status-page[aria-selected="true"] { background: var(--accent); border-color: var(--accent); color: var(--surface); }
 .status-bar.layout-scroll > .status-main > .status-body { padding: 16px 20px 20px; }
 .status-bar.layout-scroll .status-tag, .status-bar.layout-scroll .status-badge { border-radius: 2px; }
+/* 头像 (web/status.js faceOf): someone's picture beside their name, in a group's title and in a table's first cell. */
+.status-face { flex: none; display: inline-block; overflow: hidden; border-radius: 50%; background: var(--accent-soft); box-shadow: 0 0 0 1px var(--line-soft); vertical-align: middle; }
+.status-face.small { width: 22px; height: 22px; }
+.status-face.medium { width: 30px; height: 30px; }
+.status-face > img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: 50% 12%; }
+/* A whole figure: its head. */
+.status-face.zoom > img { width: 240%; height: auto; margin: -8% 0 0 -70%; object-fit: initial; }
+.status-group-name:has(.status-face) { display: flex; align-items: center; gap: 8px; }
+.status-table th:has(.status-face) { white-space: nowrap; }
+.status-table th > .status-face { margin-right: 6px; }
+/* 地图 (web/status.js mapBlock). */
+.status-chip { display: inline-block; padding: 0 8px; border: 1px solid var(--line-soft); border-radius: 999px; background: none; color: var(--muted); font: inherit; font-size: 11.5px; line-height: 20px; white-space: nowrap; }
+.status-chip.here { border-color: var(--accent); background: var(--accent-soft); color: var(--ink); }
+.status-chip.warn { border-color: var(--bad); color: var(--bad); }
+.status-chip.pick { cursor: pointer; }
+.status-chip.pick:hover { border-color: var(--accent); color: var(--ink); }
+.status-map { display: grid; gap: 10px; }
+.status-map-stage { position: relative; overflow: hidden; border-radius: 10px; box-shadow: 0 0 0 1px var(--line-soft); }
+.status-map-stage.plain { aspect-ratio: 16 / 9; min-height: 200px; background: radial-gradient(circle at 1px 1px, var(--line-soft) 1px, transparent 1.5px) 0 0 / 22px 22px, linear-gradient(160deg, var(--accent-soft), transparent 70%); }
+.status-map-img { display: block; width: 100%; height: auto; -webkit-user-select: none; user-select: none; }
+.status-pin { position: absolute; display: grid; justify-items: center; gap: 2px; padding: 4px; border: 0; background: none; color: #fff; font: inherit; cursor: pointer; transform: translate(-50%, -11px); }
+.status-map-stage.plain .status-pin { color: var(--ink); }
+.status-pin-dot { display: block; width: 12px; height: 12px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px rgba(255, 255, 255, .85), 0 1px 4px rgba(0, 0, 0, .5); transition: transform .15s; }
+.status-pin-name { max-width: 9em; padding: 0 6px; overflow: hidden; border-radius: 999px; background: rgba(12, 12, 16, .62); font-size: 11px; line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
+.status-map-stage.plain .status-pin-name { background: var(--surface); box-shadow: 0 0 0 1px var(--line-soft); }
+.status-pin:hover .status-pin-dot, .status-pin[aria-pressed="true"] .status-pin-dot { transform: scale(1.35); }
+.status-pin[aria-pressed="true"] .status-pin-name { background: var(--accent); color: var(--surface); }
+.status-pin.unknown { opacity: .6; }
+.status-pin.unknown .status-pin-dot { background: var(--faint); }
+.status-pin.shut .status-pin-dot { background: var(--bad); }
+.status-pin.here .status-pin-dot { box-shadow: 0 0 0 2px #fff, 0 0 0 5px var(--accent), 0 1px 4px rgba(0, 0, 0, .5); animation: status-pin-here 1.8s ease-in-out infinite; }
+@keyframes status-pin-here { 50% { box-shadow: 0 0 0 2px #fff, 0 0 0 9px transparent, 0 1px 4px rgba(0, 0, 0, .5); } }
+:root[data-card-motion="off"] .status-pin.here .status-pin-dot { animation: none; }
+@media (prefers-reduced-motion: reduce) { .status-pin.here .status-pin-dot { animation: none; } }
+.status-map-detail { display: grid; gap: 4px; padding: 10px 12px; border-radius: 10px; background: var(--accent-soft); }
+.status-map-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.status-map-name { font-size: 14px; color: var(--ink); }
+.status-map-text { margin: 0; font-size: 12.5px; line-height: 1.6; color: var(--muted); }
+.status-map-text > .status-label { margin-right: 8px; color: var(--faint); }
+.status-map-people, .status-map-others, .status-map-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 12px; }
+.status-person { display: inline-flex; align-items: center; gap: 5px; color: var(--ink); }
+.status-map-legend .key { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); }
+.status-map-legend .key::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.status-map-legend .key.here::before { box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px var(--accent); }
+.status-map-legend .key.shut::before { background: var(--bad); }
+.status-map-legend .key.unknown::before { background: var(--faint); }
+/* 类型克制 (web/status.js typesBlock). */
+.status-types { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; }
+.status-ring-wrap { flex: 1 1 220px; max-width: 300px; margin: 0 auto; }
+.status-types-side { flex: 1 1 180px; display: grid; gap: 8px; font-size: 12px; }
+.status-ring { display: block; width: 100%; height: auto; }
+.status-ring-edge { stroke: var(--line); stroke-width: 1.5; opacity: .7; transition: stroke .15s, opacity .15s; }
+.status-ring-edge.win { stroke: var(--ok); stroke-width: 2.4; opacity: 1; }
+.status-ring-edge.lose { stroke: var(--bad); stroke-width: 2.4; opacity: 1; }
+.status-ring-tip path { fill: var(--line); }
+.status-ring-tip.win path { fill: var(--ok); }
+.status-ring-tip.lose path { fill: var(--bad); }
+.status-ring-node { cursor: pointer; outline: none; }
+.status-ring-node circle { fill: var(--surface); stroke: var(--type); stroke-width: 2; transition: stroke-width .15s; }
+.status-ring-node text { fill: var(--ink); font-size: 14px; }
+.status-ring-node.on circle, .status-ring-node:focus-visible circle { stroke-width: 4; }
+.status-ring-node.mine circle { fill: var(--accent-soft); stroke-dasharray: 4 3; }
+.status-types-note { display: grid; gap: 4px; }
+.status-types-note p { margin: 0; font-size: 13px; color: var(--ink); }
+.status-types-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 15px; }
+.status-types-win, .status-types-lose { display: inline-block; min-width: 3em; font-size: 12px; }
+.status-types-win { color: var(--ok); }
+.status-types-lose { color: var(--bad); }
+/* 形态 (web/status.js formsBlock): a companion's chain, what it has not come to yet as shadows. */
+.status-forms { display: grid; gap: 12px; }
+.status-chain { display: grid; gap: 6px; }
+.status-chain-name { font-size: 13px; color: var(--ink); }
+.status-chain-row { display: flex; align-items: flex-start; gap: 4px; overflow-x: auto; padding: 3px 3px 4px; }
+.status-chain-arrow { flex: none; margin-top: 20px; color: var(--faint); font-size: 18px; }
+.status-chain-arrow.done { color: var(--accent); }
+.status-form { flex: 0 0 76px; display: grid; justify-items: center; gap: 2px; text-align: center; }
+.status-form-pic { position: relative; display: grid; place-items: center; width: 64px; height: 64px; overflow: hidden; border-radius: 12px; background: var(--accent-soft); box-shadow: 0 0 0 1px var(--line-soft); color: var(--faint); font-size: 20px; }
+.status-form-pic > i { font-style: normal; }
+/* Pinned to the box: as a grid item the picture's height: 100% did not hold, a tall 立绘 grew past the box and lost its
+   lower half (a beast's legs). The whole figure, within the box. */
+.status-form-pic > img { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: contain; }
+.status-form.now .status-form-pic { box-shadow: 0 0 0 2px var(--accent), 0 6px 14px -6px var(--accent); }
+.status-form.past { opacity: .75; }
+.status-form.later .status-form-pic > img { filter: brightness(0) opacity(.55); }
+.status-form-stage { font-size: 10.5px; color: var(--faint); }
+.status-form-name { max-width: 100%; overflow: hidden; font-size: 11.5px; color: var(--ink); text-overflow: ellipsis; white-space: nowrap; }
+.status-form.later .status-form-name { color: var(--faint); }
+.status-form-need { font-size: 10.5px; color: var(--muted); }
 .status-none, .status-flag { color: var(--faint); }
+/* 修改角色卡 → 状态栏 → 地图 (web/card-check.js mapEditor): the places a line each, and their pins to drag. */
+.cc-map { display: grid; gap: 8px; margin: 10px 0; padding: 12px; border: 1px solid var(--line-soft); border-radius: 12px; }
+.cc-map-places { width: 100%; box-sizing: border-box; resize: vertical; font: inherit; }
+.cc-map-pin { cursor: grab; touch-action: none; }
+.cc-map-pin:active { cursor: grabbing; }
+.cc-map-here { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; }
 .status-flag.on { color: var(--ok); }
 /* 卡片动效 turned off on this device (主题 → 卡片动效): nothing drifts, comes in or pans. */
 :root[data-card-motion="off"] .drift { display: none; }
@@ -1072,16 +1171,19 @@ select.pill { appearance: none; padding-right: 28px; background-image: linear-gr
 @keyframes foe-breathe { to { transform: scale(1.006, 1.016); } }
 @keyframes foe-lit { 18% { filter: brightness(2.1) drop-shadow(0 0 10px #fff4dc); } }
 .foe-thumb { width: 36px; height: 36px; object-fit: cover; border-radius: 6px; }
-.foe-name { margin-top: 8px; font-size: 16px; line-height: 1.3; letter-spacing: .14em; overflow-wrap: anywhere; text-shadow: 0 1px 7px rgb(var(--halo-c) / .9); transition: color .2s; }
-.tier-elite .foe-name::before, .tier-boss .foe-name::before, .tier-boss .foe-name::after { content: "◆"; margin-right: .4em; font-size: .56em; vertical-align: .2em; color: var(--gold); }
-.tier-boss .foe-name::before, .tier-boss .foe-name::after { color: var(--cinnabar); }
-.tier-boss .foe-name::after { margin: 0 0 0 .2em; }
+/* A foe's plate under its feet: its rank and type beside its name, its life, what is on it. Each look frames it its own way. */
+.foe-plate { position: relative; display: flex; flex-direction: column; align-items: center; gap: 5px; width: max-content; min-width: min(150px, 100%); max-width: 100%; margin-top: 8px; }
+.foe-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 2px .5em; max-width: 100%; }
+.foe-name { font-size: 16px; line-height: 1.3; letter-spacing: .14em; overflow-wrap: anywhere; text-shadow: 0 1px 7px rgb(var(--halo-c) / .9); transition: color .2s; }
+.foe-rank { flex: none; padding: 0 .5em; border: 1px solid currentColor; color: var(--gold); font-size: 11px; font-weight: 600; line-height: 1.6; letter-spacing: .12em; }
+.tier-boss .foe-rank { color: var(--cinnabar); }
+.foe-type { flex: none; padding: 0 .45em; border-radius: 3px; background: rgb(var(--bone-c) / .12); color: rgb(var(--bone-c) / .78); font-size: 12px; font-style: normal; line-height: 1.6; letter-spacing: .08em; }
 .foe-tag { min-height: 1.5em; font-size: 13px; letter-spacing: .06em; color: var(--gold); text-shadow: 0 1px 6px rgb(var(--halo-c) / .9); }
 /* Life is a hairline. A blow takes it at once; the pale part left behind follows, so you see how much went. */
 .battle-bar { position: relative; display: block; flex: 1; width: 100%; height: 3px; background: rgb(var(--bone-c) / .16); overflow: hidden; }
 .battle-bar i { position: absolute; top: 0; bottom: 0; left: 0; display: block; background: var(--malachite); transition: width .3s var(--ease); }
 .battle-bar i.lag { background: rgb(var(--bone-c) / .62); transition: width .7s var(--ease) .32s; }
-.battle-bar.foe { flex: none; width: min(150px, 78%); }
+.battle-bar.foe { flex: none; width: 100%; }
 .battle-bar.foe i:not(.lag) { background: linear-gradient(90deg, #a03a29, var(--cinnabar)); }
 .battle-bar.energy i { background: var(--azurite); }
 .battle-line { min-height: 1.7em; display: flex; align-items: center; justify-content: center; gap: 16px; width: 100%; text-align: center; font-size: 17px; line-height: 1.7; letter-spacing: .06em; text-shadow: 0 1px 8px rgb(var(--halo-c) / .9); }
@@ -1211,6 +1313,9 @@ html[data-ui-lang="en"] .battle-end-card h2 { writing-mode: horizontal-tb; borde
   .tier-elite .foe-face.drawn { --foe-height: 268px; }
   .tier-boss .foe-face.drawn { --foe-height: 320px; }
   .battle-foe { max-width: 340px; }
+  .foe-plate { min-width: 180px; }
+  /* On a big screen the foes stand on the scene's floor, not in the middle of its air. */
+  .battle.scene .battle-field > :last-child { margin-bottom: 3vh; }
 }
 @media (max-width: 560px) {
   .battle-top { padding: 10px 14px 2px; }
@@ -1225,7 +1330,8 @@ html[data-ui-lang="en"] .battle-end-card h2 { writing-mode: horizontal-tb; borde
   .tier-boss .foe-face { width: 84px; height: 84px; font-size: 38px; }
   .foe-face.drawn, .tier-elite .foe-face.drawn { --foe-height: 104px; }
   .tier-boss .foe-face.drawn { --foe-height: 132px; }
-  .foe-name { margin-top: 6px; font-size: 14px; letter-spacing: .08em; }
+  .foe-plate { margin-top: 6px; min-width: min(120px, 100%); }
+  .foe-name { font-size: 14px; letter-spacing: .08em; }
   .foe-tag { font-size: 12px; }
   .battle-line { font-size: 15px; gap: 10px; }
   .battle-bottom { min-height: 186px; grid-template-columns: minmax(0, 1fr); align-content: end; gap: 12px; padding: 22px 14px max(12px, env(safe-area-inset-bottom)); }
@@ -1258,7 +1364,8 @@ html[data-ui-lang="en"] .battle-end-card h2 { writing-mode: horizontal-tb; borde
   .foe-face, .tier-elite .foe-face, .tier-boss .foe-face { width: 56px; height: 56px; font-size: 24px; }
   .foe-face.drawn, .tier-elite .foe-face.drawn { --foe-height: 112px; }
   .tier-boss .foe-face.drawn { --foe-height: 140px; }
-  .foe-name { margin-top: 4px; font-size: 13px; }
+  .foe-plate { margin-top: 4px; gap: 3px; }
+  .foe-name { font-size: 13px; }
   .foe-tag { min-height: 0; }
   .battle-line { font-size: 14px; min-height: 1.5em; }
   .battle-bottom { min-height: 0; grid-template-columns: minmax(0, 1fr); align-content: end; gap: 12px; padding: 6px 14px 10px; background: linear-gradient(270deg, rgb(var(--deep-c) / .9), transparent); overflow-y: auto; }
@@ -1320,10 +1427,34 @@ html[data-ui-lang="en"] .battle-end-card h2 { writing-mode: horizontal-tb; borde
 .game-foe { margin: 0 0 10px; }
 /* 指挥: one who leads from behind has no bars to watch. 收服: the tries at the end of a fight. */
 .battle-member.commander :is(.battle-bar, .member-life, .member-energy, .member-word) { visibility: hidden; }
-/* 收服: one button to each that may be tried for, wide like the end screen's own, whatever the look. */
-.battle-tame { width: 100%; display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin: 12px 0 0; }
-.battle-tame .battle-action { flex: 1 1 10em; letter-spacing: .04em; line-height: 1.3; text-align: center; }
-.battle-end-note.ok { color: var(--accent); }
+/* 收服: a card to each that may be tried for (its head, how strong, the odds on 魅力, the word to press); once the die
+   has landed, the one tried for alone, stamped with how it went. */
+.battle-tame { width: 100%; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 10px; margin: 12px 0 0; }
+.tame-card { position: relative; display: flex; align-items: center; gap: 12px; min-width: 0; min-height: 76px; padding: 8px 14px 8px 8px; border: 1px solid var(--line-soft); border-radius: 14px; background: color-mix(in srgb, var(--surface) 86%, transparent); color: var(--ink); font: inherit; text-align: left; cursor: pointer; animation: tame-in .45s var(--ease) both; animation-delay: calc(var(--i, 0) * 70ms + .5s); transition: transform .2s var(--ease), border-color .2s, box-shadow .2s; }
+@keyframes tame-in { from { opacity: 0; transform: translateY(10px); } }
+.tame-card:is(:hover:not(:disabled), :focus-visible) { transform: translateY(-2px); border-color: var(--accent); box-shadow: 0 8px 22px rgb(0 0 0 / .22); }
+.tame-card:disabled { cursor: default; opacity: .7; }
+.tame-face { flex: none; display: grid; place-items: center; width: 60px; height: 60px; overflow: hidden; border: 2px solid var(--accent); border-radius: 50%; background: var(--accent-soft) 50% 0 / cover no-repeat; color: var(--accent); font-size: 26px; font-weight: 700; }
+.tame-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.tame-head { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; min-width: 0; }
+.tame-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 17px; font-weight: 700; }
+.tame-rank { flex: none; padding: 0 6px; border-radius: 4px; background: var(--accent); color: var(--accent-ink); font-size: 12px; line-height: 1.6; }
+.tame-type { flex: none; padding: 0 6px; border: 1px solid var(--line-soft); border-radius: 4px; color: var(--muted); font-size: 12px; font-style: normal; line-height: 1.5; }
+.tame-odds { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.tame-odds b { color: var(--ink); font-size: 14px; font-variant-numeric: tabular-nums; }
+.tame-meter { flex: 1; min-width: 40px; height: 5px; overflow: hidden; border-radius: 3px; background: var(--line-soft); }
+.tame-meter i { display: block; width: var(--chance); height: 100%; border-radius: inherit; background: var(--accent); }
+.tame-go { flex: none; padding: 3px 13px; border: 1px solid var(--accent); border-radius: 999px; color: var(--accent); font-size: 14px; font-weight: 700; transition: background .2s, color .2s; }
+.tame-card:is(:hover:not(:disabled), :focus-visible) .tame-go { background: var(--accent); color: var(--accent-ink); }
+.tame-card.tried { grid-column: 1 / -1; justify-self: start; width: min(100%, 420px); padding-right: 18px; cursor: default; }
+.tame-roll { color: var(--muted); font-size: 13px; }
+.tame-roll > span { white-space: nowrap; }
+html[data-look] .tame-card.tried { animation-delay: 0s; }
+.tame-stamp { flex: none; padding: 2px 10px; border: 2px solid currentColor; border-radius: 6px; color: var(--accent); font-size: 16px; letter-spacing: .08em; transform: rotate(-6deg); animation: tame-stamp .4s var(--ease) both; }
+.tame-card.fail .tame-stamp { color: var(--bad); }
+.tame-card.fail .tame-face { filter: grayscale(1) brightness(.75); }
+@keyframes tame-stamp { from { opacity: 0; transform: scale(1.8) rotate(-14deg); } }
+@media (prefers-reduced-motion: reduce) { .tame-card, .tame-stamp { animation: none; } }
 /* 形态: one form of a chain in the rule window, set off from the next. */
 .game-form { margin: 6px 0 10px; padding-left: 8px; border-left: 2px solid var(--line); }
 .game-form .cp-row + .cp-row { margin-top: -4px; border-style: dashed; }
@@ -1614,6 +1745,8 @@ html[data-ui-lang="en"] .roll-tier { font-size: 42px; }
 .script-bar { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .script-bar[hidden] { display: none; }
 .script-bar .script-btn { border-radius: 999px; padding: 3px 12px; }
+/* A button of the preset's scripts (web/card-scripts.js), told apart from the card's own. */
+.script-bar .script-btn.from-preset { border-style: dashed; }
 /* Always laid out, put away by being invisible: the script frames keep their size while the window is away. */
 .script-layer { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 16px; background: rgba(0, 0, 0, .35); visibility: hidden; pointer-events: none; opacity: 0; transition: opacity .15s; }
 .script-layer.open { visibility: visible; pointer-events: auto; opacity: 1; }
@@ -1962,6 +2095,15 @@ dl.usage dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; 
 .preset-tools input[type="search"] { flex: 1; min-width: 180px; }
 .seg-label { font-size: 12px; color: var(--muted); margin-left: 6px; }
 .seg-note { flex-basis: 100%; margin: 0; font-size: 12px; color: var(--faint); }
+/* A preset's Tavern Helper scripts (presets.js scriptsSection): each with its switch and a line on what it does here. */
+.preset-scripts { margin: 12px 28px 0; padding: 10px 14px; border: 1px solid var(--line-soft); border-radius: 10px; }
+.preset-scripts > summary { cursor: pointer; font-weight: 600; }
+.preset-scripts > .hint { margin: 8px 0; }
+.preset-scripts > .row { display: flex; flex-wrap: wrap; gap: 8px; }
+.pscript-list { list-style: none; padding: 0; margin: 10px 0 0; display: grid; gap: 10px; }
+.dialog label.pscript-head { display: flex; flex-direction: row; align-items: center; gap: 8px; margin: 0; font-size: 13px; color: var(--ink); }
+.pscript-name { font-weight: 600; overflow-wrap: anywhere; }
+.pscript .hint { margin: 2px 0 0 0; overflow-wrap: anywhere; }
 /* The built-in preset's options (basic-options.js), in the preset window and the quick switches. */
 .basic-options { padding: 10px 28px 4px; overflow-y: auto; }
 .basic-field { display: grid; grid-template-columns: 5.5em minmax(0, 1fr); align-items: center; gap: 4px 14px; padding: 10px 0; border-bottom: 1px solid var(--line-soft); }
@@ -2152,6 +2294,7 @@ dl.usage dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; 
   .preset-nav { border-right: 0; border-bottom: 1px solid var(--line-soft); max-height: calc(34vh / var(--page-zoom)); }
   .preset-head { padding: 16px 56px 12px 18px; }
   .preset-tools, .preset-apply { margin-left: 0; padding-left: 18px; padding-right: 18px; }
+  .preset-scripts { margin-left: 18px; margin-right: 18px; }
   .prompt-list { padding: 4px 8px 18px; }
 }
 
@@ -3538,7 +3681,8 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 /* 从小说抽取 in the worldbook window (web/books.js renderNovel). */
 .book-novel { padding: 4px 18px 14px; font-size: 13.5px; line-height: 1.7; }
 .book-novel > p { margin: 0 0 8px; }
-.book-novel-limit { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 8px; font-size: 13px; color: var(--muted); }
+/* In a row, not the column a dialog's label is. */
+.book-novel-limit, .dialog .book-novel-limit { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 8px; font-size: 13px; color: var(--muted); }
 .dialog .book-novel-limit input { width: 5.5em; font-size: 13px; padding: 4px 8px; }
 .book-novel-actions { align-items: center; gap: 8px; }
 .dialog .book-novel-limit select { font-size: 13px; padding: 4px 8px; max-width: 16em; }
@@ -3598,6 +3742,12 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .cc-skin-name { display: flex; align-items: baseline; gap: 8px; font-size: 13px; }
 .cc-skin-draft { margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px dashed var(--line); }
 .cc-skin-draft .cc-status-preview { margin: 6px 0; }
+/* 定制外观 → 装饰图: a row a slot, its picture shown small (a clear one on a checkerboard, so its edges show). */
+.cc-decor { margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px dashed var(--line); }
+.cc-decor-row { display: flex; align-items: center; gap: 8px; min-height: 40px; flex-wrap: wrap; }
+.cc-decor-row .front-check { min-width: 5.5em; }
+.cc-decor-pic { height: 36px; max-width: 160px; object-fit: contain; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); }
+.cc-decor-pic.clear { background: repeating-conic-gradient(color-mix(in srgb, var(--ink) 12%, transparent) 0 25%, transparent 0 50%) 0 0 / 10px 10px; }
 .cc-skin-problems ul { margin: 2px 0 6px; padding-left: 1.3em; font-size: 12.5px; line-height: 1.7; color: var(--muted); }
 .dialog .cc-skin textarea { width: 100%; box-sizing: border-box; font-size: 13px; padding: 6px 8px; resize: vertical; }
 .cc-skin .cc-actions, .cc-skin .cc-running { margin-top: 6px; }
@@ -3983,7 +4133,7 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
    lit and a little forward, the rest dimmed; narration dims everyone a little. Each holds its pictures
    stacked, so another expression fades in over the last. */
 /* Its own layer: the speaker comes forward among the others, never over the text box. */
-.vn-actors { position: absolute; inset: 0; pointer-events: none; z-index: 0; isolation: isolate; transform-origin: 50% var(--vn-small-at, 0px); transform: translate(calc(var(--stage-x, 0%) + var(--vn-aside, 0px)), calc(var(--vn-up, 0px) * -1)) scale(var(--vn-small, 1)); transition: transform .5s var(--ease); }
+.vn-actors { position: absolute; inset: 0; pointer-events: none; z-index: 0; isolation: isolate; transform-origin: 50% var(--vn-small-at, 0px); transform: translate(calc(min(var(--stage-x, 0%), var(--vn-room, 100vw)) + var(--vn-aside, 0px)), calc(var(--vn-up, 0px) * -1)) scale(var(--vn-small, 1)); transition: transform .5s var(--ease); }
 .vn-actor {
   position: absolute; left: var(--x, 50%); bottom: 0; width: 0; height: min(88%, 980px);
   opacity: 0; transform: translateY(18px); transform-origin: bottom center; --dim: brightness(1) saturate(1);
@@ -4376,7 +4526,8 @@ label.cast-voice, .dialog label.cast-voice { display: grid; grid-template-column
 .stage.vn-on .reader > :is(#rail, #whereabouts) { display: none; }
 .stage.vn-on .composer { position: absolute; left: 0; right: 0; bottom: 0; z-index: 8; }
 .stage.vn-on .composer::before { display: none; }
-.stage.vn-on:not(.vn-compose) .composer :is(.composer-box, .composer-row, .branch-note, .script-bar) { display: none; }
+/* 快捷回复 too: over the visual novel's box they hid its 回看 / 自动 / 跳过 row (2.6.0); they come back with the box to type in. */
+.stage.vn-on:not(.vn-compose) .composer :is(.composer-box, .composer-row, .branch-note, .script-bar, .qr-bar) { display: none; }
 .vn-compose-close { display: none; }
 /* Writing an action: a row of its own between the choices and the text box, in the choices' glass, the line still there to read. */
 .stage.vn-on.vn-compose .vn-compose-close { display: block; position: absolute; right: 14px; bottom: 13px; }

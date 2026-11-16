@@ -173,7 +173,7 @@ export const MISSING = Object.freeze({
     importRawCharacter importRawChat importRawPreset importRawWorldbook importRawTavernRegex
     getLorebookSettings setLorebookSettings setCurrentCharLorebooks deleteLorebook setChatLorebook getOrCreateChatLorebook
     createPersona createOrReplacePersona replacePersona updatePersonaWith deletePersona
-    getPresetNames getLoadedPresetName loadPreset getPreset createPreset createOrReplacePreset replacePreset updatePresetWith setPreset deletePreset renamePreset
+    loadPreset createPreset createOrReplacePreset deletePreset renamePreset
     getTavernHelperVersion getFrontendVersion getTavernVersion updateTavernHelper updateFrontendVersion
     rebindGlobalWorldbooks rebindCharWorldbooks rebindChatWorldbook getOrCreateChatWorldbook deleteWorldbook`),
   server: words(`

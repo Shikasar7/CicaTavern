@@ -2,7 +2,7 @@
 // kept so the player can take one back or delete it. A card's places keep
 // theirs in cards/<id>/history.json (by place, newest first), the pictures in
 // cards/<id>/history/. Places: roster:<entryId> (人设图), sprite:<entryId>
-// (立绘), face:<entryId>:<expression> (表情差分), scene:<sceneId> (场景),
+// (立绘), face:<entryId>:<expression> (表情差分), scene:<sceneId> (场景), look:decor-<slot> (外观的装饰图),
 // avatar (the card's picture, and avatars drawn but not taken). A chat's
 // pictures keep theirs on the reply (node.media.images[].history, the helpers
 // at the end). Each place keeps media.drawHistory old ones (配图 settings,
@@ -18,7 +18,7 @@ import { msg } from './i18n.mjs'
 
 export const HISTORY_DEFAULT = 5
 export const HISTORY_MAX = 20
-const SLOT = /^(?:avatar|(?:roster|sprite):[\w-]{1,40}|face:[\w-]{1,40}:[a-z]{1,20}|scene:[\w-]{1,64})$/
+const SLOT = /^(?:avatar|(?:roster|sprite):[\w-]{1,40}|face:[\w-]{1,40}:[a-z]{1,20}|scene:[\w-]{1,64}|look:decor-(?:texture|corner|divider|emblem))$/
 const FILE = /^[\w-]{1,100}\.(png|jpg|webp)$/
 const TYPES = { jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp' }
 const clip = (value, max) => (typeof value === 'string' ? value.trim().slice(0, max) : '')

@@ -9,10 +9,13 @@
 //       { path: '你.随身物品', label: '随身', show: 'tags' } ] }
 // How a field shows: meter a gauge (a number, 80/100 or 45%), number, rating (stars out of `max`), text, long (a
 // paragraph), badge (a short word that stands out), tags, list (a line each), stats (a grid of named values),
-// table (a row per item), flag (yes or no), hidden.
+// table (a row per item), flag (yes or no), hidden. Three draw a picture of what the variable holds (web/status.js):
+// map (a record of places, as pins on the card's map: `map` beside the fields says where each is), types (who is
+// fielded, on the ring of what beats what from the card's 游戏规则), forms (a record of companions, each with its
+// chain of 形态). Where there is nothing to draw them from, they show as a table or a word.
 import { getPath, splitPath, unwrap, writablePath } from './vars.js'
 
-export const SHOWS = ['meter', 'number', 'rating', 'text', 'long', 'badge', 'tags', 'list', 'stats', 'table', 'flag', 'hidden']
+export const SHOWS = ['meter', 'number', 'rating', 'text', 'long', 'badge', 'tags', 'list', 'stats', 'table', 'flag', 'map', 'types', 'forms', 'hidden']
 const MAX_FIELDS = 200
 const MAX_RATING = 10
 const str = (value, max) => (typeof value === 'string' ? value.trim().slice(0, max) : '')
@@ -40,6 +43,46 @@ export function joinPath(keys) {
   return `/${keys.map(key => key.replace(/~/g, '~0').replace(/\//g, '~1')).join('/')}`
 }
 
+// 地图: the places a card's map has, and where on it (0–100 across and down). Without a place of their own on it,
+// places are laid out in rows (web/status.js).
+const MAX_PLACES = 40
+const spot = value => (num(value) === null ? null : Math.max(0, Math.min(100, Math.round(num(value) * 10) / 10)))
+
+/** A bar's map as saved: { places: [{ name, short?, zone?, x?, y? }], here?: the path of where the player is }; null for none. */
+export function cleanMap(raw) {
+  if (!raw || typeof raw !== 'object') return null
+  const places = []
+  for (const place of Array.isArray(raw.places) ? raw.places : []) {
+    const name = str(place?.name, 40)
+    if (!name || places.some(one => one.name === name) || places.length >= MAX_PLACES) continue
+    const [x, y] = [spot(place.x), spot(place.y)]
+    places.push({ name, ...(str(place.short, 12) ? { short: str(place.short, 12) } : {}), ...(str(place.zone, 16) ? { zone: str(place.zone, 16) } : {}), ...(x !== null && y !== null ? { x, y } : {}) })
+  }
+  const here = cleanPath(raw.here)
+  return places.length || here ? { places, ...(here ? { here } : {}) } : null
+}
+
+// A variable that is the places of the story (a book of them), and one that says where the player is now.
+const MAP_KEY = /^(地图|地点|去过的地方|到过的地方|足迹|已知地点|map|places|locations)$/i
+const HERE_KEY = /^(当前地点|所在地点|当前位置|所在位置|所在地|所在|位置|地点|location|where|place)$/i
+/** Whether a variable of this path is the story's places: drawn as a map where it is a book. */
+export const isMapPath = path => MAP_KEY.test(splitPath(String(path ?? '')).at(-1) ?? '')
+
+/**
+ * The map of a card being made (创作角色卡), from its plan: the world's places, and the variable that says where the
+ * player is. A map the plan's bar already has (places put where they are on a picture) is kept.
+ */
+export function planMap(plan) {
+  const variables = plan?.tracking?.variables ?? []
+  if (!variables.some(variable => variable.show === 'map')) return null
+  const here = variables.find(variable => variable.type !== 'book' && variable.type !== 'list' && HERE_KEY.test(splitPath(variable.path).at(-1) ?? ''))?.path ?? ''
+  const kept = cleanMap(plan.status?.map)
+  return cleanMap({ places: kept?.places.length ? kept.places : (plan.world?.places ?? []).map(place => ({ name: place?.name })), here: kept?.here ?? here })
+}
+
+/** Whether two names mean one thing: the same, or one inside the other (深谷遗迹第二层·水晶溶洞, 水晶溶洞). */
+export const sameName = (a, b) => Boolean(a) && Boolean(b) && (a === b || (a.length > 1 && b.includes(a)) || (b.length > 1 && a.includes(b)))
+
 /** A layout as saved, or null when there is nothing to show. */
 export const STATUS_THEMES = ['plain', 'paper', 'neon', 'pastel', 'ink', 'parchment', 'gothic', 'terminal', 'ocean']
 // 版式: how the bar is laid out (web/status.js). None = the plain one, rows under a title.
@@ -58,9 +101,11 @@ export function cleanStatusSpec(raw) {
   const fields = []
   for (const field of raw.fields) {
     const path = cleanPath(field?.path)
-    if (!path || seen.has(path) || fields.length >= MAX_FIELDS) continue
-    seen.add(path)
-    const show = SHOWS.includes(field.show) ? field.show : 'text'
+    const show = SHOWS.includes(field?.show) ? field.show : 'text'
+    // Who is fielded may show twice: as a word among the rest, and on the ring of types on a page of its own.
+    const key = show === 'types' ? `${path}\u0000types` : path
+    if (!path || seen.has(key) || fields.length >= MAX_FIELDS) continue
+    seen.add(key)
     const out = { path, label: str(field.label, 24), show }
     if (show === 'meter') {
       const min = num(field.min) ?? 0
@@ -82,9 +127,10 @@ export function cleanStatusSpec(raw) {
   const skin = cleanSkin(raw.skin)
   // Variables past the limit are counted, so the bar can say they are not all there.
   const more = Number.isInteger(raw.more) && raw.more > 0 ? { more: raw.more } : {}
+  const map = fields.some(f => f.show === 'map') ? cleanMap(raw.map) : null
   // 立绘 and 场景图 on top of the bar (the pictures are the app's: 角色名册, 视觉小说的场景), and what drifts over it.
   const art = { ...(raw.portrait === true ? { portrait: true } : {}), ...(raw.scene === true ? { scene: true } : {}), ...(cleanEffect(raw.effect) ? { effect: raw.effect } : {}), ...(raw.phone === true ? { phone: true } : {}), ...(cleanLayout(raw.layout) ? { layout: raw.layout } : {}) }
-  return fields.some(f => f.show !== 'hidden') ? { title: str(raw.title, 40), fields, ...(skin ? { skin } : theme), ...(palette ? { palette } : {}), ...art, ...more } : null
+  return fields.some(f => f.show !== 'hidden') ? { title: str(raw.title, 40), fields, ...(skin ? { skin } : theme), ...(palette ? { palette } : {}), ...art, ...(map ? { map } : {}), ...more } : null
 }
 
 // Names of 0–100 gauges in MVU cards: 好感度, 信任值, 体力, 欲望, HP… (a guess; other numbers stay numbers).
@@ -143,7 +189,7 @@ export function statusPages(spec) {
 
 // 小手机: what a bar keeps off its face, to be opened like the apps of a phone. A bar in pages keeps its first page
 // and makes an app of each other one; in any bar a list, a table, a paragraph or a set of numbers is an app of its own.
-const APP_SHOWS = new Set(['table', 'list', 'long', 'stats'])
+const APP_SHOWS = new Set(['table', 'list', 'long', 'stats', 'map', 'types', 'forms'])
 
 /**
  * A layout with 小手机 on, cut in two: { bar: what stays on the bar (no pages left in it), apps: [{ name, spec }] }.
@@ -160,11 +206,13 @@ export function phoneApps(spec) {
     if (!name) stay.push(plain)
     else apps.set(name, [...(apps.get(name) ?? []), plain])
   }
-  return { bar: { ...spec, fields: stay }, apps: [...apps].map(([name, fields]) => ({ name, spec: { ...spec, title: name, fields } })) }
+  const every = spec.every ?? spec.fields
+  return { bar: { ...spec, fields: stay, every }, apps: [...apps].map(([name, fields]) => ({ name, spec: { ...spec, title: name, fields, every } })) }
 }
 
 /** A layout's fields on one page: those with no page of their own go on the first. */
-export const onPage = (spec, page, pages) => ({ ...spec, fields: spec.fields.filter(field => (field.page || pages[0]) === page) })
+// `every`: all the bar's fields, for what one page reads of the others (the map's 在这里: who is where, on any page).
+export const onPage = (spec, page, pages) => ({ ...spec, fields: spec.fields.filter(field => (field.page || pages[0]) === page), every: spec.every ?? spec.fields })
 
 /** Whether at least two of these key lists have a key in common: people of one shape, not parts of one thing. */
 const twoAlike = lists => lists.filter((a, i) => lists.some((b, j) => i !== j && a.some(key => b.includes(key)))).length >= 2
@@ -388,6 +436,43 @@ function tableOf(value, before) {
   return { named: !Array.isArray(value), columns, rows, ...(records.length > rows.length ? { more: records.length - rows.length } : {}) }
 }
 
+// 地图: what says whether a place can be gone to, where someone is, and the words for a place that cannot be.
+const ACCESS = /^(通行|出入|进出|状态|开放|access|status|entry)$/i
+const SHUT = /受限|封|禁|不可|不能|关闭|锁|需要|须|凭|locked|closed|restricted|denied|sealed/i
+const WHERE = /^(所在|所在地|位置|地点|当前位置|当前地点|现在在|where|location|place)$/i
+const FACT_MAX = 300
+
+/** The places a map field holds: [{ name, facts: [[key, words]], shut, changed? }]. */
+function spotsOf(value, before) {
+  const items = Array.isArray(value) ? shownItems(value).map(item => [isPlain(unwrap(item)) ? compactText(unwrap(item).名称 ?? unwrap(item).name ?? '', 40) : compactText(item, 40), item]) : isPlain(value) ? shownEntries(value) : []
+  const old = name => (isPlain(before) ? before[name] : undefined)
+  return items.filter(([name]) => name).slice(0, MAX_ROWS).map(([name, raw]) => {
+    const item = unwrap(raw)
+    const facts = isPlain(item) ? shownEntries(item).map(([key, x]) => [key, compactText(x, FACT_MAX)]).filter(([, words]) => words) : compactText(item, FACT_MAX) && item !== true ? [['', compactText(item, FACT_MAX)]] : []
+    return { name, facts, shut: facts.some(([key, words]) => ACCESS.test(key) && SHUT.test(words)), ...(before !== undefined && !Array.isArray(value) && JSON.stringify(unwrap(old(name))) !== JSON.stringify(item) ? { changed: true } : {}) }
+  })
+}
+
+/**
+ * Who the variables say is where: [{ name, where, note }], from tables of people (人物.苏晚.所在) and people's own (苏晚.所在).
+ * Read from every field of the bar (`every`), not only those on the map's page or in its 小手机 app.
+ */
+function peopleOf(spec, state) {
+  const out = []
+  const add = (name, record) => {
+    const entry = shownEntries(record).find(([key, x]) => WHERE.test(key) && typeof unwrap(x) === 'string' && unwrap(x))
+    if (entry && !out.some(one => one.name === name)) out.push({ name, where: unwrap(entry[1]) })
+  }
+  for (const field of spec.every ?? spec.fields ?? []) {
+    const keys = splitPath(field.path)
+    const value = unwrap(getPath(state ?? {}, field.path))
+    if (isPlain(value)) for (const [name, item] of shownEntries(value)) if (isPlain(unwrap(item))) add(name, unwrap(item))
+    // Where the player is is not someone else being there.
+    if (field.path !== spec.map?.here && keys.length > 1 && WHERE.test(keys.at(-1)) && typeof value === 'string' && value && !out.some(one => one.name === keys.at(-2))) out.push({ name: keys.at(-2), where: value })
+  }
+  return out.slice(0, MAX_ROWS)
+}
+
 /**
  * The rows to draw, grouped by owner (林小雨.好感度 → 林小雨; 角色.林雪.身体.体力 → 林雪, in a section 身体).
  * `previous`: the state before this reply, for the change marks (+4, −8) and what is new.
@@ -446,11 +531,24 @@ export function statusGroups(spec, state, previous = null) {
       row.table = tableOf(value, previous ? before ?? null : undefined)
       // A book with nothing in it yet says so, and shows none of MVU's marks.
       if (!row.table) Object.assign(row, { show: 'text', text: isPlain(value) || Array.isArray(value) ? '' : compactText(value) })
+    } else if (field.show === 'map') {
+      row.spots = spotsOf(value, previous ? before ?? null : undefined)
+      row.places = spec.map?.places ?? []
+      const here = spec.map?.here ? unwrap(getPath(state ?? {}, spec.map.here)) : ''
+      row.here = typeof here === 'string' ? here : ''
+      row.people = peopleOf(spec, state)
+      if (row.spots.some(one => one.changed)) row.changed = true
+    } else if (field.show === 'types') row.text = compactText(value)
+    else if (field.show === 'forms') {
+      row.table = tableOf(value, previous ? before ?? null : undefined)
+      // Every word a companion's row says of it: which of its 形态 it is in is among them.
+      row.lines = (isPlain(value) ? shownEntries(value) : []).slice(0, MAX_ROWS).map(([name, item]) => ({ name, words: isPlain(unwrap(item)) ? shownEntries(unwrap(item)).map(([, x]) => unwrap(x)).filter(x => typeof x === 'string') : typeof unwrap(item) === 'string' ? [unwrap(item)] : [] }))
+      if (!row.table) Object.assign(row, { show: 'text', text: isPlain(value) || Array.isArray(value) ? '' : compactText(value) })
     } else if (field.show === 'flag') row.on = Boolean(value) && value !== 'false' && value !== '否' // i18n-ignore: a state value
     else if (field.show === 'long') row.text = compactText(value, LONG_MAX)
     else row.text = compactText(value)
     // Words have no +4: a mark says they changed.
-    if (previous && before !== undefined && (row.text !== undefined || row.on !== undefined) && JSON.stringify(before) !== JSON.stringify(value)) row.changed = true
+    if (previous && before !== undefined && row.show !== 'map' && (row.text !== undefined || row.on !== undefined) && JSON.stringify(before) !== JSON.stringify(value)) row.changed = true
     const owner = owners.get(joinPath(keys)) ?? keys.slice(0, -1)
     const section = keys.slice(owner.length, -1).join(' · ')
     if (section) row.section = section
@@ -947,11 +1045,49 @@ export function skinClass(css) {
 /** The CSS as the page loads it: every rule reaching only into the bar that wears `scope`. */
 export const scopedSkinCss = (css, scope = skinClass(css)) => printSkin(skinTree(css), scope).join('\n')
 
-/** A look as a card keeps it ({ name?, css }), or null. */
+// ─── 外观的图 ──────────────────────────────────────────────────────────────
+// A look never names an address (url() is cut, above). It names a picture of the card's own by a variable the app
+// fills in on whatever wears the look: `background-image: var(--pic-scene-15d494, none)`. The app sets only the ones
+// this card has, each to a file of its own (server/look-pictures.mjs), so a look cannot reach anything else.
+//   --pic-avatar, --pic-cover          the card's picture, its 开场页 picture
+//   --pic-scene-<6 of the scene's id>  a scene        --pic-sprite-<roster entry id>  a 立绘, its white cut away
+//   --pic-decor-<slot>                 a decorative picture drawn for the look (画装饰图)
+// The card's own pictures are used as small copies made when a look first uses them (they travel with the look).
+
+/** 画装饰图: what can be drawn for a look. clear: drawn on white and the white cut away. */
+export const DECOR_SLOTS = Object.freeze({
+  texture: { clear: false, shape: 'square', size: 512 },
+  corner: { clear: true, shape: 'square', size: 256 },
+  divider: { clear: true, shape: 'landscape', size: 1024 },
+  emblem: { clear: true, shape: 'square', size: 256 },
+})
+export const LOOK_TOKEN = /^--pic-(?:avatar|cover|scene-[0-9a-f]{6}|sprite-[\w-]{1,40}|decor-(?:texture|corner|divider|emblem))$/
+const LOOK_TOKENS = /--pic-[\w-]+/g
+const MAX_DECOR_PROMPT = 600
+
+/** The picture variables a look's CSS names, each once. */
+export const lookTokensUsed = css => [...new Set(String(css ?? '').match(LOOK_TOKENS) ?? [])]
+
+/** The declarations that fill the variables in: { token: address } → '--pic-x: url("…")' for those named right. */
+export function lookVars(pictures) {
+  return Object.entries(pictures ?? {})
+    .filter(([token, src]) => LOOK_TOKEN.test(token) && typeof src === 'string' && /^(?:\/api\/look\/[\w-]+\/[\w-]+\.(?:png|jpg|webp)(?:\?v=\w+)?|data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+)$/.test(src))
+    .map(([token, src]) => [token, `url("${src}")`])
+}
+
+/** 画装饰图's prompts as a look keeps them: { slot: prompt } for the slots it knows. */
+export function cleanDecor(raw) {
+  if (!raw || typeof raw !== 'object') return null
+  const kept = Object.fromEntries(Object.keys(DECOR_SLOTS).map(slot => [slot, str(raw[slot], MAX_DECOR_PROMPT)]).filter(([, prompt]) => prompt))
+  return Object.keys(kept).length ? kept : null
+}
+
+/** A look as a card keeps it ({ name?, css, decor? }), or null. */
 export function cleanSkin(raw) {
   if (!raw || typeof raw !== 'object' || typeof raw.css !== 'string') return null
   const css = cleanSkinCss(raw.css)
-  return css ? { ...(str(raw.name, 24) ? { name: str(raw.name, 24) } : {}), css } : null
+  const decor = cleanDecor(raw.decor)
+  return css ? { ...(str(raw.name, 24) ? { name: str(raw.name, 24) } : {}), css, ...(decor ? { decor } : {}) } : null
 }
 
 // ─── 变量模板 and 只读变量 ────────────────────────────────────────────────

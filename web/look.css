@@ -33,7 +33,11 @@ html:not([data-look="plain"]) .battle-veil { display: none; }
 html[data-look="plain"][data-look-tone="light"] .battle-float.hurt, html[data-look="plain"][data-look-tone="light"] .battle-float.crit { color: var(--cinnabar); }
 html[data-look="plain"][data-look-tone="light"] .battle-float.heal { color: var(--malachite); }
 html[data-look="plain"][data-look-tone="light"] .fx-name { color: var(--bone); text-shadow: 0 0 16px #fff, 0 0 30px #fff, 0 0 44px #fff; }
-html[data-look="plain"][data-look-tone="light"] .foe-name { padding: 0 10px; background: rgb(var(--night-c) / .86); text-shadow: none; }
+html[data-look="plain"] .foe-plate { padding: 7px 14px 8px; border: 1px solid rgb(var(--gold-c) / .28); border-radius: 10px; background: rgb(var(--night-c) / .72); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); box-shadow: 0 10px 26px rgb(0 0 0 / .2); transition: border-color .2s; }
+html[data-look="plain"] .battle-foe:hover:not(:disabled) .foe-plate, html[data-look="plain"] .battle-foe.aimed .foe-plate { border-color: var(--gold); }
+html[data-look="plain"] :is(.foe-name, .foe-tag) { text-shadow: none; }
+html[data-look="plain"] .foe-tag:empty { display: none; }
+html[data-look="plain"] .battle-bar.foe { height: 4px; border-radius: 2px; }
 html[data-look="plain"][data-look-tone="light"] .battle-line:not(:empty) { width: fit-content; margin: 0 auto; padding: 0 16px; background: rgb(var(--night-c) / .86); text-shadow: none; }
 html[data-look="plain"][data-look-tone="light"] .battle-line::before, html[data-look="plain"][data-look-tone="light"] .battle-line::after { content: none; }
 /* Light paper lets the fight show through far more than the dark does: the end's page is laid nearly solid, and what is behind it fades. */
@@ -141,8 +145,10 @@ html[data-look="ink"] .battle-foe.struck .foe-face.drawn img { animation: ink-li
 html[data-look="ink"] .foe-face.drawn::before { border-color: var(--cinnabar); box-shadow: 0 0 14px rgb(179 54 42 / .5); }
 html[data-look="ink"] .foe-face.drawn::after { background: radial-gradient(closest-side, rgb(60 50 30 / .42), rgb(60 50 30 / .18) 58%, transparent); }
 html[data-look="ink"] .foe-name { font: 400 25px/1.3 var(--look-brush); letter-spacing: .12em; color: var(--ink); text-shadow: var(--halo); }
-html[data-look="ink"] .tier-elite .foe-name::before, html[data-look="ink"] .tier-boss .foe-name::before, html[data-look="ink"] .tier-boss .foe-name::after { color: var(--cinnabar); }
 html[data-look="ink"] .foe-tag { color: var(--cinnabar); text-shadow: var(--halo); }
+html[data-look="ink"] .foe-plate { gap: 3px; padding: 4px 30px 2px; background: radial-gradient(closest-side, rgb(var(--night-c) / .92), rgb(var(--night-c) / .7) 62%, transparent); }
+html[data-look="ink"] .foe-rank { padding: 1px 4px; border: 0; border-radius: 2px; background: var(--cinnabar); color: var(--paper); font: 400 15px/1.2 var(--look-brush); letter-spacing: 0; }
+html[data-look="ink"] .foe-type { padding: 0 4px; border: 1.5px solid var(--cinnabar); border-radius: 2px; background: none; color: var(--cinnabar); font: 400 15px/1.3 var(--look-brush); letter-spacing: 0; }
 html[data-look="ink"] .battle-bar { height: 15px; background: none; }
 html[data-look="ink"] .battle-bar i { background: var(--ink-jade, none) left center / 280px 100% no-repeat; }
 html[data-look="ink"] .battle-bar i.lag { display: none; }
@@ -215,12 +221,26 @@ html[data-look="ink"] .battle-thing::before { content: ""; position: absolute; l
 html[data-look="ink"] .battle-thing b { font: 400 24px/1.15 var(--look-brush); }
 html[data-look="ink"] .battle-thing i { font: 19px/1 var(--look-kai); color: var(--cinnabar); }
 html[data-look="ink"] .battle-end-actions { grid-column: 2; justify-content: flex-end; margin-top: 6px; }
-/* 收服: under the ledger, each a word over a brush stroke like 继续, the long label in a smaller hand. */
-html[data-look="ink"] .battle-tame { grid-column: 2; justify-content: flex-start; gap: 4px 26px; margin: 0; }
-html[data-look="ink"] :is(.battle-end-actions, .battle-tame) .battle-action { flex: none; min-width: 110px; min-height: 44px; padding: 2px 8px 8px; border: 0; background: var(--ink-stroke, none) center bottom / 100% 10px no-repeat; color: var(--ink); font: 400 26px/1.2 var(--look-brush); letter-spacing: .2em; }
-html[data-look="ink"] .battle-tame .battle-action { min-width: 0; padding: 2px 4px 10px; font-size: 24px; letter-spacing: .04em; }
-html[data-look="ink"] :is(.battle-end-actions, .battle-tame) .battle-action::before { content: none; }
-html[data-look="ink"] :is(.battle-end-actions, .battle-tame) .battle-action:is(:hover:not(:disabled), :focus-visible) { color: var(--cinnabar); background: var(--ink-stroke, none) center bottom / 100% 10px no-repeat; }
+/* 收服: under the ledger, each on paper like a tally slip: the head ringed in ink, the rank a red seal, the odds a brush line. */
+html[data-look="ink"] .battle-tame { grid-column: 2; gap: 10px 18px; margin: 4px 0 0; }
+html[data-look="ink"] .tame-card { gap: 14px; padding: 8px 16px 10px 10px; border: 0; border-radius: 3px; background: var(--ink-stroke, none) 70% 100% / 90% 9px no-repeat, rgb(255 250 238 / .5); box-shadow: 1px 2px 3px rgb(40 30 10 / .28); color: var(--ink); font-family: var(--look-kai); }
+html[data-look="ink"] .tame-card:is(:hover:not(:disabled), :focus-visible) { box-shadow: 2px 5px 10px rgb(40 30 10 / .35); }
+html[data-look="ink"] .tame-face { border: 2px solid var(--ink); background-color: rgb(235 226 205 / .8); color: var(--ink); font: 400 30px/1 var(--look-brush); filter: url(#ink-rough-fine); }
+html[data-look="ink"] .tame-name { font: 400 26px/1.1 var(--look-brush); }
+html[data-look="ink"] .tame-rank { padding: 1px 5px; border-radius: 2px; background: var(--cinnabar); color: #f2e8d3; font: 15px/1.2 var(--look-kai); }
+html[data-look="ink"] .tame-type { border: 1px solid var(--cinnabar); border-radius: 2px; color: var(--cinnabar); font: 14px/1.3 var(--look-kai); }
+html[data-look="ink"] .tame-odds { color: var(--bone-soft); font: 15px/1.2 var(--look-kai); }
+html[data-look="ink"] .tame-odds b { color: var(--cinnabar); font: 400 22px/1 var(--look-brush); }
+html[data-look="ink"] .tame-meter { height: 4px; border-radius: 0; background: rgb(90 84 74 / .18); }
+html[data-look="ink"] .tame-meter i { border-radius: 0; background: var(--ink); }
+html[data-look="ink"] .tame-go { padding: 0 2px; border: 0; border-radius: 0; color: var(--ink); font: 400 26px/1.2 var(--look-brush); }
+html[data-look="ink"] .tame-card:is(:hover:not(:disabled), :focus-visible) .tame-go { background: none; color: var(--cinnabar); }
+html[data-look="ink"] .tame-roll { color: var(--bone-soft); font: 16px/1.3 var(--look-kai); }
+html[data-look="ink"] .tame-stamp { padding: 3px 8px; border: 0; border-radius: 3px; background: var(--cinnabar); color: #f2e8d3; font: 400 22px/1.1 var(--look-brush); filter: url(#ink-rough-fine); }
+html[data-look="ink"] .tame-card.fail .tame-stamp { background: var(--ink); color: #f2e8d3; }
+html[data-look="ink"] .battle-end-actions .battle-action { flex: none; min-width: 110px; min-height: 44px; padding: 2px 8px 8px; border: 0; background: var(--ink-stroke, none) center bottom / 100% 10px no-repeat; color: var(--ink); font: 400 26px/1.2 var(--look-brush); letter-spacing: .2em; }
+html[data-look="ink"] .battle-end-actions .battle-action::before { content: none; }
+html[data-look="ink"] .battle-end-actions .battle-action:is(:hover:not(:disabled), :focus-visible) { color: var(--cinnabar); background: var(--ink-stroke, none) center bottom / 100% 10px no-repeat; }
 /* The roll: a compass; the number in its middle; the word stamped. */
 html[data-look="ink"] .roll-layer { background: var(--ink-grain, none), rgb(235 226 205 / .92); backdrop-filter: none; -webkit-backdrop-filter: none; font-family: var(--look-kai); color: var(--ink); }
 html[data-look="ink"] .roll-stage { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); width: min(1000px, 100%); gap: 40px; }
@@ -269,7 +289,7 @@ html[data-look="ink"] .roll-hint { color: var(--bone-soft); }
   html[data-look="ink"] .battle-tally { min-height: 54px; }
   html[data-look="ink"] .battle-tally.gain b { font-size: 42px; }
   html[data-look="ink"] :is(.battle-end-actions, .battle-tame) { grid-column: 1; }
-  html[data-look="ink"] .battle-tame .battle-action { font-size: 22px; }
+  html[data-look="ink"] .tame-name { font-size: 22px; }
   html[data-look="ink"] .roll-stage { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; }
   html[data-look="ink"] .roll-dial-box { grid-column: 1 / -1; grid-row: 1; justify-self: center; width: min(86vw, 46vh); }
   html[data-look="ink"] .roll-title { justify-self: center; font-size: 44px; }
@@ -404,9 +424,17 @@ html[data-look="console"] .foe-face.drawn::before { left: 12%; right: 12%; botto
 html[data-look="console"] .battle-foe:hover:not(:disabled) .foe-face.drawn img, html[data-look="console"] .battle-foe.aimed .foe-face.drawn img { filter: brightness(1.15) drop-shadow(0 3px 0 var(--win-deep)); }
 html[data-look="console"] .battle-foe.struck .foe-face.drawn img { animation: console-hit .5s steps(5); }
 @keyframes console-hit { from { filter: brightness(1.35) drop-shadow(0 3px 0 var(--win-deep)); transform: translateX(14px); } }
-html[data-look="console"] .foe-name { margin-top: 2px; padding: 0 12px; border: 3px solid #fff; border-radius: 5px; background: var(--win); color: #fff; font: 700 14px/1.5 var(--ui); letter-spacing: 0; text-shadow: none; }
+html[data-look="console"] .foe-plate { align-items: stretch; gap: 4px; margin-top: 4px; padding: 4px 10px 6px; border: 3px solid #fff; border-radius: 6px; background: var(--win); box-shadow: 0 0 0 2px var(--win-deep), 4px 5px 0 2px rgb(6 10 40 / .5); }
+html[data-look="console"] .foe-head { justify-content: flex-start; gap: 2px 6px; }
+html[data-look="console"] .foe-name { color: #fff; font: 700 14px/1.5 var(--ui); letter-spacing: 0; text-shadow: none; }
+html[data-look="console"] .foe-rank { padding: 0 5px; border: 0; border-radius: 3px; background: var(--hit); color: var(--win-deep); font: 700 11px/1.6 var(--ui); letter-spacing: 0; }
+html[data-look="console"] .tier-boss .foe-rank { background: var(--hurt); color: #fff; }
+html[data-look="console"] .foe-type { padding: 0; border-radius: 0; background: none; color: var(--bone-soft); font: 700 12px/1.5 var(--ui); letter-spacing: 0; }
+html[data-look="console"] .foe-type::before { content: "/ "; }
+html[data-look="console"] .foe-tag { min-height: 0; font-size: 12px; text-align: left; }
+html[data-look="console"] .foe-tag:empty { display: none; }
+html[data-look="console"] .battle-foe:hover:not(:disabled) .foe-plate, html[data-look="console"] .battle-foe.aimed .foe-plate { border-color: var(--hit); }
 html[data-look="console"] .battle-foe:hover:not(:disabled) .foe-name, html[data-look="console"] .battle-foe.aimed .foe-name { color: var(--hit); }
-html[data-look="console"] .tier-elite .foe-name::before, html[data-look="console"] .tier-boss .foe-name::before, html[data-look="console"] .tier-boss .foe-name::after { color: var(--hit); }
 html[data-look="console"] .foe-tag { color: var(--hit); text-shadow: 0 2px 0 var(--win-deep); }
 html[data-look="console"] .battle-bar { height: 11px; border: 2px solid #fff; border-radius: 2px; background: var(--win-deep); overflow: hidden; }
 html[data-look="console"] .battle-bar i { background: repeating-linear-gradient(90deg, var(--life) 0 7px, transparent 7px 9px); transition: width .4s steps(6); }
@@ -419,6 +447,7 @@ html[data-look="console"] .battle-line::before, html[data-look="console"] .battl
 html[data-look="console"] .battle-bottom { min-height: 0; grid-template-columns: minmax(0, 1fr) 230px; align-items: stretch; gap: 16px; padding: 10px 16px 14px; background: none; }
 html[data-look="console"] .battle-self { order: 2; grid-template-columns: minmax(0, 1fr); align-content: center; gap: 4px; padding: 10px 22px 12px; border: 5px solid #fff; border-radius: 9px; background: var(--win); box-shadow: var(--frame); }
 html[data-look="console"] .battle-self.struck { animation: none; border-color: var(--hurt); }
+html[data-look="console"] .battle-party { order: 2; justify-self: start; width: min(100%, 620px); max-width: none; align-content: center; gap: 2px; padding: 8px 14px 10px; border: 5px solid #fff; border-radius: 9px; background: var(--win); box-shadow: var(--frame); }
 html[data-look="console"] .battle-meter { grid-template-columns: 3em minmax(0, 1fr) 6em; align-items: center; gap: 10px; }
 html[data-look="console"] .battle-meter > span:first-child { color: var(--bone-soft); font-size: 17px; letter-spacing: 0; }
 html[data-look="console"] .battle-meter .battle-bar { grid-column: auto; grid-row: auto; }
@@ -478,8 +507,26 @@ html[data-look="console"] .battle-thing { border: 2px solid var(--edge); border-
 html[data-look="console"] .battle-thing b { font-size: 16px; }
 html[data-look="console"] .battle-thing i { color: var(--hit); }
 html[data-look="console"] .battle-end-actions { justify-content: flex-end; margin-top: 10px; }
-html[data-look="console"] .battle-tame { justify-content: flex-start; gap: 10px; margin-top: 10px; }
-html[data-look="console"] :is(.battle-end-actions, .battle-tame) .battle-action { flex: none; min-width: 7em; min-height: 36px; justify-content: center; padding: 2px 16px; border: 2px solid var(--edge); border-radius: 2px; background: var(--tab); font-size: 17px; letter-spacing: 0; }
+/* 收服: a small window to each, the head in a square frame, the odds a meter of blocks, the word to press a tab. */
+html[data-look="console"] .battle-tame { gap: 10px; margin-top: 10px; }
+html[data-look="console"] .tame-card { gap: 12px; padding: 8px 12px 8px 8px; border: 3px solid #fff; border-radius: 6px; background: var(--win); box-shadow: var(--frame); color: #fff; font: 700 15px/1.4 var(--ui); animation: console-rise .2s steps(3) both; animation-delay: calc(var(--i, 0) * 90ms + .4s); transition: none; }
+html[data-look="console"] .tame-card:is(:hover:not(:disabled), :focus-visible) { transform: none; border-color: var(--hit); box-shadow: var(--frame); }
+html[data-look="console"] .tame-face { border: 2px solid #fff; border-radius: 3px; background-color: var(--tab); color: #fff; image-rendering: auto; }
+html[data-look="console"] .tame-name { font-size: 18px; }
+html[data-look="console"] .tame-rank { border-radius: 2px; background: var(--hit); color: var(--win-deep, #000); font-size: 13px; }
+html[data-look="console"] .tame-type { border: 0; padding: 0; color: #fff; opacity: .8; font-size: 13px; }
+html[data-look="console"] .tame-type::before { content: "/ "; }
+html[data-look="console"] .tame-odds { color: #fff; opacity: .9; font-size: 13px; }
+html[data-look="console"] .tame-odds b { color: var(--hit); font-size: 16px; }
+html[data-look="console"] .tame-meter { height: 8px; border: 2px solid #fff; border-radius: 0; background: var(--win-deep, rgb(0 0 0 / .4)); }
+html[data-look="console"] .tame-meter i { border-radius: 0; background: repeating-linear-gradient(90deg, var(--hit) 0 6px, transparent 6px 8px); }
+html[data-look="console"] .tame-go { padding: 2px 12px; border: 2px solid var(--edge); border-radius: 2px; background: var(--tab); color: #fff; font-size: 15px; }
+html[data-look="console"] .tame-card:is(:hover:not(:disabled), :focus-visible) .tame-go { border-color: var(--hit); background: var(--tab); color: var(--hit); }
+html[data-look="console"] .tame-card:is(:hover:not(:disabled), :focus-visible) .tame-go::before { content: "▶ "; }
+html[data-look="console"] .tame-roll { color: #fff; opacity: .85; font-size: 14px; }
+html[data-look="console"] .tame-stamp { border-width: 3px; border-radius: 3px; color: var(--hit); transform: none; animation: console-rise .2s steps(3) both; }
+html[data-look="console"] .tame-card.fail .tame-stamp { color: var(--hurt); }
+html[data-look="console"] .battle-end-actions .battle-action { flex: none; min-width: 7em; min-height: 36px; justify-content: center; padding: 2px 16px; border: 2px solid var(--edge); border-radius: 2px; background: var(--tab); font-size: 17px; letter-spacing: 0; }
 html[data-look="console"] .battle-end-actions .battle-action.primary { border-color: var(--hit); color: var(--hit); }
 /* The roll: a window with the die in it and the sum written out; no flash, the lines just arrive. */
 html[data-look="console"] .roll-layer { background: conic-gradient(var(--win-deep) 25%, var(--win-deep2) 0 50%, var(--win-deep) 0 75%, var(--win-deep2) 0) 0 0 / 56px 56px; backdrop-filter: none; -webkit-backdrop-filter: none; font: 700 19px/1.55 var(--ui); animation: none; }
@@ -519,6 +566,7 @@ html[data-look="console"] .roll-hint { margin-top: 10px; color: #fff; text-shado
   html[data-look="console"] .battle-line { top: 46px; max-width: calc(100% - 24px); padding: 2px 12px; border-width: 4px; font-size: 15px; }
   html[data-look="console"] .battle-bottom { grid-template-columns: minmax(0, 1fr); padding: 8px 10px 10px; gap: 10px; }
   html[data-look="console"] .battle-self { order: 0; padding: 6px 12px 8px; border-width: 4px; }
+  html[data-look="console"] .battle-party { order: 0; justify-self: stretch; width: auto; padding: 4px 8px 6px; border-width: 4px; }
   html[data-look="console"] .battle-meter { grid-template-columns: 2.6em minmax(0, 1fr) 4.4em; font-size: 14px; }
   html[data-look="console"] .battle-meter > span:first-child, html[data-look="console"] .battle-meter b, html[data-look="console"] .battle-meter b small { font-size: 14px; }
   html[data-look="console"] .battle-panel { grid-row: auto; grid-column: auto; }
@@ -542,6 +590,7 @@ html[data-look="console"] .roll-hint { margin-top: 10px; color: #fff; text-shado
   html[data-look="console"] .battle-line { top: 8px; max-width: 46%; font-size: 14px; }
   html[data-look="console"] .battle-bottom { grid-template-columns: minmax(0, 1fr); align-content: end; padding: 6px 10px; gap: 8px; }
   html[data-look="console"] .battle-self { order: 0; padding: 4px 10px 6px; border-width: 4px; }
+  html[data-look="console"] .battle-party { order: 0; justify-self: stretch; width: auto; padding: 3px 8px 4px; border-width: 4px; }
   html[data-look="console"] .battle-panel { grid-row: auto; grid-column: auto; }
   html[data-look="console"] .battle-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   html[data-look="console"] .battle-action { font-size: 15px; }
@@ -579,10 +628,10 @@ html[data-look="bold"] .look-fields { display: block; position: absolute; top: 0
 .look-red { position: absolute; top: 0; right: 0; bottom: 0; left: 0; overflow: hidden; background: var(--look-hot); clip-path: var(--f2); transition: clip-path .9s var(--out); }
 .look-rays { position: absolute; right: -420px; top: -360px; width: 1300px; height: 1300px; border-radius: 50%; background: repeating-conic-gradient(rgb(255 255 255 / .07) 0 9deg, transparent 9deg 18deg); animation: bold-spin 46s linear infinite; }
 @keyframes bold-spin { to { transform: rotate(360deg); } }
-.look-stripe { position: absolute; top: 0; right: 0; bottom: 0; left: 0; background: var(--paper); clip-path: var(--stripe); transition: clip-path .9s var(--out); }
 .look-dots { position: absolute; left: 0; bottom: 0; width: 460px; height: 330px; color: var(--paper); background: radial-gradient(currentColor 2.4px, transparent 3px) 0 0 / 13px 13px; opacity: .2; clip-path: polygon(0 0, 100% 100%, 0 100%); }
-html[data-look="bold"] .vn { --f2: polygon(66% 0, 100% 0, 100% 100%, 50% 100%); --stripe: polygon(58% 0, 66% 0, 50% 100%, 42% 100%); --cx: 0px; --cs: 1; }
-html[data-look="bold"] .vn.choosing { --f2: polygon(60% 0, 100% 0, 100% 100%, 72% 100%); --stripe: polygon(50% 0, 60% 0, 72% 100%, 62% 100%); --cx: -22px; --cs: 1.03; }
+/* Only the left colour while the story plays; the red sweeps in from the right when it is the player's turn (choices or the input open). */
+html[data-look="bold"] .vn { --f2: polygon(100% 0, 100% 0, 100% 100%, 100% 100%); --cx: 0px; --cs: 1; }
+html[data-look="bold"] :is(.vn.choosing, .stage.vn-compose .vn) { --f2: polygon(60% 0, 100% 0, 100% 100%, 72% 100%); --cx: -22px; --cs: 1.03; }
 html[data-look="bold"] .vn-actors[data-count="1"] { --stage-x: 14%; }
 html[data-look="bold"] .vn-actors { transition: transform .85s var(--out), filter .3s; animation: bold-trail-back .7s ease-out; }
 html[data-look="bold"] .vn.choosing .vn-actors { --stage-x: 26%; animation: bold-trail .7s ease-out; }
@@ -653,8 +702,8 @@ html[data-look="bold"] .encounter-foe { border-bottom: 1px solid var(--rule); ba
 html[data-look="bold"] .encounter-who b, html[data-look="bold"] .encounter-stat b { font-family: var(--ui); font-weight: 800; }
 html[data-look="bold"] .vn-menu .encounter { padding: 0 8px; }
 /* The fight. */
-html[data-look="bold"] .battle { --f2: polygon(0 0, 100% 0, 100% 100%, 34% 100%, 0 54%); --stripe: polygon(0 54%, 34% 100%, 28% 100%, 0 62%); background: var(--paper); font-family: var(--ui); font-weight: 500; }
-html[data-look="bold"] .battle.ended { --f2: polygon(60% 0, 100% 0, 100% 100%, 44% 100%, 44% 100%); --stripe: polygon(52% 0, 60% 0, 44% 100%, 36% 100%); --cx: 20px; --cs: 1.04; }
+html[data-look="bold"] .battle { --f2: polygon(0 0, 100% 0, 100% 100%, 34% 100%, 0 54%); background: var(--paper); font-family: var(--ui); font-weight: 500; }
+html[data-look="bold"] .battle.ended { --f2: polygon(60% 0, 100% 0, 100% 100%, 44% 100%, 44% 100%); --cx: 20px; --cs: 1.04; }
 html[data-look="bold"] .battle:not(.scene) .look-wash { opacity: 1; }
 html[data-look="bold"] .battle.scene::before { top: 0; right: 0; bottom: 0; left: 0; animation: none; }
 html[data-look="bold"] .battle::after { content: none; }
@@ -692,11 +741,18 @@ html[data-look="bold"] .battle-foe.lunge { z-index: 3; }
 html[data-look="bold"] .battle-foe.lunge .foe-face.drawn img { animation: bold-lunge .6s var(--both); }
 @keyframes bold-lunge { 36% { transform: translate(6px, -14px) scale(.94); } 62%, 76% { transform: translate(-34px, 80px) scale(1.42); } }
 html[data-look="bold"] .battle-foe.down .foe-face.drawn img { filter: grayscale(1) brightness(.6); animation: none; }
-html[data-look="bold"] .foe-name { margin-top: 12px; padding: 0 14px; background: var(--paper); color: var(--gold); font: 800 15px/1.6 var(--ui); letter-spacing: 0; text-shadow: none; transform: skewX(-12deg); }
-html[data-look="bold"] .tier-elite .foe-name::before, html[data-look="bold"] .tier-boss .foe-name::before, html[data-look="bold"] .tier-boss .foe-name::after { color: var(--gold); }
-html[data-look="bold"] .foe-tag { color: var(--gold); text-shadow: 2px 2px 0 var(--paper); }
+html[data-look="bold"] .foe-plate { --lean: -12deg; align-items: stretch; gap: 5px; margin-top: 14px; padding: 6px 16px 9px 14px; border-left: 6px solid var(--gold); background: var(--paper); box-shadow: 7px 7px 0 var(--look-hot); transform: skewX(var(--lean)); transition: box-shadow .25s var(--out), border-color .25s; }
+html[data-look="bold"] .foe-plate > :not(.battle-bar) { transform: skewX(calc(var(--lean) * -1)); }
+html[data-look="bold"] .battle-foe:hover:not(:disabled) .foe-plate, html[data-look="bold"] .battle-foe.aimed .foe-plate { border-left-color: var(--bone); box-shadow: 7px 7px 0 var(--gold); }
+html[data-look="bold"] .foe-head { justify-content: flex-start; gap: 3px 7px; }
+html[data-look="bold"] .foe-name { color: var(--bone); font: italic 800 17px/1.4 var(--ui); letter-spacing: 0; text-shadow: none; }
+html[data-look="bold"] .foe-rank { padding: 0 7px; border: 0; background: var(--gold); color: var(--paper); font: italic 800 12px/1.6 var(--ui); letter-spacing: 0; }
+html[data-look="bold"] .tier-boss .foe-rank { background: var(--bone); color: var(--look-hot); }
+html[data-look="bold"] .foe-type { padding: 0 6px; border-radius: 0; background: var(--look-hot); color: var(--gold); font: 800 12px/1.6 var(--ui); letter-spacing: 0; }
+html[data-look="bold"] .foe-tag { min-height: 0; color: var(--gold); font: 800 12px/1.5 var(--ui); text-align: left; text-shadow: none; }
+html[data-look="bold"] .foe-tag:empty { display: none; }
 html[data-look="bold"] .battle-bar { height: 9px; background: rgb(255 255 255 / .16); transform: skewX(-24deg); }
-html[data-look="bold"] .battle-bar.foe { width: min(176px, 100%); background: var(--paper); box-shadow: 0 0 0 2px var(--paper); }
+html[data-look="bold"] .battle-bar.foe { width: 100%; height: 8px; background: rgb(255 255 255 / .14); transform: none; }
 html[data-look="bold"] .battle-bar i { background: var(--gold); transition: width .9s var(--out); }
 html[data-look="bold"] .battle-bar i.lag { background: var(--bone); opacity: .55; transition: width .9s var(--out) .36s; }
 html[data-look="bold"] .battle-bar.foe i:not(.lag) { background: var(--gold); }
@@ -710,11 +766,10 @@ html[data-look="bold"] .battle-self.struck { animation: none; }
 html[data-look="bold"] .battle-meter > span:first-child { color: var(--gold); font-size: 14px; font-weight: 800; letter-spacing: 0; }
 html[data-look="bold"] .battle-meter b { font: 400 42px/1.05 var(--look-display); }
 html[data-look="bold"] .battle-meter b small { font-size: 18px; opacity: .65; }
-/* 队伍: one slanted band across the foot, a slot each, the cut-outs' heads over its top edge; the one choosing widens and turns red. */
+/* 队伍: a slanted card each, side by side, the cut-outs' heads over its top edge; the one choosing rises and turns red. */
 html[data-look="bold"] .battle-bottom:has(> .battle-party) { grid-template-columns: minmax(0, 1fr) 216px; padding: 56px 34px 26px 0; }
-html[data-look="bold"] .battle-party { --lean: -16deg; display: flex; align-items: stretch; gap: 0; max-width: none; margin-left: -44px; padding: 0 0 0 44px; border-block: 4px solid var(--gold); background: var(--paper); box-shadow: 0 10px 0 0 var(--look-hot); transform: skewX(var(--lean)); transform-origin: 0 100%; animation: bold-enter .6s var(--out) .2s both; }
-html[data-look="bold"] .battle-member { flex: 1 1 0; min-width: 0; display: grid; grid-template-columns: 76px minmax(0, 1fr) auto; grid-template-rows: auto auto auto auto; align-items: end; column-gap: 8px; row-gap: 4px; padding: 8px 14px 9px 6px; border: 0; border-left: 5px solid var(--gold); background: none; color: var(--bone); font: 15px var(--ui); transition: flex-grow .35s var(--out), background .25s, filter .25s; }
-html[data-look="bold"] .battle-member:first-child { border-left: 0; }
+html[data-look="bold"] .battle-party { --lean: -16deg; display: flex; align-items: flex-end; gap: 34px; max-width: none; padding: 0 0 0 40px; animation: bold-enter .6s var(--out) .2s both; }
+html[data-look="bold"] .battle-member { flex: 0 1 340px; min-width: 0; display: grid; grid-template-columns: 76px minmax(0, 1fr) auto; grid-template-rows: auto auto auto auto; align-items: end; column-gap: 8px; row-gap: 4px; padding: 8px 16px 9px 6px; border: 0; border-block: 4px solid var(--gold); background: var(--paper); box-shadow: 9px 9px 0 0 var(--look-hot); color: var(--bone); font: 15px var(--ui); transform: skewX(var(--lean)); transform-origin: 0 100%; transition: transform .35s var(--out), background .25s, box-shadow .25s, filter .25s; }
 html[data-look="bold"] .battle-member > :not(.battle-bar) { transform: skewX(calc(var(--lean) * -1)); }
 /* The cut-out: its head (--head tall) rises --poke over the band; only the band's lower edge cuts it. */
 html[data-look="bold"] .member-face { --head: 42px; --poke: 32px; grid-column: 1; grid-row: 1 / -1; align-self: stretch; position: relative; width: auto; height: auto; margin: -8px 0 -9px; border-radius: 0; background: none; color: var(--gold); font: 400 34px var(--look-display); clip-path: inset(-200px -16px 0 0); transform-origin: 50% 100%; transition: scale .35s var(--out); }
@@ -729,7 +784,7 @@ html[data-look="bold"] .battle-member .battle-bar.life { grid-column: 2 / -1; gr
 html[data-look="bold"] .battle-member .battle-bar.energy { grid-column: 2 / -1; grid-row: 4; align-self: auto; height: 2px; transform: none; }
 html[data-look="bold"] .member-tag { top: -18px; right: 12px; padding: 0 7px; background: var(--look-hot); color: var(--gold); font: 800 12px/1.5 var(--ui); letter-spacing: 0; }
 html[data-look="bold"] .member-tag:empty { display: none; }
-html[data-look="bold"] .battle-member.acting { flex-grow: 1.4; border-left-color: var(--gold); background: var(--look-hot); }
+html[data-look="bold"] .battle-member.acting { background: var(--look-hot); box-shadow: 9px 9px 0 0 var(--gold); transform: translateY(-8px) skewX(var(--lean)); }
 html[data-look="bold"] .battle-member.acting .member-face { scale: 1.12; }
 html[data-look="bold"] .battle-member.acting .member-name { background: var(--bone); }
 html[data-look="bold"] .battle-member.acting .member-tag { background: var(--paper); }
@@ -737,13 +792,13 @@ html[data-look="bold"] .battle-party:has(.acting) .battle-member:not(.acting, .d
 html[data-look="bold"] .battle-member.told .member-name::after { color: inherit; }
 html[data-look="bold"] .battle-member.down { opacity: 1; filter: grayscale(1) brightness(.5); }
 html[data-look="bold"] .battle.giving .battle-member:not(:disabled) { filter: none; }
-html[data-look="bold"] .battle.giving .battle-member:not(:disabled):hover, html[data-look="bold"] .battle.giving .battle-member:not(:disabled):focus-visible { border-left-color: var(--gold); background: rgb(var(--bone-c) / .16); outline: none; }
+html[data-look="bold"] .battle.giving .battle-member:not(:disabled):hover, html[data-look="bold"] .battle.giving .battle-member:not(:disabled):focus-visible { background: color-mix(in srgb, var(--paper), var(--bone) 16%); outline: none; }
 /* With the faces in the band, the figure only steps in to strike and to win. */
 html[data-look="bold"] .battle:has(.battle-party) .battle-hero { opacity: 0; transition: transform .85s var(--out), opacity .2s; }
 html[data-look="bold"] .battle:has(.battle-party):is(.dashing, .ended) .battle-hero { opacity: 1; }
-/* A fight's scene shows nearly as it is: none of the field, stripe and dots (the win keeps them), only as much wash as 场景滤镜 says. Without a scene they stay, or there is nothing to look at. */
-html[data-look="bold"] .battle.scene :is(.look-red, .look-stripe, .look-dots) { transition: clip-path .9s var(--out), opacity .6s; }
-html[data-look="bold"] .battle.scene:not(.ended) :is(.look-red, .look-stripe, .look-dots) { opacity: 0; }
+/* A fight's scene shows nearly as it is: none of the field and dots (the win keeps them), only as much wash as 场景滤镜 says. Without a scene they stay, or there is nothing to look at. */
+html[data-look="bold"] .battle.scene :is(.look-red, .look-dots) { transition: clip-path .9s var(--out), opacity .6s; }
+html[data-look="bold"] .battle.scene:not(.ended) :is(.look-red, .look-dots) { opacity: 0; }
 html[data-look="bold"] .battle-panel.choose { padding: 8px; animation: bold-enter .6s var(--out) .28s both; }
 html[data-look="bold"] .battle-panel.target { min-width: 0; min-height: 0; padding: 10px 12px; text-align: left; }
 html[data-look="bold"] .battle-actions { position: relative; grid-auto-flow: row; grid-auto-columns: auto; justify-content: stretch; }
@@ -824,10 +879,28 @@ html[data-look="bold"] .battle-tally.gain b { color: var(--gold); font-size: 42p
 html[data-look="bold"] .battle-thing { border: 2px solid var(--gold); transform: skewX(-12deg); }
 html[data-look="bold"] .battle-thing b { font: 800 15px/1.5 var(--ui); }
 html[data-look="bold"] .battle-end-actions { margin-top: 22px; }
-html[data-look="bold"] .battle-tame { justify-content: flex-start; gap: 10px 16px; margin-top: 12px; padding-left: 6px; }
-html[data-look="bold"] :is(.battle-end-actions, .battle-tame) .battle-action { flex: none; min-width: 170px; min-height: 46px; justify-content: center; padding: 4px 16px; border: 3px solid var(--gold); background: var(--paper); color: var(--gold); font: 800 17px/1.3 var(--ui); transform: skewX(-12deg); }
+/* 收服: slanted black cards like the foes' plates, gold edged with the red shadow; the one pressed jumps; the stamp a cut-out word. */
+html[data-look="bold"] .battle-tame { --lean: -12deg; gap: 14px 22px; margin-top: 14px; padding: 0 12px 8px 10px; }
+html[data-look="bold"] .tame-card { gap: 14px; padding: 8px 18px 8px 10px; border: 0; border-left: 6px solid var(--gold); border-radius: 0; background: #000; box-shadow: 7px 7px 0 var(--look-hot); color: var(--bone); font: 800 15px/1.3 var(--ui); transform: skewX(var(--lean)); animation: bold-tame-in .5s var(--out) both; animation-delay: calc(var(--i, 0) * 80ms + .5s); }
+@keyframes bold-tame-in { from { opacity: 0; transform: translateX(-40px) skewX(var(--lean)); } }
+html[data-look="bold"] .tame-card > * { transform: skewX(calc(var(--lean) * -1)); }
+html[data-look="bold"] .tame-card:is(:hover:not(:disabled), :focus-visible) { border-color: var(--bone); box-shadow: 9px 9px 0 var(--gold); transform: translateY(-4px) skewX(var(--lean)); }
+html[data-look="bold"] .tame-face { border: 3px solid var(--gold); border-radius: 0; background-color: var(--look-hot); color: var(--gold); font: 400 30px/1 var(--look-display); }
+html[data-look="bold"] .tame-name { font-size: 19px; }
+html[data-look="bold"] .tame-rank { border-radius: 0; background: var(--gold); color: #000; font-size: 13px; }
+html[data-look="bold"] .tame-type { border: 0; padding: 0; color: var(--look-hot); filter: brightness(1.6); font-size: 13px; font-weight: 800; }
+html[data-look="bold"] .tame-odds { color: var(--gold); font-size: 13px; }
+html[data-look="bold"] .tame-odds b { color: #fff; font: 400 22px/1 var(--look-display); }
+html[data-look="bold"] .tame-meter { height: 8px; border-radius: 0; background: rgb(255 255 255 / .16); transform: skewX(-24deg); }
+html[data-look="bold"] .tame-meter i { border-radius: 0; background: var(--gold); }
+html[data-look="bold"] .tame-go { padding: 2px 14px; border: 0; border-radius: 0; background: var(--gold); color: #000; font-size: 15px; }
+html[data-look="bold"] .tame-card:is(:hover:not(:disabled), :focus-visible) .tame-go { background: var(--look-hot); color: #fff; }
+html[data-look="bold"] .tame-roll { color: var(--bone-soft); font-size: 14px; }
+html[data-look="bold"] .tame-stamp { padding: 2px 12px; border: 0; border-radius: 0; background: var(--gold); color: #000; font: 400 24px/1.2 var(--look-display); letter-spacing: 0; transform: skewX(12deg) rotate(-4deg); }
+html[data-look="bold"] .tame-card.fail .tame-stamp { background: var(--bone); color: var(--look-hot); }
+html[data-look="bold"] .battle-end-actions .battle-action { flex: none; min-width: 170px; min-height: 46px; justify-content: center; padding: 4px 16px; border: 3px solid var(--gold); background: var(--paper); color: var(--gold); font: 800 17px/1.3 var(--ui); transform: skewX(-12deg); }
 html[data-look="bold"] .battle-end-actions .battle-action.primary { border-color: #fff; background: var(--look-hot); color: #fff; }
-html[data-look="bold"] :is(.battle-end-actions, .battle-tame) .battle-action:hover:not(:disabled) { background: #fff; color: var(--look-hot); transform: skewX(-12deg) translateY(-4px); }
+html[data-look="bold"] .battle-end-actions .battle-action:hover:not(:disabled) { background: #fff; color: var(--look-hot); transform: skewX(-12deg) translateY(-4px); }
 /* The roll. */
 .roll-hero { display: none; }
 html[data-look="bold"] .roll-layer { align-items: stretch; justify-content: flex-start; overflow: hidden; padding: 0; background: var(--paper); backdrop-filter: none; -webkit-backdrop-filter: none; font-family: var(--ui); animation: fade .3s ease-out; }
@@ -846,8 +919,8 @@ html[data-look="bold"] .roll-calc hr { display: none; }
 html[data-look="bold"] .roll-tier, html[data-look="bold"] .roll-sum { display: none; }
 html[data-look="bold"] .roll-hint { position: absolute; left: 44px; bottom: 30px; padding: 0 16px; background: var(--paper); color: var(--gold); font: 800 16px/1.8 var(--ui); transform: skewX(-12deg); }
 @media (max-width: 560px) {
-  html[data-look="bold"] .vn { --f2: polygon(84% 0, 100% 0, 100% 100%, 44% 100%); --stripe: polygon(70% 0, 84% 0, 44% 100%, 30% 100%); }
-  html[data-look="bold"] .vn.choosing { --f2: polygon(0 0, 100% 0, 100% 24%, 0 34%); --stripe: polygon(0 34%, 100% 24%, 100% 34%, 0 44%); }
+  html[data-look="bold"] .vn { --f2: polygon(0 0, 100% 0, 100% 0, 0 0); }
+  html[data-look="bold"] :is(.vn.choosing, .stage.vn-compose .vn) { --f2: polygon(0 0, 100% 0, 100% 24%, 0 34%); }
   html[data-look="bold"] .vn-actors[data-count="1"], html[data-look="bold"] .vn.choosing .vn-actors { --stage-x: 0%; }
   html[data-look="bold"] .vn-box { width: calc(100% - 28px); min-height: 140px; padding: 18px 14px 8px; font-size: calc(18px * var(--story-scale)); }
   html[data-look="bold"] .vn-name { left: 12px; font-size: 16px; }
@@ -859,8 +932,8 @@ html[data-look="bold"] .roll-hint { position: absolute; left: 44px; bottom: 30px
   html[data-look="bold"] .vn-menu-list { padding: 6px; }
   html[data-look="bold"] .vn-menu.brief .vn-choice { min-height: 46px; padding: 4px 8px 4px 24px; font-size: var(--vn-choice-size, 14.5px); }
   html[data-look="bold"] .vn-menu.brief .vn-choice-short { padding: 0 5px; font-size: 12px; }
-  html[data-look="bold"] .battle { --f2: polygon(0 0, 100% 0, 100% 100%, 46% 100%, 0 70%); --stripe: polygon(0 70%, 46% 100%, 38% 100%, 0 76%); }
-  html[data-look="bold"] .battle.ended { --f2: polygon(0 0, 100% 0, 100% 30%, 0 42%, 0 42%); --stripe: polygon(0 42%, 100% 30%, 100% 40%, 0 52%); --cx: 0px; }
+  html[data-look="bold"] .battle { --f2: polygon(0 0, 100% 0, 100% 100%, 46% 100%, 0 70%); }
+  html[data-look="bold"] .battle.ended { --f2: polygon(0 0, 100% 0, 100% 30%, 0 42%, 0 42%); --cx: 0px; }
   html[data-look="bold"] .battle-hero { --at-x: .22; --at-y: .56; --zoom: 1.5; --head-most: .2; }
   html[data-look="bold"] .battle.ended .battle-hero { --at-x: .62; --at-y: .13; --zoom: 1.2; --head-most: .32; }
   html[data-look="bold"] .battle-field { padding-left: 4px; padding-right: 4px; }
@@ -896,7 +969,7 @@ html[data-look="bold"] .roll-hint { position: absolute; left: 44px; bottom: 30px
   html[data-look="bold"] .battle-end-card h2 { font-size: 72px; }
   html[data-look="bold"] .battle-ledger { margin-top: auto; }
   html[data-look="bold"] .battle-end-actions { margin-top: 12px; justify-content: flex-end; }
-  html[data-look="bold"] :is(.battle-end-actions, .battle-tame) .battle-action { min-width: 130px; min-height: 42px; font-size: 16px; }
+  html[data-look="bold"] .battle-end-actions .battle-action { min-width: 130px; min-height: 42px; font-size: 16px; }
   html[data-look="bold"] .roll-layer::before { clip-path: polygon(0 34%, 100% 22%, 100% 100%, 0 100%); }
   html[data-look="bold"] .roll-hero { --at-x: .3; --at-y: .05; --zoom: 1.2; --head-most: .24; }
   html[data-look="bold"] .roll-stage { right: 14px; left: 14px; top: 44px; bottom: 60px; width: auto; }
@@ -935,8 +1008,8 @@ html[data-look="bold"] .roll-hint { position: absolute; left: 44px; bottom: 30px
   html[data-look="bold"] .battle-meter b { font-size: 24px; }
   /* 队伍: the band across the foot of the field, the menu alone on the right; numbers of life only. */
   html[data-look="bold"] .battle-bottom:has(> .battle-party) { position: static; grid-template-columns: minmax(0, 1fr); padding-top: 6px; }
-  html[data-look="bold"] .battle-party { --lean: -14deg; position: absolute; left: 0; right: 316px; bottom: 14px; margin: 0; padding-left: 34px; border-block-width: 3px; box-shadow: 0 6px 0 0 var(--look-hot); }
-  html[data-look="bold"] .battle-member { grid-template-columns: 42px minmax(0, 1fr); column-gap: 5px; row-gap: 3px; padding: 5px 8px 6px 4px; border-left-width: 3px; }
+  html[data-look="bold"] .battle-party { --lean: -14deg; position: absolute; left: 0; right: 316px; bottom: 14px; gap: 18px; margin: 0; padding-left: 24px; }
+  html[data-look="bold"] .battle-member { grid-template-columns: 42px minmax(0, 1fr); column-gap: 5px; row-gap: 3px; padding: 5px 8px 6px 4px; border-block-width: 3px; box-shadow: 6px 6px 0 0 var(--look-hot); }
   html[data-look="bold"] .member-face { --head: 26px; --poke: 19px; margin: -5px 0 -6px; clip-path: inset(-200px -8px 0 0); font-size: 20px; }
   html[data-look="bold"] .member-name { margin-top: -15px; padding: 0 4px; font-size: 10px; }
   html[data-look="bold"] .member-life { font-size: 20px; }

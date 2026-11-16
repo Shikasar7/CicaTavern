@@ -13,6 +13,11 @@
 // is left out for the rest of the run and named in the error log; the turn goes on without it.
 //
 // A card without such scripts costs nothing: its list says so (card.helperList), and no file is read.
+//
+// A preset's scripts (preset-scripts.mjs) run the same way in every chat that uses the preset: a sandbox of the
+// preset's own, which hears each event before the card's does (SillyTavern's order: global, preset, then the
+// card's scripts), with storage and permissions of its own. Each sandbox has an owner: { key, kind: 'card' or
+// 'preset', id, name, prefix (before its scripts' names in a chat's storage) }.
 import { readFileSync } from 'node:fs'
 import { readFile, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
@@ -22,6 +27,7 @@ import { createZ } from './schema-z.mjs'
 import { createLodash } from './sandbox-lodash.mjs'
 import { helperScriptsOf } from './schema.mjs'
 import { helperSummary } from './helper-scripts.mjs'
+import { presetPermissions, scriptsAsSwitched } from './preset-scripts.mjs'
 import { rawOfPicture } from './cards.mjs'
 import { applyCommands, applyStateUpdates, readUpdates } from './state.mjs'
 import { bookByName, bookNames, chatBooks, thEntry, withChatChanges, writeChatBook } from './frames.mjs'
@@ -34,19 +40,23 @@ export { MVU_EVENTS, TAVERN_EVENTS }
 const LISTENED = /\b(?:eventOn|eventOnce|eventMakeFirst|eventMakeLast|eventOnButton)\(\s*(?:getButtonEvent\(\s*)?(['"`])([^'"`$\n]{1,60})\1/g
 // A whole card's scripts at most (bundles carry Zod and lodash: a big card's three came to 1.3 MB).
 const MAX_SOURCE = 4_000_000
+// One script for the page at most: it runs in the browser, not the sandbox (a big preset's own app came to 5 MB).
+const MAX_PAGE_SOURCE = 8_000_000
 const MEMORY_LIMIT = 256 * 1024 * 1024
 // A big card's guard takes 0.7 s of its own work in V8 and 2.8 s here; a phone is slower still.
 const LOAD_MS = 20_000
 // Tests set a shorter one (CARD_SCRIPTS_FIRE_MS) to see a script that never ends cut off.
 const FIRE_MS = Number(process.env.CARD_SCRIPTS_FIRE_MS) || 20_000
 const IDLE_MS = 5 * 60_000
-// Sandboxes kept warm at once: a card switched back to does not load again.
-const WARM_MAX = 2
+// Sandboxes kept warm at once: a card switched back to does not load again (a chat's preset has one too).
+const WARM_MAX = 3
 // The floors a script sees, and the newest of them with their variables (older ones as text only).
 const FLOORS = 40
 const FLOORS_WITH_DATA = 6
 // What a chat keeps for its scripts (their localStorage and script variables), at most.
 const STORAGE_MAX = 200_000
+// A script's own variables as shipped in the card or preset (its data), at most.
+const MAX_SCRIPT_DATA = 200_000
 const MVU_KEYS = ['stat_data', 'display_data', 'delta_data', 'initialized_lorebooks', 'schema']
 
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -69,7 +79,11 @@ export function onCardScriptProblem(fn) {
 
 /** A card's scripts that run here, from its file's extensions: [{ name, content }], the author's enabled ones. */
 export function hookScriptsOf(extensions) {
-  const scripts = helperScriptsOf(extensions)
+  return hookScriptsFrom(helperScriptsOf(extensions))
+}
+
+/** The scripts of a list (a card's, a preset's) that run here: [{ name, content }], the enabled ones. */
+function hookScriptsFrom(scripts) {
   const kinds = helperSummary(scripts)
   let room = MAX_SOURCE
   return scripts
@@ -85,17 +99,22 @@ export function hookScriptsOf(extensions) {
  * them all when the chat opens, as SillyTavern does (web/card-scripts.js).
  */
 function buttonsFrom(extensions) {
-  const scripts = helperScriptsOf(extensions)
+  return buttonsFromScripts(helperScriptsOf(extensions))
+}
+
+function buttonsFromScripts(scripts) {
   const kinds = helperSummary(scripts)
   const value = { page: [], server: [] }
   scripts.forEach((script, i) => {
     const info = kinds[i]
     if (!info?.on) return
     if (info.kind === 'hooks') value.server.push(...info.buttons.map(name => ({ script: info.name, name })))
-    else if (info.kind === 'custom' && typeof script.content === 'string' && script.content.length <= MAX_SOURCE) {
+    else if (info.kind === 'custom' && typeof script.content === 'string' && script.content.length <= MAX_PAGE_SOURCE) {
       // The names it listens for, as written in its code: a button hidden from the bar, an event a card's frame emits.
       const events = [...new Set([...script.content.matchAll(LISTENED)].map(match => match[2]).filter(name => !isHostEvent(name)))]
-      value.page.push({ name: info.name, content: script.content, remote: info.remote === true, buttons: info.buttons, events })
+      // Its own variables as its author shipped them (getVariables({ type: 'script' }) starts from these).
+      const data = isObject(script.data) && JSON.stringify(script.data).length <= MAX_SCRIPT_DATA ? script.data : {}
+      value.page.push({ name: info.name, content: script.content, remote: info.remote === true, buttons: info.buttons, events, data })
     }
   })
   return value
@@ -775,7 +794,7 @@ export function cardScriptsFor(store) {
 }
 
 function createCardScripts(store) {
-  const sandboxes = new Map() // card id → { sign, runtime, scripts: [{ name, vm, broken, listens }], timer, active }
+  const sandboxes = new Map() // owner key (a card's id, preset:<id>) → { owner, sign, runtime, scripts: [{ name, vm, broken, listens }], timer, active }
 
   // ─── Which scripts a card has ───
   const fileOf = cardId => path.join(store.dirs.cards, cardId, 'hook-scripts.json')
@@ -910,25 +929,37 @@ function createCardScripts(store) {
     const active = box.active
     if (op !== 'generate') throw new Error(`不认识的操作 ${op}`)
     if (!active) throw new Error('这时没有对话，调用不了模型')
-    if (!(await permissions(active.card.id)).model) {
-      active.notes.push({ script: script.name, level: 'warning', text: `「${script.name}」想调用模型，没有被允许：在「检查这张卡」里可以允许` })
-      throw new Error('这张卡的脚本没有被允许调用模型')
+    const { owner } = box
+    if (!(await mayCallModel(owner))) {
+      active.notes.push({ script: script.name, level: 'warning', text: owner.kind === 'preset'
+        ? `预设「${owner.name}」的脚本「${script.name}」想调用模型，没有被允许：在这个预设的「脚本权限」里可以允许`
+        : `「${script.name}」想调用模型，没有被允许：在「检查这张卡」里可以允许` })
+      throw new Error(owner.kind === 'preset' ? '这个预设的脚本没有被允许调用模型' : '这张卡的脚本没有被允许调用模型')
     }
     if (!model) throw new Error('这里调用不了模型')
     const now = Date.now()
-    const times = (modelCalls.get(active.card.id) ?? []).filter(at => now - at < 60_000)
+    const times = (modelCalls.get(owner.key) ?? []).filter(at => now - at < 60_000)
     if (times.length >= MODEL_PER_MINUTE || (active.modelCalls = (active.modelCalls ?? 0) + 1) > MODEL_PER_EVENT) throw new Error('调用模型太频繁')
-    modelCalls.set(active.card.id, [...times, now])
+    modelCalls.set(owner.key, [...times, now])
     return model(active.chat, { raw: data?.raw === true, config: data?.config ?? {} }, active.signal)
   }
 
-  function open(card, scripts, sign) {
+  /** What the player lets an owner's scripts call the model: a card's in 检查这张卡, a preset's in its 脚本权限. */
+  async function mayCallModel(owner) {
+    if (owner.kind === 'preset') return presetPermissions(await store.getPreset(owner.id).catch(() => null)).generate === 'allow'
+    return (await permissions(owner.id)).model
+  }
+
+  /** A script's name in the error log: a preset's says whose it is. */
+  const logName = (owner, name) => (owner.kind === 'preset' ? `${name}（预设「${owner.name}」）` : name)
+
+  function open(owner, scripts, sign) {
     const runtime = sandboxEngine().newRuntime()
     runtime.setMemoryLimit(MEMORY_LIMIT)
     runtime.setMaxStackSize(1024 * 1024)
     runtime.setModuleLoader(loadModule, resolveModule)
     // `queue`: the card's events, one after another (two chats of the card share its sandbox). `pending`: calls the server answers later.
-    const box = { sign, runtime, scripts: [], timer: null, active: null, queue: Promise.resolve(), pending: new Set(), books: scripts.some(s => /Worldbook|Lorebook/.test(s.content)), regexes: scripts.some(s => /TavernRegex/.test(s.content)) }
+    const box = { owner, sign, runtime, scripts: [], timer: null, active: null, queue: Promise.resolve(), pending: new Set(), books: scripts.some(s => /Worldbook|Lorebook/.test(s.content)), regexes: scripts.some(s => /TavernRegex/.test(s.content)) }
     for (const source of scripts) {
       const vm = runtime.newContext()
       const script = { name: source.name, vm, broken: false, listens: new Set() }
@@ -989,7 +1020,7 @@ function createCardScripts(store) {
         evalJson(vm, '__errors()')
       } catch (error) {
         script.broken = true
-        report(source.name, String(error?.message ?? error))
+        report(logName(owner, source.name), String(error?.message ?? error))
       }
     }
     return box
@@ -1008,10 +1039,75 @@ function createCardScripts(store) {
       close(card.id)
       box = null
     }
-    if (!box) box = open(card, scripts, sign)
+    if (!box) box = open({ key: card.id, kind: 'card', id: card.id, name: card.name ?? '', prefix: '' }, scripts, sign)
     keepWarm(card.id, box)
     return box
   }
+
+  // ─── A preset's scripts ───
+  // What was read of a preset's scripts file, by preset: { sign, hooks, buttons } (read again when the file or a switch changes).
+  const presetLists = new Map()
+
+  /**
+   * A preset's scripts as the player switched them: { preset, hooks, buttons }; null for one without any that
+   * `wanted(item)` (its list's entries) picks, read from nothing.
+   */
+  async function presetScripts(presetId, wanted) {
+    if (!presetId) return null
+    const preset = await store.getPreset(presetId).catch(() => null)
+    if (!preset?.helperSaved || !Array.isArray(preset.helperList) || !preset.helperList.some(item => item.on && wanted(item))) return null
+    const sign = `${await store.presetScriptsSign(presetId)}|${preset.helperList.map(item => (item.on ? 1 : 0)).join('')}`
+    const kept = presetLists.get(presetId)
+    if (kept?.sign === sign) return { preset, ...kept }
+    const scripts = scriptsAsSwitched(preset, await store.getPresetScripts(presetId))
+    const value = { sign, hooks: hookScriptsFrom(scripts), buttons: buttonsFromScripts(scripts) }
+    presetLists.set(presetId, value)
+    return { preset, ...value }
+  }
+
+  /** The sandbox of the preset `chat` uses, when it has scripts that run here; null otherwise (nearly always). */
+  async function presetSandbox(chat) {
+    const id = typeof chat?.presetId === 'string' ? chat.presetId : ''
+    const key = `preset:${id}`
+    const found = await presetScripts(id, item => item.kind === 'hooks')
+    if (!found?.hooks.length) {
+      if (id) close(key)
+      return null
+    }
+    const sign = found.hooks.map(s => `${s.name}:${s.content.length}:${hash(s.content)}`).join('|')
+    let box = sandboxes.get(key)
+    if (box && box.sign !== sign) {
+      close(key)
+      box = null
+    }
+    if (!box) box = open({ key, kind: 'preset', id, name: found.preset.name ?? '', prefix: `${key}/` }, found.hooks, sign)
+    // Renamed since: its notes say the name the player sees.
+    box.owner.name = found.preset.name ?? box.owner.name
+    keepWarm(key, box)
+    return box
+  }
+
+  /** The sandboxes an event of `chat` goes to, in order: its preset's, then its card's (`only`: one kind of them). */
+  async function boxesFor(card, chat, only = null) {
+    const preset = only === 'card' ? null : await presetSandbox(chat)
+    const own = only === 'preset' ? null : await sandboxOf(card)
+    return [preset, own].filter(Boolean)
+  }
+
+  /**
+   * `type` to each sandbox's scripts in turn: what the preset's make of the variables and the arguments, the card's
+   * see. → { args, current } of the last that listened, or null when none did.
+   */
+  async function fireAll(boxes, type, args, ctx) {
+    let result = null
+    for (const box of boxes) {
+      const fired = await fire(box, type, result ? result.args : args, result ? { ...ctx, current: result.current } : ctx)
+      if (fired) result = fired
+    }
+    return result
+  }
+
+  const anyListens = (boxes, types) => boxes.some(box => box.scripts.some(script => !script.broken && types.some(type => script.listens.has(type))))
 
   // ─── Firing an event ───
   /** The latest floors as a script sees them; the last is the floor being written, with `current` as its variables. */
@@ -1049,7 +1145,9 @@ function createCardScripts(store) {
     const books = box.books ? await bookBases(card, chat, settings) : null
     const regexes = box.regexes ? await (await import('./chats.mjs')).chatRegexes(store, chat) : null
     box.active = { card, chat, books, regexes, notes: ctx.notes ?? [], prefix: false, changed: false, signal: ctx.signal ?? new AbortController().signal }
-    const storageOf = name => structuredClone(chat.scriptStorage?.[name] ?? { local: {}, vars: {} })
+    // A preset's scripts keep theirs apart from the card's of the same name.
+    const storeKey = name => `${box.owner.prefix}${name}`
+    const storageOf = name => structuredClone(chat.scriptStorage?.[storeKey(name)] ?? { local: {}, vars: {} })
     let current = ctx.current
     let chatVars = structuredClone(chat.frameVars ?? {})
     let globalVars = structuredClone(settings.globalVars ?? {})
@@ -1075,14 +1173,14 @@ function createCardScripts(store) {
           chatVars = out.chatVars
           globalVars = out.globalVars
           if (JSON.stringify(out.storage) !== JSON.stringify(storageOf(script.name))) {
-            const next = { ...(chat.scriptStorage ?? {}), [script.name]: out.storage }
+            const next = { ...(chat.scriptStorage ?? {}), [storeKey(script.name)]: out.storage }
             if (JSON.stringify(next).length <= STORAGE_MAX) chat.scriptStorage = next
           }
-          if (out.errors.length) report(script.name, out.errors.join('；'))
+          if (out.errors.length) report(logName(box.owner, script.name), out.errors.join('；'))
         } catch (error) {
           // Past its time or its memory: what it holds may be half-changed, so it does not run again this time.
           script.broken = true
-          report(script.name, String(error?.message ?? error))
+          report(logName(box.owner, script.name), String(error?.message ?? error))
         }
       }
     } finally {
@@ -1139,17 +1237,27 @@ function createCardScripts(store) {
     close,
     closeAll: () => [...sandboxes.keys()].forEach(close),
 
-    /** Whether the card's scripts listen for `type` (a card frame's own event worth sending to the server). */
-    async listens(card, type) {
-      const box = await sandboxOf(card)
-      return Boolean(box?.scripts.some(script => !script.broken && script.listens.has(type)))
+    /** A preset's scripts with buttons of their own, as buttonsOf has a card's (read again when its file or a switch changes). */
+    async presetButtonsOf(presetId) {
+      const found = await presetScripts(presetId, item => item.kind === 'custom' || item.buttons?.length)
+      return found?.buttons ?? { page: [], server: [] }
     },
 
-    /** The card's own event names its scripts listen for (none of SillyTavern's or MVU's): what a page sends on. */
-    async ownEvents(card) {
-      const box = await sandboxOf(card)
-      if (!box) return []
-      const names = box.scripts.filter(script => !script.broken).flatMap(script => [...script.listens])
+    /** A preset changed or gone: its sandbox closes, and what was read of it is read again. */
+    forgetPreset(presetId) {
+      close(`preset:${presetId}`)
+      presetLists.delete(presetId)
+    },
+
+    /** Whether the scripts of the chat's card or preset listen for `type` (a card frame's own event worth sending to the server). */
+    async listens(card, type, chat = null) {
+      return anyListens(await boxesFor(card, chat), [type])
+    },
+
+    /** The own event names (none of SillyTavern's or MVU's) the scripts of the card, and of `chat`'s preset, listen for. */
+    async ownEvents(card, chat = null) {
+      const boxes = await boxesFor(card, chat)
+      const names = boxes.flatMap(box => box.scripts.filter(script => !script.broken).flatMap(script => [...script.listens]))
       return [...new Set(names)].filter(type => !isHostEvent(type))
     },
 
@@ -1158,11 +1266,11 @@ function createCardScripts(store) {
      * @param chat - the chat being made (its scripts' storage, chat variables and book changes land on it).
      */
     async initialized(card, chat, state) {
-      const box = await sandboxOf(card)
-      if (!box) return state
+      const boxes = await boxesFor(card, chat)
+      if (!boxes.length) return state
       const current = mvuData(state)
       let prefix = false
-      const fired = await fire(box, MVU_EVENTS.VARIABLE_INITIALIZED, [current, 0], { card, chat, current, path: [{ role: 'assistant', text: chat.nodes?.root?.text ?? '', state }], currentAt: 0, onPrefix: () => (prefix = true) })
+      const fired = await fireAll(boxes, MVU_EVENTS.VARIABLE_INITIALIZED, [current, 0], { card, chat, current, path: [{ role: 'assistant', text: chat.nodes?.root?.text ?? '', state }], currentAt: 0, onPrefix: () => (prefix = true) })
       if (prefix) await prefixRebuilt(chat)
       return fired ? stateOf(fired.current, state) : state
     },
@@ -1175,8 +1283,8 @@ function createCardScripts(store) {
      * @returns { state, changes, unread, notes }
      */
     async update(card, chat, { before, text, path, received = false }) {
-      const box = await sandboxOf(card)
-      if (!box) return null
+      const boxes = await boxesFor(card, chat)
+      if (!boxes.length) return null
       const notes = []
       let prefix = false
       const read = readUpdates(before, text)
@@ -1184,7 +1292,7 @@ function createCardScripts(store) {
       const ctx = { card, chat, path: floors, text, notes, onPrefix: () => (prefix = true) }
       let current = mvuData(read.state)
       const step = async (type, args, currentAt) => {
-        const fired = await fire(box, type, args, { ...ctx, current, currentAt })
+        const fired = await fireAll(boxes, type, args, { ...ctx, current, currentAt })
         if (fired) current = fired.current
         return fired
       }
@@ -1218,32 +1326,12 @@ function createCardScripts(store) {
     /**
      * `text` (a turn's message) with the macros the card's scripts registered (registerMacroLike) put in; the same text
      * for a card whose scripts have none.
-     * @param context - { role, messageId } as the macros' callbacks get it.
+     * @param context - { role, messageId } as the macros' callbacks get it; `chat`, whose preset's scripts' go first.
      */
     async applyMacros(card, text, context = {}) {
-      const box = await sandboxOf(card)
-      if (!box) return text
-      const run = box.queue.then(() => {
-        let out = text
-        for (const script of box.scripts) {
-          if (script.broken) continue
-          const { vm } = script
-          try {
-            if (!evalJson(vm, '__macroCount()')) continue
-            const payload = vm.newString(JSON.stringify({ text: out, role: context.role ?? 'user', messageId: context.messageId ?? 0 }))
-            vm.setProp(vm.global, '__payload', payload)
-            payload.dispose()
-            box.runtime.setInterruptHandler(shouldInterruptAfterDeadline(Date.now() + FIRE_MS))
-            out = evalJson(vm, '__applyMacros()')
-          } catch (error) {
-            script.broken = true
-            report(script.name, String(error?.message ?? error))
-          }
-        }
-        return out
-      })
-      box.queue = run.catch(() => {})
-      return run
+      let out = text
+      for (const box of await boxesFor(card, context.chat ?? null)) out = await macrosOf(box, out, context)
+      return out
     },
 
     /**
@@ -1253,9 +1341,9 @@ function createCardScripts(store) {
      * @returns { state, notes }: `state` the variables the turn starts from when a script changed them, else null.
      */
     async turnStarting(card, chat, path) {
-      const box = await sandboxOf(card)
+      const boxes = await boxesFor(card, chat)
       const types = [TAVERN_EVENTS.MESSAGE_SENT, TAVERN_EVENTS.GENERATION_STARTED, TAVERN_EVENTS.GENERATION_AFTER_COMMANDS]
-      if (!box || !box.scripts.some(script => !script.broken && types.some(type => script.listens.has(type)))) return { state: null, notes: [] }
+      if (!anyListens(boxes, types)) return { state: null, notes: [] }
       const notes = []
       let prefix = false
       const start = path.at(-1)?.state ?? {}
@@ -1263,7 +1351,7 @@ function createCardScripts(store) {
       const ctx = { card, chat, path, notes, onPrefix: () => (prefix = true) }
       const sent = path.length - 1
       for (const [type, args] of [[types[0], [sent]], [types[1], ['normal', {}, false]], [types[2], ['normal', {}, false]]]) {
-        const fired = await fire(box, type, args, { ...ctx, current })
+        const fired = await fireAll(boxes, type, args, { ...ctx, current })
         if (fired) current = fired.current
       }
       if (prefix) await prefixRebuilt(chat)
@@ -1272,23 +1360,50 @@ function createCardScripts(store) {
     },
 
     /**
-     * A card frame's own event (web/compat.js eventEmit with a name of the card's) to the scripts listening, with the
-     * latest floor's variables. → { handled, state, notes }: `state` the latest floor's after it (unchanged: null).
+     * A card frame's own event (web/compat.js eventEmit with a name of the card's), or a script button's press, to the
+     * scripts listening, with the latest floor's variables. → { handled, state, notes }: `state` the latest floor's
+     * after it (unchanged: null).
      * @param path - the chat's floors, the latest last.
+     * @param only - 'card' or 'preset': a button's press reaches only the scripts of the one it belongs to.
      */
-    async emit(card, chat, type, args, path) {
-      const box = await sandboxOf(card)
-      if (!box || !box.scripts.some(script => !script.broken && script.listens.has(type))) return { handled: false, state: null, notes: [] }
+    async emit(card, chat, type, args, path, only = null) {
+      const boxes = await boxesFor(card, chat, only)
+      if (!anyListens(boxes, [type])) return { handled: false, state: null, notes: [] }
       const notes = []
       let prefix = false
       const latest = path.at(-1)
       const current = mvuData(latest?.state ?? {})
-      const fired = await fire(box, String(type), Array.isArray(args) ? args : [], { card, chat, current, path, notes, onPrefix: () => (prefix = true) })
+      const fired = await fireAll(boxes, String(type), Array.isArray(args) ? args : [], { card, chat, current, path, notes, onPrefix: () => (prefix = true) })
       if (prefix) await prefixRebuilt(chat)
       const state = fired ? stateOf(fired.current, latest?.state ?? {}) : null
       const changed = state && JSON.stringify(state) !== JSON.stringify(latest?.state ?? {})
       return { handled: Boolean(fired), state: changed ? state : null, notes }
     },
+  }
+
+  /** `text` with the macros one sandbox's scripts registered put in, in its queue. */
+  function macrosOf(box, text, context) {
+    const run = box.queue.then(() => {
+      let out = text
+      for (const script of box.scripts) {
+        if (script.broken) continue
+        const { vm } = script
+        try {
+          if (!evalJson(vm, '__macroCount()')) continue
+          const payload = vm.newString(JSON.stringify({ text: out, role: context.role ?? 'user', messageId: context.messageId ?? 0 }))
+          vm.setProp(vm.global, '__payload', payload)
+          payload.dispose()
+          box.runtime.setInterruptHandler(shouldInterruptAfterDeadline(Date.now() + FIRE_MS))
+          out = evalJson(vm, '__applyMacros()')
+        } catch (error) {
+          script.broken = true
+          report(logName(box.owner, script.name), String(error?.message ?? error))
+        }
+      }
+      return out
+    })
+    box.queue = run.catch(() => {})
+    return run
   }
 }
 

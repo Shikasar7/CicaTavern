@@ -286,12 +286,12 @@ test('亲密描写 强化: says what to write out, keeps to adults and leaves th
   assert.doesNotMatch(basicRules(cleanBasic({ intimacy: 'restrained' })), /涉及性的角色/)
 })
 
-test('a block the thinking only names takes no story with it (「结尾 <choices>…」 in a <think_fox~>)', () => {
+test('a block the thinking only names takes no story with it (「结尾 <choices>…」 in a <think_mist~>)', () => {
   const reply = [
-    '<think_fox~>',
+    '<think_mist~>',
     '本轮要求：约 2600 字。',
-    '必须包含：结尾<choices>（带检定）及<fox_tip>，再输出<UpdateVariable>。',
-    '</think_fox~>',
+    '必须包含：结尾<choices>（带检定）及<side_tip>，再输出<UpdateVariable>。',
+    '</think_mist~>',
     '<content>',
     '<time_box>腊月初三 黄昏｜雁回关外三十里｜小雪</time_box>',
     '寒风卷着碎雪。',
@@ -300,24 +300,24 @@ test('a block the thinking only names takes no story with it (「结尾 <choices
     'B. 绕后偷袭',
     '</choices>',
     '</content>',
-    '<fox_tip>唔～</fox_tip>',
+    '<side_tip>唔～</side_tip>',
   ].join('\n')
   assert.deepEqual(choicesOf(reply), ['拔刀迎敌', '绕后偷袭'])
   assert.deepEqual(timeBoxOf(reply), ['腊月初三 黄昏', '雁回关外三十里', '小雪'])
   const shown = streamingText(reply)
   assert.ok(shown.includes('寒风卷着碎雪。'), shown)
-  assert.ok(shown.includes('</think_fox~>'), 'the thinking stays closed, so it folds as 思考过程')
+  assert.ok(shown.includes('</think_mist~>'), 'the thinking stays closed, so it folds as 思考过程')
   assert.ok(!shown.includes('A. 拔刀迎敌'))
-  assert.ok(shown.includes('<fox_tip>唔～</fox_tip>'))
+  assert.ok(shown.includes('<side_tip>唔～</side_tip>'))
   const server = displayText(reply)
   assert.ok(server.includes('寒风卷着碎雪。') && !server.includes('本轮要求') && !server.includes('A. 拔刀迎敌'), server)
   // Thinking still being written: what it names is not a block yet.
   assert.deepEqual(choicesOf('<thinking>\n结尾写 <choices>\nA. 不是选项\n'), [])
   // What a card's page reads (getChatMessages): the mentions are quiet, the real blocks and the thinking's tags as they were.
   const read = quietMentions(reply)
-  assert.ok(read.includes('结尾＜choices＞（带检定）及＜fox_tip＞，再输出<UpdateVariable>。'), 'a tag with no real block outside is left alone')
-  assert.equal(read.match(/<fox_tip>([\s\S]*?)<\/fox_tip>/)[1], '唔～')
-  assert.ok(read.startsWith('<think_fox~>') && read.includes('</think_fox~>\n<content>'))
-  assert.equal(read.slice(read.indexOf('</think_fox~>')), reply.slice(reply.indexOf('</think_fox~>')))
+  assert.ok(read.includes('结尾＜choices＞（带检定）及＜side_tip＞，再输出<UpdateVariable>。'), 'a tag with no real block outside is left alone')
+  assert.equal(read.match(/<side_tip>([\s\S]*?)<\/side_tip>/)[1], '唔～')
+  assert.ok(read.startsWith('<think_mist~>') && read.includes('</think_mist~>\n<content>'))
+  assert.equal(read.slice(read.indexOf('</think_mist~>')), reply.slice(reply.indexOf('</think_mist~>')))
   assert.equal(quietMentions('没有思考，<b>照旧</b>'), '没有思考，<b>照旧</b>')
 })

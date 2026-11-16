@@ -374,7 +374,7 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
       return el('section', { class: 'plan-card ce-statusbar' }, [
         head,
         el('p', { class: 'hint', text: change.before ? t`只改显示，不动变量，也不发给模型。保存后这张卡的对话都按新样式显示。` : t`这张卡还没有自己的状态栏，这是按变量排的一个。保存后它跟着卡走，导出到 SillyTavern 也在。` }),
-        el('div', { class: 'cc-change' }, view.editor.statusEditor(el, change, state.tuning, { spare: tune.fields, state: data.state, redraw: renderStatus, design: { api, cardId: state.card.id, cover: state.card.cover ? { name: state.card.name, cover: state.card.cover } : null }, tryKey: state.card.id })),
+        el('div', { class: 'cc-change' }, view.editor.statusEditor(el, change, state.tuning, { spare: tune.fields, state: data.state, redraw: renderStatus, design: { api, cardId: state.card.id, pickDraw, cover: state.card.cover ? { name: state.card.name, cover: state.card.cover } : null }, tryKey: state.card.id })),
         el('div', { class: 'cc-actions' }, [
           el('button', { type: 'button', class: 'btn ghost small', text: t`取消`, onclick: () => { state.tuning = null; renderStatus() } }),
           el('span', { class: 'grow' }),
@@ -858,7 +858,7 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
 
   // The entries window and 检查这张卡 change the card behind this one: read it again when they close.
   const readAgain = guard(async () => {
-    if (!dialog.open || !state.card) return
+    if (!dialog.open || !state.card || state.opening) return
     absorb(await api(`/api/cards/${state.card.id}/edit`))
     renderMain()
     loadStatus()
@@ -869,35 +869,53 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
   // Esc: the field being typed in saves as it loses focus.
   dialog.addEventListener('cancel', () => document.activeElement?.blur?.())
 
+  /**
+   * @param options.say - words to put in 对话修改's box, which opens.
+   * @param options.status - straight to 状态栏 with its editor open (检查这张卡's 调整状态栏).
+   */
+  async function openCard(cardId, { say = '', status = false } = {}) {
+    if (!view.main) layout()
+    const switching = state.card?.id !== cardId
+    const [card, session] = await Promise.all([api(`/api/cards/${cardId}/edit`), api(`/api/cards/${cardId}/assistant`), talk.loadModels()])
+    if (switching) {
+      state.card = null
+      state.stale = false
+      state.told = false
+      state.drawn = null
+      state.kept = []
+      state.withRegex = false
+      state.status = null
+      state.tuning = null
+      talk.reset()
+      view.main.scrollTop = 0
+    }
+    absorb(card)
+    showPane(say ? 'assist' : status ? 'card' : state.pane)
+    renderMain()
+    showApply()
+    loadKept(cardId)
+    const statusRead = loadStatus(cardId)
+    talk.load(session)
+    if (!dialog.open) dialog.showModal()
+    if (say) talk.say(say)
+    // The talk opens at its latest turn (it has no size until the window shows).
+    talk.scroll()
+    if (!status) return
+    await statusRead
+    if (state.card?.id !== cardId || !dialog.open) return
+    if (state.status?.statusTune && !state.status.ownBar && !state.tuning) await openTuning()
+    view.statusBox?.scrollIntoView({ block: 'start' })
+  }
+
   return {
-    /** @param options.say - words to put in 对话修改's box, which opens. */
-    open: guard(async (cardId, { say = '' } = {}) => {
-      if (!view.main) layout()
-      const switching = state.card?.id !== cardId
-      const [card, session] = await Promise.all([api(`/api/cards/${cardId}/edit`), api(`/api/cards/${cardId}/assistant`), talk.loadModels()])
-      if (switching) {
-        state.card = null
-        state.stale = false
-        state.told = false
-        state.drawn = null
-        state.kept = []
-        state.withRegex = false
-        state.status = null
-        state.tuning = null
-        talk.reset()
-        view.main.scrollTop = 0
+    open: guard(async (cardId, options) => {
+      // 检查这张卡 closing as this opens (its 调整状态栏): its reading again (readAgain) would draw the window over this.
+      state.opening = true
+      try {
+        await openCard(cardId, options)
+      } finally {
+        state.opening = false
       }
-      absorb(card)
-      showPane(say ? 'assist' : state.pane)
-      renderMain()
-      showApply()
-      loadKept(cardId)
-      loadStatus(cardId)
-      talk.load(session)
-      if (!dialog.open) dialog.showModal()
-      if (say) talk.say(say)
-      // The talk opens at its latest turn (it has no size until the window shows).
-      talk.scroll()
     }),
   }
 }

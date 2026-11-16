@@ -168,7 +168,6 @@ export function lookFields(el) {
   const washed = () => el('i', { class: 'look-wash-picture' })
   return el('div', { class: 'look-fields', 'aria-hidden': 'true' }, [
     el('div', { class: 'look-wash' }, [washed(), el('div', { class: 'look-red' }, [washed(), el('i', { class: 'look-rays' })])]),
-    el('i', { class: 'look-stripe' }),
     el('i', { class: 'look-dots' }),
   ])
 }

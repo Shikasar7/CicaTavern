@@ -5,6 +5,7 @@ import { t } from '/i18n.js'
 import { ailName, banner, countWord, currentLook, enterFight, fitFigure, headIn, heroNow, letters, lookFields, slideSlab, sweep } from '/game-look.js'
 import { fightResult } from '/shared/game/encounter.js'
 import { addsText, foeAddsLine } from '/game-growth.js'
+import { showRoll } from '/game-play.js'
 import { aliveFoes, alivePartyOf, attemptSetup, autoCommands, canRally, foesOf, needsFriend, needsTarget, partyOf, playerOf, refusal, replay as replayFight, roundRefusal, shiftCost, skillCost, skillsOf, startBattle, step, tameTry } from '/shared/game/battle.js'
 import { cutOut, spriteFrame } from '/shared/cutout.js'
 
@@ -32,6 +33,8 @@ const STATUS_LOOKS = { weaken: 'stun', expose: 'stun', slow: 'stun', ward: 'boos
 const THING_WORDS = (energy = '') => ({ heal: t`回复生命`, energy: energy ? t`回复${energy}` : t`回复气力`, damage: t`打一个敌人`, cure: t`解除异常`, boost: t`提高攻击力，3 回合` })
 // What the card calls a boss, when it has its own word for one.
 const REFUSALS = (words = {}) => ({ boss: words.boss ? t`${words.boss}面前跑不掉` : t`首领面前跑不掉` })
+// The mark on a foe's plate for the two that are more than one of many.
+const RANKS = (words = {}) => ({ elite: words.elite || t`精英`, boss: words.boss || t`首领` })
 const RESULT_WORDS = () => ({ won: t`胜利`, lost: t`战败`, fled: t`逃脱` })
 const RESULT_SEALS = () => ({ won: t`捷`, lost: t`败`, fled: t`遁` })
 const PICTURE_SIDE = 480
@@ -181,9 +184,16 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
     foeRow.dataset.count = String(foesOf(state).length)
     foeRow.replaceChildren(...foesOf(state).map((foe, i) => el('button', { type: 'button', class: `battle-foe tier-${foe.tier}`, style: `--i: ${i}`, 'data-id': foe.id, onclick: event => { event.stopPropagation(); aimAt(foe.id) } }, [
       foePicture(foe),
-      el('span', { class: 'foe-name', text: foe.type ? `${foe.name}·${foe.type}` : foe.name }),
-      el('span', { class: 'battle-bar foe' }, [el('i', { class: 'lag' }), el('i')]),
-      el('span', { class: 'foe-tag' }),
+      // Its plate: how strong (精英, 首领, as the card calls them), who and of what type, how much life, what is on it.
+      el('span', { class: 'foe-plate' }, [
+        el('span', { class: 'foe-head' }, [
+          RANKS(words)[foe.tier] ? el('b', { class: 'foe-rank', text: RANKS(words)[foe.tier] }) : null,
+          el('span', { class: 'foe-name', text: foe.name }),
+          foe.type ? el('i', { class: 'foe-type', text: foe.type }) : null,
+        ]),
+        el('span', { class: 'battle-bar foe' }, [el('i', { class: 'lag' }), el('i')]),
+        el('span', { class: 'foe-tag' }),
+      ]),
     ])))
   }
 
@@ -194,6 +204,23 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
     cutPicture(picture).then(cut => {
       box.replaceChildren(el('img', { src: cut ?? picture, alt: '' }))
       box.classList.add('drawn')
+    })
+  }
+
+  /** A foe's head in a round frame (收服): the cut-out drawn so its face fills it, or its top when no face is found. */
+  function paintHead(box, name) {
+    const { picture } = foeShown(name)
+    if (!picture) return
+    cutPicture(picture).then(async cut => {
+      const src = cut ?? picture
+      const crop = await headIn(src)
+      box.textContent = ''
+      box.classList.add('drawn')
+      box.style.backgroundImage = `url("${src}")`
+      if (crop) {
+        box.style.backgroundSize = `${crop.size}% auto`
+        box.style.backgroundPosition = `${crop.x}% ${crop.y}%`
+      }
     })
   }
 
@@ -248,7 +275,7 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
     for (const bar of node.querySelectorAll('.battle-bar i')) bar.style.width = `${(life / foe.maxLife) * 100}%`
     node.classList.toggle('down', life <= 0)
     node.disabled = life <= 0
-    const tags = [foe.charging ? t`⚠ 正在蓄力` : '', foe.stun > 0 ? t`眩晕` : '', foe.poison > 0 ? t`中毒` : '', ...Object.entries(FOE_TAGS()).map(([held, word]) => (foe[held] > 0 ? word : ''))].filter(Boolean)
+    const tags = [foe.charging ? t`⚠ 正在蓄力` : '', foe.stun > 0 ? (foe.late ? t`措手不及` : t`眩晕`) : '', foe.poison > 0 ? t`中毒` : '', ...Object.entries(FOE_TAGS()).map(([held, word]) => (foe[held] > 0 ? word : ''))].filter(Boolean)
     // With nothing on it, what its blows leave behind (招式效果), so the player knows before it lands.
     node.querySelector('.foe-tag').textContent = life > 0 ? tags.join(' ') || foeAddsLine(foe.adds) : t`倒下`
     node.classList.toggle('charging', foe.charging && life > 0)
@@ -300,7 +327,7 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
   }
 
   /** What holds for one of the party now, in a few words. `ward`: what the shield can still take, when a blow is being shown. */
-  const tagsOf = (unit, ward = unit.ward) => [unit.guarding ? t`防御` : '', unit.boost > 0 ? t`强化` : '', ward > 0 ? t`护盾 ${ward}` : '', unit.taunt > 0 ? t`挑衅` : '', unit.stun > 0 ? t`眩晕` : '', unit.poison > 0 ? t`掉血` : '', unit.weak > 0 ? t`削弱` : '', unit.open > 0 ? t`破绽` : ''].filter(Boolean).join(' ')
+  const tagsOf = (unit, ward = unit.ward) => [unit.guarding ? t`防御` : '', unit.boost > 0 ? t`强化` : '', ward > 0 ? t`护盾 ${ward}` : '', unit.taunt > 0 ? t`挑衅` : '', unit.stun > 0 ? (unit.late ? t`措手不及` : t`眩晕`) : '', unit.poison > 0 ? t`掉血` : '', unit.weak > 0 ? t`削弱` : '', unit.open > 0 ? t`破绽` : ''].filter(Boolean).join(' ')
 
   /** The same for the player alone, who has no row. */
   function drawSelfTag(ward) {
@@ -398,7 +425,7 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
       queue.length ? el('button', { type: 'button', class: 'battle-back', text: t`上一个`, onclick: () => unsay() }) : null,
     ]) : null
     // 眩晕: whatever is chosen, this one's action is lost this round.
-    const dazed = who.stun > 0 && !busy && !state.over ? el('p', { class: 'battle-hint dazed', text: who.id === 'player' ? t`你被打晕了，这一回合出不了手` : t`${who.name}被打晕了，这一回合出不了手` }) : null
+    const dazed = who.stun > 0 && !busy && !state.over ? el('p', { class: 'battle-hint dazed', text: who.late ? (who.id === 'player' ? t`你被打了个措手不及，这一回合出不了手` : t`${who.name}被打了个措手不及，这一回合出不了手`) : who.id === 'player' ? t`你被打晕了，这一回合出不了手` : t`${who.name}被打晕了，这一回合出不了手` }) : null
     panel.replaceChildren(...[head, dazed, actions].filter(Boolean))
     slideSlab(el, actions, '.battle-action')
   }
@@ -590,7 +617,7 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
       foeNode(event.by).classList.add('charging')
       foeNode(event.by).querySelector('.foe-tag').textContent = t`⚠ 正在蓄力`
       say(t`${nameOf(event.by)}在蓄力，下回合会打得很重`)
-    } else if (event.type === 'stunned') say(event.by === 'player' ? t`你动弹不得` : t`${nameOf(event.by)}动弹不得`)
+    } else if (event.type === 'stunned') say(event.late ? (event.by === 'player' ? t`你还没回过神` : t`${nameOf(event.by)}还没反应过来`) : event.by === 'player' ? t`你动弹不得` : t`${nameOf(event.by)}动弹不得`)
     else if (event.type === 'afflict') {
       // 招式效果: what a foe's blow left on one of the party.
       effect(event.status === 'stun' ? 'stun' : 'poison', rowOf(event.target))
@@ -827,14 +854,44 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
     const things = Object.entries(op.used).map(([name, count]) => el('span', { class: 'battle-thing' }, [el('b', { text: name }), count > 1 ? el('i', { text: `×${count}` }) : null]))
     const price = [state.over === 'lost' && !player.commander ? t`重伤：所有属性 −2，3 天` : '', op.rallied ? t`透支：所有属性 −3，7 天` : '', op.shock ? t`理智 −${op.shock}` : ''].filter(Boolean)
     const rally = canRally(state)
-    // 收服: one of those brought down may be tried for, once. What is shown is the rules' own roll.
+    // 收服: one of those brought down may be tried for, once, a card to each: its face, how strong, the odds. The die
+    // is thrown like any check's, landing on the rules' own roll; then the card says how it went.
     tamed = ''
     const tameable = state.over === 'won' ? foesOf(state).filter((foe, i, all) => all.findIndex(other => other.name === foe.name) === i && tameTry(setup, foe)) : []
+    const charm = words.charm || t`魅力`
     const tameBox = el('div', { class: 'battle-tame' })
-    const drawTame = tried => tameBox.replaceChildren(...(tried
-      ? [el('p', { class: `battle-end-note${tried.ok ? ' ok' : ''}`, text: tried.ok ? t`收服成功：${tamed}加入了${words.party || t`队伍`}（掷出 ${tried.roll}，合计 ${tried.total}，需要 ${tried.dc}）` : t`没能收服${tamed}（掷出 ${tried.roll}，合计 ${tried.total}，需要 ${tried.dc}）` })]
-      : tameable.map(foe => el('button', { type: 'button', class: 'battle-action', text: t`收服${foe.name}（${tameTry(setup, foe).chance}%）`, onclick: () => { tamed = foe.name; drawTame(tameTry(setup, foe)) } }))))
-    drawTame(null)
+    const tameCard = (foe, tried = null, i = 0) => {
+      const { chance } = tameTry(setup, foe)
+      const face = el('span', { class: 'tame-face', 'aria-hidden': 'true', text: foe.name.slice(0, 1) })
+      paintHead(face, foe.name)
+      const attrs = tried ? { class: `tame-card tried ${tried.ok ? 'ok' : 'fail'}`, role: 'status' } : { type: 'button', class: 'tame-card', onclick: () => tryTame(foe) }
+      return el(tried ? 'div' : 'button', { ...attrs, style: `--chance: ${chance}%; --i: ${i}` }, [
+        face,
+        el('span', { class: 'tame-info' }, [
+          el('span', { class: 'tame-head' }, [
+            RANKS(words)[foe.tier] ? el('b', { class: 'tame-rank', text: RANKS(words)[foe.tier] }) : null,
+            el('span', { class: 'tame-name', text: foe.name }),
+            foe.type ? el('i', { class: 'tame-type', text: foe.type }) : null,
+          ]),
+          tried
+            // The numbers break only between one and the next, never inside 需要 10.
+            ? el('span', { class: 'tame-roll' }, (tried.ok ? t`${foe.name}愿意跟你走了` : t`掷出 ${tried.roll} · 合计 ${tried.total} · 需要 ${tried.dc}`).split(' · ').flatMap((part, i) => [i ? ' · ' : null, el('span', { text: part })]))
+            : el('span', { class: 'tame-odds' }, [el('span', { text: charm }), el('span', { class: 'tame-meter' }, el('i')), el('b', { text: `${chance}%` })]),
+        ]),
+        tried ? el('b', { class: 'tame-stamp', text: tried.ok ? t`收服成功` : t`没能收服` }) : el('span', { class: 'tame-go', text: t`试着收服` }),
+      ])
+    }
+    const tryTame = async foe => {
+      const tried = tameTry(setup, foe)
+      tamed = foe.name
+      tameBox.querySelectorAll('button').forEach(button => { button.disabled = true })
+      await showRoll(el, { ...tried, stat: charm }, sound, null, { into: dialog, hint: tried.ok ? t`${foe.name}愿意跟你走了` : t`没能收服${foe.name}` })
+      tameNote.hidden = true
+      tameBox.replaceChildren(tameCard(foe, tried))
+      endBox.querySelector('.primary')?.focus()
+    }
+    tameBox.replaceChildren(...tameable.map((foe, i) => tameCard(foe, null, i)))
+    const tameNote = el('p', { class: 'battle-end-note', text: t`可以试着收服一个，只有一次机会，看你的${charm}。` })
     endBox.replaceChildren(el('div', { class: `battle-end-card ${state.over}` }, [
       el('div', { class: 'battle-end-word' }, [el('h2', {}, letters(el, RESULT_WORDS()[state.over])), el('i', { class: 'battle-end-seal', text: RESULT_SEALS()[state.over] })]),
       // The names' column is as wide as the longest name here, so a companion's name stays on one line.
@@ -856,7 +913,7 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
           ]))
         }),
       ]),
-      tameable.length ? el('p', { class: 'battle-end-note', text: t`可以试着收服一个，只有一次机会，看你的${words.charm || t`魅力`}。` }) : null,
+      tameable.length ? tameNote : null,
       tameable.length ? tameBox : null,
       rally ? el('p', { class: 'battle-end-note', text: t`拼命再战：${words.life || t`生命`}回到四成、${energyWord}回满，再打一次。之后 7 天所有属性 −3。` }) : null,
       el('div', { class: 'battle-end-actions' }, [
@@ -940,7 +997,11 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
     // One there is no running from: the way out is the story's, where the fight leaves that open.
     const stuck = Boolean(refusal(state, { kind: 'flee' }))
     const warned = !out ? '' : !stuck ? t`对手强得不像话，打不过就逃` : forced ? t`对手强得不像话，也逃不掉` : t`对手强得不像话，也逃不掉：撑不住就点上方的「交给剧情」`
-    return [warned, held.length ? t`你带着${held.join(t`、`)}上阵` : ''].filter(Boolean).join(t`。`)
+    // 开局: what the way in gave or cost, said once before the first blow.
+    const opening = setup.opening ?? {}
+    const cut = opening.life || Object.keys(opening.lives ?? {}).length
+    const won = [opening.first ? t`你抢到了先手` : '', opening.caught ? t`你被打了个措手不及` : '', opening.open ? t`对手露着破绽` : '', opening.boost ? t`你们蓄好了势` : '', cut ? t`对手已经带伤` : '']
+    return [warned, ...won, held.length ? t`你带着${held.join(t`、`)}上阵` : ''].filter(Boolean).join(t`。`)
   }
 
   function close() {

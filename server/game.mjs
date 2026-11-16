@@ -30,7 +30,7 @@ const CARD_READ = 6000
 const LORE_READ = 2000
 const THEMES = ['plain', 'wuxia', 'xianxia', 'fantasy', 'modern', 'scifi', 'horror', 'monster', 'netgame', 'hero', 'apocalypse', 'daily']
 // What each is, for the helper: it picks the nearest, and the card's own words go in `words`.
-const THEME_WORDS = '通用、武侠、修仙、西幻或奇幻、现代、科幻、克苏鲁或恐怖、怪兽养成（宠物、数码兽、契约兽这类伙伴替你打、会进化）、网游或系统流、变身或机甲（hero：平时是普通人，打斗时变身、合体、驾驶机体）、末日求生、日常（几乎不打架）'
+const THEME_WORDS = '通用、武侠、修仙、西幻或奇幻、现代、科幻、克苏鲁或恐怖、怪兽养成（宠物、契约兽、电子伙伴这类伙伴替你打、会进化）、网游或系统流、变身或机甲（hero：平时是普通人，打斗时变身、合体、驾驶机体）、末日求生、日常（几乎不打架）'
 const FOE_PICTURE = /^[\w-]{1,64}\.(png|jpg|webp)$/
 const PICTURE_TYPES = { jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp' }
 const MAX_PICTURE = 12 * 1024 * 1024
@@ -67,6 +67,9 @@ const FIGHT_RULES = [
   '  1. 选项：有敌人、对峙、拦路，或者气氛紧张到能动手时，在行动选项里放一个战斗选项，行尾加这个标记，比如 C. 拔刀迎战【战斗|灰狼×2:杂兵】。这种不用结束回复，玩家选了才开打。',
   '  2. 强制：敌人先动手、玩家躲不掉，或者玩家这一轮明确要动手时，先写一两句开打的场面，再写这个标记，然后结束回复，标记后面什么都不写。',
 ]
+// 开局: what the way into a fight gives or costs. Told with the fights; a copy of the rules from before it is told apart by it.
+const OPENING_TOLD = '|开局:'
+const OPENING_RULE = `- 战斗标记最后可以加一段开局，写玩家这样动手占到的便宜或吃的亏，比如 C. 趁它低头喝水摸到背后【战斗|狼王:精英${OPENING_TOLD}先手、狼王血70】。能写的：先手（敌人第一回合出不了手）、破绽（敌人开场更容易受伤）、强化（我方开场攻击提高）、被偷袭（我方第一回合出不了手）、敌血70（所有敌人开场只剩七成）、名字血60（只是那一个）。有利的最多写两项，血量不低于 25；血量只在敌人开打前已经带伤、中毒或被削弱时写，光是没发现你不算。只在这句行动或眼前的局面确实带来这些时才写：正面硬打不写；同一场战斗的几个选项打法不同，开局也应该不同。`
 const AS_THE_STORY_HAS_IT = '按它在故事里的实力写，不要为了让玩家打得过就压低：打不过的敌人也可以出现，玩家可以逃或者想别的办法。'
 
 /** How a foe's strength is written: by the card's ranks, or a word beside the player. */
@@ -106,7 +109,7 @@ function rulesBlock(pausing, bound, fights, foes, ranks, sanity, party, words = 
     RULES_OPEN,
     '这个故事带规则，数值由应用计算，你只写故事。',
     ...stop,
-    ...(fights ? [...FIGHT_RULES, strengthRule(ranks, grows)] : []),
+    ...(fights ? [...FIGHT_RULES, OPENING_RULE, strengthRule(ranks, grows)] : []),
     ...(fights && foes.length ? [`- 这个世界常见的敌人：${foes.slice(0, MAX_FOES_TOLD).join('、')}。`] : []),
     ...(fights && party ? [PARTY_RULE] : []),
     `- 行动选项：每组挑 1 到 2 个有风险的，在那一行末尾加 【检定|属性|DC数字】，比如 B. 翻过断崖【检定|${grace}|DC12】。这种不用结束回复，其余的不加，不要每个都加。`,
@@ -270,7 +273,7 @@ export function gamePrompt({ sheet, rank = '', ranks = [], pausing, fights = fal
   const sent = turns.filter(node => node.role === 'user').map(node => node.prompt ?? '')
   // A copy from before fights were on, or before they could be on a choice, says nothing of them.
   const party = fights && (companions || (sheet.party?.length ?? 0) > 0)
-  const haveRules = sent.slice(-RULES_EVERY).some(prompt => prompt.includes(RULES_OPEN) && prompt.includes(OWN_ACTIONS) && (!fights || prompt.includes(FIGHTS_TOLD)) && (!party || prompt.includes(PARTY_TOLD)) && (!forms || prompt.includes(FORMS_TOLD)) && (!(fights && lead) || prompt.includes(LEAD_TOLD)) && (!(fights && tame) || prompt.includes(TAME_TOLD)) && (!Object.keys(attributeNames({ words })).length || prompt.includes(attributesLine(words))))
+  const haveRules = sent.slice(-RULES_EVERY).some(prompt => prompt.includes(RULES_OPEN) && prompt.includes(OWN_ACTIONS) && (!fights || (prompt.includes(FIGHTS_TOLD) && prompt.includes(OPENING_TOLD))) && (!party || prompt.includes(PARTY_TOLD)) && (!forms || prompt.includes(FORMS_TOLD)) && (!(fights && lead) || prompt.includes(LEAD_TOLD)) && (!(fights && tame) || prompt.includes(TAME_TOLD)) && (!Object.keys(attributeNames({ words })).length || prompt.includes(attributesLine(words))))
   const line = sheetLine(sheet, rank, words, perks, gear, forms)
   const lastLine = sent.flatMap(prompt => prompt.match(SHEET_LINE) ?? []).at(-1)
   const parts = [haveRules ? '' : rulesBlock(pausing, bound, fights, foes, ranks, sheet.sanity !== undefined, party, words, grows, forms, lead, tame), lastLine === line ? '' : line, lines.length ? `<本轮操作>${lines.join('；')}</本轮操作>` : '', check ? checkBlock(check) : '', battle ? battleBlock(forms?.story?.length ? { ...battle, story: forms.story } : battle, words) : '', turnAsks({ fights, fightRate, foes, wantsFight, mayFight, own, safe, battle, spot }, turns)]

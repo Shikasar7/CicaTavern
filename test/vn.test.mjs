@@ -14,16 +14,16 @@ test('names: a card name before its subtitle, the player, the cast and their ali
   assert.deepEqual(names[0].keys, ['林青禾', '青禾'])
   // The cast's entry for the card's character and its player entry join the card's and the player's names.
   const cast = speakerNames({
-    char: '顾念念-武当抽奖系统-v1.6',
-    user: '小蝉',
+    char: '沈念念-青峰签到系统-v1.6',
+    user: '小舟',
     roster: [
       { id: 'p', name: '主角', aliases: '师兄, 小道长', player: true, kind: 'boy' },
-      { id: 'n', name: '顾念念', aliases: '念念, 小师妹', kind: 'girl' },
+      { id: 'n', name: '沈念念', aliases: '念念, 小师妹', kind: 'girl' },
     ],
   })
   assert.deepEqual(cast, [
-    { name: '顾念念', keys: ['顾念念-武当抽奖系统-v1.6', '顾念念', '念念', '小师妹'], char: true, kind: 'girl', id: 'n' },
-    { name: '小蝉', keys: ['小蝉', '主角', '师兄', '小道长'], player: true, kind: 'boy', id: 'p' },
+    { name: '沈念念', keys: ['沈念念-青峰签到系统-v1.6', '沈念念', '念念', '小师妹'], char: true, kind: 'girl', id: 'n' },
+    { name: '小舟', keys: ['小舟', '主角', '师兄', '小道长'], player: true, kind: 'boy', id: 'p' },
   ])
 })
 
@@ -142,9 +142,9 @@ test('time and weather from the time box; the newest reply that says where', () 
 
 // A card that writes its own header line, as in a real chat (an imported preset, no time box).
 const nian = speakerNames({
-  char: '顾念念-武当抽奖系统-v1.6',
-  user: '小蝉',
-  roster: [{ name: '主角', player: true, kind: 'boy' }, { name: '顾念念', aliases: '念念，小师妹', kind: 'girl' }, { name: '慕寒漪', aliases: '寒漪', kind: 'girl' }],
+  char: '沈念念-青峰签到系统-v1.6',
+  user: '小舟',
+  roster: [{ name: '主角', player: true, kind: 'boy' }, { name: '沈念念', aliases: '念念，小师妹', kind: 'girl' }, { name: '慕寒漪', aliases: '寒漪', kind: 'girl' }],
 })
 
 test('places: a header line with a date or time, a labelled line, the variables; the reply first', () => {
@@ -156,7 +156,7 @@ test('places: a header line with a date or time, a labelled line, the variables;
   assert.equal(headerPlace('第一行\n第二行\n第三行\n下午三点 · 书店'), null, 'only the first lines')
   assert.deepEqual(placeIn('<StatusPlaceHolderImpl/>\n永和十七年八月十五 · 亥时 21:52 · 武当山·后山剑池\n\n正文'), { time: '永和十七年八月十五 亥时 21:52', place: '武当山·后山剑池', weather: '' })
   assert.equal(placeIn('<time_box>清晨｜码头｜雾</time_box>\n永和十七年 · 亥时 · 武当山').place, '码头', 'the time box wins')
-  const state = { 系统: { 当前时间: '永和十七年八月十五 亥时 21:40', 当前地点: '武当山·后山剑池' }, 顾念念: { 位置: '紫霄宫' } }
+  const state = { 系统: { 当前时间: '永和十七年八月十五 亥时 21:40', 当前地点: '武当山·后山剑池' }, 沈念念: { 位置: '紫霄宫' } }
   const path = [
     { id: 'root', role: 'assistant', raw: '开场，没有地点。', state },
     { id: 'u1', role: 'user', text: '走' },
@@ -164,13 +164,13 @@ test('places: a header line with a date or time, a labelled line, the variables;
   ]
   assert.deepEqual(latestPlace(path), { nodeId: 'a1', time: '', place: '山门', weather: '' })
   assert.deepEqual(latestPlace(path.slice(0, 1)), { nodeId: 'root', time: '永和十七年八月十五 亥时 21:40', place: '武当山·后山剑池', weather: '' })
-  assert.equal(latestPlace([{ id: 'r', role: 'assistant', raw: '', state: { 顾念念: { 位置: '紫霄宫' }, 系统: { 当前地点: '剑池' } } }]).place, '剑池', 'the story\'s place before a character\'s')
+  assert.equal(latestPlace([{ id: 'r', role: 'assistant', raw: '', state: { 沈念念: { 位置: '紫霄宫' }, 系统: { 当前地点: '剑池' } } }]).place, '剑池', 'the story\'s place before a character\'s')
 })
 
 test('speakers: 她 is the heroine named last or the card\'s own, 你 the player, an unknown name before 笑道', () => {
   const said = text => splitLines(text, { names: nian }).filter(b => b.kind === 'dialogue').map(b => b.speaker)
-  assert.deepEqual(said('「师兄说什么?」她凑近了一点,呼吸快要贴到你脸上,「念念没听清楚,再说一遍嘛~」'), ['顾念念', '顾念念'])
-  assert.deepEqual(said('「是……」你喉咙发紧,每个字都像被什么东西卡着,「念念……师兄喜欢……」'), ['小蝉', '小蝉'])
+  assert.deepEqual(said('「师兄说什么?」她凑近了一点,呼吸快要贴到你脸上,「念念没听清楚,再说一遍嘛~」'), ['沈念念', '沈念念'])
+  assert.deepEqual(said('「是……」你喉咙发紧,每个字都像被什么东西卡着,「念念……师兄喜欢……」'), ['小舟', '小舟'])
   assert.deepEqual(said('慕寒漪推门进来。\n\n「夜深了。」她说。'), ['慕寒漪'])
   assert.deepEqual(said('「两位，打烊了。」店小二笑道。'), ['店小二'])
   assert.equal(pronounNear('她回头看你,笑意还挂在脸上,', ''), '她')
@@ -178,7 +178,7 @@ test('speakers: 她 is the heroine named last or the card\'s own, 你 the player
   // 他 on a card whose heroine is a girl, with no man named: nobody rather than the wrong one.
   assert.deepEqual(said('「走吧。」他说。'), [null])
   // Nothing says who: the one who spoke last, else the card's own.
-  assert.deepEqual(said('「师兄？」\n\n声音从你背后传来。'), ['顾念念'])
+  assert.deepEqual(said('「师兄？」\n\n声音从你背后传来。'), ['沈念念'])
   assert.deepEqual(said('慕寒漪说：「走。」\n\n「快些。」'), ['慕寒漪', '慕寒漪'])
   // A quoted word is narration; 等你 is no name.
   assert.deepEqual(splitLines('「惊喜」两个字亮得刺眼。', { names: nian }).map(b => b.kind), ['narration'])
@@ -190,31 +190,31 @@ test('speakers: 她 is the heroine named last or the card\'s own, 你 the player
 
 test('speakers: a quote alone on its line, from the lines either side; people called by their trade; long clauses before a colon', () => {
   const cast = speakerNames({
-    char: '顾念念-武当抽奖系统-v1.6',
-    user: '小蝉',
-    roster: [{ name: '主角', aliases: '师兄', player: true, kind: 'boy' }, { name: '顾念念', aliases: '念念，师妹', kind: 'girl' }, { name: '清虚子', aliases: '师父', kind: 'boy' }],
+    char: '沈念念-青峰签到系统-v1.6',
+    user: '小舟',
+    roster: [{ name: '主角', aliases: '师兄', player: true, kind: 'boy' }, { name: '沈念念', aliases: '念念，师妹', kind: 'girl' }, { name: '清虚子', aliases: '师父', kind: 'boy' }],
   })
   const said = text => splitLines(text, { names: cast }).filter(b => b.kind === 'dialogue').map(b => b.speaker)
   // The line before says who; 你 reacting after is the player listening.
-  assert.deepEqual(said('她停在你面前，仰着脸看你。\n\n「师兄收拾好啦？」\n\n你点头。'), ['顾念念'])
+  assert.deepEqual(said('她停在你面前，仰着脸看你。\n\n「师兄收拾好啦？」\n\n你点头。'), ['沈念念'])
   assert.deepEqual(said('你还没来得及回答，殿里就传来师父的声音。\n\n「站在门口干什么，进来。」'), ['清虚子'])
-  assert.deepEqual(said('师妹乖巧地点头。\n\n「念念一定看好师兄的~」\n\n她说这话的时候，梨涡又出来了。'), ['顾念念'])
+  assert.deepEqual(said('师妹乖巧地点头。\n\n「念念一定看好师兄的~」\n\n她说这话的时候，梨涡又出来了。'), ['沈念念'])
   // Nothing before it: the line after it, when it starts with 她/他.
-  assert.deepEqual(said('又回头喊了一声。\n\n「师兄快点收拾呀~」\n\n她跑远了。'), ['顾念念'])
+  assert.deepEqual(said('又回头喊了一声。\n\n「师兄快点收拾呀~」\n\n她跑远了。'), ['沈念念'])
   // 他 after a quote is the subject; the 师妹 he looks at is not the speaker.
   assert.deepEqual(said('清虚子放下酒杯。\n\n「念念，」他看着师妹，「看好你师兄。」'), ['清虚子', '清虚子'])
   // An innkeeper is 掌柜, and 他 means him while he is the one named last.
-  assert.deepEqual(said('掌柜的是个瘦老头，见你们进来，眼睛一亮。\n\n「哟，武当的道长~」\n\n他从柜台后面探出身子。\n\n「住店还是打尖？」\n\n师妹走到柜台前。\n\n「掌柜的，要两间上房~」'), ['掌柜', '掌柜', '顾念念'])
+  assert.deepEqual(said('掌柜的是个瘦老头，见你们进来，眼睛一亮。\n\n「哟，武当的道长~」\n\n他从柜台后面探出身子。\n\n「住店还是打尖？」\n\n师妹走到柜台前。\n\n「掌柜的，要两间上房~」'), ['掌柜', '掌柜', '沈念念'])
   // Said to the player, not by them.
-  assert.deepEqual(said('你摇头。\n\n「师兄，累不累？」'), ['顾念念'])
+  assert.deepEqual(said('你摇头。\n\n「师兄，累不累？」'), ['沈念念'])
   // A long clause before a colon is no name, but may hold one.
   assert.deepEqual(said('师父说的话还在耳边响：「杀是好杀。」'), ['清虚子'])
 })
 
 test('speakers: narration before a colon is no name; the nearest clause with a subject says who', () => {
   const said = text => splitLines(text, { names: nian }).filter(b => b.kind === 'dialogue').map(b => b.speaker)
-  assert.deepEqual(said('她刷了一会儿,忽然抬眼看你,嘴角翘起来:"紧张?"'), ['顾念念'])
-  assert.deepEqual(said('过了片刻,她忽然笑了,笑得很短:"不敢也正常。昨天你没做,我也没逼你。今天——"'), ['顾念念'])
+  assert.deepEqual(said('她刷了一会儿,忽然抬眼看你,嘴角翘起来:"紧张?"'), ['沈念念'])
+  assert.deepEqual(said('过了片刻,她忽然笑了,笑得很短:"不敢也正常。昨天你没做,我也没逼你。今天——"'), ['沈念念'])
   assert.equal(guessSpeaker('她刷了一会儿,忽然抬眼看你,嘴角翘起来:', '', nian), null)
   assert.equal(pronounNear('过了片刻,她忽然笑了,笑得很短:', ''), '她')
   // The clause nearest the quote decides: a name there, or 你 after 她.
@@ -228,7 +228,7 @@ test('speakers: narration before a colon is no name; the nearest clause with a s
   assert.equal(guessSpeaker('', '半晌才说。', nian), null)
   for (const lead of ['心里默念：', '内心想法：', '😈坏笑着说：', '第二根：', '开头一行：', '最后才说：']) assert.equal(guessSpeaker(lead, '', nian), null, lead)
   // A doubled name is no doubled adverb (缓缓说).
-  assert.equal(guessSpeaker('念念说：', '', nian), '顾念念')
+  assert.equal(guessSpeaker('念念说：', '', nian), '沈念念')
   assert.equal(guessSpeaker('', '温梨慢悠悠地说，', nian), '温梨')
   assert.equal(guessSpeaker('', '这个问题咽回去。', nian), null)
   assert.equal(guessSpeaker('', '王师兄话没说完，就咳了起来。', nian), null)
@@ -250,7 +250,7 @@ test('speakers: a cast with no kinds gets them from the reply; told in the third
   const xixi = speakerNames({ char: '汐汐-v3.0', user: '阿蝉' })
   assert.deepEqual(said(xixi, '汐汐站在门口，她把伞收起来。\n\n「学长。」\n\n阿蝉放下书，他抬起头。\n\n「来吧。」他自言自语。'), ['汐汐', '阿蝉'])
   // Told to 你, a heroine the reply calls 她 is never 他: nobody rather than her.
-  const told = speakerNames({ char: '顾念念-武当抽奖系统-v1.0', user: '你' })
+  const told = speakerNames({ char: '沈念念-青峰签到系统-v1.0', user: '你' })
   assert.deepEqual(said(told, '念念推门进来，她笑了。\n\n他放下茶杯。\n\n「坐吧。」'), [null])
   // 他听见她说： — the one heard.
   assert.deepEqual(said(xixi, '汐汐站在门口，她把伞收起来。\n\n他听见她说：「学长。」'), ['汐汐'])
@@ -272,17 +272,17 @@ test('speakers: quotes alone one after another answer each other, unless their w
     ['伊梦洁', '白芷', '伊梦洁', '白芷', '伊梦洁'],
   )
   // Told to 你, the player answers: 怕什么？ after 念念有点怕。, and 你说。 after a quote says it was theirs.
-  assert.deepEqual(said(nian, '师妹挽着你的胳膊。\n\n「师兄，念念有点怕。」\n\n「怕什么？」\n\n「怕那个姐姐。」'), ['顾念念', '小蝉', '顾念念'])
-  assert.deepEqual(said(nian, '师妹抬头看你。\n\n「师兄要去哪？」\n\n「山下。」\n\n你说。'), ['顾念念', '小蝉'])
+  assert.deepEqual(said(nian, '师妹挽着你的胳膊。\n\n「师兄，念念有点怕。」\n\n「怕什么？」\n\n「怕那个姐姐。」'), ['沈念念', '小舟', '沈念念'])
+  assert.deepEqual(said(nian, '师妹抬头看你。\n\n「师兄要去哪？」\n\n「山下。」\n\n你说。'), ['沈念念', '小舟'])
   // 你说没有。 answers the quote; it does not say it.
-  assert.deepEqual(said(nian, '揉到第二只脚的时候，她终于开口了：\n\n「师兄今天想要什么？」\n\n你说没有。'), ['顾念念'])
+  assert.deepEqual(said(nian, '揉到第二只脚的时候，她终于开口了：\n\n「师兄今天想要什么？」\n\n你说没有。'), ['沈念念'])
   // One who speaks of themselves by name goes on.
-  const duo = speakerNames({ char: '顾念念-武当抽奖系统-v1.6', user: '小蝉', roster: [{ name: '主角', aliases: '师兄', player: true, kind: 'boy' }, { name: '龙阿朵', aliases: '朵朵', kind: 'girl' }] })
-  assert.deepEqual(said(duo, '龙阿朵看着你。\n\n「朵朵从小就在想。」\n\n「朵朵想找一个人。」\n\n「一个不怕朵朵的人。」'), ['龙阿朵', '龙阿朵', '龙阿朵'])
+  const duo = speakerNames({ char: '沈念念-青峰签到系统-v1.6', user: '小舟', roster: [{ name: '主角', aliases: '师兄', player: true, kind: 'boy' }, { name: '苗阿朵', aliases: '朵朵', kind: 'girl' }] })
+  assert.deepEqual(said(duo, '苗阿朵看着你。\n\n「朵朵从小就在想。」\n\n「朵朵想找一个人。」\n\n「一个不怕朵朵的人。」'), ['苗阿朵', '苗阿朵', '苗阿朵'])
 })
 
 test('options: 1️⃣ lines come apart from the story; the rest of their <small> block goes', () => {
-  const reply = '她还在等。\n\n<small>\n请选择小蝉的下一步行动:\n1️⃣ 😖 低头承认,小声说「是……」\n\n2️⃣ 😰 试图转移话题\n\ntips: "假装昏倒！"\n</small>'
+  const reply = '她还在等。\n\n<small>\n请选择小舟的下一步行动:\n1️⃣ 😖 低头承认,小声说「是……」\n\n2️⃣ 😰 试图转移话题\n\ntips: "假装昏倒！"\n</small>'
   assert.deepEqual(splitLines(reply, { names: nian }).map(b => [b.kind, b.plain]), [
     ['narration', '她还在等。'],
     ['option', '😖 低头承认,小声说「是……」'],

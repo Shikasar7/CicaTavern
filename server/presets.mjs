@@ -31,8 +31,13 @@ export function isPresetJson(json) {
 // A preset as this app keeps it, edits made here included, to move it to another device.
 export const PRESET_FORMAT = 'agent-tavern-preset'
 
-export function exportPreset(preset) {
-  return { format: PRESET_FORMAT, version: 1, exportedAt: new Date().toISOString(), preset }
+/**
+ * @param scripts - its Tavern Helper scripts (kept beside it, preset-scripts.mjs), carried in the file. What the player
+ *   let them do is the player's, not the preset's: it stays here.
+ */
+export function exportPreset(preset, scripts = []) {
+  const { scriptPermissions, ...kept } = preset
+  return { format: PRESET_FORMAT, version: 1, exportedAt: new Date().toISOString(), preset: scripts.length ? { ...kept, helperScriptList: scripts } : kept }
 }
 
 /** An exported preset → a new preset (fresh id); null when the file is not one. */
@@ -45,7 +50,9 @@ export function importOwnPreset(json) {
   // The fields the app reads, in the shapes it reads them (a file missing one used to break every preset
   // list and each turn); a well-formed export comes out the same. Only the built-in preset is built in:
   // its options live in the settings.
-  const { builtin, options, ...rest } = preset
+  // Its scripts are kept beside it (the caller saves them, preset-scripts.mjs presetScriptsOf); what scripts may do is
+  // asked again here.
+  const { builtin, options, helperScriptList, helperList, helperSaved, helperReadAt, scriptPermissions, ...rest } = preset
   const num = value => (Number.isFinite(Number(value)) && value !== null && value !== '' ? Number(value) : null)
   const params = isRecord(preset.params) ? preset.params : {}
   const formats = isRecord(preset.formats) ? preset.formats : {}
@@ -278,6 +285,11 @@ export function presetDetail(preset) {
     ...presetSummary(preset),
     postMode: POST_MODES.includes(preset.postMode) ? preset.postMode : 'prefix',
     helperScripts: preset.helperScripts ?? 0,
+    // What each script is and whether it is on (preset-scripts.mjs); helperSaved: their text is kept, so they run.
+    helperList: Array.isArray(preset.helperList) ? preset.helperList : [],
+    helperSaved: preset.helperSaved === true,
+    helperReadAt: typeof preset.helperReadAt === 'string' ? preset.helperReadAt : '',
+    scriptPermissions: isRecord(preset.scriptPermissions) ? preset.scriptPermissions : {},
     params: preset.params ?? {},
     regexScriptList: withUniqueIds(normalizeScripts(preset.regexScripts)),
     quick: preset.quick ?? [],
@@ -335,6 +347,13 @@ export function editPreset(preset, patch) {
     }
     const byId = new Map(preset.prompts.map(p => [p.id, p]))
     preset.prompts = order.map(id => byId.get(id))
+  }
+  // Its Tavern Helper scripts switched on or off, by their place in its list.
+  if (Array.isArray(patch.helpers) && Array.isArray(preset.helperList)) {
+    for (const change of patch.helpers) {
+      const item = preset.helperList[Number(change?.index)]
+      if (item && typeof change.on === 'boolean') item.on = change.on
+    }
   }
   // Entries pinned to the chat's quick-switch panel (what Tavern Helper floating menus are usually for).
   if (Array.isArray(patch.quick)) {

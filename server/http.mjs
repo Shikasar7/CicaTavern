@@ -20,6 +20,8 @@ import { injectPrompts, uninjectPrompts } from './injections.mjs'
 import { TAVERN_EVENTS } from '../web/shared/th-api.js'
 import { bookByName, bookNames, chatBooks, createChatBook, fieldChange, parseUpdates, setFrameVars, thEntry, withChatChanges, writeChatBook } from './frames.mjs'
 import { editPreset, exportPreset, importOwnPreset, normalizePreset, presetDetail, presetSummary } from './presets.mjs'
+import { applyThPreset, presetPermissions, presetScriptsOf, thPreset, withPresetScripts } from './preset-scripts.mjs'
+import { decideEntry } from '../web/shared/frame-permissions.js'
 import { VN_ID, basicDetail, editBuiltin, ownTexts } from './basic.mjs'
 import { DIRECT_CARD, builtinKey, editsKey } from '../web/shared/basic.js'
 import { appVersion, featuresOf } from './edition.mjs'
@@ -45,6 +47,8 @@ import { KEYED as VOICE_KEYED } from './voice/index.mjs'
 import { createPromptLibrary } from './prompts.mjs'
 import { createGallery } from './gallery.mjs'
 import { MAX_PACK, createCardPacks } from './card-pack.mjs'
+import { createLookPictures, decodePicture } from './look-pictures.mjs'
+import { creationOf, withOptionPicture } from './forge/creation.mjs'
 import { createForge } from './forge/index.mjs'
 import { qrSvg } from './qr.mjs'
 import { lostPaths, setStatePath } from './state.mjs'
@@ -172,6 +176,7 @@ const STATIC = {
   '/sort-rows.js': ['sort-rows.js', 'text/javascript; charset=utf-8'],
   '/gallery.js': ['gallery.js', 'text/javascript; charset=utf-8'],
   '/card-pack.js': ['card-pack.js', 'text/javascript; charset=utf-8'],
+  '/look-pictures.js': ['look-pictures.js', 'text/javascript; charset=utf-8'],
   '/shared/blockwords.js': ['shared/blockwords.js', 'text/javascript; charset=utf-8'],
   '/dictation.js': ['dictation.js', 'text/javascript; charset=utf-8'],
   '/icon.png': ['icon.png', 'image/png'],
@@ -191,7 +196,7 @@ const TEXT_EXPORT_TYPES = new Set(['text/plain', 'text/markdown'])
 // A card, worldbook or preset file comes base64, a third bigger than itself. A big MVU card's picture is 36 MB (it
 // carries the card twice, as V2 "chara" and V3 "ccv3", as SillyTavern writes it): these take a file up to about 110 MB.
 const MAX_UPLOAD = 150 * 1024 * 1024
-const UPLOADS = /^\/api\/(?:cards\/(?:import|inspect)|worldbooks\/import|presets\/import)$/
+const UPLOADS = /^\/api\/(?:cards\/(?:import|inspect)|worldbooks\/import|presets\/import|presets\/[\w-]+\/helper-scripts)$/
 
 /** `<provider>/<model>` stays as it is; subscription aliases become catalog ids. */
 const modelRef = ref => (isProviderRef(ref) ? ref : canonicalModel(ref))
@@ -399,6 +404,15 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
   const picks = createPickLists(store)
   const blockWords = createBlockWords(store)
   const scenes = createScenes(store, { media, history: drawHistory })
+  // 定制外观的图 (look-pictures.mjs): drawn decorations and small copies of the card's own pictures a look names.
+  const lookPictures = createLookPictures(store, { scenes, history: drawHistory })
+  // Changes to one thing that must not cross (read, change, write): each waits for the one before it under its key.
+  const queues = new Map()
+  const oneAtATime = (key, work) => {
+    const next = (queues.get(key) ?? Promise.resolve()).catch(() => {}).then(work)
+    queues.set(key, next)
+    return next.finally(() => { if (queues.get(key) === next) queues.delete(key) })
+  }
   const saves = createSaves(store)
   const prompts = createPromptLibrary(store)
   const gallery = createGallery(store, { scenes, media })
@@ -406,7 +420,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
   let galleryExport = null
   // 导出角色卡 → 带上图片和设置 (card-pack.mjs): the zip built for a card, kept to be fetched; and a zip sent to be
   // imported, kept until the import that names it (one of each at a time, let go of when too old).
-  const cardPacks = createCardPacks(store, { rulebooks, regex })
+  const cardPacks = createCardPacks(store, { rulebooks, regex, look: lookPictures })
   let packExport = null
   let packUpload = null
   const keepFor = (slot, clear) => {
@@ -422,7 +436,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     const last = [...activePath(chat)].reverse().find(n => n.role === 'assistant')
     last.state = state
     // Put right by hand, the warning goes.
-    const kept = await engine.keptToSchema(chat, state)
+    const kept = await engine.keptToSchema(chat, state, null, { keepAll: true })
     if (kept.problem) last.schemaProblem = kept.problem
     else delete last.schemaProblem
     // The model has not seen this edit; the next turn re-sends the full state.
@@ -443,6 +457,20 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     const result = await engine.cardScripts.emit(card, chat, type, [at >= 0 ? at : path.length - 1], path)
     if (result.handled && result.state) await putState(chat, result.state)
     return result.handled
+  }
+
+  /**
+   * The presets as a chat's scripts see them (Tavern Helper's preset functions): the one in use whole, the others by
+   * name; and the chat's regex as getTavernRegexes hands them over, at once ({ global, preset, character }).
+   */
+  async function thPresetInfo(chat) {
+    const [list, regexes] = await Promise.all([store.listPresets(), chatRegexes(store, chat)])
+    const own = list.find(p => p.id === chat.presetId)
+    const loaded = own ? own.name : chat.presetId === VN_ID ? '视觉小说预设' : '基础预设'
+    const regex = Object.fromEntries(['global', 'preset', 'character'].map(type => [type, regexes.get({ type })]))
+    const inUse = thPreset(own ?? { prompts: [] })
+    inUse.extensions = { regex_scripts: regex.preset }
+    return { names: list.map(p => p.name), loaded, inUse, editable: Boolean(own), regexes: regex }
   }
 
   /** Variables a proposal of 对话修改 puts into the chat it read, each at its path. */
@@ -467,6 +495,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     rulebooks,
     writeChatState,
     history: drawHistory,
+    lookPictures,
   })
   // 设置 → 更多 → 更新. A restart after an update starts the server the way this one was started.
   let listenArg
@@ -702,7 +731,9 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
   /** The card a SillyTavern export writes: with `?regex=sets`, the 正则集 attached to it after its own scripts. */
   async function exportedCard(cardId, url) {
     const card = await withRulebook(await store.getCard(cardId))
-    return url.searchParams.get('regex') === 'sets' ? withAttachedScripts(card, await store.getRegexSets()) : card
+    // 定制外观的图 go along as data (st-export.mjs withLookPictures): a card file has nowhere else to keep them.
+    const look = { ...card, lookPictures: (await lookPictures.embedded(card)).vars }
+    return url.searchParams.get('regex') === 'sets' ? withAttachedScripts(look, await store.getRegexSets()) : look
   }
 
   /** A card as it leaves the app: its rule book, kept beside it, goes along. */
@@ -960,7 +991,9 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       try {
         const view = slot.startsWith('roster:')
           ? await media.saveRosterRef(id, slot.slice('roster:'.length), `data:image/${imageKind(buffer).replace('jpg', 'jpeg')};base64,${buffer.toString('base64')}`)
-          : await scenes.restore(id, slot, buffer, entry)
+          : slot.startsWith('look:')
+            ? { look: await lookPictures.restore(id, slot, buffer, entry) }
+            : await scenes.restore(id, slot, buffer, entry)
         return { ...view, history: await drawHistory.list(id) }
       } catch (error) {
         // Not taken back after all: kept again.
@@ -973,6 +1006,25 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       await drawHistory.remove(id, file)
       return drawHistory.list(id)
     }],
+    // 定制外观的图 (look-pictures.mjs): what a look may name and the pictures kept for it. { token, image (a data URL),
+    // from (the picture a copy was made from), prompt, backend }; drawing a decoration is a slow call below.
+    ['GET', /^\/api\/cards\/([\w-]+)\/look-pictures$/, ([id]) => lookPictures.view(id)],
+    ['PUT', /^\/api\/cards\/([\w-]+)\/look-pictures$/, ([id], body) => lookPictures.save(id, String(body?.token ?? ''), decodePicture(body?.image), { from: body?.from, prompt: body?.prompt, backend: body?.backend })],
+    ['DELETE', /^\/api\/cards\/([\w-]+)\/look-pictures\/([\w-]+)$/, ([id, name]) => lookPictures.remove(id, `--pic-${name}`)],
+    // 建角页的图: which options have one ({ label: [option] }), and { label, option, image (a small data URL, or null to
+    // take it off) } put on the card's form.
+    ['GET', /^\/api\/cards\/([\w-]+)\/creation\/pictures$/, async ([id]) => ({ pictures: Object.fromEntries(Object.entries(creationOf((await store.getCard(id)).regexScripts)?.pics ?? {}).map(([label, list]) => [label, Object.keys(list)])) })],
+    ['PUT', /^\/api\/cards\/([\w-]+)\/creation\/picture$/, ([id], body) => oneAtATime(`creation:${id}`, async () => {
+      // One option at a time: several pictures come in together (备齐门面图), each a change to the same card.
+      const card = await store.getCard(id)
+      try {
+        card.regexScripts = withOptionPicture(card.regexScripts ?? [], String(body?.label ?? ''), String(body?.option ?? ''), body?.image ?? null)
+      } catch (error) {
+        throw httpError(error.status ?? 400, error.status === 404 ? msg`这张卡没有建角页` : msg`建角页上没有这个选项，或者图不对（要小于 64 KB 的 PNG、JPG 或 WebP）`)
+      }
+      await store.saveCard(card)
+      return { ok: true }
+    })],
     // 游戏规则 (game.mjs): a card's rule book.
     ['GET', /^\/api\/cards\/([\w-]+)\/game$/, ([id]) => rulebooks.read(id)],
     ['PUT', /^\/api\/cards\/([\w-]+)\/game$/, ([id], body) => rulebooks.change(id, body)],
@@ -1111,7 +1163,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     // 脚本按钮: the card's scripts with buttons of their own (card-scripts.mjs buttonsOf).
     ['GET', /^\/api\/cards\/([\w-]+)\/script-buttons$/, async ([id]) => engine.cardScripts.buttonsOf(await store.getCard(id))],
     // The card's own event names its scripts on the server listen for (card-scripts.mjs): a frame's are sent on.
-    ['GET', /^\/api\/cards\/([\w-]+)\/script-events$/, async ([id]) => ({ events: await engine.cardScripts.ownEvents(await store.getCard(id)) })],
+    // ?presetId: the chat's preset's scripts too.
+    ['GET', /^\/api\/cards\/([\w-]+)\/script-events$/, async ([id], _, url) => ({ events: await engine.cardScripts.ownEvents(await store.getCard(id), { presetId: url.searchParams.get('presetId') ?? '' }) })],
     ['PUT', /^\/api\/cards\/([\w-]+)\/media$/, ([id], body) => media.saveCardMedia(id, body)],
     ['POST', /^\/api\/cards\/([\w-]+)\/roster\/draft$/, ([id]) => media.draftRoster(id, AbortSignal.timeout(180000))],
     // 从对话里补充: the characters in an open chat's recent turns that the list (`cast`, as the page
@@ -1604,10 +1657,45 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
         throw httpError(400, msg`无法解析预设 JSON`)
       }
       const preset = importOwnPreset(json) ?? normalizePreset(json, filename.replace(/\.json$/i, ''))
+      // Its Tavern Helper scripts, kept beside it: they run in the chats that use it (preset-scripts.mjs).
+      const scripts = presetScriptsOf(json)
+      if (scripts.length) withPresetScripts(preset, scripts)
+      await store.savePresetScripts(preset.id, scripts)
       await store.savePreset(preset)
       return presetSummary(preset)
     }],
-    ['GET', /^\/api\/presets\/([\w-]+)\/export$/, async ([id]) => exportPreset(await store.getPreset(id))],
+    ['GET', /^\/api\/presets\/([\w-]+)\/export$/, async ([id]) => {
+      const preset = await store.getPreset(id)
+      return exportPreset(preset, preset.helperSaved ? await store.getPresetScripts(preset.id) : [])
+    }],
+    // 读入脚本: a preset imported before its scripts were kept gets them from its file again (its entries stay as edited here).
+    ['POST', /^\/api\/presets\/([\w-]+)\/helper-scripts$/, async ([id], body) => {
+      const preset = await store.getPreset(id)
+      const { buffer } = decodeUpload(body)
+      let json
+      try {
+        json = JSON.parse(buffer.toString('utf8').replace(/^\uFEFF/, ''))
+      } catch {
+        throw httpError(400, msg`无法解析预设 JSON`)
+      }
+      const scripts = presetScriptsOf(json)
+      if (!scripts.length) throw httpError(400, msg`这个文件里没有酒馆助手脚本`)
+      withPresetScripts(preset, scripts)
+      await store.savePresetScripts(preset.id, scripts)
+      engine.cardScripts.forgetPreset(preset.id)
+      return presetDetail(await store.savePreset(preset))
+    }],
+    // What the player lets a preset's scripts do (asked once per preset, web/app.js): { send, generate, relay, local }.
+    ['GET', /^\/api\/presets\/([\w-]+)\/script-permissions$/, async ([id]) => presetPermissions(await store.getPreset(id))],
+    // One answer kept ({ kind, decision: 'allow' | 'deny' | null, origin }), as frame-permissions.js keeps a card's.
+    ['PUT', /^\/api\/presets\/([\w-]+)\/script-permissions$/, async ([id], body) => {
+      const preset = await store.getPreset(id)
+      preset.scriptPermissions = decideEntry(presetPermissions(preset), String(body?.kind ?? ''), body?.decision ?? null, typeof body?.origin === 'string' ? body.origin : undefined)
+      await store.savePreset(preset)
+      return preset.scriptPermissions
+    }],
+    // 脚本按钮 of a preset's scripts (card-scripts.mjs presetButtonsOf): the page starts them beside the card's.
+    ['GET', /^\/api\/presets\/([\w-]+)\/script-buttons$/, async ([id]) => engine.cardScripts.presetButtonsOf((await store.getPreset(id)).id)],
     // The built-in preset: its options live in the settings (PUT /api/settings { basic }).
     ['GET', /^\/api\/presets\/basic$/, async () => basicDetail(await store.getSettings())],
     ['GET', /^\/api\/presets\/vn$/, async () => basicDetail(await store.getSettings(), VN_ID)],
@@ -1625,6 +1713,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['PUT', /^\/api\/presets\/([\w-]+)$/, async ([id], body) => presetDetail(await store.savePreset(editPreset(await store.getPreset(id), body)))],
     ['DELETE', /^\/api\/presets\/([\w-]+)$/, async ([id]) => {
       await store.deletePreset(id)
+      engine.cardScripts.forgetPreset(id)
       await forge.dropTalk('preset', id)
       await forge.dropTalk('regex', `preset-${id}`)
       const settings = await store.getSettings()
@@ -1890,10 +1979,39 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       const args = Array.isArray(body.args) ? body.args.slice(0, 20) : []
       if (JSON.stringify(args).length > 100_000) throw httpError(400, msg`事件带的数据太大`)
       const path = activePath(chat).filter(node => !node.deleted)
-      const result = await engine.cardScripts.emit(card, chat, type, args, path)
+      // A 脚本按钮's press: only the scripts of the card or the preset it belongs to.
+      const only = body.owner === 'card' || body.owner === 'preset' ? body.owner : null
+      const result = await engine.cardScripts.emit(card, chat, type, args, path, only)
       if (!result.handled) return { handled: false }
       if (result.state) await putState(chat, result.state)
       return { handled: true, notes: result.notes, chat: chatView(await store.saveChat(chat)) }
+    })],
+    // Tavern Helper's preset functions (getPreset, getLoadedPresetName, getPresetNames) read what this returns once,
+    // when a script's frame is made: { names, loaded, inUse (Tavern Helper's shape), editable }.
+    ['GET', /^\/api\/chats\/([\w-]+)\/th-preset$/, async ([id]) => thPresetInfo(await store.getChat(id))],
+    // replacePreset / setPreset / updatePresetWith: { name ('in_use' or a preset's name), preset (Tavern Helper's
+    // shape) } put into that imported preset; the chat's fixed prefix is built again when it is the one in use.
+    // → { changed, rebuilt, info, chat? }
+    ['PUT', /^\/api\/chats\/([\w-]+)\/th-preset$/, ([id], body) => store.withChat(id, async () => {
+      if (engine.isRunning(id)) throw httpError(409, msg`正在生成，先停止`)
+      const chat = await store.getChat(id)
+      const name = typeof body?.name === 'string' ? body.name : 'in_use'
+      const list = await store.listPresets()
+      const target = name === 'in_use' ? list.find(p => p.id === chat.presetId) : list.find(p => p.name === name)
+      if (!target) throw httpError(400, name === 'in_use' ? msg`这个对话用的是应用自带的预设，脚本不能改它` : msg`没有叫「${name}」的预设`)
+      let changed
+      try {
+        changed = applyThPreset(target, body?.preset)
+      } catch (error) {
+        throw httpError(400, error.message)
+      }
+      if (!changed) return { changed: false, info: await thPresetInfo(chat) }
+      await store.savePreset(target)
+      if (target.id !== chat.presetId) return { changed: true, info: await thPresetInfo(chat) }
+      const before = chat.systemPrompt
+      await rebuildPrompt(store, chat, chat.presetId)
+      const view = chatView(await store.saveChat(chat))
+      return { changed: true, rebuilt: chat.systemPrompt !== before, info: await thPresetInfo(chat), chat: view }
     })],
     // Tavern Helper's chat variables (the templates' local scope): `vars` whole, or a card UI's
     // { set, unset } over those saved now (patchVars), so two UIs open at once keep each other's keys.
@@ -2092,6 +2210,12 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       const found = await scenes.readPicture(scenePicture[1], scenePicture[2])
       if (!found) return sendJson(res, 404, { error: msg`没有这张场景图` })
       // A picture's name changes with the picture: it can stay cached.
+      res.writeHead(200, { 'content-type': found.type, 'cache-control': 'max-age=31536000, immutable' })
+      return res.end(found.data)
+    }
+    const lookPicture = /^\/api\/look\/([\w-]+)\/([\w.-]+)$/.exec(url.pathname)
+    if (req.method === 'GET' && lookPicture) {
+      const found = await lookPictures.readPicture(lookPicture[1], lookPicture[2])
       res.writeHead(200, { 'content-type': found.type, 'cache-control': 'max-age=31536000, immutable' })
       return res.end(found.data)
     }
@@ -2344,6 +2468,22 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       const body = await readBody(req)
       const text = name => (typeof body[name] === 'string' ? body[name] : '')
       return sendJson(res, 200, await scenes.draw(sceneDraw[1], { place: text('place'), sceneId: text('sceneId'), prompt: text('prompt'), rewrite: body.rewrite === true, passage: text('passage'), choice: drawChoiceOf(body) }, cancelOnClose()))
+    }
+    // 备齐门面图 → 建角页的图: one option's picture drawn and handed back; the page makes it small and puts it on the form.
+    const optionDraw = /^\/api\/cards\/([\w-]+)\/creation\/draw$/.exec(url.pathname)
+    if (req.method === 'POST' && optionDraw) {
+      const body = await readBody(req)
+      const drawn = await media.drawOptionPicture(optionDraw[1], typeof body.prompt === 'string' ? body.prompt : '', cancelOnClose(), drawChoiceOf(body))
+      return sendJson(res, 200, { image: `data:image/${imageKind(drawn.buffer).replace('jpg', 'jpeg')};base64,${drawn.buffer.toString('base64')}`, backend: drawn.backend ?? '' })
+    }
+    // 画装饰图 (定制外观): one decoration drawn and handed back, not kept: the page cuts the white away from the clear
+    // ones and makes it small, then keeps it (PUT …/look-pictures).
+    const decorDraw = /^\/api\/cards\/([\w-]+)\/look-pictures\/draw$/.exec(url.pathname)
+    if (req.method === 'POST' && decorDraw) {
+      const body = await readBody(req)
+      await store.getCard(decorDraw[1])
+      const drawn = await media.drawDecor({ slot: String(body.slot ?? ''), prompt: typeof body.prompt === 'string' ? body.prompt : '' }, cancelOnClose(), drawChoiceOf(body))
+      return sendJson(res, 200, { image: `data:image/${imageKind(drawn.buffer).replace('jpg', 'jpeg')};base64,${drawn.buffer.toString('base64')}`, backend: drawn.backend ?? '', prompt: drawn.prompt })
     }
     // 立绘 and 表情 take a { backend, model } of their own too (做成视觉小说 asks how to draw first).
     const foeDraw = /^\/api\/cards\/([\w-]+)\/foes\/draw$/.exec(url.pathname)

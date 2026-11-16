@@ -2,7 +2,7 @@
 // HTML, no frames): the built-in preset's time box and choices, and the status
 // bar (web/shared/status.js decides what goes in it).
 import { t } from '/i18n.js'
-import { onPage, paletteColors, phoneApps, scopedSkinCss, skinClass, statusGroups, statusPages } from '/shared/status.js'
+import { onPage, paletteColors, phoneApps, sameName, scopedSkinCss, skinClass, statusGroups, statusPages } from '/shared/status.js'
 
 const COLLAPSED = 'statusBarCollapsed'
 
@@ -31,8 +31,17 @@ export function paint(box, colors) {
 // 定制外观: a sheet for each look on the page, loaded once and shared by every bar that wears it.
 const skinSheets = new Map()
 
-/** Dress a bar (or the card's 开场页, web/cover.js) in the card's own look: its rules reach only what wears this class. */
-export function wear(box, skin) {
+// 外观的图 (web/shared/status.js LOOK_TOKEN): only the card's own, each a file of its look (or, in SillyTavern, set in
+// the frame's own styles instead).
+const LOOK_VAR = /^--pic-(?:avatar|cover|scene-[0-9a-f]{6}|sprite-[\w-]{1,40}|decor-(?:texture|corner|divider|emblem))$/
+const LOOK_SRC = /^\/api\/look\/[\w-]+\/[\w-]+\.(?:png|jpg|webp)(?:\?v=\w+)?$/
+
+/**
+ * Dress a bar (or the card's 开场页, web/cover.js) in the card's own look: its rules reach only what wears this class.
+ * @param pictures - { '--pic-…': address } the card's pictures the look may name (art.lookPictures)
+ */
+export function wear(box, skin, pictures = null) {
+  for (const [token, src] of Object.entries(pictures ?? {})) if (LOOK_VAR.test(token) && LOOK_SRC.test(src)) box.style.setProperty(token, `url("${src}")`)
   const scope = skinClass(skin.css)
   if (!skinSheets.get(scope)?.isConnected) {
     const sheet = document.createElement('style')
@@ -73,6 +82,10 @@ export function effectLayer(el, kind, scale = 1) {
 /**
  * 立绘 and 场景图 on top of a bar. The pictures are the app's own (角色名册的立绘和表情、视觉小说的场景), found by
  * whoever draws the bar: `art` is { portrait, zoom (a whole figure: show its upper half), scene, name, mood, place }.
+ * It also says what the rest of the bar may draw from (each only where the card has it):
+ *   face(name, words) → { src, zoom } or null: someone's picture (words: what their row says, for one who changes 形态);
+ *   map: the picture of the card's map; types: { beats: { type: [beaten] }, of(name) → type };
+ *   chain(name) → [{ name, stage, need }] or null: a companion's 形态, in order.
  */
 function artBlock(el, art) {
   if (!art?.portrait && !art?.scene) return null
@@ -88,6 +101,12 @@ function artBlock(el, art) {
     words.some(Boolean) ? el('span', { class: 'status-art-words' }, words) : null,
     art.place ? el('span', { class: 'status-art-place', text: art.place }) : null,
   ])
+}
+
+/** A small round picture of someone, or null when the card has none of them. */
+function faceOf(el, art, name, size, words) {
+  const face = name && art?.face ? art.face(name, words ?? []) : null
+  return face ? el('span', { class: `status-face ${size}${face.zoom ? ' zoom' : ''}` }, el('img', { src: face.src, alt: '', draggable: 'false', loading: 'lazy' })) : null
 }
 
 // 小手机: what the bar keeps off its face (web/shared/status.js phoneApps) is a row of icons under it; one opens as the
@@ -111,19 +130,19 @@ const appIcon = name => ICON(APP_ICONS.find(([names]) => names.test(name))?.[1] 
 /** How many things an app holds (lines, rows), and whether this reply changed any of them. */
 function appNews(groups) {
   const rows = groups.flatMap(group => group.rows)
-  const count = rows.reduce((sum, row) => sum + (row.items?.length ?? 0) + (row.table?.rows.length ?? 0), 0)
+  const count = rows.reduce((sum, row) => sum + (row.items?.length ?? 0) + (row.table?.rows.length ?? 0) + (row.spots?.length ?? 0), 0)
   const changed = groups.some(group => group.changed) || rows.some(row => row.changed || row.added?.length || row.table?.rows.some(line => line.changed))
   return { count, changed }
 }
 
 /** Whether an app has nothing in it yet (lists and tables with no line, a paragraph with no word): then it has no icon. */
-const appEmpty = groups => groups.every(group => group.rows.every(row => (row.show === 'list' && !row.items.length) || (row.show === 'table' && !row.table.rows.length) || (row.show === 'long' && !row.text) || (row.show === 'tags' && !row.tags.length)))
+const appEmpty = groups => groups.every(group => group.rows.every(row => (row.show === 'list' && !row.items.length) || (row.show === 'table' && !row.table.rows.length) || (row.show === 'long' && !row.text) || (row.show === 'tags' && !row.tags.length) || (row.show === 'map' && !row.spots.length && !row.places.length)))
 
 // The app the reader left open: open again in the next bar drawn (the reply after), till it is closed by hand.
 let appOpen = ''
 
 /** The icons and the phone they open in: [dock, phone]. `apps` are [{ name, groups }]. `remembers`: as for the bar's page. */
-function phoneBlock(el, apps, remembers = true) {
+function phoneBlock(el, apps, remembers = true, art = null) {
   const screen = el('div', { class: 'status-phone-screen' })
   const heading = el('b', { class: 'status-phone-name' })
   const close = () => open('')
@@ -143,7 +162,7 @@ function phoneBlock(el, apps, remembers = true) {
     phone.hidden = !app
     if (!app) return
     heading.textContent = app.name
-    screen.replaceChildren(...app.groups.map(group => groupBlock(el, group, app.name)))
+    screen.replaceChildren(...app.groups.map(group => groupBlock(el, group, app.name, art)))
     // An app that is one thing (a bag, a list of quests) needs no name over it again.
     screen.classList.toggle('single', app.groups.length === 1 && app.groups[0].rows.length === 1)
     screen.scrollTop = 0
@@ -201,10 +220,10 @@ const PICKED_GROUP = 'statusBarGroup'
 const PICKED_PAGE = 'statusBarPage'
 const ALL = '*'
 
-function statusTable(el, table) {
+function statusTable(el, table, art = null) {
   const head = table.columns.length ? el('thead', {}, el('tr', {}, [table.named ? el('th', {}) : null, ...table.columns.map(text => el('th', { text }))])) : null
   const body = el('tbody', {}, table.rows.map(row => el('tr', { class: row.changed ? 'changed' : '' }, [
-    table.named ? el('th', { scope: 'row', text: row.name }) : null,
+    table.named ? el('th', { scope: 'row' }, [faceOf(el, art, row.name, 'small', row.cells), el('span', { text: row.name })]) : null,
     ...row.cells.map(text => el('td', { text })),
   ])))
   return el('div', { class: 'status-table-wrap' }, [
@@ -224,7 +243,199 @@ function longText(el, text) {
   return el('div', {}, [words, toggle])
 }
 
-function statusRow(el, row) {
+// 地图: the card's places as pins on its map. Where the card gave a place no spot of its own (or has no picture of the
+// map), they stand in rows, those of one part of the world together.
+export function laidOut(places) {
+  const free = places.filter(place => place.x === undefined)
+  const zones = [...new Set(free.map(place => place.zone ?? ''))]
+  const ordered = zones.flatMap(zone => free.filter(place => (place.zone ?? '') === zone))
+  const columns = Math.max(1, Math.ceil(Math.sqrt(ordered.length * 1.6)))
+  const lines = Math.max(1, Math.ceil(ordered.length / columns))
+  const spots = new Map(ordered.map((place, i) => {
+    const line = Math.floor(i / columns)
+    // Every other row stands half a step along, so the names under the pins do not run into each other.
+    const along = (i % columns) + (line % 2 ? 0.75 : 0.25)
+    return [place.name, { x: Math.round((along / columns) * 1000) / 10, y: Math.round(((line + 0.5) / lines) * 800) / 10 + 8 }]
+  }))
+  return places.map(place => ({ ...place, ...(spots.get(place.name) ?? {}) }))
+}
+
+const ZONE = /^(区域|地区|分区|zone|area|region)$/i
+// The place the reader last looked at, and the type: shown again in the next bar drawn.
+let placeOpen = ''
+let typeOpen = ''
+
+function mapBlock(el, row, art) {
+  // A card that says where nothing is still has a map: of the places the variables name.
+  const zoneOf = spot => spot.facts.find(([key]) => ZONE.test(key))?.[1].slice(0, 16) ?? ''
+  const places = laidOut(row.places.length ? row.places : row.spots.map(spot => ({ name: spot.name, ...(zoneOf(spot) ? { zone: zoneOf(spot) } : {}) })))
+  const spotOf = name => row.spots.find(spot => sameName(spot.name, name))
+  const placeOf = name => places.find(place => sameName(place.name, name))
+  const stage = el('div', { class: `status-map-stage${art?.map ? '' : ' plain'}` }, art?.map ? el('img', { class: 'status-map-img', src: art.map, alt: '', draggable: 'false' }) : null)
+  const detail = el('div', { class: 'status-map-detail', 'aria-live': 'polite' })
+  const pins = new Map()
+  const show = (name, byHand) => {
+    if (byHand) placeOpen = name
+    const place = placeOf(name)
+    const spot = spotOf(name)
+    for (const [key, pin] of pins) pin.setAttribute('aria-pressed', String(key === place?.name))
+    const title = spot?.name ?? place?.name ?? name
+    const there = row.people.filter(one => sameName(one.where, title) || (place && sameName(one.where, place.name)))
+    const zone = place?.zone ?? ''
+    detail.replaceChildren(...[
+      el('div', { class: 'status-map-head' }, [
+        el('b', { class: 'status-map-name', text: spot ? title : t`还没探明的地方` }),
+        zone ? el('span', { class: 'status-chip', text: zone }) : null,
+        spot?.shut ? el('span', { class: 'status-chip warn', text: t`受限` }) : null,
+        row.here && sameName(row.here, title) ? el('span', { class: 'status-chip here', text: t`你在这里` }) : null,
+      ]),
+      spot ? null : el('p', { class: 'status-map-text', text: t`只知道这一带有个去处，还没有去过，也没人说起过。` }),
+      ...(spot?.facts ?? []).filter(([, words]) => words !== zone).map(([key, words]) => el('p', { class: 'status-map-text' }, [key ? el('span', { class: 'status-label', text: key }) : null, el('span', { text: words })])),
+      there.length ? el('div', { class: 'status-map-people' }, [el('span', { class: 'status-label', text: t`在这里` }), ...there.map(one => el('span', { class: 'status-person' }, [faceOf(el, art, one.name, 'small'), el('b', { text: one.name })]))]) : null,
+    ].filter(Boolean))
+  }
+  for (const place of places) {
+    const spot = spotOf(place.name)
+    const here = row.here && (sameName(row.here, place.name) || (spot && sameName(row.here, spot.name)))
+    const pin = el('button', { type: 'button', class: `status-pin${spot ? '' : ' unknown'}${here ? ' here' : ''}${spot?.shut ? ' shut' : ''}${spot?.changed ? ' changed' : ''}`, style: `left:${place.x}%;top:${place.y}%`, title: spot ? place.name : t`还没探明`, 'aria-pressed': 'false', onclick: () => show(place.name, true) }, [
+      el('i', { class: 'status-pin-dot', 'aria-hidden': 'true' }),
+      el('span', { class: 'status-pin-name', text: spot ? place.short || place.name : '?' }),
+    ])
+    pins.set(place.name, pin)
+    stage.append(pin)
+  }
+  const others = row.spots.filter(spot => !placeOf(spot.name))
+  const known = row.spots.length
+  const box = el('div', { class: 'status-map' }, [
+    stage,
+    detail,
+    others.length ? el('div', { class: 'status-map-others' }, [el('span', { class: 'status-label', text: t`图外的地方` }), ...others.map(spot => el('button', { type: 'button', class: 'status-chip pick', text: spot.name, onclick: () => show(spot.name, true) }))]) : null,
+    el('div', { class: 'status-map-legend' }, [
+      row.here ? el('span', { class: 'key here', text: t`所在` }) : null,
+      el('span', { class: 'key', text: t`去过或听说过` }),
+      row.spots.some(spot => spot.shut) ? el('span', { class: 'key shut', text: t`受限` }) : null,
+      places.some(place => !spotOf(place.name)) ? el('span', { class: 'key unknown', text: t`还没探明` }) : null,
+      el('span', { class: 'status-none', text: t`已知 ${known} 处，点地名看详情` }),
+    ]),
+  ])
+  const first = [placeOpen, row.here, row.spots[0]?.name, places[0]?.name].find(name => name && (placeOf(name) || spotOf(name)))
+  if (first) show(first, false)
+  return box
+}
+
+// 类型克制: the card's types on a ring, an arrow from each to what it beats; the type of whoever is fielded is marked.
+let ringCount = 0
+
+function typesBlock(el, row, art) {
+  const beats = art.types.beats
+  const names = Object.keys(beats)
+  const fielded = row.text
+  const mine = names.includes(fielded) ? fielded : art.types.of(fielded) ?? ''
+  const NS = 'http://www.w3.org/2000/svg'
+  const id = `status-ring-${++ringCount}`
+  const make = (tag, attrs, text) => {
+    const node = document.createElementNS(NS, tag)
+    for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value)
+    if (text) node.textContent = text
+    return node
+  }
+  const svg = make('svg', { viewBox: '0 0 360 360', class: 'status-ring', role: 'group', 'aria-label': row.label })
+  const at = i => {
+    const angle = (Math.PI * 2 * i) / names.length - Math.PI / 2
+    return [180 + Math.cos(angle) * 132, 180 + Math.sin(angle) * 132]
+  }
+  const hue = i => `hsl(${Math.round((i * 360) / names.length + 265) % 360} 48% 64%)`
+  const defs = make('defs', {})
+  for (const kind of ['', 'win', 'lose']) {
+    const marker = make('marker', { id: `${id}${kind}`, class: `status-ring-tip ${kind}`, viewBox: '0 0 10 10', refX: '8', refY: '5', markerWidth: '7', markerHeight: '7', orient: 'auto-start-reverse' })
+    marker.append(make('path', { d: 'M0 0 L10 5 L0 10 z' }))
+    defs.append(marker)
+  }
+  svg.append(defs)
+  const edges = []
+  names.forEach((from, i) => {
+    for (const to of beats[from]) {
+      const j = names.indexOf(to)
+      if (j < 0) continue
+      const [x1, y1] = at(i)
+      const [x2, y2] = at(j)
+      const length = Math.hypot(x2 - x1, y2 - y1) || 1
+      const [ux, uy] = [(x2 - x1) / length, (y2 - y1) / length]
+      // Bent a little to one side, so two types that beat each other show two lines.
+      const line = make('path', { d: `M${x1 + ux * 30} ${y1 + uy * 30} Q${(x1 + x2) / 2 - uy * 14} ${(y1 + y2) / 2 + ux * 14} ${x2 - ux * 32} ${y2 - uy * 32}`, class: 'status-ring-edge', fill: 'none' })
+      edges.push({ from, to, line })
+      svg.append(line)
+    }
+  })
+  const note = el('div', { class: 'status-types-note', 'aria-live': 'polite' })
+  const nodes = names.map((name, i) => {
+    const [x, y] = at(i)
+    const node = make('g', { class: `status-ring-node${name === mine ? ' mine' : ''}`, transform: `translate(${x} ${y})`, tabindex: '0', role: 'button', 'aria-label': name, style: `--type:${hue(i)}` })
+    node.append(make('circle', { r: '26' }), make('text', { 'text-anchor': 'middle', dy: '5' }, name))
+    svg.append(node)
+    return { name, node, color: hue(i) }
+  })
+  const pick = (name, byHand) => {
+    if (byHand) typeOpen = name
+    for (const edge of edges) {
+      const kind = edge.from === name ? 'win' : edge.to === name ? 'lose' : ''
+      edge.line.setAttribute('class', `status-ring-edge ${kind}`)
+      edge.line.setAttribute('marker-end', `url(#${id}${kind})`)
+    }
+    for (const one of nodes) one.node.classList.toggle('on', one.name === name)
+    const beaten = names.filter(other => beats[other].includes(name))
+    note.replaceChildren(
+      el('div', { class: 'status-types-head' }, [el('b', { text: name, style: `color:${nodes.find(one => one.name === name).color}` }), name === mine && fielded !== name ? el('span', { class: 'status-chip here', text: fielded }) : null]),
+      el('p', {}, [el('span', { class: 'status-types-win', text: t`克制` }), el('span', { text: beats[name].join(t`、`) || t`没有` })]),
+      el('p', {}, [el('span', { class: 'status-types-lose', text: t`被克` }), el('span', { text: beaten.join(t`、`) || t`没有` })]),
+    )
+  }
+  for (const one of nodes) {
+    one.node.addEventListener('click', () => pick(one.name, true))
+    one.node.addEventListener('keydown', event => {
+      if (event.key !== 'Enter' && event.key !== ' ') return
+      event.preventDefault()
+      pick(one.name, true)
+    })
+  }
+  pick(names.includes(typeOpen) ? typeOpen : mine || names[0], false)
+  return el('div', { class: 'status-types' }, [el('div', { class: 'status-ring-wrap' }, svg), el('div', { class: 'status-types-side' }, [note, el('p', { class: 'status-none', text: t`用克制对方的类型出手更重，被克制时吃亏。点一个类型看它克谁、被谁克。` })])])
+}
+
+/** Where in its chain a companion is, by what its row says of it: a form's name first, then a stage's. */
+export function formIndex(chain, words) {
+  const said = words.map(word => String(word))
+  const byName = chain.findIndex(form => said.some(word => word === form.name))
+  if (byName >= 0) return byName
+  const byStage = chain.findIndex(form => form.stage && said.some(word => word === form.stage))
+  return Math.max(0, byStage)
+}
+
+// 形态: each companion's chain as a row of pictures, the one it is in marked, those it has not come to as shadows.
+function formsBlock(el, row, art) {
+  const chains = row.lines.map(line => ({ line, chain: art?.chain?.(line.name) ?? null })).filter(one => one.chain)
+  return el('div', { class: 'status-forms' }, [
+    ...chains.map(({ line, chain }) => {
+      const at = formIndex(chain, line.words)
+      return el('div', { class: 'status-chain', 'data-name': line.name }, [
+        el('b', { class: 'status-chain-name', text: line.name }),
+        el('div', { class: 'status-chain-row' }, chain.flatMap((form, i) => {
+          const face = art.face?.(form.name, [form.name]) ?? null
+          const tile = el('div', { class: `status-form${i === at ? ' now' : i < at ? ' past' : ' later'}`, title: i > at ? form.need : '' }, [
+            el('span', { class: 'status-form-pic' }, face ? el('img', { src: face.src, alt: '', draggable: 'false', loading: 'lazy' }) : el('i', { text: i > at ? '?' : form.name.slice(0, 1) })),
+            form.stage ? el('span', { class: 'status-form-stage', text: form.stage }) : null,
+            el('span', { class: 'status-form-name', text: i <= at ? form.name : '???' }),
+            i > at && form.need ? el('span', { class: 'status-form-need', text: form.need }) : null,
+          ])
+          return i ? [el('span', { class: `status-chain-arrow${i <= at ? ' done' : ''}`, 'aria-hidden': 'true', text: '›' }), tile] : [tile]
+        })),
+      ])
+    }),
+    statusTable(el, row.table, art),
+  ])
+}
+
+function statusRow(el, row, art = null) {
   const label = el('span', { class: 'status-label', text: row.label, title: row.path })
   // What a look of the card's own (定制外观) tells rows apart by.
   const marks = { 'data-show': row.show, 'data-label': row.label }
@@ -264,12 +475,15 @@ function statusRow(el, row) {
       el('span', { class: 'status-value' }, [el('span', { text: String(stat.value) }), deltaMark(el, stat.delta)]),
     ]))))
   }
-  if (row.show === 'table') return block(statusTable(el, row.table))
+  if (row.show === 'table') return block(statusTable(el, row.table, art))
+  if (row.show === 'map') return block(mapBlock(el, row, art))
+  if (row.show === 'forms') return block(formsBlock(el, row, art))
+  if (row.show === 'types') return art?.types ? block(typesBlock(el, row, art)) : line(el('span', { class: 'status-tags' }, el('span', { class: 'status-badge', text: row.text || '—' })))
   return line(el('span', { class: 'status-text', text: row.text || '—' }))
 }
 
 /** One person's rows, a line above each section of them. */
-function groupBlock(el, group, title) {
+function groupBlock(el, group, title, art = null) {
   const rows = el('div', { class: `status-rows${group.rows.length >= WIDE_AT ? ' wide' : ''}` })
   let section = ''
   for (const row of group.rows) {
@@ -277,9 +491,9 @@ function groupBlock(el, group, title) {
       section = row.section ?? ''
       if (section) rows.append(el('div', { class: 'status-section', text: section }))
     }
-    rows.append(statusRow(el, row))
+    rows.append(statusRow(el, row, art))
   }
-  return el('div', { class: 'status-group', 'data-name': group.name }, [group.name && group.name !== title ? el('div', { class: 'status-group-name', text: group.name }) : null, rows])
+  return el('div', { class: 'status-group', 'data-name': group.name }, [group.name && group.name !== title ? el('div', { class: 'status-group-name' }, [faceOf(el, art, group.name, 'medium'), el('span', { text: group.name })]) : null, rows])
 }
 
 function rememberedGroup() {
@@ -373,13 +587,13 @@ function factBlock(el, row) {
  * `aside`: this one stands in a narrow column beside the tabs (侧栏式), so only their name and numbers are in it; what is
  * on their mind and their tags open with the first tab.
  */
-function railGroup(el, group, lead, title, picture, aside) {
+function railGroup(el, group, lead, title, picture, aside, art = null) {
   const parts = groupParts(group, lead)
   const quote = parts.quote ? el('p', { class: 'status-quote', 'data-label': parts.quote.label, title: parts.quote.label, text: parts.quote.text }) : null
-  const tags = parts.tags.length ? el('div', { class: 'status-rows' }, parts.tags.map(row => statusRow(el, row))) : null
+  const tags = parts.tags.length ? el('div', { class: 'status-rows' }, parts.tags.map(row => statusRow(el, row, art))) : null
   const name = group.name && group.name !== title ? group.name : ''
   const who = name || parts.pills.length
-    ? el('div', { class: 'status-who' }, [name ? el('b', { class: 'status-who-name', text: name }) : null, ...parts.pills.map(row => el('span', { class: `status-badge${row.changed ? ' changed' : ''}`, 'data-label': row.label, title: row.label, text: row.text || '—' }))])
+    ? el('div', { class: 'status-who' }, [picture ? null : faceOf(el, art, group.name, 'medium'), name ? el('b', { class: 'status-who-name', text: name }) : null, ...parts.pills.map(row => el('span', { class: `status-badge${row.changed ? ' changed' : ''}`, 'data-label': row.label, title: row.label, text: row.text || '—' }))])
     : null
   const main = el('div', { class: 'status-g-main' }, [
     who,
@@ -391,7 +605,7 @@ function railGroup(el, group, lead, title, picture, aside) {
   const node = main.childElementCount || picture
     ? el('div', { class: `status-g${lead ? ' lead' : ''}${picture ? ' has-pic' : ''}`, 'data-name': group.name }, [picture, main])
     : null
-  const more = parts.rest.length ? groupBlock(el, { ...group, rows: parts.rest }, title) : null
+  const more = parts.rest.length ? groupBlock(el, { ...group, rows: parts.rest }, title, art) : null
   if (!aside || (!quote && !tags)) return [node, more]
   // Their name is beside it in the rail already.
   const block = more ?? el('div', { class: 'status-group', 'data-name': group.name })
@@ -405,7 +619,7 @@ function railOf(el, groups, title, art, aside) {
   const rest = []
   groups.forEach((group, i) => {
     const picture = i === 0 && art?.portrait ? el('span', { class: `status-pic${art.zoom ? ' zoom' : ''}` }, el('img', { src: art.portrait, alt: '', draggable: 'false' })) : null
-    const [node, more] = railGroup(el, group, i === 0, title, picture, aside && i === 0)
+    const [node, more] = railGroup(el, group, i === 0, title, picture, aside && i === 0, art)
     // 侧栏式 keeps one person beside the tabs: with everyone there the rail runs long past a first tab with little in it.
     if (node && aside && i) rest.push(node)
     else if (node) rail.append(node)
@@ -441,7 +655,7 @@ export function statusBar(el, whole, state, { previous = null, note = '', collap
   const layout = spec.layout && first.length < SWITCH_AT ? spec.layout : ''
   const box = el('section', { class: `status-bar${spec.theme ? ` theme-${spec.theme}` : ''}${layout ? ` layout-${layout}` : ''}` })
   if (spec.palette) paint(box, paletteColors(spec.palette))
-  if (spec.skin) wear(box, spec.skin)
+  if (spec.skin) wear(box, spec.skin, art?.lookPictures)
   const fx = spec.effect ? effectLayer(el, spec.effect) : null
   if (fx) {
     box.classList.add('has-drift')
@@ -460,7 +674,7 @@ export function statusBar(el, whole, state, { previous = null, note = '', collap
   const laid = layout ? railOf(el, first, title, art, layout === 'rail') : null
   const body = el('div', { class: `status-body${groups.length > 1 ? ' multi' : ''}` })
   const fill = shown => {
-    const blocks = shown.map(group => groupBlock(el, group, title))
+    const blocks = shown.map(group => groupBlock(el, group, title, art))
     const switcher = shown.length >= SWITCH_AT ? groupSwitch(el, shown, blocks, body) : []
     body.replaceChildren(...switcher, ...blocks)
     body.classList.toggle('multi', shown.length > 1)
@@ -510,7 +724,7 @@ export function statusBar(el, whole, state, { previous = null, note = '', collap
   }
   box.prepend(...[fx, head, pictures].filter(Boolean))
   if (laid) box.append(laid.rail, el('div', { class: 'status-main', hidden: !laid.tabs && body.hidden }, [laid.tabs, body]))
-  else box.append(body, ...(apps.length ? phoneBlock(el, apps, remembers) : []))
+  else box.append(body, ...(apps.length ? phoneBlock(el, apps, remembers, art) : []))
   return box
 }
 

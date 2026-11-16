@@ -1,5 +1,7 @@
 // 变量规则: a card's MVU schema (Tavern Helper's Zod script, registerMvuSchema), kept to after each update as
-// MVU keeps to it in SillyTavern: numbers held to their range, missing fields filled, lists trimmed.
+// MVU keeps to it in SillyTavern: numbers held to their range, missing fields filled, lists trimmed. Unlike there, the
+// variables at the top that the rules do not name and the chat already has are left alone (what a lorebook attached
+// beside the card adds).
 //
 // Most cards have none, and no sandbox opens for them. One with a schema runs it in a QuickJS sandbox of its own,
 // with no host objects, no network and no files, against the app's small Zod (schema-z.mjs); the sandbox goes
@@ -45,11 +47,31 @@ globalThis.z = (${createZ})()
 globalThis._ = (${createLodash})()
 globalThis.$ = fn => (typeof fn === 'function' ? fn() : undefined)
 globalThis.window = globalThis
-globalThis.__check = text => {
+// The variables at the top the rules do not name go round them, as they are, when they are in keep (the chat already
+// had them, or its lorebooks start with them: one attached beside the card, a 金手指 of the player's): kept to the
+// rules they would be dropped each turn, or fail the whole check. Others the rules do not name (a name the model got
+// wrong) are the rules' to drop, as in SillyTavern.
+globalThis.__named = schema => {
+  for (let at = schema, depth = 0; at && depth < 20; at = at.inner, depth++) {
+    if (at.shape) return at.unknown === 'strip' || at.unknown === 'strict' ? new Set(Object.keys(at.shape)) : null
+  }
+  return null
+}
+globalThis.__check = (text, keep = []) => {
   try {
     const schema = typeof globalThis.__schema === 'function' ? globalThis.__schema() : globalThis.__schema
-    const result = schema.safeParse(JSON.parse(text))
-    return JSON.stringify(result.success ? { data: result.data } : { invalid: String(result.error?.message ?? 'invalid').slice(0, 300) })
+    const input = JSON.parse(text)
+    const named = keep.length && input && typeof input === 'object' && !Array.isArray(input) ? globalThis.__named(schema) : null
+    const aside = {}
+    if (named) for (const key of keep) if (!named.has(key) && Object.hasOwn(input, key)) { aside[key] = input[key]; delete input[key] }
+    const result = schema.safeParse(input)
+    let data = result.data
+    // What the rules wrote at the top themselves (a transform's total) is theirs: what was set aside does not go over it.
+    if (result.success && named && data && typeof data === 'object') {
+      data = { ...data }
+      for (const [key, value] of Object.entries(aside)) if (!Object.hasOwn(data, key)) data[key] = value
+    }
+    return JSON.stringify(result.success ? { data } : { invalid: String(result.error?.message ?? 'invalid').slice(0, 300) })
   } catch (error) {
     return JSON.stringify({ error: String(error?.message ?? error).slice(0, 300) })
   }
@@ -136,10 +158,11 @@ function open(source) {
 /**
  * `state` as the schema makes it.
  * @param source - the card's schema script; '' is no schema, and costs nothing.
+ * @param keep - variables at the top that go round the rules when the rules do not name them (engine.mjs keptToSchema)
  * @returns { state, problem }: the same state object when there is nothing to do or the schema gives no answer.
  *   `problem` says why when this state is what failed; a script that cannot run at all is the card's, for the error log.
  */
-export function keepToSchema(source, state) {
+export function keepToSchema(source, state, keep = []) {
   if (!source) return { state }
   const text = JSON.stringify(state ?? {})
   if (text.length > MAX_STATE) return { state }
@@ -159,7 +182,7 @@ export function keepToSchema(source, state) {
   if (sandbox.broken) return { state }
   try {
     sandbox.runtime.setInterruptHandler(shouldInterruptAfterDeadline(Date.now() + CHECK_MS))
-    const handle = run(sandbox.vm, sandbox.runtime, `__check(${JSON.stringify(text)})`)
+    const handle = run(sandbox.vm, sandbox.runtime, `__check(${JSON.stringify(text)}, ${JSON.stringify(keep)})`)
     const answer = JSON.parse(sandbox.vm.dump(handle))
     handle.dispose()
     if (answer.error === undefined) failing.delete(key)

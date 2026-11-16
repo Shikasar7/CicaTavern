@@ -49,7 +49,7 @@ function answersOf(numbers, asked) {
  * @param deps - from createForge: { store, load, save, serial, run, jobs, removeFile(id), cutNote(result),
  *   trialReport(cardId): the card's last 试玩体检 report, or null }
  */
-export function createCheck({ store, load, save, serial, run, jobs, removeFile, cutNote, trialReport = async () => null }) {
+export function createCheck({ store, load, save, serial, run, jobs, removeFile, cutNote, trialReport = async () => null, lookPrompt = async () => ({ pictures: [], drawn: [] }) }) {
   const idOf = cardId => `${PREFIX}${cardId}`
 
   /** The last trial's report and its problems still open. */
@@ -344,7 +344,7 @@ export function createCheck({ store, load, save, serial, run, jobs, removeFile, 
     const bar = barFor(card, helpers, spec)
     if (!bar) throw new Error(msg`这张卡没有可以设计外观的状态栏`)
     ctx.step('skin')
-    const result = await ctx.call(skinRequest(card, bar, startingState(card, { helpers }), { wish, previous, problems, reply: ctx.languages.reply }))
+    const result = await ctx.call(skinRequest(card, bar, startingState(card, { helpers }), { wish, previous, problems, ...(await lookPrompt(cardId)), reply: ctx.languages.reply }))
     const read = readSkin(result.text, { palette: previous?.palette ?? bar.palette })
     if (!read) throw new Error(`${msg`${ctx.label} 没有写出能用的样式，再试一次，或者换个模型`}${cutNote(result)}`)
     await ctx.update(draft => {

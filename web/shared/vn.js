@@ -30,7 +30,7 @@ const VOICE = /^(?:的(?:声音|话|语气|嗓音|笑声)|说过的话|说的话
 // Before a name: hearing them (他听见伊梦洁倒抽了一口气：) — the sound is theirs; so with 她/他 (他听见她说：).
 const HEARD = /(?:听见|听到)了?$/
 const HEARD_PRONOUN = /(?:听见|听到)了?([她他])(?![们])/
-// After a name, on the line after a quote: saying or answering it (白芷接得很快。, 顾念念在你身后喊了一声, 清虚子打断他。) — the quote is theirs.
+// After a name, on the line after a quote: saying or answering it (白芷接得很快。, 沈念念在你身后喊了一声, 清虚子打断他。) — the quote is theirs.
 const REPLIED = /^[^，,听让等]{0,6}?(?<![没不未])(?:说|问|喊|叫|打断|接(?:话|道|口|得|了一句)|答(?:道|话|得|了)|回(?:答|道|嘴|得|了一句)|应(?:道|声|了一声))(?!不出|出口|题|起)/
 // The line after a quote saying who said it: 你说。, 他低声说，… — not 你说没有 or 你又说了一遍, which answer it.
 const PRONOUN_SAID = /^(你|她|他)(?![们])(?:轻声|低声|小声|大声|笑着|如实|继续|才)?(?:说|道|问|答|喊|叫)(?:道)?(?=$|[，,：:])/
@@ -84,7 +84,7 @@ export function carryTags(lines) {
 
 /**
  * The names a speaker can go by: the card's (a name like 林雪-异能抽奖系统-v1.1
- * is called 林雪; a three-character one also by its last two, 顾念念 → 念念,
+ * is called 林雪; a three-character one also by its last two, 沈念念 → 念念,
  * unless the cast lists its aliases), the player's, the cast's with their
  * aliases. The cast's player entry is the player; a cast member with the
  * card's name is the card's character. A name written family name first with a

@@ -776,7 +776,7 @@ test('what a turn settled is known before its reply: said at its start, and work
 
 test('what one turn asks of the model: a fight the player wants, one that is overdue, a safe way taken', () => {
   const sheet = startSheet({})
-  const said = { role: 'user', prompt: '<游戏规则>自己写的行动 战斗选项</游戏规则>' }
+  const said = { role: 'user', prompt: '<游戏规则>自己写的行动 战斗选项 |开局:</游戏规则>' }
   const turn = (extra, turns = [said]) => gamePrompt({ sheet, pausing: true, fights: true, check: null, ...extra }, turns).text
   assert.match(turn({ wantsFight: true }), /<本轮要求>玩家这一轮要动手/)
   assert.doesNotMatch(turn({}), /<本轮要求>/)
@@ -798,7 +798,7 @@ test('a fight\'s own settings: how hard follows 难度 until it is set, how ofte
   const book = cleanRulebook({ level: 'full', difficulty: 'easy', fightDifficulty: 'hard' })
   assert.equal(encounterSetup(startSheet(book), book, { foes: [{ name: '灰狼', count: 1, tier: 'normal' }] }, 'c', 'n').difficulty, 'hard', 'the rolls\' 难度 is not the fight\'s')
   const sheet = startSheet({})
-  const said = { role: 'user', prompt: '<游戏规则>自己写的行动 战斗选项</游戏规则>' }
+  const said = { role: 'user', prompt: '<游戏规则>自己写的行动 战斗选项 |开局:</游戏规则>' }
   const quiet = count => Array.from({ length: count }, () => ({ ...said }))
   const asks = (fightRate, count) => gamePrompt({ sheet, pausing: true, fights: true, fightRate, check: null }, quiet(count)).text.includes('好几轮没有打斗')
   assert.equal(asks('often', 2), true)

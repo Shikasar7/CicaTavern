@@ -20,7 +20,7 @@ import { cleanFight, encounterSetup, fightLine, fightResult } from '../web/share
 import { asksForFight, foesRequest, gamePrompt, mayAskForFight, parseFoes, parseSuggestion, parseThings, settledSheet, suggestRequest, thingsRequest } from './game.mjs'
 import { variablePaths } from '../web/shared/game/bindings.js'
 import { httpError, newId } from './store.mjs'
-import { dynamicEntries, inPrefix, isConstant, isInitvar, isPreprocessing, sendsNear, triggeredEntries } from './worldbook.mjs'
+import { dynamicEntries, initialState, inPrefix, isConstant, isInitvar, isPreprocessing, sendsNear, triggeredEntries } from './worldbook.mjs'
 import { depthWindow, PLACEMENT } from '../web/shared/regex.js'
 import { applyScripts } from './regex-guard.mjs'
 import { replaceVariableMacros } from '../web/shared/vars.js'
@@ -511,16 +511,16 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       injected: { before: injections.before.map(item => ({ ...item, text: resolve(item.text) })), after: injections.after.map(item => ({ ...item, text: resolve(item.text) })) },
     })
     // The card's scripts' own macros (registerMacroLike), over the whole message.
-    const withMacros = await cardScripts.applyMacros(card, prompt, { role: 'user', messageId: path.length })
+    const withMacros = await cardScripts.applyMacros(card, prompt, { role: 'user', messageId: path.length, chat })
     // 同酒馆: the same after-history entries by role, for a provider that takes them as messages of their own after the
     // turn's message (tailMessages); the turn's message then goes without its <预设指令>, as the history keeps it.
-    const tailOf = async text => (text.trim() ? cardScripts.applyMacros(card, resolve(text), { role: 'user', messageId: path.length }) : '')
+    const tailOf = async text => (text.trim() ? cardScripts.applyMacros(card, resolve(text), { role: 'user', messageId: path.length, chat }) : '')
     const presetTail = preset?.postMode === 'latest' && presetText.trim() ? { system: await tailOf(presetSent.system), user: await tailOf(presetSent.user) } : null
     return {
       settings,
       prompt: withMacros,
       ...(presetTail ? { presetTail } : {}),
-      ...(prefill ? { prefill: await cardScripts.applyMacros(card, resolve(prefill), { role: 'assistant', messageId: path.length }) } : {}),
+      ...(prefill ? { prefill: await cardScripts.applyMacros(card, resolve(prefill), { role: 'assistant', messageId: path.length, chat }) } : {}),
       // The input as the turn keeps it (its own templates run).
       input: resolve(said),
       injected: sent.map(hit => hit.ref),
@@ -719,7 +719,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     const settled = Math.min(window >= 0 ? turns.length - window - 1 : Infinity, latestOnly || nearLore ? messages.length - 1 : Infinity)
     // Only this one mark in the history (with the newest message's, two at most). Two Claude relays
     // (2026-10-08) billed the history about twice with more marks than that; with this one besides the
-    // newest, xcode and modelflare's Claude (2026-10-29, three turns of 15k characters) bill exactly
+    // newest, two Claude relays (2026-10-29, three turns of 15k characters) bill exactly
     // what they do without it, so it stays: without it a depth window rewrites the history's cache every turn.
     if (Number.isFinite(settled) && settled >= 0) messages[settled].cache = true
     return withLead(chat, messages)
@@ -1163,7 +1163,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         // reply's own writes, so 补写变量 keeps them too. A bag is not among them: what the reply put in it stays.
         const replyWrites = [...(evaluated?.writes.message ?? []), ...gameWrites.filter(write => typeof write.value === 'number')]
         // The card's variable rules have the last word on the state, so the sheet reads what they kept.
-        const kept = await keptToSchema(fresh, applyWrites(updated.state, replyWrites), turnCard)
+        const kept = await keptToSchema(fresh, applyWrites(updated.state, replyWrites), turnCard, { before: parent.state })
         const finalState = kept.state
         const sheet = ruled ? settledSheet(book, pathTo(fresh, parent.id), userNode, replyText, finalState) : null
         const node = {
@@ -1628,11 +1628,18 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
   /**
    * The state as the chat's card's schema makes it, as { state, problem } (keepToSchema). A card
    * imported before schemas were kept has its script in its picture only: read from there once.
+   * Variables at the top the rules do not name stay when the chat had them `before` this turn, or its lorebooks start
+   * with them (one attached beside the card since), or (`keepAll`) they were written by hand in the 状态 panel.
    */
-  async function keptToSchema(chat, state, read = null) {
+  async function keptToSchema(chat, state, read = null, { before = null, keepAll = false } = {}) {
     const card = await cardWithSchema(chat.cardId, read)
-    if (!card) return { state }
-    return keepToSchema(card.mvuSchema, state)
+    if (!card?.mvuSchema) return { state }
+    const keep = new Set(Object.keys((keepAll ? state : before) ?? {}))
+    if (!keepAll) {
+      const books = await booksForCard(store, card, await store.getSettings(), chat).catch(() => [])
+      for (const key of Object.keys(initialState(books))) keep.add(key)
+    }
+    return keepToSchema(card.mvuSchema, state, [...keep])
   }
 
   /**
@@ -1720,7 +1727,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         if (unread) edit.node.updateUnread = true
         else delete edit.node.updateUnread
         // The reply's own template writes land after its update blocks again.
-        const kept = await keptToSchema(fresh, applyWrites(state, edit.node.templateWrites))
+        const kept = await keptToSchema(fresh, applyWrites(state, edit.node.templateWrites), null, { before })
         edit.node.state = kept.state
         if (kept.problem) edit.node.schemaProblem = kept.problem
         else delete edit.node.schemaProblem

@@ -36,7 +36,7 @@ const totalOf = value => Math.min(MAX_TOTAL, Math.max(1, Math.round(Number(value
 
 export const CREATION_TALK ='这张卡开局先让玩家填一张表或抽一抽，再开始故事。和用户商量开局要定哪几件事、每件事有哪些选项。用户说交给你，就按这张卡定。'
 
-export const creationPlan = root => `方案里多写一个 creation 字段：{"intro": "开局前对玩家说的一句话", "fields": [{"label": "这一项的名字，几个字", "kind": "pick", "options": ["选项"], "note": "一句说明，可以空着", "path": "tracking 里已经有、意思就是这一项的变量 path（比如「出身」对「主角.出身」），意思不同的不要借用，没有就空着，会另建一个"}]}。kind 有三种：pick 从 options 里选一个，text 玩家自己写一小段，points 把 total 点分给 options 里的几项（比如 "total": 10）。fields 2 到 6 个，pick 的 options 3 到 8 个，每个选项写成这个故事里具体的东西，选了会真的改变开局。不问玩家的名字，名字另有地方填，path 用「${root}.这一项」。`
+export const creationPlan = root => `方案里多写一个 creation 字段：{"intro": "开局前对玩家说的一句话", "fields": [{"label": "这一项的名字，几个字", "kind": "pick", "options": ["选项"], "note": "一句说明，可以空着", "path": "tracking 里已经有、意思就是这一项的变量 path（比如「出身」对「主角.出身」），意思不同的不要借用，没有就空着，会另建一个"}]}。kind 有三种：pick 从 options 里选一个，text 玩家自己写一小段，points 把 total 点分给 options 里的几项（比如 "total": 10）。fields 2 到 6 个，pick 的 options 3 到 8 个，每个选项写成这个故事里具体的东西，选了会真的改变开局。pick 的选项是看得见的东西（伙伴、宠物、道具、出身地）时，可以再写 "looks": {"选项": "English description of a small picture of it"}，给建角页上的选项配图用；不好画的（信条、性格）不写。不问玩家的名字，名字另有地方填，path 用「${root}.这一项」。`
 
 /** The form as a plan keeps it, or null when the model wrote none. */
 export function cleanCreation(raw) {
@@ -55,11 +55,19 @@ export function cleanCreation(raw) {
         note: clip(field.note, 60),
         ...(kind === 'points' ? { total: totalOf(field.total) } : {}),
         ...(path && kind !== 'points' ? { path } : {}),
+        // 建角页的图: how each option looks, for 备齐门面图 to draw.
+        ...(kind === 'pick' && looksOf(field.looks, options) ? { looks: looksOf(field.looks, options) } : {}),
       }
     })
     .filter(field => field.label && !seen.has(field.label) && seen.add(field.label) && (field.kind === 'text' || field.options.length >= 2))
     .slice(0, MAX_FIELDS)
   return { intro: clip(raw.intro, 120), fields }
+}
+
+function looksOf(raw, options) {
+  if (!raw || typeof raw !== 'object') return null
+  const kept = Object.fromEntries(options.map(option => [option, clip(raw[option], 300)]).filter(([, looks]) => looks))
+  return Object.keys(kept).length ? kept : null
 }
 
 export const creationReady = plan => Boolean(plan.creation?.fields.length)
@@ -152,7 +160,13 @@ const PAGE_STYLE = `
 .cr-foot .cr-note{flex:1}
 .cr-go{padding:6px 18px}
 .cr-go:disabled{opacity:.45;cursor:default}
-.cr-copy{white-space:pre-wrap;user-select:all;border:1px solid var(--line);border-radius:8px;padding:6px 8px;margin-top:8px}`
+.cr-copy{white-space:pre-wrap;user-select:all;border:1px solid var(--line);border-radius:8px;padding:6px 8px;margin-top:8px}
+.cr-opts.pics{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:8px}
+.cr-opts.pics .cr-opt{display:flex;flex-direction:column;align-items:stretch;gap:4px;padding:4px;border-radius:10px;text-align:center}
+.cr-pic{display:block;aspect-ratio:1;border-radius:7px;overflow:hidden;background:var(--line)}
+.cr-pic img{width:100%;height:100%;object-fit:cover;display:block}
+.cr-pic-none{display:flex;align-items:center;justify-content:center;height:100%;font-size:28px;color:var(--muted)}
+.cr-opt-name{font-size:13px;line-height:1.3;padding:0 2px 2px}`
 
 // Plain concatenation and no dollar signs: this goes through a regex replacement, and through a template string here.
 const PAGE_SCRIPT_TEXT = `
@@ -171,9 +185,14 @@ function line(f){
   return f.label+'：'+(String(v||'').trim()||W.blank);
 }
 function sheet(){return (SPEC.mark+SPEC.fields.map(line).join('；')).replace(/[|]/g,'｜').replace(/[{]/g,'｛').replace(/[}]/g,'｝').replace(/\\s*\\n\\s*/g,' ')}
+function picOf(f,o){var p=SPEC.pics&&SPEC.pics[f.label];return p&&p[o]||''}
 function pickField(f,body){
-  var row=h('div','cr-opts');
-  f.options.forEach(function(o){var b=h('button','cr-opt'+(picks[f.label]===o?' on':''),o);b.type='button';b.disabled=sent;b.onclick=function(){picks[f.label]=o;draw()};row.append(b)});
+  var shown=f.options.some(function(o){return picOf(f,o)}),row=h('div','cr-opts'+(shown?' pics':''));
+  f.options.forEach(function(o){
+    var b=h('button','cr-opt'+(picks[f.label]===o?' on':''),shown?null:o);b.type='button';b.disabled=sent;b.onclick=function(){picks[f.label]=o;draw()};
+    if(shown){var pic=h('span','cr-pic'),src=picOf(f,o);if(src){var img=h('img');img.src=src;img.alt='';pic.append(img)}else pic.append(h('span','cr-pic-none',o.slice(0,1)));b.append(pic,h('span','cr-opt-name',o))}
+    row.append(b);
+  });
   body.append(row);
 }
 function textField(f,body){
@@ -219,7 +238,7 @@ draw();`
 /** The form as one HTML block for a regex replacement. */
 export function creationHtml(creation, { title = '', look = {}, english = false } = {}) {
   const { mark, roll, rollAll, start, left, sent, blank, copy } = wordsOf(english)
-  const spec = { title, mark, fields: creation.fields.map(({ path, ...field }) => field), words: { roll, rollAll, start, left, sent, blank, copy } }
+  const spec = { title, mark, fields: creation.fields.map(({ path, looks, ...field }) => field), words: { roll, rollAll, start, left, sent, blank, copy } }
   const data = JSON.stringify(spec).replace(/</g, '\\u003c')
   return ['```html', '<!DOCTYPE html>', '<html><head><meta charset="utf-8">', `<style>${BAR_STYLE}${PAGE_STYLE}</style>`, '</head><body>', `<div class="bar${look.theme ?? ''}" id="bar"${look.style ?? ''}></div>`, `<script>var SPEC=${data};${PAGE_SCRIPT_TEXT}</script>`, '</body></html>', '```'].join('\n')
 }
@@ -253,6 +272,46 @@ export function creationOf(scripts) {
 
 /** The page's text with another form in it; the look around it stays. */
 export const withCreationSpec = (text, spec) => text.replace(SPEC_AT, () => `var SPEC=${JSON.stringify(spec).replace(/</g, '\\u003c')};\n`)
+
+// 建角页的图: kept in the form itself (SPEC.pics: { label: { option: data URL } }), so the page has them wherever it
+// goes (SillyTavern too). Small: the page makes them 192 px WebP before they come.
+const PICTURE = /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/
+export const MAX_OPTION_PICTURE = 64 * 1024
+const MAX_PICTURES = 48
+const refused = (message, status) => Object.assign(new Error(message), { status })
+
+/** A card's scripts with a picture on one of its form's options (null: taken off). Throws for what the form has not. */
+export function withOptionPicture(scripts, label, option, image) {
+  const spec = creationOf(scripts)
+  if (!spec) throw refused('no form', 404)
+  const field = spec.fields.find(item => item.label === label && item.kind === 'pick')
+  if (!field || !field.options.includes(option)) throw refused('no option', 400)
+  if (image !== null && (!PICTURE.test(String(image ?? '')) || String(image).length > MAX_OPTION_PICTURE)) throw refused('bad picture', 400)
+  const pics = { ...(spec.pics ?? {}) }
+  const own = { ...(pics[label] ?? {}) }
+  if (image === null) delete own[option]
+  else own[option] = image
+  if (Object.keys(own).length) pics[label] = own
+  else delete pics[label]
+  if (Object.values(pics).reduce((n, list) => n + Object.keys(list).length, 0) > MAX_PICTURES) throw refused('too many', 400)
+  const { pics: _, ...rest } = spec
+  const next = Object.keys(pics).length ? { ...rest, pics } : rest
+  return scripts.map(script => (script.id === PAGE_SCRIPT ? { ...script, replaceString: withCreationSpec(script.replaceString, next) } : script))
+}
+
+/** A form written anew (创作角色卡 saved again) keeps the pictures the card's form had for the same options. */
+export function keepOptionPictures(scripts, before) {
+  const old = creationOf(before)?.pics
+  const spec = creationOf(scripts)
+  if (!old || !spec) return scripts
+  const pics = {}
+  for (const field of spec.fields) {
+    const kept = Object.fromEntries((field.options ?? []).filter(option => old[field.label]?.[option]).map(option => [option, old[field.label][option]]))
+    if (Object.keys(kept).length) pics[field.label] = kept
+  }
+  if (!Object.keys(pics).length) return scripts
+  return scripts.map(script => (script.id === PAGE_SCRIPT ? { ...script, replaceString: withCreationSpec(script.replaceString, { ...spec, pics }) } : script))
+}
 
 /**
  * A form with what a model wrote over it ({ fields: [{ label, options?, note?, total? }] }), or null when nothing

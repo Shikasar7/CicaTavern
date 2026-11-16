@@ -1419,7 +1419,7 @@ export async function complete(provider, modelId, original, { proxy = null } = {
   try {
     first = await attempt()
   } catch (error) {
-    // The system prompt never arrived (a relay passing some requests to an upstream that drops it, modelflare's
+    // The system prompt never arrived (a relay passing some requests to an upstream that drops it, one relay's
     // Claude for one): asked again at once with it in the first message, and so for this model from now on.
     if (!error.systemDropped || dropped || original.signal?.aborted) throw error
     SYSTEM_DROPPED.add(pair)

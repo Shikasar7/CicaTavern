@@ -610,7 +610,7 @@ test('a newer version of a card takes over the older one\'s picture settings, ca
   const cards = await store.listCards()
   assert.equal(previousVersion(cards, newer)?.id, card.id)
   assert.equal(previousVersion(cards, other), null)
-  assert.equal(baseName('顾念念-武当抽奖系统-v1.3'), '顾念念-武当抽奖系统')
+  assert.equal(baseName('沈念念-青峰签到系统-v1.3'), '沈念念-青峰签到系统')
 
   await media.inheritCardMedia(card.id, newer.id)
   const view = await media.cardMediaView(newer.id)

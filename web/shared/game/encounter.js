@@ -1,7 +1,7 @@
 // 遭遇: a fight in the story. Where it comes from (the mark a reply stopped on) and what it comes to (the numbers the
 // turn after it settles). The page and the server both work these out from what was done: what the page reports is
 // played through again, so what the model is told is what the rules say happened.
-import { MAX_PARTY, alliesOf, attemptSetup, autoCommands, battleSetup, fieldFoes, foesOf, playerOf, replay, rewardOf, shockOf, simulate, startBattle, step, tameTry } from './battle.js'
+import { MAX_PARTY, alliesOf, attemptSetup, autoCommands, battleSetup, cleanOpening, fieldFoes, foesOf, playerOf, replay, rewardOf, shockOf, simulate, startBattle, step, tameTry } from './battle.js'
 import { modifierOf } from './dice.js'
 import { alliesFor, effectOf, fieldedOf, playerGrowth, typesFor } from './sheet.js'
 import { foesFollow, growsOn, wornWorth } from './growth.js'
@@ -49,7 +49,7 @@ export function encounterSetup(sheet, book, gate, chatId, nodeId) {
   const types = typesFor(book, sheet)
   // 收服: a roll on the player's 魅力, where there is room for one more.
   const tame = book.tame && (sheet.party ?? []).length < 8 ? { charm: modifierOf(sheet.attributes?.charm ?? 10), have: [...new Set([...(sheet.party ?? []).map(member => member.name), ...Object.keys(book.companions ?? {})])] } : null
-  return { ...battleSetup(sheet, { foes, seed: `${chatId}:${nodeId}`, difficulty, effects: name => effectOf(book, name), kinds: book.skills, allies, ...(book.skillAdds ? { adds: book.skillAdds } : {}), ...playerGrowth(sheet, book), ...(types ? { types } : {}), ...(lead ? { lead } : {}), ...(tame ? { tame } : {}) }), ...(Object.keys(met).length ? { met } : {}) }
+  return { ...battleSetup(sheet, { foes, seed: `${chatId}:${nodeId}`, difficulty, effects: name => effectOf(book, name), kinds: book.skills, allies, ...(book.skillAdds ? { adds: book.skillAdds } : {}), ...playerGrowth(sheet, book), ...(types ? { types } : {}), ...(lead ? { lead } : {}), ...(tame ? { tame } : {}) }), ...(cleanOpening(gate.opening) ? { opening: cleanOpening(gate.opening) } : {}), ...(Object.keys(met).length ? { met } : {}) }
 }
 
 /** Whether a fight is beyond the player: a foe in it stands well above them. Such a one can be left to the story even when the story forced it. */

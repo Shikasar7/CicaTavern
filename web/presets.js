@@ -49,9 +49,10 @@ const PLACEMENT = {
  * @param deps - { api, el, toast, guard, getChat, isGenerating, onChatChanged(chatView), onPresetEdited(id), onBasicChanged(settings) }
  */
 /**
- * @param deps - { …, openTalk(options) (talk-dialog.js: 对话修改 on the preset shown) }
+ * @param deps - { …, openTalk(options) (talk-dialog.js: 对话修改 on the preset shown), openScriptPermissions(preset)
+ *   (card-permissions.js: what the preset's scripts may do) }
  */
-export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenerating, onChatChanged, onPresetEdited, onBasicChanged, openTalk }) {
+export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenerating, onChatChanged, onPresetEdited, onBasicChanged, openTalk, openScriptPermissions }) {
   // 拖动调整顺序 (web/sort-rows.js): a grip on each row that moves; ↑ 上移 / ↓ 下移 stay for the keyboard and a phone.
   const grip = () => el('span', { class: 'drag-handle', title: t`拖动调整顺序`, 'aria-hidden': 'true', text: '⋮⋮' })
   function sortable(list, rows, onMove) {
@@ -176,7 +177,7 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
     const meta = [
       t`启用 ${detail.enabled}/${detail.prompts.filter(p => !p.marker).length} 条：前缀约 ${prefixChars.toLocaleString()} 字，每轮约 ${turnChars.toLocaleString()} 字`,
       detail.regexScripts ? t`${detail.regexScripts} 条正则随预设生效` : '',
-      detail.helperScripts ? t`${detail.helperScripts} 个酒馆助手脚本不执行（悬浮球之类的开关面板，可以把条目点「快捷」放到输入框旁）` : '',
+      detail.helperScripts ? helperMeta(detail) : '',
       ignored.length ? t`${ignored.join(t`、`)} 不使用（用模型自己的默认值；供应商的最大输出在供应商设置里填）` : '',
     ].filter(Boolean)
     return [
@@ -428,6 +429,7 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
 
     main.replaceChildren(
       head,
+      detail.helperScripts ? scriptsSection(detail) : null,
       el('div', { class: 'preset-tools' }, [
         search,
         el('button', { type: 'button', class: 'btn small', text: t`＋ 新增条目`, onclick: guard(addPrompt) }),
@@ -439,6 +441,76 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
       sortable(el('ul', { class: 'prompt-list', id: 'prompt-list' }, detail.prompts.map(promptRow)), '.prow[data-id]', keys => restructure({ order: keys })),
     )
     filterRows()
+  }
+
+  // ─── 酒馆助手脚本 (server/preset-scripts.mjs) ───────────────────────────
+  /** The meta line's word on the preset's scripts: how many run, or that they cannot until read in. */
+  function helperMeta(detail) {
+    if (!detail.helperSaved) return t`${detail.helperScripts} 个酒馆助手脚本还没有运行：导入时没有保存脚本内容，在下面「酒馆助手脚本」里读入一次`
+    const on = detail.helperList.filter(item => item.on && (item.kind === 'hooks' || item.kind === 'custom')).length
+    return t`${detail.helperScripts} 个酒馆助手脚本，开着的 ${on} 个在用这个预设的对话里运行`
+  }
+
+  /** What one script does here, in a line. */
+  function scriptWhere(item) {
+    const parts = []
+    if (item.kind === 'hooks') parts.push(t`跟着变量更新，在服务器的沙盒里运行（手机上也一样）`)
+    else if (item.kind === 'custom' && item.remote) parts.push(t`从网址加载（${item.hosts.join(t`、`)}），打开「加载酒馆助手脚本库」后在页面上运行`)
+    else if (item.kind === 'custom') parts.push(t`打开对话时在页面上运行`)
+    else if (item.kind === 'mvu') parts.push(t`MVU 框架，这个应用已内置，不用运行`)
+    else if (item.kind === 'upkeep') parts.push(t`管 SillyTavern 设置的小工具，这里用不上`)
+    else if (item.kind === 'updater') parts.push(t`检查作者更新的工具，这里不运行`)
+    else parts.push(t`变量规则，这里以角色卡的为准，不运行`)
+    if (item.buttons?.length) parts.push(t`按钮：${item.buttons.join(t`、`)}`)
+    if (item.uses?.includes('model')) parts.push(t`自己调用模型要你允许`)
+    if (item.stPage) parts.push(t`改 SillyTavern 自己页面（消息列表、菜单）的部分不起作用`)
+    if (item.missing?.length) parts.push(t`这些函数这里没有：${item.missing.join(t`、`)}`)
+    return parts.join(t`；`)
+  }
+
+  /** The preset's scripts, each with its switch; its permissions; reading them in from the file. */
+  function scriptsSection(detail) {
+    const picker = el('input', { type: 'file', accept: '.json,application/json', hidden: true })
+    picker.addEventListener('change', guard(async () => {
+      const file = picker.files?.[0]
+      picker.value = ''
+      if (!file) return
+      const data = await new Promise((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(String(reader.result).split(',')[1] ?? '')
+        reader.onerror = () => reject(reader.error)
+        reader.readAsDataURL(file)
+      })
+      state.detail = await api(`/api/presets/${state.selected}/helper-scripts`, { method: 'POST', body: { filename: file.name, data } })
+      onPresetEdited?.(state.selected)
+      renderMain()
+      toast(t`已读入 ${state.detail.helperScripts} 个酒馆助手脚本`)
+    }))
+    const rows = detail.helperList.map((item, index) => {
+      const runs = item.kind === 'hooks' || item.kind === 'custom'
+      const box = el('input', { type: 'checkbox', class: 'switch', checked: item.on, disabled: !detail.helperSaved || !runs, 'aria-label': item.name })
+      box.addEventListener('change', guard(async () => {
+        item.on = box.checked
+        await save({ helpers: [{ index, on: box.checked }] }, false)
+        renderHead()
+      }))
+      return el('li', { class: 'pscript' }, [
+        el('label', { class: 'pscript-head' }, [box, el('span', { class: 'pscript-name', text: item.name || t`（没有名字）` })]),
+        el('div', { class: 'hint', text: scriptWhere(item) }),
+      ])
+    })
+    return el('details', { class: 'preset-scripts', open: state.scriptsOpen === true || !detail.helperSaved, ontoggle: event => { state.scriptsOpen = event.target.open } }, [
+      el('summary', { text: t`酒馆助手脚本（${detail.helperScripts}）` }),
+      el('p', { class: 'hint', text: detail.helperSaved
+        ? t`用这个预设的对话里，开着的脚本和角色卡自己的脚本一起运行：预设的先、卡的后，按钮都在输入框上方（同名的按钮各管各的）。换了别的预设，或者在这里关掉，就停下。`
+        : t`这个预设是在能运行脚本之前导入的，当时只记了个数。选一次原来的预设文件，读入里面的脚本（条目和你在这里做的修改不变）。` }),
+      el('div', { class: 'row' }, [
+        el('button', { type: 'button', class: `btn small${detail.helperSaved ? '' : ' primary'}`, text: detail.helperSaved ? t`从文件重新读入…` : t`读入脚本…`, onclick: () => picker.click() }),
+        el('button', { type: 'button', class: 'btn small', text: t`脚本权限…`, title: t`自己发送、调用模型、经 CicaTavern 联网：每个预设问一次，在这里改`, onclick: () => openScriptPermissions?.({ id: state.selected, name: detail.name }) }),
+        picker,
+      ]),
+      el('ul', { class: 'pscript-list' }, rows),
+    ])
   }
 
   function modeButton(value, label) {

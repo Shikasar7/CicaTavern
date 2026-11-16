@@ -32,8 +32,8 @@ export function reasoningSpans(text) {
 const TAG_LIKE = /<(\/?)([A-Za-z_][\w~:.-]*)([^<>\n]*)>/g
 /**
  * `text` with the tags its thinking only names written ＜like this＞, where the same tag is a real block outside the
- * thinking: what a card's page reads with its own `<fox_selc>([\s\S]*?)</fox_selc>` (getChatMessages) then finds the
- * real block, not the mention (「结尾输出<fox_selc>」) and the story after it. The thinking reads the same.
+ * thinking: what a card's page reads with its own `<opt_sel>([\s\S]*?)</opt_sel>` (getChatMessages) then finds the
+ * real block, not the mention (「结尾输出<opt_sel>」) and the story after it. The thinking reads the same.
  */
 export function quietMentions(text) {
   const source = String(text ?? '')
@@ -262,6 +262,79 @@ const TAIL = 24
 
 const tidy = text => text.replace(/\*\*/g, '').replace(/\s+/g, ' ').trim()
 
+// A preset's or card's own blocks: a tag of its own at the start of a line, to its closing tag (or the end, while
+// it is still being written). <content>…</content>, <opt_sel>…</opt_sel>, <side_tip>…</side_tip>. HTML is no such
+// block: a <div> or <font> is the way something looks, not a part of the reply.
+const HTML_TAGS = new Set('a abbr article aside audio b big blockquote body br button canvas center code col colgroup dd del details div dl dt em figcaption figure font footer form h1 h2 h3 h4 h5 h6 head header hr html i iframe img input ins kbd label li mark nav ol option p path pre q rp rt ruby s samp script section select small source span strike strong style sub summary sup svg table tbody td textarea tfoot th thead tr tt u ul var video'.split(' ')) // i18n-ignore: tag names
+const BLOCK_OPEN = /^[ \t]*<([A-Za-z_㐀-鿿][\w~:.㐀-鿿-]*)(\s[^<>\n]*)?>/gm
+// Where the story is, when the reply wraps it: what is outside the wrapper and the reply's other blocks is still story.
+const STORY_TAG = /^(?:content|maintext|main_text|gametxt|game_text|story|narrative|正文|剧情|故事)$/i // i18n-ignore: tag names
+// A block of choices, by its name: <opt_sel>, <selection>, <action_options>, <行动选项>, <分支>…
+const OPTIONS_TAG = /sel|opt|choice|choose|action|branch|menu|选|行动|分支/i // i18n-ignore: tag names
+const HAS_WORD = new RegExp(`[${WORD}0-9]`)
+const CJK = /[㐀-鿿豈-﫿]/
+const blankOut = text => text.replace(/[^\n]/g, ' ')
+
+/** The reply's own blocks, outside its thinking: [{ name, start, end, inner, close }], inner and close the offsets of what is inside. */
+export function replyBlocks(text) {
+  const source = String(text ?? '').replace(REASONING, blankOut)
+  const blocks = []
+  let last = 0
+  for (const open of source.matchAll(BLOCK_OPEN)) {
+    const name = open[1]
+    if (open.index < last || HTML_TAGS.has(name.toLowerCase()) || /\/\s*$/.test(open[2] ?? '')) continue
+    const inner = open.index + open[0].length
+    const closing = new RegExp(`</${name.replace(/[.~-]/g, '\\$&')}\\s*>`, 'i').exec(source.slice(inner))
+    const close = closing ? inner + closing.index : source.length
+    const end = closing ? close + closing[0].length : source.length
+    blocks.push({ name, start: open.index, end, inner, close })
+    last = end
+  }
+  return blocks
+}
+
+/**
+ * The blocks of a reply that are not its story: with a wrapper (<content>, <正文>…) every other block; without one,
+ * those after the last of the story outside them (choices, tips, notes); with nothing outside them, all but the longest.
+ */
+export function asideBlocks(text, blocks = replyBlocks(text)) {
+  if (!blocks.length) return []
+  if (blocks.some(block => STORY_TAG.test(block.name))) return blocks.filter(block => !STORY_TAG.test(block.name))
+  const source = String(text ?? '').replace(REASONING, blankOut)
+  let storyEnd = -1
+  let from = 0
+  for (const block of [...blocks, { start: source.length, end: source.length }]) {
+    if (HAS_WORD.test(source.slice(from, block.start).replace(/<[^<>]*>/g, ''))) storyEnd = block.start
+    from = block.end
+  }
+  if (storyEnd >= 0) return blocks.filter(block => block.start >= storyEnd)
+  const story = blocks.reduce((best, block) => (block.end - block.start > best.end - best.start ? block : best))
+  return blocks.filter(block => block !== story)
+}
+
+/**
+ * An option line as its words: what a kaomoji or label before its <font> dressed it in, and the tags, left out.
+ * 'o(*￣▽￣*)o<font color="#1E90FF">先报一句</font>' → '先报一句'.
+ */
+export function optionWords(line) {
+  let text = String(line ?? '')
+  const font = /<font\b/i.exec(text)
+  if (font && font.index <= 24 && !CJK.test(text.slice(0, font.index))) text = text.slice(font.index)
+  return tidy(text.replace(/<[^<>]*>/g, '').replace(LETTER, ''))
+}
+
+/** A block of choices at the end of the reply, one to a line: { items, start, end }, or null. */
+function optionBlock(text) {
+  const blocks = replyBlocks(text)
+  const source = String(text ?? '')
+  for (const block of asideBlocks(source, blocks)) {
+    if (!OPTIONS_TAG.test(block.name)) continue
+    const items = source.slice(block.inner, block.close).split('\n').map(line => tidy(optionWords(line).replace(BULLET, ''))).filter(Boolean)
+    if (items.length >= 2 && items.length <= MAX * 2) return { items, start: block.start, end: block.end }
+  }
+  return null
+}
+
 /** One block's items: A–I lines when it has them, else every line. */
 function blockItems(body) {
   const lines = body.split('\n').map(line => line.trim()).filter(Boolean)
@@ -280,6 +353,9 @@ export function otherChoices(text) {
     const items = blockItems(block[2])
     if (items.length >= 2) return { choices: items.slice(0, MAX), text: (source.slice(0, block.index) + source.slice(block.index + block[0].length)).trimEnd() }
   }
+  // A preset's own block of them after the story (<opt_sel>, <行动选项>…), one to a line.
+  const own = optionBlock(source)
+  if (own) return { choices: own.items.slice(0, MAX), text: (source.slice(0, own.start) + source.slice(own.end)).trimEnd() }
   const lines = source.split('\n')
   // Walk up from the end over blank lines and dividers, gathering a run of items.
   const items = []

@@ -5,10 +5,11 @@
 // one or all that went in together. Only safe fixes come ticked for 一键采用. The last 试玩体检's problems have a
 // section of their own: a model is asked for changes to them only by their buttons, and they can be fixed by hand.
 import { t } from '/i18n.js'
-import { EFFECTS, SHOWS, STATUS_THEMES, backdropLayers, cleanStatusSpec, colorContrast, statusPages, triedExtreme, withTried } from '/shared/status.js'
+import { EFFECTS, SHOWS, STATUS_THEMES, backdropLayers, cleanMap, cleanStatusSpec, colorContrast, lookTokensUsed, statusPages, triedExtreme, withTried } from '/shared/status.js'
 import { getPath, unwrap } from '/shared/vars.js'
-import { statusBar } from '/status.js'
+import { laidOut, statusBar } from '/status.js'
 import { coverPage } from '/cover.js'
+import { decorBlock, lookPictures } from '/look-pictures.js'
 import { diffView } from '/talk.js'
 
 const ICON_CLOSE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>'
@@ -26,7 +27,7 @@ const FOLD_OVER = 6
 
 const LEVELS = [['error', t`会出错`, t`这些地方现在不起作用。`], ['warn', t`可能有问题`, t`能用，但多半不是作者想要的效果。`], ['tip', t`可以更好`, t`不改也能玩。`]]
 const FOCUS = [['rules', t`玩法和变量`, t`规则打架、变量没写清、和开场白对不上`], ['tokens', t`省上下文`, t`常驻改关键词、重复条目、太宽的关键词`], ['look', t`美化`, t`状态栏显示什么、用什么主题`], ['style', t`文笔`, t`套话和前后矛盾。默认不查，别人的写法不去挑`]]
-const SHOW_TEXT = { meter: t`进度条`, number: t`数字`, rating: t`星级`, text: t`文字`, long: t`长文字`, badge: t`徽章`, tags: t`标签`, list: t`列表`, stats: t`数值表`, table: t`表格`, flag: t`是或否`, hidden: t`不显示` }
+const SHOW_TEXT = { meter: t`进度条`, number: t`数字`, rating: t`星级`, text: t`文字`, long: t`长文字`, badge: t`徽章`, tags: t`标签`, list: t`列表`, stats: t`数值表`, table: t`表格`, flag: t`是或否`, map: t`地图`, types: t`克制图`, forms: t`形态链`, hidden: t`不显示` }
 const THEME_TEXT = { plain: t`朴素`, paper: t`纸张`, neon: t`霓虹`, pastel: t`柔和`, ink: t`水墨`, parchment: t`羊皮卷`, gothic: t`暗夜`, terminal: t`终端`, ocean: t`深海`, [OWN_COLORS]: t`按卡配色` }
 const BRICK_TEXT = { books: t`册子`, selfcheck: t`写前自查`, events: t`随机事件`, judge: t`裁判表`, world: t`世界动态`, schedule: t`日程`, relations: t`关系网`, routes: t`路线与结局`, creation: t`建角页` }
 // What a Tavern Helper script's absence comes to (server/helper-scripts.mjs).
@@ -85,8 +86,10 @@ export function statusEditor(el, change, edit, { spare = [], state = {}, redraw,
   edit.tryKey = tryKey
   const drawPreview = () => {
     const shown = cleanStatusSpec(spec)
-    preview.replaceChildren((shown && statusBar(el, shown, triedState(edit, state), { collapsible: false, note: triedNote(edit) })) || el('p', { class: 'hint', text: t`还没有要显示的项。` }))
+    preview.replaceChildren((shown && statusBar(el, shown, triedState(edit, state), { collapsible: false, note: triedNote(edit), art: edit.lookArt ?? null })) || el('p', { class: 'hint', text: t`还没有要显示的项。` }))
   }
+  // 定制外观的图 came (skinPanel loads them): the preview is drawn again with them.
+  edit.onArt = drawPreview
   // 试数值: the preview, and a look being designed under it, with other values than the card starts with.
   const tryout = tryoutBar(el, edit, { spec: () => spec, state, key: tryKey, onChange: () => {
     drawPreview()
@@ -167,6 +170,16 @@ export function statusEditor(el, change, edit, { spare = [], state = {}, redraw,
     redraw()
   } }, [el('option', { value: '', text: t`加一项…` }), ...left.map(field => el('option', { value: field.path, text: field.label ? `${field.label} (${field.path})` : field.path }))])
   drawPreview()
+  // The picture of the card's map (the 场景 called 地图), where there is one: asked for once, then drawn again with it.
+  if (design?.api && design.cardId && edit.mapSrc === undefined && spec.fields.some(field => field.show === 'map')) {
+    edit.mapSrc = ''
+    design.api(`/api/cards/${design.cardId}/scenes`).then(found => {
+      const scene = (found?.scenes ?? []).find(one => one.file && /^(?:地图|世界地图|全图|大地图|map|world ?map)$/i.test(String(one.name ?? '').trim()))
+      if (!scene) return
+      edit.mapSrc = `/api/scenes/${design.cardId}/${scene.file}`
+      redraw()
+    }, () => {})
+  }
   return [
     preview,
     tryout,
@@ -176,8 +189,84 @@ export function statusEditor(el, change, edit, { spare = [], state = {}, redraw,
     pictures,
     paging,
     el('div', { class: 'cc-status-rows' }, spec.fields.map(row)),
+    spec.fields.some(field => field.show === 'map') ? mapEditor(el, spec, { drawPreview, paths: spec.fields.map(field => field.path), src: edit.mapSrc ?? '' }) : null,
     left.length ? adding : null,
   ]
+}
+
+// 地图: the places of the card's map, a line each (区域：地点), and where each is on it: its pin is dragged there.
+const PLACE_LINE = /^(?:(.{1,16}?)[：:])?\s*(.{1,40})$/
+
+/**
+ * @param spec - the bar being edited; its `map` is written here.
+ * @param options - { drawPreview(), paths: the bar's variables (for 当前地点), src: the picture of the map, or '' }
+ */
+function mapEditor(el, spec, { drawPreview, paths, src }) {
+  spec.map = spec.map ?? { places: [] }
+  const map = spec.map
+  const stage = el('div', { class: `status-map-stage cc-map-stage${src ? '' : ' plain'}` })
+  const draw = () => {
+    stage.replaceChildren(...[src ? el('img', { class: 'status-map-img', src, alt: '', draggable: 'false' }) : null, ...laidOut(map.places).map((shown, index) => {
+      const place = map.places[index]
+      const pin = el('button', { type: 'button', class: 'status-pin cc-map-pin', style: `left:${shown.x}%;top:${shown.y}%`, title: t`拖到它在图上的位置` }, [el('i', { class: 'status-pin-dot', 'aria-hidden': 'true' }), el('span', { class: 'status-pin-name', text: place.short || place.name })])
+      const move = event => {
+        const box = stage.getBoundingClientRect()
+        place.x = Math.max(0, Math.min(100, Math.round(((event.clientX - box.left) / box.width) * 1000) / 10))
+        place.y = Math.max(0, Math.min(100, Math.round(((event.clientY - box.top) / box.height) * 1000) / 10))
+        pin.style.left = `${place.x}%`
+        pin.style.top = `${place.y}%`
+      }
+      pin.addEventListener('pointerdown', event => {
+        event.preventDefault()
+        pin.setPointerCapture(event.pointerId)
+        pin.addEventListener('pointermove', move)
+        pin.addEventListener('pointerup', () => {
+          pin.removeEventListener('pointermove', move)
+          drawPreview()
+        }, { once: true })
+      })
+      // Without a mouse: the arrow keys, a step at a time.
+      pin.addEventListener('keydown', event => {
+        const step = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[event.key]
+        if (!step) return
+        event.preventDefault()
+        place.x = Math.max(0, Math.min(100, (place.x ?? shown.x) + step[0]))
+        place.y = Math.max(0, Math.min(100, (place.y ?? shown.y) + step[1]))
+        pin.style.left = `${place.x}%`
+        pin.style.top = `${place.y}%`
+        drawPreview()
+      })
+      return pin
+    })].filter(Boolean))
+  }
+  const lines = el('textarea', { class: 'cc-map-places', rows: 5, 'aria-label': t`地图上的地点`, placeholder: t`一行一个地点，可以在前面写它属于哪一片，比如：\n上城区：白塔神殿\n下城区：断剑酒馆`, onchange: () => {
+    const next = []
+    for (const line of lines.value.split('\n')) {
+      const [, zone = '', name = ''] = PLACE_LINE.exec(line.trim()) ?? []
+      if (!name.trim() || next.some(one => one.name === name.trim())) continue
+      const old = map.places.find(one => one.name === name.trim())
+      next.push({ ...old, name: name.trim(), ...(zone.trim() ? { zone: zone.trim() } : {}) })
+      if (!zone.trim()) delete next.at(-1).zone
+    }
+    map.places = cleanMap({ places: next })?.places ?? []
+    draw()
+    drawPreview()
+  } })
+  lines.value = map.places.map(place => (place.zone ? t`${place.zone}：${place.name}` : place.name)).join('\n')
+  const here = el('select', { 'aria-label': t`记着当前地点的变量`, onchange: () => {
+    if (here.value) map.here = here.value
+    else delete map.here
+    drawPreview()
+  } }, [el('option', { value: '', text: t`没有` }), ...[...new Set([map.here, ...paths].filter(Boolean))].map(path => el('option', { value: path, text: path }))])
+  here.value = map.here ?? ''
+  draw()
+  return el('div', { class: 'cc-map' }, [
+    el('b', { text: t`地图` }),
+    el('small', { class: 'hint', text: src ? t`把每个地点的图钉拖到它在图上的位置。` : t`没有地图的图时，地点按片区排成几行；想放一张图，在「配图与朗读 → 场景」里加一个叫「地图」的场景，再回来把图钉拖到位置上。` }),
+    lines,
+    map.places.length ? stage : null,
+    el('label', { class: 'cc-map-here' }, [el('span', { text: t`当前地点的变量` }), here]),
+  ])
 }
 
 /** What each 动效 is called. */
@@ -509,6 +598,46 @@ function probeCover(wrap, width, note) {
   probeWords(page, COVER_PARTS, COVER_FAINT, note)
 }
 
+/** A computed background-image's layers, the topmost first. */
+function imageLayers(image) {
+  const layers = []
+  let depth = 0
+  let from = 0
+  for (let i = 0; i < image.length; i += 1) {
+    if (image[i] === '(') depth += 1
+    else if (image[i] === ')') depth -= 1
+    else if (image[i] === ',' && depth === 0) {
+      layers.push(image.slice(from, i).trim())
+      from = i + 1
+    }
+  }
+  layers.push(image.slice(from).trim())
+  return layers
+}
+
+/**
+ * Whether words stand right on one of the look's pictures: going outwards, the first ground behind them is a picture
+ * with no wash over it (a gradient above it in the same background, at least this solid) and no fill nearer the words.
+ */
+const WASH = 0.7
+function onPicture(part, bar) {
+  for (let node = part; node; node = node.parentElement) {
+    const style = getComputedStyle(node)
+    const layers = imageLayers(style.backgroundImage || 'none')
+    const picture = layers.findIndex(layer => /^url\(/.test(layer))
+    if (picture >= 0) {
+      const washed = layers.slice(0, picture).some(layer => {
+        const stops = (layer.match(/rgba?\([^)]*\)/g) ?? []).map(rgbaOf).filter(Boolean)
+        return stops.length > 0 && Math.min(...stops.map(stop => stop[3])) >= WASH
+      })
+      return !washed
+    }
+    if ((rgbaOf(style.backgroundColor)?.[3] ?? 0) >= WASH) return false
+    if (node === bar) break
+  }
+  return false
+}
+
 /** The words in `root` that must be read (`parts`; `faint`: those dim on purpose): shown, large enough, apart from their ground. */
 function probeWords(bar, parts, faint, note) {
   for (const part of bar.querySelectorAll(parts)) {
@@ -527,6 +656,10 @@ function probeWords(bar, parts, faint, note) {
     let alpha = 1
     for (let node = part; node && node !== bar.parentElement; node = node.parentElement) alpha *= Number(getComputedStyle(node).opacity)
     if (alpha < 0.45) note(`faded:${tag}`, t`${words} 太透明，看不清`)
+    if (onPicture(part, bar)) {
+      note(`picture:${tag}`, t`${words} 直接压在图上，字会看不清：图上面先压一层不透明度至少 0.75 的渐变或底色`)
+      continue
+    }
     const ink = rgbaOf(style.color)
     // Letters filled with a gradient have no one color to hold against the ground.
     if (!ink || lettered(style)) continue
@@ -546,12 +679,16 @@ function probeWords(bar, parts, faint, note) {
  * What is wrong with a bar in a look of the card's own, in lines a model can put right; [] when it draws well. Drawn as
  * the card starts and with every gauge full, and as each of `more` (states: the scenes the user keeps to try).
  * @param cover - { name, cover } of a card with a 开场页: the look dresses it too, and it is drawn and looked over as well.
+ * @param art - { lookPictures, lookTokens } (web/look-pictures.js): the card's pictures the look may name. A look that
+ *   names some is drawn with them, and once more without (its fallback has to hold up too).
  */
-export function skinProblems(el, spec, state, more = [], cover = null) {
+export function skinProblems(el, spec, state, more = [], cover = null, art = null) {
   const shown = cleanStatusSpec(spec)
   if (!shown?.skin) return []
   const found = new Map()
   const note = (key, words) => { if (!found.has(key)) found.set(key, words) }
+  const named = lookTokensUsed(shown.skin.css)
+  for (const token of named.filter(token => art?.lookTokens && !art.lookTokens.has(token))) note(`token:${token}`, t`外观里用了 ${token}，这张卡没有这张图：只能用 <pictures> 里列出的名字`)
   // A new box for each width: Chrome 156 kept a reused one at the width it had first (an inline width changed
   // afterwards was in its style but not in its size), so a bar looked over at 720 was measured at 340.
   let host = null
@@ -562,9 +699,12 @@ export function skinProblems(el, spec, state, more = [], cover = null) {
     return host
   }
   try {
-    for (const values of [state, withTried(state, triedExtreme(shown, state, 'full')), ...more]) {
+    const drawings = [state, withTried(state, triedExtreme(shown, state, 'full')), ...more].map(values => [values, art])
+    // Without the pictures: what shows where one is missing (left out of a SillyTavern copy over its cap).
+    if (named.length && art?.lookPictures) drawings.push([state, null])
+    for (const [values, pictures] of drawings) {
       for (const width of PROBE_WIDTHS) {
-        const bar = statusBar(el, shown, values, { collapsible: false, remembers: false })
+        const bar = statusBar(el, shown, values, { collapsible: false, remembers: false, art: pictures })
         if (!bar) continue
         sized(width).append(bar)
         const tabs = [...bar.querySelectorAll('.status-page')]
@@ -582,7 +722,7 @@ export function skinProblems(el, spec, state, more = [], cover = null) {
     if (cover?.cover) {
       for (const width of PROBE_WIDTHS) {
         const openings = (cover.cover.openings?.length ? cover.cover.openings : [{}, {}]).map(() => '')
-        const page = coverPage(el, { name: cover.name, cover: cover.cover, palette: shown.palette ?? null, skin: shown.skin, openings, picked: 0, onPick: async () => {} })
+        const page = coverPage(el, { name: cover.name, cover: cover.cover, palette: shown.palette ?? null, skin: shown.skin, art: art?.lookPictures ? { lookPictures: art.lookPictures } : null, openings, picked: 0, onPick: async () => {} })
         sized(width).append(page.node)
         probeCover(page.node, width, note)
       }
@@ -601,16 +741,27 @@ function wearing(spec, skin) {
 }
 
 /**
- * 定制外观 in a bar's editor: 调整状态栏 for a saved card, and the plan's status bar in 创作角色卡 (web/forge.js). What it
+ * 定制外观 in a bar's editor: 修改角色卡 → 状态栏 for a saved card, and the plan's status bar in 创作角色卡 (web/forge.js). What it
  * knows is kept on `edit.look` (the editor is drawn again and again): the server's view ({ skin: the draft, job, busy,
  * error, estimate }), what the user typed, what drawing the draft showed. `edit.spec` is the bar being edited: a look
  * put on goes into it (palette, skin), then `redraw()`.
  * @param options - { api, cardId (or url and stopUrl, where the look is asked for and stopped), state: the variables
  *   as they start, redraw, kept: the CSS of the look already saved, instant: whether redraw() saves (no 保存 to click),
- *   busyWords: what to say while something else has the model }
+ *   busyWords: what to say while something else has the model, pictureCard: the saved card whose pictures a look may
+ *   name (定制外观的图; none for a draft not saved yet), pickDraw: how to draw (web/draw-choice.js), for 画装饰图 }
  */
-export function skinPanel(el, edit, { api, cardId, url = `/api/cards/${cardId}/check/skin`, stopUrl = `/api/cards/${cardId}/check/stop`, state, redraw, kept = '', instant = false, cover = null, busyWords = t`模型正在看这张卡（检查这张卡），等它看完再设计外观。` }) {
+export function skinPanel(el, edit, { api, cardId, url = `/api/cards/${cardId}/check/skin`, stopUrl = `/api/cards/${cardId}/check/stop`, state, redraw, kept = '', instant = false, cover = null, busyWords = t`模型正在看这张卡（检查这张卡），等它看完再设计外观。`, pictureCard = cardId, pickDraw = null }) {
   const look = (edit.look = edit.look ?? ({ data: null, missing: false, wish: '', sending: false, mending: false, checked: '', came: '', problems: [], failure: '' }))
+  // 定制外观的图: what the card has, for the previews and the check; drawn again once they are known.
+  if (look.pictures?.cardId !== pictureCard) look.pictures = pictureCard ? lookPictures(api, pictureCard) : null
+  const art = () => look.pictures?.art ?? null
+  const picturesChanged = () => {
+    edit.lookArt = art()
+    look.checked = ''
+    check()
+    look.draw?.()
+    edit.onArt?.()
+  }
   const draft = () => look.data?.skin ?? null
   const worn = () => Boolean(draft() && edit.spec.skin?.css === draft().css)
   const asking = () => look.sending || Boolean(look.data?.job)
@@ -638,9 +789,11 @@ export function skinPanel(el, edit, { api, cardId, url = `/api/cards/${cardId}/c
       wish.focus()
     } })),
   ])
+  const decorSlot = el('div', {})
   const box = (look.box = el('div', { class: 'cc-skin', hidden: true }, [
-    el('p', { class: 'cc-skin-head' }, [el('strong', { text: t`定制外观` }), el('small', { class: 'hint', text: t`让模型按这张卡的气氛给状态栏写一套样子：边框、纹饰、字体、进度条。状态栏还是程序画的，变量照常显示。` })]),
+    el('p', { class: 'cc-skin-head' }, [el('strong', { text: t`定制外观` }), el('small', { class: 'hint', text: t`让模型按这张卡的气氛给状态栏写一套样子：边框、纹饰、字体、进度条，也能用上这张卡自己的图（场景、立绘、头像）和下面画的装饰图。状态栏还是程序画的，变量照常显示。` })]),
     draftSlot,
+    decorSlot,
     styles,
     wish,
     hint,
@@ -654,11 +807,17 @@ export function skinPanel(el, edit, { api, cardId, url = `/api/cards/${cardId}/c
     const skin = draft()
     if (!skin || look.checked === skin.at) return
     look.checked = skin.at
-    look.problems = skinProblems(el, wearing(edit.spec, skin), state, scenesOf(edit.tryKey).map(scene => withTried(state, scene.values)), cover)
+    look.problems = skinProblems(el, wearing(edit.spec, skin), state, scenesOf(edit.tryKey).map(scene => withTried(state, scene.values)), cover, art())
   }
 
   function take(data) {
     look.data = data
+    // The card's own pictures a new draft names are copied small first (they travel with the look); drawn again then.
+    const css = draft()?.css
+    if (css && look.pictures?.data && look.copied !== draft().at) {
+      look.copied = draft().at
+      look.pictures.copyFor(css).then(made => { if (made) picturesChanged() })
+    }
     check()
     // A look just made that draws badly goes back once, with what was found; the one that comes back is shown as it is.
     // (The answer can be in the view a moment before its job is gone: it has come only once the job is.)
@@ -717,7 +876,9 @@ export function skinPanel(el, edit, { api, cardId, url = `/api/cards/${cardId}/c
 
   function wear() {
     const skin = draft()
-    Object.assign(edit.spec, { palette: skin.palette, skin: { name: skin.name, css: skin.css } })
+    // 画装饰图's prompts go with the look (a redesign that wrote none keeps the ones there were).
+    const decor = skin.decor ?? edit.spec.skin?.decor
+    Object.assign(edit.spec, { palette: skin.palette, skin: { name: skin.name, css: skin.css, ...(decor ? { decor } : {}) } })
     // The 动效 the model picked for this look comes with it (it can be changed after).
     if (skin.effect) edit.spec.effect = skin.effect
     delete edit.spec.theme
@@ -732,7 +893,7 @@ export function skinPanel(el, edit, { api, cardId, url = `/api/cards/${cardId}/c
 
   function draftBlock(skin) {
     const shown = cleanStatusSpec(wearing(edit.spec, skin))
-    const bar = shown && statusBar(el, shown, triedState(edit, state), { collapsible: false, remembers: false, note: triedNote(edit) })
+    const bar = shown && statusBar(el, shown, triedState(edit, state), { collapsible: false, remembers: false, note: triedNote(edit), art: art() })
     const cut = { url: t`要加载的图片或字体`, import: t`@import 和 @font-face`, fixed: t`固定在屏幕上的层`, long: t`超出长度的最后几条规则（可以写上「精简一些」再让它改）` }
     return el('div', { class: 'cc-skin-draft' }, [
       el('p', { class: 'cc-skin-name' }, [el('strong', { text: skin.name ? t`「${skin.name}」` : t`新的外观` }), el('small', { class: 'hint', text: skin.model })]),
@@ -784,11 +945,22 @@ export function skinPanel(el, edit, { api, cardId, url = `/api/cards/${cardId}/c
     draftSlot.replaceChildren(...(saved ? [] : worn() ? [el('p', { class: 'hint', text: t`上面的预览用的就是${name}，点「保存」才写进卡。三个颜色还能在上面改。` })] : skin ? [draftBlock(skin)] : []))
     wish.placeholder = base() ? t`想怎么改，比如：边框再细一点，进度条换成金色` : t`想要什么样子，可以不写。比如：像一张泛黄的借书卡；终端里的绿字`
     hint.textContent = look.data.busy ? busyWords : estimateText(look.data.estimate)
+    // 画装饰图: on a saved card only (the pictures are kept with it).
+    const pictures = look.pictures
+    decorSlot.replaceChildren(...(pictures?.data ? [decorBlock(el, { api, pictures, pickDraw, prompts: () => draft()?.decor ?? edit.spec.skin?.decor ?? {}, onChanged: picturesChanged })] : pictureCard ? [] : [el('p', { class: 'hint', text: t`保存这张卡以后，外观就能用上它的场景、立绘和画的装饰图。` })]))
     drawActions()
     const words = look.failure || look.data.error
     failure.replaceChildren(...(words ? [el('div', { class: 'forge-error' }, [el('p', { text: words })])] : []))
   }
 
+  if (look.pictures && !look.pictures.data && !look.pictures.asked) {
+    look.pictures.asked = true
+    look.pictures.load().then(() => {
+      // The look the bar wears, and a draft from before, may name pictures not copied yet.
+      for (const css of [edit.spec.skin?.css, draft()?.css]) if (css) look.pictures.copyFor(css).then(made => { if (made) picturesChanged() })
+      picturesChanged()
+    })
+  } else edit.lookArt = art()
   if (look.data) {
     check()
     draw()
@@ -809,8 +981,8 @@ export function skinPanel(el, edit, { api, cardId, url = `/api/cards/${cardId}/c
   return box
 }
 
-/** @param deps - { api, el, toast, guard, getChat, isGenerating, openProviders, openToolPrompts(group), openTalk(cardId, words), openTrial(cardId), onChatChanged(chat), onCardChanged(cardId) } */
-export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, openProviders, openToolPrompts = null, openTalk, openTrial, onChatChanged, onCardChanged }) {
+/** @param deps - { api, el, toast, guard, getChat, isGenerating, openProviders, openToolPrompts(group), openTalk(cardId, words), openStatus(cardId) (修改角色卡 → 状态栏), openTrial(cardId), onChatChanged(chat), onCardChanged(cardId) } */
+export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, openProviders, openToolPrompts = null, openTalk, openStatus, openTrial, onChatChanged, onCardChanged }) {
   const dialog = document.getElementById('card-check-dialog')
   const view = {}
   const state = {
@@ -823,7 +995,6 @@ export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, op
     seen: new Set(), // findings already given their first tick
     opened: new Set(), // findings shown open
     editing: new Map(), // finding id → { change id: what was written over it }
-    tuning: null, // 调整状态栏 open: what statusEditor keeps, { spec, paged }
     stale: false, // something taken in reached the prefix; the open chat on this card has not applied it
     poll: null,
     busy: false,
@@ -953,7 +1124,6 @@ export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, op
       el('div', { class: 'cc-page' }, [
         prefixBar(),
         summary(),
-        tunePanel(),
         ...LEVELS.map(([level, title, note]) => group(level, title, note, findings.filter(item => item.from === 'program' && item.level === level))),
         trialSection(findings.filter(item => item.from === 'trial'), findings.filter(item => item.from === 'model' && item.trial)),
         brickSection(findings.filter(item => item.from === 'model' && item.brick)),
@@ -1017,27 +1187,14 @@ export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, op
       el('p', { class: 'cc-facts', text: line }),
       helperList(facts.helperList),
       ...notes.map(text => el('p', { class: 'hint', text })),
-      state.data.statusTune && !state.tuning
-        ? el('div', { class: 'cc-actions' }, [el('button', { type: 'button', class: 'btn small', text: t`调整状态栏`, title: t`直接改状态栏的主题、颜色和显示的内容，不用模型`, onclick: () => { state.tuning = {}; render() } })])
+      // The bar is laid out by hand in 修改角色卡 → 状态栏 (one place for it); this window says what is wrong with it.
+      state.data.statusTune
+        ? el('div', { class: 'cc-actions' }, [el('button', { type: 'button', class: 'btn small', text: t`调整状态栏`, title: t`到「修改角色卡 → 状态栏」里直接改主题、颜色和显示的内容，不用模型`, onclick: () => {
+          dialog.close()
+          openStatus(state.cardId)
+        } })])
         : null,
     ].filter(Boolean))
-  }
-
-  /** 调整状态栏: the bar's editor on its own, whether or not anything was found about it. */
-  function tunePanel() {
-    const tune = state.data.statusTune
-    if (!state.tuning || !tune) return null
-    const [change] = tune.changes
-    return el('section', { class: 'plan-card cc-tune' }, [
-      el('header', {}, [el('h4', { text: t`调整状态栏` })]),
-      el('p', { class: 'hint', text: change.before ? t`只改显示，不动变量，也不发给模型。保存后这张卡的对话都按新样式显示。` : t`这张卡还没有自己的状态栏，这是按变量排的一个。保存后它跟着卡走，导出到 SillyTavern 也在。` }),
-      el('div', { class: 'cc-change' }, statusEditor(el, change, state.tuning, { spare: tune.fields, state: state.data.state, redraw: render, design: { api, cardId: state.cardId, cover: state.data.cover ? { name: state.data.name ?? '', cover: state.data.cover } : null }, tryKey: state.cardId })),
-      el('div', { class: 'cc-actions' }, [
-        el('button', { type: 'button', class: 'btn ghost small', text: t`取消`, onclick: () => { state.tuning = null; render() } }),
-        el('span', { class: 'grow' }),
-        el('button', { type: 'button', class: 'btn primary small', disabled: Boolean(state.data.job), title: state.data.job ? t`模型还在看这张卡，等它看完或先停下` : '', text: t`保存`, onclick: () => take([{ id: tune.id, edits: { [change.id]: { spec: state.tuning.spec } } }], t`状态栏已保存`) }),
-      ]),
-    ])
   }
 
   /** 酒馆助手脚本: each one and what its absence means; those something is missing for can be taken to 对话修改. */
@@ -1541,7 +1698,6 @@ export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, op
     for (const { id } of items) {
       state.editing.delete(id)
       state.ticked.delete(id)
-      if (id === state.data.statusTune?.id) state.tuning = null
     }
     // Counted by suggestion, as they were ticked; one that could not go in with the others is named, still in the list.
     const kept = result.skipped?.length ? t`。「${result.skipped.join(t`」「`)}」要改的那段已经被前面一条改了，没能一起改，还留在列表里，可以让模型再看看` : ''
@@ -1617,7 +1773,6 @@ export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, op
         state.seen = new Set()
         state.opened = new Set()
         state.editing = new Map()
-        state.tuning = null
         state.stale = false
         state.whole = false
         state.pending = ''

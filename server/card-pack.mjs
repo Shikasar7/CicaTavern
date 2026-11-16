@@ -4,7 +4,7 @@
 //   cicatavern-pack.json   what else is in the zip (the manifest below)
 //   roster/<entry id>.png  人设图           sprites/<file>   立绘 and 表情
 //   scenes/<file>          场景图           cover.jpg        开场页的图
-//   foes/<file>            the rule book's 敌人图
+//   foes/<file>            the rule book's 敌人图   look/<file>      定制外观的图 (look-pictures.mjs)
 // 游戏规则设置 (the rule book) is a part too: ticked, it is in the card file as always and in the manifest, so an
 // import over a card that has rules of its own takes the pack's; not ticked, the card file goes without it.
 // Which of these go is the player's pick (PARTS). 正则集 attached to the card go as sets and are attached again;
@@ -31,7 +31,7 @@ export const PACK_MANIFEST = 'cicatavern-pack.json'
  * What can be ticked, in the order shown. 立绘和表情 belong to roster entries, so they take the roster along; 敌人图
  * belong to the rule book's foes, so they take the rules.
  */
-export const PARTS = ['roster', 'sprites', 'scenes', 'cover', 'rules', 'foes', 'regex', 'settings']
+export const PARTS = ['roster', 'sprites', 'scenes', 'cover', 'look', 'rules', 'foes', 'regex', 'settings']
 export const MAX_PACK = 500 * 1024 * 1024
 const MAX_ENTRIES = 4000
 const MAX_MANIFEST = 8 * 1024 * 1024
@@ -62,8 +62,9 @@ export function cleanParts(include) {
 /**
  * @param rulebooks - createRulebooks(): the bestiary's pictures.
  * @param regex - createRegex(): 正则集 made and attached.
+ * @param look - createLookPictures(): the pictures a 定制外观 names.
  */
-export function createCardPacks(store, { rulebooks, regex }) {
+export function createCardPacks(store, { rulebooks, regex, look = null }) {
   const cardDir = cardId => path.dirname(store.avatarPath(cardId))
   const at = (cardId, ...parts) => path.join(cardDir(cardId), ...parts)
 
@@ -122,6 +123,16 @@ export function createCardPacks(store, { rulebooks, regex }) {
 
     const cover = card.coverArt ? await picture('cover.jpg', store.coverArtPath(cardId)) : null
     if (cover) found.cover = { count: 1, files: [cover] }
+
+    const lookFiles = []
+    const pictures = {}
+    for (const item of look ? await look.files(cardId).catch(() => []) : []) {
+      const file = await picture(item.name, item.file)
+      if (!file) continue
+      lookFiles.push(file)
+      pictures[item.token] = item.item
+    }
+    if (lookFiles.length) found.look = { count: lookFiles.length, files: lookFiles, pictures }
 
     // The book as it travels (no pictures); null for a card that never had one.
     const rules = await rulebooks.portable(cardId).catch(() => null)
@@ -186,6 +197,7 @@ export function createCardPacks(store, { rulebooks, regex }) {
       ...(has('sprites') ? { sprites: found.sprites.sprites, expressions: found.sprites.expressions } : {}),
       ...(has('scenes') ? { scenes: found.scenes.scenes } : {}),
       ...(has('cover') ? { cover: true } : {}),
+      ...(has('look') ? { look: found.look.pictures } : {}),
       ...(has('rules') ? { rules: found.rules.rules } : {}),
       ...(has('foes') ? { foes: found.foes.foes } : {}),
       ...(has('regex') ? { regexSets: found.regex.sets } : {}),
@@ -250,12 +262,12 @@ export function createCardPacks(store, { rulebooks, regex }) {
   /**
    * What a pack brought, put on a card just imported from its card file. What the card already has under the same
    * id or name (a version updated in place) gives way to the pack's; the rest of what it has stays.
-   * → what arrived: { roster, sprites, scenes, cover, rules, foes, regexSets, settings }
+   * → what arrived: { roster, sprites, scenes, cover, look, rules, foes, regexSets, settings }
    */
   async function restore(cardId, pack) {
     const { manifest, file } = pack
     const parts = new Set(cleanParts(manifest.parts))
-    const arrived = { roster: 0, sprites: 0, scenes: 0, cover: false, rules: false, foes: 0, regexSets: 0, settings: false }
+    const arrived = { roster: 0, sprites: 0, scenes: 0, cover: false, look: 0, rules: false, foes: 0, regexSets: 0, settings: false }
     const image = async (name, max, kinds = ['png', 'jpg', 'webp']) => {
       const data = await file(name, max)
       return data && kinds.includes(imageKind(data)) ? data : null
@@ -348,6 +360,16 @@ export function createCardPacks(store, { rulebooks, regex }) {
         await store.saveCard(card)
         arrived.cover = true
       }
+    }
+
+    if (parts.has('look') && look) {
+      const entries = []
+      for (const [token, item] of Object.entries(record(manifest.look))) {
+        if (!FILE.test(item?.file ?? '')) continue
+        const data = await image(`look/${item.file}`, MAX_PICTURE)
+        if (data) entries.push({ token, data, item })
+      }
+      arrived.look = await look.unpack(cardId, entries)
     }
 
     if (parts.has('rules') && manifest.rules && typeof manifest.rules === 'object' && !Array.isArray(manifest.rules)) {
