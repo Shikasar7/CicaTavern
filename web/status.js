@@ -94,6 +94,9 @@ function artBlock(el, art) {
 // screen of a small phone standing in the bar. An icon is picked by what the app is called.
 const ICON = body => `<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`
 const APP_ICONS = [
+  [/传闻|流言|风声|见闻|rumou?rs?|gossip/i, '<path d="M4 6h16v10H10l-4 3.5V16H4z"/><path d="M8 10h8M8 13h5"/>'],
+  [/武学|武功|功法|招式|法术|心法|martial|spells?|arts/i, '<path d="M5 19 17.5 6.5c1-1 2.2-1.5 3.5-1.5 0 1.3-.5 2.5-1.5 3.5L7 21"/><path d="m4 16 4 4M3.5 20.5l2-2"/>'],
+  [/^(状态|概览|总览|主页|首页|近况|自己|status|overview|home|me)$/i, '<circle cx="12" cy="8" r="3.5"/><path d="M5 20c.8-3.600 3.400-5.500 7-5.500s6.200 1.900 7 5.500"/>'],
   [/背包|行囊|物品|道具|随身|库存|仓库|inventory|bag|items?/i, '<path d="M6 8h12l1.2 11.5a1 1 0 0 1-1 1.1H5.8a1 1 0 0 1-1-1.1z"/><path d="M9 8V6.5a3 3 0 0 1 6 0V8"/>'],
   [/任务|委托|待办|目标|约定|quests?|tasks?|todo|promises/i, '<path d="M10 6h9M10 12h9M10 18h9"/><path d="m4 6 1.2 1.2L7.5 5M4 12l1.2 1.200L7.500 11M4 18l1.200 1.200L7.500 17"/>'],
   [/情报|线索|消息|档案|笔记|记录|日志|日记|事件|clues?|intel|notes?|log|journal|events?/i, '<path d="M6 3.5h9l3.5 3.5V20a.5.5 0 0 1-.5.500H6a.5.5 0 0 1-.5-.5V4a.5.5 0 0 1 .5-.5z"/><path d="M14.5 3.5v4h4M8.500 12h7M8.500 16h5"/>'],
@@ -325,6 +328,92 @@ function groupSwitch(el, groups, blocks, body) {
   return [find, row]
 }
 
+// 版式 (web/shared/status.js STATUS_LAYOUTS): the bar laid out another way. What a person's first page holds is told
+// apart by what it is: gauges, short facts, a line of what is on their mind, and the rest, which goes under the tabs.
+// The three layouts are one structure (the head, a rail of people, the tabs and what they open); the sheet places it.
+const FACT_MAX = 12
+const QUOTE_MAX = 80
+
+function groupParts(group, lead) {
+  const parts = { pills: [], quote: null, gauges: [], facts: [], tags: [], rest: [] }
+  for (const row of group.rows) {
+    if (row.show === 'meter') parts.gauges.push(row)
+    else if (row.show === 'number' || row.show === 'rating' || row.show === 'flag') parts.facts.push(row)
+    else if (row.show === 'badge') (lead ? parts.pills : parts.facts).push(row)
+    else if (row.show === 'tags') parts.tags.push(row)
+    else if (row.show === 'text' && (row.text ?? '').length <= FACT_MAX) parts.facts.push(row)
+    else if (lead && !parts.quote && (row.show === 'text' || row.show === 'long') && row.text && row.text.length <= QUOTE_MAX) parts.quote = row
+    else parts.rest.push(row)
+  }
+  return parts
+}
+
+function gaugeBlock(el, row) {
+  const fill = el('i', { style: `width:${row.percent.toFixed(1)}%` })
+  if (filling && row.from !== undefined && fill.animate && !motionOff() && !globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+    fill.animate([{ width: `${row.from.toFixed(1)}%` }, { width: `${row.percent.toFixed(1)}%` }], { duration: 900, easing: 'cubic-bezier(.2, .8, .2, 1)' })
+  }
+  return el('div', { class: `status-gauge${row.changed ? ' changed' : ''}`, 'data-show': 'meter', 'data-label': row.label }, [
+    el('span', { class: 'status-label', text: row.label, title: row.path }),
+    el('span', { class: 'status-value' }, [el('span', { text: row.words ?? shown(row.value) }), !row.words && row.max !== undefined && row.max !== 100 ? el('small', { class: 'status-of', text: `/ ${shown(row.max)}` }) : null, deltaMark(el, row.delta)]),
+    el('span', { class: 'status-meter', role: 'meter', 'aria-valuenow': String(row.value), 'aria-label': row.label }, fill),
+  ])
+}
+
+function factBlock(el, row) {
+  const value = row.show === 'number' ? [el('span', { text: row.words ?? shown(row.value) }), deltaMark(el, row.delta)]
+    : row.show === 'rating' ? [el('span', { class: 'status-stars', role: 'img', 'aria-label': t`${row.value} / ${row.max}`, text: '★'.repeat(row.value) + '☆'.repeat(row.max - row.value) })]
+      : row.show === 'flag' ? [el('span', { class: `status-flag${row.on ? ' on' : ''}`, text: row.on ? t`是` : t`否` })]
+        : [el('span', { text: row.text || '—' })]
+  return el('div', { class: `status-fact${row.changed ? ' changed' : ''}`, 'data-show': row.show, 'data-label': row.label }, [el('span', { class: 'status-label', text: row.label, title: row.path }), el('span', { class: 'status-fact-value' }, value)])
+}
+
+/**
+ * One person in the rail, and what of theirs goes under the first tab: [node, rest (a group block, or null)].
+ * `aside`: this one stands in a narrow column beside the tabs (侧栏式), so only their name and numbers are in it; what is
+ * on their mind and their tags open with the first tab.
+ */
+function railGroup(el, group, lead, title, picture, aside) {
+  const parts = groupParts(group, lead)
+  const quote = parts.quote ? el('p', { class: 'status-quote', 'data-label': parts.quote.label, title: parts.quote.label, text: parts.quote.text }) : null
+  const tags = parts.tags.length ? el('div', { class: 'status-rows' }, parts.tags.map(row => statusRow(el, row))) : null
+  const name = group.name && group.name !== title ? group.name : ''
+  const who = name || parts.pills.length
+    ? el('div', { class: 'status-who' }, [name ? el('b', { class: 'status-who-name', text: name }) : null, ...parts.pills.map(row => el('span', { class: `status-badge${row.changed ? ' changed' : ''}`, 'data-label': row.label, title: row.label, text: row.text || '—' }))])
+    : null
+  const main = el('div', { class: 'status-g-main' }, [
+    who,
+    aside ? null : quote,
+    parts.gauges.length ? el('div', { class: 'status-gauges' }, parts.gauges.map(row => gaugeBlock(el, row))) : null,
+    parts.facts.length ? el('div', { class: 'status-facts' }, parts.facts.map(row => factBlock(el, row))) : null,
+    aside ? null : tags,
+  ])
+  const node = main.childElementCount || picture
+    ? el('div', { class: `status-g${lead ? ' lead' : ''}${picture ? ' has-pic' : ''}`, 'data-name': group.name }, [picture, main])
+    : null
+  const more = parts.rest.length ? groupBlock(el, { ...group, rows: parts.rest }, title) : null
+  if (!aside || (!quote && !tags)) return [node, more]
+  // Their name is beside it in the rail already.
+  const block = more ?? el('div', { class: 'status-group', 'data-name': group.name })
+  block.querySelector('.status-rows')?.before(...[quote, tags].filter(Boolean)) ?? block.append(...[quote, tags].filter(Boolean))
+  return [node, block]
+}
+
+/** The rail and what the first tab opens, for the people of the bar's first page: { rail, rest: [group block] }. */
+function railOf(el, groups, title, art, aside) {
+  const rail = el('div', { class: 'status-rail' })
+  const rest = []
+  groups.forEach((group, i) => {
+    const picture = i === 0 && art?.portrait ? el('span', { class: `status-pic${art.zoom ? ' zoom' : ''}` }, el('img', { src: art.portrait, alt: '', draggable: 'false' })) : null
+    const [node, more] = railGroup(el, group, i === 0, title, picture, aside && i === 0)
+    // 侧栏式 keeps one person beside the tabs: with everyone there the rail runs long past a first tab with little in it.
+    if (node && aside && i) rest.push(node)
+    else if (node) rail.append(node)
+    if (more) rest.push(more)
+  })
+  return { rail, rest }
+}
+
 /**
  * The status bar for one reply, or null when nothing in it has a value.
  * @param previous - the state before this reply, for the +/− marks.
@@ -335,7 +424,8 @@ function groupSwitch(el, groups, blocks, body) {
  */
 export function statusBar(el, whole, state, { previous = null, note = '', collapsible = true, remembers = true, art = null, seen = '' } = {}) {
   // 小手机: lists, tables and the pages after the first are kept off the bar's face, each an app to open.
-  const cut = whole.phone ? phoneApps(whole) : null
+  // A 版式 has tabs of its own in the phone's place.
+  const cut = whole.phone && !whole.layout ? phoneApps(whole) : null
   const spec = cut?.bar ?? whole
   const apps = (cut?.apps ?? []).map(app => ({ name: app.name, groups: statusGroups(app.spec, state, previous) })).filter(app => app.groups.length && !appEmpty(app.groups))
   const groups = statusGroups(spec, state, previous)
@@ -345,7 +435,11 @@ export function statusBar(el, whole, state, { previous = null, note = '', collap
     if (filled.size > 200) filled.clear()
     filled.add(seen)
   }
-  const box = el('section', { class: spec.theme ? `status-bar theme-${spec.theme}` : 'status-bar' })
+  const pages = statusPages(spec)
+  const first = pages.length ? statusGroups(onPage(spec, pages[0], pages), state, previous) : groups
+  // So many people that one shows at a time: laid out the plain way, which has the switch for that.
+  const layout = spec.layout && first.length < SWITCH_AT ? spec.layout : ''
+  const box = el('section', { class: `status-bar${spec.theme ? ` theme-${spec.theme}` : ''}${layout ? ` layout-${layout}` : ''}` })
   if (spec.palette) paint(box, paletteColors(spec.palette))
   if (spec.skin) wear(box, spec.skin)
   const fx = spec.effect ? effectLayer(el, spec.effect) : null
@@ -353,10 +447,17 @@ export function statusBar(el, whole, state, { previous = null, note = '', collap
     box.classList.add('has-drift')
     barWatch?.observe(box)
   }
-  const pictures = artBlock(el, art)
+  const pictures = layout ? null : artBlock(el, art)
   const named = groups.filter(g => g.name).length
   const title = spec.title || (named === 1 && groups.length === 1 ? groups[0].name : '') || t`状态`
   const head = el('div', { class: 'status-head' }, [el('span', { class: 'status-title', text: title }), note ? el('span', { class: 'status-note', text: note }) : null])
+  if (layout && art?.place) head.append(el('span', { class: 'status-where', text: art.place }))
+  // 卷轴式: where the story is, as a picture behind the title.
+  if (layout === 'scroll' && art?.scene) {
+    head.classList.add('has-banner')
+    head.prepend(el('img', { class: 'status-banner', src: art.scene, alt: '', draggable: 'false' }))
+  }
+  const laid = layout ? railOf(el, first, title, art, layout === 'rail') : null
   const body = el('div', { class: `status-body${groups.length > 1 ? ' multi' : ''}` })
   const fill = shown => {
     const blocks = shown.map(group => groupBlock(el, group, title))
@@ -364,20 +465,32 @@ export function statusBar(el, whole, state, { previous = null, note = '', collap
     body.replaceChildren(...switcher, ...blocks)
     body.classList.toggle('multi', shown.length > 1)
   }
-  const pages = statusPages(spec)
   if (pages.length) {
     const open = page => {
       for (const tab of tabs.children) tab.setAttribute('aria-selected', String(tab.dataset.page === page))
+      // In a 版式 the first page's people stand in the rail: its tab opens only what of theirs is not there.
+      if (laid && page === pages[0]) {
+        body.replaceChildren(...laid.rest)
+        body.classList.remove('multi')
+        body.hidden = !laid.rest.length
+        if (remembers) remember(PICKED_PAGE, page)
+        return
+      }
+      body.hidden = false
       const shown = statusGroups(onPage(spec, page, pages), state, previous)
       fill(shown)
       // Its variables are nowhere in this state yet (a chat from before the bar had them): said, rather than a blank.
       if (!shown.length) body.replaceChildren(el('p', { class: 'status-empty', text: t`这一页要显示的变量现在还没有` }))
       if (remembers) remember(PICKED_PAGE, page)
     }
-    const tabs = el('div', { class: 'status-pages', role: 'tablist' }, pages.map(page => el('button', { type: 'button', role: 'tab', class: 'status-page', 'data-page': page, text: page, onclick: () => open(page) })))
-    box.append(tabs)
+    const tabs = el('div', { class: 'status-pages', role: 'tablist' }, pages.map(page => el('button', { type: 'button', role: 'tab', class: 'status-page', 'data-page': page, onclick: () => open(page) }, [layout ? el('span', { class: 'status-page-icon', html: appIcon(page) }) : null, el('span', { text: page })])))
+    if (!laid) box.append(tabs)
+    else laid.tabs = tabs
     const picked = remembers ? recalled(PICKED_PAGE) : ''
     open(pages.includes(picked) ? picked : pages[0])
+  } else if (laid) {
+    body.replaceChildren(...laid.rest)
+    body.hidden = !laid.rest.length
   } else fill(groups)
   if (spec.more) body.append(el('p', { class: 'status-overflow', text: t`还有 ${spec.more} 项放不下，右栏「状态」里能看到全部。` }))
   if (collapsible) {
@@ -396,7 +509,8 @@ export function statusBar(el, whole, state, { previous = null, note = '', collap
     head.append(toggle)
   }
   box.prepend(...[fx, head, pictures].filter(Boolean))
-  box.append(body, ...(apps.length ? phoneBlock(el, apps, remembers) : []))
+  if (laid) box.append(laid.rail, el('div', { class: 'status-main', hidden: !laid.tabs && body.hidden }, [laid.tabs, body]))
+  else box.append(body, ...(apps.length ? phoneBlock(el, apps, remembers) : []))
   return box
 }
 

@@ -28,7 +28,8 @@ const MAX_GREETINGS = 6
 const MAX_GREETING = 3000
 // However many entries a book has, each gets at least this much (the ones past the limit then stay out).
 const MIN_SHARE = 300
-const KINDS = { file: '文件', chat: '对话', card: '角色卡', book: '世界书' }
+// `novel`: a whole book's 梗概 and 名录 (novel.mjs novelMaterial), what 创作角色卡 reads of a novel it starts from.
+const KINDS = { file: '文件', chat: '对话', card: '角色卡', book: '世界书', novel: '小说资料' }
 // What gives a card's file away when it cannot be read as one: fields no other file has, written as keys. name,
 // description and the like are in any settings file, so on their own they say nothing: see opensAsCard.
 const CARD_KEY = /\b(first_?mes|mes_?example|alternate_?greetings|character_?book|creator_?notes|post_?history_?instructions|char_?greeting|char_?persona|world_?scenario|example_?dialogue)(\\?["'])?\s*:/gi
@@ -49,6 +50,9 @@ function textReference(kind, name, text, total = text.length) {
   const kept = text.slice(0, MAX_REFERENCE_CHARS)
   return { id: newRef(), kind, name: cleanName(name) || msg`参考文件`, text: kept, chars: kept.length, total: Math.max(total, kept.length), at: new Date().toISOString() }
 }
+
+/** A book a card is made from, as the reference the wizard reads: its 梗概 and 名录, never cut (they are made to fit). */
+export const novelReference = (name, text) => textReference('novel', name, text)
 
 /** How long each of these can be for all of them to fit in `room`: the short ones stay whole, the long ones are cut to one length. */
 function shareOf(lengths, room) {
@@ -237,7 +241,7 @@ export function cleanReferences(list) {
   for (const item of Array.isArray(list) ? list : []) {
     const text = String(item?.text ?? '').trim()
     if (!text) continue
-    const reference = textReference(item.kind === 'card' || item.kind === 'book' ? item.kind : 'file', item.name, text, Number(item.total) || 0)
+    const reference = textReference(['card', 'book', 'novel'].includes(item.kind) ? item.kind : 'file', item.name, text, Number(item.total) || 0)
     kept = withReference(kept, { ...reference, ...(item.structure ? { structure: item.structure } : {}), ...(item.mode ? { mode: item.mode } : {}), ...(item.confirmed ? { confirmed: true } : {}) })
   }
   return kept
@@ -320,9 +324,9 @@ export const creditsOf = references => (references ?? []).filter(item => item.ki
 export const writingMaterial = references => (references ?? []).filter(item => !studying(item))
 
 /** The rules that go with what is there. */
-export function referenceRules(references, contentRules, structureRules) {
+export function referenceRules(references, contentRules, structureRules, novelRules = '') {
   const list = references ?? []
-  return `${list.some(item => !studying(item)) ? contentRules : ''}${list.some(studying) ? structureRules : ''}`
+  return `${list.some(item => !studying(item)) ? contentRules : ''}${list.some(item => item.kind === 'novel') ? novelRules : ''}${list.some(studying) ? structureRules : ''}`
 }
 
 /** What the model reads of them; '' when there are none. */
@@ -360,6 +364,23 @@ export const DISCUSS_REFERENCE_RULES = `
 - 用户没说清资料怎么用时，第一轮先问这个，选项类似：照着它写（人物和设定都保留）、借它的世界写新人物和新故事、只学它的写法。
 - 资料和用户说的话对不上时听用户的；几份资料之间对不上时，在回复里点出来，让用户定。
 - 附的是角色卡或世界书时，只看里面写的内容，它的格式和变量写法不用学；用户想保留它记录的数值时，照它定要记哪几项。`
+
+/** 从小说开始: a novel's 梗概 and 名录 among the references, while the guide talks it through. */
+export const DISCUSS_NOVEL_RULES = `
+
+资料里有一份「小说资料」：一部小说的梗概和名录，不是原文。这张卡照这部小说做：
+- 世界、人物、关系照它来，记进草图时照它写（by 写 "user"），不另起炉灶。
+- 第一轮先问清两件事，用户已经说了的不问，这两问代替上面「资料怎么用」那一问。一，想怎么玩：和书里的某个人物相处（选项里点出梗概里最要紧的两三个人）、自己当主角把书里的故事走一遍、在同一个世界里写新的人物和新故事、带着对剧情的了解进到书里。二，故事从哪里开始：从梗概的主线里挑两三个时间点，每个附一句那时候的情形。
+- 人物、地点、势力的名字照名录写，不改不译。名录里没有的不要说成书里有的；你补的新人物在草图里 by 写 "assistant"。
+- 梗概没写到的细节不要编成书里的事实：问用户，或者留到写卡时看它完整的条目。`
+
+/** The same, writing the plan. */
+export const PLAN_NOVEL_RULES = `
+
+资料里有一份「小说资料」（一部小说的梗概和名录），这张卡照这部小说做：
+- 方案里凡是书里有的人物、地点、势力，名字和名录里的一字不差：写卡时靠名字找它在书里的完整条目。
+- 核心角色只列这张卡真正围着转的几个。书里其余的人物和地点不用都列进方案。
+- 故事开始的那个时间点之后才发生的事，不写进开场和世界观。`
 
 /** A card the player only learns from, while the guide talks it through. */
 export const DISCUSS_STRUCTURE_RULES = `

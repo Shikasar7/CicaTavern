@@ -43,11 +43,41 @@ export function extraOf(raw) {
   return extra
 }
 
+/**
+ * SillyTavern's recursion switches of an entry (world file, or a card's extensions), kept in `extra` even for a book
+ * that keeps nothing else: excludeRecursion (not found through other entries), preventRecursion (its text finds no
+ * others), delayUntilRecursion (found only through other entries; a number: from that level of them on).
+ */
+function recursionOf(raw) {
+  const ext = raw.extensions && typeof raw.extensions === 'object' ? raw.extensions : {}
+  const out = {}
+  if ((raw.excludeRecursion ?? ext.exclude_recursion) === true) out.excludeRecursion = true
+  if ((raw.preventRecursion ?? ext.prevent_recursion) === true) out.preventRecursion = true
+  const delay = raw.delayUntilRecursion ?? ext.delay_until_recursion
+  if (delay === true || (Number.isFinite(delay) && delay >= 1)) out.delayUntilRecursion = delay === true ? true : Math.min(10, Math.trunc(delay))
+  // 发送位置 紧挨着回复 (sendsNear), this app's own: in a world file as cicaSend, in a card's extensions as cica_send.
+  if ((raw.cicaSend ?? ext.cica_send) === 'near') out.cicaSend = 'near'
+  return out
+}
+
+/**
+ * A keyword entry sent 紧挨着回复: after the player's input, sent again each turn it is found and taken out of the
+ * older messages (as a preset's 同酒馆), where the rest go with the turn's message and stay in the history.
+ */
+export const sendsNear = entry => entry?.extra?.cicaSend === 'near'
+
+/** An entry's recursion switches, as recursionOf keeps them: { exclude, prevent, delay } (delay 0: not delayed). */
+export function recursionFlags(entry) {
+  const extra = entry.extra ?? {}
+  const delay = extra.delayUntilRecursion
+  return { exclude: extra.excludeRecursion === true, prevent: extra.preventRecursion === true, delay: delay === true ? 1 : Number.isFinite(delay) && delay >= 1 ? delay : 0 }
+}
+
 function normalizeEntry(raw, index, { keep = false } = {}) {
   const ext = raw.extensions && typeof raw.extensions === 'object' ? raw.extensions : {}
   const comment = str(raw.comment || raw.name).trim()
   const content = str(raw.content)
-  const extra = keep ? extraOf(raw) : {}
+  const extra = keep ? extraOf(raw) : recursionOf(raw)
   return {
     uid: String(raw.uid ?? raw.id ?? index),
     comment,
@@ -341,26 +371,78 @@ function entryMatches(entry, text) {
   }
 }
 
+// 递归触发 (设置 → 世界书与状态 → 扫描与状态): 'off'; 'keyword', the text of entries found by keyword finds more;
+// 'all', the always-on entries' text too, as SillyTavern does.
+export const RECURSION_MODES = Object.freeze(['off', 'keyword', 'all'])
+// Levels of entries found through entries, at most: a book of entries naming each other stops here.
+export const MAX_RECURSION = 5
+// What recursion may add in a turn, at most: nearer levels first, a smaller 顺序 first within one. The rest waits
+// (found again when the story names it). Without it, a book whose entries all name each other sent half of itself.
+export const RECURSION_BUDGET = Object.freeze({ entries: 10, chars: 8000 })
+
 /**
  * Keyword-triggered entries for this turn.
  * @param books - active books.
  * @param scanText - recent story text plus the player's input, or a function
  *   giving it for a book (a book may scan its own number of messages).
  * @param recentlyInjected - `${bookId}:${uid}` refs still visible in recent turns.
+ * @param options.recursion - RECURSION_MODES: whether what was found finds more, level by level, as SillyTavern's
+ *   recursive scan, by each entry's switches (recursionFlags). An entry still visible in recent turns is not sent
+ *   again, and its text finds nothing new: what it found came with it.
  */
-export function triggeredEntries(books, scanText, recentlyInjected) {
+export function triggeredEntries(books, scanText, recentlyInjected, { recursion = 'off' } = {}) {
   const hits = []
+  const looked = new Set()
+  const candidates = []
   for (const book of books) {
-    const text = typeof scanText === 'function' ? scanText(book) : scanText
     for (const entry of book.entries) {
       if (!entry.enabled || entry.constant || special(entry)) continue
       const decorators = decoratorsOf(entry.content)
       if (decorators.has('@@activate') || decorators.has('@@dont_activate')) continue
-      const ref = `${book.id}:${entry.uid}`
-      if (recentlyInjected.has(ref)) continue
-      if (!entryMatches(entry, text)) continue
-      if (entry.useProbability && entry.probability < 100 && Math.random() * 100 >= entry.probability) continue
-      hits.push({ ref, entry })
+      candidates.push({ book, entry, ref: `${book.id}:${entry.uid}`, flags: recursionFlags(entry) })
+    }
+  }
+  // What recursion has added so far this turn (RECURSION_BUDGET).
+  const spent = { entries: 0, chars: 0 }
+  const byOrder = [...candidates].sort((a, b) => a.entry.order - b.entry.order)
+  // Those of `candidates` the text matches at this level, once each; the ones sent, as found.
+  const find = (level, textOf) => {
+    const found = []
+    for (const item of level ? byOrder : candidates) {
+      if (looked.has(item.ref)) continue
+      if (level === 0 ? item.flags.delay > 0 : item.flags.exclude || item.flags.delay > level) continue
+      if (!entryMatches(item.entry, textOf(item.book))) continue
+      // Through other entries, within what a turn may add; past it, nothing more at this level or after.
+      if (level && (spent.entries + 1 > RECURSION_BUDGET.entries || spent.chars + item.entry.content.length > RECURSION_BUDGET.chars)) {
+        spent.full = true
+        break
+      }
+      looked.add(item.ref)
+      // One sent 紧挨着回复 is not in the history any more: sent each turn it is found.
+      if (recentlyInjected.has(item.ref) && !sendsNear(item.entry)) continue
+      if (item.entry.useProbability && item.entry.probability < 100 && Math.random() * 100 >= item.entry.probability) continue
+      hits.push({ ref: item.ref, entry: item.entry, ...(level ? { level } : {}) })
+      if (level) {
+        spent.entries += 1
+        spent.chars += item.entry.content.length
+      }
+      found.push(item)
+    }
+    return found
+  }
+  let fresh = find(0, book => (typeof scanText === 'function' ? scanText(book) : scanText))
+  if (RECURSION_MODES.includes(recursion) && recursion !== 'off') {
+    // The always-on entries' text: read at the first level, with what the story found.
+    const constant = recursion === 'all'
+      ? books.flatMap(book => book.entries.filter(entry => entry.enabled && entry.constant && !special(entry) && !recursionFlags(entry).prevent).map(entry => entry.content))
+      : []
+    for (let level = 1; level <= MAX_RECURSION; level++) {
+      const text = [...(level === 1 ? constant : []), ...fresh.filter(item => !item.flags.prevent).map(item => item.entry.content)].join('\n\n')
+      // Nothing to read at this level; one delayed to a later level still waits for text there.
+      if (!text.trim()) break
+      fresh = find(level, () => text)
+      if (spent.full) break
+      if (!fresh.length && !candidates.some(item => !looked.has(item.ref) && item.flags.delay > level)) break
     }
   }
   return hits.sort((a, b) => a.entry.order - b.entry.order)
@@ -409,6 +491,18 @@ function editEntry(entry, change) {
     const position = Math.trunc(Number(change.position))
     if (position >= 0 && position <= 7) entry.position = position
   }
+  // 递归: SillyTavern's switches, kept in extra (recursionOf) where its export finds them.
+  const switches = { excludeRecursion: change.excludeRecursion, preventRecursion: change.preventRecursion, delayUntilRecursion: change.delayUntilRecursion }
+  // 发送位置: 'near' (紧挨着回复) or 'turn' (随这一轮, as before).
+  if (change.send === 'near' || change.send === 'turn') switches.cicaSend = change.send === 'near' ? 'near' : false
+  for (const [key, value] of Object.entries(switches)) {
+    if (typeof value !== 'boolean' && typeof value !== 'string') continue
+    const extra = { ...(entry.extra ?? {}) }
+    if (value) extra[key] = value
+    else delete extra[key]
+    if (Object.keys(extra).length) entry.extra = extra
+    else delete entry.extra
+  }
   entry.initvar = INITVAR.test(entry.comment) || decoratorsOf(entry.content).has('@@initial_variables')
   entry.hasScript = hasEjs(entry.content)
   return entry
@@ -446,6 +540,16 @@ export function editBook(book, patch = {}) {
     const gone = new Set(patch.remove.map(String))
     if (book.entries.some(e => gone.has(e.uid) && inPrefix(e))) prefix = true
     book.entries = book.entries.filter(e => !gone.has(e.uid))
+  }
+  // 拖动调整顺序: the list's order (the uids named first, in that order; the rest after, as they were). What goes
+  // to the model goes by each entry's 顺序 number; constant ones with the same number keep the list's order, so the
+  // prefix may change.
+  if (Array.isArray(patch.arrange)) {
+    const before = constantEntries([book]).map(e => e.uid).join('\n')
+    const at = new Map(patch.arrange.map((uid, index) => [String(uid), index]))
+    const rank = e => (at.has(e.uid) ? at.get(e.uid) : at.size)
+    book.entries = book.entries.map((e, index) => [e, index]).sort(([a, i], [b, j]) => rank(a) - rank(b) || i - j).map(([e]) => e)
+    if (constantEntries([book]).map(e => e.uid).join('\n') !== before) prefix = true
   }
   return { book, prefix, added }
 }

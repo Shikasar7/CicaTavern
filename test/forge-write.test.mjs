@@ -572,3 +572,38 @@ test('the plan facts for the review: whole and small for a small plan, the most 
   assert.match(cut, /（方案较大，只列了卡里提得多的部分，省了：配角 \d+ 条、地点 \d+ 条。/)
   assert.equal(planFacts({ characters: [] }), '')
 })
+
+test('从小说开始: a card with a book beside its draft is written with the book on each thing, and saved with the rest of it', async t => {
+  const { forge, fake, store, root } = await setup(t)
+  const file = path.join(root, 'forge', 'draftone.json')
+  const draft = JSON.parse(await readFile(file, 'utf8'))
+  const source = { name: '雨宿', digest: '', entries: [
+    { type: '人物', name: '林小雨', aliases: ['小雨'], content: '书里的林小雨：怕晴天。', parts: 9 },
+    { type: '人物', name: '送货的老陈', aliases: ['老陈'], content: '每周三来送货，话多。', parts: 1 },
+    { type: '设定', name: '雨女', aliases: [], content: '只在下雨时能被人看见。', parts: 4 },
+  ] }
+  await writeFile(file, JSON.stringify({ ...draft, source: { from: 'novel', name: '雨宿', count: 3 } }))
+  await writeFile(path.join(root, 'forge', 'draftone.source.json'), JSON.stringify(source))
+
+  await forge.write('draftone')
+  const written = await settled(forge, 'draftone')
+  assert.deepEqual([written.stage, written.error, written.source], ['polish', null, { from: 'novel', name: '雨宿', count: 3 }])
+  const entries = fake.seen.filter(call => call.system.includes('角色卡写手') && !call.asked.includes('按要求改写'))
+  // The world's entry reads the book's 设定; her entries read hers; nobody reads the delivery man, who is not in the plan.
+  assert.match(entries[0].asked, /<book name="雨宿">\n<entry type="设定" name="雨女">/)
+  assert.ok(entries.some(call => /<entry type="人物" name="林小雨">\n书里的林小雨：怕晴天。/.test(call.asked)))
+  assert.ok(!fake.seen.some(call => call.asked.includes('送货的老陈')))
+  assert.match(entries[0].system, /<book> 里是这次要写的东西在原著里的条目/)
+  assert.match(fake.seen.find(call => call.system.includes('开场白作者')).asked, /<entry type="人物" name="林小雨">/)
+  // Her entry put right after the review is rewritten with the book on her as well.
+  assert.match(fake.seen.find(call => call.asked.includes('按要求改写')).asked, /<book name="雨宿">\n<entry type="人物" name="林小雨">/)
+
+  // Saved: the card's own entries, then the book's that it did not write.
+  const saved = await forge.saveCard('draftone', { avatar: PNG_URL })
+  const book = (await store.getCard(saved.card.id)).book
+  const comments = book.entries.map(entry => entry.comment)
+  assert.deepEqual(comments.slice(-2), ['人物：送货的老陈', '设定：雨女'])
+  assert.ok(!comments.includes('人物：林小雨'))
+  const chen = book.entries.at(-2)
+  assert.deepEqual([chen.keys, chen.constant, chen.content], [['送货的老陈', '老陈'], false, '每周三来送货，话多。'])
+})

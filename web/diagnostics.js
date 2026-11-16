@@ -33,7 +33,7 @@ async function copy(text, area) {
  * @param deps - { api, el, toast, saveFile(name, text, message), getChat() → the open chat or null }
  */
 export function openDiagnostics({ api, el, toast, saveFile, getChat }) {
-  dialog ??= document.body.appendChild(el('dialog', { class: 'dialog diagnostics', 'aria-label': t`错误日志` }))
+  dialog = dialog ?? (document.body.appendChild(el('dialog', { class: 'dialog diagnostics', 'aria-label': t`错误日志` })))
   const chat = getChat()
   let text = ''
   const area = el('textarea', { class: 'diag-text', readonly: true, rows: 16, spellcheck: 'false', 'aria-label': t`要发出去的内容`, text: t`正在整理……` })

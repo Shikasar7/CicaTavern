@@ -31,7 +31,7 @@ export const rankAt = (ranks, level) => ranks[Math.min(ranks.length - 1, Math.ma
 export const levelOfRank = (ranks, rank) => Math.max(0, ranks.indexOf(rank)) * STEPS_PER_RANK + 1
 
 /** Two steps apart is a real difference, a rank is a wall, two ranks are out of reach. On a ladder of small steps it takes twice that. */
-function gapBetween(theirs, ours, span) {
+export function gapBetween(theirs, ours, span) {
   const apart = (theirs - ours) * (span === 'narrow' ? 0.5 : 1)
   if (apart >= STEPS_PER_RANK * 2) return 3
   if (apart >= STEPS_PER_RANK) return 2
@@ -39,6 +39,15 @@ function gapBetween(theirs, ours, span) {
   if (apart <= -STEPS_PER_RANK) return -2
   return apart <= -2 ? -1 : 0
 }
+
+/** Where the player stands on the ladder, in steps: their rank's when they have one that can be read, their level's if not. */
+export const standingOf = (sheet, ranks = []) => (sheet.rank ? rankPower(ranks, sheet.rank) : null) ?? (sheet.level ?? 1) - 1
+
+// The least a foe is apart from the player to stand at each gap: what `gapBetween` reads back as that gap.
+const GAP_STEPS = { [-2]: -STEPS_PER_RANK, [-1]: -2, 0: 0, 1: 2, 2: STEPS_PER_RANK, 3: STEPS_PER_RANK * 2 }
+
+/** Where a foe stands on the ladder, in steps, for one that was said to stand at a gap from a player standing at `ours`. */
+export const standingAt = (gap, ours, span) => ours + (GAP_STEPS[gap] ?? 0) * (span === 'narrow' ? 2 : 1)
 
 /**
  * How strong a foe is beside the player, from the word its mark has: { gap, rank? }. A word the rules do not know is an

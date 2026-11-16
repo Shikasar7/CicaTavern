@@ -43,6 +43,8 @@ import { createDrawHistory, dropImage, dropOldImage, madeAt, oldImageFiles, pick
 import { createSaves } from './saves.mjs'
 import { KEYED as VOICE_KEYED } from './voice/index.mjs'
 import { createPromptLibrary } from './prompts.mjs'
+import { createGallery } from './gallery.mjs'
+import { MAX_PACK, createCardPacks } from './card-pack.mjs'
 import { createForge } from './forge/index.mjs'
 import { qrSvg } from './qr.mjs'
 import { lostPaths, setStatePath } from './state.mjs'
@@ -116,6 +118,7 @@ const STATIC = {
   '/theme.js': ['theme.js', 'text/javascript; charset=utf-8'],
   '/regex.js': ['regex.js', 'text/javascript; charset=utf-8'],
   '/books.js': ['books.js', 'text/javascript; charset=utf-8'],
+  '/novel-read.js': ['novel-read.js', 'text/javascript; charset=utf-8'],
   '/card-edit.js': ['card-edit.js', 'text/javascript; charset=utf-8'],
   '/card-check.js': ['card-check.js', 'text/javascript; charset=utf-8'],
   '/trial.js': ['trial.js', 'text/javascript; charset=utf-8'],
@@ -150,6 +153,8 @@ const STATIC = {
   '/shared/game/encounter.js': ['shared/game/encounter.js', 'text/javascript; charset=utf-8'],
   '/shared/game/rank.js': ['shared/game/rank.js', 'text/javascript; charset=utf-8'],
   '/shared/game/achievements.js': ['shared/game/achievements.js', 'text/javascript; charset=utf-8'],
+  '/shared/game/growth.js': ['shared/game/growth.js', 'text/javascript; charset=utf-8'],
+  '/game-growth.js': ['game-growth.js', 'text/javascript; charset=utf-8'],
   '/game-rules.js': ['game-rules.js', 'text/javascript; charset=utf-8'],
   '/settings-search.js': ['settings-search.js', 'text/javascript; charset=utf-8'],
   '/game-play.js': ['game-play.js', 'text/javascript; charset=utf-8'],
@@ -163,6 +168,10 @@ const STATIC = {
   '/regex-vet.js': ['regex-vet.js', 'text/javascript; charset=utf-8'],
   '/blockwords.js': ['blockwords.js', 'text/javascript; charset=utf-8'],
   '/tool-prompts.js': ['tool-prompts.js', 'text/javascript; charset=utf-8'],
+  '/quick-replies.js': ['quick-replies.js', 'text/javascript; charset=utf-8'],
+  '/sort-rows.js': ['sort-rows.js', 'text/javascript; charset=utf-8'],
+  '/gallery.js': ['gallery.js', 'text/javascript; charset=utf-8'],
+  '/card-pack.js': ['card-pack.js', 'text/javascript; charset=utf-8'],
   '/shared/blockwords.js': ['shared/blockwords.js', 'text/javascript; charset=utf-8'],
   '/dictation.js': ['dictation.js', 'text/javascript; charset=utf-8'],
   '/icon.png': ['icon.png', 'image/png'],
@@ -270,8 +279,11 @@ function bookView(book, id = book.id) {
     scanDepth: book.scanDepth ?? null,
     // Whether an export carries the SillyTavern fields this app does not read (not for books imported before they were kept).
     complete: book.extras === true,
-    // `extra` stays on the server: the page does not edit it.
-    entries: book.entries.map(({ extra, ...entry }) => ({ ...entry, dynamic: isDynamic(entry), initvar: isInitvar(entry) })),
+    // `extra` stays on the server, but for the switches the page edits (递归, 发送位置: worldbook.mjs recursionOf).
+    entries: book.entries.map(({ extra, ...entry }) => {
+      const shown = Object.fromEntries(['excludeRecursion', 'preventRecursion', 'delayUntilRecursion', 'cicaSend'].filter(key => extra?.[key]).map(key => [key, extra[key]]))
+      return { ...entry, ...(Object.keys(shown).length ? { extra: shown } : {}), dynamic: isDynamic(entry), initvar: isInitvar(entry) }
+    }),
   }
 }
 
@@ -313,8 +325,8 @@ function summaryOrNone(summarize, item, kind, warn = () => {}) {
 }
 
 /** → { card, avatar, raw, game, coverArt }: `raw` the SillyTavern JSON it was read from (null for this app's own export), `game` its rule book, `coverArt` 开场页的图 (only this app's own export has one). */
-function readCardUpload(body) {
-  const { filename, buffer } = decodeUpload(body)
+function readCardUpload(body, packed = null) {
+  const { filename, buffer } = packed ?? decodeUpload(body)
   const { raw, avatar } = parseCardFile(filename, buffer)
   return importOwnCard(raw) ?? { card: normalizeCard(raw), avatar, raw, game: rulebookOf(raw) }
 }
@@ -374,7 +386,9 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     : null
   const rulebooks = createRulebooks(store)
   const music = createMusic(store)
-  const engine = createEngine(store, isolation, ledger, { subscription, rulebooks })
+  // 应用帮助 tells the assistant which version and platform the user is on.
+  const platform = features.edition === 'android' ? '安卓' : process.platform === 'darwin' ? 'Mac' : process.platform === 'win32' ? 'Windows' : process.platform
+  const engine = createEngine(store, isolation, ledger, { subscription, rulebooks, app: { version: VERSION, platform } })
   // Image backends of this computer's own, offered beside the usual ones: Codex where the user has it (codex-drawing.mjs).
   const ownBackends = features.codexDrawing ? [createCodexDrawing({ store, proxy: () => isolation.proxy })] : []
   // 抽图历史: the pictures a card's places had before they were drawn again (draw-history.mjs).
@@ -387,6 +401,19 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
   const scenes = createScenes(store, { media, history: drawHistory })
   const saves = createSaves(store)
   const prompts = createPromptLibrary(store)
+  const gallery = createGallery(store, { scenes, media })
+  // 图库's last export, fetched once by the page (or the Android app into Downloads): one at a time, a few minutes.
+  let galleryExport = null
+  // 导出角色卡 → 带上图片和设置 (card-pack.mjs): the zip built for a card, kept to be fetched; and a zip sent to be
+  // imported, kept until the import that names it (one of each at a time, let go of when too old).
+  const cardPacks = createCardPacks(store, { rulebooks, regex })
+  let packExport = null
+  let packUpload = null
+  const keepFor = (slot, clear) => {
+    const timer = setTimeout(clear, TEXT_EXPORT_KEPT_MS)
+    timer.unref?.()
+    return { ...slot, at: Date.now(), timer }
+  }
   /**
    * Variables written by hand over the latest reply's, on `chat` (saved by the caller). The state stays as it was
    * written here. → the paths the card's variable rules will drop after the next reply (a name a fixed list does not have).
@@ -459,6 +486,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     return {
       media: settings,
       workflow: media.describeWorkflow(await media.loadWorkflow()),
+      workflows: await media.purposeWorkflows(),
       novelai: await media.naiStatus(),
       ownBackends: await media.ownBackends(),
       voiceKey: await media.ttsKeyStatus(),
@@ -689,6 +717,90 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     card.coverArt = Date.now()
   }
 
+  // `replace`: update that card in place (its chats, picture and voice settings, cast and
+  // linked worldbooks stay). Otherwise a new card, which still takes over the settings and
+  // reference pictures of an older version of itself, so deleting that one loses nothing.
+  // `pack`: the zip the card file comes from (uploadedPack), instead of a file in the body.
+  async function importCard(body, pack = null) {
+    const { card, avatar, raw = null, game = null, coverArt = null } = readCardUpload(body, pack?.card)
+    if (typeof body.replace === 'string' && body.replace) {
+      const old = await store.getCard(body.replace)
+      Object.assign(card, { id: old.id, media: old.media, worldbookIds: old.worldbookIds ?? [], hasAvatar: Boolean(avatar) || old.hasAvatar, group: old.group ?? '', archived: old.archived === true, pinned: old.pinned === true, favorite: old.favorite === true })
+      // 开场页的图 stays, unless the file brings one of its own.
+      if (coverArt) await writeCoverArt(card, coverArt)
+      else if (old.coverArt) card.coverArt = old.coverArt
+      else delete card.coverArt
+      // A new version from a file without a picture keeps the old picture, with the new version's card data in it:
+      // exports take what the app does not keep (character_version, Tavern Helper scripts…) from there.
+      let picture = avatar
+      if (!picture && old.hasAvatar) {
+        const before = await readFile(store.avatarPath(old.id)).catch(() => null)
+        try {
+          // This app's own export carries no SillyTavern JSON: the old picture's stays the base, as exports read it.
+          picture = before ? writeCardPng(before, sillyTavernCard(card, raw ?? rawOfPicture(before))) : null
+        } catch {
+          picture = null // not a PNG (a picture set by hand): kept as it is
+        }
+      }
+      await store.saveCard(card, picture)
+      if (raw) await cardScriptsFor(store).remember(card.id, raw)
+      await rulebooks.arrive(card.id, game)
+      return { ...cardSummary(card), updated: old.name }
+    }
+    card.hasAvatar = Boolean(avatar)
+    // A new version of a card goes into the same group as the old one.
+    const previous = previousVersion(await store.listCards(), card)
+    if (previous?.group) card.group = previous.group
+    delete card.coverArt
+    await store.saveCard(card, avatar)
+    // 开场页的图: the file's own, else the older version's.
+    if (coverArt) await writeCoverArt(card, coverArt)
+    else if (previous?.coverArt && (await copyFile(store.coverArtPath(previous.id), store.coverArtPath(card.id)).then(() => true, () => false))) card.coverArt = Date.now()
+    if (card.coverArt) await store.saveCard(card)
+    // Its scripts that run here, kept now: a JSON card has no picture to read them from later.
+    if (raw) await cardScriptsFor(store).remember(card.id, raw)
+    if (previous) {
+      await media.inheritCardMedia(previous.id, card.id)
+      await scenes.inherit(previous.id, card.id)
+      await rulebooks.inherit(previous.id, card.id)
+      await music.inherit(previous.id, card.id)
+      await rulebooks.arrive(card.id, game)
+      await picks.inheritCard(previous.id, card.id)
+      return { ...cardSummary(card), inherited: previous.name }
+    }
+    await rulebooks.arrive(card.id, game)
+    return cardSummary(card)
+  }
+
+  /**
+   * The card as 导出角色卡 writes it, for a pack: the PNG with the card in it, or the JSON for a card without one.
+   * `withRules` false: without its rule book (游戏规则设置 not ticked), the one its picture came with included.
+   */
+  async function packedCardFile(cardId, withRules = true) {
+    const kept = await store.getCard(cardId)
+    const card = withRules ? await withRulebook(kept) : kept
+    const picture = card.hasAvatar ? await readFile(store.avatarPath(cardId)).catch(() => null) : null
+    const raw = rawOfPicture(picture)
+    const written = sillyTavernCard(forSillyTavern(card, raw), raw)
+    if (!withRules) {
+      const own = (written.data ?? written).extensions?.cicatavern
+      if (own) delete own.game
+    }
+    try {
+      if (picture) return { name: 'card.png', data: writeCardPng(picture, written) }
+    } catch {
+      // not a PNG (a picture set by hand): the card goes as JSON
+    }
+    return { name: 'card.json', data: Buffer.from(JSON.stringify(written, null, 2), 'utf8') }
+  }
+
+  /** The zip an import names (`body.pack`, from POST /api/card-packs), or null for a plain card file. */
+  function uploadedPack(body) {
+    if (typeof body?.pack !== 'string' || !body.pack) return null
+    if (packUpload?.token !== body.pack) throw httpError(410, msg`上传的文件已经过期，请重新选一次`)
+    return packUpload.pack
+  }
+
   const routes = [
     ['GET', /^\/api\/health$/, () => ({ ok: true, app: 'agent-tavern', version: VERSION, edition: features.edition, instance })],
     ['GET', /^\/api\/status$/, () => ({
@@ -826,7 +938,10 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['DELETE', /^\/api\/cards\/([\w-]+)\/scenes\/([\w-]+)$/, ([id, sceneId]) => scenes.remove(id, sceneId)],
     // 立绘 (scenes.mjs): one picture per cast member; drawing is a slow call below.
     ['GET', /^\/api\/cards\/([\w-]+)\/sprites$/, ([id]) => scenes.sprites(id)],
-    ['PUT', /^\/api\/cards\/([\w-]+)\/sprites\/([\w-]+)$/, ([id, entryId], body) => scenes.setSprite(id, entryId, body?.image)],
+    // { image }: an uploaded 立绘; { fromRef: true }: the 名册's 人设图 becomes the 立绘 (从人设图抠出).
+    ['PUT', /^\/api\/cards\/([\w-]+)\/sprites\/([\w-]+)$/, async ([id, entryId], body) => (body?.fromRef
+      ? scenes.setSprite(id, entryId, await media.readRosterRef(id, entryId), 'ref')
+      : scenes.setSprite(id, entryId, body?.image))],
     ['DELETE', /^\/api\/cards\/([\w-]+)\/sprites\/([\w-]+)$/, ([id, entryId]) => scenes.removeSprite(id, entryId)],
     // 表情差分: the 立绘 with another face, uploaded or (a slow call below) drawn.
     ['PUT', /^\/api\/cards\/([\w-]+)\/sprites\/([\w-]+)\/expressions\/(\w+)$/, ([id, entryId, expression], body) => scenes.setExpression(id, entryId, expression, body?.image)],
@@ -980,7 +1095,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       return mediaSettingsView(next)
     }],
     ['POST', /^\/api\/media\/novelai\/check$/, (_, body) => media.naiCheck(typeof body?.token === 'string' ? body.token.trim() : '')],
-    ['PUT', /^\/api\/media\/workflow$/, async (_, body) => ({ workflow: await media.saveWorkflow(body.workflow) })],
+    // body.purpose: 'scene' / 'sprite' for the one 背景 or 立绘 are drawn with; with workflow null, that one goes.
+    ['PUT', /^\/api\/media\/workflow$/, async (_, body) => ({ workflow: await media.saveWorkflow(body.workflow, typeof body.purpose === 'string' ? body.purpose : '') })],
     ['GET', /^\/api\/media\/voices$/, () => media.voices()],
     // The bridge's own path, so a tavern elsewhere (the phone) can use this one as its voice service.
     ['GET', /^\/api\/persona\/list$/, () => media.personaList()],
@@ -1110,7 +1226,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     }],
     // Which card a file would update: the newest one with the same name apart from its version.
     ['POST', /^\/api\/cards\/inspect$/, async (_, body) => {
-      const { card } = readCardUpload(body)
+      const { card } = readCardUpload(body, uploadedPack(body)?.card)
       const previous = previousVersion(await store.listCards(), card)
       return { name: card.name, previous: previous ? { id: previous.id, name: previous.name } : null }
     }],
@@ -1118,54 +1234,28 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     // linked worldbooks stay). Otherwise a new card, which still takes over the settings and
     // reference pictures of an older version of itself, so deleting that one loses nothing.
     ['POST', /^\/api\/cards\/import$/, async (_, body) => {
-      const { card, avatar, raw = null, game = null, coverArt = null } = readCardUpload(body)
-      if (typeof body.replace === 'string' && body.replace) {
-        const old = await store.getCard(body.replace)
-        Object.assign(card, { id: old.id, media: old.media, worldbookIds: old.worldbookIds ?? [], hasAvatar: Boolean(avatar) || old.hasAvatar, group: old.group ?? '', archived: old.archived === true, pinned: old.pinned === true, favorite: old.favorite === true })
-        // 开场页的图 stays, unless the file brings one of its own.
-        if (coverArt) await writeCoverArt(card, coverArt)
-        else if (old.coverArt) card.coverArt = old.coverArt
-        else delete card.coverArt
-        // A new version from a file without a picture keeps the old picture, with the new version's card data in it:
-        // exports take what the app does not keep (character_version, Tavern Helper scripts…) from there.
-        let picture = avatar
-        if (!picture && old.hasAvatar) {
-          const before = await readFile(store.avatarPath(old.id)).catch(() => null)
-          try {
-            // This app's own export carries no SillyTavern JSON: the old picture's stays the base, as exports read it.
-            picture = before ? writeCardPng(before, sillyTavernCard(card, raw ?? rawOfPicture(before))) : null
-          } catch {
-            picture = null // not a PNG (a picture set by hand): kept as it is
-          }
-        }
-        await store.saveCard(card, picture)
-        if (raw) await cardScriptsFor(store).remember(card.id, raw)
-        await rulebooks.arrive(card.id, game)
-        return { ...cardSummary(card), updated: old.name }
-      }
-      card.hasAvatar = Boolean(avatar)
-      // A new version of a card goes into the same group as the old one.
-      const previous = previousVersion(await store.listCards(), card)
-      if (previous?.group) card.group = previous.group
-      delete card.coverArt
-      await store.saveCard(card, avatar)
-      // 开场页的图: the file's own, else the older version's.
-      if (coverArt) await writeCoverArt(card, coverArt)
-      else if (previous?.coverArt && (await copyFile(store.coverArtPath(previous.id), store.coverArtPath(card.id)).then(() => true, () => false))) card.coverArt = Date.now()
-      if (card.coverArt) await store.saveCard(card)
-      // Its scripts that run here, kept now: a JSON card has no picture to read them from later.
-      if (raw) await cardScriptsFor(store).remember(card.id, raw)
-      if (previous) {
-        await media.inheritCardMedia(previous.id, card.id)
-        await scenes.inherit(previous.id, card.id)
-        await rulebooks.inherit(previous.id, card.id)
-        await music.inherit(previous.id, card.id)
-        await rulebooks.arrive(card.id, game)
-        await picks.inheritCard(previous.id, card.id)
-        return { ...cardSummary(card), inherited: previous.name }
-      }
-      await rulebooks.arrive(card.id, game)
-      return cardSummary(card)
+      const pack = uploadedPack(body)
+      const saved = await importCard(body, pack)
+      if (!pack) return saved
+      // What the zip brought beside the card: pictures, 正则集, settings.
+      const arrived = await cardPacks.restore(saved.id, pack)
+      clearTimeout(packUpload?.timer)
+      packUpload = null
+      return { ...cardSummary(await store.getCard(saved.id)), ...(saved.updated ? { updated: saved.updated } : {}), ...(saved.inherited ? { inherited: saved.inherited } : {}), arrived }
+    }],
+    // 导出角色卡 → 带上图片和设置: what this card has to take along, and the zip of what was ticked (fetched from
+    // GET /api/card-packs/:token).
+    ['GET', /^\/api\/cards\/([\w-]+)\/pack$/, ([id]) => cardPacks.survey(id)],
+    ['POST', /^\/api\/cards\/([\w-]+)\/pack$/, async ([id], body) => {
+      clearTimeout(packExport?.timer)
+      packExport = null
+      const card = await store.getCard(id)
+      const { parts, size, included } = await cardPacks.build(id, body?.include, withRules => packedCardFile(id, withRules))
+      const token = randomBytes(12).toString('hex')
+      packExport = keepFor({ token, parts, size }, () => {
+        if (packExport?.token === token) packExport = null
+      })
+      return { path: `/api/card-packs/${token}`, name: `${card.name}.zip`, size, included }
     }],
     ['GET', /^\/api\/cards\/([\w-]+)$/, async ([id]) => {
       const [card, personas, styles] = await Promise.all([store.getCard(id), store.getPersonas(), store.getStyles()])
@@ -1300,6 +1390,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['POST', /^\/api\/novel$/, (_, body) => forge.novelStart(body ?? {})],
     ['PUT', /^\/api\/novel$/, (_, body) => forge.novelUpdate(body ?? {})],
     ['POST', /^\/api\/novel\/run$/, () => forge.novelRun()],
+    ['POST', /^\/api\/novel\/digest$/, () => forge.novelDigest()],
     ['POST', /^\/api\/novel\/stop$/, () => forge.novelStop()],
     ['POST', /^\/api\/novel\/save$/, (_, body) => forge.novelSave(body ?? {})],
     ['DELETE', /^\/api\/novel$/, () => forge.novelDrop()],
@@ -1571,6 +1662,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       if (body.model !== undefined) chat.model = body.model ? modelRef(body.model) : null
       // 联网: the provider searches the web for this chat's turns when the model asks (models that can).
       if (body.webSearch !== undefined) chat.webSearch = Boolean(body.webSearch)
+      // 应用帮助 (直连对话): the assistant answers about the app from its help docs and source (help.mjs).
+      if (body.appHelp !== undefined) chat.appHelp = Boolean(body.appHelp)
       // Its own 思考 for its replies (providers.mjs chatReasoning); empty follows the provider and the settings.
       if (body.thinking !== undefined) chat.thinking = CHAT_THINKING.includes(body.thinking) ? body.thinking : null
       return { ...chatView(await store.saveChat(chat)), running: engine.isRunning(id) }
@@ -1625,10 +1718,12 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       return memoryWorldFile(memoryView(chat).entries.map(({ sourceId, ...entry }) => entry), msg`${chat.title} · 记忆簿`)
     }],
     // 隐藏这一轮: a round kept and shown but no longer sent (chats.mjs hideRound); `hidden: false` sends it again.
+    // `nodeIds`: many at once (/hide 1-80 typed in the input box), saved once.
     ['POST', /^\/api\/chats\/([\w-]+)\/hide$/, ([id], body) => store.withChat(id, async () => {
       if (engine.isRunning(id)) throw httpError(409, msg`正在生成，先停止`)
       const chat = await store.getChat(id)
-      hideRound(chat, String(body.nodeId), body.hidden !== false)
+      const ids = Array.isArray(body.nodeIds) ? body.nodeIds.slice(0, 5000).map(String) : [String(body.nodeId)]
+      for (const nodeId of ids) hideRound(chat, nodeId, body.hidden !== false)
       return chatView(await store.saveChat(chat))
     })],
     // 删除: one message, a reply or the player's (chats.mjs deleteMessage); `deleted: false` brings it back.
@@ -1668,7 +1763,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     // Manual compaction: one summary call, then the next turn starts a new session (see recap.mjs).
     // With `model`, another model writes the archive; with `keepRecent`, none does (engine.compactAt).
     ['POST', /^\/api\/chats\/([\w-]+)\/compact$/, async ([id], body) => {
-      const options = { model: typeof body?.model === 'string' ? body.model : '', keepRecent: body?.keepRecent === true }
+      const options = { model: typeof body?.model === 'string' ? body.model : '', keepRecent: body?.keepRecent === true, again: body?.again === true }
       return { ...chatView(await engine.compactChat(id, options)), running: false }
     }],
     ['GET', /^\/api\/chats\/([\w-]+)\/compact$/, async ([id]) => ({ parts: engine.compactProgress(id) })],
@@ -1739,6 +1834,22 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       const token = randomBytes(12).toString('hex')
       textExports.set(token, { type, text: String(body?.text ?? ''), at: now })
       return { path: `/api/text-exports/${token}` }
+    }],
+    // 图库: every picture of every card and chat; an export of the ones picked, as a zip to fetch.
+    ['GET', /^\/api\/gallery$/, () => gallery.list()],
+    ['POST', /^\/api\/gallery\/export$/, async (_, body) => {
+      clearTimeout(galleryExport?.timer)
+      galleryExport = null
+      const { parts, size, count, missing } = await gallery.exportZip(body?.ids)
+      const token = randomBytes(12).toString('hex')
+      // Let go of once it is too old to fetch: hundreds of megabytes would stay till the next export otherwise.
+      const timer = setTimeout(() => {
+        if (galleryExport?.token === token) galleryExport = null
+      }, TEXT_EXPORT_KEPT_MS)
+      timer.unref?.()
+      clearTimeout(galleryExport?.timer)
+      galleryExport = { token, parts, size, at: Date.now(), timer }
+      return { path: `/api/gallery/exports/${token}`, count, missing }
     }],
     // EjsTemplate.getSyntaxErrorInfo in a card's frame.
     ['POST', /^\/api\/ejs\/check$/, async (_, body) => {
@@ -2082,6 +2193,59 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       if (!data) return sendJson(res, 404, { error: msg`这个角色还没有人设图` })
       res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'no-cache' })
       return res.end(data)
+    }
+
+    // A zip to import, sent as it is (not as JSON: half a gigabyte would not fit a string). → what /api/cards/inspect
+    // says of its card, and the token to import it by ({ pack } to /api/cards/import).
+    if (req.method === 'POST' && url.pathname === '/api/card-packs') {
+      const length = Number(req.headers['content-length'])
+      // A little over the pack's most: the zip's own bookkeeping.
+      const most = MAX_PACK + 8 * 1024 * 1024
+      if (!Number.isInteger(length) || length <= 0) return sendJson(res, 411, { error: msg`缺少文件` })
+      if (length > most) return sendJson(res, 413, { error: msg`文件太大（最多 500MB）` })
+      clearTimeout(packUpload?.timer)
+      packUpload = null
+      // Into one buffer of the size said: never the file twice in memory.
+      const buffer = Buffer.allocUnsafe(length)
+      let filled = 0
+      for await (const chunk of req) {
+        if (filled + chunk.length > length) return sendJson(res, 400, { error: msg`文件和说好的大小不一样` })
+        chunk.copy(buffer, filled)
+        filled += chunk.length
+      }
+      if (filled !== length) return sendJson(res, 400, { error: msg`文件没有传完` })
+      const pack = await cardPacks.read(buffer)
+      const { card } = readCardUpload({}, pack.card)
+      const previous = previousVersion(await store.listCards(), card)
+      const token = randomBytes(12).toString('hex')
+      packUpload = keepFor({ token, pack }, () => {
+        if (packUpload?.token === token) packUpload = null
+      })
+      return sendJson(res, 200, { pack: token, name: card.name, previous: previous ? { id: previous.id, name: previous.name } : null, parts: pack.manifest.parts ?? [] })
+    }
+
+    const packFile = /^\/api\/card-packs\/([0-9a-f]{24})$/.exec(url.pathname)
+    if (req.method === 'GET' && packFile) {
+      if (packExport?.token !== packFile[1] || Date.now() - packExport.at > TEXT_EXPORT_KEPT_MS) return sendJson(res, 404, { error: msg`导出的文件已经过期，请重新导出` })
+      res.writeHead(200, { 'content-type': 'application/zip', 'content-length': packExport.size, 'cache-control': 'no-store', 'content-disposition': 'attachment' })
+      for (const part of packExport.parts) {
+        if (res.destroyed) return
+        if (!res.write(part)) await new Promise(resolve => res.once('drain', resolve).once('close', resolve))
+      }
+      return res.end()
+    }
+
+    const pictureExport = /^\/api\/gallery\/exports\/([0-9a-f]{24})$/.exec(url.pathname)
+    if (req.method === 'GET' && pictureExport) {
+      if (galleryExport?.token !== pictureExport[1] || Date.now() - galleryExport.at > TEXT_EXPORT_KEPT_MS) return sendJson(res, 404, { error: msg`导出的文件已经过期，请重新导出` })
+      res.writeHead(200, { 'content-type': 'application/zip', 'content-length': galleryExport.size, 'cache-control': 'no-store', 'content-disposition': 'attachment' })
+      // Piece by piece, each waiting for the one before to drain: never the whole zip a second time in memory.
+      const { parts } = galleryExport
+      for (const part of parts) {
+        if (res.destroyed) return
+        if (!res.write(part)) await new Promise(resolve => res.once('drain', resolve).once('close', resolve))
+      }
+      return res.end()
     }
 
     const textExport = /^\/api\/text-exports\/([\w-]+)$/.exec(url.pathname)

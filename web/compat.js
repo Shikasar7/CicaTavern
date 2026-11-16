@@ -275,6 +275,33 @@ function shimMain(ctx, makeFetch, olderLorebooks) {
       buckets.chat = chatShape()
       eventEmit('mag_variable_update_ended', messageVars.get(ctx.lastId)).catch(() => {})
     }
+    // The chat moved on (a reply, 补写变量, 编辑状态, a swipe, a rollback): the latest floor, the messages near it and their
+    // variables, as a frame made now would get them. A frame that lives on (a card script's window) read the chat as it
+    // was when it opened and kept answering getVariables / getLastMessageId with that. `changed`: the variables changed,
+    // so MVU's listeners hear it, as in SillyTavern after an update.
+    if (data && data.agentTavernChat && typeof data.agentTavernChat === 'object') {
+      const fresh = data.agentTavernChat
+      if (Number.isInteger(fresh.lastId) && fresh.lastId >= 0) {
+        for (const id of [...messageVars.keys()]) if (id > fresh.lastId) messageVars.delete(id)
+        ctx.lastId = fresh.lastId
+      }
+      if (Array.isArray(fresh.messages)) {
+        // The floors near the end, merged over what this frame has (floors past the new end go).
+        const byId = new Map((ctx.messages || []).filter(m => m.message_id <= ctx.lastId).map(m => [m.message_id, m]))
+        for (const m of fresh.messages) {
+          byId.set(m.message_id, m)
+          messageVars.set(m.message_id, mvuShape(m.state))
+        }
+        ctx.messages = [...byId.values()].sort((a, b) => a.message_id - b.message_id)
+        chat.length = 0
+        for (const m of ctx.messages) chat[m.message_id] = { name: m.name, is_user: m.role === 'user', is_system: false, mes: m.message }
+      }
+      ctx.vars.latest = fresh.latest && typeof fresh.latest === 'object' ? fresh.latest : {}
+      if (ctx.messageId === ctx.lastId) ctx.vars.message = ctx.vars.latest
+      messageVars.set(ctx.lastId, mvuShape(ctx.vars.latest))
+      buckets.chat = chatShape()
+      if (fresh.changed) eventEmit('mag_variable_update_ended', messageVars.get(ctx.lastId)).catch(() => {})
+    }
     // The chat's variables as saved now (another frame, or /setvar from STscript): this frame reads and writes over them.
     if (data && data.agentTavernChatVars && typeof data.agentTavernChatVars === 'object') {
       chatExtras = clone(data.agentTavernChatVars.vars || {})
@@ -1260,6 +1287,14 @@ export function broadcastEvent(type, ...args) {
 /** Tell every card frame the chat's state changed, so the latest floor's variables and MVU listeners follow. */
 export function broadcastState(state) {
   for (const frame of loadedFrames()) frame.contentWindow?.postMessage({ agentTavernState: { state } }, '*')
+}
+
+/**
+ * Tell every card frame the chat as it is now (`fresh`: { lastId, messages, latest, changed }), so a frame that outlives
+ * a turn reads the new latest floor and its variables, and MVU's listeners hear that they changed.
+ */
+export function broadcastChat(fresh) {
+  for (const frame of loadedFrames()) frame.contentWindow?.postMessage({ agentTavernChat: fresh }, '*')
 }
 
 /** Tell every card frame the chat's variables as saved, so a frame's copy has what another wrote (or /setvar). */

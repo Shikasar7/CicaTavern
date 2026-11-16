@@ -49,7 +49,7 @@ export function coverPage(el, { name, by = '', cover, palette = null, skin = nul
   })
   mark(picked)
   // With no picture, the name's first letter stands large and faint where one would be.
-  const box = el('section', { class: `cover${art?.backdrop ? '' : ' plain'}${art?.portrait ? ' has-figure' : ''}`, 'aria-label': t`开场页`, 'data-initial': art?.backdrop ? undefined : letters[0] ?? '' }, [
+  const box = el('section', { class: `cover${art?.backdrop ? '' : ' plain'}${art?.portrait ? ' has-figure' : ''}${cover.layout ? ` cover-${cover.layout}` : ''}`, 'aria-label': t`开场页`, 'data-initial': art?.backdrop ? undefined : letters[0] ?? '' }, [
     art?.backdrop ? el('div', { class: `cover-back${art.soft ? ' soft' : ''}` }, el('img', { src: art.backdrop, alt: '', draggable: 'false' })) : null,
     el('div', { class: 'cover-veil' }),
     cover.effect ? effectLayer(el, cover.effect, 1.6) : null,

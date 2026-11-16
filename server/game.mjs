@@ -9,7 +9,8 @@ import path from 'node:path'
 import { imageKind } from './appearance.mjs'
 import { replyMarks } from '../web/shared/game/marks.js'
 import { AID_BONUS, ATTRIBUTES, ATTRIBUTE_POINTS, AVERAGE, DEFAULT_WORDS, EFFECTS, STRENGTHS, WORD_KEYS, applyOps, attributeNames, cleanKit, cleanRulebook, fieldedOf, keptSheet, kitBook, rulesOn, sanityWord, settleReply, sheetOf, sheetOnPath, wordFor } from '../web/shared/game/sheet.js'
-import { SKILLS } from '../web/shared/game/battle.js'
+import { cleanGear, foeAddsAsk, formsAsk, gearAsk, gearSortAsk, modulesAsk, perksAsk, skillsAsk } from '../web/shared/game/growth.js'
+import { cleanFoeAdds } from '../web/shared/game/battle.js'
 import { BINDABLE, fitsField } from '../web/shared/game/bindings.js'
 import { randomFrom, seedOf } from '../web/shared/game/dice.js'
 import { stateTime, storyDay } from '../web/shared/vn.js'
@@ -27,9 +28,9 @@ const FIGHT_REMINDER = {
 const MAX_FOES_TOLD = 12
 const CARD_READ = 6000
 const LORE_READ = 2000
-const THEMES = ['plain', 'wuxia', 'xianxia', 'fantasy', 'modern', 'scifi', 'horror', 'monster', 'netgame', 'apocalypse', 'daily']
+const THEMES = ['plain', 'wuxia', 'xianxia', 'fantasy', 'modern', 'scifi', 'horror', 'monster', 'netgame', 'hero', 'apocalypse', 'daily']
 // What each is, for the helper: it picks the nearest, and the card's own words go in `words`.
-const THEME_WORDS = '通用、武侠、修仙、奇幻、现代、科幻、克苏鲁或恐怖、怪兽养成（宠物、数码兽、契约兽这类伙伴替你打、会进化）、网游或系统流、末日求生、日常（几乎不打架）'
+const THEME_WORDS = '通用、武侠、修仙、西幻或奇幻、现代、科幻、克苏鲁或恐怖、怪兽养成（宠物、数码兽、契约兽这类伙伴替你打、会进化）、网游或系统流、变身或机甲（hero：平时是普通人，打斗时变身、合体、驾驶机体）、末日求生、日常（几乎不打架）'
 const FOE_PICTURE = /^[\w-]{1,64}\.(png|jpg|webp)$/
 const PICTURE_TYPES = { jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp' }
 const MAX_PICTURE = 12 * 1024 * 1024
@@ -69,9 +70,11 @@ const FIGHT_RULES = [
 const AS_THE_STORY_HAS_IT = '按它在故事里的实力写，不要为了让玩家打得过就压低：打不过的敌人也可以出现，玩家可以逃或者想别的办法。'
 
 /** How a foe's strength is written: by the card's ranks, or a word beside the player. */
-function strengthRule(ranks) {
+function strengthRule(ranks, grows) {
+  // 成长: a foe met again is as strong as it was, so it has to come back under the name it had.
+  const again = grows ? '同一个敌人再次出现时用原来的名字；它比上次明显变强了，才写比上次更强的词。' : ''
   if (ranks.length) return `- 这个世界的等级从低到高是：${ranks.join('、')}。敌人的等级写在档位后面，比如 【战斗|黑衣头目:精英:${ranks[Math.floor(ranks.length * MID_RANK)]}】。${AS_THE_STORY_HAS_IT}`
-  return `- 敌人明显比玩家强或弱时，在档位后面写强弱，比如 【战斗|黑衣头目:精英:远强】，从远弱、稍弱、相当、稍强、强、远强里选，不写算相当。${AS_THE_STORY_HAS_IT}`
+  return `- 敌人明显比玩家强或弱时，在档位后面写强弱，比如 【战斗|黑衣头目:精英:远强】，从远弱、稍弱、相当、稍强、强、远强里选，不写算相当。${again}${AS_THE_STORY_HAS_IT}`
 }
 
 /** What a story that counts 理智 asks: the marks, unless the card keeps it in a variable of its own. */
@@ -83,7 +86,17 @@ function sanityRule(bound) {
 /** The attributes as this card calls them, in a line: what the rules tell the model, and how a copy of them from before a rename is told apart. */
 const attributesLine = words => `属性：${ATTRIBUTES.map(item => wordFor({ words }, item.id)).join('、')}`
 
-function rulesBlock(pausing, bound, fights, foes, ranks, sanity, party, words = {}) {
+// 形态: told to a story whose party has some. The opening words are how a copy of the rules is known to have them.
+const FORMS_TOLD = '队伍里有人会变'
+const formsRule = (forms, words) => `- ${FORMS_TOLD}成别的${wordFor({ words }, 'form')}（${forms.chains.join('；')}）。剧情里有人确实${wordFor({ words }, 'evolve')}了、或者变回去了，写 【进化|谁|${wordFor({ words }, 'form')}名】，玩家自己的写 【进化|${wordFor({ words }, 'form')}名】，名字只能用上面列出的。这是大事，不要随便给；条件到了的玩家会自己在行囊里${wordFor({ words }, 'evolve')}，那时 <本轮操作> 会告诉你，不用再写标记。${forms.story?.length ? `${forms.story.join('、')}没有条件可达，只能由你在故事里给：到了真正的转折点（生死关头挺身而出、长久相处后的觉醒、关键的约定达成）就写标记给出去，不要一直拖着。` : ''}叙述里按各人现在的${wordFor({ words }, 'form')}来写外貌和本事。`
+
+// 指挥 and 收服: told to a story whose card has them.
+const LEAD_TOLD = '玩家自己不上场'
+const leadRule = words => `- ${LEAD_TOLD}：打起来是${wordFor({ words }, 'party')}里的同伴在打，玩家在后面指挥、递东西、喊撤。叙述战斗前后时照这个写，不要写玩家亲自动手；同伴都倒下才算输，玩家本人不会在战斗里受伤。`
+const TAME_TOLD = '打赢以后可以收服'
+const TAME_RULE = `- ${TAME_TOLD}：玩家在战斗结束时可以试着把打倒的敌人（首领除外）收为同伴，成不成由应用掷骰决定，<战斗结果> 会告诉你。收服成功的已经入队，不用再写 【同伴|加入】；你也不要自己写谁被收服了。`
+
+function rulesBlock(pausing, bound, fights, foes, ranks, sanity, party, words = {}, grows = false, forms = null, lead = false, tame = false) {
   const grace = wordFor({ words }, 'grace')
   const mind = wordFor({ words }, 'mind')
   const stop = pausing
@@ -93,7 +106,7 @@ function rulesBlock(pausing, bound, fights, foes, ranks, sanity, party, words = 
     RULES_OPEN,
     '这个故事带规则，数值由应用计算，你只写故事。',
     ...stop,
-    ...(fights ? [...FIGHT_RULES, strengthRule(ranks)] : []),
+    ...(fights ? [...FIGHT_RULES, strengthRule(ranks, grows)] : []),
     ...(fights && foes.length ? [`- 这个世界常见的敌人：${foes.slice(0, MAX_FOES_TOLD).join('、')}。`] : []),
     ...(fights && party ? [PARTY_RULE] : []),
     `- 行动选项：每组挑 1 到 2 个有风险的，在那一行末尾加 【检定|属性|DC数字】，比如 B. 翻过断崖【检定|${grace}|DC12】。这种不用结束回复，其余的不加，不要每个都加。`,
@@ -105,6 +118,9 @@ function rulesBlock(pausing, bound, fights, foes, ranks, sanity, party, words = 
     '- 这些规则里的例子只是格式，名字换成这个故事里的东西。',
     '- 游戏状态是写给你看的：故事里不写这些数字，角色也不知道玩家的数值和背包里有什么，除非亲眼看见。玩家伤重时把伤势写进动作里。',
     ...(sanity ? [sanityRule(bound)] : []),
+    ...(forms ? [formsRule(forms, words)] : []),
+    ...(fights && lead ? [leadRule(words)] : []),
+    ...(fights && tame ? [TAME_RULE] : []),
     `- ${marksLine(bound, ranks, grace)}。这些标记玩家看不到。`,
     '- 收到 <本轮操作> 时，那些变化已经算过了，不用再写标记。',
     `- 收到 <检定结果>${fights ? ' 或 <战斗结果>' : ''} 时按它写，不要改写成败。失败也要让故事往前走：受伤、暴露、错过机会，不要写成什么都没发生。`,
@@ -140,7 +156,7 @@ function partyLine(sheet, words) {
   }).join('、')
 }
 
-function sheetLine(sheet, rank, words = {}) {
+function sheetLine(sheet, rank, words = {}, perks = [], gear = [], forms = null) {
   const things = sheet.things.map(thing => (thing.count > 1 ? `${thing.name}×${thing.count}` : thing.name)).join('、')
   const party = partyLine(sheet, words)
   const quests = sheet.quests.filter(quest => quest.status === 'new').map(quest => quest.title).join('、')
@@ -151,6 +167,10 @@ function sheetLine(sheet, rank, words = {}) {
     rank ? `等级：${rank}` : '',
     ATTRIBUTES.map(item => `${wordFor({ words }, item.id)} ${sheet.attributes[item.id]}`).join('、'),
     ails ? `异常：${ails}` : '',
+    // 天赋 by name only: what they do is the rules' to count, the story's to show.
+    perks.length ? `${wordFor({ words }, 'perk')}：${perks.join('、')}（已经练成的本事，叙述里可以体现）` : '',
+    gear.length ? `装备着：${gear.join('、')}` : '',
+    forms ? `${wordFor({ words }, 'form')}：${forms.now.join('、')}` : '',
     things ? `物品：${things}` : '',
     party ? `${wordFor({ words }, 'party')}：${party}` : '',
     quests ? `进行中的任务：${quests}` : '',
@@ -164,6 +184,15 @@ function checkBlock(result) {
   return `<检定结果>\n${result.stat || '这次'}检定（DC${result.dc}）：掷出 ${result.roll}，修正 ${sign}${Math.abs(result.modifier)}，合计 ${result.total}${bag}，${TIER_RESULT[result.tier]}。按这个结果写下去，${TIER_PAYOFF[result.tier]}\n</检定结果>`
 }
 
+// What a fight that was won should leave in the story, by how much it took (encounter.js worthOf): a fight is a turn
+// of the player's time, and one that changes nothing but the numbers was not worth having.
+const SPOILS = {
+  small: '这一仗不费力：可以顺手写一件小的战利品，或者一句旁人的反应，没有也行，不要小题大做。',
+  fair: '这一仗赢得不轻松，要写出它换来了什么，至少一样：一件用得上的战利品、一条线索或情报、在场的人对玩家态度的变化、一条原先走不通的路。',
+  great: '这是一场大胜，要写得有分量：一件像样的战利品，再加至少一样会影响后面故事的东西：关键的情报或真相、传开的名声、欠下的人情或结下的仇、新的去处。在场的同伴和旁人要有反应。',
+}
+const SPOILS_KEPT = '玩家得到的东西照常记下，不要只在正文里提。'
+
 const BATTLE_ENDS = {
   won: '胜利',
   fled: '玩家逃脱了',
@@ -173,16 +202,24 @@ const BATTLE_ENDS = {
 
 function battleBlock(battle, words = {}) {
   const life = wordFor({ words }, 'life')
+  // One the player could not have won: how they come out of it is the story's, but not as the winner.
+  if (battle.over === 'story' && battle.beyond) return `<战斗结果>\n玩家没有硬打（${battle.foes}）。对手比玩家强得多，硬打赢不了：这一段由你按剧情写，玩家是脱身了、被放过了、被擒了，还是付出了什么代价，你来决定，但不要写成玩家打赢了。\n</战斗结果>`
   if (battle.over === 'story') return `<战斗结果>\n玩家不走战斗（${battle.foes}），这一段由你按剧情写，怎么收场你决定。\n</战斗结果>`
   const used = Object.entries(battle.used).map(([name, count]) => (count > 1 ? `${name} ×${count}` : name)).join('、')
   const lines = [
     `${BATTLE_ENDS[battle.over].replace('生命', life)}，${battle.rounds} 回合。敌人：${battle.foes}${battle.downed ? `，击败了 ${battle.downed}` : ''}。`,
-    `玩家：${life} ${battle.life}/${battle.maxLife}${used ? `，用掉 ${used}` : ''}${battle.skills.length ? `，用过 ${battle.skills.join('、')}` : ''}。`,
+    battle.commanded ? `玩家在后面指挥，没有亲自动手，也没有挨打${used ? `；用掉 ${used}` : ''}。` : `玩家：${life} ${battle.life}/${battle.maxLife}${used ? `，用掉 ${used}` : ''}${battle.skills.length ? `，用过 ${battle.skills.join('、')}` : ''}。`,
     battle.party?.length ? `同伴：${battle.party.map(member => `${member.name} ${life} ${member.life}/${member.maxLife}${member.skills.length ? `，用过 ${member.skills.join('、')}` : ''}${member.fell ? '，被打倒过' : ''}`).join('；')}。` : '',
     battle.party?.some(member => member.fell) ? '被打倒过的同伴受了伤，后文要写到。' : '',
     battle.rallied ? '玩家被打倒后硬撑着站了起来，透支了身体，接下来几天都虚弱。' : '',
+    battle.tame ? (battle.tame.ok ? `玩家收服了${battle.tame.name}：它从此跟着玩家，已经入队，不用再写 【同伴】 标记。写出它服气、认主或被说动的那一刻。` : `玩家想收服${battle.tame.name}，没有成：它挣脱跑了，或者宁死不从，你来写。不要写成收服成功。`) : '',
+    // 形态: a fight worth the name that was won is where the story may give a form that nothing else can bring.
+    battle.over === 'won' && battle.worth && battle.worth !== 'small' && battle.story?.length ? `这一仗是个转折点：${battle.story.join('、')}只能由剧情给，如果这一仗里它拼了命、或者和玩家的心意通了，就在这一轮让它成真，并写上 【进化】 标记；觉得还不到时候就不写。` : '',
+    battle.shifted?.length ? `这一战里${battle.shifted.map(item => `${item.who ?? '玩家'}临时变成了${item.form}`).join('，')}，打完就变回原样了：写出这一下的变化，但不要写成从此就是那个${wordFor({ words }, 'form')}。` : '',
+    // What was cured in the fight is gone from the status line; said here too, or the story goes on limping.
+    battle.cured?.length ? `战斗里玩家解除了：${battle.cured.join('、')}。它已经好了，后文不要再写玩家受它影响。` : '',
     battle.shock ? '这样的敌人超出了玩家的理解，理智已经扣过了，不用再写 【理智】。' : '',
-    battle.over === 'lost' ? '写战败的后果：受伤、被俘、被救、失去东西都可以，故事接着走，不算结束。' : '可以写一件合理的战利品。',
+    battle.over === 'lost' ? '写战败的后果：受伤、被俘、被救、失去东西都可以，故事接着走，不算结束。' : battle.over === 'won' ? `${SPOILS[battle.worth] ?? SPOILS.small}${battle.worth && battle.worth !== 'small' ? SPOILS_KEPT : ''}` : '玩家脱身了，敌人还在：写这次交手让玩家知道了什么（对方的路数、弱点、来历），或者之后会有什么麻烦找上门。伤已经算过了，不要再给玩家加新的异常。',
     '数值已结算，不要再改这些数值，不要改写胜负。从战斗结束这一刻接着写，不用逐回合复述。',
   ]
   return `<战斗结果>\n${lines.filter(Boolean).join('\n')}\n</战斗结果>`
@@ -228,15 +265,15 @@ function lookBack(bound, sheet) {
  * @param rules - { sheet, rank, ranks, pausing, fights, fightRate, foes, check, battle, lines, bound, wantsFight, mayFight, own, safe, spot } (engine.mjs gameTurn).
  * @param turns - the turns the model will read: from the latest compaction, hidden ones left out.
  */
-export function gamePrompt({ sheet, rank = '', ranks = [], pausing, fights = false, fightRate = 'normal', foes = [], check, battle = null, lines = [], bound = [], wantsFight = false, mayFight = false, own = false, safe = false, spot = '', companions = false, words = {} }, turns) {
+export function gamePrompt({ sheet, rank = '', ranks = [], pausing, fights = false, fightRate = 'normal', foes = [], check, battle = null, lines = [], bound = [], wantsFight = false, mayFight = false, own = false, safe = false, spot = '', companions = false, words = {}, perks = [], grows = false, gear = [], forms = null, lead = false, tame = false }, turns) {
   // A party is told of where there are fights for it: the card has companions, or someone has joined.
   const sent = turns.filter(node => node.role === 'user').map(node => node.prompt ?? '')
   // A copy from before fights were on, or before they could be on a choice, says nothing of them.
   const party = fights && (companions || (sheet.party?.length ?? 0) > 0)
-  const haveRules = sent.slice(-RULES_EVERY).some(prompt => prompt.includes(RULES_OPEN) && prompt.includes(OWN_ACTIONS) && (!fights || prompt.includes(FIGHTS_TOLD)) && (!party || prompt.includes(PARTY_TOLD)) && (!Object.keys(attributeNames({ words })).length || prompt.includes(attributesLine(words))))
-  const line = sheetLine(sheet, rank, words)
+  const haveRules = sent.slice(-RULES_EVERY).some(prompt => prompt.includes(RULES_OPEN) && prompt.includes(OWN_ACTIONS) && (!fights || prompt.includes(FIGHTS_TOLD)) && (!party || prompt.includes(PARTY_TOLD)) && (!forms || prompt.includes(FORMS_TOLD)) && (!(fights && lead) || prompt.includes(LEAD_TOLD)) && (!(fights && tame) || prompt.includes(TAME_TOLD)) && (!Object.keys(attributeNames({ words })).length || prompt.includes(attributesLine(words))))
+  const line = sheetLine(sheet, rank, words, perks, gear, forms)
   const lastLine = sent.flatMap(prompt => prompt.match(SHEET_LINE) ?? []).at(-1)
-  const parts = [haveRules ? '' : rulesBlock(pausing, bound, fights, foes, ranks, sheet.sanity !== undefined, party, words), lastLine === line ? '' : line, lines.length ? `<本轮操作>${lines.join('；')}</本轮操作>` : '', check ? checkBlock(check) : '', battle ? battleBlock(battle, words) : '', turnAsks({ fights, fightRate, foes, wantsFight, mayFight, own, safe, battle, spot }, turns)]
+  const parts = [haveRules ? '' : rulesBlock(pausing, bound, fights, foes, ranks, sheet.sanity !== undefined, party, words, grows, forms, lead, tame), lastLine === line ? '' : line, lines.length ? `<本轮操作>${lines.join('；')}</本轮操作>` : '', check ? checkBlock(check) : '', battle ? battleBlock(forms?.story?.length ? { ...battle, story: forms.story } : battle, words) : '', turnAsks({ fights, fightRate, foes, wantsFight, mayFight, own, safe, battle, spot }, turns)]
   return {
     text: parts.filter(Boolean).join('\n\n'),
     reminder: !haveRules ? lookBack(bound, sheet) : `${pausing ? `行动结果不确定时写 【检定】 标记并结束回复；${fights ? '躲不掉的打斗写 【战斗】 标记并结束回复；' : ''}` : ''}行动选项里挑 1 到 2 个有风险的，行尾加 【检定|属性|DC数字】，成功的收获要比其余选项多；${fights ? FIGHT_REMINDER[fightRate] : ''}${bound.includes('things') ? '' : '得失写 【获得】【失去】，'}见之前的游戏规则。${lookBack(bound, sheet)}`,
@@ -267,8 +304,8 @@ export const mayAskForFight = input => BLOW_WORDS.test(String(input ?? ''))
 export function thingsRequest(things) {
   const list = things.map(thing => `- ${thing.name}${thing.note ? `（${thing.note}）` : ''}`).join('\n')
   const content = `给这些物品归类，只输出一个 JSON 数组，不要别的文字。每项 {"name":名字,"type":类型,"size":强度}。
-类型：heal 回复生命，energy 回复气力或法力，calm 安定心神、恢复理智，damage 战斗中用来打敌人，cure 解除中毒之类的异常，boost 暂时变强，none 只有剧情用途（钥匙、信件、材料）。
-强度：small、medium、large，看物品听起来有多珍贵；none、cure、boost 不用写。
+类型：heal 回复生命，energy 回复气力或法力，calm 安定心神、恢复理智，damage 战斗中用来打敌人，cure 解除中毒之类的异常，boost 暂时变强，none 只有剧情用途（钥匙、信件、材料），${gearSortAsk()}
+强度：small、medium、large，看物品听起来有多珍贵；none、cure、boost、gear 不用写。
 
 ${list}`
   return { system: '你是游戏的物品整理员，只输出 JSON。', messages: [{ role: 'user', content }] }
@@ -282,14 +319,17 @@ export function suggestRequest(card, paths) {
   const story = [card.description, card.personality, card.scenario, card.firstMes, lore].filter(Boolean).join('\n\n').slice(0, CARD_READ)
   const variables = paths.map(item => `- ${item.path}（${item.kind === 'number' ? '数字' : '文字或列表'}）`).join('\n')
   const content = `读这张角色卡，给它配上游戏规则。只输出一个 JSON 对象，不要别的文字：
-{"theme":"题材","energy":"气力的叫法","words":{"life":"生命的叫法"},"attributes":{"body":12,"grace":10,"mind":11,"charm":10},"skills":[{"name":"技能名","kind":"strike"}],"things":[{"name":"物品名","count":2,"type":"heal","size":"medium"}],"foes":[{"name":"敌人名","looks":"English tags for its picture","moves":["招数名"]}],"companions":[{"name":"同伴名","keys":["别称"],"attributes":{"body":10,"grace":14,"mind":12,"charm":10},"skills":[{"name":"技能名","kind":"strike"}],"start":true}],"ranks":["等级名"],"rankSpan":"wide","bindings":{"life":"变量路径"}}
+{"theme":"题材","energy":"气力的叫法","words":{"life":"生命的叫法"},"attributes":{"body":12,"grace":10,"mind":11,"charm":10},"skills":[{"name":"技能名","kind":"strike"},{"name":"技能名","kind":"strike","adds":[{"id":"expose","size":"medium"}]}],"things":[{"name":"物品名","count":2,"type":"heal","size":"medium"}],"foes":[{"name":"敌人名","looks":"English tags for its picture","moves":["招数名"]}],"companions":[{"name":"同伴名","keys":["别称"],"attributes":{"body":10,"grace":14,"mind":12,"charm":10},"skills":[{"name":"技能名","kind":"strike"}],"start":true}],"ranks":["等级名"],"rankSpan":"wide","perks":[{"name":"名字","note":"一句话","effects":[{"id":"speed","size":"medium"}]}],"forms":{"同伴名":[{"name":"最初的样子"},{"name":"形态名","at":{"level":5},"effects":[{"id":"attack","size":"medium"}]}]},"bindings":{"life":"变量路径"}}
 theme 从 ${THEMES.join('、')} 选最接近的一个（${THEME_WORDS}），不要因为例子就往武侠上靠。energy 是这个世界对气力的叫法，两三个字。
 words 是这个世界对这些东西的叫法，和默认一样就不写，每个最多 ${8} 个字：${WORD_KEYS.map(key => `${key}（默认${DEFAULT_WORDS[key]}）`).join('、')}。四个属性只改名字，意思不变：body 管力气、耐力、硬抗，grace 管速度、身手、潜行，mind 管智力、感知、意志，charm 管交涉、说服、羁绊。minion、normal、elite、boss 是四档敌人。比如怪兽养成的卡可以是 {"body":"力量","grace":"速度","mind":"智力","charm":"羁绊","life":"HP","skill":"必杀技","party":"伙伴","minion":"野生"}。
 attributes 是${ATTRIBUTES.map(item => `${item.id}（${item.name}）`).join('、')}，常人 ${AVERAGE}，比 ${AVERAGE} 多出来的加起来不超过 ${ATTRIBUTE_POINTS} 点，贴合玩家的身份。
-skills 2 到 4 个，名字贴合题材，kind 从 ${Object.keys(SKILLS).join('、')} 选（重击、群攻、连击、中毒、眩晕、治疗、增益）。
-things 是开局带的 0 到 5 样东西，type 从 ${EFFECTS.join('、')} 选，size 是 ${STRENGTHS.join('、')}。foes 写这个世界常见的 2 到 6 种敌人。
+${skillsAsk()}
+things 是开局带的 0 到 5 样东西，type 从 ${EFFECTS.join('、')} 选，size 是 ${STRENGTHS.join('、')}。${gearAsk()}foes 写这个世界常见的 2 到 6 种敌人。${foeAddsAsk()}
 companions 是会和玩家一起打架的固定同伴（宠物、伙伴怪兽也算），从卡里的主要角色选 0 到 3 个，属性同样按常人 ${AVERAGE}、多出来的不超过 ${ATTRIBUTE_POINTS} 点，按人设分（身手快的灵巧高，会治疗的带 heal 技能），技能 1 到 3 个；start 写开局是否已经同行。玩家独自行动的卡写 []。
 ranks 是这个世界明确的等级，从低到高，比如炼气、筑基、金丹，铜牌、银牌、金牌，或者成长期、成熟期、完全体，只写大的等级，不写初期中期后期；没有明确等级就写 []。rankSpan：差一级就打不过的写 wide（境界），差几级才打不过的写 narrow（段位、军衔）。
+${perksAsk()}
+${formsAsk()}
+${modulesAsk()}
 bindings 把这张卡已有的变量对到规则字段，字段有 ${BINDABLE.join('、')}（things 背包，quests 任务，rank 是写成文字的等级，其余是数字）。只对玩家自己的变量，没把握就不写。${variables ? `\n\n这张卡的变量：\n${variables}` : '这张卡没有变量，bindings 写 {}。'}
 
 角色卡：
@@ -337,18 +377,25 @@ export function parseThings(text, things) {
     return {}
   }
   const asked = new Set(things.map(thing => thing.name))
+  // A model may give a name back with its note still on it: 寒铁匕首（刃口泛蓝）. That is still the thing asked about.
+  const nameOf = said => (asked.has(said) ? said : things.map(thing => thing.name).filter(name => String(said ?? '').startsWith(name) && /^[（(：:\s]/.test(String(said).slice(name.length))).sort((a, b) => b.length - a.length)[0] ?? '')
   const out = {}
   for (const item of Array.isArray(list) ? list : []) {
-    if (asked.has(item?.name) && EFFECTS.includes(item.type)) out[item.name] = { type: item.type, ...(STRENGTHS.includes(item.size) ? { size: item.size } : {}) }
+    const name = nameOf(item?.name)
+    if (!name || out[name]) continue
+    if (cleanGear(item, name)) out[name] = cleanGear(item, name)
+    else if (EFFECTS.includes(item.type)) out[name] = { type: item.type, ...(STRENGTHS.includes(item.size) ? { size: item.size } : {}) }
   }
   return out
 }
 
 /** The helper's question: what these foes look like and do, for the story they are in. */
-export function foesRequest(names, story) {
-  const content = `这个故事里出现了这些敌人，为每个写外貌和招式，只输出一个 JSON 数组，不要别的文字。每项 {"name":名字,"looks":外貌,"moves":[招式名]}。
+export function foesRequest(names, story, types = []) {
+  const typed = types.length ? `\ntype：它的属性，从这些里选一个：${types.join('、')}；看不出来就不写。` : ''
+  const content = `这个故事里出现了这些敌人，为每个写外貌和招式，只输出一个 JSON 数组，不要别的文字。每项 {"name":名字,"looks":外貌,"moves":[招式名],"adds":[效果]${types.length ? ',"type":属性' : ''}}。${typed}
 looks：用来画图的英文标签，逗号分隔，写清是人还是什么怪物、体型、衣着或皮毛、手里的东西，比如 grey wolf, large, snarling, bared fangs。
 moves：两到三个招式名，中文，两到四个字，比如 撕咬、猛扑。
+adds：${foeAddsAsk().replace(/^foes 里/, '')}
 
 故事：
 ${story}
@@ -359,7 +406,7 @@ ${names.map(name => `- ${name}`).join('\n')}`
 }
 
 /** The helper's answer: { name: { looks, moves } }; what it did not answer stays unknown. */
-export function parseFoes(text, names) {
+export function parseFoes(text, names, types = []) {
   const answer = String(text ?? '').replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, '')
   const start = answer.indexOf('[')
   const end = answer.lastIndexOf(']')
@@ -372,7 +419,7 @@ export function parseFoes(text, names) {
   }
   const out = {}
   for (const item of Array.isArray(list) ? list : []) {
-    if (names.includes(item?.name)) out[item.name] = { looks: String(item.looks ?? ''), moves: Array.isArray(item.moves) ? item.moves : [] }
+    if (names.includes(item?.name)) out[item.name] = { looks: String(item.looks ?? ''), moves: Array.isArray(item.moves) ? item.moves : [], ...(cleanFoeAdds(item.adds).length ? { adds: cleanFoeAdds(item.adds) } : {}), ...(types.includes(item.type) ? { type: item.type } : {}) }
   }
   return out
 }

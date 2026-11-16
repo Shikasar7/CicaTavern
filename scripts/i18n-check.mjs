@@ -279,6 +279,18 @@ export async function checkTree(root = ROOT) {
       for (const problem of entryProblems(key, value, used.get(key))) problems.push({ file: name, line: 0, text: key, problem: `entry ${problem}` })
     }
   }
+  // A key written twice: the later one is what the page shows, and the earlier is a translation nobody sees.
+  for (const name of ['web/i18n/en.js', 'server/i18n/en.mjs']) {
+    const seen = new Set()
+    for (const [at, line] of readFileSync(path.join(root, name), 'utf8').split(/\r?\n/).entries()) {
+      const key = line.match(/^  ("(?:[^"\\]|\\.)*"):/)?.[1]
+      // Each table of a file is its own: the server's has one for whole messages beside the main one.
+      if (line.startsWith('export ')) seen.clear()
+      if (!key) continue
+      if (seen.has(key)) problems.push({ file: name, line: at + 1, text: JSON.parse(key), problem: 'entry written twice' })
+      seen.add(key)
+    }
+  }
   return { problems, missingWeb, missingServer }
 }
 

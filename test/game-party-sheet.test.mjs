@@ -3,7 +3,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { replyMarks } from '../web/shared/game/marks.js'
-import { MAX_FIELDED, alliesFor, applyOps, cleanKit, cleanOps, cleanRulebook, companionOf, fieldedOf, kitBook, memberOf, partyChanged, settleReply, sheetOf, startSheet } from '../web/shared/game/sheet.js'
+import { MAX_FIELDED, alliesFor, applyOps, cleanKit, cleanOps, cleanRulebook, companionOf, fieldedOf, joiningPoints, kitBook, memberOf, partyChanged, settleReply, sheetOf, startSheet } from '../web/shared/game/sheet.js'
 import { alivePartyOf, autoCommands, foesOf, partySize, startBattle, step } from '../web/shared/game/battle.js'
 import { cleanFight, encounterSetup, fightResult } from '../web/shared/game/encounter.js'
 import { gamePrompt } from '../server/game.mjs'
@@ -68,6 +68,26 @@ test('the marks: who joins, leaves, is hurt and comes back; a skill learned by o
   assert.deepEqual(marked('【学会|寒江雪|苏挽霜】'), [{ kind: 'learn', name: '寒江雪', who: '苏挽霜' }])
   assert.deepEqual(marked('【学会|寒江雪】'), [{ kind: 'learn', name: '寒江雪' }])
   assert.deepEqual(marked('【同伴|跳舞|楚怀瑾】'), [], 'a mark that makes no sense is left alone')
+})
+
+test('one who joins above the level the story starts at brings the points a player would have had by then', () => {
+  assert.equal(memberOf(BOOK, '苏挽霜').points, 0, 'at the start level, none')
+  assert.equal(memberOf(BOOK, '楚怀瑾').points, 4, 'the card says level 3: two levels up, two points each')
+  assert.equal(memberOf(BOOK, '路人甲', 6).points, 10, 'one the card does not know joins at the player\'s level')
+  assert.equal(memberOf(BOOK, '楚怀瑾', 6).level, 3, 'the card\'s level wins over the player\'s')
+  // A story that starts higher up the ladder counts from there.
+  const ladder = cleanRulebook({ ...BOOK, ranks: ['外门', '内门', '真传'], start: { ...BOOK.start, rank: '内门' } })
+  assert.equal(memberOf(ladder, '路人甲', 5).points, 0, '内门 is where the story starts: level 5')
+  assert.equal(memberOf(ladder, '路人甲', 7).points, 4)
+  assert.equal(memberOf(ladder, '楚怀瑾').points, 0, 'below the start, none')
+  // No more than the attributes have room for.
+  assert.equal(joiningPoints(BOOK, 50, { body: 20, grace: 20, mind: 20, charm: 19 }), 1)
+  // Joining through the story, then spending a point.
+  const joined = settleReply(startSheet(BOOK), marked('【同伴|加入|楚怀瑾】'), { book: BOOK })
+  assert.equal(joined.party.at(-1).points, 4)
+  const point = applyOps(joined, BOOK, cleanOps([{ op: 'point', who: '楚怀瑾', id: 'body' }]))
+  assert.equal(point.sheet.party.at(-1).attributes.body, 16)
+  assert.equal(point.sheet.party.at(-1).points, 3)
 })
 
 test('a reply\'s marks change the party, and a night\'s rest mends it', () => {

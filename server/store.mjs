@@ -155,6 +155,10 @@ export const DEFAULT_SETTINGS = Object.freeze({
   autoFillUpdate: true, // 自动补写变量: a reply without a readable update block gets one right after the turn
   replyToTop: true, // a reply written to its end is shown from its first line (not in the visual novel mode)
   dynamicStrip: 'rare', // when piled-up <动态设定> copies are stripped: 'often' | 'rare' | 'off' (dynamic.mjs)
+  // 递归触发: 'off' | 'keyword' (entries found by keyword find more) | 'all' (always-on ones too) (worldbook.mjs triggeredEntries).
+  // Off unless asked for: a book read from a novel names its people in nearly every entry, and on, one name brought
+  // half of a 437-entry book (about 49 000 characters) every turn.
+  worldRecursion: 'off',
   compaction: null, // 自动压缩: { auto, percent, cap, windows } (context.mjs cleanCompaction); null = its defaults
   memory: null, // 长期记忆（Beta）: { enabled, tidy: { enabled, every, model }, budget } (memory.mjs cleanMemory); null = all off
   toolPrompts: null, // 内置功能的附加提示词: { memory, check, forge, helper } (context.mjs cleanToolPrompts); null = none
@@ -175,7 +179,30 @@ export const DEFAULT_SETTINGS = Object.freeze({
   appearance: null, // colour style and background picture (web/shared/appearance.js); the picture itself through /api/appearance/backdrop only
   globalBookIds: [], // 全局世界书: imported books every chat uses, mounted or not (chats.mjs booksForCard); set through PUT /api/worldbooks/:id/global
   globalVars: {}, // app-wide variables: the template `global` scope (template.mjs), Tavern Helper's global variables
+  quickReplies: null, // 快捷回复: { show, items: [{ id, label, text, fill }] } (cleanQuickReplies); null = never set up
 })
+
+/**
+ * 快捷回复 as settings keep them: buttons over the input box, each a label and what it does (a command starting with
+ * `/`, or words to send or, `fill`, to put in the box). null: never set up (web/quick-replies.js offers its defaults).
+ */
+export function cleanQuickReplies(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const seen = new Set()
+  const items = []
+  for (const item of Array.isArray(value.items) ? value.items.slice(0, 60) : []) {
+    if (!item || typeof item !== 'object') continue
+    const label = String(item.label ?? '').trim().slice(0, 24)
+    const text = String(item.text ?? '').trim().slice(0, 4000)
+    if (!label || !text) continue
+    let id = typeof item.id === 'string' && /^[a-z0-9]{4,16}$/.test(item.id) ? item.id : ''
+    while (!id || seen.has(id)) id = Math.random().toString(36).slice(2, 10)
+    seen.add(id)
+    items.push({ id, label, text, fill: item.fill === true })
+    if (items.length >= 30) break
+  }
+  return { show: value.show !== false, items }
+}
 
 /** Book ids as settings keep them: strings that can name a file, each once. */
 const cleanIds = ids => [...new Set((Array.isArray(ids) ? ids : []).filter(id => typeof id === 'string' && /^[\w-]{1,64}$/.test(id)))]
@@ -247,7 +274,7 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
 
     async getSettings() {
       const saved = { ...DEFAULT_SETTINGS, ...(await readJson(path.join(root, 'settings.json'), {})) }
-      return lockSettings({ ...saved, basic: cleanBasic(saved.basic), vn: cleanVn(saved.vn), basicEdits: cleanBuiltinEdits(saved.basicEdits), vnEdits: cleanBuiltinEdits(saved.vnEdits), appearance: cleanAppearance(saved.appearance), globalBookIds: cleanIds(saved.globalBookIds), globalVars: cleanVars(saved.globalVars), compaction: cleanCompaction(saved.compaction), memory: cleanMemory(saved.memory), toolPrompts: cleanToolPrompts(saved.toolPrompts) })
+      return lockSettings({ ...saved, basic: cleanBasic(saved.basic), vn: cleanVn(saved.vn), basicEdits: cleanBuiltinEdits(saved.basicEdits), vnEdits: cleanBuiltinEdits(saved.vnEdits), appearance: cleanAppearance(saved.appearance), globalBookIds: cleanIds(saved.globalBookIds), globalVars: cleanVars(saved.globalVars), compaction: cleanCompaction(saved.compaction), memory: cleanMemory(saved.memory), toolPrompts: cleanToolPrompts(saved.toolPrompts), quickReplies: cleanQuickReplies(saved.quickReplies) })
     },
     /** Settings worked out from the saved ones and saved, with no other save in between (template global writes). */
     updateSettings(change, options) {
@@ -267,12 +294,14 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
         if (next.subscription !== 'off') next.subscription = 'on'
         next.proxy = cleanProxySetting(next.proxy)
         if (!['often', 'rare', 'off'].includes(next.dynamicStrip)) next.dynamicStrip = 'rare'
+        if (!['off', 'keyword', 'all'].includes(next.worldRecursion)) next.worldRecursion = 'off'
         next.autoFillUpdate = next.autoFillUpdate !== false
         next.statePresent = next.statePresent !== false
         next.replyToTop = next.replyToTop !== false
         next.compaction = cleanCompaction(next.compaction)
         next.memory = cleanMemory(next.memory)
         next.toolPrompts = cleanToolPrompts(next.toolPrompts)
+        next.quickReplies = cleanQuickReplies(next.quickReplies)
         if (!['auto', 'zh', 'en'].includes(next.uiLanguage)) next.uiLanguage = 'auto'
         next.showReasoning = next.showReasoning === true
         next.webFonts = next.webFonts !== false

@@ -69,6 +69,75 @@ export async function zipFolder(dir) {
   return Buffer.concat([...locals, directory, end])
 }
 
+/**
+ * A zip of files in memory, stored as they are (pictures: compressing them again gains nothing):
+ * [{ name ('folder/file.png', UTF-8), data, when }]. Runs on the phone's Node 18 too (no zlib.crc32 there).
+ */
+export function zipEntries(files) {
+  return Buffer.concat(zipParts(files).parts)
+}
+
+/** A file's CRC-32, with or without zlib.crc32. */
+export const crcOf = data => (typeof zlib.crc32 === 'function' ? zlib.crc32(data) : crc32(data))
+
+/**
+ * The same zip in pieces to write one after another (the files' own bytes among them, not copied): { parts, size }.
+ * An entry may bring its `crc` (crcOf), worked out file by file with the event loop let in between.
+ */
+export function zipParts(files) {
+  const locals = []
+  const central = []
+  let offset = 0
+  for (const { name: text, data, when = new Date(), crc = crcOf(data) } of files) {
+    const name = Buffer.from(text, 'utf8')
+    const { time, date } = dosTime(Number.isNaN(when.getTime()) ? new Date() : when)
+    const fields = (header, at) => {
+      header.writeUInt16LE(0x0800, at + 2) // UTF-8 names
+      header.writeUInt16LE(0, at + 4) // stored
+      header.writeUInt16LE(time, at + 6)
+      header.writeUInt16LE(date, at + 8)
+      header.writeUInt32LE(crc, at + 10)
+      header.writeUInt32LE(data.length, at + 14)
+      header.writeUInt32LE(data.length, at + 18)
+      header.writeUInt16LE(name.length, at + 22)
+    }
+    const local = Buffer.alloc(30)
+    local.writeUInt32LE(LOCAL, 0)
+    local.writeUInt16LE(10, 4)
+    fields(local, 4)
+    const entry = Buffer.alloc(46)
+    entry.writeUInt32LE(CENTRAL, 0)
+    entry.writeUInt16LE(20, 4)
+    entry.writeUInt16LE(10, 6)
+    fields(entry, 6)
+    entry.writeUInt32LE(offset, 42)
+    locals.push(local, name, data)
+    central.push(entry, name)
+    offset += local.length + name.length + data.length
+  }
+  const directory = Buffer.concat(central)
+  const end = Buffer.alloc(22)
+  end.writeUInt32LE(END, 0)
+  end.writeUInt16LE(files.length, 8)
+  end.writeUInt16LE(files.length, 10)
+  end.writeUInt32LE(directory.length, 12)
+  end.writeUInt32LE(offset, 16)
+  return { parts: [...locals, directory, end], size: offset + directory.length + end.length }
+}
+
+let crcTable = null
+function crc32(bytes) {
+  crcTable ??= Int32Array.from({ length: 256 }, (_, n) => {
+    let c = n
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
+    return c
+  })
+  let crc = 0xffffffff
+  // By index: a Buffer's iterator is many times slower, and this runs over hundreds of megabytes on the phone.
+  for (let i = 0; i < bytes.length; i++) crc = crcTable[(crc ^ bytes[i]) & 0xff] ^ (crc >>> 8)
+  return (crc ^ 0xffffffff) >>> 0
+}
+
 function dosTime(when) {
   return {
     time: (when.getHours() << 11) | (when.getMinutes() << 5) | Math.floor(when.getSeconds() / 2),

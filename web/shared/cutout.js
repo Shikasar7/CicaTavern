@@ -84,7 +84,7 @@ function clearBars(data, width, height, cleared) {
         n++
         break
       }
-      colour ??= own
+      colour = colour ?? (own)
       previous = own
     }
     return { n, colour }

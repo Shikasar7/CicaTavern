@@ -5,13 +5,13 @@
 // here in this app's own words.
 import { configureEntries } from './configure.mjs'
 import { httpError } from '../store.mjs'
-import { DISCUSS_REFERENCE_RULES, DISCUSS_STRUCTURE_RULES, PLAN_REFERENCE_RULES, PLAN_STRUCTURE_RULES, referenceBlock, referenceRules, userMessage } from './references.mjs'
+import { DISCUSS_NOVEL_RULES, DISCUSS_REFERENCE_RULES, DISCUSS_STRUCTURE_RULES, PLAN_NOVEL_RULES, PLAN_REFERENCE_RULES, PLAN_STRUCTURE_RULES, referenceBlock, referenceRules, userMessage } from './references.mjs'
 import { defaultShow } from './status.mjs'
 import { BRICKS, EVENT_RATES, SHOWS, STATUS_THEMES, bookText, bookValue, cleanPalette, cleanPath, cleanScale, limitsOf, needsVariables } from '../../web/shared/status.js'
 import { cleanCreation, creationVariables } from './creation.mjs'
 import { BRICK_TALK, brickEntries, brickGaps, brickPlanLines, cleanEvents, cleanJudge, cleanRelations, cleanRoutes, cleanSchedule, cleanWorld, fallbackChecks, relationPath, routePaths, schedulePaths, worldPath } from './bricks.mjs'
 import { ATTRIBUTES, ATTRIBUTE_POINTS, AVERAGE, EFFECTS, STRENGTHS, cleanKit } from '../../web/shared/game/sheet.js'
-import { SKILLS } from '../../web/shared/game/battle.js'
+import { foeAddsAsk, formsAsk, gearAsk, modulesAsk, perksAsk, skillsAsk } from '../../web/shared/game/growth.js'
 import { msg } from '../i18n.mjs'
 
 // ─── Languages ────────────────────────────────────────────────────────────
@@ -128,7 +128,7 @@ export const CARD_CHOICES = {
 const WORLD_TALK = '重世界观（冒险、探索、模拟）：世界本身也是主角，模型兼任叙述者和主持人，<user> 在里面行动。先问清舞台、规则、地点、势力和 <user> 能做什么，人物不必一开始就定死。'
 // 战斗与成长 runs on the app's rules, whatever the format: the numbers are not the card's to keep.
 const BATTLE_TALK = '这张卡用应用内置的规则：生命、气力、等级、背包、任务、检定和战斗都由程序算，不用记成变量。要和用户商量的是：玩家开局擅长什么、会哪几招、带什么东西，这个世界常见什么敌人。'
-const BATTLE_PLAN = `这张卡用应用内置的规则：生命、气力、等级、经验、背包、任务、检定和战斗结算都由程序算。tracking 里不要有这些数值，扮演准则也不写战斗流程和伤害。方案里多写一个 game 字段：{"attributes": {"body": 12, "grace": 10, "mind": 11, "charm": 10}, "skills": [{"name": "技能名", "kind": "strike"}], "things": [{"name": "物品名", "count": 2, "type": "heal", "size": "medium"}], "foes": [{"name": "敌人名", "looks": "English tags for its picture", "moves": ["招式名"]}]}。attributes 是 ${ATTRIBUTES.map(item => `${item.id}（${item.name}）`).join('、')}，常人 ${AVERAGE}，比 ${AVERAGE} 多出来的加起来不超过 ${ATTRIBUTE_POINTS} 点，贴合 <user> 的身份。skills 2 到 4 个，名字贴合题材，kind 从 ${Object.keys(SKILLS).join('、')} 选（重击、群攻、连击、中毒、眩晕、治疗、增益）。things 是开局带的 0 到 5 样东西，type 从 ${EFFECTS.join('、')} 选（回血、回气力、伤害、解毒、增益、没有效果），size 是 ${STRENGTHS.join('、')}。foes 写这个世界常见的 2 到 6 种敌人。"companions" 是和 <user> 一起行动、会一起打架的固定同伴：[{"name": "同伴名", "keys": ["别称"], "attributes": {...}, "skills": [{"name": "技能名", "kind": "strike"}], "start": true}]，从这张卡的主要角色里选 0 到 3 个，属性同样按常人 ${AVERAGE}、多出来的不超过 ${ATTRIBUTE_POINTS} 点、贴合人设，技能 1 到 3 个，start 写开局是否已经同行；<user> 独自行动的故事写 []。game 里再写："energy" 是这个世界对气力的叫法，两三个字；"words" 是这个世界对属性、生命、敌人档位这些的叫法，和默认（体魄、灵巧、心智、魅力、生命、杂兵、普通、精英、首领、技能、行囊、经验、队伍）一样就不写，比如怪兽养成写 {"body": "力量", "grace": "速度", "mind": "智力", "charm": "羁绊", "life": "HP", "skill": "必杀技", "party": "伙伴"}，键是 body、grace、mind、charm、life、minion、normal、elite、boss、skill、bag、experience、party；"ranks" 是这个世界明确的等级，从低到高，只写大的等级，没有就写 []；"rank_span"：差一级就很难打写 wide，差几级才打不过写 narrow；"sanity"：这个世界的恐怖会伤到人的心智、要记理智就写 true，否则 false。世界设定和开场里要有能打起来的理由。`
+const BATTLE_PLAN = `这张卡用应用内置的规则：生命、气力、等级、经验、背包、任务、检定和战斗结算都由程序算。tracking 里不要有这些数值，扮演准则也不写战斗流程和伤害。方案里多写一个 game 字段：{"attributes": {"body": 12, "grace": 10, "mind": 11, "charm": 10}, "skills": [{"name": "技能名", "kind": "strike"}], "things": [{"name": "物品名", "count": 2, "type": "heal", "size": "medium"}], "foes": [{"name": "敌人名", "looks": "English tags for its picture", "moves": ["招式名"]}]}。attributes 是 ${ATTRIBUTES.map(item => `${item.id}（${item.name}）`).join('、')}，常人 ${AVERAGE}，比 ${AVERAGE} 多出来的加起来不超过 ${ATTRIBUTE_POINTS} 点，贴合 <user> 的身份。${skillsAsk()}things 是开局带的 0 到 5 样东西，type 从 ${EFFECTS.join('、')} 选（回血、回气力、伤害、解毒、增益、没有效果），size 是 ${STRENGTHS.join('、')}。${gearAsk()}foes 写这个世界常见的 2 到 6 种敌人。${foeAddsAsk()}"companions" 是和 <user> 一起行动、会一起打架的固定同伴：[{"name": "同伴名", "keys": ["别称"], "attributes": {...}, "skills": [{"name": "技能名", "kind": "strike"}], "start": true}]，从这张卡的主要角色里选 0 到 3 个，属性同样按常人 ${AVERAGE}、多出来的不超过 ${ATTRIBUTE_POINTS} 点、贴合人设，技能 1 到 3 个，start 写开局是否已经同行；<user> 独自行动的故事写 []。game 里再写："energy" 是这个世界对气力的叫法，两三个字；"words" 是这个世界对属性、生命、敌人档位这些的叫法，和默认（体魄、灵巧、心智、魅力、生命、杂兵、普通、精英、首领、技能、行囊、经验、队伍、天赋）一样就不写，比如怪兽养成写 {"body": "力量", "grace": "速度", "mind": "智力", "charm": "羁绊", "life": "HP", "skill": "必杀技", "party": "伙伴"}，键是 body、grace、mind、charm、life、minion、normal、elite、boss、skill、bag、experience、party、perk（默认天赋，修仙可以叫神通，武侠叫心法，网游叫被动）、form（默认形态）、evolve（默认进化，变身英雄可以叫变身）；${perksAsk()}${formsAsk()}${modulesAsk()}"ranks" 是这个世界明确的等级，从低到高，只写大的等级，没有就写 []；"rank_span"：差一级就很难打写 wide，差几级才打不过写 narrow；"sanity"：这个世界的恐怖会伤到人的心智、要记理智就写 true，否则 false。世界设定和开场里要有能打起来的理由。`
 
 // 卡的规模: a bigger card is planned short and written in batches. The plan is the catalog: a line for each side
 // character and place, which the player can look through before anything is written.
@@ -142,7 +142,7 @@ const scalePlan = scale => {
   const least = SCALE_SIZE[scale]
   return `这张卡的世界比一般的大：地点 ${least.places} 到 ${most.places} 个，势力 ${least.factions} 到 ${most.factions} 个，配角 ${least.npcs} 个以上，角色一共最多 ${most.characters} 个，事件最多 ${most.events} 个，变量按需要写，最多 ${most.variables} 个，不受上面的数目限制。配角和地点写短：配角只写 name、kind、aliases、identity、role，地点的 description 一句话，之后会分批展开。名字彼此不要太像，别名不要重复，它们是触发设定的关键词。`
 }
-const PAGES_PLAN = '状态栏分页：每个变量多写一个 page 字段，页名两三个字，把状态栏分成 2 到 4 页，按这张卡最自然的分法，一页至少两项。'
+const PAGES_PLAN = '状态栏分页：每个变量多写一个 page 字段，页名两三个字，把状态栏分成 2 到 4 页，按这张卡最自然的分法，一页至少两项。第一页最要紧：它一直摆在状态栏上（开了「小手机」时，后面几页各收成一个图标，点开才看），所以每一轮都要看一眼的放第一页，不超过六项，变量也按这个顺序写；偶尔才查的（背包、技能、人物关系、记录这类清单和表格）放后面的页。同一类的放一页，不要把一个人的几项拆到两页；页名用玩家一看就懂的词，不要叫「其他」「更多」。'
 const COLORS_PLAN = '方案里多写一个 status_colors 字段：{"bg": "#背景色", "ink": "#文字色", "accent": "#强调色"}，配合这张卡的气氛，文字要看得清。'
 const LOOKS = [...STATUS_THEMES, 'auto']
 
@@ -661,7 +661,7 @@ export function discussRequest(rounds, brief, languages, { userName = '', cardTy
     messages.push({ role: 'user', content })
     if (!last && round.assistant) messages.push({ role: 'assistant', content: round.assistant.raw })
   })
-  return { system: discussSystem(languages, settingsNameOf(userName), cleanCardOptions(options, cardType)) + referenceRules(references, DISCUSS_REFERENCE_RULES, DISCUSS_STRUCTURE_RULES), messages, maxTokens: TALK_TOKENS, softCap: true }
+  return { system: discussSystem(languages, settingsNameOf(userName), cleanCardOptions(options, cardType)) + referenceRules(references, DISCUSS_REFERENCE_RULES, DISCUSS_STRUCTURE_RULES, DISCUSS_NOVEL_RULES), messages, maxTokens: TALK_TOKENS, softCap: true }
 }
 
 const isQuestions = value => Array.isArray(value) && value.some(q => Array.isArray(q?.options))
@@ -787,7 +787,7 @@ export function planRequest(rounds, brief, { card = DEFAULT_LANGUAGE } = {}, { c
   // 出三版来挑: the outline picked is what this plan fills out.
   const chosen = outline ? `\n\n用户从三版提纲里挑中了这一版，照它写：卡名、核心角色的名字和开场照提纲定的来，提纲没写到的按它的走向补。\n<outline>\n${JSON.stringify({ name: outline.name, summary: outline.summary, differs: outline.differs, cast: outline.cast, openings: outline.openings })}\n</outline>` : ''
   const content = `<discussion>\n${transcript(rounds)}\n</discussion>\n\n<sketch>\n${JSON.stringify(brief)}\n</sketch>\n\n按上面的讨论和草图写出创作方案。${PLAN_ANGLES[angle] ?? ''}${chosen}${PLAN_FORMAT}`
-  return { system: planSystem(card, { options: picked, greetings: cleanGreetingCount(greetings) }) + referenceRules(references, PLAN_REFERENCE_RULES, PLAN_STRUCTURE_RULES), messages: [userMessage(material, content)], maxTokens: planTokens(picked), softCap: true }
+  return { system: planSystem(card, { options: picked, greetings: cleanGreetingCount(greetings) }) + referenceRules(references, PLAN_REFERENCE_RULES, PLAN_STRUCTURE_RULES, PLAN_NOVEL_RULES), messages: [userMessage(material, content)], maxTokens: planTokens(picked), softCap: true }
 }
 
 // ─── 出三版来挑 ───────────────────────────────────────────────────────────
@@ -824,7 +824,7 @@ ${plainWriting(card)}
 [{"angle": "close", "name": "卡名", "summary": "两三句", "differs": "一句话", "cast": ["名字：身份和性子"], "openings": ["开场的名字"]}]
 </outlines>`
   const content = `<discussion>\n${transcript(rounds)}\n</discussion>\n\n<sketch>\n${JSON.stringify(brief)}\n</sketch>\n\n按上面的讨论和草图写三版提纲。只输出 <outlines>，不写别的说明。`
-  return { system: system + referenceRules(references, PLAN_REFERENCE_RULES, PLAN_STRUCTURE_RULES), messages: [userMessage(material, content)], maxTokens: TALK_TOKENS, softCap: true }
+  return { system: system + referenceRules(references, PLAN_REFERENCE_RULES, PLAN_STRUCTURE_RULES, PLAN_NOVEL_RULES), messages: [userMessage(material, content)], maxTokens: TALK_TOKENS, softCap: true }
 }
 
 /** The outlines in an answer, one for an angle at most, in the angles' order. One that names no angle takes its place's. */
@@ -853,7 +853,7 @@ export function reviseRequest(rounds, plan, { text = '', notes = [] } = {}, { ca
     `用户对方案的意见：\n${asked.join('\n')}`,
     '按意见改方案：只改意见涉及的部分，其余保持原样。新补出来的设定同样写进 assumptions。输出完整的新方案。' + PLAN_FORMAT,
   ].join('\n\n')
-  return { system: planSystem(planLanguage(plan), { options: picked }) + referenceRules(references, PLAN_REFERENCE_RULES, PLAN_STRUCTURE_RULES), messages: [userMessage(material, content)], maxTokens: planTokens(picked), softCap: true }
+  return { system: planSystem(planLanguage(plan), { options: picked }) + referenceRules(references, PLAN_REFERENCE_RULES, PLAN_STRUCTURE_RULES, PLAN_NOVEL_RULES), messages: [userMessage(material, content)], maxTokens: planTokens(picked), softCap: true }
 }
 
 // ─── Reading a plan back ──────────────────────────────────────────────────

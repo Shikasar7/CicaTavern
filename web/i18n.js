@@ -9,7 +9,9 @@ export const lang = said === 'en' || said === 'zh' ? said : pickLanguage('', nav
 /** For toLocaleString and the like. */
 export const locale = lang === 'en' ? 'en-US' : 'zh-CN'
 
-const dict = lang === 'en' ? (await import('/i18n/en.js')).default : null
+// Loaded by index.html before app.js: no top-level await here, which an old Android WebView (before Chrome 89)
+// cannot parse, and then not one script of the page runs.
+const dict = lang === 'en' ? globalThis.cicatavernWords ?? null : null
 
 /** The text in the interface language: t`删除「${name}」？`, or t(text) for text from a table. */
 export const t = createTag(dict)

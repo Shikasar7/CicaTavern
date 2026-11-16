@@ -50,6 +50,9 @@ export function createLedger(store) {
   const file = path.join(store.dirs.root, 'usage.jsonl')
   // The ledger file is created once, from existing chats; concurrent callers share that.
   let ready = null
+  // The replies that creating it found (node ids): the first reply of a new install is saved before it is recorded,
+  // so the backfill has it already, and recordTurn leaves it there (it was counted twice).
+  let backfilled = null
   // A backfill that failed (one unreadable chat) is tried again next time, not kept as the answer for good.
   const ensure = () => (ready ??= access(file).catch(() => backfill()).catch(error => {
     ready = null
@@ -71,12 +74,15 @@ export function createLedger(store) {
   /** First run: rebuild turn records from the chats already on disk. */
   async function backfill() {
     const lines = []
+    const found = new Set()
     for (const chat of await store.listChats()) {
       for (const node of Object.values(chat.nodes)) {
         if (node.role !== 'assistant' || !node.usage) continue
         lines.push(turnRecord(chat, node))
+        found.add(node.id)
       }
     }
+    backfilled = found
     lines.sort((a, b) => a.at - b.at)
     await appendFile(file, lines.map(l => `${JSON.stringify(l)}\n`).join(''), 'utf8')
   }
@@ -105,6 +111,7 @@ export function createLedger(store) {
     file,
     async recordTurn(chat, node) {
       await ensure()
+      if (backfilled?.delete(node.id)) return
       await appendFile(file, `${JSON.stringify(turnRecord(chat, node))}\n`, 'utf8')
     },
     async recordRate(info) {

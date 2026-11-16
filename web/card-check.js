@@ -78,8 +78,8 @@ function helperWords(script) {
  *   tried in the preview are kept under on this device (the card's id) }
  */
 export function statusEditor(el, change, edit, { spare = [], state = {}, redraw, design = null, tryKey = '' }) {
-  edit.spec ??= structuredClone(change.spec)
-  edit.paged ??= statusPages(edit.spec).length > 0
+  edit.spec = edit.spec ?? (structuredClone(change.spec))
+  edit.paged = edit.paged ?? (statusPages(edit.spec).length > 0)
   const { spec } = edit
   const preview = el('div', { class: 'status-preview cc-status-preview' })
   edit.tryKey = tryKey
@@ -97,7 +97,7 @@ export function statusEditor(el, change, edit, { spare = [], state = {}, redraw,
     // Any other look takes the card's own off; its three colors stay for 按卡配色.
     delete spec.skin
     if (name === OWN_COLORS) {
-      spec.palette ??= change.spec.palette ?? FIRST_COLORS
+      spec.palette = spec.palette ?? (change.spec.palette ?? FIRST_COLORS)
       delete spec.theme
     } else {
       delete spec.palette
@@ -110,6 +110,13 @@ export function statusEditor(el, change, edit, { spare = [], state = {}, redraw,
   const looks = [...STATUS_THEMES, OWN_COLORS, ...(spec.skin ? [OWN_SKIN] : [])]
   const lookText = name => (name === OWN_SKIN ? (spec.skin.name ? t`定制外观「${spec.skin.name}」` : t`定制外观`) : THEME_TEXT[name] ?? name)
   const theme = el('select', { 'aria-label': t`主题`, onchange: () => pickLook(theme.value) }, looks.map(name => el('option', { value: name, selected: look === name, text: lookText(name) })))
+  // 版式: how the bar is laid out; the plain one is rows under a title.
+  const layout = el('select', { 'aria-label': t`版式`, title: t`状态栏怎么排。卡片式：人放在最前面，页签在底下；侧栏式：数值一直在左边，右边换页；卷轴式：顶上是场景图和题字`, onchange: () => {
+    if (layout.value) spec.layout = layout.value
+    else delete spec.layout
+    redraw()
+  } }, [['', t`简洁（原来的）`], ['card', t`卡片式`], ['rail', t`侧栏式`], ['scroll', t`卷轴式`]].map(([value, text]) => el('option', { value, text })))
+  layout.value = spec.layout ?? ''
   const colors = () => el('div', { class: 'var-colors' }, [['bg', t`背景`], ['ink', t`文字`], ['accent', t`强调`]].map(([key, label]) => {
     const box = el('input', { type: 'color', value: spec.palette[key], 'aria-label': label, oninput: () => { spec.palette = { ...spec.palette, [key]: box.value }; drawPreview() } })
     return el('label', {}, [box, el('span', { text: label })])
@@ -163,7 +170,7 @@ export function statusEditor(el, change, edit, { spare = [], state = {}, redraw,
   return [
     preview,
     tryout,
-    el('div', { class: 'cc-status-top' }, [title, theme]),
+    el('div', { class: 'cc-status-top' }, [title, theme, layout]),
     spec.palette ? colors() : null,
     design ? skinPanel(el, edit, { state, redraw, kept: change.spec.skin?.css ?? '', ...design }) : null,
     pictures,
@@ -326,7 +333,7 @@ const SKIN_STYLES = () => [
 
 const PROBE_WIDTHS = [340, 720]
 // Words a reader must make out, and those that are faint on purpose.
-const READ_PARTS = '.status-title, .status-label, .status-value, .status-text, .status-tag, .status-badge, .status-stars, .status-flag, .status-long, .status-list li, .status-table th, .status-table td, .status-page, .status-tab, .status-group-name, .status-section'
+const READ_PARTS = '.status-app-name, .status-phone-name, .status-title, .status-label, .status-value, .status-text, .status-tag, .status-badge, .status-stars, .status-flag, .status-long, .status-list li, .status-table th, .status-table td, .status-page, .status-tab, .status-group-name, .status-section'
 const FAINT_PARTS = '.status-group-name, .status-section, .status-table thead th, .status-flag:not(.on)'
 const MAX_PROBLEMS = 8
 
@@ -402,11 +409,83 @@ function probe(bar, width, note) {
     if (!scrolls && (rect.right > box.right + 2 || rect.left < box.left - 2)) note(`out:${tag}`, t`宽 ${width} 像素时，${words} 横向伸出了状态栏`)
     if (rect.bottom > box.bottom + 2 || rect.top < box.top - 2) note(`out-y:${tag}`, t`${words} 伸到了状态栏的上面或下面`)
   }
+  probeBlocks(bar, width, note)
   probeWords(bar, READ_PARTS, FAINT_PARTS, note)
   for (const meter of bar.querySelectorAll('.status-meter')) {
     if (meter.closest('[hidden]')) continue
     const rect = meter.getBoundingClientRect()
     if (rect.height < 3 || rect.width < 24) note('meter', t`进度条太细或太短（${Math.round(rect.width)}×${Math.round(rect.height)} 像素），看不出进度`)
+  }
+}
+
+// The bar's blocks, top to bottom as the page lays them (web/status.js statusBar), and what stands in the phone.
+const BAR_BLOCKS = ['status-head', 'status-pages', 'status-art', 'status-rail', 'status-main', 'status-body', 'status-dock', 'status-phone']
+const PHONE_PARTS = ['status-phone-top', 'status-phone-head', 'status-phone-screen', 'status-phone-home']
+
+/** How far two boxes lie over each other, in pixels each way (0 when they do not). */
+function overlap(a, b) {
+  const wide = Math.min(a.right, b.right) - Math.max(a.left, b.left)
+  const high = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top)
+  return wide > 0 && high > 0 ? Math.min(wide, high) : 0
+}
+
+/**
+ * Where the bar's blocks stand: one under the other, none over another (negative margins can still pull one up), and
+ * in the phone the title, the screen and the bar at the foot each inside the frame, the foot's bar in the middle.
+ * Exported for the layout check (test/skin-layout.test.mjs draws looks that move things and reads what this says).
+ */
+export function probeBlocks(bar, width, note) {
+  const shown = (root, names) => names.map(name => [...root.children].find(node => node.classList.contains(name))).filter(node => node && !node.hidden && node.getBoundingClientRect().height > 0)
+  const blocks = shown(bar, BAR_BLOCKS)
+  for (let i = 0; i < blocks.length; i += 1) {
+    for (let j = i + 1; j < blocks.length; j += 1) {
+      const [first, second] = [blocks[i], blocks[j]]
+      const [a, b] = [first.getBoundingClientRect(), second.getBoundingClientRect()]
+      const [upper, lower] = [first.classList[0], second.classList[0]]
+      if (overlap(a, b) > 3) note(`over:${upper}:${lower}`, t`宽 ${width} 像素时，.${upper} 和 .${lower} 叠在了一起：状态栏的各块要一块在一块下面，不要用负的 margin 把哪一块拉上去`)
+      else if (b.top < a.top - 3) note(`order:${upper}:${lower}`, t`.${upper} 和 .${lower} 的上下顺序反了：各块的顺序由程序定`)
+    }
+  }
+  // A block let out to the bar's edge goes out the same on both sides (a title strip that stops short on the right).
+  const around = bar.getBoundingClientRect()
+  for (const block of blocks) {
+    // 侧栏式 stands its rail beside the tabs: neither reaches both edges.
+    if (block.classList.contains('status-phone') || (bar.classList.contains('layout-rail') && block.matches('.status-rail, .status-main'))) continue
+    const rect = block.getBoundingClientRect()
+    const [left, right] = [rect.left - around.left, around.right - rect.right]
+    if (Math.abs(left - right) > 3) note(`lean:${block.classList[0]}`, t`宽 ${width} 像素时，.${block.classList[0]} 左右没有对齐（左边离状态栏的边 ${Math.round(left)} 像素，右边 ${Math.round(right)} 像素）：两边的 margin 和 padding 要一样`)
+  }
+  // A gauge with no room left (two columns kept at a phone's width).
+  const tight = [...bar.querySelectorAll('.status-meter')].filter(meter => !meter.closest('[hidden]')).map(meter => meter.getBoundingClientRect().width).filter(wide => wide > 0 && wide < 80)
+  if (tight.length) note(`tight:${width}`, t`宽 ${width} 像素时，进度条被挤得只剩 ${Math.round(Math.min(...tight))} 像素：这么窄时各组要排成一列。几列并排用 repeat(auto-fit, minmax(min(100%, 260px), 1fr)) 这种自己会折行的写法，不要靠 @media（它看的是窗口，不是状态栏的宽度）`)
+  const frame = bar.querySelector('.status-phone:not([hidden]) > .status-phone-frame')
+  if (!frame) return
+  const box = frame.getBoundingClientRect()
+  const inner = { left: box.left + frame.clientLeft, right: box.left + frame.clientLeft + frame.clientWidth, top: box.top + frame.clientTop, bottom: box.top + frame.clientTop + frame.clientHeight }
+  const parts = shown(frame, PHONE_PARTS)
+  parts.forEach((part, i) => {
+    const rect = part.getBoundingClientRect()
+    const name = `.${part.classList[0]}`
+    // A title strip let out to the frame's edge is cut there and reads as flush; what counts is that it starts and ends in step.
+    const [left, right] = [rect.left - inner.left, inner.right - rect.right]
+    if (Math.abs(left - right) > 3) note(`lean:${name}`, t`小手机里的 ${name} 左右没有对齐（左边离边框 ${Math.round(left)} 像素，右边 ${Math.round(right)} 像素）：两边的 margin 和 padding 要一样`)
+    if (rect.bottom > inner.bottom + 2 || rect.top < inner.top - 2) note(`phone-out:${name}`, t`小手机里的 ${name} 伸到了边框外面`)
+    const next = parts[i + 1]
+    if (next && overlap(rect, next.getBoundingClientRect()) > 3) note(`phone-over:${name}`, t`小手机里的 ${name} 和 .${next.classList[0]} 叠在了一起`)
+  })
+  // What is on the phone's screen keeps the same edge on both sides (a box drawn round a group, pushed to one side).
+  const screen = frame.querySelector('.status-phone-screen')
+  const group = screen?.querySelector(':scope > .status-group')
+  if (group) {
+    const [outer, rect, style] = [screen.getBoundingClientRect(), group.getBoundingClientRect(), getComputedStyle(screen)]
+    const left = rect.left - outer.left - screen.clientLeft - parseFloat(style.paddingLeft)
+    const right = outer.left + screen.clientLeft + screen.clientWidth - parseFloat(style.paddingRight) - rect.right
+    if (Math.abs(left - right) > 3) note('lean:group', t`小手机里的 ${'.status-group'} 左右没有对齐（左边离边框 ${Math.round(left)} 像素，右边 ${Math.round(right)} 像素）：两边的 margin 和 padding 要一样`)
+  }
+  const dock = bar.querySelector('.status-dock')
+  if (dock) {
+    const apps = [...dock.querySelectorAll('.status-app')].map(app => app.getBoundingClientRect())
+    if (apps.some((a, i) => apps.some((b, j) => j > i && overlap(a, b) > 3))) note('apps-over', t`宽 ${width} 像素时，小手机的图标（.status-app）互相叠在了一起`)
   }
 }
 
@@ -424,6 +503,9 @@ function probeCover(wrap, width, note) {
     const rect = part.getBoundingClientRect()
     if (rect.width && (rect.right > box.right + 2 || rect.left < box.left - 2)) note(`cover-out:${partName(part).tag}`, t`宽 ${width} 像素时，${partName(part).words} 横向伸出了开场页`)
   }
+  // The words start at the page's left edge (a look that re-laid the page left them in the middle of it).
+  const main = page.querySelector('.cover-main')
+  if (main && !page.classList.contains('has-figure') && main.getBoundingClientRect().left - box.left > Math.max(48, box.width * 0.2)) note('cover-main', t`开场页的字（.cover-main）被推到了中间，左边空了一大块：不要改 .cover 的排法，也不要给 .cover-main 加大的左边距`)
   probeWords(page, COVER_PARTS, COVER_FAINT, note)
 }
 
@@ -431,6 +513,8 @@ function probeCover(wrap, width, note) {
 function probeWords(bar, parts, faint, note) {
   for (const part of bar.querySelectorAll(parts)) {
     if (part.closest('[hidden]') || !part.textContent.trim()) continue
+    // An app of one thing has its name on the phone's title: the page itself leaves the name out of the screen (style.css).
+    if (part.matches('.status-phone-screen.single .status-group-name, .status-phone-screen.single .status-row.block > .status-label')) continue
     const { tag, words } = partName(part)
     const style = getComputedStyle(part)
     const rect = part.getBoundingClientRect()
@@ -482,6 +566,11 @@ export function skinProblems(el, spec, state, more = [], cover = null) {
           tab?.click()
           probe(bar, width, note)
         }
+        // 小手机: each app opened in turn, the phone looked over like the rest (it is put away till one is).
+        for (const app of bar.querySelectorAll('.status-app')) {
+          app.click()
+          probe(bar, width, note)
+        }
       }
     }
     if (cover?.cover) {
@@ -516,7 +605,7 @@ function wearing(spec, skin) {
  *   busyWords: what to say while something else has the model }
  */
 export function skinPanel(el, edit, { api, cardId, url = `/api/cards/${cardId}/check/skin`, stopUrl = `/api/cards/${cardId}/check/stop`, state, redraw, kept = '', instant = false, cover = null, busyWords = t`模型正在看这张卡（检查这张卡），等它看完再设计外观。` }) {
-  const look = (edit.look ??= { data: null, missing: false, wish: '', sending: false, mending: false, checked: '', came: '', problems: [], failure: '' })
+  const look = (edit.look = edit.look ?? ({ data: null, missing: false, wish: '', sending: false, mending: false, checked: '', came: '', problems: [], failure: '' }))
   const draft = () => look.data?.skin ?? null
   const worn = () => Boolean(draft() && edit.spec.skin?.css === draft().css)
   const asking = () => look.sending || Boolean(look.data?.job)
@@ -1102,7 +1191,7 @@ export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, op
   // ─── Writing over a change ────────────────────────────────────────────
   function editBlocks(item) {
     const edits = state.editing.get(item.id)
-    const edit = change => (edits[change.id] ??= {})
+    const edit = change => (edits[change.id] = edits[change.id] ?? ({}))
     return item.changes.filter(change => !/^remove/.test(change.kind)).map(change => el('div', { class: 'cc-change' }, [
       el('p', { class: 'ce-change-note', text: changeLabel(change) }),
       ...(change.kind === 'statusBar' ? statusEditor(el, change, edit(change), { state: state.data.state, redraw: render }) : change.kind === 'regex' || change.kind === 'newRegex' ? regexEditor(change, edit(change)) : textEditor(item, change, edit(change))),
@@ -1351,7 +1440,7 @@ export function initCardCheck({ api, el, toast, guard, getChat, isGenerating, op
     const { job, error } = state.data
     const busy = Boolean(job) || Boolean(state.pending)
     const { estimate } = talk
-    state.scenes ??= new Set(SCENE_TEXT.slice(0, 4).map(([id]) => id))
+    state.scenes = state.scenes ?? (new Set(SCENE_TEXT.slice(0, 4).map(([id]) => id)))
     const go = el('button', { type: 'button', class: 'btn small', disabled: busy || !estimate.ready || !state.scenes.size, title: job ? t`模型还在看这张卡，等它看完或先停下` : '', text: t`让模型写`, onclick: () => askInterview() })
     const chips = SCENE_TEXT.map(([id, text]) => {
       const chip = el('button', { type: 'button', class: 'chip', 'aria-pressed': String(state.scenes.has(id)), disabled: busy, text, onclick: () => {

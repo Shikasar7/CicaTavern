@@ -46,7 +46,7 @@ let dialog = null
  * @param group - the group to scroll to and put the cursor in, or none
  */
 export async function openToolPrompts({ api, el, toast, guard, onSaved }, group = '') {
-  dialog ??= document.body.appendChild(el('dialog', { class: 'dialog tool-prompts', 'aria-label': t`内置功能的附加提示词` }))
+  dialog = dialog ?? (document.body.appendChild(el('dialog', { class: 'dialog tool-prompts', 'aria-label': t`内置功能的附加提示词` })))
   let saved = (await api('/api/settings')).toolPrompts ?? {}
 
   async function save(id, text) {

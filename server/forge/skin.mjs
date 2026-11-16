@@ -52,20 +52,37 @@ const skinSystem = reply => `你给一张角色卡的状态栏设计外观。状
 有的卡还有下面几块（没有就不用写）：
 .status-art                          顶上的一条图：.status-portrait（立绘）、.status-art-name（名字）、.status-art-place（地名），不要盖住它
 .status-dock > .status-app           「小手机」的一排图标：里面是 .status-app-icon 和 .status-app-name，点开的带 [aria-expanded="true"]
-.status-phone > .status-phone-frame  点开的小手机：.status-phone-head（.status-phone-back、.status-phone-name）、.status-phone-screen（里面还是 .status-group 和各行）、.status-phone-home
+.status-phone > .status-phone-frame  点开的小手机：.status-phone-top（顶上的听筒条）、.status-phone-head（.status-phone-back、.status-phone-name）、.status-phone-screen（里面还是 .status-group 和各行）、.status-phone-home（底下的小横条）
+
+程序已经排好的（你看不到程序的样式表，这些照着用，不要另排）：
+- .status-bar 里的各块（.status-head、.status-pages、.status-art、.status-body、.status-dock、.status-phone）从上到下一块接一块，顺序固定。不要用 position、float、order、transform、负的 margin 去挪它们，也不要把 .status-bar 改成 grid 或 flex 来重排：写了不生效。图标那一排始终在内容下面，小手机始终在图标下面，左边和图标对齐。
+- .status-bar 默认的内边距是 14px 16px 16px。要让哪一块（比如标题那一行）贴到状态栏的边，先自己把 .status-bar 的 padding 写成明确的数，再用同样的数做左右对称的负 margin；左右两边的数必须一样。
+- .status-body.multi（几组并排）和 .status-rows.wide（一组里行多）是自己会折行的网格：宽的时候几列，窄的时候一列。要改列数，写 grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)) 这种自己会折行的，不要写死 1fr 1fr 再用 @media 改回来：状态栏在电脑上也可能只有三百多像素宽（放在侧栏里），@media 看的是窗口的宽度，不是状态栏的。
+- .status-row 是三列的网格：名字、内容、数值（没有数值的行内容占满后两列）。可以改列宽和间距，不要改成别的排法。
+- .status-app 的图标 44px 见方，名字在图标下面一行，第一个图标的左边和上面的字对齐；选中的图标程序用一圈描边（box-shadow）标出来，选中和没选中的大小要一样（不要只给选中的加 padding 或边框，会把旁边的挤歪）。
+- .status-phone-frame 最宽 360px，自己没有内边距，超出圆角的部分会被裁掉；里面四块上下排列，.status-phone-head 和 .status-phone-screen 左右各有 16px 内边距，所以文字是对齐的。给 .status-phone-head 加底色就是一条贴边的标题条，不需要负 margin；要给整块屏幕留边，改 .status-phone-frame 的 padding，四块会一起缩进。.status-phone-home 是居中的一条，只改它的宽、高、颜色和圆角。
+- 同一层的东西用同一个缩进：标题、各行、图标、小手机里的字，左边都从同一条线起；圆角里面套圆角时，里面的要小一些（外圆角减去间距）。
+
+做得精致靠的是这几样：
+- 间距只用一套数（4、8、12、16、24 像素里挑），同一种东西之间的间距处处一样，不要这里 7 那里 9。
+- 字的大小最多三四档（标题、正文、次要的小字），靠大小、粗细和深浅分层级，不靠五颜六色；数字用等宽数字（font-variant-numeric: tabular-nums），上下几行才对得齐。
+- 强调色只用在少数几处：标题、进度条、这一轮变了的、选中的。大片的底色、每一行的边框都用它，就哪里都不突出了。
+- 圆角定一个基数，状态栏、里面的框、标签和徽章按大小递减；同一种东西圆角一样。
+- 阴影只用淡的、不带颜色的，表示「浮在上面」；不用发光的彩色阴影，也不要每一层都加边框再加阴影，线和框越少越干净。
+- 框里不要再套框：组和组之间用留白或一条细线分开就够了。
 
 颜色：先定三个颜色（背景、文字、强调），写在 <palette> 里。程序由它们算出下面这些变量放在 .status-bar 上，CSS 里尽量用它们，不要在 .status-bar 上重新定义它们：
 --surface 背景，--ink 文字，--accent 强调，--muted 次要的字，--faint 更淡的字，--line-soft 细线，--meter-track 进度条的底，--accent-soft 强调色的淡底，--ok 和 --bad 是「是」和增减用的绿和红。
 另外要用的颜色可以直接写，但每一处的字和它的底色要分得清。
 
-能用的：边框、圆角、阴影、渐变背景、字体（只用系统里常见的字体族，写上后备）、字距、间距、分隔线、::before 和 ::after 里用 content 加的符号和纹饰、进度条、标签、徽章、表格的样子、按 [data-label="…"] 给某一项单独的颜色、hover 和过渡、克制的 @keyframes 动画、@media (max-width: 480px) 里给窄屏的调整。
+能用的：边框、圆角、阴影、渐变背景、字体（只用系统里常见的字体族，写上后备）、字距、间距、分隔线、::before 和 ::after 里用 content 加的符号和纹饰、进度条、标签、徽章、表格的样子、按 [data-label="…"] 给某一项单独的颜色、hover 和过渡、克制的 @keyframes 动画、@media (max-width: 480px) 里给窄屏的小调整（字号、间距；列数不要靠它）。
 
 写了会被程序去掉的：url() 和一切要加载的图片、字体，@import，@font-face，position: fixed 和 sticky，!important，规则里再套规则，html、body、:root 和状态栏以外的东西。
 
 要守住的：
 - 不改 .status-meter > i 的 width；不把内容藏起来（display: none、visibility: hidden、小于 11px 的字、淡到看不清的字都不行）。
 - 手机上状态栏只有 320 到 400 像素宽：不写死宽度，不能横向撑出去，长的文字要能换行。
-- ::before、::after 的纹饰用 position: absolute 时要留在状态栏里面，不盖住字，并写 pointer-events: none。
+- ::before、::after 的纹饰用 position: absolute 时要留在状态栏里面，不盖住字，并写 pointer-events: none。用 content 写出来的一行字（编号、印章、英文小字）不要放在标题那一行里：窄的时候它会和标题、「收起」按钮叠在一起；放在角上别的空处，或者只用符号。
 - 这张卡用到的每一种显示方式都要照顾到，没用到的不用写。
 - 一共不超过 ${MAX_SKIN} 字，不写注释。
 
@@ -117,7 +134,16 @@ export function barOutline(spec, state) {
   // (five looks asked without it left them as they come).
   const apps = spec.phone ? phoneApps(spec).apps.map(app => app.name) : []
   if (apps.length) lines.push(`这张状态栏开了「小手机」：${apps.join('、')} 不直接摆在状态栏上，各是一个图标（.status-dock 里的 .status-app），点开在小手机（.status-phone-frame）里看。图标和小手机也要写样式，和状态栏是一套。`)
+  // 版式: the bar is laid out another way, with blocks the list above does not have.
+  if (spec.layout) lines.push(LAYOUT_NOTES[spec.layout])
   return lines.join('\n')
+}
+
+const LAYOUT_COMMON = '它的结构和上面的清单不同（类名固定）：.status-head 下面是 .status-rail（人和数值）和 .status-main（.status-pages 页签和 .status-body 内容），没有 .status-dock 和 .status-phone。.status-rail 里每个人是一个 .status-g（第一个带 .lead，有立绘时带 .has-pic，里面是 .status-pic 和 .status-g-main）；.status-g-main 里依次是 .status-who（.status-who-name 名字、.status-badge 心情这类短词）、.status-quote（一句内心）、.status-gauges > .status-gauge（一个数值：.status-label、.status-value、.status-meter > i）、.status-facts > .status-fact（.status-label 和 .status-fact-value）。页签是 .status-page，里面有 .status-page-icon。这些块怎么排由程序定，只改它们的颜色、边框、圆角、字体和间距，不要改 display、列数和顺序。'
+const LAYOUT_NOTES = {
+  card: `这张状态栏用的是「卡片式」版式：人在最前面（立绘、名字、心情、一句内心、数值条），没有立绘的人的数值是一张张小卡（.status-gauge 带底色和圆角），页签在最底下一排、带图标。${LAYOUT_COMMON}`,
+  rail: `这张状态栏用的是「侧栏式」版式：.status-rail 在左边一条窄栏里（第一个人和他的数值一直在），.status-main 在右边（页签在上，内容在下）；窄的时候左栏折到上面。${LAYOUT_COMMON}`,
+  scroll: `这张状态栏用的是「卷轴式」版式：.status-head 是一条横幅，有场景图时里面有 img.status-banner 和一层渐变（不要盖住、不要藏），标题用毛笔字，「收起」是右上角一枚印章；.status-facts 是横排的一行，没有立绘的人的每个 .status-gauge 是一块方牌，页签是一排方格。圆角都很小。${LAYOUT_COMMON}`,
 }
 
 function cardLines(card) {
@@ -140,7 +166,7 @@ const COVER_PART = `<cover_page>
   .cover-figure               立绘的框，里面是 img
   .cover-doors > .cover-door  开场的卡片（是按钮）：.cover-door-no、.cover-door-title、.cover-door-brief；选中的带 .picked
   .cover-hint                 底下一行小字
-开场页自己有背景图层（.cover-back、.cover-veil）和飘动的一层，不要盖住、不要藏；每一处的字和它后面的底色要分得清；手机上它只有 320 到 400 像素宽。给开场页的规则控制在全部的四分之一以内。
+开场页自己有背景图层（.cover-back、.cover-veil）和飘动的一层，不要盖住、不要藏；整页怎么排（.cover 的 display、列）由程序定，不要改，字从左边起；每一处的字和它后面的底色要分得清；手机上它只有 320 到 400 像素宽。给开场页的规则控制在全部的四分之一以内。
 </cover_page>`
 
 /** What the user asked for, as the model is told it. */

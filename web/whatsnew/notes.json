@@ -1320,6 +1320,90 @@
           }
         }
       ]
+    },
+    {
+      "version": "2.6.0",
+      "date": "2026-11",
+      "items": [
+        {
+          "image": "2.6.0-growth.webp",
+          "zh": {
+            "title": "游戏规则有了成长：天赋、装备、羁绊和进化",
+            "text": "规则窗口多了「成长」（「完整」档），分关、标准、丰富三档。标准档生命和气力上限跟着等级涨，技能越用越强，最高五阶；丰富档再加天赋，每 3 级三选一，跨进大等级还有一次大天赋。你和同伴各有武器、防具、饰品三件装备，并肩打赢几场羁绊升一档，检定成功攒历练，形态到了条件可以进化。\n行囊多了「成长」页，一页看全，还有里程碑和成长记录。读卡配置和创作角色卡会按卡的世界观写天赋和装备。以前就开着完整规则的卡保持「关」，数值不变。"
+          },
+          "en": {
+            "title": "Game rules now have Growth: talents, gear, bonds and evolving",
+            "text": "The rules window has Growth (Full rules): off, Standard or Rich. Standard raises the health and stamina caps with your level and makes skills stronger with use, up to rank five; Rich adds Talents, a pick of three every 3 levels, and a bigger one at each new tier. You and each companion wear a weapon, armour and a trinket, Bonds grow with fights won side by side, passed checks build Practice, and a Form can Evolve when its conditions are met.\nThe Pack has a Growth page with everything in one place, plus Milestones and Growth so far. Read the card and Create a card write talents and gear for the card's world. Cards that already used Full rules keep Growth off, with the same numbers as before."
+          }
+        },
+        {
+          "image": "2.6.0-battle.webp",
+          "zh": {
+            "title": "技能效果、类型克制和收服",
+            "text": "技能多了斩杀、群体治疗、护盾、鼓舞全队、挑衅五种，每个技能还能加两条附加效果（持续伤害、眩晕、削弱、吸取、净化……）；精英和首领也会打出掉血、破绽、眩晕。卡可以定义一组类型和谁克谁，克制时伤害 ×1.5；打赢以后能试着收服一个敌人，「只指挥」的卡由同伴上场去打。\n打不过又躲不掉的仗可以「交给剧情」，太弱的敌人「直接了结」；题材包先列出会改什么，再挑着套用，多了「变身 / 机甲」。"
+          },
+          "en": {
+            "title": "Skill effects, type matchups and taming",
+            "text": "Skills gain five new kinds (execute, group heal, shield, rally and taunt), and each can carry up to two extra effects (damage over time, stun, weaken, drain, cleanse…); elites and bosses can leave bleeding, openings and stuns too. A card can define types and what beats what, for ×1.5 damage; after a win you can try Taming a fallen enemy, and Lead only cards send companions in to fight.\nA fight you can neither win nor escape can be handed over with Leave it to the story, and much weaker enemies dealt with by Settle it now; a Genre pack shows what it changes before you pick parts of it, and Transformation / mecha is new."
+          }
+        },
+        {
+          "image": "2.6.0-layout.webp",
+          "zh": {
+            "title": "状态栏和开场页的版式",
+            "text": "状态栏除了一行一项，多了三种排法：卡片式把人放在最前面（立绘、心情、一句内心），侧栏式把人和他的数值固定在左边，卷轴式顶上是场景图和毛笔标题、数值是一块块方牌。开场页多了书页式和画卷式。\n主题管颜色，版式管摆在哪，可以随便搭，窄的地方自己折行。在「修改角色卡 → 状态栏 → 调整样式」和「开场页」里选；导出到 SillyTavern 也带着。"
+          },
+          "en": {
+            "title": "Layouts for the status bar and the cover page",
+            "text": "Besides one row per item, the status bar has three layouts: Card puts the person first (portrait, mood, a line of thought), Side rail keeps a person and their numbers on the left, and Scroll has the scene and a brush-stroke title on top with the numbers on tiles. The cover page adds Title page and Painted scroll.\nThe theme picks the colours and the layout picks where things go, in any combination, wrapping where it is narrow. Choose them in Edit card → Status bar → Adjust style and Cover page; they go along when exported to SillyTavern."
+          }
+        },
+        {
+          "image": "2.6.0-novel.webp",
+          "zh": {
+            "title": "创作角色卡：从小说开始",
+            "text": "创作角色卡的开始页多了「从小说开始」：把一部小说整本读完（最多 300 万字），照着它做一张卡。一段一段读，可以停、可以接着读，读书的模型能单独选便宜的；读完写一份全书梗概，向导照它跟你聊。\n方案页能选书里的内容带到哪一段为止：故事只演书的前一部分时，后面的人物和剧情不进这张卡。也可以「用已有的世界书」做卡。状态栏和门面也单独成了一步「状态栏与门面」，不用再翻到方案页最底下。"
+          },
+          "en": {
+            "title": "Create a card: Start from a novel",
+            "text": "Create a card's start page has Start from a novel: the whole book is read (up to 3 million characters) and a card made from it. It reads a stretch at a time, can stop and go on, and can use a cheaper model of its own; then it writes a synopsis of the book, which the guide talks to you from.\nOn the Plan page you choose how far into the book the card goes, so a story set in its first part keeps later people and events out of the card. You can also Use a lorebook I have. The status bar and the front now have a step of their own, Status bar & front, instead of sitting at the bottom of the plan."
+          }
+        },
+        {
+          "image": "2.6.0-help.webp",
+          "zh": {
+            "title": "直接问助手怎么用，快捷回复和图库",
+            "text": "「直连对话」里的助手能回答 CicaTavern 本身的问题：某个功能在哪、怎么用，某个报错什么意思。它照应用自带的帮助资料回答，读不到你的卡、聊天和 API Key；输入框左边的问号图标开关。\n输入框上方可以放一排「快捷回复」，点一下发一句常用的话；/hide 1-20 这类命令批量隐藏楼层。角色卡列表上方多了「图库」，所有配图、CG、立绘都在一起，选好了打包导出。"
+          },
+          "en": {
+            "title": "Ask the assistant how things work, Quick replies and the Gallery",
+            "text": "In Direct chat the assistant answers questions about CicaTavern itself: where a feature is, how to use it, what an error means. It answers from the app's own help and cannot read your cards, chats or API keys; the question-mark icon left of the box turns it on or off.\nQuick replies put a row of your own buttons above the box, each sending a line you use often, and commands like /hide 1-20 hide turns in bulk. The Gallery above the card list gathers every picture, CG and portrait, to pick from and export as a zip."
+          }
+        },
+        {
+          "icon": "🔧",
+          "zh": {
+            "title": "还有这些",
+            "text": "导出角色卡能「带上图片和设置」：立绘、表情、场景图、人设图、正则集打成一个压缩包，导回来都装回卡上。世界书能递归触发（默认关），关键词条目能放在紧挨着回复的位置；导入预设末尾的预填照 SillyTavern 的方式发；生图方案一点就换，「我的画风」存常用画师串，一张图能叠 4 个 LoRA；朗读多了通义千问；视觉小说里自己也能上台；条目能拖动排序。\n修好了：MVU 卡的界面不更新；打完仗模型又扣一遍血；记忆簿漏记；导入预设里的 <user> 没换成名字；旧安卓手机打开后点不动。"
+          },
+          "en": {
+            "title": "And also",
+            "text": "Export card has With pictures and settings…: sprites, expressions, scenes, reference images and regex sets go into one zip, and importing it puts them all back on the card. Lorebooks can trigger recursively (off by default), and keyword entries can sit right before the reply; an imported preset's closing prefill is sent the SillyTavern way; Image setups switch with one click, My styles keeps the artist tags you use, and up to 4 LoRAs stack on a picture; Qwen joins the voices; you can stand on the visual novel stage yourself; entries can be dragged into order.\nFixed: MVU cards' panels not updating; the model taking health off again after a fight; turns the memory book skipped; <user> in imported presets not becoming your name; old Android phones not responding to taps."
+          }
+        },
+        {
+          "recap": "2.5",
+          "image": "2.5.0-front.webp",
+          "zh": {
+            "title": "2.5 加了什么",
+            "text": "卡的门面：开场页、带立绘和场景图的状态栏、小手机和动效；状态栏的定制外观；继续生成；基础预设能改条目，内置功能有附加提示词；创作角色卡方案页直接改、三块新玩法积木；世界书从小说抽取；对话导出成文本。"
+          },
+          "en": {
+            "title": "What 2.5 added",
+            "text": "A front for cards: the cover page, a status bar with portraits and scenes, the Phone and motion; custom looks for the status bar; Continue; editable entries in the basic preset and extra prompts for built-in features; a Plan page you edit directly and three new play modules in Create a card; lorebooks from a novel; chats exported as text."
+          }
+        }
+      ]
     }
   ]
 }

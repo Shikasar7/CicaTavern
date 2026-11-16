@@ -308,9 +308,10 @@ export function createScenes(store, { media, history = null }) {
     })
   }
 
-  async function setSprite(cardId, entryId, image) {
+  /** A 立绘 from the page (a data URL, source 'upload'), or the 名册's 人设图 taken as it is (a buffer, source 'ref'): the page cuts out its plain background. */
+  async function setSprite(cardId, entryId, image, source = 'upload') {
     await memberOf(cardId, entryId)
-    return putSprite(cardId, entryId, decode(image), { backend: '', source: 'upload' })
+    return putSprite(cardId, entryId, Buffer.isBuffer(image) ? image : decode(image), { backend: '', source })
   }
 
   async function removeSprite(cardId, entryId) {

@@ -3,8 +3,12 @@
 // one in `node.game`, as it keeps `state`, so branches, rollbacks and saves need nothing of their own.
 // Only the rules write it, and only when a reply is made; the model and a card's scripts cannot reach it.
 import { bagChanged, bagItems, cleanBindings, numberAt, numberWrite, questsAt } from './bindings.js'
-import { SKILLS } from './battle.js'
+import { DEFAULT_SKILLS, SKILLS, cleanAdds, cleanFoeAdds, skillKindOf } from './battle.js'
 import { ailsOn, chanceOf, clampDc, judge, modifierOf, rollD20, seedOf, worstAil } from './dice.js'
+import { GEAR_SLOTS, PRACTICE_DC, cleanGear, gearOf, practiceNeeds } from './growth.js'
+import { SKIP_POINTS, bigsOwed, bonusOf, canTake, checkBonus, cleanGrowth, cleanPerks, fightBonus, grownMost, growsOn, perkFor, perkOf, perksOn, perksOwed, skillGrowth } from './growth.js'
+import { cleanForms, fightOnly, formAt, formForFight, formOf, formReady, formsOf, nextStageAt, rankGives, skillsInForm, taughtSkills } from './growth.js'
+import { bondOf, bondPointsOf, everyGives, levelPointsOf, perkEveryOf, rankRestores } from './growth.js'
 import { STEPS_PER_RANK, levelOfRank, rankAt, rankPower } from './rank.js'
 import { getPath, unwrap } from '../vars.js'
 
@@ -31,9 +35,10 @@ export const ATTRIBUTES = [
  * 叫法: what a card calls things, where it is not what the rules call them (力量 for 体魄, HP for 生命, BOSS for 首领).
  * Only words: the numbers, the marks and what is kept do not change. The four attributes by their ids, then the rest.
  */
-export const WORD_KEYS = ['body', 'grace', 'mind', 'charm', 'life', 'minion', 'normal', 'elite', 'boss', 'skill', 'bag', 'experience', 'party']
+// 装备: the three places a thing is worn (`trinket` is the slot the rules call charm: that word is an attribute's here) and the four rarities.
+export const WORD_KEYS = ['body', 'grace', 'mind', 'charm', 'life', 'minion', 'normal', 'elite', 'boss', 'skill', 'bag', 'experience', 'party', 'perk', 'weapon', 'armour', 'trinket', 'common', 'fine', 'rare', 'epic', 'form', 'evolve']
 /** What the rules call them, for the model and where the card says nothing. */
-export const DEFAULT_WORDS = { body: '体魄', grace: '灵巧', mind: '心智', charm: '魅力', life: '生命', minion: '杂兵', normal: '普通', elite: '精英', boss: '首领', skill: '技能', bag: '行囊', experience: '经验', party: '队伍' }
+export const DEFAULT_WORDS = { body: '体魄', grace: '灵巧', mind: '心智', charm: '魅力', life: '生命', minion: '杂兵', normal: '普通', elite: '精英', boss: '首领', skill: '技能', bag: '行囊', experience: '经验', party: '队伍', perk: '天赋', weapon: '武器', armour: '防具', trinket: '饰品', common: '普通', fine: '精良', rare: '稀有', epic: '传说', form: '形态', evolve: '进化' }
 const MAX_WORD = 8
 
 function cleanWords(value) {
@@ -59,6 +64,8 @@ export const AVERAGE = 10
 export const ATTRIBUTE_POINTS = 8
 const MAX_LIFE = 100
 const MAX_ENERGY = 30
+// As often as a skill's use is counted: far past where it stops mattering.
+const MAX_USES = 999
 const MAX_THINGS = 200
 const MAX_QUESTS = 100
 const MAX_FOES = 100
@@ -116,7 +123,12 @@ const FIELD_WORDS = { life: '生命', energy: '气力', sanity: '理智' }
 const AFTER_DEFEAT = 0.3
 const LEVEL_POINTS = 2
 /** Experience from one level to the next. */
-export const levelNeeds = level => level * 100
+// 成长节奏: how much experience a level takes, beside what it usually does.
+export const PACES = ['fast', 'normal', 'slow']
+const PACE_NEEDS = { fast: 0.6, normal: 1, slow: 1.5 }
+
+/** The experience a level takes to leave, at the pace the card keeps (`book`; the usual one without). */
+export const levelNeeds = (level, book) => Math.round(level * 100 * (PACE_NEEDS[book?.pace] ?? 1))
 // What 【受伤】 and 【恢复】 are worth, of the most life there is.
 const SIZES = { light: 0.1, medium: 0.25, heavy: 0.5 }
 
@@ -135,6 +147,9 @@ function cleanThings(value) {
 export function cleanRulebook(value) {
   const book = isRecord(value) ? value : {}
   const start = isRecord(book.start) ? book.start : {}
+  // 形态 and the skills a 天赋 or a form teaches: a skill that comes with its kind is one the card knows from then on.
+  const forms = cleanForms(book.forms)
+  const taught = taughtSkills({ perks: cleanPerks(book.perks), forms })
   const attributes = {}
   for (const { id } of ATTRIBUTES) {
     const stored = Number(book.attributes?.[id])
@@ -161,10 +176,22 @@ export function cleanRulebook(value) {
     sanity: book.sanity === true,
     bindings: cleanBindings(book.bindings),
     items: cleanItems(book.items),
-    skills: cleanSkills(book.skills),
+    skills: { ...taught, ...cleanSkills(book.skills) },
     foes: cleanFoes(book.foes),
     companions: cleanCompanions(book.companions),
     words: cleanWords(book.words),
+    // 成长 (growth.js): how far it goes, and the 天赋 that are this card's own. Neither said is the rules as they were.
+    ...(cleanGrowth(book.growth) ? { growth: cleanGrowth(book.growth) } : {}),
+    // 技能的附加: kept only when a skill has some.
+    ...(Object.keys(cleanSkillAdds(book.skillAdds, { skills: cleanSkills(book.skills), companions: book.companions })).length ? { skillAdds: cleanSkillAdds(book.skillAdds, { skills: cleanSkills(book.skills), companions: book.companions }) } : {}),
+    // 成长节奏: kept only when it is not the usual one, so a book from before this is as it was.
+    ...(PACES.includes(book.pace) && book.pace !== 'normal' ? { pace: book.pace } : {}),
+    ...(cleanPerks(book.perks).length ? { perks: cleanPerks(book.perks) } : {}),
+    ...(Object.keys(forms).length ? { forms } : {}),
+    // 玩法模块 (plans/14): who fights, what beats what, and whether a foe brought down can be taken along. Each kept only when on.
+    ...(book.lead === 'command' ? { lead: 'command' } : {}),
+    ...(book.tame === true ? { tame: true } : {}),
+    ...(Object.keys(cleanTypes(book.types)).length ? { types: cleanTypes(book.types), ...(Object.keys(cleanSkillTypes(book.skillTypes, cleanTypes(book.types))).length ? { skillTypes: cleanSkillTypes(book.skillTypes, cleanTypes(book.types)) } : {}), ...(Object.hasOwn(cleanTypes(book.types), typeName(book.selfType)) ? { selfType: typeName(book.selfType) } : {}) } : {}),
   }
 }
 
@@ -192,21 +219,24 @@ export function cleanKit(raw) {
   const named = (value, max) => (Array.isArray(value) ? value : []).filter(item => isRecord(item) && text(item.name, 24)).slice(0, max)
   return {
     attributes,
-    skills: named(kit.skills, 6).map(skill => ({ name: text(skill.name, 24), kind: Object.hasOwn(SKILLS, skill.kind) ? skill.kind : '' })),
+    skills: named(kit.skills, 6).map(kitSkill),
     things: named(kit.things, 8).map(thing => ({
       name: text(thing.name, 24),
       count: Number.isInteger(thing.count) && thing.count > 0 ? Math.min(thing.count, 9) : 1,
-      type: EFFECTS.includes(thing.type) ? thing.type : '',
+      type: thing.type === 'gear' || EFFECTS.includes(thing.type) ? thing.type : '',
       size: STRENGTHS.includes(thing.size) ? thing.size : 'medium',
+      // 装备: where it is worn, how rare, what it does.
+      ...(cleanGear(thing, text(thing.name, 24)) ? { gear: cleanGear(thing, text(thing.name, 24)) } : {}),
     })),
-    foes: named(kit.foes, 8).map(foe => ({ name: text(foe.name, 24), looks: text(foe.looks, 300), moves: words(foe.moves, 4) })),
+    foes: named(kit.foes, 8).map(foe => ({ name: text(foe.name, 24), looks: text(foe.looks, 300), moves: words(foe.moves, 4), ...(cleanFoeAdds(foe.adds).length ? { adds: cleanFoeAdds(foe.adds) } : {}), ...(typeName(foe.type) ? { type: typeName(foe.type) } : {}) })),
     // Who travels with the player: the card's own people, each with what they are good at.
     companions: named(kit.companions, 4).map(companion => ({
       name: text(companion.name, 24),
       keys: words(companion.keys, 6),
       attributes: shared(companion.attributes),
-      skills: named(companion.skills, 4).map(skill => ({ name: text(skill.name, 24), kind: Object.hasOwn(SKILLS, skill.kind) ? skill.kind : '' })),
+      skills: named(companion.skills, 4).map(kitSkill),
       start: companion.start !== false,
+      ...(typeName(companion.type) ? { type: typeName(companion.type) } : {}),
     })),
     // What this world calls things and how its ladder runs (创作角色卡 asks; a revised plan comes back in these names).
     energyName: text(kit.energy ?? kit.energyName, 6),
@@ -214,27 +244,58 @@ export function cleanKit(raw) {
     rankSpan: RANK_SPANS.includes(kit.rank_span ?? kit.rankSpan) ? kit.rank_span ?? kit.rankSpan : 'wide',
     sanity: kit.sanity === true,
     words: cleanWords(kit.words),
+    // 天赋 of this world's own, each with effects from the rules' table (growth.js).
+    perks: cleanPerks(kit.perks),
+    // 形态: who changes into what, where this world has that.
+    ...(Object.keys(cleanForms(kit.forms)).length ? { forms: cleanForms(kit.forms) } : {}),
+    // 玩法模块: only what this world has.
+    ...(Object.keys(cleanTypes(kit.types)).length ? { types: cleanTypes(kit.types), ...(Object.hasOwn(cleanTypes(kit.types), typeName(kit.selfType)) ? { selfType: typeName(kit.selfType) } : {}) } : {}),
+    ...(kit.lead === 'command' ? { lead: 'command' } : {}),
+    ...(kit.tame === true ? { tame: true } : {}),
   }
 }
 
 /** A kit as the rule book's own fields. */
+/** A kit's skill as kept: its name, its kind when one was given, and what it does on top when that could be read. */
+function kitSkill(skill) {
+  const name = typeof skill.name === 'string' ? skill.name.trim().slice(0, 24) : ''
+  const kind = Object.hasOwn(SKILLS, skill.kind) ? skill.kind : ''
+  const adds = cleanAdds(skill.adds, kind || skillKindOf(name))
+  return { name, kind, ...(adds.length ? { adds } : {}), ...(typeName(skill.type) ? { type: typeName(skill.type) } : {}) }
+}
+
+/** The adds of a kit's skills, the player's and the companions', by the skill's name: the first to have a name keeps it. */
+function kitAdds(kit) {
+  const out = new Map()
+  for (const skill of [...kit.skills, ...(kit.companions ?? []).flatMap(companion => companion.skills)]) if (skill.adds?.length && !out.has(skill.name)) out.set(skill.name, skill.adds)
+  return [...out]
+}
+
 export function kitBook(kit) {
   const set = (items, value) => Object.fromEntries(items.map(item => [item.name, value(item)]))
   return {
     attributes: kit.attributes,
     start: { things: kit.things.map(({ name, count }) => ({ name, count })), skills: kit.skills.map(skill => skill.name), ...((kit.companions ?? []).some(companion => companion.start) ? { party: kit.companions.filter(companion => companion.start).map(companion => companion.name).slice(0, MAX_FIELDED) } : {}) },
-    items: set(kit.things.filter(thing => thing.type), ({ type, size }) => ({ type, size })),
+    items: set(kit.things.filter(thing => thing.type), ({ type, size, gear }) => gear ?? { type, size }),
     skills: set(kit.skills.filter(skill => skill.kind), skill => skill.kind),
-    foes: set(kit.foes, ({ looks, moves }) => ({ looks, moves })),
+    ...(kitAdds(kit).length ? { skillAdds: Object.fromEntries(kitAdds(kit)) } : {}),
+    foes: set(kit.foes, ({ looks, moves, adds, type }) => ({ looks, moves, ...(adds?.length ? { adds } : {}), ...(type ? { type } : {}) })),
+    ...(kit.types ? { types: kit.types, skillTypes: Object.fromEntries([...kit.skills, ...(kit.companions ?? []).flatMap(companion => companion.skills)].filter(skill => skill.type).map(skill => [skill.name, skill.type])), ...(kit.selfType ? { selfType: kit.selfType } : {}) } : {}),
+    ...(kit.lead ? { lead: kit.lead } : {}),
+    ...(kit.tame ? { tame: true } : {}),
     ...(Object.keys(kit.words ?? {}).length ? { words: kit.words } : {}),
-    ...(kit.companions?.length ? { companions: set(kit.companions, ({ keys, attributes, skills }) => ({ keys, attributes, skills: Object.fromEntries(skills.map(skill => [skill.name, skill.kind])) })) } : {}),
+    // A kit that brings 天赋 is for a card that has them to choose; any other grows as a level makes it.
+    growth: { level: kit.perks?.length ? 'rich' : 'standard' },
+    ...(kit.perks?.length ? { perks: kit.perks } : {}),
+    ...(kit.forms ? { forms: kit.forms } : {}),
+    ...(kit.companions?.length ? { companions: set(kit.companions, ({ keys, attributes, skills, type }) => ({ keys, attributes, skills: Object.fromEntries(skills.map(skill => [skill.name, skill.kind])), ...(type ? { type } : {}) })) } : {}),
   }
 }
 
 /** A kit's world as the rule book's own fields: left out of kitBook, which also serves books that have these already. */
 export const kitWorld = ({ energyName = '', ranks = [], rankSpan = 'wide', sanity = false }) => ({ energyName, ranks, rankSpan, sanity })
 
-/** 敌人图鉴: what is known of a foe once it has been met. { name: { looks, moves, file } } */
+/** 敌人图鉴: what is known of a foe once it has been met. { name: { looks, moves, file, adds? } }; `adds` is what its blows leave behind when it comes as a 精英 or a 首领 (battle.js FOE_ADDS). */
 function cleanFoes(value) {
   const out = {}
   if (!isRecord(value)) return out
@@ -244,10 +305,41 @@ function cleanFoes(value) {
       looks: typeof foe.looks === 'string' ? foe.looks.trim().slice(0, 300) : '',
       moves: words(foe.moves, 4),
       ...(FOE_PICTURE.test(foe.file ?? '') ? { file: foe.file } : {}),
+      ...(cleanFoeAdds(foe.adds).length ? { adds: cleanFoeAdds(foe.adds) } : {}),
+      ...(typeName(foe.type) ? { type: typeName(foe.type) } : {}),
     }
   }
   return out
 }
+
+/** A type's name, as kept: a few characters, or ''. */
+const typeName = value => (typeof value === 'string' ? value.trim().slice(0, 8) : '')
+const MAX_TYPES = 8
+
+/** 类型克制: the card's types and what each beats, as kept: { type: [those it beats] }. Fewer than two is none. */
+export function cleanTypes(value) {
+  const out = {}
+  if (!isRecord(value)) return out
+  const names = Object.keys(value).map(typeName).filter(Boolean).slice(0, MAX_TYPES)
+  for (const [name, beats] of Object.entries(value)) {
+    const own = typeName(name)
+    if (!names.includes(own)) continue
+    out[own] = [...new Set((Array.isArray(beats) ? beats : []).map(typeName).filter(beaten => beaten !== own && names.includes(beaten)))]
+  }
+  return Object.keys(out).length > 1 ? out : {}
+}
+
+/** The types of skills by name, for those of a type the card has. */
+function cleanSkillTypes(value, types) {
+  const out = {}
+  for (const [name, type] of Object.entries(isRecord(value) ? value : {}).slice(0, 60)) if (name.trim() && Object.hasOwn(types, typeName(type))) out[name.trim().slice(0, 40)] = typeName(type)
+  return out
+}
+
+/** The player's own type: that of a form they have come to for good, or the one the card gives them. */
+const playerType = (book, sheet) => (sheet && formAt(sheet, book) > 0 ? formOf(sheet, book)?.type : undefined) ?? book.selfType
+/** 类型克制 as a fight is handed it (battle.js battleSetup), or null on a card with none. `sheet`: the player, for their own type. */
+export const typesFor = (book, sheet = null) => (growsOn(book) || book?.level === 'full' ? (Object.keys(book?.types ?? {}).length ? { beats: book.types, skills: book.skillTypes ?? {}, ...(playerType(book, sheet) ? { player: playerType(book, sheet) } : {}) } : null) : null)
 
 /** 队伍名册: who the card has to stand with the player. { name: { keys, attributes, skills: { name: kind or '' }, level? } } */
 function cleanCompanions(value) {
@@ -262,7 +354,7 @@ function cleanCompanions(value) {
     }
     const skills = {}
     for (const [skill, kind] of Object.entries(isRecord(companion.skills) ? companion.skills : {}).slice(0, 6)) if (skill.trim()) skills[skill.trim().slice(0, 40)] = SKILLS[kind] ? kind : ''
-    out[name.trim().slice(0, 40)] = { keys: words(companion.keys, 6), attributes, skills, ...(Number.isInteger(companion.level) && companion.level > 0 ? { level: Math.min(99, companion.level) } : {}) }
+    out[name.trim().slice(0, 40)] = { keys: words(companion.keys, 6), attributes, skills, ...(Number.isInteger(companion.level) && companion.level > 0 ? { level: Math.min(99, companion.level) } : {}), ...(typeName(companion.type) ? { type: typeName(companion.type) } : {}) }
   }
   return out
 }
@@ -276,15 +368,27 @@ export function companionOf(book, name) {
   return found ? { name: found[0], ...found[1] } : null
 }
 
+/**
+ * The points one joining at a level brings: those a player who started the story would have had by then, two a
+ * level above the one the story starts at. No more than their attributes have room for.
+ */
+export function joiningPoints(book, level, attributes) {
+  const above = Math.max(0, level - levelOfRank(Array.isArray(book?.ranks) ? book.ranks : [], book?.start?.rank))
+  const room = ATTRIBUTES.reduce((sum, { id }) => sum + MAX_ATTRIBUTE - attributes[id], 0)
+  return Math.min(above * LEVEL_POINTS, room)
+}
+
 /** One who has just joined: as the card has them, or, one it does not know, average with one plain skill. */
 export function memberOf(book, name, level = 1) {
   const known = companionOf(book, name)
+  const joins = known?.level ?? level
+  const attributes = known ? { ...known.attributes } : Object.fromEntries(ATTRIBUTES.map(({ id }) => [id, AVERAGE]))
   return {
     name: known?.name ?? String(name).trim().slice(0, 40),
-    level: known?.level ?? level,
+    level: joins,
     experience: 0,
-    points: 0,
-    attributes: known ? { ...known.attributes } : Object.fromEntries(ATTRIBUTES.map(({ id }) => [id, AVERAGE])),
+    points: joiningPoints(book, joins, attributes),
+    attributes,
     life: MAX_LIFE,
     maxLife: MAX_LIFE,
     energy: MAX_ENERGY,
@@ -339,8 +443,119 @@ export function partyChanged(sheet, book, act, name) {
   return null
 }
 
+/** One of the party with the skills they fight with said: one with none has those everybody has. */
+const skilled = (who, own) => ((who.skills ?? []).length ? who : { ...who, skills: own ? DEFAULT_SKILLS : [COMPANION_SKILL] })
+
+/** One of the party in another form of their chain: its name kept, the skills of the form left gone and the new one's come. */
+function inForm(who, book, to, own) {
+  const first = formsOf(who, book)[0]
+  const { form: _was, ...rest } = who
+  const skills = skillsInForm(Object.keys(to.skills ?? {}).length || Object.keys(formOf(who, book)?.skills ?? {}).length ? skilled(who, own) : who, book, to)
+  return { ...rest, ...(to === first ? {} : { form: to.name }), skills }
+}
+
+/** 临时进化: what one of the party becomes if they take their next form in a fight (battle.js battleSetup), or null. */
+function shiftFor(who, book, kinds, own, to = formForFight(who, book)) {
+  if (!to) return null
+  const as = inForm(who, book, to, own)
+  // A second form for a fight only, right after this one (变身 → 强化形态), is taken from it in the same fight.
+  const chain = formsOf(who, book)
+  const after = chain[chain.indexOf(to) + 1]
+  const then = after && fightOnly(after) ? shiftFor(as, book, kinds, own, after) : null
+  return { name: to.name, names: as.skills, bonus: fightBonus(bonusOf(as, book)), grown: skillGrowth(as, book, as.skills, kinds), ...(to.type ? { type: to.type } : {}), ...(to.drain ? { drain: true } : {}), ...(then ? { then } : {}) }
+}
+
 /** What stands with the player in a fight, in the shape battle.js takes. */
-export const alliesFor = (sheet, book) => fieldedOf(sheet).map(member => ({ ...member, kinds: companionKinds(book, member.name) }))
+export function alliesFor(sheet, book) {
+  return fieldedOf(sheet).map(member => {
+    const kinds = companionKinds(book, member.name)
+    // 类型克制: that of the form they have come to, their own (one tamed keeps what it was), or what the card says of them.
+    const type = (formAt(member, book) > 0 ? formOf(member, book)?.type : undefined) ?? member.type ?? companionOf(book, member.name)?.type
+    if (!growsOn(book)) return { ...member, kinds, ...(type ? { type } : {}) }
+    const shift = shiftFor(member, book, { ...book.skills, ...kinds }, false)
+    const form = formAt(member, book) > 0 ? formOf(member, book) : null
+    return { ...member, kinds, ...(type ? { type } : {}), ...(form ? { shown: form.name } : {}), bonus: fightBonus(bonusOf(member, book)), grown: skillGrowth(member, book, member.skills ?? [], { ...book.skills, ...kinds }), ...(shift ? { shift } : {}) }
+  })
+}
+
+/** What growth gives the player in a fight, in the shape battle.js takes; nothing on a card that does not count it. */
+export function playerGrowth(sheet, book) {
+  if (!growsOn(book)) return {}
+  const names = sheet.skills.length ? sheet.skills : DEFAULT_SKILLS
+  const kinds = Object.fromEntries(names.map(name => [name, book.skills?.[name] ?? skillKindOf(name)]))
+  const shift = shiftFor(sheet, book, book.skills ?? {}, true)
+  return { grows: true, bonus: fightBonus(bonusOf(sheet, book)), grown: skillGrowth(sheet, book, names, kinds), ...(shift ? { shift } : {}) }
+}
+
+/** The most life and energy of one who has not grown, kept the first time growth is counted: what a card's own numbers were. */
+const baseOf = who => who.grew ?? { life: who.maxLife, energy: who.maxEnergy }
+
+/** One of the party with the most life and energy set to `most`: what was added is theirs at once, what is taken is only a ceiling. */
+function fitted(who, most, { life = true, energy = true } = {}) {
+  const out = { ...who }
+  if (life && most.life !== out.maxLife) {
+    out.life = most.life > out.maxLife ? out.life + (most.life - out.maxLife) : Math.min(out.life, most.life)
+    out.maxLife = most.life
+  }
+  if (energy && most.energy !== out.maxEnergy) {
+    out.energy = most.energy > out.maxEnergy ? (out.energy ?? out.maxEnergy) + (most.energy - out.maxEnergy) : Math.min(out.energy ?? most.energy, most.energy)
+    out.maxEnergy = most.energy
+  }
+  return out
+}
+
+/**
+ * The sheet with what growth makes of it: the most life and energy of each of the party, from their level and 天赋,
+ * and a 天赋 chosen for a companion who has one to choose (unless the card leaves that to the player). The same sheet
+ * always comes to the same thing. A card that stopped counting growth gets its numbers back.
+ * @param bound - the fields the card keeps itself: those are the card's to say.
+ */
+export function grownSheet(sheet, book, bound = sheet.bound ?? []) {
+  const free = { life: !bound.includes('life') && !bound.includes('maxLife'), energy: !bound.includes('energy') && !bound.includes('maxEnergy') }
+  if (!growsOn(book)) {
+    if (!sheet.grew && !(sheet.party ?? []).some(member => member.grew)) return sheet
+    const back = who => {
+      if (!who.grew) return who
+      const { grew, ...rest } = who
+      return fitted(rest, grew, who === sheet ? free : undefined)
+    }
+    const plain = back(sheet)
+    return { ...plain, ...(sheet.party ? { party: sheet.party.map(back) } : {}) }
+  }
+  sheet = fitGear(sheet, book)
+  const one = (who, own) => {
+    let grown = { ...who, grew: baseOf(who) }
+    if (!own && book.growth?.companions !== 'manual') {
+      for (let key = perkFor(grown, book); perksOwed(grown, book) > 0 && key; key = perkFor(grown, book)) grown = { ...grown, perks: [...(grown.perks ?? []), key] }
+      // 大天赋: a companion who has crossed a rank has one too, chosen the same way.
+      for (let key = perkFor(grown, book, true); bigsOwed(grown, book) > 0 && key; key = perkFor(grown, book, true)) grown = { ...grown, perks: [...(grown.perks ?? []), key] }
+    }
+    // What a 天赋 they have teaches, and the skills of the form they are in, are theirs.
+    const taught = [...(perksOn(book) ? (grown.perks ?? []).map(key => perkOf(book, key)?.skill).filter(Boolean) : []), ...Object.keys(formOf(grown, book)?.skills ?? {})]
+    const missing = taught.filter((name, i) => !skilled(grown, own).skills.includes(name) && taught.indexOf(name) === i)
+    if (missing.length) grown = { ...grown, skills: [...skilled(grown, own).skills, ...missing] }
+    return fitted(grown, grownMost(grown, book, grown.grew), own ? free : undefined)
+  }
+  const player = one(sheet, true)
+  return { ...player, ...(sheet.party ? { party: sheet.party.map(member => one(member, false)) } : {}) }
+}
+
+/** What kind a skill by a name is on this card: the player's, one of the companions', or what its name suggests. */
+export function skillKindIn(book, name) {
+  const theirs = Object.values(book?.companions ?? {}).map(companion => companion?.skills?.[name]).find(kind => SKILLS[kind])
+  return SKILLS[book?.skills?.[name]] ? book.skills[name] : theirs ?? skillKindOf(name)
+}
+
+/** 技能的附加 as kept: { name: [{ id, size }] }, for whoever on the card has a skill by that name (battle.js cleanAdds). */
+function cleanSkillAdds(value, book) {
+  const out = {}
+  if (!isRecord(value)) return out
+  for (const [name, adds] of Object.entries(value).slice(0, MAX_THINGS)) {
+    const kept = cleanAdds(adds, skillKindIn(book, name))
+    if (name.trim() && kept.length) out[name.trim().slice(0, 40)] = kept
+  }
+  return out
+}
 
 function cleanSkills(value) {
   const out = {}
@@ -353,6 +568,11 @@ function cleanItems(value) {
   const out = {}
   if (!isRecord(value)) return out
   for (const [name, effect] of Object.entries(value).slice(0, MAX_THINGS)) {
+    // 装备: a thing that is worn (growth.js).
+    if (cleanGear(effect, name)) {
+      out[name.slice(0, 40)] = cleanGear(effect, name)
+      continue
+    }
     if (!isRecord(effect) || !EFFECTS.includes(effect.type)) continue
     out[name.slice(0, 40)] = { type: effect.type, ...(STRENGTHLESS.has(effect.type) ? {} : { size: STRENGTHS.includes(effect.size) ? effect.size : 'medium' }) }
   }
@@ -468,7 +688,7 @@ export function sheetOf(book, game, state) {
     if (value === null) broken.push(field)
     else sheet[field] = value
   }
-  return { ...sheet, strain: strainOf(sheet), bound: Object.keys(bindings), broken, named: attributeNames(book) }
+  return grownSheet({ ...sheet, strain: strainOf(sheet), bound: Object.keys(bindings), broken, named: attributeNames(book) }, book)
 }
 
 /** A sheet as a reply keeps it: a rank in words is the card's, read again each time. */
@@ -538,19 +758,49 @@ export function rollCheck(sheet, book, check, ...spot) {
   const dc = dcFor(check.dc, book.difficulty)
   const ails = ailsFor(sheet, check.stat)
   const { aid, lacks } = aidFor(sheet, check)
-  const result = judge(rollD20(seedOf(...spot, check.stat, String(check.dc))), modifierFor(sheet, check.stat) + (aid ? AID_BONUS : 0), dc)
+  const result = judge(rollD20(seedOf(...spot, check.stat, String(check.dc))), modifierFor(sheet, check.stat) + (aid ? AID_BONUS : 0) + checkBonus(sheet, book, attributeOf(check.stat, sheet.named)), dc)
   return { stat: check.stat, ...result, ...(lacks ? { tier: 'fail', lacks } : {}), ...(ails.length ? { ails } : {}), ...(aid ? { aid: { name: aid, by: AID_BONUS } } : {}) }
 }
 
 /** The chance a choice is shown with, in percent. */
 export function chanceFor(sheet, book, check) {
   const { aid, lacks } = aidFor(sheet, check)
-  return lacks ? 0 : chanceOf(modifierFor(sheet, check.stat) + (aid ? AID_BONUS : 0), dcFor(check.dc, book.difficulty))
+  return lacks ? 0 : chanceOf(modifierFor(sheet, check.stat) + (aid ? AID_BONUS : 0) + checkBonus(sheet, book, attributeOf(check.stat, sheet.named)), dcFor(check.dc, book.difficulty))
 }
 
 /** A roll in a line: what a settling turn says it was, for the model and for what comes after a compaction. */
 export function checkLine(result) {
   return `掷骰：${result.stat ? `${result.stat} ` : ''}${result.total}，需要 ${result.dc}，${result.lacks ? `缺${result.lacks}，` : ''}${TIER_WORDS[result.tier]}`
+}
+
+/**
+ * 历练: what a roll that came off leaves on the attribute it was made on, on a card that counts growth:
+ * { practice: id, by } to go with the roll's experience, or null. A roll against less than `PRACTICE_DC` teaches nothing.
+ */
+export function checkPractice(sheet, book, check, result) {
+  if (!growsOn(book) || result.lacks || result.dc < PRACTICE_DC) return null
+  const by = result.tier === 'crit' ? 2 : result.tier === 'success' ? 1 : 0
+  const id = attributeOf(check.stat, sheet.named)
+  return by && ATTRIBUTES.some(item => item.id === id) && sheet.attributes[id] < MAX_ATTRIBUTE ? { practice: id, by } : null
+}
+
+/** 历练 added to an attribute, and the points of it that come of enough. */
+function drilled(sheet, id, by) {
+  let value = sheet.attributes[id]
+  let held = (sheet.practice?.[id] ?? 0) + by
+  while (value < MAX_ATTRIBUTE && held >= practiceNeeds(value)) {
+    held -= practiceNeeds(value)
+    value += 1
+  }
+  return { ...sheet, attributes: { ...sheet.attributes, [id]: value }, practice: { ...(sheet.practice ?? {}), [id]: value < MAX_ATTRIBUTE ? held : 0 } }
+}
+
+/** What the model is told of a level come by, on a card that counts growth: a rank crossed is a 突破. */
+function grewLine(before, after, book) {
+  if (!growsOn(book) || (after.level ?? 1) <= (before.level ?? 1)) return ''
+  const ranks = Array.isArray(book.ranks) ? book.ranks : []
+  const rank = ranks.length ? rankAt(ranks, after.level) : ''
+  return rank && rank !== rankAt(ranks, before.level ?? 1) ? `玩家突破到了${rank}，伤势和疲惫一扫而空，叙述里要写出这一刻` : `玩家升到了 ${after.level} 级`
 }
 
 /** The experience a roll brings: only where the rules count levels. */
@@ -594,6 +844,10 @@ export function cleanOps(value) {
     else if (op.op === 'point' && ATTRIBUTES.some(item => item.id === op.id)) out.push({ op: 'point', id: op.id, ...(typeof op.who === 'string' && op.who.trim() ? { who: op.who.trim().slice(0, 40) } : {}) })
     else if (op.op === 'party' && name && PARTY_ACTS.includes(op.act)) out.push({ op: 'party', act: op.act, name })
     else if (op.op === 'mend' && name) out.push({ op: 'mend', name })
+    else if (op.op === 'equip' && name) out.push({ op: 'equip', name, ...(typeof op.who === 'string' && op.who.trim() ? { who: op.who.trim().slice(0, 40) } : {}) })
+    else if (op.op === 'unequip' && GEAR_SLOTS.includes(op.slot)) out.push({ op: 'unequip', slot: op.slot, ...(typeof op.who === 'string' && op.who.trim() ? { who: op.who.trim().slice(0, 40) } : {}) })
+    else if (op.op === 'form') out.push({ op: 'form', ...(typeof op.who === 'string' && op.who.trim() ? { who: op.who.trim().slice(0, 40) } : {}) })
+    else if (op.op === 'perk' && (op.skip === true || (typeof op.key === 'string' && op.key.trim()))) out.push({ op: 'perk', ...(op.skip === true ? { skip: true, ...(op.big === true ? { big: true } : {}) } : { key: op.key.trim().slice(0, 41) }), ...(typeof op.who === 'string' && op.who.trim() ? { who: op.who.trim().slice(0, 40) } : {}) })
   }
   return out
 }
@@ -609,17 +863,48 @@ const held = (sheet, name) => sheet.things.find(thing => thing.name === name)?.c
 const clampTo = (value, most) => Math.max(0, Math.min(most, value))
 
 /** Experience gained, and the levels and points that come of it. A level the card keeps itself is the card's to raise. */
-function grow(sheet, experience) {
-  let { level = 1, points = 0 } = sheet
+function grow(sheet, experience, book) {
+  let { level = 1 } = sheet
   let total = (sheet.experience ?? 0) + experience
   if (!sheet.bound?.includes('level') && !sheet.bound?.includes('rank')) {
-    while (total >= levelNeeds(level)) {
-      total -= levelNeeds(level)
+    while (total >= levelNeeds(level, book)) {
+      total -= levelNeeds(level, book)
       level += 1
-      points += LEVEL_POINTS
     }
   }
-  return { ...sheet, level, points, experience: total }
+  const gained = levelsGive(sheet.level ?? 1, level, book)
+  return restored({ ...sheet, level, points: (sheet.points ?? 0) + gained.points, experience: total }, sheet.level ?? 1, book, gained.whole)
+}
+
+/**
+ * 里程碑 → 奖励: the attribute points the levels from `was` to `level` bring on this card (a card may leave them to
+ * 历练 alone, or give more), with those of every few levels, and whether one of those makes whole again.
+ */
+function levelsGive(was, level, book) {
+  const every = perkEveryOf(book)
+  const steps = growsOn(book) ? Math.floor(level / every) - Math.floor(was / every) : 0
+  const gives = everyGives(book)
+  return { points: (level - was) * levelPointsOf(book) + steps * gives.points, whole: steps > 0 && gives.restore }
+}
+
+/** Whole again, where the rules keep those numbers. */
+const madeWhole = sheet => ({ ...sheet, ...(sheet.bound?.includes('life') ? {} : { life: sheet.maxLife }), ...(sheet.bound?.includes('energy') || sheet.maxEnergy === undefined ? {} : { energy: sheet.maxEnergy }) })
+
+/** 突破: one who has crossed into a new rank, on a card that counts growth, is whole again, where the rules keep those numbers. */
+function restored(sheet, was, book, whole = false) {
+  const ranks = Array.isArray(book?.ranks) ? book.ranks : []
+  if (!growsOn(book) || !ranks.length || sheet.level <= was || rankAt(ranks, sheet.level) === rankAt(ranks, was)) return whole && growsOn(book) ? madeWhole(sheet) : sheet
+  // 大天赋: one to choose for each rank crossed, on a card that has 天赋.
+  const step = level => Math.min(ranks.length - 1, Math.max(0, Math.floor((level - 1) / STEPS_PER_RANK)))
+  const crossed = step(sheet.level) - step(was)
+  const gives = rankGives(book)
+  const bigs = gives.big ? { bigs: (sheet.bigs ?? 0) + crossed } : {}
+  // 里程碑: a card may have a 突破 bring attribute points, and every skill a stage further.
+  const points = gives.points && crossed > 0 ? { points: (sheet.points ?? 0) + gives.points * crossed } : {}
+  const mastery = { ...(sheet.mastery ?? {}) }
+  if (gives.skills) for (let i = 0; i < crossed; i++) for (const name of (sheet.skills ?? []).length ? sheet.skills : DEFAULT_SKILLS) mastery[name] = nextStageAt(mastery[name]) ?? mastery[name]
+  const out = { ...sheet, ...bigs, ...points, ...(gives.skills && crossed > 0 ? { mastery } : {}) }
+  return whole || rankRestores(book) ? madeWhole(out) : out
 }
 
 /** A blow to the mind: at nothing it breaks, and comes back with a madness that wears off like anything else. */
@@ -632,28 +917,161 @@ function shaken(sheet, lost) {
 /** A steady mind takes a little less of it, never nothing. */
 const shock = (sheet, size) => Math.max(1, SHOCKS[size] - Math.max(0, modifierOf(sheet.attributes.mind)))
 
+/** How often each skill has been used, with a fight's own count added: what 熟练 is read from. */
+function practised(who, uses) {
+  if (!uses || !Object.keys(uses).length) return who
+  const mastery = { ...(who.mastery ?? {}) }
+  for (const [name, count] of Object.entries(uses)) if (Number.isInteger(count) && count > 0) mastery[name.slice(0, 40)] = Math.min(MAX_USES, (mastery[name] ?? 0) + count)
+  return { ...who, mastery }
+}
+
+// How many foes a story keeps the strength of: the oldest are let go.
+const MAX_MET = 80
+
+/** The foes a story has met, with those of one more fight: { name: { at, gap, level } }, how each stood when first met. */
+function remembered(held = {}, met) {
+  const out = { ...held }
+  for (const [name, one] of Object.entries(met)) {
+    if (!Number.isFinite(one?.at) || !Number.isInteger(one?.gap) || !Number.isInteger(one?.level)) continue
+    delete out[name]
+    // `worn`: what the party had on when they met, which the foe followed part of and goes on following.
+    const worn = Number.isFinite(one.worn?.deal) && Number.isFinite(one.worn?.take) ? { worn: { deal: Math.max(0, Math.min(2, one.worn.deal)), take: Math.max(0, Math.min(2, one.worn.take)) } } : {}
+    out[name.slice(0, 40)] = { at: one.at, gap: one.gap, level: one.level, ...worn }
+  }
+  return Object.fromEntries(Object.entries(out).slice(-MAX_MET))
+}
+
+/** 收服: a foe brought down joins the party as what it was: its moves for skills, its type its own. Nothing when there is no room, or one by its name is there already. */
+function tamed(sheet, book, name) {
+  const joined = partyChanged(sheet, book, 'join', name)
+  if (!joined || companionOf(book, name)) return joined ?? sheet
+  const known = book.foes?.[name]
+  const moves = (known?.moves ?? []).slice(0, 3)
+  return { ...joined, party: joined.party.map(member => (member.name === name ? { ...member, tamed: true, ...(moves.length ? { skills: moves } : {}), ...(known?.type ? { type: known.type } : {}) } : member)) }
+}
+
 /** A fight's outcome on the sheet: nothing changed until now, whatever it took. */
-function afterFight(sheet, op) {
+function afterFight(sheet, op, book = {}) {
   const things = Object.entries(op.used).reduce((left, [name, count]) => lose(left, { name, count }), sheet.things)
-  const life = op.over === 'lost' ? Math.max(1, Math.round(sheet.maxLife * AFTER_DEFEAT)) : op.life
+  // 成长: what was won is worth more to one who learns faster, and one who mends faster is the better for it at once.
+  const grows = growsOn(book)
+  const earned = (who, experience) => (grows ? Math.round(experience * (1 + bonusOf(who, book).gain)) : experience)
+  const mended = (who, left) => (grows && op.over === 'won' ? Math.min(who.maxLife, left + Math.round(who.maxLife * bonusOf(who, book).mend)) : left)
+  // 指挥: one who led from behind was not struck: a fight lost is their companions' to bear.
+  const beaten = op.over === 'lost' && !op.commanded
+  const life = beaten ? Math.max(1, Math.round(sheet.maxLife * AFTER_DEFEAT)) : op.commanded ? sheet.life : mended(sheet, op.life)
   const energy = sheet.bound?.includes('energy') ? op.energy : sheet.energy
   const left = (sheet.conditions ?? []).filter(item => !op.cured?.includes(item.name))
-  const conditions = [...(op.over === 'lost' ? [DEFEATED] : []), ...(op.rallied ? [RALLIED] : [])].reduce(ailed, left)
+  const conditions = [...(beaten ? [DEFEATED] : []), ...(op.rallied ? [RALLIED] : [])].reduce(ailed, left)
   const party = (sheet.party ?? []).map(member => {
     const fought = op.party?.find(item => item.name === member.name)
     if (!fought) return member
-    const life = op.over === 'lost' ? Math.max(1, Math.round(member.maxLife * AFTER_DEFEAT)) : Math.max(1, Math.min(member.maxLife, fought.life))
-    // Those who fell get half of what the fight was worth.
-    return grow({ ...member, life }, op.over === 'lost' ? 0 : fought.fell ? Math.floor(op.experience / 2) : op.experience)
+    const life = op.over === 'lost' ? Math.max(1, Math.round(member.maxLife * AFTER_DEFEAT)) : mended(member, Math.max(1, Math.min(member.maxLife, fought.life)))
+    // Those who fell get half of what the fight was worth. 羁绊: a fight won beside the player is one more between them,
+    // and a step of it may bring attribute points on a card that says so.
+    const bond = grows && op.over === 'won' ? Math.min(MAX_USES, (member.bond ?? 0) + 1) : null
+    const stepped = bond !== null && bondOf({ bond }) > bondOf(member) ? bondPointsOf(book) : 0
+    return grow(practised({ ...member, life, ...(bond !== null ? { bond } : {}), ...(stepped ? { points: (member.points ?? 0) + stepped } : {}) }, grows ? fought.uses : null), earned(member, op.over === 'lost' ? 0 : fought.fell ? Math.floor(op.experience / 2) : op.experience), book)
   })
-  const after = { ...sheet, things, life, energy, conditions, ...(sheet.party ? { party } : {}) }
-  return grow(op.shock && sheet.sanity !== undefined ? shaken(after, op.shock) : after, op.experience)
+  const settled = practised({ ...sheet, things, life, energy, conditions, ...(sheet.party ? { party } : {}), ...(grows && op.met ? { met: remembered(sheet.met, op.met) } : {}) }, grows ? op.uses : null)
+  const after = op.tamed ? tamed(settled, book, op.tamed) : settled
+  return grow(op.shock && sheet.sanity !== undefined ? shaken(after, op.shock) : after, earned(sheet, op.experience), book)
+}
+
+/** A 天赋 taken, or passed over for points, by the player or one of the party. → { sheet, line } or null. */
+function perkTaken(sheet, book, op) {
+  const at = op.who ? (sheet.party ?? []).findIndex(member => member.name === op.who) : -1
+  const who = op.who ? sheet.party?.[at] : sheet
+  if (!who || (op.skip ? !(op.big ? bigsOwed(who, book) : perksOwed(who, book)) : !canTake(who, book, op.key))) return null
+  const skipped = op.big ? { bigSkips: (who.bigSkips ?? 0) + 1 } : { perkSkips: (who.perkSkips ?? 0) + 1 }
+  const changed = op.skip ? { ...who, ...skipped, points: (who.points ?? 0) + SKIP_POINTS } : { ...who, perks: [...(who.perks ?? []), op.key] }
+  const after = op.who ? { ...sheet, party: sheet.party.map((member, i) => (i === at ? changed : member)) } : changed
+  return { sheet: after, line: op.skip ? '' : `${op.who ?? '玩家'}有了新的${wordFor(book, 'perk')}「${perkOf(book, op.key).name}」` }
+}
+
+/** 进化: the player or one of the party comes to the next form of their chain, with all it asks for met. → { sheet, line } or null. */
+function evolved(sheet, book, op) {
+  const at = op.who ? (sheet.party ?? []).findIndex(member => member.name === op.who) : -1
+  const who = op.who ? sheet.party?.[at] : sheet
+  const to = who ? formReady(who, book, sheet.things) : null
+  if (!to) return null
+  const changed = inForm(who, book, to, !op.who)
+  const after = op.who ? { ...sheet, party: sheet.party.map((member, i) => (i === at ? changed : member)) } : changed
+  return { sheet: after, line: `${op.who ?? '玩家'}${wordFor(book, 'evolve')}成了「${to.name}」${to.stage ? `（${to.stage}）` : ''}，接下来的叙述里按新的${wordFor(book, 'form')}写` }
+}
+
+/** 【进化】: the story puts one of the party into a form of their chain, whatever it asks for; the first is the way back. */
+function formed(sheet, book, mark) {
+  const party = sheet.party ?? []
+  const named = mark.who ? companionOf(book, mark.who)?.name ?? mark.who : null
+  // Said of nobody, it is whoever has a form by that name: the player first.
+  const has = who => formsOf(who, book).some(form => form.name === mark.name)
+  const at = named ? party.findIndex(member => member.name === named) : has(sheet) ? -1 : party.findIndex(has)
+  const who = at >= 0 ? party[at] : named && !['玩家', '你', '{{user}}'].includes(named) ? null : sheet
+  const to = who ? formsOf(who, book).find(form => form.name === mark.name) : null
+  if (!to || formOf(who, book) === to) return sheet
+  const changed = inForm(who, book, to, at < 0)
+  return at >= 0 ? { ...sheet, party: party.map((member, i) => (i === at ? changed : member)) } : changed
+}
+
+/** How many of a thing are worn by the party, but for one of them. */
+const wornBy = (sheet, name, but) => [sheet, ...(sheet.party ?? [])].filter(one => one !== but).reduce((sum, one) => sum + Object.values(one.gear ?? {}).filter(worn => worn === name).length, 0)
+
+/** 装备 put on or taken off, by the player or one of the party. → { sheet, line } or null. */
+function geared(sheet, book, op) {
+  if (!growsOn(book)) return null
+  const at = op.who ? (sheet.party ?? []).findIndex(member => member.name === op.who) : -1
+  const who = op.who ? sheet.party?.[at] : sheet
+  if (!who) return null
+  const gear = { ...(who.gear ?? {}) }
+  if (op.op === 'unequip') {
+    if (!gear[op.slot]) return null
+    delete gear[op.slot]
+  } else {
+    const item = gearOf(book, op.name)
+    // There has to be one to spare: what another of the party has on is theirs.
+    if (!item || gear[item.slot] === op.name || held(sheet, op.name) <= wornBy(sheet, op.name, who)) return null
+    gear[item.slot] = op.name
+  }
+  const { gear: _was, ...bare } = who
+  const changed = Object.keys(gear).length ? { ...bare, gear } : bare
+  const after = op.who ? { ...sheet, party: sheet.party.map((member, i) => (i === at ? changed : member)) } : changed
+  return { sheet: after, line: op.op === 'equip' ? `${op.who ?? '玩家'}装备了「${op.name}」` : '' }
+}
+
+/** Gear nobody has any more comes off: a thing lost, given away, or no longer gear on this card. The player's first, then the others'. */
+function fitGear(sheet, book) {
+  const left = new Map(sheet.things.map(thing => [thing.name, thing.count]))
+  const fit = who => {
+    if (!who.gear) return who
+    const gear = {}
+    for (const [slot, name] of Object.entries(who.gear)) {
+      if (gearOf(book, name)?.slot !== slot || !(left.get(name) > 0)) continue
+      left.set(name, left.get(name) - 1)
+      gear[slot] = name
+    }
+    if (Object.keys(gear).length === Object.keys(who.gear).length) return who
+    const { gear: _was, ...bare } = who
+    return Object.keys(gear).length ? { ...bare, gear } : bare
+  }
+  const player = fit(sheet)
+  const party = sheet.party?.map(fit)
+  return player === sheet && (!party || party.every((member, i) => member === sheet.party[i])) ? sheet : { ...player, ...(party ? { party } : {}) }
 }
 
 /** One operation on the sheet: { sheet, line } (what the model is told), or null when it cannot be done now. */
 function applyOp(sheet, book, op) {
-  if (op.op === 'battle') return { sheet: afterFight(sheet, op), line: '' }
-  if (op.op === 'grow') return { sheet: grow(sheet, op.experience), line: '' }
+  if (op.op === 'battle') {
+    const after = afterFight(sheet, op, book)
+    return { sheet: after, line: grewLine(sheet, after, book) }
+  }
+  if (op.op === 'grow') {
+    const grown = grow(sheet, growsOn(book) ? Math.round(op.experience * (1 + bonusOf(sheet, book).gain)) : op.experience, book)
+    const learns = growsOn(book) && ATTRIBUTES.some(item => item.id === op.practice) && grown.attributes[op.practice] < MAX_ATTRIBUTE
+    return { sheet: learns ? drilled(grown, op.practice, op.by === 2 ? 2 : 1) : grown, line: grewLine(sheet, grown, book) }
+  }
+  if (op.op === 'perk') return perkTaken(sheet, book, op)
+  if (op.op === 'form') return evolved(sheet, book, op)
   if (op.op === 'point' && op.who) {
     const item = ATTRIBUTES.find(attribute => attribute.id === op.id)
     const at = (sheet.party ?? []).findIndex(member => member.name === op.who)
@@ -671,6 +1089,7 @@ function applyOp(sheet, book, op) {
     if (!sheet.points || sheet.attributes[op.id] >= MAX_ATTRIBUTE) return null
     return { sheet: { ...sheet, points: sheet.points - 1, attributes: { ...sheet.attributes, [op.id]: sheet.attributes[op.id] + 1 } }, line: `玩家把 1 点加到${item.name}` }
   }
+  if (op.op === 'equip' || op.op === 'unequip') return geared(sheet, book, op)
   if (op.op === 'use') {
     const effect = effectOf(book, op.name)
     if (!held(sheet, op.name) || !usableNow(effect)) return null
@@ -719,6 +1138,8 @@ export function applyOps(sheet, book, ops) {
     if (op.op === 'use' || op.op === 'lose') done.spent.push(op.name)
     if (op.op === 'battle') for (const [name, count] of Object.entries(op.used)) done.spent.push(...Array(count).fill(name))
   }
+  // A level or a 天赋 gained just now is felt at once.
+  if (done.ops.length) done.sheet = grownSheet(done.sheet, book)
   return done
 }
 
@@ -729,8 +1150,11 @@ export function applyOps(sheet, book, ops) {
 export function opWrites(book, state, before, after, ops) {
   const bindings = book.bindings ?? {}
   const writes = []
+  // A fight settles them even where they end as they began (hurt, then healed back with a pill): the model's own
+  // change to them in that turn would stand otherwise.
+  const fought = ops.some(op => op.op === 'battle')
   for (const field of ['life', 'energy', 'sanity']) {
-    if (bindings[field] && before[field] !== after[field]) writes.push(numberWrite(state, bindings[field], after[field]))
+    if (bindings[field] && (fought || before[field] !== after[field])) writes.push(numberWrite(state, bindings[field], after[field]))
   }
   if (bindings.things) {
     let bag = getPath(state ?? {}, bindings.things)
@@ -752,13 +1176,14 @@ export function opWrites(book, state, before, after, ops) {
 }
 
 /** Up the ladder as the story says, a rank at a time at most. Down it the story cannot go. */
-function promoted(sheet, power) {
+function promoted(sheet, power, book) {
   const level = power === null ? sheet.level : Math.min(power + 1, sheet.level + STEPS_PER_RANK)
-  return level > sheet.level ? { ...sheet, level, experience: 0, points: (sheet.points ?? 0) + LEVEL_POINTS } : sheet
+  return level > sheet.level ? restored({ ...sheet, level, experience: 0, points: (sheet.points ?? 0) + levelPointsOf(book) }, sheet.level, book) : sheet
 }
 
 function applyMark(sheet, mark, ranks, book) {
   if (mark.kind === 'party') return partyChanged(sheet, book, mark.act, mark.name) ?? sheet
+  if (mark.kind === 'form') return formed(sheet, book, mark)
   if (mark.kind === 'learn' && mark.who) {
     const at = (sheet.party ?? []).findIndex(member => member.name === (companionOf(book, mark.who)?.name ?? mark.who))
     if (at < 0 || sheet.party[at].skills.includes(mark.name)) return sheet
@@ -768,7 +1193,7 @@ function applyMark(sheet, mark, ranks, book) {
   if (mark.kind === 'lose') return { ...sheet, things: lose(sheet.things, mark) }
   if (mark.kind === 'quest') return { ...sheet, quests: quest(sheet.quests, mark) }
   if (mark.kind === 'learn') return sheet.skills.includes(mark.name) ? sheet : { ...sheet, skills: [...sheet.skills, mark.name] }
-  if (mark.kind === 'promote') return promoted(sheet, rankPower(ranks, mark.name))
+  if (mark.kind === 'promote') return promoted(sheet, rankPower(ranks, mark.name), book)
   if (mark.kind === 'sanity') return mark.back ? { ...sheet, sanity: Math.min(sheet.maxSanity, sheet.sanity + SHOCKS[mark.size]) } : shaken(sheet, shock(sheet, mark.size))
   if (mark.kind === 'ail') return { ...sheet, conditions: ailed(sheet.conditions ?? [], { ...mark, stat: attributeOf(mark.stat, attributeNames(book)) ?? '' }) }
   if (mark.kind === 'mend') return { ...sheet, conditions: (sheet.conditions ?? []).filter(item => item.name !== mark.name) }
@@ -805,7 +1230,8 @@ export function settleReply(sheet, marks, { bound = [], spent = [], newDay = fal
     return at < 0
   })
   // What this reply brought on is counted from this day.
-  const settled = taken.reduce((held, mark) => applyMark(held, mark, ranks, book), { ...sheet, conditions: wornOff(sheet.conditions, newDay) })
+  // A rank the story gave is felt at once, as a level won is.
+  const settled = grownSheet(taken.reduce((held, mark) => applyMark(held, mark, ranks, book), { ...sheet, conditions: wornOff(sheet.conditions, newDay) }), book, bound)
   if (!newDay) return settled
   // A night's rest is the party's as well, and a hurt companion is fit again by morning.
   const party = (settled.party ?? []).map(member => ({ ...member, hurt: false, life: Math.min(member.maxLife, member.life + Math.round(member.maxLife * REST)), energy: Math.min(member.maxEnergy, member.energy + Math.round(member.maxEnergy * REST)) }))

@@ -34,6 +34,10 @@ const NO_PROXY = 'localhost,127.0.0.1,::1'
 const ANTHROPIC_VERSION = '2023-06-01'
 const ANTHROPIC_DEFAULT_MAX = 8192
 const TIMEOUT_MS = 10 * 60 * 1000
+// 超时 in a provider's 高级: how long a request may go without a byte, in seconds (0 = TIMEOUT_MS).
+export const TIMEOUT_RANGE = Object.freeze({ min: 10, max: 3600 })
+/** How long a request to `provider` waits without a byte arriving, in milliseconds. */
+const timeoutOf = provider => (provider?.timeout > 0 ? provider.timeout * 1000 : TIMEOUT_MS)
 
 const isObject = value => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 
@@ -165,6 +169,8 @@ export function normalizeProvider(input, previous = null, taken = new Set()) {
     headers: cleanHeaders(input.headers),
     models,
     maxTokens: intIn(input.maxTokens, 1, 1_000_000),
+    // 超时 (秒): out of range or empty is the default (TIMEOUT_MS).
+    timeout: intIn(input.timeout, TIMEOUT_RANGE.min, TIMEOUT_RANGE.max),
     temperature,
     extraBody,
     // 思考: 'off' asks the model not to think, for models the 思考 setting does not reach (thinkingOff).
@@ -566,10 +572,10 @@ async function headersFor(provider, extra = {}, options = {}) {
 const agentPlatformKey = provider => isVertex(provider) && Boolean(apiKeyOf(provider)) && !googleCredential(apiKeyOf(provider))
 
 /** One request; resolves with the response once headers arrive. */
-function send(target, { method = 'GET', headers, body, rawBody, signal, proxy }) {
+function send(target, { method = 'GET', headers, body, rawBody, signal, proxy, timeout = TIMEOUT_MS }) {
   const url = new URL(target)
   const lib = url.protocol === 'https:' ? https : http
-  if (rawBody) return sendPayload(lib, url, { method, headers, payload: rawBody, signal, proxy })
+  if (rawBody) return sendPayload(lib, url, { method, headers, payload: rawBody, signal, proxy, timeout })
   const payload = body === undefined ? undefined : Buffer.from(JSON.stringify(body), 'utf8')
   return sendPayload(lib, url, {
     method,
@@ -577,17 +583,19 @@ function send(target, { method = 'GET', headers, body, rawBody, signal, proxy })
     payload,
     signal,
     proxy,
+    timeout,
   })
 }
 
-function sendPayload(lib, url, { method, headers, payload, signal, proxy }) {
+/** `timeout`: how long the socket may stay quiet, in milliseconds (a provider's own 超时, timeoutOf). */
+function sendPayload(lib, url, { method, headers, payload, signal, proxy, timeout = TIMEOUT_MS }) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(abortError(signal))
     const req = lib.request(url, {
       method,
       agent: agentFor(url, proxy),
       headers,
-      timeout: TIMEOUT_MS,
+      timeout,
     })
     // Whether the provider itself was reached: TLS with it done (through a proxy's tunnel too), or a plain
     // connection made without a proxy. A time running out after that is the provider not answering.
@@ -1333,6 +1341,7 @@ export async function complete(provider, modelId, original, { proxy = null } = {
           body: requestBody(provider, modelId, body, { withReasoning: reasoning, thoughts, ...options }),
           signal: request.signal,
           proxy: provider.proxy === 'direct' ? null : proxy,
+          timeout: timeoutOf(provider),
         })
         // Vertex AI's shared capacity full at that moment (429 Resource exhausted): Google's advice is to wait and
         // ask again, a little longer each time. Nothing of the answer has come yet, so asking again repeats nothing.
@@ -1587,6 +1596,7 @@ export async function providerRequest(provider, suffix, { method = 'POST', body,
     body: raw ? undefined : body,
     signal,
     proxy: provider.proxy === 'direct' ? null : proxy,
+    timeout: timeoutOf(provider),
   })
   await failIfBad(res)
   return { contentType: String(res.headers['content-type'] ?? ''), buffer: await readBuffer(res) }
@@ -1620,6 +1630,7 @@ export async function googleRequest(provider, suffix, { body, signal, proxy = nu
     body,
     signal,
     proxy: provider.proxy === 'direct' ? null : proxy,
+    timeout: timeoutOf(provider),
   })
   await failIfBad(res)
   return parseJson(await readText(res, 64 * 1024 * 1024))
@@ -1823,7 +1834,7 @@ function plainError(provider, error, begun = false) {
   }
   // Reached, then nothing for as long as it may take: the provider busy or queueing, not the network.
   if (error?.reached && (errorCode(error) === 'ETIMEDOUT' || /请求超时|Request timed out/i.test(text))) {
-    return withCode(msg`${name} 连上了，但一直没开始回答（请求超时）：多半是对方太忙、在排队，或者模型思考得太久。稍后再试、调低「努力程度」，或者先换个模型。`, error)
+    return withCode(msg`${name} 连上了，但一直没开始回答（请求超时）：多半是对方太忙、在排队，或者模型思考得太久。稍后再试、调低「努力程度」，或者先换个模型；本机模型或慢的中转，可以在供应商的「高级」里把「超时」调长。`, error)
   }
   if (network) return withCode(msg`连不上 ${name}：检查 Base URL、网络和代理设置。（${text.slice(0, 160)}）`, error)
   if (begun) return withCode(msg`${name} 写到中途报错了，这是上游返回的错误：${text.slice(0, 240)}`, error)

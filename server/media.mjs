@@ -8,8 +8,8 @@
 //   / {{reference}} placeholders (imported as SillyTavern's %prompt% and so
 //   on, see checkWorkflow), or NovelAI's image API (its persistent
 //   token kept server-side in novelai.json, never sent to the page).
-// - Voice: the sources in voice/: a provider's /audio/speech, Fish Audio and
-//   MiniMax and MOSS with the user's own key, or a voice service speaking the xiaoya
+// - Voice: the sources in voice/: a provider's /audio/speech or Bailian's
+//   Qwen-Audio-TTS, Fish Audio and MiniMax and MOSS with the user's own key, or a voice service speaking the xiaoya
 //   bridge's protocol (the local bridge on this machine's own install, nothing
 //   by default elsewhere); proxied so a phone on the LAN can play it, cached
 //   by source + model + voice + text. Browser voices (Web Speech) never reach
@@ -31,6 +31,7 @@ import { DEFAULT_LISTEN, cleanListen, createListen, readAudio } from './voice/li
 import { msg } from './i18n.mjs'
 import { HISTORY_DEFAULT, cleanKeep, madeAt } from './draw-history.mjs'
 import { EXPRESSION_LOOK, expressionRequest, parseExpressionLabels } from '../web/shared/stage.js'
+import { IMAGE_PRESET_KEYS, imagePresetOf } from '../web/shared/draw.js'
 
 export const DEFAULT_MEDIA = Object.freeze({
   helperModel: '', // provider ref that writes image prompts; empty = the chat's model when it is a provider
@@ -85,6 +86,9 @@ export const DEFAULT_MEDIA = Object.freeze({
   minimaxVoices: Object.freeze([]), // none listed = MiniMax's system voices
   mossModel: 'moss-tts-1.5-flash',
   mossVoices: Object.freeze([]), // none listed = some voices of the MOSS Create library
+  qwenTtsProvider: '', // a provider on Alibaba Cloud Bailian (the 通义千问 template): Qwen-Audio-TTS (voices qwen:<id>)
+  qwenTtsModel: 'qwen-audio-3.1-tts-plus',
+  qwenTtsVoices: Object.freeze([]), // none listed = the qwen-audio-3.1 system voices
   geminiTtsProvider: '', // a provider with Google's key: Gemini's speech models (voices gemini:<name>)
   geminiTtsModel: 'gemini-2.5-flash-preview-tts',
   geminiTtsVoices: Object.freeze([]), // none listed = Gemini's prebuilt voices
@@ -95,14 +99,48 @@ export const DEFAULT_MEDIA = Object.freeze({
   autoRead: false,
   autoImage: false,
   drawHistory: HISTORY_DEFAULT, // 抽图历史: old pictures each place keeps when drawn again (draw-history.mjs), 0 = none
+  imagePresets: Object.freeze([]), // 生图方案: [{ id, name, settings }], how pictures are drawn saved under a name (IMAGE_PRESET_KEYS)
+  // 我的画风: [{ id, name, style, negative }], 画师串 and the like kept once for every card (a card's 画风 picks one);
+  // defaultStyle: the id of the one a card with no 画风 of its own is drawn with, '' = none.
+  styleLibrary: Object.freeze([]),
+  defaultStyle: '',
 })
 
-// lora: a file in ComfyUI's models/loras, added to the workflow for this card (ComfyUI only).
-// roster: the cast for pictures (roster.mjs); a lone member with a LoRA of their own is drawn with theirs instead (loraFor).
+// 我的画风: at most this many, each its words at most as long as a card's 画风 (cleanCardMedia).
+const MAX_STYLES = 50
+
+/** 我的画风 as kept: a name and words each, ids unique. */
+export function cleanStyleLibrary(list) {
+  const seen = new Set()
+  const out = []
+  for (const item of (Array.isArray(list) ? list : []).slice(0, MAX_STYLES * 2)) {
+    if (!item || typeof item !== 'object') continue
+    const name = String(item.name ?? '').trim().slice(0, 40)
+    const style = String(item.style ?? '').trim().slice(0, 1200)
+    const negative = String(item.negative ?? '').trim().slice(0, 600)
+    if (!name || (!style && !negative)) continue
+    let id = typeof item.id === 'string' && /^[a-z0-9]{4,16}$/.test(item.id) ? item.id : ''
+    while (!id || seen.has(id)) id = Math.random().toString(36).slice(2, 10)
+    seen.add(id)
+    out.push({ id, name, style, negative })
+    if (out.length >= MAX_STYLES) break
+  }
+  return out
+}
+
+// 生图方案 (web/shared/draw.js IMAGE_PRESET_KEYS): at most this many.
+const MAX_IMAGE_PRESETS = 20
+export { IMAGE_PRESET_KEYS, imagePresetOf }
+
+// loras: the card's 画风 LoRA, up to four (files in ComfyUI's models/loras, or the WebUI's), each with its trigger word and
+// strength, on every picture of people (lorasFor). The first is also lora / loraTrigger / loraStrength, as builds before
+// the list kept it. roster: the cast for pictures (roster.mjs); a lone member with a LoRA of their own has theirs on top.
 // style / styleNegative: the card's look; NovelAI puts them on every picture of the card, ComfyUI and SD WebUI
 // the style (styleFirst) and the negative after their own, the others get the style in the prompt (portraits and 立绘 too).
 // promptRules: this card's 写提示词的额外要求, after every card's (media.promptRules).
-export const DEFAULT_CARD_MEDIA = Object.freeze({ voice: '', narratorVoice: '', style: '', styleNegative: '', promptRules: '', lora: '', loraTrigger: '', loraStrength: 0.8, roster: [] })
+export const DEFAULT_CARD_MEDIA = Object.freeze({ voice: '', narratorVoice: '', style: '', styleNegative: '', promptRules: '', lora: '', loraTrigger: '', loraStrength: 0.8, loras: [], roster: [] })
+// 画风 LoRA a card may stack. More bleed into each other: each needs a lower strength.
+export const MAX_STYLE_LORAS = 4
 export const PROMPT_DETAILS = ['brief', 'standard', 'detailed']
 const RULES_MAX = { media: 4000, card: 2000 }
 
@@ -110,6 +148,9 @@ const SIZE = /^(\d{3,4})x(\d{3,4})$/
 const SHAPES = ['square', 'portrait', 'landscape']
 // Images APIs (OpenAI gpt-image, grok2api) take only these three sizes; SDXL
 // workflows want about one megapixel at its trained ratios.
+// The pictures that may have a ComfyUI workflow of their own: 背景 and 立绘 (server createMedia drawingWorkflow).
+export const WORKFLOW_PURPOSES = ['scene', 'sprite']
+
 const PIXELS = {
   openai: { square: '1024x1024', portrait: '1024x1536', landscape: '1536x1024' },
   comfy: { square: '1024x1024', portrait: '832x1216', landscape: '1216x832' },
@@ -219,6 +260,12 @@ export function cleanMedia(input, previous = DEFAULT_MEDIA, defaults = DEFAULT_M
   }
   text('geminiImageProvider', 40)
   text('geminiTtsProvider', 40)
+  text('qwenTtsProvider', 40)
+  if (typeof source.qwenTtsModel === 'string') {
+    const model = source.qwenTtsModel.trim()
+    if (model && !/^qwen-audio-[\w.-]{1,60}$/.test(model)) throw httpError(400, msg`通义千问朗读模型名不对（例如 qwen-audio-3.1-tts-plus）`)
+    value.qwenTtsModel = model || DEFAULT_MEDIA.qwenTtsModel
+  }
   for (const key of ['geminiImageModel', 'geminiTtsModel']) {
     if (typeof source[key] !== 'string') continue
     const model = source[key].trim().replace(/^models\//, '')
@@ -297,11 +344,43 @@ export function cleanMedia(input, previous = DEFAULT_MEDIA, defaults = DEFAULT_M
   value.drawHistory = cleanKeep(source.drawHistory, cleanKeep(value.drawHistory))
   text('defaultVoice', 250)
   if (Array.isArray(source.defaultVoiceAsked)) value.defaultVoiceAsked = [...new Set(source.defaultVoiceAsked.filter(id => typeof id === 'string').map(id => id.slice(0, 20)))].slice(0, 12)
-  for (const key of ['ttsVoices', 'fishVoices', 'minimaxVoices', 'mossVoices', 'geminiTtsVoices']) {
+  for (const key of ['ttsVoices', 'fishVoices', 'minimaxVoices', 'mossVoices', 'qwenTtsVoices', 'geminiTtsVoices']) {
     if (typeof source[key] === 'string' || Array.isArray(source[key])) value[key] = cleanVoiceList(source[key], { fish: key === 'fishVoices' })
   }
   for (const key of ['imageReference', 'autoRead', 'autoImage', 'naiReference', 'naiRefStyle', 'geminiReference']) if (typeof source[key] === 'boolean') value[key] = source[key]
+  if (Array.isArray(source.imagePresets)) value.imagePresets = cleanImagePresets(source.imagePresets, defaults, backends)
+  else value.imagePresets = cleanImagePresets(Array.isArray(value.imagePresets) ? value.imagePresets : [], defaults, backends)
+  value.styleLibrary = cleanStyleLibrary(Array.isArray(source.styleLibrary) ? source.styleLibrary : value.styleLibrary)
+  if (typeof source.defaultStyle === 'string') value.defaultStyle = source.defaultStyle
+  if (!value.styleLibrary.some(item => item.id === value.defaultStyle)) value.defaultStyle = ''
   return cleanListen(source, value)
+}
+
+/**
+ * 生图方案 as saved: each a name and the image settings, cleaned as the settings themselves are. One that no longer
+ * reads (a backend this install lost, a name written by hand) is dropped rather than block every other setting.
+ */
+function cleanImagePresets(list, defaults, backends) {
+  const seen = new Set()
+  const out = []
+  for (const preset of list.slice(0, MAX_IMAGE_PRESETS * 2)) {
+    if (!preset || typeof preset !== 'object' || !preset.settings || typeof preset.settings !== 'object') continue
+    const name = String(preset.name ?? '').trim().slice(0, 40)
+    let id = typeof preset.id === 'string' && /^[a-z0-9]{4,16}$/.test(preset.id) ? preset.id : ''
+    if (!name) continue
+    while (!id || seen.has(id)) id = Math.random().toString(36).slice(2, 10)
+    let settings
+    try {
+      const picked = Object.fromEntries(IMAGE_PRESET_KEYS.filter(key => preset.settings[key] !== undefined).map(key => [key, preset.settings[key]]))
+      settings = imagePresetOf(cleanMedia(picked, defaults, defaults, { backends }))
+    } catch {
+      continue
+    }
+    seen.add(id)
+    out.push({ id, name, settings })
+    if (out.length >= MAX_IMAGE_PRESETS) break
+  }
+  return out
 }
 
 export function cleanCardMedia(input, previous = DEFAULT_CARD_MEDIA) {
@@ -311,9 +390,20 @@ export function cleanCardMedia(input, previous = DEFAULT_CARD_MEDIA) {
   if (typeof input?.style === 'string') value.style = input.style.trim().slice(0, 600)
   if (typeof input?.styleNegative === 'string') value.styleNegative = input.styleNegative.trim().slice(0, 600)
   if (typeof input?.promptRules === 'string') value.promptRules = cleanRules(input.promptRules, RULES_MAX.card)
-  if (typeof input?.lora === 'string') value.lora = cleanLora(input.lora)
-  if (typeof input?.loraTrigger === 'string') value.loraTrigger = input.loraTrigger.trim().slice(0, 80)
-  if (input?.loraStrength !== undefined) value.loraStrength = cleanStrength(input.loraStrength, value.loraStrength)
+  // Saved before the list: its one LoRA is the first.
+  const before = Array.isArray(value.loras) && value.loras.length ? value.loras : value.lora ? [{ lora: value.lora, trigger: value.loraTrigger, strength: value.loraStrength }] : []
+  let loras = Array.isArray(input?.loras) ? input.loras : before
+  // A page from before the list changes the first one through lora / loraTrigger / loraStrength: when it sends no
+  // list, or sends back the list as it was (the view read and returned) with those changed. A changed list wins.
+  const untouched = !Array.isArray(input?.loras) || JSON.stringify(cleanStyleLoras(input.loras)) === JSON.stringify(cleanStyleLoras(before))
+  const old = typeof input?.lora === 'string' || typeof input?.loraTrigger === 'string' || input?.loraStrength !== undefined
+  if (old && untouched) {
+    const first = loras[0] ?? { lora: '', trigger: '', strength: 0.8 }
+    loras = [{ lora: input.lora ?? first.lora, trigger: input.loraTrigger ?? first.trigger, strength: input.loraStrength ?? first.strength }, ...loras.slice(1)]
+  }
+  value.loras = cleanStyleLoras(loras)
+  const [first] = value.loras
+  Object.assign(value, { lora: first?.lora ?? '', loraTrigger: first?.trigger ?? '', loraStrength: first?.strength ?? DEFAULT_CARD_MEDIA.loraStrength })
   value.roster = cleanRoster(Array.isArray(input?.roster) ? input.roster : value.roster)
   return value
 }
@@ -377,19 +467,34 @@ function withSamplerLora(workflow, { name, strength, loraId }) {
   return out
 }
 
+/** The card's 画风 LoRA as kept: a file name each, its trigger word and strength; each file once, at most MAX_STYLE_LORAS. */
+function cleanStyleLoras(list) {
+  const out = []
+  for (const item of list) {
+    if (!item || typeof item !== 'object') continue
+    const lora = cleanLora(typeof item.lora === 'string' ? item.lora : '')
+    if (!lora || out.some(kept => kept.lora === lora)) continue
+    out.push({ lora, trigger: String(item.trigger ?? '').trim().slice(0, 80), strength: cleanStrength(item.strength, DEFAULT_CARD_MEDIA.loraStrength) })
+    if (out.length >= MAX_STYLE_LORAS) break
+  }
+  return out
+}
+
 /**
- * Whose LoRA a picture is drawn with (ComfyUI, SD WebUI): { lora, loraTrigger,
- * loraStrength } or null. A lone cast member with one of their own: theirs.
- * Otherwise the card's, as its 画风, in every picture of people (人设图 and 立绘
- * too), unless it is a cast member's own (a character LoRA: their face would go
- * on everyone). Several LoRAs in one picture bleed into each other, so never more than one.
+ * The LoRA a picture is drawn with (ComfyUI, SD WebUI), each { lora, loraTrigger, loraStrength }, in the order they
+ * go on: the card's 画风 ones in every picture of people (人设图 and 立绘 too), except one that is a cast member's
+ * own (a character LoRA: their face would go on everyone); then a lone cast member's own. With two or more people
+ * in the frame, no one's own: character LoRA in one picture bleed into each other, faces and clothes mixed.
+ * A background has none.
  */
-export function loraFor(cardMedia, cast, { scenery = false } = {}) {
-  if (scenery) return null
-  if (cast?.solo?.lora) return cast.solo
-  if (!cardMedia.lora) return null
-  if (cast && cardMedia.roster.some(entry => entry.lora === cardMedia.lora)) return null
-  return cardMedia
+export function lorasFor(cardMedia, cast, { scenery = false } = {}) {
+  if (scenery) return []
+  const owned = new Set((cardMedia.roster ?? []).map(entry => entry.lora).filter(Boolean))
+  const solo = cast?.solo?.lora ? cast.solo : null
+  const style = (cardMedia.loras ?? [])
+    .filter(item => !(cast && owned.has(item.lora)) && item.lora !== solo?.lora)
+    .map(item => ({ lora: item.lora, loraTrigger: item.trigger, loraStrength: item.strength }))
+  return solo ? [...style, { lora: solo.lora, loraTrigger: solo.loraTrigger, loraStrength: solo.loraStrength }] : style
 }
 
 /** The trigger word first, unless the prompt already starts with it. */
@@ -668,10 +773,15 @@ export function contextImageInstruction({ promptStyle, style, passage, roster = 
 }
 
 /** Refusals read as auth errors otherwise; say what usually causes them. */
+// grok2api relays a Grok Web refusal as 503 "Grok Web 媒体上游返回 403"; others say policy/moderation.
+const REFUSAL = /上游返回 403|content[ _-]?policy|moderation|safety system|nsfw|flagged/i
+
+// An Images API that has no edits for this model, by what it answers (grok2api, relays with no channel for it).
+const NO_EDITS = /模型不存在|无可用渠道|no available channel|not support|unsupported|model[ _]not[ _]found|does not exist/i
+
 function imageError(provider, error) {
   const text = String(error?.message ?? '')
-  // grok2api relays a Grok Web refusal as 503 "Grok Web 媒体上游返回 403"; others say policy/moderation.
-  if (/上游返回 403|content[ _-]?policy|moderation|safety system|nsfw|flagged/i.test(text)) {
+  if (REFUSAL.test(text)) {
     return msg`${provider.name} 拒绝画这张：多半是提示词或参考图没过它的内容审核。改掉敏感的描述再画，或者在「配图与朗读」里关掉参考图试试。（${text.slice(0, 160)}）`
   }
   return providerError(provider, error)
@@ -1257,20 +1367,32 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
   const voices = createVoices({ root: store.dirs.root, settings, providers: () => store.getProviders(), proxy: proxyNow, features, urls: voiceUrls })
   const listen = createListen({ providers: () => store.getProviders(), proxy: proxyNow })
 
-  const workflowFile = path.join(store.dirs.root, 'comfy-workflow.json')
+  // The imported workflow, and the ones for 背景 (a place's background, the page's) and for 立绘 (表情, a foe's picture)
+  // when the player imported their own for those: tuned apart (a landscape model; a white background and a character LoRA).
+  const workflowFile = purpose => path.join(store.dirs.root, purpose ? `comfy-workflow-${purpose}.json` : 'comfy-workflow.json')
 
-  async function loadWorkflow() {
+  async function loadWorkflow(purpose = '') {
     try {
-      return JSON.parse(await readFile(workflowFile, 'utf8'))
+      return JSON.parse(await readFile(workflowFile(purpose), 'utf8'))
     } catch {
       return null
     }
   }
 
-  /** The workflow pictures are drawn with: the imported one, or in 简单模式 the one built from the model picked. */
+  /**
+   * The workflow pictures are drawn with: for a background or a 立绘 (media.comfyPurpose) the one imported for it,
+   * whatever the mode; else the imported one, or in 简单模式 the one built from the model picked.
+   */
   async function drawingWorkflow(media) {
     const now = media ?? (await settings())
+    const own = WORKFLOW_PURPOSES.includes(now.comfyPurpose) ? await loadWorkflow(now.comfyPurpose) : null
+    if (own) return own
     return now.comfyMode === 'simple' ? simpleWorkflow(now) : loadWorkflow()
+  }
+
+  /** What the page shows of the workflows for 背景 and 立绘: { scene, sprite }, null where none is imported. */
+  async function purposeWorkflows() {
+    return Object.fromEntries(await Promise.all(WORKFLOW_PURPOSES.map(async purpose => [purpose, describeWorkflow(await loadWorkflow(purpose))])))
   }
 
   /**
@@ -1305,9 +1427,15 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     }
   }
 
-  async function saveWorkflow(json) {
+  /** @param purpose - '' (the one for everything), or 'scene' / 'sprite'; for those null takes it away (drawn with the other again). */
+  async function saveWorkflow(json, purpose = '') {
+    if (purpose && !WORKFLOW_PURPOSES.includes(purpose)) throw httpError(400, msg`没有这种用途的工作流`)
+    if (purpose && json === null) {
+      await rm(workflowFile(purpose), { force: true })
+      return null
+    }
     const workflow = checkWorkflow(json)
-    await writeFile(workflowFile, JSON.stringify(workflow, null, 1), 'utf8')
+    await writeFile(workflowFile(purpose), JSON.stringify(workflow, null, 1), 'utf8')
     return describeWorkflow(workflow)
   }
 
@@ -1345,7 +1473,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
   async function writeImagePrompt(chat, node, { reply, input, moment = false }, signal) {
     const media = await settings()
     const card = await store.getCard(chat.cardId)
-    const cardMedia = cleanCardMedia(card.media)
+    const cardMedia = await looksOf(cleanCardMedia(card.media))
     const roster = cardMedia.roster
     const detail = media.promptDetail
     const rules = promptRulesOf(media, cardMedia)
@@ -1416,26 +1544,54 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     const reference = media.imageReference && editsImages(media.imageEditModel || media.imageModel) ? (cast?.lead && (await refFor(cardId, cast.lead))) || ((await avatarFits(cardId, cast)) ? await avatarOf(cardId) : null) : null
     // OpenRouter draws through chat (Gemini and GPT image models answer with a picture).
     if (/openrouter\.ai/i.test(provider.baseURL)) return { buffer: await chatImage(provider, media, prompt, reference, signal), note: '' }
-    const size = imageSize('openai', media.imageShape)
-    const generate = () =>
-      providerRequest(provider, '/images/generations', {
-        body: { model: media.imageModel, prompt, n: 1, size, ...imageFormat(media.imageModel) },
-        signal,
-        proxy: proxyNow(),
-      })
-    let response
+    const wanted = imageSize('openai', media.imageShape)
+    const sizeKey = `${provider.id}|${media.imageModel}|${wanted}`
+    const size = squareOnly.has(sizeKey) ? PIXELS.openai.square : wanted
     let note = ''
+    // A 背景 or a 立绘 asks for 1536×1024 or 1024×1536; a relay whose model takes only a square
+    // answers 400 or 422. Drawn square then (and from then on, for that model), not refused.
+    const generate = async () => {
+      try {
+        return await providerRequest(provider, '/images/generations', {
+          body: { model: media.imageModel, prompt, n: 1, size, ...imageFormat(media.imageModel) },
+          signal,
+          proxy: proxyNow(),
+        })
+      } catch (error) {
+        if (size === PIXELS.openai.square || signal?.aborted || ![400, 422].includes(error.providerStatus) || REFUSAL.test(error.message ?? '')) throw error
+        const square = await providerRequest(provider, '/images/generations', {
+          body: { model: media.imageModel, prompt, n: 1, size: PIXELS.openai.square, ...imageFormat(media.imageModel) },
+          signal,
+          proxy: proxyNow(),
+        }).catch(() => {
+          throw error
+        })
+        squareOnly.add(sizeKey)
+        note = [note, msg`${media.imageModel} 不接受 ${size} 这个尺寸，改画了方图。`].filter(Boolean).join(' ')
+        return square
+      }
+    }
+    let response
     try {
-      if (reference) {
-        const editModel = media.imageEditModel || media.imageModel
+      const editModel = media.imageEditModel || media.imageModel
+      const editKey = `${provider.id}|${editModel}`
+      if (reference && cannotEdit.has(editKey)) {
+        response = await generate()
+        note = [msg`${editModel} 用不了参考图，这张没带参考图。可以在「配图与朗读」里给参考图单独选一个能改图的模型。`, note].filter(Boolean).join(' ')
+      } else if (reference) {
         try {
           response = await editWithReference(provider, { model: editModel, prompt, size, reference }, signal)
         } catch (error) {
-          // The model cannot edit (grok2api: a Web 2.0 route only generates and
-          // answers 404 "模型不存在"); draw without the reference instead of failing.
-          if (signal?.aborted || ![400, 404, 422].includes(error.providerStatus)) throw error
+          // The model cannot edit: grok2api's Web 2.0 route only generates (404 "模型不存在"), and a
+          // relay with no edits route answers anything from 400 to 503 ("无可用渠道"). Drawn without
+          // the reference instead of failing, and the next ones skip the edit. Not a moderation
+          // refusal (the prompt is the trouble there), nor the network.
+          if (signal?.aborted || !error.providerStatus || REFUSAL.test(error.message ?? '')) throw error
           response = await generate()
-          note = msg`${editModel} 用不了参考图（${String(error.message).slice(0, 80)}），这张没带参考图。可以在「配图与朗读」里给参考图单独选一个能改图的模型（grok2api 的 Web 账号是 grok-imagine-image-edit）。`
+          // Remembered only where the answer says there is no such route or model; a busy or rate-limited relay
+          // (429, a 5xx of the moment), or a size it turned away, is tried with the reference again next time.
+          if ([404, 405, 501].includes(error.providerStatus) || NO_EDITS.test(error.message ?? '')) cannotEdit.add(editKey)
+          note = [msg`${editModel} 用不了参考图（${String(error.message).slice(0, 80)}），这张没带参考图。可以在「配图与朗读」里给参考图单独选一个能改图的模型（grok2api 的 Web 账号是 grok-imagine-image-edit）。`, note].filter(Boolean).join(' ')
         }
       } else {
         response = await generate()
@@ -1468,6 +1624,10 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
       throw httpError(502, imageError(provider, error))
     }
   }
+
+  // Images API models found this run to take no reference picture (provider|model), or only a square (provider|model|size).
+  const cannotEdit = new Set()
+  const squareOnly = new Set()
 
   /**
    * /images/edits with the avatar as reference. JSON with a data URL first
@@ -1576,14 +1736,16 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
 
   /**
    * Stable Diffusion WebUI or Forge (txt2img over its --api). The model is the
-   * one loaded in the WebUI; a card's or a lone cast member's LoRA goes in the
-   * prompt as <lora:name:strength>, with its trigger word.
+   * one loaded in the WebUI; the card's LoRA and a lone cast member's go in the
+   * prompt as <lora:name:strength>, each with its trigger word.
    */
   async function sdwebuiImage(media, prompt, cardId, signal, cast = null, { scenery = false } = {}) {
-    const cardMedia = cardId ? cleanCardMedia((await store.getCard(cardId)).media) : DEFAULT_CARD_MEDIA
-    const owner = loraFor(cardMedia, cast, { scenery })
+    const cardMedia = cardId ? await looksOf(cleanCardMedia((await store.getCard(cardId)).media)) : DEFAULT_CARD_MEDIA
+    const loras = lorasFor(cardMedia, cast, { scenery })
     prompt = styleFirst(prompt, cardMedia.style)
-    if (owner) prompt = `${withTrigger(prompt, owner.loraTrigger)}, <lora:${owner.lora.replace(/^.*[\\/]/, '').replace(/\.(safetensors|pt|ckpt)$/i, '')}:${owner.loraStrength}>`
+    // The trigger words first, the last LoRA's at the very front; the tags at the end, in order.
+    for (const owner of loras) prompt = withTrigger(prompt, owner.loraTrigger)
+    if (loras.length) prompt = `${prompt}, ${loras.map(owner => `<lora:${owner.lora.replace(/^.*[\\/]/, '').replace(/\.(safetensors|pt|ckpt)$/i, '')}:${owner.loraStrength}>`).join(', ')}`
     const [width, height] = imageSize('sdwebui', media.imageShape).split('x').map(Number)
     const body = {
       prompt,
@@ -1634,27 +1796,27 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     if (!imported && simple) throw httpError(400, msg`ComfyUI 简单模式还没选模型：在「配图与朗读」里点「读取模型」选一个`)
     if (!imported) throw httpError(400, msg`还没导入 ComfyUI 工作流：在「配图与朗读」里导入「导出（API）」的 JSON`)
     // No card yet (a card being created): no card LoRA.
-    const cardMedia = cardId ? cleanCardMedia((await store.getCard(cardId)).media) : DEFAULT_CARD_MEDIA
-    let owner = loraFor(cardMedia, cast, { scenery })
+    const cardMedia = cardId ? await looksOf(cleanCardMedia((await store.getCard(cardId)).media)) : DEFAULT_CARD_MEDIA
+    let loras = lorasFor(cardMedia, cast, { scenery })
     const notes = []
     let withOwner = imported
-    if (owner) {
-      try {
-        withOwner = withLora(imported, { name: owner.lora, strength: owner.loraStrength })
-      } catch (error) {
-        // A workflow with no model loader to put it after: drawn as it is rather than not at all.
-        if (error.status !== 400) throw error
-        notes.push(msg`${error.message}，这张没带 LoRA「${owner.lora}」。`)
-        owner = null
-      }
+    // Each put on right after the model's loader, so the first ends up nearest the sampler: a chain, in any order the same.
+    try {
+      for (const owner of loras) withOwner = withLora(withOwner, { name: owner.lora, strength: owner.loraStrength })
+    } catch (error) {
+      // A workflow with no model loader to put it after: drawn as it is rather than not at all.
+      if (error.status !== 400) throw error
+      notes.push(msg`${error.message}，这张没带 LoRA「${loras.map(owner => owner.lora).join('、')}」。`)
+      withOwner = imported
+      loras = []
     }
     const [width, height] = imageSize('comfy', media.imageShape).split('x').map(Number)
     const negatives = [media.comfyNegative, cardMedia.styleNegative, scenery ? SCENERY_NEGATIVE : '', negative].filter(Boolean).join(', ')
     const workflow = withNegative(fitSize(withOwner, width, height), negatives)
     prompt = styleFirst(prompt, cardMedia.style)
-    if (owner) prompt = withTrigger(prompt, owner.loraTrigger)
+    for (const owner of loras) prompt = withTrigger(prompt, owner.loraTrigger)
     const base = media.comfyUrl
-    if (owner) {
+    for (const owner of loras) {
       const clash = await familyClash(base, owner.lora, imported)
       if (clash) notes.push(clash)
     }
@@ -1875,7 +2037,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     const [width, height] = imageSize('novelai', media.imageShape).split('x').map(Number)
     // The card's look first on every picture, weighted up ({{ }}) so a long scene doesn't drown it;
     // taken out of the prompt where it was written in, so it isn't there twice.
-    const card = cardId ? cleanCardMedia((await store.getCard(cardId).catch(() => ({}))).media ?? {}) : DEFAULT_CARD_MEDIA
+    const card = cardId ? await looksOf(cleanCardMedia((await store.getCard(cardId).catch(() => ({}))).media ?? {})) : DEFAULT_CARD_MEDIA
     const scene = cast ? { ...cast, scene: unstyled(cast.scene, card.style) } : null
     const base = scene ? [countTags(scene.characters), scene.scene].filter(Boolean).join(', ') : unstyled(prompt, card.style)
     const positive = [card.style ? `{{${card.style}}}` : '', base.replace(/[,，\s]+$/, ''), media.naiQuality].filter(Boolean).join(', ')
@@ -2077,6 +2239,14 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
   }
 
   /** The settings with the 画图方式 and model picked for one picture, if any (withDrawChoice). */
+  /** A card's picture settings as drawn: its own 画风, else the 默认画风 of 我的画风 when one is set. */
+  async function looksOf(cardMedia) {
+    if (cardMedia.style || cardMedia.styleNegative) return cardMedia
+    const media = await settings()
+    const fallback = media.styleLibrary?.find(item => item.id === media.defaultStyle)
+    return fallback ? { ...cardMedia, style: fallback.style, styleNegative: fallback.negative } : cardMedia
+  }
+
   async function settingsFor(choice) {
     return withDrawChoice(await settings(), choice, backends)
   }
@@ -2167,7 +2337,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
    * own. Returned to the page, which pads it like an upload.
    */
   async function drawPortrait(cardId, input, signal, { model = '', backend: method = '' } = {}) {
-    const { style } = cleanCardMedia((await store.getCard(cardId)).media)
+    const { style } = await looksOf(cleanCardMedia((await store.getCard(cardId)).media))
     const [entry] = cleanRoster([input])
     if (!entry?.looks) throw httpError(400, msg`先写这个角色的长相，再画人设图`)
     const media = await settingsFor({ backend: method, model })
@@ -2185,26 +2355,26 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
    */
   /** @param choice - { backend, model } for this one (做成视觉小说 asks first), else as the settings say. */
   async function drawSprite(cardId, entryId, signal, choice = {}) {
-    const { roster, style } = cleanCardMedia((await store.getCard(cardId)).media)
+    const { roster, style } = await looksOf(cleanCardMedia((await store.getCard(cardId)).media))
     const entry = roster.find(item => item.id === entryId)
     if (!entry) throw httpError(404, msg`名单里没有这个角色`)
     if (!entry.looks) throw httpError(400, msg`先在「配图与朗读 → 角色名册」里写${entry.name}的长相，再画立绘`)
     const media = await settingsFor(choice)
     const tags = media.promptStyle === 'tags'
     const cast = { scene: [style, tags ? SPRITE_SCENE : SPRITE_SCENE_NATURAL].filter(Boolean).join(', '), characters: [{ entry, action: [spriteOutfit(entry.outfit), tags ? 'standing' : ''].filter(Boolean).join(', '), position: '' }], solo: entry, lead: entry }
-    const plain = { ...media, imageShape: 'portrait', naiNegative: [media.naiNegative, SPRITE_NEGATIVE].filter(Boolean).join(', '), sdNegative: [media.sdNegative, SPRITE_NEGATIVE].filter(Boolean).join(', ') }
+    const plain = { ...media, comfyPurpose: 'sprite', imageShape: 'portrait', naiNegative: [media.naiNegative, SPRITE_NEGATIVE].filter(Boolean).join(', '), sdNegative: [media.sdNegative, SPRITE_NEGATIVE].filter(Boolean).join(', ') }
     return render(plain, cardId, cast, cast, '', signal, { negative: SPRITE_NEGATIVE })
   }
 
   /** A foe for a fight (敌人图鉴): as a 立绘, on white, from what the helper said of it. No one to look like: no references. */
   async function drawFoe(cardId, foe, signal, choice = {}) {
     if (!foe.looks) throw httpError(400, msg`还不知道${foe.name}长什么样，等遭遇时辅助模型写好再画`)
-    const { style } = cleanCardMedia((await store.getCard(cardId)).media)
+    const { style } = await looksOf(cleanCardMedia((await store.getCard(cardId)).media))
     const media = await settingsFor(choice)
     const tags = media.promptStyle === 'tags'
     const entry = { id: 'foe', name: foe.name, looks: foe.looks, outfit: '' }
     const cast = { scene: [style, tags ? SPRITE_SCENE : SPRITE_SCENE_NATURAL].filter(Boolean).join(', '), characters: [{ entry, action: tags ? 'standing' : '', position: '' }], solo: entry, lead: entry }
-    const plain = { ...media, imageShape: 'portrait', imageReference: false, geminiReference: false, naiReference: false, naiNegative: [media.naiNegative, SPRITE_NEGATIVE].filter(Boolean).join(', '), sdNegative: [media.sdNegative, SPRITE_NEGATIVE].filter(Boolean).join(', ') }
+    const plain = { ...media, comfyPurpose: 'sprite', imageShape: 'portrait', imageReference: false, geminiReference: false, naiReference: false, naiNegative: [media.naiNegative, SPRITE_NEGATIVE].filter(Boolean).join(', '), sdNegative: [media.sdNegative, SPRITE_NEGATIVE].filter(Boolean).join(', ') }
     return render(plain, cardId, cast, cast, '', signal, { references: 'none', negative: SPRITE_NEGATIVE })
   }
 
@@ -2217,7 +2387,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
   async function drawExpression(cardId, entryId, expression, base, signal, choice = {}) {
     const look = EXPRESSION_LOOK[expression]
     if (!look) throw httpError(404, msg`没有这种表情`)
-    const { roster, style } = cleanCardMedia((await store.getCard(cardId)).media)
+    const { roster, style } = await looksOf(cleanCardMedia((await store.getCard(cardId)).media))
     const entry = roster.find(item => item.id === entryId)
     if (!entry) throw httpError(404, msg`名单里没有这个角色`)
     const picture = base ?? (await rosterRef(cardId, entryId))
@@ -2236,7 +2406,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     const lead = { ...entry, picture }
     const action = tags ? [spriteOutfit(entry.outfit), look.tags].filter(Boolean).join(', ') : fresh ? [spriteOutfit(entry.outfit), `with ${look.words}`].filter(Boolean).join(', ') : `with ${look.words}`
     const cast = { scene, characters: [{ entry: lead, action, position: '' }], solo: lead, lead }
-    const plain = { ...media, imageShape: 'portrait', imageReference: true, geminiReference: true, naiReference: true, naiNegative: [media.naiNegative, SPRITE_NEGATIVE].filter(Boolean).join(', '), sdNegative: [media.sdNegative, SPRITE_NEGATIVE].filter(Boolean).join(', ') }
+    const plain = { ...media, comfyPurpose: 'sprite', imageShape: 'portrait', imageReference: true, geminiReference: true, naiReference: true, naiNegative: [media.naiNegative, SPRITE_NEGATIVE].filter(Boolean).join(', '), sdNegative: [media.sdNegative, SPRITE_NEGATIVE].filter(Boolean).join(', ') }
     const result = await render(plain, cardId, cast, cast, '', signal, { references: 'cast', negative: SPRITE_NEGATIVE })
     const note = fresh ? msg`这种画图方式不能照着立绘改，表情是按长相重新画的，可能和立绘不太一样。` : ''
     return { ...result, note: [result.note, note].filter(Boolean).join(' ') }
@@ -2249,7 +2419,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
   async function drawsFromPicture(media) {
     if (media.imageBackend === 'sdwebui') return false
     if (media.imageBackend !== 'comfy') return true
-    return Boolean(describeWorkflow(await drawingWorkflow(media).catch(() => null))?.placeholders.includes('reference'))
+    return Boolean(describeWorkflow(await drawingWorkflow({ ...media, comfyPurpose: 'sprite' }).catch(() => null))?.placeholders.includes('reference'))
   }
 
   /**
@@ -2332,7 +2502,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     const card = await store.getCard(cardId)
     const media = await settingsFor(choice)
     const { entry, from, model } = await avatarSubject(card, media, signal)
-    const { style } = cleanCardMedia(card.media)
+    const { style } = await looksOf(cleanCardMedia(card.media))
     const cast = { scene: [style, AVATAR_SCENE].filter(Boolean).join(', '), characters: [{ entry, action: [entry.outfit, 'looking at viewer'].filter(Boolean).join(', '), position: '' }], solo: entry, lead: entry }
     const plain = { ...media, imageShape: 'square', naiReference: false, imageReference: false, geminiReference: false, naiNegative: [media.naiNegative, AVATAR_NEGATIVE].filter(Boolean).join(', '), sdNegative: [media.sdNegative, AVATAR_NEGATIVE].filter(Boolean).join(', ') }
     const { buffer, backend, note } = await render(plain, cardId, cast, cast, '', signal, { references: 'cast', negative: AVATAR_NEGATIVE })
@@ -2352,7 +2522,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
   async function drawScenery({ cardId, place, lore = '', prompt = '', passage = '', choice = {} }, signal) {
     const media = await settingsFor(choice)
     const card = await store.getCard(cardId)
-    const cardMedia = cleanCardMedia(card.media)
+    const cardMedia = await looksOf(cleanCardMedia(card.media))
     let text = String(prompt ?? '').trim()
     let named = ''
     if (!text) {
@@ -2383,7 +2553,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
       }
       text = withStyle(ensureScenery(text, media.promptStyle), cardMedia.style, media.promptStyle)
     }
-    const plain = { ...media, imageShape: 'landscape', imageReference: false, naiReference: false, naiNegative: [media.naiNegative, SCENERY_NEGATIVE].filter(Boolean).join(', ') }
+    const plain = { ...media, comfyPurpose: 'scene', imageShape: 'landscape', imageReference: false, naiReference: false, naiNegative: [media.naiNegative, SCENERY_NEGATIVE].filter(Boolean).join(', ') }
     const { buffer, note, backend } = await render(plain, cardId, null, null, text, signal, { scenery: true })
     return { buffer, prompt: text, backend, note, place: named }
   }
@@ -2392,7 +2562,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
   async function drawBackdrop(prompt, signal) {
     const media = await settings()
     const text = ensureScenery(String(prompt ?? '').trim(), media.promptStyle)
-    const plain = { ...media, imageShape: 'landscape', imageReference: false, naiReference: false, geminiReference: false, naiNegative: [media.naiNegative, SCENERY_NEGATIVE].filter(Boolean).join(', ') }
+    const plain = { ...media, comfyPurpose: 'scene', imageShape: 'landscape', imageReference: false, naiReference: false, geminiReference: false, naiNegative: [media.naiNegative, SCENERY_NEGATIVE].filter(Boolean).join(', ') }
     const { buffer, backend } = await render(plain, null, null, null, text, signal, { scenery: true, references: 'none' })
     return { buffer, backend }
   }
@@ -2465,5 +2635,5 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     return listen.transcribe({ media, audio: readAudio(audio, type), names: Array.isArray(names) ? names : [] }, signal)
   }
 
-  return { drawFoe, defaults, settings, cleanSettings, ownBackends: ownBackendViews, naiStatus, setNaiToken, naiCheck, cardMediaView, saveCardMedia, inheritCardMedia, draftRoster, draftRosterFromChat, drawPortrait, drawCardArt, drawAvatar, drawScenery, drawBackdrop, drawSprite, drawExpression, drawsFromPicture, settingsFor, labelExpressions, readRosterRef, saveRosterRef, removeRosterRef, writeImagePrompt, generateImage, readImage, removeImage, removeChatMedia, copyChatMedia, loras, voices: voices.list, personaList: voices.personaList, ttsKeyStatus: voices.ttsKeyStatus, setTtsKey: voices.setTtsKey, voiceKeys: voices.keyStatus, setVoiceKey: voices.setKey, speak, previewVoice, accountVoices, transcribe, loadWorkflow, saveWorkflow, describeWorkflow, comfyModels }
+  return { drawFoe, defaults, settings, cleanSettings, ownBackends: ownBackendViews, naiStatus, setNaiToken, naiCheck, cardMediaView, saveCardMedia, inheritCardMedia, draftRoster, draftRosterFromChat, drawPortrait, drawCardArt, drawAvatar, drawScenery, drawBackdrop, drawSprite, drawExpression, drawsFromPicture, settingsFor, labelExpressions, readRosterRef, saveRosterRef, removeRosterRef, writeImagePrompt, generateImage, readImage, removeImage, removeChatMedia, copyChatMedia, loras, voices: voices.list, personaList: voices.personaList, ttsKeyStatus: voices.ttsKeyStatus, setTtsKey: voices.setTtsKey, voiceKeys: voices.keyStatus, setVoiceKey: voices.setKey, speak, previewVoice, accountVoices, transcribe, loadWorkflow, saveWorkflow, describeWorkflow, purposeWorkflows, comfyModels }
 }

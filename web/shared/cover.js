@@ -17,6 +17,9 @@ const MAX_OPENINGS = 12
 
 const words = (value, max) => (typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, max) : '')
 
+// 版式: how the page is laid out (web/cover.js, the sheet's `.cover-book` and `.cover-scroll`). None = the first one.
+export const COVER_LAYOUTS = ['book', 'scroll']
+
 /** A cover as a card keeps it, or null when the card has none. */
 export function cleanCover(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
@@ -24,7 +27,7 @@ export function cleanCover(raw) {
   const openings = (Array.isArray(raw.openings) ? raw.openings : []).slice(0, MAX_OPENINGS).map(item => ({ title: words(item?.title, 24), brief: words(item?.brief, 60) }))
   const effect = cleanEffect(raw.effect)
   // `st: false`: the cover stays here; the card goes to SillyTavern with its own openings, as it would without one.
-  return { tagline: words(raw.tagline, 60), lines, ...(openings.some(item => item.title || item.brief) ? { openings } : {}), ...(effect ? { effect } : {}), ...(raw.figure === false ? { figure: false } : {}), ...(raw.st === false ? { st: false } : {}) }
+  return { tagline: words(raw.tagline, 60), lines, ...(openings.some(item => item.title || item.brief) ? { openings } : {}), ...(effect ? { effect } : {}), ...(raw.figure === false ? { figure: false } : {}), ...(COVER_LAYOUTS.includes(raw.layout) ? { layout: raw.layout } : {}), ...(raw.st === false ? { st: false } : {}) }
 }
 
 /** A few sentences as lines of a cover: cut at the full stops, the first one the line under the name. */

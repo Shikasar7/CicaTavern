@@ -11,6 +11,7 @@
 //   【同伴|加入|温小棠】 【同伴|离开|温小棠】 【同伴|负伤|楚怀瑾】 【同伴|归队|楚怀瑾】   who travels with the player
 //   【异常|扭伤左脚|灵巧|中】 【异常|解除|扭伤左脚】   what holds the player back, on one attribute or all of them (轻 中 重)
 //   【晋升|筑基】                    the player has risen to a rank of the card's
+//   【进化|亚古兽|暴龙兽】 【进化|暴龙兽】   one of the party (or the player) has come to a 形态 of the card's
 //   【理智|中】 【理智|回复|轻】       the mind shaken or calmed, on a card that counts it (轻 中 重)
 // A mark that makes no sense stays in the text as it was: it may be the card's own. Numbers are never
 // the model's: it writes sizes and names, and the rules work out the rest.
@@ -19,7 +20,7 @@ import { otherChoices } from '../basic.js'
 
 // Models do write them in the wrong brackets (<检定|灵巧|DC12>): the page would swallow that as a tag, and the story would
 // stop with nothing to do. The kind and the bar are what tell it from anything else.
-const MARK = /(?:\*\*)?[【<\[［〖〔]\s*(检定|战斗|获得|失去|任务|受伤|恢复|学会|异常|晋升|理智|同伴)\s*[|｜]\s*([^【】<>\[\]［］〖〗〔〕\n]{0,80}?)\s*[】>\]］〗〕](?:\*\*)?/g
+const MARK = /(?:\*\*)?[【<\[［〖〔]\s*(检定|战斗|获得|失去|任务|受伤|恢复|学会|异常|晋升|理智|同伴|进化)\s*[|｜]\s*([^【】<>\[\]［］〖〗〔〕\n]{0,80}?)\s*[】>\]］〗〕](?:\*\*)?/g
 // Where a mark is not the story's: the model's thinking, the update blocks, the action choices.
 const SEALED = /<(think|thinking|reasoning|choices|UpdateVariable|state)\b[^>]*>[\s\S]*?(?:<\/\1\s*>|$)/gi
 const KEYCAP_LINE = /^[ \t]*[1-9]️?⃣.*$/gm
@@ -90,6 +91,7 @@ function readMark(kind, body) {
   }
   if (kind === '受伤' || kind === '恢复') return { kind: kind === '受伤' ? 'hurt' : 'heal', size: SIZE[fields[0]] ?? 'light' }
   if (kind === '晋升') return fields[0] ? { kind: 'promote', name: clip(fields[0]) } : null
+  if (kind === '进化') return fields[1] ? { kind: 'form', who: clip(fields[0]), name: clip(fields[1]) } : fields[0] ? { kind: 'form', name: clip(fields[0]) } : null
   if (kind === '理智') return { kind: 'sanity', back: fields.includes('回复'), size: SIZE[fields.find(field => SIZE[field])] ?? 'light' }
   if (kind === '异常') {
     if (fields[0] === '解除') return fields[1] ? { kind: 'mend', name: clip(fields[1]) } : null
@@ -161,8 +163,8 @@ export function parseChoice(text) {
   const rest = String(text ?? '').replace(MARK, (whole, kind, body) => {
     const mark = readMark(kind, body)
     if (!mark) return whole
-    if (mark.kind === 'check') check ??= mark
-    if (mark.kind === 'battle') fight ??= mark
+    if (mark.kind === 'check') check = check ?? (mark)
+    if (mark.kind === 'battle') fight = fight ?? (mark)
     return ''
   })
   return { text: rest.trim(), check, ...(fight ? { fight } : {}) }

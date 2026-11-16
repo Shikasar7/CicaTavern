@@ -368,3 +368,19 @@ test('创作角色卡: a draft\'s avatar drawn or uploaded again keeps the ones 
   await forge.remove('draftone')
   assert.deepEqual(await kept(), [])
 })
+
+test('从人设图抠出: the 人设图 becomes the 立绘 as it is, and the one it replaced is kept', async t => {
+  const { call, bytes, cardId } = await tavern(t, { keep: 3 })
+  await call(`/api/cards/${cardId}/media`, { method: 'PUT', body: { roster: [{ id: 'qinghe', name: '林青禾', looks: 'long black hair' }] } })
+  // No 人设图 yet: nothing to take.
+  assert.equal((await call(`/api/cards/${cardId}/sprites/qinghe`, { method: 'PUT', body: { fromRef: true } })).status, 404)
+  await call(`/api/cards/${cardId}/roster/qinghe/ref`, { method: 'PUT', body: { image: dataUrl(png(51)) } })
+  await call(`/api/cards/${cardId}/sprites/qinghe`, { method: 'PUT', body: { image: dataUrl(png(52)) } })
+  const view = (await call(`/api/cards/${cardId}/sprites/qinghe`, { method: 'PUT', body: { fromRef: true } })).body
+  assert.equal(view.sprites.qinghe.source, 'ref')
+  assert.deepEqual(await bytes(`/api/sprites/${cardId}/${view.sprites.qinghe.file}`), png(51))
+  const kept = (await call(`/api/cards/${cardId}/history`)).body
+  assert.deepEqual(kept.slots['sprite:qinghe'].map(entry => entry.source), ['upload'])
+  // The 人设图 itself stays.
+  assert.deepEqual(await bytes(`/api/cards/${cardId}/roster/qinghe/ref`), png(51))
+})

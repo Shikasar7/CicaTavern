@@ -354,6 +354,12 @@ function stEntry(entry, base = {}) {
       useProbability: entry.useProbability,
       ...(entry.caseSensitive ? { case_sensitive: true } : {}),
       ...(entry.wholeWords ? { match_whole_words: true } : {}),
+      // 递归 as set here (worldbook.mjs recursionFlags), over what the card came with.
+      exclude_recursion: entry.extra?.excludeRecursion === true,
+      prevent_recursion: entry.extra?.preventRecursion === true,
+      delay_until_recursion: entry.extra?.delayUntilRecursion ?? false,
+      // 发送位置 紧挨着回复, this app's own (worldbook.mjs sendsNear).
+      ...(entry.extra?.cicaSend === 'near' ? { cica_send: 'near' } : {}),
     },
   }
   // A world-file style entry keeps its own names for the same things.

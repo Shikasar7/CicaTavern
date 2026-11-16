@@ -207,7 +207,7 @@ function percentLines({ title, sub, series, xLabel, ariaLabel }) {
     let anchorX = null
     visible.forEach((sr, i) => {
       const nearest = sr.points.reduce((best, p) => (Math.abs(p.x - vx) < Math.abs(best.x - vx) ? p : best), sr.points[0])
-      anchorX ??= nearest.x
+      anchorX = anchorX ?? (nearest.x)
       dots[i].setAttribute('cx', x(nearest.x))
       dots[i].setAttribute('cy', y(nearest.y))
       dots[i].setAttribute('visibility', 'visible')

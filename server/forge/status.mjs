@@ -34,6 +34,7 @@ export function statusSpecOf(plan) {
     scene: plan.status?.scene === true,
     effect: plan.status?.effect,
     phone: plan.status?.phone === true,
+    layout: plan.status?.layout,
     fields: plan.tracking.variables.map(v => ({ path: v.path, label: v.label, show: v.show || defaultShow(v), ...rangeOf(v.range), ...(plan.status?.pages && v.page ? { page: v.page } : {}) })),
   })
 }
@@ -44,34 +45,34 @@ export const BAR_STYLE = `
 :root{--bg:#f7f8f5;--line:#dfe4df;--ink:#1c2427;--muted:#5d6a6d;--faint:#8b9698;--accent:#2b5869;--soft:rgba(43,88,105,.11);--track:#dde3de;--ok:#2f7a55;--bad:#b0413a}
 @media (prefers-color-scheme:dark){:root{--bg:#182025;--line:#273238;--ink:#dde3e0;--muted:#919da0;--faint:#67747a;--accent:#8dbfcb;--soft:rgba(141,191,203,.12);--track:#263137;--ok:#6fbf93;--bad:#e57b70}}
 body{margin:0;background:transparent}
-.bar{margin:8px 0;padding:12px 16px 14px;background:var(--bg);border:1px solid var(--line);border-radius:14px;font:13px/1.6 system-ui,"Microsoft YaHei",sans-serif;color:var(--ink)}
-.title{font-weight:600;letter-spacing:.1em;color:var(--accent);margin-bottom:8px}
-.group+.group{margin-top:9px;padding-top:9px;border-top:1px dashed var(--line)}
-.gname{font-size:11.5px;color:var(--faint);letter-spacing:.12em;margin-bottom:3px}
-.row{display:grid;grid-template-columns:minmax(3.6em,max-content) minmax(0,1fr) auto;align-items:center;gap:12px;min-height:26px}
+.bar{margin:8px 0;padding:14px 16px 16px;background:var(--bg);border:1px solid var(--line);border-radius:16px;font:13px/1.6 system-ui,"Microsoft YaHei",sans-serif;color:var(--ink)}
+.title{font-weight:600;font-size:14px;letter-spacing:.08em;color:var(--accent);margin-bottom:12px}
+.group+.group{margin-top:12px;padding-top:12px;border-top:1px dashed var(--line)}
+.gname{font-size:12px;color:var(--faint);letter-spacing:.08em;margin-bottom:4px}
+.row{display:grid;grid-template-columns:minmax(3.6em,max-content) minmax(0,1fr) auto;align-items:center;gap:12px;min-height:28px}
 .row>.wide{grid-column:2/-1}
-.label{color:var(--muted);white-space:nowrap}
-.meter{height:6px;border-radius:3px;background:var(--track);overflow:hidden}
-.meter>i{display:block;height:100%;border-radius:3px;background:var(--accent)}
-.value{text-align:right;min-width:3.4em;font-variant-numeric:tabular-nums}
-.tags{display:flex;flex-wrap:wrap;gap:4px}
-.tag{font-size:12px;padding:0 9px;border-radius:999px;background:var(--soft);line-height:22px}
+.label{color:var(--muted);font-size:12.5px;white-space:nowrap}
+.meter{height:8px;border-radius:999px;background:var(--track);overflow:hidden}
+.meter>i{display:block;height:100%;border-radius:999px;background:var(--accent)}
+.value{text-align:right;min-width:3.4em;font-weight:600;font-variant-numeric:tabular-nums}
+.tags{display:flex;flex-wrap:wrap;gap:6px}
+.tag{font-size:12px;padding:0 8px;border-radius:8px;background:var(--soft);line-height:22px}
 .stars{color:var(--accent);letter-spacing:1px}
 .line{padding:2px 0;border-top:1px dashed var(--line)}.line:first-child{border-top:0}.trow{display:flex;gap:8px;align-items:baseline;padding:2px 0;border-top:1px dashed var(--line)}.trow:first-child{border-top:0}.trow>b{font-weight:500}.trow>span{color:var(--muted);font-size:12px}
-.tabs{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px}.tab{padding:2px 12px;border:1px solid var(--line);border-radius:999px;background:none;color:var(--muted);font:inherit;font-size:12.5px;cursor:pointer}.tab.on{background:var(--soft);border-color:var(--accent);color:var(--ink)}
+.tabs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}.tab{padding:2px 12px;border:1px solid var(--line);border-radius:999px;background:none;color:var(--muted);font:inherit;font-size:12.5px;cursor:pointer}.tab.on{background:var(--soft);border-color:var(--accent);color:var(--ink)}
 .faint{color:var(--faint)}.on{color:var(--ok)}
-.theme-paper{--bg:#f6efe0;--line:#dccdae;--ink:#3b2f22;--muted:#7a6a55;--faint:#a8977c;--accent:#8a3b2a;--soft:rgba(138,59,42,.1);--track:#e6dac2;font-family:"Noto Serif SC","Songti SC",STSong,serif}
-@media (prefers-color-scheme:dark){.theme-paper{--bg:#28221a;--line:#3d342a;--ink:#e8dcc6;--muted:#b3a487;--faint:#857760;--accent:#d9876f;--soft:rgba(217,135,111,.13);--track:#3a3127}}
-.theme-neon{--bg:#0f1220;--line:#2b2f55;--ink:#e6e8ff;--muted:#9aa0d8;--faint:#6a70a8;--accent:#3ef0ff;--soft:rgba(62,240,255,.12);--track:#23264a;box-shadow:0 0 14px rgba(62,240,255,.22)}
+.theme-paper{--bg:#f6efe0;--line:#dccdae;--ink:#3b2f22;--muted:#7a6a55;--faint:#857764;--ok:#2f7a4d;--bad:#b23a30;--accent:#8a3b2a;--soft:rgba(138,59,42,.1);--track:#e6dac2;font-family:"Noto Serif SC","Songti SC",STSong,serif}
+@media (prefers-color-scheme:dark){.theme-paper{--bg:#28221a;--line:#3d342a;--ink:#e8dcc6;--muted:#b3a487;--faint:#857760;--ok:#6fd08c;--bad:#f08078;--accent:#d9876f;--soft:rgba(217,135,111,.13);--track:#3a3127}}
+.theme-neon{--bg:#0f1220;--line:#2b2f55;--ink:#e6e8ff;--muted:#9aa0d8;--faint:#7e84b3;--ok:#6fd08c;--bad:#f08078;--accent:#3ef0ff;--soft:rgba(62,240,255,.12);--track:#23264a;box-shadow:0 0 14px rgba(62,240,255,.22)}
 .theme-neon .title{text-shadow:0 0 6px rgba(62,240,255,.6)}
 .theme-neon .meter>i{box-shadow:0 0 6px var(--accent)}
-.theme-ink{--bg:#f3f1ea;--line:#d4d0c4;--ink:#24241f;--muted:#6f6d62;--faint:#98958a;--accent:#2f2f2a;--soft:rgba(47,47,42,.09);--track:#dedbd0;font-family:"Noto Serif SC","Songti SC",STSong,serif}
-.theme-parchment{--bg:#efe2c4;--line:#c9b285;--ink:#3a2a16;--muted:#75603f;--faint:#a08a63;--accent:#7a4b1e;--soft:rgba(122,75,30,.12);--track:#ddcba3;font-family:"Noto Serif SC","Songti SC",STSong,serif}
-.theme-gothic{--bg:#16121a;--line:#33283a;--ink:#e9e0ea;--muted:#a795ad;--faint:#75637c;--accent:#c0395a;--soft:rgba(192,57,90,.15);--track:#2b2230}
-.theme-terminal{--bg:#0b140e;--line:#1f3a28;--ink:#b8f5c8;--muted:#6fae82;--faint:#4a7a58;--accent:#3ddc84;--soft:rgba(61,220,132,.12);--track:#16291c;font-family:ui-monospace,Consolas,"Courier New",monospace}
-.theme-ocean{--bg:#0e1f2b;--line:#1f3b4d;--ink:#dcecf2;--muted:#8fb2c1;--faint:#5f8294;--accent:#4fc3d9;--soft:rgba(79,195,217,.13);--track:#18303f}
-.theme-pastel{--bg:#fff6f8;--line:#f3d6de;--ink:#4a3a40;--muted:#9a7d86;--faint:#c4a7b0;--accent:#e57a9b;--soft:rgba(229,122,155,.13);--track:#f6e3e8;border-radius:18px}
-@media (prefers-color-scheme:dark){.theme-pastel{--bg:#2b2226;--line:#3f3036;--ink:#f1dfe5;--muted:#c09aa7;--faint:#8c6f79;--accent:#f09ab5;--soft:rgba(240,154,181,.13);--track:#3b2d33}}`
+.theme-ink{--bg:#f3f1ea;--line:#d4d0c4;--ink:#24241f;--muted:#6f6d62;--faint:#7c7a70;--ok:#2f7a4d;--bad:#b23a30;--accent:#2f2f2a;--soft:rgba(47,47,42,.09);--track:#dedbd0;font-family:"Noto Serif SC","Songti SC",STSong,serif}
+.theme-parchment{--bg:#efe2c4;--line:#c9b285;--ink:#3a2a16;--muted:#75603f;--faint:#806d4e;--ok:#2a6e45;--bad:#b23a30;--accent:#7a4b1e;--soft:rgba(122,75,30,.12);--track:#ddcba3;font-family:"Noto Serif SC","Songti SC",STSong,serif}
+.theme-gothic{--bg:#16121a;--line:#33283a;--ink:#e9e0ea;--muted:#a795ad;--faint:#8a7b90;--ok:#6fd08c;--bad:#f08078;--accent:#dc5a78;--soft:rgba(220,90,120,.15);--track:#2b2230}
+.theme-terminal{--bg:#0b140e;--line:#1f3a28;--ink:#b8f5c8;--muted:#6fae82;--faint:#5b8f6b;--ok:#6fd08c;--bad:#f08078;--accent:#3ddc84;--soft:rgba(61,220,132,.12);--track:#16291c;font-family:ui-monospace,Consolas,"Courier New",monospace}
+.theme-ocean{--bg:#0e1f2b;--line:#1f3b4d;--ink:#dcecf2;--muted:#8fb2c1;--faint:#7595a3;--ok:#6fd08c;--bad:#f08078;--accent:#4fc3d9;--soft:rgba(79,195,217,.13);--track:#18303f}
+.theme-pastel{--bg:#fff6f8;--line:#f3d6de;--ink:#4a3a40;--muted:#86656f;--faint:#977c85;--ok:#2f7a4d;--bad:#b23a30;--accent:#c8456f;--soft:rgba(200,69,111,.12);--track:#f6e3e8;border-radius:18px}
+@media (prefers-color-scheme:dark){.theme-pastel{--bg:#2b2226;--line:#3f3036;--ink:#f1dfe5;--muted:#c09aa7;--faint:#8c6f79;--ok:#6fd08c;--bad:#f08078;--accent:#f09ab5;--soft:rgba(240,154,181,.13);--track:#3b2d33}}`
 
 // An extension that renders the block in a frame of its own (小白X) leaves out what Tavern Helper puts there: `mvu` and `floor`
 // fall back on the page around it, or the bar shows only its title.
@@ -141,7 +142,7 @@ export function barLook(spec) {
 // A bar drawn by this app's own code in SillyTavern (it wears a look, has 动效, or a 小手机 with something in it) is a
 // whole page of tens of thousands of characters, made anew for every reply that has one. Only the latest replies get
 // it there (a regex's 最大深度): a long chat would otherwise open with a hundred of them.
-export const wholeFrame = spec => Boolean(spec?.skin || spec?.effect || (spec?.phone && phoneApps(spec).apps.length))
+export const wholeFrame = spec => Boolean(spec?.skin || spec?.effect || spec?.layout || (spec?.phone && phoneApps(spec).apps.length))
 export const STATUS_DEPTH = 2
 
 export function statusBarHtml(spec, { english = false } = {}) {

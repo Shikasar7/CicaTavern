@@ -196,7 +196,7 @@ export function initUpdate({ api, el, toast, guard, android = null, onChange = (
       }
       const another = health && (instance ? health.instance !== instance : health.version === version || wentDown)
       if (another) {
-        upAt ||= Date.now()
+        upAt = upAt || (Date.now())
         const now = await fetch('/api/update', { cache: 'no-store' }).then(res => res.json()).catch(() => null)
         if (now?.result || Date.now() - upAt > 15_000) {
           location.reload()

@@ -3,10 +3,10 @@
 // with the next turn (app.js), so a rollback or a branch takes it back like everything else.
 import { t } from '/i18n.js'
 
-const TABS = () => [['self', t`角色`], ['party', t`队伍`], ['bag', t`背包`], ['quests', t`任务`], ['map', t`地图`], ['deeds', t`成就`], ['sound', t`声音`]]
+const TABS = () => [['self', t`角色`], ['party', t`队伍`], ['growth', t`成长`], ['bag', t`背包`], ['quests', t`任务`], ['map', t`地图`], ['deeds', t`成就`], ['sound', t`声音`]]
 const LAYER_WORDS = () => [['effects', t`音效`], ['ambience', t`环境音`], ['music', t`音乐`]]
 const MAX_TRACK = 28 * 1024 * 1024
-const EFFECT_WORDS = () => ({ heal: t`回血`, energy: t`回气力`, calm: t`回复理智`, damage: t`攻击`, cure: t`解除异常`, boost: t`增益`, none: t`只有剧情用途` })
+const EFFECT_WORDS = (energy = '') => ({ heal: t`回血`, energy: energy ? t`回${energy}` : t`回气力`, calm: t`回复理智`, damage: t`攻击`, cure: t`解除异常`, boost: t`增益`, gear: t`装备`, none: t`只有剧情用途` })
 const SIZE_WORDS = () => ({ small: t`小`, medium: t`中等`, large: t`大` })
 // Things the helper has been asked about on this page: once each.
 const asked = new Set()
@@ -34,6 +34,10 @@ export function openBag({ el, api, toast, chat, tab: firstTab = 'self', book: fi
     addOp(op)
     render()
   }
+  const { growth } = play
+  const grows = () => growth.growsOn(book)
+  // A 天赋 taken, with its name as the player reads it for the chip by the input box.
+  const take = op => act(op.key ? { ...op, label: growth.perkShown(book, op.key)?.name ?? op.key } : op)
 
   function meter(label, field, most) {
     const value = sheet()[field]
@@ -72,8 +76,9 @@ export function openBag({ el, api, toast, chat, tab: firstTab = 'self', book: fi
       bound('money') ? el('div', { class: 'bag-row' }, [el('span', { class: 'bag-name', text: t`金钱` }), el('b', { text: String(now.money ?? 0) })]) : null,
       book.level === 'full' ? el('div', { class: 'bag-row' }, [
         el('span', { class: 'bag-name', text: [t`等级 ${now.level}`, play.rankNow(now, book)].filter(Boolean).join(' · ') }),
-        bound('rank') || bound('level') ? el('span', { class: 'hint', text: t`来自变量 ${book.bindings.rank ?? book.bindings.level}` }) : el('span', { class: 'hint', text: `${said('experience', t`经验`)} ${now.experience ?? 0} / ${play.levelNeeds(now.level)}` }),
+        bound('rank') || bound('level') ? el('span', { class: 'hint', text: t`来自变量 ${book.bindings.rank ?? book.bindings.level}` }) : el('span', { class: 'hint', text: `${said('experience', t`经验`)} ${now.experience ?? 0} / ${play.levelNeeds(now.level, book)}` }),
       ]) : null,
+      growth.levelLine(now, book) ? el('p', { class: 'hint', text: growth.levelLine(now, book) }) : null,
       brokenNote('rank'),
       ...ailRows(),
       el('h3', { text: now.points ? t`属性（还有 ${now.points} 点可加）` : t`属性` }),
@@ -83,8 +88,13 @@ export function openBag({ el, api, toast, chat, tab: firstTab = 'self', book: fi
         el('span', { class: 'hint', text: item.modifier < 0 ? `−${-item.modifier}` : `+${item.modifier}` }),
         now.points ? el('button', { type: 'button', class: 'btn small', text: '+', 'aria-label': t`加到${item.name}`, onclick: () => act({ op: 'point', id: item.id }) }) : null,
       ]))),
+      ...(grows() ? growth.practiceRows(now, book).map(item => el('p', { class: 'hint', text: t`${item.name}历练 ${item.held}/${item.needs}：检定成功会涨，攒满 +1` })) : []),
+      grows() && book.growth?.power ? el('div', { class: 'bag-row' }, [el('span', { class: 'bag-name', text: t`战力` }), el('b', { text: String(growth.powerOf(now, book)) })]) : null,
       now.skills.length ? el('h3', { text: said('skill', t`技能`) }) : null,
-      now.skills.length ? el('p', { text: now.skills.join(t`、`) }) : null,
+      ...(now.skills.length && grows() ? growth.skillRows(el, now, book) : [now.skills.length ? el('p', { text: now.skills.join(t`、`) }) : null]),
+      ...growth.perkSection({ el, who: now, book, seed: chat.id, word: said('perk', t`天赋`), act: take }),
+      ...growth.formSection({ el, who: now, sheet: now, book, act }),
+      ...growth.gearSection({ el, who: now, sheet: now, book, act }),
     ]
   }
 
@@ -120,7 +130,12 @@ export function openBag({ el, api, toast, chat, tab: firstTab = 'self', book: fi
           el('span', { class: 'hint', text: item.modifier < 0 ? `−${-item.modifier}` : `+${item.modifier}` }),
           member.points ? el('button', { type: 'button', class: 'btn small', text: '+', 'aria-label': t`给${member.name}加到${item.name}`, onclick: () => act({ op: 'point', id: item.id, who: member.name }) }) : null,
         ]))),
-        el('p', { class: 'hint', text: [member.skills.length ? t`${said('skill', t`技能`)}：${member.skills.join(t`、`)}` : '', member.points ? t`还有 ${member.points} 点可加` : '', `${said('experience', t`经验`)} ${member.experience ?? 0} / ${play.levelNeeds(member.level)}`].filter(Boolean).join(' · ') }),
+        el('p', { class: 'hint', text: [member.skills.length ? t`${said('skill', t`技能`)}：${member.skills.map(name => (grows() ? growth.skillShown(name, member.mastery?.[name]) : name)).join(t`、`)}` : '', member.points ? t`还有 ${member.points} 点可加` : '', `${said('experience', t`经验`)} ${member.experience ?? 0} / ${play.levelNeeds(member.level, book)}`].filter(Boolean).join(' · ') }),
+        growth.bondLine(member, book) ? el('p', { class: 'hint', text: growth.bondLine(member, book) }) : null,
+        ...growth.formSection({ el, who: member, sheet: sheet(), book, act, name: member.name }),
+        ...growth.gearSection({ el, who: member, sheet: sheet(), book, act, name: member.name }),
+        // Their 天赋: chosen for them unless the card leaves it to the player, who then chooses here.
+        ...(growth.perksOn(book) && ((member.perks ?? []).length || growth.perksOwed(member, book) || growth.bigsOwed(member, book)) ? growth.perkSection({ el, who: member, book, seed: chat.id, word: said('perk', t`天赋`), act: take, name: member.name }) : []),
       ])
     }
     return [
@@ -153,27 +168,36 @@ export function openBag({ el, api, toast, chat, tab: firstTab = 'self', book: fi
   function effectPicker(thing) {
     const set = book.items[thing.name] ?? null
     const guessed = play.effectOf(book, thing.name)
-    const words = EFFECT_WORDS()
+    const words = EFFECT_WORDS(book.energyName)
     const kind = el('select', { 'aria-label': t`${thing.name}的效果` }, [
       el('option', { value: '', text: guessed && !set ? t`按名字猜：${words[guessed.type]}` : t`未设定效果`, selected: !set }),
       ...Object.entries(words).map(([value, text]) => el('option', { value, text, selected: value === set?.type })),
     ])
     const size = el('select', { 'aria-label': t`${thing.name}的强度`, hidden: !set?.size }, Object.entries(SIZE_WORDS()).map(([value, text]) => el('option', { value, text, selected: value === (set?.size ?? 'medium') })))
-    const change = () => saveEffect(thing.name, kind.value ? { type: kind.value, size: size.value } : null).catch(error => toast(error.message))
+    const change = () => saveEffect(thing.name, kind.value === 'gear' ? { type: 'gear', ...(set?.type === 'gear' ? set : {}) } : kind.value ? { type: kind.value, size: size.value } : null).catch(error => toast(error.message))
     kind.addEventListener('change', change)
     size.addEventListener('change', change)
     return el('span', { class: 'bag-effect' }, [kind, size])
+  }
+
+  /** 装备: where a thing is worn, how rare it is and what it does, for one set to be gear. */
+  function gearPicker(thing) {
+    const set = book.items[thing.name]
+    const put = change => saveEffect(thing.name, { ...set, ...change }).catch(error => toast(error.message))
+    return el('span', { class: 'bag-effect bag-gear' }, growth.gearPickers({ el, name: thing.name, set, book, put }))
   }
 
   function thingRow(thing) {
     const effect = play.effectOf(book, thing.name)
     const usable = play.usableNow(effect)
     const full = usable && play.nothingToRestore(effect, sheet())
-    return el('div', { class: 'bag-thing' }, [
+    return el('div', { class: effect?.type === 'gear' ? 'bag-thing gear' : 'bag-thing' }, [
       el('div', { class: 'bag-main' }, [
         el('span', { class: 'bag-name', text: thing.count > 1 ? `${thing.name} ×${thing.count}` : thing.name }),
         thing.note ? el('span', { class: 'hint', text: thing.note }) : null,
         effectPicker(thing),
+        effect?.type === 'gear' ? gearPicker(thing) : null,
+        effect?.type === 'gear' ? el('span', { class: 'hint', text: grows() ? t`${growth.gearText(book, thing.name)}。在「角色」或「队伍」页装上。` : t`${growth.gearText(book, thing.name)}。这张卡的「成长」关着，装备不起作用。` }) : null,
       ]),
       el('div', { class: 'bag-actions' }, [
         usable ? el('button', { type: 'button', class: 'btn small primary', text: t`使用`, disabled: full, title: full ? (effect.type === 'cure' ? t`现在没有要解除的状态` : t`已经是满的，用了也是浪费`) : '', onclick: () => act({ op: 'use', name: thing.name }) }) : null,
@@ -360,8 +384,11 @@ export function openBag({ el, api, toast, chat, tab: firstTab = 'self', book: fi
   }
 
   function render() {
-    tabs.replaceChildren(...TABS().map(([key, label]) => [key, key === 'party' ? said('party', label) : key === 'bag' ? said('bag', label) : label]).map(([key, label]) => el('button', { type: 'button', role: 'tab', 'aria-selected': String(key === tab), class: key === tab ? 'on' : '', text: label, onclick: () => { tab = key; render() } })))
-    const page = { self: selfPage, party: partyPage, bag: bagPage, quests: questsPage, map: mapPage, deeds: deedsPage, sound: soundPage }[tab]
+    // 成长 has a page of its own only where the card counts it.
+    if (tab === 'growth' && !grows()) tab = 'self'
+    tabs.replaceChildren(...TABS().filter(([key]) => key !== 'growth' || grows()).map(([key, label]) => [key, key === 'party' ? said('party', label) : key === 'bag' ? said('bag', label) : label]).map(([key, label]) => el('button', { type: 'button', role: 'tab', 'aria-selected': String(key === tab), class: key === tab ? 'on' : '', text: label, onclick: () => { tab = key; render() } })))
+    const growthPage = () => growth.growthPage({ el, sheet: sheet(), book, path: chat.path, go: next => { tab = next; render() } })
+    const page = { self: selfPage, party: partyPage, growth: growthPage, bag: bagPage, quests: questsPage, map: mapPage, deeds: deedsPage, sound: soundPage }[tab]
     body.replaceChildren(...page().filter(Boolean))
     if (tab === 'bag') sortThings()
   }

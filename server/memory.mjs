@@ -32,7 +32,8 @@ const TEXT_MAX = 600
 const KEYS_MAX = 12
 // Entries one turn recalls at most, besides the characters of settings.memory.budget.
 export const RECALL_MAX = 8
-// The first tidy of a long story reads this many of its latest turns at most.
+// One tidy reads this many turns at most: the first on a long story its latest ones; one behind (tidies that failed,
+// 边玩边整理 off for a while) the oldest it has not read, and the next ones go on from there until it is caught up.
 export const TIDY_FIRST_MAX = 30
 
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -339,11 +340,15 @@ ${existingNote(entries)}`,
 }
 
 /** 边玩边整理 by the chat's model: its history, then this, about the last `turns` turns. */
-export function tidyInContext(names, entries, turns, firstInput) {
+/** @param lastInput - the last of them, when they stop before the latest turn (catching up). */
+export function tidyInContext(names, entries, turns, firstInput, lastInput = null) {
+  const which = lastInput === null
+    ? `最近 ${turns} 轮（从{{user}}说「${String(firstInput).slice(0, 40)}」那一轮开始）`
+    : `从{{user}}说「${String(firstInput).slice(0, 40)}」那一轮开始、到{{user}}说「${String(lastInput).slice(0, 40)}」那一轮为止的 ${turns} 轮（之后的剧情这次不用管）`
   return replaceMacros(
     `【暂停扮演：整理记忆】
 这一条不是剧情，是系统请求，请不要续写故事。
-请只整理最近 ${turns} 轮（从{{user}}说「${String(firstInput).slice(0, 40)}」那一轮开始）里以后可能用得上的具体事实，记成一条条记忆，放在 <记忆条目> 和 </记忆条目> 之间，只输出这一段。人物条目按最新情况重写。
+请只整理${which}里以后可能用得上的具体事实，记成一条条记忆，放在 <记忆条目> 和 </记忆条目> 之间，只输出这一段。人物条目按${lastInput === null ? '最新' : '这几轮里的'}情况重写。
 
 ${FORMAT}
 
@@ -353,14 +358,15 @@ ${existingNote(entries)}`,
 }
 
 /** 边玩边整理 by the helper model, which reads only these turns: { system, user }. */
-export function tidyRequest(names, entries, turns) {
+/** @param latest - they are the latest turns (else the oldest not yet read, catching up). */
+export function tidyRequest(names, entries, turns, latest = true) {
   const story = turns.map(item => `〔第 ${item.turn} 轮〕\n【{{user}}】${item.user.trim()}\n【{{char}}】${item.reply.trim()}`).join('\n\n')
   return {
     system: replaceMacros('你在帮一部长篇互动小说整理「记忆簿」：从剧情原文里把以后可能用得上的具体事实记成一条条，供以后的章节查阅。只整理，不续写，不评论。', names),
     user: replaceMacros(
       `${existingNote(entries)}
 
-下面是最近 ${turns.length} 轮的原文（{{user}}是玩家，{{char}}一方是角色和叙述）：
+下面是${latest ? `最近 ${turns.length} 轮` : `第 ${turns[0]?.turn}–${turns.at(-1)?.turn} 轮`}的原文（{{user}}是玩家，{{char}}一方是角色和叙述）：
 
 <原文>
 ${story}

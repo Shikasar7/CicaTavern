@@ -7,7 +7,7 @@ import path from 'node:path'
 import { baseName, normalizeCard, previousVersion } from '../server/cards.mjs'
 import { createChat } from '../server/chats.mjs'
 import { deflateRawSync } from 'node:zlib'
-import { checkWorkflow, cleanCardMedia, cleanMedia, cleanNaiToken, cleanPrompt, clipTypeOf, comfyFailure, comfyRefusal, createMedia, fillWorkflow, fitSize, imagePromptRequest, imageSize, loraFor, modelFamily, pictureSize, simpleWorkflow, sizeNodes, unzipFirst, withLora, withNegative, withTrigger } from '../server/media.mjs'
+import { checkWorkflow, cleanCardMedia, cleanMedia, cleanNaiToken, cleanPrompt, clipTypeOf, comfyFailure, comfyRefusal, createMedia, fillWorkflow, fitSize, imagePromptRequest, imageSize, lorasFor, modelFamily, pictureSize, simpleWorkflow, sizeNodes, unzipFirst, withLora, withNegative, withTrigger } from '../server/media.mjs'
 import { normalizeProvider } from '../server/providers.mjs'
 import { createStore } from '../server/store.mjs'
 
@@ -97,6 +97,12 @@ async function fakeBackends(t) {
       // Classic OpenAI: multipart only.
       if (!type.includes('multipart')) return send(400, { error: { message: "Invalid 'image': expected a file upload (multipart/form-data)" } })
       if (!raw.includes('name="image"; filename="reference.png"')) return send(400, { error: { message: 'no image part' } })
+      return send(200, { data: [{ b64_json: PNG.toString('base64') }] })
+    }
+    // A relay: no edits route behind it ("无可用渠道" as 503), and a model that draws only squares.
+    if (req.url === '/relay/v1/images/edits') return send(503, { error: { message: '当前分组下无可用渠道' } })
+    if (req.url === '/relay/v1/images/generations') {
+      if (json.size !== '1024x1024') return send(400, { error: { message: `invalid size: ${json.size}` } })
       return send(200, { data: [{ b64_json: PNG.toString('base64') }] })
     }
     if (req.url === '/files/out.png') return send(200, PNG, 'image/png')
@@ -237,6 +243,21 @@ test('image prompt from the helper model, then images through the OpenAI images 
   const viaForm = await media.generateImage(chat, 'root', prompt)
   assert.deepEqual(await media.readImage(chat.id, viaForm.file), PNG)
   assert.deepEqual(fake.seen.filter(r => r.url === '/form/v1/images/edits').map(r => r.type.split(';')[0]), ['application/json', 'multipart/form-data'])
+
+  // A relay with no edits route and a square-only model: drawn square without the reference, and the next one
+  // goes straight to a square generation.
+  const relay = normalizeProvider({ name: '反代', api: 'openai-completions', baseURL: `${fake.base}/relay/v1`, apiKey: KEY, models: ['x'] }, null, new Set((await store.getProviders()).map(p => p.id)))
+  await store.saveProviders([...(await store.getProviders()), relay])
+  await store.saveSettings({ media: cleanMedia({ imageProvider: relay.id }, (await store.getSettings()).media) })
+  const before = fake.seen.length
+  const viaRelay = await media.generateImage(chat, 'root', prompt)
+  assert.deepEqual(await media.readImage(chat.id, viaRelay.file), PNG)
+  assert.match(viaRelay.note, /用不了参考图[\s\S]*不接受 1024x1536 这个尺寸，改画了方图/)
+  assert.deepEqual(fake.seen.slice(before).map(r => `${r.url} ${r.json?.size ?? ''}`), ['/relay/v1/images/edits 1024x1536', '/relay/v1/images/generations 1024x1536', '/relay/v1/images/generations 1024x1024'])
+  const again = fake.seen.length
+  const second = await media.generateImage(chat, 'root', prompt)
+  assert.match(second.note, /用不了参考图/)
+  assert.deepEqual(fake.seen.slice(again).map(r => `${r.url} ${r.json?.size ?? ''}`), ['/relay/v1/images/generations 1024x1024'])
   await media.removeImage(chat.id, edited.file)
   await assert.rejects(media.readImage(chat.id, edited.file))
   await assert.rejects(media.readImage(chat.id, '../settings.json'), /文件名/)
@@ -285,7 +306,7 @@ test('ComfyUI: workflow saved, placeholders filled, avatar uploaded as reference
   assert.throws(() => withLora({ 1: { class_type: 'KSampler', inputs: {} } }, { name: 'x.safetensors' }), /找不到采样器用的模型/)
   assert.throws(() => cleanCardMedia({ lora: '../../secret.safetensors' }), /LoRA/)
   assert.throws(() => cleanCardMedia({ lora: 'notes.txt' }), /LoRA/)
-  assert.equal(cleanCardMedia({ loraStrength: 9 }).loraStrength, 2)
+  assert.equal(cleanCardMedia({ lora: 'a.safetensors', loraStrength: 9 }).loraStrength, 2)
   assert.deepEqual(await media.loras(), { ok: true, loras: ['linxue.safetensors'] })
 })
 
@@ -476,7 +497,7 @@ test('voice: voices listed, speech proxied and cached, a dead bridge explained',
   const { fake, store, media } = await setup(t)
   const [external, ...own] = (await media.voices()).sources
   assert.deepEqual(external, { id: 'bridge', label: '本地语音桥接', chunkMax: 100, configured: true, ok: true, voices: ['jok', '南晚'], cloud: [{ name: 'fish:abc', label: '南晚 · abc', provider: 'Fish Audio · 云端', model: 'drama-3', tags: true }], current: 'jok', remote: false })
-  assert.deepEqual(own.map(s => [s.id, s.configured]), [['openai', false], ['fish', false], ['minimax', false], ['moss', false], ['gemini', false]])
+  assert.deepEqual(own.map(s => [s.id, s.configured]), [['openai', false], ['fish', false], ['minimax', false], ['moss', false], ['qwen', false], ['gemini', false]])
   const first = await media.speak({ text: '站住。', voice: '南晚', stable: true })
   assert.deepEqual([first.buffer.toString(), first.mime], ['RIFF....WAVE', 'audio/wav'])
   const call = fake.seen.find(r => r.url === '/api/tts')
@@ -726,9 +747,9 @@ test("ComfyUI: a workflow with its size written in draws at the 画幅 asked for
   assert.equal(lora(), 'styleA.safetensors')
   assert.match(sent()[6].inputs.text, /^masterpiece, stA, watercolor, 1girl, solo, upper body, .*white background.*short black hair, police uniform/)
   assert.match(sent()[7].inputs.text, /^lowres, bad anatomy, multiple views, text, scenery, detailed background/)
-  // Someone with their own LoRA: theirs instead.
+  // Someone with their own LoRA: theirs on top of the card's, its trigger word first.
   await media.drawSprite(card.id, 'aming001')
-  assert.equal(lora(), 'aming.safetensors')
+  assert.deepEqual(Object.values(sent()).filter(node => /Lora/.test(node.class_type)).map(node => node.inputs.lora_name), ['styleA.safetensors', 'aming.safetensors'])
   assert.match(sent()[6].inputs.text, /^masterpiece, aming, /)
   // 人设图 and a 表情: the same.
   await media.drawPortrait(card.id, { id: 'linxue01', name: '林雪', kind: 'girl', looks: 'short black hair' })
@@ -745,7 +766,7 @@ test("ComfyUI: a workflow with its size written in draws at the 画幅 asked for
   await media.generateImage(chat, 'root', '场景: office\n[林雪] saluting\n[阿明] nodding')
   assert.equal(lora(), 'styleA.safetensors')
   // A card LoRA that is someone's own is their face: not on anybody else.
-  await media.saveCardMedia(card.id, { ...(await media.cardMediaView(card.id)), lora: 'aming.safetensors', loraTrigger: 'aming' })
+  await media.saveCardMedia(card.id, { ...(await media.cardMediaView(card.id)), loras: [{ lora: 'aming.safetensors', trigger: 'aming' }] })
   await media.drawSprite(card.id, 'linxue01')
   assert.equal(lora(), null)
   await media.generateImage(chat, 'root', '场景: office\n[林雪] saluting\n[阿明] nodding')
@@ -754,7 +775,87 @@ test("ComfyUI: a workflow with its size written in draws at the 画幅 asked for
   assert.equal(lora(), 'aming.safetensors')
 })
 
-test('fitSize, withNegative and loraFor', () => {
+test('ComfyUI: 背景 and 立绘 drawn with workflows of their own when imported, the rest with the main one', async t => {
+  const { fake, store, chat, card, media } = await setup(t)
+  await store.saveSettings({ media: cleanMedia({ imageBackend: 'comfy', promptStyle: 'tags' }, (await store.getSettings()).media) })
+  const flow = (ckpt, reference = false) => ({
+    4: { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: ckpt } },
+    5: { class_type: 'EmptyLatentImage', inputs: { width: '%width%', height: '%height%', batch_size: 1 } },
+    6: { class_type: 'CLIPTextEncode', inputs: { text: '%prompt%', clip: ['4', 1] } },
+    7: { class_type: 'CLIPTextEncode', inputs: { text: '%negative_prompt%', clip: ['4', 1] } },
+    ...(reference ? { 12: { class_type: 'LoadImage', inputs: { image: '%char_avatar%' } } } : {}),
+    3: { class_type: 'KSampler', inputs: { seed: '%seed%', model: ['4', 0], positive: ['6', 0], negative: ['7', 0], latent_image: ['5', 0] } },
+    8: { class_type: 'VAEDecode', inputs: { samples: ['3', 0], vae: ['4', 2] } },
+    9: { class_type: 'SaveImage', inputs: { images: ['8', 0] } },
+  })
+  await media.saveWorkflow(flow('main.safetensors'))
+  await media.saveCardMedia(card.id, { roster: [{ id: 'linxue01', name: '林雪', kind: 'girl', looks: 'short black hair' }] })
+  const model = () => Object.values(fake.workflowSent()).find(node => typeof node.inputs?.ckpt_name === 'string')?.inputs.ckpt_name
+  const all = async () => {
+    await media.generateImage(chat, 'root', 'a quiet street')
+    const reply = model()
+    await media.drawBackdrop('a quiet street')
+    const backdrop = model()
+    await media.drawSprite(card.id, 'linxue01')
+    const sprite = model()
+    await media.drawExpression(card.id, 'linxue01', 'smile', PNG)
+    return [reply, backdrop, sprite, model()]
+  }
+  assert.deepEqual(await all(), ['main.safetensors', 'main.safetensors', 'main.safetensors', 'main.safetensors'])
+  assert.deepEqual(await media.purposeWorkflows(), { scene: null, sprite: null })
+  assert.equal(await media.drawsFromPicture(await media.settings()), false)
+
+  await media.saveWorkflow(flow('scene.safetensors'), 'scene')
+  const info = await media.saveWorkflow(flow('sprite.safetensors', true), 'sprite')
+  assert.ok(info.placeholders.includes('reference'))
+  assert.deepEqual(await all(), ['main.safetensors', 'scene.safetensors', 'sprite.safetensors', 'sprite.safetensors'])
+  assert.equal(await media.drawsFromPicture(await media.settings()), true, 'a 表情 is edited from the 立绘 when the 立绘 workflow takes a picture')
+  // In 简单模式 too: imported for them, they are what 背景 and 立绘 are drawn with.
+  await store.saveSettings({ media: cleanMedia({ comfyMode: 'simple', comfyModel: 'simple.safetensors' }, (await store.getSettings()).media) })
+  assert.deepEqual(await all(), ['simple.safetensors', 'scene.safetensors', 'sprite.safetensors', 'sprite.safetensors'])
+  await store.saveSettings({ media: cleanMedia({ comfyMode: 'workflow' }, (await store.getSettings()).media) })
+
+  // Taken away: drawn with the main one again.
+  assert.equal(await media.saveWorkflow(null, 'sprite'), null)
+  assert.deepEqual(await all(), ['main.safetensors', 'scene.safetensors', 'main.safetensors', 'main.safetensors'])
+  assert.equal((await media.purposeWorkflows()).sprite, null)
+  await assert.rejects(media.saveWorkflow(flow('x.safetensors'), 'cg'), /没有这种用途/)
+})
+
+test('我的画风: kept once for every card; a card with no 画风 of its own is drawn with the default one', async t => {
+  const { fake, store, card, media } = await setup(t)
+  const kept = cleanMedia({ styleLibrary: [{ name: '厚涂', style: 'artist:aaa, thick paint', negative: 'sketch' }, { name: '', style: 'x' }, { name: '空的' }], defaultStyle: 'nope' }, (await store.getSettings()).media)
+  assert.deepEqual(kept.styleLibrary.map(item => [item.name, item.style, item.negative]), [['厚涂', 'artist:aaa, thick paint', 'sketch']])
+  assert.equal(kept.defaultStyle, '', 'a default that is not in the list is none')
+  const id = kept.styleLibrary[0].id
+  assert.equal(cleanMedia({ defaultStyle: id }, kept).defaultStyle, id)
+  // Saved without the list (the settings form): the list stays.
+  assert.equal(cleanMedia({ imageShape: 'portrait' }, kept).styleLibrary.length, 1)
+
+  await store.saveSettings({ media: cleanMedia({ imageBackend: 'comfy', promptStyle: 'tags', defaultStyle: id }, kept) })
+  await media.saveWorkflow({
+    4: { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: 'base.safetensors' } },
+    5: { class_type: 'EmptyLatentImage', inputs: { width: '%width%', height: '%height%', batch_size: 1 } },
+    6: { class_type: 'CLIPTextEncode', inputs: { text: '%prompt%', clip: ['4', 1] } },
+    7: { class_type: 'CLIPTextEncode', inputs: { text: '%negative_prompt%', clip: ['4', 1] } },
+    3: { class_type: 'KSampler', inputs: { seed: '%seed%', model: ['4', 0], positive: ['6', 0], negative: ['7', 0], latent_image: ['5', 0] } },
+    8: { class_type: 'VAEDecode', inputs: { samples: ['3', 0], vae: ['4', 2] } },
+    9: { class_type: 'SaveImage', inputs: { images: ['8', 0] } },
+  })
+  await media.saveCardMedia(card.id, { roster: [{ id: 'linxue01', name: '林雪', kind: 'girl', looks: 'short black hair' }] })
+  const sent = () => fake.workflowSent()
+  await media.drawSprite(card.id, 'linxue01')
+  assert.match(sent()[6].inputs.text, /^artist:aaa, thick paint, 1girl/)
+  assert.match(sent()[7].inputs.text, /sketch/)
+  // The card's own 画风 wins.
+  await media.saveCardMedia(card.id, { ...(await media.cardMediaView(card.id)), style: 'watercolor' })
+  await media.drawSprite(card.id, 'linxue01')
+  assert.match(sent()[6].inputs.text, /^watercolor, 1girl/)
+  assert.doesNotMatch(sent()[6].inputs.text, /artist:aaa/)
+  assert.doesNotMatch(sent()[7].inputs.text, /sketch/)
+})
+
+test('fitSize, withNegative and lorasFor', () => {
   // SD 1.5 stays small; the Efficient Loader's own fields; a workflow with placeholders is left as it is.
   const sd15 = { 5: { class_type: 'EmptyLatentImage', inputs: { width: 512, height: 768, batch_size: 1 } } }
   assert.deepEqual(fitSize(sd15, 1216, 832)[5].inputs, { width: 768, height: 512, batch_size: 1 })
@@ -775,12 +876,46 @@ test('fitSize, withNegative and loraFor', () => {
   const card = cleanCardMedia({ lora: 'style.safetensors', roster: [{ id: 'aaaa0001', name: '甲', looks: 'x' }, { id: 'bbbb0001', name: '乙', looks: 'y', lora: 'yi.safetensors' }] })
   const [jia, yi] = card.roster
   const castOf = (...people) => ({ characters: people.map(entry => ({ entry })), solo: people.length === 1 ? people[0] : null })
-  assert.equal(loraFor(card, null).lora, 'style.safetensors')
-  assert.equal(loraFor(card, castOf(jia)).lora, 'style.safetensors')
-  assert.equal(loraFor(card, castOf(yi)).lora, 'yi.safetensors')
-  assert.equal(loraFor(card, castOf(jia, yi)).lora, 'style.safetensors')
-  assert.equal(loraFor(card, castOf(jia), { scenery: true }), null)
-  assert.equal(loraFor({ ...card, lora: 'yi.safetensors' }, castOf(jia)), null)
+  const names = (...args) => lorasFor(...args).map(item => item.lora)
+  assert.deepEqual(names(card, null), ['style.safetensors'])
+  assert.deepEqual(names(card, castOf(jia)), ['style.safetensors'])
+  // A lone member with one of their own: theirs on top of the card's.
+  assert.deepEqual(names(card, castOf(yi)), ['style.safetensors', 'yi.safetensors'])
+  assert.deepEqual(names(card, castOf(jia, yi)), ['style.safetensors'], 'two in the frame: no one\'s own')
+  assert.deepEqual(names(card, castOf(jia), { scenery: true }), [])
+  assert.deepEqual(names(cleanCardMedia({ lora: 'yi.safetensors' }, card), castOf(jia)), [], 'a member\'s own as the card\'s: not on everyone')
+
+  // Up to four 画风 LoRA; the first is still lora / loraTrigger / loraStrength.
+  const stacked = cleanCardMedia({ loras: [
+    { lora: 'style.safetensors', trigger: 'ink', strength: 0.6 },
+    { lora: 'detail.safetensors', strength: 0.4 },
+    { lora: 'style.safetensors', strength: 1 },
+    { lora: '' },
+    { lora: 'light.safetensors', strength: 9 },
+    { lora: 'grain.safetensors' },
+    { lora: 'fifth.safetensors' },
+  ] }, card)
+  assert.deepEqual(stacked.loras.map(item => [item.lora, item.strength]), [['style.safetensors', 0.6], ['detail.safetensors', 0.4], ['light.safetensors', 2], ['grain.safetensors', 0.8]])
+  assert.deepEqual([stacked.lora, stacked.loraTrigger, stacked.loraStrength], ['style.safetensors', 'ink', 0.6])
+  assert.deepEqual(names(stacked, castOf(yi)), ['style.safetensors', 'detail.safetensors', 'light.safetensors', 'grain.safetensors', 'yi.safetensors'])
+  assert.deepEqual(lorasFor(stacked, null)[0], { lora: 'style.safetensors', loraTrigger: 'ink', loraStrength: 0.6 })
+  // A page from before the list changes the first and keeps the rest; one saved before the list reads as one.
+  const patched = cleanCardMedia({ lora: 'new.safetensors', loraTrigger: 'nw', loraStrength: 0.5 }, stacked)
+  assert.deepEqual(patched.loras.map(item => item.lora), ['new.safetensors', 'detail.safetensors', 'light.safetensors', 'grain.safetensors'])
+  assert.deepEqual(cleanCardMedia({}, { lora: 'old.safetensors', loraTrigger: 'o', loraStrength: 0.7 }).loras, [{ lora: 'old.safetensors', trigger: 'o', strength: 0.7 }])
+  assert.deepEqual(cleanCardMedia({ loras: [] }, stacked).loras, [])
+  assert.equal(cleanCardMedia({ loras: [] }, stacked).lora, '')
+  assert.throws(() => cleanCardMedia({ loras: [{ lora: '../x.safetensors' }] }), /LoRA/)
+
+  // ComfyUI: one loader each, in a chain from the checkpoint to everything that took it.
+  const flow = { 4: { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: 'base.safetensors' } }, 3: { class_type: 'KSampler', inputs: { model: ['4', 0], positive: ['6', 0] } }, 6: { class_type: 'CLIPTextEncode', inputs: { clip: ['4', 1], text: '' } } }
+  const chained = withLora(withLora(flow, { name: 'a.safetensors', strength: 0.6 }), { name: 'b.safetensors', strength: 0.4 })
+  const loader = name => Object.entries(chained).find(([, node]) => node.inputs.lora_name === name)
+  const [aId, a] = loader('a.safetensors')
+  const [bId, b] = loader('b.safetensors')
+  assert.deepEqual([b.inputs.model, b.inputs.clip], [['4', 0], ['4', 1]])
+  assert.deepEqual([a.inputs.model, a.inputs.clip], [[bId, 0], [bId, 1]])
+  assert.deepEqual([chained[3].inputs.model, chained[6].inputs.clip], [[aId, 0], [aId, 1]])
 })
 
 test('ComfyUI: each reference picture is uploaded under a name of its own', async t => {
@@ -821,7 +956,7 @@ test('ComfyUI: a 人设图 or a picture with no card never takes the old 人设�
   await media.drawCardArt({ name: '新角色', looks: 'short red hair' })
 
   // Flux and the like: the model loaded on its own, a model-only LoRA after it; the text encoder untouched.
-  await media.saveCardMedia(card.id, { ...(await media.cardMediaView(card.id)), lora: 'styleA.safetensors', loraTrigger: 'stA' })
+  await media.saveCardMedia(card.id, { ...(await media.cardMediaView(card.id)), loras: [{ lora: 'styleA.safetensors', trigger: 'stA' }] })
   await media.saveWorkflow({
     1: { class_type: 'UNETLoader', inputs: { unet_name: 'flux1-dev.safetensors', weight_dtype: 'default' } },
     2: { class_type: 'DualCLIPLoader', inputs: { clip_name1: 'clip_l.safetensors', clip_name2: 't5xxl.safetensors', type: 'flux' } },

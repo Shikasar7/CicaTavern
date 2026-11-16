@@ -73,7 +73,9 @@ test('用户 / AI 助手 entries before the history become the lead messages; af
   assert.equal(prefix.text, '你是小雨的叙述者。')
   assert.deepEqual(prefix.lead, [{ role: 'user', content: '照规范写给旅人看。' }, { role: 'assistant', content: '明白。' }])
   const tail = renderPresetTailParts(preset, { card: CARD, persona: PERSONA, names: NAMES, vars: prefix.vars, input: '你好' })
-  assert.deepEqual(tail, { text: '正文后写选项。\n\n（短一点）', system: '正文后写选项。', user: '（短一点）' })
+  const parts = { text: '正文后写选项。\n\n（短一点）', system: '正文后写选项。', user: '（短一点）' }
+  // Its last entry is a 用户 one: nothing to send as the reply's start.
+  assert.deepEqual(tail, { ...parts, prefill: '', rest: parts })
   assert.equal(renderPresetTail(preset, { card: CARD, persona: PERSONA, names: NAMES, input: '你好' }), tail.text)
 })
 
@@ -261,4 +263,11 @@ test('preset export and import: edits made here travel, the copy gets its own id
   assert.deepEqual({ ...copy, id: preset.id, importedAt: preset.importedAt }, preset)
   assert.equal(importOwnPreset(PRESET), null, 'a SillyTavern file is left to normalizePreset')
   assert.throws(() => importOwnPreset({ ...archive, preset: { name: 'x', prompts: [{ id: 1 }] } }), /不完整/)
+})
+
+test('SillyTavern\'s macros without braces: <user>, <char>, <bot> in any case, and next to braces of its own', () => {
+  const ctx = { names: { user: '阿明', char: '小雨' }, vars: {} }
+  assert.equal(expandMacros('绝不代替 <user> 做决定，<CHAR> 和 <Bot> 是同一个', ctx), '绝不代替 阿明 做决定，小雨 和 小雨 是同一个')
+  assert.equal(expandMacros('A：${<user>具体要做的决策}', ctx), 'A：${阿明具体要做的决策}')
+  assert.equal(expandMacros('<user_input>{{user}}</user_input>', ctx), '<user_input>阿明</user_input>', 'a tag of another name is left alone')
 })

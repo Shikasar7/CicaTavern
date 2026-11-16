@@ -137,48 +137,77 @@ function openBlocks(chunk) {
 }
 
 /**
- * Split non-fenced text into prose and HTML by paragraph. A paragraph that
- * opens a block tag keeps absorbing the following paragraphs until the tags
- * balance, so a <details> spanning blank lines stays one frame; prose around
- * it stays prose.
+ * Split non-fenced text into prose and HTML by line, as SillyTavern's Markdown keeps them apart: a line that opens a
+ * block tag starts a frame, which takes the lines after it (blank ones too) until its tags balance, so a <details>
+ * spanning blank lines stays one frame; the lines around it stay prose, with their line breaks, bold and quotes.
+ * (By paragraph, a regex putting its status bar right under the story with no blank line took the whole reply
+ * into the frame.) Frames with only blank lines between them are one.
  */
 function splitProse(text, out) {
-  const paragraphs = text.split(/\n{2,}/)
   let story = []
   let html = null
-  let depth = 0
   const flushStory = () => {
-    if (story.length) out.push({ kind: 'story', body: story.join('\n\n') })
+    const body = story.join('\n').replace(/^\n+|\n+$/g, '')
+    if (body.trim()) out.push({ kind: 'story', body })
     story = []
   }
-  for (const paragraph of paragraphs) {
+  const closeHtml = () => {
+    const body = html.join('\n').replace(/\n+$/, '')
+    const previous = out.at(-1)
+    if (previous?.kind === 'html' && previous.fromProse) previous.body += `\n\n${body}`
+    else out.push({ kind: 'html', body, fromProse: true })
+    html = null
+  }
+  // A tag still open at the end of the lines so far (`<div` and its attributes on the next line) holds the frame too.
+  const unfinished = lines => {
+    const joined = lines.join('\n')
+    return openBlocks(joined) > 0 || joined.lastIndexOf('<') > joined.lastIndexOf('>')
+  }
+  for (const line of text.split('\n')) {
     if (html !== null) {
-      html.push(paragraph)
-      depth += openBlocks(paragraph)
-      if (depth <= 0) {
-        out.push({ kind: 'html', body: html.join('\n\n') })
-        html = null
-      }
-    } else if (HTML_LIKE.test(paragraph)) {
-      flushStory()
-      depth = openBlocks(paragraph)
-      if (depth > 0) html = [paragraph]
-      else {
-        const previous = out.at(-1)
-        if (previous?.kind === 'html' && previous.fromProse) previous.body += `\n\n${paragraph}`
-        else out.push({ kind: 'html', body: paragraph, fromProse: true })
-      }
-    } else if (paragraph.trim()) {
-      story.push(paragraph)
+      html.push(line)
+      if (!unfinished(html)) closeHtml()
+    } else if (HTML_LIKE.test(line)) {
+      // Only blank lines since the last frame: this one joins it.
+      if (story.some(kept => kept.trim())) flushStory()
+      else story = []
+      html = [line]
+      if (!unfinished(html)) closeHtml()
+    } else {
+      story.push(line)
     }
   }
-  if (html !== null) out.push({ kind: 'html', body: html.join('\n\n') })
+  if (html !== null) {
+    const body = html.join('\n').replace(/\n+$/, '')
+    out.push({ kind: 'html', body })
+  }
   flushStory()
 }
 
 const escaped = text => text.replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch])
 
-/** A line of Markdown as HTML: code, links to the web, bold and italics; everything else is text. */
+/**
+ * The pictures a story or an opening shows by address (SillyTavern shows them): ![说明](https://…), <img src="https://…">,
+ * and an address of a picture alone on its line. Out of `text` with `mark(src, alt)` in their place.
+ */
+export function takePictures(text, mark) {
+  return String(text ?? '')
+    .replace(/!\[([^\]\n]*)\]\((https?:\/\/[^\s)]+)(?:\s+"[^"\n]*")?\)/g, (_, alt, src) => mark(src, alt))
+    .replace(/<img\b[^>]*?\bsrc\s*=\s*["']?(https?:\/\/[^"'\s>]+)["']?[^>]*>/gi, (tag, src) => mark(src, /\balt\s*=\s*["']([^"']*)["']/i.exec(tag)?.[1] ?? ''))
+    .replace(/^([ \t]*)(https?:\/\/[^\s<>"']+?\.(?:png|jpe?g|gif|webp|avif|bmp)(?:[?#][^\s<>"']*)?)[ \t]*$/gim, (_, indent, src) => indent + mark(src, ''))
+}
+
+/** A picture by its address, as a story shows it: no referrer sent along, loaded when scrolled to. */
+export function pictureHtml(src, alt = '') {
+  const safe = value => String(value).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch])
+  return `<img class="story-picture" src="${safe(src)}" alt="${safe(alt)}" loading="lazy" referrerpolicy="no-referrer">`
+}
+
+/**
+ * A line of Markdown as HTML: code, links to the web, bold and italics; everything else is text. No pictures by
+ * address here (直连对话, where the model may have read the web: a picture's address fetched by itself could carry
+ * what was said out); a story's and an opening's are shown (web/app.js storyHtml).
+ */
 function inlineMarkdown(text) {
   const codes = []
   return escaped(text)

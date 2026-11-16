@@ -46,7 +46,7 @@ export function initDrawChoice({ api, el, guard, openSettings }) {
   /** @param options.batch - for several pictures (做成视觉小说): the note says so. */
   async function pick({ title, action = t`画`, note = '', batch = false } = {}) {
     const choices = await load()
-    dialog ??= document.body.appendChild(el('dialog', { class: 'dialog draw-choice', 'aria-label': t`这一张怎么画` }))
+    dialog = dialog ?? (document.body.appendChild(el('dialog', { class: 'dialog draw-choice', 'aria-label': t`这一张怎么画` })))
     const chosen = startingChoice(choices)
     return new Promise(resolve => {
       let done = null

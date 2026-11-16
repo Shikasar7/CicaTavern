@@ -111,7 +111,7 @@ export function previewPalette(custom, key = '') {
     syncThemeColor()
     return
   }
-  previewing ??= { style: root.dataset.style ?? '' }
+  previewing = previewing ?? ({ style: root.dataset.style ?? '' })
   previewing.key = key
   styleTag('palette-preview', paletteCss(custom).replaceAll('data-style="custom"', 'data-style="preview"'))
   root.dataset.style = 'preview'
@@ -254,7 +254,7 @@ function fitInterface(ui) {
 let probe = null
 /** Whether this device has a font: a sample measures differently with it than with a generic family alone. */
 function hasFont(name) {
-  probe ??= document.createElement('canvas').getContext('2d')
+  probe = probe ?? (document.createElement('canvas').getContext('2d'))
   const sample = 'mmmmmmmmmmlli 0123456789 AaBbQqWw'
   return ['monospace', 'serif', 'sans-serif'].some(base => {
     probe.font = `40px ${base}`
@@ -550,7 +550,7 @@ export function initTheme({ api, el, toast, guard, getSettings, setSettings, onR
         }
         const move = moved => {
           width = fitColumn(from + (2 * outward * (moved.clientX - startX)) / zoom, widest)
-          frame ||= requestAnimationFrame(show)
+          frame = frame || (requestAnimationFrame(show))
         }
         const end = () => {
           cancelAnimationFrame(frame)

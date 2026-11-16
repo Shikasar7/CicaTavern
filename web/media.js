@@ -6,7 +6,7 @@ import { hasMarks, speakerNames, splitLines } from '/shared/vn.js'
 import { comboBox, createMenu, MENU_ICONS, whoLine } from '/menu.js'
 import { locale, t, zh } from '/i18n.js'
 import { NAI_MODELS, historyStrip, keptItems } from '/draw-choice.js'
-import { GEMINI_IMAGE_MODELS, IMAGE_MODEL, STYLE_PRESETS, stylePresetOf } from '/shared/draw.js'
+import { GEMINI_IMAGE_MODELS, IMAGE_MODEL, STYLE_PRESETS, currentImagePreset, imagePresetOf, stylePresetOf } from '/shared/draw.js'
 import { matchesTerms, searchBox, searchTerms } from '/books.js'
 import { blackBars } from '/shared/cutout.js'
 
@@ -69,6 +69,21 @@ export async function mendReference(blob) {
 
 const SHAPES = [['square', t`方图`], ['portrait', t`竖图`], ['landscape', t`横图`]]
 const IMAGE_BACKEND_TEXT = { openai: t`图片接口`, gemini: 'Gemini', comfy: 'ComfyUI', sdwebui: 'SD WebUI', novelai: 'NovelAI' }
+
+/** A 生图方案 in a few words: how it draws, with which provider and model. */
+function presetLabel(settings, providers = [], own = []) {
+  const providerName = id => providers.find(p => p.id === id)?.name ?? ''
+  const backend = settings.imageBackend
+  const ownOne = own.find(o => o.id === backend)
+  const model = {
+    openai: [providerName(settings.imageProvider), settings.imageModel],
+    gemini: [providerName(settings.geminiImageProvider), settings.geminiImageModel],
+    novelai: [String(settings.naiModel ?? '').replace(/^nai-diffusion-(\d)-(\d)-/, 'V$1.$2 ').replace(/^nai-diffusion-(\d)-/, 'V$1 ')],
+    comfy: [settings.comfyMode === 'simple' ? settings.comfyModel : t`导入的工作流`, settings.comfyUrl],
+    sdwebui: [settings.sdUrl],
+  }[backend] ?? [settings.localModels?.[backend]]
+  return [IMAGE_BACKEND_TEXT[backend] ?? ownOne?.name ?? backend, ...model].filter(Boolean).join(' · ')
+}
 // The 画风预设 by id (web/shared/draw.js STYLE_PRESETS has their words).
 const STYLE_PRESET_NAMES = { anime: t`日系动画`, galgame: t`精致 CG（galgame）`, impasto: t`厚涂`, watercolor: t`水彩`, ink: t`国风水墨`, semireal: t`半写实`, photo: t`写实照片`, retro: t`90 年代复古动画`, render3d: t`3D 渲染` }
 // 写提示词的额外要求: as long as the server keeps them (server/media.mjs RULES_MAX).
@@ -82,6 +97,7 @@ const imageBackends = () => [
   ['sdwebui', t`SD WebUI / Forge（本地）`],
 ]
 const GEMINI_TTS_MODELS = ['gemini-2.5-flash-preview-tts', 'gemini-2.5-pro-preview-tts']
+const QWEN_TTS_MODELS = ['qwen-audio-3.1-tts-plus', 'qwen-audio-3.1-tts-flash']
 // Where to sign up for a picture or voice service (keys: where its key is made;
 // a local tool is downloaded), and how it is reached from mainland China.
 const NET_TEXT = { direct: t`国内直连`, proxy: t`需科学上网`, local: t`本机运行` }
@@ -109,6 +125,7 @@ const SERVICE_SITES = {
     { name: t`MiniMax 国际站`, site: 'https://platform.minimax.io', keys: 'https://platform.minimax.io/user-center/basic-information/interface-key', net: 'proxy' },
   ],
   'voice:moss': [{ name: t`MOSS 开放平台`, site: 'https://platform.moss.cn', keys: 'https://platform.moss.cn/app/api-keys', net: 'direct' }],
+  'voice:qwen': [{ name: t`阿里云百炼`, site: 'https://www.aliyun.com/product/bailian', keys: 'https://bailian.console.aliyun.com', net: 'direct' }],
   'voice:gemini': [GOOGLE_SITE],
   'stt:provider': [
     { name: t`硅基流动（SenseVoice，免费）`, site: 'https://cloud.siliconflow.cn', keys: 'https://cloud.siliconflow.cn/account/ak', net: 'direct' },
@@ -123,6 +140,8 @@ const SERVICE_SITES = {
 const SD_SAMPLERS = ['Euler a', 'Euler', 'DPM++ 2M', 'DPM++ 2M Karras', 'DPM++ SDE Karras', 'DPM++ 2M SDE', 'DDIM', 'UniPC']
 /** A provider holding Google's key (the Gemini template), offered first for Gemini's own models. */
 const isGoogle = p => p?.api === 'google-generative' || /generativelanguage\.googleapis\.com|aiplatform\.googleapis\.com|\/v1beta\/openai\/?$/i.test(p?.baseURL ?? '')
+/** A provider on Alibaba Cloud Bailian (the 通义千问 template), offered first for Qwen-Audio-TTS. */
+const isDashscope = p => p?.api !== 'anthropic-messages' && /^https?:\/\/[^/]*\.aliyuncs\.com(\/|$)/i.test(p?.baseURL ?? '')
 // Gemini's own API has no OpenAI-style images, speech or transcription endpoints: its images and speech go through Google's.
 const openaiStyle = p => p.api !== 'anthropic-messages' && p.api !== 'google-generative'
 // A voice service on this machine or the LAN (a local voice bridge, or the tavern on a PC):
@@ -139,10 +158,10 @@ const speech = typeof speechSynthesis !== 'undefined' && typeof SpeechSynthesisU
 speech?.getVoices()
 
 // Voice sources on the server (server/voice/): a card names a voice as `<source>:<id>`.
-const VOICE_SOURCES = ['openai', 'fish', 'minimax', 'moss', 'gemini']
+const VOICE_SOURCES = ['openai', 'fish', 'minimax', 'moss', 'qwen', 'gemini']
 // The sources with an account to read voices from (从账户读取音色).
 const ACCOUNT_SOURCES = ['fish', 'minimax', 'moss']
-const VOICE_FIELDS = ['ttsProvider', 'ttsModel', 'ttsVoices', 'fishModel', 'fishVoices', 'minimaxModel', 'minimaxRegion', 'minimaxVoices', 'mossModel', 'mossVoices', 'geminiTtsProvider', 'geminiTtsModel', 'geminiTtsVoices']
+const VOICE_FIELDS = ['ttsProvider', 'ttsModel', 'ttsVoices', 'fishModel', 'fishVoices', 'minimaxModel', 'minimaxRegion', 'minimaxVoices', 'mossModel', 'mossVoices', 'qwenTtsProvider', 'qwenTtsModel', 'qwenTtsVoices', 'geminiTtsProvider', 'geminiTtsModel', 'geminiTtsVoices']
 const TTS_MODELS = ['gpt-4o-mini-tts', 'tts-1', 'tts-1-hd', 'FunAudioLLM/CosyVoice2-0.5B']
 const FISH_MODELS = [['drama-3', t`drama-3（情绪最足，按用量计费）`], ['s2.1-pro', 's2.1-pro'], ['s2.1-pro-free', t`s2.1-pro-free（免费，合理使用）`], ['s2-pro', 's2-pro']]
 const MINIMAX_MODELS = ['speech-2.8-hd', 'speech-2.8-turbo', 'speech-2.6-hd']
@@ -153,7 +172,7 @@ const mossModels = current => (MOSS_MODELS.some(([id]) => id === current) || !cu
 const PREVIEW_LINE = zh`你好呀，很高兴见到你。今天想听我讲点什么呢？`
 // Characters per chunk: the bridge's Qwen3 voices keep their intonation over ~100;
 // cloud voices bill per request, so longer; Chrome stops a long utterance after ~15 s.
-const CHUNK_MAX = { bridge: 100, browser: 150, openai: 250, fish: 250, minimax: 300, moss: 300, gemini: 300 }
+const CHUNK_MAX = { bridge: 100, browser: 150, openai: 250, fish: 250, minimax: 300, moss: 300, qwen: 300, gemini: 300 }
 // 语音输入 (server/voice/listen.mjs): where a recording is written out.
 const STT_FIELDS = ['sttSource', 'sttProvider', 'sttModel', 'sttUrl', 'sttLocalModel', 'sttLanguage']
 const STT_MODELS = ['FunAudioLLM/SenseVoiceSmall', 'TeleAI/TeleSpeechASR', 'whisper-large-v3-turbo', 'whisper-large-v3', 'gpt-4o-mini-transcribe', 'gpt-4o-transcribe', 'whisper-1', 'voxtral-mini-latest']
@@ -1102,7 +1121,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       settingsMenu.start(typeof section === 'string' ? section : null, panel)
       state.formCard = forCard
     }
-    const [{ media, workflow, novelai, voiceKey, voiceKeys, ownBackends = [] }, providers, voiceInfo, loraInfo, browserVoices] = await Promise.all([
+    const [{ media, workflow, workflows = {}, novelai, voiceKey, voiceKeys, ownBackends = [] }, providers, voiceInfo, loraInfo, browserVoices] = await Promise.all([
       api('/api/media/settings'),
       api('/api/providers'),
       api('/api/media/voices'),
@@ -1114,14 +1133,14 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     state.voiceInfo = voiceInfo
     const cardId = formCardId()
     const card = cardId ? await api(`/api/cards/${cardId}/media`) : null
-    renderSettings({ media, workflow, novelai, voiceKey, voiceKeys, providers: providers.providers, voiceInfo, loraInfo, card, browserVoices })
+    renderSettings({ media, workflow, workflows, novelai, voiceKey, voiceKeys, providers: providers.providers, voiceInfo, loraInfo, card, browserVoices })
     if (!$('media-dialog').open) $('media-dialog').showModal()
   })
 
   /** The card the settings window is about. */
   const formCardId = () => state.formCard?.id ?? state.cardId
 
-  function renderSettings({ media, workflow, novelai, voiceKey, voiceKeys, providers, voiceInfo, loraInfo, card, browserVoices = [] }) {
+  function renderSettings({ media, workflow, workflows = {}, novelai, voiceKey, voiceKeys, providers, voiceInfo, loraInfo, card, browserVoices = [] }) {
     const form = $('media-form')
     const option = (value, text, selected) => el('option', { value, text, selected: value === selected })
     const field = (label, control, hint) => el('label', {}, [label, control, hint ? el('span', { class: 'hint', text: hint }) : null])
@@ -1277,6 +1296,48 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       ]),
       el('p', { class: 'hint', text: t`在 ComfyUI 里「导出（API）」再导入就行：酒馆顺着采样器找到正向和负面提示词、宽高，种子每次自动随机。要指定写在哪，把正向提示词写成 %prompt%（不要写 {{prompt}}，导出时花括号会被 ComfyUI 去掉）、负面写 %negative_prompt%；要用参考图，LoadImage 写 "%char_avatar%"（会上传这张卡的头像）。SillyTavern 的 ComfyUI 工作流可以直接导入。` }),
     ])
+    // 背景 and 立绘 with workflows of their own (server/media.mjs drawingWorkflow): tuned apart; not imported, drawn as above.
+    const purposeRow = (purpose, label) => {
+      const info = el('span', { class: 'hint', style: 'white-space: pre-line' })
+      const clear = el('button', { type: 'button', class: 'btn small ghost', text: t`不单独用` })
+      const show = described => {
+        info.textContent = described ? workflowText(described) : t`没单独导入，和上面一样`
+        clear.hidden = !described
+      }
+      show(workflows[purpose] ?? null)
+      const input = el('input', { type: 'file', accept: '.json,application/json', hidden: true })
+      input.onchange = guard(async () => {
+        const file = input.files[0]
+        input.value = ''
+        if (!file) return
+        let json
+        try {
+          json = JSON.parse(await file.text())
+        } catch {
+          throw new Error(t`工作流文件不是 JSON`)
+        }
+        const { workflow: info } = await api('/api/media/workflow', { method: 'PUT', body: { workflow: json, purpose } })
+        show(info)
+        toast(t`${label}的工作流已导入`)
+      })
+      clear.onclick = guard(async () => {
+        await api('/api/media/workflow', { method: 'PUT', body: { workflow: null, purpose } })
+        show(null)
+        toast(t`${label}改回和上面一样画`)
+      })
+      return el('div', { class: 'workflow-row' }, [
+        el('button', { type: 'button', class: 'btn small', text: t`导入${label}工作流`, onclick: () => input.click() }),
+        input,
+        clear,
+        info,
+      ])
+    }
+    const purposeBox = el('details', { class: 'workflow-purposes', open: Boolean(workflows.scene || workflows.sprite) || undefined }, [
+      el('summary', { text: t`背景和立绘单独用的工作流（可选）` }),
+      purposeRow('scene', t`背景`),
+      purposeRow('sprite', t`立绘`),
+      el('p', { class: 'hint', text: t`背景要横图和风景模型，立绘要竖图、白底和人物 LoRA，一份工作流难两头顾。视觉小说的背景和页面背景用「背景」这份；立绘、表情差分和敌人图用「立绘」这份（要照着立绘改表情，它得有 %char_avatar%）。没导入的照上面画；每轮的配图和 CG 也照上面画。导入了就用它，简单模式下也是。` }),
+    ])
     const syncComfyMode = () => {
       comfySimpleBox.hidden = comfyMode.value !== 'simple'
       workflowBox.hidden = comfyMode.value === 'simple'
@@ -1289,6 +1350,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       field(t`工作流`, comfyMode),
       workflowBox,
       comfySimpleBox,
+      purposeBox,
       field(
         t`负面提示词`,
         el('textarea', { name: 'comfyNegative', rows: 2, spellcheck: 'false', text: media.comfyNegative ?? '', placeholder: t`例如 lowres, bad anatomy, bad hands, worst quality, watermark` }),
@@ -1530,8 +1592,24 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     if (roster) roster.open = true
     // The card's 画风, a 画风预设 to fill it with, and its own 写提示词的额外要求.
     const styleBox = el('textarea', { name: 'style', rows: 2, text: card?.style ?? '', placeholder: t`例如 anime style, delicate lineart, soft cel shading, soft lighting` })
-    const presetNow = stylePresetOf(card?.style)?.id ?? ''
-    const stylePick = el('select', {}, [option('', t`自己写`, presetNow), ...STYLE_PRESETS.map(preset => option(preset.id, STYLE_PRESET_NAMES[preset.id], presetNow))])
+    // 我的画风 (all cards share them) after the built-in ones: `my:<id>`.
+    const myStyles = () => state.settings?.styleLibrary ?? []
+    const myStyleOf = (words, negative) => myStyles().find(item => item.style === words.trim() && (!negative || item.negative === negative.trim())) ?? null
+    const pickNow = (words, negative) => {
+      const mine = myStyleOf(words, negative)
+      return mine ? `my:${mine.id}` : stylePresetOf(words)?.id ?? ''
+    }
+    const stylePick = el('select')
+    // At first from the card; after 我的画风 changed, from the form as it is now.
+    const fillStylePick = (words = styleBox.value, negative = form.elements.styleNegative?.value ?? '') => {
+      const now = pickNow(words, negative)
+      stylePick.replaceChildren(
+        option('', t`自己写`, now),
+        el('optgroup', { label: t`内置画风` }, STYLE_PRESETS.map(preset => option(preset.id, STYLE_PRESET_NAMES[preset.id], now))),
+        myStyles().length ? el('optgroup', { label: t`我的画风` }, myStyles().map(item => option(`my:${item.id}`, item.name, now))) : null,
+      )
+    }
+    fillStylePick(card?.style ?? '', card?.styleNegative ?? '')
     const cardRules = rulesField('cardPromptRules', card?.promptRules ?? '', RULES_MAX.card, t`例如：她总戴着红色发带；故事在下雨的江南小镇，画面多用青灰色`)
     const presetWords = preset => (promptStyle.value === 'tags' ? preset.tags : preset.natural)
     const setStyle = words => {
@@ -1539,6 +1617,15 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       styleBox.dispatchEvent(new Event('input', { bubbles: true }))
     }
     stylePick.onchange = () => {
+      const mine = myStyles().find(item => `my:${item.id}` === stylePick.value)
+      if (mine) {
+        // Its negative comes along, or clears what a 画风预设 or another of mine put there.
+        const negative = form.elements.styleNegative
+        const known = value => STYLE_PRESETS.some(item => item.negative === value) || myStyles().some(item => item.negative === value)
+        if (negative && (mine.negative || !negative.value.trim() || known(negative.value.trim()))) negative.value = mine.negative
+        setStyle(mine.style)
+        return
+      }
       const preset = STYLE_PRESETS.find(item => item.id === stylePick.value)
       if (!preset) return
       // A 画风负面 the user wrote stays; an empty one or another preset's takes this one's.
@@ -1547,7 +1634,17 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       setStyle(presetWords(preset))
     }
     styleBox.addEventListener('input', () => {
-      stylePick.value = stylePresetOf(styleBox.value)?.id ?? ''
+      stylePick.value = pickNow(styleBox.value, form.elements.styleNegative?.value ?? '')
+    })
+    // This card's 画风 into 我的画风, for the other cards to pick.
+    const keepStyle = guard(async () => {
+      const style = styleBox.value.trim()
+      const negative = form.elements.styleNegative?.value.trim() ?? ''
+      if (!style && !negative) throw new Error(t`先写好画风再存`)
+      const name = prompt(t`给这个画风起个名字`, charName ? t`${charName}的画风` : '')?.trim()
+      if (!name) return
+      await putStyles({ styleLibrary: [...myStyles(), { name, style, negative }] }, t`已存进「我的画风」：${name}`)
+      stylePick.value = pickNow(style, negative)
     })
     // A preset's words follow the 提示词写法: tags for tag prompts, a phrase for sentences.
     promptStyle.addEventListener('change', () => {
@@ -1556,7 +1653,150 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     })
     const shared = (feature, rest) => ({ look: 'shared', tag: t`所有卡通用`, crumb: t`${feature} · 所有卡通用`, ...rest })
     const own = (feature, rest) => ({ look: 'own', crumb: `${feature} · ${charName || t`这张卡`}`, ...rest })
+
+    // 生图方案: ways of drawing saved under a name (a provider, its model and the options), one tap to switch.
+    const presetBox = el('div', { class: 'image-presets' })
+    const putPresets = async (list, note) => {
+      const view = await api('/api/media/settings', { method: 'PUT', body: { imagePresets: list } })
+      state.settings = view.media
+      announceSettings()
+      toast(note, 2000)
+      renderPresets()
+      settingsMenu.refresh()
+    }
+    const usePreset = guard(async preset => {
+      if (settingsMenu.dirty && !confirm(t`有改动还没保存。换方案会丢掉这些改动，继续吗？`)) return
+      const view = await api('/api/media/settings', { method: 'PUT', body: preset.settings })
+      state.settings = view.media
+      announceSettings()
+      toast(t`已换成「${preset.name}」`, 2000)
+      settingsMenu.markClean()
+      await openSettings()
+    })
+    const saveCurrent = guard(async () => {
+      // What the form shows is what goes in: saved first.
+      if (settingsMenu.dirty) {
+        await save(form, Boolean(card))
+        if (settingsMenu.dirty) return
+      }
+      const media = state.settings ?? {}
+      const name = prompt(t`给这个方案起个名字`, presetLabel(media, providers, state.ownBackends).slice(0, 40))?.trim()
+      if (!name) return
+      await putPresets([...(media.imagePresets ?? []), { name, settings: imagePresetOf(media) }], t`已存成方案「${name}」`)
+    })
+    const renamePreset = guard(async preset => {
+      const name = prompt(t`方案的新名字`, preset.name)?.trim()
+      if (!name || name === preset.name) return
+      await putPresets(state.settings.imagePresets.map(p => (p.id === preset.id ? { ...p, name } : p)), t`已改名`)
+    })
+    const dropPreset = guard(async preset => {
+      if (!confirm(t`删掉方案「${preset.name}」？现在的设置不变。`)) return
+      await putPresets(state.settings.imagePresets.filter(p => p.id !== preset.id), t`已删掉`)
+    })
+    const updatePreset = guard(async preset => {
+      if (settingsMenu.dirty) {
+        await save(form, Boolean(card))
+        if (settingsMenu.dirty) return
+      }
+      await putPresets(state.settings.imagePresets.map(p => (p.id === preset.id ? { ...p, settings: imagePresetOf(state.settings) } : p)), t`已用现在的设置更新「${preset.name}」`)
+    })
+    function renderPresets() {
+      const media = state.settings ?? {}
+      const list = media.imagePresets ?? []
+      const now = currentImagePreset(media)
+      const small = (text, onclick, title = '') => el('button', { type: 'button', class: 'btn small ghost', text, title, onclick })
+      presetBox.replaceChildren(
+        ...(list.length
+          ? list.map(preset => el('div', { class: `image-preset${preset.id === now?.id ? ' on' : ''}` }, [
+              el('div', { class: 'image-preset-text' }, [el('b', { text: preset.name }), el('span', { class: 'hint', text: presetLabel(preset.settings, providers, state.ownBackends) })]),
+              el('div', { class: 'image-preset-tools' }, [
+                preset.id === now?.id ? el('span', { class: 'chip', text: t`正在用` }) : el('button', { type: 'button', class: 'btn small', text: t`换成这个`, onclick: () => usePreset(preset) }),
+                preset.id === now?.id ? null : small(t`用现在的覆盖`, () => updatePreset(preset), t`把现在的画图设置存进这个方案，替换它原来的`),
+                small(t`改名`, () => renamePreset(preset)),
+                small(t`删除`, () => dropPreset(preset)),
+              ].filter(Boolean)),
+            ]))
+          : [el('p', { class: 'hint', text: t`还没有方案。在「画图方式」里设好一种（供应商、模型、画幅这些），回来点「把现在的设置存成方案」；设好另一种再存一个，以后一点就换过去，不用重新填。` })]),
+        el('div', { class: 'row' }, [el('button', { type: 'button', class: 'btn small', text: t`把现在的设置存成方案`, onclick: saveCurrent })]),
+        el('p', { class: 'hint', text: t`方案记的是画图方式、供应商、模型、画幅和各家的选项。NovelAI 的令牌、导入的 ComfyUI 工作流和供应商的密钥只有一份，各方案共用。视觉小说里的「配图 ▾」也能换。` }),
+      )
+    }
+    renderPresets()
+
+    // 我的画风: 画师串 and the like kept once for all cards. A card picks one in 画风与 LoRA; a card with no 画风 of its
+    // own is drawn with the 默认 one. Saved as soon as changed (the list), like the 生图方案.
+    const styleLibraryBox = el('div', { class: 'image-presets style-library' })
+    const putStyles = async (changes, note) => {
+      const view = await api('/api/media/settings', { method: 'PUT', body: changes })
+      state.settings = view.media
+      announceSettings()
+      if (note) toast(note, 2000)
+      renderStyles()
+      fillStylePick()
+      settingsMenu.refresh()
+    }
+    const styleDraft = {
+      name: el('input', { placeholder: t`名字，例如 厚涂画师串`, maxlength: '40' }),
+      style: el('textarea', { rows: 2, spellcheck: 'false', placeholder: t`画师串或画风词，例如 artist:xxx, artist:yyy, masterpiece` }),
+      negative: el('input', { spellcheck: 'false', placeholder: t`画风负面，可不填，例如 realistic, 3d` }),
+    }
+    const addStyle = guard(async () => {
+      const [name, style, negative] = ['name', 'style', 'negative'].map(key => styleDraft[key].value.trim())
+      if (!name) throw new Error(t`先给画风起个名字`)
+      if (!style && !negative) throw new Error(t`画风和画风负面至少写一个`)
+      await putStyles({ styleLibrary: [...myStyles(), { name, style, negative }] }, t`已加进「我的画风」：${name}`)
+      for (const box of Object.values(styleDraft)) box.value = ''
+    })
+    const editStyle = guard(async item => {
+      const name = prompt(t`名字`, item.name)?.trim()
+      if (!name) return
+      const style = prompt(t`画风（画师串）`, item.style)
+      if (style === null) return
+      const negative = prompt(t`画风负面`, item.negative)
+      if (negative === null) return
+      // Both empty, it would be dropped from the list on saving.
+      if (!style.trim() && !negative.trim()) throw new Error(t`画风和画风负面至少写一个`)
+      await putStyles({ styleLibrary: myStyles().map(other => (other.id === item.id ? { ...other, name, style, negative } : other)) }, t`已改好「${name}」`)
+    })
+    const dropStyle = guard(async item => {
+      if (!confirm(t`从「我的画风」里删掉「${item.name}」？已经用了它的卡不受影响。`)) return
+      await putStyles({ styleLibrary: myStyles().filter(other => other.id !== item.id) }, t`已删掉`)
+    })
+    const setDefaultStyle = guard(async id => putStyles({ defaultStyle: id }, id ? t`没写画风的卡都用「${myStyles().find(item => item.id === id)?.name}」` : t`没写画风的卡不再加画风`))
+    function renderStyles() {
+      const list = myStyles()
+      const now = state.settings?.defaultStyle ?? ''
+      const small = (text, onclick, title = '') => el('button', { type: 'button', class: 'btn small ghost', text, title, onclick })
+      styleLibraryBox.replaceChildren(
+        ...(list.length
+          ? list.map(item => el('div', { class: `image-preset${item.id === now ? ' on' : ''}` }, [
+              el('div', { class: 'image-preset-text' }, [el('b', { text: item.name }), el('span', { class: 'hint', text: [item.style, item.negative && t`负面：${item.negative}`].filter(Boolean).join(' · ').slice(0, 160) })]),
+              el('div', { class: 'image-preset-tools' }, [
+                item.id === now ? el('span', { class: 'chip', text: t`默认` }) : small(t`设为默认`, () => setDefaultStyle(item.id), t`没写画风的卡都用这个`),
+                item.id === now ? small(t`取消默认`, () => setDefaultStyle('')) : null,
+                small(t`修改`, () => editStyle(item)),
+                small(t`删除`, () => dropStyle(item)),
+              ].filter(Boolean)),
+            ]))
+          : [el('p', { class: 'hint', text: t`还没有。常用的画师串在这里存一次，每张卡的「画风与 LoRA」里就能直接选，不用每张卡再填一遍。` })]),
+        el('div', { class: 'style-draft' }, [styleDraft.name, styleDraft.style, styleDraft.negative, el('div', { class: 'row' }, [el('button', { type: 'button', class: 'btn small', text: t`加进我的画风`, onclick: addStyle })])]),
+        el('p', { class: 'hint', text: t`设成「默认」的，用在自己没写画风的卡上（画风和画风负面都空着的卡）；卡里写了画风就用卡自己的。也可以在一张卡的「画风与 LoRA」里点「存进我的画风」。` }),
+      )
+    }
+    renderStyles()
+
     const sections = [
+      shared(t`配图`, {
+        id: 'image-presets',
+        title: t`生图方案`,
+        summary: () => {
+          const list = state.settings?.imagePresets ?? []
+          if (!list.length) return t`把常用的几种画图设置存下来，一点就换`
+          const now = currentImagePreset(state.settings)
+          return now ? t`正在用「${now.name}」 · 共 ${list.length} 个` : t`现在的设置没存成方案 · 共 ${list.length} 个`
+        },
+        body: [presetBox],
+      }),
       shared(t`配图`, {
         id: 'image',
         title: t`画图方式`,
@@ -1606,35 +1846,37 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
           promptRules.tools,
         ],
       }),
+      shared(t`配图`, {
+        id: 'style-library',
+        title: t`我的画风`,
+        summary: () => {
+          const list = myStyles()
+          if (!list.length) return t`常用的画师串存一次，每张卡直接选`
+          const fallback = list.find(item => item.id === state.settings?.defaultStyle)
+          return [t`${list.length} 个`, fallback ? t`默认「${fallback.name}」` : ''].filter(Boolean).join(' · ')
+        },
+        body: [styleLibraryBox],
+      }),
       card && own(t`配图`, {
         id: 'card-style',
         title: t`画风与 LoRA`,
         summary: () => {
           const style = form.elements.style?.value.trim() ?? ''
-          const lora = form.elements.lora?.value ?? ''
+          const loras = readLoras(form).map(item => item.lora.replace(/^.*[\\/]/, '').replace(/\.(safetensors|pt|ckpt)$/i, ''))
           const preset = stylePresetOf(style)
-          const styleText = preset ? STYLE_PRESET_NAMES[preset.id] : style.length > 28 ? `${style.slice(0, 28)}…` : style
-          return [style ? t`画风：${styleText}` : t`还没写画风`, lora ? t`LoRA：${lora}` : '', cardRules.box.value.trim() ? t`有额外要求` : ''].filter(Boolean).join(' · ')
+          const mine = myStyleOf(style, form.elements.styleNegative?.value ?? '')
+          const styleText = mine ? mine.name : preset ? STYLE_PRESET_NAMES[preset.id] : style.length > 28 ? `${style.slice(0, 28)}…` : style
+          const fallback = myStyles().find(item => item.id === state.settings?.defaultStyle)
+          return [style ? t`画风：${styleText}` : fallback && !form.elements.styleNegative?.value.trim() ? t`用默认画风「${fallback.name}」` : t`还没写画风`, loras.length ? t`LoRA：${loras.join(t`、`)}` : '', cardRules.box.value.trim() ? t`有额外要求` : ''].filter(Boolean).join(' · ')
         },
         body: [
-          field(t`画风预设`, stylePick, t`选一个就把下面的画风换成它的词（照「提示词写法」用标签或句子），画风负面空着时也填上；换完还能改，自己写的画风照样用。`),
+          field(t`画风预设`, stylePick, t`选一个就把下面的画风换成它的词（内置的照「提示词写法」用标签或句子），画风负面空着时也填上；换完还能改，自己写的画风照样用。「我的画风」在所有卡通用的「我的画风」里管理。`),
           field(t`画风（写进画面提示词；人设图、立绘也加，NovelAI、ComfyUI、SD WebUI 每张都加）`, styleBox),
+          el('div', { class: 'row', style: 'margin: -4px 0 14px' }, [el('button', { type: 'button', class: 'btn small', text: t`存进我的画风`, title: t`把这张卡的画风和画风负面存成一条，别的卡也能选`, onclick: keepStyle })]),
           field(t`画风负面（加在负面提示词后面：NovelAI、ComfyUI、SD WebUI）`, el('input', { name: 'styleNegative', value: card.styleNegative ?? '', placeholder: t`例如 realistic, 3d, chibi` })),
           field(t`这张卡写提示词的额外要求（加在所有卡通用的后面）`, cardRules.box),
           cardRules.tools,
-          field(
-            t`整卡 LoRA（ComfyUI 和 SD WebUI 用；人设图、立绘也用，名册里自带 LoRA 的角色单独出镜时改用她自己的）`,
-            el('select', { name: 'lora' }, [
-              option('', t`不用`, card.lora),
-              ...loraInfo.loras.map(name => option(name, name, card.lora)),
-              card.lora && !loraInfo.loras.includes(card.lora) ? option(card.lora, t`${card.lora}（ComfyUI 里现在没有）`, card.lora) : null,
-            ].filter(Boolean)),
-            loraInfo.ok ? t`画这张卡时自动在工作流的 Load Checkpoint 后面接上它，并把触发词放在提示词最前面。` : t`ComfyUI 没开，列不出 LoRA 文件；开着 ComfyUI 再打开这里。`,
-          ),
-          el('div', { class: 'grid' }, [
-            field(t`触发词`, el('input', { name: 'loraTrigger', value: card.loraTrigger, placeholder: t`例如 linxue`, spellcheck: 'false' })),
-            field(t`强度`, el('input', { name: 'loraStrength', type: 'number', min: '0', max: '2', step: '0.05', value: String(card.loraStrength) })),
-          ]),
+          loraList(card, loraInfo),
         ],
       }),
       card && own(t`配图`, {
@@ -1651,7 +1893,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         id: 'voice',
         title: t`朗读来源`,
         summary: () => {
-          if (voiceNeed()) return speech ? t`现在只能用浏览器音色：设一个云端服务（Fish Audio、MiniMax、MOSS、Gemini 或供应商的朗读接口），声音自然得多` : t`还没有能用的音色：点这里设一个云端服务`
+          if (voiceNeed()) return speech ? t`现在只能用浏览器音色：设一个云端服务（Fish Audio、MiniMax、MOSS、通义千问、Gemini 或供应商的朗读接口），声音自然得多` : t`还没有能用的音色：点这里设一个云端服务`
           const parts = []
           for (const id of VOICE_SOURCES) if (sources[id]?.configured) parts.push(t`${sources[id].label} ${sources[id].voices.length} 个音色`)
           if (speech) parts.push(t`浏览器 ${chinese.length} 个音色`)
@@ -1723,7 +1965,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     }
     settingsMenu.mount({
       panels: [
-        { id: 'image', title: t`配图`, icon: MENU_ICONS.picture, aside: switchRow(autoImage, t`新回复自动配图`, t`每轮多一次辅助模型调用和一次生图`), rows: ['image', 'prompt', who(), 'card-style', 'roster'] },
+        { id: 'image', title: t`配图`, icon: MENU_ICONS.picture, aside: switchRow(autoImage, t`新回复自动配图`, t`每轮多一次辅助模型调用和一次生图`), rows: ['image-presets', 'image', 'prompt', 'style-library', who(), 'card-style', 'roster'] },
         { id: 'voice', title: t`朗读`, icon: MENU_ICONS.voice, aside: switchRow(autoRead, t`新回复自动朗读`), rows: ['voice', 'default-voice', who(), 'card-voice'] },
         { id: 'stt', title: t`语音输入`, icon: MENU_ICONS.mic, rows: ['stt'] },
       ],
@@ -1863,8 +2105,17 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         sdwebui: el('p', { class: 'hint', text: t`用 SD WebUI 里当前加载的模型画（${media.sdUrl}）。` }),
       }[media.imageBackend] ?? (own ? (own.ready ? (ownModel ? row(t`模型`, ownModel) : null) : unset(own.need)) : null)
       const shape = el('select', { onchange: () => saveMedia({ imageShape: shape.value }) }, SHAPES.map(([value, text]) => option(value, text, media.imageShape)))
+      const presets = media.imagePresets ?? []
+      const nowPreset = currentImagePreset(media)
+      const plan = presets.length
+        ? el('select', { onchange: () => plan.value && saveMedia(presets.find(p => p.id === plan.value).settings, true) }, [
+            nowPreset ? null : option('', t`（现在的设置没存成方案）`, ''),
+            ...presets.map(p => option(p.id, p.name, nowPreset?.id ?? '')),
+          ].filter(Boolean))
+        : null
       // replaceChildren prints a null as text: leave the empty ones out.
       box.replaceChildren(...[
+        plan ? row(t`生图方案`, plan) : null,
         row(t`画图用`, backend),
         modelRow,
         row(t`画幅`, shape),
@@ -1907,6 +2158,11 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     if (sources.moss?.configured) {
       const select = el('select', { onchange: () => saveMedia({ mossModel: select.value }, true) }, mossModels(media.mossModel).map(([value, text]) => option(value, text, media.mossModel)))
       models.push(row(t`朗读模型（MOSS）`, select))
+    }
+    if (sources.qwen?.configured) {
+      const list = QWEN_TTS_MODELS.includes(media.qwenTtsModel) ? QWEN_TTS_MODELS : [...QWEN_TTS_MODELS, media.qwenTtsModel]
+      const select = el('select', { onchange: () => saveMedia({ qwenTtsModel: select.value }, true) }, list.map(id => option(id, id, media.qwenTtsModel)))
+      models.push(row(t`朗读模型（通义千问）`, select))
     }
     if (sources.gemini?.configured) {
       const input = el('input', { value: media.geminiTtsModel ?? '', spellcheck: 'false', onchange: () => saveMedia({ geminiTtsModel: input.value.trim() }, true) })
@@ -1952,6 +2208,56 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     if (!image) return false
     await api(`/api/cards/${cardId}/roster/${entryId}/ref`, { method: 'PUT', body: { image } })
     return true
+  }
+
+  // 画风 LoRA (画风与 LoRA): up to this many on every picture of people (server/media.mjs MAX_STYLE_LORAS).
+  const MAX_STYLE_LORAS = 4
+
+  /**
+   * The card's 画风 LoRA as rows to fill: a file, its trigger word and strength each; one more can be added up to four.
+   * A lone cast member with a LoRA of their own has it on top of these.
+   */
+  function loraList(card, loraInfo) {
+    const option = (value, text, selected) => el('option', { value, text, selected: value === selected })
+    const rows = el('div', { class: 'lora-rows' })
+    const more = el('button', { type: 'button', class: 'btn small', text: t`＋ 再加一个 LoRA` })
+    const changed = () => {
+      more.hidden = rows.children.length >= MAX_STYLE_LORAS
+      rows.dispatchEvent(new Event('input', { bubbles: true }))
+    }
+    const row = (item = { lora: '', trigger: '', strength: 0.8 }) => {
+      const pick = el('select', { 'data-lora': 'lora', 'aria-label': t`LoRA 文件` }, [
+        option('', t`不用`, item.lora),
+        ...loraInfo.loras.map(name => option(name, name, item.lora)),
+        item.lora && !loraInfo.loras.includes(item.lora) ? option(item.lora, t`${item.lora}（ComfyUI 里现在没有）`, item.lora) : null,
+      ].filter(Boolean))
+      const line = el('div', { class: 'lora-row' }, [
+        pick,
+        el('input', { 'data-lora': 'trigger', value: item.trigger ?? '', placeholder: t`触发词，例如 linxue`, 'aria-label': t`触发词`, spellcheck: 'false' }),
+        el('input', { 'data-lora': 'strength', type: 'number', min: '0', max: '2', step: '0.05', value: String(item.strength ?? 0.8), 'aria-label': t`强度`, title: t`强度` }),
+        el('button', { type: 'button', class: 'btn small ghost', text: t`去掉`, onclick: () => { line.remove(); if (!rows.children.length) rows.append(row()); changed() } }),
+      ])
+      return line
+    }
+    const start = card.loras?.length ? card.loras : card.lora ? [{ lora: card.lora, trigger: card.loraTrigger, strength: card.loraStrength }] : []
+    rows.append(...(start.length ? start : [{ lora: '', trigger: '', strength: 0.8 }]).map(row))
+    more.onclick = () => { rows.append(row()); changed() }
+    more.hidden = rows.children.length >= MAX_STYLE_LORAS
+    return el('div', { class: 'field lora-list' }, [
+      el('span', { text: t`画风 LoRA（ComfyUI 和 SD WebUI 用；人设图、立绘也用，最多 ${MAX_STYLE_LORAS} 个叠在一起）` }),
+      rows,
+      more,
+      el('span', { class: 'hint', text: loraInfo.ok
+        ? t`画这张卡时一个接一个接在工作流的模型后面（SD WebUI 写进提示词），触发词放在提示词最前面。叠得越多，每个的强度要越低（比如画风 0.6、细节 0.4），不然画面会糊。名册里自带 LoRA 的角色单独出镜时，她自己的再叠在上面；画面里有两个人以上时只用这里的。`
+        : t`ComfyUI 没开，列不出 LoRA 文件；开着 ComfyUI 再打开这里。` }),
+    ])
+  }
+
+  /** The 画风 LoRA rows as the form shows them now, the empty ones left out. */
+  function readLoras(form) {
+    return [...form.querySelectorAll('.lora-row')]
+      .map(line => ({ lora: line.querySelector('[data-lora="lora"]').value, trigger: line.querySelector('[data-lora="trigger"]').value.trim(), strength: Number(line.querySelector('[data-lora="strength"]').value || 0.8) }))
+      .filter(item => item.lora)
   }
 
   /** The roster as the form shows it now; each one's voice from 朗读 → 音色 (one added since has none yet). */
@@ -2130,8 +2436,30 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
           }
         }
         syncSummary()
+        syncPlayerHint()
       }
       const name = el('input', { 'data-field': 'name', value: entry.name, placeholder: entry.player ? t`主角` : t`名字`, maxlength: '40' })
+      // 主角 (or the player's own name, which makes one of the same; web/shared/vn.js speakerNames): off the visual
+      // novel's stage unless chosen as one of its 常驻角色. Said here, where it is set.
+      const playerHint = el('p', { class: 'hint roster-player-hint' })
+      const sameName = () => {
+        const typed = name.value.trim()
+        const short = full => full.split(/[-－·|｜_ ]/)[0].trim() || full
+        // As speakerNames: a player name of one character (the default 你) is no name to find them by.
+        const own = short(String(userName ?? '').trim())
+        return Boolean(typed && own.length >= 2 && short(typed) === own)
+      }
+      const syncPlayerHint = () => {
+        const said = player.checked
+          ? t`主角是你自己：视觉小说里平时不上台。想看到自己的立绘，在视觉小说「配图 ▾」的「常驻角色」里选上。`
+          : sameName()
+            ? t`这个名字和你的角色名「${userName}」一样，会被当成主角（你自己）：视觉小说里平时不上台，可以在「配图 ▾」的「常驻角色」里选上。`
+            : ''
+        playerHint.textContent = said
+        playerHint.hidden = !said
+      }
+      name.addEventListener('input', syncPlayerHint)
+      syncPlayerHint()
       const aliases = el('input', { 'data-field': 'aliases', value: entry.aliases, placeholder: t`别称，用逗号分开（例如 念念, 小师妹）` })
       // What 从对话里补充 changed here, with a way back.
       const note = el('div', { class: 'roster-note', hidden: true })
@@ -2184,6 +2512,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
                 el('label', { class: 'check-row', title: t`玩家扮演的角色；剧情里叫「${userName || t`玩家`}」时也认得` }, [player, el('span', { text: t`主角` })]),
                 el('button', { type: 'button', class: 'btn small ghost danger', text: t`移除`, onclick: () => { node.remove(); syncSummary() } }),
               ]),
+              playerHint,
               aliases,
               el('div', { class: 'roster-row' }, [
                 el('button', { type: 'button', class: 'btn small', text: t`上传人设图`, onclick: () => file.click() }),
@@ -2562,6 +2891,27 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       el('div', { class: 'row voice-actions' }, [listen('moss'), fromAccount('moss')]),
     ])
 
+    // Qwen-Audio-TTS through a provider on Bailian (the 通义千问 template, the one chat uses).
+    const bailianSpeakers = speakers.filter(isDashscope)
+    const qwen = el('details', { class: 'voice-source', open: Boolean(media.qwenTtsProvider) }, [
+      el('summary', {}, [el('span', { class: 'voice-source-name' }, [t`通义千问（阿里云百炼）`, netTag('direct')]), state('qwen')]),
+      serviceLinks('voice:qwen'),
+      el('div', { class: 'grid' }, [
+        field(t`供应商`, el('select', { name: 'qwenTtsProvider' }, [
+          option('', speakers.length ? t`不用` : t`先在「供应商」里添加`, media.qwenTtsProvider),
+          ...[...bailianSpeakers, ...speakers.filter(p => !isDashscope(p))].map(p => option(p.id, p.name, media.qwenTtsProvider)),
+        ]), bailianSpeakers.length ? t`选用「通义千问」模板建的供应商，和对话共用密钥` : t`先用「通义千问」模板建一个供应商（密钥在 bailian.console.aliyun.com 创建）`),
+        field(t`模型`, el('select', { name: 'qwenTtsModel' }, [
+          option('qwen-audio-3.1-tts-plus', t`qwen-audio-3.1-tts-plus（音质最好）`, media.qwenTtsModel),
+          option('qwen-audio-3.1-tts-flash', t`qwen-audio-3.1-tts-flash（更快更便宜，音色多）`, media.qwenTtsModel),
+          QWEN_TTS_MODELS.includes(media.qwenTtsModel) ? null : option(media.qwenTtsModel, media.qwenTtsModel, media.qwenTtsModel),
+        ].filter(Boolean))),
+      ]),
+      field(t`音色（每行一个：voice 参数，后面可以空一格写名字）`, el('textarea', { name: 'qwenTtsVoices', rows: 3, spellcheck: 'false', placeholder: t`留空用 4 个系统音色（龙安欢、龙安灵心、龙安风悦、许南川）`, text: voiceListText(media.qwenTtsVoices) }),
+        t`flash 模型还有几十个音色（含方言），在百炼文档的 Qwen-Audio-TTS 音色列表里查 voice 参数贴在这里；复刻或设计的音色也贴 voice 参数。音色只能配它所属的模型。回复里的情绪会变成语气指令。按字数计费，国内直连。`),
+      el('div', { class: 'row voice-actions' }, [listen('qwen')]),
+    ])
+
     // Gemini's speech models through a provider holding Google's key (the one chat uses).
     const googleSpeakers = speakers.filter(isGoogle)
     let geminiTtsModels = GEMINI_TTS_MODELS
@@ -2590,7 +2940,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         t`预置音色有 Kore、Leda、Aoede（女声）、Puck、Charon、Fenrir（男声）等 30 个，中文也能读。回复里的情绪会变成「用…的语气说」放在台词前。按用量计费，走「设置」里的代理。`),
       el('div', { class: 'row voice-actions' }, [listen('gemini')]),
     ])
-    return [openai, fish, minimax, moss, gemini]
+    return [openai, fish, minimax, moss, qwen, gemini]
   }
 
   // ─── 默认对白音色: what a card with no dialogue voice reads in ─────────
@@ -2639,7 +2989,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
    * @param asking - starts on the question, with info (/api/media/voices); else straight on 拉取音色.
    */
   function chooseDefaultVoice({ asking, info = null }) {
-    const dialog = (defaultVoiceDialog ??= document.body.appendChild(el('dialog', { class: 'dialog default-voice', 'aria-label': t`默认对白音色` })))
+    const dialog = (defaultVoiceDialog = defaultVoiceDialog ?? (document.body.appendChild(el('dialog', { class: 'dialog default-voice', 'aria-label': t`默认对白音色` }))))
     if (dialog.open) return Promise.resolve()
     const box = el('form', { class: 'dc-form' })
     const heard = el('form', {}, [el('input', { type: 'hidden', name: 'ttsUrl', value: state.settings?.ttsUrl ?? '' })])
@@ -2676,7 +3026,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       try {
         const sources = (state.voiceInfo ?? await api('/api/media/voices')).sources ?? []
         const { problems, changed } = await pullAccounts(sources, () => mine === pulling && dialog.open)
-        listsChanged ||= changed
+        listsChanged = listsChanged || (changed)
         const [voiceInfo, browserVoices, providers] = await Promise.all([
           api('/api/media/voices'),
           loadBrowserVoices(),
@@ -3098,7 +3448,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     if (hasCard && cardId) {
       const saved = await api(`/api/cards/${cardId}/media`, {
         method: 'PUT',
-        body: { voice: value('voice'), narratorVoice: value('narratorVoice'), style: value('style'), styleNegative: value('styleNegative'), promptRules: value('cardPromptRules'), lora: value('lora'), loraTrigger: value('loraTrigger'), loraStrength: Number(value('loraStrength') || 0.8), roster: collectRoster(form) },
+        body: { voice: value('voice'), narratorVoice: value('narratorVoice'), style: value('style'), styleNegative: value('styleNegative'), promptRules: value('cardPromptRules'), loras: readLoras(form), roster: collectRoster(form) },
       })
       // Another card's settings (its ⋯) change nothing in the chat that is open.
       if (cardId === state.cardId) {

@@ -246,7 +246,7 @@ export function createMenu({ dialog, form, el, title: menuTitle, edits = countsA
           const section = sections.find(s => s.id === row)
           if (!section) return null
           // A page says where it sits: its panel, unless it says more itself.
-          section.crumb ??= section.tag ? `${panel.title} · ${section.tag}` : panel.title
+          section.crumb = section.crumb ?? (section.tag ? `${panel.title} · ${section.tag}` : panel.title)
           const made = entry(section)
           entries.set(row, made)
           return made.button

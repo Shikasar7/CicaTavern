@@ -36,7 +36,7 @@ const KEY = 'sk-test-1234567890abcd'
 /** A provider that speaks all three protocols and records each request. */
 async function fakeProvider(t) {
   const requests = []
-  const flags = { rejectTtl: false, rejectReasoning: false, rejectField: '', maxOutput: 0, contextLimit: 0, stopReason: 'end_turn', promptTokens: 100, summaryText: '', contextMessage: '', dropSystem: false, lateUsage: false, thinking: '' }
+  const flags = { rejectTtl: false, rejectReasoning: false, rejectField: '', maxOutput: 0, contextLimit: 0, stopReason: 'end_turn', promptTokens: 100, summaryText: '', contextMessage: '', dropSystem: false, lateUsage: false, thinking: '', rejectPrefill: false }
   let count = 0
   const server = createServer(async (req, res) => {
     let body = ''
@@ -55,6 +55,11 @@ async function fakeProvider(t) {
     if (flags.rejectField && json && flags.rejectField in json) {
       res.writeHead(400, { 'content-type': 'application/json' })
       return res.end(JSON.stringify({ error: { message: `${flags.rejectField}: Extra inputs are not permitted` } }))
+    }
+    // As the newer Claude models answer a request that ends with the reply's start.
+    if (flags.rejectPrefill && json?.messages?.at(-1)?.role === 'assistant') {
+      res.writeHead(400, { 'content-type': 'application/json' })
+      return res.end(JSON.stringify({ error: { message: flags.prefillMessage || 'This model does not support assistant message prefill. The conversation must end with a user message.' } }))
     }
     if (flags.rejectReasoning && (json?.thinking || json?.output_config || json?.reasoning || json?.reasoning_effort)) {
       res.writeHead(400, { 'content-type': 'application/json' })
@@ -75,7 +80,8 @@ async function fakeProvider(t) {
     }
     const lastUser = JSON.stringify((json.messages ?? json.input).at(-1))
     // 「标签写错」: a state block closed with MVU's tag, as some models write it.
-    const text = lastUser.includes('暂停扮演') ? flags.summaryText || SUMMARY : lastUser.includes('标签写错') ? `第 ${++count} 次回复${CROSSED}` : `第 ${++count} 次回复<hide>变量${count}</hide>`
+    // flags.lead: what the reply starts with (thinking after a 预填 that opened its tag).
+    const text = (flags.lead ?? '') + (lastUser.includes('暂停扮演') ? flags.summaryText || SUMMARY : lastUser.includes('标签写错') ? `第 ${++count} 次回复${CROSSED}` : `第 ${++count} 次回复<hide>变量${count}</hide>`)
     const half = Math.ceil(text.length / 2)
     res.writeHead(200, { 'content-type': 'text/event-stream' })
     const send = (data, event) => res.write(`${event ? `event: ${event}\n` : ''}data: ${typeof data === 'string' ? data : JSON.stringify(data)}\n\n`)
@@ -319,6 +325,29 @@ test('compaction checks the archive, keeps the last turns when nothing can read 
   fake.flags.contextMessage = "This model's maximum context length is 131072 tokens. However, you requested 140000 tokens."
   await assert.rejects(turn('四'), error => error.contextFull === true)
   assert.equal((await store.getModelContext())[`${provider.id}/m1`], 131_072)
+})
+
+test('compaction asked for all the same: the archive just made written again, one turn since enough', async t => {
+  const { store, turn, engine, chat } = await setup(t, 'openai-completions')
+  await turn('一')
+  await turn('二')
+  // 压缩失败后「只保留最近两轮」: in the player's eyes no archive was written, and it said 不用再压缩.
+  await engine.compactChat(chat.id, { keepRecent: true })
+  await assert.rejects(engine.compactChat(chat.id), /不用再压缩/)
+  // Asked again: written by the model, in the place of the one there.
+  const redone = activePath(await engine.compactChat(chat.id, { again: true }))
+  assert.equal(redone.filter(node => node.compaction).length, 1)
+  assert.equal(redone.at(-1).compaction.kept, undefined)
+  assert.equal(redone.at(-1).compaction.turns, 2)
+  // One turn since: refused as before, done when asked again.
+  await turn('三')
+  await assert.rejects(engine.compactChat(chat.id), /不用再压缩/)
+  const once = activePath(await engine.compactChat(chat.id, { again: true }))
+  assert.equal(once.filter(node => node.compaction).length, 2)
+  // Nothing new and the archive already the model's: written once more, still one there.
+  const twice = activePath(await engine.compactChat(chat.id, { again: true }))
+  assert.equal(twice.filter(node => node.compaction).length, 2)
+  assert.ok(!activePath(await store.getChat(chat.id)).at(-1).compaction.kept)
 })
 
 test('compaction too long even in halves: read again in parts under the start of the system prompt only', async t => {
@@ -708,6 +737,54 @@ test('rebuilt history as SillyTavern sends it: preset block on the newest messag
   assert.ok(messages[1].content[0].cache_control)
   assert.equal(typeof messages[3].content, 'string')
   assert.ok(messages[4].content[0].cache_control, 'the newest message keeps the mark: the next turn reads up to it')
+})
+
+test('a preset ending with AI 助手 entries: sent as the reply\'s start (预填); turned away, as text from then on', async t => {
+  for (const api of ['openai-completions', 'anthropic-messages']) {
+    const { fake, turn, store, chat } = await setup(t, api, api === 'anthropic-messages' ? '' : '/v1')
+    const preset = normalizePreset({
+      name: 'P',
+      prompts: [
+        { identifier: 'main', content: '写' },
+        { identifier: 'chatHistory', marker: true },
+        { identifier: 'rule', content: '<user>的话只代表<user>' },
+        { identifier: 'cot', role: 'assistant', content: '首先从思考开始：\n<think>' },
+      ],
+    })
+    editPreset(preset, { postMode: 'latest' })
+    await store.savePreset(preset)
+    await store.saveChat({ ...(await store.getChat(chat.id)), presetId: preset.id })
+    fake.flags.lead = '想一想\n</think>\n'
+    const { chat: after } = await turn('走')
+    const sent = fake.requests.at(-1).body.messages
+    const text = m => (typeof m.content === 'string' ? m.content : m.content.map(part => part.text).join(''))
+    assert.equal(sent.at(-1).role, 'assistant', `${api}: the reply starts from it`)
+    assert.equal(text(sent.at(-1)), '首先从思考开始：\n<think>')
+    assert.ok(!sent.slice(0, -1).some(m => text(m).includes('首先从思考开始')), 'not in the turn\'s message as well')
+    assert.match(JSON.stringify(sent), /玩家的话只代表玩家|你的话只代表你/, '<user> is the player\'s name')
+    // Kept with the thinking tag it opened in front: it folds, and a preset's `…</think>` regex finds it.
+    assert.match(activePath(after).at(-1).text, /^<think>\n想一想\n<\/think>\n第 \d+ 次回复/)
+    // The model writes the tag itself (DeepSeek did): there once, not twice.
+    fake.flags.lead = '<think>自己写的</think>'
+    const { chat: own } = await turn('又走')
+    assert.match(activePath(own).at(-1).text, /^<think>自己写的<\/think>第 \d+ 次回复/)
+    // No thinking at all, straight into the story: the reply as written, not all of it folded away as thinking.
+    fake.flags.lead = ''
+    const { chat: plain } = await turn('接着走')
+    assert.match(activePath(plain).at(-1).text, /^第 \d+ 次回复/)
+    // A model that turns it away: the turn still goes, the entry as text after the message; remembered.
+    // Gemini's own API says it its own way.
+    fake.flags.rejectPrefill = true
+    if (api === 'openai-completions') fake.flags.prefillMessage = 'Requests ending with a model turn are not supported.'
+    await turn('再走')
+    const refused = fake.requests.at(-1).body.messages
+    assert.equal(refused.at(-1).role, 'user')
+    assert.match(text(refused.at(-1)), /首先从思考开始/)
+    assert.doesNotMatch(activePath(await store.getChat(chat.id)).at(-1).text, /^<think>/)
+    const before = fake.requests.length
+    await turn('三走')
+    assert.equal(fake.requests.length, before + 1, 'not tried again')
+  }
 })
 
 test('同酒馆 on Claude: the after-history entries after the turn, 系统 ones as a system message on Anthropic’s own API', () => {

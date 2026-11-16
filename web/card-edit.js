@@ -400,7 +400,7 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
 
   /** 调整样式: the editor 检查这张卡 has, loaded the first time (it lives with that window's code). */
   const openTuning = guard(async () => {
-    view.editor ??= await import('/card-check.js')
+    view.editor = view.editor ?? (await import('/card-check.js'))
     state.tuning = {}
     renderStatus()
   })
@@ -473,6 +473,8 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
     lines.value = (cover?.lines ?? []).join('\n')
     const abroad = el('input', { type: 'checkbox', onchange: () => put({ st: abroad.checked ? undefined : false }) })
     abroad.checked = cover?.st !== false
+    const layout = el('select', { 'aria-label': t`版式`, title: t`开场页怎么排。书页式：大标题、立绘和几行引子，开场一行一个；画卷式：顶上是背景图和毛笔题字，开场是一张张牌`, onchange: () => put({ layout: layout.value || undefined }) }, [['', t`简洁（原来的）`], ['book', t`书页式`], ['scroll', t`画卷式`]].map(([value, text]) => el('option', { value, text })))
+    layout.value = cover?.layout ?? ''
     const figure = el('input', { type: 'checkbox', onchange: () => put({ figure: figure.checked ? undefined : false }) })
     figure.checked = cover?.figure !== false
     const openings = card.greetings.filter(text => text.trim())
@@ -487,6 +489,7 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
       el('div', { class: 'front-row' }, [
         el('label', { class: 'front-check' }, [box, el('span', { text: t`开场页` })]),
         cover ? el('label', { class: 'front-check' }, [el('span', { text: t`动效` }), effect]) : null,
+        cover ? el('label', { class: 'front-check' }, [el('span', { text: t`版式` }), layout]) : null,
         cover ? el('label', { class: 'front-check', title: t`带上：导出的卡第一条开场白是开场页（要装酒馆助手才显示；没装的人看到一行说明，要左右切换消息选开场）。不带：导出的卡和没有开场页时一样` }, [abroad, el('span', { text: t`导出到 SillyTavern 时带上开场页` })]) : null,
       ]),
       ...(cover ? [coverArtRow(card, figure), el('div', { class: 'front-words' }, [tagline, lines]), el('div', { class: 'front-preview' }, page.node)] : []),

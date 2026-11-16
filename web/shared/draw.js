@@ -7,6 +7,29 @@
 export const DRAW_BACKENDS = Object.freeze(['openai', 'gemini', 'novelai', 'comfy', 'sdwebui'])
 export const NAI_MODEL_IDS = Object.freeze(['nai-diffusion-5-full', 'nai-diffusion-5-curated', 'nai-diffusion-4-5-full', 'nai-diffusion-4-5-curated'])
 export const GEMINI_IMAGE_MODELS = Object.freeze(['gemini-2.5-flash-image', 'gemini-3-pro-image-preview'])
+
+// 生图方案 (设置 → 配图与朗读 → 配图 → 生图方案, server/media.mjs cleanImagePresets): what one saved way of drawing
+// holds. The NovelAI token, the imported ComfyUI workflow and the providers' keys stay where they are (one of each):
+// a plan names a provider, a model and the options, not a key.
+export const IMAGE_PRESET_KEYS = Object.freeze([
+  'imageBackend', 'imageProvider', 'imageModel', 'imageEditModel', 'imageShape', 'imageReference', 'promptStyle', 'promptDetail',
+  'comfyUrl', 'comfyMode', 'comfyTemplate', 'comfyModel', 'comfyClip', 'comfyClip2', 'comfyClipType', 'comfyVae', 'comfySteps', 'comfyCfg', 'comfyNegative', 'comfySampler', 'comfyScheduler',
+  'geminiImageProvider', 'geminiImageModel', 'geminiReference',
+  'sdUrl', 'sdSteps', 'sdCfg', 'sdSampler', 'sdNegative',
+  'naiModel', 'naiQuality', 'naiReference', 'naiRefFidelity', 'naiRefStyle', 'naiV5Empty', 'naiNegative',
+  'localModels',
+])
+
+/** The image settings of `media` that a 生图方案 keeps. */
+export const imagePresetOf = media => Object.fromEntries(IMAGE_PRESET_KEYS.map(key => [key, media[key]]))
+
+/** The saved 生图方案 that the settings `media` draw with now, or null (changed since, or none saved). */
+export function currentImagePreset(media) {
+  const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
+  const now = imagePresetOf(media)
+  // localModels: only the keys a plan holds (an own backend added later is not a change).
+  return (media.imagePresets ?? []).find(preset => IMAGE_PRESET_KEYS.every(key => (key === 'localModels' ? Object.entries(preset.settings.localModels ?? {}).every(([id, model]) => now.localModels?.[id] === model) : same(preset.settings[key], now[key])))) ?? null
+}
 // A model that draws, by its name.
 export const IMAGE_MODEL = /image|imagine|dall|flux|sdxl|stable|seedream|gpt-image|kolors|wanx|cogview|midjourney|recraft|ideogram/i
 // SD WebUI answers nobody until it runs: it counts as set up once its address was changed or it is the one in use.

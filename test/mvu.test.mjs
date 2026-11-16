@@ -237,6 +237,14 @@ test('display segments: prose stays prose, HTML blocks (even across blank lines)
   const folded = segments('故事。\n\n<details><summary>行卷</summary>\n\n```yaml\na: <1>\n\nb: 2\n```\n\n</details>\n\n尾声。')
   assert.deepEqual(folded.map(p => p.kind), ['story', 'html', 'story'])
   assert.match(folded[1].body, /<pre><code>a: &lt;1&gt;\n\nb: 2<\/code><\/pre>\n\n<\/details>$/)
+  // A regex's status bar right under the story, no blank line between: only the bar is a frame; the story keeps its
+  // own lines (line breaks, bold, quotes), before and after it.
+  const close = segments('她抬起头。\n「你来了。」**很好**\n<div class="bar">\n<span>好感 3</span>\n</div>\n后来的话\n又一行')
+  assert.deepEqual(close.map(p => [p.kind, p.body]), [['story', '她抬起头。\n「你来了。」**很好**'], ['html', '<div class="bar">\n<span>好感 3</span>\n</div>'], ['story', '后来的话\n又一行']])
+  // A tag opened over two lines, and two blocks with a blank line between: one frame.
+  const split = segments('正文。\n<div\n  class="a">甲</div>\n\n<div>乙</div>\n尾。')
+  assert.deepEqual(split.map(p => p.kind), ['story', 'html', 'story'])
+  assert.match(split[1].body, /^<div\n {2}class="a">甲<\/div>\n\n<div>乙<\/div>$/)
 })
 
 test('the status bar goes after the story wherever the model put its placeholder', async () => {

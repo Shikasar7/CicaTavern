@@ -115,7 +115,7 @@ export function speakerNames({ char = '', user = '', roster = [] } = {}) {
     if (same) {
       same.keys = [...new Set([...same.keys, ...keys])]
       if (marks.length) same.marks = [...new Set([...(same.marks ?? []), ...marks])]
-      for (const [key, value] of Object.entries(extra)) same[key] ??= value
+      for (const [key, value] of Object.entries(extra)) same[key] = same[key] ?? (value)
     } else if (keys.length || marks.length) out.push({ name: short, keys: [...new Set(keys)], ...(marks.length ? { marks: [...new Set(marks)] } : {}), ...extra })
   }
   const cast = Array.isArray(roster) ? roster.filter(entry => entry && (entry.name || entry.player)) : []
@@ -410,7 +410,7 @@ function noteNamed(text, names, recent) {
       if (at >= 0) found.push({ at: at + key.length, entry })
     }
   }
-  recent.at ??= {}
+  recent.at = recent.at ?? ({})
   for (const { entry } of found.sort((a, b) => a.at - b.at)) {
     const note = kind => {
       recent[kind] = entry.name
@@ -879,7 +879,13 @@ function atHeader(line, index) {
 const SPOKEN = /^【[^【】|｜]{1,24}[|｜][^【】|｜]{0,12}】\s*\S/
 
 export function headerPlace(text) {
-  const lines = String(text ?? '').split('\n').map(line => plainOf(line).trim()).filter(Boolean).slice(0, 3)
+  // The first three lines with something in them, and no more read: a long reply was read whole for three lines.
+  const lines = []
+  for (const raw of String(text ?? '').split('\n', 60)) {
+    const line = plainOf(raw).trim()
+    if (line) lines.push(line)
+    if (lines.length >= 3) break
+  }
   for (const line of lines) {
     if (line.length > 80 || SPOKEN.test(line)) continue
     const label = key => LABELLED[key].exec(line)?.[1]?.replace(WRAP, '').trim() ?? ''
@@ -921,10 +927,22 @@ function stateValue(state, key) {
 }
 
 /** Where a reply says the story is: its time box, else a header line. → { time, place, weather } or null. */
-export function placeIn(text) {
-  const box = placeOf(timeBoxOf(text))
-  return box.place ? box : headerPlace(String(text ?? '').replace(/<[^<>]*\/>/g, ''))
+/** @param options.keep - remember it (a reply as saved); not for a reply still being written, new at every frame. */
+export function placeIn(text, { keep = true } = {}) {
+  const whole = String(text ?? '')
+  // By its length, start and end (the header line, a time box at either end): a long reply is not kept twice over.
+  const key = `${whole.length}:${whole.slice(0, 300)}:${whole.slice(-300)}`
+  if (PLACES_READ.has(key)) return PLACES_READ.get(key)
+  const box = placeOf(timeBoxOf(whole))
+  const found = box.place ? box : headerPlace(whole.replace(/<[^<>]*\/>/g, ''))
+  // Every reply of a long chat is read again at each redraw (成就, the days, where the story is): read once.
+  if (!keep) return found
+  if (PLACES_READ.size >= 4000) PLACES_READ.clear()
+  PLACES_READ.set(key, found)
+  return found
 }
+// A reply's text → where it says the story is (placeIn), the result shared: callers only read it.
+const PLACES_READ = new Map()
 
 /** Where a reply on a path has the story: its own text first (time box, header line), then the variables it left (系统.当前地点). */
 function replyPlace(node, rawOf, stateOf) {

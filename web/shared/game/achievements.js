@@ -22,8 +22,22 @@ export const ACHIEVEMENTS = [
   { id: 'places', counts: 'places', need: 5 },
 ]
 
+// A story line's tally by where it ends (its length, its last node and how long that one is): the page asks for the same
+// ones at every redraw, and reachedWith for the line up to the reply before as well. A few kept.
+const TALLIES = new Map()
+
 /** What a story line adds up to. */
 export function tallyOf(path) {
+  const last = path.at(-1)
+  const key = `${path.length}:${last?.id}:${String(last?.text ?? '').length}:${last?.battle?.over ?? ''}:${last?.check?.tier ?? ''}`
+  if (TALLIES.has(key)) return TALLIES.get(key)
+  const tally = countUp(path)
+  if (TALLIES.size >= 64) TALLIES.clear()
+  TALLIES.set(key, tally)
+  return tally
+}
+
+function countUp(path) {
   const tally = { wins: 0, bosses: 0, narrow: 0, untouched: 0, escapes: 0, crits: 0 }
   path.forEach((node, i) => {
     if (node.check?.tier === 'crit') tally.crits++

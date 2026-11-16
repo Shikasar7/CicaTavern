@@ -144,6 +144,33 @@ test('边玩边整理: every N turns the helper notes them down on the reply; a 
   assert.equal(memoryOf(activePath(saved)), null, 'the regenerated reply is a branch without that snapshot')
 })
 
+test('边玩边整理 behind by more than one tidy reads: the oldest unread turns first, then on from there, none left out', async t => {
+  let failing = false
+  const answer = request => {
+    if (!request.messages.some(m => textOf(m.content).includes('<原文>'))) return null
+    return failing ? '整理不了' : ENTRIES
+  }
+  const { store, engine, chat, turn, fake } = await setup(t, { memory: { enabled: true, tidy: { enabled: true, every: 5 } }, answer })
+  let last
+  for (let i = 1; i <= 5; i++) last = await turn(`第${i}轮`)
+  assert.equal(await engine.tidyMemory(chat.id, last.nodeId), true)
+  // The helper fails for a long while: 40 turns pile up.
+  failing = true
+  for (let i = 6; i <= 45; i++) last = await turn(`第${i}轮`)
+  assert.equal(await engine.tidyMemory(chat.id, last.nodeId), false)
+  failing = false
+  const read = () => [...textOf(fake.requests.at(-1).messages.at(-1).content).matchAll(/〔第 (\d+) 轮〕/g)].map(match => Number(match[1]))
+  assert.equal(await engine.tidyMemory(chat.id, last.nodeId), true)
+  assert.deepEqual([read()[0], read().at(-1)], [6, 35], 'the oldest unread, not 16–45')
+  assert.match(textOf(fake.requests.at(-1).messages.at(-1).content), /下面是第 6–35 轮的原文/)
+  assert.equal(memoryOf(activePath(await store.getChat(chat.id))).turns, 35)
+  // The next reply goes on from there.
+  last = await turn('第46轮')
+  assert.equal(await engine.tidyMemory(chat.id, last.nodeId), true)
+  assert.deepEqual([read()[0], read().at(-1)], [36, 46])
+  assert.equal(memoryOf(activePath(await store.getChat(chat.id))).turns, 46)
+})
+
 test('a tidy whose reply is gone by the time it is done writes nothing', async t => {
   let drop = null
   const answer = async request => {

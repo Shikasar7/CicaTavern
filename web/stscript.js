@@ -106,7 +106,7 @@ function trailingNamed(p, command, inClosure) {
     if (!arg) break
     p.at += arg[0].length
     const value = readValue(p, inClosure)
-    command.named[arg[1].toLowerCase()] ??= value
+    command.named[arg[1].toLowerCase()] = command.named[arg[1].toLowerCase()] ?? (value)
   }
   readText(p, inClosure)
 }

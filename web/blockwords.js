@@ -45,7 +45,7 @@ function describe(word) {
  *   subscription: this edition has the Claude subscription }
  */
 export async function openBlockWords({ api, el, toast, guard, getChat, onChanged, subscription = false }) {
-  dialog ??= document.body.appendChild(el('dialog', { class: 'dialog blockwords', 'aria-label': t`屏蔽词` }))
+  dialog = dialog ?? (document.body.appendChild(el('dialog', { class: 'dialog blockwords', 'aria-label': t`屏蔽词` })))
   const state = { words: (await api('/api/blockwords')).words, editing: null }
   const chat = getChat()
   const latest = chat?.path?.findLast(node => node.role === 'assistant')

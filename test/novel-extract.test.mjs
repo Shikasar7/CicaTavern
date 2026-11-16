@@ -8,7 +8,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { createApp } from '../server/http.mjs'
-import { extractRequest, gather, mergeBatches, mergeRequest, novelBook, novelEstimate, readExtract, readMerge, splitNovel } from '../server/forge/novel.mjs'
+import { bookSource, digestMaterial, digestRequest, extractRequest, gather, mergeBatches, mergeRequest, novelBook, novelEstimate, novelMaterial, readDigest, readExtract, readMerge, rosterText, splitNovel } from '../server/forge/novel.mjs'
 
 const chapter = (n, body = '她走进雨里，没有回头。\n') => `第${n}章 雨夜之${n}\n${body.repeat(380)}`
 const NOVEL = [1, 2, 3, 4, 5, 6].map(n => chapter(n)).join('\n')
@@ -77,7 +77,8 @@ test('the entries become a book found by name, a kind after another', () => {
     ['人物：林小雨', ['林小雨', '小雨'], false, true],
     ['地点：便利店', ['便利店'], false, true],
     // A name of one character is all this one has to be found by.
-    ['物品：伞', ['伞'], false, true],
+    // A name of one character is in every other sentence: its entry is kept, but off, for the player to give a longer keyword.
+    ['物品：伞', ['伞'], false, false],
   ])
   const estimate = novelEstimate(NOVEL, splitNovel(NOVEL), 1)
   assert.equal(estimate.stretches, 2)
@@ -190,4 +191,152 @@ test('a stretch that will not read is asked for once more, then left out and nam
   assert.deepEqual([read.done, read.failed, read.stage], [3, [1], 'ready'])
   assert.equal(seen.length, 5, 'the first stretch twice, the other two, and the place noted twice put together')
   assert.deepEqual(read.entries.map(entry => [entry.name, entry.parts]), [['便利店', 2]])
+})
+
+// ─── 从小说开始 (plans/18): the 梗概 and 名录 a card is made from ───────────────────────────────────
+
+const BOOK = [
+  { type: '人物', name: '林小雨', aliases: ['小雨'], content: '只在雨夜出现的女孩。话很少，怕晴天。', parts: 9 },
+  { type: '人物', name: '店长', aliases: [], content: '便利店的店长，总在算账。', parts: 2 },
+  { type: '地点', name: '便利店', aliases: [], content: '街角那家，二十四小时开着。', parts: 5 },
+  { type: '事件', name: '停电', aliases: [], content: '整条街停电，只有便利店亮着。', parts: 1 },
+  { type: '事件', name: '放晴', aliases: [], content: '雨停的那天她没有来。', parts: 1 },
+]
+
+test('the 梗概 is written from the entries met most, the events in the book\'s order; an answer is its text', () => {
+  const material = digestMaterial(BOOK)
+  assert.match(material, /<人物>\n- 林小雨（小雨）：只在雨夜出现的女孩。话很少，怕晴天。\n- 店长：/)
+  assert.ok(material.indexOf('停电') < material.indexOf('放晴'), 'events as they came')
+  const request = digestRequest('雨宿', BOOK)
+  assert.match(request.system, /主线/)
+  assert.match(request.messages[0].content, /^<book name="雨宿">\n<人物>/)
+  assert.equal(readDigest('```markdown\n## 世界和基调\n雨。\n```'), '## 世界和基调\n雨。')
+  assert.equal(readDigest('x'.repeat(20000)).length, 8000)
+})
+
+test('the 名录 names every entry, the ones met most with a line; with no room the lines go, never the names', () => {
+  const roster = rosterText(BOOK)
+  assert.match(roster, /【人物】2 个\n- 林小雨（小雨）：只在雨夜出现的女孩\n- 店长：便利店的店长，总在算账/)
+  assert.match(roster, /【事件】2 个/)
+  const many = Array.from({ length: 400 }, (_, i) => ({ type: '人物', name: `路人${i}`, aliases: [], content: '一个路过的人，说了很长很长的一段话。', parts: 400 - i }))
+  const tight = rosterText(many, 4000)
+  assert.ok(tight.length <= 4000)
+  assert.match(tight, /路人0/)
+  assert.match(tight, /路人399/, 'the least met is still named')
+  const material = novelMaterial({ name: '雨宿', digest: '## 主线\n她来了，又走了。', entries: BOOK })
+  assert.match(material, /^这是小说《雨宿》整理出来的资料，不是原文。书里一共记了 5 个条目/)
+  assert.match(material, /# 梗概\n## 主线\n她来了，又走了。\n\n# 名录\n【人物】/)
+  assert.match(novelMaterial({ name: '雨宿', digest: '', entries: BOOK }), /不是原文[^#]*\n\n# 名录/, 'one with no 梗概 yet has its 名录 alone')
+})
+
+test('a book carries its 梗概 as an entry always there, and gives it back with its kinds when a card starts from it', () => {
+  const book = novelBook('雨宿的世界', BOOK, '## 主线\n她来了，又走了。')
+  const digest = book.entries.find(entry => entry.comment === '梗概：雨宿的世界')
+  assert.deepEqual([digest.constant, digest.content, digest.keys], [true, '## 主线\n她来了，又走了。', []])
+  assert.equal(book.entries.filter(entry => entry.constant).length, 1)
+  assert.equal(novelBook('雨宿的世界', BOOK).entries.length, 5, 'no 梗概, no entry for it')
+  const source = bookSource(book)
+  assert.equal(source.digest, '## 主线\n她来了，又走了。')
+  assert.deepEqual(source.entries.map(entry => [entry.type, entry.name, entry.aliases]), [['人物', '林小雨', ['小雨']], ['人物', '店长', []], ['地点', '便利店', []], ['事件', '停电', []], ['事件', '放晴', []]])
+  // A book from elsewhere: its comments are names, what has none goes by its first keyword, what is off stays out.
+  const other = bookSource({ name: '别处的书', entries: [{ comment: '青梧山', keys: ['青梧山', '青梧'], content: '一座山。', constant: true }, { comment: '', keys: ['灵石'], content: '钱。' }, { comment: '关掉的', keys: [], content: '不用。', enabled: false }, { comment: '空的', keys: [], content: ' ' }] })
+  assert.deepEqual(other.entries.map(entry => [entry.type, entry.name, entry.aliases, entry.parts]), [['设定', '青梧山', ['青梧'], 3], ['设定', '灵石', [], 1]])
+})
+
+test('从小说开始: the novel read gets its 梗概 on asking, and a card begun from it reads the 梗概 and 名录, the entries kept beside the draft', async t => {
+  const { call, seen, settled, app } = await tavern(t, json => {
+    const system = json.messages[0].content
+    if (system.includes('写梗概')) return '## 主线\n她在雨夜来，天晴就走。'
+    if (system.includes('整理世界书条目')) return '[{"name": "林小雨", "content": "只在雨夜出现的女孩；怕晴天。"}]'
+    if (system.includes('整理成角色扮演用的世界书')) return '[{"type": "人物", "name": "林小雨", "content": "只在雨夜出现的女孩。"}, {"type": "地点", "name": "便利店", "content": "街角那家。"}]'
+    return '好，我们来聊聊这张卡。'
+  })
+  const draftSettled = async id => {
+    for (let i = 0; i < 400; i++) {
+      const view = (await call(`/api/forge/${id}`)).body
+      if (!view.job) return view
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    throw new Error('the draft never settled')
+  }
+  assert.equal((await call('/api/forge', { method: 'POST', body: { source: 'novel' } })).status, 404, 'no novel, no card from one')
+  await call('/api/novel', { method: 'POST', body: { name: '雨宿.txt', text: NOVEL } })
+  assert.equal((await call('/api/novel/digest', { method: 'POST' })).status, 409, 'nothing read, nothing to tell of')
+  assert.equal((await call('/api/forge', { method: 'POST', body: { source: 'novel' } })).status, 409)
+  await call('/api/novel/run', { method: 'POST' })
+  const read = await settled()
+  assert.deepEqual([read.stage, read.digest, read.digestStale], ['ready', '', false])
+  const before = seen.length
+
+  await call('/api/novel/digest', { method: 'POST' })
+  const told = await settled()
+  assert.deepEqual([told.digest, told.digestStale, told.error], ['## 主线\n她在雨夜来，天晴就走。', false, ''])
+  assert.equal(seen.length, before + 1, 'one request')
+  assert.match(seen.at(-1).messages.at(-1).content, /<book name="雨宿">\n<人物>\n- 林小雨：只在雨夜出现的女孩；怕晴天。/)
+  // The player's own words for it stay.
+  const edited = (await call('/api/novel', { method: 'PUT', body: { digest: '  ## 主线\n改过的。 ' } })).body.novel
+  assert.equal(edited.digest, '## 主线\n改过的。')
+
+  // A card from it: no words needed, the first turn is sent with the 梗概 and the 名录.
+  const draft = (await call('/api/forge', { method: 'POST', body: { source: 'novel' } })).body
+  // Where each entry was read is known, so the card can take the book as far as any of the stretches.
+  assert.deepEqual(draft.source, { from: 'novel', name: '雨宿', count: 2, stretches: ['第1章 雨夜之1 … 第2章 雨夜之2', '第3章 雨夜之3 … 第4章 雨夜之4', '第5章 雨夜之5 … 第6章 雨夜之6'] })
+  assert.equal((await call(`/api/forge/${draft.id}`, { method: 'PUT', body: { sourceUntil: 2 } })).body.source.until, 2)
+  assert.equal((await call(`/api/forge/${draft.id}`, { method: 'PUT', body: { sourceUntil: 9 } })).body.source.until, 0, 'the last stretch or past it is all of the book')
+  assert.equal(draft.rounds[0].user.text, '我想照《雨宿》做一张卡')
+  assert.deepEqual(draft.references.map(reference => [reference.kind, reference.name]), [['novel', '雨宿']])
+  await draftSettled(draft.id)
+  const sent = JSON.stringify(seen.at(-1).messages)
+  assert.match(sent, /<reference type=\\"小说资料\\" name=\\"雨宿\\">/)
+  assert.match(sent, /# 梗概\\n## 主线\\n改过的。/)
+  assert.match(sent, /这张卡照这部小说做：.*想怎么玩.*故事从哪里开始/, 'the guide is told what to ask of a novel')
+  assert.match(sent, /【人物】1 个\\n- 林小雨：只在雨夜出现的女孩\\n/)
+  assert.doesNotMatch(sent, /街角那家。<\/entry>/)
+  const { readFile, stat } = await import('node:fs/promises')
+  const sourceFile = path.join(app.store.dirs.root, 'forge', `${draft.id}.source.json`)
+  const kept = JSON.parse(await readFile(sourceFile, 'utf8'))
+  assert.deepEqual([kept.name, kept.digest, kept.entries.map(entry => entry.name)], ['雨宿', '## 主线\n改过的。', ['林小雨', '便利店']])
+
+  // The book made of it has the 梗概; a card can start from that book as well.
+  const saved = (await call('/api/novel/save', { method: 'POST', body: { name: '雨宿的世界' } })).body
+  assert.equal(saved.entries, 3)
+  const again = (await call('/api/forge', { method: 'POST', body: { text: '同一个世界的新故事', source: { bookId: saved.id } } })).body
+  assert.deepEqual(again.source, { from: 'book', name: '雨宿的世界', count: 2, bookId: saved.id })
+  assert.equal(again.rounds[0].user.text, '同一个世界的新故事')
+  await draftSettled(again.id)
+  assert.match(JSON.stringify(seen.at(-1).messages), /这是小说《雨宿的世界》整理出来的资料[^#]*# 梗概\\n## 主线\\n改过的。/)
+  assert.equal((await call('/api/forge', { method: 'POST', body: { source: { bookId: 'nope' } } })).status, 404)
+
+  // A draft dropped takes its book along.
+  await call(`/api/forge/${draft.id}`, { method: 'DELETE' })
+  await assert.rejects(stat(sourceFile))
+})
+
+test('a note goes to the one it names before one that shares an alias; an alias that is another entry\'s name, or claimed twice, is put right', async () => {
+  const { entriesOf } = await import('../server/forge/novel.mjs')
+  // The model once called the river 老梁. The watchman's own notes still go to the watchman.
+  const notes = gather([], [{ type: '人物', name: '清河', aliases: ['老梁'], content: '河龙。' }])
+  gather(notes, [{ type: '人物', name: '梁更夫', aliases: ['老梁'], content: '打更的。' }])
+  gather(notes, [{ type: '人物', name: '梁更夫', aliases: [], content: '在水关里。' }])
+  gather(notes, [{ type: '人物', name: '老梁', aliases: ['梁更夫'], content: '会打五更。' }])
+  assert.deepEqual(notes.map(note => [note.name, note.parts.length]), [['清河', 1], ['梁更夫', 3]])
+  // 老梁 is claimed by both: it stays with the one met less. 团儿's alias 阿蛮 is another entry's name: it is 阿蛮's.
+  gather(notes, [{ type: '人物', name: '清河', aliases: [], content: '三千七百岁。' }, { type: '人物', name: '清河', aliases: [], content: '住河底。' }, { type: '人物', name: '清河', aliases: [], content: '行雨。' }])
+  gather(notes, [{ type: '人物', name: '团儿', aliases: [], content: '范老篾的女儿。' }, { type: '人物', name: '阿蛮', aliases: [], content: '转生后的名字。' }, { type: '人物', name: '团儿', aliases: ['阿蛮', '范团儿'], content: '八岁出痘。' }])
+  const entries = entriesOf(notes)
+  assert.deepEqual(entries.map(entry => [entry.name, entry.aliases]), [['清河', []], ['梁更夫', ['老梁']], ['团儿', ['范团儿']], ['阿蛮', []]])
+  // What reading comes to: what is written back is counted by the text, not a flat number a stretch.
+  const stretches = splitNovel(NOVEL)
+  const estimate = novelEstimate(NOVEL, stretches)
+  assert.ok(estimate.output > estimate.input * 0.5, 'a dense novel writes back about as much as it reads')
+})
+
+test('what anyone may be called is no alias of one person; a name is never dropped for it', async () => {
+  const { entriesOf } = await import('../server/forge/novel.mjs')
+  const notes = gather([], [
+    { type: '人物', name: '沈观', aliases: ['先生', '算盘先生', '师爷', '沈先生'], content: '看客。' },
+    { type: '人物', name: '老头', aliases: ['老人家', '臭棋老头'], content: '村里下棋的，没有名字。' },
+  ])
+  assert.deepEqual(entriesOf(notes).map(entry => [entry.name, entry.aliases]), [['沈观', ['算盘先生', '沈先生']], ['老头', ['臭棋老头']]])
+  assert.match(extractRequest('正文', '第一章').system, /谁都能叫的称呼不写/)
 })

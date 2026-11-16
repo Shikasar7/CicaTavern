@@ -52,6 +52,28 @@ const PLACEMENT = {
  * @param deps - { …, openTalk(options) (talk-dialog.js: 对话修改 on the preset shown) }
  */
 export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenerating, onChatChanged, onPresetEdited, onBasicChanged, openTalk }) {
+  // 拖动调整顺序 (web/sort-rows.js): a grip on each row that moves; ↑ 上移 / ↓ 下移 stay for the keyboard and a phone.
+  const grip = () => el('span', { class: 'drag-handle', title: t`拖动调整顺序`, 'aria-hidden': 'true', text: '⋮⋮' })
+  function sortable(list, rows, onMove) {
+    import('/sort-rows.js')
+      .then(({ sortRows }) => sortRows(list, {
+        rows,
+        handle: '.drag-handle',
+        key: 'id',
+        // Not saved: drawn again from what is.
+        onMove: guard(async keys => {
+          try {
+            await onMove(keys)
+          } catch (error) {
+            renderMain()
+            throw error
+          }
+        }),
+      }))
+      .catch(() => {})
+    return list
+  }
+
   const $ = id => document.getElementById(id)
   const state = {
     list: [],
@@ -196,7 +218,8 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
           el('button', { type: 'button', class: 'btn small', text: t`＋ 新增条目`, onclick: guard(addBasicPrompt) }),
           el('p', { class: 'seg-note', text: t`上面的选项决定用哪几段，每段的文字都可以点开改，改过的会标「已改」，点「恢复默认」回到原文。改的是这个选项值下的那一段：比如改了「文风 · 电影感」，换成别的文风时用那种文风的原文，换回来还是你改的。角色卡、你的角色设定和世界书由卡决定，不在这里改。` }),
         ]),
-        el('ul', { class: 'prompt-list', id: 'prompt-list' }, detail.prompts.map(basicRow)),
+        // Only the player's own entries move, among themselves.
+        sortable(el('ul', { class: 'prompt-list', id: 'prompt-list' }, detail.prompts.map(basicRow)), '.prow.movable', keys => saveBasic({ order: keys })),
         el('details', { class: 'basic-preview' }, [el('summary', { text: t`选项和条目加进「每轮回复都要遵守」一节的内容` }), rules]),
         state.list.length ? null : el('p', { class: 'basic-import', text: t`想用 SillyTavern 的预设：在它的「AI 响应配置」里导出预设 JSON（或用 SillyTavern/data/default-user/OpenAI Settings 里的文件），点左上角「导入」或拖进窗口。` }),
       ]),
@@ -240,8 +263,9 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
     const title = el('button', { type: 'button', class: 'prow-name', text: name, title: t`展开编辑`, 'aria-expanded': String(open) })
     const pencil = el('button', { type: 'button', class: 'prow-edit', title: t`编辑内容`, 'aria-label': t`编辑「${name}」`, text: '✎' })
     const more = el('div', { class: 'prow-more' }, el('div'))
-    row = el('li', { class: `prow${p.enabled ? '' : ' off'}${open ? ' open' : ''}`, 'data-id': p.id }, [
+    row = el('li', { class: `prow${p.enabled ? '' : ' off'}${open ? ' open' : ''}${p.kind === 'added' ? ' movable' : ''}`, 'data-id': p.id }, [
       el('div', { class: 'prow-line' }, [
+        p.kind === 'added' ? grip() : null,
         toggle,
         title,
         p.kind === 'added' ? el('span', { class: 'badge role', text: t`自己加的` }) : null,
@@ -412,7 +436,7 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
         el('p', { class: 'seg-note', text: modeNote(detail.postMode) }),
         el('p', { class: 'seg-note', text: POST_MODE_ADVICE }),
       ]),
-      el('ul', { class: 'prompt-list', id: 'prompt-list' }, detail.prompts.map(promptRow)),
+      sortable(el('ul', { class: 'prompt-list', id: 'prompt-list' }, detail.prompts.map(promptRow)), '.prow[data-id]', keys => restructure({ order: keys })),
     )
     filterRows()
   }
@@ -453,7 +477,7 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
 
   function promptRow(p) {
     // Not "history": that class is the chat's 回看历史 panel, positioned over the top-right corner.
-    if (p.id === 'chatHistory') return el('li', { class: 'prow marker chatlog', 'data-id': p.id, text: t`聊天记录` })
+    if (p.id === 'chatHistory') return el('li', { class: 'prow marker chatlog', 'data-id': p.id }, [grip(), el('span', { text: t`聊天记录` })])
     let row = null
     const toggle = el('input', { type: 'checkbox', class: 'switch', checked: p.enabled, 'aria-label': t`启用「${p.name}」` })
     toggle.addEventListener('change', guard(async () => {
@@ -473,6 +497,7 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
     if (p.marker) {
       row = el('li', { class: `prow${p.enabled ? '' : ' off'}`, 'data-id': p.id }, [
         el('div', { class: 'prow-line' }, [
+          grip(),
           toggle,
           el('span', { class: 'prow-name', text: MARKER_LABEL[p.id] ?? p.name }),
           el('span', { class: 'badge role', text: t`角色卡数据` }),
@@ -486,6 +511,7 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
     const more = el('div', { class: 'prow-more' }, el('div'))
     row = el('li', { class: `prow${p.enabled ? '' : ' off'}${state.open.has(p.id) ? ' open' : ''}`, 'data-id': p.id }, [
       el('div', { class: 'prow-line' }, [
+        grip(),
         toggle,
         name,
         ROLE_LABEL[p.role] ? el('span', { class: 'badge role', text: ROLE_LABEL[p.role] }) : null,

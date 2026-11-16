@@ -4,7 +4,8 @@
 import { t } from '/i18n.js'
 import { ailName, banner, countWord, currentLook, enterFight, fitFigure, headIn, heroNow, letters, lookFields, slideSlab, sweep } from '/game-look.js'
 import { fightResult } from '/shared/game/encounter.js'
-import { aliveFoes, alivePartyOf, attemptSetup, autoCommands, canRally, foesOf, needsFriend, needsTarget, partyOf, playerOf, refusal, replay as replayFight, roundRefusal, skillCost, skillsOf, startBattle, step } from '/shared/game/battle.js'
+import { addsText, foeAddsLine } from '/game-growth.js'
+import { aliveFoes, alivePartyOf, attemptSetup, autoCommands, canRally, foesOf, needsFriend, needsTarget, partyOf, playerOf, refusal, replay as replayFight, roundRefusal, shiftCost, skillCost, skillsOf, startBattle, step, tameTry } from '/shared/game/battle.js'
 import { cutOut, spriteFrame } from '/shared/cutout.js'
 
 const SPEED_KEY = 'cicatavern.battleSpeed'
@@ -20,8 +21,15 @@ const remembered = () => {
   }
 }
 
-const SKILL_WORDS = () => ({ strike: t`重击一个敌人`, sweep: t`打所有敌人`, flurry: t`连打两下`, poison: t`打一下，让敌人中毒`, stun: t`打一下，可能打晕`, heal: t`回复生命`, boost: t`提高攻击力，3 回合` })
-const THING_WORDS = () => ({ heal: t`回复生命`, energy: t`回复气力`, damage: t`打一个敌人`, cure: t`解除异常`, boost: t`提高攻击力，3 回合` })
+// How far use has brought a skill (shared/game/growth.js): the fight is told with each one.
+const STAGE_WORDS = () => ['', '', t`二阶`, t`三阶`, t`四阶`, t`五阶`]
+const SKILL_WORDS = () => ({ strike: t`重击一个敌人`, sweep: t`打所有敌人`, flurry: t`连打两下`, poison: t`打一下，让敌人中毒`, stun: t`打一下，可能打晕`, heal: t`回复生命`, boost: t`提高攻击力，3 回合`, finish: t`打一下，对快倒下的敌人翻倍`, mend: t`全队回复生命`, ward: t`护盾，挡下一部分伤害，3 回合`, rally: t`全队攻击力提高，3 回合`, taunt: t`引敌人来打自己，自己少受伤，3 回合` })
+// What a skill leaves on someone, on their tag and in the line that says so.
+const FOE_TAGS = () => ({ weak: t`削弱`, open: t`破绽`, slow: t`迟缓` })
+const STATUS_LINES = () => ({ weaken: name => t`${name}被削弱了`, expose: name => t`${name}露出了破绽`, slow: name => t`${name}的动作慢了下来` })
+// How one a skill has left something on looks: none of these has a picture of its own yet.
+const STATUS_LOOKS = { weaken: 'stun', expose: 'stun', slow: 'stun', ward: 'boost', rally: 'boost', taunt: 'boost' }
+const THING_WORDS = (energy = '') => ({ heal: t`回复生命`, energy: energy ? t`回复${energy}` : t`回复气力`, damage: t`打一个敌人`, cure: t`解除异常`, boost: t`提高攻击力，3 回合` })
 // What the card calls a boss, when it has its own word for one.
 const REFUSALS = (words = {}) => ({ boss: words.boss ? t`${words.boss}面前跑不掉` : t`首领面前跑不掉` })
 const RESULT_WORDS = () => ({ won: t`胜利`, lost: t`战败`, fled: t`逃脱` })
@@ -82,13 +90,17 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
   let state = replayFight(attemptSetup(setup, attempt), actions)
   let speed = remembered()
   let auto = false
+  // 收服: whom the player tried for when the fight was won, if anyone.
+  let tamed = ''
   let busy = false
   let mode = 'choose'
   let pending = null
   let aimed = 0
   let blowing = ''
   const bold = currentLook().look === 'bold'
-  const nameOf = id => (id === 'player' ? t`你` : state.units.find(unit => unit.id === id)?.name ?? '')
+  // 形态: one of the party goes by the form they are in, or have taken for this fight.
+  const shownOf = unit => unit?.shifted ?? unit?.shown ?? unit?.name ?? ''
+  const nameOf = id => (id === 'player' ? t`你` : shownOf(state.units.find(unit => unit.id === id)))
   // 队伍: with others beside the player, each of them is told what to do in turn, and the round is played when all are.
   const party = partyOf(state).length > 1
   let queue = []
@@ -99,7 +111,8 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
   const companionFaces = new Set(partyOf(state).filter(unit => unit.id !== 'player').map(unit => faceFor(unit.name)).filter(Boolean))
   const playerFace = companionFaces.has(hero) ? '' : hero
   /** A picture for one of the party: the player's figure, or the companion's own. */
-  const pictureOf = unit => (unit.id === 'player' ? playerFace : faceFor(unit.name)) || ''
+  // 形态: the face of the form they are in, where the cast has one by that name; else their own.
+  const pictureOf = unit => (unit.id === 'player' ? playerFace : faceFor(shownOf(unit)) || faceFor(unit.name)) || ''
 
   const round = el('span', { class: 'battle-round' })
   const speedButton = el('button', { type: 'button', class: 'battle-top-button', onclick: () => setSpeed(speed === 1 ? 2 : 1) })
@@ -112,9 +125,12 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
   const energyBar = el('i')
   const lifeText = el('b')
   const energyText = el('b')
+  // What holds for the player alone (防御, 强化, 护盾, 挑衅): the party has these on each one's row.
+  const selfTag = el('span', { class: 'self-tag' })
   const selfBox = party ? el('div', { class: 'battle-party' }, partyOf(state).map(memberRow)) : el('div', { class: 'battle-self' }, [
     el('div', { class: 'battle-meter' }, [el('span', { text: words.life || t`生命` }), el('span', { class: 'battle-bar life' }, [lifeLag, lifeBar]), lifeText]),
     el('div', { class: 'battle-meter' }, [el('span', { text: energyWord }), el('span', { class: 'battle-bar energy' }, energyBar), energyText]),
+    selfTag,
   ])
   const order = party ? el('div', { class: 'battle-order', 'aria-hidden': 'true' }) : null
   const panel = el('div', { class: 'battle-panel' })
@@ -165,7 +181,7 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
     foeRow.dataset.count = String(foesOf(state).length)
     foeRow.replaceChildren(...foesOf(state).map((foe, i) => el('button', { type: 'button', class: `battle-foe tier-${foe.tier}`, style: `--i: ${i}`, 'data-id': foe.id, onclick: event => { event.stopPropagation(); aimAt(foe.id) } }, [
       foePicture(foe),
-      el('span', { class: 'foe-name', text: foe.name }),
+      el('span', { class: 'foe-name', text: foe.type ? `${foe.name}·${foe.type}` : foe.name }),
       el('span', { class: 'battle-bar foe' }, [el('i', { class: 'lag' }), el('i')]),
       el('span', { class: 'foe-tag' }),
     ])))
@@ -232,15 +248,16 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
     for (const bar of node.querySelectorAll('.battle-bar i')) bar.style.width = `${(life / foe.maxLife) * 100}%`
     node.classList.toggle('down', life <= 0)
     node.disabled = life <= 0
-    const tags = [foe.charging ? t`⚠ 正在蓄力` : '', foe.stun > 0 ? t`眩晕` : '', foe.poison > 0 ? t`中毒` : ''].filter(Boolean)
-    node.querySelector('.foe-tag').textContent = life > 0 ? tags.join(' ') : t`倒下`
+    const tags = [foe.charging ? t`⚠ 正在蓄力` : '', foe.stun > 0 ? t`眩晕` : '', foe.poison > 0 ? t`中毒` : '', ...Object.entries(FOE_TAGS()).map(([held, word]) => (foe[held] > 0 ? word : ''))].filter(Boolean)
+    // With nothing on it, what its blows leave behind (招式效果), so the player knows before it lands.
+    node.querySelector('.foe-tag').textContent = life > 0 ? tags.join(' ') || foeAddsLine(foe.adds) : t`倒下`
     node.classList.toggle('charging', foe.charging && life > 0)
   }
 
   /** One of the party in the status window: who, how much life, how much energy. A button, for when a heal is being given. */
   function memberRow(unit) {
     const picture = pictureOf(unit)
-    const face = el('span', { class: 'member-face', text: picture ? '' : (unit.id === 'player' ? t`你` : unit.name).slice(0, 1) })
+    const face = el('span', { class: 'member-face', text: picture ? '' : (unit.id === 'player' ? t`你` : shownOf(unit)).slice(0, 1) })
     if (picture && !bold) face.style.backgroundImage = `url("${picture}")`
     // 撞色: the cut-out itself, its head over the band and cut only where the band ends, so its outline is the figure's own.
     if (picture && bold) {
@@ -254,13 +271,15 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
         figure.style.setProperty('--face-side', String(place.face.side))
       })
     }
-    return el('button', { type: 'button', class: 'battle-member', 'data-id': unit.id, disabled: true, onclick: event => { event.stopPropagation(); giveTo(unit.id) } }, [
+    return el('button', { type: 'button', class: `battle-member${unit.commander ? ' commander' : ''}`, 'data-id': unit.id, disabled: true, onclick: event => { event.stopPropagation(); giveTo(unit.id) } }, [
       face,
-      el('span', { class: 'member-name', text: unit.id === 'player' ? t`你` : unit.name }),
+      el('span', { class: 'member-name', text: unit.commander ? t`你（指挥）` : unit.id === 'player' ? (unit.type ? t`你·${unit.type}` : t`你`) : unit.type ? `${shownOf(unit)}·${unit.type}` : shownOf(unit) }),
+      // Each bar says what it counts and how much is left, so two bars are never one number.
+      el('i', { class: 'member-word life', text: words.life || t`生命` }),
       el('span', { class: 'battle-bar life' }, [el('i', { class: 'lag' }), el('i')]),
       el('b', { class: 'member-life' }),
+      el('i', { class: 'member-word energy', text: energyWord }),
       el('span', { class: 'battle-bar energy' }, el('i')),
-      // Only 撞色 shows the number beside its bar.
       el('b', { class: 'member-energy', title: energyWord }),
       el('span', { class: 'member-tag' }),
     ])
@@ -274,9 +293,18 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
     for (const node of [lag, bar]) node.style.width = `${(life / unit.maxLife) * 100}%`
     row.querySelector('.battle-bar.energy i').style.width = `${unit.maxEnergy ? (energy / unit.maxEnergy) * 100 : 0}%`
     row.querySelector('.member-life').replaceChildren(String(life), el('small', { text: `/${unit.maxLife}` }))
-    row.querySelector('.member-energy').textContent = unit.maxEnergy ? String(energy) : ''
+    row.querySelector('.member-energy').replaceChildren(...(unit.maxEnergy ? [String(energy), el('small', { text: `/${unit.maxEnergy}` })] : []))
+    row.classList.toggle('no-energy', !unit.maxEnergy)
     row.classList.toggle('down', life <= 0)
-    row.querySelector('.member-tag').textContent = life <= 0 ? t`倒下` : unit.guarding ? t`防御` : unit.boost > 0 ? t`强化` : ''
+    row.querySelector('.member-tag').textContent = life <= 0 ? t`倒下` : tagsOf(unit)
+  }
+
+  /** What holds for one of the party now, in a few words. `ward`: what the shield can still take, when a blow is being shown. */
+  const tagsOf = (unit, ward = unit.ward) => [unit.guarding ? t`防御` : '', unit.boost > 0 ? t`强化` : '', ward > 0 ? t`护盾 ${ward}` : '', unit.taunt > 0 ? t`挑衅` : '', unit.stun > 0 ? t`眩晕` : '', unit.poison > 0 ? t`掉血` : '', unit.weak > 0 ? t`削弱` : '', unit.open > 0 ? t`破绽` : ''].filter(Boolean).join(' ')
+
+  /** The same for the player alone, who has no row. */
+  function drawSelfTag(ward) {
+    if (!party) selfTag.textContent = tagsOf(playerOf(state), ward)
   }
 
   /** Who is choosing now, and who may be given something. */
@@ -320,12 +348,14 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
     else {
       drawLife()
       drawEnergy()
+      drawSelfTag()
     }
     drawPanel()
   }
 
   // ─── What the player can do ──────────────────────────────────────
-  const actionButton = (label, onclick, key, reason = null) => el('button', { type: 'button', class: 'battle-action', disabled: busy || Boolean(reason), title: reason ?? '', onclick }, [el('span', { class: 'battle-key', text: key }), el('span', { text: label })])
+  // `note`: what it costs, small beside the words, so a long name does not make the whole foot of the page taller.
+  const actionButton = (label, onclick, key, reason = null, note = '') => el('button', { type: 'button', class: `battle-action${note ? ' long' : ''}`, disabled: busy || Boolean(reason), title: reason ?? '', onclick }, [el('span', { class: 'battle-key', text: key }), el('span', {}, [label, note ? el('small', { text: note }) : null])])
 
   function drawPanel() {
     dialog.classList.toggle('aiming', mode === 'target')
@@ -342,24 +372,34 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
       foeNode(foes[aimed % foes.length].id).classList.add('aimed')
       return panel.replaceChildren(el('p', { class: 'battle-hint', text: t`选一个目标` }), backButton())
     }
-    if (mode === 'friend') return panel.replaceChildren(el('p', { class: 'battle-hint', text: t`给谁用：点左边的人` }), backButton())
+    if (mode === 'friend') return panel.replaceChildren(el('p', { class: 'battle-hint', text: t`给谁用：点队伍里的人` }), backButton())
     if (mode === 'skill') return panel.replaceChildren(listOf(skillsOf(state, acting()).map(skillRow), t`还没有技能`), backButton())
     if (mode === 'item') return panel.replaceChildren(listOf(state.things.filter(thing => left(thing) > 0).map(thingRow), t`没有能用的东西`), backButton())
     const who = acting()
     const fleeReason = REFUSALS(words)[refusal(state, { kind: 'flee' })] ?? null
-    const actions = el('div', { class: 'battle-actions' }, [
+    // 指挥: one who leads from behind heartens, hands things out, waits, or calls the retreat.
+    const actions = who.commander ? el('div', { class: 'battle-actions' }, [
+      actionButton(t`鼓劲`, () => choose({ kind: 'cheer' }), '1'),
+      actionButton(t`道具`, () => show('item'), '2'),
+      actionButton(t`观望`, () => choose({ kind: 'guard' }), '3'),
+      actionButton(t`撤退`, () => choose({ kind: 'flee' }), '4', fleeReason),
+    ]) : el('div', { class: 'battle-actions' }, [
       actionButton(t`攻击`, () => choose({ kind: 'attack' }), '1'),
       actionButton(words.skill || t`技能`, () => show('skill'), '2'),
       actionButton(t`道具`, () => show('item'), '3'),
       actionButton(t`防御`, () => choose({ kind: 'guard' }), '4'),
       // Only the player can take the party away.
       who.id === 'player' ? actionButton(t`逃跑`, () => choose({ kind: 'flee' }), '5', fleeReason) : null,
+      // 临时进化: the next 形态 for this fight, for one whose card lets it.
+      who.shift ? actionButton(t`${words.evolve || t`进化`}：${who.shift.name}`, () => choose({ kind: 'shift' }), who.id === 'player' ? '6' : '5', refusal(state, { who: who.id, kind: 'shift' }) === 'energy' ? t`${energyWord}不够` : null, `${energyWord} ${shiftCost(who)}`) : null,
     ])
     const head = party && !busy && !state.over ? el('div', { class: 'battle-who' }, [
-      el('span', { text: who.id === 'player' ? t`你的行动` : t`${who.name}的行动` }),
+      el('span', { text: who.id === 'player' ? t`你的行动` : t`${shownOf(who)}的行动` }),
       queue.length ? el('button', { type: 'button', class: 'battle-back', text: t`上一个`, onclick: () => unsay() }) : null,
     ]) : null
-    panel.replaceChildren(...[head, actions].filter(Boolean))
+    // 眩晕: whatever is chosen, this one's action is lost this round.
+    const dazed = who.stun > 0 && !busy && !state.over ? el('p', { class: 'battle-hint dazed', text: who.id === 'player' ? t`你被打晕了，这一回合出不了手` : t`${who.name}被打晕了，这一回合出不了手` }) : null
+    panel.replaceChildren(...[head, dazed, actions].filter(Boolean))
     slideSlab(el, actions, '.battle-action')
   }
 
@@ -384,8 +424,8 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
     const cost = skillCost(state, skill, who)
     const reason = who.energy < cost ? t`${energyWord}不够` : null
     return el('button', { type: 'button', class: 'battle-row', disabled: busy || Boolean(reason), onclick: () => choose({ kind: 'skill', name: skill.name }) }, [
-      el('b', { text: skill.name }),
-      el('span', { text: SKILL_WORDS()[skill.kind] }),
+      el('b', { text: skill.stage > 1 ? `${skill.name}·${STAGE_WORDS()[skill.stage]}` : skill.name }),
+      el('span', { text: [skill.type ? t`${skill.type}系` : '', SKILL_WORDS()[skill.kind], addsText(skill.adds, energyName)].filter(Boolean).join(t`；`) }),
       el('span', { class: 'battle-cost', text: reason ?? `${energyWord} ${cost}` }),
     ])
   }
@@ -394,7 +434,7 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
     const reason = refusal(state, { kind: 'item', name: thing.name }) === 'nothing' ? t`现在没有要解除的状态` : null
     return el('button', { type: 'button', class: 'battle-row', disabled: busy || Boolean(reason), onclick: () => choose({ kind: 'item', name: thing.name }) }, [
       el('b', { text: left(thing) > 1 ? `${thing.name} ×${left(thing)}` : thing.name }),
-      el('span', { text: reason ?? THING_WORDS()[thing.effect.type] }),
+      el('span', { text: reason ?? THING_WORDS(energyName)[thing.effect.type] }),
     ])
   }
 
@@ -433,6 +473,8 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
   /** Given to one of the party: to oneself, nobody needs naming. */
   function giveTo(id) {
     if (mode !== 'friend' || !pending) return
+    // 鼓劲 is for one who fights.
+    if (pending.kind === 'cheer' && unitOf(id)?.commander) return
     take(id === (pending.who ?? 'player') ? pending : { ...pending, target: id })
   }
 
@@ -458,8 +500,10 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
   const crit = event => (event.crit ? t`暴击！` : '')
 
   function playEvent(event) {
+    // 类型克制: a blow that was the better or the worse for its type says so.
+    const edged = event.edge === 'strong' ? t`，效果拔群` : event.edge === 'weak' ? t`，效果不好` : ''
     const say = text => {
-      line.textContent = text
+      line.textContent = text + edged
     }
     if (event.type === 'hit') {
       const foe = state.units.find(unit => unit.id === event.target)
@@ -474,15 +518,17 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
       const struck = rowOf(event.target ?? 'player')
       if (party) drawMember(unitOf(event.target), { life: event.life })
       else drawLife(event.life)
-      if (!party || event.target === 'player') replay(hurt, 'on')
+      if (event.amount && (!party || event.target === 'player')) replay(hurt, 'on')
       effect('claw', foeRow, { crit: event.crit || event.charged })
-      shake(struck)
-      float(struck, String(event.amount), event.crit ? 'crit' : 'hurt')
+      if (event.amount) shake(struck)
+      if (event.amount) float(struck, String(event.amount), event.crit ? 'crit' : 'hurt')
       sound?.play(event.crit ? 'crit' : 'hit')
       if (event.charged) replay(dialog, 'quake')
       const move = moveOf(event.by)
       const whom = party && event.target !== 'player' ? nameOf(event.target) : ''
-      if (whom) say(event.charged ? t`${crit(event)}${nameOf(event.by)}蓄力一击，${whom}受到 ${event.amount} 点伤害` : move ? t`${crit(event)}${nameOf(event.by)}使出${move}，${whom}受到 ${event.amount} 点伤害` : t`${crit(event)}${nameOf(event.by)}打中了${whom}，${event.amount} 点伤害`)
+      // A shield that took the whole blow: nothing got through.
+      if (!event.amount) say(whom ? t`${nameOf(event.by)}的攻击被${whom}的护盾全挡下了` : t`${nameOf(event.by)}的攻击被护盾全挡下了`)
+      else if (whom) say(event.charged ? t`${crit(event)}${nameOf(event.by)}蓄力一击，${whom}受到 ${event.amount} 点伤害` : move ? t`${crit(event)}${nameOf(event.by)}使出${move}，${whom}受到 ${event.amount} 点伤害` : t`${crit(event)}${nameOf(event.by)}打中了${whom}，${event.amount} 点伤害`)
       else say(event.charged ? t`${crit(event)}${nameOf(event.by)}蓄力一击，你受到 ${event.amount} 点伤害` : move ? t`${crit(event)}${nameOf(event.by)}使出${move}，${event.amount} 点伤害` : t`${crit(event)}${nameOf(event.by)}打中了你，${event.amount} 点伤害`)
     } else if (event.type === 'heal') {
       const row = rowOf(event.target ?? 'player')
@@ -510,6 +556,21 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
         effect('energy', rowOf(event.target ?? 'player'))
         say(party && event.target !== 'player' ? t`${nameOf(event.target)}回复 ${event.amount} 点${energyWord}` : t`回复 ${event.amount} 点${energyWord}`)
       }
+    } else if (event.type === 'shift') {
+      const unit = unitOf(event.by)
+      if (party) {
+        drawMember(unit, { life: event.life, energy: event.energy })
+        const label = rowOf(event.by).querySelector('.member-name')
+        if (label && event.by !== 'player') label.textContent = event.name
+      } else {
+        drawLife(event.life)
+        drawEnergy(event.energy)
+      }
+      effect('boost', rowOf(event.by ?? 'player'))
+      effect('name', foeRow, { text: event.name })
+      sound?.play('heal')
+      const healed = event.heal ? t`，回复 ${event.heal} 点生命` : ''
+      say(event.by === 'player' ? t`你${words.evolve || t`进化`}成了${event.name}${healed}` : t`${unit?.name ?? ''}${words.evolve || t`进化`}成了${event.name}${healed}`)
     } else if (event.type === 'guard') {
       effect('guard', rowOf(event.by ?? 'player'))
       say(party && event.by !== 'player' ? t`${nameOf(event.by)}摆好了防御姿势` : t`你摆好了防御姿势`)
@@ -529,8 +590,59 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
       foeNode(event.by).classList.add('charging')
       foeNode(event.by).querySelector('.foe-tag').textContent = t`⚠ 正在蓄力`
       say(t`${nameOf(event.by)}在蓄力，下回合会打得很重`)
-    } else if (event.type === 'stunned') say(t`${nameOf(event.by)}动弹不得`)
-    else if (event.type === 'status') {
+    } else if (event.type === 'stunned') say(event.by === 'player' ? t`你动弹不得` : t`${nameOf(event.by)}动弹不得`)
+    else if (event.type === 'afflict') {
+      // 招式效果: what a foe's blow left on one of the party.
+      effect(event.status === 'stun' ? 'stun' : 'poison', rowOf(event.target))
+      const name = nameOf(event.target)
+      if (event.target === 'player') say(event.status === 'poison' ? t`你开始持续掉血` : event.status === 'stun' ? t`你被打晕了` : event.status === 'weaken' ? t`你被削弱了` : t`你露出了破绽`)
+      else say(event.status === 'poison' ? t`${name}开始持续掉血` : event.status === 'stun' ? t`${name}被打晕了` : event.status === 'weaken' ? t`${name}被削弱了` : t`${name}露出了破绽`)
+    } else if (event.type === 'upkeep') {
+      // 能量耗尽: a form that feeds on energy takes its share; said only in the party's rows, not in words each round.
+      if (party) drawMember(unitOf(event.target), { energy: event.energy })
+      else drawEnergy(event.energy)
+      return false
+    } else if (event.type === 'revert') {
+      const unit = unitOf(event.by)
+      if (party) {
+        drawMember(unit, {})
+        const label = rowOf(event.by).querySelector('.member-name')
+        if (label && event.by !== 'player') label.textContent = unit.type ? `${unit.shown ?? unit.name}·${unit.type}` : unit.shown ?? unit.name
+      }
+      say(event.by === 'player' ? t`${energyWord}耗尽，你从${event.name}变回了原样` : t`${energyWord}耗尽，${unit?.name ?? ''}从${event.name}变回了原样`)
+    } else if (event.type === 'sap') {
+      if (party) drawMember(unitOf(event.target), { life: event.life })
+      else drawLife(event.life)
+      float(rowOf(event.target), String(event.amount), 'hurt')
+      say(event.target === 'player' ? t`你持续掉血，${event.amount} 点伤害` : t`${nameOf(event.target)}持续掉血，${event.amount} 点伤害`)
+    } else if (event.type === 'drain') {
+      drawFoe(unitOf(event.by), event.life)
+      effect('heal', faceOf(event.by))
+      say(t`${nameOf(event.by)}吸取了 ${event.amount} 点生命`)
+    } else if (event.type === 'cleansed') say(event.target === 'player' ? t`你身上的异常解除了` : t`${nameOf(event.target)}身上的异常解除了`)
+    else if (event.type === 'slowed') say(t`${nameOf(event.by)}动作迟缓，错过了出手`)
+    else if (event.type === 'recoil') {
+      if (party) drawMember(unitOf(event.target), { life: event.life })
+      else drawLife(event.life)
+      say(party && event.target !== 'player' ? t`${nameOf(event.target)}被招式反噬，失去 ${event.amount} 点生命` : t`招式反噬，你失去 ${event.amount} 点生命`)
+    } else if (event.type === 'warded') {
+      if (party) drawMember(unitOf(event.target))
+      else drawSelfTag(event.left)
+      say(party && event.target !== 'player' ? t`${nameOf(event.target)}的护盾挡下了 ${event.amount} 点伤害` : t`护盾挡下了 ${event.amount} 点伤害`)
+    } else if (event.type === 'status' && event.status === 'cheer') {
+      effect('boost', rowOf(event.target))
+      for (const unit of partyOf(state)) drawMember(unit)
+      say(t`你给${nameOf(event.target)}鼓劲，它的攻击力提高了`)
+    } else if (event.type === 'status' && STATUS_LOOKS[event.status]) {
+      const friendly = STATUS_LOOKS[event.status] === 'boost'
+      effect(STATUS_LOOKS[event.status], friendly ? rowOf(event.target) : faceOf(event.target))
+      if (friendly && party) for (const unit of partyOf(state)) drawMember(unit)
+      // Alone, the shield shows as soon as it is up; the rest of what holds is drawn when the round is over.
+      if (!party && event.status === 'ward') drawSelfTag(event.amount)
+      if (!friendly) drawFoe(unitOf(event.target))
+      const whose = party && event.target !== 'player' ? nameOf(event.target) : ''
+      say(event.status === 'ward' ? (whose ? t`${whose}有了护盾，能挡 ${event.amount} 点伤害` : t`你有了护盾，能挡 ${event.amount} 点伤害`) : event.status === 'rally' ? t`全队的攻击力提高了` : event.status === 'taunt' ? (whose ? t`${whose}把敌人引向了自己` : t`你把敌人引向了自己`) : STATUS_LINES()[event.status](nameOf(event.target)))
+    } else if (event.type === 'status') {
       effect(event.status, event.status === 'boost' ? rowOf(event.target) : faceOf(event.target))
       say(event.status === 'poison' ? t`${nameOf(event.target)}中毒了` : event.status === 'stun' ? t`${nameOf(event.target)}被打晕了` : party && event.target !== 'player' ? t`${nameOf(event.target)}的攻击力提高了` : t`你的攻击力提高了`)
     } else if (event.type === 'poison') {
@@ -541,7 +653,9 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
     } else if (event.type === 'down') {
       effect('down', faceOf(event.target))
       say(t`${nameOf(event.target)}倒下了`)
-    } else if (event.type === 'flee') say(event.tier === 'fail' ? t`没跑掉（掷出 ${event.total}，需要 ${event.dc}）` : t`你跑掉了（掷出 ${event.total}，需要 ${event.dc}）`)
+    } else if (event.type === 'cover') say(event.target === 'player' ? t`${nameOf(event.by)}替你挡下了这一击` : event.by === 'player' ? t`你替${nameOf(event.target)}挡下了这一击` : t`${nameOf(event.by)}替${nameOf(event.target)}挡下了这一击`)
+    else if (event.type === 'stand') say(event.target === 'player' ? t`你咬牙撑住了，没有倒下` : t`${nameOf(event.target)}咬牙撑住了，没有倒下`)
+    else if (event.type === 'flee') say(event.tier === 'fail' ? t`没跑掉（掷出 ${event.total}，需要 ${event.dc}）` : t`你跑掉了（掷出 ${event.total}，需要 ${event.dc}）`)
     else return false
     return true
   }
@@ -704,16 +818,27 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
   function showEnd() {
     const player = playerOf(state)
     sound?.play(state.over === 'lost' ? 'lose' : 'win')
+    // A fight that was won is not to be handed to the story by a slip of the hand: that would throw the win away.
+    storyButton.hidden = state.over === 'won'
     line.textContent = ''
     const { op } = fightResult(setup, { over: state.over, attempt, actions })
     const again = el('button', { type: 'button', class: 'battle-action', text: t`重打这场`, onclick: () => retry() })
     const row = (kind, label, value) => el('div', { class: `battle-tally ${kind}` }, [el('span', { class: 'battle-tally-name', text: label }), value])
     const things = Object.entries(op.used).map(([name, count]) => el('span', { class: 'battle-thing' }, [el('b', { text: name }), count > 1 ? el('i', { text: `×${count}` }) : null]))
-    const price = [state.over === 'lost' ? t`重伤：所有属性 −2，3 天` : '', op.rallied ? t`透支：所有属性 −3，7 天` : '', op.shock ? t`理智 −${op.shock}` : ''].filter(Boolean)
+    const price = [state.over === 'lost' && !player.commander ? t`重伤：所有属性 −2，3 天` : '', op.rallied ? t`透支：所有属性 −3，7 天` : '', op.shock ? t`理智 −${op.shock}` : ''].filter(Boolean)
     const rally = canRally(state)
+    // 收服: one of those brought down may be tried for, once. What is shown is the rules' own roll.
+    tamed = ''
+    const tameable = state.over === 'won' ? foesOf(state).filter((foe, i, all) => all.findIndex(other => other.name === foe.name) === i && tameTry(setup, foe)) : []
+    const tameBox = el('div', { class: 'battle-tame' })
+    const drawTame = tried => tameBox.replaceChildren(...(tried
+      ? [el('p', { class: `battle-end-note${tried.ok ? ' ok' : ''}`, text: tried.ok ? t`收服成功：${tamed}加入了${words.party || t`队伍`}（掷出 ${tried.roll}，合计 ${tried.total}，需要 ${tried.dc}）` : t`没能收服${tamed}（掷出 ${tried.roll}，合计 ${tried.total}，需要 ${tried.dc}）` })]
+      : tameable.map(foe => el('button', { type: 'button', class: 'battle-action', text: t`收服${foe.name}（${tameTry(setup, foe).chance}%）`, onclick: () => { tamed = foe.name; drawTame(tameTry(setup, foe)) } }))))
+    drawTame(null)
     endBox.replaceChildren(el('div', { class: `battle-end-card ${state.over}` }, [
       el('div', { class: 'battle-end-word' }, [el('h2', {}, letters(el, RESULT_WORDS()[state.over])), el('i', { class: 'battle-end-seal', text: RESULT_SEALS()[state.over] })]),
-      el('div', { class: 'battle-ledger' }, [
+      // The names' column is as wide as the longest name here, so a companion's name stays on one line.
+      el('div', { class: 'battle-ledger', style: `--tally-name: ${Math.min(9, Math.max(3.6, ...[words.life || t`生命`, ...(op.party ?? []).map(member => member.name)].map(name => [...name].reduce((sum, char) => sum + (char.charCodeAt(0) > 255 ? 1.2 : 0.7), 0))))}em` }, [
         row('rounds', t`回合`, el('b', { text: String(state.round) })),
         row('life', words.life || t`生命`, el('span', { class: 'battle-tally-life' }, [
           el('span', { class: 'battle-bar life' }, el('i', { style: `width: ${(player.life / player.maxLife) * 100}%` })),
@@ -731,6 +856,8 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
           ]))
         }),
       ]),
+      tameable.length ? el('p', { class: 'battle-end-note', text: t`可以试着收服一个，只有一次机会，看你的${words.charm || t`魅力`}。` }) : null,
+      tameable.length ? tameBox : null,
       rally ? el('p', { class: 'battle-end-note', text: t`拼命再战：${words.life || t`生命`}回到四成、${energyWord}回满，再打一次。之后 7 天所有属性 −3。` }) : null,
       el('div', { class: 'battle-end-actions' }, [
         state.over === 'lost' ? again : null,
@@ -772,7 +899,7 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
   function finish(over) {
     auto = false
     close()
-    onEnd?.({ over, attempt, actions })
+    onEnd?.({ over, attempt, actions, ...(over === 'won' && tamed ? { tame: tamed } : {}) })
   }
 
   // ─── Keys ────────────────────────────────────────────────────────
@@ -803,14 +930,17 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
       if (key === 'Enter' || key === ' ') take({ ...pending, target: foes[aimed % foes.length].id })
       return
     }
-    if (mode === 'choose' && /^[1-5]$/.test(key)) panel.querySelectorAll('.battle-action')[Number(key) - 1]?.click()
+    if (mode === 'choose' && /^[1-6]$/.test(key)) panel.querySelectorAll('.battle-action')[Number(key) - 1]?.click()
   }
 
   /** What the player goes in with: how far above them this foe is, what holds them back. */
   function openingWords() {
     const held = (setup.player.ails ?? []).map(ail => ailName(ail.name))
     const out = Math.max(...foesOf(state).map(foe => foe.gap ?? 0)) >= OUT_OF_REACH
-    return [out ? t`对手强得不像话，打不过就逃` : '', held.length ? t`你带着${held.join(t`、`)}上阵` : ''].filter(Boolean).join(t`。`)
+    // One there is no running from: the way out is the story's, where the fight leaves that open.
+    const stuck = Boolean(refusal(state, { kind: 'flee' }))
+    const warned = !out ? '' : !stuck ? t`对手强得不像话，打不过就逃` : forced ? t`对手强得不像话，也逃不掉` : t`对手强得不像话，也逃不掉：撑不住就点上方的「交给剧情」`
+    return [warned, held.length ? t`你带着${held.join(t`、`)}上阵` : ''].filter(Boolean).join(t`。`)
   }
 
   function close() {

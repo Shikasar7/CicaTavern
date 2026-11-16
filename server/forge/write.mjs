@@ -4,6 +4,7 @@
 // as SillyTavern's V3 shape.
 import YAML from 'yaml'
 import { toBookEntry } from './configure.mjs'
+import { BOOK_RULES, carriedEntries, sourceBlock } from './source.mjs'
 import { DEFAULT_LANGUAGE, LONG_TOKENS, TALK_TOKENS, conditionValue, englishCard, eventConditions, looseJson, ownWords, plainWriting, planLanguage, playerRoot, section, stagesOf, typedValue } from './prompts.mjs'
 import { msg } from '../i18n.mjs'
 import { WRITE_REFERENCE_RULES, referenceBlock, userMessage, writingMaterial } from './references.mjs'
@@ -169,16 +170,19 @@ function batchPlan(plan, targets) {
   }
 }
 
-export function entriesRequest(plan, targets, written, references = []) {
+/** @param source - 从小说开始: the book the card is made from; what it has on these entries goes with this request. */
+export function entriesRequest(plan, targets, written, references = [], source = null) {
   const material = referenceBlock(writingMaterial(references))
+  const book = sourceBlock(source, targets)
   const asked = targets.map(e => `- ${e.name}：${e.purpose}\n  写法：${formatOf(e)}${e.staged ? stagedNote(plan, e) : ''}${e.type === '事件' ? eventNote(plan, e) : ''}`).join('\n')
   const content = [
     `<plan>\n${SAMPLE_PLAN(batchPlan(plan, targets))}\n</plan>`,
+    book,
     writtenBlock(written),
     `这次要写下面这些条目：\n${asked}`,
     '每个条目的正文放在 <entry name="条目名"> 和 </entry> 之间，名字和上面一字不差；只写正文，标签外不写别的。',
   ].filter(Boolean).join('\n\n')
-  return { system: writeSystem(planLanguage(plan)) + genderRule(plan) + (material ? WRITE_REFERENCE_RULES : ''), messages: [userMessage(material, content)], maxTokens: LONG_TOKENS, softCap: true }
+  return { system: writeSystem(planLanguage(plan)) + genderRule(plan) + (material ? WRITE_REFERENCE_RULES : '') + (book ? BOOK_RULES : ''), messages: [userMessage(material, content)], maxTokens: LONG_TOKENS, softCap: true }
 }
 
 const greetingSystem = language => `你是角色卡的开场白作者。开场白是玩家进入故事读到的第一段正文，它决定玩家想不想开口。
@@ -201,17 +205,20 @@ function stateLine(plan, greeting) {
   return `\n  这个开场的开局数值和默认不同：${own.map(([path, value]) => `${label(path)}（${path}）= ${value}`).join('；')}。叙述要和它们一致。`
 }
 
-export function greetingsRequest(plan, targets, written, initial, references = []) {
+export function greetingsRequest(plan, targets, written, initial, references = [], source = null) {
   const material = referenceBlock(writingMaterial(references))
+  // An opening is about the people it has on stage: the card's core characters, as the book has them.
+  const book = sourceBlock(source, plan.characters.filter(c => c.kind === 'core').map(c => ({ name: c.name, type: '角色' })))
   const asked = targets.map(g => `- 开场 ${g.index + 1}「${g.title}」：${[g.start, g.scene, g.situation].filter(Boolean).join('；')}。${g.length} 字。${plan.tracking.enabled ? stateLine(plan, g) : ''}`).join('\n')
   const content = [
     `<plan>\n${SAMPLE_PLAN(plan)}\n</plan>`,
+    book,
     writtenBlock(written, 5000),
     initial ? `<initial_state>\n${initial}\n</initial_state>` : '',
     `这次要写下面这些开场白：\n${asked}`,
     '每段开场白放在 <greeting index="序号"> 和 </greeting> 之间，序号和上面一致；只写正文，标签外不写别的。',
   ].filter(Boolean).join('\n\n')
-  return { system: greetingSystem(planLanguage(plan)) + genderRule(plan) + (material ? WRITE_REFERENCE_RULES : ''), messages: [userMessage(material, content)], maxTokens: LONG_TOKENS, softCap: true }
+  return { system: greetingSystem(planLanguage(plan)) + genderRule(plan) + (material ? WRITE_REFERENCE_RULES : '') + (book ? BOOK_RULES : ''), messages: [userMessage(material, content)], maxTokens: LONG_TOKENS, softCap: true }
 }
 
 // ─── Reading written text back ────────────────────────────────────────────
@@ -439,8 +446,11 @@ export function applyIssues(card, issues, language = DEFAULT_LANGUAGE) {
 export const withoutEcho = text => text.replace(/([^。！？!?\n]{3,}?)[，,]\1(?=[，,。！？!?\n]|$)/g, '$1')
 
 /** Rewrite whole pieces: by review issues, or by the user's note on one piece. */
-export function rewriteRequest(plan, card, pieces, references = []) {
+export function rewriteRequest(plan, card, pieces, references = [], source = null) {
   const material = referenceBlock(writingMaterial(references))
+  // 从小说开始: what the book has on the pieces being rewritten, as when they were first written.
+  const about = [...pieces.filter(p => !p.greeting).map(p => card.entries.find(e => e.name === p.name) ?? { name: p.name }), ...(pieces.some(p => p.greeting) ? plan.characters.filter(c => c.kind === 'core').map(c => ({ name: c.name, type: '角色' })) : [])]
+  const book = sourceBlock(source, about)
   const asked = pieces
     .map(p => {
       const notes = p.issues?.length ? p.issues.map(i => `  - ${i.type ? `${i.type}：` : ''}${i.original ? `「${i.original}」` : ''}${i.suggestion ? ` → ${i.suggestion}` : ''}`).join('\n') : `  - ${p.note}`
@@ -451,6 +461,7 @@ export function rewriteRequest(plan, card, pieces, references = []) {
   const others = card.entries.filter(e => e.content && !pieces.some(p => p.name === e.name))
   const content = [
     `<plan>\n${SAMPLE_PLAN(plan)}\n</plan>`,
+    book,
     writtenBlock(others, 4000),
     `按要求改写下面这些内容，输出改好之后的完整正文：\n\n${asked}`,
     '条目放在 <entry name="条目名"> 和 </entry> 之间，开场白放在 <greeting index="序号"> 和 </greeting> 之间，名字和序号与上面一致；标签外不写别的。',
@@ -458,7 +469,7 @@ export function rewriteRequest(plan, card, pieces, references = []) {
   const greetingsOnly = pieces.every(p => p.greeting)
   const language = planLanguage(plan)
   const system = greetingsOnly ? greetingSystem(language) : `${writeSystem(language)}\n开场白另按开场白的写法：头三行抓人，结尾给 <user> 话头，不替 <user> 说话做决定。`
-  return { system: system + genderRule(plan) + (material ? WRITE_REFERENCE_RULES : ''), messages: [userMessage(material, content)], maxTokens: LONG_TOKENS, softCap: true }
+  return { system: system + genderRule(plan) + (material ? WRITE_REFERENCE_RULES : '') + (book ? BOOK_RULES : ''), messages: [userMessage(material, content)], maxTokens: LONG_TOKENS, softCap: true }
 }
 
 // ─── State tracking, built in code ────────────────────────────────────────
@@ -913,8 +924,10 @@ const planRulebook = game => cleanRulebook({ level: 'full', ...kitBook(game), ..
  * @param options.credits - cards whose content this one uses, [{ title, author }]: the player answers for it, so the
  *   card is theirs alone, and its notes end by saying where it came from.
  */
-export function cardJson(plan, card, { author = '', credits = [] } = {}) {
-  const entries = [...card.entries].sort((a, b) => a.order - b.order).map((entry, i) => toBookEntry({ ...entry, content: wrapped(withListedEvents(entry, plan), plan) }, i))
+/** @param source - 从小说开始: the book the card is made from; its entries the card did not write go in as they are. */
+export function cardJson(plan, card, { author = '', credits = [], source = null } = {}) {
+  const made = [...card.entries].sort((a, b) => a.order - b.order).map((entry, i) => toBookEntry({ ...entry, content: wrapped(withListedEvents(entry, plan), plan) }, i))
+  const entries = [...made, ...carriedEntries(source, card.entries).map((entry, i) => toBookEntry(entry, made.length + i))]
   const greetings = card.greetings.map((_, i) => greetingText(plan, card, i)).filter(Boolean)
   const words = stateWords(plan)
   const status = statusSpecOf(plan)

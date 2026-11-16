@@ -936,6 +936,8 @@ export function chatView(chat) {
       truncated: node.api?.truncated || undefined,
       // 联网: what the reply searched for and the pages it drew on.
       search: node.search ?? undefined,
+      // 应用帮助: what the assistant looked up before this reply ({ op, target }).
+      lookups: node.lookups?.length ? node.lookups : undefined,
       // 显示思考过程: the model's own thinking before this reply (not part of the story, never sent back).
       reasoning: node.reasoning || undefined,
       stateChanges: node.stateChanges ?? undefined,
@@ -974,6 +976,8 @@ export function chatView(chat) {
     // Its own 思考 for its replies ('off' or an effort), null following the provider and the settings.
     thinking: chat.thinking ?? null,
     webSearch: Boolean(chat.webSearch),
+    // 应用帮助 (直连对话): on unless turned off.
+    appHelp: chat.appHelp !== false,
     presetId: chat.presetId ?? null,
     presetName: chat.presetName ?? null,
     // null: a chat from before 你的角色 and 文风 were lists, on their first item.

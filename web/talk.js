@@ -41,8 +41,14 @@ const chars = n => n.toLocaleString()
 function referenceTip(item) {
   if (item.kind === 'chat') return item.rounds < item.total ? t`只放得下最近的 ${item.rounds} 轮（共 ${item.total} 轮）。点开看向导读到的内容` : t`共 ${item.rounds} 轮。点开看向导读到的内容`
   if (item.chars >= item.total) return t`点开看向导读到的内容`
-  return item.kind === 'file' ? t`文件太长，只读了前 ${chars(item.chars)} 字（共 ${chars(item.total)} 字）。点开看向导读到的内容` : t`内容太长，长的条目只读了开头（共 ${chars(item.total)} 字）。点开看向导读到的内容`
+  return item.kind === 'file' ? t`文件太长，只读了前 ${chars(item.chars)} 字（共 ${chars(item.total)} 字）。整本小说不要附：做新卡用创作角色卡开始页的「从小说开始」，只要世界书用「世界书 → 从小说抽取」。点开看向导读到的内容` : t`内容太长，长的条目只读了开头（共 ${chars(item.total)} 字）。点开看向导读到的内容`
 }
+
+/** Whether a file was too long to read whole: the model has only its start. */
+export const cutShort = item => item.kind === 'file' && item.chars < item.total
+
+/** What to tell the player about a file that was cut short, and where a long one goes instead. */
+export const cutShortNote = item => t`「${item.name}」太长，只读了前 ${chars(item.chars)} 字（共 ${chars(item.total)} 字），后面的向导看不到。整本小说不要附：做新卡用创作角色卡开始页的「从小说开始」，只要世界书用「世界书 → 从小说抽取」。`
 
 /**
  * References as chips, each with what it is when that was worked out from the file.
@@ -51,14 +57,14 @@ function referenceTip(item) {
  * @param studied - the wizard's: a card it only studies says so, and how little of it the model reads (`brief`).
  */
 export function referenceChips(el, items, { open, drop, locked = false, label = t`向导读：`, studied = false }) {
-  const kind = item => (item.kind === 'card' ? t`角色卡` : item.kind === 'book' ? t`世界书` : '')
+  const kind = item => (item.kind === 'card' ? t`角色卡` : item.kind === 'book' ? t`世界书` : item.kind === 'novel' ? t`小说的梗概和名录` : '')
   const onlyShape = item => studied && Boolean(item.structure) && item.mode !== 'content'
   return [
     el('span', { class: 'ce-refs-note', text: label }),
-    ...items.map(item => el('span', { class: 'ce-ref' }, [
+    ...items.map(item => el('span', { class: cutShort(item) ? 'ce-ref cut-short' : 'ce-ref' }, [
       el('button', { type: 'button', class: 'ce-ref-name', title: onlyShape(item) ? t`只学结构：向导读不到这张卡的内容，只读到它的规模和玩法（${chars(item.brief?.length ?? 0)} 字）。点开看向导读到的内容；要用原文，选下面的「使用原文…」` : referenceTip(item), onclick: () => open(item) }, [
         el('span', { text: item.name }),
-        el('small', { text: onlyShape(item) ? t`角色卡 · 只学结构` : kind(item) ? t`${kind(item)} · ${chars(item.chars)} 字` : t`${chars(item.chars)} 字` }),
+        el('small', { text: onlyShape(item) ? t`角色卡 · 只学结构` : kind(item) ? t`${kind(item)} · ${chars(item.chars)} 字` : cutShort(item) ? t`只读了前 ${chars(item.chars)} 字 / 共 ${chars(item.total)} 字` : t`${chars(item.chars)} 字` }),
       ]),
       el('button', { type: 'button', class: 'ce-ref-off', disabled: locked, 'aria-label': t`去掉「${item.name}」`, title: t`去掉`, text: '×', onclick: () => drop(item) }),
     ])),

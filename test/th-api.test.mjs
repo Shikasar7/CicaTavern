@@ -99,3 +99,29 @@ test('a script\'s calls the stand-in lacks, by where it runs', () => {
   assert.deepEqual(missingCalls(code, 'page'), ['getTavernHelperVersion', 'loadPreset'])
   assert.deepEqual(missingCalls('getVariables()', 'page'), [])
 })
+
+test('a frame that outlives a turn hears the chat move on: the new latest floor, its variables, MVU\'s update event', async () => {
+  const tag = frameShim({ names: { user: '你', char: 'x' }, frame: 'f2', vars: { latest: { 好感: 1 }, message: { 好感: 1 } }, viewport: { height: 800, width: 1200 }, events: {}, messageId: 2, lastId: 2,
+    messages: [{ message_id: 1, name: '你', role: 'user', message: '你好', state: {} }, { message_id: 2, name: 'x', role: 'assistant', message: '嗯', state: { 好感: 1 } }] })
+  const context = frameWindow()
+  const listeners = []
+  context.addEventListener = (type, fn) => { if (type === 'message') listeners.push(fn) }
+  // The page, as the frame knows it before the shim puts its own stand-in `parent` in its place.
+  const page = context.parent
+  vm.runInContext(tag.replace(/^<script>/, '').replace(/<\\?\/script>$/, ''), context, { timeout: 5000 })
+  const heard = []
+  context.eventOn('mag_variable_update_ended', variables => heard.push(variables?.stat_data?.好感))
+  assert.equal(context.getLastMessageId(), 2)
+  const send = data => listeners.forEach(fn => fn({ source: page, data }))
+  send({ agentTavernChat: { lastId: 4, latest: { 好感: 3 }, changed: true, messages: [{ message_id: 3, name: '你', role: 'user', message: '再见', state: {} }, { message_id: 4, name: 'x', role: 'assistant', message: '好', state: { 好感: 3 } }] } })
+  await new Promise(resolve => setTimeout(resolve, 20))
+  assert.equal(context.getLastMessageId(), 4)
+  assert.equal(context.getVariables({ type: 'message', message_id: 'latest' }).stat_data.好感, 3)
+  assert.equal(context.getVariables({ type: 'message', message_id: 2 }).stat_data.好感, 1, 'the floor it stood on keeps its own')
+  assert.deepEqual(heard, [3])
+  // Rolled back to an earlier floor, nothing changed in the variables: no event, and the later floors are gone.
+  send({ agentTavernChat: { lastId: 2, latest: { 好感: 1 }, changed: false, messages: [{ message_id: 2, name: 'x', role: 'assistant', message: '嗯', state: { 好感: 1 } }] } })
+  await new Promise(resolve => setTimeout(resolve, 20))
+  assert.equal(context.getLastMessageId(), 2)
+  assert.deepEqual(heard, [3])
+})

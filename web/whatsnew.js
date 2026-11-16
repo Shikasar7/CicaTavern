@@ -34,7 +34,7 @@ export function initWhatsNew({ el }) {
   let at = 0
 
   async function load() {
-    notes ??= await fetch('/whatsnew/notes.json').then(res => (res.ok ? res.json() : null)).catch(() => null)
+    notes = notes ?? (await fetch('/whatsnew/notes.json').then(res => (res.ok ? res.json() : null)).catch(() => null))
     return Array.isArray(notes?.versions) ? notes.versions : []
   }
 

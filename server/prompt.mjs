@@ -394,7 +394,10 @@ export function openingBlock(opening, names) {
   return `<开场>\n以下是故事的开场，已作为第一段正文展示给玩家：\n${replaceMacros(opening, names)}\n</开场>`
 }
 
-export function buildTurnPrompt({ names, opening, recap = '', entries = [], memory = '', dynamic = [], characterNote = '', stateText, input, replyLength = 0, replyRange = '', presetText = '', reminder = '', marks = false, game = '', injected = { before: [], after: [] } }) {
+// The block of lore sent 紧挨着回复, by its tag (engine.mjs takes it out of every user message but the newest).
+export const NEAR_TAG = '世界书·紧挨回复'
+
+export function buildTurnPrompt({ names, opening, recap = '', entries = [], nearEntries = [], memory = '', dynamic = [], characterNote = '', stateText, input, replyLength = 0, replyRange = '', presetText = '', reminder = '', marks = false, game = '', injected = { before: [], after: [] } }) {
   const parts = []
   const block = (tag, items) => {
     const body = items.filter(item => item.text).map(item => titled(item.title, item.text)).join('\n\n')
@@ -416,6 +419,8 @@ export function buildTurnPrompt({ names, opening, recap = '', entries = [], memo
   block('卡脚本提示', injected.before ?? [])
   parts.push(`<玩家输入>\n${replaceMacros(input, names)}\n</玩家输入>`)
   block('卡脚本提示', injected.after ?? [])
+  // 发送位置 紧挨着回复 (worldbook.mjs sendsNear): after the input, and taken out of the older messages (engine NEAR_LORE).
+  block(NEAR_TAG, nearEntries)
   // After the input, like SillyTavern's post-history prompts.
   if (presetText) parts.push(`<预设指令>\n${presetText}\n</预设指令>`)
   if (marks) parts.push(dialogueFormat())

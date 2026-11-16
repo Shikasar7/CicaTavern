@@ -516,6 +516,18 @@ test('the usage ledger: a first fill that failed (an unreadable chat) is tried a
   await ledger.summary()
 })
 
+test('the usage ledger: the first reply of a new install is counted once (the backfill that makes the file has it)', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'tavern-ledger-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const node = { id: 'n1', role: 'assistant', usage: { input: 10, output: 5 }, model: 'm', createdAt: new Date().toISOString() }
+  const chat = { id: 'c1', title: '茶馆', cardId: 'k', nodes: { n1: node } }
+  const ledger = createLedger({ dirs: { root }, listChats: async () => [chat] })
+  await ledger.recordTurn(chat, node)
+  const second = { ...node, id: 'n2' }
+  await ledger.recordTurn({ ...chat, nodes: { n1: node, n2: second } }, second)
+  assert.equal((await ledger.summary()).today.turns, 2)
+})
+
 test('the usage ledger: a model without a price has no equivalent cost (—), not $0, and is left out of the totals', async t => {
   const root = await mkdtemp(path.join(tmpdir(), 'tavern-ledger-'))
   t.after(() => rm(root, { recursive: true, force: true }))

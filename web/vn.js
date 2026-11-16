@@ -45,6 +45,8 @@ const TRIED_KEY = 'cicatavern.vnTried'
 const FORMAT_KEY = 'cicatavern.vnFormat'
 // 视觉小说预设 offered on going into the mode: 'never' once the player said 不再提示.
 const PRESET_OFFER_KEY = 'cicatavern.vnPresetOffer'
+// The preset a chat had before it took the 视觉小说预设 on the way in, offered back on the way out: { chatId: { id, name } }.
+const PRESET_BEFORE_KEY = 'cicatavern.vnPresetBefore'
 // 游戏规则 offered on going into the mode: { never: true } or { cardId: true } once asked.
 const RULES_OFFER_KEY = 'cicatavern.vnRulesOffer'
 // How far each reply has been read: { chatId: { nodeId: line } }, the chats and replies last read kept.
@@ -249,7 +251,10 @@ export function initVn(deps) {
   cgRow.append(drawCgControl)
   const hideControl = control(t`隐藏`, t`隐藏界面（H），点一下恢复`, () => root.classList.add('bare'))
   const actControl = control(t`✎ 行动`, t`写下你的行动（回车），再点一下收起`, () => compose(!stage.classList.contains('vn-compose')))
-  const exitControl = control(t`退出`, t`退出视觉小说模式`, () => setOn(state.cardId, false))
+  const exitControl = control(t`退出`, t`退出视觉小说模式`, () => exitMode())
+  // Where the top bar (and its switch) is gone: full screen, a phone on its side. Out in the open there, not only under 界面.
+  const exitQuick = control(t`✕ 退出`, t`退出视觉小说模式，回到对话`, () => exitMode())
+  exitQuick.classList.add('vn-exit')
   const saveControl = control(t`存档`, t`存档（F5 快速存档）`, () => saves.open('save'))
   const loadControl = control(t`读档`, t`读档（F9 快速读档）`, () => saves.open('load'))
   // The top bar and its 记忆 are gone in here on a phone on its side and in full screen.
@@ -282,6 +287,7 @@ export function initVn(deps) {
     el('span', { class: 'vn-quick' }, [split(readButton, readMore), split(imageButton, imageMore), soundControl]),
     gameMenu,
     viewMenu,
+    exitQuick,
   ])
   root.append(bg, tint, lookFields(el), actors, memoryLayer, flash, pulse, corner, title, chapter, panel, menu, waitBox, hud.notes, box, controls, scrim, pop, logBox, cgView)
 
@@ -641,7 +647,8 @@ export function initVn(deps) {
     const rows = [switchRow(t`显示立绘`, !choice.off, on => setStage({ off: !on }), t`关掉后只看背景和文字（这张卡记住）`)]
     if (choice.off) return rows
     rows.push(switchRow(t`自动识别出场角色`, !choice.manual, on => setStage({ manual: !on }), t`谁说话谁上场；关掉后台上只有常驻角色`))
-    const people = state.names.filter(entry => !entry.player)
+    // The player too: never on the stage by themselves, but there when chosen here (a cast that likes to see them).
+    const people = [...state.names.filter(entry => !entry.player), ...state.names.filter(entry => entry.player)]
     if (!people.length) return rows
     const fixed = choice.fixed ?? []
     const list = cast.lists.get(cardId)
@@ -649,7 +656,8 @@ export function initVn(deps) {
     const buttons = people.map(entry => {
       const held = fixed.includes(entry.name)
       const bare = list && !spriteSources(cardId, entry, list).length
-      const b = el('button', { type: 'button', 'aria-pressed': String(held), title: bare ? t`还没有立绘，画好才能上台` : '' }, [entry.name, bare ? el('small', { text: t`无立绘` }) : null].filter(Boolean))
+      const title = bare ? t`还没有立绘，画好才能上台` : entry.player ? t`你自己：平时不上台，选上就一直站在台上` : ''
+      const b = el('button', { type: 'button', 'aria-pressed': String(held), title }, [entry.name, entry.player ? el('small', { text: t`你` }) : null, bare ? el('small', { text: t`无立绘` }) : null].filter(Boolean))
       b.addEventListener('click', () => setStage({ fixed: held ? fixed.filter(name => name !== entry.name) : [...fixed, entry.name] }))
       return b
     })
@@ -754,10 +762,75 @@ export function initVn(deps) {
     toggle.classList.remove('fresh')
     const chat = getChat()
     if (!chat) return
-    const on = !isOn(chat.cardId)
-    setOn(chat.cardId, on)
-    if (on) offerPreset(chat).then(() => offerRules(chat))
+    if (isOn(chat.cardId)) return exitMode()
+    setOn(chat.cardId, true)
+    offerPreset(chat).then(() => offerRules(chat))
   })
+
+  /**
+   * Out of the mode (退出, the switch): what is still being drawn for it stops (its errors with it), and the
+   * preset the chat took on the way in may go back.
+   */
+  function exitMode() {
+    const chat = getChat()
+    const cardId = chat?.cardId ?? state.cardId
+    if (!cardId) return
+    setOn(cardId, false)
+    const stopped = stopDrawing(cardId)
+    if (stopped) toast(t`退出了视觉小说模式，还没画完的 ${stopped} 张图停下了`, 3000)
+    if (chat) offerPresetBack(chat)
+  }
+
+  /** Stops the backgrounds and 立绘 drawn or waiting for a card. Not counted as failed: drawn again next time as before. → how many. */
+  function stopDrawing(cardId) {
+    const waiting = art.queue.get(cardId) ?? []
+    const running = art.jobs.get(cardId)
+    art.queue.delete(cardId)
+    if (running) {
+      running.dropped = true
+      running.controller.abort()
+    }
+    if (art.error?.cardId === cardId) art.error = null
+    drawChip()
+    return waiting.length + (running ? 1 : 0)
+  }
+
+  /** The chat took the 视觉小说预设 on the way in (offerPreset) and still has it: offer the one it had. */
+  function offerPresetBack(chat) {
+    const before = recall(PRESET_BEFORE_KEY, {})
+    const was = before[chat.id]
+    if (!was) return
+    // Another window in the way: asked the next time out, not forgotten.
+    if (chat.presetId === VN_ID && deps.usePreset && document.querySelector('dialog[open]')) return
+    delete before[chat.id]
+    remember(PRESET_BEFORE_KEY, before)
+    if (chat.presetId !== VN_ID || !deps.usePreset) return
+    const box = el('dialog', { class: 'dialog vn-preset-offer' })
+    const done = async back => {
+      // A reply being written: its preset is not changed under it, the window waits.
+      if (back && isGenerating()) return toast(t`这一轮还在写，写完再换`)
+      box.close()
+      box.remove()
+      if (!back) return
+      try {
+        await deps.usePreset(chat.id, was.id, was.name)
+      } catch (error) {
+        toast(error.message)
+      }
+    }
+    box.append(
+      el('h2', { text: t`换回原来的预设？` }),
+      el('p', { text: t`进入视觉小说模式时，这个对话改用了视觉小说预设。回到普通对话，可以换回原来的「${was.name}」；也可以继续用视觉小说预设。` }),
+      el('p', { class: 'muted small', text: t`会重建这个对话的固定前缀，下一轮重写一次缓存。之后也可以在「预设」里换。` }),
+      el('div', { class: 'row end' }, [
+        el('button', { type: 'button', class: 'btn', text: t`继续用视觉小说预设`, onclick: () => done(false) }),
+        el('button', { type: 'button', class: 'btn primary', text: t`换回「${was.name}」`, onclick: () => done(true) }),
+      ]),
+    )
+    box.addEventListener('cancel', () => done(false))
+    document.body.append(box)
+    box.showModal()
+  }
 
   // Chats offered the preset in this page already: asked once each.
   const offered = new Set()
@@ -776,6 +849,10 @@ export function initVn(deps) {
         box.remove()
         if (answer === 'never') remember(PRESET_OFFER_KEY, 'never')
         if (answer === 'use') {
+          // What it had, offered back on the way out (the last few chats).
+          const before = Object.entries(recall(PRESET_BEFORE_KEY, {})).filter(([id]) => id !== chat.id).slice(-30)
+          const name = isBuiltinPreset(chat.presetId) ? t`基础预设` : chat.presetName || t`不用预设`
+          remember(PRESET_BEFORE_KEY, Object.fromEntries([...before, [chat.id, { id: chat.presetId ?? '', name }]]))
           try {
             await deps.usePreset(chat.id, VN_ID)
           } catch (error) {
@@ -1386,8 +1463,18 @@ export function initVn(deps) {
     if (gate.kind === 'check') return openMenu(t`检定`, gate.line, [row(1, t`掷骰`, throwDie)], own)
     const start = row(1, gate.resumes ? t`继续战斗` : t`开始战斗`, () => intoFight())
     // Taken from the choices it can still be left; one the story brought on cannot.
-    if (!gate.choice) return openMenu(t`遭遇战`, gate.line, [gate.panel(), start], own)
-    openMenu(t`战斗`, gate.line, [gate.panel(), start, row(2, t`交给剧情`, () => leaveFight()), row(3, t`换个选择`, () => dropFight())], own)
+    // Against those far below, it can be settled without the screen.
+    const quick = gate.quick ? [row(gate.choice ? 4 : 2, t`直接了结`, () => quickFight())] : []
+    // One the story forced can be left to it all the same when there is no winning it.
+    const leave = gate.leavable ? [row(2, t`交给剧情`, () => leaveFight())] : []
+    if (!gate.choice) return openMenu(t`遭遇战`, gate.line, [gate.panel(), start, ...leave, ...quick], own)
+    openMenu(t`战斗`, gate.line, [gate.panel(), start, row(2, t`交给剧情`, () => leaveFight()), row(3, t`换个选择`, () => dropFight()), ...quick], own)
+  }
+
+  function quickFight() {
+    hideMenu()
+    compose(false)
+    deps.quickFight()
   }
 
   function intoFight() {
@@ -1733,6 +1820,7 @@ export function initVn(deps) {
       fromGallery ? null : control(t`回廊`, t`这条故事线上所有的 CG（G）`, () => openGallery(state.cgAt)),
       redraw,
       edit,
+      control(t`导出`, t`把这张存下来`, () => exportCg(all[at])),
       control(t`关闭`, t`Esc`, () => leaveCg()),
       note,
     ].filter(Boolean)))
@@ -1762,6 +1850,7 @@ export function initVn(deps) {
         el('b', { text: t`CG 回廊` }),
         el('span', { class: 'muted small', text: all.length ? t`这条故事线上的 ${all.length} 张配图` : '' }),
         deps.rulesRunning() ? control(t`成就`, t`这条故事线上做到的事`, () => deps.openBag('deeds')) : null,
+        all.length ? control(t`全部导出`, t`这条故事线上的 CG 打成一个压缩包；别的对话和卡的图在「图库」里`, () => exportCgs(chat, all)) : null,
         control(t`关闭`, t`Esc`, () => closeCg()),
       ]),
       all.length ? grid : el('p', { class: 'vn-waiting', text: t`这条故事线上还没有配图。右上角「配图」开着时，新回复会自动配图。` }),
@@ -1773,6 +1862,19 @@ export function initVn(deps) {
     cgView.hidden = false
     ;(from === null ? grid.querySelector('.here') : grid.children[from])?.scrollIntoView({ block: 'center' })
   }
+
+  /** One CG saved under the chat's title and its turn. */
+  function exportCg(cg) {
+    const title = getChat()?.title ?? 'CG'
+    deps.download(cg.src, `${title} ${cgLabel(cg)} ${cg.file}`, cg.file.endsWith('.png') ? 'image/png' : cg.file.endsWith('.webp') ? 'image/webp' : 'image/jpeg')
+  }
+
+  /** CG 回廊's 全部导出: the story line's pictures as a zip, through 图库's export (server/gallery.mjs). */
+  const exportCgs = guard(async (chat, all) => {
+    const { path, count, missing } = await api('/api/gallery/export', { method: 'POST', body: { ids: all.map(cg => `reply:${chat.id}:${cg.file}`) } })
+    deps.download(path, `${chat.title || 'CG'}.zip`, 'application/zip')
+    toast(missing ? t`导出了 ${count} 张，${missing} 张已经不在了` : t`导出了 ${count} 张`, 5000)
+  })
 
   function closeCg() {
     cgView.hidden = true
@@ -1802,7 +1904,7 @@ export function initVn(deps) {
     let where = state.stepWhere ?? latestPlace(chat.path)
     if (writing && !state.stepWhere) {
       // Complete lines only: a header still being written would name half a place.
-      const live = placeIn(writing.slice(0, writing.lastIndexOf('\n') + 1))
+      const live = placeIn(writing.slice(0, writing.lastIndexOf('\n') + 1), { keep: false })
       if (live?.place) where = live
     }
     root.dataset.time = timeOfDay(where?.time) ?? ''
@@ -1897,7 +1999,8 @@ export function initVn(deps) {
       if (data.note) toast(data.note, 6000)
     } catch (error) {
       // Failed or cancelled (取消): not drawn again by itself; 画一张, 画立绘, 重试 and the library still can.
-      art.failed.add(job.key)
+      // Stopped by leaving the mode: as if never asked.
+      if (!art.jobs.get(cardId)?.dropped) art.failed.add(job.key)
       if (!controller.signal.aborted) art.error = { cardId, key: job.key, label: job.label, message: error.message, job }
     } finally {
       clearInterval(tick)
@@ -2189,10 +2292,14 @@ export function initVn(deps) {
     return (await spriteFor(cardId, entry))?.src ?? null
   }
 
-  /** Who may stand on the stage: someone in the cast who is not the player, unless they turned out to have no picture. */
+  /**
+   * Who may stand on the stage: someone in the cast, unless they turned out to have no picture. The player only when
+   * chosen as one of the 常驻角色: then they stand there too, and light up when the story has them speak.
+   */
   function isActor(name) {
     const entry = state.names.find(item => item.name === name)
-    return Boolean(entry && !entry.player && !cast.none.has(`${state.cardId}:${name}`))
+    if (!entry || cast.none.has(`${state.cardId}:${name}`)) return false
+    return !entry.player || (stageOf(state.cardId).fixed ?? []).includes(name)
   }
 
   // name → { box, src }: the ones standing there now.
@@ -2724,7 +2831,7 @@ export function initVn(deps) {
       const thumb = el('div', { class: 'vn-library-sprite' }, [el('span', { class: 'muted small', text: '…' })])
       const kindLabel = el('span', { class: 'muted small' })
       const drawn = list[member.id]
-      const drawnLabel = drawn?.source === 'upload' ? t`上传的立绘` : t`画的立绘`
+      const drawnLabel = { upload: t`上传的立绘`, ref: t`从人设图抠出的立绘` }[drawn?.source] ?? t`画的立绘`
       // A 立绘 there that cannot be cut out says why (the picture shown is then the 人设图, or none).
       const troubleLine = el('span', { class: 'muted small', hidden: true })
       spriteFor(cardId, entry).then(found => {
@@ -2746,6 +2853,10 @@ export function initVn(deps) {
           cast.none.clear()
           renderLibrary()
         }),
+        // 从人设图抠出: the 人设图 in place of a 立绘 drawn or uploaded (without one, it is already what shows).
+        member.ref && drawn && drawn.source !== 'ref' ? act(t`从人设图抠出`, () => fromRef(cardId, member), {
+          title: t`把名册里的人设图去掉纯色背景，当${member.name}的立绘；现在这张留在「旧立绘」里，可以换回来`,
+        }) : null,
         drawn ? act(t`删除`, async () => {
           if (!confirm(t`删除${member.name}的立绘？（人设图不受影响）`)) return
           takeSprites(cardId, await api(`/api/cards/${cardId}/sprites/${member.id}`, { method: 'DELETE' }))
@@ -2762,6 +2873,16 @@ export function initVn(deps) {
     }))
     return [head, grid]
   }
+
+  /** 从人设图抠出: when its background can be cut out (as the stage would), the 人设图 becomes the 立绘. */
+  const fromRef = guard(async (cardId, member) => {
+    if (!(await cutPicture(`/api/cards/${cardId}/roster/${member.id}/ref`))) {
+      return toast(t`${member.name}的人设图背景不是纯色，抠不出来：换一张白底的人设图，或者画一张立绘`, 6000)
+    }
+    takeSprites(cardId, await api(`/api/cards/${cardId}/sprites/${member.id}`, { method: 'PUT', body: { fromRef: true } }))
+    cast.none.clear()
+    renderLibrary()
+  })
 
   /** Someone's expressions: each drawn from their 立绘 (or uploaded), and 画一套 for the ones missing. */
   function faceRow(cardId, entry, member, canDraw, kept = {}) {
@@ -3193,8 +3314,9 @@ export function initVn(deps) {
       const gate = deps.pendingGate()
       if (gate && !isGenerating()) {
         if (key === '1') (gate.kind === 'check' ? throwDie : intoFight)()
-        else if (key === '2' && gate.choice) leaveFight()
+        else if (key === '2' && (gate.choice || gate.leavable)) leaveFight()
         else if (key === '3' && gate.choice) dropFight()
+        else if (key === (gate.choice ? '4' : '2') && gate.quick) quickFight()
       } else if (choice && !isGenerating()) pick(choice)
     } else if (key === 'a' || key === 'A') setAuto(!state.auto)
     else if (key === 'h' || key === 'H') root.classList.toggle('bare')

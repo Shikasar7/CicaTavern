@@ -213,10 +213,10 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 - 也叫：连接超时、timeout、ETIMEDOUT、ECONNRESET、ECONNREFUSED、ENOTFOUND、socket hang up、aborted、海外接口连不上
 - 平台：Windows、Mac、安卓
 - 原文：连不上 {0}：检查 Base URL、网络和代理设置。（{1}）
-- 原文：{0} 连上了，但一直没开始回答（请求超时）：多半是对方太忙、在排队，或者模型思考得太久。稍后再试、调低「努力程度」，或者先换个模型。
+- 原文：{0} 连上了，但一直没开始回答（请求超时）：多半是对方太忙、在排队，或者模型思考得太久。稍后再试、调低「努力程度」，或者先换个模型；本机模型或慢的中转，可以在供应商的「高级」里把「超时」调长。
 - 原文：请求超时
 - 英文：{0} can't be reached: check the Base URL, your network and the proxy settings. ({1})
-- 英文：{0} was reached but never started answering (request timed out): most likely it is too busy or queueing, or the model is thinking for too long. Try again later, lower the effort, or switch to another model for now.
+- 英文：{0} was reached but never started answering (request timed out): most likely it is too busy or queueing, or the model is thinking for too long. Try again later, lower the effort, or switch to another model for now; for a model on this machine or a slow relay, raise the Timeout under the provider's Advanced.
 - 英文：Request timed out
 - 出现在：发出一轮对话、「从接口获取模型列表」、配图时
 - 原因：请求没到达供应商，或者等了很久没回应。括号里是具体情况：「请求超时」是一直没回应，ECONNREFUSED 是地址那头没有服务，ENOTFOUND 是域名查不到（地址写错或网络不通），ECONNRESET、socket hang up 多是被网络或代理掐断。OpenAI、Anthropic、Gemini、OpenRouter 等海外服务在国内通常要走代理。
@@ -371,6 +371,21 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 - 原因：选的文件不是 CicaTavern 导出的剧情存档，或者存档被改过、缺了内容（最后一轮要是模型的叙述）。
 - 解决：在原来的设备上重新导出一次；整段对话要搬到另一台设备的，用对话的「打包」导出再导入。
 
+## 附的文件太长，只读了开头 {#err-reference-cut-short}
+
+- 也叫：小说只读了一部分、参考文本只读 6 万字、只读了前 6 万字、附的小说没读完、向导不知道后面的剧情
+- 原文：「{0}」太长，只读了前 {1} 字（共 {2} 字），后面的向导看不到。整本小说不要附：做新卡用创作角色卡开始页的「从小说开始」，只要世界书用「世界书 → 从小说抽取」。
+- 原文：文件太长，只读了前 {0} 字（共 {1} 字）。整本小说不要附：做新卡用创作角色卡开始页的「从小说开始」，只要世界书用「世界书 → 从小说抽取」。点开看向导读到的内容
+- 英文：“{0}” is long: only the first {1} of {2} characters are read, and the assistant cannot see the rest. Don't attach a whole novel: for a new card use “Start from a novel” on the first page of Create a card, and for a lorebook alone use Lorebook → From a novel.
+- 英文：The file is long: only the first {0} of {1} characters are read. Don't attach a whole novel: for a new card use “Start from a novel” on the first page of Create a card, and for a lorebook alone use Lorebook → From a novel. Open it to see what the assistant reads
+- 出现在：创作角色卡里点「附文件」附上一份超过 6 万字的文本时（弹出提示）；鼠标停在文件名上时
+- 原因：附的资料每一轮都会发给模型，所以一份最多读 6 万字，超出的部分不读。这不是出错，文件已经附上了，只是向导只看得到开头。
+- 解决：见下
+
+1. 设定、人物小传这类不长的资料：拆成几份，或者删掉用不上的部分，再附一次。一共最多 6 份、加起来 10 万字。
+2. 整本小说，想照它做一张卡：把附上的这份去掉，回到创作角色卡的开始页，点「从小说开始」（最多 300 万字），见[从小说开始做卡](features.md#forge-novel)。
+3. 整本小说，只想要一本世界书：打开世界书窗口（左栏「世界书」），点左上角「从小说抽取」，见[从小说抽取世界书](features.md#book-novel)。
+
 ## 附不上资料 {#err-reference}
 
 - 也叫：附文件失败、读对话失败、参考文件传不上
@@ -445,7 +460,7 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 - 原文：{0} 没有写出能用的样式，再试一次，或者换个模型
 - 英文：{0} wrote no styles that can be used. Try again, or use another model
 - 出现在：修改角色卡或检查这张卡 → 调整状态栏 → 定制外观，模型写完一套外观之后
-- 原因：模型写的样式画出来有问题：有东西伸出了状态栏、被藏起来、字太小，或者字和底色太接近；或者写了不允许的东西（要加载的图片和字体、固定在屏幕上的层），这些已经自动去掉；或者回答里没有能用的样式。
+- 原因：模型写的样式画出来有问题：有东西伸出了状态栏、被藏起来、字太小，字和底色太接近，或者几块叠在了一起、小手机里的标题条左右没有对齐；或者写了不允许的东西（要加载的图片和字体、固定在屏幕上的层），这些已经自动去掉；或者回答里没有能用的样式。
 - 解决：见下。
 
 1. 列出问题时，预览还是照样显示。问题不大可以直接点「用这套外观」；想改好就点「让模型修这几处」，每点一次发一次请求。
@@ -589,6 +604,15 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 - 出现在：发出一轮对话时
 - 原因：模型回了空内容。括号里写着 PROHIBITED_CONTENT、SAFETY、content_filter 的，是供应商自己的内容审查拦下了，不是 CicaTavern 的问题，在 CicaTavern 里关不掉；RECITATION 是模型觉得和受版权保护的文字太像。
 - 解决：重试一次；不行就换个模型，或者回滚最近几轮、改掉可能触发审查的内容。Gemini 的 PROHIBITED_CONTENT 换密钥、换中转都一样。
+
+## 助手查了很多次资料还没有回答 {#err-help-lookups}
+
+- 也叫：应用帮助报错、查资料停了、小助手没回答
+- 原文：助手查了 {0} 次资料还没有回答：可以重新生成，或者换个问法
+- 英文：The assistant looked things up {0} times without answering: regenerate, or ask another way
+- 出现在：直连对话打开了「应用帮助」，发出一轮对话时
+- 原因：一轮里助手最多查 6 次帮助资料和源码，查满了还在要查，没给出回答。多半是问题太宽，或者模型没照要求在查完后回答。
+- 解决：点「重新生成」再试；把问题问具体些（哪个界面、哪句报错）；或者换个更强的模型。
 
 ## 回复写到输出上限被截断 {#err-truncated}
 
@@ -832,7 +856,7 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 - 英文：Browser speech error: {0}
 - 出现在：点朗读、试听时
 - 原因：选的是浏览器自带的音色，但这个浏览器（或安卓应用里的系统网页组件）没有朗读功能，或者朗读时出错。安卓版里一般没有浏览器音色。
-- 解决：在 设置 → 配图与朗读 的「朗读来源」里设一个云端服务（Fish Audio、MiniMax、MOSS、Gemini 或供应商的朗读接口）；电脑上可以换 Edge 或 Chrome 打开。
+- 解决：在 设置 → 配图与朗读 的「朗读来源」里设一个云端服务（Fish Audio、MiniMax、MOSS、通义千问、Gemini 或供应商的朗读接口）；电脑上可以换 Edge 或 Chrome 打开。
 
 ## 朗读失败、试听失败 {#err-tts-failed}
 
@@ -843,8 +867,21 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 - 英文：Preview failed ({0})
 - 英文：(this provider may not have an /audio/speech endpoint, or the model name is wrong)
 - 出现在：点朗读、试听时
-- 原因：朗读服务回了错误但没说原因（括号里是状态码），或者选的供应商没有朗读接口。大多数中转站和国内模型服务没有 /audio/speech。
-- 解决：换一个有朗读接口的供应商（比如 OpenAI 官方），或者改用 Fish Audio、MiniMax、MOSS、Gemini 朗读。
+- 原因：朗读服务回了错误但没说原因（括号里是状态码），或者选的供应商没有朗读接口。大多数中转站和国内模型服务没有 /audio/speech，阿里云百炼（通义千问）也没有。
+- 解决：换一个有朗读接口的供应商（比如 OpenAI 官方），或者改用 Fish Audio、MiniMax、MOSS、Gemini 朗读；通义千问的供应商改在「朗读来源 → 通义千问」里用。
+
+## 通义千问朗读报错 {#err-qwen-voice}
+
+- 也叫：Qwen TTS、阿里云百炼、InvalidParameter、音色不属于这个模型
+- 原文：（模型名不对，或者音色不属于这个模型：qwen-audio-3.1 的系统音色以 _v3.1 结尾）
+- 原文：（「{0}」不是阿里云百炼的地址：要选用「通义千问」模板建的供应商）
+- 原文：还没选通义千问朗读用的供应商：在「配图与朗读 → 朗读来源」里选用「通义千问」模板建的那个
+- 英文：(the model name is wrong, or the voice does not belong to this model: qwen-audio-3.1's system voices end in _v3.1)
+- 英文：("{0}" is not an Alibaba Cloud Bailian address: pick the provider made from the "Qwen" template)
+- 英文：No provider for Qwen speech yet: in Pictures & voice → Voice sources, pick the one made from the "Qwen" template
+- 出现在：用通义千问的音色朗读、试听时
+- 原因：百炼的每个模型只认自己的一组音色，3.0 的音色（比如 longanhuan_v3.6）配 3.1 的模型会被拒；或者选的供应商不是百炼的地址；或者还没选供应商。
+- 解决：在 设置 → 配图与朗读 → 朗读来源 → 通义千问 里，选「通义千问」模板建的供应商，音色写这个模型的音色列表里的 voice 参数（留空用 4 个系统音色）。
 
 ## 云端朗读服务报错 {#err-cloud-voice}
 
@@ -1178,6 +1215,19 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 - 原因：页面已经是新版本，后台还在跑旧版本的服务。
 - 解决：关掉所有 CicaTavern 窗口（包括手机上打开的），等一分钟让服务退出，再从桌面图标打开；或者在 设置 → 更多 →「退出应用并停止后台服务」后重新打开。
 
+## 旧手机打开后点哪里都没反应，或提示页面没能启动 {#err-page-cannot-start}
+
+- 也叫：打开没反应、点不动、点击无响应、白屏、荣耀、华为、旧手机、老手机、WebView 太旧、页面没能启动
+- 原文：页面没能启动：{0}
+- 英文：The page could not start. On Android, update Android System WebView (Chrome 80 or later) and open the app again.
+- 出现在：安卓应用或手机浏览器打开 CicaTavern 时
+- 原因：手机系统自带的网页内核（WebView）太旧。国产手机，尤其没有谷歌服务的华为、荣耀，WebView 常年不更新；2.5.0 及以前在 Chrome 89 以下的内核上读不懂页面的脚本，页面出来了但什么都不响应。
+- 解决：更新到 2.6.0 以后，Chrome 80 以上的内核都能打开。还不行，提示里会写「浏览器内核」的版本：
+
+1. 在应用商店搜「Android System WebView」更新（华为、荣耀在「应用市场」搜 WebView）。
+2. 更新后把 CicaTavern 从后台划掉，重新打开。
+3. 还是不行，把提示里的内核版本和第一行的错误发到群里。
+
 ## 打开对话时整个页面没反应 {#err-chat-froze}
 
 - 也叫：卡死、点什么都没反应、界面不动、打开就卡住、重启也没用
@@ -1230,3 +1280,21 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 - 出现在：设置 → 配图与朗读 的「画面提示词」里「从文件读入」
 - 原因：读入的生图规则文件超过了这一栏的长度上限，后面的部分没读进来。
 - 解决：把文件里用不上的部分删掉再读入，或者读入后手动精简。
+
+## 带图片的角色卡压缩包太大 {#err-card-pack-too-large}
+
+- 原文：选的内容太大了（超过 500MB），去掉几项再导出
+- 原文：文件太大（最多 500MB）
+- 英文：Too much picked (over 500MB): untick a few and export again
+- 英文：The file is too large (500MB at most)
+- 出现在：导出角色卡 →「带上图片和设置…」点导出时；「导入角色卡」选了一个 zip 时
+- 原因：一张卡连图片一起的压缩包最多 500MB。导出时勾选的图片加起来超过了，或者导入的 zip 超过了。
+- 解决：导出时去掉几项（场景图和立绘最占地方）再导出；导入的 zip 太大时，请对方少勾几项重新导出。
+
+## 上传的角色卡压缩包过期了 {#err-card-pack-expired}
+
+- 原文：上传的文件已经过期，请重新选一次
+- 英文：The uploaded file has expired: pick it again
+- 出现在：「导入角色卡」选了一个 zip，在「更新这张卡还是另存」的询问上停了很久才点
+- 原因：上传的压缩包只在后台留十分钟，或者中间又导入了另一个压缩包。
+- 解决：重新点「导入角色卡」选一次这个 zip。

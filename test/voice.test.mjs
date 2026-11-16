@@ -12,6 +12,7 @@ import { createStore } from '../server/store.mjs'
 import { audioOf, audioType, cloudError, createCloudSource, listAccountVoices, requestSpec, unpack, wavFromPcm } from '../server/voice/cloud.mjs'
 import { cleanVoiceList, createVoices, prepareText } from '../server/voice/index.mjs'
 import { defaultVoices, speechRequest, takesInstructions } from '../server/voice/openai.mjs'
+import { dashscopeBase, isDashscope, qwenSpeechRequest } from '../server/voice/qwen.mjs'
 
 const MP3 = Buffer.concat([Buffer.from('ID3'), Buffer.from([4, 0, 0, 0, 0, 0, 0]), Buffer.alloc(32, 0x55)])
 const WAV = Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WAVE'), Buffer.alloc(32)])
@@ -20,6 +21,7 @@ const PROVIDER_KEY = 'sk-voice-provider-0001'
 const FISH_KEY = 'fish-secret-key-abcd1234'
 const MINIMAX_KEY = 'eyJminimax.secret.key-wxyz5678'
 const MOSS_KEY = 'sk-moss-secret-key-9876'
+const QWEN_KEY = 'sk-bailian-secret-key-4321'
 const MOSS_VOICE = '94aa4989-c7e9-5007-ae42-ab401823e6c9'
 const FISH_VOICE = '0123456789abcdef0123456789abcdef'
 // No voice service assumed (the release): an emptied address stays empty.
@@ -33,7 +35,7 @@ async function saveMedia(store, patch) {
 /** One fake server for every voice source: /audio/speech, Fish, MiniMax (both sites), MOSS and a voice bridge. */
 async function fakeVoices(t) {
   const seen = []
-  const fake = { pcm: false, minimaxError: 0, bridgeNames: ['jok'], bridgeCloud: [], fishModels: [], minimaxAccount: {}, mossVoices: [] }
+  const fake = { pcm: false, minimaxError: 0, bridgeNames: ['jok'], bridgeCloud: [], fishModels: [], minimaxAccount: {}, mossVoices: [], qwenInline: false }
   const server = createServer(async (req, res) => {
     const chunks = []
     for await (const chunk of req) chunks.push(chunk)
@@ -85,6 +87,14 @@ async function fakeVoices(t) {
       const more = after + 2 < fake.mossVoices.length
       return send(200, { object: 'list', data, has_more: more, ...(more ? { next_cursor: String(after + 2) } : {}) })
     }
+    // Bailian (DashScope): JSON with a link to the audio, or the audio inline; a voice of another model refused.
+    if (req.url === '/dash/api/v1/services/audio/tts/SpeechSynthesizer') {
+      if (req.headers.authorization !== `Bearer ${QWEN_KEY}`) return send(401, { code: 'InvalidApiKey', message: 'Invalid API-key provided.' })
+      if (!/_v3\.1$/.test(json.input?.voice ?? '')) return send(400, { code: 'InvalidParameter', message: 'Voice not supported by this model' })
+      const audio = fake.qwenInline ? { data: MP3.toString('base64'), url: '' } : { data: '', url: `http://127.0.0.1:${server.address().port}/dash-oss/a.mp3?Expires=1&Signature=x`, expires_at: 1 }
+      return send(200, { request_id: 'r', output: { finish_reason: 'stop', audio }, usage: { characters: 4 } })
+    }
+    if (req.url.startsWith('/dash-oss/a.mp3?')) return send(200, MP3, 'audio/mpeg')
     if (req.url === '/api/persona/list') return send(200, { voices: fake.bridgeNames.map(name => ({ name })), cloud_voices: fake.bridgeCloud, current: { voice: 'jok' } })
     if (req.url === '/api/tts') return send(200, WAV, 'audio/wav')
     send(404, { error: 'no' })
@@ -664,4 +674,46 @@ test('默认对白音色 is asked about once per source, and not with one chosen
   assert.deepEqual(sourcesToAsk(sources, { defaultVoice: 'fish:abc', defaultVoiceAsked: [] }), [], 'one chosen: no more questions')
   assert.deepEqual(sourcesToAsk(sources, { autoRead: true }), [], 'a server from before it cannot keep one')
   assert.deepEqual(sourcesToAsk(sources, null), [])
+})
+
+test('通义千问: DashScope\'s own API beside the compatible address, the provider\'s key, emotions as the instruction, the linked audio fetched', async t => {
+  assert.equal(dashscopeBase({ baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1' }), 'https://dashscope.aliyuncs.com/api/v1')
+  assert.equal(dashscopeBase({ baseURL: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/' }), 'https://dashscope-intl.aliyuncs.com/api/v1')
+  assert.equal(dashscopeBase({ baseURL: 'https://ws-1.cn-beijing.maas.aliyuncs.com/compatible-mode/v1' }), 'https://ws-1.cn-beijing.maas.aliyuncs.com/api/v1')
+  assert.equal(isDashscope({ api: 'openai-completions', baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1' }), true)
+  assert.equal(isDashscope({ api: 'openai-completions', baseURL: 'https://api.siliconflow.cn/v1' }), false)
+  assert.deepEqual(qwenSpeechRequest({ model: 'qwen-audio-3.1-tts-plus', voice: 'longanhuan_v3.1', text: '你好', instructions: '' }), { model: 'qwen-audio-3.1-tts-plus', input: { text: '你好', voice: 'longanhuan_v3.1', format: 'mp3' } })
+  assert.equal(qwenSpeechRequest({ model: 'm', voice: 'v', text: 't', instructions: 'x'.repeat(300) }).input.instruction.length, 100)
+  assert.throws(() => cleanMedia({ qwenTtsModel: 'speech-2.8-hd' }), /通义千问朗读模型/)
+  assert.equal(cleanMedia({ qwenTtsModel: '' }).qwenTtsModel, 'qwen-audio-3.1-tts-plus')
+  assert.deepEqual(cleanMedia({ qwenTtsVoices: 'longxiaochun_v3.1 小春' }).qwenTtsVoices, [{ id: 'longxiaochun_v3.1', name: '小春' }])
+
+  const { store, media, calls, fake, base, provider } = await setup(t)
+  const qwen = normalizeProvider({ name: '通义千问', api: 'openai-completions', baseURL: `${base}/dash/compatible-mode/v1`, apiKey: QWEN_KEY, models: ['qwen-plus'] }, null, new Set([provider.id]))
+  await store.saveProviders([...(await store.getProviders()), qwen])
+  assert.equal((await media.voices()).sources.find(s => s.id === 'qwen').configured, false, 'no provider picked yet')
+  await saveMedia(store, { qwenTtsProvider: qwen.id })
+  const source = (await media.voices()).sources.find(s => s.id === 'qwen')
+  assert.equal(source.configured, true)
+  assert.deepEqual(source.voices.map(v => v.ref), ['qwen:longanhuan_v3.1', 'qwen:longanlingxin_v3.1', 'qwen:longanfengyue_v3.1', 'qwen:xunanchuan_v3.1'], 'the system voices while none are listed')
+
+  // The tags become the instruction; the link in the reply is fetched.
+  const spoken = await media.speak({ text: '[害羞地小声] 欢迎回来。', voice: 'qwen:longanhuan_v3.1' })
+  assert.deepEqual([spoken.mime, spoken.buffer], ['audio/mpeg', MP3])
+  const [call] = calls('/dash/api/v1/services/audio/tts/SpeechSynthesizer')
+  assert.equal(call.headers.authorization, `Bearer ${QWEN_KEY}`)
+  assert.deepEqual(call.json, { model: 'qwen-audio-3.1-tts-plus', input: { text: '欢迎回来。', voice: 'longanhuan_v3.1', format: 'mp3', instruction: '用这种语气说：害羞地小声' } })
+  assert.equal(calls('/dash-oss/a.mp3?Expires=1&Signature=x').length, 1)
+
+  // Audio inline (base64) is taken as it is.
+  fake.qwenInline = true
+  await saveMedia(store, { qwenTtsModel: 'qwen-audio-3.1-tts-flash' })
+  const inline = await media.previewVoice({ source: 'qwen' })
+  assert.deepEqual([inline.mime, inline.buffer], ['audio/mpeg', MP3])
+  assert.equal(calls('/dash/api/v1/services/audio/tts/SpeechSynthesizer').at(-1).json.model, 'qwen-audio-3.1-tts-flash')
+
+  // A voice of another model says what to check; the key never shows.
+  const wrong = await media.speak({ text: '还在吗', voice: 'qwen:longanhuan_v3.6' }).catch(error => error)
+  assert.match(wrong.message, /音色不属于这个模型/)
+  assert.doesNotMatch(wrong.message, new RegExp(QWEN_KEY))
 })

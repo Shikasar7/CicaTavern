@@ -8,7 +8,7 @@
 // is applied again (the bar the preset window shows too); keyword entries and
 // templated ones are read every turn.
 import { t } from '/i18n.js'
-import { decodeTextFile } from '/shared/card-edit.js'
+import { NOVEL_TYPES, novelDigest, novelFile, novelPick, novelTop } from '/novel-read.js'
 
 // SillyTavern positions; 2–4 all go to the end of the context here (server/worldbook.mjs isLate).
 const POSITIONS = [[0, t`角色定义前`], [1, t`角色定义后`], [4, t`上下文末尾`]]
@@ -269,9 +269,6 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
   // ─── 从小说抽取 ─────────────────────────────────────────────────────────
   // A novel, or any long text, read a stretch at a time into entries (server/forge/novel.mjs). Nothing is sent till
   // 开始抽取; it goes on in the background, is stopped and taken up again, and ends as a list to pick a new book from.
-  const NOVEL_TYPES = { 人物: t`人物`, 地点: t`地点`, 势力: t`势力`, 物品: t`物品`, 设定: t`设定`, 事件: t`事件` } // i18n-ignore: the kinds as the server names them
-  const count = n => Number(n ?? 0).toLocaleString()
-
   async function openNovel() {
     state.novelOpen = true
     state.selected = null
@@ -307,18 +304,10 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
 
   async function pickNovel(file) {
     if (!file) return
-    const text = decodeTextFile(await file.arrayBuffer())
     state.novelPicked = null
     state.novelSeen = null
     state.novelName = undefined
-    await novelCall('', { method: 'POST', body: { name: file.name, text } })
-  }
-
-  function novelStepText(job) {
-    const [, kind, at, total] = /^(read|merge):(\d+):(\d+)$/.exec(job.step ?? '') ?? []
-    if (kind === 'read') return t`正在读第 ${at} / ${total} 段…可以关掉窗口，回来再看。`
-    if (kind === 'merge') return t`都读完了，正在把同一个名字的几段笔记合成一条：第 ${at} / ${total} 批…`
-    return t`正在发给模型…`
+    await novelCall('', { method: 'POST', body: await novelFile(file) })
   }
 
   function renderNovel() {
@@ -329,66 +318,41 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
       return
     }
     if (!novel) {
-      const file = el('input', { type: 'file', accept: '.txt,.md,.text,text/plain,text/markdown', hidden: true, onchange: guard(async event => {
-        const [picked] = event.target.files
-        event.target.value = ''
-        await pickNovel(picked)
-      }) })
       $('book-main').replaceChildren(head, el('div', { class: 'book-novel' }, [
         el('p', { text: t`把一部小说、一份很长的设定整本读完，抽成一本世界书：人物、地点、势力、物品、设定和发生过的大事，一样一条，对话里提到名字时才发给模型。` }),
         el('p', { class: 'hint', text: t`选一个文本文件（txt、md，UTF-8 和 GBK 都认，最多 300 万字）。选了只是切好段、估出用量，点「开始抽取」才发送。Word 和 PDF 先另存成 txt。` }),
-        el('label', { class: 'btn primary small' }, [t`选文件…`, file]),
+        novelPick(el, guard, pickNovel),
       ]))
       return
     }
-    const { job, estimate, stage } = novel
+    const { job, stage } = novel
     const busy = Boolean(job)
-    const limit = el('input', { type: 'number', min: 1, max: novel.stretches.length, value: novel.limit, disabled: busy, 'aria-label': t`读前几段`, onchange: () => novelCall('', { method: 'PUT', body: { limit: Number(limit.value) || 0 } }) })
-    const costs = part => (part.cost == null ? '' : t`，大约 $${part.cost.toFixed(2)}`)
-    // The part asked for is read and there is more of the text: it can go on to the end.
-    const more = stage === 'ready' && novel.rest?.stretches > 0 ? novel.rest : null
-    const left = !estimate.ready
-      ? stage === 'ready' && !more ? '' : t`还没有可用的模型：先在「设置 → 模型」里添加供应商，选一个默认模型。`
-      : stage === 'reading'
-        ? t`还要读 ${estimate.stretches} 段：发给 ${estimate.model}，大约 ${count(estimate.input)} 输入、${count(estimate.output)} 输出 token${costs(estimate)}。读完后合并同名的条目还要再花一两成。思考多的模型会更高。`
-        : stage === 'merging'
-          ? t`都读完了，还有 ${novel.toMerge} 批同名的笔记要让模型合成一条。`
-          : more ? t`后面还有 ${more.stretches} 段没读：都读完大约 ${count(more.input)} 输入、${count(more.output)} 输出 token${costs(more)}。` : ''
-    const found = Object.entries(novel.counts).filter(([, n]) => n).map(([type, n]) => t`${NOVEL_TYPES[type] ?? type} ${n}`).join(t` · `)
-    const top = el('div', { class: 'book-novel' }, [
-      el('p', {}, [el('b', { text: novel.name }), el('span', { class: 'hint', text: t` · ${count(novel.chars)} 字 · 切成 ${novel.stretches.length} 段` })]),
-      el('p', { class: 'hint', text: t`已经读了 ${novel.done} 段${found ? t`，记下：${found}` : ''}。` }),
-      novel.failed.length ? el('p', { class: 'ce-outcome warn', text: t`第 ${novel.failed.join(t`、`)} 段模型没有按格式回答，跳过了；里面的内容没有记下。` }) : null,
-      stage === 'reading' && !busy ? el('label', { class: 'book-novel-limit' }, [el('span', { text: t`只读前` }), limit, el('span', { text: t`段（共 ${novel.stretches.length} 段；想先试试，填个小的数）` })]) : null,
-      left ? el('p', { class: 'hint', text: left }) : null,
-      novel.error && !busy ? el('p', { class: 'ce-outcome warn', text: novel.error }) : null,
-      el('div', { class: 'row book-novel-actions' }, [
-        busy
-          ? el('span', { class: 'forge-working' }, [el('span', { class: 'dots' }), el('span', { text: novelStepText(job) })])
-          : stage !== 'ready'
-            ? el('button', { type: 'button', class: 'btn primary small', disabled: !estimate.ready, text: novel.done ? t`接着抽` : t`开始抽取`, onclick: () => novelCall('/run', { method: 'POST' }) })
-            : more
-              ? el('button', { type: 'button', class: 'btn small', disabled: !estimate.ready, text: t`把剩下的 ${more.stretches} 段也读完`, onclick: guard(async () => {
-                await api('/api/novel', { method: 'PUT', body: { limit: 0 } })
-                await novelCall('/run', { method: 'POST' })
-              }) })
-              : null,
-        busy ? el('button', { type: 'button', class: 'btn small', text: t`停下`, title: t`读完的几段都留着，之后可以接着抽`, onclick: guard(async () => {
-          await api('/api/novel/stop', { method: 'POST' })
-          state.novel = await api('/api/novel')
-          renderMain()
-          pollNovel()
-        }) }) : null,
-        el('span', { class: 'grow' }),
-        busy ? null : el('button', { type: 'button', class: 'btn ghost small', text: t`不要了`, title: t`丢掉这部小说和已经记下的内容`, onclick: () => { if (confirm(t`丢掉「${novel.name}」和已经记下的 ${novel.entries.length} 条？`)) novelCall('', { method: 'DELETE' }) } }),
-      ]),
-    ].filter(Boolean))
+    const top = novelTop(el, novel, {
+      limit: n => novelCall('', { method: 'PUT', body: { limit: n } }),
+      run: () => novelCall('/run', { method: 'POST' }),
+      runAll: guard(async () => {
+        await api('/api/novel', { method: 'PUT', body: { limit: 0 } })
+        await novelCall('/run', { method: 'POST' })
+      }),
+      stop: guard(async () => {
+        await api('/api/novel/stop', { method: 'POST' })
+        state.novel = await api('/api/novel')
+        renderMain()
+        pollNovel()
+      }),
+      drop: () => novelCall('', { method: 'DELETE' }),
+    })
+    // 梗概: written on asking, and then an entry of the book that is always there.
+    const digest = novelDigest(el, novel, {
+      write: () => novelCall('/digest', { method: 'POST' }),
+      keep: value => novelCall('', { method: 'PUT', body: { digest: value } }),
+    }, t`写成世界书时放在最前面，作为一条常驻条目，让模型一直知道全书的大概。不想要就留空`)
     if (!novel.entries.length) {
       $('book-main').replaceChildren(head, top)
       return
     }
     // What was noted, a kind at a time: all of it picked till the user unpicks.
-    state.novelPicked ??= new Set(novel.entries.map(entry => entry.name))
+    state.novelPicked = state.novelPicked ?? (new Set(novel.entries.map(entry => entry.name)))
     for (const entry of novel.entries) if (!state.novelSeen?.has(entry.name)) state.novelPicked.add(entry.name)
     state.novelSeen = new Set(novel.entries.map(entry => entry.name))
     const picked = state.novelPicked
@@ -398,7 +362,7 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
       const book = await api('/api/novel/save', { method: 'POST', body: { name: name.value, picked: [...picked] } })
       await refreshBooks()
       onChanged?.()
-      toast(t`已写成世界书「${book.name}」${book.entries} 条。小说和笔记还留着，不用了点「不要了」。`)
+      toast(t`已写成世界书「${book.name}」${book.entries} 条。小说和笔记还留着，不用了点「不要了」。` + (book.off ? t`其中 ${book.off} 条的名字只有一个字，先关着：一个字的关键词到处都会触发。要用就给它加个长一点的关键词再打开。` : ''), book.off ? 10000 : undefined)
       await select(book.id)
     }) })
     const groups = Object.keys(NOVEL_TYPES).flatMap(type => {
@@ -417,13 +381,13 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
         ]))),
       ])]
     })
-    $('book-main').replaceChildren(head, top, el('div', { class: 'book-novel' }, [
+    $('book-main').replaceChildren(...[head, top, digest, el('div', { class: 'book-novel' }, [
       stage === 'ready'
         ? el('p', { class: 'hint', text: t`读完了。不要的条目去掉勾，写成世界书后每一条还能再改；它是一本单独的世界书，挂到卡上才生效。` })
         : el('p', { class: 'hint', text: t`还没读完，下面是到现在记下的。现在就写成世界书也可以，同名的几段笔记会原样接在一起。` }),
       el('div', { class: 'row book-novel-save' }, [name, save]),
       ...groups,
-    ]))
+    ])].filter(Boolean))
   }
 
   function renderMain() {
@@ -449,7 +413,7 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
       ]),
       state.picking ? bulkBar() : null,
       detail.entries.length
-        ? el('ul', { class: `prompt-list book-entries${state.picking ? ' picking' : ''}`, id: 'book-entries' }, detail.entries.map(entryRow))
+        ? sortable(el('ul', { class: `prompt-list book-entries${state.picking ? ' picking' : ''}`, id: 'book-entries' }, detail.entries.map(entryRow)))
         : el('div', { class: 'preset-empty' }, [
             el('p', { text: t`这本世界书还没有条目。` }),
             el('p', { class: 'small', text: t`可以一条条新增，也可以说说这本书写什么，让向导写出来。` }),
@@ -675,6 +639,7 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
         if (state.picking && !event.target.closest('input, button')) setPicked(!state.picked.has(e.uid))
       }
       return el('div', { class: 'prow-line', onclick: tick }, [
+        el('span', { class: 'drag-handle', title: t`拖动调整在列表里的位置（发给模型的先后看「顺序」）`, 'aria-hidden': 'true', text: '⋮⋮' }),
         pick,
         toggle,
         name,
@@ -719,6 +684,26 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
     return row
   }
 
+  // 拖动调整顺序 (web/sort-rows.js): where an entry sits in the list; its 顺序 number decides where it goes in the prompt.
+  function sortable(list) {
+    import('/sort-rows.js')
+      .then(({ sortRows }) => sortRows(list, {
+        rows: '.prow[data-uid]',
+        handle: '.drag-handle',
+        key: 'uid',
+        onMove: guard(async uids => {
+          try {
+            await save({ arrange: uids }, { quiet: true })
+          } catch (error) {
+            renderMain()
+            throw error
+          }
+        }),
+      }))
+      .catch(() => {})
+    return list
+  }
+
   /** Name, trigger, position, order, keys, matching and the text; each saves when it changes. */
   function fillEditor(more, e, row) {
     const holder = more.firstChild
@@ -735,6 +720,11 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
       known ? null : el('option', { value: String(e.position), text: t`保持原样（SillyTavern 位置 ${e.position}）`, selected: true }),
     ])
     const order = el('input', { type: 'number', step: '1', value: String(e.order), 'aria-label': t`顺序` })
+    // 发送位置 of a keyword entry (server/worldbook.mjs sendsNear).
+    const send = el('select', { 'aria-label': t`发送位置`, title: t`随这一轮：和你这一轮的话一起发，留在历史里，之后几轮不再重复发（省钱，缓存稳）。紧挨着回复：放在你这一轮的话后面、离回复最近，每轮提到都重发，旧的拿掉，像预设的「同酒馆」：影响更大，每轮多一点缓存写入。` }, [
+      el('option', { value: 'turn', text: t`随这一轮（默认）`, selected: e.extra?.cicaSend !== 'near' }),
+      el('option', { value: 'near', text: t`紧挨着回复`, selected: e.extra?.cicaSend === 'near' }),
+    ])
     const keys = el('input', { value: e.keys.join(', '), placeholder: t`用逗号分开，例如：雪, 小雪`, spellcheck: 'false', 'aria-label': t`关键词` })
     const secondary = e.secondaryKeys?.length ? el('input', { value: e.secondaryKeys.join(', '), spellcheck: 'false', 'aria-label': t`次要关键词` }) : null
     const area = el('textarea', { spellcheck: 'false', 'aria-label': t`内容` })
@@ -753,6 +743,7 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
     edit(kind, () => ({ constant: kind.value === 'constant' }))
     edit(position, () => ({ position: Number(position.value) }))
     edit(order, () => ({ order: Number(order.value) }))
+    edit(send, () => ({ send: send.value }))
     // Keys come back cleaned, written the way the field shows them.
     edit(keys, () => ({ keys: splitKeys(keys.value) }), () => (keys.value = e.keys.join(', ')))
     if (secondary) edit(secondary, () => ({ secondaryKeys: splitKeys(secondary.value) }), () => (secondary.value = e.secondaryKeys.join(', ')))
@@ -773,6 +764,19 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
       }))
       return el('label', { class: 'check-row book-check', title: tip }, [box, el('span', { text: label })])
     }
+    // 递归 (server/worldbook.mjs recursionFlags): SillyTavern's three switches, kept in the entry's extra.
+    const recursion = (key, label, tip) => {
+      const box = el('input', { type: 'checkbox', checked: Boolean(e.extra?.[key]) })
+      box.addEventListener('change', guard(async () => {
+        try {
+          await save({ entries: [{ uid: e.uid, [key]: box.checked }] })
+        } catch (error) {
+          box.checked = !box.checked
+          throw error
+        }
+      }))
+      return el('label', { class: 'check-row book-check', title: tip }, [box, el('span', { text: label })])
+    }
 
     holder.append(el('div', { class: 'prompt-editor' }, [
       el('div', { class: 'prompt-fields' }, [
@@ -780,11 +784,18 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
         field(t`触发方式`, kind),
         field(t`位置`, position),
         field(t`顺序`, order),
+        e.constant ? null : field(t`发送位置`, send),
         field(t`关键词`, keys, 'wide'),
         secondary ? field(t`次要关键词`, secondary, 'wide') : null,
         el('div', { class: 'prompt-field wide book-match' }, [
           match('caseSensitive', t`区分大小写`, t`关键词的大小写要和对话里一致才算提到`),
           match('wholeWords', t`整词匹配`, t`英文关键词要作为完整的词出现，lamp 不算提到 lamps`),
+        ]),
+        e.constant ? null : el('div', { class: 'prompt-field wide book-match book-recursion' }, [
+          el('span', { class: 'book-recursion-label', text: t`递归` }),
+          recursion('excludeRecursion', t`不被别的条目触发`, t`只有对话里提到关键词才发；别的条目内容里提到不算`),
+          recursion('preventRecursion', t`不触发别的条目`, t`这一条的内容里提到别的条目的关键词，不会把它们带出来`),
+          recursion('delayUntilRecursion', t`只能被别的条目触发`, t`对话里直接提到关键词不发；要先触发一条内容里提到它的条目，才一起发`),
         ]),
       ]),
       el('p', { class: 'prompt-note', text: noteOf(e) }),
@@ -811,7 +822,12 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
   /** The book's entries arrived again (a save, a move): kept objects stay bound to open editors. */
   function takeEntries(entries) {
     const byUid = new Map(state.detail.entries.map(e => [e.uid, e]))
-    state.detail.entries = entries.map(fresh => Object.assign(byUid.get(fresh.uid) ?? {}, fresh))
+    state.detail.entries = entries.map(fresh => {
+      const kept = byUid.get(fresh.uid) ?? {}
+      // A switch turned off can take the last of the entry's extra with it.
+      if (!('extra' in fresh)) delete kept.extra
+      return Object.assign(kept, fresh)
+    })
     const nav = navOf(state.detail.id)
     if (nav) nav.counts = countEntries(state.detail.entries)
     const kept = new Set(entries.map(e => e.uid))

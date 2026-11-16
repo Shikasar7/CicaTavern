@@ -122,8 +122,10 @@ test('the plan carries the front: all on at first, the words the summary\'s till
     tagline: '深夜便利店里，只在雨夜出现的女孩',
     lines: ['她每次来都买同一种热饮。', '你是唯一记得她的人！'],
     openings: [{ title: '第一场雨', brief: '凌晨两点，店里' }, { title: '第七场雨', brief: '傍晚，店门口' }],
+    // 版式: the one that goes with the bar's (跟着主题 till one is picked; this plan's theme takes 卡片式, and the cover with it 书页式).
+    layout: 'book',
   })
-  assert.deepEqual([first.plan.status.portrait, first.plan.status.scene, first.plan.status.effect], [true, true, ''])
+  assert.deepEqual([first.plan.status.portrait, first.plan.status.scene, first.plan.status.effect, first.plan.status.layout], [true, true, '', 'card'])
   // An opening's own list, written as text, is its items (not the text cut at its commas).
   assert.equal(first.plan.greetings[1].state['主角.随身'], '伞、她落下的发圈')
   // What the pictures go by is given to the plan once, off the bar: a face from the words the faces are known by,
@@ -310,7 +312,8 @@ test('the pages SillyTavern gets never empty the body they are in (Tavern Helper
   assert.equal(saved.regexScripts.find(script => script.id === 'cicatavern-status-bar').maxDepth, 2)
   bar.maxDepth = null
   assert.equal(depth(old), 2, 'one saved before goes out kept to them too')
-  await forge.update('frontdraft', { look: null, front: { phone: false, effect: '' } })
+  // No 版式 either: that too is drawn by the whole page.
+  await forge.update('frontdraft', { look: null, front: { phone: false, effect: '', layout: '' } })
   const small = await store.getCard((await forge.saveCard('frontdraft', { avatar: PNG })).card.id)
   assert.equal(small.regexScripts.find(script => script.id === 'cicatavern-status-bar').maxDepth, null)
   assert.equal(depth(small), null)

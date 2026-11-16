@@ -52,7 +52,7 @@ export function createFramePermissions(storage) {
   /** What the keys before this one allowed, moved over once. */
   function migrate() {
     const all = {}
-    const entry = cardId => (all[cardId] ??= {})
+    const entry = cardId => (all[cardId] = all[cardId] ?? ({}))
     const generate = readOld(OLD_GENERATE)
     if (Array.isArray(generate)) for (const cardId of generate) if (typeof cardId === 'string') entry(cardId).generate = 'allow'
     for (const [key, kind] of [[OLD_RELAY, 'relay'], [OLD_LOCAL, 'local']]) {
@@ -60,7 +60,7 @@ export function createFramePermissions(storage) {
       if (!isObject(map)) continue
       for (const [cardId, origins] of Object.entries(map)) {
         if (!Array.isArray(origins)) continue
-        for (const origin of origins) if (typeof origin === 'string') (entry(cardId)[kind] ??= {})[origin] = 'allow'
+        for (const origin of origins) if (typeof origin === 'string') (entry(cardId)[kind] = entry(cardId)[kind] ?? ({}))[origin] = 'allow'
       }
     }
     const moved = clean(all)

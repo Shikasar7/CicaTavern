@@ -23,7 +23,7 @@ export function initCardPermissions({ el, permissions, onRelayChange }) {
   }
 
   function open(card) {
-    dialog ??= document.body.appendChild(el('dialog', { class: 'dialog card-permissions', 'aria-label': t`卡片界面权限` }))
+    dialog = dialog ?? (document.body.appendChild(el('dialog', { class: 'dialog card-permissions', 'aria-label': t`卡片界面权限` })))
     const render = () => {
       const kept = permissions.of(card.id)
       const row = (title, hint, control) => el('div', { class: 'cp-row' }, [el('div', { class: 'cp-text' }, [el('span', { class: 'cp-title', text: title }), el('span', { class: 'hint', text: hint })]), control])

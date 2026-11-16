@@ -3,6 +3,7 @@
 //   fish:<reference_id>           Fish Audio (cloud.mjs)
 //   minimax:<voice_id>            MiniMax (cloud.mjs)
 //   moss:<voice_id>               MOSS, the MOSI platform's moss-tts (cloud.mjs)
+//   qwen:<voice>                  Qwen-Audio-TTS via a provider on Alibaba Cloud Bailian (qwen.mjs)
 //   gemini:<voice name>           Gemini's speech models via a provider with Google's key (gemini.mjs)
 //   bridge:<name>, or no prefix   an external voice service (bridge.mjs)
 // browser:<name> is spoken by the page and never reaches the server.
@@ -21,6 +22,7 @@ import { createBridge } from './bridge.mjs'
 import { AUDIO_EXT, audioOf, createCloudSource } from './cloud.mjs'
 import { createGeminiSource } from './gemini.mjs'
 import { createOpenaiSource, instructionsFor } from './openai.mjs'
+import { createQwenSource } from './qwen.mjs'
 import { msg } from '../i18n.mjs'
 
 // Services whose key the tavern keeps (voice-keys.json); a provider's key stays in providers.json.
@@ -99,8 +101,10 @@ export function createVoices({ root, settings, providers, proxy = () => null, fe
   const bridge = createBridge({ root, features })
   // The phone has no 设置 → 网络代理 to point to.
   const proxyMenu = features?.proxy !== false
-  const sources = [createOpenaiSource(), createCloudSource('fish', { urls, proxyMenu }), createCloudSource('minimax', { urls, proxyMenu }), createCloudSource('moss', { urls, proxyMenu }), createGeminiSource()]
+  const sources = [createOpenaiSource(), createCloudSource('fish', { urls, proxyMenu }), createCloudSource('minimax', { urls, proxyMenu }), createCloudSource('moss', { urls, proxyMenu }), createQwenSource(), createGeminiSource()]
   const byId = new Map(sources.map(source => [source.id, source]))
+  // Sources speaking through a provider: what is missing is a provider and a model, not a key.
+  const viaProvider = new Set(['openai', 'qwen', 'gemini'])
   const ttsDir = path.join(root, 'media', 'tts')
 
   // The cloud services' keys live in their own file, so /api/settings and the page never carry them.
@@ -158,7 +162,7 @@ export function createVoices({ root, settings, providers, proxy = () => null, fe
     const target = source?.target(value.slice(cut + 1))
     // A source the tavern has no key for: the voice service may still know the name (or say it is down).
     // A provider's voice says what is wrong with its provider rather than going to the bridge.
-    if (source && target && (source.configured(ctx) || source.id === 'openai' || source.id === 'gemini' || !hasBridge)) {
+    if (source && target && (source.configured(ctx) || viaProvider.has(source.id) || !hasBridge)) {
       const model = source.model(ctx.media)
       return { source, ...target, emotion: source.emotion(ctx.media), speaker: `${source.id}|${model}|${value.slice(cut + 1)}` }
     }
@@ -281,7 +285,7 @@ export function createVoices({ root, settings, providers, proxy = () => null, fe
     if (!ref && sourceId) {
       const source = byId.get(sourceId)
       if (!source) throw httpError(400, msg`不认识的语音来源：${sourceId}`)
-      if (!source.configured(ctx)) throw httpError(400, source.id === 'openai' || source.id === 'gemini' ? msg`先选一个供应商并填模型` : msg`${source.label} 还没填密钥`)
+      if (!source.configured(ctx)) throw httpError(400, viaProvider.has(source.id) ? msg`先选一个供应商并填模型` : msg`${source.label} 还没填密钥`)
       ref = source.list(ctx)[0]?.ref ?? ''
       if (!ref) throw httpError(400, msg`${source.label} 还没列音色：在音色框里至少写一个`)
     }

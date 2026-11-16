@@ -79,7 +79,7 @@ export function initHistory({ el, getChat, settleScroll }) {
         rounds.push({ n: 0, input: '', reply: bodyText(article), nodes: [article], top: 0, opening: node.compaction ? t`前情` : t`开场` })
       } else {
         const round = rounds.at(-1)
-        round.reply ||= bodyText(article)
+        round.reply = round.reply || (bodyText(article))
         round.nodes.push(article)
       }
     }

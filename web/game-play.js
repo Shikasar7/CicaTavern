@@ -6,16 +6,19 @@ import { reachedWith } from '/shared/game/achievements.js'
 import { foeSheets } from '/shared/game/battle.js'
 import { changeWords, choiceChecks, choiceFights, cutAtGate, parseChoice, replyMarks, withoutGameMarks } from '/shared/game/marks.js'
 import { AID_BONUS, ATTRIBUTES, MAX_FIELDED, aidFor, applyOps, chanceFor, checkExperience, checkLine, dcFor, effectOf, fieldedOf, gateKinds, levelNeeds, nothingToRestore, rankNow, rollCheck, sheetOf, sheetOnPath, startSheet, turnSheet, usableNow } from '/shared/game/sheet.js'
-import { chanceToWin, encounterSetup, foesLine } from '/shared/game/encounter.js'
+import { beneath, beyond, chanceToWin, encounterSetup, foesLine, playedOut } from '/shared/game/encounter.js'
 import { ailsOn, modifierOf, riskOf } from '/shared/game/dice.js'
 import { latestPlace, matchScene, normalizePlace, visitedPlaces } from '/shared/vn.js'
 import { turnBare, turnDie, turnPan } from '/game-dice.js'
 import { ailName, banner, countWord, currentLook, fitFigure, heroNow, letters } from '/game-look.js'
 import { noteChips } from '/vn-hud.js'
+import { growthNotes, levelUpCard, pendingOf } from '/game-growth.js'
+import * as growth from '/game-growth.js'
 
 export { createSound } from '/game-sound.js'
+export { growth, levelUpCard, pendingOf }
 export { ACHIEVEMENTS, tallyOf, reachedBy } from '/shared/game/achievements.js'
-export { noteChips, latestPlace, matchScene, normalizePlace, visitedPlaces, applyOps, changeWords, checkExperience, choiceChecks, choiceFights, checkLine, chanceToWin, cutAtGate, effectOf, encounterSetup, gateKinds, nothingToRestore, parseChoice, rankNow, rollCheck, turnSheet, usableNow, withoutGameMarks }
+export { noteChips, latestPlace, matchScene, normalizePlace, visitedPlaces, applyOps, beneath, beyond, playedOut, changeWords, checkExperience, choiceChecks, choiceFights, checkLine, chanceToWin, cutAtGate, effectOf, encounterSetup, gateKinds, nothingToRestore, parseChoice, rankNow, rollCheck, turnSheet, usableNow, withoutGameMarks }
 
 const TIER_WORDS = () => ({ crit: t`大成功`, success: t`成功`, close: t`险胜`, fail: t`失败` })
 const TIER_HINTS = () => ({ crit: t`超出预期`, success: '', close: t`差一点，做到了但有代价`, fail: t`没做到` })
@@ -87,15 +90,19 @@ export function opLabel(op) {
   if (op.op === 'point') return t`加点 ${ATTRIBUTES.find(item => item.id === op.id)?.name ?? ''}`
   if (op.op === 'party') return PARTY_LABELS()[op.act]?.(op.name) ?? op.name
   if (op.op === 'mend') return t`解除 ${ailName(op.name)}`
+  if (op.op === 'equip') return op.who ? t`${op.who}装上 ${op.name}` : t`装上 ${op.name}`
+  if (op.op === 'unequip') return op.who ? t`${op.who}卸下${growth.SLOT_WORDS()[op.slot]}` : t`卸下${growth.SLOT_WORDS()[op.slot]}`
+  if (op.op === 'form') return op.who ? t`${op.who}：${op.label ?? t`进化`}` : op.label ?? t`进化`
+  if (op.op === 'perk') return op.skip ? t`不选，换成属性点` : op.who ? t`${op.who}：${op.label ?? op.key}` : op.label ?? op.key
   return op.status === 'new' ? t`新任务 ${op.name}` : op.status === 'done' ? t`完成 ${op.name}` : t`失败 ${op.name}`
 }
 
 const counts = sheet => new Map((sheet?.things ?? []).map(thing => [thing.name, thing.count]))
 
 /** All the experience a sheet has come by, levels included: what is left over goes down at a new level. */
-function earnedBy(sheet) {
+function earnedBy(sheet, book) {
   let total = sheet.experience ?? 0
-  for (let level = 1; level < (sheet.level ?? 1); level++) total += levelNeeds(level)
+  for (let level = 1; level < (sheet.level ?? 1); level++) total += levelNeeds(level, book)
   return total
 }
 
@@ -143,9 +150,10 @@ export function sheetNotes(sheetBefore, after, book, replyText = '') {
   if (book.level === 'full') {
     moved('energy', book.energyName || t`气力`)
     // A rank the story raised is no experience earned, whatever the levels add up to.
-    const earned = replyMarks(replyText).some(mark => mark.kind === 'promote') ? 0 : earnedBy(after) - earnedBy(before)
+    const earned = replyMarks(replyText).some(mark => mark.kind === 'promote') ? 0 : earnedBy(after, book) - earnedBy(before, book)
     if (earned > 0) notes.push({ kind: 'up', field: 'experience', label: cardWord(book, 'experience', t`经验`), delta: earned })
-    if ((after.level ?? 1) > (before.level ?? 1) && !bindings.level && !bindings.rank) notes.push({ kind: 'level', icon: '⭐', text: t`升到 ${after.level} 级，有属性点可以加` })
+    // A card that counts growth says what the level brought under the reply (levelUpCard): here only that it came.
+    if ((after.level ?? 1) > (before.level ?? 1) && !bindings.level && !bindings.rank) notes.push({ kind: 'level', icon: '⭐', text: growth.growsOn(book) ? t`升到 ${after.level} 级` : t`升到 ${after.level} 级，有属性点可以加` })
     const rank = rankNow(after, book)
     if (rank !== rankNow(before, book) && !bindings.level && !bindings.rank) notes.push({ kind: 'level', icon: '⭐', text: t`晋升：${rank}` })
   }
@@ -164,8 +172,10 @@ export function sheetNotes(sheetBefore, after, book, replyText = '') {
   const now = new Map((after.party ?? []).map(member => [member.name, member]))
   for (const [name, member] of now) {
     const old = was.get(name)
-    if (!old) notes.push({ kind: 'gain', icon: '🤝', text: book.words?.party ? t`${name}加入了${book.words.party}` : t`${name}加入了队伍` })
-    else {
+    if (!old) {
+      notes.push({ kind: 'gain', icon: '🤝', text: book.words?.party ? t`${name}加入了${book.words.party}` : t`${name}加入了队伍` })
+      if (member.points) notes.push({ kind: 'level', icon: '⭐', text: t`${name}有 ${member.points} 点属性可以加` })
+    } else {
       if (member.hurt && !old.hurt) notes.push({ kind: 'lose', icon: '🩹', text: t`${name}负伤，暂时不能上场` })
       if (!member.hurt && old.hurt) notes.push({ kind: 'gain', icon: '🌿', text: t`${name}伤好了` })
       if (member.level > old.level) notes.push({ kind: 'level', icon: '⭐', text: t`${name}升到 ${member.level} 级` })
@@ -173,6 +183,7 @@ export function sheetNotes(sheetBefore, after, book, replyText = '') {
     }
   }
   for (const name of was.keys()) if (!now.has(name)) notes.push({ kind: 'lose', icon: '👋', text: book.words?.party ? t`${name}离开了${book.words.party}` : t`${name}离开了队伍` })
+  notes.push(...growthNotes(before, after, book))
   const named = (list, item) => (list ?? []).some(other => other.name === item.name)
   for (const item of after.conditions ?? []) if (!named(before.conditions, item)) notes.push({ kind: 'lose', icon: '🩹', text: t`状态：${ailName(item.name)}` })
   for (const item of before.conditions ?? []) if (!named(after.conditions, item)) notes.push({ kind: 'gain', icon: '🌿', text: t`恢复：${ailName(item.name)}` })
@@ -243,12 +254,12 @@ export function encounterCards(el, setup, shown = () => ({ picture: '' }), words
   return el('div', { class: 'encounter' }, [...[...kinds.values()].map(foe => {
     const known = foe.tier !== 'boss'
     const { picture } = shown(foe.name)
-    const traits = [foe.charges ? t`会蓄力` : '', foe.noEscape ? t`逃不掉` : ''].filter(Boolean).join(t`、`)
+    const traits = [foe.type ? t`${foe.type}系` : '', foe.charges ? t`会蓄力` : '', foe.noEscape ? t`逃不掉` : '', growth.foeAddsLine(foe.adds)].filter(Boolean).join(t`、`)
     return el('div', { class: `encounter-foe tier-${foe.tier}${foe.gap >= STRONG ? ' strong' : ''}` }, [
       el('span', { class: 'encounter-face', 'aria-hidden': 'true' }, picture ? cutOutImage(el, picture) : foe.name.slice(0, 1)),
       el('span', { class: 'encounter-who' }, [
         el('b', { text: foe.count > 1 ? `${foe.name} ×${foe.count}` : foe.name }),
-        el('small', { text: [words[foe.tier] || FOE_TIERS()[foe.tier], foe.rank, GAP_NOTES()[foe.gap], traits].filter(Boolean).join(' · ') }),
+        el('small', { text: [words[foe.tier] || FOE_TIERS()[foe.tier], foe.rank, GAP_NOTES()[foe.gap], traits, foe.since ? t`${foe.since} 级时交过手` : ''].filter(Boolean).join(' · ') }),
       ]),
       stat(t`等级`, known ? foe.level : UNKNOWN),
       stat(words.life || t`生命`, known ? foe.life : UNKNOWN),

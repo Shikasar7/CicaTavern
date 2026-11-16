@@ -74,6 +74,8 @@ await rm(out, { recursive: true, force: true })
 await mkdir(path.join(out, 'bin'), { recursive: true })
 await cp(path.join(root, 'server'), path.join(out, 'server'), { recursive: true, filter: publicFile })
 await cp(path.join(root, 'web'), path.join(out, 'web'), { recursive: true, filter: publicFile })
+// The help docs: 直连对话's 应用帮助 reads them (server/help.mjs).
+await cp(path.join(root, 'docs', 'help'), path.join(out, 'docs', 'help'), { recursive: true })
 // The README's banner.
 await cp(path.join(root, 'docs', 'brand', 'banner.jpg'), path.join(out, 'docs', 'brand', 'banner.jpg'))
 // The README's pictures.

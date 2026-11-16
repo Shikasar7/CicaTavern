@@ -99,6 +99,12 @@ test('SD WebUI / Forge: txt2img with its settings, a lone cast member\'s LoRA in
   assert.equal(image.backend, 'SD WebUI')
   const body = server.seen.at(-1).json
   assert.match(body.prompt, /^linxue, [\s\S]*<lora:linxue_v2:0\.7>$/)
+  // The card's 画风 LoRA too: every trigger word in front, the tags at the end in order, hers last.
+  await media.saveCardMedia(card.id, { loras: [{ lora: 'ink.safetensors', trigger: 'inkwash', strength: 0.6 }, { lora: 'sub/detail.safetensors', strength: 0.4 }] })
+  await media.generateImage(chat, 'root', FRAME)
+  const stacked = server.seen.at(-1).json.prompt
+  assert.match(stacked, /^linxue, inkwash, /)
+  assert.match(stacked, /, <lora:ink:0\.6>, <lora:detail:0\.4>, <lora:linxue_v2:0\.7>$/)
   assert.deepEqual([body.width, body.height, body.steps, body.cfg_scale, body.sampler_name], [1216, 832, 20, 5.5, 'DPM++ 2M'])
   assert.match(body.negative_prompt, /worst quality/)
   // Nobody there: connection refused is explained.

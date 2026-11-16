@@ -269,7 +269,8 @@ test('a turn looks for a book\'s keywords as far back as the book says', async t
   await store.init()
   const provider = normalizeProvider({ name: 'Fake', api: 'openai-completions', baseURL: await fakeModel(t), apiKey: 'sk-test', models: [{ id: 'm1' }] })
   await store.saveProviders([provider])
-  await store.saveSettings({ model: `${provider.id}/m1`, subscription: 'off', scanDepth: 4 })
+  // Recursion off: the far book's lamp would find the near one's through its text.
+  await store.saveSettings({ model: `${provider.id}/m1`, subscription: 'off', scanDepth: 4, worldRecursion: 'off' })
   const card = normalizeCard({ spec: 'chara_card_v2', data: { name: '林雪', first_mes: '雪下了一整夜。' } })
   await store.saveCard(card)
   const engine = createEngine(store, { proxy: null })

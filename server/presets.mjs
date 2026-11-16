@@ -353,7 +353,13 @@ export function editPreset(preset, patch) {
  * unknown macro is left as written.
  */
 export function expandMacros(text, ctx) {
-  const source = String(text ?? '').replace(/\{\{\/\/[\s\S]*?\}\}/g, '')
+  // SillyTavern's older macros without braces, in any case, before the rest (as its MacroEngine does): presets write
+  // 「绝不代替 <user> 做决定」 and mean the player's name. The name itself, not {{user}}: `${<user>的决策}` would
+  // otherwise read as `${{{user}}…` and lose its braces.
+  const source = String(text ?? '')
+    .replace(/\{\{\/\/[\s\S]*?\}\}/g, '')
+    .replace(/<USER>/gi, () => ctx.names?.user ?? '')
+    .replace(/<(?:BOT|CHAR)>/gi, () => ctx.names?.char ?? '')
   // {{trim}} removes the whitespace around it.
   return expandFrom(source, 0, ctx, false).text.replace(/\s*\u0001\s*/g, '')
 }
@@ -604,5 +610,11 @@ export function renderPresetTail(preset, options) {
  */
 export function renderPresetTailParts(preset, { card, persona, names, vars = {}, input = '', lastChar = '', render = text => text }) {
   const items = postItems(preset, { names, vars: { ...vars }, card, persona, lastUser: input, lastChar, render }, 'turn')
-  return { text: joinItems(items), system: joinItems(items.filter(item => item.role === 'system')), user: joinItems(items.filter(item => item.role !== 'system')) }
+  const partsOf = list => ({ text: joinItems(list), system: joinItems(list.filter(item => item.role === 'system')), user: joinItems(list.filter(item => item.role !== 'system')) })
+  // 预填: the AI 助手 entries at the very end (「首先从思考开始：<think>」), which SillyTavern sends as the reply's own
+  // start, so the model writes on from there. `rest` is the rest, for when they go that way (engine.mjs prefillOf).
+  let cut = items.length
+  while (cut > 0 && items[cut - 1].role === 'assistant') cut--
+  const prefill = joinItems(items.slice(cut))
+  return { ...partsOf(items), prefill, rest: partsOf(items.slice(0, cut)) }
 }

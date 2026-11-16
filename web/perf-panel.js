@@ -88,7 +88,7 @@ export function actionLines(action) {
  * @param deps - { el, toast, perf (render.js), perfReport, saveFile(name, text, message), about() → version and the like }
  */
 export function openPerf({ el, toast, perf, perfReport, saveFile, about = () => ({}) }) {
-  dialog ??= document.body.appendChild(el('dialog', { class: 'dialog perf-log', 'aria-label': t`性能记录` }))
+  dialog = dialog ?? (document.body.appendChild(el('dialog', { class: 'dialog perf-log', 'aria-label': t`性能记录` })))
   const recording = el('input', { type: 'checkbox', checked: perf.on })
   const body = el('tbody')
   const details = el('pre', { class: 'perf-detail', hidden: true })

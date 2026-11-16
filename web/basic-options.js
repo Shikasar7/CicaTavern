@@ -257,7 +257,7 @@ export const BASIC_FIELDS = [
   { key: 'knowledge', label: t`防全知`, hint: t`角色只知道自己能知道的事，猜不到你没说出口的想法。`, values: [['off', t`关`], ['on', t`开`]] },
   { key: 'selfCheck', label: t`写前自查`, hint: t`模型写之前先过一遍：有没有抢话、角色知不知道这件事、前后对不对得上。这段你看不到，每轮多写一小段。`, values: [['off', t`关`], ['on', t`开`]] },
   { key: 'themes', label: t`题材尺度`, hint: t`放开：暴力、犯罪、背叛这类黑暗题材按剧情正面去写，反派可以真的坏，不跳出故事说教。模型自己的底线仍然有效。`, values: [['standard', t`常规`], ['open', t`放开`]] },
-  { key: 'jailbreak', label: t`破限`, hint: t`软：不拒绝、不回避敏感题材，照剧情直接写；强：先声明创作权限，结尾再确认一次，仍然按上面的格式输出。模型自己的底线仍然有效。`, values: [['off', t`关`], ['soft', t`软破限`], ['strong', t`强破限`]] },
+  { key: 'jailbreak', label: t`破限`, hint: t`软：不拒绝、不回避敏感题材，照剧情直接写；强：换成一段英文自称约束，要求不拒绝任何请求、无条件照做，并严格按格式输出。模型自己的底线仍然有效。`, values: [['off', t`关`], ['soft', t`软破限`], ['strong', t`强破限`]] },
   { key: 'intimacy', label: t`亲密描写`, hint: t`克制：点到为止；自然：剧情到了就写；强化：用露骨的词细写动作、感官、挑逗和对白，一轮写透一个阶段。`, values: [['restrained', t`克制`], ['natural', t`自然`], ['explicit', t`强化`]] },
   { key: 'choices', label: t`行动选项`, hint: t`回复末尾给四个行动：点一下填进输入框，点箭头直接发送。`, values: [['off', t`关`], ['four', t`四个`]] },
   { key: 'timeBox', label: t`时间框`, hint: t`回复开头一行写时间、地点和天气。`, values: [['off', t`关`], ['on', t`开`]] },
@@ -345,7 +345,8 @@ function withTip(el, button, tip) {
     // The next touch anywhere takes it away.
     setTimeout(() => addEventListener('pointerdown', hideTip, { once: true, capture: true }))
   })
-  button.addEventListener('focus', () => { if (button.matches(':focus-visible')) later() })
+  // :focus-visible throws in an old WebView (before Chrome 86): there, any focus shows it.
+  button.addEventListener('focus', () => { try { if (button.matches(':focus-visible')) later() } catch { later() } })
   button.addEventListener('blur', hideTip)
 }
 

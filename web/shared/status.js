@@ -42,6 +42,12 @@ export function joinPath(keys) {
 
 /** A layout as saved, or null when there is nothing to show. */
 export const STATUS_THEMES = ['plain', 'paper', 'neon', 'pastel', 'ink', 'parchment', 'gothic', 'terminal', 'ocean']
+// 版式: how the bar is laid out (web/status.js). None = the plain one, rows under a title.
+export const STATUS_LAYOUTS = ['card', 'rail', 'scroll']
+export const cleanLayout = value => (STATUS_LAYOUTS.includes(value) ? value : '')
+// The layout a theme goes with, where the pick is 跟着主题 ('auto'): paper and brush go on a scroll, the dark screens beside a rail.
+const THEME_LAYOUTS = { paper: 'scroll', ink: 'scroll', parchment: 'scroll', neon: 'rail', gothic: 'rail', terminal: 'rail', ocean: 'rail' }
+export const layoutFor = (layout, theme) => (layout === 'auto' ? THEME_LAYOUTS[theme] ?? 'card' : cleanLayout(layout))
 // 动效: what drifts over a bar (and over the card's 开场页), drawn by the program (web/status.js effectLayer).
 export const EFFECTS = ['rain', 'snow', 'petals', 'embers', 'fireflies', 'stars', 'dust']
 export const cleanEffect = value => (EFFECTS.includes(value) ? value : '')
@@ -77,7 +83,7 @@ export function cleanStatusSpec(raw) {
   // Variables past the limit are counted, so the bar can say they are not all there.
   const more = Number.isInteger(raw.more) && raw.more > 0 ? { more: raw.more } : {}
   // 立绘 and 场景图 on top of the bar (the pictures are the app's: 角色名册, 视觉小说的场景), and what drifts over it.
-  const art = { ...(raw.portrait === true ? { portrait: true } : {}), ...(raw.scene === true ? { scene: true } : {}), ...(cleanEffect(raw.effect) ? { effect: raw.effect } : {}), ...(raw.phone === true ? { phone: true } : {}) }
+  const art = { ...(raw.portrait === true ? { portrait: true } : {}), ...(raw.scene === true ? { scene: true } : {}), ...(cleanEffect(raw.effect) ? { effect: raw.effect } : {}), ...(raw.phone === true ? { phone: true } : {}), ...(cleanLayout(raw.layout) ? { layout: raw.layout } : {}) }
   return fields.some(f => f.show !== 'hidden') ? { title: str(raw.title, 40), fields, ...(skin ? { skin } : theme), ...(palette ? { palette } : {}), ...art, ...more } : null
 }
 
@@ -410,6 +416,7 @@ export function statusGroups(spec, state, previous = null) {
         if (was && was.value !== gauge.value) row.delta = round(gauge.value - was.value)
         const percentOf = one => Math.max(0, Math.min(100, ((one.value - one.min) / (one.max - one.min)) * 100))
         if (field.show === 'meter') row.percent = percentOf(gauge)
+        if (field.show === 'meter') row.max = gauge.max
         // Where the gauge stood before this reply: it fills from there.
         if (field.show === 'meter' && row.delta) row.from = percentOf(was)
       }
