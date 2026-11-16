@@ -552,15 +552,21 @@ export function skinProblems(el, spec, state, more = [], cover = null) {
   if (!shown?.skin) return []
   const found = new Map()
   const note = (key, words) => { if (!found.has(key)) found.set(key, words) }
-  const host = el('div', { class: 'skin-probe', 'aria-hidden': 'true' })
-  document.body.append(host)
+  // A new box for each width: Chrome 156 kept a reused one at the width it had first (an inline width changed
+  // afterwards was in its style but not in its size), so a bar looked over at 720 was measured at 340.
+  let host = null
+  const sized = width => {
+    host?.remove()
+    host = el('div', { class: 'skin-probe', 'aria-hidden': 'true', style: `width:${width}px` })
+    document.body.append(host)
+    return host
+  }
   try {
     for (const values of [state, withTried(state, triedExtreme(shown, state, 'full')), ...more]) {
       for (const width of PROBE_WIDTHS) {
-        host.style.width = `${width}px`
         const bar = statusBar(el, shown, values, { collapsible: false, remembers: false })
         if (!bar) continue
-        host.replaceChildren(bar)
+        sized(width).append(bar)
         const tabs = [...bar.querySelectorAll('.status-page')]
         for (const tab of tabs.length ? tabs : [null]) {
           tab?.click()
@@ -575,15 +581,14 @@ export function skinProblems(el, spec, state, more = [], cover = null) {
     }
     if (cover?.cover) {
       for (const width of PROBE_WIDTHS) {
-        host.style.width = `${width}px`
         const openings = (cover.cover.openings?.length ? cover.cover.openings : [{}, {}]).map(() => '')
         const page = coverPage(el, { name: cover.name, cover: cover.cover, palette: shown.palette ?? null, skin: shown.skin, openings, picked: 0, onPick: async () => {} })
-        host.replaceChildren(page.node)
+        sized(width).append(page.node)
         probeCover(page.node, width, note)
       }
     }
   } finally {
-    host.remove()
+    host?.remove()
   }
   return [...found.values()].slice(0, MAX_PROBLEMS)
 }
