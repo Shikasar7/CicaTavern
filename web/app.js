@@ -454,6 +454,21 @@ const cardPackModule = () => import('/card-pack.js').catch(() => {
 /** The window to tick what goes with a card ({ id, name }) and take the zip. */
 const openCardPack = guard(async card => (await cardPackModule()).openCardPack({ api, el, toast, guard, download: downloadPath }, card))
 
+const backupModule = () => import('/backup.js').catch(() => {
+  throw Object.assign(new Error(t`备份与换设备要重启后台服务后才能用：关掉所有窗口等一分钟，再从桌面图标打开。`), { status: 404 })
+})
+/** 设置 → 更多 → 备份与换设备 (web/backup.js). An old phone app that cannot save a file can still import. */
+const openBackup = guard(async () => (await backupModule()).openBackup({ api, el, toast, guard, download: downloadPath, canSave: document.documentElement.dataset.edition !== 'android' || Boolean(android?.saveDownload) }))
+
+/** 导出 → .charx: the card with its picture, its own character's 立绘 and expressions, scenes and CG (server/card-bundle.mjs charxFiles). */
+const exportCardCharx = guard(async card => {
+  const made = await api(`/api/cards/${card.id}/charx`, { method: 'POST' })
+  downloadPath(made.path, made.name, 'application/zip')
+  const { faces, backgrounds, cgs } = made.counts
+  const with_ = [faces ? t`立绘和表情 ${faces} 张` : '', backgrounds ? t`场景图 ${backgrounds} 张` : '', cgs ? t`CG ${cgs} 张` : ''].filter(Boolean).join(t`、`)
+  toast(with_ ? t`已导出「${card.name}.charx」（带着${with_}）` : t`已导出「${card.name}.charx」`, 6000)
+})
+
 /** 设置 → 写作 → 快捷回复, and the ⚙ at the end of their row (web/quick-replies.js, loaded when first opened). */
 const openQuickReplies = guard(async () => {
   const { openQuickReplies: open } = await import('/quick-replies.js').catch(() => {
@@ -1270,6 +1285,9 @@ function openCardMenu(card, anchor) {
     document.documentElement.dataset.edition !== 'android' || android?.saveDownload
       ? { label: t`带上图片和设置…`, hint: t`一个压缩包：这张卡，加上你勾选的立绘、表情、场景图、正则集和配图设置。在 CicaTavern 里导入会全部装回去`, onClick: () => openCardPack(card) }
       : null,
+    document.documentElement.dataset.edition !== 'android' || android?.saveDownload
+      ? { label: t`.charx 文件`, hint: t`一个文件：卡、头像、卡的主角的立绘和表情、场景图和卡的 CG。SillyTavern 1.13 以上、RisuAI 能直接导入，立绘进表情包，场景进背景`, onClick: () => exportCardCharx(card) }
+      : null,
     '-',
     { header: t`移到分组` },
     ...groups.map(name => ({ label: name, current: card.group === name, onClick: () => organizeCard(card, { group: name }) })),
@@ -1386,15 +1404,26 @@ const importFiles = guard(async files => {
       await importSillyTavernFile(file)
       continue
     }
-    // A card exported with its pictures and settings (导出角色卡 → 带上图片和设置): sent as it is, then imported.
-    if (/\.zip$/i.test(file.name)) {
+    // A card exported with its pictures and settings (导出角色卡 → 带上图片和设置), a CharX, or someone's 整合包
+    // (looked through first, then imported as ticked): sent as it is.
+    if (/\.(zip|charx)$/i.test(file.name)) {
       const pack = await cardPackModule()
-      const card = await pack.importCardPack({ api }, file, previous => (confirm(t`已经有「${previous.name}」。
-
-确定：更新这张卡（对话都保留，压缩包里带的图片和设置会盖到这张卡上）
-取消：另存为一张新卡`) ? previous.id : ''))
-      const brought = pack.arrivedText(card.arrived)
+      const card = await pack.importCardPack({ api }, file, previous => askReplace(previous, t`对话都保留，压缩包里带的图片和设置会盖到这张卡上。`, t`另存为一张新卡。`))
+      if (card.skipped) continue
+      if (card.bundle) {
+        const got = await pack.openBundle({ api, el, guard }, card.bundle, { cards: ui.cards.map(item => ({ id: item.id, name: item.name })), current: ui.cardId })
+        if (!got) continue
+        done.push(pack.bundleText(got) || t`「${file.name}」里没有导入什么`)
+        if (got.target) ui.cardId = got.target
+        reselect = true
+        continue
+      }
+      // A CharX's picture that is no PNG: made one here and set.
+      const left = [...(card.arrived?.left ?? [])]
+      if (card.arrived?.iconPath && !(await pack.iconFromZip({ api }, file, card.id, card.arrived.iconPath).catch(() => false))) left.unshift(t`头像`)
+      const brought = [pack.arrivedText(card.arrived), left.length ? t`没带上：${left.join(t`、`)}` : ''].filter(Boolean).join(t`；`)
       done.push((card.updated ? t`角色卡「${card.updated}」更新为「${card.name}」` : t`角色卡「${card.name}」`) + (brought ? t`（带着${brought}）` : ''))
+      if (card.updated && cardEditUi.cardReplaced(card.id)) done.push(t`开着的「修改角色卡」关上了，再打开就是新的内容`)
       ui.cardId = card.id
       reselect = true
       continue
@@ -1427,9 +1456,11 @@ const importFiles = guard(async files => {
     } else {
       // A newer version of a card already here: update that one in place, or keep both.
       const { previous } = await api('/api/cards/inspect', { method: 'POST', body: { filename: file.name, data } })
-      const replace = previous && confirm(t`已经有「${previous.name}」。\n\n确定：更新这张卡（对话、配图与朗读设置、角色名册和人设图都保留）\n取消：另存为一张新卡（也会带上它的配图设置和人设图）`) ? previous.id : ''
+      const replace = previous ? await askReplace(previous, t`对话、配图与朗读设置、角色名册和人设图都保留。`, t`另存为一张新卡，也会带上它的配图设置和人设图。`) : ''
+      if (replace === null) continue
       const card = await api('/api/cards/import', { method: 'POST', body: { filename: file.name, data, ...(replace ? { replace } : {}) } })
       done.push(card.updated ? t`角色卡「${card.updated}」更新为「${card.name}」` : t`角色卡「${card.name}」${card.inherited ? t`（沿用了「${card.inherited}」的配图设置和人设图）` : ''}`)
+      if (card.updated && cardEditUi.cardReplaced(card.id)) done.push(t`开着的「修改角色卡」关上了，再打开就是新的内容`)
       ui.cardId = card.id
       reselect = true
     }
@@ -1442,6 +1473,42 @@ const importFiles = guard(async files => {
   if (presets) presetsUi.open()
   if (packages.length) await importPackages(packages)
 })
+
+/**
+ * A card being imported that is here already: update it, keep both, or import nothing. Asked in the page: the browser's
+ * confirm is the app's own on iPhone, and asked while the file picker was still closing it could not be shown and took
+ * the app down (2026-11-18). → the id to update, '' for a new card, or null for none.
+ */
+function askReplace(previous, updateNote, newNote) {
+  return new Promise(resolve => {
+    const box = el('dialog', { class: 'dialog ask-replace' })
+    // Answered once, by a button at once or by however the window was closed (Esc: import nothing).
+    let done = false
+    const finish = value => {
+      if (done) return
+      done = true
+      if (box.open) box.close()
+      box.remove()
+      resolve(value)
+    }
+    box.addEventListener('cancel', event => {
+      event.preventDefault()
+      finish(null)
+    })
+    box.addEventListener('close', () => finish(null))
+    const choice = (label, note, value, primary = false) => el('button', { type: 'button', class: `ask-replace-choice${primary ? ' primary' : ''}`, onclick: () => finish(value) }, [el('b', { text: label }), el('span', { text: note })])
+    box.append(
+      el('h2', { text: t`已经有「${previous.name}」` }),
+      el('div', { class: 'ask-replace-choices' }, [
+        choice(t`更新这张卡`, updateNote, previous.id, true),
+        choice(t`另存为新卡`, newNote, ''),
+      ]),
+      el('div', { class: 'row end' }, [el('button', { type: 'button', class: 'btn small', text: t`不导入`, onclick: () => finish(null) })]),
+    )
+    document.body.append(box)
+    box.showModal()
+  })
+}
 
 // ─── Chat ───────────────────────────────────────────────────────────────
 function setChat(chat) {
@@ -1461,7 +1528,10 @@ function setChat(chat) {
     // Render once the card's and preset's regex scripts are known.
     Promise.all([loadCardDetail(chat.cardId), loadPresetDetail(chat.presetId)]).then(() => { if (ui.chat === chat) renderChat() })
   }
-  ui.branchFrom = null
+  // 编辑重发 / 从这里分支 stays through a redraw of the same chat (memory tidied, the server's news, back to the page):
+  // only another chat, or a path without the place it sends from, ends it.
+  const from = ui.branchFrom?.parentId
+  if (switched || !chat || (from && !chat.path.some(node => node.id === from))) ui.branchFrom = null
   renderChat()
   renderChats()
   renderSide()
@@ -1955,6 +2025,8 @@ const openCardRules = guard(async card => {
     chatId: open?.id ?? '',
     state: open?.path.findLast(node => node.role === 'assistant')?.state ?? null,
     drawFoe: (name, done) => vnUi.drawFoe(card.id, name, done, true),
+    drawSkill: (name, note, done) => vnUi.drawSkill(card.id, name, note, done),
+    viewPicture: (src, caption, meta, options) => mediaUi.viewPicture(src, caption, meta, options),
     onChange: () => ui.chat?.cardId === card.id && loadRules(ui.chat, true),
   })
 })
@@ -2207,6 +2279,12 @@ const foeShown = cardId => name => {
   return { moves: foe?.moves ?? [], picture: foe?.file ? `/api/foes/${cardId}/${foe.file}` : '' }
 }
 
+/** 技能特写: a skill's own picture, as the rule book has it now; '' for one without. */
+const skillShown = cardId => name => {
+  const file = rules.book?.skillPictures?.[name]
+  return file ? `/api/skills/${cardId}/${file}` : ''
+}
+
 /** The picture of where the story is, for the fight to happen in front of. */
 async function sceneBehind(chat) {
   const where = rules.play.latestPlace(chat.path)
@@ -2248,6 +2326,7 @@ const startFight = guard(async () => {
     words: rules.book.words ?? {},
     // A companion's face from the visual novel's cast: their name, or one the card's rules say they go by.
     faceFor: name => [name, ...(rules.book.companions?.[name]?.keys ?? [])].map(one => vnUi.pictureFor(one)).find(Boolean) ?? '',
+    skillPicture: skillShown(chat.cardId),
     setup: encounterOf(chat, ops),
     forced: !canLeaveFight(chat, gate),
     resume: fightsKept()[spot] ?? null,
@@ -2468,8 +2547,13 @@ function drawChat() {
   const lastAssistant = [...chat.path].reverse().find(n => n.role === 'assistant')
   // 直连对话 opens with nothing: there is no opening to show.
   // 继续生成: the reply being written on is out of sight meanwhile; the live one shows it with what comes.
-  const continuing = ui.busy.get(chat.id)?.hides
-  const blank = node => (chat.cardId === DIRECT_CARD && node.id === 'root' && !node.compaction) || node.id === continuing
+  const job = ui.busy.get(chat.id)
+  const continuing = job?.hides
+  // 编辑重发 / 从这里分支: what came after the place it is sent from is out of sight while the new version is written,
+  // the new words where the old ones were (the old version stays behind ‹ ›).
+  const cutAt = job?.after ? chat.path.findIndex(node => node.id === job.after) : -1
+  const cut = cutAt >= 0 ? new Set(chat.path.slice(cutAt + 1).map(node => node.id)) : null
+  const blank = node => (chat.cardId === DIRECT_CARD && node.id === 'root' && !node.compaction) || node.id === continuing || Boolean(cut?.has(node.id))
   const nodes = drawMessages(chat, lastAssistant, blank)
   if (chat.folded > 0) {
     nodes.push(
@@ -4237,6 +4321,8 @@ const frameHandlers = {
     if (!chat) throw new Error(t`没有打开的对话`)
     const target = relayTargetOf(url)
     askRelay(card ?? chat.cardId, target)
+    // The card hears only that its call failed, and often shows no more than that: the page says what to do.
+    toast(t`已允许经 CicaTavern 连接 ${target.origin}。刚才那一下没有重发，请在卡里再点一次。`, 8000)
     return t`已允许这张卡经 CicaTavern 连接 ${target.origin}。这一次的请求可能已经送到对方，所以没有重发：再试一次就会经 CicaTavern 连接。`
   },
 }
@@ -5264,7 +5350,7 @@ function tipId() {
  * back redraws what has arrived (liveNodes).
  * @returns true when the turn was saved.
  */
-/** @param options - 继续生成: { prefix: the reply as it was, hides: its id }. */
+/** @param options - 继续生成: { prefix: the reply as it was, hides: its id }; 编辑重发: { after: the node it is sent from }. */
 async function generate(endpoint, body, echoUserText, outcome = null, options = {}) {
   const recorded = perf.begin('reply', ui.chat.title)
   try {
@@ -5274,11 +5360,11 @@ async function generate(endpoint, body, echoUserText, outcome = null, options = 
   }
 }
 
-async function writeTurn(endpoint, body, echoUserText, outcome, { prefix = '', hides = null } = {}) {
+async function writeTurn(endpoint, body, echoUserText, outcome, { prefix = '', hides = null, after = null } = {}) {
   const chatId = ui.chat.id
   const title = ui.chat.title
   const tipBefore = ui.chat.path.at(-1)?.id
-  const job = { kind: 'turn', text: prefix, note: '…', echo: echoUserText, outcome, hides, startedAt: Date.now() }
+  const job = { kind: 'turn', text: prefix, note: '…', echo: echoUserText, outcome, hides, after, startedAt: Date.now() }
   ui.readFrom = null
   follow.on = true
   ui.busy.set(chatId, job)
@@ -5489,7 +5575,12 @@ const send = guard(async () => {
   const files = ui.chat.cardId === DIRECT_CARD ? ui.directFiles : []
   ui.directFiles = []
   ui.directReading = ''
-  const parentId = ui.branchFrom?.parentId ?? tipId()
+  // Sent from an earlier place (编辑重发, 从这里分支): done with once sent, back if the turn fails.
+  const branch = ui.branchFrom
+  const parentId = branch?.parentId ?? tipId()
+  const after = branch && parentId !== tipId() ? parentId : null
+  ui.branchFrom = null
+  renderBranchNote()
   input.value = ''
   fitInput()
   const chatId = ui.chat.id
@@ -5508,9 +5599,17 @@ const send = guard(async () => {
   // None of the choices: the player's own action, for the model to weigh against what they have.
   const own = Boolean(rulesRunning()) && !check && !onlyChoices(said, listed?.picks)
   const game = check || ops.length || safe || own ? { game: { check, ops, safe, own } } : {}
-  const ok = await generate('turn', { parentId, input: said, marks: vnUi.marks(ui.chat), ...game, ...(files.length ? { files } : {}) }, said, roll ? rules.play.rollOutcome(roll, rules.book) : null)
+  const ok = await generate('turn', { parentId, input: said, marks: vnUi.marks(ui.chat), ...game, ...(files.length ? { files } : {}) }, said, roll ? rules.play.rollOutcome(roll, rules.book) : null, { after })
+  if (ok && after) toast(t`原来那一版收在这条消息的 ‹ › 里，点一下就能切回`)
   // Keep the draft so nothing is lost, unless you have moved on to another chat or typed anew.
-  if (!ok && ui.chat?.id === chatId && !input.value.trim()) { input.value = text; fitInput() }
+  if (!ok && ui.chat?.id === chatId && !input.value.trim()) {
+    input.value = text
+    fitInput()
+    if (branch && !ui.branchFrom && ui.chat.path.some(node => node.id === branch.parentId)) {
+      ui.branchFrom = branch
+      renderBranchNote()
+    }
+  }
   if (!ok && files.length) {
     ui.directFiles = files
     renderDirectFiles()
@@ -6040,6 +6139,7 @@ function windowItems(card) {
     media(t`画图方式`, 'image', t`NovelAI ComfyUI SD WebUI Gemini 出图 生图`),
     media(t`配图提示词`, 'prompt', t`辅助模型 提示词`),
     media(t`我的画风`, 'style-library', t`画师串 画风 默认画风 所有卡`),
+    { title: t`图库`, group: t`配图与朗读`, place: '', text: t`所有图片 CG 立绘 背景 配图 批量导出 打包下载`, go: () => openGallery() },
     media(t`朗读来源`, 'voice', t`TTS 音色 Fish MiniMax 配音`),
     ...(card ? [media(t`这张卡的画风`, 'card-style', t`画风 LoRA`), media(t`角色名册`, 'roster', t`立绘 人设图`), media(t`这张卡的音色`, 'card-voice', t`对白音色 旁白音色`)] : []),
     ...(card ? [{ title: t`游戏规则`, group: card.name, place: '', text: t`检定 骰子 战斗 难度 频率 属性 技能 敌人 图鉴`, go: () => openCardRules(card) }] : []),
@@ -6235,6 +6335,10 @@ function layOutSettings({ form, card, providers, presets }) {
       summary: () => t`不用配置也会连：${[form.webFonts.checked && t`网络字体`, form.cdnLibraries.checked && t`酒馆助手脚本库`].filter(Boolean).join(t`、`) || t`都关了`}`,
     },
     {
+      id: 'backup', title: t`备份与换设备`, look: 'shared', action: () => openBackup(),
+      summary: () => t`把角色卡、对话、配图和设置打包成一个文件，换设备时导入。可以只勾一部分`,
+    },
+    {
       id: 'errors', title: t`错误日志`, look: 'shared', action: () => openErrorLog(),
       summary: () => t`出了问题时导出来发给开发者：版本、设置概要和最近的出错记录`,
     },
@@ -6273,7 +6377,7 @@ function layOutSettings({ form, card, providers, presets }) {
     { id: 'media', title: t`配图与朗读`, icon: MENU_ICONS.picture, rows: ['media-image', 'media-voice', 'dictation'] },
     { id: 'books', title: t`世界书与状态`, icon: MENU_ICONS.book, rows: ['scan', 'manage-books', cardRow, 'books'] },
     { id: 'link', title: t`连接`, icon: MENU_ICONS.link, rows: ['network', 'access'] },
-    { id: 'more', title: t`更多`, icon: MENU_ICONS.tools, rows: ['reading', 'background', 'interface', 'update', 'privacy', 'errors', 'perf', 'shortcut', 'show-prompt', 'rebuild-prompt', 'stop-server'] },
+    { id: 'more', title: t`更多`, icon: MENU_ICONS.tools, rows: ['backup', 'reading', 'background', 'interface', 'update', 'privacy', 'errors', 'perf', 'shortcut', 'show-prompt', 'rebuild-prompt', 'stop-server'] },
   ]
   settingsMenu.mount({
     panels,
@@ -6554,6 +6658,14 @@ const mediaUi = initMedia({
   openProviders: () => providersUi.open(),
   saveFile,
   pickDraw: drawChoice.pick,
+  // 选图: 图库 as a picker (web/gallery.js), loaded when first used.
+  pickPicture: async ({ cardId }) => {
+    const { openGallery: open } = await import('/gallery.js').catch(() => {
+      throw Object.assign(new Error(t`图库要重启后台服务后才能用：关掉所有窗口等一分钟，再从桌面图标打开。`), { status: 404 })
+    })
+    return open({ api, el, toast, guard, download: downloadPath }, { cardId, pick: true })
+  },
+  openGallery: () => openGallery(),
   // A reply's picture in the works shows in the visual novel's corner, where the reply itself is out of sight.
   onPictures: () => vnHooks.picturesChanged(),
 })

@@ -5,7 +5,7 @@
 import { bagChanged, bagItems, cleanBindings, numberAt, numberWrite, questsAt } from './bindings.js'
 import { DEFAULT_SKILLS, SKILLS, cleanAdds, cleanFoeAdds, skillKindOf } from './battle.js'
 import { ailsOn, chanceOf, clampDc, judge, modifierOf, rollD20, seedOf, worstAil } from './dice.js'
-import { GEAR_SLOTS, PRACTICE_DC, cleanGear, gearOf, practiceNeeds } from './growth.js'
+import { GEAR_SLOTS, PLAYER_FORMS, PRACTICE_DC, cleanGear, gearOf, practiceNeeds } from './growth.js'
 import { SKIP_POINTS, bigsOwed, bonusOf, canTake, checkBonus, cleanGrowth, cleanPerks, fightBonus, grownMost, growsOn, perkFor, perkOf, perksOn, perksOwed, skillGrowth } from './growth.js'
 import { cleanForms, fightOnly, formAt, formForFight, formOf, formReady, formsOf, nextStageAt, rankGives, skillsInForm, taughtSkills } from './growth.js'
 import { bondOf, bondPointsOf, everyGives, levelPointsOf, perkEveryOf, rankRestores } from './growth.js'
@@ -100,6 +100,7 @@ const MADNESS = { name: '疯狂', stat: '', size: 'heavy' }
 // Low, the mind is not to be trusted: not a condition, it lasts as long as the sanity stays there.
 const STRAINS = [[0.25, { name: '濒临崩溃', stat: 'mind', size: 'medium' }], [0.5, { name: '动摇', stat: 'mind', size: 'light' }]]
 const FOE_PICTURE = /^[\w-]{1,64}\.(png|jpg|webp)$/
+const MAX_SKILL_PICTURES = 120
 const MAX_OPS = 20
 // What a day's rest gives back, of the most there is.
 const REST = 0.5
@@ -178,6 +179,8 @@ export function cleanRulebook(value) {
     items: cleanItems(book.items),
     skills: { ...taught, ...cleanSkills(book.skills) },
     foes: cleanFoes(book.foes),
+    // 技能特写: a skill's own picture, cut in full screen when it is used. Kept only when some skill has one.
+    ...(Object.keys(cleanSkillPictures(book.skillPictures)).length ? { skillPictures: cleanSkillPictures(book.skillPictures) } : {}),
     companions: cleanCompanions(book.companions),
     words: cleanWords(book.words),
     // 成长 (growth.js): how far it goes, and the 天赋 that are this card's own. Neither said is the rules as they were.
@@ -296,6 +299,32 @@ export function kitBook(kit) {
 export const kitWorld = ({ energyName = '', ranks = [], rankSpan = 'wide', sanity = false }) => ({ energyName, ranks, rankSpan, sanity })
 
 /** 敌人图鉴: what is known of a foe once it has been met. { name: { looks, moves, file, adds? } }; `adds` is what its blows leave behind when it comes as a 精英 or a 首领 (battle.js FOE_ADDS). */
+/**
+ * 技能特写: every skill the book names, with whose it is: { name, owner } where owner is a companion's name, or '' for
+ * the player (their own, a 天赋's, or one of their forms').
+ */
+export function skillsNamed(book) {
+  const out = new Map()
+  for (const name of book?.start?.skills ?? []) out.set(name, '')
+  for (const [owner, companion] of Object.entries(book?.companions ?? {})) for (const name of Object.keys(companion.skills ?? {})) if (!out.has(name)) out.set(name, owner)
+  for (const [owner, chain] of Object.entries(book?.forms ?? {})) for (const form of chain) for (const name of Object.keys(form.skills ?? {})) if (!out.has(name)) out.set(name, owner === PLAYER_FORMS || !book?.companions?.[owner] ? '' : owner)
+  for (const name of Object.keys(book?.skills ?? {})) if (!out.has(name)) out.set(name, '')
+  return [...out].map(([name, owner]) => ({ name, owner }))
+}
+
+/** 技能特写: { skill name: its picture's file }, the files as the server writes them. */
+export function cleanSkillPictures(value) {
+  const out = {}
+  if (!isRecord(value)) return out
+  for (const [name, file] of Object.entries(value)) {
+    const key = name.trim().slice(0, 40)
+    if (!key || !FOE_PICTURE.test(file ?? '')) continue
+    out[key] = file
+    if (Object.keys(out).length >= MAX_SKILL_PICTURES) break
+  }
+  return out
+}
+
 function cleanFoes(value) {
   const out = {}
   if (!isRecord(value)) return out

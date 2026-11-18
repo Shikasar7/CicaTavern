@@ -11,7 +11,7 @@ import { htmlFrame, segments, streamingText } from '/render.js'
 import { timeBox } from '/status.js'
 import { advanceDay, isCreationPage, latestPlace, matchScene, normalizePlace, opensNextDay, placeIn, sameLine, speakerNames, splitLines, stateTime, storyDay, timeOfDay, timesIn, weatherOf } from '/shared/vn.js'
 import { cutOut, spriteFrame } from '/shared/cutout.js'
-import { EXPRESSIONS, PACK_PICTURE, heroOf, packFaces, stageAt } from '/shared/stage.js'
+import { EXPRESSIONS, PACK_PICTURE, heroOf, lineEffects, packFaces, stageAt } from '/shared/stage.js'
 import { initVnSaves } from '/vn-saves.js'
 import { initVnHud, noteChips } from '/vn-hud.js'
 import { changeNotes } from '/shared/hud.js'
@@ -561,10 +561,14 @@ export function initVn(deps) {
       setLook({ strength: Number(strength.value) })
       shown.textContent = `${strength.value}%`
     })
+    // 技能特写: a skill with its own picture cuts to it in a fight.
+    const cutIns = el('input', { type: 'checkbox', checked: now.cutIns !== false, 'aria-label': t`技能特写` })
+    cutIns.addEventListener('change', () => setLook({ cutIns: cutIns.checked }))
     return [
       cards,
       palettes.length ? el('div', { class: 'vn-pop-row' }, [el('span', { text: t`配色` }), el('div', { class: 'seg' }, palettes)]) : null,
       now.look === 'bold' ? row(t`场景滤镜`, el('span', { class: 'vn-look-strength' }, [strength, shown])) : null,
+      row(t`技能特写`, cutIns),
     ]
   }
 
@@ -706,7 +710,7 @@ export function initVn(deps) {
           artMode('newSprite', t`没有立绘的角色说话时：`, renderPopOwn),
           ...stageRows(switchRow),
         ]))
-    if (popKind === 'image') popOwn.prepend(el('div', { class: 'vn-pop-pages' }, [artPage('scenes', t`场景`, t`这张卡的背景图`), artPage('sprites', t`立绘`, t`角色说话时显示的立绘`)]))
+    if (popKind === 'image') popOwn.prepend(el('div', { class: 'vn-pop-pages' }, [artPage('scenes', t`场景`, t`这张卡的背景图`), artPage('sprites', t`立绘`, t`角色说话时显示的立绘`), artPage('cgs', 'CG', t`卡自带的 CG，剧情到了就全屏放`)]))
   }
 
   // ─── Saves (web/vn-saves.js): the line on screen, and getting back to it ──
@@ -1267,7 +1271,16 @@ export function initVn(deps) {
     plate.textContent = step.speaker ? shownName(step.speaker) : ''
     plate.dataset.who = step.speaker ? whoIs(step.speaker) : ''
     plate.style.setProperty('--who', step.speaker ? String(hueOf(step.speaker)) : '')
-    drawStage({ effects: fresh })
+    // 演出效果 as the line arrives: the picture's own (闪白, 震屏) at once, whether or not anyone stands on the stage
+    // (显示立绘 off too); the speaker's (跳一下, 发抖) once the stage is drawn, by whichever drawing of it comes to this line.
+    if (fresh) {
+      const effects = lineEffects(step)
+      playScreen(effects.screen)
+      cast.pendingActor = effects.actor ? { step, actor: effects.actor } : null
+    }
+    drawStage()
+    // 【CG|组名】 on the line before: the card's CG, as the line arrives.
+    if (fresh && step.effects?.cg && state.cardId) showCardCg(state.cardId, step.effects.cg)
   }
 
   function showStep(animate) {
@@ -1359,7 +1372,7 @@ export function initVn(deps) {
       setReading(false)
       // 自动 waits for the voice, then moves on (one timer: a line read at once must not leave one behind).
       clearTimeout(state.autoTimer)
-      if (state.auto && state.phase === 'shown') state.autoTimer = setTimeout(() => state.auto && advance(), 450)
+      if (state.auto && state.phase === 'shown') state.autoTimer = setTimeout(() => state.auto && cgView.hidden && advance(), 450)
     }, step.speaker)
   }
 
@@ -1375,7 +1388,7 @@ export function initVn(deps) {
     else if (state.auto && !state.reading && !state.skipping) {
       const step = state.steps[state.index]
       state.autoTimer = setTimeout(() => {
-        if (state.auto && state.phase === 'shown' && !state.reading && !document.hidden) advance()
+        if (state.auto && state.phase === 'shown' && !state.reading && !document.hidden && cgView.hidden) advance()
       }, Math.min(9000, Math.max(1500, 800 + 55 * (step?.plain.length ?? 0))))
     }
   }
@@ -1753,18 +1766,30 @@ export function initVn(deps) {
     cgButton.replaceChildren(el('img', { src, alt: '' }), el('span', { text: images.length > 1 ? `CG ${images.length}` : 'CG' }))
   }
 
-  /** Every illustration on the story's path so far, oldest first, with the turn it belongs to (0: the opening). */
+  /**
+   * Every illustration on the story's path so far, oldest first, with the turn it belongs to (0: the opening); with
+   * them, the card's CG each reply marked (【CG|组名】), as `card` ones: those are the card's, not drawn here.
+   */
   function allCgs(chat) {
     const out = []
     let turn = 0
+    const groups = chat ? (shownCgs(chat.cardId) ?? []) : []
     for (const node of chat?.path ?? []) {
       if (node.role === 'user') turn += 1
       if (node.role !== 'assistant') continue
       for (const image of node.media?.images ?? []) out.push({ src: `/api/media/${chat.id}/${image.file}`, file: image.file, nodeId: node.id, turn, prompt: image.prompt ?? '' })
+      if (!groups.length) continue
+      const marked = new Set()
+      for (const [, name] of String(node.text ?? '').matchAll(CG_MARK)) {
+        const group = matchScene(name, groups)
+        if (!group || marked.has(group.id)) continue
+        marked.add(group.id)
+        for (const picture of group.pictures) out.push({ src: cgSrc(chat.cardId, picture), file: picture.file, nodeId: node.id, turn, prompt: group.name, card: chat.cardId })
+      }
     }
     return out
   }
-  const cgLabel = cg => (cg.turn ? t`第 ${cg.turn} 轮` : t`开场`)
+  const cgLabel = cg => [cg.turn ? t`第 ${cg.turn} 轮` : t`开场`, cg.card ? cg.prompt : ''].filter(Boolean).join(' · ')
 
   /** 画 CG: the reply on screen, up to the line being read. */
   function drawMoment() {
@@ -1814,7 +1839,8 @@ export function initVn(deps) {
       const work = deps.pictureWork?.(getChat()?.id) ?? { jobs: [], failures: [] }
       const job = work.jobs.find(item => item.nodeId === all[at].nodeId)
       const failure = work.failures.find(item => item.nodeId === all[at].nodeId)
-      redraw.disabled = edit.disabled = Boolean(job)
+      // The card's own CG is not drawn here: nothing to draw again.
+      redraw.disabled = edit.disabled = Boolean(job) || Boolean(all[at].card)
       note.textContent = job ? t`这一轮的新图正在画…` : failure ? t`配图没画出来：${failure.message}` : ''
       note.classList.toggle('bad', !job && Boolean(failure))
       note.hidden = !note.textContent
@@ -1890,7 +1916,7 @@ export function initVn(deps) {
 
   /** CG 回廊's 全部导出: the story line's pictures as a zip, through 图库's export (server/gallery.mjs). */
   const exportCgs = guard(async (chat, all) => {
-    const { path, count, missing } = await api('/api/gallery/export', { method: 'POST', body: { ids: all.map(cg => `reply:${chat.id}:${cg.file}`) } })
+    const { path, count, missing } = await api('/api/gallery/export', { method: 'POST', body: { ids: all.map(cg => (cg.card ? `cg:${cg.card}:${cg.file}` : `reply:${chat.id}:${cg.file}`)) } })
     deps.download(path, `${chat.title || 'CG'}.zip`, 'application/zip')
     toast(missing ? t`导出了 ${count} 张，${missing} 张已经不在了` : t`导出了 ${count} 张`, 5000)
   })
@@ -1901,16 +1927,20 @@ export function initVn(deps) {
     state.cgStep = null
     state.cgAt = null
     state.cgRefresh = null
+    state.cgNext = null
+    state.cgDone = null
   }
 
-  /** Out of what is showing: a picture opened from the gallery goes back to it, anything else to the story. */
-  const leaveCg = () => (cgView.dataset.back ? openGallery(state.cgAt) : closeCg())
+  /** Out of what is showing: a picture opened from the gallery goes back to it, the card's CG to the story, anything else closes. */
+  const leaveCg = () => (cgView.dataset.back ? openGallery(state.cgAt) : state.cgDone ? state.cgDone() : closeCg())
   cgButton.addEventListener('click', event => {
     event.stopPropagation()
     openCg()
   })
   cgView.addEventListener('click', event => {
     event.stopPropagation()
+    // The card's CG: a click is the next picture.
+    if (state.cgNext && (event.target === cgView || event.target.tagName === 'IMG')) return state.cgNext()
     if (event.target === cgView || event.target.tagName === 'IMG') leaveCg()
   })
 
@@ -2140,6 +2170,79 @@ export function initVn(deps) {
     return scenes.loading.get(cardId)
   }
 
+  // ─── 卡的 CG: groups of pictures the card brings (server/card-cgs.mjs) ──
+  // A reply's 【CG|组名】 opens its group full screen from the line after it: the pictures one by one
+  // (click, Enter or →), then the story goes on. The list is kept per card; the library changes it.
+  const cardCgs = { lists: new Map(), loading: new Map() }
+  // A reply's 【CG|组名】 as the text keeps it (CG 回廊 lists what each reply showed).
+  const CG_MARK = /【\s*(?:CG|cg|插图|事件图)\s*[|｜]\s*([^【】\n]{1,40}?)\s*】/g
+
+  function cgsOf(cardId) {
+    if (cardCgs.lists.has(cardId)) return Promise.resolve(cardCgs.lists.get(cardId))
+    if (!cardCgs.loading.has(cardId)) {
+      cardCgs.loading.set(cardId, api(`/api/cards/${cardId}/cgs`)
+        .then(view => view.groups)
+        .catch(() => [])
+        .then(list => {
+          cardCgs.lists.set(cardId, list)
+          cardCgs.loading.delete(cardId)
+          return list
+        }))
+    }
+    return cardCgs.loading.get(cardId)
+  }
+  /** The groups with pictures, as far as they are known now (null: not read yet). */
+  const shownCgs = cardId => cardCgs.lists.get(cardId)?.filter(group => group.pictures?.length) ?? null
+  const cgSrc = (cardId, picture) => `/api/cgs/${cardId}/${picture.file}`
+
+  /** A reply's 【CG|组名】 reached: its group full screen (a name the card has no group for: nothing). */
+  async function showCardCg(cardId, name) {
+    const group = matchScene(name, (await cgsOf(cardId)).filter(item => item.pictures?.length))
+    if (!group || !state.on || state.cardId !== cardId) return
+    clearTimeout(state.autoTimer)
+    closePop()
+    let at = 0
+    let timer = null
+    const pictures = group.pictures
+    const picture = el('img', { alt: group.name })
+    const count = el('span', { class: 'vn-cg-count' })
+    const show = () => {
+      picture.src = cgSrc(cardId, pictures[at])
+      count.textContent = pictures.length > 1 ? `${group.name} · ${at + 1} / ${pictures.length}` : group.name
+      // 自动: each picture a while, then on.
+      clearTimeout(timer)
+      if (state.auto) timer = setTimeout(() => state.cgNext?.(), 4000)
+    }
+    const done = () => {
+      clearTimeout(timer)
+      closeCg()
+      if (state.auto && state.phase === 'shown' && !state.reading) state.autoTimer = setTimeout(() => state.auto && state.phase === 'shown' && advance(), 900)
+    }
+    const next = () => {
+      if (at < pictures.length - 1) {
+        at++
+        show()
+      } else done()
+    }
+    cgView.replaceChildren(picture, el('div', { class: 'vn-cg-tools' }, [
+      count,
+      ...(pictures.length > 1 ? [control('‹', t`上一张（←）`, () => state.cgStep(-1)), control('›', t`下一张（→）`, () => state.cgStep(1))] : []),
+      control(t`继续`, t`点画面、Enter 或空格：下一张，最后一张之后回到故事`, () => next()),
+    ]))
+    Object.assign(cgView.dataset, { mode: 'event', back: '' })
+    state.cgStep = by => {
+      if (at + by >= pictures.length) return done()
+      at = Math.max(0, at + by)
+      show()
+    }
+    state.cgNext = next
+    state.cgAt = null
+    state.cgRefresh = null
+    state.cgDone = done
+    show()
+    cgView.hidden = false
+  }
+
   function setBackground(cardId, scene) {
     const url = scene?.file ? `/api/scenes/${cardId}/${scene.file}` : ''
     if (bg.dataset.url === url) return
@@ -2151,6 +2254,8 @@ export function initVn(deps) {
 
   /** The place's picture (or the one drawn for this chat's turn there), or the fallback while it has none. */
   async function showScene(chat, where, writing) {
+    // The card's CG, read while the story opens (the next turn offers them: marks()).
+    cgsOf(chat.cardId)
     const list = await scenesOf(chat.cardId)
     if (getChat()?.id !== chat.id || !state.on) return
     // A place with nothing to tell it by (???, ……) is none: no scene could ever match it, so each picture drawn
@@ -2231,7 +2336,9 @@ export function initVn(deps) {
   // lists: { entryId: 立绘 }; faces: { entryId: { smile: … } } (表情差分); none: names with no picture at all;
   // why: a picture's address → why it could not be cut out (cutOut's why, or 'load').
   // pictures: `${cardId}:${name}` → the picture last shown of them (and the player's), for 撞色's figure; hero: who it was.
-  const cast = { lists: new Map(), faces: new Map(), loading: new Map(), cuts: new Map(), why: new Map(), token: 0, missing: null, none: new Map(), pictures: new Map(), hero: null }
+  // pendingActor: the speaker's 演出效果 for the line just come ({ step, actor }), played by the drawing of the stage that
+  // reaches that line (one drawn while pictures load may be overtaken by the next).
+  const cast = { lists: new Map(), faces: new Map(), loading: new Map(), cuts: new Map(), why: new Map(), token: 0, missing: null, none: new Map(), pictures: new Map(), hero: null, pendingActor: null }
 
   /** A sprites view from the server (GET, a drawing, an upload) becomes the lists. */
   function takeSprites(cardId, view) {
@@ -2349,7 +2456,7 @@ export function initVn(deps) {
    * the speaker lit and the rest dimmed, each with their expression; with
    * `effects`, the line's shake, flash or hop plays (once, as the line arrives).
    */
-  async function drawStage({ effects = false } = {}) {
+  async function drawStage() {
     const token = ++cast.token
     const cardId = state.cardId
     const step = state.steps[state.index]
@@ -2375,7 +2482,7 @@ export function initVn(deps) {
       for (const member of missing) cast.none.set(`${cardId}:${member.name}`, true)
       const speaker = missing.find(member => member.name === step.speaker && step.kind === 'dialogue')
       if (speaker?.entry) missingSprite(cardId, speaker.entry)
-      return drawStage({ effects })
+      return drawStage()
     }
     if (layout.speaker && cast.missing) {
       cast.missing = null
@@ -2412,7 +2519,11 @@ export function initVn(deps) {
     showHead(speaker?.src)
     heroPicture()
     setHero(heroPicture)
-    if (effects) playEffects(layout)
+    const pending = cast.pendingActor
+    if (pending?.step === step) {
+      cast.pendingActor = null
+      playActor(layout.speaker, pending.actor)
+    }
   }
 
   /**
@@ -2483,19 +2594,28 @@ export function initVn(deps) {
   }
 
   /** Once, as a line arrives: the picture shakes or flashes, the speaker hops or trembles. */
-  function playEffects(layout) {
-    if (prefs.effects === false || reducedMotion()) return
-    const replay = (node, name) => {
-      node.classList.remove(name)
-      void node.offsetWidth
-      node.classList.add(name)
-      node.addEventListener('animationend', () => node.classList.remove(name), { once: true })
-    }
-    const { screen, actor } = layout.effects
+  function effectsOn() {
+    return prefs.effects !== false && !reducedMotion()
+  }
+
+  function replay(node, name) {
+    node.classList.remove(name)
+    void node.offsetWidth
+    node.classList.add(name)
+    node.addEventListener('animationend', () => node.classList.remove(name), { once: true })
+  }
+
+  /** 闪白 or 震屏: the whole picture. */
+  function playScreen(screen) {
+    if (!screen || !effectsOn()) return
     if (screen === 'shake') replay(root, 'vn-shake')
     if (screen === 'flash') replay(flash, 'on')
-    const speaker = layout.speaker && onStage.get(layout.speaker)
-    if (actor && speaker) replay(speaker.box, actor)
+  }
+
+  /** 跳一下 or 发抖: the one speaking, when they stand on the stage. */
+  function playActor(name, actor) {
+    const speaker = name && onStage.get(name)
+    if (actor && speaker && effectsOn()) replay(speaker.box, actor)
   }
 
   /** Nobody on stage (a card's panel, waiting for the first line, leaving the mode). */
@@ -2534,6 +2654,11 @@ export function initVn(deps) {
     const key = `foe:${name}`
     if (!asked && (prefs.newSprite !== 'auto' || art.failed.has(key))) return
     enqueue(cardId, { key, label: t`${name}的立绘`, url: `/api/cards/${cardId}/foes/draw`, body: { name }, done })
+  }
+
+  /** 画技能图 (技能特写): asked for in the rule window, drawn in the queue as a foe's is; `note` says what the skill does. */
+  function drawSkill(cardId, name, note, done) {
+    enqueue(cardId, { key: `skill:${name}`, label: t`${name}的技能图`, url: `/api/cards/${cardId}/skills/draw`, body: { name, note }, done })
   }
 
   /**
@@ -2692,7 +2817,7 @@ export function initVn(deps) {
   })
 
   const act = (label, fn, extra = {}) => {
-    const b = el('button', { type: 'button', class: `btn small${extra.danger ? ' danger' : ''}`, text: label, disabled: extra.disabled, title: extra.title })
+    const b = el('button', { type: 'button', class: `btn small${extra.danger ? ' danger' : ''}${extra.primary ? ' primary' : ''}`, text: label, disabled: extra.disabled, title: extra.title })
     b.addEventListener('click', guard(fn))
     return b
   }
@@ -2725,7 +2850,7 @@ export function initVn(deps) {
     const chat = getChat()
     const cardId = chat?.cardId
     if (!library || !cardId) return
-    const tabs = el('div', { class: 'seg vn-library-tabs' }, [['scenes', t`场景`], ['sprites', t`立绘`]].map(([value, text]) => {
+    const tabs = el('div', { class: 'seg vn-library-tabs' }, [['scenes', t`场景`], ['sprites', t`立绘`], ['cgs', 'CG']].map(([value, text]) => {
       const b = el('button', { type: 'button', 'aria-pressed': String(libraryTab === value), text })
       b.addEventListener('click', () => {
         libraryTab = value
@@ -2735,12 +2860,12 @@ export function initVn(deps) {
     }))
     // 抽图历史 (server/draw-history.mjs): each place's old pictures, under it (a server without them: none).
     const kept = (await api(`/api/cards/${cardId}/history`).catch(() => null))?.slots ?? {}
-    const body = libraryTab === 'sprites' ? await spriteTab(chat, cardId, kept) : await sceneTab(chat, cardId, kept)
+    const body = libraryTab === 'sprites' ? await spriteTab(chat, cardId, kept) : libraryTab === 'cgs' ? await cgTab(chat, cardId) : await sceneTab(chat, cardId, kept)
     if (!library) return
     drawLibraryStatus()
     library.replaceChildren(
       el('form', { method: 'dialog', class: 'dialog-x' }, [el('button', { class: 'btn small', text: t`关闭` })]),
-      el('div', { class: 'vn-library-top' }, [el('h2', { text: libraryTab === 'sprites' ? t`立绘` : t`场景` }), tabs]),
+      el('div', { class: 'vn-library-top' }, [el('h2', { text: libraryTab === 'sprites' ? t`立绘` : libraryTab === 'cgs' ? t`卡的 CG` : t`场景` }), tabs]),
       libraryStatus,
       ...body,
     )
@@ -2766,8 +2891,123 @@ export function initVn(deps) {
     renderLibrary()
   }
 
+  // ─── 多选 in 场景 and 立绘: the ones ticked, drawn again or deleted together ───
+  // One per page, cleared on another card and after each batch.
+  const picks = { scenes: { on: false, cardId: null, ids: new Set() }, sprites: { on: false, cardId: null, ids: new Set() } }
+
+  /** A page's 多选 for this card, where `ids` can be ticked: ticks gone meanwhile (deleted elsewhere) are dropped. */
+  function pickFor(kind, cardId, ids) {
+    const pick = picks[kind]
+    if (pick.cardId !== cardId) {
+      pick.cardId = cardId
+      endPick(pick)
+    }
+    if (!ids.length) pick.on = false
+    for (const id of pick.ids) if (!ids.includes(id)) pick.ids.delete(id)
+    return pick
+  }
+
+  function endPick(pick) {
+    pick.on = false
+    pick.ids.clear()
+  }
+
+  /** 多选 / 完成, at the top of a page. */
+  const pickButton = (pick, title) => act(pick.on ? t`完成` : t`多选`, () => {
+    const on = !pick.on
+    endPick(pick)
+    pick.on = on
+    renderLibrary()
+  }, { title, primary: pick.on })
+
+  /**
+   * 多选 over a grid: `tick(item, id, name)` makes an item tickable (a click anywhere on it); `bar()` is the row above it,
+   * the count (`count(n)`) and the actions ({ label, title, danger, can(id), run(ids) }: each gets the ticked ones it can
+   * act on). Ticking shows again in place, without drawing the window anew (the grid keeps its scroll).
+   */
+  function picker(pick, ids, count, actions) {
+    const ticks = new Map()
+    let bar = null
+    const sync = () => {
+      for (const [id, { item, box }] of ticks) {
+        item.classList.toggle('picked', pick.ids.has(id))
+        box.checked = pick.ids.has(id)
+      }
+      const picked = [...pick.ids]
+      const next = el('div', { class: 'vn-bulk' }, [
+        el('span', { class: 'vn-bulk-count', text: count(picked.length) }),
+        act(t`全选`, () => {
+          for (const id of ids) pick.ids.add(id)
+          sync()
+        }),
+        act(t`全不选`, () => {
+          pick.ids.clear()
+          sync()
+        }, { disabled: !picked.length }),
+        el('span', { class: 'vn-bulk-gap' }),
+        ...actions.map(action => {
+          const usable = picked.filter(id => action.can?.(id) ?? true)
+          return act(action.label, () => action.run(usable), { disabled: !usable.length, danger: action.danger, title: action.title })
+        }),
+      ])
+      bar?.replaceWith(next)
+      bar = next
+    }
+    return {
+      tick(item, id, name) {
+        const box = el('input', { type: 'checkbox', class: 'vn-pick', 'aria-label': t`选中「${name}」` })
+        item.prepend(box)
+        item.addEventListener('click', () => {
+          if (pick.ids.has(id)) pick.ids.delete(id)
+          else pick.ids.add(id)
+          sync()
+        })
+        ticks.set(id, { item, box })
+        return item
+      },
+      bar() {
+        sync()
+        return bar
+      },
+    }
+  }
+
   async function sceneTab(chat, cardId, kept = {}) {
     const list = await scenesOf(cardId)
+    const pick = pickFor('scenes', cardId, list.map(scene => scene.id))
+    const picked = ids => list.filter(scene => ids.includes(scene.id))
+    const ticking = pick.on ? picker(pick, list.map(scene => scene.id), n => t`已选 ${n} 张`, [
+      {
+        label: t`重画`,
+        title: t`按原来的提示词把选中的场景都重画一遍，旧图留在每张下面`,
+        run: ids => {
+          // Queued one after another, each as its own 重画 would (one card draws one picture at a time).
+          for (const scene of picked(ids)) drawPlace(cardId, scene.name, { sceneId: scene.id })
+          toast(t`${ids.length} 张排上了，一张一张画`)
+          endPick(pick)
+          renderLibrary()
+        },
+      },
+      {
+        label: t`删除`,
+        danger: true,
+        run: async ids => {
+          if (!confirm(t`删除选中的 ${ids.length} 个场景？它们的旧图也一起删掉。`)) return
+          let view = null
+          try {
+            for (const scene of picked(ids)) view = await api(`/api/cards/${cardId}/scenes/${scene.id}`, { method: 'DELETE' })
+          } finally {
+            endPick(pick)
+            // Whatever went before a failure is gone: the server's list says so.
+            if (!view) view = await api(`/api/cards/${cardId}/scenes`).catch(() => null)
+            if (view) scenes.lists.set(cardId, view.scenes)
+            if (getChat()?.cardId === cardId && state.on) drawScene(getChat(), null)
+            renderLibrary()
+          }
+          toast(t`删掉了 ${ids.length} 个场景`)
+        },
+      },
+    ]) : null
     const place = scenes.current?.cardId === cardId ? scenes.current.place : ''
     const shown = scenes.current?.cardId === cardId ? scenes.current.scene : null
     const matched = place ? matchScene(place, list) : null
@@ -2788,11 +3028,20 @@ export function initVn(deps) {
           if (!name) return
           await sceneCall(cardId, `/api/cards/${cardId}/scenes`, 'POST', { name, image: await shrink(file) })
         }),
+        list.length ? pickButton(pick, t`勾选几个场景，一起重画或删除`) : null,
       ]),
       artMode('newScene', t`到了新地点：`),
     ])
-    const grid = el('div', { class: 'vn-library-grid' }, list.length ? list.map(scene => {
-      const thumb = scene.file ? zoomable(el('img', { src: `/api/scenes/${cardId}/${scene.file}`, alt: '', loading: 'lazy' }), scene.name, false) : el('div', { class: 'vn-library-empty', text: t`没有图` })
+    const grid = el('div', { class: `vn-library-grid${ticking ? ' picking' : ''}` }, list.length ? list.map(scene => {
+      const image = scene.file ? el('img', { src: `/api/scenes/${cardId}/${scene.file}`, alt: '', loading: 'lazy' }) : null
+      // 多选: a click anywhere on it ticks it; its own buttons wait until 完成.
+      if (ticking) {
+        return ticking.tick(el('figure', { class: `vn-library-item${scene === shown ? ' current' : ''}` }, [
+          image ?? el('div', { class: 'vn-library-empty', text: t`没有图` }),
+          el('figcaption', {}, [el('b', { text: scene.name }), scene.aliases.length ? el('span', { class: 'muted small', text: scene.aliases.join(t`、`) }) : null]),
+        ]), scene.id, scene.name)
+      }
+      const thumb = image ? zoomable(image, scene.name, false) : el('div', { class: 'vn-library-empty', text: t`没有图` })
       const tools = [
         place && scene !== shown ? act(t`用在这里`, async () => {
           // A scene chosen here wins over a pinned turn's picture.
@@ -2829,12 +3078,98 @@ export function initVn(deps) {
         }),
       ])
     }) : [el('p', { class: 'muted small', text: t`还没有场景。到了新地点会画一张，也可以在上面上传。` })])
-    return [head, grid]
+    return [head, ticking?.bar(), grid].filter(Boolean)
+  }
+
+  /** 卡的 CG: the card's groups, each a row of pictures; the server's view comes back from each change. */
+  async function cgCall(cardId, url, method, body) {
+    const view = await api(url, { method, body })
+    cardCgs.lists.set(cardId, view.groups)
+    renderLibrary()
+    return view
+  }
+
+  /** Picture files from the player, several at once. */
+  const pickPictures = () => new Promise(resolve => {
+    const input = el('input', { type: 'file', multiple: true, accept: 'image/png,image/jpeg,image/webp' })
+    input.addEventListener('change', () => resolve([...input.files]))
+    input.click()
+  })
+
+  /** Pictures added to a group one at a time, in the order picked (by file name). */
+  async function addCgPictures(cardId, groupId, files) {
+    const sorted = [...files].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
+    for (const file of sorted) await cgCall(cardId, `/api/cards/${cardId}/cgs/${groupId}/pictures`, 'POST', { image: await shrink(file) })
+    toast(t`加了 ${sorted.length} 张`)
+  }
+
+  async function cgTab(chat, cardId) {
+    const list = await cgsOf(cardId)
+    const offered = formatOn(chat) || list.some(group => group.pictures?.length)
+    const head = el('div', { class: 'vn-library-head' }, [
+      el('p', { text: t`卡自带的 CG，一组是一幕，可以有好几张。视觉小说里，模型写到某一组的那一幕时，会在前面标上【CG|组名】（标记本身不显示），这组图就全屏一张张放，点一下看下一张，放完回到故事。` }),
+      el('p', { class: 'muted small', text: offered
+        ? t`模型只看得到组名和说明：名字写清是谁、哪一幕（比如「林青禾-雨夜告白」），说明写什么时候用。`
+        : t`还没有带图的组。导入角色卡时选带图包的压缩包，CG 会自动放进来；也可以在这里一组组建。` }),
+      el('div', { class: 'row' }, [
+        act(t`新建一组`, async () => {
+          const name = prompt(t`这组 CG 叫什么（谁、哪一幕）？`, '')?.trim()
+          if (!name) return
+          const note = prompt(t`什么时候放这组（可以不写）`, '')
+          if (note === null) return
+          const view = await cgCall(cardId, `/api/cards/${cardId}/cgs`, 'POST', { name, note })
+          const files = await pickPictures()
+          if (files.length) await addCgPictures(cardId, view.group.id, files)
+        }),
+      ]),
+    ])
+    const items = list.map(group => {
+      const strip = el('div', { class: 'vn-cg-strip' }, group.pictures.map((picture, i) => el('div', { class: 'vn-cg-cell' }, [
+        zoomable(el('img', { src: cgSrc(cardId, picture), alt: '', loading: 'lazy' }), `${group.name} ${i + 1}`, false),
+        act('×', async () => {
+          if (confirm(t`从「${group.name}」里删掉第 ${i + 1} 张？`)) await cgCall(cardId, `/api/cards/${cardId}/cgs/${group.id}/pictures/${picture.file}`, 'DELETE')
+        }, { title: t`删掉这张`, danger: true }),
+      ])))
+      const tools = [
+        act(t`加图`, async () => {
+          const files = await pickPictures()
+          if (files.length) await addCgPictures(cardId, group.id, files)
+        }),
+        group.pictures.length ? act(t`放一遍`, () => {
+          library.close()
+          showCardCg(cardId, group.name)
+        }, { disabled: !state.on || state.cardId !== cardId }) : null,
+        act(t`改名和说明`, async () => {
+          const name = prompt(t`组名`, group.name)?.trim()
+          if (!name) return
+          const note = prompt(t`什么时候放这组（可以不写）`, group.note ?? '')
+          if (note === null) return
+          const aliases = prompt(t`别名（模型这样写也算这一组），用逗号分开`, (group.aliases ?? []).join(t`，`))
+          if (aliases === null) return
+          await cgCall(cardId, `/api/cards/${cardId}/cgs/${group.id}`, 'PUT', { name, note, aliases: aliases.split(/[,，、]/).map(a => a.trim()).filter(Boolean) })
+        }),
+        act(t`删除`, async () => {
+          if (confirm(t`删除「${group.name}」这组 CG（${group.pictures.length} 张）？`)) await cgCall(cardId, `/api/cards/${cardId}/cgs/${group.id}`, 'DELETE')
+        }, { danger: true }),
+      ]
+      return el('section', { class: 'vn-cg-group' }, [
+        el('div', { class: 'vn-cg-group-head' }, [
+          el('b', { text: group.name }),
+          el('span', { class: 'muted small', text: [t`${group.pictures.length} 张`, group.note, group.aliases?.length ? t`也叫 ${group.aliases.join(t`、`)}` : ''].filter(Boolean).join(' · ') }),
+        ]),
+        group.pictures.length ? strip : el('p', { class: 'muted small', text: t`还没有图` }),
+        el('div', { class: 'row' }, tools),
+      ])
+    })
+    return [head, items.length ? el('div', { class: 'vn-cg-groups' }, items) : el('p', { class: 'muted small', text: t`这张卡还没有 CG。` })]
   }
 
   async function spriteTab(chat, cardId, kept = {}) {
     const roster = state.roster.get(cardId) ?? []
     const list = await spritesOf(cardId)
+    const members = [...roster.filter(member => !member.player), ...roster.filter(member => member.player)]
+    // Without a 名册 there is no one to tick.
+    const pick = pickFor('sprites', cardId, roster.some(member => !member.player) ? members.map(member => member.id) : [])
     const toggleRow = (text, hint, on, onChange) => {
       const input = el('input', { type: 'checkbox', class: 'switch', checked: on })
       input.addEventListener('change', () => onChange(input.checked))
@@ -2846,7 +3181,9 @@ export function initVn(deps) {
         ? t`表情：按模型在每句对白前标的【名字|表情】换；没标的按引号前后的叙述换（笑了笑→微笑、红了脸→害羞……），认不出就保持上一个。下面每个人可以画一套表情，在立绘上只改脸。`
         : t`表情：每句按引号前后的叙述换（笑了笑→微笑、红了脸→害羞、皱眉→生气……），认不出就保持上一个。下面每个人可以画一套表情，在立绘上只改脸。` }),
       artMode('newSprite', t`没有立绘的角色说话时：`),
-      el('div', { class: 'row' }, [act(t`一键备齐`, () => prepare(cardId, { places: scenes.current?.cardId === cardId && scenes.current.place ? [scenes.current.place] : [] }), { title: t`名单里还没有立绘的人画立绘，再给每个人画齐表情；现在的地点没有背景的话也画一张` })]),
+      el('div', { class: 'row' }, [act(t`一键备齐`, () => prepare(cardId, { places: scenes.current?.cardId === cardId && scenes.current.place ? [scenes.current.place] : [] }), { title: t`名单里还没有立绘的人画立绘，再给每个人画齐表情；现在的地点没有背景的话也画一张` }),
+        roster.some(member => !member.player) ? pickButton(pick, t`勾选几个人，一起重画或删除立绘`) : null,
+      ]),
       // Speakers are told apart by the 名册's names and aliases: one the story calls otherwise has no 立绘.
       deps.openMedia ? el('div', { class: 'vn-library-tip' }, [
         el('span', { class: 'muted small', text: t`有角色的立绘显示不出来，或者故事里给角色起了外号、别名：打开角色名册，点「从对话里补充」，按最近的对话更新名册。` }),
@@ -2880,10 +3217,43 @@ export function initVn(deps) {
         })]) : null,
       ])]
     }
-    const members = [...roster.filter(member => !member.player), ...roster.filter(member => member.player)]
     const names = speakerNames({ char: chat.names?.char, user: chat.names?.user, roster })
-    const grid = el('div', { class: 'vn-library-grid sprites' }, members.map(member => {
-      const entry = names.find(item => item.id === member.id) ?? { name: member.name, id: member.id, keys: [] }
+    const entryOf = member => names.find(item => item.id === member.id) ?? { name: member.name, id: member.id, keys: [] }
+    const picked = ids => members.filter(member => ids.includes(member.id))
+    const ticking = pick.on ? picker(pick, members.map(member => member.id), n => t`已选 ${n} 个`, [
+      {
+        label: t`重画`,
+        title: t`按名册里现在的长相把选中的人的立绘都画一遍（还没有的就画一张），旧立绘留在每人下面；没写长相的跳过`,
+        can: id => Boolean(members.find(member => member.id === id)?.looks),
+        run: ids => {
+          for (const member of picked(ids)) drawSprite(cardId, entryOf(member))
+          const skipped = pick.ids.size - ids.length
+          toast(skipped ? t`${ids.length} 张排上了，一张一张画；${skipped} 个没写长相，跳过了` : t`${ids.length} 张排上了，一张一张画`, skipped ? 6000 : undefined)
+          endPick(pick)
+          renderLibrary()
+        },
+      },
+      {
+        label: t`删除`,
+        danger: true,
+        title: t`删除选中的人画的或上传的立绘；人设图和表情不受影响`,
+        can: id => Boolean(list[id]),
+        run: async ids => {
+          if (!confirm(t`删除选中的 ${ids.length} 张立绘？（人设图不受影响）`)) return
+          try {
+            for (const member of picked(ids)) takeSprites(cardId, await api(`/api/cards/${cardId}/sprites/${member.id}`, { method: 'DELETE' }))
+          } finally {
+            endPick(pick)
+            cast.none.clear()
+            if (getChat()?.cardId === cardId && state.on) drawStage()
+            renderLibrary()
+          }
+          toast(t`删掉了 ${ids.length} 张立绘`)
+        },
+      },
+    ]) : null
+    const grid = el('div', { class: `vn-library-grid sprites${ticking ? ' picking' : ''}` }, members.map(member => {
+      const entry = entryOf(member)
       const thumb = el('div', { class: 'vn-library-sprite' }, [el('span', { class: 'muted small', text: '…' })])
       const kindLabel = el('span', { class: 'muted small' })
       const drawn = list[member.id]
@@ -2892,13 +3262,18 @@ export function initVn(deps) {
       const troubleLine = el('span', { class: 'muted small', hidden: true })
       spriteFor(cardId, entry).then(found => {
         kindLabel.textContent = found ? { sprite: drawnLabel, ref: t`人设图抠出`, avatar: t`头像抠出` }[found.kind] : ''
-        thumb.replaceChildren(found ? zoomable(el('img', { src: found.src, alt: '' }), t`${entry.name} · ${kindLabel.textContent}`) : el('span', { class: 'muted small', text: t`没有能用的图` }))
+        // In 多选 a click ticks it instead of opening it.
+        const img = found ? el('img', { src: found.src, alt: '' }) : null
+        thumb.replaceChildren(img ? ticking ? img : zoomable(img, t`${entry.name} · ${kindLabel.textContent}`) : el('span', { class: 'muted small', text: t`没有能用的图` }))
         const trouble = found?.kind === 'sprite' ? '' : spriteTrouble(cardId, member.id)
         troubleLine.textContent = trouble ? t`${drawnLabel}用不了：${trouble}` : ''
         troubleLine.hidden = !trouble
       })
       // Drawn from the looks the 名册 had then (scenes.mjs keeps them): they have changed since.
       const changed = drawn?.source === 'drawn' && typeof drawn.looks === 'string' && (drawn.looks !== (member.looks ?? '') || drawn.outfit !== (member.outfit ?? ''))
+      const caption = el('figcaption', {}, [el('b', { text: member.player ? t`${entry.name}（玩家）` : entry.name }), kindLabel, troubleLine, changed ? el('span', { class: 'muted small', text: t`名册里的长相改过了，重画会按现在的画` }) : null])
+      // 多选: a click anywhere on it ticks it; its own buttons and 表情 wait until 完成.
+      if (ticking) return ticking.tick(el('figure', { class: 'vn-library-item' }, [thumb, caption]), member.id, entry.name)
       const busy = art.jobs.get(cardId)?.key === `sprite:${member.id}`
       const tools = [
         act(drawn ? t`重画` : t`画立绘`, () => drawSprite(cardId, entry), { disabled: !member.looks || busy, title: member.looks ? '' : t`先在「配图与朗读 → 角色名册」里写长相` }),
@@ -2921,13 +3296,13 @@ export function initVn(deps) {
       ]
       return el('figure', { class: 'vn-library-item' }, [
         thumb,
-        el('figcaption', {}, [el('b', { text: member.player ? t`${entry.name}（玩家）` : entry.name }), kindLabel, troubleLine, changed ? el('span', { class: 'muted small', text: t`名册里的长相改过了，重画会按现在的画` }) : null]),
+        caption,
         el('div', { class: 'row' }, tools),
         oldRow(cardId, keptItems(cardId, kept[`sprite:${member.id}`]), t`旧立绘`, view => spriteTaken(cardId, view)),
         member.player ? null : pack?.cardId === cardId && pack.memberId === member.id ? packView(cardId, entry, member) : faceRow(cardId, entry, member, Boolean(drawn || member.ref), kept),
       ])
     }))
-    return [head, grid]
+    return [head, ticking?.bar(), grid].filter(Boolean)
   }
 
   /** 从人设图抠出: when its background can be cut out (as the stage would), the 人设图 becomes the 立绘. */
@@ -3348,6 +3723,9 @@ export function initVn(deps) {
       if ((key === 'ArrowLeft' || key === 'ArrowRight') && state.cgStep) {
         event.preventDefault()
         state.cgStep(key === 'ArrowLeft' ? -1 : 1)
+      } else if ((key === ' ' || key === 'Enter' || key === 'PageDown') && state.cgNext) {
+        event.preventDefault()
+        state.cgNext()
       } else if (key === 'g' || key === 'G') openGallery(state.cgAt)
       return
     }
@@ -3449,10 +3827,11 @@ export function initVn(deps) {
     toast(on ? t`下一轮起，模型会给每句对白标上说话人和表情` : t`下一轮起不再要求标注，说话人和表情按叙述判断`)
   }
 
-  /** For a turn about to be sent: ask for the format? (Said once, the first time either way.) */
+  /** For a turn about to be sent: ask for the format (true), only offer the card's CG ('cg'), or neither? (Said once, the first time either way.) */
   function marks(chat) {
     if (!chat || !isOn(chat.cardId)) return false
     const on = formatOn(chat)
+    if (!on && shownCgs(chat.cardId)?.length) return 'cg'
     if (typeof formatSaved(chat.cardId) !== 'boolean') {
       if (on) toldOnce('toldFormat', t`视觉小说里，模型会给每句对白标上说话人和表情（【名字|表情】，标记本身不显示），认人、换表情更准。不想要可以在「立绘」里关掉「对白标注」。`)
       else toldOnce('toldFormatPreset', t`用导入的预设时，不要求模型标说话人和表情，免得和预设自己的格式冲突。想要更准的认人和表情，可以在「立绘」里打开「对白标注」。`)
@@ -3497,5 +3876,5 @@ export function initVn(deps) {
 
   // 创作角色卡's 备齐门面图: the same pictures 做成视觉小说 gets ready, without entering the mode.
   const prepareArt = (cardId, places = [], { faces = true, skipForms = false, map = null, creation = [] } = {}) => prepare(cardId, { places, faces, skipForms, map, creation })
-  return { render, streamed, isOn, turnFlags, marks, makeReady, prepareArt, picturesChanged, refreshEnd, compose: openCompose, drawFoe, pictureFor, loadPictures }
+  return { render, streamed, isOn, turnFlags, marks, makeReady, prepareArt, picturesChanged, refreshEnd, compose: openCompose, drawFoe, drawSkill, pictureFor, loadPictures }
 }

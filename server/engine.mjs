@@ -14,6 +14,7 @@ import { appHelp, helpSystem, lookupGate, lookupLabel, lookupLine, lookupOf, MAX
 import { buildTurnPrompt, chatTemplates, drawnEntries, everyTurnReminder, openingBlock, renderEntry, replaceMacros, templateText, webSearchNote } from './prompt.mjs'
 import { applyStateUpdates, applyWrites, displayText, keepReadOnly, stateWrites, withoutOpenEnd, writeLabels } from './state.mjs'
 import { choiceFights, cutAtGate, withoutGameMarks } from '../web/shared/game/marks.js'
+import { cgList, readCgs } from './card-cgs.mjs'
 import { formsTold, growsOn, perkOf, perksOn } from '../web/shared/game/growth.js'
 import { applyOps, checkExperience, checkLine, checkPractice, cleanCheck, cleanOps, fieldedOf, gateKinds, keptSheet, opWrites, pausesOn, rankNow, rollCheck, rulesOn, sheetOf, sheetOnPath } from '../web/shared/game/sheet.js'
 import { cleanFight, encounterSetup, fightLine, fightResult } from '../web/shared/game/encounter.js'
@@ -505,8 +506,9 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       replyLength: Number(settings.replyLength) || 0,
       replyRange: await replyRange(chat, settings),
       presetText: resolve(presetText),
-      reminder: [everyTurnReminder(chat.systemPrompt, books, { presetRules: hasPrefixRules(preset), mvu: usesMvu(card, books), choices: asksChoices(chat), selfCheck: asksSelfCheck(chat), scripts }), game?.reminder].filter(Boolean).join(''),
+      reminder: [everyTurnReminder(chat.systemPrompt, books, { presetRules: hasPrefixRules(preset), mvu: usesMvu(card, books, preset), choices: asksChoices(chat), selfCheck: asksSelfCheck(chat), scripts }), game?.reminder].filter(Boolean).join(''),
       marks,
+      cgs: marks ? cgList(await readCgs(store.dirs, chat.cardId)) : [],
       game: game?.text,
       injected: { before: injections.before.map(item => ({ ...item, text: resolve(item.text) })), after: injections.after.map(item => ({ ...item, text: resolve(item.text) })) },
     })
@@ -1667,8 +1669,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
    */
   async function missesUpdate(chat, node) {
     if (!node || node.role !== 'assistant' || node.gate || (hasUpdateBlock(node.text) && !node.updateUnread)) return false
-    const [settings, card] = await Promise.all([store.getSettings(), store.getCard(chat.cardId)])
-    return usesMvu(card, await booksForCard(store, card, settings, chat))
+    const [settings, card, preset] = await Promise.all([store.getSettings(), store.getCard(chat.cardId), presetFor(store, chat.presetId)])
+    return usesMvu(card, await booksForCard(store, card, settings, chat), preset)
   }
 
   /**
@@ -1692,9 +1694,9 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       // Its text is in the summary now, and a compaction point is not edited (editMessage).
       if (node.compaction) throw httpError(400, msg`这条回复已经压缩进剧情存档，不能再补写变量`)
       if (hasUpdateBlock(node.text) && !node.updateUnread) throw httpError(400, msg`这条回复已经有变量更新了`)
-      const [settings, card] = await Promise.all([store.getSettings(), store.getCard(chat.cardId)])
+      const [settings, card, preset] = await Promise.all([store.getSettings(), store.getCard(chat.cardId), presetFor(store, chat.presetId)])
       const books = await booksForCard(store, card, settings, chat)
-      if (!usesMvu(card, books)) throw httpError(400, msg`这张卡不用 MVU 变量`)
+      if (!usesMvu(card, books, preset)) throw httpError(400, msg`这张卡不用 MVU 变量`)
       // As the turn worked it out: from the reply it continued (the player's message sits in between),
       // with what that turn's templates wrote.
       const turn = chat.nodes[node.parent]

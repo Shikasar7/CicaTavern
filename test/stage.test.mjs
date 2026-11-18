@@ -2,7 +2,7 @@
 // effects, and who stands on the stage line by line.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { effectsOf, EXPRESSION_LOOK, EXPRESSIONS, FACE_WORDS, faceOf, guessExpression, markEffects, heroOf, packFaces, stageAt } from '../web/shared/stage.js'
+import { effectsOf, EXPRESSION_LOOK, EXPRESSIONS, FACE_WORDS, faceOf, guessExpression, lineEffects, markEffects, heroOf, packFaces, stageAt } from '../web/shared/stage.js'
 import { speakerNames } from '../web/shared/vn.js'
 
 test('an expression from the narration around a line, else from the voice', () => {
@@ -197,4 +197,13 @@ test("heroOf: 撞色's figure is the player's side, never this round's foe", () 
   assert.equal(heroOf(foeOnly, 0, { names, foes: ['黑鹞子'], pictured: notPlayer, before: '黑鹞子' }), null)
   assert.equal(heroOf(foeOnly, 0, { names, foes: ['黑鹞子'], pictured: notPlayer }), null)
   assert.equal(heroOf([], 0, { names: [], pictured: all }), null)
+})
+
+test('a line\'s effects: its mark\'s, else its narration\'s, a mark of nothing but a CG included', () => {
+  const line = (plain, effects) => ({ type: 'line', kind: 'narration', plain, ...(effects ? { effects } : {}) })
+  assert.deepEqual(lineEffects(line('一道闪电劈下来。', { screen: 'shake' })), { screen: 'shake', actor: null }, 'the mark wins')
+  assert.deepEqual(lineEffects(line('一道闪电劈下来。')), { screen: 'flash', actor: null })
+  // 【CG|…】 alone says nothing of the picture: the narration's flash still comes.
+  assert.deepEqual(lineEffects(line('一道闪电劈下来。', { cg: '雷夜' })), { screen: 'flash', actor: null })
+  assert.deepEqual(lineEffects({ type: 'option', plain: '一道闪电' }), { screen: null, actor: null })
 })

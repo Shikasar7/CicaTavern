@@ -43,19 +43,22 @@ export function initCardScripts({ api, el, toast, getChat, frameContext, ownerCo
   const enlarge = el('button', { type: 'button', class: 'btn small ghost script-enlarge', text: t`放大`, title: t`在大窗口里看`, onclick: () => open(false) })
   // A layer always laid out, put away by being invisible (not a closed <dialog>, whose content is not laid out): the
   // scripts' frames keep their size while put away, for a script that measures what it draws.
-  const panel = el('div', { class: 'script-window', role: 'dialog', 'aria-modal': 'true' }, [
-    el('div', { class: 'script-window-head' }, [
-      title,
-      el('div', { class: 'script-window-tools' }, [
-        enlarge,
-        el('button', { type: 'button', class: 'btn small ghost', text: t`收起`, title: t`收起窗口，脚本还在运行；再按它的按钮会打开`, onclick: () => close() }),
-      ]),
+  const head = el('div', { class: 'script-window-head' }, [
+    title,
+    el('div', { class: 'script-window-tools' }, [
+      enlarge,
+      el('button', { type: 'button', class: 'btn small ghost', text: t`收起`, title: t`收起窗口，脚本还在运行；右下角留一个小按钮，点它或脚本的按钮都会再打开`, onclick: () => close() }),
     ]),
-    body,
   ])
+  const panel = el('div', { class: 'script-window', role: 'dialog', 'aria-modal': 'true' }, [head, body])
   const windowBox = el('div', { class: 'script-layer', 'aria-hidden': 'true' }, [panel])
-  windowBox.addEventListener('click', event => event.target === windowBox && close())
-  document.body.append(windowBox)
+  // Not the click a drag of the docked panel ends with (it lands on the layer).
+  let dragEnded = false
+  windowBox.addEventListener('click', event => event.target === windowBox && !dragEnded && close())
+  // Where a window put away with something still on it comes back: a small chip for each, where the docked panel
+  // sits. A status bar has no button of its own to bring it back.
+  const chips = el('div', { class: 'script-chips', role: 'toolbar', 'aria-label': t`收起的脚本窗口`, hidden: true })
+  document.body.append(windowBox, chips)
   const isOpen = () => windowBox.classList.contains('open')
   const isDocked = () => windowBox.classList.contains('docked')
   /**
@@ -67,20 +70,104 @@ export function initCardScripts({ api, el, toast, getChat, frameContext, ownerCo
     const spots = vn ? [vn.querySelector('.vn-box'), vn.classList.contains('vn-compose') ? document.querySelector('#composer') : null] : [document.querySelector('#composer')]
     const tops = spots.map(node => node?.getBoundingClientRect().top).filter(top => top > 0)
     const top = tops.length ? Math.min(...tops) : 0
-    if (top > 0) windowBox.style.setProperty('--dock-bottom', `${Math.max(12, Math.round(window.innerHeight - top + 8))}px`)
+    if (top > 0) for (const box of [windowBox, chips]) box.style.setProperty('--dock-bottom', `${Math.max(12, Math.round(window.innerHeight - top + 8))}px`)
   }
-  window.addEventListener('resize', () => isDocked() && placeDock())
+  const placeIfShown = () => {
+    if (isDocked() || !chips.hidden) placeDock()
+    if (isDocked()) placeSpot()
+  }
+  window.addEventListener('resize', placeIfShown)
+
+  // The docked panel dragged by its title row to where the player wants it, kept on this device; a double click there
+  // puts it back above the input box.
+  const SPOT_KEY = 'agentTavernScriptDock'
+  let spot = (() => {
+    try {
+      const kept = JSON.parse(localStorage.getItem(SPOT_KEY) || 'null')
+      return kept && Number.isFinite(kept.x) && Number.isFinite(kept.y) ? kept : null
+    } catch {
+      return null
+    }
+  })()
+  const keepSpot = () => {
+    try {
+      if (spot) localStorage.setItem(SPOT_KEY, JSON.stringify(spot))
+      else localStorage.removeItem(SPOT_KEY)
+    } catch {}
+  }
+  /** Where `spot` puts the panel, kept inside the window (a smaller window, a phone turned). */
+  function placeSpot() {
+    windowBox.classList.toggle('moved', Boolean(spot))
+    if (!spot) return
+    const x = Math.min(Math.max(0, spot.x), Math.max(0, window.innerWidth - panel.offsetWidth))
+    const y = Math.min(Math.max(0, spot.y), Math.max(0, window.innerHeight - panel.offsetHeight))
+    panel.style.setProperty('--dock-x', `${Math.round(x)}px`)
+    panel.style.setProperty('--dock-y', `${Math.round(y)}px`)
+    return { x, y }
+  }
+  head.addEventListener('pointerdown', event => {
+    if (!isDocked() || event.button !== 0 || event.target.closest('button')) return
+    event.preventDefault()
+    const box = panel.getBoundingClientRect()
+    const dx = event.clientX - box.left
+    const dy = event.clientY - box.top
+    // The whole layer takes the pointer while dragging: over a frame (the story's, a script's) the moves would go to it.
+    windowBox.classList.add('dragging')
+    const move = moved => {
+      spot = { x: moved.clientX - dx, y: moved.clientY - dy }
+      spot = placeSpot()
+    }
+    const end = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', end)
+      window.removeEventListener('pointercancel', end)
+      windowBox.classList.remove('dragging')
+      dragEnded = true
+      setTimeout(() => { dragEnded = false }, 0)
+      keepSpot()
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', end)
+    window.addEventListener('pointercancel', end)
+  })
+  head.addEventListener('dblclick', event => {
+    if (!isDocked() || event.target.closest('button')) return
+    spot = null
+    keepSpot()
+    placeSpot()
+  })
   // The visual novel turned on or off, its input box opened or put away.
   const stage = document.querySelector('.stage')
-  if (stage) new MutationObserver(() => isDocked() && requestAnimationFrame(placeDock)).observe(stage, { attributes: true, attributeFilter: ['class'] })
+  if (stage) new MutationObserver(() => requestAnimationFrame(placeIfShown)).observe(stage, { attributes: true, attributeFilter: ['class'] })
+
+  /** A chip for each script the player put away while it still has something on it; pressed, it comes back docked. */
+  function drawChips() {
+    const away = [...frames.values()].filter(entry => entry.visible && entry.dismissed && entry.frame.dataset.script !== showing)
+    chips.replaceChildren(...away.map(entry => el('button', {
+      type: 'button',
+      class: 'btn small script-chip',
+      text: entry.label,
+      title: t`打开「${entry.label}」`,
+      onclick: () => {
+        entry.dismissed = false
+        showFrame(entry, true)
+      },
+    })))
+    // Not over the window while it is open: they come back when it is put away.
+    chips.hidden = !away.length || isOpen()
+    if (!chips.hidden) placeDock()
+  }
   /** Shown as the big window, or docked (the small panel bottom right). */
   function open(docked) {
     if (docked) placeDock()
     windowBox.classList.add('open')
     windowBox.classList.toggle('docked', docked)
+    if (docked) placeSpot()
+    head.title = docked ? t`按住标题拖到想放的地方；双击标题回到右下角` : ''
     panel.setAttribute('aria-modal', docked ? 'false' : 'true')
     enlarge.hidden = !docked
     windowBox.setAttribute('aria-hidden', 'false')
+    drawChips()
   }
   /**
    * The window put away. Another script with something on it that the player has not put away comes back docked
@@ -93,6 +180,7 @@ export function initCardScripts({ api, el, toast, getChat, frameContext, ownerCo
     showing = null
     const waiting = next ? [...frames.values()].find(entry => entry.visible && !entry.dismissed && entry.frame.dataset.script !== was) : null
     if (waiting) showFrame(waiting, true)
+    else drawChips()
   }
   /** The player puts the window away: what it shows stays away until its button is pressed, though it changes. */
   function close() {
@@ -117,6 +205,7 @@ export function initCardScripts({ api, el, toast, getChat, frameContext, ownerCo
     frames.clear()
     showing = null
     starting++
+    drawChips()
   }
 
   /** A list of the server's (buttonsOf) as this page keeps it: each script and button says whose it is. */
@@ -264,11 +353,12 @@ export function initCardScripts({ api, el, toast, getChat, frameContext, ownerCo
     const name = entry.frame.dataset.script
     if (!visible) {
       if (showing === name) putAway()
+      else drawChips()
       return
     }
     const pressed = Date.now() - entry.pressedAt < PRESS_SHOWS_MS
     if (pressed) return showFrame(entry, false)
-    if (entry.dismissed) return
+    if (entry.dismissed) return drawChips()
     // The big window open on another script stays; this one waits for its button or that window to close.
     if (isOpen() && !isDocked() && showing !== name) return
     showFrame(entry, isOpen() && showing === name ? isDocked() : true)

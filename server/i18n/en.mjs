@@ -8,6 +8,12 @@ const pl = (n, one, many) => `${n} ${Number(String(n).replace(/,/g, '')) === 1 ?
 
 export default {
   // ─── http.mjs, forge/ ──────────────────────────────────────────────────
+  // 备份与换设备 (backup.mjs)
+  "导出备份": "Exporting a backup",
+  "正在导入上一个备份，等它完成": "The last backup is still being imported, wait for it to finish",
+  "这不是 CicaTavern 的备份包（设置 → 更多 → 备份与换设备 导出的 zip）": "This isn't a CicaTavern backup (a zip exported from Settings → More → Backup & moving devices)",
+  "这个备份是更新版本的 CicaTavern 导出的，先更新这边的 CicaTavern": "This backup comes from a newer CicaTavern: update CicaTavern here first",
+  "读不了这个压缩包：{0}": "Can't read this zip: {0}",
   "文件太大": "File is too large",
   "助手": "Assistant",
   "开场不能删除": "The opening can't be deleted",
@@ -1053,6 +1059,34 @@ export default {
   "这个文件里没有酒馆助手脚本": "There are no Tavern Helper scripts in this file",
   "这个对话用的是应用自带的预设，脚本不能改它": "This chat uses one of the app's built-in presets, which scripts can't change",
   "没有叫「{0}」的预设": "There is no preset called \"{0}\"",
+  // 导入角色卡 with a CharX or an 整合包 (card-bundle.mjs), 卡的 CG (card-cgs.mjs)
+  "这个 zip 读不出来（分卷、zip64 和加密的 zip 不支持；7z、rar 先解压，再选里面的卡）": "This zip can't be read (split, zip64 and encrypted zips aren't supported; unpack a 7z or rar first and pick the card inside)",
+  "这个 .charx 里没有角色卡": "There's no character card in this .charx",
+  "别的图 {0} 张": "{0} other pictures",
+  "RisuAI 模块": "a RisuAI module",
+  "CG 组要有名字": "A CG group needs a name",
+  "CG 要是 PNG、JPG 或 WebP": "A CG must be a PNG, JPG or WebP",
+  "CG 太大（最多 12MB）": "The CG is too large (12 MB at most)",
+  "没有这组 CG": "No such CG group",
+  "CG 组太多了（最多 {0} 组），先删掉一些": "Too many CG groups ({0} at most): delete some first",
+  "已经有叫「{0}」的 CG 组了": "There's already a CG group called \"{0}\"",
+  "一组 CG 最多 {0} 张": "A CG group holds {0} pictures at most",
+  "这组 CG 里没有这张": "That picture isn't in this CG group",
+  "这个压缩包要在导入窗口里选好再导入": "Pick what to import from this zip in its import window first",
+  "没有这张 CG": "No such CG",
+  // 选图 (http.mjs image/put, media.mjs putImage) and 图库's 卡的 CG (gallery.mjs)
+  "卡的CG": "Card CGs",
+  "这张图已经不在了": "That picture is no longer there",
+  "配图要是 PNG、JPG 或 WebP": "The picture must be a PNG, JPG or WebP",
+  "从图库选": "From the Gallery",
+  "本地上传": "Uploaded",
+  // 技能特写 (game.mjs, http.mjs, media.mjs)
+  "没说是哪个技能": "No skill named",
+  "技能图要是 PNG、JPG 或 WebP": "The skill picture must be PNG, JPG or WebP",
+  "技能图太大（最多 12MB）": "The skill picture is too large (12 MB at most)",
+  "没有这张技能图": "No such skill picture",
+  "规则里没有这个技能": "The rules don't have this skill",
+  "{0} · {1} 没有写出技能图的提示词": "{0} · {1} didn't write a prompt for the skill picture",
 }
 
 // Whole messages from the modules bin/launch.mjs loads on its own (store.mjs,

@@ -3,7 +3,7 @@
 // Shared with the server (server/scenes.mjs matches places) and the tests, so
 // it keeps to what the phone app's Node has: no \p{…}, Intl or normalize().
 import { FOLD_TAG, timeBoxOf } from './basic.js'
-import { EFFECT_KINDS, faceOf, markEffects } from './stage.js'
+import { CG_KINDS, EFFECT_KINDS, faceOf, markEffects } from './stage.js'
 
 // Reasoning in its own tag (<thinking>, <思考>…): FOLD_TAG is defined in basic.js and offered here as before.
 export { FOLD_TAG }
@@ -508,6 +508,7 @@ const withOptionsOnly = text => text
 // server/prompt.mjs asks for them in the turn's message:
 //   【林青禾|微笑】「你来了。」   who says the line and how they look
 //   【效果|震屏】                 what the picture does (on its own line, before the line it is for)
+//   【CG|组名】                   one of the card's CG groups, full screen (the same way: on its own line)
 // The reader takes them out of the text; the chat shows the name instead
 // (markSpeakers). One way to read 【kind|value】 for the marks to come.
 
@@ -522,20 +523,26 @@ const EFFECT_MARK = /(?:\*\*)?【\s*([^【】|｜\n]{1,8}?)\s*[|｜]\s*([^【】
 // A mark still being written at the end of a reply coming in.
 const OPEN_MARK = /(?:\*\*)?【[^【】\n]{0,40}$|(?:\*\*)?【[^【】\n]{1,40}[|｜][^【】\n]{0,40}】(?:\*\*)?\s*[：:]?\s*$/
 
-const isEffectKind = kind => EFFECT_KINDS.includes(String(kind).trim().toLowerCase())
+const isCgKind = kind => CG_KINDS.includes(String(kind).trim().toLowerCase())
+const isEffectKind = kind => isCgKind(kind) || EFFECT_KINDS.includes(String(kind).trim().toLowerCase())
 
 /** Two lots of effects as one (the later wins where both ask), or null when neither asks. */
-const joinEffects = (a, b) => (a || b ? { screen: b?.screen ?? a?.screen ?? null, actor: b?.actor ?? a?.actor ?? null } : null)
+const joinEffects = (a, b) => (a || b ? { screen: b?.screen ?? a?.screen ?? null, actor: b?.actor ?? a?.actor ?? null, ...((b?.cg ?? a?.cg) ? { cg: b?.cg ?? a.cg } : {}) } : null)
 
-/** The effect marks in a line taken out ({ screen, actor }, or null), and the line without them. */
+/** The effect marks in a line taken out ({ screen, actor, cg? }, or null), and the line without them. */
 function takeEffects(text) {
   let effects = null
   const rest = text.replace(EFFECT_MARK, (mark, kind, words) => {
     if (!isEffectKind(kind)) return mark
+    // 【CG|组名】: the group's name as written (the page finds the group).
+    if (isCgKind(kind)) {
+      effects = { screen: effects?.screen ?? null, actor: effects?.actor ?? null, cg: words.trim() }
+      return ''
+    }
     // 【效果|攻击力+5】 in a card's own text is not ours.
     const asked = markEffects(words.split(/[|｜,，、\s]+/))
     if (!asked) return mark
-    effects = { screen: asked.screen ?? effects?.screen ?? null, actor: asked.actor ?? effects?.actor ?? null }
+    effects = { screen: asked.screen ?? effects?.screen ?? null, actor: asked.actor ?? effects?.actor ?? null, ...(effects?.cg ? { cg: effects.cg } : {}) }
     return ''
   })
   return { text: rest, effects }

@@ -5,8 +5,9 @@
 // header forces a CORS preflight we never approve).
 import { createHmac, randomBytes } from 'node:crypto'
 import { createServer } from 'node:http'
-import { existsSync } from 'node:fs'
-import { copyFile, readFile, rm, writeFile } from 'node:fs/promises'
+import { createWriteStream, existsSync } from 'node:fs'
+import { copyFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { pipeline } from 'node:stream/promises'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import YAML from 'yaml'
@@ -33,7 +34,8 @@ import { APIS, CHAT_THINKING, draftProvider, exportProviders, importProviders, i
 import { initTemplates, templateSyntaxError } from './template.mjs'
 import { canonicalModel } from './models.mjs'
 import { createLedger } from './usage.mjs'
-import { createMedia, drawChoiceOf } from './media.mjs'
+import { cleanCardMedia, createMedia, drawChoiceOf } from './media.mjs'
+import { crcOf, zipParts } from './update/zip.mjs'
 import { createCodexDrawing } from './codex-drawing.mjs'
 import { createAppearance, imageKind } from './appearance.mjs'
 import { attachedSummary, createRegex, withAttachedScripts } from './regex.mjs'
@@ -41,12 +43,15 @@ import { createPickLists } from './personas.mjs'
 import { blockSent, createBlockWords } from './blockwords.mjs'
 import { promptRules } from '../web/shared/blockwords.js'
 import { createScenes } from './scenes.mjs'
+import { createCardCgs } from './card-cgs.mjs'
 import { createDrawHistory, dropImage, dropOldImage, madeAt, oldImageFiles, pickImage, redrawImage } from './draw-history.mjs'
 import { createSaves } from './saves.mjs'
 import { KEYED as VOICE_KEYED } from './voice/index.mjs'
 import { createPromptLibrary } from './prompts.mjs'
 import { createGallery } from './gallery.mjs'
-import { MAX_PACK, createCardPacks } from './card-pack.mjs'
+import { MAX_PACK, PACK_MANIFEST, createCardPacks } from './card-pack.mjs'
+import { backupName, createBackup } from './backup.mjs'
+import { charxFiles, createBundles, openZip, readCharx, surveyBundle, zipKind } from './card-bundle.mjs'
 import { createLookPictures, decodePicture } from './look-pictures.mjs'
 import { creationOf, withOptionPicture } from './forge/creation.mjs'
 import { createForge } from './forge/index.mjs'
@@ -57,6 +62,7 @@ import { forSillyTavern } from './forge/st-export.mjs'
 import { editCard, greetingList } from '../web/shared/card-edit.js'
 import { patchVars } from '../web/shared/vars.js'
 import { normalizeScripts, withUniqueIds } from '../web/shared/regex.js'
+import { skillsNamed } from '../web/shared/game/sheet.js'
 import { chatPackage, importChatPackage, savePackagePicture } from './transfer.mjs'
 import { createStore, defaultDataRoot, httpError, newId, PRIVACY_NOTICE } from './store.mjs'
 import { contextInfo } from './context.mjs'
@@ -176,6 +182,7 @@ const STATIC = {
   '/sort-rows.js': ['sort-rows.js', 'text/javascript; charset=utf-8'],
   '/gallery.js': ['gallery.js', 'text/javascript; charset=utf-8'],
   '/card-pack.js': ['card-pack.js', 'text/javascript; charset=utf-8'],
+  '/backup.js': ['backup.js', 'text/javascript; charset=utf-8'],
   '/look-pictures.js': ['look-pictures.js', 'text/javascript; charset=utf-8'],
   '/shared/blockwords.js': ['shared/blockwords.js', 'text/javascript; charset=utf-8'],
   '/dictation.js': ['dictation.js', 'text/javascript; charset=utf-8'],
@@ -265,6 +272,9 @@ function sendJson(res, status, value) {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...(report ? { 'x-perf-trace': encodeURIComponent(JSON.stringify(report)) } : {}) })
   res.end(text)
 }
+
+/** What a turn asks of the 视觉小说格式: true (the whole format), 'cg' (only the card's CG offered), or false. */
+const turnMarks = value => (value === true || value === 'cg' ? value : false)
 
 function decodeUpload(body) {
   if (typeof body.data !== 'string' || typeof body.filename !== 'string') throw httpError(400, msg`缺少文件`)
@@ -404,6 +414,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
   const picks = createPickLists(store)
   const blockWords = createBlockWords(store)
   const scenes = createScenes(store, { media, history: drawHistory })
+  const cardCgs = createCardCgs(store)
   // 定制外观的图 (look-pictures.mjs): drawn decorations and small copies of the card's own pictures a look names.
   const lookPictures = createLookPictures(store, { scenes, history: drawHistory })
   // Changes to one thing that must not cross (read, change, write): each waits for the one before it under its key.
@@ -415,14 +426,28 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
   }
   const saves = createSaves(store)
   const prompts = createPromptLibrary(store)
-  const gallery = createGallery(store, { scenes, media })
+  const gallery = createGallery(store, { scenes, media, cgs: cardCgs })
   // 图库's last export, fetched once by the page (or the Android app into Downloads): one at a time, a few minutes.
   let galleryExport = null
   // 导出角色卡 → 带上图片和设置 (card-pack.mjs): the zip built for a card, kept to be fetched; and a zip sent to be
   // imported, kept until the import that names it (one of each at a time, let go of when too old).
-  const cardPacks = createCardPacks(store, { rulebooks, regex, look: lookPictures })
+  const cardPacks = createCardPacks(store, { rulebooks, regex, look: lookPictures, cgs: cardCgs })
   let packExport = null
   let packUpload = null
+  // 备份与换设备 (backup.mjs): the export ticked (fetched from GET /api/backup/exports/:token, written as it is sent),
+  // and the zip sent to be imported, kept in a file of its own until it is imported or let go of. One of each.
+  const backup = createBackup(store, { version: VERSION, edition: features.edition, platform: features.edition === 'android' ? 'android' : process.platform, storeOptions: { subscription: features.subscription, lan: features.lan } })
+  const backupUploads = path.join(store.dirs.root, 'backup-upload')
+  let backupExport = null
+  let backupUpload = null
+  // A zip left from a run that stopped mid-import is nobody's now.
+  rm(backupUploads, { recursive: true, force: true }).catch(() => {})
+  const dropBackupUpload = async () => {
+    clearTimeout(backupUpload?.timer)
+    const file = backupUpload?.file
+    backupUpload = null
+    if (file) await rm(file, { force: true }).catch(() => {})
+  }
   const keepFor = (slot, clear) => {
     const timer = setTimeout(clear, TEXT_EXPORT_KEPT_MS)
     timer.unref?.()
@@ -793,6 +818,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     if (previous) {
       await media.inheritCardMedia(previous.id, card.id)
       await scenes.inherit(previous.id, card.id)
+      await cardCgs.inherit(previous.id, card.id)
       await rulebooks.inherit(previous.id, card.id)
       await music.inherit(previous.id, card.id)
       await rulebooks.arrive(card.id, game)
@@ -802,6 +828,26 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     await rulebooks.arrive(card.id, game)
     return cardSummary(card)
   }
+
+  /** A worldbook's JSON (导入世界书, or one in an 整合包) kept as a worldbook of its own. */
+  async function importBookJson(json, name) {
+    const book = normalizeBook(unwrapWorkspace(json), name, { standalone: true })
+    await store.saveBook(book)
+    return book
+  }
+
+  /** A preset's JSON (导入预设, or one in an 整合包) kept, with its Tavern Helper scripts beside it (preset-scripts.mjs). */
+  async function importPresetJson(json, name) {
+    const preset = importOwnPreset(json) ?? normalizePreset(json, name)
+    const scripts = presetScriptsOf(json)
+    if (scripts.length) withPresetScripts(preset, scripts)
+    await store.savePresetScripts(preset.id, scripts)
+    await store.savePreset(preset)
+    return preset
+  }
+
+  // 导入角色卡 with a CharX or an 整合包 (card-bundle.mjs).
+  const bundles = createBundles({ store, media, scenes, cardCgs, regex, importCard: (body, pack) => importCard(body, pack), importBook: importBookJson, importPreset: importPresetJson })
 
   /**
    * The card as 导出角色卡 writes it, for a pack: the PNG with the card in it, or the JSON for a card without one.
@@ -967,6 +1013,13 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['PUT', /^\/api\/cards\/([\w-]+)\/scenes\/([\w-]+)$/, ([id, sceneId], body) => scenes.update(id, sceneId, body ?? {})],
     ['PUT', /^\/api\/cards\/([\w-]+)\/scenes\/([\w-]+)\/image$/, ([id, sceneId], body) => scenes.setImage(id, sceneId, body?.image)],
     ['DELETE', /^\/api\/cards\/([\w-]+)\/scenes\/([\w-]+)$/, ([id, sceneId]) => scenes.remove(id, sceneId)],
+    // 卡的 CG (card-cgs.mjs): groups of pictures the visual novel shows when a reply marks them.
+    ['GET', /^\/api\/cards\/([\w-]+)\/cgs$/, ([id]) => cardCgs.list(id)],
+    ['POST', /^\/api\/cards\/([\w-]+)\/cgs$/, ([id], body) => cardCgs.add(id, body ?? {})],
+    ['PUT', /^\/api\/cards\/([\w-]+)\/cgs\/([\w-]+)$/, ([id, groupId], body) => cardCgs.update(id, groupId, body ?? {})],
+    ['DELETE', /^\/api\/cards\/([\w-]+)\/cgs\/([\w-]+)$/, ([id, groupId]) => cardCgs.remove(id, groupId)],
+    ['POST', /^\/api\/cards\/([\w-]+)\/cgs\/([\w-]+)\/pictures$/, ([id, groupId], body) => cardCgs.addPicture(id, groupId, body?.image)],
+    ['DELETE', /^\/api\/cards\/([\w-]+)\/cgs\/([\w-]+)\/pictures\/([\w.-]+)$/, ([id, groupId, file]) => cardCgs.removePicture(id, groupId, file)],
     // 立绘 (scenes.mjs): one picture per cast member; drawing is a slow call below.
     ['GET', /^\/api\/cards\/([\w-]+)\/sprites$/, ([id]) => scenes.sprites(id)],
     // { image }: an uploaded 立绘; { fromRef: true }: the 名册's 人设图 becomes the 立绘 (从人设图抠出).
@@ -1040,6 +1093,13 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       const match = /^data:image\/(?:png|jpeg|webp);base64,([A-Za-z0-9+/=]+)$/.exec(String(body?.image ?? ''))
       if (body?.image && !match) throw httpError(400, msg`立绘要是 PNG、JPG 或 WebP`)
       return rulebooks.setFoePicture(id, String(body?.name ?? '').slice(0, 40), match ? Buffer.from(match[1], 'base64') : null)
+    }],
+    ['DELETE', /^\/api\/cards\/([\w-]+)\/foes$/, ([id], body) => rulebooks.removeFoe(id, String(body?.name ?? '').slice(0, 40))],
+    // 技能特写: a skill's picture by hand, or null to take it off; drawing one is a slow call below.
+    ['PUT', /^\/api\/cards\/([\w-]+)\/skills\/image$/, ([id], body) => {
+      const match = /^data:image\/(?:png|jpeg|webp);base64,([A-Za-z0-9+/=]+)$/.exec(String(body?.image ?? ''))
+      if (body?.image && !match) throw httpError(400, msg`技能图要是 PNG、JPG 或 WebP`)
+      return rulebooks.setSkillPicture(id, String(body?.name ?? ''), match ? Buffer.from(match[1], 'base64') : null)
     }],
     // 背景音乐 (music.mjs): the player's own tracks for a card.
     ['GET', /^\/api\/cards\/([\w-]+)\/music$/, ([id]) => music.list(id)],
@@ -1194,6 +1254,42 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       }
       return chatView(await store.saveChat(chat))
     })],
+    // 选图: a picture from 图库 (`gallery`: its id) or the player's own (`image`: a data URL) as the reply's picture,
+    // added, or (`replace`) in that picture's place, which becomes one of its old ones as when it is drawn again.
+    ['POST', /^\/api\/chats\/([\w-]+)\/nodes\/([\w-]+)\/image\/put$/, async ([id, nodeId], body) => {
+      let buffer = null
+      let prompt = ''
+      if (typeof body?.gallery === 'string' && body.gallery) {
+        const item = (await gallery.list()).items.find(entry => entry.id === body.gallery)
+        buffer = item ? await gallery.read(item.id) : null
+        if (!buffer) throw httpError(404, msg`这张图已经不在了`)
+        prompt = item.kind === 'reply' ? item.prompt : ''
+      } else {
+        const match = /^data:image\/(?:png|jpeg|webp);base64,([A-Za-z0-9+/=]+)$/.exec(String(body?.image ?? ''))
+        if (!match) throw httpError(400, msg`配图要是 PNG、JPG 或 WebP`)
+        buffer = Buffer.from(match[1], 'base64')
+      }
+      const chat = await store.getChat(id)
+      if (chat.nodes[nodeId]?.role !== 'assistant') throw httpError(404, msg`这条叙述不存在`)
+      const image = await media.putImage(chat, buffer, { prompt, source: body?.gallery ? 'gallery' : 'upload' })
+      const replace = typeof body?.replace === 'string' ? body.replace : ''
+      const keep = replace ? (await media.settings()).drawHistory : 0
+      let dropped = []
+      const saved = await store.withChat(id, async () => {
+        const fresh = await store.getChat(id)
+        const target = fresh.nodes[nodeId]
+        if (!target) throw httpError(404, msg`这条叙述已经不在了`)
+        const redrawn = replace ? redrawImage(target.media?.images, replace, image, keep) : null
+        dropped = redrawn?.dropped ?? []
+        target.media = { ...(target.media ?? {}), images: redrawn?.images ?? [...(target.media?.images ?? []), image] }
+        return store.saveChat(fresh)
+      })
+      for (const gone of dropped) {
+        await media.removeImage(id, gone.file).catch(() => {})
+        await prompts.forgetPicture(id, gone.file).catch(() => {})
+      }
+      return { image, chat: { ...chatView(saved), running: engine.isRunning(id) } }
+    }],
     // 抽图历史: one of a picture's old ones shown again in its place; the one shown now becomes an old one.
     ['POST', /^\/api\/chats\/([\w-]+)\/nodes\/([\w-]+)\/image\/use$/, ([id, nodeId], body) => store.withChat(id, async () => {
       const chat = await store.getChat(id)
@@ -1288,16 +1384,54 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     // reference pictures of an older version of itself, so deleting that one loses nothing.
     ['POST', /^\/api\/cards\/import$/, async (_, body) => {
       const pack = uploadedPack(body)
+      if (pack?.kind === 'bundle') throw httpError(400, msg`这个压缩包要在导入窗口里选好再导入`)
       const saved = await importCard(body, pack)
       if (!pack) return saved
-      // What the zip brought beside the card: pictures, 正则集, settings.
-      const arrived = await cardPacks.restore(saved.id, pack)
+      // What the zip brought beside the card: pictures, 正则集, settings (a CharX: its 表情 and backgrounds).
+      const arrived = pack.kind === 'charx' ? await bundles.restoreCharx(saved.id, pack) : await cardPacks.restore(saved.id, pack)
       clearTimeout(packUpload?.timer)
       packUpload = null
       return { ...cardSummary(await store.getCard(saved.id)), ...(saved.updated ? { updated: saved.updated } : {}), ...(saved.inherited ? { inherited: saved.inherited } : {}), arrived }
     }],
+    // An 整合包 looked through (POST /api/card-packs, kind 'bundle'), imported as ticked in its window.
+    ['POST', /^\/api\/card-bundles\/import$/, async (_, body) => {
+      const pack = uploadedPack(body)
+      if (pack?.kind !== 'bundle') throw httpError(410, msg`上传的文件已经过期，请重新选一次`)
+      const result = await bundles.take(pack, body?.choices ?? {})
+      clearTimeout(packUpload?.timer)
+      packUpload = null
+      return result
+    }],
     // 导出角色卡 → 带上图片和设置: what this card has to take along, and the zip of what was ticked (fetched from
     // GET /api/card-packs/:token).
+    // 备份与换设备: what there is to take, by kind; the export of what was ticked (a link to fetch); an import's progress.
+    ['GET', /^\/api\/backup$/, () => backup.survey()],
+    ['POST', /^\/api\/backup\/export$/, async (_, body) => {
+      const token = randomBytes(12).toString('hex')
+      clearTimeout(backupExport?.timer)
+      backupExport = keepFor({ token, include: Array.isArray(body?.include) ? body.include : [] }, () => {
+        if (backupExport?.token === token) backupExport = null
+      })
+      return { path: `/api/backup/exports/${token}`, name: backupName() }
+    }],
+    ['POST', /^\/api\/backup\/import$/, async (_, body) => {
+      if (!backupUpload || body?.upload !== backupUpload.token) throw httpError(410, msg`上传的文件已经过期，请重新选一次`)
+      // Kept while it is read: the import lets go of it when done.
+      clearTimeout(backupUpload.timer)
+      const { file } = backupUpload
+      return backup.startImport(file, { include: body?.include, conflict: body?.conflict === 'replace' ? 'replace' : 'keep' }, {
+        done: async () => {
+          prompts.forget()
+          uiLanguage = null
+          if (backupUpload?.file === file) await dropBackupUpload()
+        },
+      })
+    }],
+    ['GET', /^\/api\/backup\/import$/, () => backup.status()],
+    ['DELETE', /^\/api\/backup\/upload$/, async () => {
+      if (backup.status().state !== 'running') await dropBackupUpload()
+      return { ok: true }
+    }],
     ['GET', /^\/api\/cards\/([\w-]+)\/pack$/, ([id]) => cardPacks.survey(id)],
     ['POST', /^\/api\/cards\/([\w-]+)\/pack$/, async ([id], body) => {
       clearTimeout(packExport?.timer)
@@ -1309,6 +1443,46 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
         if (packExport?.token === token) packExport = null
       })
       return { path: `/api/card-packs/${token}`, name: `${card.name}.zip`, size, included }
+    }],
+    // 导出 → .charx (card-bundle.mjs charxFiles): the card and its pictures for SillyTavern and RisuAI, fetched as a pack is.
+    ['POST', /^\/api\/cards\/([\w-]+)\/charx$/, async ([id]) => {
+      clearTimeout(packExport?.timer)
+      packExport = null
+      const card = await withRulebook(await store.getCard(id))
+      const picture = card.hasAvatar ? await readFile(store.avatarPath(id)).catch(() => null) : null
+      const raw = rawOfPicture(picture)
+      const written = sillyTavernCard(forSillyTavern(card, raw), raw)
+      // The card's own character: the cast entry of its name, else the only one who is not the player.
+      const cast = cleanCardMedia(card.media).roster
+      const own = cast.find(entry => entry.name === card.name) ?? (cast.filter(entry => !entry.player).length === 1 ? cast.find(entry => !entry.player) : null)
+      const kept = own ? await scenes.sprites(id) : null
+      const faces = {}
+      const sprite = own ? kept?.sprites?.[own.id] : null
+      if (sprite) faces.neutral = (await scenes.readSprite(id, sprite.file))?.data
+      for (const [expression, face] of Object.entries(own ? kept?.expressions?.[own.id] ?? {} : {})) faces[expression] = (await scenes.readSprite(id, face.file))?.data
+      for (const key of Object.keys(faces)) if (!faces[key]) delete faces[key]
+      const backgrounds = []
+      for (const scene of (await scenes.list(id)).scenes) {
+        const data = scene.file ? (await scenes.readPicture(id, scene.file))?.data : null
+        if (data) backgrounds.push({ name: scene.name, data })
+      }
+      const cgs = []
+      for (const group of await cardCgs.read(id)) {
+        for (const picture of group.pictures ?? []) {
+          const data = (await cardCgs.readPicture(id, picture.file))?.data
+          if (data) cgs.push({ group: group.name, data })
+        }
+      }
+      const { files, counts } = charxFiles(written, { icon: picture, faces, backgrounds, cgs })
+      const when = new Date()
+      const entries = files.map(file => ({ ...file, when, crc: crcOf(file.data) }))
+      const { parts, size } = zipParts(entries)
+      if (size > MAX_PACK) throw httpError(413, msg`选的内容太大了（超过 500MB），去掉几项再导出`)
+      const token = randomBytes(12).toString('hex')
+      packExport = keepFor({ token, parts, size }, () => {
+        if (packExport?.token === token) packExport = null
+      })
+      return { path: `/api/card-packs/${token}`, name: `${card.name}.charx`, size, counts }
     }],
     ['GET', /^\/api\/cards\/([\w-]+)$/, async ([id]) => {
       const [card, personas, styles] = await Promise.all([store.getCard(id), store.getPersonas(), store.getStyles()])
@@ -1627,8 +1801,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       } catch {
         throw httpError(400, msg`无法解析世界书 JSON`)
       }
-      const book = normalizeBook(unwrapWorkspace(json), filename.replace(/\.json$/i, ''), { standalone: true })
-      await store.saveBook(book)
+      const book = await importBookJson(json, filename.replace(/\.json$/i, ''))
       return { id: book.id, name: book.name, entries: book.entries.length }
     }],
     // The cards it was attached to let go of it too, and the global list (chats already skip a missing book).
@@ -1656,13 +1829,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       } catch {
         throw httpError(400, msg`无法解析预设 JSON`)
       }
-      const preset = importOwnPreset(json) ?? normalizePreset(json, filename.replace(/\.json$/i, ''))
       // Its Tavern Helper scripts, kept beside it: they run in the chats that use it (preset-scripts.mjs).
-      const scripts = presetScriptsOf(json)
-      if (scripts.length) withPresetScripts(preset, scripts)
-      await store.savePresetScripts(preset.id, scripts)
-      await store.savePreset(preset)
-      return presetSummary(preset)
+      return presetSummary(await importPresetJson(json, filename.replace(/\.json$/i, '')))
     }],
     ['GET', /^\/api\/presets\/([\w-]+)\/export$/, async ([id]) => {
       const preset = await store.getPreset(id)
@@ -1910,7 +2078,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       return { ...chatView(await store.saveChat(chat)), lost }
     })],
     ['POST', /^\/api\/chats\/([\w-]+)\/preview$/, ([id], body) =>
-      engine.previewTurn(id, { parentId: String(body.parentId), input: body.input, marks: body.marks === true })],
+      engine.previewTurn(id, { parentId: String(body.parentId), input: body.input, marks: turnMarks(body.marks) })],
     // 楼层渲染: { nodeId, texts } → { texts, errors? }, the EJS in what a card's display regex made
     // for one message, rendered at that message; nothing the templates write is kept (engine.renderForDisplay).
     ['POST', /^\/api\/chats\/([\w-]+)\/display-render$/, ([id], body) => engine.renderForDisplay(id, body ?? {})],
@@ -2213,9 +2381,23 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       res.writeHead(200, { 'content-type': found.type, 'cache-control': 'max-age=31536000, immutable' })
       return res.end(found.data)
     }
+    const cgPicture = /^\/api\/cgs\/([\w-]+)\/([\w.-]+)$/.exec(url.pathname)
+    if (req.method === 'GET' && cgPicture) {
+      const found = await cardCgs.readPicture(cgPicture[1], cgPicture[2])
+      if (!found) return sendJson(res, 404, { error: msg`没有这张 CG` })
+      res.writeHead(200, { 'content-type': found.type, 'cache-control': 'max-age=31536000, immutable' })
+      return res.end(found.data)
+    }
     const lookPicture = /^\/api\/look\/([\w-]+)\/([\w.-]+)$/.exec(url.pathname)
     if (req.method === 'GET' && lookPicture) {
       const found = await lookPictures.readPicture(lookPicture[1], lookPicture[2])
+      res.writeHead(200, { 'content-type': found.type, 'cache-control': 'max-age=31536000, immutable' })
+      return res.end(found.data)
+    }
+    const skillPicture = /^\/api\/skills\/([\w-]+)\/([\w.-]+)$/.exec(url.pathname)
+    if (req.method === 'GET' && skillPicture) {
+      const found = await rulebooks.readSkillPicture(skillPicture[1], skillPicture[2])
+      if (!found) return sendJson(res, 404, { error: msg`没有这张技能图` })
       res.writeHead(200, { 'content-type': found.type, 'cache-control': 'max-age=31536000, immutable' })
       return res.end(found.data)
     }
@@ -2338,14 +2520,56 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
         filled += chunk.length
       }
       if (filled !== length) return sendJson(res, 400, { error: msg`文件没有传完` })
-      const pack = await cardPacks.read(buffer)
-      const { card } = readCardUpload({}, pack.card)
-      const previous = previousVersion(await store.listCards(), card)
+      // This app's own pack, a CharX, or anything else (card-bundle.mjs): what it is says what comes back.
+      const zip = openZip(buffer)
+      const kind = zip.has(PACK_MANIFEST) ? 'cica' : await zipKind(zip)
       const token = randomBytes(12).toString('hex')
-      packUpload = keepFor({ token, pack }, () => {
-        if (packUpload?.token === token) packUpload = null
-      })
-      return sendJson(res, 200, { pack: token, name: card.name, previous: previous ? { id: previous.id, name: previous.name } : null, parts: pack.manifest.parts ?? [] })
+      const keep = pack => {
+        packUpload = keepFor({ token, pack }, () => {
+          if (packUpload?.token === token) packUpload = null
+        })
+      }
+      const cards = await store.listCards()
+      const previousOf = card => {
+        const previous = previousVersion(cards, card)
+        return previous ? { id: previous.id, name: previous.name } : null
+      }
+      if (kind === 'bundle') {
+        const survey = await surveyBundle(zip)
+        for (const item of survey.cards) {
+          try {
+            item.previous = previousOf(readCardUpload({}, { filename: item.path.split('/').pop(), buffer: await zip.file(item.path, MAX_PACK) }).card)
+          } catch {
+            item.previous = null
+          }
+        }
+        keep({ kind, zip, survey })
+        return sendJson(res, 200, { pack: token, kind, survey })
+      }
+      const pack = kind === 'cica' ? { kind, ...(await cardPacks.read(buffer)) } : { kind, zip, charx: await readCharx(zip, writeCardPng) }
+      if (kind === 'charx') pack.card = pack.charx.card
+      const { card } = readCardUpload({}, pack.card)
+      keep(pack)
+      const brings = kind === 'charx' ? { faces: Object.keys(pack.charx.faces).length, scenes: pack.charx.backgrounds.length, left: pack.charx.left } : null
+      return sendJson(res, 200, { pack: token, kind, name: card.name, previous: previousOf(card), parts: pack.manifest?.parts ?? [], ...(brings ? { brings } : {}) })
+    }
+
+    // 备份与换设备's zip, written as it goes out: never whole in memory, nor on disk.
+    const backupFile = /^\/api\/backup\/exports\/([0-9a-f]{24})$/.exec(url.pathname)
+    if (req.method === 'GET' && backupFile) {
+      if (backupExport?.token !== backupFile[1] || Date.now() - backupExport.at > TEXT_EXPORT_KEPT_MS) return sendJson(res, 404, { error: msg`导出的文件已经过期，请重新导出` })
+      const stop = new AbortController()
+      res.on('close', () => stop.abort())
+      res.writeHead(200, { 'content-type': 'application/zip', 'cache-control': 'no-store', 'content-disposition': `attachment; filename="${backupName()}"` })
+      const write = buffer => (res.destroyed ? Promise.reject(Object.assign(new Error('closed'), { code: 'ABORTED' })) : res.write(buffer) ? undefined : new Promise(resolve => res.once('drain', resolve).once('close', resolve)))
+      try {
+        await backup.exportTo(backupExport.include, write, { signal: stop.signal })
+        return res.end()
+      } catch (error) {
+        // Half a zip is no zip: the download fails rather than saving it.
+        if (error.code !== 'ABORTED') diagnostics.record({ source: 'process', what: msg`导出备份`, message: error.message }).catch(() => {})
+        return res.destroy()
+      }
     }
 
     const packFile = /^\/api\/card-packs\/([0-9a-f]{24})$/.exec(url.pathname)
@@ -2412,6 +2636,41 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       // Not the page's own request (another site's form): not an error of the app's.
       res.logFailures = false
       return sendJson(res, 403, { error: msg`缺少请求头` })
+    }
+
+    // A backup to import, sent as it is and written to a file as it comes (gigabytes: never in memory). → what it
+    // holds, by kind, and the token to import it by (POST /api/backup/import).
+    if (req.method === 'POST' && url.pathname === '/api/backup/upload') {
+      if (backup.status().state === 'running') return sendJson(res, 409, { error: msg`正在导入上一个备份，等它完成` })
+      await dropBackupUpload()
+      const token = randomBytes(12).toString('hex')
+      const file = path.join(backupUploads, `${token}.zip`)
+      await mkdir(backupUploads, { recursive: true })
+      try {
+        await pipeline(req, createWriteStream(file))
+      } catch {
+        await rm(file, { force: true }).catch(() => {})
+        return sendJson(res, 400, { error: msg`文件没有传完` })
+      }
+      const length = Number(req.headers['content-length'])
+      if (Number.isInteger(length) && length !== (await stat(file)).size) {
+        await rm(file, { force: true }).catch(() => {})
+        return sendJson(res, 400, { error: msg`文件没有传完` })
+      }
+      let found
+      try {
+        found = await backup.inspect(file)
+      } catch (error) {
+        await rm(file, { force: true }).catch(() => {})
+        const why = error.code === 'NOT_BACKUP' ? msg`这不是 CicaTavern 的备份包（设置 → 更多 → 备份与换设备 导出的 zip）`
+          : error.code === 'NEWER' ? msg`这个备份是更新版本的 CicaTavern 导出的，先更新这边的 CicaTavern`
+            : msg`读不了这个压缩包：${error.message}`
+        return sendJson(res, 400, { error: why })
+      }
+      backupUpload = keepFor({ token, file }, () => {
+        if (backupUpload?.token === token && backup.status().state !== 'running') dropBackupUpload()
+      })
+      return sendJson(res, 200, { upload: token, ...found })
     }
 
     const packagePicture = /^\/api\/chats\/([\w-]+)\/media\/([\w.-]+)$/.exec(url.pathname)
@@ -2494,6 +2753,18 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       if (!foe) throw httpError(404, msg`图鉴里没有这个敌人`)
       const picture = await media.drawFoe(foeDraw[1], { name, looks: foe.looks }, cancelOnClose(), drawChoiceOf(body))
       return sendJson(res, 200, await rulebooks.setFoePicture(foeDraw[1], name, picture.buffer))
+    }
+    // 画技能图: a skill being used, by whoever has it (their 人设图 goes along), from its name and what it does.
+    const skillDraw = /^\/api\/cards\/([\w-]+)\/skills\/draw$/.exec(url.pathname)
+    if (req.method === 'POST' && skillDraw) {
+      const body = await readBody(req)
+      const name = String(body.name ?? '').trim().slice(0, 40)
+      const book = await rulebooks.read(skillDraw[1])
+      const skill = skillsNamed(book).find(item => item.name === name)
+      if (!skill) throw httpError(404, msg`规则里没有这个技能`)
+      const caster = skill.owner ? [skill.owner, ...(book.companions[skill.owner]?.keys ?? [])] : null
+      const picture = await media.drawSkill(skillDraw[1], { name, note: String(body.note ?? '').slice(0, 300), caster }, cancelOnClose(), drawChoiceOf(body))
+      return sendJson(res, 200, await rulebooks.setSkillPicture(skillDraw[1], name, picture.buffer))
     }
     const spriteDraw = /^\/api\/cards\/([\w-]+)\/sprites\/([\w-]+)\/draw$/.exec(url.pathname)
     if (req.method === 'POST' && spriteDraw) {
@@ -2632,7 +2903,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     if (req.method === 'POST' && turn) {
       const body = await readBody(req)
       const args = turn[2] === 'turn'
-        ? { parentId: String(body.parentId), input: body.input, marks: body.marks === true, game: body.game ?? null, files: body.files }
+        ? { parentId: String(body.parentId), input: body.input, marks: turnMarks(body.marks), game: body.game ?? null, files: body.files }
         : turn[2] === 'continue' ? { continueId: String(body.nodeId) } : { userNodeId: String(body.userNodeId) }
       return streamTurn(res, turn[1], args)
     }
@@ -2686,6 +2957,9 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
           // Answering the error failed too: that request goes, the server stays.
           .catch(() => res.destroy())
       })
+      // Node's default gives a request five minutes to arrive whole: a backup of gigabytes sent from a phone over
+      // WiFi (备份与换设备) takes longer. Headers still have to come within their own limit.
+      server.requestTimeout = 2 * 60 * 60 * 1000
       await new Promise((resolve, reject) => {
         server.once('error', reject)
         server.listen(port, host, resolve)

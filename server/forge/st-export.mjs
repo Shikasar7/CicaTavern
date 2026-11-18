@@ -1,7 +1,7 @@
 // What SillyTavern needs that older cards were made without. Only on the way out: the card kept here stays as it is, and
 // a card made elsewhere keeps its lists as its author left them.
 import YAML from 'yaml'
-import { LIST_GROWS, lookVars } from '../../web/shared/status.js'
+import { LIST_GROWS, lookVars, withoutLookRule } from '../../web/shared/status.js'
 import { COVER_SCRIPT } from '../../web/shared/cover.js'
 import { isInitvar } from '../worldbook.mjs'
 import { BAR_LOAD, MVU_HELPER_ID, OWN_STATUS_SCRIPT, STATUS_DEPTH } from './status.mjs'
@@ -63,7 +63,8 @@ export function withLookPictures(card) {
   const vars = lookVars(card.lookPictures)
   if (!vars.length || !Array.isArray(card.regexScripts)) return card
   const rule = `<style>.skinned{${vars.map(([token, value]) => `${token}:${value}`).join(';')}}</style>`
-  const dressed = text => (typeof text === 'string' && text.includes('<style>') ? text.replace('<style>', () => `${rule}<style>`) : text)
+  // One rule only: a card that went out once and came back may hold the last one still.
+  const dressed = text => (typeof text === 'string' && text.includes('<style>') ? withoutLookRule(text).replace('<style>', () => `${rule}<style>`) : text)
   return { ...card, regexScripts: card.regexScripts.map(script => (script.id === OWN_STATUS_SCRIPT || script.id === COVER_SCRIPT ? { ...script, replaceString: dressed(script.replaceString) } : script)) }
 }
 

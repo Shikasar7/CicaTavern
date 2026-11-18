@@ -10,7 +10,7 @@
 // scripts never touch it.
 import { t } from '/i18n.js'
 import { VN_ID } from '/shared/basic.js'
-import { applyScripts, effectFlags, effectOf, PLACEMENT, regexFromString, scriptsInFile, stScripts } from '/shared/regex.js'
+import { applyScripts, effectFlags, effectOf, isRegexFile, PLACEMENT, regexFromString, scriptsInFile, stScripts } from '/shared/regex.js'
 import { HTML_LIKE } from '/render.js'
 import { matchesTerms, searchTerms } from '/books.js'
 
@@ -48,6 +48,8 @@ export function initRegex({ api, el, toast, guard, saveFile, context, getCards, 
     panels: new Set(), // open sections above a set's scripts: 'settings', 'cards'
     picking: false, // 多选
     picked: new Set(),
+    setPicking: false, // 多选 among the 正则集, to put on cards or take off them together
+    pickedSets: new Set(),
     target: null, // where 复制 / 移动 last went ('' a new set), kept while ticking more
     sample: '',
     macros: text => text,
@@ -146,13 +148,160 @@ export function initRegex({ api, el, toast, guard, saveFile, context, getCards, 
     const all = places()
     const fixed = all.filter(p => p.kind !== 'set')
     const sets = all.filter(p => p.kind === 'set')
+    if (!sets.length) state.setPicking = false
+    for (const id of state.pickedSets) if (!sets.some(p => p.set.id === id)) state.pickedSets.delete(id)
+    const picking = state.setPicking
+    // 多选: a click ticks a set instead of opening it.
+    const setItem = place => {
+      if (!picking) return item(place)
+      const ticked = state.pickedSets.has(place.set.id)
+      const users = usedBy(place.set).length
+      const li = el('li', { class: ticked ? 'picked' : '' }, [
+        el('div', { class: 'item-title' }, [
+          el('input', { type: 'checkbox', class: 'regex-set-pick', checked: ticked, tabindex: '-1', 'aria-label': t`选中正则集「${place.name}」` }),
+          el('span', { class: 'item-main', text: place.name }),
+        ]),
+        el('div', { class: 'item-sub', text: [summary(place.scripts), users ? t`挂在 ${users} 张卡上` : t`还没挂到卡上`].join(t`，`) }),
+      ])
+      li.addEventListener('click', () => {
+        if (state.pickedSets.has(place.set.id)) state.pickedSets.delete(place.set.id)
+        else state.pickedSets.add(place.set.id)
+        renderNav()
+      })
+      return li
+    }
+    const n = state.pickedSets.size
     $('regex-list').replaceChildren(
       el('ul', { class: 'preset-list' }, fixed.map(item)),
-      el('h3', { class: 'regex-group-title' }, [t`正则集`, el('span', { text: t`挂到哪些卡，就只对那几张卡生效` })]),
+      el('h3', { class: 'regex-group-title' }, [
+        t`正则集`,
+        el('span', { text: t`挂到哪些卡，就只对那几张卡生效` }),
+        sets.length ? el('button', { type: 'button', class: `btn small${picking ? ' primary' : ''} regex-set-pick-toggle`, text: picking ? t`完成` : t`多选`, title: t`勾选几个正则集，一起挂到卡上或从卡上摘下`, onclick: toggleSetPicking }) : null,
+      ]),
+      picking ? el('div', { class: 'regex-set-bulk' }, [
+        el('span', { class: 'book-bulk-count', text: t`已选 ${n} 个` }),
+        el('button', { type: 'button', class: 'btn small ghost', text: n === sets.length ? t`全不选` : t`全选`, onclick: () => {
+          if (n === sets.length) state.pickedSets.clear()
+          else for (const p of sets) state.pickedSets.add(p.set.id)
+          renderNav()
+        } }),
+        el('button', { type: 'button', class: 'btn small', text: t`挂到卡上…`, disabled: !n, onclick: guard(() => setsOnCards(true)) }),
+        el('button', { type: 'button', class: 'btn small', text: t`从卡上摘下…`, disabled: !n, onclick: guard(() => setsOnCards(false)) }),
+      ]) : null,
       sets.length
-        ? el('ul', { class: 'preset-list' }, sets.map(item))
+        ? el('ul', { class: `preset-list${picking ? ' regex-sets-picking' : ''}` }, sets.map(setItem))
         : el('p', { class: 'regex-empty', text: t`还没有。点「新建」建一个，或者在一组正则里多选后「复制」到新的正则集。` }),
     )
+  }
+
+  function toggleSetPicking() {
+    state.setPicking = !state.setPicking
+    state.pickedSets.clear()
+    renderNav()
+  }
+
+  /**
+   * The cards to put the ticked sets on (`attach`) or take them off: picked in a window of their own, then each set's
+   * cards saved. Taking off offers only the cards one of them is on.
+   */
+  async function setsOnCards(attach) {
+    const sets = state.sets.filter(set => state.pickedSets.has(set.id))
+    if (!sets.length) return
+    const cards = attach ? getCards() : getCards().filter(card => sets.some(set => set.cardIds.includes(card.id)))
+    if (!cards.length) return toast(attach ? t`还没有角色卡。` : t`选中的正则集还没挂到任何卡上`)
+    const names = sets.map(set => t`「${set.name}」`).join(t`、`)
+    const ids = await pickCards({
+      title: attach ? t`把 ${sets.length} 个正则集挂到哪些卡上` : t`从哪些卡上摘下这 ${sets.length} 个正则集`,
+      note: attach ? t`${names}会挂到勾上的卡上，已经挂着的不变。挂上后，这些卡的每个对话都在卡里自带的正则之后运行它们。` : t`${names}从勾上的卡上摘下，正则集本身还在。`,
+      action: attach ? t`挂上` : t`摘下`,
+      cards,
+    })
+    if (!ids?.length) return
+    for (const set of sets) {
+      const next = attach ? [...new Set([...set.cardIds, ...ids])] : set.cardIds.filter(id => !ids.includes(id))
+      if (next.length === set.cardIds.length && next.every((id, i) => id === set.cardIds[i])) continue
+      set.cardIds = (await api(`/api/regex/sets/${set.id}/cards`, { method: 'PUT', body: { ids: next } })).set.cardIds
+    }
+    onChanged({ sets: state.sets })
+    state.setPicking = false
+    state.pickedSets.clear()
+    renderNav()
+    redraw()
+    const said = attach ? t`${sets.length} 个正则集挂到了 ${ids.length} 张卡上` : t`从 ${ids.length} 张卡上摘下了 ${sets.length} 个正则集`
+    const prompt = sets.some(set => set.scripts.some(s => !s.disabled && touchesPrompt(s)))
+    toast(prompt ? [said, t`会改发给模型的内容，这些卡的对话下一轮会重新写入一次缓存。`].join(t`。`) : said, prompt ? 6000 : 3000)
+  }
+
+  /** Cards to tick in a window of their own (search, 全选 among those shown). → the ids ticked, or null. */
+  function pickCards({ title, note, action, cards }) {
+    return new Promise(resolve => {
+      const box = el('dialog', { class: 'dialog regex-card-pick' })
+      const ticks = new Set()
+      const count = el('span', { class: 'book-bulk-count' })
+      const go = el('button', { type: 'button', class: 'btn small primary', text: action })
+      const sync = () => {
+        count.textContent = t`已选 ${ticks.size} 张`
+        go.disabled = !ticks.size
+      }
+      const rows = cards.map(card => {
+        const input = el('input', { type: 'checkbox', value: card.id })
+        input.addEventListener('change', () => {
+          if (input.checked) ticks.add(card.id)
+          else ticks.delete(card.id)
+          sync()
+        })
+        const row = el('label', { class: 'check-row book-check' }, [
+          input,
+          el('span', { class: 'book-card-name', text: card.name }),
+          card.group ? el('span', { class: 'book-panel-sub', text: card.group }) : null,
+          card.archived ? el('span', { class: 'book-panel-sub', text: t`已归档` }) : null,
+        ])
+        return { card, input, row }
+      })
+      const search = el('input', { type: 'search', placeholder: t`搜索卡名或分组`, 'aria-label': t`搜索卡名或分组` })
+      search.addEventListener('input', () => {
+        const query = search.value.trim().toLowerCase()
+        for (const { card, row } of rows) row.hidden = Boolean(query) && !`${card.name} ${card.group ?? ''}`.toLowerCase().includes(query)
+      })
+      const tickShown = on => {
+        for (const { card, input, row } of rows) {
+          if (row.hidden) continue
+          input.checked = on
+          if (on) ticks.add(card.id)
+          else ticks.delete(card.id)
+        }
+        sync()
+      }
+      // Answered once: by the button at once, or by however the window was closed (关闭, Esc, 取消).
+      let done = false
+      const finish = value => {
+        if (done) return
+        done = true
+        if (box.open) box.close()
+        box.remove()
+        resolve(value)
+      }
+      go.addEventListener('click', () => finish([...ticks]))
+      box.addEventListener('close', () => finish(null))
+      box.addEventListener('cancel', () => finish(null))
+      box.append(
+        el('div', { class: 'dialog-x' }, [el('button', { type: 'button', class: 'btn small', text: t`关闭`, onclick: () => finish(null) })]),
+        el('h2', { text: title }),
+        el('p', { class: 'prompt-note', text: note }),
+        el('div', { class: 'row regex-card-pick-tools' }, [
+          search,
+          el('button', { type: 'button', class: 'btn small ghost', text: t`全选`, title: t`选中列出来的全部卡`, onclick: () => tickShown(true) }),
+          el('button', { type: 'button', class: 'btn small ghost', text: t`全不选`, onclick: () => tickShown(false) }),
+          count,
+        ]),
+        el('div', { class: 'book-cards regex-card-pick-list' }, rows.map(entry => entry.row)),
+        el('div', { class: 'row end' }, [el('button', { type: 'button', class: 'btn small', text: t`取消`, onclick: () => finish(null) }), go]),
+      )
+      document.body.append(box)
+      sync()
+      box.showModal()
+      search.focus()
+    })
   }
 
   function select(key) {
@@ -864,6 +1013,16 @@ export function initRegex({ api, el, toast, guard, saveFile, context, getCards, 
     event.target.value = ''
     const scripts = []
     for (const file of files) {
+      if (await isZip(file)) {
+        try {
+          const found = await regexInZip(file)
+          if (!found.length) toast(t`「${file.name}」里没有找到正则文件（SillyTavern 导出的正则 .json）`)
+          scripts.push(...found)
+        } catch (error) {
+          toast(error.message)
+        }
+        continue
+      }
       try {
         scripts.push(...scriptsInFile(JSON.parse(await file.text())))
       } catch {
@@ -880,6 +1039,40 @@ export function initRegex({ api, el, toast, guard, saveFile, context, getCards, 
     const said = place.kind === 'global' ? t`导入了 ${result.added} 条正则，放在全局，所有对话都会用` : t`导入了 ${result.added} 条正则，放在${label(place)}`
     toast(live(place) ? said : [said, t`这个正则集还没挂到卡上，在「用到它的卡」里勾上才生效`].join(t`。`), 6000)
   }))
+
+  /** A zip by its name or its first bytes (PK). */
+  async function isZip(file) {
+    if (/\.zip$/i.test(file.name)) return true
+    const head = new Uint8Array(await file.slice(0, 4).arrayBuffer())
+    return head[0] === 0x50 && head[1] === 0x4b && head[2] === 0x03 && head[3] === 0x04
+  }
+
+  /**
+   * The regex in a zip of SillyTavern regex files: each .json in it that is regex on its own, in any folder, in the
+   * zip's order (a card or a preset in it is not taken apart here: 导入角色卡 reads those).
+   */
+  async function regexInZip(file) {
+    const { zipData, zipEntries } = await import('/shared/zip.js')
+    const bytes = new Uint8Array(await file.arrayBuffer())
+    let entries
+    try {
+      entries = zipEntries(bytes)
+    } catch {
+      throw new Error(t`读不出「${file.name}」：不是 zip 文件，或者是分卷、zip64 的`)
+    }
+    const inflateRaw = async data => new Uint8Array(await new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer())
+    const found = []
+    for (const item of entries) {
+      if (!/\.json$/i.test(item.name) || /(^|\/)__MACOSX\//.test(item.name)) continue
+      try {
+        const json = JSON.parse(new TextDecoder().decode(await zipData(bytes, item, inflateRaw)))
+        if (isRegexFile(json)) found.push(...scriptsInFile(json))
+      } catch {
+        // Not JSON, or not regex: passed over.
+      }
+    }
+    return found
+  }
 
   /** SillyTavern scripts into the global ones (the importer, for a regex file dropped anywhere). → how many were added. */
   async function importScripts(scripts) {

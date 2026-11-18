@@ -15,7 +15,7 @@ import { t, zh } from '/i18n.js'
 import { addsText } from '/game-growth.js'
 import { EFFECTS, EVENT_RATES, VARIABLE_TEMPLATES, bookValue, cleanPath, cleanStatusSpec, planMap, rangeOf, settlePicks, templateVariables } from '/shared/status.js'
 import { splitPath } from '/shared/vars.js'
-import { statusBar } from '/status.js'
+import { layoutTakes, statusBar } from '/status.js'
 import { REFERENCE_FILES, cutShort, cutShortNote, referenceBody, referenceChips } from '/talk.js'
 import { novelDigest, novelFile, novelPick, novelTop } from '/novel-read.js'
 import { historyStrip } from '/draw-choice.js'
@@ -1661,11 +1661,15 @@ export function initForge({ api, el, toast, guard, saveDownload = null, exportPa
     const bar = draft.plan.status ?? {}
     const hasBar = draft.plan.tracking.enabled && bar.ui !== false
     const put = guard(async front => apply(await api(`/api/forge/${draft.id}`, { method: 'PUT', body: { front } })))
+    // A box the bar's 版式 leaves without effect is greyed out, and a ticked one it changes says how.
+    const takes = layoutTakes(hasBar ? bar.layout ?? '' : '')
     const check = (label, on, key, title) => {
-      const box = el('input', { type: 'checkbox', disabled: busy, onchange: () => put({ [key]: box.checked }) })
+      const off = takes.off.includes(key)
+      const box = el('input', { type: 'checkbox', disabled: busy || off, onchange: () => put({ [key]: box.checked }) })
       box.checked = on
-      return el('label', { class: 'front-check', title }, [box, el('span', { text: label })])
+      return el('label', { class: `front-check${off ? ' off' : ''}`, title: off ? takes[key] : title }, [box, el('span', { text: label })])
     }
+    const taken = hasBar ? ['scene', 'phone'].filter(key => bar[key] === true && takes[key]).map(key => takes[key]) : []
     const names = { rain: t`雨`, snow: t`雪`, petals: t`花瓣`, embers: t`火星`, fireflies: t`萤火`, stars: t`星光`, dust: t`浮尘` }
     const effect = el('select', { disabled: busy, 'aria-label': t`动效`, onchange: () => put({ effect: effect.value }) }, [el('option', { value: '', text: t`不要` }), ...EFFECTS.map(kind => el('option', { value: kind, text: names[kind] }))])
     effect.value = (cover?.effect ?? bar.effect) || ''
@@ -1707,6 +1711,7 @@ export function initForge({ api, el, toast, guard, saveDownload = null, exportPa
         el('label', { class: 'front-check' }, [el('span', { text: t`动效` }), effect]),
         hasBar ? el('label', { class: 'front-check' }, [el('span', { text: t`版式` }), layout]) : null,
       ]),
+      taken.length ? el('div', { class: 'front-notes' }, taken.map(text => el('small', { class: 'hint front-note', text }))) : null,
       cover ? el('div', { class: 'front-words' }, [tagline, lines]) : null,
       cover ? el('div', { class: 'front-row' }, [check(t`导出到 SillyTavern 时带上开场页`, cover.st !== false, 'coverSt', t`带上：导出的卡第一条开场白是开场页（要装酒馆助手才显示；没装的人看到一行说明，要左右切换消息选开场）。不带：导出的卡和没有开场页时一样`)]) : null,
       el('p', { class: 'front-whole-head' }, [el('strong', { text: t`成品预览` }), el('small', { class: 'hint', text: t`新对话打开时从上到下的样子：开场页、开场白的开头、状态栏。图片要保存以后才有。` })]),

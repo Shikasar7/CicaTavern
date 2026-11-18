@@ -24,6 +24,13 @@ test('nothing kept, or nonsense, is the plain look', () => {
   for (const saved of [null, undefined, {}, { look: 'neon' }, 'bold', 3]) assert.deepEqual(cleanLook(saved), { look: 'plain', palette: '', strength: STRENGTH })
 })
 
+test('技能特写: on unless turned off, and kept only when off', () => {
+  assert.equal(cleanLook({ look: 'ink' }).cutIns, undefined)
+  assert.equal(cleanLook({ look: 'ink', cutIns: true }).cutIns, undefined)
+  assert.equal(cleanLook({ look: 'ink', cutIns: 'no' }).cutIns, undefined)
+  assert.deepEqual(cleanLook({ look: 'console', palette: 'plum', strength: 70, cutIns: false }), { look: 'console', palette: 'plum', strength: 70, cutIns: false })
+})
+
 test("a palette of another look falls to the look's first", () => {
   assert.equal(cleanLook({ look: 'bold', palette: 'plum' }).palette, 'gold')
   assert.equal(cleanLook({ look: 'plain', palette: 'gold' }).palette, '')

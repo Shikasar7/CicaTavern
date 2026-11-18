@@ -4,7 +4,9 @@
 //   cicatavern-pack.json   what else is in the zip (the manifest below)
 //   roster/<entry id>.png  人设图           sprites/<file>   立绘 and 表情
 //   scenes/<file>          场景图           cover.jpg        开场页的图
+//   cgs/<file>             卡的 CG (card-cgs.mjs), in their groups
 //   foes/<file>            the rule book's 敌人图   look/<file>      定制外观的图 (look-pictures.mjs)
+//   skills/<file>          the rule book's 技能图 (技能特写)
 // 游戏规则设置 (the rule book) is a part too: ticked, it is in the card file as always and in the manifest, so an
 // import over a card that has rules of its own takes the pack's; not ticked, the card file goes without it.
 // Which of these go is the player's pick (PARTS). 正则集 attached to the card go as sets and are attached again;
@@ -19,6 +21,7 @@ import { imageKind } from './appearance.mjs'
 import { cleanCardMedia } from './media.mjs'
 import { cleanScripts } from './regex.mjs'
 import { isRosterId } from './roster.mjs'
+import { readCgs } from './card-cgs.mjs'
 import { httpError, readJsonFile, writeJson } from './store.mjs'
 import { msg } from './i18n.mjs'
 import { crcOf, zipParts } from './update/zip.mjs'
@@ -29,9 +32,9 @@ export const PACK_FORMAT = 'cicatavern-card-pack'
 export const PACK_MANIFEST = 'cicatavern-pack.json'
 /**
  * What can be ticked, in the order shown. 立绘和表情 belong to roster entries, so they take the roster along; 敌人图
- * belong to the rule book's foes, so they take the rules.
+ * and 技能图 belong to the rule book's foes and skills, so they take the rules.
  */
-export const PARTS = ['roster', 'sprites', 'scenes', 'cover', 'look', 'rules', 'foes', 'regex', 'settings']
+export const PARTS = ['roster', 'sprites', 'scenes', 'cgs', 'cover', 'look', 'rules', 'foes', 'skills', 'regex', 'settings']
 export const MAX_PACK = 500 * 1024 * 1024
 const MAX_ENTRIES = 4000
 const MAX_MANIFEST = 8 * 1024 * 1024
@@ -55,7 +58,7 @@ const scriptsKey = scripts => JSON.stringify(cleanScripts(scripts).map(({ id: _i
 export function cleanParts(include) {
   const wanted = new Set((Array.isArray(include) ? include : []).filter(part => PARTS.includes(part)))
   if (wanted.has('sprites')) wanted.add('roster')
-  if (wanted.has('foes')) wanted.add('rules')
+  if (wanted.has('foes') || wanted.has('skills')) wanted.add('rules')
   return PARTS.filter(part => wanted.has(part))
 }
 
@@ -64,7 +67,7 @@ export function cleanParts(include) {
  * @param regex - createRegex(): 正则集 made and attached.
  * @param look - createLookPictures(): the pictures a 定制外观 names.
  */
-export function createCardPacks(store, { rulebooks, regex, look = null }) {
+export function createCardPacks(store, { rulebooks, regex, look = null, cgs = null }) {
   const cardDir = cardId => path.dirname(store.avatarPath(cardId))
   const at = (cardId, ...parts) => path.join(cardDir(cardId), ...parts)
 
@@ -121,6 +124,20 @@ export function createCardPacks(store, { rulebooks, regex, look = null }) {
     }
     if (sceneFiles.length) found.scenes = { count: sceneFiles.length, files: sceneFiles, scenes }
 
+    const groups = []
+    const cgFiles = []
+    for (const group of await readCgs(store.dirs, cardId)) {
+      const pictures = []
+      for (const item of Array.isArray(group?.pictures) ? group.pictures : []) {
+        const file = FILE.test(item?.file ?? '') ? await picture(`cgs/${item.file}`, at(cardId, 'cgs', item.file)) : null
+        if (!file) continue
+        cgFiles.push(file)
+        pictures.push(item.file)
+      }
+      if (pictures.length) groups.push({ name: group.name, aliases: group.aliases ?? [], note: group.note ?? '', pictures })
+    }
+    if (cgFiles.length) found.cgs = { count: cgFiles.length, files: cgFiles, groups }
+
     const cover = card.coverArt ? await picture('cover.jpg', store.coverArtPath(cardId)) : null
     if (cover) found.cover = { count: 1, files: [cover] }
 
@@ -149,6 +166,16 @@ export function createCardPacks(store, { rulebooks, regex, look = null }) {
       foes[name] = foe.file
     }
     if (foeFiles.length) found.foes = { count: foeFiles.length, files: foeFiles, foes }
+
+    const skills = {}
+    const skillFiles = []
+    for (const [name, kept] of Object.entries(record(book?.skillPictures))) {
+      const file = FILE.test(kept ?? '') ? await picture(`skills/${kept}`, at(cardId, 'skills', kept)) : null
+      if (!file) continue
+      skillFiles.push(file)
+      skills[name] = kept
+    }
+    if (skillFiles.length) found.skills = { count: skillFiles.length, files: skillFiles, skills }
 
     const sets = (await store.getRegexSets()).filter(set => set.cardIds.includes(cardId))
     if (sets.length) found.regex = { count: sets.length, files: [], sets: sets.map(set => ({ name: set.name, description: set.description, scripts: set.scripts })) }
@@ -196,10 +223,12 @@ export function createCardPacks(store, { rulebooks, regex, look = null }) {
       ...(cast ? { roster: cast, refs: found.roster.refs } : {}),
       ...(has('sprites') ? { sprites: found.sprites.sprites, expressions: found.sprites.expressions } : {}),
       ...(has('scenes') ? { scenes: found.scenes.scenes } : {}),
+      ...(has('cgs') ? { cgs: found.cgs.groups } : {}),
       ...(has('cover') ? { cover: true } : {}),
       ...(has('look') ? { look: found.look.pictures } : {}),
       ...(has('rules') ? { rules: found.rules.rules } : {}),
       ...(has('foes') ? { foes: found.foes.foes } : {}),
+      ...(has('skills') ? { skills: found.skills.skills } : {}),
       ...(has('regex') ? { regexSets: found.regex.sets } : {}),
       ...(has('settings') ? { settings: found.settings.settings } : {}),
     }
@@ -262,12 +291,12 @@ export function createCardPacks(store, { rulebooks, regex, look = null }) {
   /**
    * What a pack brought, put on a card just imported from its card file. What the card already has under the same
    * id or name (a version updated in place) gives way to the pack's; the rest of what it has stays.
-   * → what arrived: { roster, sprites, scenes, cover, look, rules, foes, regexSets, settings }
+   * → what arrived: { roster, sprites, scenes, cover, look, rules, foes, skills, regexSets, settings }
    */
   async function restore(cardId, pack) {
     const { manifest, file } = pack
     const parts = new Set(cleanParts(manifest.parts))
-    const arrived = { roster: 0, sprites: 0, scenes: 0, cover: false, look: 0, rules: false, foes: 0, regexSets: 0, settings: false }
+    const arrived = { roster: 0, sprites: 0, scenes: 0, cgs: 0, cover: false, look: 0, rules: false, foes: 0, skills: 0, regexSets: 0, settings: false }
     const image = async (name, max, kinds = ['png', 'jpg', 'webp']) => {
       const data = await file(name, max)
       return data && kinds.includes(imageKind(data)) ? data : null
@@ -351,6 +380,18 @@ export function createCardPacks(store, { rulebooks, regex, look = null }) {
       if (arrived.scenes) await writeJson(at(cardId, 'scenes.json'), { scenes })
     }
 
+    // 卡的 CG: a group of a name the card has takes its place (card-cgs.mjs bring), one group at a time.
+    if (parts.has('cgs') && cgs && Array.isArray(manifest.cgs)) {
+      for (const group of manifest.cgs) {
+        const pictures = []
+        for (const file of Array.isArray(group?.pictures) ? group.pictures : []) {
+          const data = FILE.test(file ?? '') ? await image(`cgs/${file}`, MAX_PICTURE) : null
+          if (data) pictures.push(data)
+        }
+        arrived.cgs += (await cgs.bring(cardId, [{ name: clip(group?.name, 40), aliases: Array.isArray(group?.aliases) ? group.aliases : [], note: clip(group?.note, 80), pictures }])).pictures
+      }
+    }
+
     if (parts.has('cover')) {
       const data = await image('cover.jpg', MAX_REF, ['jpg'])
       if (data) {
@@ -392,6 +433,16 @@ export function createCardPacks(store, { rulebooks, regex, look = null }) {
         if (!data) continue
         await rulebooks.setFoePicture(cardId, name, data)
         arrived.foes++
+      }
+    }
+
+    if (parts.has('skills')) {
+      for (const [name, picture] of Object.entries(record(manifest.skills)).slice(0, 120)) {
+        if (!clip(name, 40) || !FILE.test(picture ?? '')) continue
+        const data = await image(`skills/${picture}`, MAX_PICTURE)
+        if (!data) continue
+        await rulebooks.setSkillPicture(cardId, name, data)
+        arrived.skills++
       }
     }
 

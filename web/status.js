@@ -80,6 +80,20 @@ export function effectLayer(el, kind, scale = 1) {
 }
 
 /**
+ * What a 版式 does with the bar's 顶上放立绘, 顶上放场景图 and 小手机 (statusBar below), for the editors to say beside
+ * those boxes: { portrait, scene, phone }, each a line or ''. `off`: the ones it leaves without any effect.
+ */
+export function layoutTakes(layout) {
+  if (!layout) return { portrait: '', scene: '', phone: '', off: [] }
+  return {
+    portrait: t`用了版式时，立绘放在第一个人的名字旁边，不在顶上。`,
+    scene: layout === 'scroll' ? '' : t`卡片式和侧栏式不放场景图，只在标题旁写地名；要图就换卷轴式或简洁。`,
+    phone: t`用了版式时，版式自己的页签代替小手机；改回「简洁」才有小手机。`,
+    off: ['phone'],
+  }
+}
+
+/**
  * 立绘 and 场景图 on top of a bar. The pictures are the app's own (角色名册的立绘和表情、视觉小说的场景), found by
  * whoever draws the bar: `art` is { portrait, zoom (a whole figure: show its upper half), scene, name, mood, place }.
  * It also says what the rest of the bar may draw from (each only where the card has it):

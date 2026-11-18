@@ -204,3 +204,20 @@ test('a card pack takes the look\'s pictures along and puts them on the imported
   assert.equal(pictures[0].token, '--pic-decor-texture')
   assert.equal(pictures[0].prompt, 'obsidian')
 })
+
+test('a card out to SillyTavern and back again carries its look\'s pictures once, however often it goes round', async () => {
+  const { normalizeCard } = await import('../server/cards.mjs')
+  const page = '```html\n<!DOCTYPE html>\n<html><head><meta charset="utf-8">\n<style>.status-bar{}</style>\n</head><body></body></html>\n```'
+  const lookPictures = { '--pic-decor-texture': url(PNG) }
+  let scripts = [{ id: 'cicatavern-status-bar', scriptName: '状态栏', findRegex: '/<StatusBar>/', replaceString: page, placement: [2] }]
+  const sizes = []
+  for (let round = 0; round < 3; round++) {
+    const out = withLookPictures({ regexScripts: scripts, lookPictures }).regexScripts
+    assert.equal(out[0].replaceString.split('.skinned{--pic-').length - 1, 1, 'one rule on the way out')
+    sizes.push(out[0].replaceString.length)
+    // Back in, as SillyTavern's file would bring it: the rule comes off, the look sets its pictures here.
+    scripts = normalizeCard({ spec: 'chara_card_v2', data: { name: '卡', extensions: { regex_scripts: out } } }).regexScripts
+    assert.doesNotMatch(scripts[0].replaceString, /\.skinned\{--pic-/)
+  }
+  assert.equal(new Set(sizes).size, 1, 'the same size every time round')
+})

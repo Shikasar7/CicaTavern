@@ -1,6 +1,6 @@
 // 游戏规则 (角色卡菜单): how far this card's rules go. Each change is kept at once and counts from the card's next turn.
 import { t } from '/i18n.js'
-import { ATTRIBUTES, ATTRIBUTE_POINTS, AVERAGE, MAX_FIELDED, MIN_ATTRIBUTE, WORD_KEYS, effectOf, startSheet } from '/shared/game/sheet.js'
+import { ATTRIBUTES, ATTRIBUTE_POINTS, AVERAGE, MAX_FIELDED, MIN_ATTRIBUTE, WORD_KEYS, effectOf, skillsNamed, startSheet } from '/shared/game/sheet.js'
 import { ADD_SIZES, FOE_ADD_IDS, FOE_ADD_ROOM, MAX_ADDS, SKILL_ADDS, SKILL_ADD_IDS, addFits, cleanFoeAdds, skillKindOf } from '/shared/game/battle.js'
 import { BIG_BUDGET, BOND_AT, BOND_POINTS_MOST, EFFECTS, EFFECT_IDS, LEVEL_POINTS_MOST, MAX_PERKS, PERK_BUDGET, PERK_EVERY_RANGE, PERK_SKILL_COST, RANK_POINTS_MOST, SHIFT_COST, SHIFT_UPKEEP, SIZES, bondPointsOf, cleanPerks, everyGives, levelPointsOf, perkEveryOf, rankRestores, slotByName } from '/shared/game/growth.js'
 import { ADD_NAMES, EFFECT_NAMES, FOE_ADD_NAMES, MAX_FORMS, PLAYER_FORMS, SIZE_WORDS, addsText, effectPickers, foeAddsLine, foeAddsText, formBudget, formName, gearPickers, gearText, perkShown, wordsOf } from '/game-growth.js'
@@ -36,9 +36,9 @@ const THEMES = () => ({
   daily: { label: t`日常`, level: 'light', energyName: t`精力`, words: { body: t`体力`, grace: t`手巧`, mind: t`头脑`, charm: t`人缘`, bag: t`随身物品` }, skills: {} },
 })
 
-/** @param deps - { el, api, toast, chatId (an open chat with the card, or ''), state (its variables, or null), drawFoe (name, done), onChange (the rules changed) } */
+/** @param deps - { el, api, toast, chatId (an open chat with the card, or ''), state (its variables, or null), drawFoe (name, done), drawSkill (name, note, done), onChange (the rules changed), viewPicture (src, caption, meta, options: the image viewer) } */
 export async function openGameRules(card, deps) {
-  const { el, api, toast, chatId, state, drawFoe, onChange } = deps
+  const { el, api, toast, chatId, state, drawFoe, drawSkill, onChange, viewPicture } = deps
   const [book, details] = await Promise.all([api(`/api/cards/${card.id}/game`), api(`/api/cards/${card.id}`).catch(() => null)])
   // The card seems to bring a fight of its own.
   const ownFights = (details?.regexScriptList ?? []).some(script => /战斗|battle/i.test(`${script.scriptName} ${script.replaceString}`))
@@ -47,7 +47,7 @@ export async function openGameRules(card, deps) {
     const kept = await api(`/api/cards/${card.id}/game`, { method: 'PUT', body: change })
     Object.assign(book, kept)
     // The last of these taken away leaves the answer without the field.
-    for (const key of ['forms', 'perks', 'types', 'skillTypes', 'selfType', 'lead', 'tame']) if (!Object.hasOwn(kept, key)) delete book[key]
+    for (const key of ['forms', 'perks', 'types', 'skillTypes', 'selfType', 'lead', 'tame', 'skillPictures']) if (!Object.hasOwn(kept, key)) delete book[key]
     // A field the answer left out is one that is no more: the last add of the last skill, taken off.
     if (!Object.hasOwn(book, 'skillAdds')) book.skillAdds = undefined
     onChange?.()
@@ -98,10 +98,24 @@ export async function openGameRules(card, deps) {
     const kit = { ...sheet, things: [{ name: t`回春丹`, count: 2 }, { name: t`雷符`, count: 1 }, ...sheet.things], skills: sheet.skills.length ? sheet.skills : [t`强击`, t`横扫`, t`连击`] }
     const effects = name => (name === t`回春丹` ? { type: 'heal', size: 'medium' } : name === t`雷符` ? { type: 'damage', size: 'medium' } : effectOf(book, name))
     const kinds = { [t`强击`]: 'strike', [t`横扫`]: 'sweep', [t`连击`]: 'flurry', ...book.skills }
-    openBattle({ el, energyName: book.energyName, setup: battleSetup(kit, { foes: fieldFoes(TRIALS[Number(trial.value)][1]), seed: String(Date.now()), difficulty: book.fightDifficulty, effects, kinds, adds: book.skillAdds ?? {} }) })
+    const skillPicture = name => (book.skillPictures?.[name] ? `/api/skills/${card.id}/${book.skillPictures[name]}` : '')
+    openBattle({ el, energyName: book.energyName, skillPicture, setup: battleSetup(kit, { foes: fieldFoes(TRIALS[Number(trial.value)][1]), seed: String(Date.now()), difficulty: book.fightDifficulty, effects, kinds, adds: book.skillAdds ?? {} }) })
   }
   // 敌人图鉴: who has been met, and their pictures.
   const bestiary = el('div')
+  /** A foe's picture that opens full size on a click, on a checkerboard as the 立绘 do (not opening or closing its row). */
+  const foePicture = (name, foe, className) => {
+    const img = el('img', { class: className, src: `/api/foes/${card.id}/${foe.file}`, alt: '' })
+    if (!viewPicture) return img
+    img.classList.add('zoomable')
+    img.title = t`点击放大`
+    img.addEventListener('click', event => {
+      event.preventDefault()
+      event.stopPropagation()
+      viewPicture(img.src, foe.looks ? t`${name}：${foe.looks}` : name, '', { cutout: true })
+    })
+    return img
+  }
   const setPicture = (name, image) => api(`/api/cards/${card.id}/foes/image`, { method: 'PUT', body: { name, image } }).then(next => {
     Object.assign(book, next)
     showBestiary()
@@ -115,8 +129,19 @@ export async function openGameRules(card, deps) {
     })
     input.click()
   }
+  const removeFoe = name => {
+    if (!confirm(t`把「${name}」从敌人图鉴里删掉？立绘和招式效果一起删。下次再遇到，辅助模型会重新写它的外貌和招式。`)) return
+    api(`/api/cards/${card.id}/foes`, { method: 'DELETE', body: { name } }).then(next => {
+      Object.assign(book, next)
+      showBestiary()
+      showTypes()
+      onChange?.()
+    }, failed)
+  }
   function showBestiary() {
     const names = Object.keys(book.foes)
+    // One being worked on stays open while each change to it is kept.
+    const open = new Set([...bestiary.querySelectorAll('details[open]')].map(node => node.dataset.foe))
     bestiary.replaceChildren(...(names.length ? names.map(name => {
       const foe = book.foes[name]
       const draw = () => {
@@ -138,18 +163,62 @@ export async function openGameRules(card, deps) {
         size.addEventListener('change', () => putAdds(held.map((item, i) => (i === at ? { ...item, size: size.value } : item))))
         return [what, size]
       }
-      return el('div', { class: 'game-foe' }, [
-        row(name, foe.moves.join(t`、`), el('span', { class: 'battle-trial' }, [
-          foe.file ? el('img', { class: 'foe-thumb', src: `/api/foes/${card.id}/${foe.file}`, alt: '' }) : null,
+      return el('details', { class: 'game-companion game-foe', 'data-foe': name, ...(open.has(name) ? { open: '' } : {}) }, [
+        el('summary', {}, [
+          foe.file ? foePicture(name, foe, 'foe-thumb') : null,
+          el('b', { text: name }),
+          el('span', { class: 'hint', text: [foe.moves.join(t`、`), foeAddsText(held)].filter(Boolean).join(' · ') }),
+        ]),
+        foe.file ? el('div', { class: 'foe-preview' }, [foePicture(name, foe, '')]) : null,
+        row(t`立绘`, foe.looks || '', el('span', { class: 'battle-trial' }, [
           foe.looks ? el('button', { type: 'button', class: 'btn small', text: foe.file ? t`重画` : t`画立绘`, onclick: draw }) : null,
           el('button', { type: 'button', class: 'btn small', text: t`上传`, onclick: () => pickPicture(name) }),
-          foe.file ? el('button', { type: 'button', class: 'btn small', text: t`删除`, onclick: () => setPicture(name, null) }) : null,
+          foe.file ? el('button', { type: 'button', class: 'btn small', text: t`删除立绘`, 'aria-label': t`删除${name}的立绘`, onclick: () => setPicture(name, null) }) : null,
         ])),
         row(t`${name}的招式效果`, foeAddsText(held) || t`没有：当精英、首领出场时只是打得重`, el('span', { class: 'game-adds' }, Array.from({ length: Math.min(FOE_ADD_ROOM.boss.count, held.length + 1) }, (_, at) => addPicker(at)).flat())),
+        el('div', { class: 'row end' }, [el('button', { type: 'button', class: 'btn small danger', text: t`从图鉴删掉`, 'aria-label': t`把${name}从图鉴删掉`, onclick: () => removeFoe(name) })]),
       ])
     }) : [el('p', { class: 'hint', text: t`还没遇到过敌人。遭遇时辅助模型会写下外貌和招式。` })]), ...(names.length ? [el('p', { class: 'hint', text: t`招式效果只在这种敌人当精英或首领出场时起作用：精英用第一条（最多中幅），首领两条都用（小幅、中幅、大幅各算 1、2、3 点，最多 ${FOE_ADD_ROOM.boss.points} 点）。带了效果的敌人，出手本身会轻一点。` })] : []))
   }
   showBestiary()
+  // 技能特写: a picture for a skill, cut in full screen when it is used in a fight.
+  const skillArt = el('div')
+  const setSkillPicture = (name, image) => api(`/api/cards/${card.id}/skills/image`, { method: 'PUT', body: { name, image } }).then(next => {
+    Object.assign(book, next)
+    if (!Object.hasOwn(next, 'skillPictures')) delete book.skillPictures
+    showSkillArt()
+  }, failed)
+  const pickSkillPicture = name => {
+    const input = el('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp' })
+    input.addEventListener('change', () => {
+      const reader = new FileReader()
+      reader.onload = () => setSkillPicture(name, reader.result)
+      if (input.files[0]) reader.readAsDataURL(input.files[0])
+    })
+    input.click()
+  }
+  function showSkillArt() {
+    const skills = skillsNamed(book)
+    const pictures = book.skillPictures ?? {}
+    skillArt.replaceChildren(...(skills.length ? [el('p', { class: 'hint', text: t`给技能配一张图，战斗里放这个技能时会切到全屏特写。「画技能图」用配图设置里的画图方式，按技能名和效果画放技能的那一下，同伴的技能会带上它的人设图当参考。` }), ...skills.map(({ name, owner }) => {
+      const file = pictures[name]
+      const kind = kindIn(name)
+      const draw = () => {
+        const adds = addsText(book.skillAdds?.[name] ?? [], book.energyName)
+        drawSkill(name, [SKILL_KINDS()[kind], adds].filter(Boolean).join(t`，`), next => {
+          Object.assign(book, next)
+          showSkillArt()
+        })
+        toast(t`在后台画「${name}」的技能图`)
+      }
+      return row(name, owner ? t`${owner}的技能` : t`你的技能`, el('span', { class: 'battle-trial' }, [
+        file ? el('img', { class: 'foe-thumb skill-thumb', src: `/api/skills/${card.id}/${file}`, alt: '' }) : null,
+        drawSkill ? el('button', { type: 'button', class: 'btn small', text: file ? t`重画` : t`画技能图`, onclick: draw }) : null,
+        el('button', { type: 'button', class: 'btn small', text: t`上传`, onclick: () => pickSkillPicture(name) }),
+        file ? el('button', { type: 'button', class: 'btn small', text: t`删除`, onclick: () => setSkillPicture(name, null) }) : null,
+      ]))
+    })] : [el('p', { class: 'hint', text: t`还没有技能。` })]))
+  }
   // What each skill does: guessed from its name until it is set.
   const skillKinds = el('div')
   const showSkillKinds = () => skillKinds.replaceChildren(...book.start.skills.map(name => row(name, '', choice(t`${name}的效果`, book.skills[name] ?? skillKindOf(name), Object.entries(SKILL_KINDS()), kind => ({ skills: { ...book.skills, [name]: kind } })))))
@@ -186,8 +255,12 @@ export async function openGameRules(card, deps) {
     const names = [...new Set([...book.start.skills, ...Object.values(book.companions).flatMap(companion => Object.keys(companion.skills)), ...Object.keys(book.skillAdds ?? {})])]
     skillAdds.replaceChildren(...(names.length ? [el('p', { class: 'hint', text: t`附加效果：每个技能最多两条。附加越多，这一招本身越轻（每一点少半成）；小幅、中幅、大幅各算 1、2、3 点，最多 3 点，超出的会被削掉。「反噬」是代价，能退回一半点数。` }), ...names.map(addsRow)] : []))
   }
-  afterSave = showSkillAdds
+  afterSave = () => {
+    showSkillAdds()
+    showSkillArt()
+  }
   showSkillAdds()
+  showSkillArt()
   // 队伍名册: who on the card stands with the player, each with their own attributes and skills.
   const roster = el('div')
   const splitWords = text => text.split(/[、，,\s]+/).map(word => word.trim()).filter(Boolean)
@@ -274,7 +347,7 @@ export async function openGameRules(card, deps) {
 
   // What the window shows was read when it opened: after a change to many of them at once, it opens again.
   const again = async () => {
-    await openGameRules(card, deps)
+    await openGameRules(card, { ...deps, scrollTop: main.scrollTop })
     dialog.close()
   }
   // 题材包: what one would set is shown first, each part to take or leave.
@@ -628,7 +701,6 @@ export async function openGameRules(card, deps) {
     ]
   }
   const growthSettings = [
-    el('h3', { text: t`成长` }),
     row(t`成长节奏`, t`升一级要多少经验。快：平时的六成。慢：平时的一倍半。只管升级快慢，不改敌人强弱；正在玩的对话从下一次得到经验起按新的算。`, choice(t`成长节奏`, book.pace ?? 'normal', [['fast', t`快`], ['normal', t`适中`], ['slow', t`慢`]], pace => ({ pace }))),
     row(t`成长`, t`升级带来什么。关：只有属性点，和以前一样。标准：${book.words?.life || t`生命`}和${book.energyName || t`气力`}上限随等级涨，技能越用越强。丰富：再加每 ${perkEveryOf(book)} 级三选一的${book.words?.perk || t`天赋`}。正在玩的对话下一轮就按新的算。`, growthChoice),
     growthLevel !== 'off' ? row(t`战力`, t`在行囊的角色页显示一个战力数字：把属性和成长折成一个数，常人 1 级是 100。只是参考。`, choice(t`战力`, book.growth?.power ? 'on' : 'off', [['off', t`不显示`], ['on', t`显示`]], value => ({ growth: { ...book.growth, power: value === 'on' } }))) : null,
@@ -681,59 +753,173 @@ export async function openGameRules(card, deps) {
     )
   }
   showTypes()
-  // 战斗设置: only the full rules have fights.
-  const fightSettings = el('div', { hidden: book.level !== 'full' }, [
-    el('h3', { text: t`战斗设置` }),
-    row(t`战斗难度`, t`敌人的生命和伤害。宽松时更好打，严苛时敌人更耐打、打得更疼。`, choice(t`战斗难度`, book.fightDifficulty, [['easy', t`宽松`], ['normal', t`标准`], ['hard', t`严苛`]], fightDifficulty => ({ fightDifficulty }))),
-    row(t`战斗频率`, t`模型多久安排一次打斗。少：只在剧情需要时；多：隔一两轮就有战斗选项。`, choice(t`战斗频率`, book.fightRate, [['rare', t`少`], ['normal', t`适中`], ['often', t`多`]], fightRate => ({ fightRate }))),
-    row(t`等级阶梯`, t`这个世界的等级，从低到高，用逗号分开。填了以后敌人按等级算差距；不填时由模型写敌人比你强多少。`, ranksInput()),
-    book.ranks.length ? row(t`阶梯跨度`, t`大：差一级就很难打，比如修仙的境界。小：差几级才打不过，比如段位、军衔。`, choice(t`阶梯跨度`, book.rankSpan, [['wide', t`跨度大`], ['narrow', t`跨度小`]], rankSpan => ({ rankSpan }))) : null,
-    book.ranks.length ? row(t`开局等级`, t`玩家从哪一级开始，只影响新故事。绑定了「等级（文字）」的卡按变量来。`, choice(t`开局等级`, book.start.rank || book.ranks[0], book.ranks.map(rank => [rank, rank]), rank => ({ start: { ...book.start, rank } }))) : null,
-    ...growthSettings,
-    el('h3', { text: t`玩法模块` }),
-    el('p', { class: 'hint', text: t`按题材开的几样玩法，不开就和以前一样。可以让「读卡配置」按这张卡来定。` }),
-    row(t`谁上场`, t`亲自上场：你和同伴一起打。只指挥：你不动手也不挨打，给同伴鼓劲、递道具、喊撤退，同伴都倒下才算输；身边没有同伴时还是你自己打。适合驯兽师、召唤师、指挥官。`, choice(t`谁上场`, book.lead === 'command' ? 'command' : 'self', [['self', t`亲自上场`], ['command', t`只指挥`]], lead => ({ lead }))),
-    row(t`收服`, t`打赢以后可以试着把一个打倒的敌人收为同伴，首领除外。成不成看你的${book.words?.charm || t`魅力`}，只有一次机会。`, choice(t`收服`, book.tame ? 'on' : 'off', [['off', t`关`], ['on', t`开`]], value => ({ tame: value === 'on' }))),
-    typesBox,
-    el('h3', { text: t`队伍名册` }),
-    el('p', { class: 'hint', text: t`和你一起打架的人：各有各的属性和技能，在行囊的「队伍」里安排谁上场。故事里写到有人入队时，名册里没有的人按常人加进来。` }),
-    roster,
-  ])
-  levelChoice.addEventListener('change', () => { fightSettings.hidden = levelChoice.value !== 'full' })
-  const dialog = el('dialog', { class: 'dialog card-permissions', 'aria-label': t`游戏规则` }, [
-    el('form', { method: 'dialog', class: 'cp-form' }, [
-      el('button', { class: 'btn small primary dialog-x', value: 'close', text: t`完成` }),
-      el('h2', { text: t`「${card.name}」的游戏规则` }),
-      el('p', { class: 'hint', text: t`打开后，成败、物品和数值由程序计算，模型只按结果写故事。只对这张卡生效，随时可以关掉，已有的对话不受影响。` }),
+  // 分区: the window in parts, each folded or open as this person left it (kept on this device), and a list of them to
+  // jump by, the part in view marked: beside the parts on a wide screen, a row of tabs along the top on a narrow one.
+  const fights = () => levelChoice.value === 'full'
+  const PARTS = [
+    { key: 'basics', title: t`基本`, about: t`规则档位、检定难度、剧情暂停、理智`, children: [
       row(t`规则`, t`轻度：检定、背包、任务和地图。完整：再加战斗和等级。`, levelChoice),
       ownFights ? el('p', { class: 'hint warn', text: t`这张卡好像自带战斗界面。开「完整」后两套可能同时出现，可以只开「轻度」。` }) : null,
-      row(t`检定难度`, t`检定的难度整体调低或调高，战斗的在下面单独设。`, choice(t`检定难度`, book.difficulty, [['easy', t`宽松`], ['normal', t`标准`], ['hard', t`严苛`]], difficulty => ({ difficulty }))),
+      row(t`检定难度`, t`检定的难度整体调低或调高，战斗的在「战斗设置」里单独设。`, choice(t`检定难度`, book.difficulty, [['easy', t`宽松`], ['normal', t`标准`], ['hard', t`严苛`]], difficulty => ({ difficulty }))),
       row(t`剧情暂停`, t`让模型在有风险的地方停下来等你掷骰。导入的预设有自己的输出格式，可能和这个冲突，所以默认不开，只有选项上的检定。`, choice(t`剧情暂停`, book.pause === null ? 'auto' : book.pause ? 'on' : 'off', [['auto', t`自动`], ['on', t`开`], ['off', t`关`]], value => ({ pause: value === 'auto' ? null : value === 'on' }))),
       row(t`理智`, t`恐怖题材用：目睹恐怖时理智下降，很难恢复，低了影响心智，归零时发疯。`, choice(t`理智`, book.sanity ? 'on' : 'off', [['off', t`关`], ['on', t`开`]], value => ({ sanity: value === 'on' }))),
-      fightSettings,
+    ] },
+    { key: 'setup', title: t`快速配置`, about: t`题材包，或让辅助模型读卡来配`, children: [
       row(t`题材包`, t`按故事的种类套一组设置：叫法、开局技能、玩法模块、成长侧重和战斗外观。选了以后先列出它会改什么，你挑着套用。`, themeSelect),
       packBox,
-      el('h3', { text: t`叫法` }),
-      el('p', { class: 'hint', text: t`这张卡怎么叫这些东西，界面和发给模型的规则一起换。只换名字，数值和存档不变；空着就用默认的叫法。` }),
-      wordsBox,
       row(t`辅助模型配置`, t`让辅助模型读这张卡，选一个题材包，再按这张卡写出叫法、属性、技能、物品、常见敌人、同伴、等级阶梯、天赋、形态和变量绑定；它没写的由题材包补上。你看过再采用。`, askHelper),
       proposal,
-      row(t`试打一场`, t`用这张卡的属性打一场，看看战斗怎么玩。什么都不会保存。`, el('span', { class: 'battle-trial' }, [trial, el('button', { type: 'button', class: 'btn small', text: t`开始`, onclick: () => tryFight().catch(failed) })])),
+    ] },
+    { key: 'words', title: t`叫法`, about: t`界面和规则里怎么称呼`, children: [
+      el('p', { class: 'hint', text: t`这张卡怎么叫这些东西，界面和发给模型的规则一起换。只换名字，数值和存档不变；空着就用默认的叫法。` }),
+      wordsBox,
+    ] },
+    { key: 'start', title: t`开局`, about: t`开局技能、属性，试打一场`, children: [
       row(t`开局技能`, t`战斗里能用的技能，用逗号分开。效果先按名字猜，下面可以改。空着就给强击和横扫。`, skillsInput()),
       skillKinds,
       skillAdds,
-      el('h3', { text: t`开局属性` }),
+      el('h4', { class: 'gr-sub', text: t`开局属性` }),
       el('p', { class: 'hint' }, [t`10 是常人。只影响新故事，已经开始的故事保持原样。`, ' ', spare]),
       ...ATTRIBUTES.map(attribute),
-      el('h3', { text: t`敌人图鉴` }),
-      bestiary,
-      el('h3', { text: t`绑定变量` }),
+      row(t`试打一场`, t`用这张卡的属性打一场，看看战斗怎么玩。什么都不会保存。`, el('span', { class: 'battle-trial' }, [trial, el('button', { type: 'button', class: 'btn small', text: t`开始`, onclick: () => tryFight().catch(failed) })])),
+    ] },
+    { key: 'fight', full: true, title: t`战斗设置`, about: t`难度、频率、等级阶梯`, children: [
+      row(t`战斗难度`, t`敌人的生命和伤害。宽松时更好打，严苛时敌人更耐打、打得更疼。`, choice(t`战斗难度`, book.fightDifficulty, [['easy', t`宽松`], ['normal', t`标准`], ['hard', t`严苛`]], fightDifficulty => ({ fightDifficulty }))),
+      row(t`战斗频率`, t`模型多久安排一次打斗。少：只在剧情需要时；多：隔一两轮就有战斗选项。`, choice(t`战斗频率`, book.fightRate, [['rare', t`少`], ['normal', t`适中`], ['often', t`多`]], fightRate => ({ fightRate }))),
+      row(t`等级阶梯`, t`这个世界的等级，从低到高，用逗号分开。填了以后敌人按等级算差距；不填时由模型写敌人比你强多少。`, ranksInput()),
+      book.ranks.length ? row(t`阶梯跨度`, t`大：差一级就很难打，比如修仙的境界。小：差几级才打不过，比如段位、军衔。`, choice(t`阶梯跨度`, book.rankSpan, [['wide', t`跨度大`], ['narrow', t`跨度小`]], rankSpan => ({ rankSpan }))) : null,
+      book.ranks.length ? row(t`开局等级`, t`玩家从哪一级开始，只影响新故事。绑定了「等级（文字）」的卡按变量来。`, choice(t`开局等级`, book.start.rank || book.ranks[0], book.ranks.map(rank => [rank, rank]), rank => ({ start: { ...book.start, rank } }))) : null,
+    ] },
+    { key: 'growth', full: true, title: t`成长`, about: t`节奏、里程碑、天赋、装备、形态`, children: growthSettings },
+    { key: 'modules', full: true, title: t`玩法模块`, about: t`谁上场、收服、类型克制`, children: [
+      el('p', { class: 'hint', text: t`按题材开的几样玩法，不开就和以前一样。可以让「读卡配置」按这张卡来定。` }),
+      row(t`谁上场`, t`亲自上场：你和同伴一起打。只指挥：你不动手也不挨打，给同伴鼓劲、递道具、喊撤退，同伴都倒下才算输；身边没有同伴时还是你自己打。适合驯兽师、召唤师、指挥官。`, choice(t`谁上场`, book.lead === 'command' ? 'command' : 'self', [['self', t`亲自上场`], ['command', t`只指挥`]], lead => ({ lead }))),
+      row(t`收服`, t`打赢以后可以试着把一个打倒的敌人收为同伴，首领除外。成不成看你的${book.words?.charm || t`魅力`}，只有一次机会。`, choice(t`收服`, book.tame ? 'on' : 'off', [['off', t`关`], ['on', t`开`]], value => ({ tame: value === 'on' }))),
+      typesBox,
+    ] },
+    { key: 'party', full: true, title: t`队伍名册`, about: t`一起打架的同伴`, children: [
+      el('p', { class: 'hint', text: t`和你一起打架的人：各有各的属性和技能，在行囊的「队伍」里安排谁上场。故事里写到有人入队时，名册里没有的人按常人加进来。` }),
+      roster,
+    ] },
+    { key: 'foes', title: t`敌人图鉴`, about: t`遇到过的敌人：立绘和招式效果`, children: [bestiary] },
+    { key: 'cutin', title: t`技能特写`, about: t`给技能配图，战斗里放技能时全屏特写`, children: [skillArt] },
+    { key: 'links', title: t`绑定变量`, about: t`把卡的变量当作生命、背包来用`, children: [
       el('p', { class: 'hint', text: t`这张卡已有的变量可以当作生命、背包这些来用：故事里归卡管，用物品时由规则写回。` }),
       paths.length ? el('div', { class: 'row' }, [guess]) : el('p', { class: 'hint', text: t`打开这张卡的对话后才能选变量。` }),
       paths.length ? links : null,
+    ] },
+  ]
+  const folded = readFolded()
+  const uid = Math.random().toString(36).slice(2, 8)
+  const parts = new Map(PARTS.map(part => {
+    const id = `gr-${uid}-${part.key}`
+    const shut = folded.has(part.key)
+    const body = el('div', { class: 'gr-body', id: `${id}-body`, hidden: shut }, part.children)
+    const head = el('button', { type: 'button', class: 'gr-head', id: `${id}-head`, 'aria-expanded': String(!shut), 'aria-controls': body.id, onclick: () => fold(part.key, !folded.has(part.key)) }, [
+      el('span', { class: 'gr-title', text: part.title }),
+      el('span', { class: 'gr-about', text: part.about }),
+      el('span', { class: 'gr-chevron', 'aria-hidden': 'true' }),
+    ])
+    const section = el('section', { class: `gr-sec${shut ? ' folded' : ''}`, id, 'aria-labelledby': head.id }, [el('h3', { class: 'gr-h' }, [head]), body])
+    const tab = el('button', { type: 'button', class: 'gr-tab', text: part.title, 'aria-controls': id, onclick: () => jump(part.key) })
+    return [part.key, { part, section, head, body, tab }]
+  }))
+  const shown = () => [...parts.values()].filter(({ section }) => !section.hidden)
+  const allButton = el('button', { type: 'button', class: 'btn small gr-all' })
+  const showAll = () => { allButton.textContent = shown().every(({ part }) => folded.has(part.key)) ? t`全部展开` : t`全部收起` }
+  function fold(key, shut) {
+    const { section, head, body } = parts.get(key)
+    if (shut) folded.add(key)
+    else folded.delete(key)
+    body.hidden = shut
+    head.setAttribute('aria-expanded', String(!shut))
+    section.classList.toggle('folded', shut)
+    keepFolded(folded)
+    showAll()
+    requestAnimationFrame(spy)
+  }
+  allButton.addEventListener('click', () => {
+    const shut = !shown().every(({ part }) => folded.has(part.key))
+    for (const { part } of shown()) fold(part.key, shut)
+  })
+  const tabs = el('div', { class: 'gr-tabs' }, [...parts.values()].map(({ tab }) => tab))
+  const nav = el('nav', { class: 'gr-nav', 'aria-label': t`游戏规则的分类` }, [tabs, allButton])
+  const main = el('div', { class: 'gr-main' }, [...parts.values()].map(({ section }) => section))
+  // Only the full rules have fights: their parts, and the tabs to them, come and go with it.
+  const showFights = () => {
+    for (const { part, section, tab } of parts.values()) if (part.full) section.hidden = tab.hidden = !fights()
+    showAll()
+    spy()
+  }
+  levelChoice.addEventListener('change', showFights)
+  // The part in view: the last whose top has passed the top of the list, or the last of all at the very bottom. One
+  // just jumped to stays marked until the list is scrolled by hand (it may sit too low to reach the top).
+  let chosen = ''
+  let marked = ''
+  const smooth = () => (matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth')
+  function mark(key) {
+    if (key === marked) return
+    marked = key
+    for (const [one, { tab }] of parts) {
+      if (one === key) tab.setAttribute('aria-current', 'location')
+      else tab.removeAttribute('aria-current')
+    }
+    const tab = parts.get(key)?.tab
+    if (tab && tabs.scrollWidth > tabs.clientWidth) tabs.scrollTo({ left: tab.offsetLeft - (tabs.clientWidth - tab.offsetWidth) / 2, behavior: smooth() })
+  }
+  function spy() {
+    const list = shown()
+    if (!list.length) return
+    if (chosen && !parts.get(chosen).section.hidden) return mark(chosen)
+    const line = main.scrollTop + 12
+    let now = list[0].part.key
+    for (const { part, section } of list) if (section.offsetTop <= line) now = part.key
+    if (main.scrollTop > 0 && main.scrollTop + main.clientHeight >= main.scrollHeight - 4) now = list.at(-1).part.key
+    mark(now)
+  }
+  function jump(key) {
+    const { section, head } = parts.get(key)
+    if (folded.has(key)) fold(key, false)
+    chosen = key
+    mark(key)
+    main.scrollTo({ top: section.offsetTop - 4, behavior: smooth() })
+    head.focus({ preventScroll: true })
+  }
+  let spying = 0
+  main.addEventListener('scroll', () => { if (!spying) spying = requestAnimationFrame(() => { spying = 0; spy() }) }, { passive: true })
+  for (const kind of ['wheel', 'touchstart', 'pointerdown', 'keydown']) main.addEventListener(kind, () => { chosen = '' }, { passive: true })
+  const dialog = el('dialog', { class: 'dialog card-permissions game-rules', 'aria-label': t`游戏规则` }, [
+    el('form', { method: 'dialog', class: 'cp-form gr-form' }, [
+      el('div', { class: 'gr-top' }, [
+        el('button', { class: 'btn small primary dialog-x', value: 'close', text: t`完成` }),
+        el('h2', { text: t`「${card.name}」的游戏规则` }),
+        el('p', { class: 'hint', text: t`打开后，成败、物品和数值由程序计算，模型只按结果写故事。只对这张卡生效，随时可以关掉，已有的对话不受影响。` }),
+      ]),
+      nav,
+      main,
     ]),
   ])
   dialog.addEventListener('close', () => dialog.remove())
   document.body.append(dialog)
   dialog.showModal()
+  showFights()
+  // Opened again after a change to many settings at once: where it was.
+  if (deps.scrollTop) main.scrollTop = deps.scrollTop
+  spy()
+}
+
+// Which parts of the window are folded: this person's own, kept on this device (and nothing lost if it cannot be).
+const FOLDED_KEY = 'game-rules-folded'
+function readFolded() {
+  try {
+    const list = JSON.parse(localStorage.getItem(FOLDED_KEY) || '[]')
+    return new Set(Array.isArray(list) ? list.filter(key => typeof key === 'string') : [])
+  } catch {
+    return new Set()
+  }
+}
+function keepFolded(folded) {
+  try {
+    localStorage.setItem(FOLDED_KEY, JSON.stringify([...folded]))
+  } catch {}
 }

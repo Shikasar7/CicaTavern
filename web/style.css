@@ -860,6 +860,12 @@ select.pill { appearance: none; padding-right: 28px; background-image: linear-gr
 /* A label in a dialog stacks what is in it: these are a box and a word on one line. */
 .dialog label.front-check, label.front-check { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; margin: 0; font-size: 13px; color: var(--ink); white-space: nowrap; }
 .front-check input[type="checkbox"] { flex: none; margin: 0; }
+/* What the 版式 leaves without effect: greyed, its reason in the title and in a line under the row. */
+.front-check.off { opacity: 0.5; cursor: not-allowed; }
+.front-notes { display: grid; gap: 2px; margin: -2px 0 8px; }
+.front-notes:empty { display: none; }
+.front-row > .front-notes { flex-basis: 100%; margin: 0; }
+.front-note { display: block; }
 .front-check select { width: auto; }
 .front-words { display: grid; gap: 6px; margin: 4px 0 10px; }
 .front-art .front-row { gap: 8px 12px; }
@@ -1477,6 +1483,72 @@ html[data-look] .tame-card.tried { animation-delay: 0s; }
 .game-companion > summary { display: flex; align-items: baseline; gap: 10px; padding: 8px 2px; cursor: pointer; }
 .game-companion > summary b { flex: none; max-width: 60%; font-weight: 600; }
 .game-companion[open] > summary { color: var(--accent, inherit); }
+/* A small arrow at the end of each fold's head: it opens. */
+.game-companion > summary::after { content: ""; flex: none; align-self: center; width: 6px; height: 6px; margin: 0 6px 0 auto; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: rotate(-45deg); transition: transform .2s var(--ease); }
+.game-companion[open] > summary::after { transform: translateY(-2px) rotate(45deg); }
+/* 敌人图鉴: a fold to each foe, its picture small in the head. */
+details.game-foe { margin: 0; }
+details.game-foe > summary { align-items: center; }
+details.game-foe > summary .foe-thumb { flex: none; width: 28px; height: 28px; }
+/* 敌人图鉴: the picture itself in an open row; it and the thumbnail open full size (web/game-rules.js foePicture). */
+.foe-preview { display: flex; justify-content: center; padding: 6px 0 2px; }
+.foe-preview img { max-width: 100%; max-height: 220px; object-fit: contain; border-radius: 8px; background: repeating-conic-gradient(var(--pane) 0 25%, var(--surface) 0 50%) 0 0 / 14px 14px; }
+.foe-thumb.zoomable, .foe-preview img.zoomable { cursor: zoom-in; }
+details.game-foe > summary .hint { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+details.game-foe > .row.end { margin: 4px 0 8px; }
+
+/* 游戏规则 (game-rules.js): the window in parts. Its head stays at the top; under it, a list of the parts to jump by (beside them on
+   a wide screen, a row of tabs over them on a narrow one) and the parts, which alone scroll. Each part's head folds it and stays in
+   sight while the part is read. The colours are the app's own, light or dark; the looks change only the list's shape and letters. */
+.dialog.card-permissions.game-rules { width: min(1040px, calc(calc(100vw / var(--page-zoom)) - 32px)); height: min(920px, calc(calc(100 * var(--dvh) / var(--page-zoom)) - 32px)); padding: 0; overflow: hidden; }
+.dialog.card-permissions.game-rules[open] { display: flex; flex-direction: column; }
+.gr-form { flex: 1; min-height: 0; display: grid; grid-template-columns: 200px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); grid-template-areas: "top top" "nav main"; }
+.gr-top { grid-area: top; padding: 20px 24px 14px; border-bottom: 1px solid var(--line-soft); }
+.dialog .gr-top h2 { margin: 0 0 6px; }
+.gr-top > .hint { margin: 0; line-height: 1.6; }
+.gr-nav { grid-area: nav; display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow-y: auto; padding: 14px 10px 16px 12px; border-right: 1px solid var(--line-soft); }
+.gr-tabs { position: relative; display: flex; flex-direction: column; gap: 2px; }
+.gr-tab { position: relative; display: block; width: 100%; padding: 7px 12px 7px 14px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--muted); font: inherit; font-size: 13.5px; line-height: 1.4; text-align: left; cursor: pointer; transition: background .15s, color .15s, border-color .15s; }
+.gr-tab:hover { background: var(--surface); color: var(--ink); }
+.gr-tab[aria-current] { background: var(--accent-soft); color: var(--ink); font-weight: 600; }
+.gr-tab[aria-current]::before { content: ""; position: absolute; left: 4px; top: 8px; bottom: 8px; width: 3px; border-radius: 2px; background: var(--accent); }
+.gr-tab:focus-visible, .gr-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.gr-all { align-self: flex-start; margin-left: 10px; }
+.gr-main { grid-area: main; position: relative; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 24px 32px; }
+.gr-sec { border-bottom: 1px solid var(--line-soft); }
+.gr-sec:last-child { border-bottom: 0; }
+.dialog .gr-h { position: sticky; top: 0; z-index: 3; margin: 0; background: var(--raised); color: var(--ink); font: inherit; }
+/* What scrolls under a part's head fades into it rather than being cut. */
+.dialog .gr-h::after { content: ""; position: absolute; left: 0; right: 0; top: 100%; height: 10px; background: linear-gradient(var(--raised), transparent); pointer-events: none; }
+.gr-head { display: flex; align-items: baseline; gap: 12px; width: 100%; padding: 14px 4px 10px; border: 0; border-radius: 8px; background: none; color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
+.gr-title { flex: none; font: 600 15.5px/1.35 var(--serif); letter-spacing: .02em; }
+.gr-about { flex: 1; min-width: 0; overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.gr-chevron { flex: none; align-self: center; width: 7px; height: 7px; margin: 0 6px; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: translateY(-2px) rotate(45deg); transition: transform .2s var(--ease); }
+.gr-sec.folded .gr-chevron { transform: rotate(-45deg); }
+.gr-sec.folded .gr-head { padding-bottom: 14px; }
+.gr-head:hover :is(.gr-title, .gr-chevron) { color: var(--accent); border-color: var(--accent); }
+.gr-body { padding: 2px 0 16px; }
+.gr-body > p.hint { margin: 0 0 10px; line-height: 1.6; }
+.dialog .gr-sub { margin: 16px 0 6px; color: var(--muted); font-size: 13px; font-weight: 600; }
+@media (prefers-reduced-motion: reduce) { .gr-chevron { transition: none; } }
+/* Narrow: the list a row of tabs, scrolled sideways, with 全部收起 at its end. */
+@media (max-width: 760px) {
+  .dialog.card-permissions.game-rules { width: calc(calc(100vw / var(--page-zoom)) - 16px); height: calc(calc(100 * var(--dvh) / var(--page-zoom)) - 16px); border-radius: 14px; }
+  .gr-form { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr); grid-template-areas: "top" "nav" "main"; }
+  .gr-top { padding: 14px 16px 10px; }
+  .dialog .gr-top h2 { font-size: 17px; }
+  .gr-top > .hint { font-size: 12px; line-height: 1.5; }
+  .gr-nav { flex-direction: row; align-items: center; gap: 8px; overflow: visible; padding: 8px 12px; border-right: 0; border-bottom: 1px solid var(--line-soft); }
+  .gr-tabs { flex: 1; min-width: 0; flex-direction: row; gap: 6px; overflow-x: auto; scrollbar-width: none; padding: 1px; }
+  .gr-tabs::-webkit-scrollbar { display: none; }
+  .gr-tab { flex: none; width: auto; padding: 4px 12px; border-color: var(--line-soft); border-radius: 999px; font-size: 13px; white-space: nowrap; }
+  .gr-tab[aria-current] { border-color: var(--accent); }
+  .gr-tab[aria-current]::before { content: none; }
+  .gr-all { flex: none; margin: 0; }
+  .gr-main { padding: 0 14px 24px; }
+  .gr-head { gap: 8px; padding: 12px 2px 8px; }
+  .gr-title { font-size: 15px; }
+}
 .bag-add { display: flex; gap: 6px; margin-top: 10px; }
 .bag-add input, .bag-add select { flex: 1; min-width: 0; }
 .bag-add .btn { flex: none; }
@@ -1762,7 +1834,17 @@ html[data-ui-lang="en"] .roll-tier { font-size: 42px; }
 .script-layer.docked { background: none; place-items: end; padding: 12px 12px var(--dock-bottom, 124px); pointer-events: none; }
 .script-layer.docked .script-window { width: min(380px, calc(100vw - 24px)); padding: 8px 10px 10px; pointer-events: auto; box-shadow: 0 10px 30px rgba(0, 0, 0, .25); }
 .script-layer.docked .script-window-body { height: min(320px, 42vh); }
+/* Dragged by its title row to a place of the player's (web/card-scripts.js placeSpot). */
+.script-layer.docked .script-window-head { cursor: move; touch-action: none; user-select: none; -webkit-user-select: none; }
+.script-layer.docked.moved .script-window { position: fixed; left: var(--dock-x, auto); top: var(--dock-y, auto); }
+.script-layer.docked.dragging { pointer-events: auto; cursor: move; }
+.script-layer.dragging .script-frame { pointer-events: none; }
 @media (max-width: 700px) { .script-layer.docked .script-window-body { height: min(260px, 30vh); } }
+/* Script windows put away with something still on them: a chip each to bring them back (web/card-scripts.js drawChips). */
+.script-chips { position: fixed; right: 12px; bottom: var(--dock-bottom, 124px); z-index: 59; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; max-width: min(260px, calc(100vw - 24px)); }
+.script-chips[hidden] { display: none; }
+.script-chip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: 999px; padding: 4px 12px; background: var(--raised); box-shadow: 0 4px 14px rgba(0, 0, 0, .18); }
+.script-chip::before { content: "▣"; margin-right: 6px; opacity: .6; }
 .branch-note button { border: 0; background: none; color: var(--muted); cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
 
 /* ─── Right pane ─────────────────────────────────────────────────── */
@@ -2610,6 +2692,14 @@ button.chip.on { background: var(--accent); border-color: var(--accent); color: 
 .gallery-item.picked .gallery-check::after { content: ''; position: absolute; left: 5px; top: 1px; width: 5px; height: 10px; border: solid var(--accent-ink); border-width: 0 2px 2px 0; transform: rotate(45deg); }
 .gallery-label { font-size: 11.5px; padding: 4px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
 .gallery-empty { grid-column: 1 / -1; text-align: center; padding: 30px 0; }
+/* 立绘: one folding list per character (web/gallery.js drawSprites). */
+.gallery-sprites { max-height: min(62vh, 640px); overflow-y: auto; margin: 10px 0; display: flex; flex-direction: column; gap: 6px; padding: 2px; }
+.gallery-sprites[hidden], .gallery-grid[hidden] { display: none; }
+.gallery-sprite { border: 1px solid var(--line-soft); border-radius: 10px; background: var(--raised); }
+.gallery-sprite > summary { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; padding: 8px 12px; cursor: pointer; }
+.gallery-sprite-tools { margin-left: auto; display: flex; gap: 6px; }
+.gallery-sprite > .gallery-grid { max-height: none; margin: 0; padding: 2px 10px 10px; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); }
+.gallery-sprite .gallery-item img { object-fit: contain; }
 #image-prompt { width: 100%; font: 13px/1.6 var(--mono); margin-bottom: 14px; resize: vertical; }
 .dialog.image-view { width: min(980px, calc(calc(100vw / var(--page-zoom)) - 32px)); }
 .image-view img { display: block; max-width: 100%; max-height: calc(72vh / var(--page-zoom)); margin: 0 auto 12px; border-radius: 12px; }
@@ -2813,7 +2903,7 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .roster-line-name, .roster-line-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .roster-line-name { font-size: 13.5px; font-weight: 600; color: var(--ink); }
 .roster-line-sub { font-size: 12px; color: var(--muted); }
-.roster-line-sub.empty { color: var(--faint); }
+.roster-line-sub.blank { color: var(--faint); }
 .roster-line-tags { flex: none; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; max-width: 45%; }
 .roster-tag { font-size: 11px; line-height: 1.6; padding: 0 6px; border-radius: 999px; background: var(--line-soft); color: var(--muted); white-space: nowrap; }
 .roster-tag.player { background: var(--accent-soft); color: var(--accent); }
@@ -3377,6 +3467,15 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
   .dialog label.card-pack-row { grid-template-columns: auto minmax(0, 1fr); }
   .card-pack-size { grid-column: 2; }
 }
+
+/* 设置 → 更多 → 备份与换设备 (web/backup.js): the same rows, plus the two ways in and the import's progress. */
+.backup-actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 14px 0 10px; }
+.backup-progress { width: 100%; height: 8px; margin: 6px 0 4px; accent-color: var(--accent); }
+.backup-conflict { margin: 8px 0 4px; padding: 8px 10px; border-radius: 10px; background: var(--line-soft); }
+.backup-conflict[hidden], .backup-keys[hidden] { display: none; }
+.backup-conflict p { margin: 0 0 4px; }
+.backup-report { margin: 8px 0; padding-left: 18px; line-height: 1.7; }
+.dialog details.hint p { white-space: pre-line; }
 
 /* Five steps, the titles and the model picker do not fit one row in a middling window: the steps take a row of their own. */
 @media (min-width: 781px) and (max-width: 1200px) {
@@ -3997,6 +4096,25 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .regex-group-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; margin: 16px 8px 6px; font: 600 12px/1.4 var(--ui); color: var(--muted); }
 .regex-group-title span { font-weight: 400; color: var(--faint); }
 .regex-empty { margin: 0 8px; font-size: 12px; color: var(--faint); }
+/* 多选 among the 正则集 (web/regex.js renderNav): ticked by a click, put on cards or taken off them together. */
+.regex-group-title .regex-set-pick-toggle { margin-left: auto; font-weight: 400; }
+.regex-set-bulk { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 8px 8px; padding: 8px 10px; border-radius: 10px; background: var(--surface); box-shadow: 0 0 0 1px var(--line-soft); font-size: 12px; }
+.regex-sets-picking li { cursor: pointer; }
+.regex-sets-picking li.picked { background: var(--accent-soft); }
+.regex-sets-picking .item-title { display: flex; align-items: center; gap: 6px; }
+.regex-set-pick { margin: 0; flex: none; pointer-events: none; accent-color: var(--accent); }
+.regex-card-pick { width: min(560px, calc(100vw - 32px)); }
+/* 导入角色卡: a card here already (web/app.js askReplace). */
+.ask-replace { width: min(460px, calc(100vw - 32px)); }
+.ask-replace h2 { margin: 0 0 12px; font-size: 17px; }
+.ask-replace-choices { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.ask-replace-choice { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; width: 100%; padding: 10px 14px; border: 1px solid var(--line-soft); border-radius: 12px; background: var(--surface); color: var(--ink); text-align: left; cursor: pointer; font: inherit; }
+.ask-replace-choice span { font-size: 12px; color: var(--muted); }
+.ask-replace-choice.primary { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-soft); }
+.ask-replace-choice:hover, .ask-replace-choice:focus-visible { border-color: var(--accent); }
+.regex-card-pick-tools { flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 8px; }
+.regex-card-pick-tools input[type=search] { flex: 1 1 180px; min-width: 0; }
+.regex-card-pick-list { max-height: calc(50vh / var(--page-zoom)); }
 .regex-tools-gap { flex: 1; }
 .regex-form { padding: 6px 10px 12px; }
 /* Not the lorebook entry's text box (.prow-more textarea): these fill the form as its inputs do. */
@@ -4388,7 +4506,7 @@ details.turn-table summary { font-size: 12px; color: var(--muted); cursor: point
 .vn-more-grid .vn-btn { padding: 10px 6px; font-size: 13px; overflow: hidden; text-overflow: ellipsis; background: var(--surface); border-color: var(--line); }
 .vn-more-grid .vn-btn.on { background: var(--accent); border-color: var(--accent); }
 /* 场景 and 立绘, first thing in 配图's menu. */
-.vn-pop-pages { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.vn-pop-pages { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .vn-pop-page { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--accent) 50%, var(--line)); border-radius: 12px; background: var(--accent-soft); color: var(--ink); text-align: left; cursor: pointer; transition: border-color .15s, background .15s; }
 .vn-pop-page:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 22%, var(--raised)); }
 .vn-pop-page b { font: 600 15px var(--ui); color: var(--accent); }
@@ -4678,6 +4796,25 @@ label.cast-voice, .dialog label.cast-voice { display: grid; grid-template-column
 .vn-library-empty { display: grid; place-items: center; color: var(--faint); font-size: 12px; }
 .vn-library-item figcaption { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px 4px; font-size: 13px; }
 .vn-library-item .row { flex-wrap: wrap; gap: 4px; padding: 4px 8px 10px; }
+/* 多选 in 场景 (web/vn.js sceneTab): a click on a scene ticks it; the bar above acts on the ticked ones. */
+.vn-bulk { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 0 0 10px; padding: 8px 12px; border-radius: 10px; background: var(--surface); box-shadow: 0 0 0 1px var(--line-soft); font-size: 13px; }
+.vn-bulk-count { font-variant-numeric: tabular-nums; color: var(--ink); margin-right: 4px; }
+.vn-bulk-gap { flex: 1; }
+.vn-library-grid.picking .vn-library-item { position: relative; cursor: pointer; user-select: none; }
+.vn-library-item.picked { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); background: var(--accent-soft); }
+.vn-library-item .vn-pick { position: absolute; top: 8px; left: 8px; z-index: 1; width: 18px; height: 18px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+@media (max-width: 780px) { .vn-bulk-gap { display: none; } }
+/* 卡的 CG (web/vn.js cgTab): one group a row of thumbnails, in order; the event view covers the stage. */
+.vn-cg-groups { display: flex; flex-direction: column; gap: 10px; max-height: calc(58vh / var(--page-zoom)); overflow-y: auto; padding: 2px; }
+.vn-cg-group { border: 1px solid var(--line-soft); border-radius: 12px; background: var(--surface); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.vn-cg-group-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.vn-cg-strip { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; }
+.vn-cg-cell { position: relative; flex: none; width: 120px; }
+.vn-cg-cell img { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; display: block; border-radius: 8px; background: var(--pane); }
+.vn-cg-cell .btn { position: absolute; top: 4px; right: 4px; padding: 0 7px; min-height: 0; line-height: 1.6; }
+.vn-cg-group .row { flex-wrap: wrap; gap: 4px; }
+.vn-cg[data-mode="event"] { cursor: pointer; background: #000; }
+.vn-cg[data-mode="event"] img { width: 100%; height: 100%; object-fit: contain; }
 @media (max-width: 560px) {
   .vn-cg-thumb { width: 72px; }
 }

@@ -7,7 +7,7 @@ import { normalizeBook } from './worldbook.mjs'
 import { httpError, newId } from './store.mjs'
 import { normalizeScripts, withUniqueIds } from '../web/shared/regex.js'
 import { DIRECT_CARD } from '../web/shared/basic.js'
-import { cleanPath, cleanStatusSpec } from '../web/shared/status.js'
+import { cleanPath, cleanStatusSpec, withoutLookRule } from '../web/shared/status.js'
 import { COVER_HIDE_SCRIPT, COVER_MARK, COVER_SCRIPT, cleanCover } from '../web/shared/cover.js'
 import { msg } from './i18n.mjs'
 import { usesMvu } from './mvu.mjs'
@@ -264,7 +264,8 @@ export function normalizeCard(raw) {
     tags: Array.isArray(data.tags) ? data.tags.filter(t => typeof t === 'string').slice(0, 20) : [],
     spec: str(raw.spec) || 'v1',
     book,
-    regexScripts: withUniqueIds(normalizeScripts(extensions.regex_scripts)).filter(script => !covered || (script.id !== COVER_SCRIPT && script.id !== COVER_HIDE_SCRIPT)),
+    // A look's pictures set for SillyTavern (forge/st-export.mjs withLookPictures) come off: here the look sets them itself.
+    regexScripts: withUniqueIds(normalizeScripts(extensions.regex_scripts)).filter(script => !covered || (script.id !== COVER_SCRIPT && script.id !== COVER_HIDE_SCRIPT)).map(script => (script.replaceString?.includes('.skinned{--pic-') ? { ...script, replaceString: withoutLookRule(script.replaceString) } : script)),
     // Character note inserted near the end of the context in SillyTavern; here: the tail of each turn.
     depthPrompt: str(extensions.depth_prompt?.prompt),
     // Tavern Helper scripts are not run; MVU behaviour is built in, and a schema among them is kept to (schema.mjs).

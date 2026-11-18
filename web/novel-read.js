@@ -12,7 +12,9 @@ export const count = n => Number(n ?? 0).toLocaleString()
 export const novelFile = async file => ({ name: file.name, text: decodeTextFile(await file.arrayBuffer()) })
 
 export function novelStepText(job) {
-  const [, kind, at, total] = /^(read|merge|digest):(\d+):(\d+)$/.exec(job.step ?? '') ?? []
+  const [, kind, at, total, reading] = /^(read|merge|digest):(\d+):(\d+)(?::(\d+))?$/.exec(job.step ?? '') ?? []
+  // 同时读: several at once, the first of them alone (the ones after it are sent with its names).
+  if (kind === 'read' && Number(reading) > 1) return t`同时在读 ${reading} 段，读完了 ${Number(at) - 1} / ${total} 段…可以关掉窗口，回来再看。`
   if (kind === 'read') return t`正在读第 ${at} / ${total} 段…可以关掉窗口，回来再看。`
   if (kind === 'merge') return t`都读完了，正在把同一个名字的几段笔记合成一条：第 ${at} / ${total} 批…`
   if (kind === 'digest') return t`正在写全书的梗概…`
@@ -63,12 +65,13 @@ export function novelTop(el, novel, on, { models = null } = {}) {
         el('span', { text: t`（读书的请求多，可以挑个便宜的）` }),
       ])
     : null
-  // Stretches read at once: faster, at the price of more requests a minute than some providers let through.
-  const width = !busy && (stage !== 'ready' || more)
+  // Stretches read at once: faster, at the price of more requests a minute than some providers let through. Shown while
+  // reading too (as it is set; changed between runs).
+  const width = stage !== 'ready' || more
     ? el('label', { class: 'book-novel-limit' }, [
         el('span', { text: t`同时读` }),
-        el('select', { 'aria-label': t`同时读几段`, onchange: event => on.parallel(Number(event.target.value)) }, [...new Set([1, 2, 3, 4, 6, 8, novel.parallel])].sort((a, b) => a - b).map(n => el('option', { value: n, text: String(n), selected: novel.parallel === n }))),
-        el('span', { text: t`段（越多读得越快；供应商报限流或请求太多，就调小）` }),
+        el('select', { 'aria-label': t`同时读几段`, disabled: busy, title: busy ? t`读完或停下以后才能改` : '', onchange: event => on.parallel(Number(event.target.value)) }, [...new Set([1, 2, 3, 4, 6, 8, novel.parallel])].sort((a, b) => a - b).map(n => el('option', { value: n, text: String(n), selected: novel.parallel === n }))),
+        el('span', { text: t`段（越多读得越快；供应商报限流或请求太多，就调小。有的供应商或中转同时只处理一个请求，调大也不会更快）` }),
       ])
     : null
   return el('div', { class: 'book-novel' }, [

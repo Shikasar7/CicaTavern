@@ -2,7 +2,7 @@
 // this only asks what the player does and shows what comes of it, one event at a time. Timers, not animation frames: a
 // page out of sight still has to finish a round.
 import { t } from '/i18n.js'
-import { ailName, banner, countWord, currentLook, enterFight, fitFigure, headIn, heroNow, letters, lookFields, slideSlab, sweep } from '/game-look.js'
+import { CUT_IN_MS, ailName, banner, countWord, currentLook, cutIn, cutInsOn, enterFight, fitFigure, headIn, heroNow, letters, loadCutIn, lookFields, slideSlab, sweep } from '/game-look.js'
 import { fightResult } from '/shared/game/encounter.js'
 import { addsText, foeAddsLine } from '/game-growth.js'
 import { showRoll } from '/game-play.js'
@@ -48,6 +48,8 @@ const SPREAD = { heal: 560, energy: 560, boost: 560 }
 const CLAWS = 3
 // How long a skill's name holds the screen before its blow, where a look writes it out; and how long it stays, in effects.
 const SKILL_MS = { ink: 820 }
+// 技能特写 with 减少动态效果: the picture held still, long enough to see.
+const CUT_IN_STILL_MS = 900
 const NAME_STAYS = 2.7
 const BLOWS_LANDED = new Set(['slash', 'strike', 'cut', 'flurry', 'burst'])
 // Pictures cut out of their white on this page: address → a promise of the cut one, or of null.
@@ -83,9 +85,9 @@ export function cutPicture(url) {
  * @param deps - { el, setup (battle.js battleSetup), resume ({ attempt, actions }: a fight to pick up), onProgress ({ attempt, actions }),
  *   onEnd ({ over: 'won'|'lost'|'fled'|'story', attempt, actions }), sound (web/game-sound.js),
  *   foeShown (name → { moves, picture }), background (the scene's picture), forced (the story left no way round it),
- *   faceFor (name → a companion's picture, or '') }
+ *   faceFor (name → a companion's picture, or ''), skillPicture (a skill's name → its 技能特写 picture, or '') }
  */
-export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound = null, foeShown = () => ({ moves: [], picture: '' }), background = '', energyName = '', forced = false, hero = heroNow(), faceFor = () => '', words = {} }) {
+export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound = null, foeShown = () => ({ moves: [], picture: '' }), background = '', energyName = '', forced = false, hero = heroNow(), faceFor = () => '', skillPicture = () => '', words = {} }) {
   const energyWord = energyName || t`气力`
   const still = matchMedia('(prefers-reduced-motion: reduce)').matches
   let attempt = resume?.attempt ?? 0
@@ -116,6 +118,9 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
   /** A picture for one of the party: the player's figure, or the companion's own. */
   // 形态: the face of the form they are in, where the cast has one by that name; else their own.
   const pictureOf = unit => (unit.id === 'player' ? playerFace : faceFor(shownOf(unit)) || faceFor(unit.name)) || ''
+  // 技能特写: the pictures of the skills the party has, loaded now so that the first one used does not wait.
+  const cutInOf = name => (cutInsOn() && skillPicture(name)) || ''
+  for (const unit of partyOf(state)) for (const skill of skillsOf(state, unit)) if (cutInOf(skill.name)) loadCutIn(cutInOf(skill.name))
 
   const round = el('span', { class: 'battle-round' })
   const speedButton = el('button', { type: 'button', class: 'battle-top-button', onclick: () => setSpeed(speed === 1 ? 2 : 1) })
@@ -526,7 +531,8 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
 
   const crit = event => (event.crit ? t`暴击！` : '')
 
-  function playEvent(event) {
+  /** @param cut - the skill was just shown in a 技能特写: its name needs no writing out over the fight again. */
+  function playEvent(event, cut = false) {
     // 类型克制: a blow that was the better or the worse for its type says so.
     const edged = event.edge === 'strong' ? t`，效果拔群` : event.edge === 'weak' ? t`，效果不好` : ''
     const say = text => {
@@ -604,7 +610,7 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
     } else if (event.type === 'skill') {
       if (party) drawMember(unitOf(event.by), { energy: event.energy })
       else drawEnergy(event.energy)
-      effect('name', foeRow, { text: event.name })
+      if (!cut) effect('name', foeRow, { text: event.name })
       if (blowing === 'sweep') effect('sweep', foeRow)
       say(party && event.by !== 'player' ? t`${nameOf(event.by)}使出${event.name}` : t`你使出${event.name}`)
     } else if (event.type === 'item') say(party && event.by !== 'player' ? t`${nameOf(event.by)}用了${event.name}` : t`你用了${event.name}`)
@@ -697,6 +703,19 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
     dialog.classList.add('frozen')
     await banner(el, dialog, { text: name, small: skill ? `${energyWord} -${skillCost(state, skill, who)}` : '', picture: pictureOf(who), ms: 1250 / speed })
     dialog.classList.remove('frozen')
+  }
+
+  /** 技能特写: the skill's own picture over the whole screen, then back to the fight. → false when it would not load. */
+  async function cutInFor(name, action) {
+    const who = unitOf(action.who)
+    const skill = skillsOf(state, who).find(item => item.name === action.name)
+    const cost = skill ? `${energyWord} -${skillCost(state, skill, who)}` : ''
+    const small = [party && who?.id !== 'player' ? nameOf(who.id) : '', cost].filter(Boolean).join(' · ')
+    if (!still) sound?.play('crit')
+    dialog.classList.add('frozen')
+    const shown = await cutIn(el, dialog, { picture: cutInOf(name), text: name, small, ms: (still ? CUT_IN_STILL_MS : CUT_IN_MS) / speed, still })
+    dialog.classList.remove('frozen')
+    return shown
   }
 
   /** The round's order across the top, as it comes out: who acts now stands out. */
@@ -796,8 +815,10 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
         partyOf(state).forEach(unit => unit.id !== event.who && rowOf(unit.id).classList.remove('acting'))
         continue
       }
+      // 技能特写: a skill with a picture of its own cuts to it, in every look; 撞色's banner is for those without.
+      const cut = event.type === 'skill' && cutInOf(event.name) ? await cutInFor(event.name, action) : false
       if (bold && !still) {
-        if (event.type === 'skill') await bannerFor(event.name, action)
+        if (event.type === 'skill' && !cut) await bannerFor(event.name, action)
         if (event.type === 'hit' && !dashed) {
           dashed = true
           await dash(event.target, action.kind === 'skill' || event.crit)
@@ -807,7 +828,7 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
           await lunge(event.by)
         }
       }
-      if (playEvent(event)) await wait(event.type === 'skill' ? SKILL_MS[currentLook().look] ?? EVENT_MS : EVENT_MS)
+      if (playEvent(event, cut)) await wait(event.type === 'skill' && !cut ? SKILL_MS[currentLook().look] ?? EVENT_MS : EVENT_MS)
     }
     stepBack()
     if (heroBox && heroBox.getAttribute('src') !== hero) {

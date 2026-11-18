@@ -149,10 +149,13 @@ If you can't quite say what you want, the creator guides you round by round:
 
 <br clear="right">
 
-## Latest changes [2.6.1]
+## Latest changes [2.6.2]
 
 <p align="center"><img src="web/whatsnew/2.6.1-statusart.webp" alt="Pictures on the status bar: small portraits before names, a book of places drawn as a map, a type-matchup wheel and a companion's form chain" width="720"></p>
 
+- **2.6.2: Backup & moving devices**: Settings → More → Backup & moving devices packs the cards, chats, pictures, lorebooks, presets and settings you tick into one zip, merged in on another computer, Mac or Android phone; keys stay out unless you tick them.
+- **2.6.2: Skill cut-ins**: a skill can have a picture, shown full screen when it is used in a fight, in each theme's own style; the game rules window is now in sections you can fold.
+- **2.6.2: and also**: import other people's bundles, picture packs and .charx files; cards carry their own CGs, shown full screen when the story gets there, and export as .charx; pick a reply's picture from the gallery; select several scenes or sprites in the visual novel to redraw or delete; fixed forms in card pages that would not submit, Edit & resend leaving the same message twice, and visual novel effects gone with sprites turned off.
 - **2.6.1: pictures on the status bar**: small portraits before names; a book of places drawn as a map (where you've been, where you can't go, what's unexplored, where you are), a Type chart and companions' Form chain.
 - **2.6.1: scripts in presets run too**: the floating balls, preset helpers and other Tavern Helper scripts an imported preset carries run in chats using it, just like a card's own scripts, with permissions asked once per preset.
 - **2.6.1: and also**: a Custom look can use the card's own pictures and drawn Decorations; Get the pictures ready also draws forms, a world map and character-creation options; the visual novel's battle screen has new enemy plates, and taming is a card with a dice roll; reading a novel runs several parts at once, two to three times faster; fixed variables from an extra lorebook being dropped by a card's variable rules, and game rules mistaking a preset's choices for checkpoints.

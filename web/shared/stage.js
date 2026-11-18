@@ -72,6 +72,17 @@ export function effectsOf(text) {
   return { screen: find(SCREEN), actor: find(ACTOR) }
 }
 
+/**
+ * What a line does to the picture: its 【效果|…】 mark's, else its narration's. A mark of nothing but a CG
+ * (【CG|…】) says nothing of the picture, so the narration still does.
+ */
+export function lineEffects(step) {
+  if (step?.type !== 'line') return { screen: null, actor: null }
+  const marked = step.effects
+  if (marked?.screen || marked?.actor) return { screen: marked.screen ?? null, actor: marked.actor ?? null }
+  return effectsOf(step.plain)
+}
+
 // ─── 视觉小说格式: what the marks may say (server/prompt.mjs asks, web/shared/vn.js reads) ──
 
 /** The word the format offers the model for each expression. */
@@ -85,6 +96,8 @@ export const EFFECT_WORDS = {
   tremble: ['发抖', '颤抖', '抖', 'tremble', 'shiver'], // i18n-ignore: words the model writes
 }
 export const EFFECT_KINDS = ['效果', '演出', '特效', 'effect', 'fx'] // i18n-ignore: words the model writes
+// 【CG|组名】: one of the card's CG groups (server/card-cgs.mjs), shown full screen from the line after it.
+export const CG_KINDS = ['cg', '插图', '事件图'] // i18n-ignore: words the model writes
 const SCREEN_EFFECTS = ['shake', 'flash']
 
 // A word the model chose that is not on the list (苦笑, 脸红了, 惊恐): the first expression it points to.
@@ -184,8 +197,7 @@ export function stageAt(steps, index, { names = [], max = 3, isActor = () => tru
   return {
     members: members.map(({ name, expression }) => ({ name, expression })),
     speaker,
-    // A 【效果|…】 mark says what the line does; else its narration.
-    effects: step?.type === 'line' ? (step.effects ? { screen: step.effects.screen ?? null, actor: step.effects.actor ?? null } : effectsOf(step.plain)) : { screen: null, actor: null },
+    effects: lineEffects(step),
   }
 }
 
@@ -261,13 +273,13 @@ export function parseExpressionLabels(text, count) {
  * takes the first its pack has.
  */
 export const PACK_NAMES = {
-  neutral: ['neutral', 'default', 'normal', 'idle', '平静', '默认'], // i18n-ignore: file names
+  neutral: ['neutral', 'default', 'normal', 'idle', 'calm', '平静', '默认', '平和'], // i18n-ignore: file names
   smile: ['smile', 'approval', 'caring', 'optimism', 'gratitude', 'relief', 'admiration', 'pride', '微笑'], // i18n-ignore: file names
-  happy: ['happy', 'joy', 'amusement', 'excitement', 'love', '开心', '高兴'], // i18n-ignore: file names
+  happy: ['happy', 'joy', 'amusement', 'excitement', 'love', '开心', '高兴', '喜悦'], // i18n-ignore: file names
   shy: ['shy', 'embarrassment', 'blush', 'love', 'nervousness', 'desire', '害羞', '脸红'], // i18n-ignore: file names
-  angry: ['angry', 'anger', 'annoyance', 'disapproval', 'disgust', '生气', '愤怒'], // i18n-ignore: file names
+  angry: ['angry', 'anger', 'annoyance', 'disapproval', 'disgust', '生气', '愤怒', '嫌弃'], // i18n-ignore: file names
   sad: ['sad', 'sadness', 'grief', 'disappointment', 'remorse', '难过', '伤心'], // i18n-ignore: file names
-  surprised: ['surprised', 'surprise', 'shock', 'realization', 'fear', '惊讶', '吃惊'], // i18n-ignore: file names
+  surprised: ['surprised', 'surprise', 'shock', 'realization', 'fear', 'anxious', 'nervous', '惊讶', '吃惊', '紧张'], // i18n-ignore: file names
   thinking: ['thinking', 'confusion', 'curiosity', 'thoughtful', '思考', '疑惑'], // i18n-ignore: file names
 }
 export const PACK_PICTURE = /\.(png|jpe?g|webp|gif)$/i

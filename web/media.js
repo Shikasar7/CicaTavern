@@ -202,7 +202,7 @@ function browserVoice(ref) {
  * @param deps - { api, el, toast, guard, getChat, getModels, openProviders, saveFile,
  *   pickDraw(options) (web/draw-choice.js: the 画图方式 and model for one picture) }
  */
-export function initMedia({ api, el, toast, guard, getChat, getModels, openProviders, saveFile, pickDraw, onPictures = () => {} }) {
+export function initMedia({ api, el, toast, guard, getChat, getModels, openProviders, saveFile, pickDraw, pickPicture = null, openGallery = null, onPictures = () => {} }) {
   const $ = id => document.getElementById(id)
   // The settings window (配图与朗读) as a menu of parts (web/menu.js).
   const settingsMenu = createMenu({ dialog: $('media-dialog'), form: $('media-form'), el, title: t`配图与朗读`, onPage: (_, left) => left === 'voice' && settleVoiceKeys() })
@@ -288,6 +288,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     return [
       el('button', { text: label, disabled: Boolean(job), title: t`辅助模型在后台描述这一幕，写好了弹出来让你确认，再交给生图模型`, onclick: () => writePrompt(node) }),
       el('button', { text: t`提示词库`, disabled: Boolean(job), title: t`用以前画过或存下的提示词给这段配图，可以先改再画`, onclick: () => openLibrary({ node, chatId: getChat()?.id }) }),
+      el('button', { text: t`选图`, disabled: Boolean(job), title: t`从图库（画过的配图、背景、立绘、卡的 CG）选一张，或上传本地图片，当这段的配图`, onclick: () => choosePicture(node) }),
       el('button', { class: reading ? 'on' : '', text: reading ? t`停止朗读` : t`朗读`, title: t`对白用角色音色，旁白用旁白音色。只想听某一句：直接点那句对白`, onclick: () => (reading ? player.stop() : readNode(node)) }),
     ]
   }
@@ -323,8 +324,9 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         return el('figure', { class: 'reply-image' }, [
           img,
           el('figcaption', {}, [
-            el('button', { type: 'button', text: t`重画`, title: t`同一段提示词再画一张换掉这张，可以先选画图方式和模型；这张留在旧图里`, disabled: Boolean(job), onclick: () => redraw(node, image, chat.id) }),
+            el('button', { type: 'button', text: t`重画`, title: image.prompt ? t`同一段提示词再画一张换掉这张，可以先选画图方式和模型；这张留在旧图里` : t`这张没有提示词（选来或上传的图）：先「改提示词」写一段再画`, disabled: Boolean(job) || !image.prompt, onclick: () => redraw(node, image, chat.id) }),
             el('button', { type: 'button', text: t`改提示词`, disabled: Boolean(job), onclick: () => editPrompt(chat.id, node, image) }),
+            el('button', { type: 'button', text: t`换一张`, title: t`从图库选一张或上传本地图片换掉这张；这张留在旧图里`, disabled: Boolean(job), onclick: () => choosePicture(node, image.file) }),
             el('button', { type: 'button', text: t`删除`, onclick: () => removeImage(node, image) }),
             old ? el('button', { type: 'button', text: t`旧图 ${old}`, title: t`这张重画之前的几张：点一张换回来`, 'aria-expanded': String(open), onclick: () => toggleOld(node, image) }) : null,
           ]),
@@ -538,6 +540,22 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     const data = await runJob(node, chatId, 'draw', work, { prompt, reveal: true, backend: picked?.label, replace })
     if (data?.image?.note) toast(data.image.note, 12000)
   }
+
+  /**
+   * 选图 / 换一张: a picture from 图库 or the player's own file as the reply's picture, added or (`replace`) in that
+   * picture's place, which becomes an old one as when it is drawn again.
+   */
+  const choosePicture = guard(async (node, replace = '') => {
+    const chat = getChat()
+    if (!chat || !pickPicture) return
+    const chosen = await pickPicture({ cardId: chat.cardId })
+    if (!chosen) return
+    const data = await api(`/api/chats/${chat.id}/nodes/${node.id}/image/put`, { method: 'POST', body: { ...chosen, ...(replace ? { replace } : {}) } })
+    if (data.image?.file) state.fresh.add(data.image.file)
+    if (replace && data.image?.file) state.openOld.add(data.image.file)
+    adopt(data.chat, node.id)
+    refreshNode(node.id)
+  })
 
   /** 重画: the same prompt again, with the 画图方式 and model picked for it, in this picture's place. */
   const redraw = guard(async (node, image, chatId) => {
@@ -1786,6 +1804,8 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     renderStyles()
 
     const sections = [
+      // 图库 (角色卡 → 图库), from here too: another window.
+      openGallery ? shared(t`配图`, { id: 'gallery', title: t`图库`, summary: () => t`所有卡和对话里的图：配图、CG、背景、立绘，选好后批量导出`, action: () => openGallery() }) : null,
       shared(t`配图`, {
         id: 'image-presets',
         title: t`生图方案`,
@@ -1965,7 +1985,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     }
     settingsMenu.mount({
       panels: [
-        { id: 'image', title: t`配图`, icon: MENU_ICONS.picture, aside: switchRow(autoImage, t`新回复自动配图`, t`每轮多一次辅助模型调用和一次生图`), rows: ['image-presets', 'image', 'prompt', 'style-library', who(), 'card-style', 'roster'] },
+        { id: 'image', title: t`配图`, icon: MENU_ICONS.picture, aside: switchRow(autoImage, t`新回复自动配图`, t`每轮多一次辅助模型调用和一次生图`), rows: ['image-presets', 'image', 'prompt', 'style-library', openGallery ? 'gallery' : null, who(), 'card-style', 'roster'].filter(Boolean) },
         { id: 'voice', title: t`朗读`, icon: MENU_ICONS.voice, aside: switchRow(autoRead, t`新回复自动朗读`), rows: ['voice', 'default-voice', who(), 'card-voice'] },
         { id: 'stt', title: t`语音输入`, icon: MENU_ICONS.mic, rows: ['stt'] },
       ],
@@ -2334,7 +2354,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         lineName.textContent = shown
         const others = splitNames(now.aliases)
         lineSub.textContent = others.length ? t`也叫 ${others.join(t`、`)}` : now.looks.trim() ? now.looks.trim() : t`还没写长相`
-        lineSub.classList.toggle('empty', !others.length && !now.looks.trim())
+        lineSub.classList.toggle('blank', !others.length && !now.looks.trim())
         const img = thumb.querySelector('img')
         face.replaceChildren(img ? el('img', { src: img.src, alt: '' }) : el('span', { text: Array.from(shown)[0] ?? '?' }))
         lineTags.replaceChildren(...[

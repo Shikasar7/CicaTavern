@@ -1466,6 +1466,68 @@
           }
         }
       ]
+    },
+    {
+      "version": "2.6.2",
+      "date": "2026-11",
+      "after": true,
+      "items": [
+        {
+          "image": "2.6.2-backup.webp",
+          "zh": {
+            "title": "备份与换设备：一个压缩包带走全部",
+            "text": "「设置 → 更多 → 备份与换设备」把角色卡和图片、对话和配图、世界书、预设、正则和人设文风、外观和其余设置、供应商和配图朗读设置打包成一个 zip，按类勾选，每项写着多大；抽图历史和密钥默认不带，勾密钥时会提醒。边打包边下载，几个 GB 也不占内存，安卓存进「下载」。\n在另一台设备（电脑、Mac、安卓之间都行）点「从备份导入…」选这个 zip，先列出里面有什么、哪些这边已有，勾上要的导入：没有的加进来，已有的一次选「保留这边的」或「用文件里的」。网络代理、手机访问这些只属于这台设备的设置不带。"
+          },
+          "en": {
+            "title": "Backup & moving devices: everything in one zip",
+            "text": "Settings → More → Backup & moving devices packs your cards and their pictures, chats and their pictures, lorebooks, presets, regex, personas and styles, looks and other settings, and providers with picture and voice settings into one zip. Tick the parts you want; each shows its size. Earlier pictures and keys stay out unless ticked, and ticking keys comes with a warning. The zip downloads while it is packed, so even several GB take no memory; Android saves it to Downloads.\nOn the other device (Windows, Mac and Android all work), Import from a backup… lists what the zip holds and what is already there. Tick what to bring in: what is new is added, and for what is already there you choose once to keep this device's copy or use the file's. Proxy and phone access settings belong to each device and are not carried over."
+          }
+        },
+        {
+          "image": "2.6.2-cutin.webp",
+          "zh": {
+            "title": "技能特写，游戏规则窗口分好类了",
+            "text": "在「游戏规则 → 技能特写」给技能配图（上传，或「画技能图」按技能名和效果画，同伴的技能带上它的人设图当参考），战斗里放这个技能时切到一张全屏特写：图缓慢推近，技能名在一条从右边滑进来的斜横幅上，闪一下白、响一声暴击音，再回到战场。简约、撞色、古风、怀旧游戏机各有样子；系统开了减少动态效果时图不动、不闪，不想看可以在「主题 → 技能特写」里关掉。\n游戏规则窗口分成基本、叫法、开局、战斗设置、成长、敌人图鉴、技能特写等十一类：电脑上左边列出分类，手机上是顶上一排标签，每类点标题收起或展开，还有「全部收起」。敌人图鉴里能「从图鉴删掉」一个敌人，图点一下看大图。"
+          },
+          "en": {
+            "title": "Skill cut-ins, and the game rules sorted",
+            "text": "Give a skill a picture in Game rules → Skill cut-ins (upload one, or Draw skill picture from its name and effect; a companion's skill takes their Reference image along), and using it in a fight cuts to that picture full screen: it slowly pushes in, the skill's name slides in from the right on a slanted band with a white flash and a critical hit sound, and then it is back to the fight. Simple, Color block, Classical and Retro console each have their own look. With reduced motion set on the system the picture holds still and does not flash, and Theme → Skill cut-ins turns them off.\nThe game rules window is sorted into eleven parts (Basics, Names, Start, Fight settings, Growth, Bestiary, Skill cut-ins and more): down the left on a computer, as a row of tabs on a phone. Each part folds by its title, and there is Collapse all. In the Bestiary, Remove from the bestiary takes a foe out, and a tap on its picture shows it large."
+          }
+        },
+        {
+          "image": "2.6.2-bundle.webp",
+          "zh": {
+            "title": "导入别人的整合包和 .charx，卡自带的 CG",
+            "text": "别人做的整合包、图包（.zip）和 RisuAI 这类软件导出的 .charx，在「导入角色卡、世界书或预设」里选或拖进窗口就能导入。.charx 直接导进来；别的压缩包先列出「压缩包里有这些」：角色卡、世界书、正则、预设、按 SillyTavern 方式命名的表情文件夹、按文件夹放的图片（当场景图、当一组 CG 或不带），勾好再导入，角色的图按名字进角色名册。\n卡可以自带 CG，一组是一幕：视觉小说里剧情写到那一幕时，这组图全屏一张张放，放完回到故事。在视觉小说的「配图 ▾ → CG」里新建组、加图、改名。「导出角色卡 → .charx 文件」把卡、立绘和表情、场景图、CG 打成一个文件，SillyTavern 1.13 以上和 RisuAI 能直接导入。"
+          },
+          "en": {
+            "title": "Import others' packs and .charx files; a card's own CGs",
+            "text": "Packs and picture packs (.zip) made by others, and .charx files from apps such as RisuAI, now come in through Import a card, lorebook or preset, picked or dropped on the window. A .charx comes straight in; other zips first show What's in this zip: cards, lorebooks, regex, presets, expression folders named the SillyTavern way, and folders of pictures (as scenes, as a group of CGs, or left out). Tick what you want; people's pictures go into the Character roster by name.\nA card can carry its own CGs, one group per moment: in the visual novel, when the story reaches that moment, the group plays full screen one picture at a time, then the story goes on. Make groups, add pictures and rename them under the visual novel's image menu → CG. Export card → .charx file packs the card, its sprites and expressions, scenes and CGs into one file that SillyTavern 1.13 and later and RisuAI can import directly."
+          }
+        },
+        {
+          "image": "2.6.2-pictures.webp",
+          "zh": {
+            "title": "从图库选配图，场景和立绘多选",
+            "text": "回复下面多了「选图」：不用画图模型，从图库（画过、传过的配图、背景、立绘、卡的 CG）里挑一张当这段的配图，也能上传本地图片；已经有图的也能这样换一张，原来那张留在旧图里。图库的立绘按角色列，每个角色能单独导出。\n视觉小说的场景页、立绘页点「多选」，勾上几个一起「重画」或「删除」：重画按顺序一张张画，旧图留在每张下面；立绘的重画跳过名册里没写长相的人，删除只删画的或上传的立绘，人设图和表情不动。"
+          },
+          "en": {
+            "title": "Pick a picture from the Gallery; select several scenes or sprites",
+            "text": "Under a reply, Pick a picture takes one from the Gallery (pictures drawn or uploaded before, backgrounds, sprites, the card's CGs) as that reply's picture, with no image model needed, or uploads one of your own. A picture already there can be swapped the same way, and the old one stays in Earlier pictures. In the Gallery, sprites are listed by character, and each character's pictures can be exported on their own.\nIn the visual novel's scene and sprite pages, Select lets you tick several and Redraw or Delete them together. Redraws are drawn one after another, each keeping its old picture underneath; sprite redraws skip anyone the roster gives no looks, and Delete only removes drawn or uploaded sprites, never Reference images or expressions."
+          }
+        },
+        {
+          "icon": "🔧",
+          "zh": {
+            "title": "还有这些，和修好的",
+            "text": "编辑重发写的时候就在原来的位置，写完收进这句话的「‹ ›」里；脚本的小窗能拖动，收起后右下角留个按钮找得回来；正则能从 .zip 导入，正则集能多选后一次挂到好几张卡上；读小说时进度写出同时在读几段；状态栏的立绘、场景图、小手机勾了没反应时会说为什么。\n修好：卡片界面里的表单交不出去；用四个反引号包起来的整页界面被切断；编辑重发后留下两楼一样的话；演出效果有时没有了；MVU 规则写在预设或另挂的世界书里时认不出；导入同一张卡的新版本后敌人图鉴的图和技能图丢了。"
+          },
+          "en": {
+            "title": "Also new, and fixed",
+            "text": "Edit & resend now writes in the line's own place and files the old one under its ‹ ›; script windows can be dragged, and a collapsed one leaves a button at the bottom right to bring it back; regex can be imported from a .zip, and several regex sets can be selected and put on several cards at once; reading a novel shows how many parts are being read at once; the status bar says why a sprite, scene picture or phone ticked on does not show.\nFixed: forms in a card's interface not submitting; whole-page interfaces wrapped in four backticks being cut apart; Edit & resend leaving the same line twice; screen effects sometimes going missing; MVU rules in a preset or an added lorebook not being recognised; foe and skill pictures being lost when a newer version of a card was imported."
+          }
+        }
+      ]
     }
   ]
 }

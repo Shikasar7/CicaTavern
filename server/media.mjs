@@ -23,6 +23,7 @@ import path from 'node:path'
 import { complete, fetchBytes, googleRequest, isProviderRef, postJson, providerError, providerRequest, refLabel, resolveRef, unreadReply, withCode } from './providers.mjs'
 import { chatMaterial, cleanFrame, cleanLora, cleanRoster, cleanStrength, countTags, draftMaterial, flattenFrame, frameFormat, isFramePrompt, isRosterId, leadOf, naiCharacters, parseFrame, parseRosterChat, parseRosterDraft, rosterBrief, rosterChatRequest, rosterDraftRequest, withSomeone } from './roster.mjs'
 import { httpError, newId } from './store.mjs'
+import { imageKind } from './appearance.mjs'
 import { blockRequest } from './blockwords.mjs'
 import { toolNote, withToolNote } from './context.mjs'
 import { FISH_MODELS } from './voice/cloud.mjs'
@@ -710,6 +711,33 @@ export function sceneryPromptRequest({ place, lore = '', setting = '', style = '
   return { system: `You write prompts for an image generator. You never write story text.\n${format}`, messages: [{ role: 'user', content }], maxTokens: PROMPT_MAX_TOKENS + 40 }
 }
 
+/**
+ * 画技能图: the helper's question for a 技能特写, the picture cut in full screen when a skill is used: the moment it
+ * goes off, by whoever has it (their looks are added apart, with their 人设图 as the picture to keep).
+ */
+export function skillPromptRequest({ name, note = '', who = '', setting = '', style = '', promptStyle = 'natural' }) {
+  const tags = promptStyle === 'tags'
+  const format = tags
+    ? 'Format: 25-50 comma-separated English tags: the action, what the skill looks like as it goes off (its energy, light, element, motion), a dynamic camera angle, dramatic lighting. No sentences.'
+    : 'Format: one English paragraph of 30-70 words: the instant the skill goes off, what it looks like (its energy, light, element, motion), a dynamic cinematic angle, dramatic lighting.'
+  const task = [
+    'TASK: write an image-generation prompt for the full-screen special-move cut-in of a game: the instant the skill in <skill> is used. Do not write story text, no Chinese.',
+    who ? 'It is used by <caster>: show them doing it, by what they do, not by their looks (those are added separately).' : 'It is used by the hero of the story, seen in the act from behind or in shadow: the skill is what the picture is about.',
+    'A wide landscape picture, intense and full of motion. No text, letters, numbers or game interface in it.',
+    'Match the era and culture of <setting>.',
+    format,
+    'Reply with the prompt only.',
+  ].join('\n')
+  const content = [
+    `<skill name="${String(name).replace(/"/g, '')}">${note ? `\n${clip(note, 300)}\n` : ''}</skill>`,
+    who ? `<caster>${String(who).replace(/[<>]/g, '')}</caster>` : '',
+    setting ? `<setting>\n${clip(setting, 500)}\n</setting>` : '',
+    style ? `<art_style>${style}</art_style>` : '',
+    task,
+  ].filter(Boolean).join('\n\n')
+  return { system: `You write prompts for an image generator. You never write story text.\n${format}`, messages: [{ role: 'user', content }], maxTokens: PROMPT_MAX_TOKENS + 40 }
+}
+
 /** A passage scenery answer → { place, prompt }: the PLACE: line, then the prompt. */
 export function readSceneryAnswer(text) {
   const value = String(text ?? '').replace(/<think>[\s\S]*?<\/think>/gi, '')
@@ -1176,6 +1204,7 @@ const OFF_PLAIN = 'detailed background, gradient background, indoors, window, wa
 // A cast member's reference picture: one person, nothing else to copy from it (the visual novel cuts it out too).
 const PORTRAIT_SCENE = 'solo, upper body, looking at viewer, simple background, white background'
 const PORTRAIT_NEGATIVE = 'nsfw, multiple views, text'
+const SKILL_NEGATIVE = 'text, letters, watermark, signature, user interface, multiple views, nsfw'
 const REFERENCE_NEGATIVE = `${PORTRAIT_NEGATIVE}, ${OFF_PLAIN}`
 // A card's avatar (修改角色卡 → 生成头像): square, the face and shoulders filling it.
 const AVATAR_SCENE = 'solo, portrait, face and shoulders, close-up, looking at viewer, simple background'
@@ -2285,6 +2314,20 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
   }
 
   /**
+   * A picture for a reply that is not drawn (选图: from 图库, or the player's own file), kept as a drawn one is.
+   * → the image as the reply records it ({ file, prompt, backend, source, at }).
+   */
+  async function putImage(chat, buffer, { prompt = '', source = 'upload' } = {}) {
+    const kind = imageKind(buffer)
+    if (!['png', 'jpg', 'webp'].includes(kind)) throw httpError(400, msg`配图要是 PNG、JPG 或 WebP`)
+    if (buffer.length > 15 * 1024 * 1024) throw httpError(400, msg`图片太大了（15 MB 以内）`)
+    const file = `${newId()}.${kind}`
+    await mkdir(mediaDir(chat.id), { recursive: true })
+    await writeFile(path.join(mediaDir(chat.id), file), buffer)
+    return { file, prompt: String(prompt ?? '').slice(0, 4000), backend: source === 'gallery' ? msg`从图库选` : msg`本地上传`, source, at: new Date().toISOString() }
+  }
+
+  /**
    * One picture from whichever backend is chosen.
    * @param options.scenery - a background with nobody in it (comfyImage).
    */
@@ -2395,6 +2438,48 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     const cast = { scene: [style, tags ? SPRITE_SCENE : SPRITE_SCENE_NATURAL].filter(Boolean).join(', '), characters: [{ entry, action: tags ? 'standing' : '', position: '' }], solo: entry, lead: entry }
     const plain = { ...media, comfyPurpose: 'sprite', imageShape: 'portrait', imageReference: false, geminiReference: false, naiReference: false, naiNegative: [media.naiNegative, SPRITE_NEGATIVE].filter(Boolean).join(', '), sdNegative: [media.sdNegative, SPRITE_NEGATIVE].filter(Boolean).join(', ') }
     return render(plain, cardId, cast, cast, '', signal, { references: 'none', negative: SPRITE_NEGATIVE })
+  }
+
+  /**
+   * 画技能图 (技能特写): a skill going off, landscape, from its name and what it does. Whoever uses it is in it with
+   * their looks, their 人设图 the picture to keep when they have one; `caster` is the names a companion goes by, or
+   * null for the player. → { buffer, backend, note, prompt }
+   */
+  async function drawSkill(cardId, { name, note = '', caster = null }, signal, choice = {}) {
+    const media = await settingsFor(choice)
+    const card = await store.getCard(cardId)
+    const cardMedia = await looksOf(cleanCardMedia(card.media))
+    const names = entry => [entry.name, ...String(entry.aliases ?? '').split(/[,，、]/)].map(one => one.trim()).filter(Boolean)
+    const entry = (caster ? cardMedia.roster.find(item => !item.player && names(item).some(one => caster.includes(one))) : cardMedia.roster.find(item => item.player)) ?? null
+    const who = entry ? (entry.player ? caster?.[0] || '' : entry.name) : caster?.[0] ?? ''
+    let text = ''
+    let target = null
+    try {
+      target = await helperTarget({ model: '' }, media)
+    } catch (error) {
+      if (media.promptStyle === 'tags') throw error
+    }
+    if (target) {
+      const { provider, modelId } = target
+      const request = skillPromptRequest({ name, note, who: who || (entry ? 'the hero' : ''), setting: card.scenario, style: cardMedia.style, promptStyle: media.promptStyle })
+      let result
+      try {
+        result = await complete(provider, modelId, withToolNote({ ...request, signal }, await helperNote()), { proxy: proxyNow() })
+      } catch (error) {
+        if (error.status) throw error
+        throw httpError(502, providerError(provider, error))
+      }
+      text = cleanPrompt(result.text, media.promptStyle)
+      if (!text) throw httpError(502, unreadReply(provider, result) ?? msg`${provider.name} · ${modelId} 没有写出技能图的提示词`)
+    } else {
+      text = `The instant a special move called "${name}" goes off${note ? ` (${note})` : ''}: a dynamic cinematic angle, bursting energy and light, dramatic lighting, full of motion, no text.`
+    }
+    const scene = withStyle(text, cardMedia.style, media.promptStyle)
+    const ref = entry ? await refFor(cardId, entry) : null
+    const cast = entry?.looks ? { scene, characters: [{ entry, action: '', position: '' }], solo: entry, lead: entry } : null
+    const plain = { ...media, imageShape: 'landscape', ...(ref ? {} : { imageReference: false, naiReference: false, geminiReference: false }), naiNegative: [media.naiNegative, SKILL_NEGATIVE].filter(Boolean).join(', '), sdNegative: [media.sdNegative, SKILL_NEGATIVE].filter(Boolean).join(', ') }
+    const drawn = await render(plain, cardId, cast, cast, scene, signal, { references: ref ? 'cast' : 'none', negative: SKILL_NEGATIVE })
+    return { ...drawn, prompt: scene }
   }
 
   /**
@@ -2686,5 +2771,5 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     return listen.transcribe({ media, audio: readAudio(audio, type), names: Array.isArray(names) ? names : [] }, signal)
   }
 
-  return { drawDecor, drawOptionPicture, drawFoe, defaults, settings, cleanSettings, ownBackends: ownBackendViews, naiStatus, setNaiToken, naiCheck, cardMediaView, saveCardMedia, inheritCardMedia, draftRoster, draftRosterFromChat, drawPortrait, drawCardArt, drawAvatar, drawScenery, drawBackdrop, drawSprite, drawExpression, drawsFromPicture, settingsFor, labelExpressions, readRosterRef, saveRosterRef, removeRosterRef, writeImagePrompt, generateImage, readImage, removeImage, removeChatMedia, copyChatMedia, loras, voices: voices.list, personaList: voices.personaList, ttsKeyStatus: voices.ttsKeyStatus, setTtsKey: voices.setTtsKey, voiceKeys: voices.keyStatus, setVoiceKey: voices.setKey, speak, previewVoice, accountVoices, transcribe, loadWorkflow, saveWorkflow, describeWorkflow, purposeWorkflows, comfyModels }
+  return { drawDecor, drawOptionPicture, drawFoe, drawSkill, defaults, settings, cleanSettings, ownBackends: ownBackendViews, naiStatus, setNaiToken, naiCheck, cardMediaView, saveCardMedia, inheritCardMedia, draftRoster, draftRosterFromChat, drawPortrait, drawCardArt, drawAvatar, drawScenery, drawBackdrop, drawSprite, drawExpression, drawsFromPicture, settingsFor, labelExpressions, readRosterRef, saveRosterRef, removeRosterRef, writeImagePrompt, generateImage, putImage, readImage, removeImage, removeChatMedia, copyChatMedia, loras, voices: voices.list, personaList: voices.personaList, ttsKeyStatus: voices.ttsKeyStatus, setTtsKey: voices.setTtsKey, voiceKeys: voices.keyStatus, setVoiceKey: voices.setKey, speak, previewVoice, accountVoices, transcribe, loadWorkflow, saveWorkflow, describeWorkflow, purposeWorkflows, comfyModels }
 }

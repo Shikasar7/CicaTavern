@@ -105,6 +105,10 @@ export function createPromptLibrary(store) {
   }
 
   return {
+    /** The file changed under the library (备份与换设备 merged one in): read it again next time. */
+    forget() {
+      cache = null
+    },
     /** Entries for a card (all cards when cardId is empty): starred first, then newest. */
     async list(cardId = '') {
       const { entries } = await load()

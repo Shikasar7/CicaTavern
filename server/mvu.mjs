@@ -7,9 +7,17 @@ import { entryText, entryTitle, isConstant, isInitvar } from './worldbook.mjs'
 const MVU = /_\.set\s*\(|UpdateVariable|JSONPatch/
 const BLOCK = /<UpdateVariable>[\s\S]*?<\/UpdateVariable>/i
 
-/** Whether the card (its own fields, and the books given) asks for MVU update blocks. */
-export function usesMvu(card, books = []) {
-  const texts = [card?.systemPrompt, card?.postHistoryInstructions, ...books.flatMap(book => (book?.entries ?? []).filter(e => e.enabled !== false).map(e => e.content))]
+/**
+ * Whether the chat asks for MVU update blocks: in the card's own fields, the books given (the card's, and those
+ * attached beside it) or the preset's prompts. Rules kept in a preset or an attached book count as the card's.
+ */
+export function usesMvu(card, books = [], preset = null) {
+  const texts = [
+    card?.systemPrompt,
+    card?.postHistoryInstructions,
+    ...books.flatMap(book => (book?.entries ?? []).filter(e => e.enabled !== false).map(e => e.content)),
+    ...(preset?.prompts ?? []).filter(p => p?.enabled !== false).map(p => p.content),
+  ]
   return texts.some(text => MVU.test(String(text ?? '')))
 }
 

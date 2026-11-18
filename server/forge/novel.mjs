@@ -525,8 +525,22 @@ export function createNovel({ store, load, save, serial, run, jobs, cutNote, fil
     const todo = []
     for (let i = session.done; i < limit; i++) if (!(i in waiting)) todo.push(i)
     let finished = limit - todo.length
-    ctx.step(`read:${Math.min(finished + 1, limit)}:${limit}`)
+    // How many are being read this moment: the page says so when it is more than one (同时读).
+    let reading = 0
+    const tell = () => ctx.step(`read:${Math.min(finished + 1, limit)}:${limit}:${reading}`, { same: true })
+    ctx.step(`read:${Math.min(finished + 1, limit)}:${limit}:0`)
     const readOne = async i => {
+      reading += 1
+      tell()
+      try {
+        await readStretch(i)
+      } finally {
+        reading -= 1
+      }
+      finished += 1
+      tell()
+    }
+    const readStretch = async i => {
       const stretch = session.stretches[i]
       // The names met most often first: with more of them than a request lists, those are the ones to keep to.
       const known = [...session.notes].sort((a, b) => b.parts.length - a.parts.length).map(note => note.name)
@@ -549,8 +563,6 @@ export function createNovel({ store, load, save, serial, run, jobs, cutNote, fil
         }
         draft.merged = false
       })
-      finished += 1
-      ctx.step(`read:${Math.min(finished + 1, limit)}:${limit}`, { same: true })
     }
     if (width > 1 && !session.notes.length && todo.length > 1) await pooled([todo.shift()], 1, ctx.signal, readOne)
     await pooled(todo, width, ctx.signal, readOne)

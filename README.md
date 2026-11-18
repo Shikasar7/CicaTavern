@@ -150,10 +150,13 @@ If you can't quite say what you want, the creator guides you round by round:
 
 <br clear="right">
 
-## Latest changes [2.6.1]
+## Latest changes [2.6.2]
 
 <p align="center"><img src="web/whatsnew/2.6.1-statusart.webp" alt="Pictures on the status bar: small portraits before names, a book of places drawn as a map, a type-matchup wheel and a companion's form chain" width="720"></p>
 
+- **2.6.2: Backup & moving devices**: Settings → More → Backup & moving devices packs the cards, chats, pictures, lorebooks, presets and settings you tick into one zip, merged in on another computer, Mac or Android phone; keys stay out unless you tick them.
+- **2.6.2: Skill cut-ins**: a skill can have a picture, shown full screen when it is used in a fight, in each theme's own style; the game rules window is now in sections you can fold.
+- **2.6.2: and also**: import other people's bundles, picture packs and .charx files; cards carry their own CGs, shown full screen when the story gets there, and export as .charx; pick a reply's picture from the gallery; select several scenes or sprites in the visual novel to redraw or delete; fixed forms in card pages that would not submit, Edit & resend leaving the same message twice, and visual novel effects gone with sprites turned off.
 - **2.6.1: pictures on the status bar**: small portraits before names; a book of places drawn as a map (where you've been, where you can't go, what's unexplored, where you are), a Type chart and companions' Form chain.
 - **2.6.1: scripts in presets run too**: the floating balls, preset helpers and other Tavern Helper scripts an imported preset carries run in chats using it, just like a card's own scripts, with permissions asked once per preset.
 - **2.6.1: and also**: a Custom look can use the card's own pictures and drawn Decorations; Get the pictures ready also draws forms, a world map and character-creation options; the visual novel's battle screen has new enemy plates, and taming is a card with a dice roll; reading a novel runs several parts at once, two to three times faster; fixed variables from an extra lorebook being dropped by a card's variable rules, and game rules mistaking a preset's choices for checkpoints.
@@ -502,10 +505,13 @@ flowchart LR
 
 <br clear="right">
 
-## 最新版本变动[2.6.1]
+## 最新版本变动[2.6.2]
 
 <p align="center"><img src="web/whatsnew/2.6.1-statusart.webp" alt="状态栏上的图：人名前的小头像，记地点的册子画成的地图，以及类型克制图和同伴的形态链" width="720"></p>
 
+- **2.6.2：备份与换设备**：「设置 → 更多 → 备份与换设备」按类勾选，把角色卡、对话、配图、世界书、预设和设置打成一个 zip，在另一台电脑、Mac 或安卓上合并导入；密钥默认不带。
+- **2.6.2：技能特写**：技能能配一张图，战斗里放这个技能时切到全屏特写，四个主题各有各的样子；游戏规则窗口分了类，能折叠。
+- **2.6.2：还有这些**：导入别人的整合包、图包和 .charx，卡能自带 CG、剧情到了全屏放，也能导出成 .charx；从图库选配图；视觉小说的场景和立绘能多选重画、删除；修了卡片界面里的表单交不出去、编辑重发留下两楼、关掉立绘后没有演出效果。
 - **2.6.1：状态栏上的图**：名字前带小头像；记地点的册子能画成地图（去过的、受限的、没探明的、你在哪），还有类型克制图和同伴的形态链。
 - **2.6.1：预设里的酒馆助手脚本也运行了**：导入的预设带的悬浮球、预设助手这类脚本，在用这个预设的对话里和卡的脚本一样运行，权限每个预设问一次。
 - **2.6.1：还有这些**：定制外观能用卡自己的图、画装饰图；备齐门面图多画形态、世界地图和建角页的图；视觉小说战斗界面重做了敌人信息牌，收服换成卡片还会掷骰子；读小说同时读几段，快了两三倍；修了另挂世界书的变量被卡的变量规则删掉、自带选项格式的预设下游戏规则误把选项当关卡。

@@ -470,6 +470,20 @@ export function initTheme({ api, el, toast, guard, getSettings, setSettings, onR
     ])
   }
 
+  /** 技能特写: a skill with a picture of its own cuts to it full screen in a fight; this device can do without. */
+  function cutInRow() {
+    const box = el('input', { type: 'checkbox', 'aria-label': t`技能特写` })
+    box.checked = currentLook().cutIns !== false
+    box.addEventListener('change', () => setLook({ cutIns: box.checked }))
+    return el('div', { class: 'theme-row top' }, [
+      el('span', { class: 'theme-label', text: t`技能特写` }),
+      el('div', { class: 'theme-reading' }, [
+        el('label', { class: 'front-check' }, [box, el('span', { text: t`显示` })]),
+        el('p', { class: 'hint', text: t`战斗里放有配图的技能时，切到一张全屏特写再回到战场。技能图在卡的「游戏规则」里配。只记在这台设备上。` }),
+      ]),
+    ])
+  }
+
   /** 正文宽度: the same as dragging the column's edges, for a phone-sized hand or a keyboard; not on a phone, where the column is the screen. */
   function widthRow(reading) {
     if (matchMedia(zoomedQuery('(max-width: 560px)')).matches) return null
@@ -828,6 +842,7 @@ export function initTheme({ api, el, toast, guard, getSettings, setSettings, onR
         el('span', { class: 'theme-label', text: t`游戏界面` }),
         el('select', { 'aria-label': t`视觉小说、战斗和掷骰的样子`, onchange: event => setLook({ look: event.target.value }) }, Object.entries(lookNames()).map(([look, name]) => el('option', { value: look, text: name, selected: look === currentLook().look }))),
       ]),
+      cutInRow(),
       el('div', { class: 'theme-row top' }, [
         el('span', { class: 'theme-label', text: t`背景图` }),
         el('div', { class: 'theme-backdrop' }, [

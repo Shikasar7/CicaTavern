@@ -8,6 +8,7 @@ import { normalizeCard } from '../server/cards.mjs'
 import { createChat } from '../server/chats.mjs'
 import { createMedia } from '../server/media.mjs'
 import { createScenes } from '../server/scenes.mjs'
+import { createCardCgs } from '../server/card-cgs.mjs'
 import { createGallery } from '../server/gallery.mjs'
 import { createStore } from '../server/store.mjs'
 import zlib from 'node:zlib'
@@ -25,7 +26,8 @@ test('图库: 配图 of every chat, a card\'s 背景 and 立绘, newest first; a
   await store.saveCard(card)
   const media = createMedia(store, {})
   const scenes = createScenes(store, { media })
-  const gallery = createGallery(store, { scenes, media })
+  const cgs = createCardCgs(store)
+  const gallery = createGallery(store, { scenes, media, cgs })
   assert.deepEqual((await gallery.list()).items, [])
 
   const chat = await createChat(store, card.id)
@@ -40,21 +42,28 @@ test('图库: 配图 of every chat, a card\'s 背景 and 立绘, newest first; a
   cardNow.media = { ...(cardNow.media ?? {}), roster: [{ id: 'lx', name: '林雪', kind: 'girl', looks: 'short hair' }] }
   await store.saveCard(cardNow)
   await scenes.setSprite(card.id, 'lx', dataUrl)
+  await scenes.setExpression(card.id, 'lx', 'shy', dataUrl)
+  // 卡的 CG: a group of two.
+  await cgs.bring(card.id, [{ name: '林雪-雨夜', note: '告白', pictures: [PNG, PNG] }])
 
   const { items } = await gallery.list()
-  assert.deepEqual(items.map(item => item.kind).sort(), ['reply', 'scene', 'sprite'])
+  assert.deepEqual(items.map(item => item.kind).sort(), ['cg', 'cg', 'reply', 'scene', 'sprite', 'sprite'])
+  assert.deepEqual(items.filter(item => item.kind === 'cg').map(item => [item.name, item.group, item.prompt]).sort(), [['林雪-雨夜 1', '林雪-雨夜', '告白'], ['林雪-雨夜 2', '林雪-雨夜', '告白']])
+  assert.ok((await gallery.read(items.find(item => item.kind === 'cg').id)).equals(PNG))
   const reply = items.find(item => item.kind === 'reply')
   assert.deepEqual([reply.cardName, reply.chatId, reply.prompt, reply.src], ['林雪/警官', chat.id, 'a quiet street', `/api/media/${chat.id}/a1.png`])
-  assert.equal(items.find(item => item.kind === 'sprite').name, '林雪')
+  // 立绘 and expressions say whose and which face, for the 立绘 list (web/gallery.js).
+  assert.deepEqual(items.filter(item => item.kind === 'sprite').map(item => [item.name, item.who, item.entryId, item.face]).sort(), [['林雪', '林雪', 'lx', 'neutral'], ['林雪·shy', '林雪', 'lx', 'shy']])
   assert.equal(items.find(item => item.kind === 'scene').name, '雨巷')
   assert.ok(items[0].at >= items.at(-1).at, 'newest first')
 
   const { parts, size, count, missing } = await gallery.exportZip([...items.map(item => item.id), 'reply:nochat:x.png'])
   const buffer = Buffer.concat(parts)
   assert.equal(size, buffer.length)
-  assert.deepEqual([count, missing], [3, 1])
+  assert.deepEqual([count, missing], [6, 1])
   const names = listZip(buffer).map(entry => entry.name).sort()
-  assert.equal(names.length, 3)
+  assert.equal(names.length, 6)
+  assert.ok(names.some(name => name.startsWith('林雪_警官/卡的CG/林雪-雨夜 1')), names.join(' '))
   assert.ok(names.every(name => name.startsWith('林雪_警官/')), names.join(' '))
   assert.ok(names.some(name => name.startsWith('林雪_警官/背景/雨巷')))
   assert.ok(names.some(name => name.startsWith('林雪_警官/立绘/林雪')))

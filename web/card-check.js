@@ -7,7 +7,7 @@
 import { t } from '/i18n.js'
 import { EFFECTS, SHOWS, STATUS_THEMES, backdropLayers, cleanMap, cleanStatusSpec, colorContrast, lookTokensUsed, statusPages, triedExtreme, withTried } from '/shared/status.js'
 import { getPath, unwrap } from '/shared/vars.js'
-import { laidOut, statusBar } from '/status.js'
+import { laidOut, layoutTakes, statusBar } from '/status.js'
 import { coverPage } from '/cover.js'
 import { decorBlock, lookPictures } from '/look-pictures.js'
 import { diffView } from '/talk.js'
@@ -24,6 +24,9 @@ const FIRST_COLORS = { bg: '#f7f8f5', ink: '#1c2427', accent: '#2b5869' }
 // A long look is left out of the editing box: the page would hang on it, and a model never wrote it.
 const MAX_EDIT = 20000
 const FOLD_OVER = 6
+// The 场景 that is the card's map, not a place the story is at.
+const MAP_SCENE = /^(?:地图|世界地图|全图|大地图|map|world ?map)$/i
+const SCENES_NAMED = 6
 
 const LEVELS = [['error', t`会出错`, t`这些地方现在不起作用。`], ['warn', t`可能有问题`, t`能用，但多半不是作者想要的效果。`], ['tip', t`可以更好`, t`不改也能玩。`]]
 const FOCUS = [['rules', t`玩法和变量`, t`规则打架、变量没写清、和开场白对不上`], ['tokens', t`省上下文`, t`常驻改关键词、重复条目、太宽的关键词`], ['look', t`美化`, t`状态栏显示什么、用什么主题`], ['style', t`文笔`, t`套话和前后矛盾。默认不查，别人的写法不去挑`]]
@@ -65,8 +68,32 @@ function helperWords(script) {
     HELPER_PAGE,
     script.buttons.length ? t`它的按钮在输入框上方。` : '',
     script.stPage ? t`它要改 SillyTavern 自己页面上的东西（消息列表、菜单），这部分不起作用。` : '',
+    script.stRequest ? t`它要改 SillyTavern 组装和发出请求的方式（当前预设的设置、工具调用、拦截请求）。这里的请求由程序在后台组装发出，这部分不起作用；它因此每次都弹提示的话，关掉它不影响其余内容。` : '',
     lacking,
   ].filter(Boolean).join('')
+}
+
+/**
+ * Why a ticked 顶上放立绘, 顶上放场景图 or 小手机 may change nothing on the bar: what the 版式 does with it
+ * (layoutTakes), and what pictures the card has. `info`: { figure: someone in 角色名册 has a 立绘 or 人设图, avatar,
+ * scenes: the names of the 场景 with a picture }, or null while it is asked for.
+ */
+function artNotes(spec, takes, info) {
+  const notes = []
+  if (spec.portrait) {
+    if (takes.portrait) notes.push(takes.portrait)
+    if (info && !info.figure) notes.push(info.avatar ? t`角色名册里还没有立绘或人设图，先用卡的头像。` : t`这张卡还没有立绘、人设图或头像，立绘不会显示。在「设置 → 配图与朗读 → 角色名册」里画。`)
+  }
+  if (spec.scene) {
+    if (takes.scene) notes.push(takes.scene)
+    if (info && !info.scenes.length) notes.push(t`这张卡还没有场景图，场景图不会显示。在视觉小说里画场景，或者用「一键备齐」。`)
+    else if (info) {
+      const named = info.scenes.slice(0, SCENES_NAMED).join(t`、`)
+      notes.push(info.scenes.length > SCENES_NAMED ? t`回复写到的地点和场景图同名时才显示，现有：${named} 等 ${info.scenes.length} 张。` : t`回复写到的地点和场景图同名时才显示，现有：${named}。`)
+    }
+  }
+  if (spec.phone && takes.phone) notes.push(takes.phone)
+  return notes
 }
 
 /**
@@ -140,15 +167,22 @@ export function statusEditor(el, change, edit, { spare = [], state = {}, redraw,
     const drop = el('button', { type: 'button', class: 'btn ghost small', 'aria-label': t`去掉「${field.path}」`, title: t`去掉`, text: '×', onclick: () => { spec.fields.splice(index, 1); redraw() } })
     return el('div', { class: `cc-status-row${edit.paged ? ' paged' : ''}` }, [el('code', { text: field.path }), label, show, edit.paged ? page : null, drop])
   }
-  // 立绘, 场景图 and 动效 on the bar: the pictures are the ones the app keeps for this card.
+  // 立绘, 场景图 and 动效 on the bar: the pictures are the ones the app keeps for this card. A box the 版式 leaves
+  // without effect is greyed out (what it holds is kept, for a change back); a ticked one that will show nothing says why.
+  const takes = layoutTakes(spec.layout ?? '')
+  const notes = el('div', { class: 'front-notes', 'aria-live': 'polite' })
+  const drawNotes = () => notes.replaceChildren(...artNotes(spec, takes, edit.artInfo).map(text => el('small', { class: 'hint front-note', text })))
+  edit.drawNotes = drawNotes
   const picture = (key, label, hint) => {
-    const box = el('input', { type: 'checkbox', onchange: () => {
+    const off = takes.off.includes(key)
+    const box = el('input', { type: 'checkbox', disabled: off, onchange: () => {
       if (box.checked) spec[key] = true
       else delete spec[key]
       drawPreview()
+      drawNotes()
     } })
     box.checked = spec[key] === true
-    return el('label', { class: 'front-check', title: hint }, [box, el('span', { text: label })])
+    return el('label', { class: `front-check${off ? ' off' : ''}`, title: off ? takes[key] : hint }, [box, el('span', { text: label })])
   }
   const effect = el('select', { 'aria-label': t`动效`, onchange: () => {
     if (effect.value) spec.effect = effect.value
@@ -161,8 +195,24 @@ export function statusEditor(el, change, edit, { spare = [], state = {}, redraw,
     picture('scene', t`顶上放场景图`, t`回复写到一个有场景图的地点时显示那张图（视觉小说的场景）`),
     picture('phone', t`小手机`, t`列表、表格、长段文字和第一页以后的各页不直接摆在状态栏上，变成一排图标，点开在一个小手机里看（背包、任务、情报这类）`),
     el('label', { class: 'front-check' }, [el('span', { text: t`动效` }), effect]),
-    el('small', { class: 'hint', text: t`图片只在 CicaTavern 里显示，这里的预览不带图。` }),
+    el('small', { class: 'hint', text: t`下面的预览不带图：立绘和场景图要回到对话里看，也只在 CicaTavern 里显示。` }),
+    notes,
   ])
+  drawNotes()
+  // What pictures the card has, asked for once: a ticked box with none to show says so.
+  if (design?.api && design.cardId && edit.artInfo === undefined) {
+    edit.artInfo = null
+    const ask = path => design.api(`/api/cards/${design.cardId}/${path}`).catch(() => null)
+    Promise.all([ask('media'), ask('sprites'), ask('scenes')]).then(([media, drawn, places]) => {
+      const cast = (media?.roster ?? []).filter(entry => !entry.player)
+      edit.artInfo = {
+        figure: cast.some(entry => drawn?.sprites?.[entry.id]?.file || entry.ref),
+        avatar: design.hasAvatar === true,
+        scenes: (places?.scenes ?? []).filter(scene => scene.file && !MAP_SCENE.test(String(scene.name ?? '').trim())).map(scene => String(scene.name ?? '').trim()).filter(Boolean),
+      }
+      edit.drawNotes?.()
+    })
+  }
   // What the card's variables could show and the bar does not.
   const left = spare.filter(field => !spec.fields.some(shown => shown.path === field.path))
   const adding = el('select', { class: 'cc-status-add', 'aria-label': t`加一项`, onchange: () => {
@@ -174,7 +224,7 @@ export function statusEditor(el, change, edit, { spare = [], state = {}, redraw,
   if (design?.api && design.cardId && edit.mapSrc === undefined && spec.fields.some(field => field.show === 'map')) {
     edit.mapSrc = ''
     design.api(`/api/cards/${design.cardId}/scenes`).then(found => {
-      const scene = (found?.scenes ?? []).find(one => one.file && /^(?:地图|世界地图|全图|大地图|map|world ?map)$/i.test(String(one.name ?? '').trim()))
+      const scene = (found?.scenes ?? []).find(one => one.file && MAP_SCENE.test(String(one.name ?? '').trim()))
       if (!scene) return
       edit.mapSrc = `/api/scenes/${design.cardId}/${scene.file}`
       redraw()

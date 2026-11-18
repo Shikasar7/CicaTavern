@@ -1075,6 +1075,14 @@ export function lookVars(pictures) {
     .map(([token, src]) => [token, `url("${src}")`])
 }
 
+/**
+ * The rule that sets a look's pictures in a card gone out to SillyTavern (forge/st-export.mjs withLookPictures): one
+ * <style> of `.skinned{--pic-…:url("data:…")}`. Taken out when such a card comes back, and before another is put in,
+ * so that a card exported and imported again does not carry one more copy of every picture each time.
+ */
+const LOOK_RULE = /<style>\.skinned\{--pic-[^<]*\}<\/style>/g
+export const withoutLookRule = text => (typeof text === 'string' ? text.replace(LOOK_RULE, '') : text)
+
 /** 画装饰图's prompts as a look keeps them: { slot: prompt } for the slots it knows. */
 export function cleanDecor(raw) {
   if (!raw || typeof raw !== 'object') return null

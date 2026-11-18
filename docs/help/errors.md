@@ -840,12 +840,14 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 - 原文：人设图太大（最多 15MB）
 - 原文：场景图太大（最多 12MB）
 - 原文：背景图太大（最多 12MB）
+- 原文：技能图太大（最多 12MB）
 - 英文：Image is too large (15 MB max)
 - 英文：The reference image is too large (15MB max)
 - 英文：The scene picture is too large (12 MB at most)
 - 英文：The background picture is too large (12 MB at most)
-- 出现在：换角色卡头像、上传人设图、场景图、主题背景图时
-- 原因：图片文件超过了上限：头像和人设图 15 MB，场景图和背景图 12 MB。
+- 英文：The skill picture is too large (12 MB at most)
+- 出现在：换角色卡头像、上传人设图、场景图、主题背景图、技能图（游戏规则 → 技能特写）时
+- 原因：图片文件超过了上限：头像和人设图 15 MB，场景图、背景图和技能图 12 MB。
 - 解决：用看图软件把图片缩小或另存为 JPG 再上传。
 
 ## 表情和立绘不太像，或表情先不画 {#err-sprite-faces}
@@ -1317,6 +1319,24 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 - 原因：一张卡连图片一起的压缩包最多 500MB。导出时勾选的图片加起来超过了，或者导入的 zip 超过了。
 - 解决：导出时去掉几项（场景图和立绘最占地方）再导出；导入的 zip 太大时，请对方少勾几项重新导出。
 
+## 压缩包读不出来 {#err-zip-unreadable}
+
+- 原文：这个 zip 读不出来（分卷、zip64 和加密的 zip 不支持；7z、rar 先解压，再选里面的卡）
+- 英文：This zip can't be read (split, zip64 and encrypted zips aren't supported; unpack a 7z or rar first and pick the card inside)
+- 出现在：「导入角色卡」选了一个 .zip 或 .charx 时
+- 原因：文件不是 zip（7z、rar 改了扩展名的也算），或者是分卷压缩、zip64、加了密码的 zip，本应用读不了。
+- 解决：先用解压软件解开，再选里面的角色卡、世界书这些文件导入；要带图的话，把解出来的文件夹重新压成普通的 zip（不加密码、不分卷）再导入。
+
+## CG 图太大或格式不对 {#err-cg-too-large}
+
+- 原文：CG 太大（最多 12MB）
+- 原文：CG 要是 PNG、JPG 或 WebP
+- 英文：The CG is too large (12 MB at most)
+- 英文：A CG must be a PNG, JPG or WebP
+- 出现在：视觉小说 → 右上角 → CG 里「加图」时
+- 原因：一张 CG 最多 12MB，而且只认 PNG、JPG、WebP（GIF、BMP 这些不行）。
+- 解决：换一张，或者先用看图软件另存成 JPG 再加。导入压缩包时，太大或格式不对的 CG 会直接跳过。
+
 ## 上传的角色卡压缩包过期了 {#err-card-pack-expired}
 
 - 原文：上传的文件已经过期，请重新选一次
@@ -1324,3 +1344,39 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 - 出现在：「导入角色卡」选了一个 zip，在「更新这张卡还是另存」的询问上停了很久才点
 - 原因：上传的压缩包只在后台留十分钟，或者中间又导入了另一个压缩包。
 - 解决：重新点「导入角色卡」选一次这个 zip。
+
+## 选的文件不是备份包 {#err-backup-not-backup}
+
+- 原文：这不是 CicaTavern 的备份包（设置 → 更多 → 备份与换设备 导出的 zip）
+- 英文：This isn't a CicaTavern backup (a zip exported from Settings → More → Backup & moving devices)
+- 原文：读不了这个压缩包：{0}
+- 英文：Can't read this zip: {0}
+- 出现在：设置 → 更多 → 备份与换设备 → 从备份导入… 选了文件之后
+- 原因：选的不是「导出备份」得到的 zip（比如角色卡压缩包、别人的整合包），或者文件没下载完、拷坏了。
+- 解决：选「导出备份」导出的那个 zip。角色卡压缩包和整合包用左栏的「导入角色卡、世界书或预设」导入。文件坏了就在原设备上重新导出一次，等下载完成再拷。
+
+## 备份是更新版本导出的 {#err-backup-newer}
+
+- 原文：这个备份是更新版本的 CicaTavern 导出的，先更新这边的 CicaTavern
+- 英文：This backup comes from a newer CicaTavern: update CicaTavern here first
+- 出现在：从备份导入时
+- 原因：备份的格式比这边的 CicaTavern 新，这边读不全。
+- 解决：先在「设置 → 更多 → 更新」把这边更新到和导出那边一样或更新的版本，再导入。
+
+## 上一个备份还在导入 {#err-backup-busy}
+
+- 原文：正在导入上一个备份，等它完成
+- 英文：The last backup is still being imported, wait for it to finish
+- 出现在：从备份导入时，又选了一个备份
+- 原因：同一时间只导入一个备份，上一个还没导完（比如在另一个窗口或手机上点的）。
+- 解决：等它完成后再导入。导入进度在原来那个窗口里看。
+
+## 备份没有导入完 {#err-backup-import-failed}
+
+- 原文：上传中断了，再试一次
+- 英文：The upload was interrupted, try again
+- 原文：导入失败
+- 英文：Import failed
+- 出现在：设置 → 更多 → 备份与换设备 → 从备份导入… 读取文件或导入的时候
+- 原因：读取时页面关了、网络断了（手机浏览器连电脑时 WiFi 断开、电脑睡眠），或者导入途中后台服务停了、磁盘满了。
+- 解决：确认磁盘还有空间（导入时要留出和备份差不多大的地方），再导入一次。已经导入的部分留在这边，再导入时这边已有的会按你选的保留或替换，不会重复。

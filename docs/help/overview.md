@@ -22,7 +22,7 @@ CicaTavern 是 Agent 式的 SillyTavern 角色卡酒馆：导入 SillyTavern 的
 
 - 也叫：下载地址、安装包、最新版、更新、国内下载、镜像
 
-最新版本是 **2.6.1**（2026-11-17）。下载：
+最新版本是 **2.6.2**（2026-11-18）。下载：
 
 - GitHub 发布页：https://github.com/Shikasar7/CicaTavern/releases/latest
 - 国内镜像（同样的文件）：https://cnb.cool/cicatavern/CicaTavern/-/releases
@@ -34,7 +34,7 @@ CicaTavern 是 Agent 式的 SillyTavern 角色卡酒馆：导入 SillyTavern 的
 
 - 也叫：存档位置、数据文件夹、备份、换电脑、API Key 存在哪
 
-- **Windows**：`%USERPROFILE%\.cicatavern\`；**Mac**：用户主目录下的 `.cicatavern` 文件夹。角色卡、世界书、预设、对话、配图和供应商设置（含 API Key，明文）都在里面，换电脑时整个文件夹拷过去即可。更新、回到上一版都不会动它。
+- **Windows**：`%USERPROFILE%\.cicatavern\`；**Mac**：用户主目录下的 `.cicatavern` 文件夹。角色卡、世界书、预设、对话、配图和供应商设置（含 API Key，明文）都在里面，换电脑时整个文件夹拷过去即可；电脑和安卓之间用「设置 → 更多 → 备份与换设备」。更新、回到上一版都不会动它。
 - **安卓**：存在应用自己的空间里，卸载应用时一起删除。
 
 手机和电脑的数据互不相通，要搬对话用「导出存档」再在另一边导入。因为 API Key 是明文存的，不要把这个文件夹或里面的文件发给别人。

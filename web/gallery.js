@@ -1,9 +1,14 @@
 // 图库 (角色卡 list → 图库): every picture of every card and chat (server/gallery.mjs), to look through, pick and
-// export as a zip. web/app.js loads this file when the window is first opened, so a server started before the file
+// export as a zip. Also the picker for a reply's picture (选图, web/media.js): one picture, or one of the player's
+// own files. web/app.js loads this file when the window is first opened, so a server started before the file
 // existed still serves the page.
 import { t } from '/i18n.js'
+import { shrink } from '/theme.js'
 
-const KIND_NAMES = () => ({ reply: t`配图和CG`, scene: t`背景`, sprite: t`立绘` })
+const KIND_NAMES = () => ({ reply: t`配图和CG`, scene: t`背景`, sprite: t`立绘`, cg: t`卡的 CG` })
+// 立绘: each character's 立绘 first, then the expressions in this order.
+const FACES = ['neutral', 'smile', 'happy', 'shy', 'angry', 'sad', 'surprised', 'thinking']
+const FACE_NAMES = () => ({ neutral: t`立绘`, smile: t`微笑`, happy: t`开心`, shy: t`害羞`, angry: t`生气`, sad: t`难过`, surprised: t`惊讶`, thinking: t`思考` })
 // Shown at first, then more on asking: a few thousand pictures would be a slow page.
 const PAGE = 240
 
@@ -12,13 +17,17 @@ let dialog = null
 /**
  * @param deps - { api, el, toast, guard, download(path, name, mime) }
  * @param options.cardId - the card to show at first ('' = all).
+ * @param options.pick - 选图: one picture is picked, or a file of the player's own uploaded; resolves to
+ *   { gallery: its id } or { image: a data URL } once the window closes, or null when nothing was chosen.
  */
-export async function openGallery({ api, el, toast, guard, download }, { cardId = '' } = {}) {
+export async function openGallery({ api, el, toast, guard, download }, { cardId = '', pick = false } = {}) {
   dialog = dialog ?? document.body.appendChild(el('dialog', { class: 'dialog wide gallery', 'aria-label': t`图库` }))
   const { items } = await api('/api/gallery')
   const picked = new Set()
   const filter = { card: items.some(item => item.cardId === cardId) ? cardId : '', kind: '', query: '' }
   let shown = PAGE
+  // 立绘: the characters whose list is open (kept while the window is).
+  const opened = new Set()
 
   const cards = [...new Map(items.map(item => [item.cardId, item.cardName || t`（已删除的卡）`])).entries()]
   const cardPick = el('select', { 'aria-label': t`角色卡` }, [el('option', { value: '', text: t`全部卡（${items.length} 张）` }), ...cards.map(([id, name]) => el('option', { value: id, text: t`${name}（${items.filter(item => item.cardId === id).length}）` }))])
@@ -31,6 +40,10 @@ export async function openGallery({ api, el, toast, guard, download }, { cardId 
     draw()
   }, 'data-kind': kind }))
   const grid = el('div', { class: 'gallery-grid' })
+  // 立绘 picked: one folding list per character instead of the grid.
+  const spriteList = el('div', { class: 'gallery-sprites', hidden: true })
+  const openAll = el('button', { type: 'button', class: 'btn ghost small', text: t`全部展开`, hidden: true })
+  const closeAll = el('button', { type: 'button', class: 'btn ghost small', text: t`全部收起`, hidden: true })
   const count = el('span', { class: 'muted small' })
   const more = el('button', { type: 'button', class: 'btn small', text: t`显示更多`, onclick: () => {
     shown += PAGE
@@ -48,29 +61,128 @@ export async function openGallery({ api, el, toast, guard, download }, { cardId 
 
   const label = item => [KIND_NAMES()[item.kind], item.name || item.chatTitle, item.at ? new Date(item.at).toLocaleDateString() : ''].filter(Boolean).join(' · ')
 
+  /** One picture to pick: a click picks it or lets it go. */
+  function tile(item, list, text = label(item)) {
+    const box = el('button', { type: 'button', class: `gallery-item${picked.has(item.id) ? ' picked' : ''}`, title: [label(item), item.prompt].filter(Boolean).join('\n'), 'aria-pressed': String(picked.has(item.id)) }, [
+      el('img', { src: item.src, alt: '', loading: 'lazy', decoding: 'async' }),
+      el('span', { class: 'gallery-check', 'aria-hidden': 'true' }),
+      el('span', { class: 'gallery-label', text }),
+    ])
+    box.addEventListener('click', () => {
+      // 选图: one at a time.
+      if (pick) {
+        const was = picked.has(item.id)
+        picked.clear()
+        if (!was) picked.add(item.id)
+        return draw()
+      }
+      if (picked.has(item.id)) picked.delete(item.id)
+      else picked.add(item.id)
+      box.classList.toggle('picked', picked.has(item.id))
+      box.setAttribute('aria-pressed', String(picked.has(item.id)))
+      drawCount(list)
+    })
+    return box
+  }
+
+  /** The 立绘 and expressions by character: [{ key, cardName, who, items }], by card, then name. */
+  function spriteGroups(list) {
+    const groups = new Map()
+    for (const item of list) {
+      if (item.kind !== 'sprite') continue
+      const key = `${item.cardId}:${item.entryId ?? item.name}`
+      if (!groups.has(key)) groups.set(key, { key, cardName: item.cardName || t`（已删除的卡）`, who: item.who || item.name || t`（不在名册里了）`, items: [] })
+      groups.get(key).items.push(item)
+    }
+    const at = face => (FACES.includes(face) ? FACES.indexOf(face) : FACES.length)
+    for (const group of groups.values()) group.items.sort((a, b) => at(a.face) - at(b.face))
+    return [...groups.values()].sort((a, b) => a.cardName.localeCompare(b.cardName, 'zh-CN') || a.who.localeCompare(b.who, 'zh-CN'))
+  }
+
+  /** A zip of these pictures, downloaded under this name. */
+  async function exportIds(ids, name) {
+    const { path, count: done, missing } = await api('/api/gallery/export', { method: 'POST', body: { ids } })
+    download(path, `${name}-${new Date().toISOString().slice(0, 10)}.zip`, 'application/zip')
+    toast(missing ? t`导出了 ${done} 张，${missing} 张已经不在了` : t`导出了 ${done} 张`, 5000)
+  }
+
+  /** 立绘: a folding list per character, its 立绘 and expressions inside, each list with its own 选这组 and 导出. */
+  function drawSprites(list) {
+    const groups = spriteGroups(list)
+    const faces = FACE_NAMES()
+    // A button in a list's head does its own thing, not open or close the list.
+    const own = fn => event => {
+      event.preventDefault()
+      event.stopPropagation()
+      fn()
+    }
+    spriteList.replaceChildren(...(groups.length ? groups.map(group => {
+      const ids = group.items.map(item => item.id)
+      const pickAll = el('button', { type: 'button', class: 'btn ghost small', text: t`选这组`, onclick: own(() => {
+        const all = ids.every(id => picked.has(id))
+        for (const id of ids) {
+          if (all) picked.delete(id)
+          else picked.add(id)
+        }
+        draw()
+      }) })
+      const save = el('button', { type: 'button', class: 'btn small', text: t`导出`, title: t`把这个角色的立绘和表情导出成一个压缩包`, onclick: own(guard(async () => {
+        save.disabled = true
+        try {
+          await exportIds(ids, t`${group.cardName}-${group.who}-立绘`)
+        } finally {
+          save.disabled = false
+        }
+      })) })
+      const details = el('details', { class: 'gallery-sprite', open: opened.has(group.key) }, [
+        el('summary', {}, [
+          el('b', { text: group.who }),
+          filter.card ? null : el('span', { class: 'muted small', text: group.cardName }),
+          el('span', { class: 'muted small', text: t`${group.items.length} 张` }),
+          el('span', { class: 'gallery-sprite-tools' }, [pickAll, save]),
+        ]),
+        el('div', { class: 'gallery-grid' }, group.items.map(item => tile(item, list, faces[item.face] ?? item.name))),
+      ])
+      details.addEventListener('toggle', () => {
+        if (details.open) opened.add(group.key)
+        else opened.delete(group.key)
+      })
+      return details
+    }) : [el('p', { class: 'muted gallery-empty', text: t`没有符合的立绘` })]))
+  }
+
   function draw() {
     const list = matching()
+    const sprites = filter.kind === 'sprite'
+    grid.hidden = sprites
+    spriteList.hidden = !sprites
+    openAll.hidden = !sprites
+    closeAll.hidden = !sprites
+    if (sprites) {
+      drawSprites(list)
+      more.hidden = true
+      return drawCount(list)
+    }
     grid.replaceChildren(...(list.length
-      ? list.slice(0, shown).map(item => {
-          const box = el('button', { type: 'button', class: `gallery-item${picked.has(item.id) ? ' picked' : ''}`, title: [label(item), item.prompt].filter(Boolean).join('\n'), 'aria-pressed': String(picked.has(item.id)) }, [
-            el('img', { src: item.src, alt: '', loading: 'lazy', decoding: 'async' }),
-            el('span', { class: 'gallery-check', 'aria-hidden': 'true' }),
-            el('span', { class: 'gallery-label', text: label(item) }),
-          ])
-          box.addEventListener('click', () => {
-            if (picked.has(item.id)) picked.delete(item.id)
-            else picked.add(item.id)
-            box.classList.toggle('picked', picked.has(item.id))
-            box.setAttribute('aria-pressed', String(picked.has(item.id)))
-            drawCount(list)
-          })
-          return box
-        })
+      ? list.slice(0, shown).map(item => tile(item, list))
       : [el('p', { class: 'muted gallery-empty', text: items.length ? t`没有符合的图` : t`还没有画过图。给回复配图、画 CG、画背景和立绘之后都会出现在这里。` })]))
     more.hidden = list.length <= shown
     drawCount(list)
   }
+  openAll.onclick = () => {
+    for (const group of spriteGroups(matching())) opened.add(group.key)
+    draw()
+  }
+  closeAll.onclick = () => {
+    opened.clear()
+    draw()
+  }
   function drawCount(list = matching()) {
+    if (pick) {
+      count.textContent = t`列出 ${list.length} 张`
+      use.disabled = !picked.size
+      return
+    }
     count.textContent = t`列出 ${list.length} 张，已选 ${picked.size} 张`
     exportButton.disabled = !picked.size
     exportButton.textContent = picked.size ? t`导出所选（${picked.size}）` : t`导出所选`
@@ -98,22 +210,51 @@ export async function openGallery({ api, el, toast, guard, download }, { cardId 
     if (!picked.size) return
     exportButton.disabled = true
     try {
-      const { path, count: done, missing } = await api('/api/gallery/export', { method: 'POST', body: { ids: [...picked] } })
-      const name = filter.card ? cards.find(([id]) => id === filter.card)?.[1] ?? t`图库` : t`图库`
-      download(path, `${name}-${new Date().toISOString().slice(0, 10)}.zip`, 'application/zip')
-      toast(missing ? t`导出了 ${done} 张，${missing} 张已经不在了` : t`导出了 ${done} 张`, 5000)
+      await exportIds([...picked], filter.card ? cards.find(([id]) => id === filter.card)?.[1] ?? t`图库` : t`图库`)
     } finally {
       drawCount()
     }
   })
 
+  // 选图: what was chosen, handed back as the window closes.
+  let chosen = null
+  const use = el('button', { type: 'button', class: 'btn primary', text: t`用这张`, disabled: true, onclick: () => {
+    if (!picked.size) return
+    chosen = { gallery: [...picked][0] }
+    dialog.close()
+  } })
+  const upload = el('button', { type: 'button', class: 'btn', text: t`上传本地图片…`, onclick: guard(async () => {
+    const file = await new Promise(resolve => {
+      const input = el('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp' })
+      input.addEventListener('change', () => resolve(input.files[0] ?? null))
+      input.click()
+    })
+    if (!file) return
+    chosen = { image: await shrink(file) }
+    dialog.close()
+  }) })
+  const buttons = pick
+    ? [upload, el('button', { class: 'btn', value: 'cancel', text: t`取消` }), use]
+    : [selectAll, clear, exportButton, el('button', { class: 'btn', value: 'cancel', text: t`关闭` })]
+
   dialog.replaceChildren(el('form', { method: 'dialog' }, [
-    el('div', { class: 'library-head' }, [el('h2', { text: t`图库` }), el('p', { class: 'muted small', text: t`所有卡和对话里画过、传过的图：每轮的配图和 CG、背景、立绘和表情。点图选中，选好后导出成一个压缩包，按卡和种类分好文件夹。` })]),
-    el('div', { class: 'library-tools gallery-tools' }, [cardPick, query, el('div', { class: 'seg', role: 'group', 'aria-label': t`种类` }, kindButtons)]),
+    el('div', { class: 'library-head' }, pick
+      ? [el('h2', { text: t`选一张配图` }), el('p', { class: 'muted small', text: t`从画过、传过的图里选一张当这段的配图（每轮的配图、背景、立绘、卡的 CG），也可以上传本地图片。点一张选中，再点「用这张」。` })]
+      : [el('h2', { text: t`图库` }), el('p', { class: 'muted small', text: t`所有卡和对话里画过、传过的图：每轮的配图和 CG、背景、立绘和表情、卡的 CG。点图选中，选好后导出成一个压缩包，按卡和种类分好文件夹。` })]),
+    el('div', { class: 'library-tools gallery-tools' }, [cardPick, query, el('div', { class: 'seg', role: 'group', 'aria-label': t`种类` }, kindButtons), el('span', { class: 'row gallery-fold' }, [openAll, closeAll])]),
     grid,
+    spriteList,
     el('div', { class: 'row', style: 'justify-content: center' }, [more]),
-    el('div', { class: 'row between' }, [count, el('div', { class: 'row' }, [selectAll, clear, exportButton, el('button', { class: 'btn', value: 'cancel', text: t`关闭` })])]),
+    el('div', { class: 'row between' }, [count, el('div', { class: 'row' }, buttons)]),
   ]))
+  dialog.classList.toggle('picking', pick)
   draw()
+  const closed = new Promise(resolve => {
+    dialog.onclose = () => {
+      dialog.onclose = null
+      resolve(chosen)
+    }
+  })
   if (!dialog.open) dialog.showModal()
+  return pick ? closed : undefined
 }

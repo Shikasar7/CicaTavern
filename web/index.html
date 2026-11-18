@@ -156,7 +156,7 @@
         <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v10m0 0-4-4m4 4 4-4M4 16h12" /></svg>
         <span class="wide-label">导入角色卡、世界书或预设</span>
         <span class="short-label">导入</span>
-        <input type="file" id="import-input" accept=".png,.json,.zip,image/png,application/json,application/zip" multiple hidden>
+        <input type="file" id="import-input" accept=".png,.json,.zip,.charx,image/png,application/json,application/zip" multiple hidden>
       </label>
       <button class="import forge-open" id="forge-open" type="button" title="和创作向导聊一聊，把一个模糊的想法慢慢聊成一张完整的角色卡">
         <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 16c3.5-.6 6.3-2.4 8.4-5.4L16 5l-1-1-5.6 3.6C6.4 9.7 4.6 12.5 4 16Z" /><path d="M8.5 11.5 4 16" /></svg>
@@ -592,8 +592,8 @@
           <h2>正则</h2>
           <span class="row-actions">
             <button type="button" class="btn small" id="regex-new" title="新建一个正则集：挂到哪些角色卡上，就只对那几张卡生效">新建</button>
-            <label class="btn small" title="导入 SillyTavern 导出的正则（.json），放进选中的这一组（选中的不能改时放进全局）">导入
-              <input type="file" id="regex-import" accept=".json,application/json" multiple hidden>
+            <label class="btn small" title="导入 SillyTavern 导出的正则（.json，或装着它们的 .zip 压缩包），放进选中的这一组（选中的不能改时放进全局）">导入
+              <input type="file" id="regex-import" accept=".json,.zip,application/json,application/zip,application/x-zip-compressed" multiple hidden>
             </label>
           </span>
         </div>

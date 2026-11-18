@@ -163,6 +163,59 @@ export async function banner(el, host, { text, small = '', picture = '', ms = 12
   box.remove()
 }
 
+// 技能特写: how long the picture holds the screen at normal speed, and how wide 怀旧游戏机 draws it before it is blown up.
+export const CUT_IN_MS = 1400
+const CUT_IN_PIXELS = 256
+const CUT_IN_WAIT = 1500
+const pictures = new Map()
+
+/** A picture loaded and decoded ahead, once per address: → a promise of the image, or null when it will not load. */
+export function loadCutIn(url) {
+  if (!pictures.has(url)) {
+    const image = new Image()
+    image.decoding = 'async'
+    image.src = url
+    pictures.set(url, image.decode().then(() => image, () => null))
+  }
+  return pictures.get(url)
+}
+
+/** Whether this device shows 技能特写 (主题 → 技能特写). */
+export const cutInsOn = () => current.cutIns !== false
+
+/**
+ * 技能特写: a skill's own picture over the whole screen, pushing in and drifting a little, a slanted band with its name
+ * sliding in from the right, a flash as it cuts in. Each look dresses it its own way (look.css); `still` (减少动态效果)
+ * holds it without moving or flashing.
+ * @param options - { picture, text, small, ms, still }. → a promise: true when it has played and gone, false (and
+ *   nothing shown) when the picture would not load in time.
+ */
+export async function cutIn(el, host, { picture, text, small = '', ms = CUT_IN_MS, still = false }) {
+  const image = await Promise.race([loadCutIn(picture), nap(CUT_IN_WAIT).then(() => null)])
+  if (!image) return false
+  let art
+  if (current.look === 'console') {
+    // Few pixels, blown up without smoothing: the picture as an old console would show it.
+    const width = Math.min(CUT_IN_PIXELS, image.naturalWidth)
+    art = Object.assign(document.createElement('canvas'), { className: 'look-cutin-art', width, height: Math.max(1, Math.round((image.naturalHeight / image.naturalWidth) * width)) })
+    art.getContext('2d').drawImage(image, 0, 0, art.width, art.height)
+  } else art = el('img', { class: 'look-cutin-art', src: picture, alt: '' })
+  const box = el('div', { class: `look-cutin${still ? ' still' : ''}`, style: `--ms: ${ms}ms`, 'aria-hidden': 'true' }, [
+    el('div', { class: 'look-cutin-frame' }, [art]),
+    el('div', { class: 'look-cutin-band' }, [el('div', { class: 'look-cutin-text' }, [el('b', { text }), small ? el('small', { text: small }) : null])]),
+    current.look === 'ink' ? el('i', { class: 'look-cutin-seal', text: t`技` }) : null,
+    el('i', { class: 'look-cutin-flash' }),
+  ])
+  host.append(box)
+  await nap(ms)
+  if (!still) {
+    box.classList.add('out')
+    await nap(Math.min(220, ms / 6))
+  }
+  box.remove()
+  return true
+}
+
 /** The fields under the 撞色 look, for a page to put behind what it shows. */
 export function lookFields(el) {
   const washed = () => el('i', { class: 'look-wash-picture' })

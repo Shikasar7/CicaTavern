@@ -19,7 +19,9 @@ const HIDDEN = [
 ]
 // Reasoning tags (<thinking>, <思考>…) are not among them: app.js folds those (思考中… while one is still open).
 const OPEN_HIDDEN = /<(state|update(?:variable)?|time_box|choices)>(?![\s\S]*<\/\1>)[\s\S]*$/i
-const FENCE = /```([\w-]*)[^\n]*\n?([\s\S]*?)```/g
+// Closed by as many backticks as it opened with, as Markdown does: a page in ```` may well hold a ``` of its own (a JS
+// string), which would otherwise cut it short.
+const FENCE = /(`{3,})([\w-]*)[^\n]*\n?([\s\S]*?)\1(?!`)/g
 // A chunk with any of these is shown in a frame of its own, styles kept (regex.js's trial shows it the same way).
 export const HTML_LIKE = /<(!doctype|html|head|body|style|script|div|table|section|details|svg|canvas|link|iframe|form|button)\b/i
 
@@ -34,11 +36,12 @@ export function nameMacros(text, names) {
 // (a prompt it sends, a parser), and an update block's open-end match would take the rest of the message with it.
 // So may the model's thinking (「结尾输出 <choices>…」): taken for a choices block, the mention would hide the story up to
 // the real </choices>, and the thinking's closing tag with it (the story then folded away under 思考中…).
-const GUARDED = new RegExp(`\`\`\`[\\s\\S]*?\`\`\`|<script\\b[\\s\\S]*?<\\/script>|${REASONING.source}`, 'gi')
+// REASONING first: its back references count its own groups from the start.
+const GUARDED = new RegExp(`${REASONING.source}|(?<fence>\`{3,})[\\s\\S]*?\\k<fence>(?!\`)|<script\\b[\\s\\S]*?<\\/script>`, 'gi')
 
 /** A fenced block of nothing but the story's bookkeeping (a model that fenced its update block): no page's, so it goes. */
 function onlyHidden(fence) {
-  const body = fence.replace(/^```[^\n]*\n?/, '').replace(/```$/, '')
+  const body = fence.replace(/^`{3,}[^\n]*\n?/, '').replace(/`{3,}$/, '')
   if (!body.trim()) return false
   let rest = body
   for (const re of HIDDEN) rest = rest.replace(re, '')
@@ -313,7 +316,7 @@ export function segments(text) {
   let pending = ''
   for (const match of text.matchAll(FENCE)) {
     const before = text.slice(last, match.index)
-    const [, lang, body] = match
+    const [, , lang, body] = match
     last = match.index + match[0].length
     const html = HTML_LIKE.test(body) || /^html?$/i.test(lang)
     if (!html && openBlocks(pending + before) > 0) {
@@ -453,7 +456,9 @@ export function htmlFrame(body, context = null) {
   if (context?.owner || context?.cardId) frame.dataset.card = context.owner || context.cardId
   // And whose floor: a card may change its own message or the latest (compat.js setMessage, app.js editMessage).
   if (context?.nodeId) frame.dataset.node = context.nodeId
-  frame.setAttribute('sandbox', 'allow-scripts allow-popups allow-popups-to-escape-sandbox')
+  // allow-forms: a card's form (a code to type in, a search box) submits, and its own submit handler hears it; without it
+  // the browser drops the submit unheard. Where a form would take the frame away, compat.js keeps it (shimMain).
+  frame.setAttribute('sandbox', 'allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox')
   frame.setAttribute('referrerpolicy', 'no-referrer')
   frame.setAttribute('loading', 'lazy')
   frame.style.height = `${heights.get(frame.dataset.key) ?? 80}px`

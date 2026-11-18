@@ -1052,3 +1052,94 @@ html[data-look="bold"] .roll-hint { position: absolute; left: 44px; bottom: 30px
   html[data-look="console"] .battle-end-card h2 { font-size: 34px; }
   html[data-look="console"] .battle-tally { padding: 1px 0; }
 }
+
+/* 游戏规则 (game-rules.js, style.css has the window): in each look, only the list of parts and their titles change; the colours stay the app's. */
+/* 古风 a brush-hand title and a red mark; 怀旧游戏机 square tabs and a ▶ at the one in view; 撞色 a slab on it, hard edges. */
+html[data-look="ink"] .gr-title { font-family: var(--look-kai); font-size: 17px; letter-spacing: .06em; }
+html[data-look="ink"] .gr-tab { border-radius: 3px; font-family: var(--look-kai); font-size: 14.5px; }
+html[data-look="ink"] .gr-tab[aria-current]::before { left: 3px; width: 4px; border-radius: 1px; background: var(--cinnabar); }
+html[data-look="ink"] .gr-tab[aria-current] { background: color-mix(in srgb, var(--cinnabar) 10%, transparent); }
+html[data-look="console"] .gr-tab { padding-left: 22px; border-radius: 3px; font-weight: 700; }
+html[data-look="console"] .gr-tab[aria-current]::before { content: "▶"; top: 50%; bottom: auto; left: 7px; width: auto; height: auto; border-radius: 0; background: none; color: var(--accent); font-size: 10px; line-height: 1; transform: translateY(-50%); animation: gr-blink 1s steps(1) infinite; }
+html[data-look="console"] .gr-title { font-family: var(--ui); font-weight: 700; letter-spacing: .04em; }
+html[data-look="console"] .gr-chevron { border-width: 0 3px 3px 0; }
+@keyframes gr-blink { 50% { opacity: 0; } }
+html[data-look="bold"] .gr-tab { border-radius: 0; font-weight: 600; }
+html[data-look="bold"] .gr-tab[aria-current] { background: var(--accent); color: var(--accent-ink); }
+html[data-look="bold"] .gr-tab[aria-current]::before { content: none; }
+html[data-look="bold"] .gr-title { font-family: var(--look-display); font-weight: 400; font-size: 17px; letter-spacing: .06em; }
+html[data-look="bold"] .gr-sec { border-bottom-width: 2px; }
+@media (max-width: 760px) {
+  html[data-look="console"] .gr-tab { padding-left: 20px; border-radius: 3px; }
+  html[data-look="console"] .gr-tab:not([aria-current]) { padding-left: 12px; }
+  html[data-look="ink"] .gr-tab, html[data-look="bold"] .gr-tab { border-radius: 2px; }
+  html[data-look="console"] .gr-tab[aria-current]::before { content: "▶"; }
+}
+@media (prefers-reduced-motion: reduce) { html[data-look="console"] .gr-tab[aria-current]::before { animation: none; } }
+
+/* ─── 技能特写 (game-look.js cutIn): a skill's own picture over the whole screen, pushing in and drifting a little, a
+   slanted band with its name sliding in from the right (gold above, red below), a flash as it cuts in. 简约 is the
+   plain one below; the other looks dress it their own way. ─── */
+.look-cutin { --cut-gold: #e6c98a; --cut-red: #c2203c; --cut-ease: cubic-bezier(.16, 1, .3, 1); --cut-slant: -3.6deg; position: absolute; top: 0; right: 0; bottom: 0; left: 0; z-index: 8; overflow: hidden; background: #000; pointer-events: none; }
+.look-cutin.out { opacity: 0; transition: opacity .2s ease-in; }
+.look-cutin-frame { position: absolute; top: 0; right: 0; bottom: 0; left: 0; overflow: hidden; }
+.look-cutin-frame::after { content: ""; position: absolute; top: 0; right: 0; bottom: 0; left: 0; background: radial-gradient(120% 90% at 50% 42%, transparent 58%, rgb(0 0 0 / .42)); }
+.look-cutin-art { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; transform-origin: 50% 50%; animation: cutin-push var(--ms, 1400ms) cubic-bezier(.3, .1, .3, 1) both; }
+@keyframes cutin-push { from { transform: scale(1) translateX(0); } to { transform: scale(1.08) translateX(-1.6%); } }
+.look-cutin-band { position: absolute; left: -4%; width: 108%; top: 63%; height: clamp(76px, 14vh, 160px); background: rgb(12 8 12 / .8); border-top: clamp(3px, .6vh, 7px) solid var(--cut-gold); border-bottom: clamp(3px, .6vh, 7px) solid var(--cut-red); transform: skewY(var(--cut-slant)); animation: cutin-band calc(var(--ms, 1400ms) * .26) var(--cut-ease) both; }
+@keyframes cutin-band { from { translate: 34% 0; opacity: 0; } 60% { opacity: 1; } to { translate: 0 0; opacity: 1; } }
+.look-cutin-text { position: absolute; left: 11%; top: 50%; right: 6%; display: flex; flex-wrap: wrap; align-items: baseline; column-gap: .9em; transform: translateY(-50%); }
+/* The name and the line after it each level about their own middle, so each sits inside the slanted band where it is:
+   levelled as one, a name at the band's low end stood out over its top edge. */
+.look-cutin-text > * { transform: skewY(calc(var(--cut-slant) * -1)); }
+.look-cutin-text b { color: #faeed2; font: 600 clamp(30px, min(7vh, 8.5vw), 78px)/1.15 var(--serif); letter-spacing: .14em; white-space: nowrap; text-shadow: 0 3px 16px rgb(0 0 0 / .6); }
+.look-cutin-text small { color: var(--cut-gold); font: 600 clamp(12px, 2.2vh, 20px)/1.3 var(--ui); letter-spacing: .12em; white-space: nowrap; }
+.look-cutin-flash { position: absolute; top: 0; right: 0; bottom: 0; left: 0; background: #fbf8f0; opacity: 0; animation: cutin-flash calc(var(--ms, 1400ms) * .1) ease-out both; }
+@keyframes cutin-flash { from { opacity: .9; } to { opacity: 0; } }
+.look-cutin-seal { display: none; }
+
+/* 撞色: the band of the trailer, heavier, its name in the display face with the hot colour behind it. */
+html[data-look="bold"] .look-cutin { --cut-gold: var(--gold); --cut-red: var(--look-hot); }
+html[data-look="bold"] .look-cutin-art { animation-name: cutin-push-bold; }
+@keyframes cutin-push-bold { from { transform: scale(1.02) translateX(0); } to { transform: scale(1.12) translateX(-2%); } }
+html[data-look="bold"] .look-cutin-band { height: clamp(96px, 18vh, 200px); background: #0c080c; border-top-width: clamp(5px, 1vh, 10px); border-bottom-width: clamp(5px, 1vh, 10px); }
+html[data-look="bold"] .look-cutin-band::before { content: ""; position: absolute; top: 0; right: 0; bottom: 0; left: 0; background: repeating-linear-gradient(100deg, rgb(255 255 255 / .05) 0 2px, transparent 2px 24px); }
+/* Room between the name and a line wrapped under it for the name's offset shadow. */
+html[data-look="bold"] .look-cutin-text { row-gap: 10px; }
+html[data-look="bold"] .look-cutin-text b { color: #fff; font: 400 clamp(44px, min(11vh, 10vw), 112px)/1.1 var(--look-display); letter-spacing: 0; text-shadow: 6px 6px 0 var(--look-hot); }
+html[data-look="bold"] .look-cutin-text small { color: var(--gold); font: 800 clamp(13px, 2.6vh, 22px)/1.3 var(--ui); letter-spacing: .1em; }
+
+/* 古风: the picture unrolls like a scroll on the paper, toned to it; the band a stroke of ink, the name in the brush
+   hand, gold leaf above and cinnabar below, and a seal stamped on it. The flash is the paper's. */
+html[data-look="ink"] .look-cutin { --cut-gold: #b8963e; --cut-red: var(--cinnabar); background: var(--paper); }
+html[data-look="ink"] .look-cutin-frame { animation: cutin-unroll calc(var(--ms, 1400ms) * .3) cubic-bezier(.4, 0, .2, 1) both; }
+@keyframes cutin-unroll { from { clip-path: inset(0 50% 0 50%); } to { clip-path: inset(0 0 0 0); } }
+html[data-look="ink"] .look-cutin-frame::after { background: none; box-shadow: inset 0 0 12vh 2vh var(--paper); }
+html[data-look="ink"] .look-cutin-art { filter: sepia(.28) saturate(.82) contrast(1.04); }
+html[data-look="ink"] .look-cutin-band { height: clamp(90px, 17vh, 190px); background: linear-gradient(90deg, transparent, rgb(29 27 25 / .9) 9%, rgb(29 27 25 / .86) 82%, transparent); border-top-width: 2px; border-bottom-width: 4px; filter: url(#ink-rough-fine); animation-duration: calc(var(--ms, 1400ms) * .34); }
+html[data-look="ink"] .look-cutin-text b { color: #f2e8d3; font: 400 clamp(40px, min(10vh, 9vw), 104px)/1.05 var(--look-brush); letter-spacing: .1em; text-shadow: none; animation: cutin-write calc(var(--ms, 1400ms) * .4) calc(var(--ms, 1400ms) * .12) cubic-bezier(.4, 0, .2, 1) both; }
+@keyframes cutin-write { from { clip-path: inset(-20% 100% -20% 0); } to { clip-path: inset(-20% -10% -20% 0); } }
+html[data-look="ink"] .look-cutin-text small { color: #e6d6b4; font: 400 clamp(14px, 2.6vh, 22px)/1.3 var(--look-kai); }
+html[data-look="ink"] .look-cutin-seal { position: absolute; right: 8%; top: calc(63% - 5vh); display: grid; place-items: center; width: clamp(44px, 9vh, 76px); height: clamp(44px, 9vh, 76px); border-radius: 3px; background: var(--cinnabar); color: #f2e8d3; font: clamp(28px, 6vh, 50px)/1 var(--look-brush); font-style: normal; filter: url(#ink-rough-fine); transform: rotate(-5deg); animation: ink-stamp .3s calc(var(--ms, 1400ms) * .42) cubic-bezier(.5, 0, .2, 1) both; }
+html[data-look="ink"] .look-cutin-flash { background: var(--paper); }
+
+/* 怀旧游戏机: the picture in big pixels, moving a step at a time; the name in a window of the console's own, its rim
+   gold above and red below, typed out. */
+html[data-look="console"] .look-cutin { --cut-gold: var(--gold); --cut-red: var(--hurt); background: var(--win-deep); }
+html[data-look="console"] .look-cutin-art { image-rendering: pixelated; animation-timing-function: steps(7, end); }
+html[data-look="console"] .look-cutin-frame::after { background: repeating-linear-gradient(0deg, rgb(0 0 0 / .14) 0 2px, transparent 2px 4px); }
+html[data-look="console"] .look-cutin-band { left: 6%; width: 88%; top: auto; bottom: 8%; height: auto; padding: clamp(10px, 2vh, 18px) clamp(14px, 3vw, 26px); border: 3px solid #fff; border-radius: 6px; background: var(--win); box-shadow: inset 0 5px 0 var(--cut-gold), inset 0 -5px 0 var(--cut-red), var(--frame); transform: none; animation: cutin-band calc(var(--ms, 1400ms) * .26) steps(5, end) both; }
+html[data-look="console"] .look-cutin-text { position: static; transform: none; }
+html[data-look="console"] .look-cutin-text > * { transform: none; }
+html[data-look="console"] .look-cutin-text b { color: #fff; font: 700 clamp(26px, min(6vh, 7vw), 54px)/1.15 var(--ui); letter-spacing: .04em; text-shadow: 3px 3px 0 var(--win-deep); animation: cutin-type calc(var(--ms, 1400ms) * .3) calc(var(--ms, 1400ms) * .12) steps(8, end) both; }
+@keyframes cutin-type { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+html[data-look="console"] .look-cutin-text small { color: var(--gold); font: 700 clamp(12px, 2.4vh, 20px)/1.3 var(--ui); letter-spacing: 0; }
+html[data-look="console"] .look-cutin-flash { background: #fff; animation-timing-function: steps(2, end); }
+
+/* 减少动态效果: held still, no flash. */
+.look-cutin.still :is(.look-cutin-frame, .look-cutin-art, .look-cutin-band, .look-cutin-text b, .look-cutin-seal) { animation: none; }
+.look-cutin.still .look-cutin-flash { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  .look-cutin :is(.look-cutin-frame, .look-cutin-art, .look-cutin-band, .look-cutin-text b, .look-cutin-seal) { animation: none; }
+  .look-cutin-flash { display: none; }
+}

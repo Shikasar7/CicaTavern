@@ -16,6 +16,7 @@ import { basicRules, narratorText } from './basic.mjs'
 import { hasVariableMacros, replaceVariableMacros } from '../web/shared/vars.js'
 import { PLACEMENT, worldScripts } from '../web/shared/regex.js'
 import { applyScripts } from './regex-guard.mjs'
+import { usesMvu } from './mvu.mjs'
 import { EFFECT_WORDS, FACE_WORDS } from '../web/shared/stage.js'
 
 export function replaceMacros(text, names) {
@@ -152,11 +153,9 @@ const titled = (title, text) => (title ? `【${title}】\n${text}` : text)
 
 const section = (title, body) => (body && body.trim() ? `## ${title}\n${body.trim()}` : '')
 
-function stateProtocol(card, hasState) {
-  const usesMvu = /_\.set\s*\(|UpdateVariable|JSONPatch/.test(
-    [card.systemPrompt, card.postHistoryInstructions, ...(card.book?.entries ?? []).map(e => e.content)].join('\n'),
-  )
-  if (usesMvu || !hasState) return ''
+/** Our own <state> protocol, for a chat with variables whose card, books or preset do not ask for MVU blocks. */
+function stateProtocol(mvu, hasState) {
+  if (mvu || !hasState) return ''
   return [
     '## 状态记录',
     '<当前状态> 是游戏变量的最新值。本轮剧情让某些变量变化时，在回复末尾追加一个 <state> 块，内容是只含变化字段的 JSON（嵌套对象按层级写，值为 null 表示删除）。没有变化就不要写。示例：',
@@ -191,7 +190,7 @@ export function replyBlocks(entries, scripts) {
  * whose paragraphs open the every-turn section; without them the rules read as
  * they did before that preset existed. `style`: the chat's 文风 (its text).
  */
-export function buildSystemPrompt({ card, persona, style = '', settings, books, hasState, options = null, edits = null, render = text => text }) {
+export function buildSystemPrompt({ card, persona, style = '', settings, books, hasState, mvu = false, options = null, edits = null, render = text => text }) {
   const names = { char: card.name, user: persona.name || '你' }
   const m = text => replaceMacros(text, names)
   // The card's and the player's own text may hold templates (rendered once, see buildChatPrompt).
@@ -221,7 +220,7 @@ export function buildSystemPrompt({ card, persona, style = '', settings, books, 
           '- 篇幅随情节而定；不要重复前文已经写过的内容。',
           `- 使用${settings.language || '简体中文'}写作。`,
         ].join('\n'),
-    stateProtocol(card, hasState),
+    stateProtocol(mvu, hasState),
     section('文风与写作要求', m(style)),
     section(`玩家角色：${names.user}`, f(persona.description)),
     [
@@ -318,7 +317,9 @@ function asksForOutput(entry) {
  */
 export function buildChatPrompt({ card, persona, style = '', settings, books, hasState, preset = null, render = text => text }) {
   if (card.direct) return { systemPrompt: DIRECT_SYSTEM, presetVars: {} }
-  if (!preset || preset.builtin) return { systemPrompt: buildSystemPrompt({ card, persona, style, settings, books, hasState, options: preset?.options ?? null, edits: preset?.edits ?? null, render }), presetVars: {} }
+  // MVU rules may sit in the card, a book attached beside it or the preset: any of them means no <state> protocol too.
+  const mvu = usesMvu(card, [card.book, ...(books ?? [])].filter(Boolean), preset)
+  if (!preset || preset.builtin) return { systemPrompt: buildSystemPrompt({ card, persona, style, settings, books, hasState, mvu, options: preset?.options ?? null, edits: preset?.edits ?? null, render }), presetVars: {} }
   const names = { char: card.name, user: persona.name || '你' }
   const m = text => replaceMacros(text, names)
   const world = after =>
@@ -339,7 +340,7 @@ export function buildChatPrompt({ card, persona, style = '', settings, books, ha
   const systemPrompt = [
     prefix.text,
     notes,
-    stateProtocol(card, hasState),
+    stateProtocol(mvu, hasState),
     section('文风与写作要求', m(style)),
     section(EVERY_TURN, [prefix.rules, lateText(books, m)].filter(t => t.trim()).join('\n\n')),
   ]
@@ -348,6 +349,18 @@ export function buildChatPrompt({ card, persona, style = '', settings, books, ha
   // The preset's 用户 / AI 助手 entries before the history: messages ahead of it (engine.mjs leadMessages).
   return { systemPrompt, presetVars: prefix.vars, presetLead: prefix.lead }
 }
+
+// 卡的 CG (card-cgs.mjs): the groups the card brings, offered by name; the reply marks one 【CG|组名】.
+const cgRule = cgs => [
+  '这张卡带着几组 CG（全屏的剧情插图）。动笔前先对一下：这一轮会不会写到下面某一幕（人物、地点和事件对得上就算）？会的话，那一幕第一行的前面单独写一行【CG|组名】，组名照抄，画面会换成这组 CG。写到了就一定要标，不要漏；这一轮没写到就不加，前面回复里用过的组不再用。CG：',
+  ...cgs.map(item => `- ${item}`),
+].join('\n')
+
+/**
+ * The card's CG offered (in the visual novel, with the 视觉小说格式 or without it): a block of its own, so the rule
+ * is not lost among the format's. A model reading it as one more sentence of the format let the moments go by.
+ */
+export const cgFormat = cgs => ['<CG>', cgRule(cgs), '</CG>'].join('\n')
 
 /**
  * 视觉小说格式: while the player reads in the visual novel mode with it on
@@ -386,7 +399,8 @@ export function webSearchNote() {
  * @param replyRange - the built-in preset's 正文字数 (shared/basic.js lengthRule): in place of replyLength when set.
  * @param presetText - the preset's per-turn paragraphs, rendered for this turn.
  * @param reminder - one line pointing at the prefix's every-turn rules.
- * @param marks - ask for the 视觉小说格式 (dialogueFormat).
+ * @param marks - ask for the 视觉小说格式 (dialogueFormat): true; 'cg', only the card's CG (cgFormat).
+ * @param cgs - with marks: the card's CG groups to offer (card-cgs.mjs cgList).
  * @param game - what the turn says of the 游戏规则 (game.mjs gamePrompt).
  */
 /** The opening as the first turn's message carries it. */
@@ -397,7 +411,7 @@ export function openingBlock(opening, names) {
 // The block of lore sent 紧挨着回复, by its tag (engine.mjs takes it out of every user message but the newest).
 export const NEAR_TAG = '世界书·紧挨回复'
 
-export function buildTurnPrompt({ names, opening, recap = '', entries = [], nearEntries = [], memory = '', dynamic = [], characterNote = '', stateText, input, replyLength = 0, replyRange = '', presetText = '', reminder = '', marks = false, game = '', injected = { before: [], after: [] } }) {
+export function buildTurnPrompt({ names, opening, recap = '', entries = [], nearEntries = [], memory = '', dynamic = [], characterNote = '', stateText, input, replyLength = 0, replyRange = '', presetText = '', reminder = '', marks = false, cgs = [], game = '', injected = { before: [], after: [] } }) {
   const parts = []
   const block = (tag, items) => {
     const body = items.filter(item => item.text).map(item => titled(item.title, item.text)).join('\n\n')
@@ -423,7 +437,8 @@ export function buildTurnPrompt({ names, opening, recap = '', entries = [], near
   block(NEAR_TAG, nearEntries)
   // After the input, like SillyTavern's post-history prompts.
   if (presetText) parts.push(`<预设指令>\n${presetText}\n</预设指令>`)
-  if (marks) parts.push(dialogueFormat())
+  if (marks === true) parts.push(dialogueFormat())
+  if (marks && cgs.length) parts.push(cgFormat(cgs))
   if (game) parts.push(game)
   if (reminder) parts.push(`<本轮提醒>${reminder}</本轮提醒>`)
   return parts.join('\n\n')

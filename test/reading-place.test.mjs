@@ -22,7 +22,8 @@ test('what loads late on screen is watched, and only pulls the page while the re
 
 test('every way out of a picture goes through leaveCg, so one opened from the gallery goes back to it', () => {
   const vn = read('vn.js')
-  assert.match(vn, /const leaveCg = \(\) => \(cgView\.dataset\.back \? openGallery\(state\.cgAt\) : closeCg\(\)\)/)
+  // The card's CG (a reply's 【CG|组名】) goes back to the story the same way.
+  assert.match(vn, /const leaveCg = \(\) => \(cgView\.dataset\.back \? openGallery\(state\.cgAt\) : state\.cgDone \? state\.cgDone\(\) : closeCg\(\)\)/)
   assert.match(vn, /tagName === 'IMG'\) leaveCg\(\)/)
   assert.match(vn, /if \(!cgView\.hidden\) return leaveCg\(\)/)
   assert.match(vn, /control\(t`关闭`, t`Esc`, \(\) => leaveCg\(\)\)/)

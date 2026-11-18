@@ -4,7 +4,7 @@
 // cache. Each turn's message stays in the history as sent, so the rules go only when the turns the
 // model will read no longer hold a copy, and the sheet only when it has changed.
 import { randomBytes } from 'node:crypto'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { imageKind } from './appearance.mjs'
 import { replyMarks } from '../web/shared/game/marks.js'
@@ -429,7 +429,7 @@ export function parseFoes(text, names, types = []) {
 
 /** A rule book as it goes with a card: the bestiary's pictures stay behind, like the rest of the card's media. */
 function travelling(value) {
-  const book = cleanRulebook(value)
+  const { skillPictures: _pictures, ...book } = cleanRulebook(value)
   return { ...book, foes: Object.fromEntries(Object.entries(book.foes).map(([name, { file: _left, ...foe }]) => [name, foe])) }
 }
 
@@ -488,6 +488,16 @@ export function createRulebooks(store) {
     })
   }
 
+  /** A foe taken out of the bestiary, its picture with it; met again, the helper describes it anew. */
+  function removeFoe(cardId, name) {
+    return change(cardId, async book => {
+      const foe = book.foes[name]
+      if (!foe) return {}
+      if (FOE_PICTURE.test(foe.file ?? '')) await rm(path.join(foeDir(cardId), foe.file), { force: true })
+      return { foes: Object.fromEntries(Object.entries(book.foes).filter(([key]) => key !== name)) }
+    })
+  }
+
   async function readFoePicture(cardId, picture) {
     if (!FOE_PICTURE.test(picture)) return null
     try {
@@ -497,10 +507,46 @@ export function createRulebooks(store) {
     }
   }
 
+  const skillDir = cardId => path.join(store.dirs.cards, cardId, 'skills')
+
+  /** 技能特写: a skill's picture, cut in full screen when it is used; `buffer` null takes it away. */
+  function setSkillPicture(cardId, name, buffer) {
+    const skill = String(name ?? '').trim().slice(0, 40)
+    if (!skill) throw httpError(400, msg`没说是哪个技能`)
+    if (buffer && !imageKind(buffer)) throw httpError(400, msg`技能图要是 PNG、JPG 或 WebP`)
+    if (buffer && buffer.length > MAX_PICTURE) throw httpError(400, msg`技能图太大（最多 12MB）`)
+    return change(cardId, async book => {
+      const { [skill]: was, ...rest } = book.skillPictures ?? {}
+      if (FOE_PICTURE.test(was ?? '')) await rm(path.join(skillDir(cardId), was), { force: true })
+      if (!buffer) return { skillPictures: rest }
+      const picture = `skill-${randomBytes(6).toString('hex')}.${imageKind(buffer)}`
+      await mkdir(skillDir(cardId), { recursive: true })
+      await writeFile(path.join(skillDir(cardId), picture), buffer)
+      return { skillPictures: { ...rest, [skill]: picture } }
+    })
+  }
+
+  async function readSkillPicture(cardId, picture) {
+    if (!FOE_PICTURE.test(picture)) return null
+    try {
+      return { data: await readFile(path.join(skillDir(cardId), picture)), type: PICTURE_TYPES[picture.split('.').pop()] }
+    } catch {
+      return null
+    }
+  }
+
   /** A newer version of a card plays by the older one's rules. */
   async function inherit(fromId, toId) {
     const book = await readJsonFile(file(fromId), null)
-    if (book) await writeJson(file(toId), cleanRulebook(book))
+    if (!book) return
+    const kept = cleanRulebook(book)
+    await writeJson(file(toId), kept)
+    // The pictures the book names go along: the bestiary's and the skills'.
+    const files = [...Object.values(kept.foes).map(foe => ['foes', foe.file]), ...Object.values(kept.skillPictures ?? {}).map(picture => ['skills', picture])].filter(([, name]) => name)
+    for (const [folder, name] of files) {
+      await mkdir(path.join(store.dirs.cards, toId, folder), { recursive: true })
+      await copyFile(path.join(store.dirs.cards, fromId, folder, name), path.join(store.dirs.cards, toId, folder, name)).catch(() => {})
+    }
   }
 
   /** The book as it leaves with the card; null for a card that never had one, whose files stay as they were. */
@@ -514,5 +560,5 @@ export function createRulebooks(store) {
     if (book && !await readJsonFile(file(cardId), null)) await writeJson(file(cardId), travelling(book))
   }
 
-  return { read, change, inherit, portable, arrive, learnFoes, setFoePicture, readFoePicture }
+  return { read, change, inherit, portable, arrive, learnFoes, setFoePicture, readFoePicture, setSkillPicture, readSkillPicture, removeFoe }
 }

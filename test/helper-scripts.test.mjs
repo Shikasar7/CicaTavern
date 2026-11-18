@@ -55,7 +55,7 @@ test('helper scripts: the list stays on the card, however it was imported, and o
   assert.equal(card.helperList.length, SCRIPTS.length)
   assert.equal(JSON.stringify(card.helperList).includes('replaceWorldbook'), false, 'what they are, not their text')
   assert.deepEqual(cleanHelperList([{ name: 'x', kind: 'nonsense' }, { name: 'y', kind: 'custom', uses: ['book', 'rm -rf'], effect: 'bad' }]), [
-    { name: 'y', on: true, kind: 'custom', remote: false, hosts: [], buttons: [], uses: ['book'], missing: [], stPage: false, about: '', effect: 'lost' },
+    { name: 'y', on: true, kind: 'custom', remote: false, hosts: [], buttons: [], uses: ['book'], missing: [], stPage: false, stRequest: false, about: '', effect: 'lost' },
   ])
   assert.equal(cleanHelperList('nope'), null)
 })
@@ -89,4 +89,15 @@ test('对话修改 hears of the scripts only when the request is about them', ()
   const asked = editRequest(card, { text: '「夏日事件」用世界书做', helpers }).request.messages[0].content
   assert.match(asked, /<helper_scripts>/)
   assert.doesNotMatch(editRequest(card, { text: '短一点', helpers }).request.messages[0].content, /helper_scripts/)
+})
+
+test('helper scripts: one that rewrites the request SillyTavern sends says so, and is not taken for one that works', () => {
+  const [tools, wraps, plain] = helperSummary([
+    { name: '工具', enabled: true, content: 'const ctx = SillyTavern.getContext(); ctx.registerFunctionTool({ name: "x" }); eventOn(tavern_events.CHAT_COMPLETION_SETTINGS_READY, d => {})' },
+    { name: '拦截', enabled: true, content: 'const f = window.fetch; window.fetch = (u, o) => String(u).includes("/api/backends/chat-completions/generate") ? f(u, o) : f(u, o)' },
+    { name: '普通', enabled: true, content: 'eventOn(tavern_events.MESSAGE_RECEIVED, () => toastr.info("好"))' },
+  ])
+  assert.deepEqual([tools.stRequest, tools.effect], [true, 'some'])
+  assert.deepEqual([wraps.stRequest, wraps.effect], [true, 'some'])
+  assert.deepEqual([plain.stRequest, plain.effect], [false, 'none'])
 })

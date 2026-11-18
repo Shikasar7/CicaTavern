@@ -353,3 +353,16 @@ _.delete('没有的', 'x');//没有这一项，不算
   assert.deepEqual(changes, ['店.来客', '店.账', '随身', '好感'])
   assert.deepEqual(state.随身, ['伞', '表'], 'input state is not mutated')
 })
+
+test('a fence closes on as many backticks as it opened with: a page in ```` keeps a ``` of its own', async () => {
+  const { segments, streamingText } = await import('../web/render.js')
+  const page = '````html\n<html><body><div id="app"></div><script>const tip = "用 ```json 包起来"; render(tip)</script></body></html>\n````'
+  const parts = segments(`开场。\n\n${page}\n\n尾声。`)
+  assert.deepEqual(parts.map(p => p.kind), ['story', 'html', 'story'])
+  assert.match(parts[1].body, /render\(tip\)<\/script><\/body><\/html>\n?$/, 'the whole page in one frame, not cut at the inner ```')
+  // Kept whole while the story's own blocks are stripped around it, its update-block mention included.
+  const named = '````html\n<div>页</div><script>const ask = "写 <UpdateVariable> 块 ```"</script>\n````'
+  assert.equal(streamingText(`正文。\n\n${named}`), `正文。\n\n${named}`)
+  // Three still close on three, and a longer run of backticks inside a ``` block does not close it early.
+  assert.deepEqual(segments('```js\nconst a = "````"\n```\n\n后文。').map(p => p.kind), ['code', 'story'])
+})

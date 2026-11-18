@@ -243,11 +243,12 @@ export function patternOf(script, macros = t => t) {
   return regexFromString(source)
 }
 
-const FENCED = /```[\s\S]*?```/g
+// Closed by as many backticks as it opened with (render.js's FENCE).
+const FENCED = /(`{3,})[\s\S]*?\1(?!`)/g
 /** The model's thinking blocks and the fenced blocks (a page an earlier script made of the thinking, say) in `text`. */
 function closedSpans(text) {
   const spans = reasoningSpans(text)
-  for (const match of text.matchAll(FENCED)) spans.push({ inner: match.index + 3, close: match.index + match[0].length - 3, end: match.index + match[0].length })
+  for (const match of text.matchAll(FENCED)) spans.push({ inner: match.index + match[1].length, close: match.index + match[0].length - match[1].length, end: match.index + match[0].length })
   return spans
 }
 

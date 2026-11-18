@@ -32,6 +32,9 @@ export function runsOnServer(code) {
 // SillyTavern's own page, by the parts of it a script reaches for (its message list, its menus and panels): a card
 // frame has its own page instead, with only the input box standing in for SillyTavern's.
 const ST_PAGE = /['"`](?:#chat\b|\.mes(?:_text|_block)?\b|#sheld\b|#form_sheld|#send_form|#leftSendForm|#rightSendForm|#extensionsMenu|#extensions_settings2?\b|#top-settings-holder|#top-bar|#movingDivs|#options\b|#character_popup|#WorldInfo|#rm_[a-z_]+|#left-nav-panel|#right-nav-panel)/
+// How SillyTavern builds and sends the model's request, by the parts a script reaches into: its live preset settings,
+// its tool calls, the events around the request, the request itself. Here the server builds and sends it.
+const ST_REQUEST = /\bchatCompletionSettings\b|\bregisterFunctionTool\b|\bToolManager\b|\bCHAT_COMPLETION_(?:SETTINGS|PROMPT)_READY\b|\bchat_completion_(?:settings|prompt)_ready\b|\bGENERATE_(?:AFTER|BEFORE)_(?:DATA|COMBINE_PROMPTS)\b|\bgenerate_(?:after|before)_(?:data|combine_prompts)\b|\/api\/backends\/chat-completions/
 
 const USES = [
   ['buttons', /replaceScriptButtons|appendInexistentScriptButtons|getButtonEvent/],
@@ -75,9 +78,11 @@ function buttonsOf(script) {
 /**
  * One script as a page and a model can be told about it.
  * @returns {{ name, on, kind, remote, hosts: string[], buttons: string[], uses: string[], missing: string[], stPage: boolean,
- *   about, effect: 'none'|'some'|'lost' }}
+ *   stRequest: boolean, about, effect: 'none'|'some'|'lost' }}
  *   missing: the Tavern Helper functions it calls that are not where it runs (web/shared/th-api.js MISSING).
  *   stPage: it reaches for SillyTavern's own page (its message list, its menus), which a card frame does not have.
+ *   stRequest: it changes how SillyTavern builds or sends the request (its live preset settings, tool calls, the request
+ *   itself), which the server does here.
  *   effect: what is lost of it here. Something the author left off, or that this app does itself, is none.
  */
 function describe(script) {
@@ -92,10 +97,11 @@ function describe(script) {
   const runs = kind === 'hooks' || (kind === 'custom' && !remote)
   const missing = runs ? missingCalls(code, kind === 'hooks' ? 'server' : 'page').slice(0, SHOWN_MISSING) : []
   const stPage = kind === 'custom' && !remote && ST_PAGE.test(code)
+  const stRequest = runs && ST_REQUEST.test(code)
   // A script that runs here loses what the stand-in lacks; one loaded from an address runs too (with the network
   // library switch on), but what it does cannot be told.
   const effect = !on || ['mvu', 'schema', 'upkeep'].includes(kind) ? 'none'
-    : runs ? (missing.length || stPage ? 'some' : 'none')
+    : runs ? (missing.length || stPage || stRequest ? 'some' : 'none')
     : 'some'
   return {
     name,
@@ -107,6 +113,7 @@ function describe(script) {
     uses,
     missing,
     stPage,
+    stRequest,
     // The tools everyone knows come with a whole readme: what they are is said here already.
     about: kind === 'custom' || kind === 'hooks' ? clip(String(script.info ?? '').replace(/[#*]/g, ' '), ABOUT_CHARS) : '',
     effect,
@@ -132,6 +139,7 @@ export function cleanHelperList(list) {
     uses: strings(item.uses, 20).filter(use => USES.some(([known]) => known === use)),
     missing: strings(item.missing, 40).filter(name => /^[A-Za-z]+$/.test(name)).slice(0, SHOWN_MISSING),
     stPage: item.stPage === true,
+    stRequest: item.stRequest === true,
     about: clip(item.about, ABOUT_CHARS),
     effect: ['none', 'some', 'lost'].includes(item.effect) ? item.effect : 'lost',
   }))

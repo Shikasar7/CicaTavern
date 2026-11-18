@@ -1044,6 +1044,11 @@ test('the bestiary: the helper says what a foe is, once; what is known stays, a 
   assert.equal(bare.foes.灰狼.looks, 'grey wolf, snarling')
   assert.equal((await fetch(`${base}/api/foes/${card.id}/${file}`)).status, 404, 'the file goes too')
   assert.equal((await call(`/api/cards/${card.id}/foes/image`, { name: '灰狼', image: 'data:text/plain;base64,aGk=' }, 'PUT')).status, 400)
+  const redrawn = (await call(`/api/cards/${card.id}/foes/image`, { name: '灰狼', image: `data:image/png;base64,${png.toString('base64')}` }, 'PUT')).body.foes.灰狼.file
+  const gone = (await call(`/api/cards/${card.id}/foes`, { name: '灰狼' }, 'DELETE')).body
+  assert.equal(gone.foes.灰狼, undefined, 'taken out of the bestiary')
+  assert.equal((await fetch(`${base}/api/foes/${card.id}/${redrawn}`)).status, 404, 'its picture with it')
+  assert.deepEqual((await call(`/api/cards/${card.id}/foes`, { name: '没有的' }, 'DELETE')).body.foes, {}, 'one not there changes nothing')
 })
 
 test('a foe nobody has described cannot be drawn, and a card without rules sends nothing', async t => {

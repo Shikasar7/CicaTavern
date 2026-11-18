@@ -272,6 +272,14 @@ export function frameFetch({ direct, post, call, fetches, frame, appOrigin, rela
 /* Runs inside the frame. Self-contained: it is serialised with toString(). `makeFetch` is frameFetch. */
 function shimMain(ctx, makeFetch, olderLorebooks) {
   const host = window.parent
+  // A form submitted and not stopped by the card's own handler would load its action in the frame, the card's page gone
+  // (as in SillyTavern no form ever leaves): the last to hear it, it stops it. One meant for a new window still opens.
+  window.addEventListener('submit', event => {
+    const form = event.target
+    const target = String(event.submitter?.getAttribute?.('formtarget') || form?.getAttribute?.('target') || '').toLowerCase()
+    const method = String(event.submitter?.getAttribute?.('formmethod') || form?.getAttribute?.('method') || '').toLowerCase()
+    if (!event.defaultPrevented && target !== '_blank' && method !== 'dialog') event.preventDefault()
+  })
   const post = (op, args) => host.postMessage({ agentTavernCall: ctx.frame, op, args }, '*')
   let seq = 0
   const pending = new Map()
@@ -1106,7 +1114,8 @@ function shimMain(ctx, makeFetch, olderLorebooks) {
         if (/^(SCRIPT|STYLE|LINK|TEMPLATE|DIALOG)$/.test(item.tagName) || item.hidden) continue
         const style = getComputedStyle(item)
         if (style.display === 'none' || style.visibility === 'hidden') continue
-        if (item.childElementCount || item.textContent.trim() || /^(IMG|CANVAS|VIDEO|SVG|IFRAME)$/i.test(item.tagName)) return true
+        // A shadow root's content counts (a status bar that keeps its look apart in one).
+        if (item.childElementCount || item.shadowRoot?.childElementCount || item.textContent.trim() || /^(IMG|CANVAS|VIDEO|SVG|IFRAME)$/i.test(item.tagName)) return true
       }
       return false
     }
@@ -1218,7 +1227,12 @@ function shimMain(ctx, makeFetch, olderLorebooks) {
       const value = Reflect.get(target, key)
       return typeof value === 'function' ? value.bind(target) : value
     },
-    set: () => true,
+    // What a card keeps on "SillyTavern's window" (`parent.__its_slot__ = …`, read back as the sign it mounted) is
+    // kept on this frame's window, where it reads it from; only the names above stay ours.
+    set: (target, key, value) => {
+      if (!['document', 'postMessage', 'parent', 'window', 'self', '$', 'jQuery', 'innerHeight', 'innerWidth'].includes(key)) Reflect.set(target, key, value)
+      return true
+    },
   })
   try {
     window.parent = fakeParent

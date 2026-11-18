@@ -374,7 +374,7 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
       return el('section', { class: 'plan-card ce-statusbar' }, [
         head,
         el('p', { class: 'hint', text: change.before ? t`只改显示，不动变量，也不发给模型。保存后这张卡的对话都按新样式显示。` : t`这张卡还没有自己的状态栏，这是按变量排的一个。保存后它跟着卡走，导出到 SillyTavern 也在。` }),
-        el('div', { class: 'cc-change' }, view.editor.statusEditor(el, change, state.tuning, { spare: tune.fields, state: data.state, redraw: renderStatus, design: { api, cardId: state.card.id, pickDraw, cover: state.card.cover ? { name: state.card.name, cover: state.card.cover } : null }, tryKey: state.card.id })),
+        el('div', { class: 'cc-change' }, view.editor.statusEditor(el, change, state.tuning, { spare: tune.fields, state: data.state, redraw: renderStatus, design: { api, cardId: state.card.id, hasAvatar: state.card.hasAvatar === true, pickDraw, cover: state.card.cover ? { name: state.card.name, cover: state.card.cover } : null }, tryKey: state.card.id })),
         el('div', { class: 'cc-actions' }, [
           el('button', { type: 'button', class: 'btn ghost small', text: t`取消`, onclick: () => { state.tuning = null; renderStatus() } }),
           el('span', { class: 'grow' }),
@@ -917,5 +917,17 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
         state.opening = false
       }
     }),
+    /**
+     * The card was replaced from a file (导入角色卡 → 更新这张卡): a window still on it holds the old card, and saving
+     * there would put the old look and settings back. It closes; opened again, it reads the new one afresh.
+     * → whether it was open (the import says so with the rest).
+     */
+    cardReplaced(cardId) {
+      if (state.card?.id !== cardId) return false
+      const open = dialog.open
+      state.card = null
+      if (open) dialog.close()
+      return open
+    },
   }
 }

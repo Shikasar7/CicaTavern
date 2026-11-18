@@ -43,7 +43,7 @@ async function setup(t) {
   return { app, call, upload, download }
 }
 
-/** A card with everything a pack can take: cast with a reference picture, sprite, expression, scene, cover, foe picture, a 正则集, settings. */
+/** A card with everything a pack can take: cast with a reference picture, sprite, expression, scene, cover, foe picture, skill picture, a 正则集, settings. */
 async function dressedCard({ call }) {
   const png = writeCardPng(PNG, CARD)
   const card = (await call('/api/cards/import', { method: 'POST', body: { filename: '雨宿.png', data: png.toString('base64') } })).body
@@ -56,6 +56,7 @@ async function dressedCard({ call }) {
   assert.equal((await call(`/api/cards/${id}/scenes`, { method: 'POST', body: { name: '晴空便利店', aliases: ['便利店'], image: url(JPEG, 'jpeg') } })).status, 200)
   assert.equal((await call(`/api/cards/${id}/cover-art`, { method: 'PUT', body: { image: url(JPEG, 'jpeg') } })).status, 200)
   assert.equal((await call(`/api/cards/${id}/foes/image`, { method: 'PUT', body: { name: '雨妖', image: url(PNG, 'png') } })).status, 200)
+  assert.equal((await call(`/api/cards/${id}/skills/image`, { method: 'PUT', body: { name: '强击', image: url(PNG, 'png') } })).status, 200)
   const set = (await call('/api/regex/sets', { method: 'POST', body: { name: '雨夜美化', scripts: [{ scriptName: '去掉括号', findRegex: '/（.*?）/g', replaceString: '' }] } })).body
   assert.equal((await call(`/api/regex/sets/${set.id}/cards`, { method: 'PUT', body: { ids: [id] } })).status, 200)
   return { id, girl, boss, set }
@@ -67,6 +68,7 @@ const fileIn = async (zip, name) => Buffer.from(await zipData(zip, zipEntries(zi
 test('sprites take their roster along; unknown parts are dropped', () => {
   assert.deepEqual(cleanParts(['sprites', 'nonsense', 'cover']), ['roster', 'sprites', 'cover'])
   assert.deepEqual(cleanParts(['foes']), ['rules', 'foes'])
+  assert.deepEqual(cleanParts(['skills']), ['rules', 'skills'])
   assert.deepEqual(cleanParts(null), [])
 })
 
@@ -76,7 +78,7 @@ test('a card says what it has to take along, and a pack with everything puts it 
   const { call, upload, download } = ctx
 
   const survey = (await call(`/api/cards/${id}/pack`)).body
-  assert.deepEqual(survey.parts.map(part => part.key), ['roster', 'sprites', 'scenes', 'cover', 'rules', 'foes', 'regex', 'settings'])
+  assert.deepEqual(survey.parts.map(part => part.key), ['roster', 'sprites', 'scenes', 'cover', 'rules', 'foes', 'skills', 'regex', 'settings'])
   assert.equal(survey.parts.find(part => part.key === 'sprites').count, 2)
   assert.equal(survey.parts.find(part => part.key === 'roster').count, 2)
   assert.ok(survey.parts.find(part => part.key === 'scenes').bytes > 0)
@@ -91,6 +93,7 @@ test('a card says what it has to take along, and a pack with everything puts it 
   assert.equal(names.filter(name => name.startsWith('sprites/')).length, 2)
   assert.equal(names.filter(name => name.startsWith('scenes/')).length, 1)
   assert.equal(names.filter(name => name.startsWith('foes/')).length, 1)
+  assert.equal(names.filter(name => name.startsWith('skills/')).length, 1)
   // The card file is the SillyTavern PNG: the card in its text, the attached 正则集 not flattened into it.
   const inside = JSON.parse(Buffer.from(readPngText(await fileIn(zip, 'card.png')).chara ?? readPngText(await fileIn(zip, 'card.png')).ccv3, 'base64').toString('utf8'))
   assert.equal(inside.data.name, '雨宿')
@@ -102,7 +105,7 @@ test('a card says what it has to take along, and a pack with everything puts it 
   assert.equal(sent.body.previous.id, id)
   const fresh = (await call('/api/cards/import', { method: 'POST', body: { pack: sent.body.pack } })).body
   assert.notEqual(fresh.id, id)
-  assert.deepEqual(fresh.arrived, { roster: 2, sprites: 2, scenes: 1, cover: true, look: 0, rules: true, foes: 1, regexSets: 1, settings: true })
+  assert.deepEqual(fresh.arrived, { roster: 2, sprites: 2, scenes: 1, cgs: 0, cover: true, look: 0, rules: true, foes: 1, skills: 1, regexSets: 1, settings: true })
   // The token is spent.
   assert.equal((await call('/api/cards/import', { method: 'POST', body: { pack: sent.body.pack } })).status, 410)
 
@@ -124,6 +127,9 @@ test('a card says what it has to take along, and a pack with everything puts it 
   assert.ok((await download(`/api/cards/${fresh.id}/cover-art`)).equals(JPEG))
   const book = (await call(`/api/cards/${fresh.id}/game`)).body
   assert.match(book.foes['雨妖'].file, /^foe-[0-9a-f]{12}\.png$/)
+  // 技能特写: the skill's picture came along, under a name of the new card's own.
+  assert.match(book.skillPictures['强击'], /^skill-[0-9a-f]{12}\.png$/)
+  assert.ok((await download(`/api/skills/${fresh.id}/${book.skillPictures['强击']}`)).equals(PNG))
   // The same set, attached to both cards: not a second copy.
   const { sets } = (await call('/api/regex')).body
   assert.equal(sets.length, 1)
@@ -148,7 +154,7 @@ test('only what was ticked goes; without the settings the cast leaves its LoRAs 
   const sent = await upload(zip)
   const fresh = (await call('/api/cards/import', { method: 'POST', body: { pack: sent.body.pack } })).body
   // A new version of a card here inherits the older one's media; the pack's own parts are what `arrived` counts.
-  assert.deepEqual(fresh.arrived, { roster: 2, sprites: 2, scenes: 0, cover: false, look: 0, rules: false, foes: 0, regexSets: 0, settings: false })
+  assert.deepEqual(fresh.arrived, { roster: 2, sprites: 2, scenes: 0, cgs: 0, cover: false, look: 0, rules: false, foes: 0, skills: 0, regexSets: 0, settings: false })
 })
 
 test('a pack with nothing ticked is the card alone, and still imports', async t => {
@@ -163,12 +169,16 @@ test('a pack with nothing ticked is the card alone, and still imports', async t 
   assert.equal(fresh.updated, '雨宿')
 })
 
-test('a zip that is no pack is refused; files the manifest should not name are passed over', async t => {
+test('a zip that is no pack is only looked through; files the manifest should not name are passed over', async t => {
   const ctx = await setup(t)
   const { call, upload } = ctx
   const entry = (name, data) => ({ name, data: Buffer.from(data), when: new Date(), crc: crcOf(Buffer.from(data)) })
+  // Someone else's zip (card-bundle.mjs): what it has, for the window; it cannot go in as a card.
   const plain = await upload(writeZip([entry('readme.txt', 'hello')]))
-  assert.equal(plain.status, 400)
+  assert.equal(plain.status, 200)
+  assert.equal(plain.body.kind, 'bundle')
+  assert.deepEqual(plain.body.survey.others, ['readme.txt'])
+  assert.equal((await call('/api/cards/import', { method: 'POST', body: { pack: plain.body.pack } })).status, 400)
   assert.equal((await upload(Buffer.from('not a zip at all'))).status, 400)
 
   const card = writeCardPng(PNG, CARD)
@@ -196,7 +206,7 @@ test('a zip that is no pack is refused; files the manifest should not name are p
   const sent = await upload(zip)
   assert.equal(sent.status, 200)
   const fresh = (await call('/api/cards/import', { method: 'POST', body: { pack: sent.body.pack } })).body
-  assert.deepEqual(fresh.arrived, { roster: 1, sprites: 0, scenes: 1, cover: false, look: 0, rules: false, foes: 0, regexSets: 0, settings: false })
+  assert.deepEqual(fresh.arrived, { roster: 1, sprites: 0, scenes: 1, cgs: 0, cover: false, look: 0, rules: false, foes: 0, skills: 0, regexSets: 0, settings: false })
   const media = (await call(`/api/cards/${fresh.id}/media`)).body
   assert.equal(media.roster.length, 1)
   assert.equal(media.roster[0].ref, true)
@@ -227,7 +237,9 @@ test('游戏规则设置 goes when ticked and stays behind when not; over a card
   const manifest = JSON.parse((await fileIn(zip, PACK_MANIFEST)).toString('utf8'))
   assert.equal(manifest.rules.level, 'full')
   assert.equal(manifest.rules.foes['雨妖'].file, undefined)
-  assert.ok(!namesIn(zip).some(name => name.startsWith('foes/')))
+  assert.equal(manifest.rules.skillPictures, undefined)
+  assert.equal((await cardIn(zip)).data.extensions.cicatavern.game.skillPictures, undefined)
+  assert.ok(!namesIn(zip).some(name => name.startsWith('foes/') || name.startsWith('skills/')))
 
   // The card's own rules changed since; updating it in place from the pack puts the pack's back, its foe picture kept.
   await call(`/api/cards/${id}/game`, { method: 'PUT', body: { level: 'off' } })
@@ -238,4 +250,6 @@ test('游戏规则设置 goes when ticked and stays behind when not; over a card
   const book = (await call(`/api/cards/${id}/game`)).body
   assert.equal(book.level, 'full')
   assert.equal(book.foes['雨妖'].file, picture)
+  // …and the skill pictures it had, which the pack did not bring.
+  assert.match(book.skillPictures['强击'], /^skill-[0-9a-f]{12}\.png$/)
 })

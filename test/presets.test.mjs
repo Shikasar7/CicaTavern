@@ -271,3 +271,18 @@ test('SillyTavern\'s macros without braces: <user>, <char>, <bot> in any case, a
   assert.equal(expandMacros('A：${<user>具体要做的决策}', ctx), 'A：${阿明具体要做的决策}')
   assert.equal(expandMacros('<user_input>{{user}}</user_input>', ctx), '<user_input>阿明</user_input>', 'a tag of another name is left alone')
 })
+
+test('MVU rules kept in an attached book or the preset mean no <state> protocol too', () => {
+  const rule = { uid: 1, comment: '变量更新', key: [], constant: true, enabled: true, position: 1, order: 1, content: '回复末尾写 <UpdateVariable> 块。' }
+  const protocol = /## 状态记录/
+  const build = (books, preset) => buildChatPrompt({ card: CARD, persona: PERSONA, settings: {}, books, hasState: true, preset }).systemPrompt
+  // Nowhere: the app's own <state> protocol.
+  assert.match(build([], null), protocol)
+  // In a book attached beside the card (not the card's own).
+  assert.doesNotMatch(build([{ id: 'extra', entries: [rule] }], null), protocol)
+  // In the preset only: a prompt it sends.
+  const withRule = (identifier, content) => inPrefix({ ...PRESET, prompts: PRESET.prompts.map(p => (p.identifier === identifier ? { ...p, content } : p)) })
+  assert.doesNotMatch(build([], withRule('style', '每轮结尾输出 <UpdateVariable>。')), protocol)
+  // A preset prompt turned off does not count.
+  assert.match(build([], withRule('off', '每轮结尾输出 <UpdateVariable>。')), protocol)
+})

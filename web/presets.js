@@ -464,6 +464,7 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
     if (item.buttons?.length) parts.push(t`按钮：${item.buttons.join(t`、`)}`)
     if (item.uses?.includes('model')) parts.push(t`自己调用模型要你允许`)
     if (item.stPage) parts.push(t`改 SillyTavern 自己页面（消息列表、菜单）的部分不起作用`)
+    if (item.stRequest) parts.push(t`改 SillyTavern 组装和发出请求的部分（当前预设的设置、工具调用、拦截请求）不起作用：这里的请求由程序在后台发。它因此每次都弹提示的话，可以关掉它，预设的提示词照常用`)
     if (item.missing?.length) parts.push(t`这些函数这里没有：${item.missing.join(t`、`)}`)
     return parts.join(t`；`)
   }
