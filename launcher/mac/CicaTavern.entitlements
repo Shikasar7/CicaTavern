@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The launcher's entitlements when it is signed with the Developer ID (scripts/mac-build.sh
+  app, hardened runtime): the microphone, which the hardened runtime otherwise refuses, for
+  voice input in the window (Info.plist's NSMicrophoneUsageDescription says why).
+  runtime/node keeps the Node.js Foundation's own signature and entitlements.
+-->
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+</dict>
+</plist>
