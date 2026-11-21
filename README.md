@@ -197,6 +197,6 @@ Mac、安卓、iPhone 的安装，以及更新、代理、配图、朗读、隐�
 
 ## 许可证
 
-[GNU AGPL-3.0](LICENSE)，版权归 Shikasar7 所有。免费使用，也可以商用；修改后再发布要同样开源。提交代码前请看 [CONTRIBUTING.md](CONTRIBUTING.md)。
+[GNU AGPL-3.0](LICENSE)，版权归 Shikasar7 所有。免费使用。如修改后再发布要同样开源。提交代码前请看 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
-本项目与 Anthropic、OpenAI、Google 等模型服务商没有关联，费用按你自己的账号计费。角色卡、世界书、预设的版权归原作者所有。
+本项目与 Anthropic、OpenAI、Google 等模型服务商没有关联，无商业推广。费用按你自己添加的供应商账号计费。角色卡、世界书、预设的版权归原作者所有。
