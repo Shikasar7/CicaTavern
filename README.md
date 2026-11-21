@@ -189,7 +189,7 @@ Mac、安卓、iPhone 的安装，以及更新、代理、配图、朗读、隐�
 
 <p align="center"><img src="docs/screenshots/support-usage.png" alt="开发用量统计：10 月到 11 月共 261 亿 token、7.6 万次请求" width="720"></p>
 
-如果您玩得开心，也想支持一下作者的话，可以请作者喝杯奶茶嘿嘿，万分感谢！有了您的支持，作者一定小皮鞭抽自己加速更新 (ง •̀_•́)ง
+如果您玩得开心，也想支持一下作者的话，可以请作者喝杯奶茶回回血嘿嘿，万分感谢！有了您的支持，作者一定小皮鞭抽自己加速更新 (ง •̀_•́)ง
 
 <p align="center"><img src="docs/screenshots/support-qr.webp" alt="赞赏码：微信和支付宝都能扫" width="280"></p>
 
