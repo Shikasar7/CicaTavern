@@ -190,6 +190,11 @@ test('a turn renders a card\'s EJS controllers with its own book and this input;
   // A welcome page switching the first message, as SillyTavern's swipes do.
   assert.equal((await post(`/api/chats/${chat.id}/opening`, { index: 1 })).path[0].text, '蝉鸣。')
   assert.equal((await send(`/api/chats/${chat.id}/opening`, { index: 5 })).status, 400)
+  // A start page that had the model write the opening and set it as floor 0: its update blocks give the variables.
+  const written = await post(`/api/chats/${chat.id}/opening`, { text: '院子里很热。\n<UpdateVariable>\n[{"op":"replace","path":"/世界/当前场景","value":"院子"}]\n</UpdateVariable>' })
+  assert.match(written.path[0].text, /^院子里很热。/)
+  assert.equal(written.path[0].state.世界.当前场景, '院子')
+  assert.equal((await send(`/api/chats/${chat.id}/opening`, { text: '  ' })).status, 400)
   const { switchOpening } = await import('../server/chats.mjs')
   const played = { ...chat, nodes: { root: chat.path[0], turn: { id: 'turn', parent: 'root', role: 'user', text: '你好' } } }
   await assert.rejects(switchOpening({ getCard: async () => ({}) }, played, 1), /已经开始/)
@@ -278,7 +283,9 @@ test('real MVU card: first-turn preview hides placeholders and feeds variables',
   const chat = await post('/api/chats', { cardId: card.id })
   assert.ok(Object.keys(chat.path[0].state).length > 0, 'initvar became the chat state')
   const preview = await post(`/api/chats/${chat.id}/preview`, { parentId: 'root', input: '你好' })
-  assert.doesNotMatch(preview.prompt, /StatusPlaceHolderImpl/, 'prompt-only regex removed the placeholder')
+  // The card's own rules (sent each turn at their depth) may name it; the opening's own is what the regex takes out.
+  const outsideLore = preview.prompt.replace(/<(世界书·紧挨回复|世界书 深度="\d+")>[\s\S]*?<\/世界书(·紧挨回复)?>/g, '')
+  assert.doesNotMatch(outsideLore, /StatusPlaceHolderImpl/, 'prompt-only regex removed the placeholder')
   assert.match(preview.prompt, /<动态设定>[\s\S]*status_current_variable[\s\S]*<\/动态设定>/, 'variable list rendered each turn')
   assert.doesNotMatch(preview.prompt, /format_message_variable|<%/, 'no raw macros or EJS reach the model')
   assert.doesNotMatch(preview.prompt, /<当前状态>/, 'card shows state itself, so ours is skipped')

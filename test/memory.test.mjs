@@ -9,6 +9,10 @@ test('settings: both switches off by default, the interval and budget kept in ra
   assert.deepEqual(cleanMemory(null), { enabled: false, tidy: { enabled: false, every: 10, model: 'helper' }, budget: 1500 })
   assert.deepEqual(cleanMemory({ enabled: true, tidy: { enabled: true, every: 99, model: 'chat' }, budget: 10 }), { enabled: true, tidy: { enabled: true, every: 30, model: 'chat' }, budget: 300 })
   assert.equal(cleanMemory({ enabled: 'yes' }).enabled, false)
+  // 整理用的模型 picked by name: a provider's model; anything else is the helper.
+  assert.equal(cleanMemory({ tidy: { model: 'p1/deepseek-chat' } }).tidy.model, 'p1/deepseek-chat')
+  assert.equal(cleanMemory({ tidy: { model: 'not a model' } }).tidy.model, 'helper')
+  assert.equal(cleanMemory({ tidy: { model: 42 } }).tidy.model, 'helper')
 })
 
 test('the entries a model wrote: tolerant of brackets, bold, list marks and stray lines', () => {

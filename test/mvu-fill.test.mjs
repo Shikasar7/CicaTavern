@@ -27,13 +27,14 @@ test('a long card’s reminder names what the reply must contain and counts the 
   const rules = [entry(10, '[mvu_update]变量输出格式', '正文后输出 <UpdateVariable>。'), entry(11, '0【焊死状态栏】', '在对话的末尾插入状态栏')]
   const books = [{ id: 'b', entries: [...lore, ...rules] }]
   const prefix = '## 每轮回复都要遵守\n【第1层守层者】\n…'
-  const reminder = everyTurnReminder(prefix, books, { mvu: true })
+  // A chat from before 聊天中 @深度, whose prefix holds them (a newer one sends them at their depth).
+  const reminder = everyTurnReminder(prefix, books, { mvu: true, atDepth: false })
   assert.match(reminder, /尤其|包括/)
   assert.match(reminder, /结尾完整闭合的 <UpdateVariable> 变量更新块/)
   assert.match(reminder, /【\[mvu_update\]变量输出格式】、【0【焊死状态栏】】，以及其余 6 条常驻设定。$/)
   assert.doesNotMatch(reminder, /第3层守层者/)
   // A short list is still named in full, as before.
-  assert.equal(everyTurnReminder('## 每轮回复都要遵守\n【甲】', [{ id: 'b', entries: [entry(0, '甲', '设定'), entry(1, '乙', '设定')] }]), '本轮回复同样要遵守系统提示末尾「每轮回复都要遵守」一节的全部要求，包括【甲】、【乙】。')
+  assert.equal(everyTurnReminder('## 每轮回复都要遵守\n【甲】', [{ id: 'b', entries: [entry(0, '甲', '设定'), entry(1, '乙', '设定')] }], { atDepth: false }), '本轮回复同样要遵守系统提示末尾「每轮回复都要遵守」一节的全部要求，包括【甲】、【乙】。')
 })
 
 test('MVU cards are told apart; an answer’s update block is found', () => {

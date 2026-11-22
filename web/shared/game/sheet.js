@@ -38,7 +38,7 @@ export const ATTRIBUTES = [
 // 装备: the three places a thing is worn (`trinket` is the slot the rules call charm: that word is an attribute's here) and the four rarities.
 export const WORD_KEYS = ['body', 'grace', 'mind', 'charm', 'life', 'minion', 'normal', 'elite', 'boss', 'skill', 'bag', 'experience', 'party', 'perk', 'weapon', 'armour', 'trinket', 'common', 'fine', 'rare', 'epic', 'form', 'evolve']
 /** What the rules call them, for the model and where the card says nothing. */
-export const DEFAULT_WORDS = { body: '体魄', grace: '灵巧', mind: '心智', charm: '魅力', life: '生命', minion: '杂兵', normal: '普通', elite: '精英', boss: '首领', skill: '技能', bag: '行囊', experience: '经验', party: '队伍', perk: '天赋', weapon: '武器', armour: '防具', trinket: '饰品', common: '普通', fine: '精良', rare: '稀有', epic: '传说', form: '形态', evolve: '进化' }
+export const DEFAULT_WORDS = { body: '体魄', grace: '灵巧', mind: '心智', charm: '魅力', life: '生命', minion: '杂兵', normal: '普通', elite: '精英', boss: '首领', skill: '技能', bag: '背包', experience: '经验', party: '队伍', perk: '天赋', weapon: '武器', armour: '防具', trinket: '饰品', common: '普通', fine: '精良', rare: '稀有', epic: '传说', form: '形态', evolve: '进化' }
 const MAX_WORD = 8
 
 function cleanWords(value) {
@@ -68,7 +68,7 @@ const MAX_ENERGY = 30
 const MAX_USES = 999
 const MAX_THINGS = 200
 const MAX_QUESTS = 100
-const MAX_FOES = 100
+const MAX_FOES = 200
 const MAX_RANKS = 24
 const MAX_CONDITIONS = 8
 // 队伍: who the card has to stand with the player, who is with them now, and how many of those go into a fight.
@@ -100,7 +100,9 @@ const MADNESS = { name: '疯狂', stat: '', size: 'heavy' }
 // Low, the mind is not to be trusted: not a condition, it lasts as long as the sanity stays there.
 const STRAINS = [[0.25, { name: '濒临崩溃', stat: 'mind', size: 'medium' }], [0.5, { name: '动摇', stat: 'mind', size: 'light' }]]
 const FOE_PICTURE = /^[\w-]{1,64}\.(png|jpg|webp)$/
-const MAX_SKILL_PICTURES = 120
+export const MAX_SKILL_PICTURES = 240
+// A skill's 属性: as many as a card with a large bestiary has skills.
+const MAX_SKILL_TYPES = 240
 const MAX_OPS = 20
 // What a day's rest gives back, of the most there is.
 const REST = 0.5
@@ -328,8 +330,13 @@ export function cleanSkillPictures(value) {
 function cleanFoes(value) {
   const out = {}
   if (!isRecord(value)) return out
-  for (const [name, foe] of Object.entries(value).slice(0, MAX_FOES)) {
-    if (!isRecord(foe)) continue
+  const kept = Object.entries(value).filter(([, foe]) => isRecord(foe))
+  // Over the limit, the first ones without a picture go (a picture was drawn or uploaded for that one), then the first.
+  while (kept.length > MAX_FOES) {
+    const plain = kept.findIndex(([, foe]) => !FOE_PICTURE.test(foe.file ?? ''))
+    kept.splice(Math.max(0, plain), 1)
+  }
+  for (const [name, foe] of kept) {
     out[name.slice(0, 40)] = {
       looks: typeof foe.looks === 'string' ? foe.looks.trim().slice(0, 300) : '',
       moves: words(foe.moves, 4),
@@ -339,6 +346,19 @@ function cleanFoes(value) {
     }
   }
   return out
+}
+
+// A foe's name with a number on it (异化流浪犬A, 异化流浪犬2号, 异化流浪犬甲, 异化流浪犬（一）): one of that kind. Only a
+// number: 狼王 and 异化流浪犬头领 are kinds of their own, with pictures of their own.
+const FOE_NUMBER = /^(.+?)\s*(?:[A-Ha-h]|[0-9０-９]{1,2}号?|[一二三四五六七八九十]{1,2}号|[甲乙丙丁]|[（(]\s*(?:[A-Ha-h]|[0-9０-９]{1,2}|[一二三四五六七八九十]{1,2}|[甲乙丙丁])\s*[)）]|#\s*[0-9]{1,2})$/
+const owns = (record, key) => Object.prototype.hasOwnProperty.call(record, key)
+
+/** The bestiary's name for a foe the story names: its own, else the kind it is a numbered one of; null when neither is there. */
+export function bestiaryName(foes, name) {
+  if (!isRecord(foes) || typeof name !== 'string' || !name) return null
+  if (owns(foes, name)) return name
+  const kind = FOE_NUMBER.exec(name.trim())?.[1]
+  return kind && owns(foes, kind) ? kind : null
 }
 
 /** A type's name, as kept: a few characters, or ''. */
@@ -361,7 +381,7 @@ export function cleanTypes(value) {
 /** The types of skills by name, for those of a type the card has. */
 function cleanSkillTypes(value, types) {
   const out = {}
-  for (const [name, type] of Object.entries(isRecord(value) ? value : {}).slice(0, 60)) if (name.trim() && Object.hasOwn(types, typeName(type))) out[name.trim().slice(0, 40)] = typeName(type)
+  for (const [name, type] of Object.entries(isRecord(value) ? value : {}).slice(0, MAX_SKILL_TYPES)) if (name.trim() && Object.hasOwn(types, typeName(type))) out[name.trim().slice(0, 40)] = typeName(type)
   return out
 }
 

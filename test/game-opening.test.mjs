@@ -4,7 +4,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { OPENING_MOST, autoCommands, cleanOpening, foesOf, partyOf, playerOf, startBattle, step } from '../web/shared/game/battle.js'
 import { chanceToWin, encounterSetup, fightResult, playedOut } from '../web/shared/game/encounter.js'
-import { gateOf, parseChoice } from '../web/shared/game/marks.js'
+import { gateOf, parseChoice, withoutGameMarks } from '../web/shared/game/marks.js'
 import { cleanRulebook, sheetOf } from '../web/shared/game/sheet.js'
 import { gamePrompt } from '../server/game.mjs'
 
@@ -82,4 +82,17 @@ test('a reply that stops on a fight can carry 开局 too, and the model is told 
   // A chat whose copy of the rules is from before 开局 is sent them again.
   const old = gamePrompt({ sheet, pausing: true, fights: true, check: null }, []).text.replace(/\|开局:/g, '')
   assert.match(gamePrompt({ sheet, pausing: true, fights: true, check: null }, [{ role: 'user', prompt: old }]).text, /开局:先手/)
+})
+
+test('the format copied as it is (敌人×数量:档位) is no fight and is not shown; a real name with it is', () => {
+  assert.equal(gateOf('她拔出剑。\n【战斗|敌人×数量:普通】'), null)
+  assert.equal(gateOf('【战斗|敌人:首领】'), null)
+  assert.deepEqual(gateOf('【战斗|楚子苓×数量:档位】'), { kind: 'battle', foes: [{ name: '楚子苓', count: 1, tier: 'normal' }] })
+  assert.deepEqual(gateOf('【战斗|楚子苓:普通】'), { kind: 'battle', foes: [{ name: '楚子苓', count: 1, tier: 'normal' }] })
+  assert.equal(withoutGameMarks('她拔出剑。\n【战斗|敌人×数量:普通】\n风停了。'), '她拔出剑。\n风停了。')
+  // What the turn asks for says what goes in it, with an example: the format alone was copied.
+  const sheet = sheetOf(cleanRulebook({ level: 'full' }), null, {})
+  const asked = gamePrompt({ sheet, pausing: true, fights: true, wantsFight: true }, []).text
+  assert.match(asked, /玩家这一轮要动手：[^<]*【战斗\|楚子苓:普通】/)
+  assert.doesNotMatch(asked.slice(asked.indexOf('<本轮要求>')), /敌人×数量/)
 })

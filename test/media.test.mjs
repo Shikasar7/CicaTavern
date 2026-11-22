@@ -7,7 +7,7 @@ import path from 'node:path'
 import { baseName, normalizeCard, previousVersion } from '../server/cards.mjs'
 import { createChat } from '../server/chats.mjs'
 import { deflateRawSync } from 'node:zlib'
-import { checkWorkflow, cleanCardMedia, cleanMedia, cleanNaiToken, cleanPrompt, clipTypeOf, comfyFailure, comfyRefusal, createMedia, fillWorkflow, fitSize, imagePromptRequest, imageSize, lorasFor, modelFamily, pictureSize, simpleWorkflow, sizeNodes, unzipFirst, withLora, withNegative, withTrigger } from '../server/media.mjs'
+import { checkWorkflow, cleanCardMedia, cleanMedia, cleanNaiToken, cleanNaiUrl, cleanPrompt, clipTypeOf, comfyFailure, comfyRefusal, createMedia, fillWorkflow, fitSize, imagePromptRequest, imageSize, lorasFor, modelFamily, pictureSize, simpleWorkflow, sizeNodes, unzipFirst, withLora, withNegative, withTrigger } from '../server/media.mjs'
 import { normalizeProvider } from '../server/providers.mjs'
 import { createStore } from '../server/store.mjs'
 
@@ -113,6 +113,11 @@ async function fakeBackends(t) {
     if (req.url === '/history/p1') return send(200, { p1: { status: { completed: true }, outputs: { 9: { images: [{ filename: 'x.png', subfolder: '', type: 'output' }] } } } })
     if (req.url.startsWith('/view?')) return send(200, PNG, 'image/png')
     if (req.url === '/upload/image') return send(200, { name: 'tavern-ref.png' })
+    // A relay that takes NovelAI's own requests: its own key, the picture as it is (no zip), no account to look up.
+    if (req.url === '/nairelay/ai/generate-image') {
+      if (req.headers.authorization !== 'Bearer relay-key-0123456789') return send(401, { message: 'bad key' })
+      return send(200, PNG, 'image/png')
+    }
     if (req.url === '/ai/generate-image') {
       if (req.headers.authorization !== `Bearer ${NAI_TOKEN}`) return send(401, { statusCode: 401, message: 'Invalid accessToken.' })
       if (json.model === 'nai-diffusion-9-full') return send(400, { statusCode: 400, message: 'Invalid model' })
@@ -317,7 +322,7 @@ test('NovelAI: token kept server-side, V4-style body, zip unpacked, errors expla
   assert.throws(() => cleanNaiToken('has space inside token'), /令牌格式/)
   assert.equal(cleanNaiToken(`Bearer ${NAI_TOKEN}`), NAI_TOKEN)
 
-  assert.deepEqual(await media.setNaiToken(NAI_TOKEN), { hasToken: true, tokenHint: '…abcd' })
+  assert.deepEqual(await media.setNaiToken(NAI_TOKEN), { hasToken: true, tokenHint: '…abcd', url: '' })
   assert.ok(!JSON.stringify(await store.getSettings()).includes(NAI_TOKEN), 'the token is not in settings.json')
   assert.deepEqual(await media.naiCheck(''), { tier: 'Opus', active: true, anlas: 10000, v5: null, renewsAt: '2026-10-21T20:06:55.000Z' })
 
@@ -373,7 +378,7 @@ test('NovelAI: token kept server-side, V4-style body, zip unpacked, errors expla
 
   await media.setNaiToken('pst-someone-elses-token-0000')
   await assert.rejects(media.generateImage(chat, 'root', 'x'), /不认这个令牌/)
-  assert.deepEqual(await media.setNaiToken(''), { hasToken: false, tokenHint: '' })
+  assert.deepEqual(await media.setNaiToken(''), { hasToken: false, tokenHint: '', url: '' })
 })
 
 test('cast: drafted from the card, cast-format prompt, per-character NovelAI prompts, the lead\'s reference on V4.5', async t => {
@@ -1340,4 +1345,22 @@ test('a stopped ComfyUI or SD WebUI picture is stopped there too', async t => {
   await store.saveSettings({ media: cleanMedia({ imageBackend: 'sdwebui' }, (await store.getSettings()).media) })
   await stopAfter(200, signal => media.generateImage(chat, 'root', 'x', signal))
   await until(() => comfy.seen.some(r => r.url === '/sdapi/v1/interrupt'))
+})
+
+test('NovelAI through another address: a relay that takes its own requests, with its own key', async t => {
+  const { fake, store, chat, media } = await setup(t)
+  await store.saveSettings({ media: cleanMedia({ imageBackend: 'novelai', naiModel: 'nai-diffusion-4-5-full' }, (await store.getSettings()).media) })
+  assert.equal(cleanNaiUrl('https://image.novelai.net/'), '', 'the official one is no other address')
+  assert.equal(cleanNaiUrl('https://relay.example.com/nai/ai/generate-image'), 'https://relay.example.com/nai', 'without the path the app adds')
+  assert.throws(() => cleanNaiUrl('relay.example.com'), /https:\/\//)
+  assert.deepEqual(await media.setNaiUrl(`${fake.base}/nairelay/`), { hasToken: false, tokenHint: '', url: `${fake.base}/nairelay` })
+  assert.deepEqual(await media.setNaiToken('relay-key-0123456789'), { hasToken: true, tokenHint: '…6789', url: `${fake.base}/nairelay` })
+  const image = await media.generateImage(chat, 'root', '1girl')
+  assert.deepEqual(await media.readImage(chat.id, image.file), PNG)
+  assert.ok(fake.seen.some(r => r.url === '/nairelay/ai/generate-image'), 'sent to the relay')
+  await assert.rejects(media.naiCheck(''), /查不了订阅和额度/, 'no account to look up there: said so')
+  await assert.rejects(media.naiCheck('', ''), /不认这个令牌/, 'the address in the box, not the saved one')
+  // The token cleared, the address stays; both cleared, nothing is left.
+  assert.deepEqual(await media.setNaiToken(''), { hasToken: false, tokenHint: '', url: `${fake.base}/nairelay` })
+  assert.deepEqual(await media.setNaiUrl(''), { hasToken: false, tokenHint: '', url: '' })
 })

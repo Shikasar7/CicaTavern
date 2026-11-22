@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { bagChanged, bagItems, cleanBindings, guessBindings, numberAt, numberWrite, questsAt, variablePaths } from '../web/shared/game/bindings.js'
 import { replyMarks } from '../web/shared/game/marks.js'
 import { visitedPlaces } from '../web/shared/vn.js'
-import { ambienceFor, cleanSound, layerLevel, trackFor } from '../web/shared/game/sound.js'
+import { ambienceFor, cleanSound, layerLevel, nextTrack, trackFor, tracksFor } from '../web/shared/game/sound.js'
 import { applyOps, cleanOps, cleanRulebook, effectOf, keptSheet, nothingToRestore, opWrites, settleReply, sheetOf, startSheet, usableNow } from '../web/shared/game/sheet.js'
 import { reachedBy, reachedWith, tallyOf } from '../web/shared/game/achievements.js'
 
@@ -191,8 +191,9 @@ test('a long story does not slow the map down', () => {
 })
 
 test('the sound settings: what is missing is the default, music waits to be asked for', () => {
-  assert.deepEqual(cleanSound(null), { on: true, effects: 0.7, ambience: 0.5, music: 0, off: [] })
-  assert.deepEqual(cleanSound({ on: false, effects: 9, ambience: -1, music: 'x' }), { on: false, effects: 1, ambience: 0, music: 0, off: [] })
+  assert.deepEqual(cleanSound(null), { on: true, effects: 0.7, ambience: 0.5, music: 0, off: [], musicMode: 'all' })
+  assert.deepEqual(cleanSound({ on: false, effects: 9, ambience: -1, music: 'x', musicMode: 'loud' }), { on: false, effects: 1, ambience: 0, music: 0, off: [], musicMode: 'all' })
+  assert.equal(cleanSound({ musicMode: 'shuffle' }).musicMode, 'shuffle')
   assert.deepEqual(cleanSound({ off: ['music', 'nothing'] }).off, ['music'])
   assert.equal(layerLevel(cleanSound({ music: 0.8, off: ['music'] }), 'music'), 0, 'switched off, whatever its volume')
   assert.equal(layerLevel(cleanSound({ music: 0.8, off: ['music'] }), 'effects'), 0.7, 'the others go on')
@@ -221,6 +222,24 @@ test('which track plays: the fight\'s in a fight, the place\'s at the place, els
   assert.equal(trackFor([{ id: 'a', use: 'story' }], { fighting: true }).id, 'a', 'with no fight track the story\'s goes on')
   assert.equal(trackFor([], {}), null)
   assert.equal(trackFor([{ id: 'c', use: '旧城茶馆' }], { place: '旧城 茶馆', same: (a, b) => a.replace(' ', '') === b.replace(' ', '') }).id, 'c')
+})
+
+test('several tracks for one use make a playlist: round, shuffled, or one over and over', () => {
+  const tracks = [{ id: 'a', use: 'story' }, { id: 'b', use: 'battle' }, { id: 'c', use: '茶馆' }, { id: 'd', use: 'story' }, { id: 'e', use: 'battle' }]
+  const ids = options => tracksFor(tracks, options).map(track => track.id)
+  assert.deepEqual(ids({}), ['a', 'd'], 'in the order they were uploaded')
+  assert.deepEqual(ids({ place: '茶馆' }), ['c'])
+  assert.deepEqual(ids({ place: '茶馆', fighting: true }), ['b', 'e'])
+  assert.deepEqual(tracksFor([{ id: 'a', use: 'story' }], { fighting: true }).map(track => track.id), ['a'])
+  assert.equal(nextTrack(3, -1, 'all'), 0)
+  assert.equal(nextTrack(3, 2, 'all'), 0, 'round again from the first')
+  assert.equal(nextTrack(3, 1, 'one'), 1)
+  assert.equal(nextTrack(3, -1, 'one'), 0)
+  assert.equal(nextTrack(0, -1, 'all'), -1)
+  assert.equal(nextTrack(1, 0, 'shuffle'), 0)
+  // Shuffled: any but the one that just played.
+  for (const [random, want] of [[0, 0], [0.49, 0], [0.5, 2], [0.99, 2]]) assert.equal(nextTrack(3, 1, 'shuffle', () => random), want)
+  assert.equal(nextTrack(3, -1, 'shuffle', () => 0.99), 2)
 })
 
 

@@ -13,7 +13,7 @@
 // The model works in the background; the window polls the draft while it does.
 import { t, zh } from '/i18n.js'
 import { addsText } from '/game-growth.js'
-import { EFFECTS, EVENT_RATES, VARIABLE_TEMPLATES, bookValue, cleanPath, cleanStatusSpec, planMap, rangeOf, settlePicks, templateVariables } from '/shared/status.js'
+import { EFFECTS, EVENT_RATES, VARIABLE_TEMPLATES, bookValue, cleanPath, cleanStatusSpec, layoutFor, planMap, rangeOf, settlePicks, templateVariables } from '/shared/status.js'
 import { splitPath } from '/shared/vars.js'
 import { layoutTakes, statusBar } from '/status.js'
 import { REFERENCE_FILES, cutShort, cutShortNote, referenceBody, referenceChips } from '/talk.js'
@@ -28,6 +28,7 @@ const STEPS = [
   ['plan', t`定方案`],
   ['look', t`状态栏与门面`],
   ['write', t`动笔`],
+  ['plot', t`剧本`],
   ['polish', t`打磨与头像`],
 ]
 // Examples to start from, by kind of card; 换一批 draws four (from all of them while the kind is not said).
@@ -89,7 +90,8 @@ const OPTION_GROUPS = [
   { key: 'userGender', kind: 'one', label: t`你的性别`, values: [['', t`不限`], ['female', t`女`], ['male', t`男`]], short: label => t`你是${label}`, hint: t`你在故事里是男是女：角色怎么称呼你、用「他」还是「她」都按它写。这里不选，向导聊到你的身份时会问，你在聊天里说了也算。方案页还能改。` },
   { key: 'play', kind: 'many', label: t`玩法`, values: [['bond', t`好感与关系阶段`], ['growth', t`成长与能力`], ['resources', t`经营与资源`], ['countdown', t`倒计时与事件`], ['explore', t`探索与线索`], ['battle', t`战斗与成长`]], hint: t`可多选。每种玩法记录对应的数值：好感和信任（性格随它分阶段）、等级和修为、金钱和物资、剩余天数、解锁的地点和线索。战斗与成长用应用内置的规则，不占变量，开局就有检定、回合制战斗、背包和升级。` },
   { key: 'format', kind: 'one', label: t`格式`, values: [['', t`向导定`], ['text', t`纯文本卡`], ['mvu', t`MVU 变量卡`], ['mvu-ui', t`MVU + 美化状态栏`]], hint: t`纯文本：不记录数值。MVU：记录数值，每条回复下面有状态栏。美化状态栏：在 SillyTavern 里也显示成好看的面板（要装酒馆助手）。` },
-  { key: 'statusTheme', kind: 'one', label: t`状态栏样式`, values: [['plain', t`简洁`], ['paper', t`古风纸笺`], ['neon', t`赛博霓虹`], ['pastel', t`柔和手账`]], when: options => options.format === 'mvu-ui' },
+  // Each shown as a small bar drawn in it (themeTile). The themes from before are being made anew; a draft that has one keeps it.
+  { key: 'statusTheme', kind: 'one', tiles: true, label: t`状态栏样式`, values: [['plain', t`简洁`], ['editorial', t`文艺杂志`], ['meadow', t`晴野`], ['sigil', t`夜曜纹章`], ['daybreak', t`晨笺`], ['aquarelle', t`天光云影`], ['cobalt', t`钴蓝`], ['afterschool', t`放课后`], ['lineart', t`线稿`], ['signal', t`信号`], ['mercury', t`流银`], ['redink', t`赤墨`], ['kaleido', t`万华`], ['auto', t`按卡配色`]], when: options => options.format === 'mvu-ui' },
   // 高级选项: folded away, and nothing changes while none is picked. server/forge/bricks.mjs writes what the bricks put in a card.
   { key: 'bricks', kind: 'many', advanced: true, label: t`玩法积木`, values: [['books', t`背包和册子`], ['selfcheck', t`写前自查`], ['events', t`随机事件`], ['judge', t`裁判表`], ['world', t`世界动态`], ['schedule', t`日程`], ['relations', t`关系网`], ['routes', t`路线与结局`], ['creation', t`建角页`]], about: {
     books: t`玩的时候能增能减的记录：物品、认识的人、任务、回忆、线索。向导按卡定一到三本，状态栏里显示成表格。`,
@@ -106,13 +108,13 @@ const OPTION_GROUPS = [
   { key: 'judgeDice', kind: 'one', advanced: true, label: t`运气`, values: [['', t`交给向导`], ['on', t`平手看骰子`], ['off', t`不看运气`]], hint: t`等级一样时怎么定：程序掷骰子，或者由模型按故事判。`, when: options => options.bricks.includes('judge') },
   { key: 'worldRate', kind: 'one', advanced: true, label: t`世界动得多快`, values: [['', t`交给向导`], ['rare', t`慢`], ['normal', t`中`], ['often', t`快`]], hint: t`慢：约八轮动一步。中：约五轮。快：约三轮。`, when: options => options.bricks.includes('world') },
   { key: 'scale', kind: 'one', advanced: true, label: t`卡的规模`, values: [['', t`轻量`], ['standard', t`标准`], ['epic', t`大作`]], hint: t`轻量和以前一样。标准：最多 30 个角色、20 个地点、120 个变量。大作：最多 60 个角色、40 个地点、200 个变量。方案页就是世界目录，配角和地点先写一句话，看过再分批写，写卡的时间和花费都会多很多。` },
-  { key: 'statusTheme', kind: 'one', advanced: true, label: t`更多样式`, values: [['ink', t`水墨`], ['parchment', t`羊皮卷`], ['gothic', t`暗夜`], ['terminal', t`终端`], ['ocean', t`深海`], ['auto', t`按卡配色`]], hint: t`按卡配色：向导按这张卡的气氛挑颜色，方案页还能改。`, when: options => options.format === 'mvu-ui' },
+  { key: 'plot', kind: 'flag', advanced: true, label: t`剧本`, values: [[false, t`不要`], [true, t`写一份`]], hint: t`选「写一份」：卡写完后先到「剧本」这一步，和向导定好设置、先看大纲再写完整；在那一步什么都没写就保存的话，保存后向导在后台写一份放进卡里。选「不要」也能随时点上面的「剧本」去写。` },
   { key: 'statusPages', kind: 'flag', advanced: true, label: t`状态栏分页`, values: [[false, t`一页`], [true, t`分几页`]], hint: t`变量多时分成几页，比如概览、册子、人物，向导按卡分。`, when: options => options.format === 'mvu-ui' },
 ]
 // Words that ask for another card's own text. Asked for with a card only being learned from, the page asks first.
 const COPY_WORDS = /照搬|照抄|抄过来|搬过来|原文|原样|原封不动|一模一样|复制(这张|那张|它|原)|照着(它|这张|那张|原卡)写|直接用(它|这张|那张|原卡|原来)/
 const OPTION_GROUPS_LABELS = Object.fromEntries(OPTION_GROUPS.find(group => group.key === 'bricks').values)
-const NO_OPTIONS = { cast: '', world: false, gender: '', userGender: '', play: [], format: '', statusTheme: 'plain', bricks: [], eventRate: '', judgeDice: '', worldRate: '', scale: '', statusPages: false }
+const NO_OPTIONS = { cast: '', world: false, gender: '', userGender: '', play: [], format: '', statusTheme: 'plain', bricks: [], eventRate: '', judgeDice: '', worldRate: '', scale: '', statusPages: false, plot: false }
 /** The examples that fit the picks (EXAMPLES is by the old kinds). */
 const exampleKind = options => (options.play?.length || options.format.startsWith('mvu') ? 'game' : options.world ? 'world' : options.cast || '')
 /** The picks in a few words, for the sketch's folded row. */
@@ -143,8 +145,8 @@ const pieceName = target => {
 // A plan's world kind, which the server keeps as 真实 or 架空 whatever the card's language.
 const WORLD_KIND = new Map([[zh`真实`, t`真实`], [zh`架空`, t`架空`]])
 const STRATEGY = { constant: [t`常驻`, 'on'], keyword: [t`提到时`, 'key'], off: [t`不发送`, 'off'] }
-const POSITION = { before: t`角色定义前`, after: t`角色定义后`, depth: t`上下文末尾` }
-const STAGE_TEXT = { discuss: t`聊想法`, plan: t`定方案`, look: t`状态栏与门面`, write: t`动笔`, polish: t`打磨与头像` }
+const POSITION = { before: t`角色定义前`, after: t`角色定义后`, depth: t`紧挨着回复（深度 0）` }
+const STAGE_TEXT = { discuss: t`聊想法`, plan: t`定方案`, look: t`状态栏与门面`, write: t`动笔`, plot: t`剧本`, polish: t`打磨与头像` }
 // How a tracked variable shows in the status bar, and the value type each implies (hidden keeps its own).
 const SHOWS = [['meter', t`进度条`], ['number', t`数字`], ['rating', t`星级`], ['text', t`文字`], ['badge', t`徽章`], ['long', t`长文字`], ['tags', t`标签`], ['list', t`列表`], ['table', t`表格`], ['flag', t`是或否`], ['map', t`地图`], ['forms', t`形态链`], ['types', t`克制图`], ['hidden', t`不显示`]]
 // 变量模板 (web/shared/status.js VARIABLE_TEMPLATES): a set of variables for a kind of story.
@@ -175,6 +177,7 @@ const TOOL_PROMPTS = '__tool_prompts__'
 const ICON_LOCK = '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="4.5" y="9" width="11" height="7.5" rx="2"/><path d="M7 9V6.5a3 3 0 0 1 6 0V9"/></svg>'
 const ICON_OPEN = '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="4.5" y="9" width="11" height="7.5" rx="2"/><path d="M7 9V6.5a3 3 0 0 1 5.6-1.5"/></svg>'
 const ICON_CLOSE = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15"/></svg>'
+const ICON_ZOOM = '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5"/><path d="m12.2 12.2 4.3 4.3M8.5 6.3v4.4M6.3 8.5h4.4"/></svg>'
 const ICON_NEW = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg>'
 
 function ago(iso) {
@@ -304,6 +307,9 @@ export function initForge({ api, el, toast, guard, saveDownload = null, exportPa
     } })
     view.save = el('button', { type: 'button', class: 'btn primary', text: t`保存为角色卡`, onclick: () => saveCard() })
     view.polishFoot = el('div', { class: 'forge-foot' }, [el('div', { class: 'forge-actions' }, [view.toPlanBack, el('span', { class: 'grow' }), view.saved, view.png, view.trial, view.vn, view.chat, view.save])])
+    // 剧本: on to 打磨与头像 (with a plot or without one).
+    view.toPolish = el('button', { type: 'button', class: 'btn primary', text: t`下一步：打磨与头像`, onclick: () => setStage('polish') })
+    view.plotFoot = el('div', { class: 'forge-foot' }, [el('div', { class: 'forge-actions' }, [el('span', { class: 'hint', text: t`剧本可以不写：不写，这张卡照样能玩，以后也能在「修改角色卡 → 剧本」里补。` }), el('span', { class: 'grow' }), view.toPolish])])
     view.discussFoot = el('div', { class: 'forge-foot' }, [view.composer, el('div', { class: 'forge-actions' }, [view.attach, view.pickCount, el('span', { class: 'grow' }), view.undo, view.toPlans, view.toPlan, view.send])])
     view.planFoot = el('div', { class: 'forge-foot' }, [view.planText, el('div', { class: 'forge-actions' }, [view.back, view.lookBack, view.attachPlan, el('span', { class: 'grow' }), view.rewriteAll, view.revise, view.toLook, view.write])])
     view.body = el('div', { class: 'forge-body' }, [view.main, view.sketch])
@@ -318,6 +324,7 @@ export function initForge({ api, el, toast, guard, saveDownload = null, exportPa
         view.refs,
         view.discussFoot,
         view.planFoot,
+        view.plotFoot,
         view.polishFoot,
         view.file,
       ]),
@@ -379,11 +386,12 @@ export function initForge({ api, el, toast, guard, saveDownload = null, exportPa
     view.home.hidden = !draft
     view.body.classList.toggle('home', !draft)
     // Writing and polishing are about the card itself, and the look about its bar and front: the talk's sketch steps aside.
-    view.body.classList.toggle('wide', Boolean(draft && (draft.stage === 'look' || draft.stage === 'write' || draft.stage === 'polish')))
+    view.body.classList.toggle('wide', Boolean(draft && (draft.stage === 'look' || draft.stage === 'write' || draft.stage === 'plot' || draft.stage === 'polish')))
     view.discussFoot.hidden = !draft || draft.stage !== 'discuss'
     // 状态栏与门面 shares the plan's foot: 提意见 there is sent with 按意见修改方案 the same way.
     view.planFoot.hidden = !draft || (draft.stage !== 'plan' && draft.stage !== 'look')
     view.polishFoot.hidden = !draft || draft.stage !== 'polish'
+    view.plotFoot.hidden = !draft || draft.stage !== 'plot'
     renderMain()
     renderSketch()
     renderReferences()
@@ -487,7 +495,7 @@ export function initForge({ api, el, toast, guard, saveDownload = null, exportPa
     state.stepsShown = key
     view.steps.replaceChildren(
       ...STEPS.map(([id, label], i) => {
-        const has = { discuss: true, plan: Boolean(draft?.plan), look: Boolean(draft?.plan), write: Boolean(draft?.card), polish: Boolean(draft?.card?.writtenAt) }
+        const has = { discuss: true, plan: Boolean(draft?.plan), look: Boolean(draft?.plan), write: Boolean(draft?.card), plot: Boolean(draft?.card?.writtenAt), polish: Boolean(draft?.card?.writtenAt) }
         const reachable = draft && !draft.job && has[id]
         const done = i < at || (has[id] && id !== 'write' && i !== at) || (id === 'write' && draft?.card?.writtenAt)
         return el('li', { class: i === at ? 'now' : done ? 'done' : '' }, [
@@ -551,6 +559,7 @@ export function initForge({ api, el, toast, guard, saveDownload = null, exportPa
     keepScroll(() => {
       if (!draft) view.main.replaceChildren(homeView())
       else if (draft.stage === 'polish' && draft.card) view.main.replaceChildren(polishView(draft))
+      else if (draft.stage === 'plot' && draft.card) view.main.replaceChildren(plotStepView(draft))
       else if (draft.stage === 'write' && draft.card) view.main.replaceChildren(writeView(draft))
       else if (draft.stage === 'plan' && draft.plan && !(draft.job?.kind === 'discuss')) view.main.replaceChildren(planView(draft))
       else if (draft.stage === 'look' && draft.plan && !(draft.job?.kind === 'discuss')) view.main.replaceChildren(lookView(draft))
@@ -624,7 +633,7 @@ export function initForge({ api, el, toast, guard, saveDownload = null, exportPa
     if (!novel) {
       return el('div', { class: 'forge-home' }, [head, el('div', { class: 'book-novel' }, [
         el('p', { text: t`把一部小说整本读完，照着它做一张卡。原文不会每轮都发给向导：先一段一段读，记下人物、地点、势力、物品、设定和发生过的大事，再写一份全书梗概，向导照着梗概和你聊。` }),
-        el('p', { class: 'hint', text: t`选一个文本文件（txt、md，UTF-8 和 GBK 都认，最多 500 万字）。选了只是切好段、估出用量，点「开始抽取」才发送。Word 和 PDF 先另存成 txt。` }),
+        el('p', { class: 'hint', text: t`选一个文本文件（txt、md，UTF-8 和 GBK 都认，最多 1000 万字）。选了只是切好段、估出用量，点「开始抽取」才发送。Word 和 PDF 先另存成 txt。` }),
         el('p', { class: 'hint', text: t`小说的内容只用于自己玩。做出来的卡要公开发布，先确认原作允许。` }),
         novelPick(el, guard, async file => novelCall('', { method: 'POST', body: await novelFile(file) })),
       ])])
@@ -758,10 +767,10 @@ export function initForge({ api, el, toast, guard, saveDownload = null, exportPa
       study.length ? el('div', { class: 'forge-study-list' }, study) : null,
       // A card it only studies: what the model gets of it, not the card's text.
       reading ? el('div', { class: 'ce-ref-text' }, el('pre', { text: reading.structure && reading.mode !== 'content' && reading.brief ? reading.brief : reading.text })) : null,
-      el('div', { class: 'forge-attach-row' }, [attachButton(), el('span', { class: 'hint', text: t`手上有设定或小说？附上它，向导会照着聊，写卡时也照着写。附别人的卡时默认只学结构，不读内容。` })]),
+      el('div', { class: 'forge-attach-row' }, [attachButton(), el('span', { class: 'hint', text: t`手上有设定或小说大纲？附上它，向导会照着聊，写卡时也照着写。附别人的卡时默认只学结构，不读内容。` })]),
       // A file is read to 60 000 characters; a whole novel, or a worldbook kept here, is begun from instead.
       el('div', { class: 'forge-attach-row' }, [
-        el('button', { type: 'button', class: 'btn ghost small', text: t`从小说开始`, title: t`把一部小说整本读完（最多 500 万字），照着它做一张卡`, onclick: () => openNovel() }),
+        el('button', { type: 'button', class: 'btn ghost small', text: t`从小说开始`, title: t`把一部小说整本读完（最多 1000 万字），照着它做一张卡`, onclick: () => openNovel() }),
         el('button', { type: 'button', class: 'btn ghost small', text: t`用已有的世界书`, title: t`照应用里存着的一本世界书做卡：它的条目会跟着这张卡`, onclick: () => openBookPick() }),
         el('span', { class: 'hint', text: t`整本小说别用「附文件」（一份只读前 6 万字）。` }),
       ]),
@@ -1104,6 +1113,201 @@ export function initForge({ api, el, toast, guard, saveDownload = null, exportPa
     ])
   }
 
+  // What each status bar look is: the tile's tooltip, and the words under the large view (themeViewer).
+  const THEME_NOTES = () => ({
+    plain: t`浅色的卡片，清楚省事，什么卡都合适。`,
+    editorial: t`近白的纸透一点清水蓝，衬线字配宋体，留白多，背景有淡淡的星图细线，收起展开很柔和。`,
+    meadow: t`手绘的粗黑线条和圆胖的字，云和太阳飘在上面，草地上有小花、蜗牛和一只打盹的小麻雀。`,
+    sigil: t`黑曜石的底、鎏金细线和绯红魔纹，宋体，标题前的纹章会轻轻呼吸。适合西幻和暗黑的卡。`,
+    daybreak: t`像一页晨间手账：书脊上竖排的大字，雾蓝的衬线标题配一行花体字，数值收在磨砂面板里，细线两头各一个小圆点。`,
+    aquarelle: t`一页水彩写生本：手绘墨线框，顶上一幅水彩天空，会随故事里的时间换成清晨、白天、黄昏或夜晚，数值条像一笔水彩，角落一枝嫩叶。`,
+    cobalt: t`一张单色孔版印刷：再生纸上只用一种钴蓝油墨，标题压在整块蓝底上反白，页和组自动编号，数值条的末端散成网点，卡里的图印成蓝白双色。`,
+    afterschool: t`老招牌底下打开的一台千禧年游戏机菜单：搪瓷招牌、条纹雨棚和录像带计数做标题，下面整块是深蓝的菜单底，每组一个白边蓝窗，黄色名牌，像素格的数值条，心里话是视觉小说的对话框，数值卡像存档格，底下一条按键提示。`,
+    lineart: t`一整张工程图纸：带图框、分区号和标题栏的暖灰方格纸，细线画着一台拆开的机器人，鼠标移过时它的头和手臂会沿轴线滑开，红色十字线跟着读出坐标；数值条是带箭头的尺寸线，分组是带字母的引出圈，页签是图纸标签。`,
+    signal: t`一块深夜的追踪屏：近黑的底上只有一种薄荷绿，标题后面是一片会聚成云的小格子，几格亮着、错开闪动，细线从各个方块汇到「收起」旁的目标点，分组按扇区编号，数值条是一排格子加一道亮光标；鼠标移上去，附近的小格会亮起来，一个准星跟着走并报出坐标。`,
+    mercury: t`整条状态栏铺在一片会流动的液态金属上：镀铬的波纹缓缓起伏，鼠标划过会压出一道涟漪；记录浮在一块块烟色玻璃上，标题和数字是抛光的金属字，数值条是一管带高光的水银，只有银色。`,
+    redink: t`黑、白和一种红：粗颗粒的白纸上压着一排黑色块，标题用毛笔字反白写在上面，一轮红日和一道红色飞白横扫而过；左边一根黑柱贯到底，分组一白一黑交替，背后压着巨大的红色编号，数值条是一笔带枯笔的墨。`,
+    kaleido: t`黑底上所有颜色撞在一起：标题区一道带颗粒的全色喷流，底边再涌起一道；每个分组是一块镶着自己颜色的黑玻璃，组名压在斜切的色块上，数值条是粗粗的渐变色；鼠标移过会带起一团棱镜光，边框的虹彩跟着转。`,
+    auto: t`向导按这张卡的气氛挑三种颜色，方案页还能改。`,
+  })
+
+  /**
+   * A status bar look as it will be: made-up rows drawn in it, in the 版式 it goes with. 按卡配色 shows one set of
+   * colors; the guide picks the card's own. `full` draws more rows, for the large view.
+   */
+  function themeBar(key, { full = false, seen } = {}) {
+    const fields = [
+      { path: `${t`艾琳`}.${t`好感`}`, label: t`好感`, show: 'meter', min: 0, max: 100 },
+      full ? { path: `${t`艾琳`}.${t`体力`}`, label: t`体力`, show: 'meter', min: 0, max: 100 } : null,
+      { path: `${t`艾琳`}.${t`心情`}`, label: t`心情`, show: 'badge' },
+      { path: `${t`艾琳`}.${t`内心`}`, label: t`内心`, show: 'text' },
+      full ? { path: `${t`艾琳`}.${t`特征`}`, label: t`特征`, show: 'tags' } : null,
+      full ? { path: `${t`世界`}.${t`时间`}`, label: t`时间`, show: 'text' } : null,
+      { path: `${t`世界`}.${t`地点`}`, label: t`地点`, show: 'text' },
+      full ? { path: `${t`你`}.${t`金币`}`, label: t`金币`, show: 'number' } : null,
+    ].filter(Boolean)
+    const spec = cleanStatusSpec({
+      title: t`雾港手记`,
+      ...(key === 'auto' ? { palette: { bg: '#f4efe8', ink: '#2b2230', accent: '#9b3d5a' } } : key === 'plain' ? {} : { theme: key }),
+      layout: layoutFor('auto'),
+      fields,
+    })
+    const state = {
+      [t`艾琳`]: { [t`好感`]: 62, [t`体力`]: 38, [t`心情`]: t`有点不安`, [t`内心`]: t`他像是早就知道会发生什么。`, [t`特征`]: [t`左撇子`, t`怕雷声`] },
+      [t`世界`]: { [t`时间`]: t`黄昏`, [t`地点`]: t`旧灯塔下` },
+      [t`你`]: { [t`金币`]: 248 },
+    }
+    return spec ? statusBar(el, spec, state, { collapsible: full, remembers: false, seen, live: full }) : null
+  }
+
+  // The small bars of the list. Laid out all at once the first time, fourteen looks (each with its own fonts and
+  // pictures) held the page still for about half a second. So a tile shows its frame and name at once and its bar
+  // comes when the frame is near the screen, one or two a frame; one drawn before is kept and put back as it is,
+  // so picking a look (which draws the list anew) does not draw them again. Small, they are not drawn live (流银's
+  // moving metal is the theme's still picture here; the large view has it).
+  const tileBars = new Map()
+  const tileQueue = []
+  let tileFrame = 0
+  const fillTile = frame => {
+    const key = frame.dataset.theme
+    let small = tileBars.get(key)
+    if (!small) {
+      const bar = themeBar(key, { seen: `tile-${key}` })
+      if (!bar) return
+      small = el('span', { class: 'forge-theme-scale fresh', inert: true, onanimationend: () => small.classList.remove('fresh') }, [bar])
+      tileBars.set(key, small)
+    }
+    frame.replaceChildren(small)
+  }
+  const drainTiles = () => {
+    tileFrame = 0
+    const start = performance.now()
+    while (tileQueue.length && performance.now() - start < 12) {
+      const frame = tileQueue.shift()
+      if (!frame.isConnected || frame.firstChild) continue
+      fillTile(frame)
+      // Laid out here, so the time it takes is counted against this frame's share.
+      void frame.offsetHeight
+    }
+    if (tileQueue.length) tileFrame = requestAnimationFrame(drainTiles)
+    else if (tileWaiting.size) laterTiles()
+  }
+  // Those further down come too once the ones in view are drawn, one at a time when the page has nothing else to do,
+  // so scrolling finds them ready.
+  const tileWaiting = new Set()
+  let tileIdle = 0
+  const laterTiles = () => {
+    if (tileIdle) return
+    const go = () => {
+      tileIdle = 0
+      for (const frame of tileWaiting) {
+        tileWaiting.delete(frame)
+        tileWatch?.unobserve(frame)
+        if (frame.isConnected && !frame.firstChild) return queueTile(frame)
+      }
+    }
+    tileIdle = globalThis.requestIdleCallback ? requestIdleCallback(go, { timeout: 1500 }) : setTimeout(go, 300)
+  }
+  const queueTile = frame => {
+    tileQueue.push(frame)
+    if (!tileFrame) tileFrame = requestAnimationFrame(drainTiles)
+  }
+  const tileWatch = globalThis.IntersectionObserver ? new IntersectionObserver(entries => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue
+      tileWatch.unobserve(entry.target)
+      tileWaiting.delete(entry.target)
+      queueTile(entry.target)
+    }
+  }, { rootMargin: '300px 0px' }) : null
+
+  /** A look in the list: its bar made small (now if it was drawn before, otherwise soon), and its name. */
+  function themeTile(key, label) {
+    const frame = el('span', { class: 'forge-theme-frame', 'aria-hidden': 'true', 'data-theme': key })
+    if (tileBars.has(key)) fillTile(frame)
+    else if (tileWatch) {
+      tileWatch.observe(frame)
+      tileWaiting.add(frame)
+    }
+    else queueTile(frame)
+    return [frame, el('b', { text: label })]
+  }
+
+  /**
+   * One look at full size over the page, with what it is; the arrows (and ← →) go through the others. `pick(key)`
+   * takes the one shown and closes the view; with `disabled` it only shows.
+   */
+  function themeViewer(values, startKey, { isOn, pick, disabled }) {
+    let at = Math.max(0, values.findIndex(([key]) => key === startKey))
+    const stage = el('div', { class: 'forge-theme-stage' })
+    const name = el('h2')
+    const count = el('span', { class: 'forge-theme-count' })
+    const note = el('p', { class: 'forge-theme-note' })
+    const use = el('button', { type: 'button', class: 'btn primary' })
+    // The whole bar in view at once, as large as the room allows: one taller than the room is made smaller (not below
+    // about half; past that it scrolls), a short one larger (up to the room's width), and what is left over is split
+    // above and below. Its own size changes (folded, fonts in, a picture loaded) fit it again.
+    const fit = () => {
+      const inner = stage.querySelector('.forge-theme-stage-in')
+      if (!inner) return
+      const style = getComputedStyle(stage)
+      const room = stage.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom)
+      const roomWidth = stage.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
+      const { offsetWidth: width, offsetHeight: height } = inner
+      if (!width || !height || room <= 0) return
+      const scale = Math.max(0.45, Math.min(room / height, roomWidth / width, 1.3))
+      const shown = height * scale
+      inner.style.transform = Math.abs(scale - 1) > 0.005 ? `scale(${scale.toFixed(4)})` : ''
+      inner.style.marginTop = shown < room - 1 ? `${((room - shown) / 2).toFixed(1)}px` : ''
+      inner.style.marginBottom = `${(shown - height).toFixed(1)}px`
+    }
+    const sizes = globalThis.ResizeObserver ? new ResizeObserver(fit) : null
+    const close = () => { sizes?.disconnect(); dialog.close(); dialog.remove() }
+    const show = index => {
+      at = (index + values.length) % values.length
+      const [key, label] = values[at]
+      name.textContent = label
+      count.textContent = `${at + 1} / ${values.length}`
+      note.textContent = THEME_NOTES()[key] ?? ''
+      const bar = themeBar(key, { full: true, seen: `view-${key}` })
+      stage.replaceChildren(bar ? el('div', { class: 'forge-theme-stage-in' }, [bar]) : el('p', { class: 'hint', text: t`这个样式画不出来。` }))
+      stage.scrollTop = 0
+      const inner = stage.querySelector('.forge-theme-stage-in')
+      if (inner) sizes?.observe(inner)
+      fit()
+      const now = isOn(key)
+      use.textContent = now ? t`正在用` : t`用这个样式`
+      use.disabled = disabled || now
+    }
+    use.addEventListener('click', () => {
+      const [key] = values[at]
+      close()
+      pick(key)
+    })
+    const step = by => el('button', { type: 'button', class: 'btn ghost', text: by < 0 ? t`上一个` : t`下一个`, onclick: () => show(at + by) })
+    const dialog = el('dialog', { class: 'dialog forge-theme-view', 'aria-label': t`状态栏样式` }, [
+      el('div', { class: 'forge-theme-view-head' }, [
+        el('div', { class: 'forge-theme-view-title' }, [name, count]),
+        el('button', { type: 'button', class: 'btn ghost icon', title: t`关闭`, 'aria-label': t`关闭`, html: ICON_CLOSE, onclick: close }),
+      ]),
+      stage,
+      note,
+      el('div', { class: 'row forge-theme-view-actions' }, [step(-1), step(1), el('span', { class: 'grow' }), use]),
+    ])
+    dialog.addEventListener('cancel', event => { event.preventDefault(); close() })
+    dialog.addEventListener('click', event => { if (event.target === dialog) close() })
+    dialog.addEventListener('keydown', event => {
+      if (event.key === 'ArrowLeft') { event.preventDefault(); show(at - 1) }
+      if (event.key === 'ArrowRight') { event.preventDefault(); show(at + 1) }
+    })
+    show(at)
+    document.body.append(dialog)
+    dialog.showModal()
+    sizes?.observe(stage)
+    fit()
+    use.disabled ? dialog.querySelector('.forge-theme-view-actions .btn')?.focus() : use.focus()
+  }
+
   /**
    * The picks as rows of buttons, one row per group (OPTION_GROUPS); `onChange(next)` gets
    * them all with the one changed. The status bar's look shows only with the styled bar.
@@ -1116,22 +1320,31 @@ export function initForge({ api, el, toast, guard, saveDownload = null, exportPa
         const next = group.kind === 'many' ? (on(key) ? value.filter(v => v !== key) : [...value, key]) : key
         onChange(settlePicks({ ...options, [group.key]: next }, options))
       }
-      // Bricks say what they do where there is room: each is a choice that costs something.
+      // Bricks say what they do where there is room: each is a choice that costs something. Themes show themselves.
       const cards = group.about && !compact
-      const buttons = group.values.map(([key, label]) => el('button', {
-        type: 'button', class: cards ? 'forge-brick' : null, text: cards ? null : label, disabled, 'aria-pressed': String(on(key)),
-        onclick: () => pick(key),
-      }, cards ? [el('b', { text: label }), el('span', { text: group.about[key] })] : []))
-      return el('div', { class: `forge-pick${cards ? ' wide' : ''}` }, [
+      const tiles = group.tiles && !compact
+      const buttons = group.values.map(([key, label]) => {
+        const button = el('button', {
+          type: 'button', class: cards ? 'forge-brick' : tiles ? 'forge-theme' : null, text: cards || tiles ? null : label, disabled, 'aria-pressed': String(on(key)),
+          title: tiles ? THEME_NOTES()[key] ?? null : null, onclick: () => pick(key),
+        }, cards ? [el('b', { text: label }), el('span', { text: group.about[key] })] : tiles ? themeTile(key, label) : [])
+        if (!tiles) return button
+        // Each seen large (and the others from there), so the list itself can stay small.
+        return el('div', { class: 'forge-theme-cell' }, [button, el('button', {
+          type: 'button', class: 'forge-theme-zoom', title: t`看大图`, 'aria-label': t`看「${label}」的大图`, html: ICON_ZOOM,
+          onclick: () => themeViewer(group.values, key, { isOn: on, pick, disabled }),
+        })])
+      })
+      return el('div', { class: `forge-pick${cards || tiles ? ' wide' : ''}` }, [
         el('span', { class: 'forge-pick-label', text: group.label }),
-        el('div', { class: `${cards ? 'forge-bricks' : 'seg'}${group.kind === 'many' ? ' many' : ''}`, role: 'group', 'aria-label': group.label }, buttons),
+        el('div', { class: `${cards ? 'forge-bricks' : tiles ? 'forge-themes' : 'seg'}${group.kind === 'many' ? ' many' : ''}`, role: 'group', 'aria-label': group.label }, buttons),
         !compact && group.hint ? el('p', { class: 'hint forge-pick-hint', text: group.hint }) : null,
       ])
     }
     const shown = OPTION_GROUPS.filter(group => !group.when || group.when(options))
     const advanced = shown.filter(group => group.advanced)
     // What is picked in there stays in view; otherwise it opens only when asked.
-    const open = state.advancedOpen ?? (options.bricks.length > 0 || Boolean(options.scale) || options.statusPages)
+    const open = state.advancedOpen ?? (options.bricks.length > 0 || Boolean(options.scale) || options.statusPages || options.plot)
     return el('div', { class: `forge-picks${compact ? ' compact' : ''}` }, [
       ...shown.filter(group => !group.advanced).map(row),
       el('details', { class: 'forge-advanced', open, ontoggle: event => (state.advancedOpen = event.target.open) }, [
@@ -1458,7 +1671,8 @@ export function initForge({ api, el, toast, guard, saveDownload = null, exportPa
     let variables = tracking.variables.map(v => ({ ...v }))
     const look = draft.plan.status ?? {}
     // 按卡配色, or under a look of the card's own (定制外观): the three colors the rest is worked out from, here to be changed by hand.
-    let palette = look.theme === 'auto' || look.skin ? look.palette ?? { bg: '#f7f8f5', ink: '#1c2427', accent: '#2b5869' } : null
+    // Over a theme (定制外观's 起点), a look without colors of its own wears the theme's: none to change here.
+    let palette = look.theme === 'auto' || look.skin ? look.palette ?? (look.skin?.base ? null : { bg: '#f7f8f5', ink: '#1c2427', accent: '#2b5869' }) : null
     const save = guard(async ({ enabled = state.draft.plan.tracking.enabled, redraw = false } = {}) => {
       const body = { tracking: { enabled, title: title.value.trim(), variables: variables.filter(v => v.path.trim()), ...(palette ? { palette } : {}) } }
       const view = await api(`/api/forge/${draft.id}`, { method: 'PUT', body })
@@ -1752,7 +1966,7 @@ export function initForge({ api, el, toast, guard, saveDownload = null, exportPa
       el('span', { class: 'hint', text: t`立绘 ${cast} 张` }),
       tick('faces', t`表情（每人 7 张）`, t`照着立绘给每个角色画七种表情，状态栏和视觉小说里立绘会换表情。画图方式不能照图改时不画`),
       tick('scenes', t`场景 ${places} 张`, t`给方案里的每个地点画一张场景图，状态栏顶上和开场页的背景会用`),
-      forms ? tick('forms', t`形态 ${forms} 张`, t`给游戏规则里写了长相的每个形态画一张，状态栏的形态链和行囊里用；不画表情`) : null,
+      forms ? tick('forms', t`形态 ${forms} 张`, t`给游戏规则里写了长相的每个形态画一张，状态栏的形态链和游戏菜单里用；不画表情`) : null,
       map ? tick('map', t`地图 1 张`, t`画一张这个世界的地图，作状态栏「地图」的底图；地点的位置画好后在「修改角色卡 → 状态栏」里拖`) : null,
       options.length ? tick('creation', t`建角页 ${options.length} 张`, t`给建角页上写了长相的选项各画一张小图`) : null,
       el('small', { class: 'hint', text: t`用「配图与朗读」里设的画图方式，花的是画图那边的额度。头像在「打磨与头像」里画。` }),
@@ -1937,6 +2151,65 @@ export function initForge({ api, el, toast, guard, saveDownload = null, exportPa
   }
 
   // ─── 打磨与头像 ───────────────────────────────────────────────────────
+  // ─── 剧本 ───────────────────────────────────────────────────────────────
+  // The card's 剧本, written with the guide (its settings in full: scenes, endings and their kinds, forks, side lines,
+  // chapters, tone, what to leave out, the opening it goes on from; an outline first) and adjusted in the plot editor
+  // (web/plot-edit.js), kept with the draft and saved with the card. A card needs none.
+  const plotUi = () => import('/plot-edit.js')
+  const reloadDraft = async () => {
+    if (state.draft) apply(await api(`/api/forge/${state.draft.id}`))
+  }
+  const openDraftPlots = guard(async (options = {}) => {
+    const draft = state.draft
+    if (!draft) return
+    const { openPlots } = await plotUi()
+    await openPlots({ api, el, guard, toast, forge: draft.id, cardId: '', cardName: draft.plan?.name ?? '', onSaved: () => reloadDraft() }, options)
+  })
+
+  function plotStepView(draft) {
+    const plots = draft.plots ?? []
+    const busy = Boolean(draft.job)
+    const mapOf = plot => {
+      const box = el('div', { class: 'plot-preview', hidden: true })
+      const toggle = el('button', { type: 'button', class: 'btn ghost small', text: t`路线图`, onclick: guard(async () => {
+        box.hidden = !box.hidden
+        if (box.hidden || box.childElementCount) return
+        const [{ plotMap }, { startProgress }] = await Promise.all([import('/plot-map.js'), import('/shared/plot.js')])
+        box.append(plotMap({ copy: plot, progress: startProgress(plot), spoiler: 'all' }, { el, guard, preview: true, onJump: () => {}, onSpoiler: () => {} }))
+      }) })
+      return { box, toggle }
+    }
+    const rows = plots.map(plot => {
+      const main = plot.scenes.filter(scene => !scene.side)
+      const map = mapOf(plot)
+      return el('li', { class: 'forge-plot-row' }, [
+        el('div', { class: 'forge-plot-main' }, [
+          el('b', { text: plot.name }),
+          plot.id === draft.defaultPlot ? el('span', { class: 'plot-badge', text: t`默认` }) : null,
+          plot.intro ? el('p', { class: 'small', text: plot.intro }) : null,
+          el('p', { class: 'muted small', text: [t`${main.length} 幕`, t`${main.filter(scene => scene.ending).length} 个结局`, plot.sides?.length ? t`${plot.sides.length} 条支线` : '', main.filter(scene => scene.exits.length > 1).length ? t`${main.filter(scene => scene.exits.length > 1).length} 处岔路` : ''].filter(Boolean).join(' · ') }),
+        ].filter(Boolean)),
+        el('div', { class: 'forge-plot-tools' }, [
+          map.toggle,
+          el('button', { type: 'button', class: 'btn small', text: t`调整`, disabled: busy, title: t`打开剧本编辑器：改每一幕、帮我写、问问向导改、撤销`, onclick: () => openDraftPlots({ open: plot.id }) }),
+        ]),
+        map.box,
+      ])
+    })
+    return el('div', { class: 'forge-plot' }, [
+      draft.error ? errorBlock(draft.error) : null,
+      el('section', { class: 'plan-card' }, [
+        el('header', {}, [el('h4', { text: t`剧本` })]),
+        el('p', { class: 'hint', text: t`剧本让这张卡的故事按写好的路线走：一幕一幕往下，有岔路和结局，玩家开新对话时可以选，也可以不用。向导读你刚写好的这张卡来写，保存卡时一起存进去。` }),
+        plots.length ? el('ul', { class: 'forge-plot-list' }, rows) : el('p', { class: 'hint', text: t`还没有剧本。` }),
+        el('div', { class: 'row' }, [
+          el('button', { type: 'button', class: 'btn primary', disabled: busy, text: plots.length ? t`再写一份…` : t`让向导写一份…`, title: t`写一句想法，再定几幕、几个结局和类型、岔路多少、要不要支线、分几章、基调、不要写的、从哪个开场白接着走；先出大纲，改到满意再写完整`, onclick: () => openDraftPlots({ write: true }) }),
+          el('button', { type: 'button', class: 'btn', disabled: busy, text: t`自己写 / 导入 / 管理…`, title: t`剧本窗口：新建空白剧本自己写、导入剧本文件（也认 Twine 和 Ink）、设默认、删除`, onclick: () => openDraftPlots() }),
+        ]),
+      ]),
+    ].filter(Boolean))
+  }
+
   function polishView(draft) {
     const card = draft.card
     const busy = Boolean(draft.job)
@@ -1946,6 +2219,11 @@ export function initForge({ api, el, toast, guard, saveDownload = null, exportPa
     return el('div', { class: 'forge-polish' }, [
       draft.error && draft.error.kind !== 'avatar' ? errorBlock(draft.error) : null,
       avatarHero(draft),
+      el('section', { class: 'plan-card' }, [
+        el('header', {}, [el('h4', { text: t`剧本` })]),
+        el('p', { class: 'hint', text: draft.plots?.length ? t`这张卡有 ${draft.plots.length} 个剧本，保存时一起存进卡里。` : t`这张卡还没有剧本（可以不写）。` }),
+        el('button', { type: 'button', class: 'btn small', disabled: busy, text: draft.plots?.length ? t`回去调整剧本` : t`去写剧本`, onclick: () => setStage('plot') }),
+      ]),
       checks.length
         ? el('section', { class: 'plan-card lamp' }, [
             el('header', {}, [el('h4', { text: t`还有 ${checks.length} 处可能的套话` })]),
@@ -2398,6 +2676,7 @@ export function initForge({ api, el, toast, guard, saveDownload = null, exportPa
     }
     apply(result.draft)
     await onCardSaved?.(result.card.id)
+    if (result.plotWriting) toast(t`剧本在后台写，写好后在「修改角色卡 → 剧本」里，开新对话时也能选。`, 8000)
     if (result.updated) toast(t`「${result.card.name}」已更新，原来的对话都还在。`)
     else toast(t`已保存为角色卡「${result.card.name}」，在左边的角色卡列表里。角色名册（长相、衣着）也一起建好了。`, 8000, { action: { text: t`写一张新卡`, run: () => goHome() } })
   })

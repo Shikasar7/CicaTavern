@@ -1,10 +1,11 @@
-// 行囊 (游戏规则): the player's side of the sheet: who they are, what they carry, what they are after. Nothing here
+// 游戏菜单 (游戏规则, called 行囊 before 2.7.0): the player's side of the sheet: who they are, what they carry, what they are after. Nothing here
 // changes the story at once. What is done goes into the turn's operations, shown by the input box, and is settled
 // with the next turn (app.js), so a rollback or a branch takes it back like everything else.
 import { t } from '/i18n.js'
 
 const TABS = () => [['self', t`角色`], ['party', t`队伍`], ['growth', t`成长`], ['bag', t`背包`], ['quests', t`任务`], ['map', t`地图`], ['deeds', t`成就`], ['sound', t`声音`]]
 const LAYER_WORDS = () => [['effects', t`音效`], ['ambience', t`环境音`], ['music', t`音乐`]]
+const MODE_WORDS = () => [['all', t`列表循环`], ['shuffle', t`随机播放`], ['one', t`单曲循环`]]
 const MAX_TRACK = 28 * 1024 * 1024
 const EFFECT_WORDS = (energy = '') => ({ heal: t`回血`, energy: energy ? t`回${energy}` : t`回气力`, calm: t`回复理智`, damage: t`攻击`, cure: t`解除异常`, boost: t`增益`, gear: t`装备`, none: t`只有剧情用途` })
 const SIZE_WORDS = () => ({ small: t`小`, medium: t`中等`, large: t`大` })
@@ -21,9 +22,9 @@ export function openBag({ el, api, toast, chat, tab: firstTab = 'self', book: fi
   const body = el('div', { class: 'bag-body' })
   const tabs = el('div', { class: 'bag-tabs', role: 'tablist' })
   const said = (key, fallback) => book.words?.[key] || fallback
-  const dialog = el('dialog', { class: 'dialog game-bag', 'aria-label': said('bag', t`行囊`) }, [
+  const dialog = el('dialog', { class: 'dialog game-bag', 'aria-label': t`游戏菜单` }, [
     el('button', { type: 'button', class: 'btn small dialog-x', text: t`关闭`, onclick: () => dialog.close() }),
-    el('div', { class: 'bag-head' }, [el('h2', { text: said('bag', t`行囊`) }), tabs]),
+    el('div', { class: 'bag-head' }, [el('h2', { text: t`游戏菜单` }), tabs]),
     body,
     el('p', { class: 'hint bag-foot', text: t`这里做的改动随下一轮一起生效，输入框上方可以取消。` }),
   ])
@@ -371,6 +372,9 @@ export function openBag({ el, api, toast, chat, tab: firstTab = 'self', book: fi
     }
     const file = el('input', { type: 'file', accept: 'audio/*', hidden: true })
     file.addEventListener('change', () => pickTrack(file))
+    const mode = el('select', { 'aria-label': t`播放方式` }, MODE_WORDS().map(([key, text]) => el('option', { value: key, text, selected: key === prefs.musicMode })))
+    mode.addEventListener('change', () => sound.setPrefs({ musicMode: mode.value }))
+    const skip = el('button', { type: 'button', class: 'btn small', text: t`下一首`, onclick: () => sound.skip() })
     return [
       el('label', { class: 'bag-row' }, [master, el('span', { class: 'bag-name', text: t`打开声音` })]),
       ...LAYER_WORDS().map(slider),
@@ -378,6 +382,8 @@ export function openBag({ el, api, toast, chat, tab: firstTab = 'self', book: fi
       el('h3', { text: t`背景音乐` }),
       el('p', { class: 'hint', text: t`用你自己的音乐文件，只存在这张卡下面，不随卡导出。` }),
       ...tracks.map(trackRow),
+      tracks.length > 1 && el('div', { class: 'bag-row' }, [el('span', { class: 'bag-name', text: t`播放方式` }), mode, skip]),
+      tracks.length > 1 && el('p', { class: 'hint', text: t`用在同一处的几首排成一个歌单，按这里选的方式接着放。` }),
       file,
       el('button', { type: 'button', class: 'btn small', text: t`上传音乐`, onclick: () => file.click() }),
     ]

@@ -57,7 +57,7 @@ const STATUS = 'statusBar'
  *   onCardChanged(cardId, { avatar }) (the list, the card's details and its picture follow),
  *   pickDraw(options) (web/draw-choice.js: the 画图方式 and model for one drawing) }
  */
-export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = null, getChat, isGenerating, openProviders, openCheck, openBook, onChatChanged, onCardChanged, pickDraw }) {
+export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = null, getChat, isGenerating, openProviders, openCheck, openBook, onChatChanged, onCardChanged, pickDraw, openPlots = null }) {
   const $ = id => document.getElementById(id)
   const dialog = $('card-edit-dialog')
   const state = {
@@ -141,6 +141,7 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
         ]),
         greetingsSection(card),
         bookSection(card),
+        openPlots ? plotSection(card) : null,
         (view.statusBox = el('div', { class: 'ce-status-slot' })),
         el('section', { class: 'plan-card' }, [
           el('header', {}, [el('h4', { text: t`给模型的指示` })]),
@@ -317,6 +318,18 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
     addRow.before(el('div', { class: 'ce-field ce-new-greeting' }, [el('div', { class: 'ce-field-head' }, [el('b', { text: t`开场白 ${areas.length + 1}（新）` })]), area]))
     areas.push(area)
     area.focus()
+  }
+
+  /** 剧本 (web/plot-edit.js): the card's plots, managed in a window of their own. */
+  function plotSection(card) {
+    const count = Array.isArray(card.plots) ? card.plots.length : 0
+    return el('section', { class: 'plan-card' }, [
+      el('header', {}, [el('h4', { text: t`剧本` })]),
+      el('p', { class: 'ce-book-line' }, [
+        el('span', { text: count ? t`这张卡有 ${count} 个剧本` : t`还没有剧本：故事按写好的路线一幕一幕走，有岔路和结局。` }),
+        el('button', { type: 'button', class: 'btn small', text: count ? t`管理剧本` : t`新建剧本`, onclick: () => openPlots(card) }),
+      ]),
+    ])
   }
 
   function bookSection(card) {
@@ -818,7 +831,7 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
     intro: () => t`说说想怎么改：向导会把要改的地方整段写出来，改前改后对照着给你看，勾上的才会改进卡里。`,
     ideas: () => IDEAS,
     placeholder: target => (target?.id === STATUS ? t`状态栏想怎么改，比如：换成暗色的配色，好感度用进度条，分成两页` : target ? t`「${target.label}」想怎么改，比如：再短一点，语气冷一些` : t`说说想怎么改，比如：让她说话更冷淡一点`),
-    busy: job => (job.chars ? t`正在改，已经写了 ${job.chars.toLocaleString()} 字…` : t`正在读这张卡…`),
+    busy: job => (job.step === 'pick' ? t`卡的世界书比较长，先看目录挑要读的条目…` : job.chars ? t`正在改，已经写了 ${job.chars.toLocaleString()} 字…` : t`正在读这张卡…`),
     changeTitle,
     changeWhere,
     changeNotes,

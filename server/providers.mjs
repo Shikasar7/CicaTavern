@@ -1528,7 +1528,7 @@ function withPrompt(result) {
 }
 
 // A request longer than the model's context window, as providers word it (OpenAI, DeepSeek and relays; Anthropic;
-// Gemini; Kimi's token limit; GLM's max length; Qwen's input range; Chinese relays).
+// Gemini; Kimi's token limit; GLM's max length; Qwen's input range; Ollama and llama.cpp; Chinese relays).
 export const CONTEXT_FULL = new RegExp(
   [
     'context[ _](window|length)',
@@ -1536,6 +1536,8 @@ export const CONTEXT_FULL = new RegExp(
     'too many tokens',
     'maximum context',
     "exceeds? the (model's )?(context|maximum)",
+    // Ollama and llama.cpp's server: "request (28174 tokens) exceeds the available context size (16384 tokens)".
+    'exceeds? the available context',
     'exceeded model token limit',
     'exceeds? (the )?max(imum)? (input |context |prompt |message )?length',
     'range of input length',

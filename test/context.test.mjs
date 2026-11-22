@@ -58,6 +58,7 @@ test('context-full errors: the wordings providers use, and the limit when they n
     'Total message token length exceed model limit (10000000 tokens)',
     'error code: context_length_exceeded',
     '请求的上下文长度超过了模型的最大长度',
+    'request (28174 tokens) exceeds the available context size (16384 tokens), try increasing it',
   ]) assert.match(said, CONTEXT_FULL, said)
   for (const said of ['max_tokens: 65536 > 8192, which is the maximum allowed number of output tokens', 'Rate limit reached', 'invalid api key']) {
     assert.doesNotMatch(said, CONTEXT_FULL, said)
@@ -66,6 +67,7 @@ test('context-full errors: the wordings providers use, and the limit when they n
   assert.equal(limitFromError('prompt is too long: 1000500 tokens > 1000000 maximum'), 1_000_000)
   assert.equal(limitFromError('The input token count (1100000) exceeds the maximum number of tokens allowed (1048576).'), 1_048_576)
   assert.equal(limitFromError('Range of input length should be [1, 991808]'), 991_808)
+  assert.equal(limitFromError('request (28174 tokens) exceeds the available context size (16384 tokens), try increasing it'), 16_384)
   assert.equal(limitFromError('Input token length too long'), 0)
 })
 

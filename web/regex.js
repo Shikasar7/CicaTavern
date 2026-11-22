@@ -627,10 +627,11 @@ export function initRegex({ api, el, toast, guard, saveFile, context, getCards, 
     redraw()
     const where = target ? label(target) : name
     const said = move ? t`已把 ${picked.length} 条移到${where}` : t`已把 ${picked.length} 条复制到${where}`
-    const prompt = picked.some(s => !s.disabled && touchesPrompt(s))
+    // Not `prompt`: that would hide window.prompt for the whole function, and asking a new set's name above threw.
+    const toModel = picked.some(s => !s.disabled && touchesPrompt(s))
     const notes = [said]
     if (target && !live(target)) notes.push(t`这个正则集还没挂到卡上，暂时不生效`)
-    else if (prompt) notes.push(t`会改发给模型的内容，用到的对话下一轮会重新写入一次缓存`)
+    else if (toModel) notes.push(t`会改发给模型的内容，用到的对话下一轮会重新写入一次缓存`)
     toast(notes.join(t`。`), notes.length > 1 ? 6000 : 3000)
   }
 

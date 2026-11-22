@@ -92,6 +92,8 @@ async function filled(root) {
     nodes: { root: { id: 'root', parent: null, role: 'system' }, n1: { id: 'n1', parent: 'root', role: 'assistant', text: '雨', media: { images: [{ file: 'a.png', history: [{ file: 'old.png' }] }] } } },
   })
   await put(root, 'media/chat1/a.png', PNG)
+  await put(root, 'guides/chat1.json', { chatId: 'chat1', model: 'chat', turns: [{ user: { text: '她怎么了？' }, assistant: { text: '在等你。', plans: [] } }] })
+  await put(root, 'guides/orphan.json', { chatId: 'orphan', model: 'chat', turns: [] })
   await put(root, 'media/chat1/old.png', PNG)
   await put(root, 'chats/orphan.json', { id: 'orphan', cardId: 'nocard', title: '没有卡', nodes: { root: { id: 'root' } }, updatedAt: '2026-11-02T00:00:00.000Z' })
   await put(root, 'media/tts/cache.mp3', 'tts')
@@ -188,6 +190,9 @@ test('a fresh device takes everything; references to what did not come are let g
   assert.ok(await has(root, 'cards/card1/scenes/s1.png'))
   assert.ok(await has(root, 'cards/card1/history/h1.png'))
   assert.ok(await has(root, 'media/chat1/old.png'))
+  // 剧情向导's talk goes with its chat; the one of a chat left out stays behind.
+  assert.equal((await read(root, 'guides/chat1.json')).turns[0].assistant.text, '在等你。')
+  assert.ok(!(await has(root, 'guides/orphan.json')))
   assert.ok(await has(root, 'forge/draft1.history/avatar-1.png'))
   // Books and presets were not ticked: the card and chat let go of them.
   assert.deepEqual((await read(root, 'cards/card1/card.json')).worldbookIds, [])

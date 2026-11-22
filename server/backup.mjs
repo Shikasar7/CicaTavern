@@ -140,6 +140,8 @@ export function createBackup(store, { version = '0.0.0', edition = '', platform 
       items.chats.push({ id, title: String(chat.title ?? ''), cardId: String(chat.cardId ?? '') })
       const old = new Set(oldImageFiles(chat))
       await add('chats', `chats/${name}`, { strip: old.size > 0 })
+      // 剧情向导: the talk beside it (guide.mjs).
+      if (await exists(at('guides', name))) await add('chats', `guides/${name}`, { unit: id })
       for (const rel of await walk(at('media', id))) await add(old.has(rel) ? 'history' : 'chats', `media/${id}/${rel}`, { unit: id })
     }
 
@@ -301,7 +303,7 @@ export function createBackup(store, { version = '0.0.0', edition = '', platform 
     }
     if (manifest?.format !== BACKUP_FORMAT) throw Object.assign(new Error('not a backup'), { status: 400, code: 'NOT_BACKUP' })
     if (!(manifest.version <= VERSION)) throw Object.assign(new Error('newer backup'), { status: 400, code: 'NEWER' })
-    const out = { manifest, cards: new Map(), chats: new Map(), media: new Map(), forge: new Map(), books: new Map(), presets: new Map(), presetScripts: new Map(), library: [], ui: new Map(), root: new Map(), unknown: 0 }
+    const out = { manifest, cards: new Map(), chats: new Map(), guides: new Map(), media: new Map(), forge: new Map(), books: new Map(), presets: new Map(), presetScripts: new Map(), library: [], ui: new Map(), root: new Map(), unknown: 0 }
     const push = (map, key, value) => map.set(key, [...(map.get(key) ?? []), value])
     for (const entry of zip.entries) {
       if (entry === manifestEntry) continue
@@ -314,6 +316,7 @@ export function createBackup(store, { version = '0.0.0', edition = '', platform 
       const jsonId = name => (name?.endsWith('.json') && SAFE_ID.test(name.slice(0, -5)) ? name.slice(0, -5) : null)
       if (top === 'cards' && rest.length >= 2 && SAFE_ID.test(rest[0])) push(out.cards, rest[0], [entry, rest.slice(1).join('/')])
       else if (top === 'chats' && rest.length === 1 && jsonId(rest[0])) out.chats.set(jsonId(rest[0]), entry)
+      else if (top === 'guides' && rest.length === 1 && jsonId(rest[0])) out.guides.set(jsonId(rest[0]), entry)
       else if (top === 'media' && rest.length >= 2 && SAFE_ID.test(rest[0]) && !['codex-work', 'tts'].includes(rest[0])) push(out.media, rest[0], [entry, rest.slice(1).join('/')])
       else if (top === 'forge' && rest.length >= 1) {
         // A draft's files share the name before the first dot: <id>.json, <id>.avatar, <id>.history/…; edits/ likewise.
@@ -375,7 +378,7 @@ export function createBackup(store, { version = '0.0.0', edition = '', platform 
         if (name.startsWith('data/cards/')) return /^data\/cards\/[^/]+\/history(\.json|\/)/.test(name) ? 'history' : 'cards'
         if (name.startsWith('data/forge/')) return /\.history\//.test(name) ? 'history' : 'cards'
         if (old.has(name)) return 'history'
-        if (name.startsWith('data/chats/') || name.startsWith('data/media/')) return 'chats'
+        if (name.startsWith('data/chats/') || name.startsWith('data/media/') || name.startsWith('data/guides/')) return 'chats'
         if (name.startsWith('data/worldbooks/')) return 'books'
         if (name.startsWith('data/presets/') || name.startsWith('data/preset-scripts/')) return 'presets'
         if (name.startsWith('data/prompt-library') || /^data\/(regex|regex-sets|personas|persona|styles|blockwords)\.json$/.test(name)) return 'lists'
@@ -727,6 +730,10 @@ export function createBackup(store, { version = '0.0.0', edition = '', platform 
                 else await rm(at('media', id), { recursive: true, force: true })
               }
               await writeJson(target, { ...chat, id })
+              // 剧情向导's talk goes with its chat: one replaced leaves no talk from before it.
+              const guide = sorted.guides.get(id)
+              if (guide) await placeFile(guide, at('guides', `${id}.json`))
+              else if (replace) await rm(at('guides', `${id}.json`), { force: true })
             })
             count(here ? 'replaced' : 'added', 'chats')
           } catch (error) {

@@ -1334,6 +1334,17 @@ export function unzipFirst(buffer) {
 }
 
 /** A pasted persistent token (pst-…): printable, no spaces. */
+/**
+ * Another address for NovelAI's image API (a relay that takes NovelAI's own requests): http(s), without the path the
+ * app adds itself; '' (or the official one) for NovelAI's own.
+ */
+export function cleanNaiUrl(value) {
+  const url = String(value ?? '').trim().replace(/\/+(ai\/generate-image(-stream)?|user\/subscription)\/?$/i, '').replace(/\/+$/, '')
+  if (!url || /^https:\/\/image\.novelai\.net$/i.test(url)) return ''
+  if (!/^https?:\/\/[^\s/?#]+(\/[^\s?#]*)?$/i.test(url)) throw httpError(400, msg`NovelAI 接口地址要写成 http:// 或 https:// 开头的网址`)
+  return url
+}
+
 export function cleanNaiToken(value) {
   const token = String(value ?? '').trim().replace(/^Bearer\s+/i, '')
   if (!/^[!-~]{16,1000}$/.test(token)) throw httpError(400, msg`NovelAI 令牌格式不对：在 NovelAI 网页「设置 → Account → Get Persistent API Token」复制（pst- 开头）`)
@@ -2008,24 +2019,40 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
   // The persistent token lives in its own file, so /api/settings never carries it.
   const naiFile = path.join(store.dirs.root, 'novelai.json')
 
-  async function naiToken() {
+  // With the token, the address it is for: '' for NovelAI's own (a relay's key and its address go together).
+  async function naiSaved() {
     try {
-      return String(JSON.parse(await readFile(naiFile, 'utf8')).token ?? '')
+      const saved = JSON.parse(await readFile(naiFile, 'utf8'))
+      return { token: String(saved.token ?? ''), url: String(saved.url ?? '') }
     } catch {
-      return ''
+      return { token: '', url: '' }
     }
   }
+  const naiToken = async () => (await naiSaved()).token
+  const naiBase = async () => (await naiSaved()).url || naiImageUrl
 
-  /** What the page may know about the token. */
+  async function writeNai({ token, url }) {
+    if (!token && !url) await rm(naiFile, { force: true })
+    else await writeFile(naiFile, JSON.stringify({ ...(token ? { token } : {}), ...(url ? { url } : {}) }), 'utf8')
+  }
+
+  /** What the page may know about the token, and the address it goes to ('' for NovelAI's own). */
   async function naiStatus() {
-    const token = await naiToken()
-    return { hasToken: Boolean(token), tokenHint: token ? `…${token.slice(-4)}` : '' }
+    const { token, url } = await naiSaved()
+    return { hasToken: Boolean(token), tokenHint: token ? `…${token.slice(-4)}` : '', url }
   }
 
   /** Save a pasted token; '' removes it. */
   async function setNaiToken(value) {
-    if (value === '') await rm(naiFile, { force: true })
-    else await writeFile(naiFile, JSON.stringify({ token: cleanNaiToken(value) }), 'utf8')
+    const saved = await naiSaved()
+    await writeNai({ ...saved, token: value === '' ? '' : cleanNaiToken(value) })
+    return naiStatus()
+  }
+
+  /** Where NovelAI's requests go: another address (a relay that takes NovelAI's own requests), or '' for NovelAI's own. */
+  async function setNaiUrl(value) {
+    const saved = await naiSaved()
+    await writeNai({ ...saved, url: cleanNaiUrl(value) })
     return naiStatus()
   }
 
@@ -2041,18 +2068,25 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     return providerError({ name: 'NovelAI' }, error)
   }
 
-  async function naiSubscription(token, timeout = 20000) {
-    const { buffer } = await providerRequest(naiProvider(naiImageUrl, token), '/user/subscription', { method: 'GET', proxy: proxyNow(), signal: AbortSignal.timeout(timeout) })
+  async function naiSubscription(token, timeout = 20000, base = null) {
+    const { buffer } = await providerRequest(naiProvider(base ?? (await naiBase()), token), '/user/subscription', { method: 'GET', proxy: proxyNow(), signal: AbortSignal.timeout(timeout) })
     return naiAccount(JSON.parse(buffer.toString('utf8')))
   }
 
-  /** Subscription tier, Anlas and the V5 allowance, to check a token without drawing anything. */
-  async function naiCheck(typed) {
+  /**
+   * Subscription tier, Anlas and the V5 allowance, to check a token without drawing anything. `typedUrl`: the address
+   * in the box, not yet saved (undefined: the saved one).
+   */
+  async function naiCheck(typed, typedUrl) {
     const token = typed ? cleanNaiToken(typed) : await naiToken()
     if (!token) throw httpError(400, msg`还没填 NovelAI 令牌`)
+    const own = typeof typedUrl === 'string' ? cleanNaiUrl(typedUrl) : (await naiSaved()).url
     try {
-      return await naiSubscription(token)
+      return await naiSubscription(token, 20000, own || naiImageUrl)
     } catch (error) {
+      // Another address: many relays draw but have no account to look up.
+      const status = error?.providerStatus
+      if (own && (status === 404 || status === 405 || status === 501)) throw httpError(502, msg`这个地址查不了订阅和额度（不少中转没有这个接口），画图不受影响：直接画一张试试。`)
       throw httpError(502, naiError(error, ''))
     }
   }
@@ -2107,7 +2141,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
       const body = naiRequest({ model, prompt: positive, negative, width, height, seed, characters, reference })
       const label = `NovelAI · ${model}${reference ? msg` · 人设图：${cast.lead.name}` : ''}`
       try {
-        const { buffer } = await providerRequest(naiProvider(naiImageUrl, token), '/ai/generate-image', { body, signal, proxy: proxyNow() })
+        const { buffer } = await providerRequest(naiProvider(await naiBase(), token), '/ai/generate-image', { body, signal, proxy: proxyNow() })
         return { buffer: unzipFirst(buffer), label, note }
       } catch (error) {
         if (signal?.aborted || error.status) throw error
@@ -2771,5 +2805,5 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     return listen.transcribe({ media, audio: readAudio(audio, type), names: Array.isArray(names) ? names : [] }, signal)
   }
 
-  return { drawDecor, drawOptionPicture, drawFoe, drawSkill, defaults, settings, cleanSettings, ownBackends: ownBackendViews, naiStatus, setNaiToken, naiCheck, cardMediaView, saveCardMedia, inheritCardMedia, draftRoster, draftRosterFromChat, drawPortrait, drawCardArt, drawAvatar, drawScenery, drawBackdrop, drawSprite, drawExpression, drawsFromPicture, settingsFor, labelExpressions, readRosterRef, saveRosterRef, removeRosterRef, writeImagePrompt, generateImage, putImage, readImage, removeImage, removeChatMedia, copyChatMedia, loras, voices: voices.list, personaList: voices.personaList, ttsKeyStatus: voices.ttsKeyStatus, setTtsKey: voices.setTtsKey, voiceKeys: voices.keyStatus, setVoiceKey: voices.setKey, speak, previewVoice, accountVoices, transcribe, loadWorkflow, saveWorkflow, describeWorkflow, purposeWorkflows, comfyModels }
+  return { drawDecor, drawOptionPicture, drawFoe, drawSkill, defaults, settings, cleanSettings, ownBackends: ownBackendViews, naiStatus, setNaiToken, setNaiUrl, naiCheck, cardMediaView, saveCardMedia, inheritCardMedia, draftRoster, draftRosterFromChat, drawPortrait, drawCardArt, drawAvatar, drawScenery, drawBackdrop, drawSprite, drawExpression, drawsFromPicture, settingsFor, labelExpressions, readRosterRef, saveRosterRef, removeRosterRef, writeImagePrompt, generateImage, putImage, readImage, removeImage, removeChatMedia, copyChatMedia, loras, voices: voices.list, personaList: voices.personaList, ttsKeyStatus: voices.ttsKeyStatus, setTtsKey: voices.setTtsKey, voiceKeys: voices.keyStatus, setVoiceKey: voices.setKey, speak, previewVoice, accountVoices, transcribe, loadWorkflow, saveWorkflow, describeWorkflow, purposeWorkflows, comfyModels }
 }

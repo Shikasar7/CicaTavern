@@ -21,6 +21,7 @@ import { imageKind } from './appearance.mjs'
 import { cleanCardMedia } from './media.mjs'
 import { cleanScripts } from './regex.mjs'
 import { isRosterId } from './roster.mjs'
+import { MAX_SKILL_PICTURES } from '../web/shared/game/sheet.js'
 import { readCgs } from './card-cgs.mjs'
 import { httpError, readJsonFile, writeJson } from './store.mjs'
 import { msg } from './i18n.mjs'
@@ -437,7 +438,7 @@ export function createCardPacks(store, { rulebooks, regex, look = null, cgs = nu
     }
 
     if (parts.has('skills')) {
-      for (const [name, picture] of Object.entries(record(manifest.skills)).slice(0, 120)) {
+      for (const [name, picture] of Object.entries(record(manifest.skills)).slice(0, MAX_SKILL_PICTURES)) {
         if (!clip(name, 40) || !FILE.test(picture ?? '')) continue
         const data = await image(`skills/${picture}`, MAX_PICTURE)
         if (!data) continue

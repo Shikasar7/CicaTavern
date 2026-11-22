@@ -75,7 +75,7 @@ test('用户 / AI 助手 entries before the history become the lead messages; af
   const tail = renderPresetTailParts(preset, { card: CARD, persona: PERSONA, names: NAMES, vars: prefix.vars, input: '你好' })
   const parts = { text: '正文后写选项。\n\n（短一点）', system: '正文后写选项。', user: '（短一点）' }
   // Its last entry is a 用户 one: nothing to send as the reply's start.
-  assert.deepEqual(tail, { ...parts, prefill: '', rest: parts })
+  assert.deepEqual(tail, { ...parts, prefill: '', rest: parts, deep: [] })
   assert.equal(renderPresetTail(preset, { card: CARD, persona: PERSONA, names: NAMES, input: '你好' }), tail.text)
 })
 
@@ -184,8 +184,13 @@ test('a per-turn paragraph that sets a variable sets it for the prefix prompts a
 
 test('late worldbook entries go last in the prefix, with a one-line reminder each turn', () => {
   const entry = (comment, content, position) => ({ uid: comment, comment, keys: [], secondaryKeys: [], content, constant: true, enabled: true, order: 10, position, initvar: false })
-  const books = [{ id: 'b', entries: [entry('世界观', '雨城常年下雨。', 0), entry('[mvu_update]变量输出格式', '正文后输出 <UpdateVariable>。', 4)] }]
+  // Author's note bottom (3): late, in the prefix. 聊天中 @深度 (4) goes each turn at its depth, not into a new prefix.
+  const books = [{ id: 'b', entries: [entry('世界观', '雨城常年下雨。', 0), entry('[mvu_update]变量输出格式', '正文后输出 <UpdateVariable>。', 3), entry('深处', '每轮在聊天里。', 4)] }]
   const plain = buildChatPrompt({ card: CARD, persona: PERSONA, settings: {}, books, hasState: false }).systemPrompt
+  assert.doesNotMatch(plain, /每轮在聊天里/)
+  // A chat built before there was @深度 has it in its prefix still, and named in the reminder.
+  assert.match(everyTurnReminder(plain, books, { atDepth: false }), /【深处】/)
+  assert.doesNotMatch(everyTurnReminder(plain, books), /【深处】/)
   assert.ok(plain.indexOf('雨城常年下雨。') < plain.indexOf('## 每轮回复都要遵守'))
   assert.match(plain, /## 每轮回复都要遵守\n【\[mvu_update\]变量输出格式】\n正文后输出 <UpdateVariable>。$/)
   assert.equal(everyTurnReminder(plain, books), '本轮回复同样要遵守系统提示末尾「每轮回复都要遵守」一节的全部要求，包括【[mvu_update]变量输出格式】。')
@@ -285,4 +290,22 @@ test('MVU rules kept in an attached book or the preset mean no <state> protocol 
   assert.doesNotMatch(build([], withRule('style', '每轮结尾输出 <UpdateVariable>。')), protocol)
   // A preset prompt turned off does not count.
   assert.match(build([], withRule('off', '每轮结尾输出 <UpdateVariable>。')), protocol)
+})
+
+test('同酒馆: the preset\'s 聊天中 @深度 entries deeper than 0 go to their depth; the other modes keep them after the history', () => {
+  const preset = normalizePreset({
+    prompts: [
+      { identifier: 'main', role: 'system', content: '你是{{char}}的叙述者。' },
+      { identifier: 'chatHistory', marker: true },
+      { identifier: 'deep', role: 'system', content: '深处的话。', injection_position: 1, injection_depth: 3 },
+      { identifier: 'zero', role: 'system', content: '紧挨着的话。', injection_position: 1, injection_depth: 0 },
+      { identifier: 'rule', role: 'system', content: '正文后写选项。' },
+    ],
+  })
+  const latest = renderPresetTailParts({ ...preset, postMode: 'latest' }, { card: CARD, persona: PERSONA, names: NAMES, input: '你好' })
+  assert.deepEqual(latest.deep, [{ depth: 3, text: '深处的话。' }])
+  assert.equal(latest.text, '紧挨着的话。\n\n正文后写选项。')
+  const kept = renderPresetTailParts({ ...preset, postMode: 'turn' }, { card: CARD, persona: PERSONA, names: NAMES, input: '你好' })
+  assert.deepEqual(kept.deep, [])
+  assert.equal(kept.text, '深处的话。\n\n紧挨着的话。\n\n正文后写选项。')
 })

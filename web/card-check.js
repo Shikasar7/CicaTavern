@@ -31,7 +31,7 @@ const SCENES_NAMED = 6
 const LEVELS = [['error', t`会出错`, t`这些地方现在不起作用。`], ['warn', t`可能有问题`, t`能用，但多半不是作者想要的效果。`], ['tip', t`可以更好`, t`不改也能玩。`]]
 const FOCUS = [['rules', t`玩法和变量`, t`规则打架、变量没写清、和开场白对不上`], ['tokens', t`省上下文`, t`常驻改关键词、重复条目、太宽的关键词`], ['look', t`美化`, t`状态栏显示什么、用什么主题`], ['style', t`文笔`, t`套话和前后矛盾。默认不查，别人的写法不去挑`]]
 const SHOW_TEXT = { meter: t`进度条`, number: t`数字`, rating: t`星级`, text: t`文字`, long: t`长文字`, badge: t`徽章`, tags: t`标签`, list: t`列表`, stats: t`数值表`, table: t`表格`, flag: t`是或否`, map: t`地图`, types: t`克制图`, forms: t`形态链`, hidden: t`不显示` }
-const THEME_TEXT = { plain: t`朴素`, paper: t`纸张`, neon: t`霓虹`, pastel: t`柔和`, ink: t`水墨`, parchment: t`羊皮卷`, gothic: t`暗夜`, terminal: t`终端`, ocean: t`深海`, [OWN_COLORS]: t`按卡配色` }
+const THEME_TEXT = { plain: t`朴素`, editorial: t`文艺杂志`, meadow: t`晴野`, sigil: t`夜曜纹章`, daybreak: t`晨笺`, aquarelle: t`天光云影`, cobalt: t`钴蓝`, afterschool: t`放课后`, lineart: t`线稿`, signal: t`信号`, mercury: t`流银`, redink: t`赤墨`, kaleido: t`万华`, [OWN_COLORS]: t`按卡配色` }
 const BRICK_TEXT = { books: t`册子`, selfcheck: t`写前自查`, events: t`随机事件`, judge: t`裁判表`, world: t`世界动态`, schedule: t`日程`, relations: t`关系网`, routes: t`路线与结局`, creation: t`建角页` }
 // What a Tavern Helper script's absence comes to (server/helper-scripts.mjs).
 const HELPER_EFFECT = { none: t`不受影响`, some: t`部分影响`, lost: t`功能缺失` }
@@ -138,7 +138,8 @@ export function statusEditor(el, change, edit, { spare = [], state = {}, redraw,
   const title = el('input', { value: spec.title ?? '', placeholder: t`标题，可以不写`, 'aria-label': t`状态栏标题`, oninput: () => { spec.title = title.value; drawPreview() } })
   const look = spec.skin ? OWN_SKIN : spec.palette ? OWN_COLORS : spec.theme ?? 'plain'
   const looks = [...STATUS_THEMES, OWN_COLORS, ...(spec.skin ? [OWN_SKIN] : [])]
-  const lookText = name => (name === OWN_SKIN ? (spec.skin.name ? t`定制外观「${spec.skin.name}」` : t`定制外观`) : THEME_TEXT[name] ?? name)
+  const skinText = () => (spec.skin.name ? t`定制外观「${spec.skin.name}」` : t`定制外观`)
+  const lookText = name => (name === OWN_SKIN ? (spec.skin.base ? t`${skinText()} · 叠在${THEME_TEXT[spec.skin.base]}上` : skinText()) : THEME_TEXT[name] ?? name)
   const theme = el('select', { 'aria-label': t`主题`, onchange: () => pickLook(theme.value) }, looks.map(name => el('option', { value: name, selected: look === name, text: lookText(name) })))
   // 版式: how the bar is laid out; the plain one is rows under a title.
   const layout = el('select', { 'aria-label': t`版式`, title: t`状态栏怎么排。卡片式：人放在最前面，页签在底下；侧栏式：数值一直在左边，右边换页；卷轴式：顶上是场景图和题字`, onchange: () => {
@@ -458,16 +459,34 @@ export function tryoutBar(el, edit, { spec, state, key = '', onChange }) {
 // The draft is drawn off screen before it is shown, at a phone's width and a wide one, as the chat starts and with the
 // gauges full, to see what sticks out of the bar or cannot be read; what that finds goes back to the model once.
 
-// Ways a look can go, to start from: picking one writes its words into the box, to be changed like any typed there.
+// 风格: ways a look can go. The chip only picks one ([key, name, what it is in a line]); what it is made of, part by
+// part, is the server's to tell the model (server/forge/skin-styles.mjs). What the user types goes over it.
 const SKIN_STYLES = () => [
-  [t`日系清新`, t`日系清新：浅色的底，低饱和的粉蓝或薄荷色，大圆角，细线，留白多，像一个干净的手机日记应用`],
-  [t`金属光泽`, t`金属光泽：拉丝金属的底，边框有高光和倒角，进度条像抛光的金属条，冷色，硬朗`],
-  [t`日记手帐`, t`日记手帐：米色的纸，淡淡的格线或点阵，像贴上去的和纸胶带和便签，手写感的字体，标题下面一道荧光笔`],
-  [t`像素风`, t`像素风：硬边，不用圆角和模糊，粗的像素边框（用 box-shadow 叠出台阶），等宽字体，颜色不超过六种，进度条分成一格一格`],
-  [t`赛璐璐平涂`, t`莫比斯式的赛璐璐平涂：平涂的色块，纤细均匀的描边，淡而开阔的配色（沙黄、天青、淡紫），用细线排出一点阴影，不用渐变的光泽`],
-  [t`水墨留白`, t`水墨留白：宣纸的底，墨色浓淡，朱红只点一处，竖排感的标题，细而不匀的墨线，大片留白`],
-  [t`赛博霓虹`, t`赛博霓虹：近黑的底，青和品红的霓虹描边带一点辉光，等宽字体，细的扫描线，角上有切角`],
-  [t`童话绘本`, t`童话绘本：暖色的纸，蜡笔和水彩的感觉，圆润的边框像手画的，颜色明快，小装饰用星星和叶子`],
+  ['fresh', t`日系清新`, t`日系清新：浅色的底，低饱和的粉蓝或薄荷色，大圆角，细线，留白多，像一个干净的手机日记应用`],
+  ['metal', t`金属光泽`, t`金属光泽：拉丝金属的底，边框有高光和倒角，进度条像抛光的金属条，冷色，硬朗`],
+  ['journal', t`日记手帐`, t`日记手帐：米色的纸，淡淡的格线或点阵，像贴上去的和纸胶带和便签，手写感的字体，标题下面一道荧光笔`],
+  ['pixel', t`像素风`, t`像素风：硬边，不用圆角和模糊，粗的像素边框（用 box-shadow 叠出台阶），等宽字体，颜色不超过六种，进度条分成一格一格`],
+  ['cel', t`赛璐璐平涂`, t`赛璐璐平涂：平涂的色块，纤细均匀的描边，淡而开阔的配色（沙黄、天青、淡紫），用细线排出一点阴影，不用渐变的光泽`],
+  ['ink', t`水墨留白`, t`水墨留白：宣纸的底，墨色浓淡，朱红只点一处，拉开字距的楷体标题，细而不匀的墨线，大片留白`],
+  ['neon', t`赛博霓虹`, t`赛博霓虹：近黑的底，青和品红的霓虹描边带一点辉光，等宽字体，细的扫描线，角上有切角`],
+  ['storybook', t`童话绘本`, t`童话绘本：暖色的纸，蜡笔和水彩的感觉，圆润的边框像手画的，颜色明快，小装饰用星星和叶子`],
+]
+
+// 起点: where a look starts. A theme stays under it and the model writes only what it changes; from nothing it writes all.
+const SKIN_STARTS = () => [
+  ['', t`从零设计`, t`模型从头写一整套，只按这张卡的气氛和你写的要求`],
+  ['editorial', t`文艺杂志`, t`在文艺杂志上改：留着它的纸、字和星图细线，模型只写要改的地方`],
+  ['meadow', t`晴野`, t`在晴野上改：留着它的手绘线条、圆字和草地，模型只写要改的地方`],
+  ['sigil', t`夜曜纹章`, t`在夜曜纹章上改：留着它的黑曜石、鎏金和魔纹，模型只写要改的地方`],
+  ['daybreak', t`晨笺`, t`在晨笺上改：留着它的晨曦纸面、衬线大字和花体，模型只写要改的地方`],
+  ['aquarelle', t`天光云影`, t`在天光云影上改：留着它的水彩纸、墨线框和会变的天空，模型只写要改的地方`],
+  ['cobalt', t`钴蓝`, t`在钴蓝上改：留着它的单色印刷、蓝色标签和错开的圆盘，模型只写要改的地方`],
+  ['afterschool', t`放课后`, t`在放课后上改：留着它的搪瓷招牌、深蓝菜单底和白边蓝窗，模型只写要改的地方`],
+  ['lineart', t`线稿`, t`在线稿上改：留着它的图框方格纸、细线画的机器人和尺寸线，模型只写要改的地方`],
+  ['signal', t`信号`, t`在信号上改：留着它的近黑底、薄荷绿格子点阵和追踪细线，模型只写要改的地方`],
+  ['mercury', t`流银`, t`在流银上改：留着它流动的镀铬、烟色玻璃面板和水银管，模型只写要改的地方`],
+  ['redink', t`赤墨`, t`在赤墨上改：留着它的黑色块、黑柱、毛笔标题和那一道红，模型只写要改的地方`],
+  ['kaleido', t`万华`, t`在万华上改：留着它的黑底、彩色喷流、镶色的黑玻璃分组和虹彩边框，模型只写要改的地方`],
 ]
 
 const PROBE_WIDTHS = [340, 720]
@@ -668,13 +687,16 @@ function imageLayers(image) {
 /**
  * Whether words stand right on one of the look's pictures: going outwards, the first ground behind them is a picture
  * with no wash over it (a gradient above it in the same background, at least this solid) and no fill nearer the words.
+ * A picture the look drew itself (SVG in its CSS: a paper grain, a ridge of hills, a line of stars) is its ornament, not
+ * one of the card's photographs: words over it are left to the look.
  */
 const WASH = 0.7
+const DRAWN = /^url\(\s*["']?data:image\/svg\+xml/i
 function onPicture(part, bar) {
   for (let node = part; node; node = node.parentElement) {
     const style = getComputedStyle(node)
     const layers = imageLayers(style.backgroundImage || 'none')
-    const picture = layers.findIndex(layer => /^url\(/.test(layer))
+    const picture = layers.findIndex(layer => /^url\(/.test(layer) && !DRAWN.test(layer))
     if (picture >= 0) {
       const washed = layers.slice(0, picture).some(layer => {
         const stops = (layer.match(/rgba?\([^)]*\)/g) ?? []).map(rgbaOf).filter(Boolean)
@@ -783,10 +805,16 @@ export function skinProblems(el, spec, state, more = [], cover = null, art = nul
   return [...found.values()].slice(0, MAX_PROBLEMS)
 }
 
-/** The bar in a look: the three colors and the rules, in place of a theme. */
-function wearing(spec, skin) {
-  const next = { ...spec, palette: skin.palette, skin: { name: skin.name, css: skin.css } }
-  delete next.theme
+/**
+ * The bar in a look: the rules over the theme it starts from (skin.base) with that theme's colors or its own, or, from
+ * nothing, the three colors and the rules in place of a theme.
+ */
+function wearing(spec, skin, decor = null) {
+  const next = { ...spec, skin: { name: skin.name, css: skin.css, ...(decor ? { decor } : {}), ...(skin.base ? { base: skin.base } : {}) } }
+  if (skin.palette) next.palette = skin.palette
+  else delete next.palette
+  if (skin.base) next.theme = skin.base
+  else delete next.theme
   return next
 }
 
@@ -801,7 +829,7 @@ function wearing(spec, skin) {
  *   name (定制外观的图; none for a draft not saved yet), pickDraw: how to draw (web/draw-choice.js), for 画装饰图 }
  */
 export function skinPanel(el, edit, { api, cardId, url = `/api/cards/${cardId}/check/skin`, stopUrl = `/api/cards/${cardId}/check/stop`, state, redraw, kept = '', instant = false, cover = null, busyWords = t`模型正在看这张卡（检查这张卡），等它看完再设计外观。`, pictureCard = cardId, pickDraw = null }) {
-  const look = (edit.look = edit.look ?? ({ data: null, missing: false, wish: '', sending: false, mending: false, checked: '', came: '', problems: [], failure: '' }))
+  const look = (edit.look = edit.look ?? ({ data: null, missing: false, wish: '', style: '', sending: false, mending: false, checked: '', came: '', problems: [], failure: '' }))
   // 定制外观的图: what the card has, for the previews and the check; drawn again once they are known.
   if (look.pictures?.cardId !== pictureCard) look.pictures = pictureCard ? lookPictures(api, pictureCard) : null
   const art = () => look.pictures?.art ?? null
@@ -816,7 +844,7 @@ export function skinPanel(el, edit, { api, cardId, url = `/api/cards/${cardId}/c
   const worn = () => Boolean(draft() && edit.spec.skin?.css === draft().css)
   const asking = () => look.sending || Boolean(look.data?.job)
   // What to work from: the draft on show, or the look the bar already wears.
-  const base = () => draft() ?? (edit.spec.skin ? { name: edit.spec.skin.name ?? '', palette: edit.spec.palette, css: edit.spec.skin.css } : null)
+  const base = () => draft() ?? (edit.spec.skin ? { name: edit.spec.skin.name ?? '', palette: edit.spec.palette, css: edit.spec.skin.css, ...(edit.spec.skin.base ? { base: edit.spec.skin.base } : {}) } : null)
 
   // The parts that change are drawn again in their own places: the box being typed in is left alone.
   const draftSlot = el('div', {})
@@ -828,23 +856,44 @@ export function skinPanel(el, edit, { api, cardId, url = `/api/cards/${cardId}/c
     drawActions()
   } })
   wish.value = look.wish
-  const styles = el('div', { class: 'cc-skin-styles', role: 'group', 'aria-label': t`风格` }, [
-    el('span', { class: 'hint', text: t`风格：` }),
-    ...SKIN_STYLES().map(([name, words]) => el('button', { type: 'button', class: 'chip-pick', text: name, title: words, onclick: () => {
-      // The style's line goes first, in place of another style's; what the user typed stays under it.
-      const styles = SKIN_STYLES().map(([, line]) => line)
-      const typed = look.wish.split('\n').map(line => line.trim()).filter(line => line && !styles.includes(line))
-      wish.value = look.wish = [words, ...typed].join('\n')
+  // 风格: one picked stays marked (picked again: none); what it is, in a line, under the chips.
+  const styles = el('div', { class: 'cc-skin-styles', role: 'group', 'aria-label': t`风格` })
+  const styleNote = el('p', { class: 'hint cc-skin-style-note', hidden: true })
+  const drawStyles = () => {
+    const picked = SKIN_STYLES().find(([key]) => key === look.style)
+    styles.replaceChildren(
+      el('span', { class: 'hint', text: t`风格：` }),
+      ...SKIN_STYLES().map(([key, name, words]) => el('button', { type: 'button', class: 'chip-pick', 'aria-pressed': String(look.style === key), text: name, title: words, onclick: () => {
+        look.style = look.style === key ? '' : key
+        drawStyles()
+        drawActions()
+      } })),
+    )
+    styleNote.hidden = !picked
+    styleNote.textContent = picked ? t`${picked[2]}。模型会拿到这种风格的详细做法（底、配色、边框、字、进度条、标签、变化时的反应），下面自己写的要求优先。再点一次取消。` : ''
+  }
+  drawStyles()
+  // 起点: a theme to go over (the theme stays under the look, the model writes what it changes), or nothing. Till one
+  // is picked: the theme the look worn now goes over, else the bar's theme.
+  if (look.start === undefined) look.start = edit.spec.skin ? edit.spec.skin.base ?? '' : STATUS_THEMES.includes(edit.spec.theme) && edit.spec.theme !== 'plain' ? edit.spec.theme : ''
+  const starts = el('div', { class: 'cc-skin-styles cc-skin-starts', role: 'group', 'aria-label': t`起点` })
+  const drawStarts = () => starts.replaceChildren(
+    el('span', { class: 'hint', text: t`起点：` }),
+    ...SKIN_STARTS().map(([key, name, words]) => el('button', { type: 'button', class: 'chip-pick', 'aria-pressed': String(look.start === key), text: name, title: words, onclick: () => {
+      look.start = key
+      drawStarts()
       drawActions()
-      wish.focus()
     } })),
-  ])
+  )
+  drawStarts()
   const decorSlot = el('div', {})
   const box = (look.box = el('div', { class: 'cc-skin', hidden: true }, [
     el('p', { class: 'cc-skin-head' }, [el('strong', { text: t`定制外观` }), el('small', { class: 'hint', text: t`让模型按这张卡的气氛给状态栏写一套样子：边框、纹饰、字体、进度条，也能用上这张卡自己的图（场景、立绘、头像）和下面画的装饰图。状态栏还是程序画的，变量照常显示。` })]),
     draftSlot,
     decorSlot,
+    starts,
     styles,
+    styleNote,
     wish,
     hint,
     actions,
@@ -875,7 +924,7 @@ export function skinPanel(el, edit, { api, cardId, url = `/api/cards/${cardId}/c
     if (draft() && !data.job) look.came = draft().at
     const mend = fresh && look.mending && look.problems.length > 0 && !draft().fixed
     if (fresh) look.mending = false
-    if (mend) send({ previous: draft(), problems: look.problems })
+    if (mend) send({ previous: draft(), problems: look.problems, base: draft().base ?? '' })
   }
 
   function poll() {
@@ -896,7 +945,7 @@ export function skinPanel(el, edit, { api, cardId, url = `/api/cards/${cardId}/c
     look.failure = ''
     look.draw()
     try {
-      take(await api(url, { method: 'POST', body: { spec: edit.spec, ...body } }))
+      take(await api(url, { method: 'POST', body: { spec: edit.spec, base: look.start, ...body } }))
     } catch (error) {
       look.failure = error.message
       look.mending = false
@@ -909,7 +958,7 @@ export function skinPanel(el, edit, { api, cardId, url = `/api/cards/${cardId}/c
   /** A new look, asked for by the user: one that draws badly is sent back once by itself. */
   function ask(previous) {
     look.mending = true
-    send({ wish: look.wish.trim(), previous })
+    send({ wish: look.wish.trim(), style: look.style, previous })
   }
 
   async function stop() {
@@ -927,11 +976,11 @@ export function skinPanel(el, edit, { api, cardId, url = `/api/cards/${cardId}/c
   function wear() {
     const skin = draft()
     // 画装饰图's prompts go with the look (a redesign that wrote none keeps the ones there were).
-    const decor = skin.decor ?? edit.spec.skin?.decor
-    Object.assign(edit.spec, { palette: skin.palette, skin: { name: skin.name, css: skin.css, ...(decor ? { decor } : {}) } })
+    const next = wearing(edit.spec, skin, skin.decor ?? edit.spec.skin?.decor)
+    for (const key of Object.keys(edit.spec)) if (!(key in next)) delete edit.spec[key]
+    Object.assign(edit.spec, next)
     // The 动效 the model picked for this look comes with it (it can be changed after).
     if (skin.effect) edit.spec.effect = skin.effect
-    delete edit.spec.theme
     redraw()
   }
 
@@ -944,7 +993,7 @@ export function skinPanel(el, edit, { api, cardId, url = `/api/cards/${cardId}/c
   function draftBlock(skin) {
     const shown = cleanStatusSpec(wearing(edit.spec, skin))
     const bar = shown && statusBar(el, shown, triedState(edit, state), { collapsible: false, remembers: false, note: triedNote(edit), art: art() })
-    const cut = { url: t`要加载的图片或字体`, import: t`@import 和 @font-face`, fixed: t`固定在屏幕上的层`, long: t`超出长度的最后几条规则（可以写上「精简一些」再让它改）` }
+    const cut = { url: t`要加载的图片和字体，或用了程序不留的写法的小图`, import: t`@import 和 @font-face`, fixed: t`固定在屏幕上的层`, long: t`超出长度的最后几条规则（可以写上「精简一些」再让它改）` }
     return el('div', { class: 'cc-skin-draft' }, [
       el('p', { class: 'cc-skin-name' }, [el('strong', { text: skin.name ? t`「${skin.name}」` : t`新的外观` }), el('small', { class: 'hint', text: skin.model })]),
       skin.reply ? el('p', { class: 'hint', text: skin.reply }) : null,
@@ -960,7 +1009,7 @@ export function skinPanel(el, edit, { api, cardId, url = `/api/cards/${cardId}/c
       el('div', { class: 'cc-actions' }, [
         el('button', { type: 'button', class: 'btn ghost small', disabled: asking(), text: t`不要了`, title: t`丢掉这一版，卡里什么都不变`, onclick: () => drop() }),
         el('span', { class: 'grow' }),
-        look.problems.length ? el('button', { type: 'button', class: 'btn small', disabled: asking() || look.data.busy, text: t`让模型修这几处`, onclick: () => send({ previous: skin, problems: look.problems }) }) : null,
+        look.problems.length ? el('button', { type: 'button', class: 'btn small', disabled: asking() || look.data.busy, text: t`让模型修这几处`, onclick: () => send({ previous: skin, problems: look.problems, base: skin.base ?? '' }) }) : null,
         el('button', { type: 'button', class: 'btn primary small', text: t`用这套外观`, title: instant ? t`用在这张卡的状态栏上` : t`换到上面的预览里；点「保存」才写进卡`, onclick: () => wear() }),
       ]),
     ])
@@ -969,7 +1018,8 @@ export function skinPanel(el, edit, { api, cardId, url = `/api/cards/${cardId}/c
   /** The buttons, or what the model is doing. */
   function drawActions() {
     const { job, busy, estimate } = look.data
-    const from = base()
+    // A look to work from is one on the 起点 picked: another 起点 starts anew.
+    const from = base() && (base().base ?? '') === look.start ? base() : null
     const off = asking() || busy || !estimate.ready
     if (look.sending) return actions.replaceChildren(el('div', { class: 'forge-working' }, [el('span', { class: 'dots' }), el('span', { text: t`正在发给模型…` })]))
     if (job) {
@@ -977,11 +1027,16 @@ export function skinPanel(el, edit, { api, cardId, url = `/api/cards/${cardId}/c
       return actions.replaceChildren(el('div', { class: 'cc-running' }, [el('div', { class: 'forge-working' }, [el('span', { class: 'dots' }), el('span', { text: words })]), el('button', { type: 'button', class: 'btn small', text: t`停下`, onclick: () => stop() })]))
     }
     return actions.replaceChildren(el('div', { class: 'cc-actions' }, [
-      edit.spec.skin ? el('button', { type: 'button', class: 'btn ghost small', text: t`去掉定制外观`, title: t`状态栏回到三个颜色的样子；这套外观不再用`, onclick: () => { delete edit.spec.skin; redraw() } }) : null,
+      edit.spec.skin ? el('button', { type: 'button', class: 'btn ghost small', text: t`去掉定制外观`, title: edit.spec.skin.base ? t`状态栏回到「${THEME_TEXT[edit.spec.skin.base]}」原来的样子；这套外观不再用` : t`状态栏回到三个颜色的样子；这套外观不再用`, onclick: () => {
+        // Over a theme, the theme stays as it was, in its own colors.
+        if (edit.spec.skin.base) delete edit.spec.palette
+        delete edit.spec.skin
+        redraw()
+      } }) : null,
       el('span', { class: 'grow' }),
-      from ? el('button', { type: 'button', class: 'btn small', disabled: off || !look.wish.trim(), text: t`照这个改`, title: t`在现在这一套的基础上，按上面写的改`, onclick: () => ask(from) }) : null,
-      // With nothing written, another one unlike this; with a wish, one made from the wish alone.
-      el('button', { type: 'button', class: `btn small${from ? '' : ' primary'}`, disabled: off, text: from ? t`另设计一套` : t`让模型设计`, onclick: () => ask(from && !look.wish.trim() ? from : null) }),
+      from ? el('button', { type: 'button', class: 'btn small', disabled: off || !(look.wish.trim() || look.style), text: t`照这个改`, title: t`在现在这一套的基础上，按上面写的和选的风格改`, onclick: () => ask(from) }) : null,
+      // With nothing written or picked, another one unlike this; with a wish or a style, one made from that alone.
+      el('button', { type: 'button', class: `btn small${from ? '' : ' primary'}`, disabled: off, text: from ? t`另设计一套` : look.start ? t`在「${THEME_TEXT[look.start]}」上设计` : t`让模型设计`, onclick: () => ask(from && !look.wish.trim() && !look.style ? from : null) }),
     ]))
   }
 

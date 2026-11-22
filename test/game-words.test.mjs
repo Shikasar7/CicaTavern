@@ -15,7 +15,7 @@ test('a card\'s words are kept as given: what is the default, empty or unknown g
   assert.deepEqual(odd.words, { life: '生命值是很长的叫' })
   assert.deepEqual(cleanRulebook({}).words, {})
   assert.equal(wordFor(BOOK, 'life'), 'HP')
-  assert.equal(wordFor(BOOK, 'bag'), '行囊')
+  assert.equal(wordFor(BOOK, 'bag'), '背包')
 })
 
 test('a roll by the card\'s name for an attribute is a roll of that attribute', () => {

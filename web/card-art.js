@@ -120,11 +120,19 @@ export function initCardArt({ api, onLoaded }) {
       if (file) return { src: `/api/sprites/${card.id}/${file}`, zoom: true }
       return entry.ref ? { src: `/api/cards/${card.id}/roster/${entry.id}/ref`, zoom: false } : null
     }
+    // A creature (or a 形态) with no one in the roster for it: its picture in the 敌人图鉴, where it has one. A card with
+    // many creatures keeps them there, the roster having room for a cast, not for every form of every pet.
+    const bestiary = name => {
+      const file = name && book?.foes?.[name]?.file
+      return file ? { src: `/api/foes/${card.id}/${file}`, zoom: false } : null
+    }
     // One who changes 形态 shows as the form its row says it is in, where that form has a picture of its own.
     const face = (name, words = []) => {
       const grown = chainOf(book, name)
       const form = grown ? grown.chain[formIndex(grown.chain, [name, ...words])] : null
-      return (form && pictured(data.roster.find(entry => namesOf(entry).includes(form.name.toLowerCase())))) || pictured(entryOf(name)) || (grown ? pictured(entryOf(grown.owner)) : null)
+      return (form && (pictured(data.roster.find(entry => namesOf(entry).includes(form.name.toLowerCase()))) || bestiary(form.name)))
+        || pictured(entryOf(name)) || bestiary(name)
+        || (grown ? pictured(entryOf(grown.owner)) || bestiary(grown.owner) : null)
     }
     const map = data.scenes.find(scene => scene.file && MAP_NAME.test(String(scene.name ?? '').trim()))
     const beats = book?.types && Object.keys(book.types).length > 1 ? book.types : null
@@ -178,7 +186,7 @@ export function initCardArt({ api, onLoaded }) {
     return { backdrop: scene?.src ?? avatar, soft: !scene, portrait: portrait?.src ?? '', zoom: portrait?.zoom === true, ...look }
   }
 
-  /** A face for a name on this card (as a bar's: extras), for what is drawn outside a bar (行囊); null while the pictures are asked for. */
+  /** A face for a name on this card (as a bar's: extras), for what is drawn outside a bar (游戏菜单); null while the pictures are asked for. */
   function faces(card, chat, book = null) {
     const data = card?.id ? of(card.id) : null
     return data ? extras(card, data, chat, book).face : null

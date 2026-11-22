@@ -1,5 +1,5 @@
 // 图库 (角色卡 list → 图库): every picture of every card and chat (server/gallery.mjs), to look through, pick and
-// export as a zip. Also the picker for a reply's picture (选图, web/media.js): one picture, or one of the player's
+// export as a zip, or delete. Also the picker for a reply's picture (选图, web/media.js): one picture, or one of the player's
 // own files. web/app.js loads this file when the window is first opened, so a server started before the file
 // existed still serves the page.
 import { t } from '/i18n.js'
@@ -9,20 +9,22 @@ const KIND_NAMES = () => ({ reply: t`配图和CG`, scene: t`背景`, sprite: t`�
 // 立绘: each character's 立绘 first, then the expressions in this order.
 const FACES = ['neutral', 'smile', 'happy', 'shy', 'angry', 'sad', 'surprised', 'thinking']
 const FACE_NAMES = () => ({ neutral: t`立绘`, smile: t`微笑`, happy: t`开心`, shy: t`害羞`, angry: t`生气`, sad: t`难过`, surprised: t`惊讶`, thinking: t`思考` })
+const ICON_ZOOM = '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5"/><path d="m12.2 12.2 4.3 4.3M8.5 6.3v4.4M6.3 8.5h4.4"/></svg>'
 // Shown at first, then more on asking: a few thousand pictures would be a slow page.
 const PAGE = 240
 
 let dialog = null
 
 /**
- * @param deps - { api, el, toast, guard, download(path, name, mime) }
+ * @param deps - { api, el, toast, guard, download(path, name, mime), viewPicture(src, caption, meta, options): the image
+ *   viewer (web/media.js), for a picture's 看大图 }
  * @param options.cardId - the card to show at first ('' = all).
  * @param options.pick - 选图: one picture is picked, or a file of the player's own uploaded; resolves to
  *   { gallery: its id } or { image: a data URL } once the window closes, or null when nothing was chosen.
  */
-export async function openGallery({ api, el, toast, guard, download }, { cardId = '', pick = false } = {}) {
+export async function openGallery({ api, el, toast, guard, download, viewPicture = null }, { cardId = '', pick = false } = {}) {
   dialog = dialog ?? document.body.appendChild(el('dialog', { class: 'dialog wide gallery', 'aria-label': t`图库` }))
-  const { items } = await api('/api/gallery')
+  let { items } = await api('/api/gallery')
   const picked = new Set()
   const filter = { card: items.some(item => item.cardId === cardId) ? cardId : '', kind: '', query: '' }
   let shown = PAGE
@@ -50,6 +52,7 @@ export async function openGallery({ api, el, toast, guard, download }, { cardId 
     draw()
   } })
   const exportButton = el('button', { type: 'button', class: 'btn primary', text: t`导出所选` })
+  const deleteButton = el('button', { type: 'button', class: 'btn danger', text: t`删除所选` })
   const selectAll = el('button', { type: 'button', class: 'btn ghost', text: t`全选` })
   const clear = el('button', { type: 'button', class: 'btn ghost', text: t`取消选择` })
 
@@ -61,7 +64,7 @@ export async function openGallery({ api, el, toast, guard, download }, { cardId 
 
   const label = item => [KIND_NAMES()[item.kind], item.name || item.chatTitle, item.at ? new Date(item.at).toLocaleDateString() : ''].filter(Boolean).join(' · ')
 
-  /** One picture to pick: a click picks it or lets it go. */
+  /** One picture to pick: a click picks it or lets it go; its magnifier (top left) shows it full size. */
   function tile(item, list, text = label(item)) {
     const box = el('button', { type: 'button', class: `gallery-item${picked.has(item.id) ? ' picked' : ''}`, title: [label(item), item.prompt].filter(Boolean).join('\n'), 'aria-pressed': String(picked.has(item.id)) }, [
       el('img', { src: item.src, alt: '', loading: 'lazy', decoding: 'async' }),
@@ -82,7 +85,10 @@ export async function openGallery({ api, el, toast, guard, download }, { cardId 
       box.setAttribute('aria-pressed', String(picked.has(item.id)))
       drawCount(list)
     })
-    return box
+    if (!viewPicture) return box
+    const zoom = el('button', { type: 'button', class: 'gallery-zoom', title: t`看大图`, 'aria-label': t`看「${text}」的大图`, html: ICON_ZOOM })
+    zoom.addEventListener('click', () => viewPicture(item.src, item.prompt || [item.cardName, item.name || item.chatTitle].filter(Boolean).join(' · '), label(item), { cutout: item.kind === 'sprite' }))
+    return el('div', { class: 'gallery-cell' }, [box, zoom])
   }
 
   /** The 立绘 and expressions by character: [{ key, cardName, who, items }], by card, then name. */
@@ -186,6 +192,7 @@ export async function openGallery({ api, el, toast, guard, download }, { cardId 
     count.textContent = t`列出 ${list.length} 张，已选 ${picked.size} 张`
     exportButton.disabled = !picked.size
     exportButton.textContent = picked.size ? t`导出所选（${picked.size}）` : t`导出所选`
+    deleteButton.disabled = !picked.size
   }
 
   cardPick.onchange = () => {
@@ -216,6 +223,31 @@ export async function openGallery({ api, el, toast, guard, download }, { cardId 
     }
   })
 
+  // 删除所选: gone from where each lives (the reply, the card's backgrounds, 立绘, CG), asked once.
+  deleteButton.onclick = guard(async () => {
+    if (!picked.size) return
+    const chosenItems = items.filter(item => picked.has(item.id))
+    const kinds = [...new Set(chosenItems.map(item => KIND_NAMES()[item.kind]))].join(t`、`)
+    const base = chosenItems.some(item => item.kind === 'sprite' && item.face === 'neutral') ? t`删掉立绘本身后，表情还在，要的话一起选上。` : ''
+    if (!confirm(t`删除选中的 ${picked.size} 张图（${kinds}）？删了找不回来：对话里的配图、卡的背景、立绘和 CG 都会跟着没了。${base}`)) return
+    deleteButton.disabled = true
+    try {
+      const { removed, missing } = await api('/api/gallery/delete', { method: 'POST', body: { ids: [...picked] } })
+      toast(missing ? t`删了 ${removed} 张，${missing} 张已经不在了` : t`删了 ${removed} 张`, 5000)
+      picked.clear()
+      ;({ items } = await api('/api/gallery'))
+      // The counts in the card list follow.
+      for (const option of cardPick.options) {
+        const many = option.value ? items.filter(item => item.cardId === option.value).length : items.length
+        const name = option.value ? cards.find(([id]) => id === option.value)?.[1] ?? '' : ''
+        option.textContent = option.value ? t`${name}（${many}）` : t`全部卡（${many} 张）`
+      }
+      draw()
+    } finally {
+      drawCount()
+    }
+  })
+
   // 选图: what was chosen, handed back as the window closes.
   let chosen = null
   const use = el('button', { type: 'button', class: 'btn primary', text: t`用这张`, disabled: true, onclick: () => {
@@ -235,12 +267,12 @@ export async function openGallery({ api, el, toast, guard, download }, { cardId 
   }) })
   const buttons = pick
     ? [upload, el('button', { class: 'btn', value: 'cancel', text: t`取消` }), use]
-    : [selectAll, clear, exportButton, el('button', { class: 'btn', value: 'cancel', text: t`关闭` })]
+    : [selectAll, clear, deleteButton, exportButton, el('button', { class: 'btn', value: 'cancel', text: t`关闭` })]
 
   dialog.replaceChildren(el('form', { method: 'dialog' }, [
     el('div', { class: 'library-head' }, pick
       ? [el('h2', { text: t`选一张配图` }), el('p', { class: 'muted small', text: t`从画过、传过的图里选一张当这段的配图（每轮的配图、背景、立绘、卡的 CG），也可以上传本地图片。点一张选中，再点「用这张」。` })]
-      : [el('h2', { text: t`图库` }), el('p', { class: 'muted small', text: t`所有卡和对话里画过、传过的图：每轮的配图和 CG、背景、立绘和表情、卡的 CG。点图选中，选好后导出成一个压缩包，按卡和种类分好文件夹。` })]),
+      : [el('h2', { text: t`图库` }), el('p', { class: 'muted small', text: t`所有卡和对话里画过、传过的图：每轮的配图和 CG、背景、立绘和表情、卡的 CG。点图选中，选好后导出成一个压缩包（按卡和种类分好文件夹），或者删掉。` })]),
     el('div', { class: 'library-tools gallery-tools' }, [cardPick, query, el('div', { class: 'seg', role: 'group', 'aria-label': t`种类` }, kindButtons), el('span', { class: 'row gallery-fold' }, [openAll, closeAll])]),
     grid,
     spriteList,

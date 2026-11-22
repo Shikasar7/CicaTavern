@@ -662,7 +662,7 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
           depthField,
         ]),
         el('p', { class: 'prompt-note', text: t`角色：这条以谁的身份发给模型。「聊天记录」上面的：「系统」写进系统提示；「用户」「AI 助手」和 SillyTavern 一样，作为单独的消息排在聊天记录前面（开局写好，缓存照样命中），对话要点「应用到当前对话」才用上。「聊天记录」下面的（选「同酒馆」时）：用 Anthropic 官方接口的较新 Claude 模型，「系统」条目作为单独的系统消息跟在你这条消息后面；其他情况都附在你这条消息后面。现在的 Claude 模型不接受以「AI 助手」结尾的请求（预填），所以末尾的「AI 助手」条目也按文字附上。` }),
-        el('p', { class: 'prompt-note', text: t`位置：「相对」按列表里的顺序摆：在「聊天记录」上面的，开局写进固定前缀；在下面的，按上方「聊天记录之后的条目」的选法发送。「聊天中 @深度」在 SillyTavern 里是插进聊天记录、离最新一条消息 N 条的地方（0 就是紧挨着最新一条）；CicaTavern 不管它在列表哪里，都当作聊天记录之后的条目，深度大的排在前面。` }),
+        el('p', { class: 'prompt-note', text: t`位置：「相对」按列表里的顺序摆：在「聊天记录」上面的，开局写进固定前缀；在下面的，按上方「聊天记录之后的条目」的选法发送。「聊天中 @深度」插进聊天记录、离最新一条消息 N 条的地方（0 就是紧挨着最新一条），你说的话和 AI 的回复各算一条：选「同酒馆」时和 SillyTavern 一样，每轮插在那里、旧的拿掉；选「放进前缀」或「每轮都留」时，都当作聊天记录之后的条目，深度大的排在前面。` }),
         area,
         el('div', { class: 'prompt-actions' }, [
           el('button', { type: 'button', class: 'btn small ghost', text: t`↑ 上移`, disabled: index <= 0, onclick: guard(() => move(p.id, -1)) }),

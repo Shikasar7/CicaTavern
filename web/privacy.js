@@ -8,12 +8,13 @@ import { t } from '/i18n.js'
 /** What CicaTavern connects to, for the notice and the settings page. */
 export function connectionList(el, { updates }) {
   return el('ul', { class: 'privacy-list' }, [
-    el('li', { text: t`你自己添加的模型供应商、画图和朗读服务：只在你配置之后才连，发过去的是对话内容和相关设置。` }),
-    updates ? el('li', { text: t`检查更新：每天最多一次访问 GitHub（api.github.com）；GitHub 没有及时回应时也问国内镜像 cnb.cool（腾讯）。只发送版本号（对方能看到你的 IP 地址）。` }) : null,
+    el('li', { text: t`你自己添加的模型供应商、画图和朗读服务：只在你配置之后才连，发过去的是对话内容和相关设置，只发送给你填的供应商。` }),
+    updates ? el('li', { text: t`检查更新：每天最多一次访问 GitHub（api.github.com）；GitHub 没有及时回应时也问国内镜像 cnb.cool（腾讯）。只发送版本号。` }) : null,
     el('li', { text: t`正文字体：从 Google Fonts 加载思源宋体。关掉后用系统自带的字体。` }),
     el('li', { text: t`酒馆助手脚本库：为酒馆助手做的角色卡界面（状态栏等）用到 jQuery、Vue、Tailwind 等时，从 jsDelivr 等公共 CDN 加载。关掉后这类界面可能显示不全。` }),
     el('li', { text: t`角色卡和预设里的网页内容，可能从卡片作者写的网址加载图片或字体。` }),
     el('li', { text: t`不收集使用数据，也不发给开发者。数据只存在你的设备上。` }),
+    el('li', { text: t`本应用无任何商业化推广。模型推荐使用各官方供应商渠道。` }),
   ])
 }
 

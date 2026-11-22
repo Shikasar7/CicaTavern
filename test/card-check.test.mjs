@@ -196,11 +196,11 @@ test('a layout changed again keeps its SillyTavern copy in step', () => {
   const card = cardOf({ entries: [INIT, RULE], scripts: [HIDE] })
   applyFinding(card, one(checkCard(card), 'status-none'))
   const before = card.regexScripts.find(item => item.id === 'cicatavern-status-bar').replaceString
-  const spec = { ...card.statusBar, theme: 'neon' }
+  const spec = { ...card.statusBar, theme: 'sigil' }
   applyFinding(card, { changes: [{ id: 'statusBar', kind: 'statusBar', spec }] })
   const after = card.regexScripts.find(item => item.id === 'cicatavern-status-bar').replaceString
   assert.notEqual(after, before)
-  assert.match(after, /theme-neon/)
+  assert.match(after, /theme-sigil/)
 })
 
 test('written over by hand: what is checked, and what cannot go in', () => {
@@ -331,7 +331,7 @@ test('reading a suggestion: patches, keywords, a status bar; what it may not wri
     '<suggestion title="世界观改关键词" why="只在提到旧城时才用"><entry uid="2" mode="keyword" keys="旧城, 雨夜"></entry></suggestion>',
     '<suggestion title="开场白点题"><patch target="greeting:1"><old>她说</old><new>青禾说</new></patch></suggestion>',
     '<suggestion title="改没发全文的条目"><entry uid="4">整条重写</entry></suggestion>',
-    '<suggestion title="状态栏"><status_bar>{"theme": "paper", "fields": [{"path": "好感度", "label": "好感", "show": "meter", "min": 0, "max": 100}]}</status_bar></suggestion>',
+    '<suggestion title="状态栏"><status_bar>{"theme": "editorial", "fields": [{"path": "好感度", "label": "好感", "show": "meter", "min": 0, "max": 100}]}</status_bar></suggestion>',
     `<suggestion title="重写美化"><regex id="a"><replace>${'<div style="x">'.repeat(40)}</replace></regex></suggestion>`,
     '<suggestion title="改查找"><regex id="a"><find>/乙/g</find></regex></suggestion>',
     '<suggestion title="原文对不上"><patch target="entry:3"><old>没有这句</old><new>x</new></patch></suggestion>',
@@ -350,7 +350,7 @@ test('reading a suggestion: patches, keywords, a status bar; what it may not wri
   assert.deepEqual([mode.mode, mode.keys, mode.after], ['keyword', ['旧城', '雨夜'], '旧城只在雨夜开门。'])
   assert.equal(byTitle['开场白点题'].changes[0].after, '「又下雨了。」青禾说。')
   assert.deepEqual(byTitle['改没发全文的条目'].changes, [], 'not read in full, not rewritten')
-  assert.equal(byTitle['状态栏'].changes[0].spec.theme, 'paper')
+  assert.equal(byTitle['状态栏'].changes[0].spec.theme, 'editorial')
   assert.equal(byTitle['状态栏'].changes[0].scripts, true)
   assert.deepEqual(byTitle['重写美化'].changes, [], 'a whole look is not a model\'s to write')
   assert.equal(byTitle['改查找'].changes[0].findAfter, '/乙/g')

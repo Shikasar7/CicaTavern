@@ -6,11 +6,14 @@
 import { EFFECTS, MAX_SKIN, cleanDecor, cleanEffect, cleanPalette, cleanSkinCss, phoneApps, skinCut, statusGroups, statusPages, onPage } from '../../web/shared/status.js'
 import { attr } from './blocks.mjs'
 import { looseJson, section } from './prompts.mjs'
+import { cleanStyle, styleBlock, styleName } from './skin-styles.mjs'
+import { themeRules } from './status-frame.mjs'
 
-// The answer, thinking included: the rules are a few thousand tokens, a model that thinks first as much again.
-export const SKIN_TOKENS = 20000
-/** What an answer comes to, for the estimate before anything is sent (real ones: 7 000 with a cover to dress). */
-export const SKIN_OUTPUT = 7500
+// The answer, thinking included: the rules and the pictures drawn in them are many thousand tokens, a model that thinks
+// first as much again.
+export const SKIN_TOKENS = 32000
+/** What an answer comes to, for the estimate before anything is sent (real ones: 7 000 with a cover to dress, more with pictures). */
+export const SKIN_OUTPUT = 11000
 const MAX_WISH = 600
 const MAX_PROBLEMS = 12
 const MAX_ROWS = 60
@@ -75,9 +78,17 @@ const skinSystem = reply => `你给一张角色卡的状态栏设计外观。状
 --surface 背景，--ink 文字，--accent 强调，--muted 次要的字，--faint 更淡的字，--line-soft 细线，--meter-track 进度条的底，--accent-soft 强调色的淡底，--ok 和 --bad 是「是」和增减用的绿和红。
 另外要用的颜色可以直接写，但每一处的字和它的底色要分得清。
 
-能用的：边框、圆角、阴影、渐变背景、字体（只用系统里常见的字体族，写上后备）、字距、间距、分隔线、::before 和 ::after 里用 content 加的符号和纹饰、进度条、标签、徽章、表格的样子、按 [data-label="…"] 给某一项单独的颜色、hover 和过渡、克制的 @keyframes 动画、@media (max-width: 480px) 里给窄屏的小调整（字号、间距；列数不要靠它）。
+能用的：边框、圆角、阴影、渐变背景、字体（只用系统里常见的字体族，写上后备）、字距、间距、分隔线、::before 和 ::after 里用 content 加的符号和纹饰、进度条、标签、徽章、表格的样子、按 [data-label="…"] 给某一项单独的颜色、hover 和过渡、克制的 @keyframes 动画、mask-image、mix-blend-mode、clip-path、@media (max-width: 480px) 里给窄屏的小调整（字号、间距；列数不要靠它），还有下面说的画图和鼠标。
 
-写了会被程序去掉的：url() 和一切要加载的图片、字体，@import，@font-face，position: fixed 和 sticky，!important，规则里再套规则，html、body、:root 和状态栏以外的东西。
+画图：CSS 里可以直接写 SVG 小图，渐变拼不出来的东西靠它画：远山、太阳、笔触、仪表、城市剪影、像素小人、花草、印章、角花。一套好看的外观通常有一幅招牌画面（标题区或状态栏一角的一幅小画）加两三样小纹饰。
+- 写法：url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>…</svg>")。整段在双引号里，SVG 里的属性用单引号；# 一律写成 %23（颜色 %23e1111c，引用 url(%23g)）。可以和渐变叠在同一个 background 里，也能用在 mask-image、border-image-source、list-style-image 和 ::before、::after 上。
+- 能用的元素：svg、g、defs、symbol、use（只引用这张图里的 #id）、path、rect、circle、ellipse、line、polyline、polygon、text、tspan、linearGradient、radialGradient、stop、pattern、clipPath、mask、marker、filter，滤镜 feTurbulence、feDisplacementMap、feGaussianBlur、feColorMatrix、feComponentTransfer（feFuncR、feFuncG、feFuncB、feFuncA）、feComposite、feBlend、feMerge、feMergeNode、feOffset、feFlood、feMorphology、feDropShadow、feSpecularLighting、feDiffuseLighting 和光源。feTurbulence 加 feDisplacementMap 能做纸纹、墨晕、毛边、手抖的线、拉丝金属；feGaussianBlur 加 feMerge 能做辉光。
+- 写了整张图会被去掉的：image、foreignObject、script、a、style 元素、动画元素、CDATA 和 DOCTYPE；style 属性和 on 开头的属性会被删掉，颜色和描边都用属性写（fill='…' stroke='…'）。每张图不超过 8000 字。
+- 图会缩放：写好 viewBox，用 preserveAspectRatio 和 background-size、background-position 控制怎么摆。图里的字只写装饰性的（印章、招牌上的一两个字），数据一律留给程序画的元素。图在字的下面或旁边，不挡字。
+
+鼠标：.status-bar 上有 --px、--py（鼠标在状态栏里的位置，像素）和 --pfx、--pfy（0 到 1），鼠标在状态栏上时它带 .pointing。可以用来做跟着鼠标的光、几层画面错开的视差、十字线；用的时候写默认值（var(--pfx, .5)），鼠标不在、手机上没有鼠标时也要好看。
+
+写了会被程序去掉的：url() 里除了上面的 SVG 小图以外的一切（网上的图片、字体、别的格式的图），@import，@font-face，position: fixed 和 sticky，!important，规则里再套规则，html、body、:root 和状态栏以外的东西。
 
 要守住的：
 - 不改 .status-meter > i 的 width；不把内容藏起来（display: none、visibility: hidden、小于 11px 的字、淡到看不清的字都不行）。
@@ -201,6 +212,44 @@ const COVER_PART = `<cover_page>
 开场页自己有背景图层（.cover-back、.cover-veil）和飘动的一层，不要盖住、不要藏；整页怎么排（.cover 的 display、列）由程序定，不要改，字从左边起；每一处的字和它后面的底色要分得清；手机上它只有 320 到 400 像素宽。给开场页的规则控制在全部的四分之一以内。
 </cover_page>`
 
+// 起点: a look can start from one of the themes and go over it. What each is, for the model (and its name, as the
+// page says it). The theme's own rules go with it: the model writes only what it changes.
+const THEME_WORDS = {
+  editorial: ['文艺杂志', '日系杂志式的极简：近白透一点清水蓝的纸，大圆角，西文用高对比的衬线字、中文用细宋体，宽字距的小标题和小圆点，数值条是一根细线加一个小圆点；背景右上角一组淡淡的星图细线慢慢漂，左下角一道点线波纹'],
+  meadow: ['晴野', '手绘绘本风：粗黑的手绘描边和卡通式的投影，圆圆胖胖的字（站酷快乐体和 Nunito，主题自带），黑色胶囊按钮、黄色徽章，心里话是对话气泡；云和太阳在右上角飘，底边是一条草地，有小花、蜗牛和打盹的小麻雀（这几张图是主题自带的）'],
+  sigil: ['夜曜纹章', '西幻暗黑：黑曜石的底，鎏金细线和绯红魔纹，宋体，标题前的纹章会轻轻呼吸，数值条是绯红的，组名前一枚菱形'],
+  daybreak: ['晨笺', '晨间手账：暖白的纸透一点晨曦的蓝和暖粉，左边竖排一个大衬线字，标题是雾蓝的大衬线字压着一行花体（花体是主题自带的字），右上角一轮刚升起的太阳和几圈细环，数值收在磨砂面板里，分组有斜体编号和带圆点的细线，数值条从雾蓝渐到暖粉'],
+  aquarelle: ['天光云影', '水彩写生本：米白的水彩纸，手绘的墨线框四角交叉出头，顶上一幅跟着故事时间换的水彩天空（清晨、白天、黄昏、深夜四幅，是主题自带的图，强调色跟着变），楷体标题下一行斜体英文小句，数值条是一笔水彩，短词垫着一团水彩晕，角落一枝嫩叶'],
+  cobalt: ['钴蓝', '单色孔版印刷：再生纸上只印一种钴蓝，标题反白压在一块蓝色标签上、后面一个错位的线框，旁边一个横切错开的蓝色圆盘和白色四角星、灰色块、细线，页和组自动编号，粗体窄字，实心蓝印章，数值条末端散成网点，立绘印成蓝白双色'],
+  afterschool: ['放课后', '老招牌底下的一台千禧年游戏机菜单：标题是一块奶油色搪瓷招牌（边缘有点锈，番茄红的大字带一点录像带的色边，字用主题自带的站酷庆科黄油体），带条纹雨棚、录像带计数和橙色的相机日期；招牌以下整块是深蓝渐变的菜单底，奶油色加藏青的粗边框，每个分组是一个白边蓝玻璃窗、名字写在明黄的小牌子上，鼠标所在的一行有一个光标，数值条是绿和橙的像素格，心里话是带名牌和「▼」的视觉小说对话框，分页是 L / R 肩键页签，卡片式的数值卡是灰蓝色的存档格，底边一条按键提示；整体有扫描线和一条慢慢移动的录像带噪带，鼠标处有显像管反光和小星星'],
+  lineart: ['线稿', '一整张工程图纸：暖灰的方格纸，四周一圈图框和分区号，底部有标题栏；标题区右边用近黑的均匀细线画着一台沿斜轴拆开的机器人（天线、带护目镜和一只红眼的头、波纹颈、肩梁、掀开的胸甲和带肋的核心、线缆、腰环、髋部齿轮、双腿、一条落到三指手的手臂），细引线拉到等宽小字上，鼠标移过时头和手臂沿轴线滑开，红色十字线和坐标读数跟着鼠标；标题是粗黑的无衬线字，标签是等宽字，页签是图纸标签，分组是带字母的引出圈加一条引线，数值条是两端带箭头的尺寸线（读数一端是红的），数值卡是写着 DETAIL 的局部详图，标签是打了孔的零件牌，收起按钮是带一根红线的深色刻度条'],
+  signal: ['信号', '深夜的追踪屏：近黑的底只用一种薄荷绿和灰线，标题后面一片聚成云的小格子点阵、几格亮着错开闪动，方框带坐标读数、细线汇到「收起」旁的目标点，小标签是等宽大写加方框，分组写成 SECTOR 01 这样的扇区，数值条是一排格子、末端一道亮光标，数字是等宽字带一点辉光，短词装在左上角带切角的方框里。整条状态栏都是这块屏：四角有角标、两边有刻度，分组是带四角框的「[ SECTOR 01 ]」，每行前有小序号，页签是 CH01、CH02，底下一行链路状态；鼠标移到哪里，那里的小格亮起、十字线和准星跟着走（主题自己用 --px、--py 这些变量做的，改的时候留着）。'],
+  mercury: ['流银', '液态金属：整条状态栏底下是一片实时流动的镀铬（程序画的，在 canvas.status-fx 里，标题区、两条边和底边露得最亮，面板之间调暗）；每个分组是一块浮在金属上的烟色玻璃面板，带一道亮边；标题和数字是抛光金属字，数值条是一管带高光的水银，徽章和选中的页签是镀铬胶囊，组名前一颗水银珠；只有银白灰黑。'],
+  redink: ['赤墨', '暗黑撞色：只有黑、纸白和一种正红。粗颗粒的白纸，标题区是一排宽窄不一的黑色块，标题用毛笔字（马善政，主题自带）反白写在上面，一轮红日沉在色块后面，一道带飞白的红色笔触横扫过去，细圆圈、虚线和墨点压到黑块上就变成白的；左边一根黑柱从标题贯到底，上面竖排一行打字机小字，底边是干笔拖出的毛边；分组一白一黑交替（黑的是整块黑底白字、带红色错位影），每组背后压着巨大的淡红编号；标签是黑底白字的小块，数值条是一笔末端枯散的墨、停处一根红针，心情是斜盖的红印章，数值卡一黑一白反着来，立绘印成高反差黑白再压一道红斜杠'],
+  kaleido: ['万华', '黑底撞色，贯穿整条状态栏：边框是一圈会随鼠标转动的虹彩；标题区是近黑的夜色，一道带颗粒的全色喷流从标题旁喷向远角，上面是红绿蓝错开的圆环、玻璃碎片和白色细弧线，底边还有第二道喷流涌向一个大圆环；每个分组是一块镶着自己颜色的黑玻璃（朱红、长春花蓝、紫、荧光绿、粉轮流），右上角切一片碎片，组名反黑压在斜切的色块上；数值条是粗的带颗粒渐变色条加白热的端头，短词是歪一点的套印色块，页签是色块、选中的是整条光谱；鼠标移过有一团棱镜光跟着走'],
+}
+
+/** The theme a look goes over, as the model is told it; '' for a look from nothing. */
+function baseBlock(base) {
+  const [name, words] = THEME_WORDS[base] ?? []
+  if (!name) return ''
+  return `<base_theme name="${name}">
+这次不是从零设计：状态栏先穿着程序自带的主题「${name}」（${words}），你的 CSS 叠在它上面，做出这张卡自己的一版。
+- 主题的样式表在下面，已经生效，不用重写。选择器里去掉了主题自己的类名，写法和你的一样；url(…) 是主题的图和画出来的纹饰，你看不到它们的内容；要换掉就写 background-image: none、别的渐变，或者你自己画的 SVG 小图。
+- 只写要改和要加的：配色、纹饰、字体、边框、进度条、某几项的样子。想保留的就不写，不要把主题的规则抄一遍。你写的规则会盖过主题里同一处的规则。
+- <palette> 可以不写：不写就用主题自己的颜色。写了，程序用它算出的颜色变量会盖过主题的，主题里用变量的地方跟着变；主题里写死的颜色（渐变、阴影、描边）要换的话自己再写。
+- 主题自己定义的变量（--ed-latin、--mw-round 这样的）可以直接用。
+- 主题在 ::before、::after 上的纹饰和动画，要去掉就写 content: none 或 animation: none。
+- 留住主题的底子和好看的地方，再加上这张卡自己的气氛：要看得出是从「${name}」长出来的，又不是原样。
+${themeRules(base)}
+</base_theme>`
+}
+
+/** 起点 as a look keeps it: a theme it goes over, or '' (from nothing). */
+export const cleanBase = base => (Object.hasOwn(THEME_WORDS, base) ? base : '')
+
+export { cleanStyle }
+
 /** What the user asked for, as the model is told it. */
 export const cleanWish = wish => clip(typeof wish === 'string' ? wish : '', MAX_WISH)
 
@@ -212,36 +261,50 @@ export const cleanProblems = problems => (Array.isArray(problems) ? problems : [
  * @param spec - the bar it is for (what the editor shows now), cleaned
  * @param state - the variables as they start
  * @param options - { wish, previous: a look to work from ({ name, palette, css }), problems: what drawing it showed, reply,
- *   pictures: the card's own pictures it may name (look-pictures.mjs offered), drawn: the decorations already drawn }
+ *   pictures: the card's own pictures it may name (look-pictures.mjs offered), drawn: the decorations already drawn,
+ *   base: the theme the look goes over ('' = from nothing), style: 风格, a way for it to go (skin-styles.mjs; '' = none) }
  */
-export function skinRequest(card, spec, state, { wish = '', previous = null, problems = [], reply = '简体中文', pictures = [], drawn = [] } = {}) {
+export function skinRequest(card, spec, state, { wish = '', previous = null, problems = [], reply = '简体中文', pictures = [], drawn = [], base = '', style = '' } = {}) {
+  const over = cleanBase(base)
+  // A look being put right keeps the way it went: the style is not said again.
+  const styled = problems.length ? '' : styleName(style)
+  // Over a theme, a look without colors of its own has none to show: the theme's are used.
+  const colors = previous?.palette ?? (over ? null : spec.palette ?? FIRST_COLORS)
   const current = previous?.css
-    ? `<current name="${attr(previous.name ?? '')}">\n<palette>${JSON.stringify(previous.palette ?? spec.palette ?? FIRST_COLORS)}</palette>\n<css>\n${previous.css}\n</css>\n</current>`
+    ? `<current name="${attr(previous.name ?? '')}">\n${colors ? `<palette>${JSON.stringify(colors)}</palette>\n` : ''}<css>\n${previous.css}\n</css>\n</current>`
     : ''
   const ask = problems.length
     ? `<current> 是你上一次写的外观。程序把它画出来后查出下面这些问题，把它们改掉，其余的保持原样，再把四段完整写一遍：\n${problems.map(item => `- ${item}`).join('\n')}`
     : current
-      ? `<current> 是现在的外观。${wish ? `用户想在它的基础上改：${wish}` : '用户想要再设计一版，和它明显不同。'}`
+      ? `<current> 是现在的外观。${wish ? `用户想在它的基础上改：${wish}${styled ? `\n风格照 <style> 里的「${styled}」。` : ''}` : styled ? `用户想把它改成 <style> 里的「${styled}」风格：取自这张卡的东西和排得好的地方留着，质感、配色和手法换过去。` : '用户想要再设计一版，和它明显不同。'}`
       : wish
-        ? `用户想要的样子：${wish}`
-        : '用户没有说想要什么样子，按这张卡的气氛定。'
-  const content = [cardLines(card), `<status_bar>\n这张卡的状态栏开局时是这样的（每行：短名 · 显示方式 · 现在的值）：\n${barOutline(spec, state)}\n</status_bar>`, card.cover ? COVER_PART : '', picturesBlock(pictures, drawn), current, ask].filter(Boolean).join('\n\n')
+        ? `用户想要的样子：${wish}${styled ? `\n风格照 <style> 里的「${styled}」。` : ''}`
+        : styled
+          ? `用户没有另外写要求：照 <style> 里的「${styled}」风格，按这张卡的气氛定。`
+          : '用户没有说想要什么样子，按这张卡的气氛定。'
+  const content = [cardLines(card), `<status_bar>\n这张卡的状态栏开局时是这样的（每行：短名 · 显示方式 · 现在的值）：\n${barOutline(spec, state)}\n</status_bar>`, baseBlock(over), card.cover ? COVER_PART : '', picturesBlock(pictures, drawn), styled ? styleBlock(style, { over: Boolean(over) }) : '', current, ask].filter(Boolean).join('\n\n')
   return { system: skinSystem(reply), messages: [{ role: 'user', content }], maxTokens: SKIN_TOKENS, softCap: true }
 }
+
+/** How many SVG pictures a stretch of CSS has. */
+const pictureCount = text => (String(text).match(/data:image\/svg\+xml/gi) ?? []).length
 
 const unfenced = text => String(text ?? '').replace(/^\s*```[\w-]*[ \t]*\n?/, '').replace(/\n?```\s*$/, '').trim()
 
 /**
- * An answer as a look: { reply, name, palette, css, cut } with the CSS as a card may keep it; null when there is no
- * CSS left to use. `cut`: what the model wrote that was taken out (it was told not to), for the page to say so.
+ * An answer as a look: { reply, name, palette, css, cut, base? } with the CSS as a card may keep it; null when there is
+ * no CSS left to use. `cut`: what the model wrote that was taken out (it was told not to), for the page to say so.
+ * `base`: the theme it was asked to go over; then a look that names no colors has none (palette null: the theme's).
  */
-export function readSkin(text, { palette: fallback = null } = {}) {
+export function readSkin(text, { palette: fallback = null, base = '' } = {}) {
+  const over = cleanBase(base)
   const source = String(text ?? '')
   const written = unfenced(section(source, 'css') || /```css\s*\n([\s\S]*?)(?:```|$)/i.exec(source)?.[1] || '')
   const css = cleanSkinCss(written)
   if (!css) return null
   const cut = [
-    /url\s*\(|image-set\s*\(/i.test(written) ? 'url' : '',
+    // A picture from elsewhere, or one of its own drawn with what a picture may not have.
+    /url\s*\(\s*(?!["']?(?:data:image\/svg\+xml|#|%23))|image-set\s*\(/i.test(written) || pictureCount(written) > pictureCount(css) ? 'url' : '',
     /@import|@font-face/i.test(written) ? 'import' : '',
     /position\s*:\s*(?:fixed|sticky)/i.test(written) ? 'fixed' : '',
     // Longer than a look may be: the rules past the limit are not in it (the page says so, and it can be asked again shorter).
@@ -250,12 +313,13 @@ export function readSkin(text, { palette: fallback = null } = {}) {
   return {
     reply: clip(section(source, 'reply'), 600),
     name: clip(section(source, 'name'), 24).replace(/^[「『"“]|[」』"”]$/g, ''),
-    palette: cleanPalette(looseJson(section(source, 'palette'))) ?? cleanPalette(fallback) ?? FIRST_COLORS,
+    palette: cleanPalette(looseJson(section(source, 'palette'))) ?? cleanPalette(fallback) ?? (over ? null : FIRST_COLORS),
     // 动效 picked with the look ('' = none, or none said).
     effect: cleanEffect(section(source, 'effect').trim().toLowerCase()),
     // 画装饰图: the decorations this look would have drawn, a prompt each.
     ...(cleanDecor(looseJson(section(source, 'decor'))) ? { decor: cleanDecor(looseJson(section(source, 'decor'))) } : {}),
     css,
     cut,
+    ...(over ? { base: over } : {}),
   }
 }

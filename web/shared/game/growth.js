@@ -199,6 +199,8 @@ export function taughtSkills(book) {
 /** Whose chain is the player's own, among the names of the companions. */
 export const PLAYER_FORMS = '@player'
 export const MAX_FORMS = 6
+// How many have a chain of 形态: the player, the companions, and a card's tameable creatures (one with a bestiary of NPC pets has dozens).
+export const MAX_FORM_OWNERS = 64
 /** The points a form's effects may come to, by how far along its chain it is. */
 export const FORM_BUDGET = [2, 4, 6, 8]
 const MAX_FORM_SKILLS = 3
@@ -215,7 +217,7 @@ export function cleanForms(value) {
   const out = {}
   if (!isRecord(value)) return out
   const text = (item, max) => (typeof item === 'string' ? item.trim().slice(0, max) : '')
-  for (const [key, list] of Object.entries(value).slice(0, 9)) {
+  for (const [key, list] of Object.entries(value).slice(0, MAX_FORM_OWNERS)) {
     const owner = ['玩家', 'player', PLAYER_FORMS].includes(key.trim()) ? PLAYER_FORMS : key.trim().slice(0, 40)
     if (!owner || !Array.isArray(list)) continue
     const chain = []

@@ -63,7 +63,7 @@ const FIGHTS_TOLD = '战斗选项'
 const PARTY_TOLD = '【同伴|加入|'
 const PARTY_RULE = `- 和玩家同行、会一起打架的角色组成队伍。有人入队写 ${PARTY_TOLD}名字】，离队写 【同伴|离开|名字】，在故事里受了重伤暂时不能上场写 【同伴|负伤|名字】，养好了写 【同伴|归队|名字】；同伴学到新本事写 【学会|名字|同伴名】。战斗时队伍里的人跟玩家一起上场，由应用决定，不用写谁上场。`
 const FIGHT_RULES = [
-  '- 战斗有两种进入方式，都写 【战斗|敌人×数量:档位】，比如 【战斗|灰狼×2:杂兵|狼王:精英】。档位：杂兵、普通、精英、首领，最多四个敌人。怎么打、谁赢由应用决定，不要写打斗的结果。',
+  '- 战斗有两种进入方式，都写 【战斗|敌人×数量:档位】，比如 【战斗|灰狼×2:杂兵|狼王:精英】，敌人写真实的名字，一个的不写数量。档位：杂兵、普通、精英、首领，最多四个敌人。怎么打、谁赢由应用决定，不要写打斗的结果。',
   '  1. 选项：有敌人、对峙、拦路，或者气氛紧张到能动手时，在行动选项里放一个战斗选项，行尾加这个标记，比如 C. 拔刀迎战【战斗|灰狼×2:杂兵】。这种不用结束回复，玩家选了才开打。',
   '  2. 强制：敌人先动手、玩家躲不掉，或者玩家这一轮明确要动手时，先写一两句开打的场面，再写这个标记，然后结束回复，标记后面什么都不写。',
 ]
@@ -91,7 +91,7 @@ const attributesLine = words => `属性：${ATTRIBUTES.map(item => wordFor({ wor
 
 // 形态: told to a story whose party has some. The opening words are how a copy of the rules is known to have them.
 const FORMS_TOLD = '队伍里有人会变'
-const formsRule = (forms, words) => `- ${FORMS_TOLD}成别的${wordFor({ words }, 'form')}（${forms.chains.join('；')}）。剧情里有人确实${wordFor({ words }, 'evolve')}了、或者变回去了，写 【进化|谁|${wordFor({ words }, 'form')}名】，玩家自己的写 【进化|${wordFor({ words }, 'form')}名】，名字只能用上面列出的。这是大事，不要随便给；条件到了的玩家会自己在行囊里${wordFor({ words }, 'evolve')}，那时 <本轮操作> 会告诉你，不用再写标记。${forms.story?.length ? `${forms.story.join('、')}没有条件可达，只能由你在故事里给：到了真正的转折点（生死关头挺身而出、长久相处后的觉醒、关键的约定达成）就写标记给出去，不要一直拖着。` : ''}叙述里按各人现在的${wordFor({ words }, 'form')}来写外貌和本事。`
+const formsRule = (forms, words) => `- ${FORMS_TOLD}成别的${wordFor({ words }, 'form')}（${forms.chains.join('；')}）。剧情里有人确实${wordFor({ words }, 'evolve')}了、或者变回去了，写 【进化|谁|${wordFor({ words }, 'form')}名】，玩家自己的写 【进化|${wordFor({ words }, 'form')}名】，名字只能用上面列出的。这是大事，不要随便给；条件到了的玩家会自己在游戏菜单里${wordFor({ words }, 'evolve')}，那时 <本轮操作> 会告诉你，不用再写标记。${forms.story?.length ? `${forms.story.join('、')}没有条件可达，只能由你在故事里给：到了真正的转折点（生死关头挺身而出、长久相处后的觉醒、关键的约定达成）就写标记给出去，不要一直拖着。` : ''}叙述里按各人现在的${wordFor({ words }, 'form')}来写外貌和本事。`
 
 // 指挥 and 收服: told to a story whose card has them.
 const LEAD_TOLD = '玩家自己不上场'
@@ -110,7 +110,7 @@ function rulesBlock(pausing, bound, fights, foes, ranks, sanity, party, words = 
     '这个故事带规则，数值由应用计算，你只写故事。',
     ...stop,
     ...(fights ? [...FIGHT_RULES, OPENING_RULE, strengthRule(ranks, grows)] : []),
-    ...(fights && foes.length ? [`- 这个世界常见的敌人：${foes.slice(0, MAX_FOES_TOLD).join('、')}。`] : []),
+    ...(fights && foes.length ? [`- 这个世界常见的敌人：${foes.slice(0, MAX_FOES_TOLD).join('、')}。写到其中的哪一种就照抄这个名字，几个一起上写数量（${foes[0]}×2），不要改叫法或给名字加编号。`] : []),
     ...(fights && party ? [PARTY_RULE] : []),
     `- 行动选项：每组挑 1 到 2 个有风险的，在那一行末尾加 【检定|属性|DC数字】，比如 B. 翻过断崖【检定|${grace}|DC12】。这种不用结束回复，其余的不加，不要每个都加。`,
     `- 检定可以带上物品，写背包里的名字：帮得上忙的写在后面，比如 B. 用绳索翻过断崖【检定|${grace}|DC12|绳索】，有它加 ${AID_BONUS} 点；非它不可的写需要，比如 【检定|${mind}|DC12|需要:铜钥匙】，没有就做不到。`,
@@ -244,13 +244,16 @@ function foeToBring(foes, turns, spot) {
 }
 
 /** What this one turn asks of the model beyond the rules. */
+// The mark with what goes in it said, and an example: the format alone (敌人×数量:档位) was copied as it is.
+const FIGHT_MARK = '【战斗|对手的名字×人数:档位】（比如 【战斗|楚子苓:普通】、【战斗|灰狼×2:杂兵|狼王:精英】，写真实的名字，一个人不用写×1）'
+
 function turnAsks({ fights, fightRate, foes, wantsFight, mayFight, own, safe, battle, spot }, turns) {
   const asks = []
-  if (wantsFight) asks.push('玩家这一轮要动手：先写一两句开打的场面，再写 【战斗|敌人×数量:档位】 结束回复，不要自己写打斗的过程和结果。')
-  else if (mayFight) asks.push('如果玩家这一轮是在对人动手：先写一两句开打的场面，再写 【战斗|敌人×数量:档位】 结束回复，不要自己写打斗的过程和结果。不是的话这条作废，也不要为此安排敌人。')
+  if (wantsFight) asks.push(`玩家这一轮要动手：先写一两句开打的场面，再写 ${FIGHT_MARK} 结束回复，不要自己写打斗的过程和结果。`)
+  else if (mayFight) asks.push(`如果玩家这一轮是在对人动手：先写一两句开打的场面，再写 ${FIGHT_MARK} 结束回复，不要自己写打斗的过程和结果。不是的话这条作废，也不要为此安排敌人。`)
   else if (fights && !battle && turnsSinceFight(turns) >= FIGHT_EVERY[fightRate]) {
     const foe = foeToBring(foes, turns, spot)
-    asks.push(`已经好几轮没有打斗了，这一轮的行动选项里放一个战斗选项，行尾加 【战斗|敌人×数量:档位】${foe ? `，敌人可以是${foe}` : ''}。如果现在在室内、安全的地方，或者是亲密、平静的场面，这条作废：不放战斗选项，也不要安排敌人或动静打断。`)
+    asks.push(`已经好几轮没有打斗了，这一轮的行动选项里放一个战斗选项，行尾加 ${FIGHT_MARK}${foe ? `，敌人可以是${foe}` : ''}。如果现在在室内、安全的地方，或者是亲密、平静的场面，这条作废：不放战斗选项，也不要安排敌人或动静打断。`)
   }
   if (own) asks.push(`这一轮是玩家${OWN_ACTIONS}：他写的是想做什么，结果由你定。手上没有的东西拿不出来（打火、纸笔这类随身小物不算），做不到的事做不到，他写的收获不算数。合理的照常写。`)
   if (safe) asks.push('玩家选了不用掷骰的稳妥做法：顺利做到，但不要给线索、物品这类额外好处，那是冒险才有的。')
@@ -469,8 +472,11 @@ export function createRulebooks(store) {
 
   const foeDir = cardId => path.join(store.dirs.cards, cardId, 'foes')
 
-  /** What the helper said of foes: what is there already stays, a picture above all. */
-  const learnFoes = (cardId, foes) => change(cardId, book => ({ foes: { ...foes, ...book.foes } }))
+  /**
+   * What the helper said of foes: what is there already stays, a picture above all. The new ones go last: a bestiary
+   * past its limit loses its first ones without a picture (cleanRulebook).
+   */
+  const learnFoes = (cardId, foes) => change(cardId, book => ({ foes: { ...book.foes, ...Object.fromEntries(Object.entries(foes).filter(([name]) => !Object.hasOwn(book.foes, name))) } }))
 
   /** A foe's picture, kept for the next time it is met; `buffer` null takes it away. */
   function setFoePicture(cardId, name, buffer) {

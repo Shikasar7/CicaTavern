@@ -12,15 +12,18 @@ test('a bar keeps a layout it knows, and no other', () => {
   assert.equal('layout' in cleanStatusSpec({ fields }), false)
 })
 
-test('the layout that goes with a theme, and one picked by hand over it', () => {
-  assert.equal(layoutFor('auto', 'parchment'), 'scroll')
-  assert.equal(layoutFor('auto', 'ink'), 'scroll')
-  assert.equal(layoutFor('auto', 'neon'), 'rail')
-  assert.equal(layoutFor('auto', 'pastel'), 'card')
-  assert.equal(layoutFor('auto', undefined), 'card')
-  assert.equal(layoutFor('rail', 'parchment'), 'rail')
-  assert.equal(layoutFor('', 'parchment'), '')
-  assert.equal(layoutFor('nonsense', 'neon'), '')
+test('the layout that goes with the theme (the card one), and one picked by hand over it', () => {
+  assert.equal(layoutFor('auto'), 'card')
+  assert.equal(layoutFor('rail'), 'rail')
+  assert.equal(layoutFor('scroll'), 'scroll')
+  assert.equal(layoutFor(''), '')
+  assert.equal(layoutFor('nonsense'), '')
+})
+
+test('only the four themes there are stay on a bar; an older one gives the plain bar', () => {
+  const fields = [{ path: 'a', label: 'A', show: 'number' }]
+  for (const theme of ['editorial', 'meadow', 'sigil']) assert.equal(cleanStatusSpec({ fields, theme }).theme, theme)
+  for (const theme of ['plain', 'paper', 'neon', 'parchment', 'gothic', 'nonsense']) assert.equal('theme' in cleanStatusSpec({ fields, theme }), false, theme)
 })
 
 test('a cover keeps a layout it knows, and no other', () => {

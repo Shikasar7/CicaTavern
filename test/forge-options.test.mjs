@@ -133,8 +133,8 @@ test('the picks about the card (they combine) and how many openings shape the ta
   let draft = await settled(forge, (await forge.create({ text: '冒险', options: { world: true } })).id)
   assert.equal(draft.options.world, true)
   assert.match(systemOf(seen.at(-1)), /用户开始前选好了这些.*重世界观/)
-  draft = await forge.update(draft.id, { options: { play: ['growth'], format: 'mvu-ui', statusTheme: 'neon' }, greetingCount: 3 })
-  assert.deepEqual([draft.options.play, draft.options.statusTheme, draft.greetingCount], [['growth'], 'neon', 3])
+  draft = await forge.update(draft.id, { options: { play: ['growth'], format: 'mvu-ui', statusTheme: 'sigil' }, greetingCount: 3 })
+  assert.deepEqual([draft.options.play, draft.options.statusTheme, draft.greetingCount], [['growth'], 'sigil', 3])
   await forge.plan(draft.id)
   draft = await settled(forge, draft.id)
   assert.match(systemOf(seen.at(-1)), /tracking.enabled 为 true/)
@@ -265,13 +265,13 @@ test('格式 and 状态栏样式: a plain-text card tracks nothing, plain MVU ha
   assert.equal(own(mvu), null)
   assert.ok(!scriptNames(mvu).includes('cicatavern-status-bar'))
   // The styled bar with a look of its own: in the layout and in SillyTavern's HTML.
-  const neon = cardJson(withCardOptions(plan, { format: 'mvu-ui', statusTheme: 'neon' }), card)
-  assert.equal(own(neon).theme, 'neon')
+  const neon = cardJson(withCardOptions(plan, { format: 'mvu-ui', statusTheme: 'sigil' }), card)
+  assert.equal(own(neon).theme, 'sigil')
   const bar = neon.data.extensions.regex_scripts.find(s => s.id === 'cicatavern-status-bar')
-  assert.match(bar.replaceString, /class="bar theme-neon"/)
-  assert.match(bar.replaceString, /\.theme-neon\{/)
+  assert.match(bar.replaceString, /class="bar theme-sigil"/)
+  assert.match(bar.replaceString, /\.theme-sigil\{/)
   // The picks as kept: a look only goes with the styled bar.
-  assert.deepEqual(cleanCardOptions({ format: 'mvu', statusTheme: 'neon', play: ['bond', 'bond', 'nope'] }), { cast: '', world: false, gender: '', play: ['bond'], format: 'mvu', statusTheme: '' })
+  assert.deepEqual(cleanCardOptions({ format: 'mvu', statusTheme: 'sigil', play: ['bond', 'bond', 'nope'] }), { cast: '', world: false, gender: '', play: ['bond'], format: 'mvu', statusTheme: '' })
 })
 
 

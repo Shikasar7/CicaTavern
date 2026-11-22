@@ -444,7 +444,7 @@ const openGallery = guard(async () => {
   const { openGallery: open } = await import('/gallery.js').catch(() => {
     throw Object.assign(new Error(t`图库要重启后台服务后才能用：关掉所有窗口等一分钟，再从桌面图标打开。`), { status: 404 })
   })
-  await open({ api, el, toast, guard, download: downloadPath }, { cardId: ui.chat?.cardId ?? '' })
+  await open({ api, el, toast, guard, download: downloadPath, viewPicture: (...args) => mediaUi.viewPicture(...args) }, { cardId: ui.chat?.cardId ?? '' })
 })
 
 /** web/card-pack.js (导出角色卡 → 带上图片和设置, and a zip picked in 导入角色卡), loaded when first needed. */
@@ -468,6 +468,214 @@ const exportCardCharx = guard(async card => {
   const with_ = [faces ? t`立绘和表情 ${faces} 张` : '', backgrounds ? t`场景图 ${backgrounds} 张` : '', cgs ? t`CG ${cgs} 张` : ''].filter(Boolean).join(t`、`)
   toast(with_ ? t`已导出「${card.name}.charx」（带着${with_}）` : t`已导出「${card.name}.charx」`, 6000)
 })
+
+// 剧情向导 (web/guide.js, loaded when first needed): its button under the input box, the bar of the plan the story
+// follows, and the panel to talk the story over in.
+let guideUi = null
+function loadGuide() {
+  if (!guideUi) {
+    guideUi = import('/guide.js').then(({ initGuide }) => initGuide({
+      api, el, guard, toast, getChat: () => ui.chat, setChat, getModels: () => ui.models, openProviders: () => providersUi.open(), branchFrom: (id, label) => branchFrom(id, label),
+      // 剧本 from the guide's own tab: put one on, write one, make one of the chat, the card's plots, the chat's copy.
+      plotActions: {
+        use: () => usePlot(),
+        write: () => writePlot(),
+        fromChat: () => plotFromChat(),
+        manage: () => managePlots(ui.chat?.cardId),
+        edit: () => editPlotCopy(),
+        count: () => ui.cardDetails.get(ui.chat?.cardId)?.plots?.length ?? 0,
+      },
+    })).catch(() => {
+      guideUi = null
+      throw Object.assign(new Error(t`剧情向导要重启后台服务后才能用：关掉所有窗口等一分钟，再从桌面图标打开。`), { status: 404 })
+    })
+  }
+  return guideUi
+}
+function renderGuide() {
+  const chat = ui.chat
+  const story = Boolean(chat) && chat.cardId !== DIRECT_CARD
+  $('guide-open').hidden = !story
+  if (story && chat.guide) loadGuide().then(guide => guide.sync(chat)).catch(() => {})
+  else if (guideUi) guideUi.then(guide => guide.sync(story ? chat : null)).catch(() => {})
+  else $('guide-bar').hidden = true
+}
+const openGuide = guard(async () => (await loadGuide()).open())
+
+// 剧本 (web/plot.js, web/plot-edit.js, loaded when first needed): the bar of the scene the story plays, the 剧本 pill in
+// the top bar (the route map, or a plot to put on), the card's plots, and the chapter lines and ending cards between
+// the messages (plotMarks).
+let plotUi = null
+function loadPlot() {
+  if (!plotUi) {
+    plotUi = import('/plot.js').then(({ initPlot }) => initPlot({
+      api, el, guard, toast, getChat: () => ui.chat, setChat, getFrom: () => ui.branchFrom?.parentId ?? null,
+      openMap: options => openPlotMap(options), newChat: () => newChat(), editCopy: () => editPlotCopy(), askGuide: kind => askPlotGuide(kind),
+      cardPlot: chat => ui.cardDetails.get(chat?.cardId)?.plots?.find(plot => plot.id === chat?.plot?.copy.id) ?? null,
+    })).catch(() => {
+      plotUi = null
+      throw Object.assign(new Error(t`剧本要重启后台服务后才能用：关掉所有窗口等一分钟，再从桌面图标打开。`), { status: 404 })
+    })
+  }
+  return plotUi
+}
+const plotEdit = () => import('/plot-edit.js').catch(() => {
+  throw Object.assign(new Error(t`剧本要重启后台服务后才能用：关掉所有窗口等一分钟，再从桌面图标打开。`), { status: 404 })
+})
+const openPlotMap = guard(async ({ fork = false } = {}) => (await loadGuide()).open({ tab: 'plot', fork }))
+/** 改剧本 while playing: the chat's copy in the plot editor (saved to the chat; 存回卡里 puts it in the card's). */
+const editPlotCopy = guard(async () => {
+  const chat = ui.chat
+  if (!chat?.plot) return
+  const card = ui.cards.find(item => item.id === chat.cardId)
+  const { openPlots } = await plotEdit()
+  await openPlots({ api, el, guard, toast, cardId: chat.cardId, cardName: card?.name ?? '', onSaved: () => {
+    ui.cardDetails.delete(chat.cardId)
+    loadCardDetail(chat.cardId).then(renderPlot)
+  } }, { chat, setChat })
+})
+/** 从对话整理: the chat played, as a new plot of its card (on a plot or not). */
+const plotFromChat = guard(() => plotDraftToCard('fromChat'))
+/** 让向导写一份 for the chat's card (from 剧情向导's 剧本 tab): once in the card, offered to the chat. */
+const writePlot = guard(() => plotDraftToCard('write'))
+/** The guide writes a plot of the chat's card (from the chat, or an idea); taken, it goes in the card's plots. */
+async function plotDraftToCard(mode) {
+  const chat = ui.chat
+  if (!chat) return
+  const [{ openPlotDraft }, { problemText }] = await Promise.all([import('/plot-draft.js'), plotEdit()]).catch(() => {
+    throw Object.assign(new Error(t`剧本要重启后台服务后才能用：关掉所有窗口等一分钟，再从桌面图标打开。`), { status: 404 })
+  })
+  await openPlotDraft({ api, el, guard, toast, problemText }, {
+    key: mode === 'fromChat' ? `chat-${chat.id}` : `card-${chat.cardId}`, mode,
+    onTake: async plot => {
+      const { plots, defaultPlot } = await api(`/api/cards/${chat.cardId}/plots`)
+      const taken = new Set(plots.map(item => item.id))
+      let id = mode === 'fromChat' ? 'plot-chat' : 'plot-guide'
+      for (let n = 2; taken.has(id); n++) id = `${mode === 'fromChat' ? 'plot-chat' : 'plot-guide'}${n}`
+      await api(`/api/cards/${chat.cardId}/plots`, { method: 'PUT', body: { plots: [...plots, { ...plot, id, source: 'own' }], defaultPlot } })
+      ui.cardDetails.delete(chat.cardId)
+      await loadCardDetail(chat.cardId).catch(() => {})
+      renderPlot()
+      toast(t`已放进剧本「${plot.name}」`)
+      // A chat on no plot yet: the one just written is offered to it.
+      if (!ui.chat?.plot && ui.chat?.id === chat.id) setTimeout(() => usePlot(), 300)
+    },
+  })
+}
+/** The guide on the chat's plot: 问问向导改 ('edit', the scenes played kept), 就这样走 ('detour', a scene of what the story did). */
+const askPlotGuide = guard(async kind => {
+  const chat = ui.chat
+  const view = chat?.plot
+  if (!view) return
+  const [{ openPlotDraft }, { problemText }] = await Promise.all([import('/plot-draft.js'), plotEdit()]).catch(() => {
+    throw Object.assign(new Error(t`剧本要重启后台服务后才能用：关掉所有窗口等一分钟，再从桌面图标打开。`), { status: 404 })
+  })
+  const act = async body => {
+    const answer = await api(`/api/chats/${chat.id}/plot`, { method: 'PUT', body })
+    if (ui.chat?.id === chat.id) setChat(answer)
+  }
+  const titleOf = id => view.copy.scenes.find(scene => scene.id === id)?.title ?? id
+  if (kind === 'fromChat') return plotFromChat()
+  await openPlotDraft({ api, el, guard, toast, problemText }, {
+    key: `chat-${chat.id}`, mode: kind, plot: view.copy, locked: [...view.progress.seen], progress: view.progress, titleOf,
+    onTake: async taken => {
+      if (kind === 'detour') {
+        await act({ action: 'detour', scene: taken.scene, back: taken.back })
+        toast(t`加进剧本了：下一轮演「${taken.scene.title}」`)
+      } else {
+        await act({ action: 'edit', copy: taken })
+        toast(t`剧本改好了`)
+      }
+    },
+  })
+})
+/** The card's plots in their window; `then`: what to do once saved (the open card's details are read again). */
+const managePlots = guard(async (cardId = ui.chat?.cardId ?? ui.cardId, options = {}) => {
+  const card = ui.cards.find(item => item.id === cardId)
+  const { openPlots } = await plotEdit()
+  await openPlots({ api, el, guard, toast, cardId, cardName: card?.name ?? '', onSaved: () => {
+    ui.cardDetails.delete(cardId)
+    loadCardDetail(cardId).then(renderPlot)
+  } }, options)
+})
+function renderPlot() {
+  const chat = ui.chat
+  const story = Boolean(chat) && chat.cardId !== DIRECT_CARD
+  const pill = $('chat-plot')
+  const plots = ui.cardDetails.get(chat?.cardId)?.plots ?? []
+  pill.hidden = !story || (!chat.plot && !plots.length)
+  if (!pill.hidden) {
+    pill.classList.toggle('unset', !chat.plot)
+    pill.classList.toggle('busy', Boolean(chat.plot && !chat.plot.paused && !chat.plot.progress.ended))
+    pill.title = chat.plot ? t`剧本「${chat.plot.copy.name}」：点开路线图` : t`这张卡有 ${plots.length} 个剧本：点一下给这段对话用上`
+  }
+  if (story && chat.plot) loadPlot().then(plot => plot.sync(chat)).catch(() => {})
+  else if (plotUi) plotUi.then(plot => plot.sync(null)).catch(() => {})
+  else $('plot-bar').hidden = true
+}
+const usePlot = guard(async () => {
+  const chat = ui.chat
+  if (!chat) return
+  if (chat.plot) return openPlotMap()
+  const card = ui.cards.find(item => item.id === chat.cardId)
+  const { pickPlot } = await plotEdit()
+  await pickPlot({ api, el, guard, cardId: chat.cardId, cardName: card?.name ?? '', chat, setChat, manage: () => managePlots(chat.cardId), fromChat: () => plotFromChat() })
+})
+
+/**
+ * 剧本 between the messages: a chapter line where the story goes into a scene (after the reply that ended the one
+ * before, or before the message that jumped), and the ending card after the reply that played an ending out.
+ * → Map(node id → { before?, after? }) of elements, kept between drawings while they say the same.
+ */
+const plotMarkKept = new Map()
+function plotMarks(chat) {
+  const marks = new Map()
+  const view = chat.plot
+  if (!view) return marks
+  const keep = (key, make) => {
+    if (!plotMarkKept.has(key)) plotMarkKept.set(key, make())
+    while (plotMarkKept.size > 200) plotMarkKept.delete(plotMarkKept.keys().next().value)
+    return plotMarkKept.get(key)
+  }
+  const sceneTitle = id => view.copy.scenes.find(scene => scene.id === id)
+  const line = scene => el('div', { class: 'plot-divider', role: 'separator' }, [el('span', { text: `${scene.chapter ? `${scene.chapter} · ` : ''}${scene.title}` })])
+  let ended = false
+  for (const node of chat.path) {
+    const scene = node.role === 'user' && node.plotSet?.at ? sceneTitle(node.plotSet.at) : null
+    if (scene) marks.set(node.id, { before: keep(`${chat.id}:${node.id}:in:${scene.chapter}:${scene.title}`, () => line(scene)) })
+    if (node.role !== 'assistant' || !node.plot) continue
+    const afters = []
+    const entered = node.plot.from ? sceneTitle(node.plot.at) : null
+    if (entered) afters.push(keep(`${chat.id}:${node.id}:to:${entered.chapter}:${entered.title}`, () => line(entered)))
+    // 支线: a side line gone into another of its scenes, a fainter line.
+    for (const [id, sideLine] of Object.entries(node.plot.sides ?? {})) {
+      const side = view.copy.sides?.find(item => item.id === id)
+      const at = sideLine.from ? sceneTitle(sideLine.at) : null
+      if (side && at) afters.push(keep(`${chat.id}:${node.id}:side:${id}:${side.name}:${at.title}`, () => el('div', { class: 'plot-divider side', role: 'separator' }, [el('span', { text: t`支线 · ${side.name} · ${at.title}` })])))
+    }
+    if (afters.length) marks.set(node.id, { ...marks.get(node.id), after: afters.length === 1 ? afters[0] : keep(`${chat.id}:${node.id}:group:${afters.length}`, () => el('div', { class: 'plot-mark-group' }, afters)) })
+    if (node.plot.ended && !ended) {
+      const end = sceneTitle(node.plot.at)
+      const names = { good: t`圆满结局`, normal: t`结局`, sad: t`遗憾结局`, hidden: t`隐藏结局` }
+      const walked = node.plot.seen.length + 1
+      marks.set(node.id, { ...marks.get(node.id), after: keep(`${chat.id}:${node.id}:end:${end?.title}:${Boolean(view)}`, () => el('div', { class: `plot-ending ${end?.ending?.kind ?? 'normal'}` }, [
+        el('span', { class: 'plot-ending-kind', text: names[end?.ending?.kind] ?? t`结局` }),
+        el('h3', { text: end?.title ?? '' }),
+        end?.ending?.text ? el('p', { text: end.ending.text }) : null,
+        el('p', { class: 'muted small', text: t`「${view.copy.name}」· 走过 ${walked} 幕` }),
+        el('p', { class: 'plot-ending-route', text: [...node.plot.seen, node.plot.at].map(id => sceneTitle(id)?.title).filter(Boolean).join(' → ') }),
+        node.plot.first ? el('p', { class: 'plot-ending-new', text: t`新结局` }) : null,
+        el('div', { class: 'plot-ending-tools' }, [
+          el('button', { type: 'button', class: 'btn small', text: t`继续写下去`, title: t`不用剧本了，接着自由写`, onclick: guard(async () => setChat(await api(`/api/chats/${chat.id}/plot`, { method: 'PUT', body: { action: 'stop' } }))) }),
+          el('button', { type: 'button', class: 'btn small', text: t`回到岔路口`, title: t`在路线图上点一个走过的岔路口，换一条路；这条路还在`, onclick: () => openPlotMap({ fork: true }) }),
+          el('button', { type: 'button', class: 'btn small primary', text: t`开新对话`, onclick: () => newChat() }),
+        ]),
+      ].filter(Boolean))) })
+    }
+    ended = Boolean(node.plot.ended)
+  }
+  return marks
+}
 
 /** 设置 → 写作 → 快捷回复, and the ⚙ at the end of their row (web/quick-replies.js, loaded when first opened). */
 const openQuickReplies = guard(async () => {
@@ -1646,7 +1854,21 @@ async function showChat(id) {
 const newChat = guard(async () => {
   const card = await api(`/api/cards/${ui.cardId}`)
   const texts = card.greetingTexts.length ? card.greetingTexts : ['']
-  if (texts.length === 1) return startChat(0)
+  // 剧本: the card's plots to start on, its default one picked; 自由发挥 is none.
+  const plots = (card.plots ?? []).filter(plot => plot.scenes?.length)
+  ui.newPlot = plots.some(plot => plot.id === card.defaultPlot) ? card.defaultPlot : ''
+  $('greeting-plots').hidden = !plots.length
+  // 剧本 that goes with an opening of its own: that one is marked among them, and brought into view.
+  const markOpening = () => {
+    const plot = plots.find(item => item.id === ui.newPlot)
+    ;[...$('greetings').children].forEach((item, index) => {
+      item.classList.toggle('plot-greeting', plot?.greeting === index)
+      item.dataset.plotNote = plot?.greeting === index ? t`剧本「${plot.name}」从这个开场开始` : ''
+    })
+    if (Number.isInteger(plot?.greeting)) $('greetings').children[plot.greeting]?.scrollIntoView({ block: 'nearest' })
+  }
+  $('greeting-plots').replaceChildren(...(plots.length ? plotChoices(plots, card.plotEndings, markOpening) : []))
+  if (texts.length === 1 && !plots.length) return startChat(0)
   const pick = index => {
     $('greeting-dialog').close()
     startChat(index)
@@ -1660,7 +1882,28 @@ const newChat = guard(async () => {
     const body = item.querySelector('.greeting-text')
     item.querySelector('.greeting-more').hidden = body.scrollHeight <= body.clientHeight + 1
   }
+  markOpening()
 })
+
+/** 剧本 in 选择开场白: 自由发挥 or one of the card's plots (an imported one does not tell how many endings it has). */
+function plotChoices(plots, endings = {}, onPick = () => {}) {
+  const choice = (id, name, note) => {
+    const radio = el('input', { type: 'radio', name: 'new-plot', value: id, checked: ui.newPlot === id })
+    radio.addEventListener('change', () => {
+      ui.newPlot = id
+      onPick()
+    })
+    return el('label', { class: 'plot-choice' }, [radio, el('span', {}, [el('b', { text: name }), note ? el('small', { class: 'muted', text: note }) : null].filter(Boolean))])
+  }
+  return [
+    el('p', { class: 'greeting-plots-head', text: t`剧本` }),
+    choice('', t`自由发挥`, t`不用剧本`),
+    ...plots.map(plot => {
+      const got = plot.scenes.filter(scene => scene.ending && endings[plot.id]?.[scene.id]).length
+      return choice(plot.id, plot.name, [plot.intro, plot.source === 'imported' ? t`${plot.scenes.length} 幕 · 多个结局` : t`${plot.scenes.length} 幕 · ${plot.scenes.filter(scene => scene.ending && !scene.side).length} 个结局`, got ? t`达成过 ${got} 个结局` : ''].filter(Boolean).join(' · '))
+    }),
+  ]
+}
 
 /** One opening in 选择开场白: its first lines (blank lines left out), the whole of it on a tap, and a button to start with it. */
 function greetingItem(text, index, pick) {
@@ -1689,7 +1932,7 @@ function greetingItem(text, index, pick) {
 }
 
 const startChat = guard(async greetingIndex => {
-  const chat = await api('/api/chats', { method: 'POST', body: { cardId: ui.cardId, greetingIndex } })
+  const chat = await api('/api/chats', { method: 'POST', body: { cardId: ui.cardId, greetingIndex, plotId: $('greeting-plots').hidden ? '' : ui.newPlot ?? '' } })
   await refreshChats()
   ui.directTipClosed = false
   setChat(chat)
@@ -1978,7 +2221,7 @@ function queueChips(chat = ui.chat) {
   return ops.map((op, i) => el('button', { type: 'button', class: 'game-chip', title: t`取消这个操作`, text: `${rules.play.opLabel(op)} ×`, onclick: event => { event.stopPropagation(); setQueue(chat, ops.filter((_, at) => at !== i)) } }))
 }
 
-/** By the input box: the turn's operations, and the way to the 行囊. */
+/** By the input box: the turn's operations, and the way to the 游戏菜单. */
 function renderQueue() {
   const box = document.querySelector('.composer-box')
   if (!box) return
@@ -1986,13 +2229,11 @@ function renderQueue() {
   if (!row) {
     row = el('div', { id: 'game-queue', class: 'game-queue' })
     box.before(row)
-    document.querySelector('.composer-row')?.append(el('button', { type: 'button', id: 'open-bag', class: 'btn small', text: t`行囊`, onclick: () => openBag() }))
+    document.querySelector('.composer-row')?.append(el('button', { type: 'button', id: 'open-bag', class: 'btn small', text: t`游戏菜单`, onclick: () => openBag() }))
   }
   row.replaceChildren(...queueChips())
   row.hidden = !row.childNodes.length
   $('open-bag').hidden = !rulesRunning()
-  // What the card calls its 行囊.
-  $('open-bag').textContent = rules.book?.words?.bag || t`行囊`
   // Points to spend or a 天赋 to choose: the button says there is something waiting.
   const waiting = rulesRunning() && ui.chat ? rules.play.pendingOf(rules.play.sheetFor(ui.chat, rules.book, queueOf(ui.chat)), rules.book) : 0
   $('open-bag').classList.toggle('waiting', waiting > 0)
@@ -2241,6 +2482,15 @@ function keepFight(replyId, fight) {
 
 // Foes asked about or drawn on this page: once each.
 const foesSeen = new Set()
+// Foes who are of the card's cast (楚子苓 met in a fight): card:name → a promise of their picture, '' for none.
+const foesCast = new Map()
+const castFoe = (chat, name) => {
+  const key = `${chat.cardId}:${name}`
+  if (!foesCast.has(key)) foesCast.set(key, (vnUi.castPicture?.(chat, name) ?? Promise.resolve('')).catch(() => ''))
+  return foesCast.get(key)
+}
+// The pictures found so far, for what is drawn at once.
+const castFoesShown = new Map()
 // The fight on screen, for a picture finished while it goes on.
 let fightOn = null
 
@@ -2255,12 +2505,29 @@ function foesLearned(book) {
 function prepareFoes(chat, gates = [pendingGate(chat)]) {
   const names = [...new Set(gates.filter(gate => gate?.kind === 'battle').flatMap(gate => gate.foes.map(foe => foe.name)))]
   if (!names.length) return
-  const unknown = names.filter(name => !rules.book.foes[name] && !foesSeen.has(`${chat.cardId}:${name}`))
+  // One of the card's cast fights in their own picture (the visual novel's): none is drawn for them.
+  // Drawn again only when a picture is new: a drawing calls this again, and a known picture comes back at once, so
+  // redrawing for it every time would never let the page breathe (a fight against one of the cast froze the chat).
+  Promise.all(names.map(name => castFoe(chat, name).then(src => {
+    const key = `${chat.cardId}:${name}`
+    if (!src || castFoesShown.get(key) === src) return false
+    castFoesShown.set(key, src)
+    return true
+  }))).then(found => {
+    if (found.some(Boolean)) foesLearned(rules.book)
+    learnFoes(chat, names)
+  })
+}
+
+function learnFoes(chat, names) {
+  // 异化流浪犬A is the bestiary's 异化流浪犬: no new entry for it, and no picture of its own.
+  const kindOf = name => rules.play.bestiaryName(rules.book.foes, name)
+  const unknown = names.filter(name => !kindOf(name) && !foesSeen.has(`${chat.cardId}:${name}`))
   const draw = () => {
-    for (const name of names) {
+    for (const name of [...new Set(names.map(name => kindOf(name) ?? name))]) {
       const seen = `draw:${chat.cardId}:${name}`
       const foe = rules.book.foes[name]
-      if (!foe?.looks || foe.file || foesSeen.has(seen)) continue
+      if (!foe?.looks || foe.file || foesSeen.has(seen) || castFoesShown.has(`${chat.cardId}:${name}`)) continue
       foesSeen.add(seen)
       vnUi.drawFoe(chat.cardId, name, foesLearned)
     }
@@ -2275,8 +2542,9 @@ function prepareFoes(chat, gates = [pendingGate(chat)]) {
 
 /** What a fight shows of a foe: its moves and picture, as the bestiary has them now. */
 const foeShown = cardId => name => {
-  const foe = rules.book?.foes[name]
-  return { moves: foe?.moves ?? [], picture: foe?.file ? `/api/foes/${cardId}/${foe.file}` : '' }
+  const foe = rules.book ? rules.book.foes[rules.play?.bestiaryName(rules.book.foes, name) ?? name] : null
+  // The bestiary's picture first (drawn or uploaded for the fight), else the cast's own.
+  return { moves: foe?.moves ?? [], picture: foe?.file ? `/api/foes/${cardId}/${foe.file}` : castFoesShown.get(`${cardId}:${name}`) ?? '' }
 }
 
 /** 技能特写: a skill's own picture, as the rule book has it now; '' for one without. */
@@ -2313,6 +2581,8 @@ const startFight = guard(async () => {
   const spot = fightSpot(gate, tip)
   const ops = queueToSend(chat, tip.id)
   const { openBattle } = await import('/game-battle.js')
+  // Those of the cast among the foes: their pictures, before the fight shows them.
+  await Promise.all(gate.foes.map(foe => castFoe(chat, foe.name).then(src => { if (src) castFoesShown.set(`${chat.cardId}:${foe.name}`, src) })))
   // The companions' pictures, those who have not stood on the stage yet too: a figure each in the party band.
   const companions = rules.book.companions ?? {}
   await vnUi.loadPictures?.(Object.entries(companions).flatMap(([name, companion]) => [name, ...(companion?.keys ?? [])]))
@@ -2324,8 +2594,10 @@ const startFight = guard(async () => {
     background: await sceneBehind(chat),
     energyName: rules.book.energyName,
     words: rules.book.words ?? {},
-    // A companion's face from the visual novel's cast: their name, or one the card's rules say they go by.
-    faceFor: name => [name, ...(rules.book.companions?.[name]?.keys ?? [])].map(one => vnUi.pictureFor(one)).find(Boolean) ?? '',
+    // A companion's face from the visual novel's cast: their name, or one the card's rules say they go by; else (a pet
+    // tamed from the bestiary, a 形态 the roster has no one for) its picture in the 敌人图鉴.
+    faceFor: name => [name, ...(rules.book.companions?.[name]?.keys ?? [])].map(one => vnUi.pictureFor(one)).find(Boolean)
+      ?? (rules.book.foes?.[name]?.file ? `/api/foes/${chat.cardId}/${rules.book.foes[name].file}` : ''),
     skillPicture: skillShown(chat.cardId),
     setup: encounterOf(chat, ops),
     forced: !canLeaveFight(chat, gate),
@@ -2503,6 +2775,8 @@ function drawChat() {
   renderQuickReplies()
   renderSearchButton()
   renderDictateButton()
+  renderGuide()
+  renderPlot()
   $('topbar-row').hidden = !chat
   const presetPill = $('chat-preset')
   presetPill.hidden = !chat
@@ -2609,7 +2883,9 @@ function drawingKey(chat, scripts) {
     // reply's panel, which is drawn afresh anyway; with it here, every message of the chat was drawn again.
     scripts, ui.settings ?? null, ui.blockWords ?? null, rules.book ? { ...rules.book, foes: null } : null, Boolean(rules.play),
     ui.cards.find(card => card.id === chat.cardId) ?? null, mediaUi.settings?.() ?? null, ui.appVersion ?? '', document.documentElement.lang,
-    cardArtVersion, document.documentElement.dataset.cardMotion ?? '',
+    // Not the card's pictures (card-art.js): only the latest reply's bar and the cover show them, both drawn afresh
+    // anyway. With them here, a chat opened after a reload was drawn whole twice, the second time as they came in.
+    document.documentElement.dataset.cardMotion ?? '',
   ])
 }
 
@@ -2629,8 +2905,11 @@ function drawMessages(chat, lastAssistant, blank) {
   drawing.lazy = true
   try {
     const out = []
+    const plotted = plotMarks(chat)
     chat.path.forEach((node, index) => {
       if (blank(node)) return
+      const mark = plotted.get(node.id)
+      if (mark?.before) out.push(mark.before)
       const depth = chat.path.length - 1 - index
       const fresh = lastAt < 0 || index >= lastAt || node.id === 'pending-user'
       // Everything renderNode reads of this message and its place.
@@ -2647,6 +2926,16 @@ function drawMessages(chat, lastAssistant, blank) {
       if (!fresh) messages.set(node.id, { sig, article })
       out.push(article)
     })
+    // 剧本: a chapter line or an ending card after the reply it follows.
+    if (plotted.size) {
+      const marked = []
+      for (const item of out) {
+        marked.push(item)
+        const after = item.dataset?.id ? plotted.get(item.dataset.id)?.after : null
+        if (after) marked.push(after)
+      }
+      out.splice(0, out.length, ...marked)
+    }
     drawing.chats.delete(chat.id)
     drawing.chats.set(chat.id, { key, messages })
     while (drawing.chats.size > KEPT_DRAWINGS) drawing.chats.delete(drawing.chats.keys().next().value)
@@ -2820,6 +3109,13 @@ function rememberPlace() {
 }
 
 /** The turn being written in this chat, as far as it has come (also after switching back). */
+/** How long a reply has been under way: 已等 until its first word (or thought) came, 已写 since. */
+function waitText(job) {
+  const s = Math.max(0, Math.floor((Date.now() - (job.startedAt ?? Date.now())) / 1000))
+  const span = s < 60 ? t`${s} 秒` : t`${Math.floor(s / 60)} 分 ${s % 60} 秒`
+  return job.firstAt ? t`已写 ${span}` : t`已等 ${span}`
+}
+
 function liveNodes(chat, { animate = false } = {}) {
   const job = ui.busy.get(chat.id)
   if (!job || job.kind === 'compact' || job.kind === 'fill' || job.kind === 'choices') return []
@@ -2830,7 +3126,7 @@ function liveNodes(chat, { animate = false } = {}) {
     nodes.push(echo)
   }
   const live = el('article', { class: `msg assistant streaming${animate ? ' enter' : ''}` }, [
-    el('div', { class: 'msg-head' }, [speakerFace(chat, 'assistant'), el('span', { class: 'name', text: chat.names.char }), el('span', { class: 'live-note', text: job.note }), el('span', { class: 'live-dots', 'aria-hidden': 'true' }, [el('i'), el('i'), el('i')])]),
+    el('div', { class: 'msg-head' }, [speakerFace(chat, 'assistant'), el('span', { class: 'name', text: chat.names.char }), el('span', { class: 'live-note', text: job.note }), el('span', { class: 'live-dots', 'aria-hidden': 'true' }, [el('i'), el('i'), el('i')]), el('span', { class: 'live-time', title: t`从发出到现在：出第一个字之前是等待，之后是在写`, text: waitText(job) })]),
     // What the player's action came to stays in sight while the story is written on from it.
     job.outcome ? el('div', { class: `roll-record ${job.outcome.tier}`, text: job.outcome.text }) : null,
     job.reasoning ? reasoningFold(job.reasoning, { thinking: !job.text }) : null,
@@ -2877,7 +3173,9 @@ function noteAllChanged() {
 
 async function applyChanges() {
   const chat = ui.chat
-  const waiting = document.hidden || document.querySelector('dialog[open], #transcript .msg.editing') || (chat && ui.busy.has(chat.id))
+  // Nor while a card's frame is calling the model or an address: drawn again, the frame would go, and its call with it
+  // (watchCallFrames). A frame that saves the chat as it goes (its world book) then has the model write was cut off this way.
+  const waiting = document.hidden || document.querySelector('dialog[open], #transcript .msg.editing') || (chat && ui.busy.has(chat.id)) || frameGenerations.size || frameFetches.size
   if (waiting) {
     // Hidden: looked at again when it shows (visibilitychange); otherwise in a little while.
     if (!document.hidden) changes.timer = setTimeout(applyChanges, 3000)
@@ -3039,6 +3337,9 @@ function renderNode(chat, node, isLastAssistant, depth = 0) {
     tools.push(el('span', { class: 'chip quiet', text: t`整理记忆中…` }), el('button', { text: t`停止整理`, onclick: () => cancelTidy() }))
   } else if (!isUser && isLastAssistant && chat.memoryError) {
     tools.push(el('button', { type: 'button', class: 'chip warn', title: chat.memoryError, text: t`⚠ 整理记忆没成功`, onclick: () => openMemory() }))
+  }
+  if (!isUser && !isLastAssistant && node.id !== 'pending-user' && Object.keys(node.state ?? {}).length) {
+    tools.push(el('button', { text: t`这一轮的状态`, title: t`看这条回复写完时的变量，只看不改`, onclick: () => showFloorState(chat, node) }))
   }
   if (!isUser && !isLastAssistant) {
     tools.push(el('button', { text: t`回滚到这里`, title: t`收起之后的对话，状态也回到这一轮；随时可以恢复`, ...busyOff(), onclick: () => rollbackTo(node.id) }))
@@ -3284,12 +3585,11 @@ function statusFor(chat, node) {
 // A card creator card's cover (web/cover.js), above the opening. Kept as drawn while what it shows stays the same:
 // the page is drawn again at every change, and the cover's letters should come in once.
 
-// What a card's bar and cover show of the app's pictures (web/card-art.js); a change in them draws the chat again.
-let cardArtVersion = 0
+// What a card's bar and cover show of the app's pictures (web/card-art.js); a change in them draws the chat again
+// (the latest reply and the cover: the messages before show none of them).
 const cardArt = initCardArt({
   api,
   onLoaded: cardId => {
-    cardArtVersion += 1
     if (ui.chat?.cardId !== cardId) return
     renderChat()
     renderSide()
@@ -4360,6 +4660,8 @@ function branchFrom(parentId, label) {
 }
 
 function renderBranchNote() {
+  // 剧本: the bar shows the story where the turn is sent from.
+  if (ui.chat?.plot) renderPlot()
   const note = $('branch-note')
   if (!ui.branchFrom) { note.hidden = true; return }
   note.hidden = false
@@ -4493,6 +4795,8 @@ function renderMemory() {
   status.className = `small${view.memoryError && !view.tidying ? ' warn' : ''}`
   status.textContent = view.tidying ? t`正在整理记忆…` : view.memoryError ? t`上次整理没成功：${view.memoryError}` : ''
   $('memory-tidy').disabled = Boolean(view.tidying) || !on
+  $('memory-model').replaceChildren(...memoryModelOptions(ui.settings?.memory?.tidy?.model ?? view.settings?.tidy?.model ?? 'helper'))
+  $('memory-model').disabled = !on
   $('memory-export').disabled = !view.entries.length
   const kinds = MEMORY_KINDS()
   const groups = Object.keys(kinds).map(kind => {
@@ -5405,8 +5709,14 @@ async function writeTurn(endpoint, body, echoUserText, outcome, { prefix = '', h
   let failure = null
   // The connection went before the turn's end was heard (a phone's screen locked): the server writes on.
   let dropped = false
+  // 已等 / 已写: the time under way, on the reply being written, every second.
+  const ticking = setInterval(() => {
+    const time = live()?.querySelector('.live-time')
+    if (time) time.textContent = waitText(job)
+  }, 1000)
   try {
     await stream(`/api/chats/${chatId}/${endpoint}`, body, event => {
+      if ((event.type === 'delta' || event.type === 'reasoning') && !job.firstAt) job.firstAt = Date.now()
       if (event.type === 'start') {
         job.sheet = event.sheet ?? null
         if (viewing()) {
@@ -5483,6 +5793,7 @@ async function writeTurn(endpoint, body, echoUserText, outcome, { prefix = '', h
     failure = { message: error.message }
     dropped = !error.status
   }
+  clearInterval(ticking)
   frames()
   perf.mark('turn.streamed')
   if (!finished && !failure) dropped = true
@@ -5764,6 +6075,44 @@ function sideBar(chat) {
   const card = ui.cardDetails.get(chat.cardId)
   const art = card?.id ? cardArt.barArt(card, spec, chat, node, rules.cardId === chat.cardId ? rules.book : null) : null
   return statusBar(el, spec, shown.state, { previous: previousState(chat, node), art, collapsible: false, seen: `side:${chat.id}:${node.id}` })
+}
+
+/**
+ * 这一轮的状态: an earlier reply's variables as they were when it was written (each reply keeps its own), read only.
+ * Laid out as the bar the side pane shows, with this round's changes; 变量 shows them as they are.
+ */
+function showFloorState(chat, node) {
+  const state = node.state ?? {}
+  const laid = statusSpecFor(chat, node) ?? autoStatusSpec(state)
+  const { effect: _, ...spec } = laid ?? {}
+  const card = ui.cardDetails.get(chat.cardId)
+  const art = laid && card?.id ? cardArt.barArt(card, spec, chat, node, rules.cardId === chat.cardId ? rules.book : null) : null
+  const bar = laid ? statusBar(el, spec, state, { previous: previousState(chat, node), art, collapsible: false, seen: `floor:${chat.id}:${node.id}` }) : null
+  const raw = el('pre', { class: 'state floor-state-raw', text: JSON.stringify(state, null, 2) })
+  const round = chat.path.slice(0, chat.path.findIndex(n => n.id === node.id) + 1).filter(n => n.role === 'user').length
+  const box = el('dialog', { class: 'dialog floor-state' })
+  const close = () => box.close()
+  box.addEventListener('close', () => box.remove())
+  let asBar = Boolean(bar)
+  const view = el('div', { class: 'floor-state-view' })
+  const mode = el('button', { type: 'button', class: 'btn small', hidden: !bar })
+  const show = () => {
+    view.replaceChildren(asBar ? bar : raw)
+    mode.textContent = asBar ? t`变量` : t`状态栏`
+  }
+  mode.onclick = () => {
+    asBar = !asBar
+    show()
+  }
+  show()
+  box.append(
+    el('h2', { text: round ? t`第 ${round} 轮的状态` : t`开场时的状态` }),
+    el('p', { class: 'hint', text: t`这条回复写完时的变量，只看不改。要从这里接着玩，用这条回复下面的「回滚到这里」或「从这里分支」。` }),
+    view,
+    el('div', { class: 'row end' }, [mode, el('button', { type: 'button', class: 'btn small', text: t`关闭`, onclick: close })]),
+  )
+  document.body.append(box)
+  box.showModal()
 }
 
 function renderSide() {
@@ -6084,7 +6433,7 @@ function fillMemory(form) {
   form.memoryOn.checked = saved.enabled === true
   form.memoryTidy.checked = saved.tidy?.enabled === true
   form.memoryEvery.value = saved.tidy?.every ?? 10
-  form.memoryModel.value = saved.tidy?.model ?? 'helper'
+  form.memoryModel.replaceChildren(...memoryModelOptions(saved.tidy?.model ?? 'helper'))
   form.memoryBudget.value = saved.budget ?? 1500
   const sync = () => {
     form.memoryTidy.disabled = form.memoryBudget.disabled = !form.memoryOn.checked
@@ -6093,6 +6442,38 @@ function fillMemory(form) {
   form.memoryOn.onchange = form.memoryTidy.onchange = sync
   sync()
 }
+
+/**
+ * 整理用的模型 (settings.memory.tidy.model): the helper, the chat's own, or one of the providers' models by name (a
+ * picked one since gone stays shown, said so). For 设置 → 长期记忆 and the 记忆簿 window alike.
+ */
+function memoryModelOptions(selected) {
+  const named = ui.models.filter(m => m.id.includes('/'))
+  const gone = selected !== 'helper' && selected !== 'chat' && !named.some(m => m.id === selected)
+  return [
+    el('option', { value: 'helper', text: t`辅助模型：只看最近这几轮，省钱`, selected: selected === 'helper' }),
+    el('option', { value: 'chat', text: t`对话模型：带着整段剧情看，记得更准`, selected: selected === 'chat' }),
+    named.length ? el('optgroup', { label: t`指定模型：只看最近这几轮` }, named.map(m => el('option', { value: m.id, text: `${m.group ?? ''} · ${m.label}`, selected: m.id === selected }))) : null,
+    gone ? el('option', { value: selected, text: t`${selected}（已不在模型列表里，整理时改用辅助模型）`, selected: true }) : null,
+  ].filter(Boolean)
+}
+
+/** 整理用的模型 in the 记忆簿 window: the same setting as 设置 → 长期记忆, its other options kept. */
+const switchMemoryModel = guard(async () => {
+  const select = $('memory-model')
+  const before = ui.settings?.memory?.tidy?.model ?? 'helper'
+  const memory = ui.settings?.memory ?? {}
+  try {
+    ui.settings = await api('/api/settings', { method: 'PUT', body: { memory: { ...memory, tidy: { ...(memory.tidy ?? {}), model: select.value } } } })
+  } catch (error) {
+    select.value = before
+    throw error
+  }
+  const form = $('settings-form')
+  if (form?.memoryModel) form.memoryModel.replaceChildren(...memoryModelOptions(ui.settings.memory.tidy.model))
+  if (memoryUi.view) memoryUi.view = { ...memoryUi.view, settings: ui.settings.memory }
+  toast(t`整理记忆簿改用：${select.selectedOptions[0]?.text ?? select.value}`)
+})
 
 const memorySettingsOf = (form, num) => ({
   enabled: form.memoryOn.checked,
@@ -6136,7 +6517,7 @@ function windowItems(card) {
   return [
     ...preset(basic, '', t`基础预设`),
     ...preset(fieldsOf(VN_ID), VN_ID, t`视觉小说预设`),
-    media(t`画图方式`, 'image', t`NovelAI ComfyUI SD WebUI Gemini 出图 生图`),
+    media(t`画图方式`, 'image', t`NovelAI ComfyUI SD WebUI Gemini 出图 生图 中转 接口地址`),
     media(t`配图提示词`, 'prompt', t`辅助模型 提示词`),
     media(t`我的画风`, 'style-library', t`画师串 画风 默认画风 所有卡`),
     { title: t`图库`, group: t`配图与朗读`, place: '', text: t`所有图片 CG 立绘 背景 配图 批量导出 打包下载`, go: () => openGallery() },
@@ -6663,7 +7044,7 @@ const mediaUi = initMedia({
     const { openGallery: open } = await import('/gallery.js').catch(() => {
       throw Object.assign(new Error(t`图库要重启后台服务后才能用：关掉所有窗口等一分钟，再从桌面图标打开。`), { status: 404 })
     })
-    return open({ api, el, toast, guard, download: downloadPath }, { cardId, pick: true })
+    return open({ api, el, toast, guard, download: downloadPath, viewPicture: (...args) => mediaUi.viewPicture(...args) }, { cardId, pick: true })
   },
   openGallery: () => openGallery(),
   // A reply's picture in the works shows in the visual novel's corner, where the reply itself is out of sight.
@@ -6673,6 +7054,11 @@ const mediaUi = initMedia({
 const historyUi = initHistory({ el, getChat: () => ui.chat, settleScroll })
 const vnUi = initVn({
   api, el, toast, guard, renderStory, perf,
+  openGuide: () => openGuide(),
+  // 剧本's ending screen: 继续写下去 (the plot taken off), 回到岔路口 (the route map), 开新对话.
+  plotAct: async body => setChat(await api(`/api/chats/${ui.chat.id}/plot`, { method: 'PUT', body })),
+  openPlotMap: options => openPlotMap(options),
+  newChat: () => newChat(),
   // 一键备齐 / 做成视觉小说 ask how to draw first (web/draw-choice.js).
   pickDraw: drawChoice.pick,
   // 视觉小说预设, offered on going into the mode: the chat's prefix rebuilt with it.
@@ -6834,6 +7220,9 @@ function regexChanged({ global, sets, card, preset }) {
 // 世界书 / 预设 / 正则 / 主题 → 对话修改: the talk on one of them, over the window it came from.
 const talkUi = initTalkDialog({ api, el, guard, openProviders: () => providersUi.open() })
 const regexUi = initRegex({ api, el, toast, guard, saveFile, context: regexContext, getCards: () => ui.cards, onChanged: regexChanged, openTalk: talkUi.open })
+// 手机上的下拉框 (web/select-sheet.js): on a touch screen a select opens a sheet in the page's look, not the system list.
+// Loaded apart, so a server from before the file only keeps the system's.
+if (matchMedia('(hover: none) and (pointer: coarse)').matches) import('/select-sheet.js').then(m => m.installSelectSheet()).catch(() => {})
 const themeUi = initTheme({ api, el, toast, guard, getSettings: () => ui.settings, setSettings: settings => { ui.settings = settings }, onReading: () => fitInput(), openTalk: talkUi.open })
 const whatsNewUi = initWhatsNew({ el })
 const updateUi = initUpdate({ api, el, toast, guard, android, onChange: () => settingsMenu?.refresh(), isGenerating: () => ui.generating, openNotes: () => whatsNewUi.open() })
@@ -6943,6 +7332,7 @@ const booksUi = initBooks({
 // 修改角色卡 (the card list's ⋯): the card's fields, its picture and its own book, and 对话修改.
 const cardEditUi = initCardEdit({
   api, el, toast, guard, saveFile, saveDownload: phoneDownload(),
+  openPlots: card => managePlots(card.id),
   openCheck: id => openCardCheck(id),
   pickDraw: drawChoice.pick,
   getChat: () => ui.chat,
@@ -7428,10 +7818,10 @@ function bind() {
     input: text => setDraft(text, false),
     slash: runFrameSlash,
     send: frameSend,
-    opening: async index => {
+    opening: async (index, text) => {
       if (!ui.chat || ui.generating) throw new Error(t`正在生成，稍后再试`)
       const chatId = ui.chat.id
-      const view = await api(`/api/chats/${chatId}/opening`, { method: 'POST', body: { index } })
+      const view = await api(`/api/chats/${chatId}/opening`, { method: 'POST', body: typeof text === 'string' ? { text } : { index } })
       if (stillOpen(chatId)) setChat(view)
     },
     ids: () => ({ presetId: ui.chat?.presetId ?? null, cardId: ui.chat?.cardId ?? null }),
@@ -7544,15 +7934,35 @@ function bind() {
       const node = document.activeElement
       return !!node && (node.isContentEditable || node.tagName === 'TEXTAREA' || (node.tagName === 'INPUT' && !/^(checkbox|radio|button|submit|reset|range|color|file|image)$/.test(node.type)))
     }
+    // On a touch screen, typing means a keyboard is up, whether or not the viewport says so: an iPhone does not
+    // shrink the page, it slides all of it up until its bottom meets the keyboard (--kb stays 0), and the input box
+    // sat over the home bar's inset as well (.keyboard-up in style.css).
+    const touch = matchMedia('(hover: none) and (pointer: coarse)')
     const syncKeyboard = () => {
       const viewport = window.visualViewport
-      const gap = typing() ? Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop) : 0
+      const typed = typing()
+      const gap = typed ? Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop) : 0
       document.documentElement.style.setProperty('--kb', `${gap}px`)
+      document.documentElement.classList.toggle('keyboard-up', typed && touch.matches)
       return gap
     }
     window.visualViewport.addEventListener('resize', syncKeyboard)
     window.visualViewport.addEventListener('scroll', syncKeyboard)
+    document.addEventListener('focusin', syncKeyboard)
     document.addEventListener('focusout', () => setTimeout(syncKeyboard, 150))
+    // On an iPhone the keyboard goes only with 完成 on the bar over it: a touch on the page outside the input box and
+    // other text boxes, a tap or the start of a scroll, puts it away too, as chat apps do. The touch still does what
+    // it does.
+    if (/iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)) {
+      document.addEventListener('touchstart', event => {
+        if (!document.documentElement.classList.contains('keyboard-up')) return
+        const node = document.activeElement
+        const target = event.target
+        if (!node || node === document.body || !(target instanceof Element)) return
+        if (node.contains(target) || target.closest('.composer, input, textarea, select, label, [contenteditable]')) return
+        node.blur()
+      }, { passive: true, capture: true })
+    }
     // Back on screen: the page itself never scrolls (.app is the screen's height), but a keyboard can leave it moved up.
     const settle = () => {
       if (!syncKeyboard() && window.scrollY) window.scrollTo(0, 0)
@@ -7576,6 +7986,8 @@ function bind() {
   $('quick-open').addEventListener('click', openQuick)
   $('search-toggle').addEventListener('click', toggleSearch)
   $('help-toggle').addEventListener('click', toggleHelp)
+  $('guide-open').addEventListener('click', openGuide)
+  $('chat-plot').addEventListener('click', usePlot)
   $('dictate').addEventListener('click', pressDictate)
   document.addEventListener('cicatavern:media-settings', renderDictateButton)
   $('quick-apply').addEventListener('click', applyQuick)
@@ -7584,6 +7996,7 @@ function bind() {
   $('memory-add').addEventListener('click', () => { memoryUi.editing = 'new'; renderMemory() })
   $('memory-tidy').addEventListener('click', tidyMemoryNow)
   $('memory-on').addEventListener('change', switchMemory)
+  $('memory-model').addEventListener('change', switchMemoryModel)
   $('memory-settings').addEventListener('click', guard(async () => {
     $('memory-dialog').close()
     await openSettings()

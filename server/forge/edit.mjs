@@ -171,10 +171,11 @@ ${STATUS_FORMAT()}
  * greeting:0, entry:3). Returns { request, shown }, shown being the uids of the
  * entries sent in full: only those can be changed by the answer.
  * `helpers`: the card's scripts (helperBlock), told about when the request is about them.
+ * `picked`: the entries a first look at a long book asked to read (book-edit.mjs pickRequest), sent in full first.
  */
-export function editRequest(card, { text, target = '', turns = [], reply = '简体中文', references = [], helpers = null, state = {} } = {}) {
+export function editRequest(card, { text, target = '', turns = [], reply = '简体中文', references = [], helpers = null, state = {}, picked = [] } = {}) {
   const entries = card.book?.entries ?? []
-  const shown = shownEntries(entries, `${text}\n${target}`, target)
+  const shown = shownEntries(entries, `${text}\n${target}`, target, { picked })
   const history = historyLines(turns)
   const material = referenceBlock(references)
   const rules = !material ? '' : REFERENCE_RULES + (chatOf(references) && !target ? CHAT_STATE_RULES : '')

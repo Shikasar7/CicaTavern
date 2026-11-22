@@ -26,18 +26,23 @@ function contents(entries) {
     .join('\n')
 }
 
-/** The first look at a long book: its contents and the request; the answer names the entries to read. */
-export function pickRequest(book, { text, target = '', turns = [] } = {}) {
+/**
+ * The first look at a long book: its contents and the request; the answer names the entries to read. `card`: the
+ * book is a card's own, looked at for 修改角色卡's 对话修改 (a request about the card's other parts reads none).
+ */
+export function pickRequest(book, { text, target = '', turns = [], card = false } = {}) {
   const history = historyLines(turns)
   const content = [
     `${bookHead(book)}\n目录（${book.entries.length} 条）：\n${contents(book.entries)}\n</worldbook>`,
     history.length ? `之前的几次修改：\n${history.join('\n')}` : '',
     `这次的要求：\n${text}`,
     target.startsWith('entry:') ? `这次只改 uid=${target.slice(6)} 这一条。` : '',
-    `先挑出完成这次要求要读全文的条目，最多 ${PICK_MAX} 条。只回答 <read>uid, uid, …</read>；只是新增条目、不用读旧条目时回答 <read></read>。`,
+    `先挑出完成这次要求要读全文的条目，最多 ${PICK_MAX} 条。只回答 <read>uid, uid, …</read>；只是新增条目、不用读旧条目时回答 <read></read>。${card ? '要求和世界书条目无关（只改人设、开场白这类）时也回答 <read></read>。' : ''}`,
   ].filter(Boolean).join('\n\n')
   return {
-    system: '你在帮用户修改一本 SillyTavern 世界书。书太长，不能一次全部附上，先看目录挑出要读的条目。只回答 <read> 标签，不写别的。',
+    system: card
+      ? '你在帮用户修改一张 SillyTavern 角色卡。卡自带的世界书太长，不能一次全部附上，先看目录挑出要读的条目。只回答 <read> 标签，不写别的。'
+      : '你在帮用户修改一本 SillyTavern 世界书。书太长，不能一次全部附上，先看目录挑出要读的条目。只回答 <read> 标签，不写别的。',
     messages: [{ role: 'user', content }],
     maxTokens: 800,
   }

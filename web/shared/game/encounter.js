@@ -3,7 +3,7 @@
 // played through again, so what the model is told is what the rules say happened.
 import { MAX_PARTY, alliesOf, attemptSetup, autoCommands, battleSetup, cleanOpening, fieldFoes, foesOf, playerOf, replay, rewardOf, shockOf, simulate, startBattle, step, tameTry } from './battle.js'
 import { modifierOf } from './dice.js'
-import { alliesFor, effectOf, fieldedOf, playerGrowth, typesFor } from './sheet.js'
+import { alliesFor, bestiaryName, effectOf, fieldedOf, playerGrowth, typesFor } from './sheet.js'
 import { foesFollow, growsOn, wornWorth } from './growth.js'
 import { gapBetween, standingAt, standingOf, strengthOf } from './rank.js'
 
@@ -21,9 +21,11 @@ const OVER_WORDS = { won: '胜利', lost: '战败', fled: '逃脱' }
  */
 function facing(group, sheet, book, difficulty) {
   // 招式效果: what the card's bestiary says this kind does with its blows; the fight keeps what its tier has room for.
-  const adds = book.foes?.[group.name]?.adds
+  // 异化流浪犬A is one of the bestiary's 异化流浪犬 (bestiaryName).
+  const kind = book.foes?.[bestiaryName(book.foes, group.name)]
+  const adds = kind?.adds
   // 类型克制: its type, on a card that has types.
-  const type = book.types ? book.foes?.[group.name]?.type : ''
+  const type = book.types ? kind?.type : ''
   const known = adds?.length || type ? { ...group, ...(adds?.length ? { adds } : {}), ...(type ? { type } : {}) } : group
   const strength = strengthOf(group.power, sheet, book.ranks, book.rankSpan)
   if (!growsOn(book) || strength.rank) return { foe: { ...known, ...strength } }

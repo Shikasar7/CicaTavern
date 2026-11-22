@@ -84,13 +84,40 @@ export function planMap(plan) {
 export const sameName = (a, b) => Boolean(a) && Boolean(b) && (a === b || (a.length > 1 && b.includes(a)) || (b.length > 1 && a.includes(b)))
 
 /** A layout as saved, or null when there is nothing to show. */
-export const STATUS_THEMES = ['plain', 'paper', 'neon', 'pastel', 'ink', 'parchment', 'gothic', 'terminal', 'ocean']
+// 状态栏样式 (web/style.css, and server/forge/status.mjs for SillyTavern). A card that still names one of the older
+// themes, since taken out, shows the plain bar.
+export const STATUS_THEMES = ['plain', 'editorial', 'meadow', 'sigil', 'daybreak', 'aquarelle', 'cobalt', 'afterschool', 'lineart', 'signal', 'mercury', 'redink', 'kaleido']
+// 天光云影 (aquarelle): which sky is painted over the bar. The first row that tells the time (its name says so: 时间,
+// 时辰, time…) is read for a word of the day's time, then for an hour; a bar that tells none has the noon sky.
+const TIME_ROW = /时间|时辰|时段|时刻|天色|time|clock|hour/i
+const SKY_WORDS = [
+  ['night', /深夜|午夜|半夜|夜|晚上|入夜|子时|丑时|亥时|戌时|night|midnight/i],
+  ['dusk', /黄昏|傍晚|日落|日暮|夕|暮|薄暮|酉时|dusk|sunset|evening|twilight/i],
+  ['dawn', /黎明|拂晓|破晓|清晨|早晨|凌晨|晨|朝|卯时|寅时|dawn|sunrise|morning/i],
+  ['day', /正午|中午|午后|上午|下午|白天|白昼|日间|辰时|巳时|午时|未时|申时|noon|daytime|afternoon/i],
+]
+const skyAt = hour => (hour >= 5 && hour < 8 ? 'dawn' : hour >= 8 && hour < 17 ? 'day' : hour >= 17 && hour < 19 ? 'dusk' : 'night')
+
+/** The sky for a bar's rows: dawn, day, dusk or night. */
+export function skyOf(groups) {
+  for (const group of groups) {
+    for (const row of group.rows ?? []) {
+      if (!TIME_ROW.test(`${row.label ?? ''} ${row.path ?? ''}`)) continue
+      const words = String(row.text ?? row.words ?? (Array.isArray(row.tags) ? row.tags.join(' ') : '') ?? '')
+      const named = SKY_WORDS.find(([, said]) => said.test(words))
+      if (named) return named[0]
+      const hour = /(?:^|[^\d])([01]?\d|2[0-3])\s*(?:[:：]\s*\d{2}|点|时)/.exec(words)
+      if (hour) return skyAt(Number(hour[1]))
+    }
+  }
+  return 'day'
+}
+
 // 版式: how the bar is laid out (web/status.js). None = the plain one, rows under a title.
 export const STATUS_LAYOUTS = ['card', 'rail', 'scroll']
 export const cleanLayout = value => (STATUS_LAYOUTS.includes(value) ? value : '')
-// The layout a theme goes with, where the pick is 跟着主题 ('auto'): paper and brush go on a scroll, the dark screens beside a rail.
-const THEME_LAYOUTS = { paper: 'scroll', ink: 'scroll', parchment: 'scroll', neon: 'rail', gothic: 'rail', terminal: 'rail', ocean: 'rail' }
-export const layoutFor = (layout, theme) => (layout === 'auto' ? THEME_LAYOUTS[theme] ?? 'card' : cleanLayout(layout))
+// 跟着主题 ('auto'): every theme there is goes with the card layout.
+export const layoutFor = layout => (layout === 'auto' ? 'card' : cleanLayout(layout))
 // 动效: what drifts over a bar (and over the card's 开场页), drawn by the program (web/status.js effectLayer).
 export const EFFECTS = ['rain', 'snow', 'petals', 'embers', 'fireflies', 'stars', 'dust']
 export const cleanEffect = value => (EFFECTS.includes(value) ? value : '')
@@ -123,14 +150,15 @@ export function cleanStatusSpec(raw) {
   // The look picked in 创作角色卡; none = the plain one. Colors of the card's own go over it.
   const theme = STATUS_THEMES.includes(raw.theme) && raw.theme !== 'plain' ? { theme: raw.theme } : {}
   const palette = cleanPalette(raw.palette)
-  // 定制外观: a look written for this card goes in place of a theme, over the three colors.
+  // 定制外观: a look written for this card, from nothing (in place of a theme, over the three colors) or over one of
+  // the themes (skin.base): that theme stays under it, and its colors unless the look has its own.
   const skin = cleanSkin(raw.skin)
   // Variables past the limit are counted, so the bar can say they are not all there.
   const more = Number.isInteger(raw.more) && raw.more > 0 ? { more: raw.more } : {}
   const map = fields.some(f => f.show === 'map') ? cleanMap(raw.map) : null
   // 立绘 and 场景图 on top of the bar (the pictures are the app's: 角色名册, 视觉小说的场景), and what drifts over it.
   const art = { ...(raw.portrait === true ? { portrait: true } : {}), ...(raw.scene === true ? { scene: true } : {}), ...(cleanEffect(raw.effect) ? { effect: raw.effect } : {}), ...(raw.phone === true ? { phone: true } : {}), ...(cleanLayout(raw.layout) ? { layout: raw.layout } : {}) }
-  return fields.some(f => f.show !== 'hidden') ? { title: str(raw.title, 40), fields, ...(skin ? { skin } : theme), ...(palette ? { palette } : {}), ...art, ...(map ? { map } : {}), ...more } : null
+  return fields.some(f => f.show !== 'hidden') ? { title: str(raw.title, 40), fields, ...(skin ? { skin, ...(skin.base ? { theme: skin.base } : {}) } : theme), ...(palette ? { palette } : {}), ...art, ...(map ? { map } : {}), ...more } : null
 }
 
 // Names of 0–100 gauges in MVU cards: 好感度, 信任值, 体力, 欲望, HP… (a guess; other numbers stay numbers).
@@ -819,10 +847,11 @@ export function backdropLayers(image, { size = 'auto', repeat = 'repeat', box = 
 // plain rules that reach nothing but the bar: no addresses to load, no fixed layers, nothing beside the bar.
 //   skin: { name: '玉简', css: '.status-bar { border-radius: 4px }\n.status-title::before { content: "◆ " }' }
 
-// What a look may come to. It dresses the bar, its phone and the card's 开场页: real ones run to 10 000–13 000.
-export const MAX_SKIN = 24000
+// What a look may come to. It dresses the bar, its phone and the card's 开场页: real ones run to 10 000–13 000, and
+// as much again with the pictures it draws (外观里的小图).
+export const MAX_SKIN = 40000
 const MAX_SKIN_RULES = 300
-const MAX_SKIN_SOURCE = 60000
+const MAX_SKIN_SOURCE = 120000
 const MAX_DECLARATION = 600
 // What a value may call: colors, sizes, gradients, transforms, filters, shapes, timing ('' is a plain bracket in a
 // sum). Anything that loads an address (url, image-set, element…) is not here: a declaration with it is left out.
@@ -919,6 +948,157 @@ function skinBlocks(text) {
   return blocks
 }
 
+// 外观里的小图: a look may draw its own ornaments as SVG written into the CSS (url("data:image/svg+xml,…")). Drawn as
+// a picture, an SVG runs nothing and loads nothing; on top of that only shapes, paint and the filters that make grain,
+// bleed and sheen are kept, rebuilt and written back one way. Anything else in a picture, and the picture goes.
+const MAX_SVG = 9000
+const MAX_SVG_PARTS = 400
+const MAX_SVG_IN_VALUE = 6
+const SVG_TAGS = new Map(['svg', 'g', 'defs', 'symbol', 'use', 'path', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon', 'text', 'tspan',
+  'linearGradient', 'radialGradient', 'stop', 'pattern', 'clipPath', 'mask', 'marker', 'filter',
+  'feTurbulence', 'feDisplacementMap', 'feGaussianBlur', 'feColorMatrix', 'feComponentTransfer', 'feFuncR', 'feFuncG', 'feFuncB', 'feFuncA',
+  'feComposite', 'feBlend', 'feMerge', 'feMergeNode', 'feOffset', 'feFlood', 'feMorphology', 'feDropShadow',
+  'feSpecularLighting', 'feDiffuseLighting', 'feDistantLight', 'fePointLight', 'feSpotLight'].map(tag => [tag.toLowerCase(), tag]))
+// Kept with what they hold left out: a picture's title and notes are nothing to see.
+const SVG_QUIET = new Set(['title', 'desc', 'metadata'])
+const SVG_ATTR = /^(?:[a-z][a-z0-9-]{0,40}|[a-z][a-zA-Z]{0,40}|xml:space|xlink:href)$/
+const SVG_ENTITY = /&(?!(?:amp|lt|gt|quot|apos|#\d{1,6}|#x[0-9a-f]{1,6});)/i
+const SVG_TOKEN = /<!--[\s\S]*?-->|<\?[\s\S]*?\?>|<\/([A-Za-z][\w:-]*)\s*>|<([A-Za-z][\w:-]*)((?:\s+[^\s=/>]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*(\/?)>|([^<]+)/y
+const SVG_ATTRS = /([^\s=/>]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g
+
+/** One attribute's value as it may stay, or null: a reference only inside the picture, nothing to load or run. */
+function svgValue(name, value) {
+  if (/[<>]/.test(value) || SVG_ENTITY.test(value) || /javascript:|data:|@import/i.test(value)) return null
+  if (/url\(\s*(?!#[\w-]+\s*\))/i.test(value)) return null
+  if ((name === 'href' || name === 'xlink:href') && !/^#[\w-]{1,60}$/.test(value)) return null
+  return value.replace(/"/g, '&quot;')
+}
+
+/** An SVG's markup as a look may keep it, or '' when anything in it is not a picture's to have. */
+export function cleanSvg(markup) {
+  const text = String(markup ?? '').trim()
+  if (!text || text.length > MAX_SVG) return ''
+  const out = []
+  const open = []
+  let quiet = 0
+  let parts = 0
+  SVG_TOKEN.lastIndex = 0
+  while (SVG_TOKEN.lastIndex < text.length) {
+    const at = SVG_TOKEN.lastIndex
+    const token = SVG_TOKEN.exec(text)
+    if (!token || token.index !== at) return ''
+    const [whole, closing, tag, attrs = '', alone, words] = token
+    if (whole.startsWith('<!--') || whole.startsWith('<?')) continue
+    if (words !== undefined) {
+      if (!open.length) {
+        if (words.trim()) return ''
+        continue
+      }
+      if (quiet) continue
+      if (SVG_ENTITY.test(words) || />/.test(words)) return ''
+      // Words only where a picture writes them.
+      if (words.trim() && !['text', 'tspan'].includes(open[open.length - 1])) return ''
+      out.push(words)
+      continue
+    }
+    if (closing) {
+      const name = closing.toLowerCase()
+      if (open[open.length - 1] !== name) return ''
+      open.pop()
+      if (SVG_QUIET.has(name)) quiet -= 1
+      else if (!quiet) out.push(`</${SVG_TAGS.get(name)}>`)
+      if (!open.length && SVG_TOKEN.lastIndex < text.length && text.slice(SVG_TOKEN.lastIndex).trim()) return ''
+      continue
+    }
+    const name = tag.toLowerCase()
+    if (!open.length && name !== 'svg') return ''
+    if (open.length && !open.includes('svg')) return ''
+    if ((parts += 1) > MAX_SVG_PARTS) return ''
+    if (SVG_QUIET.has(name)) {
+      if (!alone) {
+        open.push(name)
+        quiet += 1
+      }
+      continue
+    }
+    if (!SVG_TAGS.has(name)) return ''
+    if (quiet) {
+      if (!alone) open.push(name)
+      continue
+    }
+    const kept = []
+    for (const [, key, double, single] of attrs.matchAll(SVG_ATTRS)) {
+      const attr = key.toLowerCase()
+      // The picture's own namespace is written here; handlers, styles and anything that loads are not kept.
+      if (attr === 'xmlns' || attr.startsWith('xmlns:') || attr.startsWith('on') || attr === 'style' || !SVG_ATTR.test(key)) continue
+      const value = svgValue(attr, double ?? single)
+      if (value === null) return ''
+      kept.push(`${key}="${value}"`)
+    }
+    if (name === 'svg' && !open.length) kept.unshift('xmlns="http://www.w3.org/2000/svg"', ...(kept.some(item => item.startsWith('xlink:href')) || /xlink:href/.test(text) ? ['xmlns:xlink="http://www.w3.org/1999/xlink"'] : []))
+    out.push(`<${SVG_TAGS.get(name)}${kept.length ? ` ${kept.join(' ')}` : ''}${alone ? '/' : ''}>`)
+    if (!alone) open.push(name)
+  }
+  return open.length ? '' : out.join('').replace(/\s+/g, ' ').trim()
+}
+
+/** A picture as written in a url(): the SVG in it, or null when it is not one. */
+function svgOfUrl(source) {
+  const match = /^data:image\/svg\+xml((?:;[\w=.-]+)*),([\s\S]*)$/i.exec(source.trim())
+  if (!match) return null
+  try {
+    if (/;base64/i.test(match[1])) return new TextDecoder().decode(Uint8Array.from(atob(match[2].replace(/\s+/g, '')), char => char.charCodeAt(0)))
+    return decodeURIComponent(match[2].replace(/%(?![0-9a-f]{2})/gi, '%25'))
+  } catch {
+    return null
+  }
+}
+
+/** A clean picture written for CSS: in double quotes, with what could end the string or the url written as %xx. */
+const svgUrl = svg => `url("data:image/svg+xml,${svg.replace(/[%#<>"'\\{}\n\r\t]/g, char => `%${char.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`)}")`
+
+/**
+ * A declaration's value with each url() taken out and kept aside if it is a picture a look may have: [value with
+ * marks in their place, the pictures]; null when a url() is anything else.
+ */
+function pictureMarks(value) {
+  // Looked for outside strings ("url(" written in a content: is words).
+  const bare = unquoted(value)
+  if (bare === null) return null
+  const pictures = []
+  let out = ''
+  let at = 0
+  for (;;) {
+    const found = /url\(\s*/i.exec(bare.slice(at))
+    if (!found) break
+    const start = at + found.index
+    let from = start + found[0].length
+    let source
+    let end
+    const quote = value[from]
+    if (QUOTES.has(quote)) {
+      const close = value.indexOf(quote, from + 1)
+      if (close < 0) return null
+      source = value.slice(from + 1, close)
+      if (source.includes('\\')) return null
+      end = value.indexOf(')', close)
+      if (end < 0 || value.slice(close + 1, end).trim()) return null
+    } else {
+      end = value.indexOf(')', from)
+      if (end < 0) return null
+      source = value.slice(from, end).trim()
+      if (/["'\s\\]/.test(source)) return null
+    }
+    const svg = svgOfUrl(source)
+    const clean = svg === null ? '' : cleanSvg(svg)
+    if (!clean || pictures.length >= MAX_SVG_IN_VALUE) return null
+    out += `${value.slice(at, start)}svg-picture-${pictures.length}`
+    pictures.push(svgUrl(clean))
+    at = end + 1
+  }
+  return [out + value.slice(at), pictures]
+}
+
 /** One declaration as it may stay ([property, value]), or null. */
 function skinDeclaration(text) {
   const colon = text.indexOf(':')
@@ -926,14 +1106,18 @@ function skinDeclaration(text) {
   const name = text.slice(0, colon).trim()
   const property = name.startsWith('--') ? name : name.toLowerCase()
   // `!important` is the page's to use (a hidden row stays hidden, a folded bar folded).
-  const value = text.slice(colon + 1).replace(/!\s*important\s*$/i, '').replace(/\s+/g, ' ').trim()
+  const written = text.slice(colon + 1).replace(/!\s*important\s*$/i, '').replace(/\s+/g, ' ').trim()
+  // Pictures are set aside while the rest is looked at: a url() that is not one leaves the declaration out.
+  const marked = /url\s*\(/i.test(unquoted(written) ?? '') ? pictureMarks(written) : [written, []]
+  if (!marked) return null
+  const [value, pictures] = marked
   if (!SKIN_PROPERTY.test(property) || SKIN_BLOCKED.has(property) || !value || value.length > MAX_DECLARATION) return null
   const bare = unquoted(value)
   // Outside a string: no escapes (a function's name spelled around the list), no markup, no rule of its own.
   if (bare === null || /[\\<>{}@;!]/.test(bare)) return null
   for (const [, called] of bare.matchAll(/([\w-]*)\s*\(/g)) if (!SKIN_FUNCTIONS.has(called.toLowerCase())) return null
   if (property === 'position' && !/^(?:static|relative|absolute)$/i.test(value)) return null
-  return [property, value]
+  return [property, pictures.length ? value.replace(/svg-picture-(\d+)/g, (mark, i) => pictures[i] ?? mark) : value]
 }
 
 const skinDeclarations = body => ((unquoted(body) ?? '{').includes('{') ? [] : splitOutside(body, ';').map(skinDeclaration).filter(Boolean))
@@ -997,14 +1181,22 @@ function withoutComments(text) {
 
 const skinTree = text => skinBlocks(withoutComments(String(text ?? '').slice(0, MAX_SKIN_SOURCE))).map(block => skinNode(block)).filter(Boolean).slice(0, MAX_SKIN_RULES)
 
-/** The rules as text, a rule a line. With `scope`, every one reaches only the bar that wears that class and what is in it. */
-function printSkin(nodes, scope = '') {
+// A look over a theme: its scope is named over and over, so that each of its rules outweighs the theme's for the same
+// part (a theme's longest selectors weigh seven classes; the look's sheet comes after the theme's, so a tie is the look's).
+const OVER_THEME = 6
+
+/**
+ * The rules as text, a rule a line. With `scope`, every one reaches only the bar that wears that class and what is in it.
+ * @param over - the look is worn over a theme (skin.base): its rules are made to weigh more than the theme's
+ */
+function printSkin(nodes, scope = '', over = false) {
+  const at = scope ? `.${scope}`.repeat(over ? OVER_THEME : 1) : ''
   const moves = new Set(nodes.flatMap(node => (node.kind === 'keyframes' ? [node.name] : [])))
   // The bar's own movements, named so that two cards' cannot be each other's.
   const moved = value => (scope && moves.size ? value.replace(/[\w-]+/g, word => (moves.has(word) ? `${scope}-${word}` : word)) : value)
   const lines = declarations => declarations.map(([property, value]) => `${property}: ${/^animation(?:-name)?$/.test(property) ? moved(value) : value}`).join('; ')
   // `.status-bar…` is the bar itself, anything else something in it.
-  const reach = selector => (!scope ? selector : WHOLE_BAR.test(selector) ? `.${scope}${selector}` : `.${scope} ${selector}`)
+  const reach = selector => (!scope ? selector : WHOLE_BAR.test(selector) ? `${at}${selector}` : `${at} ${selector}`)
   const print = node => {
     if (node.kind === 'rule') return `${node.selectors.map(reach).join(', ')} { ${lines(node.declarations)} }`
     if (node.kind === 'keyframes') return `@keyframes ${scope ? `${scope}-` : ''}${node.name} { ${node.frames.map(frame => `${frame.at} { ${lines(frame.declarations)} }`).join(' ')} }`
@@ -1042,8 +1234,8 @@ export function skinClass(css) {
   return `skin-${(hash >>> 0).toString(16).padStart(8, '0')}`
 }
 
-/** The CSS as the page loads it: every rule reaching only into the bar that wears `scope`. */
-export const scopedSkinCss = (css, scope = skinClass(css)) => printSkin(skinTree(css), scope).join('\n')
+/** The CSS as the page loads it: every rule reaching only into the bar that wears `scope`. `over`: worn over a theme. */
+export const scopedSkinCss = (css, scope = skinClass(css), over = false) => printSkin(skinTree(css), scope, over).join('\n')
 
 // ─── 外观的图 ──────────────────────────────────────────────────────────────
 // A look never names an address (url() is cut, above). It names a picture of the card's own by a variable the app
@@ -1090,12 +1282,13 @@ export function cleanDecor(raw) {
   return Object.keys(kept).length ? kept : null
 }
 
-/** A look as a card keeps it ({ name?, css, decor? }), or null. */
+/** A look as a card keeps it ({ name?, css, decor?, base? }), or null. base: the theme it is worn over (none = from nothing). */
 export function cleanSkin(raw) {
   if (!raw || typeof raw !== 'object' || typeof raw.css !== 'string') return null
   const css = cleanSkinCss(raw.css)
   const decor = cleanDecor(raw.decor)
-  return css ? { ...(str(raw.name, 24) ? { name: str(raw.name, 24) } : {}), css, ...(decor ? { decor } : {}) } : null
+  const base = STATUS_THEMES.includes(raw.base) && raw.base !== 'plain' ? raw.base : ''
+  return css ? { ...(str(raw.name, 24) ? { name: str(raw.name, 24) } : {}), css, ...(decor ? { decor } : {}), ...(base ? { base } : {}) } : null
 }
 
 // ─── 变量模板 and 只读变量 ────────────────────────────────────────────────

@@ -626,14 +626,18 @@ export function renderPresetTail(preset, options) {
  * The same, rendered once, whole (`text`, as it goes in the turn's message) and by role, for a provider that takes
  * them as messages of their own after that message (engine.mjs tailMessages): `system` the 系统 entries, `user` the
  * 用户 and AI 助手 ones (a reply cannot start from an AI 助手 line: the current Claude models refuse a prefill).
+ * Under 同酒馆 ('latest'), the 聊天中 @深度 entries deeper than 0 go where SillyTavern puts them, in the chat (`deep`,
+ * [{ depth, text }]: engine.mjs placeDeep), not with the rest.
  */
 export function renderPresetTailParts(preset, { card, persona, names, vars = {}, input = '', lastChar = '', render = text => text }) {
-  const items = postItems(preset, { names, vars: { ...vars }, card, persona, lastUser: input, lastChar, render }, 'turn')
+  const all = postItems(preset, { names, vars: { ...vars }, card, persona, lastUser: input, lastChar, render }, 'turn')
+  const deep = preset.postMode === 'latest' ? all.filter(item => item.depth >= 1) : []
+  const items = all.filter(item => !deep.includes(item))
   const partsOf = list => ({ text: joinItems(list), system: joinItems(list.filter(item => item.role === 'system')), user: joinItems(list.filter(item => item.role !== 'system')) })
   // 预填: the AI 助手 entries at the very end (「首先从思考开始：<think>」), which SillyTavern sends as the reply's own
   // start, so the model writes on from there. `rest` is the rest, for when they go that way (engine.mjs prefillOf).
   let cut = items.length
   while (cut > 0 && items[cut - 1].role === 'assistant') cut--
   const prefill = joinItems(items.slice(cut))
-  return { ...partsOf(items), prefill, rest: partsOf(items.slice(0, cut)) }
+  return { ...partsOf(items), prefill, rest: partsOf(items.slice(0, cut)), deep: deep.map(item => ({ depth: Math.min(9999, Math.trunc(item.depth)), text: item.text })) }
 }

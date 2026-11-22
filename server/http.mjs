@@ -55,6 +55,12 @@ import { charxFiles, createBundles, openZip, readCharx, surveyBundle, zipKind } 
 import { createLookPictures, decodePicture } from './look-pictures.mjs'
 import { creationOf, withOptionPicture } from './forge/creation.mjs'
 import { createForge } from './forge/index.mjs'
+import { createGuide } from './guide.mjs'
+import { createPlotDraft } from './plot-draft.mjs'
+import { anchorOf, changeGuide } from './guide-text.mjs'
+import { changePlot, chatPlot, refreshPlot } from './plot.mjs'
+import { readEndings } from './plot-endings.mjs'
+import { cleanPlots } from '../web/shared/plot.js'
 import { qrSvg } from './qr.mjs'
 import { lostPaths, setStatePath } from './state.mjs'
 import { ensureBook } from './forge/edit.mjs'
@@ -69,7 +75,7 @@ import { contextInfo } from './context.mjs'
 import { currentLanguage, localize, msg, pageIn, requestLanguage, withLanguage } from './i18n.mjs'
 import { createUpdater } from './update/index.mjs'
 import { createShortcut } from './update/install.mjs'
-import { addEntries, bookCounts, editBook, editBookInfo, emptyBook, inPrefix, isDynamic, isInitvar, normalizeBook, standaloneBook, worldFile } from './worldbook.mjs'
+import { addEntries, AT_DEPTH, bookCounts, depthOf, editBook, editBookInfo, emptyBook, inPrefix, isDynamic, isInitvar, normalizeBook, standaloneBook, worldFile } from './worldbook.mjs'
 import { replaceMacros } from './prompt.mjs'
 import { accessCookie, hostAllowed, isLoopback, lanAddresses, loginPage, signedIn, tokensEqual } from './access.mjs'
 import { createDiagnostics } from './diagnostics.mjs'
@@ -96,8 +102,12 @@ const STATIC = {
   '/look.css': ['look.css', 'text/css; charset=utf-8'],
   '/fonts/mashanzheng.woff2': ['fonts/mashanzheng.woff2', 'font/woff2'],
   '/fonts/zcool.woff2': ['fonts/zcool.woff2', 'font/woff2'],
+  '/fonts/kuaile.woff2': ['fonts/kuaile.woff2', 'font/woff2'],
+  '/fonts/nunito.woff2': ['fonts/nunito.woff2', 'font/woff2'],
+  '/fonts/pinyon.woff2': ['fonts/pinyon.woff2', 'font/woff2'],
   '/render.js': ['render.js', 'text/javascript; charset=utf-8'],
   '/compat.js': ['compat.js', 'text/javascript; charset=utf-8'],
+  '/frame-idb.js': ['frame-idb.js', 'text/javascript; charset=utf-8'],
   '/stscript.js': ['stscript.js', 'text/javascript; charset=utf-8'],
   '/usage.js': ['usage.js', 'text/javascript; charset=utf-8'],
   '/presets.js': ['presets.js', 'text/javascript; charset=utf-8'],
@@ -105,6 +115,7 @@ const STATIC = {
   '/media.js': ['media.js', 'text/javascript; charset=utf-8'],
   '/history.js': ['history.js', 'text/javascript; charset=utf-8'],
   '/menu.js': ['menu.js', 'text/javascript; charset=utf-8'],
+  '/select-sheet.js': ['select-sheet.js', 'text/javascript; charset=utf-8'],
   '/forge.js': ['forge.js', 'text/javascript; charset=utf-8'],
   '/update.js': ['update.js', 'text/javascript; charset=utf-8'],
   '/privacy.js': ['privacy.js', 'text/javascript; charset=utf-8'],
@@ -179,7 +190,16 @@ const STATIC = {
   '/blockwords.js': ['blockwords.js', 'text/javascript; charset=utf-8'],
   '/tool-prompts.js': ['tool-prompts.js', 'text/javascript; charset=utf-8'],
   '/quick-replies.js': ['quick-replies.js', 'text/javascript; charset=utf-8'],
+  '/guide.js': ['guide.js', 'text/javascript; charset=utf-8'],
+  '/plot.js': ['plot.js', 'text/javascript; charset=utf-8'],
+  '/plot-map.js': ['plot-map.js', 'text/javascript; charset=utf-8'],
+  '/plot-edit.js': ['plot-edit.js', 'text/javascript; charset=utf-8'],
+  '/plot-draft.js': ['plot-draft.js', 'text/javascript; charset=utf-8'],
+  '/shared/plot.js': ['shared/plot.js', 'text/javascript; charset=utf-8'],
+  '/shared/plot-map.js': ['shared/plot-map.js', 'text/javascript; charset=utf-8'],
+  '/shared/plot-import.js': ['shared/plot-import.js', 'text/javascript; charset=utf-8'],
   '/sort-rows.js': ['sort-rows.js', 'text/javascript; charset=utf-8'],
+  '/resize-grips.js': ['resize-grips.js', 'text/javascript; charset=utf-8'],
   '/gallery.js': ['gallery.js', 'text/javascript; charset=utf-8'],
   '/card-pack.js': ['card-pack.js', 'text/javascript; charset=utf-8'],
   '/backup.js': ['backup.js', 'text/javascript; charset=utf-8'],
@@ -294,10 +314,13 @@ function bookView(book, id = book.id) {
     scanDepth: book.scanDepth ?? null,
     // Whether an export carries the SillyTavern fields this app does not read (not for books imported before they were kept).
     complete: book.extras === true,
-    // `extra` stays on the server, but for the switches the page edits (递归, 发送位置: worldbook.mjs recursionOf).
+    // `extra` stays on the server, but for the switches the page edits (递归: worldbook.mjs recursionOf), and `depth`
+    // where 聊天中 @深度 puts it (null: not in the chat; the old 紧挨着回复 shows as @深度 0).
     entries: book.entries.map(({ extra, ...entry }) => {
-      const shown = Object.fromEntries(['excludeRecursion', 'preventRecursion', 'delayUntilRecursion', 'cicaSend'].filter(key => extra?.[key]).map(key => [key, extra[key]]))
-      return { ...entry, ...(Object.keys(shown).length ? { extra: shown } : {}), dynamic: isDynamic(entry), initvar: isInitvar(entry) }
+      const shown = Object.fromEntries(['excludeRecursion', 'preventRecursion', 'delayUntilRecursion'].filter(key => extra?.[key]).map(key => [key, extra[key]]))
+      const depth = depthOf({ ...entry, extra })
+      const placed = depth !== null && entry.position !== AT_DEPTH ? { position: AT_DEPTH } : {}
+      return { ...entry, ...placed, depth, ...(Object.keys(shown).length ? { extra: shown } : {}), dynamic: isDynamic(entry), initvar: isInitvar(entry) }
     }),
   }
 }
@@ -320,6 +343,7 @@ function cardEditView(card) {
     cover: card.cover ?? null,
     statusBar: card.statusBar ?? null,
     greetings: greetingList(card),
+    plots: card.plots ?? [],
   }
 }
 
@@ -379,6 +403,16 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
   onSlowPattern(regex => diagnostics.record({ source: 'process', what: msg`卡片的正则`, message: msg`这条正则运行太久，已经跳过：/${regex.source.slice(0, 300)}/${regex.flags}` }).catch(() => {}))
   // A card or preset whose file is too damaged to list.
   const leftOut = (what, why) => diagnostics.note({ level: 'warn', what: msg`列表里跳过了读不了的 ${what}`, detail: why }).catch(() => {})
+  // A data file damaged on disk (store.mjs readJson): mended, or moved aside so the rest still opens.
+  store.onDamaged(({ file, mended, movedTo, message }) => diagnostics.record({
+    source: 'process',
+    what: msg`数据文件 ${file}`,
+    message: mended
+      ? msg`文件里混进了乱码（多半是存档时断电或强制关机），已经修好读出来了，下次保存会写成正常的文件。原文件另存了一份 .bad- 开头的副本。`
+      : movedTo
+        ? msg`文件坏了读不出来（多半是存档时断电或强制关机），已经挪到 ${movedTo}，列表里先不显示它，其余内容照常能用。这个文件可以留着找回内容。（${message}）`
+        : msg`文件坏了读不出来（多半是存档时断电或强制关机）。关掉 CicaTavern，把它挪出数据文件夹再打开。（${message}）`,
+  }).catch(() => {}))
   const network = createProxy({ override: proxyOverride(proxy), defaultMode: features.defaultProxy })
   // Read on every request, so a changed proxy setting applies at once.
   const isolation = {
@@ -522,6 +556,9 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     history: drawHistory,
     lookPictures,
   })
+  // 剧情向导 (plans/21): the guide's own talk beside each chat.
+  const guide = createGuide(store, { engine })
+  const plotDraft = createPlotDraft(store, { engine, forgeCard: id => forge.plotCard(id) })
   // 设置 → 更多 → 更新. A restart after an update starts the server the way this one was started.
   let listenArg
   const updater = createUpdater({
@@ -1195,6 +1232,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       if (voiceKey) await media.setTtsKey(decodeURIComponent(voiceKey))
       // A key belongs to the address it came with: a new address without one drops it.
       else if (body.ttsClearKey === true || next.ttsUrl !== previous.ttsUrl) await media.setTtsKey('')
+      // NovelAI's address first ('' for NovelAI's own), so a wrong one stops the save before the key for it is kept.
+      if (typeof body.naiUrl === 'string') await media.setNaiUrl(body.naiUrl)
       // The NovelAI token goes to its own file; a blank field keeps the saved one.
       if (typeof body.naiToken === 'string' && body.naiToken.trim()) await media.setNaiToken(body.naiToken)
       else if (body.naiClearToken === true) await media.setNaiToken('')
@@ -1206,7 +1245,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       await store.saveSettings({ media: next })
       return mediaSettingsView(next)
     }],
-    ['POST', /^\/api\/media\/novelai\/check$/, (_, body) => media.naiCheck(typeof body?.token === 'string' ? body.token.trim() : '')],
+    ['POST', /^\/api\/media\/novelai\/check$/, (_, body) => media.naiCheck(typeof body?.token === 'string' ? body.token.trim() : '', typeof body?.url === 'string' ? body.url : undefined)],
     // body.purpose: 'scene' / 'sprite' for the one 背景 or 立绘 are drawn with; with workflow null, that one goes.
     ['PUT', /^\/api\/media\/workflow$/, async (_, body) => ({ workflow: await media.saveWorkflow(body.workflow, typeof body.purpose === 'string' ? body.purpose : '') })],
     ['GET', /^\/api\/media\/voices$/, () => media.voices()],
@@ -1333,7 +1372,19 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     // 抽图历史: a draft's old avatars (GET …/history/:file is the picture).
     ['POST', /^\/api\/forge\/([\w-]+)\/history\/([\w.-]+)\/use$/, ([id, file]) => forge.useKeptAvatar(id, file)],
     ['DELETE', /^\/api\/forge\/([\w-]+)\/history\/([\w.-]+)$/, ([id, file]) => forge.dropKeptAvatar(id, file)],
-    ['POST', /^\/api\/forge\/([\w-]+)\/save$/, ([id], body) => forge.saveCard(id, body ?? {})],
+    ['POST', /^\/api\/forge\/([\w-]+)\/save$/, async ([id], body) => {
+      const result = await forge.saveCard(id, body ?? {})
+      // 高级选项 → 剧本: the guide writes the card one in the background (plot-draft.mjs, kind whole), into the card once
+      // done; not for a card that already has one.
+      if (result.card && result.draft?.options?.plot && !result.draft?.plots?.length) {
+        const card = await store.getCard(result.card.id).catch(() => null)
+        if (card && !card.plots?.length) {
+          const idea = result.draft.rounds?.[0]?.user?.text ?? ''
+          result.plotWriting = await plotDraft.ask(`card-${card.id}`, { kind: 'whole', auto: true, text: idea }).then(() => true, () => false)
+        }
+      }
+      return result
+    }],
     ['POST', /^\/api\/forge\/([\w-]+)\/stop$/, ([id]) => forge.stop(id)],
     // 定制外观 in the plan's status bar: a look a model writes, a draft beside the draft till it is put on (PUT /api/forge/:id look).
     ['GET', /^\/api\/forge\/([\w-]+)\/skin$/, ([id]) => forge.skinGet(id)],
@@ -1491,6 +1542,11 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       return {
         ...cardSummary(card),
         greetingTexts: greetingsOf(card).map(text => replaceMacros(text.replace(/\{\{random[^}]*\}\}/gi, '…'), names)),
+        // 剧本 (web/shared/plot.js): what 新对话 offers and the top bar's 剧本 pill reads.
+        plots: card.plots ?? [],
+        defaultPlot: card.defaultPlot ?? '',
+        // 结局收集: the endings reached on each plot, on this device.
+        plotEndings: card.plots?.length ? await readEndings(store, id) : {},
         description: card.description,
         scenario: card.scenario,
         // With ids the editor can tell apart (normalizeScripts: one missing or repeated in an imported file gets its own).
@@ -1508,6 +1564,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       await forge.dropTalk('card', id)
       await forge.dropTalk('book', `card-${id}`)
       await forge.dropTalk('regex', `card-${id}`)
+      await plotDraft.clear(`card-${id}`).catch(() => {})
       await forge.dropCheck(id)
       await forge.dropTrial(id)
       // 正则集 attached to it stay, for the other cards or later; so do the personas and styles it picked.
@@ -1895,12 +1952,14 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       for (const head of heads) if (head.trial && !forge.trialRunning(head.cardId)) await store.deleteChat(head.id).catch(() => {})
       return heads.filter(head => !head.trial).map(head => head.summary)
     }],
-    ['POST', /^\/api\/chats$/, async (_, body) => chatView(await createChat(store, String(body.cardId), Number(body.greetingIndex) || 0))],
-    // A card's welcome page switching the first message to another of its openings (before the first turn).
+    ['POST', /^\/api\/chats$/, async (_, body) => chatView(await createChat(store, String(body.cardId), Number(body.greetingIndex) || 0, { plotId: typeof body.plotId === 'string' ? body.plotId : '' }))],
+    // A card's welcome page switching the first message to another of its openings (before the first turn), or to
+    // one it wrote itself (`text`: an opening it had the model write).
     ['POST', /^\/api\/chats\/([\w-]+)\/opening$/, ([id], body) => {
       // The first turn being written answers the opening it was sent with.
       if (engine.isRunning(id)) throw httpError(409, msg`正在生成，先停止`)
-      return store.withChat(id, async () => chatView(await switchOpening(store, await store.getChat(id), Number(body?.index))))
+      const text = typeof body?.text === 'string' ? body.text : undefined
+      return store.withChat(id, async () => chatView(await switchOpening(store, await store.getChat(id), Number(body?.index), text)))
     }],
     // `frameInfo=1`: what its card's frames read too (frame-info), from the same reading of a long chat's file.
     ['GET', /^\/api\/chats\/([\w-]+)$/, async ([id], _, url) => {
@@ -1928,6 +1987,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['DELETE', /^\/api\/chats\/([\w-]+)$/, async ([id]) => {
       if (engine.isRunning(id)) throw httpError(409, msg`正在生成，先停止`)
       await store.deleteChat(id)
+      await guide.drop(id).catch(() => {})
+      await plotDraft.clear(`chat-${id}`).catch(() => {})
       await prompts.adoptChat(id).catch(() => {})
       await media.removeChatMedia(id)
       return { ok: true }
@@ -1948,6 +2009,76 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       await afterMessages(chat, TAVERN_EVENTS.MESSAGE_DELETED, String(body.nodeId))
       return chatView(await store.saveChat(chat))
     })],
+    // 剧本 (plans/22, web/shared/plot.js): a card's plots, and a chat's copy of one (plot.mjs): put on, taken off, the
+    // player's own changes to where the story is (sent with the next turn), its copy edited.
+    ['GET', /^\/api\/cards\/([\w-]+)\/plots$/, async ([id]) => {
+      const card = await store.getCard(id)
+      return { plots: card.plots ?? [], defaultPlot: card.defaultPlot ?? '', endings: await readEndings(store, id) }
+    }],
+    ['PUT', /^\/api\/cards\/([\w-]+)\/plots$/, ([id], body) => oneAtATime(`plots:${id}`, async () => {
+      const card = await store.getCard(id)
+      const now = new Date().toISOString()
+      const before = new Map((card.plots ?? []).map(plot => [plot.id, plot]))
+      card.plots = cleanPlots(body?.plots).map(plot => (JSON.stringify(before.get(plot.id)) === JSON.stringify(plot) ? plot : { ...plot, updatedAt: now }))
+      card.defaultPlot = card.plots.some(plot => plot.id === body?.defaultPlot) ? body.defaultPlot : ''
+      await store.saveCard(card)
+      return { plots: card.plots, defaultPlot: card.defaultPlot, endings: await readEndings(store, id) }
+    })],
+    ['PUT', /^\/api\/chats\/([\w-]+)\/plot$/, ([id], body) => store.withChat(id, async () => {
+      const chat = await store.getChat(id)
+      const active = activePath(chat)
+      if (body?.action === 'use') {
+        if (engine.isRunning(id)) throw httpError(409, msg`正在生成，先停止`)
+        const card = await store.getCard(chat.cardId)
+        const plot = card.plots?.find(item => item.id === body.plotId)
+        if (!plot) throw httpError(404, msg`这个剧本不在了`)
+        chat.plot = chatPlot(plot, { start: body.start, spoiler: plot.source === 'imported' ? 'blind' : 'all' })
+      } else if (body?.action === 'refresh') {
+        // 换成新版: the card's plot as it is now in place of the chat's copy; the progress follows where it fits.
+        if (engine.isRunning(id)) throw httpError(409, msg`正在生成，先停止`)
+        if (!chat.plot?.copy) throw httpError(409, msg`这段对话没有在用剧本`)
+        refreshPlot(chat, (await store.getCard(chat.cardId)).plots)
+      } else {
+        if ((body?.action === 'edit' || body?.action === 'detour') && engine.isRunning(id)) throw httpError(409, msg`正在生成，先停止`)
+        // 回到岔路口: the change goes with an earlier reply on the way, the one the next turn is sent from.
+        const tip = body?.after ? active.find(node => node.id === body.after && node.role === 'assistant') : active.at(-1)
+        if (!tip) throw httpError(400, msg`这条回复不在当前这条路上`)
+        changePlot(chat, body, tip)
+      }
+      return chatView(await store.saveChat(chat))
+    })],
+    // 让向导写剧本、改剧本 (plot-draft.mjs): `key` is card-<id> (the card's plots) or chat-<id> (a chat's copy); the page
+    // reads it again while `job` is there, and takes what it wants of the result itself.
+    ['GET', /^\/api\/plot-drafts\/((?:card|chat|forge)-[\w-]+)$/, ([key]) => plotDraft.view(key)],
+    ['POST', /^\/api\/plot-drafts\/((?:card|chat|forge)-[\w-]+)$/, ([key], body) => plotDraft.ask(key, body ?? {})],
+    ['POST', /^\/api\/plot-drafts\/((?:card|chat|forge)-[\w-]+)\/stop$/, ([key]) => plotDraft.stop(key)],
+    ['DELETE', /^\/api\/plot-drafts\/((?:card|chat|forge)-[\w-]+)$/, ([key]) => plotDraft.clear(key)],
+    // 创作角色卡 → 剧本: the plots of the card being made (forge/index.mjs), saved with it.
+    ['GET', /^\/api\/forge\/([\w-]+)\/plots$/, ([id]) => forge.plots(id)],
+    ['PUT', /^\/api\/forge\/([\w-]+)\/plots$/, ([id], body) => forge.savePlots(id, body ?? {})],
+    // 剧情向导 (plans/21): the guide's talk (guide.mjs, written in the background: the page reads it again while `job` is
+    // there), the model it uses, and the plan the story follows (chat.guide, guide-text.mjs changeGuide).
+    ['GET', /^\/api\/chats\/([\w-]+)\/guide$/, ([id]) => guide.view(id)],
+    ['POST', /^\/api\/chats\/([\w-]+)\/guide$/, ([id], body) => guide.ask(id, body)],
+    ['POST', /^\/api\/chats\/([\w-]+)\/guide\/retry$/, ([id], body) => guide.retry(id, body)],
+    ['POST', /^\/api\/chats\/([\w-]+)\/guide\/stop$/, ([id]) => guide.stop(id)],
+    ['PUT', /^\/api\/chats\/([\w-]+)\/guide\/model$/, ([id], body) => guide.setModel(id, body.model)],
+    ['DELETE', /^\/api\/chats\/([\w-]+)\/guide$/, ([id]) => guide.clear(id)],
+    ['PUT', /^\/api\/chats\/([\w-]+)\/guide\/active$/, async ([id], body) => {
+      const { chat, note } = await store.withChat(id, async () => {
+        const chat = await store.getChat(id)
+        const before = chat.guide?.active?.plan?.goal ?? ''
+        chat.guide = changeGuide(chat.guide, body, anchorOf(activePath(chat)))
+        const pace = { hint: msg`只铺垫`, steady: msg`自然推进`, soon: msg`尽快引爆` }[chat.guide.active?.strength] ?? ''
+        const note = body.action === 'adopt' ? msg`开始引导（${pace}）：${chat.guide.active.plan.goal}`
+          : body.action === 'done' ? msg`已经演到：${before}`
+          : body.action === 'stop' ? msg`停止引导：${before}`
+          : ''
+        return { chat: await store.saveChat(chat), note }
+      })
+      if (note) await guide.note(id, note).catch(() => {})
+      return { chat: chatView(chat), guide: await guide.view(id) }
+    }],
     // 长期记忆（Beta）: the 记忆簿 in force on the chat's active path (chats.mjs memoryView), the player's edits
     // to it, a tidy now (engine.tidyMemory, `force`), stopping one, and the book as a SillyTavern world file.
     ['GET', /^\/api\/chats\/([\w-]+)\/memory$/, async ([id]) => memoryReply(id, await store.getChat(id))],
@@ -2094,6 +2225,9 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     }],
     // 图库: every picture of every card and chat; an export of the ones picked, as a zip to fetch.
     ['GET', /^\/api\/gallery$/, () => gallery.list()],
+    // 图库 → 删除所选: each picture through the way it is deleted where it lives (a reply's picture with its old ones,
+    // a background, a 立绘 or one of its expressions, a CG). → { removed, missing }
+    ['POST', /^\/api\/gallery\/delete$/, (_, body) => gallery.remove(body?.ids, { forget: (chatId, file) => prompts.forgetPicture(chatId, file) })],
     ['POST', /^\/api\/gallery\/export$/, async (_, body) => {
       clearTimeout(galleryExport?.timer)
       galleryExport = null
@@ -2423,6 +2557,17 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       const end = range[1] && range[2] ? Math.min(Number(range[2]), found.data.length - 1) : found.data.length - 1
       res.writeHead(206, { ...headers, 'content-range': `bytes ${start}-${end}/${found.data.length}`, 'content-length': end - start + 1 })
       return res.end(found.data.subarray(start, end + 1))
+    }
+    // The pictures a status bar theme draws with (web/style.css, 晴野), shipped in web/themes/<theme>/.
+    const themePicture = /^\/themes\/([a-z]+)\/([\w.-]+\.(webp|png))$/.exec(url.pathname)
+    if (req.method === 'GET' && themePicture) {
+      try {
+        const data = await readFile(path.join(WEB_ROOT, 'themes', themePicture[1], themePicture[2]))
+        res.writeHead(200, { 'content-type': themePicture[3] === 'webp' ? 'image/webp' : 'image/png', 'cache-control': 'max-age=86400' })
+        return res.end(data)
+      } catch {
+        return sendJson(res, 404, { error: msg`没有这个文件` })
+      }
     }
     // 更新了什么 (web/whatsnew.js): the notes and their pictures, shipped in web/whatsnew/.
     const whatsNew = /^\/whatsnew\/([\w.-]+\.(json|webp|png|jpg))$/.exec(url.pathname)

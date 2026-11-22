@@ -1,7 +1,7 @@
 // Pictures and voice for replies: the 配图 / 朗读 buttons, the picture strip
 // under a reply, the reading bar above the input box and the settings window.
 // Nothing here changes what the model sees.
-import { readyVoiceSources, sourcesToAsk, speechChunks } from '/shared/speech.js'
+import { applyGain, levelGain, loudnessDb, readyVoiceSources, sourcesToAsk, speechChunks, wavBytes } from '/shared/speech.js'
 import { hasMarks, speakerNames, splitLines } from '/shared/vn.js'
 import { comboBox, createMenu, MENU_ICONS, whoLine } from '/menu.js'
 import { locale, t, zh } from '/i18n.js'
@@ -19,6 +19,22 @@ function voiceVolume() {
     return Number.isFinite(kept) ? Math.min(1, Math.max(0, kept)) : 1
   } catch {
     return 1
+  }
+}
+
+/**
+ * A voice's audio brought to the loudness every voice is played at (shared/speech.js), times a cast member's
+ * 音量 (1 = as levelled), as an object URL: a WAV, or the audio as it came where it cannot be decoded here.
+ */
+async function levelledUrl(blob, volume = 1) {
+  try {
+    if (typeof OfflineAudioContext === 'undefined') throw new Error('no Web Audio')
+    const decoded = await new OfflineAudioContext(1, 1, 44100).decodeAudioData(await blob.arrayBuffer())
+    const channels = Array.from({ length: decoded.numberOfChannels }, (_, i) => decoded.getChannelData(i))
+    const gain = levelGain(loudnessDb(channels, decoded.sampleRate), volume)
+    return URL.createObjectURL(new Blob([wavBytes(channels.map(data => applyGain(data, gain)), decoded.sampleRate)], { type: 'audio/wav' }))
+  } catch {
+    return URL.createObjectURL(blob)
   }
 }
 
@@ -833,7 +849,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
           signal: this.controller.signal,
         }).then(async res => {
           if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || t`朗读失败（${res.status}）`)
-          return URL.createObjectURL(await res.blob())
+          return levelledUrl(await res.blob(), chunk.gain ?? 1)
         })
         promise.catch(() => {})
         this.fetched.set(i, promise)
@@ -1006,8 +1022,8 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
   // one it cannot tell, or nobody in the cast, takes the card's dialogue voice.
 
   const cast = () => state.cardMedia?.roster ?? []
-  /** Anyone in the cast with a voice of their own: only then are speakers told apart. */
-  const castVoiced = () => cast().some(entry => entry.voice)
+  /** Anyone in the cast with a voice, 音量 or 默认语气 of their own: only then are speakers told apart. */
+  const castVoiced = () => cast().some(entry => entry.voice || entry.volume || entry.tone)
 
   function castNames() {
     const chat = getChat()
@@ -1017,11 +1033,20 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
   /** The card's dialogue voice, else 默认对白音色; '' reads with the bridge's current voice, else the browser's. */
   const dialogueVoice = () => state.cardMedia?.voice || state.settings?.defaultVoice || ''
 
-  /** A speaker's voice: their cast entry's own, else the dialogue voice. */
-  function voiceOf(speaker, names = castNames()) {
+  /** A speaker's cast entry, or null for nobody in the cast. */
+  function castEntryOf(speaker, names = castNames()) {
     const id = speaker ? names.find(entry => entry.name === speaker)?.id : null
-    return (id && cast().find(entry => entry.id === id)?.voice) || dialogueVoice()
+    return (id && cast().find(entry => entry.id === id)) || null
   }
+
+  /** A speaker's voice: their cast entry's own, else the dialogue voice. */
+  const voiceOf = (speaker, names = castNames()) => castEntryOf(speaker, names)?.voice || dialogueVoice()
+
+  /** A speaker's 音量 as a gain on the levelled audio: their cast entry's, else 1. */
+  const gainOf = (speaker, names = castNames()) => (castEntryOf(speaker, names)?.volume ?? 100) / 100
+
+  /** A speaker's 默认语气: how their lines are said when the reply gives no emotion of its own ('' = none). */
+  const toneOf = (speaker, names = castNames()) => castEntryOf(speaker, names)?.tone ?? ''
 
   /** Characters per dialogue chunk: the shortest any voice in use takes. */
   const dialogueMax = () => Math.min(chunkMaxFor(dialogueVoice()), ...cast().filter(entry => entry.voice).map(entry => chunkMaxFor(entry.voice)))
@@ -1051,7 +1076,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     // A reply in the 视觉小说格式 says who speaks each line (【名字|表情】), which the page no longer shows as text.
     const speakerOf = castVoiced() ? quoteSpeakers(hasMarks(node.text) ? (node.display ?? node.text) : text, names) : null
     // Emotions go before their lines as [tags]; the server keeps them only for voices that act on them (Fish).
-    const chunks = speechChunks(text, { narration: Boolean(narratorVoice), tags: true, speakerOf, max: { dialogue: dialogueMax(), narration: chunkMaxFor(narratorVoice) } })
+    const chunks = speechChunks(text, { narration: Boolean(narratorVoice), tags: true, speakerOf, tone: speaker => toneOf(speaker, names), max: { dialogue: dialogueMax(), narration: chunkMaxFor(narratorVoice) } })
     if (!chunks.length) return toast(t`这一段没有能读的文字`)
     if (!narratorVoice && !state.warnedNarrator) {
       state.warnedNarrator = true
@@ -1060,6 +1085,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     player.start(node.id, chunks.map(chunk => ({
       ...chunk,
       voice: chunk.kind === 'dialogue' ? voiceOf(chunk.speaker, names) : narratorVoice,
+      gain: chunk.kind === 'dialogue' ? gainOf(chunk.speaker, names) : 1,
       // Narration is long and even: the bridge's steady mode keeps one voice across blocks.
       stable: chunk.kind === 'narration',
     })))
@@ -1075,13 +1101,15 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     const { narratorVoice } = state.cardMedia ?? {}
     const plain = String(text ?? '').replace(/<[^<>]*>/g, '')
     const voice = voiceOf(speaker)
-    const chunks = speechChunks(plain, { narration: Boolean(narratorVoice), tags: true, max: { dialogue: chunkMaxFor(voice), narration: chunkMaxFor(narratorVoice) } })
+    const gain = gainOf(speaker)
+    const chunks = speechChunks(plain, { narration: Boolean(narratorVoice), tags: true, tone: toneOf(speaker), max: { dialogue: chunkMaxFor(voice), narration: chunkMaxFor(narratorVoice) } })
     if (!chunks.length) return done?.()
     // done() as well when the voice gives up (it failed, the browser would not play it, 停止): the visual novel's
     // 自动 waits for it, and would otherwise wait on that line for good.
     player.start(nodeId, chunks.map(chunk => ({
       ...chunk,
       voice: chunk.kind === 'dialogue' ? voice : narratorVoice,
+      gain: chunk.kind === 'dialogue' ? gain : 1,
       stable: chunk.kind === 'narration',
     })), null, done, done)
   }
@@ -1093,10 +1121,12 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     if (player.line === span) return player.stop()
     const node = getChat()?.path.find(n => n.id === nodeId)
     const names = castNames()
-    const voice = castVoiced() && node ? voiceOf(quoteSpeakers(shownText(node), names)(span.innerText), names) : dialogueVoice()
-    const chunks = speechChunks(span.innerText + voiceTagFor(span), { narration: false, tags: true, max: chunkMaxFor(voice) })
+    const speaker = castVoiced() && node ? quoteSpeakers(shownText(node), names)(span.innerText) : null
+    const voice = voiceOf(speaker, names)
+    const gain = gainOf(speaker, names)
+    const chunks = speechChunks(span.innerText + voiceTagFor(span), { narration: false, tags: true, tone: toneOf(speaker, names), max: chunkMaxFor(voice) })
     if (!chunks.length) return toast(t`这句没有能读的文字`)
-    player.start(nodeId, chunks.map(chunk => ({ ...chunk, voice, stable: false })), span)
+    player.start(nodeId, chunks.map(chunk => ({ ...chunk, voice, gain, stable: false })), span)
   }
 
   // A tap that clears a selection (on a phone, tapping away after selecting) is not one either.
@@ -1387,8 +1417,10 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       naiAllowance.classList.toggle('warn', Boolean(info?.v5 && (info.v5.empty || info.v5.percent <= 10)))
       return text
     }
+    // NovelAI's own address, or a relay's that takes NovelAI's own requests (server/media.mjs cleanNaiUrl).
+    const naiUrl = el('input', { name: 'naiUrl', type: 'url', autocomplete: 'off', spellcheck: 'false', value: novelai?.url ?? '', placeholder: t`留空用 NovelAI 官方` })
     checkNai.onclick = guard(async () => {
-      const info = await api('/api/media/novelai/check', { method: 'POST', body: { token: naiToken.value.trim() } })
+      const info = await api('/api/media/novelai/check', { method: 'POST', body: { token: naiToken.value.trim(), url: naiUrl.value.trim() } })
       toast(showAllowance(info), 8000)
     })
     // The V5 allowance changes by the hour: read it whenever this section is shown.
@@ -1411,6 +1443,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     ].filter(Boolean))
     const naiBox = el('div', {}, [
       serviceLinks('novelai'),
+      field(t`接口地址（可选）`, naiUrl, t`留空就连 NovelAI 官方。用中转站时填它给的地址，下面的令牌一栏填中转站的 Key：Key 和提示词都会发到这个地址，只填信得过的。只支持照搬 NovelAI 官方接口的中转；按 OpenAI 图片接口提供的，用「OpenAI 兼容图片接口」。`),
       el('label', {}, [t`NovelAI 持久令牌`, el('span', { class: 'select-with-action' }, [naiToken, checkNai, clearNai]), naiTokenHint]),
       el('p', { class: 'hint', text: t`在 NovelAI 网页点左下角齿轮 →「Account」→「Get Persistent API Token」，复制后粘贴到这里再保存。「检查」只查订阅、V5 额度和 Anlas，不画图。` }),
       el('label', {}, [t`模型`, naiModel, naiAllowance]),
@@ -1805,7 +1838,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
 
     const sections = [
       // 图库 (角色卡 → 图库), from here too: another window.
-      openGallery ? shared(t`配图`, { id: 'gallery', title: t`图库`, summary: () => t`所有卡和对话里的图：配图、CG、背景、立绘，选好后批量导出`, action: () => openGallery() }) : null,
+      openGallery ? shared(t`配图`, { id: 'gallery', title: t`图库`, summary: () => t`所有卡和对话里的图：配图、CG、背景、立绘，选好后批量导出或删除`, action: () => openGallery() }) : null,
       shared(t`配图`, {
         id: 'image-presets',
         title: t`生图方案`,
@@ -2051,11 +2084,11 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
    * A voice picker with its own 试听; onChange(value) once one is picked.
    * @param fallback - what 试听 reads with while nothing is picked: a voice, or a function that gives one.
    */
-  function voicePickerFrom(choices, { name, value, empty, form, silent = false, onChange = null, fallback = '' }) {
+  function voicePickerFrom(choices, { name, value, empty, form, silent = false, onChange = null, fallback = '', gain = null }) {
     const select = voiceSelectFrom(choices, { name, value, empty })
     if (onChange) select.addEventListener('change', () => onChange(select.value))
     const listen = el('button', { type: 'button', class: 'btn small', text: t`试听`, title: t`用这个音色读一句示例（没保存的设置也算）` })
-    listen.onclick = () => previewVoice(listen, { voice: select.value || (typeof fallback === 'function' ? fallback() : fallback) || '', form, silent })
+    listen.onclick = () => previewVoice(listen, { voice: select.value || (typeof fallback === 'function' ? fallback() : fallback) || '', form, silent, gain: gain?.() ?? 1 })
     return el('span', { class: 'select-with-action' }, [select, listen])
   }
 
@@ -2064,16 +2097,28 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
    * @param toRoster - opens 角色名册, for a card without a cast.
    * @param onChange - (entry, voice) once one is picked.
    * @param fallback - the dialogue voice, for 试听 with no voice of their own.
+   * @param onVolume - (entry, 音量 in percent) once the slider is let go.
+   * @param onTone - (entry, 默认语气) once it has been typed.
    */
-  function castVoiceBlock(roster, choices, form, toRoster, onChange = null, fallback = '') {
-    const rows = roster.map(entry => el('label', { class: 'cast-voice' }, [
-      el('span', { class: 'cast-voice-name', text: entry.player ? t`${entry.name}（主角）` : entry.name }),
-      voicePickerFrom(choices, { name: `castVoice:${entry.id}`, value: entry.voice ?? '', empty: t`同对白音色`, form, fallback, onChange: onChange && (value => onChange(entry, value)) }),
-    ]))
+  function castVoiceBlock(roster, choices, form, toRoster, onChange = null, fallback = '', onVolume = null, onTone = null) {
+    const rows = roster.map(entry => {
+      const volume = el('input', { type: 'range', name: `castVolume:${entry.id}`, min: 25, max: 200, step: 5, value: entry.volume ?? 100, 'aria-label': t`${entry.name}的音量` })
+      const shown = el('span', { class: 'cast-volume-value', text: `${volume.value}%` })
+      volume.addEventListener('input', () => { shown.textContent = `${volume.value}%` })
+      if (onVolume) volume.addEventListener('change', () => onVolume(entry, Number(volume.value)))
+      const tone = el('input', { type: 'text', name: `castTone:${entry.id}`, value: entry.tone ?? '', maxlength: 40, placeholder: t`默认语气，比如：拖长尾音，像在逗弄猎物`, 'aria-label': t`${entry.name}的默认语气` })
+      if (onTone) tone.addEventListener('change', () => onTone(entry, tone.value.trim()))
+      return el('label', { class: 'cast-voice' }, [
+        el('span', { class: 'cast-voice-name', text: entry.player ? t`${entry.name}（主角）` : entry.name }),
+        voicePickerFrom(choices, { name: `castVoice:${entry.id}`, value: entry.voice ?? '', empty: t`同对白音色`, form, fallback, onChange: onChange && (value => onChange(entry, value)), gain: () => Number(volume.value) / 100 }),
+        el('span', { class: 'cast-volume', title: t`这个人的音量：各个音色先自动拉到差不多响，再按这里调` }, [el('span', { class: 'cast-volume-label', text: t`音量` }), volume, shown]),
+        el('span', { class: 'cast-tone', title: t`回复里这句没写语气（[voice:语气:台词]）时，就照这里说；写了的照回复。Fish 当语气标签，gpt-4o-mini-tts 当语气说明，其余音色不读` }, [el('span', { class: 'cast-volume-label', text: t`语气` }), tone]),
+      ])
+    })
     return [
       el('h4', { class: 'cast-voice-title', text: t`角色各自的音色` }),
       ...(rows.length
-        ? [el('div', { class: 'cast-voices' }, rows), el('p', { class: 'hint', text: t`说话的人在角色名册里，就用自己的音色；没选的、猜不出是谁的，用对白音色。视觉小说模式按每句的说话人读，普通模式点「朗读」或点一句对白也一样。` })]
+        ? [el('div', { class: 'cast-voices' }, rows), el('p', { class: 'hint', text: t`说话的人在角色名册里，就用自己的音色；没选的、猜不出是谁的，用对白音色。视觉小说模式按每句的说话人读，普通模式点「朗读」或点一句对白也一样。` }), el('p', { class: 'hint', text: t`各个音色读出来会先自动拉到差不多响；谁还嫌大声或小声，拖名字下面的音量。「语气」写这个人平常怎么说话，回复里没标语气的台词就照它念。` })]
         : [el('p', { class: 'hint', text: t`先在角色名册里添加角色（「让辅助模型起草」最快），保存后就能给每个人选音色。` }), toRoster ? el('button', { type: 'button', class: 'btn small', 'data-settings': '', text: t`去角色名册`, onclick: toRoster }) : null]),
     ].filter(Boolean)
   }
@@ -2193,7 +2238,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         ? [
             row(t`对白音色`, voicePickerFrom(choices, { name: 'voice', value: card.voice ?? '', empty: choices.dialogueDefault, form, fallback: media.defaultVoice, onChange: value => saveCard({ voice: value }) })),
             row(t`旁白音色`, voicePickerFrom(choices, { name: 'narratorVoice', value: card.narratorVoice ?? '', empty: t`不读旁白`, form, silent: true, onChange: value => saveCard({ narratorVoice: value }) })),
-            ...castVoiceBlock(cast(), choices, form, () => openSettings('roster'), (entry, value) => saveCard({ roster: cast().map(e => (e.id === entry.id ? { ...e, voice: value } : e)) }), dialogueVoice),
+            ...castVoiceBlock(cast(), choices, form, () => openSettings('roster'), (entry, value) => saveCard({ roster: cast().map(e => (e.id === entry.id ? { ...e, voice: value } : e)) }), dialogueVoice, (entry, value) => saveCard({ roster: cast().map(e => (e.id === entry.id ? { ...e, volume: value } : e)) }), (entry, value) => saveCard({ roster: cast().map(e => (e.id === entry.id ? { ...e, tone: value } : e)) })),
           ]
         : [el('p', { class: 'hint', text: t`选一张角色卡后，这里可以给它选音色。` })]),
       choices.service && !choices.external.ok ? el('p', { class: 'hint warn', text: t`${BRIDGE_NAME}连不上：${choices.external.error ?? ''}` }) : null,
@@ -2280,9 +2325,14 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       .filter(item => item.lora)
   }
 
-  /** The roster as the form shows it now; each one's voice from 朗读 → 音色 (one added since has none yet). */
+  /** The roster as the form shows it now; each one's voice and 音量 from 朗读 → 音色 (one added since has none yet). */
   function collectRoster(form) {
-    return [...form.querySelectorAll('.roster-entry')].map(box => ({ ...readEntry(box), voice: form.elements[`castVoice:${box.dataset.id}`]?.value ?? box.dataset.voice ?? '' }))
+    return [...form.querySelectorAll('.roster-entry')].map(box => ({
+      ...readEntry(box),
+      voice: form.elements[`castVoice:${box.dataset.id}`]?.value ?? box.dataset.voice ?? '',
+      volume: Number(form.elements[`castVolume:${box.dataset.id}`]?.value ?? box.dataset.volume ?? 100),
+      tone: form.elements[`castTone:${box.dataset.id}`]?.value ?? box.dataset.tone ?? '',
+    }))
   }
 
   /** One roster entry as its box shows it now. */
@@ -2340,7 +2390,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         const current = readEntry(node)
         viewPicture(img.src, t`${current.name}：${current.looks}${current.outfit ? t`；${current.outfit}` : ''}`, t`人设图`)
       }
-      const node = el('details', { class: 'roster-entry', 'data-id': entry.id, 'data-ref': entry.ref ? '1' : '', 'data-voice': entry.voice ?? '', 'data-flag': flag, 'data-whole': entry.whole ? '1' : '' })
+      const node = el('details', { class: 'roster-entry', 'data-id': entry.id, 'data-ref': entry.ref ? '1' : '', 'data-voice': entry.voice ?? '', 'data-volume': entry.volume ?? 100, 'data-tone': entry.tone ?? '', 'data-flag': flag, 'data-whole': entry.whole ? '1' : '' })
       node.open = open
       // The line it shows closed: a face, the name and the names it goes by, what is set.
       const face = el('span', { class: 'roster-face', 'aria-hidden': 'true' })
@@ -3338,7 +3388,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
    * 试听: one sample sentence in a voice (a card's pick) or a source's first
    * voice, with the form's unsaved settings. Browser voices are spoken here.
    */
-  const previewVoice = guard(async (button, { voice = '', source = '', form, silent = false }) => {
+  const previewVoice = guard(async (button, { voice = '', source = '', form, silent = false, gain = 1 }) => {
     stopPreview()
     const draft = voiceDraft(form)
     const hereVoice = voice.startsWith(BROWSER) || (!voice && !source && !form.elements.ttsUrl?.value.trim())
@@ -3364,7 +3414,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         body: JSON.stringify({ voice, source, text: PREVIEW_LINE, ...draft }),
       })
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || t`试听失败（${res.status}）`)
-      const url = URL.createObjectURL(await res.blob())
+      const url = await levelledUrl(await res.blob(), gain)
       const audio = new Audio(url)
       previewing = { audio, url }
       audio.onended = () => {
@@ -3439,6 +3489,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         naiV5Empty: value('naiV5Empty'),
         naiNegative: value('naiNegative'),
         naiToken: value('naiToken').trim(),
+        naiUrl: value('naiUrl').trim(),
         ...(state.ownBackends.length ? { localModels: Object.fromEntries(state.ownBackends.filter(own => form.elements[`localModel:${own.id}`]).map(own => [own.id, value(`localModel:${own.id}`)])) } : {}),
         helperModel: value('helperModel'),
         promptStyle: value('promptStyle'),

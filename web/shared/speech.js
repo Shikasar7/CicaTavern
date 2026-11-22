@@ -78,9 +78,11 @@ export function emotionTag(emotion) {
  *   bracket tags, such as Fish; the server drops them for the others).
  * @param speakerOf - (quote text) → who says it, for each quote in order: the
  *   chunk's `speaker`, and two people's lines are never joined.
+ * @param tone - how a line is said when the reply gives it no emotion of its own (a
+ *   cast member's 默认语气), as text or (speaker) → text; only with `tags`.
  * @returns {{ kind: 'dialogue'|'narration', text: string, speaker?: string|null }[]}
  */
-export function speechChunks(text, { narration = true, max = 100, tags = false, speakerOf = null } = {}) {
+export function speechChunks(text, { narration = true, max = 100, tags = false, speakerOf = null, tone = null } = {}) {
   const limit = kind => (typeof max === 'number' ? max : max?.[kind] ?? 100)
   // An options block is not part of the story; voice tags give a line its emotion, then go.
   const source = String(text ?? '').replace(/<small>[\s\S]*?<\/small>/gi, '')
@@ -93,7 +95,10 @@ export function speechChunks(text, { narration = true, max = 100, tags = false, 
     const voiceTag = VOICE_AFTER.exec(source.slice(last))
     if (voiceTag) last += voiceTag[0].length
     const said = match[0].slice(1, -1)
-    runs.push({ kind: 'dialogue', text: said, tag: tags && voiceTag ? emotionTag(voiceTag[1]) : '', ...(speakerOf ? { speaker: speakerOf(said) ?? null } : {}) })
+    const speaker = speakerOf ? speakerOf(said) ?? null : undefined
+    // The reply's own emotion for the line, else the speaker's 默认语气.
+    const tag = tags ? emotionTag(voiceTag?.[1]) || emotionTag(typeof tone === 'function' ? tone(speaker) : tone) : ''
+    runs.push({ kind: 'dialogue', text: said, tag, ...(speakerOf ? { speaker } : {}) })
   }
   if (last < source.length) runs.push({ kind: 'narration', text: source.slice(last) })
 
@@ -103,10 +108,104 @@ export function speechChunks(text, { narration = true, max = 100, tags = false, 
     if (run.kind === 'narration' && !narration) continue
     const clean = cleanForSpeech(run.text)
     if (!SPEAKABLE.test(clean)) continue
-    const said = (run.tag ?? '') + clean
     const previous = merged.at(-1)
-    if (previous && previous.kind === run.kind && previous.speaker === run.speaker) previous.text += (/[，。！？、；：,.!?…~～]$/.test(previous.text) ? '' : '，') + said // i18n-ignore: story text read aloud
-    else merged.push({ kind: run.kind, text: said, ...('speaker' in run ? { speaker: run.speaker } : {}) })
+    const joined = previous && previous.kind === run.kind && previous.speaker === run.speaker
+    // A line said the same way as the one it joins carries no tag of its own.
+    const said = (run.tag && !(joined && previous.tag === run.tag) ? run.tag : '') + clean
+    if (joined) {
+      previous.text += (/[，。！？、；：,.!?…~～]$/.test(previous.text) ? '' : '，') + said // i18n-ignore: story text read aloud
+      previous.tag = run.tag ?? ''
+    } else merged.push({ kind: run.kind, text: said, tag: run.tag ?? '', ...('speaker' in run ? { speaker: run.speaker } : {}) })
   }
-  return merged.flatMap(run => splitLong(run.text, limit(run.kind)).map(piece => ({ kind: run.kind, text: piece.trim(), ...('speaker' in run ? { speaker: run.speaker } : {}) }))).filter(chunk => SPEAKABLE.test(chunk.text))
+  // Each chunk is a request of its own: one cut from the middle of a line keeps the line's tag.
+  return merged.flatMap(run => {
+    let tag = ''
+    return splitLong(run.text, limit(run.kind)).map(piece => {
+      const text = piece.trim()
+      const own = /^\[[^\]]*\] /.test(text)
+      const said = !own && tag && run.kind === 'dialogue' ? tag + text : text
+      tag = [...said.matchAll(/\[[^\]]*\] /g)].at(-1)?.[0] ?? tag
+      return { kind: run.kind, text: said, ...('speaker' in run ? { speaker: run.speaker } : {}) }
+    })
+  }).filter(chunk => SPEAKABLE.test(chunk.text))
+}
+
+// ─── Levelling: every voice about as loud as the next ───────────────────
+// Voices come out of their services at very different levels: a whispering Fish voice was 20 dB
+// under a sharp one, too quiet to hear at a volume the others were right at. Each chunk is brought
+// to one loudness before it plays (web/media.js), then a cast member's own 音量 is put on top.
+
+export const LEVEL_TARGET_DB = -20 // gated RMS in dBFS: about -20 LUFS for speech
+const LEVEL_MOST = 10 // +20 dB at most: past that it is noise being raised
+const LEVEL_LEAST = 0.25
+
+/**
+ * How loud samples are in dBFS: the mean power of 100 ms blocks, leaving out the pauses
+ * (below -70 dBFS, or 10 dB under the mean of the rest); null when there is nothing to hear.
+ * @param channels - Float32Arrays of the same length.
+ */
+export function loudnessDb(channels, sampleRate) {
+  const length = channels[0]?.length ?? 0
+  const block = Math.max(1, Math.round(sampleRate / 10))
+  const powers = []
+  for (let start = 0; start < length; start += block) {
+    const end = Math.min(length, start + block)
+    let sum = 0
+    for (const data of channels) for (let i = start; i < end; i++) sum += data[i] * data[i]
+    powers.push(sum / ((end - start) * channels.length))
+  }
+  const mean = list => list.reduce((a, b) => a + b, 0) / list.length
+  const heard = powers.filter(power => power > 1e-7)
+  if (!heard.length) return null
+  const floor = mean(heard) / 10
+  return 10 * Math.log10(mean(heard.filter(power => power >= floor)))
+}
+
+/** The gain that brings audio this loud to LEVEL_TARGET_DB, times `volume` (a cast member's 音量, 1 = as levelled). */
+export function levelGain(loudness, volume = 1) {
+  const level = loudness == null ? 1 : Math.min(LEVEL_MOST, Math.max(LEVEL_LEAST, 10 ** ((LEVEL_TARGET_DB - loudness) / 20)))
+  return level * (Number.isFinite(volume) && volume > 0 ? volume : 1)
+}
+
+/** Samples times `gain`; peaks over 0.8 are rounded off below full scale rather than clipped. */
+export function applyGain(data, gain) {
+  const out = new Float32Array(data.length)
+  const knee = 0.8
+  for (let i = 0; i < data.length; i++) {
+    const value = data[i] * gain
+    const size = Math.abs(value)
+    out[i] = size <= knee ? value : Math.sign(value) * (knee + (1 - knee) * Math.tanh((size - knee) / (1 - knee)))
+  }
+  return out
+}
+
+/** The channels as a 16-bit PCM WAV file. */
+export function wavBytes(channels, sampleRate) {
+  const count = channels.length
+  const frames = channels[0]?.length ?? 0
+  const bytes = new Uint8Array(44 + frames * count * 2)
+  const view = new DataView(bytes.buffer)
+  const word = (at, text) => [...text].forEach((ch, i) => view.setUint8(at + i, ch.charCodeAt(0)))
+  word(0, 'RIFF')
+  view.setUint32(4, 36 + frames * count * 2, true)
+  word(8, 'WAVE')
+  word(12, 'fmt ')
+  view.setUint32(16, 16, true)
+  view.setUint16(20, 1, true)
+  view.setUint16(22, count, true)
+  view.setUint32(24, sampleRate, true)
+  view.setUint32(28, sampleRate * count * 2, true)
+  view.setUint16(32, count * 2, true)
+  view.setUint16(34, 16, true)
+  word(36, 'data')
+  view.setUint32(40, frames * count * 2, true)
+  let at = 44
+  for (let i = 0; i < frames; i++) {
+    for (const data of channels) {
+      const value = Math.max(-1, Math.min(1, data[i]))
+      view.setInt16(at, value < 0 ? value * 0x8000 : value * 0x7fff, true)
+      at += 2
+    }
+  }
+  return bytes
 }

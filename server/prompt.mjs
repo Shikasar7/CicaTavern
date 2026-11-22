@@ -7,9 +7,13 @@
 // Claude Code caches up to the last message, so the history must only ever
 // grow at the end: editing an earlier user message loses the cache for all
 // that follows (measured). Material SillyTavern keeps near the end of every
-// request (@depth entries, post-history rules) therefore lives in the prefix's
-// last section, and each turn carries a one-line reminder naming it.
-import { constantEntries, entryText, entryTitle, inPrefix, keywordEntries, lateEntries, preloadEntries, templateInitialVariables } from './worldbook.mjs'
+// request (post-history rules, author's-note entries) therefore lives in the
+// prefix's last section, and each turn carries a one-line reminder naming it.
+// Worldbook entries at 聊天中 @深度 go where SillyTavern puts them, as a
+// provider's history is rebuilt for each request (placeDeep); the messages
+// from that depth on are written to the cache again each turn. Chats built
+// before (no chat.loreAtDepth) keep their constant ones in the prefix.
+import { constantEntries, deepConstantEntries, entryText, entryTitle, inPrefix, keywordEntries, lateEntries, preloadEntries, templateInitialVariables } from './worldbook.mjs'
 import { renderTemplate, stripTemplates, templateSession } from './template.mjs'
 import { renderPresetPrefix } from './presets.mjs'
 import { basicRules, narratorText } from './basic.mjs'
@@ -95,11 +99,11 @@ export function fixedWorldBooks(books, scripts, names) {
  * turn's dynamic block. The entry itself stays in the prefix as written: a card's rules there are followed
  * better than a copy far back in the history (measured: update blocks dropped), and the cache stays whole.
  */
-export function drawnEntries(books, scripts, names) {
+export function drawnEntries(books, scripts, names, { atDepth = true } = {}) {
   const drawing = worldScripts(scripts).filter(draws)
   if (!drawing.length) return []
   const fixed = fixedWorldBooks(books, scripts, names)
-  return [...constantEntries(fixed), ...lateEntries(fixed)].flatMap(entry => {
+  return [...constantEntries(fixed), ...lateEntries(fixed, { atDepth })].flatMap(entry => {
     const text = replaceMacros(entryText(entry), names)
     const after = worldRegex(text, entry, drawing, names)
     if (after === text) return []
@@ -259,8 +263,8 @@ function lateText(books, m) {
  * late entries had their own section keep them elsewhere in the prefix, so the
  * entry titles alone must identify them.
  */
-export function everyTurnReminder(systemPrompt, books, { presetRules = false, mvu = false, choices = false, selfCheck = false, scripts = [] } = {}) {
-  const late = lateEntries(books)
+export function everyTurnReminder(systemPrompt, books, { presetRules = false, mvu = false, choices = false, selfCheck = false, scripts = [], atDepth = true } = {}) {
+  const late = lateEntries(books, { atDepth })
   const titles = late.map(entry => `【${entryTitle(entry)}】`)
   const hasSection = systemPrompt.includes(`## ${EVERY_TURN}`)
   if (!titles.length && !hasSection) return ''
@@ -271,7 +275,8 @@ export function everyTurnReminder(systemPrompt, books, { presetRules = false, mv
   const update = mvu ? `结尾完整闭合的 <UpdateVariable> 变量更新块（照卡里的变量规则写，不能省${choices ? '，写完选项也要接着写' : ''}）` : ''
   // The built-in presets' choices: older replies in the history went without them (basic.mjs), and the model followed those.
   const options = choices && hasSection ? '结尾 <choices>…</choices> 里的四个行动选项（之前的回复里没有也照写）' : ''
-  const tags = replyBlocks([...constantEntries(books), ...late], scripts)
+  // The blocks the rules ask for in the reply, from the @深度 entries sent each turn too (deepConstantEntries).
+  const tags = replyBlocks([...constantEntries(books), ...late, ...(atDepth ? deepConstantEntries(books) : [])], scripts)
   // 写前自查 comes first in the reply and has no condition, from a card or the built-in preset: real models took it as
   // optional among the other blocks, and put the preset's time box first about half the time.
   const ordered = tags.filter(tag => tag !== 'self_check')
@@ -408,11 +413,75 @@ export function openingBlock(opening, names) {
   return `<开场>\n以下是故事的开场，已作为第一段正文展示给玩家：\n${replaceMacros(opening, names)}\n</开场>`
 }
 
-// The block of lore sent 紧挨着回复, by its tag (engine.mjs takes it out of every user message but the newest).
+// The block of lore at @深度 0 (紧挨着回复), by its tag (engine.mjs takes it out of every user message but the newest).
 export const NEAR_TAG = '世界书·紧挨回复'
 
-export function buildTurnPrompt({ names, opening, recap = '', entries = [], nearEntries = [], memory = '', dynamic = [], characterNote = '', stateText, input, replyLength = 0, replyRange = '', presetText = '', reminder = '', marks = false, cgs = [], game = '', injected = { before: [], after: [] } }) {
-  const parts = []
+// 聊天中 @深度 1 and more (worldbook.mjs depthOf; a preset's @深度 entries under 同酒馆): one block for each depth and
+// kind, at the top of the turn's message as written and kept. Where the history is rebuilt for each request (a
+// provider's API), engine.mjs takes them out of every message and puts this turn's at their depth (placeDeep); the
+// subscription's session cannot be rebuilt, so there they go with the turn's message, as written.
+const DEEP_KINDS = ['世界书', '预设指令']
+const deepPattern = () => /\n*<(世界书|预设指令) 深度="(\d+)">\n[\s\S]*?\n<\/\1>/g
+
+/** `deep` ([{ depth, kind, title?, text }], depth 1 and more) as the turn's message carries it: deepest first. */
+function deepBlocks(deep) {
+  const depths = [...new Set(deep.filter(item => item.depth >= 1 && item.text).map(item => item.depth))].sort((a, b) => b - a)
+  return depths.flatMap(depth => DEEP_KINDS.flatMap(kind => {
+    const body = deep.filter(item => item.depth === depth && item.kind === kind && item.text).map(item => titled(item.title, item.text)).join('\n\n')
+    return body ? [`<${kind} 深度="${depth}">\n${body}\n</${kind}>`] : []
+  }))
+}
+
+/** The @深度 blocks of a message's text, taken out: { text, deep: [{ depth, text }] } (each block's text whole). */
+export function takeDeep(text) {
+  const deep = []
+  const rest = String(text ?? '').replace(deepPattern(), (block, kind, depth) => {
+    deep.push({ depth: Number(depth), text: block.replace(/^\n+/, '') })
+    return ''
+  })
+  return { text: deep.length ? rest.replace(/^\n+/, '') : rest, deep }
+}
+
+/**
+ * `deep` ([{ depth, text }]) put into `messages` (the story's messages, the newest last) where SillyTavern inserts
+ * them: before the message `depth` from the end (1: before the newest). As text, since a message of its own would
+ * break the sides' turns: at the start of a user message, or at the end of the user message before a reply. Deeper
+ * than the story: at the start of its first message. Returns { messages, moved }: copies where changed, and the index
+ * of the first message changed that the next turn changes differently (two messages on, the same depth lands two
+ * further down): nothing from it on reads the same then, so a cache mark goes before it. One at the top now and next
+ * turn too stays put, and is left out of that.
+ */
+export function placeDeep(messages, deep) {
+  const out = messages.map(message => ({ ...message }))
+  const n = out.length
+  let moved = Infinity
+  const users = out.map((message, index) => (message.role === 'user' ? index : -1)).filter(index => index >= 0)
+  if (!users.length || !deep.length) return { messages: out, moved }
+  const at = new Map() // index → { before: [], after: [] }
+  for (const item of [...deep].sort((a, b) => b.depth - a.depth)) {
+    const k = n - item.depth
+    let index = users[0]
+    let side = 'before'
+    if (k > 0 && out[k].role === 'user') index = k
+    else if (k > 0) {
+      const earlier = users.findLast(i => i < k)
+      if (earlier !== undefined) {
+        index = earlier
+        side = 'after'
+      } else index = users.find(i => i > k)
+    }
+    if (!at.has(index)) at.set(index, { before: [], after: [] })
+    at.get(index)[side].push(item.text)
+    if (!(k <= 0 && item.depth >= n + 2)) moved = Math.min(moved, index)
+  }
+  for (const [index, { before, after }] of at) {
+    out[index].content = [...before, out[index].content, ...after].filter(text => String(text).trim()).join('\n\n')
+  }
+  return { messages: out, moved }
+}
+
+export function buildTurnPrompt({ names, opening, recap = '', entries = [], nearEntries = [], deep = [], memory = '', dynamic = [], characterNote = '', stateText, input, replyLength = 0, replyRange = '', presetText = '', plot = '', guide = '', reminder = '', marks = false, cgs = [], game = '', injected = { before: [], after: [] } }) {
+  const parts = [...deepBlocks(deep)]
   const block = (tag, items) => {
     const body = items.filter(item => item.text).map(item => titled(item.title, item.text)).join('\n\n')
     if (body) parts.push(`<${tag}>\n${body}\n</${tag}>`)
@@ -433,10 +502,13 @@ export function buildTurnPrompt({ names, opening, recap = '', entries = [], near
   block('卡脚本提示', injected.before ?? [])
   parts.push(`<玩家输入>\n${replaceMacros(input, names)}\n</玩家输入>`)
   block('卡脚本提示', injected.after ?? [])
-  // 发送位置 紧挨着回复 (worldbook.mjs sendsNear): after the input, and taken out of the older messages (engine NEAR_LORE).
+  // @深度 0 (worldbook.mjs depthOf): after the input, and taken out of the older messages (engine NEAR_LORE).
   block(NEAR_TAG, nearEntries)
   // After the input, like SillyTavern's post-history prompts.
   if (presetText) parts.push(`<预设指令>\n${presetText}\n</预设指令>`)
+  // 剧本 (web/shared/plot.js) and 剧情向导 (guide-text.mjs): this turn's message only (engine takes them out of the older ones).
+  if (plot) parts.push(plot)
+  if (guide) parts.push(guide)
   if (marks === true) parts.push(dialogueFormat())
   if (marks && cgs.length) parts.push(cgFormat(cgs))
   if (game) parts.push(game)

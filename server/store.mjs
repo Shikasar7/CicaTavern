@@ -1,7 +1,7 @@
 // Plain JSON-file storage under one data root. Every write goes through a
 // temp file + rename so a crash mid-write never leaves a half-written JSON.
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import path from 'node:path'
@@ -34,12 +34,95 @@ export function httpError(status, message) {
   return error
 }
 
-async function readJson(file, fallback) {
+/**
+ * JSON the store wrote never holds a raw control character (JSON.stringify escapes them). One that does was damaged
+ * on disk (a computer switched off mid-save can leave a run of zero bytes in a file) or edited by hand; JSON.parse
+ * then fails with "Bad control character in string literal". Drops the zero bytes, escapes the other control
+ * characters inside strings and drops them outside: the text unchanged when there was nothing to mend.
+ */
+export function mendControlChars(text) {
+  const parts = []
+  let start = 0
+  let inString = false
+  let escaped = false
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i)
+    if (code < 0x20 && (inString || (code !== 0x09 && code !== 0x0a && code !== 0x0d))) {
+      parts.push(text.slice(start, i))
+      if (inString && code !== 0) parts.push(`\\u${code.toString(16).padStart(4, '0')}`)
+      start = i + 1
+      escaped = false
+      continue
+    }
+    if (escaped) escaped = false
+    else if (code === 0x5c) escaped = inString
+    else if (code === 0x22) inString = !inString
+  }
+  if (!parts.length) return text
+  parts.push(text.slice(start))
+  return parts.join('')
+}
+
+/** Parsed `text`; one damaged by control characters, mended (`mended` set). Throws what JSON.parse threw otherwise. */
+function parseStored(text) {
   try {
-    return JSON.parse(await readFile(file, 'utf8'))
+    return { value: JSON.parse(text), mended: false }
+  } catch (error) {
+    const mended = mendControlChars(text)
+    if (mended === text) throw error
+    try {
+      return { value: JSON.parse(mended), mended: true }
+    } catch {
+      throw error
+    }
+  }
+}
+
+/**
+ * `file` as JSON, `fallback` when there is none. One that had to be mended is read as mended and `damaged` is told
+ * ({ file, mended: true }, once per damaged state of the file) after the original was copied to <file>.bad-<time>:
+ * the next save writes it clean. One that cannot be read at all throws its SyntaxError with `unreadable` set.
+ */
+async function readJson(file, fallback, damaged) {
+  let text
+  try {
+    text = await readFile(file, 'utf8')
   } catch (error) {
     if (error.code === 'ENOENT') return fallback
     throw error
+  }
+  let read
+  try {
+    read = parseStored(text)
+  } catch (error) {
+    error.unreadable = file
+    throw error
+  }
+  if (read.mended) {
+    const key = `${file}\0${text.length}`
+    if (!mendedFiles.has(key)) {
+      mendedFiles.add(key)
+      await copyFile(file, `${file}.bad-${Date.now()}`).catch(() => {})
+      damaged?.({ file, mended: true })
+    }
+  }
+  return read.value
+}
+const mendedFiles = new Set()
+
+/**
+ * readJson for a list: a file that cannot be read is moved aside to <file>.bad-<time> (kept to recover by hand)
+ * and left out, `damaged` told ({ file, movedTo }), so one broken chat or card does not stop the whole list.
+ */
+async function readListed(file, damaged) {
+  try {
+    return await readJson(file, null, damaged)
+  } catch (error) {
+    if (!error.unreadable) throw error
+    const movedTo = `${file}.bad-${Date.now()}`
+    await rename(file, movedTo).catch(() => {})
+    damaged?.({ file, movedTo, message: error.message })
+    return null
   }
 }
 
@@ -59,7 +142,7 @@ export async function readJsonFile(file, fallback) {
     throw error
   }
   try {
-    return JSON.parse(text)
+    return parseStored(text).value
   } catch {
     await rename(file, `${file}.bad-${Date.now()}`).catch(() => {})
     return fallback
@@ -77,7 +160,15 @@ export function writeJson(file, value) {
     // A name of its own: two writes in one millisecond once shared one and mixed their bytes.
     const tmp = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`
     try {
-      await writeFile(tmp, text, 'utf8')
+      // On disk before the rename: a computer switched off right after it otherwise could keep the new name over
+      // contents never written, read back as a run of zero bytes ("Bad control character in string literal").
+      const handle = await open(tmp, 'w')
+      try {
+        await handle.writeFile(text, 'utf8')
+        await handle.sync()
+      } finally {
+        await handle.close()
+      }
       await renameOver(tmp, file)
     } catch (error) {
       await rm(tmp, { force: true }).catch(() => {})
@@ -124,7 +215,7 @@ function createLocks() {
   }
 }
 
-async function listJson(dir) {
+async function listJson(dir, damaged) {
   let names
   try {
     names = await readdir(dir)
@@ -135,7 +226,7 @@ async function listJson(dir) {
   const items = []
   for (const name of names) {
     if (!name.endsWith('.json')) continue
-    const value = await readJson(path.join(dir, name), null)
+    const value = await readListed(path.join(dir, name), damaged)
     if (value) items.push(value)
   }
   return items
@@ -258,6 +349,29 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
       } catch {}
     }
   }
+  // Told of a data file damaged on disk: mended as it was read, or moved aside and left out of a list (http.mjs logs it).
+  const damagedListeners = new Set()
+  const damaged = report => {
+    const named = { ...report, file: path.relative(root, report.file), movedTo: report.movedTo && path.relative(root, report.movedTo) }
+    for (const listener of damagedListeners) {
+      try {
+        listener(named)
+      } catch {}
+    }
+  }
+  // A file only the store writes (settings, a card, a chat): mended if it can be. One that cannot be read is told
+  // ({ file, message }: the error log names the file to move out of the data folder) and thrown as a message of
+  // its own, not JSON.parse's.
+  const readData = async (file, fallback) => {
+    try {
+      return await readJson(file, fallback, damaged)
+    } catch (error) {
+      if (!error.unreadable) throw error
+      damaged({ file, message: error.message })
+      throw httpError(500, '有个数据文件坏了，读不出来，多半是存档时断电或强制关机。设置 → 更多 → 错误日志 里写了是哪个文件')
+    }
+  }
+  const readInList = file => readListed(file, damaged)
 
   return {
     dirs,
@@ -265,6 +379,14 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
     onChange(listener) {
       listeners.add(listener)
       return () => listeners.delete(listener)
+    },
+    /**
+     * Call `listener({ file, mended: true } | { file, movedTo, message })` for each data file found damaged (paths
+     * relative to the data folder); returns the way to stop.
+     */
+    onDamaged(listener) {
+      damagedListeners.add(listener)
+      return () => damagedListeners.delete(listener)
     },
     /** Run `fn` (its getChat … saveChat of chat `id`) with no other such section on that chat meanwhile. */
     withChat(id, fn) {
@@ -275,7 +397,7 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
     },
 
     async getSettings() {
-      const saved = { ...DEFAULT_SETTINGS, ...(await readJson(path.join(root, 'settings.json'), {})) }
+      const saved = { ...DEFAULT_SETTINGS, ...(await readData(path.join(root, 'settings.json'), {})) }
       return lockSettings({ ...saved, basic: cleanBasic(saved.basic), vn: cleanVn(saved.vn), basicEdits: cleanBuiltinEdits(saved.basicEdits), vnEdits: cleanBuiltinEdits(saved.vnEdits), appearance: cleanAppearance(saved.appearance), globalBookIds: cleanIds(saved.globalBookIds), globalVars: cleanVars(saved.globalVars), compaction: cleanCompaction(saved.compaction), memory: cleanMemory(saved.memory), toolPrompts: cleanToolPrompts(saved.toolPrompts), quickReplies: cleanQuickReplies(saved.quickReplies) })
     },
     /** Settings worked out from the saved ones and saved, with no other save in between (template global writes). */
@@ -324,7 +446,7 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
     },
     async ensureAccessToken() {
       const file = path.join(root, 'access.json')
-      const current = await readJson(file, {})
+      const current = await readData(file, {})
       if (typeof current.token === 'string' && /^[a-f0-9]{24,}$/.test(current.token)) return current.token
       const token = randomBytes(18).toString('hex')
       await writeJson(file, { token })
@@ -332,7 +454,7 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
     },
     /** Custom API providers, keys included (see providers.mjs publicProvider for what the UI gets). */
     async getProviders() {
-      const value = await readJson(path.join(root, 'providers.json'), {})
+      const value = await readData(path.join(root, 'providers.json'), {})
       return Array.isArray(value.providers) ? value.providers : []
     },
     async saveProviders(providers) {
@@ -348,8 +470,8 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
       const saved = await readJsonFile(path.join(root, LIST_FILES[kind]), null)
       if (saved) return cleanList(kind, saved)
       const before = kind === 'persona'
-        ? { ...DEFAULT_PERSONA, ...(await readJson(path.join(root, 'persona.json'), {})) }
-        : { text: (await readJson(path.join(root, 'settings.json'), {})).writingRules }
+        ? { ...DEFAULT_PERSONA, ...(await readData(path.join(root, 'persona.json'), {})) }
+        : { text: (await readData(path.join(root, 'settings.json'), {})).writingRules }
       return cleanList(kind, { defaultId: DEFAULT_ITEM, items: [{ ...before, id: DEFAULT_ITEM }] })
     },
     /** `change` (the list → the list to keep) over the list as saved, with no other change in between. */
@@ -389,13 +511,13 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
       const cards = []
       for (const name of names) {
         if (!SAFE_ID.test(name)) continue
-        const card = await readJson(path.join(dirs.cards, name, 'card.json'), null)
+        const card = await readInList(path.join(dirs.cards, name, 'card.json'))
         if (card && !card.direct) cards.push(card)
       }
       return cards.sort((a, b) => b.importedAt.localeCompare(a.importedAt))
     },
     async getCard(id) {
-      const card = await readJson(cardFile(id), null)
+      const card = await readData(cardFile(id), null)
       if (!card) throw httpError(404, '角色卡不存在')
       return card
     },
@@ -418,10 +540,10 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
     },
 
     async listBooks() {
-      return (await listJson(dirs.books)).sort((a, b) => a.name.localeCompare(b.name))
+      return (await listJson(dirs.books, damaged)).sort((a, b) => a.name.localeCompare(b.name))
     },
     async getBook(id) {
-      const book = await readJson(bookFile(id), null)
+      const book = await readData(bookFile(id), null)
       if (!book) throw httpError(404, '世界书不存在')
       return book
     },
@@ -434,10 +556,10 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
     },
 
     async listPresets() {
-      return (await listJson(dirs.presets)).sort((a, b) => b.importedAt.localeCompare(a.importedAt))
+      return (await listJson(dirs.presets, damaged)).sort((a, b) => b.importedAt.localeCompare(a.importedAt))
     },
     async getPreset(id) {
-      const preset = await readJson(presetFile(id), null)
+      const preset = await readData(presetFile(id), null)
       if (!preset) throw httpError(404, '预设不存在')
       return preset
     },
@@ -451,7 +573,7 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
     },
     /** A preset's Tavern Helper scripts as imported ([{ id, name, content, enabled, button, info }]), [] for none. */
     async getPresetScripts(id) {
-      const kept = await readJson(presetScriptsFile(id), null)
+      const kept = await readData(presetScriptsFile(id), null)
       return Array.isArray(kept?.scripts) ? kept.scripts : []
     },
     async savePresetScripts(id, scripts) {
@@ -465,7 +587,7 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
     },
     /** Regex scripts for every chat (regex.mjs, which cleans them before they are saved). */
     async getRegex() {
-      const value = await readJson(path.join(root, 'regex.json'), {})
+      const value = await readData(path.join(root, 'regex.json'), {})
       return Array.isArray(value.scripts) ? value.scripts : []
     },
     async saveRegex(scripts) {
@@ -474,7 +596,7 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
     },
     /** 正则集: named lists of scripts, each for the cards ticked for it (regex.mjs). In run order. */
     async getRegexSets() {
-      const value = await readJson(path.join(root, 'regex-sets.json'), {})
+      const value = await readData(path.join(root, 'regex-sets.json'), {})
       return Array.isArray(value.sets) ? value.sets : []
     },
     /** `change` (the sets → the sets to keep) over the sets as saved, with no other change in between. */
@@ -487,7 +609,7 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
     },
     /** The card list's own order (拖拽排序): card ids, first on top; cards not in it are newer and go above (cards.mjs orderCards). */
     async getCardOrder() {
-      const value = await readJson(path.join(root, 'card-order.json'), {})
+      const value = await readData(path.join(root, 'card-order.json'), {})
       return Array.isArray(value.ids) ? value.ids.filter(id => typeof id === 'string' && SAFE_ID.test(id)) : []
     },
     saveCardOrder(ids) {
@@ -499,7 +621,7 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
     },
     /** The groups' own order (拖动分组): names, first on top; groups not in it go after, by name (web/app.js cardGroups). */
     async getGroupOrder() {
-      const value = await readJson(path.join(root, 'group-order.json'), {})
+      const value = await readData(path.join(root, 'group-order.json'), {})
       return Array.isArray(value.names) ? value.names.filter(name => typeof name === 'string' && name) : []
     },
     saveGroupOrder(names) {
@@ -513,7 +635,7 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
     },
     /** Context windows heard of (context.mjs): what a provider's model list or a context-full error said, by model. */
     async getModelContext() {
-      const value = await readJson(path.join(root, 'model-context.json'), {})
+      const value = await readData(path.join(root, 'model-context.json'), {})
       return value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}
     },
     /** `heard`: { ref or model id: tokens }, added to what is kept. */
@@ -526,7 +648,7 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
     },
     /** 屏蔽词 for every chat (blockwords.mjs, which cleans them before they are saved). */
     async getBlockWords() {
-      const value = await readJson(path.join(root, 'blockwords.json'), {})
+      const value = await readData(path.join(root, 'blockwords.json'), {})
       return Array.isArray(value.words) ? value.words : []
     },
     async saveBlockWords(words) {
@@ -535,7 +657,7 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
     },
 
     async listChats(cardId) {
-      const chats = await listJson(dirs.chats)
+      const chats = await listJson(dirs.chats, damaged)
       return chats
         .filter(chat => !cardId || chat.cardId === cardId)
         .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
@@ -565,7 +687,7 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
         if (!info) continue
         let head = headCache.get(file)
         if (!head || head.mtimeMs !== info.mtimeMs || head.size !== info.size || head.summarize !== summarize) {
-          const chat = await readJson(file, null)
+          const chat = await readInList(file)
           read++
           if (!chat) continue
           head = { mtimeMs: info.mtimeMs, size: info.size, summarize, cardId: chat.cardId, trial: Boolean(chat.trial), id: chat.id, updatedAt: String(chat.updatedAt ?? ''), summary: summarize(chat) }
@@ -579,7 +701,7 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
     },
     async getChat(id) {
       const timing = span('chat.read')
-      const chat = await readJson(chatFile(id), null)
+      const chat = await readData(chatFile(id), null)
       timing({ nodes: chat ? Object.keys(chat.nodes ?? {}).length : 0 })
       if (!chat) throw httpError(404, '对话不存在')
       return chat

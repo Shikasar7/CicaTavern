@@ -15,15 +15,15 @@ import { normalizeBook } from '../worldbook.mjs'
 import { looseJson, section } from './prompts.mjs'
 
 export const NOVEL_ID = 'edit-novel'
-/** The most of a text that is read (about three million characters is a very long novel). */
-export const MAX_NOVEL = 5_000_000
+/** The most of a text that is read (about three million characters is a very long novel; some web serials run to ten). */
+export const MAX_NOVEL = 10_000_000
 const MIN_NOVEL = 200
 // A stretch: about this long, a chapter or a few together; one chapter longer than MAX_STRETCH is cut at a paragraph.
 const STRETCH = 12_000
 const MAX_STRETCH = 18_000
 // Stretches but the last of a chapter are at least half of STRETCH long, so MAX_NOVEL comes to fewer than this; a
 // text that cuts into more is not taken rather than read short.
-const MAX_STRETCHES = 1000
+const MAX_STRETCHES = 2000
 // How many stretches are read at once (the player's pick, 1 to MAX_PARALLEL), and how many when they have not picked.
 export const MAX_PARALLEL = 8
 const PARALLEL = 3
@@ -39,7 +39,8 @@ const MERGE_CHARS = 10_000
 const MAX_KNOWN = 300
 const MAX_ENTRY = 2000
 const MAX_NAME = 24
-const MAX_ENTRIES = 1500
+// As many as a worldbook holds (server/worldbook.mjs).
+const MAX_ENTRIES = 2000
 export const NOVEL_TYPES = ['人物', '地点', '势力', '物品', '设定', '事件']
 // 梗概: the whole book in a few thousand characters, written from the entries (the text is not read again). It is what
 // 创作角色卡 reads of a novel in place of the entries, which are far too many to send with every request.
