@@ -369,12 +369,12 @@ test('a note goes to the one it names before one that shares an alias; an alias 
 })
 
 test('the longest novel read, in chapters a little over half a stretch, cuts into fewer stretches than are read', () => {
-  // Two such chapters do not fit in one stretch, so each is one: the most stretches 5 000 000 characters can make.
+  // Two such chapters do not fit in one stretch, so each is one: the most stretches 10 000 000 characters can make.
   const chapter = i => `第${i + 1}章 雨\n${'雨一直下。\n'.repeat(1000)}`
-  const text = Array.from({ length: Math.floor(MAX_NOVEL / chapter(0).length) }, (_, i) => chapter(i)).join('')
+  const text = Array.from({ length: Math.floor(MAX_NOVEL / chapter(9999).length) }, (_, i) => chapter(i)).join('')
   assert.ok(text.length <= MAX_NOVEL)
   const stretches = splitNovel(text)
-  assert.ok(stretches.length > 700 && stretches.length < 1000, String(stretches.length))
+  assert.ok(stretches.length > 1400 && stretches.length < 2000, String(stretches.length))
   assert.equal(stretches.at(-1).to, text.length, 'the end of the book is read too')
 })
 

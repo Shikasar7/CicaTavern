@@ -81,6 +81,11 @@ function counted(text) {
   return { name: clip(match ? match[1].trim() : text), count: count >= 1 ? count : 1 }
 }
 
+// The format's own words copied as they are (【战斗|敌人×数量:档位】): no foe, no count, no tier.
+const PLACEHOLDER_FOE = /^(?:敌人|敌方|对手|敌人名[字称]?|名字|名称|怪物名?)$/
+const PLACEHOLDER_COUNT = /\s*[×xX*＊]\s*(?:数量|个数|N|n)$/
+const PLACEHOLDER_WORD = /^(?:档位|实力|强弱)$/
+
 function readFoes(body) {
   const foes = []
   let left = MAX_FOES
@@ -88,11 +93,11 @@ function readFoes(body) {
     const part = field.trim()
     if (!part || !left) continue
     const tiered = FOE.exec(part)
-    const { name, count } = counted(tiered ? tiered[1].trim() : part)
-    if (!name) continue
+    const { name, count } = counted((tiered ? tiered[1].trim() : part).replace(PLACEHOLDER_COUNT, ''))
+    if (!name || PLACEHOLDER_FOE.test(name)) continue
     const taken = Math.min(count, left)
     left -= taken
-    const words = (tiered?.[2] ?? '').split(/[:：]/).map(word => word.trim()).filter(Boolean)
+    const words = (tiered?.[2] ?? '').split(/[:：]/).map(word => word.trim()).filter(word => word && !PLACEHOLDER_WORD.test(word))
     const tier = words.find(word => TIERS[word])
     const power = words.find(word => word !== tier)
     foes.push({ name, count: taken, tier: TIERS[tier] ?? 'normal', ...(power ? { power: clip(power) } : {}) })
@@ -253,10 +258,13 @@ export const choiceChecks = text => choiceMarks(text, 'check')
 /** The fights of a reply's choices, the same way. */
 export const choiceFights = text => choiceMarks(text, 'fight')
 
+/** 【战斗|敌人×数量:档位】 copied as the format is: no fight, and not the card's own either: it goes from what is shown. */
+const copiedFight = (kind, body) => kind === '战斗' && /敌人|档位|数量/.test(body)
+
 /** The text without the marks; a line that held nothing else goes with them. */
 export function withoutGameMarks(text) {
   return String(text ?? '').split('\n').flatMap(line => {
-    const rest = line.replace(MARK, (whole, kind, body) => (readMark(kind, body) ? '' : whole))
+    const rest = line.replace(MARK, (whole, kind, body) => (readMark(kind, body) || copiedFight(kind, body) ? '' : whole))
     return rest === line ? [line] : rest.trim() ? [rest.trimEnd()] : []
   }).join('\n')
 }

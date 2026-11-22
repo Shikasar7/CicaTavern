@@ -5,7 +5,7 @@ import { t } from '/i18n.js'
 import { reachedWith } from '/shared/game/achievements.js'
 import { foeSheets } from '/shared/game/battle.js'
 import { changeWords, choiceChecks, choiceFights, choiceKey, cutAtGate, parseChoice, replyMarks, withoutGameMarks } from '/shared/game/marks.js'
-import { AID_BONUS, ATTRIBUTES, MAX_FIELDED, aidFor, applyOps, chanceFor, checkExperience, checkLine, dcFor, effectOf, fieldedOf, gateKinds, levelNeeds, nothingToRestore, rankNow, rollCheck, sheetOf, sheetOnPath, startSheet, turnSheet, usableNow } from '/shared/game/sheet.js'
+import { AID_BONUS, ATTRIBUTES, MAX_FIELDED, aidFor, applyOps, bestiaryName, chanceFor, checkExperience, checkLine, dcFor, effectOf, fieldedOf, gateKinds, levelNeeds, nothingToRestore, rankNow, rollCheck, sheetOf, sheetOnPath, startSheet, turnSheet, usableNow } from '/shared/game/sheet.js'
 import { beneath, beyond, chanceToWin, encounterSetup, foesLine, playedOut } from '/shared/game/encounter.js'
 import { ailsOn, modifierOf, riskOf } from '/shared/game/dice.js'
 import { latestPlace, matchScene, normalizePlace, visitedPlaces } from '/shared/vn.js'
@@ -18,7 +18,7 @@ import * as growth from '/game-growth.js'
 export { createSound } from '/game-sound.js'
 export { growth, levelUpCard, pendingOf }
 export { ACHIEVEMENTS, tallyOf, reachedBy } from '/shared/game/achievements.js'
-export { noteChips, latestPlace, matchScene, normalizePlace, visitedPlaces, applyOps, beneath, beyond, playedOut, changeWords, checkExperience, choiceChecks, choiceFights, choiceKey, checkLine, chanceToWin, cutAtGate, effectOf, encounterSetup, gateKinds, nothingToRestore, parseChoice, rankNow, rollCheck, turnSheet, usableNow, withoutGameMarks }
+export { bestiaryName, noteChips, latestPlace, matchScene, normalizePlace, visitedPlaces, applyOps, beneath, beyond, playedOut, changeWords, checkExperience, choiceChecks, choiceFights, choiceKey, checkLine, chanceToWin, cutAtGate, effectOf, encounterSetup, gateKinds, nothingToRestore, parseChoice, rankNow, rollCheck, turnSheet, usableNow, withoutGameMarks }
 
 const TIER_WORDS = () => ({ crit: t`大成功`, success: t`成功`, close: t`险胜`, fail: t`失败` })
 const TIER_HINTS = () => ({ crit: t`超出预期`, success: '', close: t`差一点，做到了但有代价`, fail: t`没做到` })
@@ -51,7 +51,7 @@ export function sheetFor(chat, book, ops = []) {
   return applyOps(sheetOf(book, sheetOnPath(chat.path), reply?.state), book, ops).sheet
 }
 
-/** The attributes as the 行囊 shows them. */
+/** The attributes as the 游戏菜单 shows them. */
 /** An attribute's name as the card calls it (sheet.named, from sheetOf), else the rules' own. */
 const attributeName = (sheet, id) => sheet?.named?.[id] || ATTRIBUTES.find(item => item.id === id)?.name
 
@@ -61,7 +61,7 @@ export const attributesOf = sheet => ATTRIBUTES.map(item => ({ id: item.id, name
 export const cardWord = (book, key, fallback) => book?.words?.[key] || fallback
 export { MAX_FIELDED, fieldedOf, levelNeeds }
 
-/** What holds the player back, as the 行囊 shows it. */
+/** What holds the player back, as the 游戏菜单 shows it. */
 export const ailsOf = sheet => (sheet.conditions ?? []).map(item => ({
   name: item.name,
   shown: ailName(item.name),
@@ -70,7 +70,7 @@ export const ailsOf = sheet => (sheet.conditions ?? []).map(item => ({
   turns: item.turns,
 }))
 
-/** What low sanity does, as the 行囊 shows it. */
+/** What low sanity does, as the 游戏菜单 shows it. */
 export const strainOf = sheet => (sheet.strain ?? []).map(item => t`${ailName(item.name)}：${attributeName(sheet, item.stat)} −${ailsOn([item], item.stat)[0].by}`)
 
 /** The same in a line, for the HUD. */

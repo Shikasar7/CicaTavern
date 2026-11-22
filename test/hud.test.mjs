@@ -40,6 +40,10 @@ test('rows: a bar its share of the range, a number, an icon, words; owners named
   ])
   // One owner: just the names.
   assert.equal(hudRows(spec, [{ path: '你.体力', look: 'number' }], state)[0].label, '体力')
+  // The game rules' own numbers are the player's: named as they are, and not one more owner (no 「$game·等级」, no 「主角·生命」 beside them).
+  const rules = { fields: [{ path: '$game.level', label: '等级', show: 'number' }, { path: '主角.生命', label: '生命', show: 'meter', min: 0, max: 100 }] }
+  const both = hudRows(rules, [{ path: '$game.level', look: 'number' }, { path: '主角.生命', look: 'meter' }], { $game: { level: 1 }, 主角: { 生命: 85 } })
+  assert.deepEqual(both.map(row => row.label), ['等级', '生命'])
   // A number that is not one reads as words.
   assert.deepEqual(hudRows(spec, [{ path: '你.体力', look: 'meter' }], { 你: { 体力: '满' } })[0], { path: '你.体力', label: '体力', look: 'text', text: '满' })
 })

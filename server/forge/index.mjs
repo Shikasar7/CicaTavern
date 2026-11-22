@@ -26,6 +26,7 @@ import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promise
 import path from 'node:path'
 import YAML from 'yaml'
 import { cardSummary, normalizeCard, pictureMark, rulebookOf, writeCardPng } from '../cards.mjs'
+import { cleanPlots } from '../../web/shared/plot.js'
 import { madeAt } from '../draw-history.mjs'
 import { helperSummary } from '../helper-scripts.mjs'
 import { cleanCardMedia, drawChoiceOf } from '../media.mjs'
@@ -45,7 +46,7 @@ import { applyRegexChanges, readRegexEdit, regexEditRequest, tryChanges } from '
 import { cleanThemeContext, readThemeEdit, themeApplier, themeEditRequest } from './theme-edit.mjs'
 import { createCheck, helpersOf } from './check-session.mjs'
 import { keepOptionPictures } from './creation.mjs'
-import { SKIN_OUTPUT, cleanProblems, cleanWish, readSkin, skinRequest } from './skin.mjs'
+import { SKIN_OUTPUT, cleanBase, cleanProblems, cleanStyle, cleanWish, readSkin, skinRequest } from './skin.mjs'
 import { statusSpecOf, withStatusCopy } from './status.mjs'
 import { cleanEffect, cleanLayout, cleanPalette, cleanSkin, cleanSkinCss, cleanStatusSpec, layoutFor, skinClass } from '../../web/shared/status.js'
 import { cleanCover, coverWords } from '../../web/shared/cover.js'
@@ -64,7 +65,8 @@ import { structureText } from './structure.mjs'
 const ID = /^[a-zA-Z0-9_-]{1,64}$/
 const EDIT = 'edit-'
 const MAX_EDIT_TURNS = 30
-const STAGES = ['discuss', 'plan', 'look', 'write', 'polish']
+// 剧本 (after 动笔, before 打磨与头像): the card's 剧本 written and adjusted here, saved with the card; it can be skipped.
+const STAGES = ['discuss', 'plan', 'look', 'write', 'plot', 'polish']
 const MAX_ROUNDS = 40
 const MAX_TEXT = 4000
 const MAX_PIECE = 20000
@@ -96,7 +98,7 @@ function imageType(buffer) {
 
 /**
  * The plan's characters as the card's cast (角色名册), so 配图 and the visual novel know their looks from the start;
- * and each 形态 the rules give a look, as one of the cast too: the status bar's 形态链 and the 行囊 show a form by the
+ * and each 形态 the rules give a look, as one of the cast too: the status bar's 形态链 and the 游戏菜单 show a form by the
  * picture of the one in the cast with its name (备齐门面图 draws them, without faces).
  */
 export function rosterOf(plan) {
@@ -320,6 +322,9 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
       // The picks made before talking (cast, world, gender, play, format, status bar look).
       options: optionsOf(draft),
       greetingCount: draft.greetingCount ?? 0,
+      // 剧本 written for the card here (saved with it).
+      plots: draft.plots ?? [],
+      defaultPlot: draft.defaultPlot ?? '',
       plan: draft.plan,
       // 玩法积木: what they add, for the plan page to say.
       brickCost: draft.plan?.bricks?.length ? brickCost(draft.plan, englishCard(planLanguage(draft.plan))) : null,
@@ -546,7 +551,8 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
     const job = jobs.get(session.id)
     const ref = draft.model || (await store.getSettings()).model || ''
     const ready = isProviderRef(ref)
-    const request = spec ? skinRequest(card, spec, state) : null
+    // The estimate is for the 起点 the page starts on: the theme the bar wears (its rules go with the request).
+    const request = spec ? skinRequest(card, spec, state, { base: spec.skin ? spec.skin.base : spec.theme }) : null
     const input = request ? estimateTokens(`${request.system}${request.messages[0].content}`) : 0
     return {
       skin: session.skin ?? null,
@@ -685,7 +691,8 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
       const step = writeSteps(plan, card).find(s => !stepDone(s, card))
       if (!step) {
         await ctx.update(fresh => {
-          fresh.stage = 'polish'
+          // 高级选项 → 剧本: written, the card goes to its 剧本 step first.
+          fresh.stage = optionsOf(fresh).plot && !fresh.plots?.length ? 'plot' : 'polish'
           fresh.card.writtenAt = new Date().toISOString()
         })
         return
@@ -915,6 +922,11 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
       },
       save: loaded => store.saveCard(loaded.subject),
       restore: (loaded, snapshot) => snapshot,
+      // A card's own book too long to send whole: a look at its contents first, as 世界书 → 对话修改 does (a request
+      // naming no entry got only the first ones that fitted in full, the rest by name and not to be changed).
+      tooLong: card => bookTooLong(card.book ?? { entries: [] }),
+      pick: (card, asked) => pickRequest(card.book, { ...asked, card: true }),
+      readPick: (text, card) => readPicked(text, card.book),
       // The variables as they start go along, for a status bar layout to pick its paths from: not for a request kept to
       // another piece, or a card that draws its own bar (working them out runs the card's variable rules).
       request: (card, asked) => {
@@ -1341,6 +1353,31 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
       return view(await load(id))
     },
 
+    /** 剧本 of the card being made: { plots, defaultPlot, greetings } (its openings, for a plot to start from one). */
+    async plots(id) {
+      const draft = await requireCard(id)
+      return { plots: draft.plots ?? [], defaultPlot: draft.defaultPlot ?? '', greetings: (draft.card.greetings ?? []).map(greeting => greeting.text ?? '') }
+    },
+
+    /** 剧本 of the card being made, written over whole (the page's editor and list). */
+    async savePlots(id, body = {}) {
+      await requireCard(id)
+      if (jobs.has(id)) throw httpError(409, msg`正在写，等它写完再保存`)
+      const saved = await mutate(id, draft => {
+        const before = new Map((draft.plots ?? []).map(plot => [plot.id, plot]))
+        const now = new Date().toISOString()
+        draft.plots = cleanPlots(body.plots).map(plot => (JSON.stringify(before.get(plot.id)) === JSON.stringify(plot) ? plot : { ...plot, updatedAt: now }))
+        draft.defaultPlot = draft.plots.some(plot => plot.id === body.defaultPlot) ? body.defaultPlot : ''
+      })
+      return { plots: saved.plots, defaultPlot: saved.defaultPlot, greetings: (saved.card.greetings ?? []).map(greeting => greeting.text ?? '') }
+    },
+
+    /** The card being made, as a card (for the guide writing its 剧本: what it reads of it). */
+    async plotCard(id) {
+      const draft = await requireCard(id)
+      return normalizeCard(cardJson(draft.plan, draft.card, { author: '' }))
+    },
+
     /**
      * A new draft from the first idea (with material to go by, the idea can wait); the first round starts right away.
      * @param references - what readReference gave the page before there was a draft.
@@ -1556,7 +1593,9 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
         if (look !== undefined) {
           if (!draft.plan) throw httpError(409, msg`还没有方案`)
           const skin = cleanSkin(look?.skin)
-          draft.look = skin ? { palette: cleanPalette(look.palette) ?? cleanPalette(draft.plan.status?.palette) ?? { bg: '#f7f8f5', ink: '#1c2427', accent: '#2b5869' }, skin } : null
+          // Over a theme (skin.base), a look without colors of its own wears the theme's.
+          const palette = cleanPalette(look?.palette) ?? (skin?.base ? null : cleanPalette(draft.plan.status?.palette) ?? { bg: '#f7f8f5', ink: '#1c2427', accent: '#2b5869' })
+          draft.look = skin ? { palette, skin } : null
         }
         // 门面: 开场页 on or off and its words, 立绘 / 场景图 / 动效 on the bar. save() puts them on the plan (wearFront).
         if (front && typeof front === 'object') {
@@ -1580,7 +1619,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
           keepPick(draft)
         }
         // Going back keeps what is ahead: the plan stays while talking, the card while planning.
-        const reachable = { discuss: true, plan: Boolean(draft.plan), look: Boolean(draft.plan), write: Boolean(draft.card), polish: Boolean(draft.card?.writtenAt) }
+        const reachable = { discuss: true, plan: Boolean(draft.plan), look: Boolean(draft.plan), write: Boolean(draft.card), plot: Boolean(draft.card?.writtenAt), polish: Boolean(draft.card?.writtenAt) }
         if (STAGES.includes(stage) && reachable[stage]) draft.stage = stage
       })
       return view(draft)
@@ -1816,8 +1855,14 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
       }
       // The plan's art style becomes the card's 画风 (配图), so its sprites and backgrounds agree; one set in 配图 stays.
       const style = draft.plan.avatar?.style ?? ''
-      if (old) Object.assign(card, { id: old.id, media: { ...old.media, style: old.media?.style || style, roster: cleanCardMedia({ roster: mergeRoster(old.media?.roster, draft.plan) }).roster }, worldbookIds: old.worldbookIds ?? [], importedAt: old.importedAt, group: old.group ?? '', archived: old.archived === true })
+      if (old) Object.assign(card, { id: old.id, media: { ...old.media, style: old.media?.style || style, roster: cleanCardMedia({ roster: mergeRoster(old.media?.roster, draft.plan) }).roster }, worldbookIds: old.worldbookIds ?? [], importedAt: old.importedAt, group: old.group ?? '', archived: old.archived === true, plots: old.plots ?? [], defaultPlot: old.defaultPlot ?? '' })
       else card.media = cleanCardMedia({ style, roster: rosterOf(draft.plan) })
+      // 剧本 written here go in with it, in place of the card's own of the same id; the card's others stay.
+      if (draft.plots?.length) {
+        const mine = new Set(draft.plots.map(plot => plot.id))
+        card.plots = cleanPlots([...(card.plots ?? []).filter(plot => !mine.has(plot.id)), ...draft.plots])
+        if (draft.defaultPlot && card.plots.some(plot => plot.id === draft.defaultPlot)) card.defaultPlot = draft.defaultPlot
+      }
       card.hasAvatar = true
       // 建角页的图 drawn on the card before: the form written anew keeps them for the options it still has.
       if (old) card.regexScripts = keepOptionPictures(card.regexScripts ?? [], old.regexScripts ?? [])
@@ -1862,13 +1907,16 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
       return skinView(await loadSkin(id))
     },
 
-    /** Sent only by this. `wish`: what the user wants; `previous`: a look to work from; `problems`: what drawing it showed. */
-    async skinAsk(id, { wish, previous, problems } = {}) {
+    /**
+     * Sent only by this. `wish`: what the user wants; `previous`: a look to work from; `problems`: what drawing it showed;
+     * `base`: 起点, the theme the look goes over ('' = from nothing); `style`: 风格, the way picked for it to go ('' = none).
+     */
+    async skinAsk(id, { wish, previous, problems, base, style } = {}) {
       const { draft, session } = await loadSkin(id)
       if (!barOf(draft).spec) throw httpError(409, msg`这张卡没有可以设计外观的状态栏`)
       if (jobs.has(id)) throw httpError(409, msg`上一步还在进行，等它写完或先停下`)
       const css = cleanSkinCss(previous?.css)
-      const asked = { wish: cleanWish(wish), previous: css ? { name: clip(previous.name, 24), palette: cleanPalette(previous.palette), css } : null, problems: css ? cleanProblems(problems) : [] }
+      const asked = { wish: cleanWish(wish), previous: css ? { name: clip(previous.name, 24), palette: cleanPalette(previous.palette), css } : null, problems: css ? cleanProblems(problems) : [], base: cleanBase(base), style: cleanStyle(style) }
       // The draft's own model, and its name for the usage panel.
       Object.assign(session, { model: draft.model ?? '', plan: { name: draft.plan.name }, brief: { title: draft.brief?.title ?? '' } })
       await run(session, 'skin', async ctx => {
@@ -1876,10 +1924,10 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
         if (!fresh.spec) throw new Error(msg`这张卡没有可以设计外观的状态栏`)
         // The pictures of the card it was saved as: a draft not saved yet has none.
         const result = await ctx.call(skinRequest(fresh.card, fresh.spec, fresh.state, { ...asked, ...(await lookPrompt(draft.card?.savedCardId)), reply: ctx.languages.reply }))
-        const read = readSkin(result.text, { palette: asked.previous?.palette ?? fresh.spec.palette })
+        const read = readSkin(result.text, { palette: asked.previous?.palette ?? (asked.base ? null : fresh.spec.palette), base: asked.base })
         if (!read) throw new Error(`${msg`${ctx.label} 没有写出能用的样式，再试一次，或者换个模型`}${cutNote(result)}`)
         await ctx.update(kept => {
-          kept.skin = { ...read, wish: asked.wish, fixed: asked.problems.length > 0, at: new Date().toISOString(), model: ctx.label }
+          kept.skin = { ...read, wish: asked.wish, ...(asked.style ? { style: asked.style } : {}), fixed: asked.problems.length > 0, at: new Date().toISOString(), model: ctx.label }
         })
       })
       return skinView(await loadSkin(id))

@@ -2,6 +2,9 @@
 // session + message uuid it ended on, so any node can be continued (resume) or
 // branched from (fork at that uuid) without replaying anything.
 import { greetingsOf } from './cards.mjs'
+import { guideView } from './guide-text.mjs'
+import { chatPlot, plotView } from './plot.mjs'
+import { cleanPlot, fitProgress, progressOn, sceneOf, SPOILERS, TIGHTNESS } from '../web/shared/plot.js'
 import { buildChatPrompt, chatTemplates, fixedWorldBooks, replaceMacros, templateText } from './prompt.mjs'
 import YAML from 'yaml'
 import { constantEntries, entryText, initialState, lateEntries } from './worldbook.mjs'
@@ -55,7 +58,7 @@ export async function mountChange(store, chat, card) {
   const books = await booksForCard(store, card)
   const now = new Set(books.map(book => book.id))
   const before = new Set(chat.bookIds)
-  const frozen = book => constantEntries([book]).length + lateEntries([book]).length
+  const frozen = book => constantEntries([book]).length + lateEntries([book], { atDepth: chat.loreAtDepth === true }).length
   const added = books.filter(book => !before.has(book.id) && frozen(book) > 0).map(book => ({ id: book.id, name: book.name, entries: frozen(book) }))
   const removed = []
   for (const id of before) {
@@ -233,6 +236,8 @@ export async function rebuildPrompt(store, chat, presetId = chat.presetId ?? '')
     prefix.dispose()
   }
   chat.systemPrompt = built.systemPrompt
+  // Built since there was 聊天中 @深度: its constant @深度 entries go each turn at their depth, not in here (engine.mjs).
+  chat.loreAtDepth = true
   chat.presetVars = built.presetVars
   if (built.presetLead.length) chat.presetLead = built.presetLead
   else delete chat.presetLead
@@ -242,11 +247,20 @@ export async function rebuildPrompt(store, chat, presetId = chat.presetId ?? '')
   return chat
 }
 
-export async function createChat(store, cardId, greetingIndex = 0) {
+/**
+ * A new chat with the card's opening `greetingIndex`; `plotId`: one of the card's 剧本 to play (plot.mjs chatPlot),
+ * '' none (自由发挥).
+ */
+export async function createChat(store, cardId, greetingIndex = 0, { plotId = '' } = {}) {
+  const card = plotId ? await store.getCard(cardId) : null
+  const plot = plotId ? card.plots?.find(item => item.id === plotId) : null
+  if (plotId && !plot) throw httpError(404, msg`这个剧本不在了`)
+  // Made before the chat, so a broken one is refused with nothing saved.
+  const playing = plot ? chatPlot(plot, { spoiler: plot.source === 'imported' ? 'blind' : 'all' }) : null
   return startChat(store, cardId, ({ card, state, open }) => {
     const greetings = greetingsOf(card)
     return open(state, greetings[Math.min(Math.max(0, greetingIndex), greetings.length - 1)] ?? '')
-  }, { initialize: true })
+  }, { initialize: true, plot: playing })
 }
 
 /** [InitVar]-style entries with their EJS run once, as ST-Prompt-Template renders @@initial_variables before reading it. */
@@ -312,18 +326,21 @@ async function saveGlobalWrites(store, writes) {
 /**
  * Another of the card's openings for a chat nobody has played yet (a card's
  * welcome page that switches the first message, as SillyTavern's swipes do),
- * with that opening's variables.
+ * with that opening's variables. `text`: an opening the card's page wrote itself
+ * instead (one it had the model write, set as floor 0), its variables from its update blocks.
  */
-export async function switchOpening(store, chat, index) {
+export async function switchOpening(store, chat, index, text) {
   if (Object.values(chat.nodes).some(node => node.parent === 'root')) throw httpError(409, msg`对话已经开始，不能再换开场白`)
   const card = await store.getCard(chat.cardId)
   const greetings = greetingsOf(card)
-  if (!Number.isInteger(index) || index < 0 || index >= greetings.length) throw httpError(400, msg`没有这个开场白`)
+  const own = typeof text === 'string'
+  if (own && !text.trim()) throw httpError(400, msg`没有这个开场白`)
+  if (!own && (!Number.isInteger(index) || index < 0 || index >= greetings.length)) throw httpError(400, msg`没有这个开场白`)
   const [settings, { persona }, globalScripts, regexSets] = await Promise.all([store.getSettings(), chatPicks(store, chat, card), store.getRegex(), store.getRegexSets()])
   const preset = await presetFor(store, chat.presetId ?? '')
   const books = await booksForCard(store, card, settings, chat)
   const ctx = { names: chat.names, card, preset, books, scripts: scriptsOf(card, preset, globalScripts, regexSets, chat.regexChanges), local: chat.frameVars ?? {}, global: settings.globalVars ?? {} }
-  const opened = openWith(ctx, initialState(books, initvarText(chat.names)), greetings[index])
+  const opened = openWith(ctx, initialState(books, initvarText(chat.names)), own ? text.replace(/\r\n/g, '\n') : greetings[index])
   Object.assign(chat.nodes.root, { text: opened.text, display: displayText(opened.text), state: opened.state })
   // The card's scripts set the new opening's variables up as they did the first's (VARIABLE_INITIALIZED).
   chat.nodes.root.state = await cardScriptsFor(store).initialized(card, chat, chat.nodes.root.state)
@@ -371,7 +388,7 @@ function openingInit(state, greeting) {
  * @param options.initialize - a new opening (not a story brought in): the card's scripts set its variables up
  *   (VARIABLE_INITIALIZED, card-scripts.mjs).
  */
-async function startChat(store, cardId, makeRoot, { userName = '', initialize = false } = {}) {
+async function startChat(store, cardId, makeRoot, { userName = '', initialize = false, plot = null } = {}) {
   const stored = await store.getCard(cardId)
   // 直连对话 answers under a name in the page's language, and without a preset's story rules.
   const card = stored.direct ? { ...stored, name: msg`助手` } : stored
@@ -412,6 +429,7 @@ async function startChat(store, cardId, makeRoot, { userName = '', initialize = 
     names,
     // Frozen at creation: editing the card later does not invalidate this chat's cache.
     systemPrompt: built.systemPrompt,
+    loreAtDepth: true,
     presetId: preset?.id ?? null,
     presetName: preset?.name ?? null,
     presetVars: built.presetVars,
@@ -437,12 +455,15 @@ async function startChat(store, cardId, makeRoot, { userName = '', initialize = 
         ...(errors.length ? { templateErrors: errors } : {}),
         ...(root.compaction ? { compaction: root.compaction } : {}),
         ...(root.game ? { game: root.game } : {}),
+        // 剧本: where an imported story was on its plot.
+        ...(root.plot ? { plot: root.plot } : {}),
         sel: null,
         sdk: null,
         createdAt: now,
       },
     },
   }
+  if (plot) chat.plot = plot
   if (initialize) chat.nodes.root.state = await cardScriptsFor(store).initialized(card, chat, chat.nodes.root.state)
   return store.saveChat(chat)
 }
@@ -490,6 +511,27 @@ export function exportStory(chat, nodeId) {
     ...(sheetOnPath(path) ? { game: sheetOnPath(path) } : {}),
     // 长期记忆: the 记忆簿 in force there (its turns numbered as this story's are).
     ...(memoryOf(path)?.entries.length ? { memory: memoryOf(path).entries } : {}),
+    // 剧本: the chat's copy, its settings, and where the story was on it.
+    ...(chat.plot?.copy ? { plot: { copy: chat.plot.copy, start: chat.plot.start, tightness: chat.plot.tightness, spoiler: chat.plot.spoiler, askAtFork: Boolean(chat.plot.askAtFork), paused: Boolean(chat.plot.paused), progress: progressOn(chat.plot.copy, withoutHidden(path), chat.plot.start) } } : {}),
+  }
+}
+
+/** The plot an archive brought (exportStory), as the chat it starts keeps it, and the progress for its first reply. */
+function storyPlot(raw) {
+  const copy = isPlainObject(raw) ? cleanPlot(raw.copy) : null
+  if (!copy) return null
+  return {
+    plot: {
+      copy,
+      start: sceneOf(copy, raw.start) ? raw.start : copy.start,
+      tightness: TIGHTNESS.includes(raw.tightness) ? raw.tightness : copy.tightness,
+      spoiler: SPOILERS.includes(raw.spoiler) ? raw.spoiler : 'all',
+      askAtFork: raw.askAtFork === true,
+      paused: raw.paused === true,
+      pending: null,
+      version: 1,
+    },
+    progress: isPlainObject(raw.progress) ? fitProgress(copy, { ...raw.progress, of: copy.id, ticks: Array.isArray(raw.progress.ticks) ? raw.progress.ticks : [], seen: Array.isArray(raw.progress.seen) ? raw.progress.seen : [], turns: Number(raw.progress.turns) || 0 }) : null,
   }
 }
 
@@ -513,6 +555,7 @@ export function readStory(archive) {
     card: typeof archive.card === 'string' ? archive.card : '',
     exportedAt: typeof archive.exportedAt === 'string' ? archive.exportedAt : null,
     memory: (Array.isArray(archive.memory) ? archive.memory : []).map(entry => cleanEntry(entry)).filter(Boolean).slice(0, MAX_ENTRIES),
+    plot: storyPlot(archive.plot),
   }
 }
 
@@ -538,7 +581,8 @@ export async function importStory(store, cardId, archive) {
       recent: story.recent.slice(0, -1),
       ...(story.memory.length ? { memory: snapshotOf(story.memory, { turns: story.turns, by: 'import' }) } : {}),
     },
-  }))
+    ...(story.plot?.progress ? { plot: story.plot.progress } : {}),
+  }), { plot: story.plot?.plot ?? null })
 }
 
 // SillyTavern's default player names: the persona here names the player instead.
@@ -625,6 +669,8 @@ export function forkChat(chat, nodeId) {
     updatedAt: now,
     tips: {},
     forkedFrom: { chatId: chat.id, nodeId, at: now },
+    // 剧本: a change of the player's not sent yet stays with the chat it was made in.
+    ...(chat.plot ? { plot: { ...structuredClone(chat.plot), pending: null } } : {}),
     nodes,
   }
 }
@@ -938,6 +984,9 @@ export function chatView(chat) {
       search: node.search ?? undefined,
       // 应用帮助: what the assistant looked up before this reply ({ op, target }).
       lookups: node.lookups?.length ? node.lookups : undefined,
+      // 剧本: the progress a reply made, a player message's own change to it (plot.mjs).
+      plot: node.plot ?? undefined,
+      plotSet: node.plotSet ?? undefined,
       // 显示思考过程: the model's own thinking before this reply (not part of the story, never sent back).
       reasoning: node.reasoning || undefined,
       stateChanges: node.stateChanges ?? undefined,
@@ -1005,6 +1054,10 @@ export function chatView(chat) {
     systemPromptTokens: estimateTokens(chat.systemPrompt) + estimateTokens(leadText(chat)),
     // 长期记忆: how many entries the 记忆簿 in force has.
     memoryEntries: memoryOf(active)?.entries.length ?? 0,
+    // 剧情向导: the plan being followed, and whether it holds on this branch (guide-text.mjs); it rests while a 剧本 runs.
+    guide: guideView(chat.guide, active, { held: Boolean(chat.plot?.copy && !chat.plot.paused) }),
+    // 剧本: the chat's copy of the plot and where the story is on it (plot.mjs).
+    plot: plotView(chat, active),
   }
 }
 
@@ -1060,5 +1113,7 @@ export function chatSummary(chat) {
     updatedAt: chat.updatedAt,
     turns,
     preview: (last?.role === 'user' ? last.text : markSpeakers(last?.display ?? '')).slice(0, 80),
+    // 剧本: the one it plays (the card's 剧本 window says which chats are on which).
+    ...(chat.plot?.copy ? { plot: { id: chat.plot.copy.id, name: chat.plot.copy.name } } : {}),
   }
 }

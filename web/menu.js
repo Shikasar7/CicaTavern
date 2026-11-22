@@ -206,6 +206,27 @@ export function createMenu({ dialog, form, el, title: menuTitle, edits = countsA
     up()
   })
 
+  // Panels the player opened, by id: kept through a redraw of the menu and a trip to a page and back; every one
+  // folded again each time the window opens (start).
+  const openPanels = new Set()
+
+  /** A panel open or folded; `animate` false when it is drawn so (no motion at the window's opening). */
+  function setOpen(node, open, animate = true) {
+    const { toggle, rows } = node.parts
+    const id = node.dataset.panel
+    if (open) openPanels.add(id)
+    else openPanels.delete(id)
+    node.classList.toggle('no-motion', !animate)
+    node.classList.toggle('open', open)
+    toggle.setAttribute('aria-expanded', String(open))
+    // Folded rows are out of reach of Tab and of the screen reader, as out of sight.
+    rows.inert = !open
+    if (animate) return
+    // Laid out as it is now, then movable again (a frame callback waits while the window is in the background).
+    void node.offsetWidth
+    node.classList.remove('no-motion')
+  }
+
   function entry(section) {
     const summary = el('span', { class: 'menu-entry-sub' })
     const status = el('span', { class: 'menu-pill', hidden: true })
@@ -238,21 +259,38 @@ export function createMenu({ dialog, form, el, title: menuTitle, edits = countsA
   function mount({ panels, sections: list, note = '', footStart = [], footEnd = [], save = null, search = null }) {
     sections = list
     const entries = new Map()
-    const panelNodes = panels.map(panel =>
-      el('section', { class: 'menu-panel', 'data-panel': panel.id }, [
-        el('header', { class: 'menu-panel-head' }, [el('span', { class: 'menu-panel-icon', 'aria-hidden': 'true', html: panel.icon }), el('h3', { text: panel.title }), panel.aside ?? null]),
-        ...panel.rows.map(row => {
-          if (typeof row !== 'string') return row
-          const section = sections.find(s => s.id === row)
-          if (!section) return null
-          // A page says where it sits: its panel, unless it says more itself.
-          section.crumb = section.crumb ?? (section.tag ? `${panel.title} · ${section.tag}` : panel.title)
-          const made = entry(section)
-          entries.set(row, made)
-          return made.button
-        }),
-      ]),
-    )
+    // The page the window was opened on, back on the menu: its panel stands open.
+    const startPanel = panels.find(panel => panel.rows.includes(current))?.id
+    if (startPanel) openPanels.add(startPanel)
+    const panelNodes = panels.map(panel => {
+      const rows = el('div', { class: 'menu-panel-inner' }, panel.rows.map(row => {
+        if (typeof row !== 'string') return row
+        const section = sections.find(s => s.id === row)
+        if (!section) return null
+        // A page says where it sits: its panel, unless it says more itself.
+        section.crumb = section.crumb ?? (section.tag ? `${panel.title} · ${section.tag}` : panel.title)
+        const made = entry(section)
+        entries.set(row, made)
+        return made.button
+      }))
+      const rowsId = `menu-rows-${panel.id}`
+      // Folded: the rows' names under the title (refresh), and a row's warning beside it, so nothing is out of sight.
+      const peek = el('span', { class: 'menu-panel-peek' })
+      const alert = el('span', { class: 'menu-pill', hidden: true })
+      const toggle = el('button', { type: 'button', class: 'menu-panel-toggle', 'aria-controls': rowsId, onclick: () => setOpen(node, !openPanels.has(panel.id)) }, [
+        el('span', { class: 'menu-panel-icon', 'aria-hidden': 'true', html: panel.icon }),
+        el('span', { class: 'menu-panel-name' }, [el('span', { class: 'menu-panel-title', text: panel.title }), peek]),
+        alert,
+        el('span', { class: 'menu-panel-chevron', 'aria-hidden': 'true', html: ICON_NEXT }),
+      ])
+      const node = el('section', { class: 'menu-panel folds', 'data-panel': panel.id }, [
+        el('header', { class: 'menu-panel-head' }, [el('h3', {}, [toggle]), panel.aside ?? null]),
+        el('div', { class: 'menu-panel-rows', id: rowsId }, [rows]),
+      ])
+      node.parts = { toggle, rows, peek, alert }
+      setOpen(node, openPanels.has(panel.id), false)
+      return node
+    })
     const home = el('div', { class: 'menu-home' }, [...panelNodes, note ? el('p', { class: 'menu-home-note', text: note }) : null])
     const homeTitle = panels.find(panel => panel.id === only)?.title ?? menuTitle
     const panes = sections
@@ -378,9 +416,19 @@ export function createMenu({ dialog, form, el, title: menuTitle, edits = countsA
     }
     // A panel with every row hidden goes too (the phone app has nothing under 连接).
     for (const panel of view?.panels ?? []) {
-      panel.hidden = (only && panel.dataset.panel !== only) || [...panel.children].slice(1).every(row => row.hidden)
-      // On its own under its own title: its head needn't say the name again.
-      panel.classList.toggle('alone', only === panel.dataset.panel)
+      const { rows, peek, alert } = panel.parts
+      const shown = [...rows.children].filter(row => !row.hidden)
+      panel.hidden = (only && panel.dataset.panel !== only) || !shown.length
+      // On its own under its own title: its head needn't say the name again, and nothing folds.
+      const alone = only === panel.dataset.panel
+      panel.classList.toggle('alone', alone)
+      if (alone && !panel.classList.contains('open')) setOpen(panel, true, false)
+      peek.textContent = shown.map(row => row.querySelector('.menu-entry-title')?.firstChild?.textContent ?? '').filter(Boolean).join(' · ')
+      // A row's warning (没选模型, 先添加一个) shows on the head while the panel is folded.
+      const warned = shown.map(row => row.querySelector('.menu-pill:not([hidden])')).find(Boolean)
+      alert.hidden = !warned
+      alert.className = warned ? warned.className : 'menu-pill'
+      alert.textContent = warned?.textContent ?? ''
     }
   }
 
@@ -405,6 +453,7 @@ export function createMenu({ dialog, form, el, title: menuTitle, edits = countsA
       current = id
       entered = id
       only = panel
+      openPanels.clear()
       setDirty(false)
     },
     get current() {

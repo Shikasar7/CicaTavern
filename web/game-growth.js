@@ -1,4 +1,4 @@
-// 成长 on the page: the player's words for what shared/game/growth.js counts, and the pieces of the 行囊 and of a
+// 成长 on the page: the player's words for what shared/game/growth.js counts, and the pieces of the 游戏菜单 and of a
 // reply that show it. Loaded with game-play.js, for a chat whose card has rules.
 import { t } from '/i18n.js'
 import { BIG_BUDGET, BOND_AT, EFFECT_IDS, GEAR_BUDGET, GEAR_SLOTS, LEVEL_GAINS, RARITIES, STAGE_USES, bigsOwed, bondOf, gearOf, nextBondAt } from '/shared/game/growth.js'
@@ -53,7 +53,7 @@ const PERK_WORDS = (named = '') => {
   }
 }
 // An attribute goes by the name the story uses for it (the model writes 【检定|灵巧】), as it does everywhere else on
-// the page: the 行囊 and a roll's line show the same word, whatever the interface language.
+// the page: the 游戏菜单 and a roll's line show the same word, whatever the interface language.
 const ATTRIBUTE_WORDS = () => Object.fromEntries(ATTRIBUTES.map(item => [item.id, item.name]))
 const KIND_WORDS = () => ({ strike: t`重击`, sweep: t`群攻`, flurry: t`连击`, poison: t`中毒`, stun: t`眩晕`, heal: t`治疗`, boost: t`增益` })
 export const SIZE_WORDS = () => ({ small: t`小幅`, medium: t`中幅`, large: t`大幅` })
@@ -130,7 +130,7 @@ export const stageWord = stage => ['', '', t`二阶`, t`三阶`, t`四阶`, t`�
 /** A skill's name as it is shown once it has come some way: 破风斩·二阶. */
 export const skillShown = (name, uses) => (stageOf(uses) > 1 ? `${name}·${stageWord(stageOf(uses))}` : name)
 
-/** What the player or one of the party has still to do in the 行囊: points to spend, 天赋 to choose. */
+/** What the player or one of the party has still to do in the 游戏菜单: points to spend, 天赋 to choose. */
 export const pendingOf = (sheet, book) => (sheet.points ?? 0) + perksOwed(sheet, book) + bigsOwed(sheet, book) + (book.growth?.companions === 'manual' ? (sheet.party ?? []).reduce((sum, member) => sum + perksOwed(member, book) + bigsOwed(member, book), 0) : 0) + [sheet, ...(sheet.party ?? [])].filter(who => formReady(who, book, sheet.things)).length
 
 /** The skills of one of the party with how far each has come, for a card that counts growth. */
@@ -332,7 +332,7 @@ export function growthNotes(before, after, book) {
 /**
  * Under the reply that brought a level: what it changed, side by side, and the way to what is left to choose.
  * Null when the reply brought none, or the card does not count growth.
- * @param open - () opens the 行囊 on the player's own page.
+ * @param open - () opens the 游戏菜单 on the player's own page.
  */
 export function levelUpCard(el, before, after, book, open) {
   if (!growsOn(book) || !after || (after.level ?? 1) <= (before?.level ?? 1)) return null
@@ -356,7 +356,7 @@ export function levelUpCard(el, before, after, book, open) {
   ])
 }
 
-// ─── 行囊的「成长」页 ─────────────────────────────────────────────────
+// ─── 游戏菜单的「成长」页 ─────────────────────────────────────────────────
 /** Where a rank begins, as a level. */
 const rankStarts = (ranks, at) => at * STEPS_PER_RANK + 1
 
@@ -437,7 +437,7 @@ export function growthLog(path, book) {
 }
 
 /**
- * The 行囊's 成长 page: what the player is built of, what is still ahead, and how they came by it. Nothing is changed
+ * The 游戏菜单's 成长 page: what the player is built of, what is still ahead, and how they came by it. Nothing is changed
  * here: `go(tab)` leads to the page where points are spent and 天赋 chosen.
  */
 export function growthPage({ el, sheet, book, path, go }) {
@@ -471,7 +471,7 @@ export function growthPage({ el, sheet, book, path, go }) {
 
 /**
  * The choices that make a thing gear: where it is worn, how rare, and up to two effects with their sizes. For the
- * 行囊's 物品 page and the rule window's list alike. `put(change)` keeps what was chosen ({ slot }, { rarity }, { effects }).
+ * 游戏菜单's 物品 page and the rule window's list alike. `put(change)` keeps what was chosen ({ slot }, { rarity }, { effects }).
  */
 export function gearPickers({ el, name, set, book, put }) {
   return [

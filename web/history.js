@@ -289,7 +289,32 @@ export function initHistory({ el, getChat, settleScroll }) {
     const size = Math.max(toTrack(box.scrollTop + box.clientHeight) * 100 - top, 4)
     thumb.style.top = `${Math.min(top, 100 - size)}%`
     thumb.style.height = `${size}%`
+    // The round you are in, marked again only when that changed (every frame of a reply being written, it did not).
+    const here = `${ticks.dataset.key}|${state.current}`
+    if (ticks.dataset.here === here) return
+    ticks.dataset.here = here
     for (const tick of ticks.children) tick.classList.toggle('here', Number(tick.dataset.n) === state.current)
+  }
+
+  // The page grew or shrank. Every round measured again, at most this often: while a reply is written it grows at
+  // its end every frame, and measuring a long chat's every round each time cost more than writing it. In between,
+  // the page's height alone, for the thumb; the rounds' places are as they were.
+  const REMEASURE_MS = 500
+  let measuredAt = 0
+  let remeasure = 0
+  function heightChanged() {
+    const now = performance.now()
+    clearTimeout(remeasure)
+    if (now - measuredAt >= REMEASURE_MS || rail.hidden) {
+      measuredAt = now
+      return layoutRail()
+    }
+    state.height = box.scrollHeight
+    state.stops = scale()
+    remeasure = setTimeout(() => {
+      measuredAt = performance.now()
+      layoutRail()
+    }, REMEASURE_MS)
   }
 
   // ─── Scrolling ────────────────────────────────────────────────────
@@ -298,7 +323,7 @@ export function initHistory({ el, getChat, settleScroll }) {
     if (frame) return
     frame = requestAnimationFrame(() => {
       frame = 0
-      if (box.scrollHeight !== state.height) layoutRail()
+      if (box.scrollHeight !== state.height) heightChanged()
       const round = readingRound()
       state.current = round?.n ?? 0
       if (!rail.hidden) {

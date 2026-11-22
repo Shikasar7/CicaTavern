@@ -9,6 +9,7 @@
 // Calling the model, editing messages or reaching the real page is not offered.
 
 import { IFRAME_EVENTS, MVU_EVENTS, TAVERN_EVENTS, olderLorebooks } from './shared/th-api.js'
+import { frameData, frameIdb } from './frame-idb.js'
 
 const STORAGE_KEY = 'agent-tavern:frame-storage'
 const VARS_KEY = 'agent-tavern:th-vars'
@@ -18,6 +19,29 @@ const MAX_STORED = 1_000_000
 // only when the frame's code looks like it uses them. `always`: also for a
 // frame that pulls its page in from elsewhere (REMOTE_PAGE), whose code cannot
 // be looked through beforehand.
+const ZOD = 'https://testingcf.jsdelivr.net/npm/zod/+esm'
+
+/* Runs inside the frame (serialised with toString). Zod, there before the next script runs: jsDelivr's build of it is
+   one module whose only export is the statement at its end, so it runs as a function returning what that names. */
+function zodNow(url) {
+  if (window.z) return
+  try {
+    const request = new XMLHttpRequest()
+    request.open('GET', url, false)
+    request.send()
+    if (request.status !== 200) return
+    const code = request.responseText
+    const at = code.lastIndexOf('export{')
+    const end = code.indexOf('}', at)
+    if (at < 0 || end < 0) return
+    const names = code.slice(at + 7, end).split(',').map(pair => pair.trim().split(/\s+as\s+/)).filter(pair => pair[0])
+    const body = `"use strict";${code.slice(0, at)}\nreturn{${names.map(([local, name]) => `${JSON.stringify(name || local)}:${local}`).join(',')}}`
+    window.z = new Function(body)()
+  } catch (error) {
+    console.warn('[酒馆] Zod 没能先载入，等模块载入后再有：', error) // i18n-ignore: for the card's scripts, inside its frame
+  }
+}
+
 const LIBRARIES = [
   { always: true, script: true, test: /\$\(|\$\.|jQuery/, tags: ['<script src="https://testingcf.jsdelivr.net/npm/jquery/dist/jquery.min.js"></script>'] },
   {
@@ -32,8 +56,9 @@ const LIBRARIES = [
   { always: true, test: /\bVue\b/, tags: ['<script src="https://testingcf.jsdelivr.net/npm/vue/dist/vue.global.prod.min.js"></script>'] },
   { test: /\bVueRouter\b/, tags: ['<script src="https://testingcf.jsdelivr.net/npm/vue-router/dist/vue-router.global.prod.min.js"></script>'] },
   // Zod as Tavern Helper's frames have it, the global `z`: the whole module (a bundled script reads `z.z.object`, a
-  // hand-written one `z.object`), set by a module that runs before the frame's own (modules keep their order).
-  { test: /\bz\.[a-zA-Z]+\(/, tags: ['<script type="module">import * as m from "https://testingcf.jsdelivr.net/npm/zod/+esm"; window.z = m</script>'] },
+  // hand-written one `z.object`). There it is there before any of the frame's scripts, and a page's plain script
+  // makes its schemas as it loads, before any module has run: so loaded at once (ZOD_NOW), the module only where that failed.
+  { test: /\bz\.[a-zA-Z]+\(/, tags: [`<script>(${zodNow})(${JSON.stringify(ZOD)})</script>`, `<script type="module">import * as m from "${ZOD}"; window.z = window.z || m</script>`] },
   // The yaml package's browser build is a module: the global `YAML` set the same way as `z`.
   { test: /\bYAML\b/, tags: ['<script type="module">import * as m from "https://testingcf.jsdelivr.net/npm/yaml/+esm"; window.YAML = m.default ?? m</script>'] },
   { test: /class=["'][^"']*\bfa[srbl]?\s+fa-|\bfa-solid\b|\bfa-regular\b/, tags: ['<link rel="stylesheet" href="https://testingcf.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css">'] },
@@ -144,10 +169,11 @@ function saveFrameStorage(cardId, key, value) {
  * { frame, frameName, messageId, lastId, chatId, cardId, names, vars: { message, latest, global, preset, character },
  *   messages: [{ message_id, name, role, message, state }], storage, viewport: { width, height } }
  */
-export function frameShim(ctx) {
+export function frameShim(ctx, { indexedDb = false } = {}) {
   // `<` escaped so a `</script>` inside the story text cannot end the tag.
   const json = JSON.stringify({ ...ctx, events: { tavern: TAVERN_EVENTS, iframe: IFRAME_EVENTS, mvu: MVU_EVENTS } }).replace(/</g, '\\u003c')
-  return `<script>(${shimMain.toString()})(${json}, ${frameFetch.toString()}, ${olderLorebooks.toString()})<\/script>`
+  // IndexedDB's stand-in only for a page that may use it (frame-idb.js USES_INDEXED_DB): most never do.
+  return `<script>(${shimMain.toString()})(${json}, ${frameFetch.toString()}, ${olderLorebooks.toString()}, ${indexedDb ? frameIdb.toString() : 'null'})<\/script>`
 }
 
 /**
@@ -270,7 +296,7 @@ export function frameFetch({ direct, post, call, fetches, frame, appOrigin, rela
 }
 
 /* Runs inside the frame. Self-contained: it is serialised with toString(). `makeFetch` is frameFetch. */
-function shimMain(ctx, makeFetch, olderLorebooks) {
+function shimMain(ctx, makeFetch, olderLorebooks, indexedDb) {
   const host = window.parent
   // A form submitted and not stopped by the card's own handler would load its action in the frame, the card's page gone
   // (as in SillyTavern no form ever leaves): the last to hear it, it stops it. One meant for a new window still opens.
@@ -291,6 +317,8 @@ function shimMain(ctx, makeFetch, olderLorebooks) {
       pending.set(id, { resolve, reject })
       host.postMessage({ agentTavernCall: ctx.frame, id, op, args }, '*')
     })
+  // IndexedDB, which an opaque-origin frame is refused: one of its own, kept by the page (frame-idb.js).
+  if (indexedDb) indexedDb({ call, frame: ctx.frame })
   window.addEventListener('message', event => {
     if (event.source !== host) return
     const data = event.data
@@ -709,6 +737,9 @@ function shimMain(ctx, makeFetch, olderLorebooks) {
     }
     if (isObject(item.data)) write({ type: 'message', message_id: id }, clone(item.data))
     if (typeof item.message === 'string') {
+      // The opening of a chat nobody has played yet: it becomes the opening, its variables from its update blocks
+      // (a card's start page that has the model write the opening and sets it as floor 0).
+      if (id === 0 && ctx.lastId === 0) return call('opening', { text: item.message })
       if (id !== ctx.messageId && id !== ctx.lastId) throw new Error('只能改这个界面所在的楼层或最新一楼') // i18n-ignore: for the card's scripts, inside its frame
       await call('editMessage', { messageId: id, text: item.message })
     }
@@ -1105,12 +1136,45 @@ function shimMain(ctx, makeFetch, olderLorebooks) {
     window.addEventListener('message', event => {
       if (event.source === host && event.data && typeof event.data.agentTavernButton === 'string') eventEmit(event.data.agentTavernButton, ...(Array.isArray(event.data.args) ? event.data.args : [])).catch(error => console.error(error))
     })
+    // SillyTavern's chat as a script looks for it (#chat, its .mes, the latest one's .mes_text), for one that puts itself
+    // under the latest reply (a status bar's 内嵌模式): one empty message, the latest floor's, in this frame, so that
+    // what it puts there shows in the script's window. Only for a script that looks for them (web/card-scripts.js).
+    const stub = ctx.stubChat ? document.createElement('div') : null
+    const stubText = document.createElement('div')
+    if (stub) {
+      stub.id = 'chat'
+      stub.dataset.agentTavernStub = ''
+      // The frame does not scroll (its page is the window's size): what is put here does, a status bar taller than
+      // the docked window too.
+      stub.style.cssText = 'position: fixed; inset: 0; overflow: auto; overscroll-behavior: contain'
+      const message = document.createElement('div')
+      message.className = 'mes last_mes'
+      message.setAttribute('is_user', 'false')
+      message.setAttribute('mesid', String(ctx.lastId ?? 0))
+      stubText.className = 'mes_text'
+      message.append(stubText)
+      stub.append(message)
+      // Before the script runs (a module runs once the page is read, after 'interactive').
+      const place = () => { if (document.body && !stub.isConnected) document.body.prepend(stub) }
+      place()
+      document.addEventListener('readystatechange', place)
+      // The chat moved on: the latest floor is another.
+      window.addEventListener('message', event => {
+        if (event.source === host && event.data?.agentTavernChat) message.setAttribute('mesid', String(ctx.lastId ?? 0))
+      })
+    }
+    /** Something a script put in the stand-in chat (only the empty message there counts for nothing). */
+    const stubUsed = () => stub.querySelectorAll('*').length > 2 || Boolean(stub.textContent.trim())
     // By what is there, not by its size: the frame is not laid out while the page keeps it put away.
     const shown = () => {
       if (document.querySelector('dialog[open]')) return true
       // What it put on the page: in the body, or beside it (a floating button added to <html> itself).
       const placed = [...(document.body?.children ?? []), ...[...document.documentElement.children].filter(item => item !== document.head && item !== document.body)]
       for (const item of placed) {
+        if (item === stub) {
+          if (stubUsed()) return true
+          continue
+        }
         if (/^(SCRIPT|STYLE|LINK|TEMPLATE|DIALOG)$/.test(item.tagName) || item.hidden) continue
         const style = getComputedStyle(item)
         if (style.display === 'none' || style.visibility === 'hidden') continue
@@ -1222,8 +1286,10 @@ function shimMain(ctx, makeFetch, olderLorebooks) {
       if (key === 'postMessage') return (...args) => host.postMessage(...args)
       if (key === 'parent' || key === 'window' || key === 'self') return fakeParent
       if (key === '$' || key === 'jQuery') return hostQuery
-      if (key === 'innerHeight') return ctx.viewport.height
-      if (key === 'innerWidth') return ctx.viewport.width
+      // A message's frame grows with what is in it: SillyTavern's window is the page's. A script's frame is a window of
+      // its own (web/card-scripts.js), small while docked: what it draws by "SillyTavern's window" has to fit there.
+      if (key === 'innerHeight') return ctx.scriptFrame ? window.innerHeight : ctx.viewport.height
+      if (key === 'innerWidth') return ctx.scriptFrame ? window.innerWidth : ctx.viewport.width
       const value = Reflect.get(target, key)
       return typeof value === 'function' ? value.bind(target) : value
     },
@@ -1237,7 +1303,8 @@ function shimMain(ctx, makeFetch, olderLorebooks) {
   try {
     window.parent = fakeParent
   } catch {}
-  document.documentElement.style.setProperty('--TH-viewport-height', `${ctx.viewport.height}px`)
+  // vh, pinned to the page's height in a message's frame; a script's frame keeps its own (it does not grow).
+  document.documentElement.style.setProperty('--TH-viewport-height', ctx.scriptFrame ? '100vh' : `${ctx.viewport.height}px`)
   // A page the card brings in later ($('body').load(url)) has its own `height: 100vh`: in a
   // frame that grows with its content, that is the frame itself, so it would grow without end.
   // Pin those to the page's viewport, as the message's own HTML is (replaceViewportHeight).
@@ -1296,12 +1363,21 @@ export function installFrameBridge(handlers) {
         await handlers.send(context)
         reply(true)
       } else if (data.op === 'slash') reply(true, await handlers.slash(String(args.command ?? ''), context))
-      else if (data.op === 'opening') reply(true, await handlers.opening(Number(args.index)))
+      else if (data.op === 'opening') reply(true, await handlers.opening(Number(args.index), typeof args.text === 'string' ? args.text : undefined))
       else if (data.op === 'scriptEvent') await handlers.scriptEvent({ type: String(args.type ?? ''), args: Array.isArray(args.args) ? args.args : [] }, context)
       else if (data.op === 'scriptView') handlers.scriptView?.({ visible: args.visible === true }, context)
       else if (data.op === 'audio' && !data.id) handlers.audio?.(args)
       else if (ANSWERED.includes(data.op)) reply(true, await handlers[data.op](args, context))
-      else if (data.op === 'storage') {
+      else if (data.op === 'idb') {
+        // Kept under the card the frame was made for, as its localStorage is; a save goes on to its other frames.
+        const tell = (other, message) => {
+          const target = document.querySelector(`iframe[data-frame="${CSS.escape(other)}"]`)
+          if (!target?.isConnected || target.dataset.card !== frame.dataset.card) return false
+          target.contentWindow?.postMessage({ agentTavernIdb: message }, '*')
+          return true
+        }
+        reply(true, await frameData(frame.dataset.card || '', id, args, tell))
+      } else if (data.op === 'storage') {
         // Kept under the card the frame was made for (render.js htmlFrame), never one it names itself.
         if (frame.dataset.card) saveFrameStorage(frame.dataset.card, args.key, args.value)
       } else if (data.op === 'vars') {

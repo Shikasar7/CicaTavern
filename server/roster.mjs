@@ -30,6 +30,22 @@ export function cleanStrength(value, fallback = 0.8) {
   return Number.isFinite(strength) ? Math.min(2, Math.max(0, Math.round(strength * 100) / 100)) : fallback
 }
 
+// How loud a cast member is read, in percent of what the voice gives after levelling (web/media.js): 100 is left unsaid.
+export const VOLUME_MIN = 25
+export const VOLUME_MAX = 200
+
+/** A cast member's 默认语气: a few words on how to say their lines, as a reply's voice tag would (no brackets, no colon). */
+export const TONE_MAX = 40
+export function cleanTone(value) {
+  return typeof value === 'string' ? value.replace(/[[\]【】:：]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, TONE_MAX) : ''
+}
+
+/** A cast member's 音量 in percent, whole and within VOLUME_MIN–VOLUME_MAX; 100 when it is not a number. */
+export function cleanVolume(value) {
+  const volume = Number(value)
+  return Number.isFinite(volume) ? Math.min(VOLUME_MAX, Math.max(VOLUME_MIN, Math.round(volume))) : 100
+}
+
 /** Entries from the form or a draft. Whether one has a reference picture is the file's business, not stored here. */
 export function cleanRoster(input) {
   if (!Array.isArray(input)) return []
@@ -59,6 +75,9 @@ export function cleanRoster(input) {
       loraStrength: cleanStrength(raw.loraStrength),
       // Their lines read aloud in this voice ('' = the card's dialogue voice); as long as a card's.
       voice: text(raw.voice, 250),
+      ...(cleanVolume(raw.volume) !== 100 ? { volume: cleanVolume(raw.volume) } : {}),
+      // How their lines are said when a reply gives no [voice:语气:] of its own ('' = as the voice says them).
+      ...(cleanTone(raw.tone) ? { tone: cleanTone(raw.tone) } : {}),
       // Drawn whole, not as a half-body sprite: a 形态 (a beast's stage), 创作角色卡 says so.
       ...(raw.whole === true ? { whole: true } : {}),
     })

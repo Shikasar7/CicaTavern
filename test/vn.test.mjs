@@ -409,3 +409,14 @@ test('a line of dialogue that says 地点： is no scene header', () => {
   assert.equal(headerPlace('她低声说，地点：旧仓库。'), null)
   assert.deepEqual(headerPlace('地点：雪山脚下\n她走了。'), { time: '', place: '雪山脚下', weather: '' })
 })
+
+test('speakers: someone the story brings in without a name is not the card\'s own; modern trades get a plate', () => {
+  const names = speakerNames({ char: '林雪', user: '小舟', roster: [{ name: '主角', player: true, kind: 'boy' }, { name: '林雪', kind: 'girl' }] })
+  const said = text => splitLines(text, { names }).filter(b => b.kind === 'dialogue').map(b => b.speaker)
+  assert.deepEqual(said('林雪说：「走吧。」\n\n一个陌生男人凑过来。\n\n「小伙子，借个火？」'), ['林雪', null])
+  assert.deepEqual(said('林雪说：「走吧。」\n\n有人在背后喊：「喂！」'), ['林雪', null])
+  assert.deepEqual(said('林雪说：「走吧。」\n\n旁边卖煎饼的大妈探出头：「小伙子，要不要来一个？」'), ['林雪', '大妈'])
+  assert.deepEqual(said('林雪说：「走吧。」\n\n路边的保安拦住了你们：「这里不让进。」'), ['林雪', '保安'])
+  // Nothing says who, and nobody new: the talk goes on, the card's own as before.
+  assert.deepEqual(said('窗外下起了雨。\n\n「好冷。」'), ['林雪'])
+})

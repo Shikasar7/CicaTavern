@@ -220,3 +220,21 @@ test('a recalled entry reaches the model with the names in place of {{user}} and
   const prompt = buildTurnPrompt({ names: { user: '阿遥', char: '青禾' }, opening: '', memory: '【约定与伏笔｜看灯】{{user}}和{{char}}约好雨停去看灯。', input: '走吧', stateText: '' })
   assert.match(prompt, /<往事>\n【约定与伏笔｜看灯】阿遥和青禾约好雨停去看灯。\n<\/往事>/)
 })
+
+test('边玩边整理 with a model picked by name: that one, reading the latest turns as the helper does', async t => {
+  const { store, engine, chat, turn, fake, helper } = await setup(t, { memory: { enabled: true, tidy: { enabled: true, every: 5 } }, answer: compactionAnswer() })
+  const picked = `${helper.slice(0, helper.indexOf('/'))}/m1`
+  const settings = await store.getSettings()
+  await store.saveSettings({ ...settings, memory: { ...settings.memory, tidy: { ...settings.memory.tidy, model: picked } } })
+  let last
+  for (const input of ['一', '二', '三', '四', '林雪把怀表给了你']) last = await turn(input)
+  assert.equal(await engine.tidyMemory(chat.id, last.nodeId), true)
+  const request = fake.requests.at(-1)
+  assert.equal(request.model, 'm1', 'the model picked')
+  assert.match(textOf(request.messages.at(-1).content), /<原文>[\s\S]*〔第 5 轮〕/, 'the turns given, not the chat read from cache')
+  // One no longer there: the helper.
+  await store.saveSettings({ ...(await store.getSettings()), memory: { ...settings.memory, tidy: { ...settings.memory.tidy, model: 'gone/x' } } })
+  for (const input of ['六', '七', '八', '九', '十']) last = await turn(input)
+  assert.equal(await engine.tidyMemory(chat.id, last.nodeId), true)
+  assert.equal(fake.requests.at(-1).model, 'helper')
+})

@@ -17,7 +17,7 @@ import { MAX_SKIN, cleanSkinCss, cleanStatusSpec, paletteColors, scopedSkinCss, 
 
 const BOOK = { entries: [{ id: 0, comment: '[InitVar]初始变量', content: '林小雨:\n  好感: 10\n  心情: 平静\n体力: 50', keys: [], constant: true, enabled: false }] }
 const FIELDS = [{ path: '林小雨.好感', label: '好感', show: 'meter', min: 0, max: 100 }, { path: '林小雨.心情', label: '心情', show: 'badge' }, { path: '体力', label: '体力', show: 'number' }]
-const BAR = { title: '雨宿', theme: 'paper', fields: FIELDS }
+const BAR = { title: '雨宿', theme: 'editorial', fields: FIELDS }
 const CSS = `.status-bar { border-radius: 4px; border: 1px solid var(--accent); background: linear-gradient(180deg, var(--surface), #0b1218) }
 .status-title::before { content: "◆ " }
 .status-row[data-label="好感"] .status-meter > i { background: #c8553d }
@@ -93,7 +93,7 @@ test('the bar keeps its look in place of a theme; a look with nothing in it is n
   assert.deepEqual(spec.skin, { name: '雨夜橱窗', css: CSS })
   assert.equal(spec.theme, undefined)
   assert.deepEqual(spec.palette, PALETTE)
-  assert.equal(cleanStatusSpec({ ...BAR, skin: { css: 'html { color: red }' } }).theme, 'paper')
+  assert.equal(cleanStatusSpec({ ...BAR, skin: { css: 'html { color: red }' } }).theme, 'editorial')
   assert.equal(cleanStatusSpec({ ...BAR, skin: { css: 'html { color: red }' } }).skin, undefined)
   assert.equal(cleanStatusSpec({ ...BAR, skin: 'x' }).skin, undefined)
   // Cleaned again, the same.
@@ -168,9 +168,9 @@ test('a look is told from another in the lines, goes into SillyTavern\'s copy an
   const kept = readEdit('<status_bar>{"fields": [{"path": "体力", "label": "体力", "show": "number"}]}</status_bar>', card).changes[0].spec
   assert.deepEqual(kept.skin, skinned.skin)
   assert.deepEqual(kept.palette, PALETTE)
-  const themed = readEdit('<status_bar>{"theme": "ink", "fields": [{"path": "体力", "show": "number"}]}</status_bar>', card).changes[0].spec
+  const themed = readEdit('<status_bar>{"theme": "meadow", "fields": [{"path": "体力", "show": "number"}]}</status_bar>', card).changes[0].spec
   assert.equal(cleanStatusSpec(themed).skin, undefined)
-  assert.equal(cleanStatusSpec(themed).theme, 'ink')
+  assert.equal(cleanStatusSpec(themed).theme, 'meadow')
 })
 
 test('试数值: the preview\'s variables with some of them another way, the state itself left alone', () => {
@@ -300,7 +300,7 @@ test('a look is asked for, kept as a draft, saved with the bar, taken back and d
   const [record] = applied.check.records
   const undone = (await call(`/api/cards/${card.id}/check/undo`, { method: 'POST', body: { record: record.id } })).body
   assert.equal(undone.card.statusBar?.skin, undefined)
-  assert.equal((await saved()).statusBar.theme, 'paper')
+  assert.equal((await saved()).statusBar.theme, 'editorial')
 
   // Not wanted: gone, and the card as it was.
   const dropped = (await call(url, { method: 'DELETE' })).body
@@ -355,13 +355,13 @@ test('what may lie behind words: a line along an edge and the ticks of a ruler a
 test('a look longer than it may be is cut at the limit, and its answer says so', async () => {
   const { MAX_SKIN, cleanSkinCss, skinCut } = await import('../web/shared/status.js')
   const { readSkin } = await import('../server/forge/skin.mjs')
-  const rule = i => `.status-row[data-label="第${i}项"] .status-label { color: #123456; letter-spacing: .1em }`
+  const rule = i => `.status-row[data-label="第${i}项"] .status-label { color: #123456; letter-spacing: .1em; text-shadow: 0 1px 0 rgba(255, 255, 255, .2), 0 0 4px rgba(0, 0, 0, .1) }`
   const long = Array.from({ length: 500 }, (_, i) => rule(i)).join('\n')
   assert.equal(skinCut(long), true)
   assert.ok(cleanSkinCss(long).length <= MAX_SKIN)
   assert.equal(skinCut(rule(1)), false)
   const answer = css => `<reply>好</reply>\n<name>长</name>\n<palette>{"bg":"#101820","ink":"#f2f2f2","accent":"#e0a030"}</palette>\n<css>\n${css}\n</css>`
-  assert.deepEqual(readSkin(answer(long.slice(0, 40000))).cut, ['long'])
+  assert.deepEqual(readSkin(answer(long.slice(0, 60000))).cut, ['long'])
   assert.deepEqual(readSkin(answer(rule(1))).cut, [])
   assert.ok(MAX_SKIN >= 24000)
 })

@@ -3,7 +3,7 @@
 //
 // The form is a display regex over a placeholder in the opening, as the status bar is, so the model never reads it and
 // it costs nothing. It works the same in SillyTavern (Tavern Helper's triggerSlash) and here (web/compat.js).
-import { BAR_STYLE, barLook, regexEntry, statusSpecOf } from './status.mjs'
+import { barLook, barStyle, regexEntry, statusSpecOf } from './status.mjs'
 
 export const CREATION_TAG = '<CreationPage/>'
 const PAGE_SCRIPT = 'cicatavern-creation-page'
@@ -240,7 +240,7 @@ export function creationHtml(creation, { title = '', look = {}, english = false 
   const { mark, roll, rollAll, start, left, sent, blank, copy } = wordsOf(english)
   const spec = { title, mark, fields: creation.fields.map(({ path, looks, ...field }) => field), words: { roll, rollAll, start, left, sent, blank, copy } }
   const data = JSON.stringify(spec).replace(/</g, '\\u003c')
-  return ['```html', '<!DOCTYPE html>', '<html><head><meta charset="utf-8">', `<style>${BAR_STYLE}${PAGE_STYLE}</style>`, '</head><body>', `<div class="bar${look.theme ?? ''}" id="bar"${look.style ?? ''}></div>`, `<script>var SPEC=${data};${PAGE_SCRIPT_TEXT}</script>`, '</body></html>', '```'].join('\n')
+  return ['```html', '<!DOCTYPE html>', '<html><head><meta charset="utf-8">', `<style>${barStyle(look.theme ?? '')}${PAGE_STYLE}</style>`, '</head><body>', `<div class="bar${look.theme ?? ''}" id="bar"${look.style ?? ''}></div>`, `<script>var SPEC=${data};${PAGE_SCRIPT_TEXT}</script>`, '</body></html>', '```'].join('\n')
 }
 
 /** The two scripts: the form for the player, nothing for the model. */

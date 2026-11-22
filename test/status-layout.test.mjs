@@ -107,7 +107,7 @@ test('more variables than fit are counted, not dropped without a word', () => {
 })
 
 test('a card\'s own layout takes in someone new beside the people it names, as it shows them', () => {
-  const own = cleanStatusSpec({ title: '状态', theme: 'paper', fields: [
+  const own = cleanStatusSpec({ title: '状态', theme: 'editorial', fields: [
     { path: '林雪.好感度', label: '好感', show: 'meter', min: 0, max: 200 },
     { path: '林雪.秘密', show: 'hidden' },
     { path: '沈念念.好感度', label: '好感', show: 'meter', min: 0, max: 200 },
@@ -116,7 +116,7 @@ test('a card\'s own layout takes in someone new beside the people it names, as i
   const state = { 林雪: { 好感度: 40, 秘密: 'x' }, 沈念念: { 好感度: 70 }, 苏晚: { 好感度: 10, 秘密: 'y', 别的: 1 }, 世界: { 时间: '夜' }, 天气: '雨' }
   const spec = withNewcomers(own, state)
   assert.deepEqual(spec.fields.at(-1), { path: '苏晚.好感度', label: '好感', show: 'meter', min: 0, max: 200 })
-  assert.equal(spec.theme, 'paper')
+  assert.equal(spec.theme, 'editorial')
   assert.equal(spec.fields.length, own.fields.length + 1, 'nothing hidden, nothing the layout does not show, nobody without its values')
   assert.deepEqual(statusGroups(spec, state).map(group => group.name), ['林雪', '沈念念', '', '苏晚'])
   assert.equal(withNewcomers(own, { 林雪: { 好感度: 40 } }), own, 'nobody new: the layout as it is')

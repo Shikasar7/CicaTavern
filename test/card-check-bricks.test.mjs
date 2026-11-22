@@ -313,7 +313,7 @@ test('a change reads out the colors and the pages', () => {
   const lines = statusLines(card.statusBar)
   assert.match(lines, /配色: 背景 #101820 · 文字 #f2f2f2 · 强调 #e0a030/)
   assert.match(lines, /好感 \(林小满\.好感度\): meter · 页: 她/)
-  assert.match(statusLines({ ...card.statusBar, palette: undefined, theme: 'gothic' }), /主题: 暗夜/)
+  assert.match(statusLines({ ...card.statusBar, palette: undefined, theme: 'sigil' }), /主题: 夜曜纹章/)
 })
 
 test('a fix to the fields leaves the look; written over, it reaches both bars and comes back on undo', () => {
@@ -359,11 +359,11 @@ test('a change goes out of date when only the colors or the pages moved', () => 
 })
 
 test('a look picked by hand takes the other one\'s place, and text out of reach of its background is put right', () => {
-  const { card, helpers } = madeCard(planWith({ ...EVERY_BRICK, statusTheme: 'gothic' }))
+  const { card, helpers } = madeCard(planWith({ ...EVERY_BRICK, statusTheme: 'sigil' }))
   const lost = withLostField(card)
   const [found] = checkCard(lost, { helpers })
   const { theme, ...own } = found.changes[0].spec
-  assert.equal(theme, 'gothic')
+  assert.equal(theme, 'sigil')
   const next = withEdits(lost, found, { statusBar: { spec: { ...own, palette: { bg: '#ffffff', ink: '#f0f0f0', accent: '#2b5869' } } } })
   assert.equal(next.changes[0].spec.palette.ink, '#1c1c1c')
   assert.equal(next.changes[0].spec.theme, undefined)
@@ -458,8 +458,8 @@ test('a status bar from the model: a look and pages go in; what it leaves out st
   assert.equal(own.spec.palette.accent, '#ff00ff')
   assert.equal(own.spec.fields[0].page, '总览')
   assert.match(own.after, /配色: 背景 #000000/)
-  const themed = ask(`{"theme": "gothic", "fields": [${field}]}`)
-  assert.equal(themed.spec.theme, 'gothic')
+  const themed = ask(`{"theme": "sigil", "fields": [${field}]}`)
+  assert.equal(themed.spec.theme, 'sigil')
   assert.equal(themed.spec.palette, undefined, 'a theme asked for shows, not the colors over it')
   const plainly = ask(`{"theme": "plain", "fields": [${field}]}`)
   assert.deepEqual([plainly.spec.theme, plainly.spec.palette], [undefined, undefined])

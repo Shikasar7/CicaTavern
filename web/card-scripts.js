@@ -26,6 +26,10 @@ const PRESS_SHOWS_MS = 5000
 // /api/chats/:id/th-preset): Tavern Helper answers those at once, not later.
 const USES_PRESETS = /\b(?:getPreset|getLoadedPresetName|getPresetNames|replacePreset|updatePresetWith|setPreset|getTavernRegexes)\s*\(/
 
+// A script that looks for SillyTavern's chat messages (a status bar put under the latest reply): its frame gets one to
+// find (compat.js stubChat).
+const LOOKS_FOR_CHAT = /\.mes(?:_text)?\b|#chat\b/
+
 /** `</script>` in a script's own text would end the tag it is put in. */
 const asModule = code => `<script type="module">${String(code).replace(/<\/script/gi, '<\\/script')}</script>`
 
@@ -78,8 +82,8 @@ export function initCardScripts({ api, el, toast, getChat, frameContext, ownerCo
   }
   window.addEventListener('resize', placeIfShown)
 
-  // The docked panel dragged by its title row to where the player wants it, kept on this device; a double click there
-  // puts it back above the input box.
+  // The docked panel dragged by its title row to where the player wants it, and resized by its edges and corners, both
+  // kept on this device; a double click there puts it back above the input box, at its first size.
   const SPOT_KEY = 'agentTavernScriptDock'
   let spot = (() => {
     try {
@@ -130,10 +134,53 @@ export function initCardScripts({ api, el, toast, getChat, frameContext, ownerCo
     window.addEventListener('pointerup', end)
     window.addEventListener('pointercancel', end)
   })
+  // The docked panel's size: its width and its frame's height (--size-w, --size-body in style.css). Resized by a top or
+  // left edge while above the input box, it stays there; by a right or bottom edge it stays where the player put it.
+  const SIZE_KEY = 'agentTavernScriptDockSize'
+  let size = null
+  let forgetSize = () => {}
+  const applySize = () => {
+    for (const [name, value] of [['--size-w', size?.w], ['--size-body', size?.h]]) {
+      if (value) panel.style.setProperty(name, `${Math.round(value)}px`)
+      else panel.style.removeProperty(name)
+    }
+  }
+  // Loaded when it can be: an older server that has not the file still has the panel, without resizing.
+  import('/resize-grips.js').then(({ addResizeGrips, readSize, keepSize }) => {
+    size = readSize(SIZE_KEY)
+    applySize()
+    forgetSize = () => keepSize(SIZE_KEY, null)
+    addResizeGrips(panel, {
+      el,
+      min: { w: 260, h: 180 },
+      allowed: isDocked,
+      // As for a drag: the layer takes the pointer, not the frames under it.
+      onStart: () => windowBox.classList.add('dragging'),
+      onResize: (box, edge) => {
+        const chrome = panel.offsetHeight - body.offsetHeight
+        size = { w: box.w, h: Math.max(80, box.h - chrome) }
+        applySize()
+        if (spot || /[es]/.test(edge)) {
+          spot = { x: box.left, y: box.top }
+          spot = placeSpot()
+        }
+      },
+      onEnd: () => {
+        windowBox.classList.remove('dragging')
+        dragEnded = true
+        setTimeout(() => { dragEnded = false }, 0)
+        keepSize(SIZE_KEY, size)
+        keepSpot()
+      },
+    })
+  }).catch(() => {})
   head.addEventListener('dblclick', event => {
     if (!isDocked() || event.target.closest('button')) return
     spot = null
     keepSpot()
+    size = null
+    applySize()
+    forgetSize()
     placeSpot()
   })
   // The visual novel turned on or off, its input box opened or put away.
@@ -163,7 +210,7 @@ export function initCardScripts({ api, el, toast, getChat, frameContext, ownerCo
     windowBox.classList.add('open')
     windowBox.classList.toggle('docked', docked)
     if (docked) placeSpot()
-    head.title = docked ? t`按住标题拖到想放的地方；双击标题回到右下角` : ''
+    head.title = docked ? t`按住标题拖到想放的地方，拖边角调大小；双击标题回到右下角、恢复原来的大小` : ''
     panel.setAttribute('aria-modal', docked ? 'false' : 'true')
     enlarge.hidden = !docked
     windowBox.setAttribute('aria-hidden', 'false')
@@ -292,7 +339,7 @@ export function initCardScripts({ api, el, toast, getChat, frameContext, ownerCo
     const presets = shown.presets && USES_PRESETS.test(script.content) ? { presets: shown.presets } : {}
     // Its own variables: what its author shipped (its data), as it last saved them here.
     const vars = { ...context.vars, script: storedScriptVariables(script.key, script.data) }
-    const frame = htmlFrame(asModule(script.content), { ...context, ...own, ...presets, vars, scriptFrame: script.name })
+    const frame = htmlFrame(asModule(script.content), { ...context, ...own, ...presets, vars, scriptFrame: script.name, stubChat: LOOKS_FOR_CHAT.test(script.content) })
     frame.classList.add('script-frame')
     frame.removeAttribute('loading')
     frame.dataset.script = script.key

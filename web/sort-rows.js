@@ -32,10 +32,10 @@ export function sortRows(list, { rows, handle, key, onMove }) {
     const scroller = scrollerOf(list)
     let y = event.clientY
     let roll = 0
-    // Every move comes to the handle, wherever the pointer goes (a pointer the browser no longer knows: as it is).
-    try {
-      grip.setPointerCapture(event.pointerId)
-    } catch {}
+    // Moves are followed on the whole page: the handle's own pointer capture ends the first time its row changes
+    // places (taken out of the list and put back), and with it every later move, so a row went one place at a time.
+    const pointer = event.pointerId
+    const view = list.ownerDocument.defaultView
     row.classList.add('dragging')
     list.classList.add('sorting')
 
@@ -66,13 +66,14 @@ export function sortRows(list, { rows, handle, key, onMove }) {
     roll = requestAnimationFrame(edge)
 
     const move = moved => {
+      if (moved.pointerId !== pointer) return
       y = moved.clientY
       place()
     }
     const end = async done => {
-      grip.removeEventListener('pointermove', move)
-      grip.removeEventListener('pointerup', up)
-      grip.removeEventListener('pointercancel', cancel)
+      view.removeEventListener('pointermove', move, true)
+      view.removeEventListener('pointerup', up, true)
+      view.removeEventListener('pointercancel', cancel, true)
       cancelAnimationFrame(roll)
       row.classList.remove('dragging')
       list.classList.remove('sorting')
@@ -87,11 +88,11 @@ export function sortRows(list, { rows, handle, key, onMove }) {
         throw error
       }
     }
-    const up = () => end(true)
-    const cancel = () => end(false)
-    grip.addEventListener('pointermove', move)
-    grip.addEventListener('pointerup', up)
-    grip.addEventListener('pointercancel', cancel)
+    const up = lifted => lifted.pointerId === pointer && end(true)
+    const cancel = lost => lost.pointerId === pointer && end(false)
+    view.addEventListener('pointermove', move, true)
+    view.addEventListener('pointerup', up, true)
+    view.addEventListener('pointercancel', cancel, true)
   })
 }
 

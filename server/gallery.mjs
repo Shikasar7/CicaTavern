@@ -7,6 +7,7 @@ import path from 'node:path'
 import { httpError } from './store.mjs'
 import { msg } from './i18n.mjs'
 import { crcOf, zipParts } from './update/zip.mjs'
+import { dropImage } from './draw-history.mjs'
 
 const FILE = /^[\w-]{1,80}\.(png|jpg|jpeg|webp)$/
 // At most this many in one export, and this many bytes (the pictures are held in memory until the zip is fetched).
@@ -88,12 +89,12 @@ export function createGallery(store, { scenes, media, cgs = null }) {
         const pictures = Array.isArray(group?.pictures) ? group.pictures : []
         pictures.forEach((picture, i) => {
           if (!FILE.test(picture?.file ?? '')) return
-          items.push({ id: `cg:${card.id}:${picture.file}`, kind: 'cg', cardId: card.id, cardName: card.name, chatId: '', chatTitle: '', name: pictures.length > 1 ? `${group.name} ${i + 1}` : String(group.name ?? ''), group: String(group.name ?? ''), src: `/api/cgs/${card.id}/${picture.file}`, prompt: String(group.note ?? ''), at: String(picture.at ?? group.at ?? '') })
+          items.push({ id: `cg:${card.id}:${picture.file}`, kind: 'cg', cardId: card.id, groupId: String(group.id ?? ''), cardName: card.name, chatId: '', chatTitle: '', name: pictures.length > 1 ? `${group.name} ${i + 1}` : String(group.name ?? ''), group: String(group.name ?? ''), src: `/api/cgs/${card.id}/${picture.file}`, prompt: String(group.note ?? ''), at: String(picture.at ?? group.at ?? '') })
         })
       }
       for (const scene of placeList?.scenes ?? []) {
         if (!FILE.test(scene?.file ?? '')) continue
-        items.push({ id: `scene:${card.id}:${scene.file}`, kind: 'scene', cardId: card.id, cardName: card.name, chatId: '', chatTitle: '', name: String(scene.name ?? ''), src: `/api/scenes/${card.id}/${scene.file}`, prompt: String(scene.prompt ?? ''), at: String(scene.updatedAt ?? scene.at ?? '') })
+        items.push({ id: `scene:${card.id}:${scene.file}`, kind: 'scene', cardId: card.id, sceneId: String(scene.id ?? ''), cardName: card.name, chatId: '', chatTitle: '', name: String(scene.name ?? ''), src: `/api/scenes/${card.id}/${scene.file}`, prompt: String(scene.prompt ?? ''), at: String(scene.updatedAt ?? scene.at ?? '') })
       }
       if (!cast) continue
       const names = new Map((card.media?.roster ?? []).map(entry => [entry.id, entry.name]))
@@ -163,5 +164,63 @@ export function createGallery(store, { scenes, media, cgs = null }) {
     return { ...zipParts(entries), count: entries.length, missing }
   }
 
-  return { list, read, exportZip }
+  /**
+   * 删除所选: each picture through the way it is deleted where it lives (a reply's picture with its old ones, a
+   * background, a 立绘 or one of its expressions, a CG). `forget(chatId, file)`: what else knew a reply's picture.
+   * → { removed, missing }
+   */
+  async function remove(ids, { forget = async () => {} } = {}) {
+    const wanted = [...new Set((Array.isArray(ids) ? ids : []).map(String))]
+    if (!wanted.length) throw httpError(400, msg`没有选图`)
+    const known = new Map((await list()).items.map(item => [item.id, item]))
+    let removed = 0
+    let missing = 0
+    const replies = new Map()
+    for (const id of wanted) {
+      const item = known.get(id)
+      if (!item) {
+        missing++
+        continue
+      }
+      const file = id.split(':')[2]
+      if (item.kind === 'reply') {
+        replies.set(item.chatId, [...(replies.get(item.chatId) ?? []), file])
+        continue
+      }
+      try {
+        if (item.kind === 'scene') await scenes.remove(item.cardId, item.sceneId)
+        else if (item.kind === 'cg') await cgs.removePicture(item.cardId, item.groupId, file)
+        else if (item.face === 'neutral') await scenes.removeSprite(item.cardId, item.entryId)
+        else await scenes.removeExpression(item.cardId, item.entryId, item.face)
+        removed++
+      } catch {
+        missing++
+      }
+    }
+    for (const [chatId, files] of replies) {
+      await store.withChat(chatId, async () => {
+        const chat = await store.getChat(chatId)
+        for (const file of files) {
+          const node = Object.values(chat.nodes ?? {}).find(item => item?.media?.images?.some(image => image.file === file))
+          if (!node) {
+            missing++
+            continue
+          }
+          const result = dropImage(node.media.images, file)
+          node.media.images = result.images
+          for (const gone of result.dropped) {
+            await media.removeImage(chatId, gone.file)
+            await forget(chatId, gone.file)?.catch?.(() => {})
+          }
+          removed++
+        }
+        await store.saveChat(chat)
+      }).catch(() => {
+        missing += files.length
+      })
+    }
+    return { removed, missing }
+  }
+
+  return { list, read, exportZip, remove }
 }

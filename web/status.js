@@ -2,7 +2,7 @@
 // HTML, no frames): the built-in preset's time box and choices, and the status
 // bar (web/shared/status.js decides what goes in it).
 import { t } from '/i18n.js'
-import { onPage, paletteColors, phoneApps, sameName, scopedSkinCss, skinClass, statusGroups, statusPages } from '/shared/status.js'
+import { onPage, paletteColors, phoneApps, sameName, scopedSkinCss, skinClass, skyOf, statusGroups, statusPages } from '/shared/status.js'
 
 const COLLAPSED = 'statusBarCollapsed'
 
@@ -20,6 +20,30 @@ function remember(key, value) {
   } catch {
     // Private windows: it just opens again next time.
   }
+}
+
+/**
+ * 收起 and 展开 carried over softly, for a look that asks for it with `--fold-ms` (a number of milliseconds; the
+ * theme 文艺杂志 does): `foldFrom` before the class changes, `foldTo` after. Nothing moves when motion is turned
+ * down on the system or for cards (主题 → 卡片动效).
+ */
+function foldFrom(box) {
+  const ms = parseFloat(getComputedStyle(box).getPropertyValue('--fold-ms'))
+  if (!(ms > 0) || typeof box.animate !== 'function' || document.documentElement.dataset.cardMotion === 'off') return null
+  if (globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return null
+  return { ms, height: box.getBoundingClientRect().height }
+}
+
+function foldTo(box, from) {
+  if (!from) return
+  const height = box.getBoundingClientRect().height
+  if (Math.abs(height - from.height) < 2) return
+  const easing = 'cubic-bezier(.22, .61, .36, 1)'
+  box.style.overflow = 'hidden'
+  const grow = box.animate([{ height: `${from.height}px` }, { height: `${height}px` }], { duration: from.ms, easing })
+  // Opening, what comes back fades in under the head as the bar grows.
+  if (height > from.height) for (const part of box.children) if (!part.matches('.status-head, .drift')) part.animate([{ opacity: 0 }, { opacity: 1 }], { duration: from.ms, easing })
+  grow.finished.catch(() => {}).finally(() => box.style.removeProperty('overflow'))
 }
 
 /** A card's own colors over the bar's (and over its 开场页, web/cover.js). */
@@ -43,12 +67,15 @@ const LOOK_SRC = /^\/api\/look\/[\w-]+\/[\w-]+\.(?:png|jpg|webp)(?:\?v=\w+)?$/
 export function wear(box, skin, pictures = null) {
   for (const [token, src] of Object.entries(pictures ?? {})) if (LOOK_VAR.test(token) && LOOK_SRC.test(src)) box.style.setProperty(token, `url("${src}")`)
   const scope = skinClass(skin.css)
-  if (!skinSheets.get(scope)?.isConnected) {
+  // Worn over a theme, the same rules weigh more (a sheet of their own: the same look may be worn from nothing too).
+  const over = Boolean(skin.base)
+  const key = over ? `${scope}+` : scope
+  if (!skinSheets.get(key)?.isConnected) {
     const sheet = document.createElement('style')
-    sheet.dataset.skin = scope
-    sheet.textContent = scopedSkinCss(skin.css, scope)
+    sheet.dataset.skin = key
+    sheet.textContent = scopedSkinCss(skin.css, scope, over)
     document.head.append(sheet)
-    skinSheets.set(scope, sheet)
+    skinSheets.set(key, sheet)
   }
   box.classList.add('skinned', scope)
 }
@@ -642,6 +669,251 @@ function railOf(el, groups, title, art, aside) {
   return { rail, rest }
 }
 
+// A bar in a theme, or wearing a look, knows where the pointer is over it, and the rules draw with that: --px and --py (px from
+// its top left), --pxi and --pyi (the same as whole numbers, for counters), --pfx and --pfy (0 to 1), and .pointing
+// while the pointer is over it. One write a frame; nothing with 动效 off.
+function followPointer(box) {
+  let last = null
+  const put = () => {
+    const event = last
+    last = null
+    const rect = box.getBoundingClientRect()
+    if (!event || !rect.width || !rect.height) return
+    // In the bar's own pixels, also when something draws it smaller or larger (a transform).
+    const k = box.offsetWidth / rect.width || 1
+    const x = Math.max(0, Math.min(box.offsetWidth, (event.clientX - rect.left) * k))
+    const y = Math.max(0, Math.min(box.offsetHeight, (event.clientY - rect.top) * k))
+    box.style.setProperty('--px', `${x.toFixed(1)}px`)
+    box.style.setProperty('--py', `${y.toFixed(1)}px`)
+    box.style.setProperty('--pxi', String(Math.round(x)))
+    box.style.setProperty('--pyi', String(Math.round(y)))
+    box.style.setProperty('--pfx', (x / (box.offsetWidth || 1)).toFixed(4))
+    box.style.setProperty('--pfy', (y / (box.offsetHeight || 1)).toFixed(4))
+  }
+  box.addEventListener('pointermove', event => {
+    if (motionOff()) return
+    if (!last) requestAnimationFrame(put)
+    last = event
+    box.classList.add('pointing')
+  })
+  box.addEventListener('pointerleave', () => box.classList.remove('pointing'))
+}
+
+// What a theme draws with code rather than rules: theme → (box) => void. The picture goes in a canvas.status-fx
+// behind everything; the theme's rules stand without it.
+// 流银: liquid chrome drawn live (one WebGL context for the page, copied into each bar's canvas).
+// 流银: the liquid chrome behind a bar, drawn live. One WebGL context for every 流银 bar on the page (mercuryShared);
+// each bar has a plain 2D canvas.status-fx the frame is copied into. A height field of slow noise and rings gives a
+// surface, its slope looks up a black-and-white studio (a bright sky over a hard dark horizon, two strips of light),
+// and that is what reads as polished metal. The pointer presses a dent that follows it and lets go.
+const MERCURY_VERT = 'attribute vec2 a;void main(){gl_Position=vec4(a,0.,1.);}'
+const MERCURY_FRAG = `precision highp float;
+uniform vec2 u_size;uniform float u_k;uniform float u_t;uniform vec2 u_m;uniform float u_ms;
+float hash(vec2 p){p=fract(p*vec2(123.34,456.21));p+=dot(p,p+45.32);return fract(p.x*p.y);}
+float noise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*f*(f*(f*6.-15.)+10.);
+return mix(mix(hash(i),hash(i+vec2(1.,0.)),f.x),mix(hash(i+vec2(0.,1.)),hash(i+vec2(1.,1.)),f.x),f.y);}
+float height(vec2 w){
+vec2 q=w+.55*vec2(noise(w*.62+vec2(0.,u_t*.05)),noise(w*.62+vec2(5.2,-u_t*.04)))-.27;
+float h=.9*noise(q*.95+vec2(u_t*.03,-u_t*.02))+.32*noise(q*2.1-vec2(u_t*.045,0.));
+vec2 c=vec2(u_size.x/230.*.74,.95);float d=length((q-c)*vec2(1.,1.25));
+h+=.3*sin(d*6.-u_t*.42)*exp(-d*.42);
+vec2 m=u_m/230.;float dm=length(w-m);
+h+=u_ms*(-.3*exp(-dm*dm*5.)+.05*sin(dm*24.-u_t*3.4)*exp(-dm*2.6));
+return h;}
+float studio(vec3 r){
+float y=r.y;
+float sky=mix(1.,.16,smoothstep(0.,.75,y));
+float ground=mix(.0,.5,smoothstep(-.04,-.95,y));
+float v=mix(ground,sky,smoothstep(-.03,.04,y));
+v+=.85*smoothstep(.07,.0,abs(y-.62))*smoothstep(.9,.1,abs(r.x));
+v+=.55*smoothstep(.05,.0,abs(r.x+.58))*smoothstep(-.1,.3,y);
+v+=.35*smoothstep(.04,.0,abs(y+.5));
+return v;}
+void main(){
+vec2 p=vec2(gl_FragCoord.x,u_size.y/u_k-gl_FragCoord.y)*u_k;
+vec2 w=p/230.;
+float e=.014;float h=height(w);
+vec2 g=vec2(height(w+vec2(e,0.))-h,height(w+vec2(0.,e))-h)/e;
+vec3 n=normalize(vec3(-g*1.55,1.));
+vec3 r=vec3(2.*n.z*n.x,-2.*n.z*n.y,2.*n.z*n.z-1.);
+float v=studio(r)+.22*pow(1.-n.z,2.);
+v=smoothstep(.03,.97,v);v=v*v*(3.-2.*v);
+gl_FragColor=vec4(v*.965,v*.985,v*1.02,1.);}`
+
+let mercuryShared = null
+
+/** The one WebGL canvas and its program, or null where there is no WebGL. */
+function mercuryContext() {
+  if (mercuryShared) return mercuryShared.gl ? mercuryShared : null
+  const canvas = document.createElement('canvas')
+  const state = { canvas, gl: null, uniforms: null, bars: new Set(), raf: 0, lost: false, sizes: null, seen: null }
+  mercuryShared = state
+  const build = () => {
+    const gl = canvas.getContext('webgl', { alpha: false, antialias: false, depth: false, stencil: false, powerPreference: 'low-power' })
+    if (!gl) return false
+    const shader = (type, source) => {
+      const made = gl.createShader(type)
+      gl.shaderSource(made, source)
+      gl.compileShader(made)
+      return gl.getShaderParameter(made, gl.COMPILE_STATUS) ? made : null
+    }
+    const vert = shader(gl.VERTEX_SHADER, MERCURY_VERT)
+    const frag = shader(gl.FRAGMENT_SHADER, MERCURY_FRAG)
+    if (!vert || !frag) return false
+    const program = gl.createProgram()
+    gl.attachShader(program, vert)
+    gl.attachShader(program, frag)
+    gl.linkProgram(program)
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) return false
+    gl.useProgram(program)
+    gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer())
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW)
+    const at = gl.getAttribLocation(program, 'a')
+    gl.enableVertexAttribArray(at)
+    gl.vertexAttribPointer(at, 2, gl.FLOAT, false, 0, 0)
+    state.gl = gl
+    state.uniforms = Object.fromEntries(['u_size', 'u_k', 'u_t', 'u_m', 'u_ms'].map(name => [name, gl.getUniformLocation(program, name)]))
+    return true
+  }
+  canvas.addEventListener('webglcontextlost', event => {
+    event.preventDefault()
+    state.lost = true
+  })
+  canvas.addEventListener('webglcontextrestored', () => {
+    state.lost = !build()
+    for (const bar of state.bars) bar.stale = true
+    mercuryRun()
+  })
+  if (!build()) return null
+  // A bar is drawn while it is on the screen, and again when its size changes.
+  state.seen = globalThis.IntersectionObserver ? new IntersectionObserver(entries => {
+    for (const entry of entries) {
+      const bar = [...state.bars].find(one => one.box === entry.target)
+      if (bar) bar.onScreen = entry.isIntersecting
+    }
+    mercuryRun()
+  }) : null
+  state.sizes = globalThis.ResizeObserver ? new ResizeObserver(entries => {
+    for (const entry of entries) {
+      const bar = [...state.bars].find(one => one.box === entry.target)
+      if (bar) bar.stale = true
+    }
+    mercuryRun()
+  }) : null
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) mercuryRun() })
+  return state
+}
+
+const mercuryStill = () => document.documentElement.dataset.cardMotion === 'off' || Boolean(globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches)
+
+/** One frame of a bar: the shader at a reduced size, copied into the bar's own canvas. */
+function mercuryDraw(state, bar, seconds) {
+  const { gl, canvas, uniforms } = state
+  const width = bar.box.clientWidth
+  const height = bar.box.clientHeight
+  if (!width || !height) return false
+  // Fewer pixels than the screen has: the metal is smooth, and the page stretches it.
+  let scale = Math.min(globalThis.devicePixelRatio || 1, 1.5) * 0.8
+  scale = Math.min(scale, Math.sqrt(520000 / (width * height)))
+  const w = Math.max(2, Math.round(width * scale))
+  const h = Math.max(2, Math.round(height * scale))
+  if (canvas.width < w || canvas.height < h) {
+    canvas.width = Math.max(canvas.width, w)
+    canvas.height = Math.max(canvas.height, h)
+  }
+  if (bar.canvas.width !== w || bar.canvas.height !== h) {
+    bar.canvas.width = w
+    bar.canvas.height = h
+  }
+  gl.viewport(0, 0, w, h)
+  gl.uniform2f(uniforms.u_size, width, height)
+  gl.uniform1f(uniforms.u_k, width / w)
+  gl.uniform1f(uniforms.u_t, seconds + bar.phase)
+  gl.uniform2f(uniforms.u_m, bar.x, bar.y)
+  gl.uniform1f(uniforms.u_ms, bar.press)
+  gl.drawArrays(gl.TRIANGLES, 0, 3)
+  bar.pen.drawImage(canvas, 0, canvas.height - h, w, h, 0, 0, w, h)
+  bar.stale = false
+  return true
+}
+
+function mercuryDrop(state, bar) {
+  state.bars.delete(bar)
+  state.seen?.unobserve(bar.box)
+  state.sizes?.unobserve(bar.box)
+  bar.box.removeEventListener('pointermove', bar.onMove)
+  bar.box.removeEventListener('pointerleave', bar.onLeave)
+  bar.canvas.remove()
+}
+
+/** The loop: thirty frames a second at most, only bars on the screen, nothing while the page is hidden. */
+function mercuryRun() {
+  const state = mercuryShared
+  if (!state?.gl || state.raf || !state.bars.size) return
+  let last = 0
+  const tick = now => {
+    state.raf = 0
+    if (!state.bars.size) return
+    const still = mercuryStill()
+    let busy = false
+    const due = now - last >= 33
+    for (const bar of [...state.bars]) {
+      // A bar that was on the page and is gone lets go of everything; one never put there gives up after a while.
+      if (bar.box.isConnected) bar.placed = true
+      else if (bar.placed || now - bar.born > 15000) { mercuryDrop(state, bar); continue }
+      else { busy = true; continue }
+      if (bar.canvas.parentNode !== bar.box) bar.box.prepend(bar.canvas)
+      if (state.lost || document.hidden || !bar.onScreen) continue
+      if (still) {
+        if (bar.stale) mercuryDraw(state, bar, 40)
+        continue
+      }
+      busy = true
+      if (!due) continue
+      bar.press += ((bar.over ? 1 : 0) - bar.press) * (bar.over ? 0.12 : 0.05)
+      bar.x += (bar.tx - bar.x) * 0.14
+      bar.y += (bar.ty - bar.y) * 0.14
+      mercuryDraw(state, bar, now / 1000)
+    }
+    if (due) last = now
+    if (busy && !document.hidden) state.raf = requestAnimationFrame(tick)
+  }
+  state.raf = requestAnimationFrame(tick)
+}
+
+function mercuryFx(box) {
+  const state = mercuryContext()
+  if (!state) return
+  const canvas = document.createElement('canvas')
+  canvas.className = 'status-fx'
+  canvas.setAttribute('aria-hidden', 'true')
+  const pen = canvas.getContext('2d')
+  if (!pen) return
+  const bar = { box, canvas, pen, onScreen: !state.seen, stale: true, placed: false, born: performance.now(), phase: (state.bars.size * 7.3) % 40, x: 0, y: 0, tx: 0, ty: 0, press: 0, over: false, onMove: null, onLeave: null }
+  bar.onMove = event => {
+    const rect = box.getBoundingClientRect()
+    const k = rect.width ? box.offsetWidth / rect.width || 1 : 1
+    bar.tx = (event.clientX - rect.left) * k
+    bar.ty = (event.clientY - rect.top) * k
+    if (!bar.over) {
+      bar.over = true
+      if (bar.press < 0.02) { bar.x = bar.tx; bar.y = bar.ty }
+    }
+    mercuryRun()
+  }
+  bar.onLeave = () => { bar.over = false }
+  box.addEventListener('pointermove', bar.onMove)
+  box.addEventListener('pointerleave', bar.onLeave)
+  box.prepend(canvas)
+  box.classList.add('has-fx')
+  state.bars.add(bar)
+  state.seen?.observe(box)
+  state.sizes?.observe(box)
+  mercuryRun()
+}
+
+const BAR_FX = { mercury: mercuryFx }
+
 /**
  * The status bar for one reply, or null when nothing in it has a value.
  * @param previous - the state before this reply, for the +/− marks.
@@ -650,7 +922,7 @@ function railOf(el, groups, title, art, aside) {
  * @param art - the pictures on top of the bar (artBlock), when the bar asks for them and there are any.
  * @param seen - a name for this drawing (the reply it is under): its gauges fill once, not each time it is drawn again.
  */
-export function statusBar(el, whole, state, { previous = null, note = '', collapsible = true, remembers = true, art = null, seen = '' } = {}) {
+export function statusBar(el, whole, state, { previous = null, note = '', collapsible = true, remembers = true, art = null, seen = '', live = true } = {}) {
   // 小手机: lists, tables and the pages after the first are kept off the bar's face, each an app to open.
   // A 版式 has tabs of its own in the phone's place.
   const cut = whole.phone && !whole.layout ? phoneApps(whole) : null
@@ -668,6 +940,11 @@ export function statusBar(el, whole, state, { previous = null, note = '', collap
   // So many people that one shows at a time: laid out the plain way, which has the switch for that.
   const layout = spec.layout && first.length < SWITCH_AT ? spec.layout : ''
   const box = el('section', { class: `status-bar${spec.theme ? ` theme-${spec.theme}` : ''}${layout ? ` layout-${layout}` : ''}` })
+  // 天光云影: the sky painted on the bar is the story's time of day.
+  if (spec.theme === 'aquarelle') box.dataset.sky = skyOf(groups)
+  if (spec.theme || spec.skin) followPointer(box)
+  // Drawn live unless asked not to (a small picture of the look, where the theme's still fallback does).
+  if (live && BAR_FX[spec.theme]) BAR_FX[spec.theme](box)
   if (spec.palette) paint(box, paletteColors(spec.palette))
   if (spec.skin) wear(box, spec.skin, art?.lookPictures)
   const fx = spec.effect ? effectLayer(el, spec.effect) : null
@@ -731,7 +1008,9 @@ export function statusBar(el, whole, state, { previous = null, note = '', collap
     set(recalled(COLLAPSED) === '1')
     toggle.addEventListener('click', () => {
       const collapsed = !box.classList.contains('collapsed')
+      const from = foldFrom(box)
       set(collapsed)
+      foldTo(box, from)
       remember(COLLAPSED, collapsed ? '1' : '0')
     })
     head.append(toggle)

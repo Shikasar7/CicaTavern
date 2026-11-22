@@ -11,7 +11,12 @@ import { t } from '/i18n.js'
 import { NOVEL_TYPES, novelDigest, novelFile, novelPick, novelTop } from '/novel-read.js'
 
 // SillyTavern positions; 2–4 all go to the end of the context here (server/worldbook.mjs isLate).
-const POSITIONS = [[0, t`角色定义前`], [1, t`角色定义后`], [4, t`上下文末尾`]]
+// 位置 (server/worldbook.mjs depthOf), by SillyTavern's numbers: a constant entry before or after the character data in
+// the frozen prefix, or in the chat at a depth; a keyword one with the turn's message (随这一轮), or at a depth.
+const AT_DEPTH = 4
+const POSITIONS = [[0, t`角色定义前`], [1, t`角色定义后`], [AT_DEPTH, t`聊天中（按深度）`]]
+const KEYWORD_POSITIONS = [['turn', t`随这一轮（默认）`], [AT_DEPTH, t`聊天中（按深度）`]]
+const DEPTH_TIP = t`深度：从最新一条消息往前数，你说的话和 AI 的回复各算一层。0 是紧挨着回复（你这一轮的话后面），1 是你这一轮的话前面，2 是上一条回复前面，以此类推；9999 是所有聊天消息之前。和酒馆一样，每轮都在这个位置重发，旧的拿掉。深度越大，每轮重新写入缓存的消息越多，花费略高；订阅模型没法改历史，会随这一轮一起发。`
 
 /** { entries, enabled, constant } as the settings count a book. */
 export function countEntries(entries) {
@@ -60,7 +65,9 @@ function kindOf(e) {
 function noteOf(e) {
   if (e.initvar) return t`初始变量（MVU）：不发给模型，开新对话时读出来当初始状态。改了对之后新开的对话生效。`
   if (e.constant && e.dynamic) return t`常驻，含模板或变量宏：每轮按当前状态渲染后随消息发送，改了下一轮就生效。`
+  if (e.constant && e.depth != null) return t`常驻，聊天中深度 ${e.depth}：每轮都放在聊天记录里这个位置，关键词不起作用。改了下一轮就生效；这个功能之前开的对话，要先「应用到当前对话」。`
   if (e.constant) return t`常驻：写进对话开局时的固定前缀，关键词不起作用。改了之后，进行中的对话要「应用到当前对话」才会用上。`
+  if (e.depth != null) return t`关键词，聊天中深度 ${e.depth}：最近的对话里提到任意一个时，每轮都放在聊天记录里这个位置，改了下一轮就生效。顺序小的排在前面。`
   return t`关键词：最近的对话里提到任意一个时，这一轮随消息发送，改了下一轮就生效。顺序小的排在前面。`
 }
 
@@ -320,7 +327,7 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
     if (!novel) {
       $('book-main').replaceChildren(head, el('div', { class: 'book-novel' }, [
         el('p', { text: t`把一部小说、一份很长的设定整本读完，抽成一本世界书：人物、地点、势力、物品、设定和发生过的大事，一样一条，对话里提到名字时才发给模型。` }),
-        el('p', { class: 'hint', text: t`选一个文本文件（txt、md，UTF-8 和 GBK 都认，最多 500 万字）。选了只是切好段、估出用量，点「开始抽取」才发送。Word 和 PDF 先另存成 txt。` }),
+        el('p', { class: 'hint', text: t`选一个文本文件（txt、md，UTF-8 和 GBK 都认，最多 1000 万字）。选了只是切好段、估出用量，点「开始抽取」才发送。Word 和 PDF 先另存成 txt。` }),
         novelPick(el, guard, pickNovel),
       ]))
       return
@@ -646,6 +653,8 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
         name,
         e.keys.length ? el('span', { class: 'book-keys', title: e.keys.join(', '), text: e.keys.join(t`、`) }) : null,
         el('span', { class: `strategy ${cls}`, title: tip, text: label }),
+        // 聊天中（按深度）, as the preset's list shows its own.
+        e.depth != null && !e.initvar ? el('span', { class: 'badge role', title: t`聊天中，深度 ${e.depth}`, text: `@${e.depth}` }) : null,
         el('span', { class: 'prow-size', text: t`${e.content.length.toLocaleString()} 字` }),
         el('button', { type: 'button', class: 'prow-edit', title: t`编辑名称、关键词、位置和内容`, 'aria-label': t`编辑「${titleOf(e)}」`, text: '✎', onclick: () => expand(true) }),
       ])
@@ -714,18 +723,25 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
       el('option', { value: 'constant', text: t`常驻`, selected: e.constant }),
       el('option', { value: 'keyword', text: t`关键词`, selected: !e.constant }),
     ])
-    const known = POSITIONS.some(([value]) => value === e.position)
-    const position = el('select', { 'aria-label': t`位置` }, [
-      ...POSITIONS.map(([value, text]) => el('option', { value: String(value), text, selected: value === e.position })),
-      // Positions this app treats like one of the above keep their SillyTavern number until changed.
-      known ? null : el('option', { value: String(e.position), text: t`保持原样（SillyTavern 位置 ${e.position}）`, selected: true }),
-    ])
+    // 位置, by the trigger: its choices are drawn again when that changes. 聊天中（按深度） shows the depth beside it.
+    const position = el('select', { 'aria-label': t`位置`, title: t`随这一轮：和你这一轮的话一起发，留在历史里，之后几轮提到也不重复发（省钱，缓存稳）。聊天中（按深度）：和酒馆的「@深度」一样，每轮都插在聊天记录里指定的位置。` })
+    const fillPosition = () => {
+      const choices = e.constant ? POSITIONS : KEYWORD_POSITIONS
+      const now = e.depth != null ? AT_DEPTH : e.constant ? e.position : 'turn'
+      // A keyword entry before or after the character data goes with the turn's message all the same.
+      const known = choices.some(([value]) => value === now) || (!e.constant && e.position <= 1)
+      position.replaceChildren(
+        ...choices.map(([value, text]) => el('option', { value: String(value), text, selected: value === now })),
+        // Positions this app treats like one of the above keep their SillyTavern number until changed.
+        known ? null : el('option', { value: String(e.position), text: t`保持原样（SillyTavern 位置 ${e.position}）`, selected: true }),
+      )
+    }
+    fillPosition()
+    const depth = el('input', { type: 'number', min: '0', max: '9999', step: '1', value: String(e.depth ?? 4), 'aria-label': t`深度`, title: DEPTH_TIP })
+    const depthField = field(t`深度`, depth)
+    const showDepth = () => (depthField.hidden = e.depth == null)
+    showDepth()
     const order = el('input', { type: 'number', step: '1', value: String(e.order), 'aria-label': t`顺序` })
-    // 发送位置 of a keyword entry (server/worldbook.mjs sendsNear).
-    const send = el('select', { 'aria-label': t`发送位置`, title: t`随这一轮：和你这一轮的话一起发，留在历史里，之后几轮不再重复发（省钱，缓存稳）。紧挨着回复：放在你这一轮的话后面、离回复最近，每轮提到都重发，旧的拿掉，像预设的「同酒馆」：影响更大，每轮多一点缓存写入。` }, [
-      el('option', { value: 'turn', text: t`随这一轮（默认）`, selected: e.extra?.cicaSend !== 'near' }),
-      el('option', { value: 'near', text: t`紧挨着回复`, selected: e.extra?.cicaSend === 'near' }),
-    ])
     const keys = el('input', { value: e.keys.join(', '), placeholder: t`用逗号分开，例如：雪, 小雪`, spellcheck: 'false', 'aria-label': t`关键词` })
     const secondary = e.secondaryKeys?.length ? el('input', { value: e.secondaryKeys.join(', '), spellcheck: 'false', 'aria-label': t`次要关键词` }) : null
     const area = el('textarea', { spellcheck: 'false', 'aria-label': t`内容` })
@@ -741,10 +757,18 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
       await save({ entries: [{ uid: e.uid, comment: name.value }] })
       row.refresh()
     }))
-    edit(kind, () => ({ constant: kind.value === 'constant' }))
-    edit(position, () => ({ position: Number(position.value) }))
+    edit(kind, () => ({ constant: kind.value === 'constant' }), () => {
+      fillPosition()
+      showDepth()
+      recursionRow.hidden = e.constant
+    })
+    // 随这一轮 is where a keyword entry before or after the character data goes: 0, as SillyTavern's own default.
+    edit(position, () => ({ position: position.value === 'turn' ? 0 : Number(position.value) }), () => {
+      showDepth()
+      depth.value = String(e.depth ?? 4)
+    })
+    edit(depth, () => ({ position: AT_DEPTH, depth: Math.max(0, Math.min(9999, Math.trunc(Number(depth.value) || 0))) }), () => (depth.value = String(e.depth ?? 0)))
     edit(order, () => ({ order: Number(order.value) }))
-    edit(send, () => ({ send: send.value }))
     // Keys come back cleaned, written the way the field shows them.
     edit(keys, () => ({ keys: splitKeys(keys.value) }), () => (keys.value = e.keys.join(', ')))
     if (secondary) edit(secondary, () => ({ secondaryKeys: splitKeys(secondary.value) }), () => (secondary.value = e.secondaryKeys.join(', ')))
@@ -779,25 +803,27 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
       return el('label', { class: 'check-row book-check', title: tip }, [box, el('span', { text: label })])
     }
 
+    // 递归: keyword entries only (shown again when the trigger changes).
+    const recursionRow = el('div', { class: 'prompt-field wide book-match book-recursion', hidden: e.constant }, [
+      el('span', { class: 'book-recursion-label', text: t`递归` }),
+      recursion('excludeRecursion', t`不被别的条目触发`, t`只有对话里提到关键词才发；别的条目内容里提到不算`),
+      recursion('preventRecursion', t`不触发别的条目`, t`这一条的内容里提到别的条目的关键词，不会把它们带出来`),
+      recursion('delayUntilRecursion', t`只能被别的条目触发`, t`对话里直接提到关键词不发；要先触发一条内容里提到它的条目，才一起发`),
+    ])
     holder.append(el('div', { class: 'prompt-editor' }, [
       el('div', { class: 'prompt-fields' }, [
         field(t`名称`, name),
         field(t`触发方式`, kind),
         field(t`位置`, position),
+        depthField,
         field(t`顺序`, order),
-        e.constant ? null : field(t`发送位置`, send),
         field(t`关键词`, keys, 'wide'),
         secondary ? field(t`次要关键词`, secondary, 'wide') : null,
         el('div', { class: 'prompt-field wide book-match' }, [
           match('caseSensitive', t`区分大小写`, t`关键词的大小写要和对话里一致才算提到`),
           match('wholeWords', t`整词匹配`, t`英文关键词要作为完整的词出现，lamp 不算提到 lamps`),
         ]),
-        e.constant ? null : el('div', { class: 'prompt-field wide book-match book-recursion' }, [
-          el('span', { class: 'book-recursion-label', text: t`递归` }),
-          recursion('excludeRecursion', t`不被别的条目触发`, t`只有对话里提到关键词才发；别的条目内容里提到不算`),
-          recursion('preventRecursion', t`不触发别的条目`, t`这一条的内容里提到别的条目的关键词，不会把它们带出来`),
-          recursion('delayUntilRecursion', t`只能被别的条目触发`, t`对话里直接提到关键词不发；要先触发一条内容里提到它的条目，才一起发`),
-        ]),
+        recursionRow,
       ]),
       el('p', { class: 'prompt-note', text: noteOf(e) }),
       area,

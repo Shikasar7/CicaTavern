@@ -128,6 +128,20 @@ export function frameKit() {
 }
 
 /**
+ * A theme's rules as a model designing a look over it reads them (skin.mjs): the theme's class left out of the
+ * selectors (they are written as for any bar), pictures as `url(…)` (drawn ornaments and the theme's own pictures are
+ * long and nothing to read), the moves the theme names left as they are.
+ */
+export function themeRules(theme) {
+  const { styles } = frameParts()
+  const mark = `.theme-${theme}`
+  return styles.split('\n')
+    .filter(line => line.includes(mark))
+    .map(line => line.split(mark).join('').replace(/url\(\s*(?:"[^"]*"|'[^']*'|[^)"']*)\s*\)/g, 'url(…)'))
+    .join('\n')
+}
+
+/**
  * The page a bar drawn by this app's own code is in SillyTavern (one that wears a look, has 动效 or a 小手机):
  * { style, script } for status.mjs to put in its frame.
  * @param load - the code that finds the message's variables and calls draw(stat) (status.mjs BAR_LOAD).
@@ -137,7 +151,7 @@ export function skinnedFrame(spec, { english: inEnglish = false, load }) {
   const scope = spec.skin ? skinClass(spec.skin.css) : ''
   // The rules stay out of the layout the script reads: they are in the styles, scoped as the page scopes them.
   const { skin, ...layout } = spec
-  const shown = skin ? { ...layout, skin: { ...(skin.name ? { name: skin.name } : {}), css: '' } } : layout
+  const shown = skin ? { ...layout, skin: { ...(skin.name ? { name: skin.name } : {}), ...(skin.base ? { base: skin.base } : {}), css: '' } } : layout
   const data = value => JSON.stringify(value).replace(/</g, '\\u003c')
   const dict = inEnglish ? englishTexts(said) : 'null'
   const code = safe([
@@ -152,7 +166,9 @@ export function skinnedFrame(spec, { english: inEnglish = false, load }) {
     'load();',
   ].join('\n'))
   // The look's rules are cleaned of anything that is not a rule; a tag's end in a string would still close the sheet.
-  const style = [FRAME_VARS, styles, '.status-bar{margin:8px 0}', skin ? scopedSkinCss(skin.css, scope) : ''].join('\n').replace(/<\/(?=style)/gi, '<\\/')
+  // Of the themes' rules only the bar's own go: each theme's are many and long (文艺杂志 draws its ornaments in them).
+  const themed = styles.split('\n').filter(line => !/\.theme-[a-z]/.test(line) || (spec.theme && line.includes(`.theme-${spec.theme}`))).join('\n')
+  const style = [FRAME_VARS, themed, '.status-bar{margin:8px 0}', skin ? scopedSkinCss(skin.css, scope, Boolean(skin.base)) : ''].join('\n').replace(/<\/(?=style)/gi, '<\\/')
   // What would end the script or the code block the page sits in, or what SillyTavern reads as a macro.
   if (/\{\{|<\/script|```/i.test(code) || /\{\{|```/.test(style)) throw new Error('status frame: the page holds what SillyTavern would read as its own')
   return { style, script: code }

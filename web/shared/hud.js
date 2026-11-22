@@ -36,13 +36,15 @@ export function hudPicks(spec, saved = null) {
 }
 
 /** A field's name as the HUD shows it: its label (or last key), after its owner's name when several own the kept ones. */
+// The game rules' own numbers ($game.level, $game.life…) are the player's and named as they are: `$game` is no owner.
+const RULES = /^\$game\./
 function namer(spec, paths) {
-  const owners = new Set(paths.map(path => splitPath(path).slice(0, -1).join('.')))
+  const owners = new Set(paths.filter(path => !RULES.test(path)).map(path => splitPath(path).slice(0, -1).join('.')))
   return path => {
     const field = spec?.fields?.find(item => item.path === path)
     const keys = splitPath(path)
     const label = field?.label || keys.at(-1) || path
-    return owners.size > 1 && keys.length > 1 ? `${keys.at(-2)}·${label}` : label
+    return owners.size > 1 && keys.length > 1 && !RULES.test(path) ? `${keys.at(-2)}·${label}` : label
   }
 }
 

@@ -6,8 +6,14 @@ import { applyScripts, PLACEMENT } from './shared/regex.js'
 import { replaceVariableMacros, UPDATE_BLOCK } from './shared/vars.js'
 import { CHOICES_BLOCK, REASONING, SELF_CHECK_BLOCK, TIME_BOX_BLOCK } from './shared/basic.js'
 import { frameShim, libraryTags, replaceViewportHeight } from './compat.js'
+import { USES_INDEXED_DB } from './frame-idb.js'
 
 const PLACEHOLDER = /<StatusPlaceHolderImpl\s*\/>/i
+// Written here, not imported from shared/plot.js: this file loads with the page, and a new file is only served once the
+// server has restarted.
+const PLOT_MARK = /\s*[<＜【]\s*剧本进度[^<>＜＞【】\n]*?\/?\s*[>＞】](?:\s*[<＜]\s*\/\s*剧本进度\s*[>＞])?/g
+// A mark being written, or what may begin one ('<', '<剧', …): held back a moment.
+const OPEN_PLOT_MARK = /\s*[<＜【]\s*(?:剧(?:本(?:进(?:度[^>＞】]*)?)?)?)?$/
 const HIDDEN = [
   // Closed with another update block's tag, or left open at the end, still hidden.
   UPDATE_BLOCK,
@@ -16,6 +22,8 @@ const HIDDEN = [
   TIME_BOX_BLOCK,
   CHOICES_BLOCK,
   SELF_CHECK_BLOCK,
+  // 剧本进度 (web/shared/plot.js takePlotMark): the server takes it out of what it keeps; this is for the text on its way.
+  PLOT_MARK,
 ]
 // Reasoning tags (<thinking>, <思考>…) are not among them: app.js folds those (思考中… while one is still open).
 const OPEN_HIDDEN = /<(state|update(?:variable)?|time_box|choices)>(?![\s\S]*<\/\1>)[\s\S]*$/i
@@ -87,7 +95,7 @@ export function blockShown(text, partial = false) {
 
 /** Text streamed so far, with finished bookkeeping blocks removed and an unfinished one hidden. */
 export function streamingText(text) {
-  const written = guarded(stripHidden(String(text ?? '')), out => out.replace(OPEN_HIDDEN, '')).trimEnd()
+  const written = guarded(stripHidden(String(text ?? '')), out => out.replace(OPEN_HIDDEN, '').replace(OPEN_PLOT_MARK, '')).trimEnd()
   // What comes after a stop will not be kept: it does not show on the way either.
   return blockShown(shownMarks ? shownMarks.strip(shownMarks.cut(written)) : written, true)
 }
@@ -417,7 +425,7 @@ function frameDocument(body, id, context) {
   const css = getComputedStyle(document.documentElement)
   const color = css.getPropertyValue('--ink').trim() || '#222'
   // Tavern Helper's frame name: TH-message--<floor>--<n>.
-  const compat = context ? frameShim({ ...context, frame: id, frameName: `TH-message--${context.messageId}--${id.replace(/\D/g, '')}` }) + libraryTags(body, Boolean(context.scriptFrame)) : ''
+  const compat = context ? frameShim({ ...context, frame: id, frameName: `TH-message--${context.messageId}--${id.replace(/\D/g, '')}` }, { indexedDb: USES_INDEXED_DB.test(body) }) + libraryTags(body, Boolean(context.scriptFrame)) : ''
   if (context) body = replaceViewportHeight(body)
   // Measure the content, not the document: the document is never shorter than the frame, so a
   // block that collapses (a folded thinking panel, a re-render at a cached height) left a gap.

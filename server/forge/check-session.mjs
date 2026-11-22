@@ -21,7 +21,7 @@ import { DEFAULT_FOCUS, checkRequest, cleanFocus, readCheck, restRequests, unrea
 import { STATUS_TUNE, bricksOf, cardFacts, checkCard, drawsOwnBar, startingState, statusCheck, statusTuning } from './check.mjs'
 import { BRICK_OUTPUT, CARD_BRICKS, brickFinding, brickName, brickRequest, cleanBrickWish, readBrick } from './brick-add.mjs'
 import { INTERVIEW_OUTPUT, cleanInterviewWish, cleanScenes, interviewFinding, interviewRequest, readInterview } from './interview.mjs'
-import { SKIN_OUTPUT, cleanProblems, cleanWish, readSkin, skinRequest } from './skin.mjs'
+import { SKIN_OUTPUT, cleanBase, cleanProblems, cleanStyle, cleanWish, readSkin, skinRequest } from './skin.mjs'
 import { reportOutdated, trialFindings } from './trial.mjs'
 
 const PREFIX = 'edit-check-'
@@ -325,7 +325,8 @@ export function createCheck({ store, load, save, serial, run, jobs, removeFile, 
     const job = jobs.get(session.id)
     const ref = session.model || (await store.getSettings()).model || ''
     const ready = isProviderRef(ref)
-    const request = bar ? skinRequest(card, bar, startingState(card, { helpers })) : null
+    // The estimate is for the 起点 the page starts on: the theme the bar wears (its rules go with the request).
+    const request = bar ? skinRequest(card, bar, startingState(card, { helpers }), { base: bar.skin ? bar.skin.base : bar.theme }) : null
     const input = request ? estimateTokens(`${request.system}${request.messages[0].content}`) : 0
     return {
       cardId: card.id,
@@ -338,17 +339,18 @@ export function createCheck({ store, load, save, serial, run, jobs, removeFile, 
     }
   }
 
-  async function skinWork(ctx, cardId, { spec, wish, previous, problems }) {
+  async function skinWork(ctx, cardId, { spec, wish, previous, problems, base, style }) {
     const { card } = await loadCheck(cardId)
     const helpers = await helpersOf(store, card)
     const bar = barFor(card, helpers, spec)
     if (!bar) throw new Error(msg`这张卡没有可以设计外观的状态栏`)
     ctx.step('skin')
-    const result = await ctx.call(skinRequest(card, bar, startingState(card, { helpers }), { wish, previous, problems, ...(await lookPrompt(cardId)), reply: ctx.languages.reply }))
-    const read = readSkin(result.text, { palette: previous?.palette ?? bar.palette })
+    const result = await ctx.call(skinRequest(card, bar, startingState(card, { helpers }), { wish, previous, problems, base, style, ...(await lookPrompt(cardId)), reply: ctx.languages.reply }))
+    // Over a theme, the colors are the look's own or the theme's: not the three the bar had before.
+    const read = readSkin(result.text, { palette: previous?.palette ?? (base ? null : bar.palette), base })
     if (!read) throw new Error(`${msg`${ctx.label} 没有写出能用的样式，再试一次，或者换个模型`}${cutNote(result)}`)
     await ctx.update(draft => {
-      draft.skin = { ...read, wish, fixed: problems.length > 0, at: new Date().toISOString(), model: ctx.label }
+      draft.skin = { ...read, wish, ...(style ? { style } : {}), fixed: problems.length > 0, at: new Date().toISOString(), model: ctx.label }
     })
   }
 
@@ -360,15 +362,16 @@ export function createCheck({ store, load, save, serial, run, jobs, removeFile, 
 
     /**
      * Ask a model for a look: sent only by this. `spec`: the bar as the editor has it now; `wish`: what the user wants;
-     * `previous`: a look to work from ({ name, palette, css }); `problems`: what drawing `previous` showed, to put right.
+     * `previous`: a look to work from ({ name, palette, css }); `problems`: what drawing `previous` showed, to put right;
+     * `base`: 起点, the theme the look goes over ('' = from nothing); `style`: 风格, the way picked for it to go ('' = none).
      */
-    async checkSkinAsk(cardId, { spec, wish, previous, problems } = {}) {
+    async checkSkinAsk(cardId, { spec, wish, previous, problems, base, style } = {}) {
       const session = await serial(idOf(cardId), async () => {
         refuseWhileBusy(cardId)
         return (await loadCheck(cardId)).session
       })
       const css = cleanSkinCss(previous?.css)
-      const asked = { spec, wish: cleanWish(wish), previous: css ? { name: String(previous.name ?? '').slice(0, 24), palette: cleanPalette(previous.palette), css } : null, problems: css ? cleanProblems(problems) : [] }
+      const asked = { spec, wish: cleanWish(wish), previous: css ? { name: String(previous.name ?? '').slice(0, 24), palette: cleanPalette(previous.palette), css } : null, problems: css ? cleanProblems(problems) : [], base: cleanBase(base), style: cleanStyle(style) }
       await run(session, 'check-skin', ctx => skinWork(ctx, cardId, asked))
       const fresh = await loadCheck(cardId)
       return skinView(fresh.card, fresh.session)

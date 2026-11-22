@@ -29,7 +29,8 @@ test("a script's own frame has jQuery and lodash, and the globals a bundled scri
   assert.match(tags, /jquery\.min\.js/)
   assert.match(tags, /lodash/)
   assert.match(tags, /vue\.global/)
-  assert.match(tags, /type="module">import \* as m from "[^"]+zod\/\+esm"; window\.z = m</, 'the whole module, set before the script runs')
+  assert.match(tags, /<script>\(function zodNow\(url\)[\s\S]*\)\("[^"]+zod\/\+esm"\)<\/script>/, 'the whole module, there before the plain scripts of the frame run')
+  assert.match(tags, /type="module">import \* as m from "[^"]+zod\/\+esm"; window\.z = window\.z \|\| m</, 'the module where that failed')
   assert.match(libraryTags('<script>YAML.parse(t)</script>'), /yaml\/\+esm"; window\.YAML/)
 })
 

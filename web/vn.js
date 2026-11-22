@@ -184,6 +184,8 @@ export function initVn(deps) {
   const title = el('div', { class: 'vn-title', hidden: true })
   // A new day: its title across the picture for a moment (第 3 天, the date, the place).
   const chapter = el('div', { class: 'vn-chapter', 'aria-hidden': 'true' })
+  // 剧本: the ending reached, across the picture, with what may come after it.
+  const plotEnd = el('div', { class: 'vn-plot-end', hidden: true, role: 'dialog', 'aria-label': t`结局` })
   const panel = el('div', { class: 'vn-panel', hidden: true })
   // The turn's choices, as a game's: a menu in the middle of the picture.
   const menu = el('div', { class: 'vn-menu', hidden: true, role: 'dialog', 'aria-label': t`行动选项` })
@@ -261,9 +263,10 @@ export function initVn(deps) {
   const loadControl = control(t`读档`, t`读档（F9 快速读档）`, () => saves.open('load'))
   // The top bar and its 记忆 are gone in here on a phone on its side and in full screen.
   const memoryControl = control(t`记忆`, t`长期记忆（Beta）：记忆簿`, () => deps.openMemory())
-  const selfControl = control(t`角色`, t`行囊：属性、等级和技能（I）`, () => deps.openBag('self'))
-  const thingsControl = control(t`背包`, t`行囊：带着的东西，能用的可以用`, () => deps.openBag('bag'))
-  const questsControl = control(t`任务`, t`行囊：进行中和做完的任务`, () => deps.openBag('quests'))
+  const guideControl = control(t`剧情向导`, t`剧情向导：在幕后聊这段故事、出方案引导剧情`, () => deps.openGuide?.())
+  const selfControl = control(t`角色`, t`游戏菜单：属性、等级和技能（I）`, () => deps.openBag('self'))
+  const thingsControl = control(t`背包`, t`游戏菜单：带着的东西，能用的可以用`, () => deps.openBag('bag'))
+  const questsControl = control(t`任务`, t`游戏菜单：进行中和做完的任务`, () => deps.openBag('quests'))
   const bagControls = [selfControl, thingsControl, questsControl]
   const soundControl = control(t`声音`, t`音乐、音效和语音的开关与音量`, () => togglePop('sound'))
   const rulesControl = control(t`规则`, t`游戏规则：开关检定和战斗，调属性、技能和敌人`, () => deps.openRules())
@@ -275,7 +278,7 @@ export function initVn(deps) {
     if (event.detail) document.activeElement?.blur()
   }, { capture: true })
   // Up top only what sets the mode up. The rest of it is behind 游戏 and 界面, the same on a phone.
-  const gameControls = [rulesControl, ...bagControls, optionsButton, actControl, memoryControl, cgControl]
+  const gameControls = [rulesControl, ...bagControls, optionsButton, actControl, memoryControl, guideControl, cgControl]
   const lookControl = control(t`主题`, t`视觉小说、战斗和掷骰的样子`, () => togglePop('look'))
   const viewControls = [lookControl, speedButton, statusButton, hudControl, hideControl, fullButton, exitControl]
   const menuButton = (kind, name, hint) => {
@@ -283,7 +286,7 @@ export function initVn(deps) {
     button.classList.add('vn-menu-btn')
     return button
   }
-  const gameMenu = menuButton('game', t`游戏`, t`规则、角色、背包、任务、选项、行动、记忆和 CG`)
+  const gameMenu = menuButton('game', t`游戏`, t`规则、角色、背包、任务、选项、行动、记忆、剧情向导和 CG`)
   const viewMenu = menuButton('view', t`界面`, t`速度、状态、HUD、隐藏、全屏和退出`)
   const controls = el('div', { class: 'vn-controls' }, [
     el('span', { class: 'vn-quick' }, [split(readButton, readMore), split(imageButton, imageMore), soundControl]),
@@ -291,7 +294,7 @@ export function initVn(deps) {
     viewMenu,
     exitQuick,
   ])
-  root.append(bg, tint, lookFields(el), actors, memoryLayer, flash, pulse, corner, title, chapter, panel, menu, waitBox, hud.notes, box, controls, scrim, pop, logBox, cgView)
+  root.append(bg, tint, lookFields(el), actors, memoryLayer, flash, pulse, corner, title, chapter, panel, menu, plotEnd, waitBox, hud.notes, box, controls, scrim, pop, logBox, cgView)
 
   // Where the layers in between may go: under the controls (however they wrapped), above the text box and the input.
   function placeLayers() {
@@ -930,7 +933,7 @@ export function initVn(deps) {
       el('ul', { class: 'vn-offer-list' }, [
         el('li', { text: t`有风险的选项标着成功率，点了就掷骰，冒险成功收获更大` }),
         el('li', { text: t`遇到敌人时进入回合制战斗，全程不调用模型` }),
-        el('li', { text: t`物品、任务、生命的变化都由程序记下，随时能在「行囊」里看` }),
+        el('li', { text: t`物品、任务、生命的变化都由程序记下，随时能在「游戏菜单」里看` }),
       ]),
       el('p', { class: 'muted small', text: t`只对这张卡生效，已有的对话不受影响，随时可以在顶栏「规则」里改。` }),
       el('div', { class: 'row end' }, [
@@ -1034,12 +1037,20 @@ export function initVn(deps) {
     return stepsOf(display(chat, node, latest).shown, false).steps.filter(step => step.type === 'line')
   }
 
+  const rosterLoading = new Map()
   /** The card's 角色名册, once (`fresh`: again, as the library opens). */
   async function loadRoster(cardId, fresh = false) {
-    if (!cardId || (!fresh && state.roster.has(cardId))) return
+    if (!cardId) return
+    // One already on its way is waited for: a fight's foes ask for the cast together, and the second must not take
+    // the empty list the first left while it loads (it would not find who it is, and draw them as a stranger).
+    if (rosterLoading.has(cardId)) return rosterLoading.get(cardId)
+    if (!fresh && state.roster.has(cardId)) return
     if (!state.roster.has(cardId)) state.roster.set(cardId, [])
-    const media = await api(`/api/cards/${cardId}/media`).catch(() => null)
-    if (media || !fresh) takeRoster(cardId, media?.roster)
+    const loading = api(`/api/cards/${cardId}/media`).catch(() => null)
+      .then(media => { if (media || !fresh) takeRoster(cardId, media?.roster) })
+      .finally(() => rosterLoading.delete(cardId))
+    rosterLoading.set(cardId, loading)
+    return loading
   }
 
   /**
@@ -1106,9 +1117,14 @@ export function initVn(deps) {
     const furthest = before[state.seen]
     state.key = key
     // Another chat's pictures don't stay open over this one.
-    if (state.chatId !== chat.id) closeCg()
+    if (state.chatId !== chat.id) {
+      closeCg()
+      plotEnd.hidden = true
+    }
     state.chatId = chat.id
     state.node = writing ? null : node
+    // 剧本: a reply that went into another scene says so (web/plot.js keeps the progress on it).
+    if (!writing && node) enteredScene(chat, node)
     state.steps = steps
     state.trailing = trailing
     state.options = options
@@ -1436,6 +1452,54 @@ export function initVn(deps) {
     openMenu(t`轮到你了`, notes.some(Boolean) ? t`冒险成功收获更大，稳妥的只推进一小步` : t`选一个，或者自己写`, rows, own, detailsButton)
   }
 
+  // 剧本's own reading of a plot, loaded once a chat has one: this file loads with the page, and a server started
+  // before the file was there would not serve it.
+  let plotLib = null
+  const loadPlotLib = () => import('/shared/plot.js').then(lib => { plotLib = lib }).catch(() => {})
+  const plotScene = (plot, id) => plot?.scenes.find(scene => scene.id === id) ?? null
+
+  /** 剧本's open ways from the scene now (two or more make a fork), as the player may see them. */
+  function plotWays(chat) {
+    const view = chat?.plot
+    if (view && !plotLib) loadPlotLib()
+    if (!view || !plotLib || view.paused || view.progress.ended) return []
+    const { exitLacks, shown: plotShown } = plotLib
+    const scene = plotScene(view.copy, view.progress.at)
+    if (!scene || scene.ending) return []
+    const state = (chat.path ?? []).findLast(node => node.role === 'assistant')?.state ?? null
+    return scene.exits.filter(exit => !exitLacks(exit, view.progress, state).length).map(exit => {
+      const target = plotScene(view.copy, exit.to)
+      return { to: exit.to, label: exit.hint || (plotShown(target, view.spoiler, view.progress) === 'none' ? t`？（还没发现的路）` : target?.title ?? t`？`), when: view.spoiler === 'blind' ? '' : exit.when }
+    })
+  }
+
+  /** 岔路 in the picture: the ways as the turn's choices are drawn; one picked goes with the next turn. */
+  function showPlotFork() {
+    const chat = getChat()
+    const ways = plotWays(chat)
+    if (ways.length < 2) return showMenu()
+    const rows = ways.map((way, i) => {
+      const go = el('button', { type: 'button', class: 'vn-choice', disabled: isGenerating(), style: `--i: ${i}` }, [
+        el('span', { class: 'vn-choice-n', text: String(i + 1) }),
+        el('span', { class: 'vn-choice-text', text: way.label }),
+        way.when ? el('span', { class: 'vn-choice-tag', text: way.when }) : null,
+      ].filter(Boolean))
+      go.addEventListener('click', guard(async event => {
+        event.stopPropagation()
+        await deps.plotAct?.({ action: 'exit', to: way.to })
+        toast(t`下一轮去「${way.label}」：写下你的行动`)
+        showMenu()
+      }))
+      return el('div', { class: 'vn-choice-row', style: `--i: ${i}` }, [go])
+    })
+    const back = el('button', { type: 'button', class: 'vn-menu-own', text: t`看行动选项` })
+    back.addEventListener('click', event => {
+      event.stopPropagation()
+      showMenu()
+    })
+    openMenu(t`岔路`, t`选一条，下一轮照着走；不选就按你的行动来定`, rows, back)
+  }
+
   function openMenu(title, hint, rows, own, more = null) {
     const list = el('div', { class: 'vn-menu-list' }, rows)
     slideSlab(el, list, '.vn-choice')
@@ -1584,8 +1648,25 @@ export function initVn(deps) {
       tools.push(redo)
     }
     tools.push(control(t`✎ 行动`, '', () => compose(true)))
+    // 剧本: a fork here, picked the way the turn's choices are.
+    const ways = plotWays(getChat())
+    if (ways.length > 1) {
+      tools.push(control(t`岔路`, t`自己选一条路，下一轮照着走`, () => showPlotFork()))
+      // 到岔路主动问我: once a scene, in place of the choices.
+      const view = getChat()?.plot
+      const key = `${getChat()?.id}:${view?.progress.at}:${view?.progress.seen.length}`
+      if (view?.askAtFork && !view.pending && state.forkAsked !== key) {
+        state.forkAsked = key
+        showPlotFork()
+      }
+    }
     endRow.replaceChildren(...tools)
     endRow.hidden = false
+    // 剧本: an ending read to its last line, once.
+    if (node?.plot?.ended && state.plotEnded !== node.id) {
+      state.plotEnded = node.id
+      showPlotEnd(getChat(), node)
+    }
   }
 
   // ─── Moving through the lines ──────────────────────────────────────
@@ -1981,6 +2062,70 @@ export function initVn(deps) {
       state.place = where.place
     }
     showScene(chat, where, Boolean(writing))
+  }
+
+  /**
+   * 剧本: a new scene's title once, when its reply is in: a new chapter across the picture (as a day's), a scene of the
+   * same chapter on the sign of a place. The replies already there when the chat opens show none.
+   */
+  function enteredScene(chat, node) {
+    if (state.plotChat !== chat.id) {
+      state.plotChat = chat.id
+      state.plotShown = new Set(chat.path.map(item => item.id))
+      return
+    }
+    const view = chat.plot
+    if (!view || !node.plot || state.plotShown.has(node.id)) return
+    // Into a scene by the model's word (on the reply), or by the player's (a way picked, a jump: on their message).
+    const asked = chat.path.find(item => item.id === node.parent)
+    const jumped = asked?.plotSet?.of === view.copy.id ? asked.plotSet.at : null
+    if (!node.plot.from && !jumped) return
+    state.plotShown.add(node.id)
+    const scene = view.copy.scenes.find(item => item.id === node.plot.at)
+    const fromId = node.plot.from && node.plot.from !== jumped ? node.plot.from : chat.path.slice(0, chat.path.indexOf(asked)).findLast(item => item.role === 'assistant' && item.plot?.of === view.copy.id)?.plot.at
+    const from = view.copy.scenes.find(item => item.id === fromId)
+    if (!scene) return
+    if (scene.chapter && scene.chapter !== from?.chapter) {
+      chapter.replaceChildren(el('b', { text: scene.chapter }), el('span', { text: scene.title }))
+      chapter.classList.remove('show')
+      void chapter.offsetWidth
+      chapter.classList.add('show')
+    } else {
+      title.textContent = scene.title
+      title.hidden = false
+      title.classList.remove('show')
+      void title.offsetWidth
+      title.classList.add('show')
+    }
+  }
+
+  /** 剧本: the ending a reply played out, once it is read to its end: three ways on, or stay and read. */
+  function showPlotEnd(chat, node) {
+    const view = chat.plot
+    const scene = view?.copy.scenes.find(item => item.id === node.plot?.at)
+    if (!scene?.ending) return
+    const names = { good: t`圆满结局`, normal: t`结局`, sad: t`遗憾结局`, hidden: t`隐藏结局` }
+    const button = (label, then, primary = false) => el('button', { type: 'button', class: `vn-btn${primary ? ' primary' : ''}`, text: label, onclick: guard(async event => {
+      event.stopPropagation()
+      plotEnd.hidden = true
+      await then()
+    }) })
+    plotEnd.className = `vn-plot-end ${scene.ending.kind}`
+    plotEnd.replaceChildren(el('div', { class: 'vn-plot-end-card' }, [
+      el('span', { class: 'vn-plot-end-kind', text: names[scene.ending.kind] ?? t`结局` }),
+      el('h2', { text: scene.title }),
+      scene.ending.text ? el('p', { text: scene.ending.text }) : null,
+      el('p', { class: 'vn-plot-end-meta', text: t`「${view.copy.name}」· 走过 ${node.plot.seen.length + 1} 幕` }),
+      el('p', { class: 'vn-plot-end-route', text: [...node.plot.seen, node.plot.at].map(id => plotScene(view.copy, id)?.title).filter(Boolean).join(' → ') }),
+      node.plot.first ? el('p', { class: 'vn-plot-end-new', text: t`新结局` }) : null,
+      el('div', { class: 'vn-plot-end-tools' }, [
+        button(t`继续写下去`, () => deps.plotAct?.({ action: 'stop' })),
+        button(t`回到岔路口`, () => deps.openPlotMap?.({ fork: true })),
+        button(t`开新对话`, () => deps.newChat?.(), true),
+        button(t`留在这里`, () => {}),
+      ]),
+    ].filter(Boolean)))
+    plotEnd.hidden = false
   }
 
   /**
@@ -2403,7 +2548,12 @@ export function initVn(deps) {
         out.getContext('2d').drawImage(canvas, x, y, w, h, 0, 0, w, h)
         const png = await new Promise(resolve => out.toBlob(resolve, 'image/png'))
         return png ? URL.createObjectURL(png) : null
-      })())
+      })().catch(error => {
+        // A canvas that fails (a phone out of memory): not this time; the next look tries again.
+        console.warn('cut-out failed', error)
+        cast.cuts.delete(url)
+        return null
+      }))
     }
     return cast.cuts.get(url)
   }
@@ -2554,6 +2704,24 @@ export function initVn(deps) {
       const src = await actorPicture(cardId, entry, 'neutral').catch(() => null)
       if (src && state.cardId === cardId) cast.pictures.set(`${cardId}:${entry.name}`, src)
     }))
+  }
+
+  /**
+   * Someone of the cast met as a foe (楚子苓 in a fight): their picture, the visual novel on or not. '' for one not in
+   * the cast, the player, or one without a picture.
+   */
+  async function castPicture(chat, name) {
+    if (!chat?.cardId || !name) return ''
+    await loadRoster(chat.cardId)
+    const names = speakerNames({ char: chat.names?.char, user: chat.names?.user, roster: state.roster.get(chat.cardId) ?? [] })
+    const entry = names.find(item => item.name === name || (item.keys ?? []).includes(name))
+    if (!entry || entry.player) return ''
+    const key = `${chat.cardId}:${entry.name}`
+    if (!cast.pictures.get(key)) {
+      const src = await actorPicture(chat.cardId, entry, 'neutral').catch(() => null)
+      if (src) cast.pictures.set(key, src)
+    }
+    return cast.pictures.get(key) || ''
   }
 
   function pictureFor(name) {
@@ -3772,6 +3940,7 @@ export function initVn(deps) {
 
   /** Leaving the mode: nothing keeps running. */
   function leave() {
+    plotEnd.hidden = true
     setHero('')
     cancelTyping()
     setSkipping(false)
@@ -3876,5 +4045,5 @@ export function initVn(deps) {
 
   // 创作角色卡's 备齐门面图: the same pictures 做成视觉小说 gets ready, without entering the mode.
   const prepareArt = (cardId, places = [], { faces = true, skipForms = false, map = null, creation = [] } = {}) => prepare(cardId, { places, faces, skipForms, map, creation })
-  return { render, streamed, isOn, turnFlags, marks, makeReady, prepareArt, picturesChanged, refreshEnd, compose: openCompose, drawFoe, drawSkill, pictureFor, loadPictures }
+  return { render, streamed, isOn, turnFlags, marks, makeReady, prepareArt, picturesChanged, refreshEnd, compose: openCompose, drawFoe, drawSkill, pictureFor, loadPictures, castPicture }
 }

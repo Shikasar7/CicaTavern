@@ -1,7 +1,7 @@
 // 递归触发 (worldbook.mjs triggeredEntries): what keyword entries find finds more, by SillyTavern's switches.
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { normalizeBook, recursionFlags, triggeredEntries, worldFile } from '../server/worldbook.mjs'
+import { depthOf, normalizeBook, recursionFlags, triggeredEntries, worldFile } from '../server/worldbook.mjs'
 import { normalizeCard } from '../server/cards.mjs'
 
 const book = entries => normalizeBook({ name: '书', entries: Object.fromEntries(entries.map((entry, uid) => [uid, { uid, ...entry }])) }, 'x', { standalone: true })
@@ -113,10 +113,35 @@ test('拖动调整顺序 moves an entry in the list; 发送位置 and the switch
   // Two constant ones of the same 顺序 swapped: the prefix changes.
   assert.equal(editBook(world, { arrange: [b, a, d, c] }).prefix, true)
   assert.deepEqual(world.entries.map(entry => entry.comment), ['乙', '甲', '丁', '丙'])
-  editBook(world, { entries: [{ uid: a, send: 'near', excludeRecursion: true }] })
-  assert.deepEqual(world.entries[1].extra, { cicaSend: 'near', excludeRecursion: true })
-  editBook(world, { entries: [{ uid: a, send: 'turn', excludeRecursion: false }] })
-  assert.equal(world.entries[1].extra, undefined)
+  // 位置 聊天中 @深度 and its depth, with the switches.
+  editBook(world, { entries: [{ uid: a, position: 4, depth: 0, excludeRecursion: true }] })
+  assert.equal(world.entries[1].position, 4)
+  assert.deepEqual(world.entries[1].extra, { depth: 0, excludeRecursion: true })
+  assert.equal(depthOf(world.entries[1]), 0)
+  editBook(world, { entries: [{ uid: a, depth: 99999 }] })
+  assert.equal(depthOf(world.entries[1]), 9999)
+  editBook(world, { entries: [{ uid: a, position: 0, excludeRecursion: false }] })
+  assert.equal(depthOf(world.entries[1]), null)
+  // An entry set 紧挨着回复 before there was @深度 is @深度 0; set somewhere again, it is that.
+  const old = book([{ comment: '灯', key: ['灯'], content: 'x', cicaSend: 'near' }])
+  assert.equal(depthOf(old.entries[0]), 0)
+  editBook(old, { entries: [{ uid: old.entries[0].uid, position: 4 }] })
+  assert.deepEqual(old.entries[0].extra, { depth: 0 })
+  editBook(old, { entries: [{ uid: old.entries[0].uid, depth: 3 }] })
+  assert.equal(depthOf(old.entries[0]), 3)
+})
+
+test('聊天中 @深度 comes from a card\'s book and a world file, and goes back out with them', () => {
+  const card = normalizeCard({ spec: 'chara_card_v2', data: { name: '林雪', character_book: { entries: [
+    { id: 1, keys: ['暗号'], content: 'x', extensions: { position: 4, depth: 2 } },
+    { id: 2, keys: ['口令'], content: 'y', extensions: { position: 0, depth: 4 } },
+  ] } } })
+  assert.equal(depthOf(card.book.entries[0]), 2)
+  assert.equal(depthOf(card.book.entries[1]), null)
+  // A depth not said: SillyTavern's 4.
+  const world = book([{ comment: 'a', key: ['a'], content: 'a', position: 4 }, { comment: 'b', key: ['b'], content: 'b', position: 4, depth: 7 }])
+  assert.deepEqual(world.entries.map(depthOf), [4, 7])
+  assert.equal(Object.values(worldFile(world).entries)[1].depth, 7)
 })
 
 test('lore sent 紧挨着回复 goes after the input, again each turn it is found, and only on the newest message', async t => {
@@ -170,4 +195,78 @@ test('lore sent 紧挨着回复 goes after the input, again each turn it is foun
   assert.doesNotMatch(second.at(-1), /长街很长/)
   assert.ok(second.slice(0, -1).every(message => !message.includes('世界书·紧挨回复')))
   assert.ok(second.slice(0, -1).some(message => message.includes('长街很长')), 'the street stays where it was sent')
+})
+
+test('聊天中 @深度 goes that many messages before the end, as text in a user message, and says where the cache stops', async () => {
+  const { placeDeep, takeDeep } = await import('../server/prompt.mjs')
+  const messages = ['u0', 'a1', 'u2', 'a3', 'u4'].map(content => ({ role: content[0] === 'u' ? 'user' : 'assistant', content }))
+  const { messages: out, moved } = placeDeep(messages, [{ depth: 9999, text: 'X' }, { depth: 2, text: 'Y' }, { depth: 3, text: 'Z' }, { depth: 1, text: 'W' }])
+  assert.deepEqual(out.map(message => message.content), ['X\n\nu0', 'a1', 'Z\n\nu2\n\nY', 'a3', 'W\n\nu4'])
+  // The top stays the top next turn; the message at depth 3 is the first that reads differently then.
+  assert.equal(moved, 2)
+  assert.equal(messages[0].content, 'u0', 'the messages given are left as they were')
+  // Deeper than the story now, but not next turn: it moves.
+  assert.equal(placeDeep(messages, [{ depth: 6, text: 'V' }]).moved, 0)
+  const taken = takeDeep('<世界书 深度="3">\n【钟】\n钟声。\n</世界书>\n\n<预设指令 深度="2">\n慢一点。\n</预设指令>\n\n<玩家输入>\n走\n</玩家输入>')
+  assert.equal(taken.text, '<玩家输入>\n走\n</玩家输入>')
+  assert.deepEqual(taken.deep.map(item => item.depth), [3, 2])
+  assert.match(taken.deep[0].text, /^<世界书 深度="3">\n【钟】\n钟声。\n<\/世界书>$/)
+})
+
+test('lore at @深度 goes there each turn it is sent, out of the older messages; constant ones each turn', async t => {
+  const { createServer } = await import('node:http')
+  const { mkdtemp, rm } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const path = await import('node:path')
+  const { activePath, createChat } = await import('../server/chats.mjs')
+  const { createEngine } = await import('../server/engine.mjs')
+  const { normalizeProvider } = await import('../server/providers.mjs')
+  const { createStore } = await import('../server/store.mjs')
+  const bodies = []
+  const server = createServer(async (req, res) => {
+    let raw = ''
+    for await (const chunk of req) raw += chunk
+    bodies.push(JSON.parse(raw))
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: '风过长街。' }, finish_reason: 'stop' }] })}\n\n`)
+    res.end('data: [DONE]\n\n')
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => server.close())
+  const root = await mkdtemp(path.join(tmpdir(), 'tavern-depth-'))
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 3 }))
+  const store = createStore(root)
+  await store.init()
+  const provider = normalizeProvider({ name: 'Fake', api: 'openai-completions', baseURL: `http://127.0.0.1:${server.address().port}/v1`, apiKey: 'sk-test', models: [{ id: 'm1' }] })
+  await store.saveProviders([provider])
+  await store.saveSettings({ model: `${provider.id}/m1`, subscription: 'off', scanDepth: 4 })
+  const lore = book([
+    { comment: '钟', key: ['钟楼'], content: '钟声悠长。', position: 4, depth: 2 },
+    { comment: '规矩', key: [], constant: true, content: '每轮写满三段。', position: 4, depth: 1 },
+    { comment: '街', key: ['长街'], content: '长街很长。' },
+  ])
+  await store.saveBook(lore)
+  const card = normalizeCard({ spec: 'chara_card_v2', data: { name: '林雪', first_mes: '雪下了一整夜。' } })
+  card.worldbookIds = [lore.id]
+  await store.saveCard(card)
+  const engine = createEngine(store, { proxy: null })
+  const chat = await createChat(store, card.id)
+  assert.doesNotMatch((await store.getChat(chat.id)).systemPrompt, /每轮写满三段/, 'not in the prefix')
+  const turn = async input => {
+    const tip = activePath(await store.getChat(chat.id)).at(-1)
+    await engine.runTurn(chat.id, { parentId: tip.id, input }, () => {})
+    return bodies.at(-1).messages.filter(message => message.role !== 'system').map(message => String(message.content))
+  }
+  // The first turn: the story is that one message, both at its top, deeper first.
+  const first = await turn('钟楼和长街')
+  assert.match(first.at(-1), /^<世界书 深度="2">\n【钟】\n钟声悠长。\n<\/世界书>\n\n<世界书 深度="1">\n【规矩】\n每轮写满三段。\n<\/世界书>[\s\S]*<世界书>\n【街】\n长街很长。/)
+  // Kept with the turn as written (the subscription sends it so).
+  assert.match(activePath(await store.getChat(chat.id)).at(-2).prompt, /^<世界书 深度="2">/)
+  const second = await turn('往前走')
+  assert.equal(second.length, 3)
+  // @深度 2: before the reply before the newest, so at the end of the message before it; @深度 1: before the newest.
+  assert.match(second[0], /<玩家输入>\n钟楼和长街\n<\/玩家输入>[\s\S]*\n\n<世界书 深度="2">\n【钟】\n钟声悠长。\n<\/世界书>$/)
+  assert.doesNotMatch(second[0], /每轮写满三段/)
+  assert.match(second[2], /^<世界书 深度="1">\n【规矩】\n每轮写满三段。/)
+  assert.equal((second[2].match(/钟声悠长/g) ?? []).length, 0)
 })

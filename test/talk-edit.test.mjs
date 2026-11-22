@@ -87,6 +87,18 @@ test('a book too long to send whole: a look at its contents first, then the entr
   assert.ok(shown.length < 30)
 })
 
+test('a card whose own book is too long: 对话修改 looks at its contents first, and sends the picked ones whole', async () => {
+  const { editRequest } = await import('../server/forge/edit.mjs')
+  const entries = Array.from({ length: 30 }, (_, i) => ({ uid: i, comment: `人物${i}`, keys: [`人物${i}`], content: `第${i}条`.repeat(1000) }))
+  const card = { name: '长卡', description: '设定', book: normalizeBook({ name: '长卡 内嵌世界书', entries }, '长卡') }
+  const look = pickRequest(card.book, { text: '把那个开酒馆的人改得凶一点', card: true })
+  assert.match(look.system, /角色卡/)
+  assert.match(look.messages[0].content, /只改人设、开场白这类/)
+  const { request, shown } = editRequest(card, { text: '把那个开酒馆的人改得凶一点', picked: ['25'] })
+  assert.equal([...shown][0], '25', 'the one the look picked, though the request does not name it')
+  assert.match(request.messages[0].content, /<entry uid="25"[^>]*>\n第25条/)
+})
+
 test('a preset: prompts with their place, markers only to switch, new prompts where asked', () => {
   const preset = normalizePreset(PRESET, '叙事预设')
   const { request, shown } = presetEditRequest(preset, { text: '文风改成长句', reply: '简体中文' })

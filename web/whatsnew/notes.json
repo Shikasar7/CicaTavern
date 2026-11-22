@@ -1528,6 +1528,123 @@
           }
         }
       ]
+    },
+    {
+      "version": "2.7.0",
+      "date": "2026-11",
+      "items": [
+        {
+          "image": "2.7.0-themes.webp",
+          "zh": {
+            "title": "状态栏多了十二个主题",
+            "text": "文艺杂志、晴野、夜曜纹章、晨笺、天光云影、钴蓝、放课后、线稿、信号、流银、赤墨、万华：改的是整个状态栏，不只是标题区。天光云影的水彩天空跟着故事里的时间变，线稿的机器人、信号的小格子、流银的液态金属会跟着鼠标动；「动效」关掉或系统开了减少动态效果时不动。\n创作角色卡的「状态栏样式」、修改角色卡的「调整样式」和定制外观的「起点」里都能选，导出到 SillyTavern 也带着各自的样子（简化版）。以前的纸张、霓虹、水墨等八种去掉了，用着它们的卡显示成朴素的样子，想换在「调整样式」里另选。"
+          },
+          "en": {
+            "title": "Twelve new status bar themes",
+            "text": "Editorial, Meadow, Night Sigil, Daybreak, Sky & Cloud, Cobalt, After School, Line Art, Signal, Liquid Silver, Red Ink and Kaleido each dress the whole status bar, not just its title. The watercolour sky of Sky & Cloud follows the time in the story, and Line Art's robot, Signal's grid and Liquid Silver's metal answer the mouse; with motion turned off, or reduced motion set on the system, they hold still.\nPick them in Status bar look in Create a card, in Adjust style in Edit card, and as a starting point for a custom look; exported to SillyTavern they keep a simpler version of their look. The eight older themes are gone: cards that used them show the plain bar, and Adjust style picks another."
+          }
+        },
+        {
+          "image": "2.7.0-plot.webp",
+          "zh": {
+            "title": "剧本模式：故事有了路线、岔路和结局",
+            "text": "卡可以带一份剧本：分章分幕，每一幕写要发生什么、几个要点、演到哪算完，以及往哪走（下一幕、岔路、结局）。对话用上剧本后，模型照着它一幕一幕推进故事，你照常说话。剧本不会自动套到已有的对话上：顶栏「剧本」、剧情向导的「剧本」页或者开新对话时选上。\n输入框上方的剧本条写着第几章哪一幕，点开看这一幕的要点（演到的打勾），能「这一幕演完了」「暂停剧本」「改剧本」「问问向导改」，调松紧（松、适中、紧）、剧透（盲玩、看大纲、全看）和谁来判断进度。故事岔开太远时会提示，可以拉回来，也可以就照现在演。"
+          },
+          "en": {
+            "title": "Scripts: a story with a route, forks and endings",
+            "text": "A card can carry a script: chapters and scenes, each saying what happens, a few points, when it is done, and where it goes next (the next scene, a fork, an ending). With a script on a chat, the model moves the story along it scene by scene while you play as usual. A script is never put on an existing chat by itself: pick it with Script in the top bar, on the story guide's Script tab, or when starting a new chat.\nThe script bar above the input box shows the chapter and scene. Open it to see the scene's points (ticked as they happen), mark Scene done, Pause the script, Edit the script or Ask the guide to change it, and set how tight it is (Loose, Medium, Tight), how much you see (Blind, Outline, All) and who judges the progress. When the story wanders too far it says so: Bring it back, or let it go this way."
+          }
+        },
+        {
+          "image": "2.7.0-map.webp",
+          "zh": {
+            "title": "路线图：主线、岔路、支线和结局",
+            "text": "主线从上往下一条竖线，岔路向两边分出去，支线画在右边、虚线连到开它的那一幕；实心是走过的，带圈的是现在，空心是还没到的，菱形是结局。幕多的剧本各章先收成方块，只展开现在这一章；手机上是一张列表。\n点一幕能跳过去，点走过的岔路口能「从这里换一条路」：从那一轮重新分出去，原来的对话还在。盲玩时只画走过的路。一份剧本最多三条支线，主线到了某一幕自动打开，和主线一起推进。"
+          },
+          "en": {
+            "title": "The route map: main line, forks, side lines and endings",
+            "text": "The main line runs down the middle, forks branch off to both sides, and side lines sit on the right, joined by a dotted line to the scene that opens them. Solid is walked, ringed is now, hollow is still ahead, and diamonds are endings. A script with many scenes folds its chapters but the current one; on a phone the map is a list.\nTap a scene to go there; tap a fork you have passed to take another way from it, branching from that reply while the way you took stays. Played blind, only the way walked is drawn. A script can have up to three side lines, each opening at a scene of the main line and running alongside it."
+          }
+        },
+        {
+          "image": "2.7.0-ending.webp",
+          "zh": {
+            "title": "岔路自己选，结局记进收集",
+            "text": "走到岔路口时等你自己选：剧本条上多一个分叉图标，点开选一条，下一轮照着走；视觉小说里读完一段，点「岔路」按钮。出口可以带条件：看过或没看过某一幕、变量大于小于等于某个数、上一次检定成没成、上一场仗赢没赢，没满足的路锁着；勾上「满足就走」，条件一满足就自动走。\n演到结局时对话里有一张结局卡，写着走过的路，能继续写下去、回到岔路口或开新对话；达成的结局记进这张卡的结局收集，没达成的显示成问号。"
+          },
+          "en": {
+            "title": "Pick your way at forks; endings are collected",
+            "text": "At a fork the script waits for you: a fork icon appears on the script bar, and the way you pick is taken next turn; in the visual novel, read to the end and press Fork. A way on can need something: a scene seen or not seen, a variable above, below or equal to a number, the last roll passed or failed, the last fight won or lost. Ways not open yet are locked, and ticking Take it as soon as it holds goes the moment it does.\nAn ending brings an ending card into the chat with the way you walked, and Keep going, Back to a fork or New chat. Each ending reached is kept in the card's collection; the rest show as question marks."
+          }
+        },
+        {
+          "image": "2.7.0-write.webp",
+          "zh": {
+            "title": "写剧本：自己写、让向导写、从对话整理",
+            "text": "「修改角色卡 → 剧本」里自己写：编辑器能拖动排序、撤销、给出口加条件，会标出到不了的幕和断掉的出口。也可以让向导写：先说想要什么，定好几幕、几个结局和哪几种、岔路多少、支线几条、分几章、基调、不要写的内容和从哪个开场白接着走，先出大纲，看过再写全文。\n聊了一阵的对话可以「整理成剧本」，把走过的路排成一份带岔路和结局的剧本；也能导入 Twine（.twee、.html）和 Ink 文件。创作角色卡多了「剧本」一步，可以写、可以导入，也可以跳过；导出成 SillyTavern 卡和整合包时剧本跟着卡走。"
+          },
+          "en": {
+            "title": "Writing scripts: by hand, by the guide, from a chat",
+            "text": "Write one yourself under Edit card, Script: the editor drags scenes into order, undoes, adds conditions to ways on, and marks scenes that cannot be reached and ways that lead nowhere. Or have the guide write one: say what you want, set the number of scenes, endings and their kinds, forks, side lines, chapters, the tone, what to leave out and which opening it follows, and read an outline before the whole script is written.\nA chat played for a while can become a script (Make a script), the way it took laid out with forks and endings, and Twine (.twee, .html) and Ink files can be imported. Create a card has a new Script step to write, import or skip one, and scripts go along when a card is exported for SillyTavern or as a pack."
+          }
+        },
+        {
+          "image": "2.7.0-guide.webp",
+          "zh": {
+            "title": "剧情向导：和助手商量故事怎么走",
+            "text": "聊天页右下角的「剧情向导」打开一个小窗，和一个助手聊这段故事：接下来可以怎么发展、她现在对你什么态度、有哪些伏笔还没收。它读最近的对话和卡的设定来答，模型可以另选。\n想让故事往某个方向走时让它出方案，点「开始引导」后方案每轮悄悄带给写回复的模型，节奏可以选只铺垫、自然推进、尽快引爆；输入框上方显示已引导几轮，演到了或不想要了就停。对话用着剧本时小窗多一个「剧本」页签。小窗能拖到别处，拖四边和四个角调大小，双击标题还原；手机上从底部拉起。"
+          },
+          "en": {
+            "title": "Story guide: talk the story over",
+            "text": "Story guide, at the bottom right of the chat, opens a small window where you talk the story over with an assistant: where it could go next, how she feels about you now, which threads are still open. It answers from the recent chat and the card, and can use another model.\nAsk it for plans when you want the story to head somewhere; Follow this then passes the plan quietly to the model writing the replies each turn, at the pace you choose (Hint only, Steady, Soon). Above the input box you see how many turns it has been followed, and you can stop it any time. With a script on the chat, the window has a Script tab too. Drag the window anywhere, resize it by its edges and corners, and double-click its title to put it back; on a phone it slides up from the bottom."
+          }
+        },
+        {
+          "image": "2.7.0-picker.webp",
+          "zh": {
+            "title": "选样式先看大图，定制外观从主题起步",
+            "text": "创作角色卡的「状态栏样式」改成几列小图，一屏看到更多（手机上两列）；每张右上角有放大镜，点开看整条状态栏，左右翻看，直接「用这个样式」。\n定制外观多了一排「起点」：从零设计，或者从十二个主题里选一个，主题的底子留着，模型只写要改和要加的地方。模型写外观时还能画 SVG 小图（远山、笔触、仪表、城市剪影、像素小人、印章），也能做跟着鼠标的光和视差；八种风格各有一份详细做法，先定一幅招牌画面。"
+          },
+          "en": {
+            "title": "See a look large before picking it; custom looks start from a theme",
+            "text": "Status bar look in Create a card is now a grid of small pictures, so more fit on a screen (two across on a phone). The magnifier on each opens the whole bar large, with Previous and Next to look through the others and Use this look to pick it.\nA custom look now has a row of starting points: From scratch, or one of the twelve themes, kept underneath while the model writes only what changes. The model can also draw small SVG pictures in a look (hills, brush strokes, dials, skylines, pixel figures, seals) and light that follows the mouse, and each of the eight styles comes with a detailed way of doing it, starting from one signature picture."
+          }
+        },
+        {
+          "image": "2.7.0-more.webp",
+          "zh": {
+            "title": "还有这些",
+            "text": "较早的回复下面多了「这一轮的状态」，只读地看那一轮写完时的变量。背景音乐同一处配的几首排成歌单，能列表循环、随机播放、单曲循环。朗读前先把响度拉齐，「音色设置」里每个人能调音量（25% 到 200%）和默认语气。世界书条目能按深度插在聊天中（列表上写着 @N），预设的「聊天中 @深度」也真按深度插。\n图库能删图、点放大镜看大图；记忆簿能直接选整理用的模型；设置页各栏默认折叠；手机上的下拉框从底部拉起；正在写的回复写着「已等 N 秒」；「行囊」改名「游戏菜单」，图鉴、技能特写等上限都放宽了。"
+          },
+          "en": {
+            "title": "And also",
+            "text": "Older replies have State then, showing the variables as that turn left them, read only. Music set for the same use makes a playlist, with Repeat all, Shuffle and Repeat one. Read-aloud evens out loudness first, and Voice settings give each person a Volume (25% to 200%) and a default Tone. Lorebook entries can go in the chat at a depth (shown as @N in the list), and a preset's in-chat depth now really places it there.\nThe Gallery can delete pictures and show them large; the memory book can pick its own model; Settings open with every section folded; on a phone, selects slide up from the bottom; a reply being written shows how long it has waited; the bag is now the Game menu, and the limits on the bestiary, skill cut-ins and more are higher."
+          }
+        },
+        {
+          "icon": "🔧",
+          "zh": {
+            "title": "修好的",
+            "text": "对话停在名册里的人参战的战斗上时，打开就卡死；存档里混进控制字符的文件让整个存档进不去（现在先修，修不好的挪到一边，写文件也改成写完再替换）；拖动排序一次只能挪一格；正则多选后移动、复制时报错；长对话卡顿。\n卡片界面正在调用模型时，世界书一改、对话一刷新调用就被停掉；卡脚本小窗里的状态面板一片空白；只写了「敌人×数量」的战斗标记被当成一场仗；视觉小说里路人的话算到角色头上，状态条多出「$game·」这样的前缀。"
+          },
+          "en": {
+            "title": "Fixed",
+            "text": "A chat resting on a fight with a roster member in it froze on opening; a save file with stray control characters kept the whole data folder from opening (it is now repaired, or set aside if it cannot be, and files are written whole before replacing the old ones); dragging moved an item only one place; moving or copying several regex at once failed; long chats stuttered.\nA card's interface calling the model was stopped when a lorebook changed or the chat refreshed; the status panel in a card script window was blank; a fight mark listing only foes and their number showed as a fight; in the visual novel, a passer-by's lines went to the character, and the status strip showed prefixes such as $game."
+          }
+        },
+        {
+          "recap": "2.6",
+          "image": "2.6.0-growth.webp",
+          "zh": {
+            "title": "2.6 加了什么",
+            "text": "游戏规则的成长：天赋、装备、羁绊、形态和进化；技能附加效果、类型克制和收服；状态栏的卡片式、侧栏式、卷轴式版式，状态栏上的头像、地图和形态链；创作角色卡从一整本小说开始；直连对话的应用帮助、快捷回复和图库；备份与换设备；技能特写；导入整合包和 .charx，卡自带的 CG；从图库选配图。"
+          },
+          "en": {
+            "title": "What 2.6 added",
+            "text": "Growth in the game rules: perks, gear, bonds, forms and evolution; skill effects, type matchups and taming; card, rail and scroll layouts for the status bar, with faces, a map and form chains on it; Create a card from a whole novel; app help in Direct chat, quick replies and the Gallery; Backup & moving devices; skill cut-ins; importing packs and .charx files, and a card's own CGs; picking a reply's picture from the Gallery."
+          }
+        }
+      ]
     }
   ]
 }

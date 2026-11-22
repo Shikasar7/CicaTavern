@@ -10,7 +10,7 @@ import { normalizeCard } from '../server/cards.mjs'
 import { STATUS_TUNE, statusTuning } from '../server/forge/check.mjs'
 
 const BOOK = { entries: [{ id: 0, comment: '[InitVar]初始变量', content: '好感: 10\n体力: 50', keys: [], constant: true, enabled: false }] }
-const BAR = { title: '小雨', theme: 'paper', fields: [{ path: '好感', label: '好感', show: 'meter' }] }
+const BAR = { title: '小雨', theme: 'editorial', fields: [{ path: '好感', label: '好感', show: 'meter' }] }
 const cardWith = extra => normalizeCard({ spec: 'chara_card_v2', data: { name: '小雨', first_mes: '你好', character_book: BOOK, ...extra } })
 
 async function app(t, card) {
@@ -63,7 +63,7 @@ test('a bar with nothing wrong can be adjusted, saved and taken back', async t =
 
   const undone = await call('/undo', 'POST', { record: saved.check.records.at(-1).id })
   assert.equal(undone.status, 200)
-  assert.equal((await card()).statusBar.theme, 'paper')
+  assert.equal((await card()).statusBar.theme, 'editorial')
 })
 
 test('a bar taken in that shows variables an older chat lacks says so', async t => {
@@ -95,7 +95,7 @@ test('nothing changed, or nothing left to show, is not saved', async t => {
   const [change] = (await call()).statusTune.changes
   assert.equal((await call('/apply', 'POST', { items: [{ id: STATUS_TUNE, edits: { [change.id]: { spec: change.spec } } }] })).status, 400)
   assert.equal((await call('/apply', 'POST', { items: [{ id: STATUS_TUNE, edits: { [change.id]: { spec: { ...change.spec, fields: [] } } } }] })).status, 400)
-  assert.equal((await card()).statusBar.theme, 'paper')
+  assert.equal((await card()).statusBar.theme, 'editorial')
 })
 
 test('a card with variables and no bar gets one laid out to start from, with its SillyTavern copy', async t => {

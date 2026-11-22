@@ -12,7 +12,7 @@ const BINDING_WORDS = (energy = '') => [['life', t`生命`], ['maxLife', t`生�
 
 const SKILL_KINDS = () => ({ strike: t`重击`, sweep: t`群攻`, flurry: t`连击`, poison: t`中毒`, stun: t`眩晕`, heal: t`治疗`, boost: t`增益`, finish: t`斩杀`, mend: t`群体治疗`, ward: t`护盾`, rally: t`鼓舞全队`, taunt: t`挑衅` })
 // 叫法: what each word is, in the page's language, and what it is called unless the card says otherwise.
-const WORD_LABELS = () => ({ body: t`体魄`, grace: t`灵巧`, mind: t`心智`, charm: t`魅力`, life: t`生命`, minion: t`杂兵`, normal: t`普通`, elite: t`精英`, boss: t`首领`, skill: t`技能`, bag: t`行囊`, experience: t`经验`, party: t`队伍`, perk: t`天赋`, weapon: t`武器`, armour: t`防具`, trinket: t`饰品`, common: t`普通（装备）`, fine: t`精良`, rare: t`稀有`, epic: t`传说`, form: t`形态`, evolve: t`进化（动词）` })
+const WORD_LABELS = () => ({ body: t`体魄`, grace: t`灵巧`, mind: t`心智`, charm: t`魅力`, life: t`生命`, minion: t`杂兵`, normal: t`普通`, elite: t`精英`, boss: t`首领`, skill: t`技能`, bag: t`背包`, experience: t`经验`, party: t`队伍`, perk: t`天赋`, weapon: t`武器`, armour: t`防具`, trinket: t`饰品`, common: t`普通（装备）`, fine: t`精良`, rare: t`稀有`, epic: t`传说`, form: t`形态`, evolve: t`进化（动词）` })
 
 /**
  * 题材包: a template for a kind of story. What it calls energy and the rest (words), the skills it starts with, and
@@ -197,6 +197,19 @@ export async function openGameRules(card, deps) {
     })
     input.click()
   }
+  /** A skill's picture, opening full size on a click as the foes' do. */
+  const skillThumb = (name, file) => {
+    const img = el('img', { class: 'foe-thumb skill-thumb', src: `/api/skills/${card.id}/${file}`, alt: '' })
+    if (!viewPicture) return img
+    img.classList.add('zoomable')
+    img.title = t`点击放大`
+    img.addEventListener('click', event => {
+      event.preventDefault()
+      event.stopPropagation()
+      viewPicture(img.src, t`${name}的技能特写`, '')
+    })
+    return img
+  }
   function showSkillArt() {
     const skills = skillsNamed(book)
     const pictures = book.skillPictures ?? {}
@@ -212,7 +225,7 @@ export async function openGameRules(card, deps) {
         toast(t`在后台画「${name}」的技能图`)
       }
       return row(name, owner ? t`${owner}的技能` : t`你的技能`, el('span', { class: 'battle-trial' }, [
-        file ? el('img', { class: 'foe-thumb skill-thumb', src: `/api/skills/${card.id}/${file}`, alt: '' }) : null,
+        file ? skillThumb(name, file) : null,
         drawSkill ? el('button', { type: 'button', class: 'btn small', text: file ? t`重画` : t`画技能图`, onclick: draw }) : null,
         el('button', { type: 'button', class: 'btn small', text: t`上传`, onclick: () => pickSkillPicture(name) }),
         file ? el('button', { type: 'button', class: 'btn small', text: t`删除`, onclick: () => setSkillPicture(name, null) }) : null,
@@ -306,7 +319,7 @@ export async function openGameRules(card, deps) {
       row(t`别名`, t`故事里也这么叫他，用来认出是谁入队、立绘用哪张。`, keys),
       row(t`技能`, t`战斗里他能用的招，用逗号分开。空着就给强击。`, skills),
       ...Object.keys(companion.skills).map(skill => row(skill, '', choice(t`${skill}的效果`, companion.skills[skill] || skillKindOf(skill), Object.entries(SKILL_KINDS()), kind => ({ companions: { ...book.companions, [name]: { ...companion, skills: { ...companion.skills, [skill]: kind } } } })))),
-      row(t`等级`, t`入队时的等级，空着就和你一样。比开局的等级每高一级，入队时带 2 点属性，在行囊的「队伍」里加。`, level),
+      row(t`等级`, t`入队时的等级，空着就和你一样。比开局的等级每高一级，入队时带 2 点属性，在游戏菜单的「队伍」里加。`, level),
       el('p', { class: 'hint', text: t`属性：10 是常人，还可以分配 ${spareOf(companion.attributes)} 点。` }),
       ...ATTRIBUTES.map(stat),
       el('div', { class: 'row end' }, [el('button', { type: 'button', class: 'btn small danger', text: t`从名册删掉`, onclick: remove })]),
@@ -642,7 +655,7 @@ export async function openGameRules(card, deps) {
     const stacked = node => { node.classList.add('cp-stack'); return node }
     return el('div', { class: 'game-form' }, [
       stacked(row(at ? t`第 ${at + 1} 个` : t`最初的样子`, '', el('span', { class: 'game-adds' }, [name, stage, chain.length > 2 ? el('button', { type: 'button', class: 'btn small', text: t`删除`, 'aria-label': t`删除${whose}`, onclick: () => saveForms({ ...forms, [owner]: chain.filter((_, i) => i !== at) }) }) : null]))),
-      at ? stacked(row(t`变成它的条件`, t`填了几样就都要满足，到了以后在行囊里点。都不填就只能由剧情给。`, el('span', { class: 'game-adds' }, [level, item, owner === PLAYER_FORMS ? null : bond]))) : null,
+      at ? stacked(row(t`变成它的条件`, t`填了几样就都要满足，到了以后在游戏菜单里点。都不填就只能由剧情给。`, el('span', { class: 'game-adds' }, [level, item, owner === PLAYER_FORMS ? null : bond]))) : null,
       stacked(row(t`加成`, t`处在这个形态时才有，最多 ${formBudget(at)} 点。`, el('span', { class: 'game-adds' }, effectPickers({ el, name: whose, effects: form.effects, words: wordsOf(book), put: effects => put({ effects }) })))),
       stacked(row(t`这个形态才会的技能`, '', el('div', { class: 'game-form-skills' }, [...skillRows, Object.keys(skills).length < 3 ? newSkill : null]))),
       at ? row(t`战斗里临时变`, t`勾上后，处在前一个形态的人可以在战斗里花 ${Math.round(SHIFT_COST * 100)}% ${energy}变成它，打完变回去。`, temp) : null,
@@ -703,14 +716,14 @@ export async function openGameRules(card, deps) {
   const growthSettings = [
     row(t`成长节奏`, t`升一级要多少经验。快：平时的六成。慢：平时的一倍半。只管升级快慢，不改敌人强弱；正在玩的对话从下一次得到经验起按新的算。`, choice(t`成长节奏`, book.pace ?? 'normal', [['fast', t`快`], ['normal', t`适中`], ['slow', t`慢`]], pace => ({ pace }))),
     row(t`成长`, t`升级带来什么。关：只有属性点，和以前一样。标准：${book.words?.life || t`生命`}和${book.energyName || t`气力`}上限随等级涨，技能越用越强。丰富：再加每 ${perkEveryOf(book)} 级三选一的${book.words?.perk || t`天赋`}。正在玩的对话下一轮就按新的算。`, growthChoice),
-    growthLevel !== 'off' ? row(t`战力`, t`在行囊的角色页显示一个战力数字：把属性和成长折成一个数，常人 1 级是 100。只是参考。`, choice(t`战力`, book.growth?.power ? 'on' : 'off', [['off', t`不显示`], ['on', t`显示`]], value => ({ growth: { ...book.growth, power: value === 'on' } }))) : null,
-    growthLevel === 'rich' ? row(t`同伴的${book.words?.perk || t`天赋`}`, t`自动：到了级数由程序按同伴擅长的属性选。手动：在行囊的「队伍」里你来选。`, choice(t`同伴的天赋`, book.growth?.companions === 'manual' ? 'manual' : 'auto', [['auto', t`自动`], ['manual', t`手动`]], value => ({ growth: { ...book.growth, ...(value === 'manual' ? { companions: 'manual' } : { companions: undefined }) } }))) : null,
+    growthLevel !== 'off' ? row(t`战力`, t`在游戏菜单的角色页显示一个战力数字：把属性和成长折成一个数，常人 1 级是 100。只是参考。`, choice(t`战力`, book.growth?.power ? 'on' : 'off', [['off', t`不显示`], ['on', t`显示`]], value => ({ growth: { ...book.growth, power: value === 'on' } }))) : null,
+    growthLevel === 'rich' ? row(t`同伴的${book.words?.perk || t`天赋`}`, t`自动：到了级数由程序按同伴擅长的属性选。手动：在游戏菜单的「队伍」里你来选。`, choice(t`同伴的天赋`, book.growth?.companions === 'manual' ? 'manual' : 'auto', [['auto', t`自动`], ['manual', t`手动`]], value => ({ growth: { ...book.growth, ...(value === 'manual' ? { companions: 'manual' } : { companions: undefined }) } }))) : null,
     ...(growthLevel !== 'off' ? milesRows() : []),
     growthLevel === 'rich' ? el('p', { class: 'hint', text: t`这张卡自己的${book.words?.perk || t`天赋`}：选的时候优先出现，另外还有通用的 24 个。可以让「辅助模型配置」按这张卡的世界观来写。` }) : null,
     growthLevel === 'rich' ? perksBox : null,
-    growthLevel !== 'off' ? el('p', { class: 'hint', text: t`这张卡的装备：故事里得到同名的东西时，就按这里写的算。部位、稀有度和效果都能改。这里只是让这张卡认识它；要让玩家手里有，用「读卡配置」写进开局物品，或在行囊的物品页添加。` }) : null,
+    growthLevel !== 'off' ? el('p', { class: 'hint', text: t`这张卡的装备：故事里得到同名的东西时，就按这里写的算。部位、稀有度和效果都能改。这里只是让这张卡认识它；要让玩家手里有，用「读卡配置」写进开局物品，或在游戏菜单的物品页添加。` }) : null,
     growthLevel !== 'off' ? gearBox : null,
-    growthLevel !== 'off' ? el('p', { class: 'hint', text: t`这张卡的${book.words?.form || t`形态`}：会变身、觉醒、合体、进化的人或伙伴，各有一串形态，每个形态有自己的加成和技能，换了形态就换一套。可以是变了就一直是（条件到了在行囊里点，或由剧情给），也可以只在战斗里临时变、打完变回去。修为、境界这种只升不降的不在这里，填在上面的「等级阶梯」。可以让「读卡配置」按这张卡来写。` }) : null,
+    growthLevel !== 'off' ? el('p', { class: 'hint', text: t`这张卡的${book.words?.form || t`形态`}：会变身、觉醒、合体、进化的人或伙伴，各有一串形态，每个形态有自己的加成和技能，换了形态就换一套。可以是变了就一直是（条件到了在游戏菜单里点，或由剧情给），也可以只在战斗里临时变、打完变回去。修为、境界这种只升不降的不在这里，填在上面的「等级阶梯」。可以让「读卡配置」按这张卡来写。` }) : null,
     growthLevel !== 'off' ? formsBox : null,
   ]
   function ranksInput() {
@@ -798,7 +811,7 @@ export async function openGameRules(card, deps) {
       typesBox,
     ] },
     { key: 'party', full: true, title: t`队伍名册`, about: t`一起打架的同伴`, children: [
-      el('p', { class: 'hint', text: t`和你一起打架的人：各有各的属性和技能，在行囊的「队伍」里安排谁上场。故事里写到有人入队时，名册里没有的人按常人加进来。` }),
+      el('p', { class: 'hint', text: t`和你一起打架的人：各有各的属性和技能，在游戏菜单的「队伍」里安排谁上场。故事里写到有人入队时，名册里没有的人按常人加进来。` }),
       roster,
     ] },
     { key: 'foes', title: t`敌人图鉴`, about: t`遇到过的敌人：立绘和招式效果`, children: [bestiary] },

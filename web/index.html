@@ -166,7 +166,7 @@
       <div class="section-title row">
         <span>角色卡</span>
         <span class="row-actions">
-          <button class="btn small ghost" id="open-gallery" type="button" title="所有卡和对话里的图：配图、CG、背景、立绘，选好后批量导出">图库</button>
+          <button class="btn small ghost" id="open-gallery" type="button" title="所有卡和对话里的图：配图、CG、背景、立绘，选好后批量导出或删除">图库</button>
           <button class="btn small ghost" id="open-books" type="button" title="导入的世界书：改名、导出、挂到哪些卡上，逐条或成批编辑条目">世界书</button>
         </span>
       </div>
@@ -205,6 +205,7 @@
             <button class="pill" id="chat-preset" title="这个对话用的预设" hidden></button>
             <select class="pill model-select" id="chat-model" title="这个对话用的模型（缓存按模型区分，切换后下一轮会重新写入缓存）" hidden></select>
             <button class="pill" id="memory-book" title="长期记忆（Beta）：记忆簿" hidden>记忆<span class="ctx-use" id="memory-count" hidden></span></button>
+            <button class="pill" id="chat-plot" title="剧本：让故事按写好的路线走" hidden>剧本</button>
             <select class="pill think-select" id="chat-thinking" title="这个对话的回复思考多少。默认跟随设置和供应商；选了别的只管这个对话，下一轮起生效" hidden></select>
             <button class="pill" id="compact-chat" title="把前面的剧情压缩成一份存档，之后在新的上下文里接着写" hidden>压缩<span class="wide-only">上下文</span><span class="ctx-use" id="context-meter" hidden></span></button>
           </div>
@@ -292,6 +293,8 @@
         <div class="ce-refs" id="direct-files" hidden></div>
         <div class="ce-ref-text" id="direct-file-text" hidden></div>
         <div class="qr-bar" id="qr-bar" role="toolbar" aria-label="快捷回复" hidden></div>
+        <div class="plot-bar" id="plot-bar" role="region" aria-label="剧本" hidden></div>
+        <div class="guide-bar" id="guide-bar" role="region" aria-label="剧情向导的引导" hidden></div>
         <div class="composer-box">
           <button type="button" class="quick-btn" id="quick-open" title="快捷开关：预设里钉住的条目" aria-label="快捷开关" hidden>
             <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 6h7m4 0h1M4 14h1m4 0h7" /><circle cx="13" cy="6" r="2" /><circle cx="7" cy="14" r="2" /></svg>
@@ -318,6 +321,9 @@
           <button type="button" class="btn ghost small" id="direct-attach" title="附文本文件给模型读：txt、md、json 这类文件，或者一张卡、一本世界书。Word 和 PDF 先另存成 txt" hidden>附文件</button>
           <input type="file" id="direct-file" multiple hidden>
           <span class="muted small" id="composer-hint">Enter 发送，Shift+Enter 换行</span>
+          <button type="button" class="btn ghost small guide-open" id="guide-open" title="剧情向导：在幕后聊这段故事、出方案引导剧情，说的话不进故事" aria-expanded="false" hidden>
+            <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.2" /><path d="M12.9 7.1 11.2 11.2 7.1 12.9 8.8 8.8Z" /></svg>剧情向导
+          </button>
         </div>
       </form>
     </main>
@@ -363,6 +369,7 @@
     <form method="dialog">
       <h2>选择开场白</h2>
       <p class="muted small greeting-count" id="greeting-count"></p>
+      <div class="greeting-plots" id="greeting-plots" role="radiogroup" aria-label="剧本" hidden></div>
       <ol class="greetings" id="greetings"></ol>
       <div class="row end">
         <button class="btn" value="cancel">取消</button>
@@ -457,14 +464,12 @@
           <label>每几轮整理一次<input name="memoryEvery" type="number" min="5" max="30"></label>
           <label>整理用的模型
             <select name="memoryModel">
-              <option value="helper">辅助模型：只看最近这几轮，省钱</option>
-              <option value="chat">对话模型：带着整段剧情看，记得更准</option>
             </select>
           </label>
           <label>每轮最多想起多少字<input name="memoryBudget" type="number" min="300" max="6000" step="100"></label>
         </div>
         <p class="hint">Beta：还在试验，默认关。压缩上下文时，写剧情存档的同一次调用顺带把人物、事件、物品与地点、约定与伏笔记成一条条（多写约 1–3k token）。之后哪一轮提到它们（关键词、别名或相近的说法），就把相关的几条附在这一轮的消息里，不动固定前缀，缓存照常命中。只想起已经压缩掉的部分；记忆簿在顶栏「记忆」里，可以查看、修改、固定和删除。</p>
-        <p class="hint">边玩边整理每次多一次模型调用。整理用的模型：「辅助模型」是「配图与朗读」里选的那个（没选时用对话模型），只把最近这几轮原文和记忆簿交给它，花得少，但它不知道更早的剧情，前因后果偶尔记偏；「对话模型」就是你正在聊天的模型，带着整段对话一起看（大部分按缓存价计费），能联系前后文，记得更准，故事越长每次花得越多。第一次压缩之前整理出的条目只记不发：那时原文都还在上下文里。</p>
+        <p class="hint">边玩边整理每次多一次模型调用。整理用的模型：「辅助模型」是「配图与朗读」里选的那个（没选时用对话模型），只把最近这几轮原文和记忆簿交给它，花得少，但它不知道更早的剧情，前因后果偶尔记偏；「对话模型」就是你正在聊天的模型，带着整段对话一起看（大部分按缓存价计费），能联系前后文，记得更准，故事越长每次花得越多。也可以直接指定一个模型，和辅助模型一样只看最近这几轮；记忆簿窗口里「现在整理」旁边也能换。第一次压缩之前整理出的条目只记不发：那时原文都还在上下文里。</p>
       </div>
       <div data-section="books">
         <div id="book-options" class="book-options muted small">先选择一张角色卡</div>
@@ -769,6 +774,9 @@
       <div id="memory-list" class="memory-list"></div>
       <div class="row end">
         <button class="btn ghost" type="button" id="memory-export" title="存成 SillyTavern 世界书（JSON），可以导入别的对话或 SillyTavern">导出成世界书</button>
+        <label class="memory-model">整理用
+          <select id="memory-model" aria-label="整理记忆簿用的模型" title="「现在整理」和边玩边整理用哪个模型：和「设置 → 长期记忆」里的是同一个"></select>
+        </label>
         <button class="btn ghost" type="button" id="memory-tidy" title="现在就把上次记下之后的新剧情整理进记忆簿（一次模型调用）">现在整理</button>
         <button class="btn" type="button" id="memory-add">新增条目</button>
         <button class="btn" value="cancel">关闭</button>

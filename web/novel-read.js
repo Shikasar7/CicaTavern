@@ -51,7 +51,7 @@ export function novelTop(el, novel, on, { models = null } = {}) {
     : stage === 'reading'
       ? t`还要读 ${estimate.stretches} 段：发给 ${estimate.model}，大约 ${count(estimate.input)} 输入、${outputs(estimate)} 输出 token${costs(estimate)}。输出多少看模型想得多不多，思考多的接近上限；读完后合并同名的条目还要再花一两成。`
       : stage === 'merging'
-        ? t`都读完了，还有 ${novel.toMerge} 批同名的笔记要让模型合成一条。`
+        ? t`都读完了，还有 ${novel.toMerge} 批同名的笔记要让模型合成一条。「同时合并」调大会快一些。`
         : more ? t`后面还有 ${more.stretches} 段没读：都读完大约 ${count(more.input)} 输入、${outputs(more)} 输出 token${costs(more)}。` : ''
   const found = Object.entries(novel.counts).filter(([, n]) => n).map(([type, n]) => t`${NOVEL_TYPES[type] ?? type} ${n}`).join(t` · `)
   // Reading is many requests: the model for it can be a cheaper one than the card is written with.
@@ -66,12 +66,15 @@ export function novelTop(el, novel, on, { models = null } = {}) {
       ])
     : null
   // Stretches read at once: faster, at the price of more requests a minute than some providers let through. Shown while
-  // reading too (as it is set; changed between runs).
+  // reading too (as it is set; changed between runs). The same number of batches are put together at once afterwards.
+  const merging = stage === 'merging'
   const width = stage !== 'ready' || more
     ? el('label', { class: 'book-novel-limit' }, [
-        el('span', { text: t`同时读` }),
-        el('select', { 'aria-label': t`同时读几段`, disabled: busy, title: busy ? t`读完或停下以后才能改` : '', onchange: event => on.parallel(Number(event.target.value)) }, [...new Set([1, 2, 3, 4, 6, 8, novel.parallel])].sort((a, b) => a - b).map(n => el('option', { value: n, text: String(n), selected: novel.parallel === n }))),
-        el('span', { text: t`段（越多读得越快；供应商报限流或请求太多，就调小。有的供应商或中转同时只处理一个请求，调大也不会更快）` }),
+        el('span', { text: merging ? t`同时合并` : t`同时读` }),
+        el('select', { 'aria-label': merging ? t`同时合并几批` : t`同时读几段`, disabled: busy, title: busy ? t`先点「停下」再改，改完点「接着抽」` : '', onchange: event => on.parallel(Number(event.target.value)) }, [...new Set([1, 2, 3, 4, 6, 8, novel.parallel])].sort((a, b) => a - b).map(n => el('option', { value: n, text: String(n), selected: novel.parallel === n }))),
+        el('span', { text: merging
+          ? t`批（越多合并得越快；供应商报限流或请求太多，就调小）`
+          : t`段（读完后合并同名笔记也同时发这么多批。越多越快；供应商报限流或请求太多，就调小。有的供应商或中转同时只处理一个请求，调大也不会更快）` }),
       ])
     : null
   return el('div', { class: 'book-novel' }, [

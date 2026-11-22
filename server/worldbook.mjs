@@ -48,23 +48,42 @@ export function extraOf(raw) {
  * that keeps nothing else: excludeRecursion (not found through other entries), preventRecursion (its text finds no
  * others), delayUntilRecursion (found only through other entries; a number: from that level of them on).
  */
-function recursionOf(raw) {
+function recursionOf(raw, position) {
   const ext = raw.extensions && typeof raw.extensions === 'object' ? raw.extensions : {}
   const out = {}
   if ((raw.excludeRecursion ?? ext.exclude_recursion) === true) out.excludeRecursion = true
   if ((raw.preventRecursion ?? ext.prevent_recursion) === true) out.preventRecursion = true
   const delay = raw.delayUntilRecursion ?? ext.delay_until_recursion
   if (delay === true || (Number.isFinite(delay) && delay >= 1)) out.delayUntilRecursion = delay === true ? true : Math.min(10, Math.trunc(delay))
-  // 发送位置 紧挨着回复 (sendsNear), this app's own: in a world file as cicaSend, in a card's extensions as cica_send.
+  // 聊天中 @深度 (depthOf): its depth, kept for a card's book too (a world file's entry keeps all its fields anyway).
+  const depth = Number(raw.depth ?? ext.depth)
+  if (position === AT_DEPTH && Number.isFinite(depth)) out.depth = depth
+  // 紧挨着回复, the 发送位置 this app had before @深度 (as @深度 0 now): in a world file as cicaSend, in a card's
+  // extensions as cica_send.
   if ((raw.cicaSend ?? ext.cica_send) === 'near') out.cicaSend = 'near'
   return out
 }
 
+// SillyTavern's 位置 聊天中 @深度 (world_info_position.atDepth), and the depth an entry there has when it names none.
+export const AT_DEPTH = 4
+export const DEFAULT_DEPTH = 4
+export const MAX_DEPTH = 9999
+
 /**
- * A keyword entry sent 紧挨着回复: after the player's input, sent again each turn it is found and taken out of the
- * older messages (as a preset's 同酒馆), where the rest go with the turn's message and stay in the history.
+ * Where in the chat an entry goes (位置「聊天中 @深度」): how many messages before the end, as SillyTavern counts them
+ * (0 after the newest message, 1 before it, each message of either side one more), or null for an entry that goes
+ * elsewhere (a constant one in the frozen prefix, a keyword one with the turn's message: 随这一轮). A keyword entry
+ * set 紧挨着回复 before there was @深度 is @深度 0. One at a depth is sent again each turn, there, and taken out of the
+ * older messages (engine.mjs placeDeepLore), as SillyTavern does.
  */
-export const sendsNear = entry => entry?.extra?.cicaSend === 'near'
+export function depthOf(entry) {
+  if (!entry) return null
+  if (entry.position === AT_DEPTH) {
+    const depth = Math.trunc(Number(entry.extra?.depth))
+    return Number.isFinite(depth) && depth >= 0 ? Math.min(MAX_DEPTH, depth) : DEFAULT_DEPTH
+  }
+  return !entry.constant && entry.extra?.cicaSend === 'near' ? 0 : null
+}
 
 /** An entry's recursion switches, as recursionOf keeps them: { exclude, prevent, delay } (delay 0: not delayed). */
 export function recursionFlags(entry) {
@@ -77,7 +96,9 @@ function normalizeEntry(raw, index, { keep = false } = {}) {
   const ext = raw.extensions && typeof raw.extensions === 'object' ? raw.extensions : {}
   const comment = str(raw.comment || raw.name).trim()
   const content = str(raw.content)
-  const extra = keep ? extraOf(raw) : recursionOf(raw)
+  // 0 before the character data, 1 after it (presets place the two apart), 4 聊天中 @深度 (SillyTavern's numbers).
+  const position = typeof raw.position === 'number' ? raw.position : Number.isFinite(ext.position) ? ext.position : raw.position === 'after_char' ? 1 : 0
+  const extra = keep ? extraOf(raw) : recursionOf(raw, position)
   return {
     uid: String(raw.uid ?? raw.id ?? index),
     comment,
@@ -89,8 +110,7 @@ function normalizeEntry(raw, index, { keep = false } = {}) {
     constant: raw.constant === true,
     enabled: raw.enabled !== false && raw.disable !== true,
     order: Number(raw.insertion_order ?? raw.order ?? 100),
-    // 0 before the character data, 1 after it (presets place the two apart).
-    position: typeof raw.position === 'number' ? raw.position : Number.isFinite(ext.position) ? ext.position : raw.position === 'after_char' ? 1 : 0,
+    position,
     caseSensitive: (raw.case_sensitive ?? raw.caseSensitive ?? ext.case_sensitive) === true,
     wholeWords: (raw.matchWholeWords ?? ext.match_whole_words) === true,
     probability: Number(raw.probability ?? ext.probability ?? 100),
@@ -299,9 +319,16 @@ export function isPreprocessing(entry) {
  * SillyTavern positions 2–4 (author's note top/bottom, @depth) put an entry
  * near the end of the context, usually rules the model must apply every turn
  * (MVU's 变量输出格式 / 变量更新规则 sit at @D0).
+ * @param atDepth - whether @depth (4) entries go at their depth each turn (a chat whose prefix was built since there
+ *   was @深度: chat.loreAtDepth), so not into the prefix.
  */
-export function isLate(entry) {
-  return entry.position >= 2 && entry.position <= 4
+export function isLate(entry, { atDepth = true } = {}) {
+  return entry.position >= 2 && entry.position <= (atDepth ? 3 : 4)
+}
+
+/** Constant entries sent each turn at their depth (a chat with loreAtDepth): the static ones placed at @深度. */
+export function deepConstantEntries(books) {
+  return sortEntries(books.flatMap(book => book.entries.filter(e => inPrefix(e) && e.position === AT_DEPTH)))
 }
 
 /** Static constant entries: rendered into a chat's frozen prefix when it starts. */
@@ -309,7 +336,7 @@ export const inPrefix = e => e.enabled && isConstant(e) && !special(e) && !isDyn
 
 /** Constant entries that never change: they go into the cached prefix. */
 export function constantEntries(books) {
-  return sortEntries(books.flatMap(book => book.entries.filter(e => inPrefix(e) && !isLate(e))))
+  return sortEntries(books.flatMap(book => book.entries.filter(e => inPrefix(e) && !isLate(e, { atDepth: false }))))
 }
 
 /**
@@ -319,8 +346,8 @@ export function constantEntries(books) {
  * pile up in the history, and the history cannot be edited without losing the
  * cache for everything after the edit.
  */
-export function lateEntries(books) {
-  return sortEntries(books.flatMap(book => book.entries.filter(e => inPrefix(e) && isLate(e))))
+export function lateEntries(books, { atDepth = true } = {}) {
+  return sortEntries(books.flatMap(book => book.entries.filter(e => inPrefix(e) && isLate(e, { atDepth }))))
 }
 
 export function entryTitle(entry) {
@@ -418,8 +445,8 @@ export function triggeredEntries(books, scanText, recentlyInjected, { recursion 
         break
       }
       looked.add(item.ref)
-      // One sent 紧挨着回复 is not in the history any more: sent each turn it is found.
-      if (recentlyInjected.has(item.ref) && !sendsNear(item.entry)) continue
+      // One at a depth (聊天中 @深度) is not in the history any more: sent each turn it is found.
+      if (recentlyInjected.has(item.ref) && depthOf(item.entry) === null) continue
       if (item.entry.useProbability && item.entry.probability < 100 && Math.random() * 100 >= item.entry.probability) continue
       hits.push({ ref: item.ref, entry: item.entry, ...(level ? { level } : {}) })
       if (level) {
@@ -487,18 +514,27 @@ function editEntry(entry, change) {
     const order = Math.trunc(Number(change.order))
     if (Number.isFinite(order)) entry.order = Math.min(99999, Math.max(-99999, order))
   }
-  if (change.position !== undefined) {
-    const position = Math.trunc(Number(change.position))
-    if (position >= 0 && position <= 7) entry.position = position
-  }
   // 递归: SillyTavern's switches, kept in extra (recursionOf) where its export finds them.
   const switches = { excludeRecursion: change.excludeRecursion, preventRecursion: change.preventRecursion, delayUntilRecursion: change.delayUntilRecursion }
-  // 发送位置: 'near' (紧挨着回复) or 'turn' (随这一轮, as before).
-  if (change.send === 'near' || change.send === 'turn') switches.cicaSend = change.send === 'near' ? 'near' : false
+  if (change.position !== undefined) {
+    const position = Math.trunc(Number(change.position))
+    if (position >= 0 && position <= 7) {
+      entry.position = position
+      // 位置 set here says where it goes: the old 紧挨着回复 is @深度 0 now.
+      switches.cicaSend = false
+      if (position === AT_DEPTH && !Number.isFinite(Number(entry.extra?.depth))) switches.depth = entry.extra?.cicaSend === 'near' ? 0 : DEFAULT_DEPTH
+    }
+  }
+  // 聊天中 @深度: how far back.
+  if (change.depth !== undefined && change.depth !== null && change.depth !== '') {
+    const depth = Math.trunc(Number(change.depth))
+    if (Number.isFinite(depth)) switches.depth = Math.min(MAX_DEPTH, Math.max(0, depth))
+  }
   for (const [key, value] of Object.entries(switches)) {
-    if (typeof value !== 'boolean' && typeof value !== 'string') continue
+    if (typeof value !== 'boolean' && typeof value !== 'string' && typeof value !== 'number') continue
     const extra = { ...(entry.extra ?? {}) }
-    if (value) extra[key] = value
+    // A depth of 0 is one too.
+    if (value || typeof value === 'number') extra[key] = value
     else delete extra[key]
     if (Object.keys(extra).length) entry.extra = extra
     else delete entry.extra

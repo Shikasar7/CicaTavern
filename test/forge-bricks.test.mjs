@@ -241,7 +241,8 @@ test('随机事件: drawn each turn by the code, in groups by where the story is
   assert.deepEqual(scripts[0].placement, [5])
   assert.equal(scripts[0].promptOnly, true)
   const loaded = normalizeCard(raw)
-  const drawn = drawnEntries([loaded.book], loaded.regexScripts, { user: '你', char: '林小满' })
+  // A chat from before 聊天中 @深度 has the rule in its prefix and gets the lines drawn; since, the rule goes each turn.
+  const drawn = drawnEntries([loaded.book], loaded.regexScripts, { user: '你', char: '林小满' }, { atDepth: false })
   assert.equal(drawn.length, 1)
   const lines = drawn[0].text.split('\n')
   assert.equal(lines.length, 2)
@@ -458,12 +459,12 @@ test('the SillyTavern bar draws a list a line each, as the app does, and tags by
 })
 
 test('a new look reaches both bars', () => {
-  const plan = planOf({}, cleanCardOptions({ format: 'mvu-ui', statusTheme: 'gothic' }))
+  const plan = planOf({}, cleanCardOptions({ format: 'mvu-ui', statusTheme: 'sigil' }))
   const spec = statusSpecOf(plan)
-  assert.equal(spec.theme, 'gothic')
+  assert.equal(spec.theme, 'sigil')
   const html = statusBarHtml(spec)
-  assert.match(html, /class="bar theme-gothic"/)
-  assert.match(html, /\.theme-gothic\{/)
+  assert.match(html, /class="bar theme-sigil"/)
+  assert.match(html, /\.theme-sigil\{/)
 })
 
 test('pages: the plan says which, a field with none goes on the first, one page is no pages', () => {
@@ -811,4 +812,32 @@ test('each line gets a variable on its first step, on a page of its own when the
   assert.equal(line.page, '世界')
   assert.ok(plan.entries.some(entry => entry.part === 'world'))
   assert.equal(read({}).world_moves, undefined)
+})
+
+test('创作角色卡 → 剧本: the step after 动笔 when asked for; kept with the draft, saved into the card; a save over it keeps the card’s own', async t => {
+  const { forge, store, settled } = await wizard(t, RAW)
+  let draft = await settled((await forge.create({ text: '卡', options: { plot: true } })).id)
+  await forge.plan(draft.id)
+  draft = await settled(draft.id)
+  await forge.write(draft.id)
+  draft = await settled(draft.id)
+  assert.equal(draft.stage, 'plot')
+  assert.deepEqual((await forge.plots(draft.id)).plots, [])
+  const plot = { id: 'p1', name: '看海', scenes: [{ id: 'a', title: '开场', exits: [{ to: 'b' }] }, { id: 'b', title: '结局', ending: { kind: 'good' } }] }
+  const saved = await forge.savePlots(draft.id, { plots: [plot], defaultPlot: 'p1' })
+  assert.equal(saved.plots[0].name, '看海')
+  assert.ok(saved.greetings.length >= 1, 'the openings, for a plot to go on from one')
+  assert.ok((await forge.plotCard(draft.id)).description !== undefined, 'the card being made, for the guide to read')
+  assert.equal((await forge.get(draft.id)).plots.length, 1)
+  const first = await forge.saveCard(draft.id, { avatar: PNG })
+  let stored = await store.getCard(first.card.id)
+  assert.deepEqual(stored.plots.map(item => item.id), ['p1'])
+  assert.equal(stored.defaultPlot, 'p1')
+  // One added on the card itself stays when the draft is saved over it again; the draft's own is replaced.
+  stored.plots = [...stored.plots, { ...plot, id: 'own', name: '卡上的' }]
+  await store.saveCard(stored)
+  await forge.savePlots(draft.id, { plots: [{ ...plot, name: '看海2' }], defaultPlot: 'p1' })
+  await forge.saveCard(draft.id, { avatar: PNG })
+  stored = await store.getCard(first.card.id)
+  assert.deepEqual(stored.plots.map(item => item.name).sort(), ['卡上的', '看海2'])
 })

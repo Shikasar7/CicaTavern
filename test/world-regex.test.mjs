@@ -50,7 +50,9 @@ test('a drawing script leaves the prefix\'s entries as written and gives each tu
   })]
   const scripts = normalizeScripts([script('\\[人\\]', '{{random::甲}}')])
   assert.equal(fixedWorldBooks(books, scripts, names), books, 'the prefix does not freeze a draw')
-  assert.deepEqual(drawnEntries(books, scripts, names), [{ title: '遭遇', text: '偶遇甲' }, { title: '末尾遭遇', text: '末尾偶遇甲' }])
+  // An @深度 one in a chat from before there was @深度 is in its prefix too; since, it goes each turn, drawn as a whole.
+  assert.deepEqual(drawnEntries(books, scripts, names, { atDepth: false }), [{ title: '遭遇', text: '偶遇甲' }, { title: '末尾遭遇', text: '末尾偶遇甲' }])
+  assert.deepEqual(drawnEntries(books, scripts, names), [{ title: '遭遇', text: '偶遇甲' }])
   assert.deepEqual(drawnEntries(books, [], names), [])
   assert.deepEqual(drawnEntries(books, normalizeScripts([script('没有', '{{random::甲}}')]), names), [], 'one that matches nothing adds nothing')
 })
@@ -121,7 +123,8 @@ test('through the app: the draw is new each turn, and a book the card makes reac
   const started = await call('POST', '/api/chats', { cardId: card.id })
   const other = await call('POST', '/api/chats', { cardId: card.id })
   const saved = await store.getChat(started.id)
-  assert.match(saved.systemPrompt, /本轮偶遇【\[NPC\]】/, 'the rule stays in the prefix, not frozen at a first draw')
+  // At @深度 2: not in the prefix, but each turn at its depth, drawn then.
+  assert.doesNotMatch(saved.systemPrompt, /本轮偶遇/, 'the rule is not frozen into the prefix at a first draw')
 
   const draws = new Set()
   for (let i = 0; i < 12; i++) {

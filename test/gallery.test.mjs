@@ -72,6 +72,47 @@ test('图库: 配图 of every chat, a card\'s 背景 and 立绘, newest first; a
   await assert.rejects(gallery.exportZip(['../../x']), /都已经不在了/)
 })
 
+test('图库 → 删除所选: each picture goes from where it lives; a reply’s goes with its old ones, a 立绘’s expressions stay', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'tavern-gallery-del-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const store = createStore(root)
+  await store.init()
+  const card = normalizeCard({ name: '林雪', description: '', first_mes: '你好' })
+  await store.saveCard(card)
+  const media = createMedia(store, {})
+  const scenes = createScenes(store, { media })
+  const cgs = createCardCgs(store)
+  const gallery = createGallery(store, { scenes, media, cgs })
+  const chat = await createChat(store, card.id)
+  const saved = await store.getChat(chat.id)
+  const { mkdir, writeFile, access } = await import('node:fs/promises')
+  await mkdir(path.join(root, 'media', chat.id), { recursive: true })
+  for (const file of ['a1.png', 'a0.png', 'b1.png']) await writeFile(path.join(root, 'media', chat.id, file), PNG)
+  saved.nodes.root.media = { images: [{ file: 'a1.png', at: '2026-11-10T08:00:00.000Z', history: [{ file: 'a0.png' }] }, { file: 'b1.png', at: '2026-11-10T09:00:00.000Z' }] }
+  await store.saveChat(saved)
+  await scenes.add(card.id, { name: '雨巷', image: dataUrl })
+  await scenes.add(card.id, { name: '邮局', image: dataUrl })
+  const cardNow = await store.getCard(card.id)
+  cardNow.media = { ...(cardNow.media ?? {}), roster: [{ id: 'lx', name: '林雪', kind: 'girl', looks: 'short hair' }] }
+  await store.saveCard(cardNow)
+  await scenes.setSprite(card.id, 'lx', dataUrl)
+  await scenes.setExpression(card.id, 'lx', 'shy', dataUrl)
+  await cgs.bring(card.id, [{ name: '雨夜', pictures: [PNG, PNG] }])
+
+  const { items } = await gallery.list()
+  const one = (kind, test = () => true) => items.find(item => item.kind === kind && test(item)).id
+  const forgotten = []
+  const picked = [one('reply', item => item.src.endsWith('a1.png')), one('scene', item => item.name === '雨巷'), one('sprite', item => item.face === 'neutral'), one('cg'), 'reply:nochat:x.png']
+  const result = await gallery.remove(picked, { forget: async (chatId, file) => { forgotten.push(file) } })
+  assert.deepEqual(result, { removed: 4, missing: 1 })
+  const left = (await gallery.list()).items
+  assert.deepEqual(left.map(item => [item.kind, item.name || item.src.split('/').pop()]).sort(), [['cg', '雨夜'], ['reply', 'b1.png'], ['scene', '邮局'], ['sprite', '林雪·shy']])
+  assert.deepEqual(forgotten.sort(), ['a0.png', 'a1.png'])
+  await assert.rejects(access(path.join(root, 'media', chat.id, 'a0.png')), 'its old one gone too')
+  assert.deepEqual((await store.getChat(chat.id)).nodes.root.media.images.map(image => image.file), ['b1.png'])
+  await assert.rejects(gallery.remove([]), /没有选图/)
+})
+
 test('zipEntries: stored entries any zip tool reads, the CRC right without zlib.crc32 (Node 18 on the phone)', t => {
   const own = zlib.crc32
   zlib.crc32 = undefined

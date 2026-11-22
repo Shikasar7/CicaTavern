@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import { FOE_ADDS, FOE_ADD_IDS, FOE_ADD_ROOM, battleSetup, cleanFoeAdds, fieldFoes, foeSheets, foesOf, playerOf, simulate, startBattle, step } from '../web/shared/game/battle.js'
 import { encounterSetup, fightResult, playedOut } from '../web/shared/game/encounter.js'
 import { foeAddsAsk, foesFollow, wornWorth } from '../web/shared/game/growth.js'
-import { applyOps, cleanKit, cleanRulebook, keptSheet, kitBook, sheetOf } from '../web/shared/game/sheet.js'
+import { applyOps, bestiaryName, cleanKit, cleanRulebook, keptSheet, kitBook, sheetOf } from '../web/shared/game/sheet.js'
 import { foesRequest, parseFoes, suggestRequest } from '../server/game.mjs'
 
 const sheet = (more = {}) => ({ level: 1, life: 100, maxLife: 100, energy: 30, maxEnergy: 30, attributes: { body: 10, grace: 10, mind: 10, charm: 10 }, skills: ['甲'], things: [], conditions: [], ...more })
@@ -207,4 +207,28 @@ test('装备: what the party has on is followed by the foes as a level is, and r
   // A foe with a rank of its own follows nothing, gear or no.
   const ranked = cleanRulebook({ level: 'full', growth: { level: 'standard' }, items: gear, ranks: ['炼气', '筑基'] })
   assert.equal(encounterSetup({ ...worn }, ranked, { foes: [{ name: '散修', count: 1, tier: 'normal', power: '筑基' }] }, 'c', 'n').foes[0].up, undefined)
+})
+
+test('a numbered one is the bestiary\'s kind (its picture and blows); a kind of its own is not; a full bestiary keeps its pictures', () => {
+  const foes = { 异化流浪犬: { looks: 'dog', moves: [], file: 'foe-aaaaaa.png', adds: [{ id: 'poison', size: 'large' }] }, 狼: { looks: 'wolf', moves: [] } }
+  for (const name of ['异化流浪犬', '异化流浪犬A', '异化流浪犬2号', '异化流浪犬 3', '异化流浪犬甲', '异化流浪犬（一）', '异化流浪犬(2)']) assert.equal(bestiaryName(foes, name), '异化流浪犬', name)
+  assert.equal(bestiaryName(foes, '狼A'), '狼')
+  for (const name of ['异化流浪犬头领', '狼王', '变异流浪犬', '异化流浪犬Z', '']) assert.equal(bestiaryName(foes, name), null, name)
+  const book = cleanRulebook({ level: 'full', foes })
+  const setup = encounterSetup(sheetOf(book, null, {}), book, { foes: [{ name: '异化流浪犬A', count: 1, tier: 'elite' }] }, 'c', 'n')
+  assert.deepEqual(setup.foes[0].adds, [{ id: 'poison', size: 'large' }], 'what the bestiary says of its kind')
+  // Past the limit the first ones without a picture go, not the ones drawn or uploaded.
+  const many = Object.fromEntries([['有图', { looks: '', moves: [], file: 'foe-bbbbbb.png' }], ...Array.from({ length: 200 }, (_, i) => [`敌人${i}`, { looks: '', moves: [] }])])
+  const kept = Object.keys(cleanRulebook({ level: 'full', foes: many }).foes)
+  assert.equal(kept.length, 200)
+  assert.ok(kept.includes('有图') && !kept.includes('敌人0') && kept.includes('敌人199'))
+})
+
+test('a card with a large bestiary keeps every chain of 形态 and every skill\'s 属性 (NPC pets: dozens of each)', () => {
+  const owners = Array.from({ length: 30 }, (_, i) => `魔宠${i}`)
+  const forms = Object.fromEntries(owners.map(name => [name, [{ name, stage: '统领级', effects: [] }, { name: `${name}·进化`, stage: '君王级', effects: [], at: { level: 13 } }]]))
+  const skillTypes = Object.fromEntries(Array.from({ length: 150 }, (_, i) => [`招式${i}`, '暗影']))
+  const book = cleanRulebook({ level: 'full', growth: { level: 'rich' }, types: { 暗影: ['精神'], 精神: ['暗影'] }, forms, skillTypes })
+  assert.equal(Object.keys(book.forms).length, 30)
+  assert.equal(Object.keys(book.skillTypes).length, 150)
 })

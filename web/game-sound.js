@@ -1,6 +1,6 @@
 // 游戏规则的声音, made here and now with Web Audio: no sound files in the app, nothing to license. Every recipe takes a
 // context and where to play, so the same code plays in the page and renders to a file for listening to it.
-import { LAYERS, ambienceFor, cleanSound, layerLevel, trackFor } from '/shared/game/sound.js'
+import { LAYERS, ambienceFor, cleanSound, layerLevel, nextTrack, tracksFor } from '/shared/game/sound.js'
 
 const KEY = 'cicatavern.sound'
 const FADE = 0.25
@@ -227,8 +227,10 @@ export function createSound() {
   let staged = false
   let same = (a, b) => a === b
   let playing = null
+  // The tracks for now, one after another as the settings say.
+  let playlist = []
   const audio = typeof Audio === 'undefined' ? null : new Audio()
-  if (audio) audio.loop = true
+  audio?.addEventListener('ended', () => advance())
 
   function start() {
     if (!ctx) {
@@ -285,16 +287,41 @@ export function createSound() {
     }
   }
 
-  /** The right track for now, playing if it can: asked again when audio opens up, or the settings change. */
-  function pickTrack() {
-    if (!audio) return
-    const track = staged || fighting ? trackFor(tracks, { place, fighting, same }) : null
-    if (track?.id !== playing?.id) {
+  /** Start the track at `at` of the playlist (-1: none). */
+  function cue(at) {
+    const track = playlist[at] ?? null
+    if (track?.id !== playing?.id || !track) {
       playing = track
       if (track) audio.src = track.url
     }
+    // One track, or one asked to repeat, loops by itself: no gap at its end.
+    audio.loop = playlist.length === 1 || prefs.musicMode === 'one'
     if (!track || !layerLevel(prefs, 'music')) audio.pause()
     else if (ctx && audio.paused) audio.play().catch(() => {})
+  }
+
+  /** The next track of the playlist: at a track's end, or asked for. */
+  function advance(skipping = false) {
+    if (!audio || !playlist.length) return
+    const at = playlist.findIndex(track => track.id === playing?.id)
+    // Asked to skip, even 单曲循环 moves on.
+    const mode = skipping && prefs.musicMode === 'one' ? 'all' : prefs.musicMode
+    const next = nextTrack(playlist.length, at, mode)
+    if (next === at) {
+      audio.currentTime = 0
+      if (ctx && layerLevel(prefs, 'music')) audio.play().catch(() => {})
+      return
+    }
+    cue(next)
+  }
+
+  /** The right playlist for now, playing if it can: asked again when audio opens up, or the settings change. */
+  function pickTrack() {
+    if (!audio) return
+    playlist = staged || fighting ? tracksFor(tracks, { place, fighting, same }) : []
+    // What is playing goes on while it is still one of them: a new place with the same music changes nothing.
+    const at = playlist.findIndex(track => track.id === playing?.id)
+    cue(at >= 0 ? at : nextTrack(playlist.length, -1, prefs.musicMode === 'shuffle' ? 'shuffle' : 'all'))
   }
 
   return {
@@ -311,6 +338,10 @@ export function createSound() {
       pickTrack()
     },
     setWeather,
+    /** 下一首: the next track of the playlist now playing. */
+    skip: () => advance(true),
+    playlist: () => playlist.map(track => ({ id: track.id, name: track.name })),
+    playing: () => playing?.id ?? null,
     setReading(on) {
       reading = on
       applyLevels()
@@ -336,6 +367,6 @@ export function createSound() {
       staged = false
       pickTrack()
     },
-    state: () => ({ context: ctx?.state ?? 'none', weather, loops: stops.length, reading, levels: ctx ? Object.fromEntries(LAYERS.map(layer => [layer, layerLevel(prefs, layer, reading)])) : null, track: playing?.id ?? null }),
+    state: () => ({ context: ctx?.state ?? 'none', weather, loops: stops.length, reading, levels: ctx ? Object.fromEntries(LAYERS.map(layer => [layer, layerLevel(prefs, layer, reading)])) : null, track: playing?.id ?? null, playlist: playlist.map(track => track.id), loop: Boolean(audio?.loop) }),
   }
 }

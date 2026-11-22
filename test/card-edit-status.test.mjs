@@ -12,7 +12,7 @@ import { STATUS_TUNE } from '../server/forge/check.mjs'
 import { STATUS_TARGET, editRequest, readEdit } from '../server/forge/edit.mjs'
 
 const BOOK = { entries: [{ id: 0, comment: '[InitVar]初始变量', content: '好感: 10\n体力: 50', keys: [], constant: true, enabled: false }] }
-const BAR = { title: '小雨', theme: 'paper', fields: [{ path: '好感', label: '好感', show: 'meter', min: 0, max: 100 }] }
+const BAR = { title: '小雨', theme: 'editorial', fields: [{ path: '好感', label: '好感', show: 'meter', min: 0, max: 100 }] }
 const cardWith = (extra = {}) => normalizeCard({ spec: 'chara_card_v2', data: { name: '小雨', first_mes: '你好', character_book: BOOK, ...extra } })
 const withBar = (bar = BAR) => Object.assign(cardWith(), { statusBar: structuredClone(bar) })
 
@@ -23,10 +23,10 @@ test('the request shows the layout and the variables; the format says how to wri
   const card = withBar()
   const { request } = editRequest(card, { text: '体力也显示出来', state: { 好感: 10, 体力: 50 } })
   const content = request.messages[0].content
-  assert.match(content, /<status_bar>\{"title":"小雨","theme":"paper"/)
+  assert.match(content, /<status_bar>\{"title":"小雨","theme":"editorial"/)
   assert.match(content, /<variables>\n开局时的变量：\n好感: 10\n体力: 50\n<\/variables>/)
   assert.match(request.system, /<status_bar>\{"title": "标题，可空"/)
-  assert.match(request.system, /theme 可选：plain、paper/)
+  assert.match(request.system, /theme 可选：plain、editorial、meadow、sigil、daybreak、aquarelle、cobalt、afterschool、lineart、signal、mercury、redink、kaleido/)
   assert.doesNotMatch(request.system, /检查这张卡 → 调整状态栏/, 'no longer sent elsewhere for new variables')
   // Kept to the bar.
   const aimed = editRequest(card, { text: '换个配色', target: STATUS_TARGET }).request.messages[0].content
@@ -44,7 +44,7 @@ test('a <status_bar> in the answer is a layout change; the look it says nothing 
   assert.equal(changes.length, 1)
   const [change] = changes
   assert.deepEqual([change.id, change.kind], ['statusBar', 'statusBar'])
-  assert.equal(change.spec.theme, 'paper', 'not written: kept')
+  assert.equal(change.spec.theme, 'editorial', 'not written: kept')
   assert.deepEqual(change.spec.fields.map(field => field.path), ['好感', '体力'])
   assert.match(change.before, /好感 \(好感\): meter/)
   assert.match(change.after, /体力 \(体力\): number/)
@@ -136,7 +136,7 @@ test('…/check/status: the bar to adjust, its preview, what is wrong with it, a
   assert.equal(tuned.records.at(-1).title, '调整状态栏')
   const undone = await call(`/api/cards/${broken.id}/check/undo`, { method: 'POST', body: { record: tuned.records.at(-1).id } })
   assert.equal(undone.status, 200)
-  assert.equal((await card()).statusBar.theme, 'paper')
+  assert.equal((await card()).statusBar.theme, 'editorial')
   assert.equal((await call(url)).body.records.length, 1)
 
   // No variables: nothing to adjust.

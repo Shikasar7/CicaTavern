@@ -10,6 +10,7 @@ import { DIRECT_CARD } from '../web/shared/basic.js'
 import { cleanPath, cleanStatusSpec, withoutLookRule } from '../web/shared/status.js'
 import { COVER_HIDE_SCRIPT, COVER_MARK, COVER_SCRIPT, cleanCover } from '../web/shared/cover.js'
 import { msg } from './i18n.mjs'
+import { cleanPlots } from '../web/shared/plot.js'
 import { usesMvu } from './mvu.mjs'
 import { cleanHelperList, helperSummary } from './helper-scripts.mjs'
 import { helperScriptsOf, schemaScript } from './schema.mjs'
@@ -205,6 +206,9 @@ function ownCardFields(card) {
     cover: cleanCover(card.cover),
     userName: str(card.userName).trim().slice(0, 24),
     readOnly: cleanReadOnly(card.readOnly),
+    // 剧本 (web/shared/plot.js), and the one a new chat starts on unless the player picks another.
+    plots: cleanPlots(card.plots),
+    defaultPlot: typeof card.defaultPlot === 'string' ? card.defaultPlot : '',
   }
 }
 
@@ -281,6 +285,9 @@ export function normalizeCard(raw) {
     userName: str(extensions.cicatavern?.user_name).trim().slice(0, 24),
     // The variables a card creator card marks read-only.
     readOnly: cleanReadOnly(extensions.cicatavern?.read_only),
+    // 剧本 a card brought (web/shared/plot.js): someone else's, so played blind unless the player says otherwise.
+    plots: cleanPlots(extensions.cicatavern?.plots).map(plot => ({ ...plot, source: 'imported' })),
+    defaultPlot: str(extensions.cicatavern?.default_plot),
     worldbookIds: [],
     hasAvatar: false,
     importedAt: new Date().toISOString(),
@@ -359,7 +366,8 @@ function stEntry(entry, base = {}) {
       exclude_recursion: entry.extra?.excludeRecursion === true,
       prevent_recursion: entry.extra?.preventRecursion === true,
       delay_until_recursion: entry.extra?.delayUntilRecursion ?? false,
-      // 发送位置 紧挨着回复, this app's own (worldbook.mjs sendsNear).
+      // 聊天中 @深度 as set here (worldbook.mjs depthOf); the old 紧挨着回复 of an entry not set again since.
+      ...(Number.isFinite(entry.extra?.depth) ? { depth: entry.extra.depth } : {}),
       ...(entry.extra?.cicaSend === 'near' ? { cica_send: 'near' } : {}),
     },
   }
@@ -383,7 +391,7 @@ export function sillyTavernCard(card, base = null) {
     extensions.regex_scripts = card.regexScripts.map((script, i) => ({ ...plain(before.find(s => s?.id && String(s.id) === script.id) ?? before[i]), ...script }))
   }
   extensions.depth_prompt = { depth: 4, role: 'system', ...plain(extensions.depth_prompt), prompt: card.depthPrompt ?? '' }
-  const own = { ...plain(extensions.cicatavern), ...(card.statusBar ? { status_bar: card.statusBar } : {}), ...(card.cover ? { cover: card.cover } : {}), ...(card.userName ? { user_name: card.userName } : {}), ...(card.readOnly?.length ? { read_only: card.readOnly } : {}), ...(card.game ? { game: card.game } : {}) }
+  const own = { ...plain(extensions.cicatavern), ...(card.statusBar ? { status_bar: card.statusBar } : {}), ...(card.cover ? { cover: card.cover } : {}), ...(card.userName ? { user_name: card.userName } : {}), ...(card.readOnly?.length ? { read_only: card.readOnly } : {}), ...(card.game ? { game: card.game } : {}), ...(card.plots?.length ? { plots: card.plots.map(({ source: _source, ...plot }) => plot) } : {}), ...(card.plots?.length && card.defaultPlot ? { default_plot: card.defaultPlot } : {}) }
   if (Object.keys(own).length) extensions.cicatavern = own
   const data = {
     ...from,

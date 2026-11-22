@@ -11,7 +11,12 @@ import { asksChoices, asksSelfCheck, choicesInstruction, choicesRequest, extract
 import { DIRECT_CARD, VN_ID, BASIC_ID, FOLD_TAG, builtinOptions, choicesOf, isBuiltinPreset } from '../web/shared/basic.js'
 import { cleanReferences, referenceBlock } from './forge/references.mjs'
 import { appHelp, helpSystem, lookupGate, lookupLabel, lookupLine, lookupOf, MAX_LOOKUPS, retrieve, runLookup } from './help.mjs'
-import { buildTurnPrompt, chatTemplates, drawnEntries, everyTurnReminder, openingBlock, renderEntry, replaceMacros, templateText, webSearchNote } from './prompt.mjs'
+import { GUIDE_BLOCK, guideBlock } from './guide-text.mjs'
+import { applyMark, applySet, PLOT_BLOCK, plotBlock, progressOn, sceneOf, takePlotMark } from '../web/shared/plot.js'
+import { noteEnding } from './plot-endings.mjs'
+import { judgeRequest, readJudge } from './plot.mjs'
+import { chatMaterial } from './roster.mjs'
+import { buildTurnPrompt, chatTemplates, drawnEntries, everyTurnReminder, openingBlock, placeDeep, renderEntry, replaceMacros, takeDeep, templateText, webSearchNote } from './prompt.mjs'
 import { applyStateUpdates, applyWrites, displayText, keepReadOnly, stateWrites, withoutOpenEnd, writeLabels } from './state.mjs'
 import { choiceFights, cutAtGate, withoutGameMarks } from '../web/shared/game/marks.js'
 import { cgList, readCgs } from './card-cgs.mjs'
@@ -21,7 +26,7 @@ import { cleanFight, encounterSetup, fightLine, fightResult } from '../web/share
 import { asksForFight, foesRequest, gamePrompt, mayAskForFight, parseFoes, parseSuggestion, parseThings, settledSheet, suggestRequest, thingsRequest } from './game.mjs'
 import { variablePaths } from '../web/shared/game/bindings.js'
 import { httpError, newId } from './store.mjs'
-import { dynamicEntries, initialState, inPrefix, isConstant, isInitvar, isPreprocessing, sendsNear, triggeredEntries } from './worldbook.mjs'
+import { deepConstantEntries, depthOf, dynamicEntries, initialState, inPrefix, isConstant, isInitvar, isPreprocessing, triggeredEntries } from './worldbook.mjs'
 import { depthWindow, PLACEMENT } from '../web/shared/regex.js'
 import { applyScripts } from './regex-guard.mjs'
 import { replaceVariableMacros } from '../web/shared/vars.js'
@@ -431,12 +436,16 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     const opening = opens && !newSession ? applyScripts(path[0].text, scripts, { placement: PLACEMENT.AI_OUTPUT, target: 'prompt', depth: 0, macros }) : ''
     const promptInput = applyScripts(said, scripts, { placement: PLACEMENT.USER_INPUT, target: 'prompt', depth: 0, macros })
 
-    const renderedDynamic = [...dynamic.map(entry => render(entry)), ...drawnEntries(books, scripts, names)]
+    // A chat whose prefix was built since there was 聊天中 @深度 (chat.loreAtDepth) sends its constant @深度 entries each
+    // turn, at their depth; an older one has them in its prefix, where they stay until it is applied again.
+    const atDepth = chat.loreAtDepth === true
+    const renderedDynamic = [...dynamic.map(entry => render(entry)), ...drawnEntries(books, scripts, names, { atDepth })]
       .filter(item => item.text)
       .map(item => (item.title ? `【${item.title}】\n${item.text}` : item.text))
       .join('\n\n')
     // A keyword entry whose template (an @@if) printed nothing was not sent, so it is not recorded either.
     const sent = hits.map(hit => ({ ref: hit.ref, entry: hit.entry, item: render(hit.entry) })).filter(hit => hit.item.text)
+    const deepConstant = atDepth ? deepConstantEntries(turnBooks).map(entry => ({ entry, item: render(entry) })).filter(hit => hit.item.text) : []
     const note = card.depthPrompt && hasEjs(card.depthPrompt) ? templateText(session(), card.depthPrompt, templateErrors, msg`角色备注`) : card.depthPrompt
     const characterNote = note
       ? replaceMacros(replaceVariableMacros(note, templates.session ? templates.session.currentState() : state, templates.session ? templates.session.currentVariables() : { local: chat.frameVars ?? {}, global: settings.globalVars ?? {} }), names).trim()
@@ -492,12 +501,38 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         stateLeft = leftBefore.filter(name => !returned.back.includes(name))
       }
     }
+    // 聊天中 @深度 (worldbook.mjs depthOf): the constant entries there and the keyword ones found, by 顺序.
+    // 剧本: where the story is on the plot (the player's own change since the last reply in), and the scene it plays now.
+    // An ended plot sends nothing: the story goes on free. The 剧情向导's plan rests while a plot runs.
+    const playing = chat.plot?.copy && !chat.plot.paused ? chat.plot : null
+    let plotSet = null
+    let plotSent = null
+    let plotText = ''
+    if (playing) {
+      let base = progressOn(playing.copy, seen, playing.start)
+      if (playing.pending?.after === parent.id && playing.pending.set) {
+        plotSet = { of: playing.copy.id, ...playing.pending.set }
+        base = applySet(playing.copy, base, plotSet)
+      }
+      if (!base.ended) {
+        const block = plotBlock(playing.copy, base, { tightness: playing.tightness, state, pull: Boolean(plotSet?.pull), mark: playing.judge?.by !== 'helper' })
+        plotText = block.text
+        if (block.sent) plotSent = { of: playing.copy.id, ...block.sent }
+      }
+    }
+    const atDepthLore = [...deepConstant, ...sent.filter(hit => depthOf(hit.entry) !== null)]
+      .map(hit => ({ ...hit, depth: depthOf(hit.entry) }))
+      .sort((a, b) => a.entry.order - b.entry.order)
     const prompt = buildTurnPrompt({
       names,
       opening,
       recap,
-      entries: sent.filter(hit => !sendsNear(hit.entry)).map(hit => ({ ...hit.item, text: resolve(hit.item.text) })),
-      nearEntries: sent.filter(hit => sendsNear(hit.entry)).map(hit => ({ ...hit.item, text: resolve(hit.item.text) })),
+      entries: sent.filter(hit => depthOf(hit.entry) === null).map(hit => ({ ...hit.item, text: resolve(hit.item.text) })),
+      nearEntries: atDepthLore.filter(hit => hit.depth === 0).map(hit => ({ ...hit.item, text: resolve(hit.item.text) })),
+      deep: [
+        ...atDepthLore.filter(hit => hit.depth > 0).map(hit => ({ ...hit.item, depth: hit.depth, kind: '世界书', text: resolve(hit.item.text) })),
+        ...(presetSent.deep ?? presetParts.deep ?? []).map(item => ({ depth: item.depth, kind: '预设指令', text: resolve(item.text) })),
+      ],
       memory: memoryText(recalled),
       dynamic: plan.text ? [{ title: '', text: plan.text }] : [],
       characterNote: resolve(characterNote),
@@ -506,7 +541,9 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       replyLength: Number(settings.replyLength) || 0,
       replyRange: await replyRange(chat, settings),
       presetText: resolve(presetText),
-      reminder: [everyTurnReminder(chat.systemPrompt, books, { presetRules: hasPrefixRules(preset), mvu: usesMvu(card, books, preset), choices: asksChoices(chat), selfCheck: asksSelfCheck(chat), scripts }), game?.reminder].filter(Boolean).join(''),
+      plot: plotText,
+      guide: playing ? '' : guideBlock(chat.guide?.active, path),
+      reminder: [everyTurnReminder(chat.systemPrompt, books, { presetRules: hasPrefixRules(preset), mvu: usesMvu(card, books, preset), choices: asksChoices(chat), selfCheck: asksSelfCheck(chat), scripts, atDepth }), game?.reminder].filter(Boolean).join(''),
       marks,
       cgs: marks ? cgList(await readCgs(store.dirs, chat.cardId)) : [],
       game: game?.text,
@@ -531,6 +568,9 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       recalled: recalled.map(entry => entry.id),
       recalledTitles: recalled.map(entry => entry.title),
       templateErrors,
+      // 剧本: the player's change this turn carried and what the turn told the model, for the reply's progress.
+      ...(plotSet ? { plotSet } : {}),
+      ...(plotSent ? { plotSent } : {}),
       // 只发在场角色的变量: who is still left out after this turn ([] once everyone has been sent).
       ...(stateLeft ? { stateLeft } : {}),
       // What the templates wrote: the chat state (kept on the user node), chat-wide and app-wide variables. The card's scripts'
@@ -660,7 +700,15 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
    * A user node marked `dynamic.compacted` stripped the piled-up <动态设定>
    * before it; `stripAll` does that for this turn.
    */
-  async function apiMessages(chat, parent, { stripAll = false } = {}) {
+  async function apiMessages(chat, parent, options = {}) {
+    return (await historyFor(chat, parent, options)).messages
+  }
+
+  /**
+   * apiMessages, and with `newest` (this turn's message as written) its 聊天中 @深度 blocks put at their depth
+   * (prompt.mjs placeDeep): { messages, newest } (that message as it goes now).
+   */
+  async function historyFor(chat, parent, { stripAll = false, newest = null } = {}) {
     const [card, preset, globalScripts, regexSets] = await Promise.all([store.getCard(chat.cardId).catch(() => null), presetFor(store, chat.presetId), store.getRegex(), store.getRegexSets()])
     const scripts = scriptsOf(card, preset, globalScripts, regexSets, chat.regexChanges)
     const macros = text => replaceMacros(text, chat.names)
@@ -687,6 +735,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         // A searched turn keeps its 联网 note while 联网 is on (the history stays as sent, the cache hits); with it
         // off, the note goes, so no turn reads that it may search (the first turn after switching writes the cache again).
         if (!chat.webSearch && prompt.endsWith(SEARCH_NOTE())) prompt = prompt.slice(0, -SEARCH_NOTE().length)
+        // Its 聊天中 @深度 blocks went where they were for that turn only: this turn's own go in at their depth.
+        prompt = takeDeep(prompt).text
         return { role: 'user', content: index < stripBefore ? stripDynamicText(prompt) : prompt }
       }
       const reply = applyScripts(node.text, replyScripts(scripts, chat, node), { placement: PLACEMENT.AI_OUTPUT, target: 'prompt', depth: turns.length - index, macros })
@@ -711,20 +761,33 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     if (latestOnly) {
       for (const message of messages) if (message.role === 'user') message.content = message.content.replace(PRESET_BLOCK, '')
     }
-    // Lore sent 紧挨着回复: the same, the message before the newest changing with it.
+    // Lore sent 紧挨着回复, and the 剧情向导 a turn carried: the same, the message before the newest changing with it.
     let nearLore = false
     for (const message of messages) {
-      if (message.role !== 'user' || !NEAR_LORE.test(message.content)) continue
-      message.content = message.content.replace(NEAR_LORE, '')
+      if (message.role !== 'user') continue
+      const kept = message.content.replace(NEAR_LORE, '').replace(GUIDE_BLOCK, '').replace(PLOT_BLOCK, '')
+      if (kept === message.content) continue
+      message.content = kept
       nearLore = true
     }
-    const settled = Math.min(window >= 0 ? turns.length - window - 1 : Infinity, latestOnly || nearLore ? messages.length - 1 : Infinity)
+    // This turn's 聊天中 @深度 blocks, out of its message and in at their depth: the messages from the first one changed
+    // read differently next turn (the same depth is two messages further on), so the history's cache mark goes before it.
+    let newestText = newest
+    let moved = Infinity
+    if (newest !== null) {
+      const { text, deep } = takeDeep(newest)
+      const placed = placeDeep([...messages, { role: 'user', content: text }], deep)
+      messages.splice(0, messages.length, ...placed.messages.slice(0, -1))
+      newestText = placed.messages.at(-1).content
+      moved = placed.moved
+    }
+    const settled = Math.min(window >= 0 ? turns.length - window - 1 : Infinity, latestOnly || nearLore ? messages.length - 1 : Infinity, moved - 1)
     // Only this one mark in the history (with the newest message's, two at most). Two Claude relays
     // (2026-10-08) billed the history about twice with more marks than that; with this one besides the
     // newest, two Claude relays (2026-10-29, three turns of 15k characters) bill exactly
     // what they do without it, so it stays: without it a depth window rewrites the history's cache every turn.
     if (Number.isFinite(settled) && settled >= 0) messages[settled].cache = true
-    return withLead(chat, messages)
+    return { messages: withLead(chat, messages), newest: newestText }
   }
 
   /**
@@ -973,7 +1036,9 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       let cut = null
       if (target.api) {
         const building = span('prompt.history')
-        const history = await apiMessages(chat, parent, { stripAll: Boolean(compacted || userNode?.dynamic?.compacted) })
+        // 聊天中 @深度: this turn's blocks at their depth (historyFor), the message itself as it goes now (`sending`).
+        const { messages: history, newest: turnText } = await historyFor(chat, parent, { stripAll: Boolean(compacted || userNode?.dynamic?.compacted), newest: prepared.prompt })
+        const sending = { ...prepared, prompt: turnText }
         building()
         const cap = await replyCap(chat, target.provider)
         try {
@@ -1027,7 +1092,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
               head = ''
               onRestart?.()
             }
-            return generateApi(target, { system, messages: [...history, ...turnMessages(target, prepared, asSystem), ...prefillMessages(), ...more, ...steps], ...cap, webSearch, onRestart: restarted, onRetry, onReasoning, chatThinking: chat.thinking }, abortController.signal, gate ? delta => gate.push(delta) : written).then(result => {
+            return generateApi(target, { system, messages: [...history, ...turnMessages(target, sending, asSystem), ...prefillMessages(), ...more, ...steps], ...cap, webSearch, onRestart: restarted, onRetry, onReasoning, chatThinking: chat.thinking }, abortController.signal, gate ? delta => gate.push(delta) : written).then(result => {
               gate?.end(Boolean(lookupOf(result.reply)))
               if (!front) return result
               // Shorter than the tag: what was held goes on as it is.
@@ -1132,6 +1197,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
             ...(rules?.auto ? { auto: true } : {}),
             ...(rules?.ops.length ? { gameOps: rules.ops } : {}),
             ...(rules?.writes.length ? { gameWrites: rules.writes } : {}),
+            ...(prepared.plotSet ? { plotSet: prepared.plotSet } : {}),
+            ...(prepared.plotSent ? { plotSent: prepared.plotSent } : {}),
             sel: null,
             createdAt: now,
           }
@@ -1140,12 +1207,21 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
           // Chat-wide and app-wide variables are outside the tree: written once, when the turn is first taken.
           if (prepared.localWrites?.length) fresh.frameVars = applyWrites(fresh.frameVars ?? {}, prepared.localWrites)
           globalWrites = prepared.globalWrites ?? []
+          // 剧本: the player's change it carried has been sent.
+          if (prepared.plotSet && fresh.plot?.pending?.after === parent.id) fresh.plot.pending = null
         }
         // 游戏规则: a reply stops at its mark, what was written past it goes. A turn that has rolled does not roll again.
         const book = await rulebooks?.read(fresh.cardId).catch(() => null)
         const ruled = rulesOn(book)
         const stops = ruled && pausesOn(book, ownPreset(fresh)) && !userNode.battle ? gateKinds(book).filter(kind => kind !== 'check' || !userNode.check) : []
-        const { text: reply, gate } = cutAtGate(written, stops)
+        const { text: gated, gate } = cutAtGate(written, stops)
+        // 剧本: the 剧本进度 mark comes out of the reply as it is kept (so out of everything that reads it later), and the
+        // progress it made goes on the reply, read against what the turn told the model.
+        const { text: reply, mark: plotMark, raw: plotRaw } = takePlotMark(gated)
+        const plotCopy = fresh.plot?.copy
+        const plotBase = plotCopy && userNode.plotSent?.of === plotCopy.id
+          ? applySet(plotCopy, progressOn(plotCopy, withoutHidden(pathTo(fresh, userNode.parent)), fresh.plot.start), userNode.plotSet?.of === plotCopy.id ? userNode.plotSet : null)
+          : null
         const gameWrites = userNode.gameWrites ?? []
         const turnWrites = [...(userNode.templateWrites ?? []), ...gameWrites]
         const replyFrom = applyWrites(parent.state, turnWrites)
@@ -1168,6 +1244,26 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         const kept = await keptToSchema(fresh, applyWrites(updated.state, replyWrites), turnCard, { before: parent.state })
         const finalState = kept.state
         const sheet = ruled ? settledSheet(book, pathTo(fresh, parent.id), userNode, replyText, finalState) : null
+        // 剧本: the progress the reply made, with what the program knows after it (the variables, this turn's roll and
+        // fight, for the exits that need them); an ending reached the first time goes in the card's 结局收集.
+        const plotProgress = plotBase
+          ? applyMark(plotCopy, plotBase, plotMark, userNode.plotSent, {
+            whole: !cut && !gate && !outcome.api?.truncated,
+            facts: {
+              state: finalState,
+              check: userNode.check ? (userNode.check.tier === 'fail' ? 'fail' : 'pass') : null,
+              battle: userNode.battle?.over === 'won' ? 'won' : userNode.battle?.over === 'lost' || userNode.battle?.over === 'fled' ? 'lost' : null,
+            },
+          })
+          : null
+        // 辅助模型判断: a reply counts towards the helper's next look; at its count, it looks once the reply is in.
+        const judging = plotProgress && fresh.plot?.judge?.by === 'helper' && !plotProgress.ended
+        if (judging) plotProgress.wait = (plotBase.wait ?? 0) + 1
+        const judgeNow = judging && plotProgress.wait >= (fresh.plot.judge.every ?? 3) && !cut && !gate
+        if (plotProgress?.ended && !plotBase.ended) {
+          const firstTime = await noteEnding(store, fresh.cardId, plotCopy.id, sceneOf(plotCopy, plotProgress.at)).catch(() => false)
+          if (firstTime) plotProgress.first = true
+        }
         const node = {
           id: newId(),
           parent: userNode.id,
@@ -1177,6 +1273,9 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
           state: finalState,
           ...(sheet ? { game: sheet } : {}),
           ...(gate ? { gate } : {}),
+          ...(plotProgress ? { plot: plotProgress } : {}),
+          // The 剧本进度 mark as the model wrote it (at most 200 characters), to look into; the page never gets it.
+          ...(plotRaw ? { plotMark: plotRaw } : {}),
           stateChanges: [...new Set([...writeLabels(turnWrites), ...updated.changes, ...writeLabels(evaluated?.writes.message)])],
           ...(updated.unread ? { updateUnread: true } : {}),
           ...(kept.problem ? { schemaProblem: kept.problem } : {}),
@@ -1221,6 +1320,11 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         }
         if (node.usage) await ledger?.recordTurn(fresh, node).catch(() => {})
         settling()
+        if (judgeNow) {
+          const judged = judgePlot(chatId, node.id)
+          plotJudges.set(chatId, judged)
+          judged.catch(() => {}).finally(() => plotJudges.get(chatId) === judged && plotJudges.delete(chatId))
+        }
         return { chat: fresh, nodeId: node.id, ...(cut ? { cut } : {}) }
       })
     } catch (error) {
@@ -1398,10 +1502,15 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
   const tidying = new Map()
   const tidyErrors = new Map()
 
-  /** The model a tidy uses (settings.memory.tidy.model): the helper, or the chat's own reading its history from cache. */
+  /**
+   * The model a tidy uses (settings.memory.tidy.model): the helper, the chat's own reading its history from cache, or
+   * one picked by name (as the helper does, the recent turns only); a picked one no longer there: the helper's.
+   */
   async function tidyTarget(chat, node, settings) {
     const providers = await store.getProviders()
     const usable = ref => isProviderRef(ref) && providers.some(p => p.id === ref.slice(0, ref.indexOf('/')))
+    const picked = settings.memory.tidy.model
+    if (picked !== 'chat' && picked !== 'helper' && usable(picked)) return { target: await targetFor(picked, settings), inContext: false }
     if (settings.memory.tidy.model === 'chat') {
       const own = node.api && usable(node.model) ? node.model : usable(modelFor(chat, settings)) ? modelFor(chat, settings) : null
       if (own) return { target: await targetFor(own, settings), inContext: true }
@@ -1843,7 +1952,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       pausing: pausesOn(book, ownPreset(chat)),
       fights,
       fightRate: book.fightRate,
-      foes: Object.keys(book.foes),
+      // Those with a picture first: they are the ones the story should call by the bestiary's names.
+      foes: Object.keys(book.foes).sort((a, b) => Boolean(book.foes[b].file) - Boolean(book.foes[a].file)),
       wantsFight,
       mayFight: fights && own && !wantsFight && mayAskForFight(input),
       own,
@@ -1871,16 +1981,63 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     }
   }
 
-  /** A small request about the rules, on the helper model, kept on the books like the rest. → the answer's text */
-  async function askAboutRules(chat, request) {
+  /**
+   * A model call beside the story on a provider's model: `preferred` when it is one still there, else the helper
+   * (配图与朗读), the chat's own, the default. Its usage goes on the chat's. → { text, model, usage }
+   * @param missing - what to say when none of them is a provider's.
+   */
+  async function sideCall(chat, preferred, request, { signal, onText = () => {}, group = 'helper', missing = null } = {}) {
     const [settings, providers] = await Promise.all([store.getSettings(), store.getProviders()])
     const usable = ref => isProviderRef(ref) && providers.some(p => p.id === ref.slice(0, ref.indexOf('/')))
-    const ref = [settings.media?.helperModel, chat && modelFor(chat, settings), settings.model].find(usable)
-    if (!ref) throw httpError(400, msg`物品归类要用供应商的模型：在顶栏选一个，或在「配图与朗读」里选一个辅助模型`)
+    const ref = [preferred, settings.media?.helperModel, chat && modelFor(chat, settings), settings.model].find(usable)
+    if (!ref) throw httpError(400, missing ?? msg`这里要用供应商的模型：在顶栏选一个，或在「配图与朗读」里选一个辅助模型`)
     const begun = Date.now()
-    const result = await generateApi(await targetFor(ref, settings), withToolNote(request, toolNote(settings, 'helper')), new AbortController().signal, () => {})
+    const result = await generateApi(await targetFor(ref, settings), withToolNote(request, toolNote(settings, group)), signal ?? new AbortController().signal, onText)
     if (chat) await ledger?.recordTurn(chat, sideRecord(result, begun)).catch(() => {})
-    return result.reply
+    return { text: result.reply, model: result.model, usage: result.tokens }
+  }
+
+  // 辅助模型判断: chat id → the look under way (the tests wait on it).
+  const plotJudges = new Map()
+
+  /**
+   * 剧本, 辅助模型判断 (plans/22 十三·3): the helper reads the last turns and says how far the scene has come; its word
+   * stands as the mark of reply `nodeId`, the progress worked out again. Only while that reply is still where it was
+   * and no turn is being written; a reply written again later is judged again by its own count.
+   */
+  async function judgePlot(chatId, nodeId) {
+    const chat = await store.getChat(chatId)
+    const node = chat.nodes[nodeId]
+    const userNode = chat.nodes[node?.parent]
+    const copy = chat.plot?.copy
+    if (!node?.plot || !copy || node.plot.of !== copy.id || userNode?.plotSent?.of !== copy.id) return null
+    const baseOf = now => applySet(copy, progressOn(copy, withoutHidden(pathTo(now, userNode.parent)), now.plot.start), userNode.plotSet?.of === copy.id ? userNode.plotSet : null)
+    const story = chatMaterial(withoutHidden(pathTo(chat, nodeId)), { turns: (chat.plot.judge?.every ?? 3) + 1, budget: 12000 })
+    const answer = await sideCall(chat, null, judgeRequest(copy, baseOf(chat), userNode.plotSent, story), { missing: msg`辅助模型判断要用供应商的模型：在「配图与朗读」里选一个辅助模型，或在顶栏选一个供应商的模型` })
+    const mark = readJudge(answer.text)
+    if (!mark) return null
+    return store.withChat(chatId, async () => {
+      if (running.has(chatId)) return null
+      const now = await store.getChat(chatId)
+      const target = now.nodes[nodeId]
+      if (!target?.plot || now.plot?.copy?.id !== copy.id) return null
+      const base = baseOf(now)
+      const facts = {
+        state: target.state,
+        check: userNode.check ? (userNode.check.tier === 'fail' ? 'fail' : 'pass') : null,
+        battle: userNode.battle?.over === 'won' ? 'won' : userNode.battle?.over === 'lost' || userNode.battle?.over === 'fled' ? 'lost' : null,
+      }
+      const next = { ...applyMark(copy, base, mark, userNode.plotSent, { whole: !target.gate && !target.api?.truncated, facts, judged: true }), judged: true, wait: 0 }
+      if (next.ended && !base.ended && await noteEnding(store, now.cardId, copy.id, sceneOf(copy, next.at)).catch(() => false)) next.first = true
+      target.plot = next
+      await store.saveChat(now)
+      return next
+    })
+  }
+
+  /** A small request about the rules, on the helper model, kept on the books like the rest. → the answer's text */
+  async function askAboutRules(chat, request) {
+    return (await sideCall(chat, null, request, { missing: msg`物品归类要用供应商的模型：在顶栏选一个，或在「配图与朗读」里选一个辅助模型` })).text
   }
 
   /** A card's rules laid out from what it says: `chatId` for the variables of a story with it, if any. Nothing is kept until the player takes it. */
@@ -1946,8 +2103,11 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
 
   return {
     runTurn,
+    // 辅助模型判断 under way for a chat, if any (a promise of the progress it wrote).
+    plotJudging: chatId => plotJudges.get(chatId) ?? null,
     compactChat,
     askInContext,
+    sideCall,
     frameGenerate,
     fillUpdate,
     missesUpdate,

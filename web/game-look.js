@@ -303,13 +303,18 @@ export function headIn(url) {
     heads.set(url, new Promise(done => {
       const image = new Image()
       image.onload = () => {
-        const width = FACE_SAMPLE
-        const height = Math.max(1, Math.round((image.naturalHeight / image.naturalWidth) * width))
-        const canvas = Object.assign(document.createElement('canvas'), { width, height })
-        const context = canvas.getContext('2d', { willReadFrequently: true })
-        context.drawImage(image, 0, 0, width, height)
-        const face = faceOf(context.getImageData(0, 0, width, height))
-        done(face ? { ...headCrop(face, width, height), face, ratio: image.naturalHeight / image.naturalWidth } : null)
+        // A canvas that fails (a phone out of memory) finds no face: the picture's top is shown, not nothing.
+        try {
+          const width = FACE_SAMPLE
+          const height = Math.max(1, Math.round((image.naturalHeight / image.naturalWidth) * width))
+          const canvas = Object.assign(document.createElement('canvas'), { width, height })
+          const context = canvas.getContext('2d', { willReadFrequently: true })
+          context.drawImage(image, 0, 0, width, height)
+          const face = faceOf(context.getImageData(0, 0, width, height))
+          done(face ? { ...headCrop(face, width, height), face, ratio: image.naturalHeight / image.naturalWidth } : null)
+        } catch {
+          done(null)
+        }
       }
       image.onerror = () => done(null)
       image.src = url

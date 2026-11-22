@@ -4,10 +4,11 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { createApp } from '../server/http.mjs'
-import { createStore, readJsonFile } from '../server/store.mjs'
+import { createStore, mendControlChars, readJsonFile } from '../server/store.mjs'
 import { createSaves } from '../server/saves.mjs'
 import { createPromptLibrary } from '../server/prompts.mjs'
 import { writeCardPng } from '../server/cards.mjs'
@@ -70,6 +71,52 @@ test('存档: a damaged list is moved aside, not silently overwritten; the new l
   const kept = (await readdir(path.join(store.dirs.cards, 'card1'))).filter(name => name.startsWith('saves.json.bad-'))
   assert.equal(kept.length, 1)
   assert.match(await readFile(path.join(store.dirs.cards, 'card1', kept[0]), 'utf8'), /"s1"/)
+})
+
+test('mendControlChars: zero bytes dropped, other control characters escaped inside strings, the rest left alone', () => {
+  assert.equal(mendControlChars('{\n "a": "x\\n\\"y"\n}'), '{\n "a": "x\\n\\"y"\n}', 'nothing to mend: the same text')
+  const mended = mendControlChars('{\n "a": "雨\u0000\u0000夜\u0001",\u0000\n "b": "一\n二\t\\\\"\n}')
+  assert.deepEqual(JSON.parse(mended), { a: '雨夜\u0001', b: '一\n二\t\\' })
+})
+
+test('a chat or card damaged on disk: mended when it can be, moved aside and left out of the list when not', async t => {
+  const root = await tempDir(t, 'tavern-damaged-')
+  const store = createStore(root)
+  await store.init()
+  const told = []
+  store.onDamaged(report => told.push(report))
+  await store.saveCard({ id: 'card1', name: '小雨', importedAt: '2026-10-01T00:00:00.000Z' })
+  await store.saveCard({ id: 'card2', name: '阿晴', importedAt: '2026-10-02T00:00:00.000Z' })
+  const chat = id => ({ id, cardId: 'card1', title: '雨夜', nodes: { root: { id: 'root', role: 'assistant', text: '开场白很长很长', createdAt: '2026-10-01T00:00:00.000Z' } } })
+  await store.saveChat(chat('chat1'))
+  await store.saveChat(chat('chat2'))
+  const chatPath = id => path.join(store.dirs.chats, `${id}.json`)
+  // chat1: a run of zero bytes inside a message, as a computer switched off mid-save leaves it.
+  const text = await readFile(chatPath('chat1'), 'utf8')
+  await writeFile(chatPath('chat1'), text.replace('很长很长', '很\u0000\u0000\u0000长'))
+  assert.throws(() => JSON.parse(text.replace('很长很长', '很\u0000长')), /Bad control character/)
+  // chat2: cut off for good.
+  await writeFile(chatPath('chat2'), text.replace('"chat1"', '"chat2"').slice(0, 60))
+  // card2: the same.
+  await writeFile(path.join(store.dirs.cards, 'card2', 'card.json'), '{"id": "card2", "name": "阿')
+
+  const heads = await store.chatHeads('card1', () => '')
+  assert.deepEqual(heads.map(head => head.id), ['chat1'], 'the list still opens, without the one that cannot be read')
+  assert.equal((await store.getChat('chat1')).nodes.root.text, '开场白很长')
+  assert.deepEqual((await store.listCards()).map(card => card.id), ['card1'])
+
+  assert.deepEqual(told.filter(report => report.mended).map(report => report.file), [path.join('chats', 'chat1.json')], 'told once, however often it is read')
+  assert.deepEqual(told.filter(report => report.movedTo).map(report => report.file).sort(), [path.join('cards', 'card2', 'card.json'), path.join('chats', 'chat2.json')])
+  const chatNames = await readdir(store.dirs.chats)
+  assert.equal(chatNames.filter(name => /^chat1\.json\.bad-\d+$/.test(name)).length, 1, 'the mended one: its original kept beside it')
+  assert.equal(chatNames.filter(name => /^chat2\.json\.bad-\d+$/.test(name)).length, 1, 'the unreadable one: moved aside, kept to recover by hand')
+  assert.ok(!chatNames.includes('chat2.json'))
+
+  await store.saveChat(await store.getChat('chat1'))
+  assert.doesNotThrow(() => JSON.parse(readFileSync(chatPath('chat1'), 'utf8')), 'the next save writes it clean')
+
+  await writeFile(path.join(root, 'settings.json'), '{"model": "a\u0000')
+  await assert.rejects(store.getSettings(), error => error.status === 500 && told.at(-1).file === 'settings.json' && !told.at(-1).movedTo, 'one the store cannot do without: an error of its own, the file named in the log')
 })
 
 test('prompt library: seeded only when there is none; a read that fails leaves the file alone and is tried again', async t => {

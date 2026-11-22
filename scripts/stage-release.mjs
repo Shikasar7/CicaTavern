@@ -100,6 +100,10 @@ for (const english of [path.join(root, 'docs', 'README-release.en.md'), path.joi
     break
   }
 }
+// The user guide the README points to.
+for (const file of ['guide.md', 'guide.en.md']) {
+  if (existsSync(path.join(root, 'docs', file))) await cp(path.join(root, 'docs', file), path.join(out, 'docs', file))
+}
 await cp(path.join(root, 'CHANGELOG.md'), path.join(out, 'CHANGELOG.md'))
 if (existsSync(path.join(root, 'LICENSE'))) await cp(path.join(root, 'LICENSE'), path.join(out, 'LICENSE'))
 else console.warn('[stage-release] 仓库根目录还没有 LICENSE：发布前选一个许可证')

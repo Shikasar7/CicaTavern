@@ -55,7 +55,11 @@ const BLOWS_LANDED = new Set(['slash', 'strike', 'cut', 'flurry', 'burst'])
 // Pictures cut out of their white on this page: address → a promise of the cut one, or of null.
 const cuts = new Map()
 
-/** A foe's picture without its plain background; null when it has none to lose, and the picture is shown as it is. */
+/**
+ * A foe's picture without its plain background; null when it has none to lose, and the picture is shown as it is. Null
+ * too when cutting fails (a phone's canvas out of memory throws): the picture is shown uncut, and the next fight tries
+ * again.
+ */
 export function cutPicture(url) {
   if (!cuts.has(url)) {
     cuts.set(url, (async () => {
@@ -76,7 +80,11 @@ export function cutPicture(url) {
       out.getContext('2d').drawImage(canvas, x, y, width, height, 0, 0, width, height)
       const png = await new Promise(resolve => out.toBlob(resolve, 'image/png'))
       return png ? URL.createObjectURL(png) : null
-    })())
+    })().catch(error => {
+      console.warn('cut-out failed, picture shown as it is', error)
+      cuts.delete(url)
+      return null
+    }))
   }
   return cuts.get(url)
 }

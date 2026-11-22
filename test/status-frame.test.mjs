@@ -148,7 +148,7 @@ test('a card in English gets the bar\'s own words in English; a plain bar keeps 
   assert.equal(bar.all('status-flag')[0].text, 'Yes')
   const [, chinese] = statusScripts(SPEC, { hidePlaceholder: '隐藏', statusBar: '状态栏' })
   assert.equal((await drawn(chinese.replaceString, STATE)).body.children[0].all('status-flag')[0].text, '是')
-  assert.ok(script.replaceString.length < 120000, `the page is ${script.replaceString.length} characters`)
+  assert.ok(script.replaceString.length < 130000, `the page is ${script.replaceString.length} characters`)
 
   const { skin: _, ...plain } = SPEC
   const small = statusBarHtml(plain)

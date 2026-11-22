@@ -51,7 +51,8 @@ export function cleanMemory(value) {
     tidy: {
       enabled: tidy.enabled === true,
       every: clamp(Math.round(Number(tidy.every) || MEMORY_DEFAULTS.tidy.every), 5, 30),
-      model: tidy.model === 'chat' ? 'chat' : 'helper',
+      // 'helper' (配图与朗读's helper model), 'chat' (the chat's own, with the story in cache), or one model named.
+      model: tidy.model === 'chat' ? 'chat' : typeof tidy.model === 'string' && /^[\w.-]+\/\S{1,200}$/.test(tidy.model) ? tidy.model : 'helper',
     },
     budget: clamp(Math.round(Number(saved.budget) || MEMORY_DEFAULTS.budget), 300, 6000),
   }
@@ -199,6 +200,7 @@ const LIMIT_SAYS = [
   /tokens? > (\d[\d,]*) maximum/i,
   /range of input length should be \[\d+,\s*(\d[\d,]*)\]/i,
   /exceed model limit \((\d[\d,]*) tokens\)/i,
+  /available context size \((\d[\d,]*) tokens\)/i,
   /max(?:imum)? (?:input |context |prompt )?(?:length|tokens?)[^\d]{0,16}(\d[\d,]*)/i,
 ]
 

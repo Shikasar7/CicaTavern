@@ -69,8 +69,11 @@ test("a script's frame: its own variables as shipped, the chat's preset, SillyTa
   const context = frameWindow()
   // The page the frame posts to.
   context.parent = new Proxy(context.parent, { get: (target, key) => (key === 'postMessage' ? message => posted.push(message) : target[key]) })
+  // Docked small: what it draws by SillyTavern's window has to fit the frame, not the page.
+  Object.assign(context, { innerWidth: 360, innerHeight: 320 })
   vm.runInContext(tag.replace(/^<script>/, '').replace(/<\\?\/script>$/, ''), context, { timeout: 5000 })
   const read = code => JSON.parse(vm.runInContext(`JSON.stringify(${code})`, context))
+  assert.deepEqual(read('[parent.innerWidth, parent.innerHeight]'), [360, 320])
   assert.deepEqual(read("getVariables({ type: 'script' })"), { should_enable: true })
   vm.runInContext("replaceVariables({ should_enable: false }, { type: 'script' })", context)
   assert.deepEqual(JSON.parse(JSON.stringify(posted.filter(m => m.op === 'vars').map(m => m.args))), [{ type: 'script', value: { should_enable: false } }], 'kept by the page, under this script')
@@ -150,4 +153,12 @@ test('a frame that outlives a turn hears the chat move on: the new latest floor,
   await new Promise(resolve => setTimeout(resolve, 20))
   assert.equal(context.getLastMessageId(), 2)
   assert.deepEqual(heard, [3])
+})
+
+test("a message's frame: SillyTavern's window is the page's, the frame grows with what is in it", () => {
+  const tag = frameShim({ names: { user: '你', char: 'x' }, frame: 'f2', vars: { latest: {} }, viewport: { height: 800, width: 1200 }, events: {}, messages: [], lastId: 0 })
+  const context = frameWindow()
+  Object.assign(context, { innerWidth: 360, innerHeight: 2000 })
+  vm.runInContext(tag.replace(/^<script>/, '').replace(/<\\?\/script>$/, ''), context, { timeout: 5000 })
+  assert.equal(vm.runInContext('JSON.stringify([parent.innerWidth, parent.innerHeight])', context), '[1200,800]')
 })

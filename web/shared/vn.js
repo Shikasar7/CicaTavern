@@ -35,7 +35,8 @@ const REPLIED = /^[^，,听让等]{0,6}?(?<![没不未])(?:说|问|喊|叫|打�
 // The line after a quote saying who said it: 你说。, 他低声说，… — not 你说没有 or 你又说了一遍, which answer it.
 const PRONOUN_SAID = /^(你|她|他)(?![们])(?:轻声|低声|小声|大声|笑着|如实|继续|才)?(?:说|道|问|答|喊|叫)(?:道)?(?=$|[，,：:])/
 // Unnamed people the story calls by their trade (掌柜的愣了一下): a name plate of their own.
-const ROLE_WORDS = '掌柜 店小二 小二 伙计 老板娘:girl 老板 老头 老汉 大爷 大娘:girl 婆婆:girl 老妇人:girl 郎中 管家 侍卫 守卫 衙役 捕快 车夫 船夫 丫鬟:girl 侍女:girl 和尚' // i18n-ignore: words in the story
+const ROLE_WORDS = '掌柜 店小二 小二 伙计 老板娘:girl 老板 老头 老汉 大爷 大娘:girl 婆婆:girl 老妇人:girl 郎中 管家 侍卫 守卫 衙役 捕快 车夫 船夫 丫鬟:girl 侍女:girl 和尚 ' + // i18n-ignore: words in the story
+  '路人 行人 陌生人 店员 服务员 收银员 保安 司机 快递员 外卖员 前台 护士:girl 警察 摊主 小贩 大妈:girl 大婶:girl 大叔 阿姨:girl 老太太:girl 老奶奶:girl 老爷爷' // i18n-ignore: words in the story
 const ROLES = ROLE_WORDS.split(' ').map(word => {
   const [name, kind = 'boy'] = word.split(':')
   return { name, keys: [name], kind, role: true }
@@ -287,6 +288,11 @@ function fromNeighbours(previous, next, names, recent, turn, third) {
   const after = pronoun && pronoun !== '你' ? byPronoun(pronoun, names, recent) : null // i18n-ignore: a pronoun
   return after ? told(after) : null
 }
+
+// Someone the story brings in without a name: 一个陌生男人, 一位穿西装的中年人, 有个孩子 (a 个/位/名 or 有人 before a word for a person).
+const STRANGER = /(?:[一两几有]|^)[个位名][^，,。！？!?“”「」『』"]{0,8}?(?:人|男子|女子|男人|女人|男生|女生|孩子|小孩|老者|姑娘|小伙子?|汉子|青年|妇人|家伙|声音)|有人|陌生|不知是谁/ // i18n-ignore: words in the story
+/** A row's last sentence, its narration only (not what is said in it). */
+const lastSentence = row => plainOf(row ?? '').replace(QUOTE, '').replace(/\s+/g, '').split(/[。！？!?]/).filter(Boolean).pop() ?? ''
 
 /** A quote's words, without its marks. */
 const innerOf = quote => plainOf(quote).trim().replace(/^[“「『"]|[”」』"]$/g, '')
@@ -752,8 +758,11 @@ export function splitLines(text, { names = [], max = 90, partial = false } = {})
           // 「师兄，渴不渴？」 is said to the player, not by them (and lines either side that said so told nothing).
           if (player && speaker === player.name && player.keys.some(key => quoted.includes(key))) speaker = near = null
           // Nothing says who: whoever spoke last (not the player, whose lines are written as such), else the card's
-          // own. A line led in by 说 that still cannot be told (等你说「是。」) keeps no name.
-          if (!speaker && !near && !pronoun && !SAY_TAIL.test(plainOf(beat.before).replace(/\s+/g, ''))) speaker = lastSpeaker ?? names.find(entry => entry.char)?.name ?? null
+          // own. A line led in by 说 that still cannot be told (等你说「是。」) keeps no name, and so does one right
+          // after narration bringing in someone unnamed (一个陌生男人凑过来。「…」): theirs, not the card's.
+          const lead = plainOf(beat.before).replace(/\s+/g, '')
+          const stranger = STRANGER.test(lead) || (bare && b === 0 && STRANGER.test(lastSentence(lines[i - 1])))
+          if (!speaker && !near && !pronoun && !stranger && !SAY_TAIL.test(lead)) speaker = lastSpeaker ?? names.find(entry => entry.char)?.name ?? null
         }
         rowSpeaker = speaker
         const who = names.find(entry => entry.name === speaker)
