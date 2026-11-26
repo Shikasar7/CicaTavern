@@ -212,6 +212,20 @@ test('entries are copied or moved between books, out of a card\'s own one too', 
   assert.equal(out.body.from.card.bookEntries, 1)
   assert.equal((await call(`/api/cards/${card.id}/book`)).body.entries.length, 1)
 
+  // Into a card's own book: beside what it has, and one made for a card without any.
+  const into = await call('/api/worldbooks/transfer', { method: 'POST', body: { from: book.id, to: `card-${card.id}`, uids: ['7'] } })
+  assert.deepEqual([into.status, into.body.to.id, into.body.to.added, into.body.to.entries, into.body.to.card.bookEntries], [200, `card-${card.id}`, ['7'], 2, 2])
+  const own = (await call(`/api/cards/${card.id}/book`)).body.entries
+  assert.deepEqual(own.map(e => e.uid), ['0', '7'])
+  const bare = await importCard('无书', null)
+  assert.equal((await call(`/api/cards/${bare.id}/book`)).status, 404)
+  const first = await call('/api/worldbooks/transfer', { method: 'POST', body: { from: `card-${card.id}`, to: `card-${bare.id}`, uids: ['0', '7'], move: true } })
+  assert.deepEqual([first.status, first.body.to.entries, first.body.from.card.bookEntries], [200, 2, 0])
+  assert.deepEqual((await call(`/api/cards/${bare.id}/book`)).body.entries.map(e => e.content), own.map(e => e.content))
+  assert.equal((await call('/api/worldbooks/transfer', { method: 'POST', body: { from: `card-${bare.id}`, to: `card-${bare.id}`, uids: ['0'] } })).status, 400)
+  assert.equal((await call('/api/worldbooks/transfer', { method: 'POST', body: { from: `card-${bare.id}`, to: 'card-nothere', uids: ['0'], move: true } })).status, 404)
+  assert.equal((await call(`/api/cards/${bare.id}/book`)).body.entries.length, 2, 'nothing moved when the card is missing')
+
   assert.equal((await call('/api/worldbooks/transfer', { method: 'POST', body: { from: book.id, to: target.id, uids: [] } })).status, 400)
   assert.equal((await call('/api/worldbooks/transfer', { method: 'POST', body: { from: book.id, to: book.id, uids: ['7'] } })).status, 400)
   assert.equal((await call('/api/worldbooks/transfer', { method: 'POST', body: { from: book.id, to: 'nothere', uids: ['7'] } })).status, 404)

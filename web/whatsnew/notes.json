@@ -1645,6 +1645,156 @@
           }
         }
       ]
+    },
+    {
+      "version": "2.8.0",
+      "date": "2026-11",
+      "items": [
+        {
+          "image": "2.8.0-pics.webp",
+          "zh": {
+            "title": "配图：一次画几张，各在画的那一句下面",
+            "text": "「设置 → 配图与朗读 → 配图 → 画面提示词」里的「一次画几张」（默认 1 张）调到 2 到 4，一条回复一次写几段提示词，画同一场戏的不同瞬间和机位，一张一张地画。写提示词的模型照抄一句原文，图就插在那一句下面；窗口里能逐张改、去掉不要的，没画成的最后一起重试。\n横图铺满正文，方图、竖图窄一些；鼠标移到图上，左上角的滑块只调这一张，图上「⋯」里的「所有图的大小」调全部。详细程度多了「详细（不截断）」。感谢 oo..十六ヾ 提出并试做了配图的几项改进：配图放在画的那一句下面、按横竖给宽度、存为 CG、一次画几张、配图在剧情里出现。"
+          },
+          "en": {
+            "title": "Pictures: several at once, each under its own line",
+            "text": "Set Pictures at a time (Settings, Pictures & voice, Image prompt; 1 by default) to 2 to 4, and a reply gets several prompts at once, different moments and angles of the same scene, drawn one after another. The model writing them copies the line each one shows, and the picture goes under that line. Edit each in the window or leave some out; those that fail can be tried again together.\nWide pictures fill the column, square and tall ones are narrower. Hover a picture for a slider that sizes just that one; Size of all pictures in its ⋯ sizes them all. Prompts have a new Detailed (not cut) level, and Keep as CG and Show pictures in the story are on the next page."
+          }
+        },
+        {
+          "image": "2.8.0-vn.webp",
+          "zh": {
+            "title": "配图在剧情里出现，画得好的存为 CG",
+            "text": "视觉小说的配图菜单里打开「配图在剧情里出现」（默认关）：念到配图画的那一句，图占满画面，立绘让开，念到下一句退回。\n对话里画得好的图，在图上「⋯ → 存为 CG…」放进卡的 CG，选一组或新建一组，写上什么时候放；视觉小说里剧情再写到这一幕时全屏放。"
+          },
+          "en": {
+            "title": "Pictures in the story, and the good ones kept as CG",
+            "text": "Turn on Show pictures in the story in the visual novel's picture menu (off by default): when the line a picture shows comes up, the picture fills the screen and the sprites step aside, until the next line.\nA picture worth keeping goes into the card's CG with Keep as CG… in its ⋯: pick a group or start one and say when it plays. When the story comes to that scene again, the visual novel shows it full screen."
+          }
+        },
+        {
+          "image": "2.8.0-wardrobe.webp",
+          "zh": {
+            "title": "衣柜和换衣服",
+            "text": "角色名册里每人可以有几套衣服（三十种常用的可挑，也能从卡里找），画图时由程序原样拼进提示词，每张图的衣服都一样。配图旁的小箭头里「换衣服…」自己换；剧情里写到换衣服，配图和立绘跟着换，分支、重新生成各算各的；衣柜里没有的衣服也认，能收进衣柜。\n卡有记衣着的变量时，在衣柜下面填它的路径，衣服就跟着变量走。视觉小说里每套可以有一张立绘，「一键备齐」会一起画。没设衣柜的卡和以前完全一样。"
+          },
+          "en": {
+            "title": "Wardrobes and changing clothes",
+            "text": "Everyone in the Character roster can have several outfits (pick from thirty common ones, or find them in the card), and the app writes the outfit into each prompt as it is, so it stays the same from picture to picture. Change clothes… under the small arrow by Illustrate changes them by hand; when the story has someone change, pictures and sprites follow, each branch and regeneration on its own. Clothes not in the wardrobe are recognised too, and can be kept there.\nWhen the card keeps clothes in a variable, give its path under the wardrobe and the clothes follow it. In the visual novel each outfit can have its own sprite, drawn along with the rest by Fill in everything. Cards without a wardrobe work as before."
+          }
+        },
+        {
+          "image": "2.8.0-raise.webp",
+          "zh": {
+            "title": "养成：同伴各自养大，随身册",
+            "text": "规则窗口「成长」里的新开关（默认关），适合收服、御兽、养宠物的卡：同伴各有等级、种族值、性格和资质。收服的带着遇到时的等级入队，出战的得全部经验、待命的得一半；比你高的打得更狠，羁绊每升一档多听一级；队伍满 8 只以后再收服的先寄养（最多 40 只）。\n正文框右下角的圆印（领头那只的脸和血，红点是能进化的只数）点开是随身册：「队伍」三只出战的站在环上，按住拖就换人；「寄养」能搜、能排、能多选；「图鉴」分彩色、灰色、剪影；「克制」看谁能对付哪个属性。点一只看详情，进化、装备、天赋都在里面。"
+          },
+          "en": {
+            "title": "Raising, and the companion book",
+            "text": "A new switch under Growth in the game rules (off by default), for cards about taming and raising creatures: each companion has its own level, base stats, nature and talent. One caught joins at the level it was met at; those fighting get all the experience, those standing by half. Higher levels hit harder, and each bond tier makes them heed one more; past eight in the party, new ones are boarded out (up to 40).\nThe seal at the bottom right of the story box (the leader's face and life, a red dot for each ready to evolve) opens the Companion book: the three fighting stand on a ring, held and dragged to swap; Board out searches, sorts and picks several; the Bestiary shows colour, grey and silhouettes; Types shows who beats what. Tap one for its details, evolving, gear and perks."
+          }
+        },
+        {
+          "image": "2.8.0-tame.webp",
+          "zh": {
+            "title": "进化全屏演一次，收服道具和再战一次",
+            "text": "在随身册或游戏菜单里进化时全屏演一次，列出属性和战力从多少到多少；种族值换成新形态的，加过的点留着，学过的招不会忘，伤全好。\n物品多了一类「收服道具」（+3、+6、必定成功），打赢以后在结算画面里选一个再试；没收服成，可以从头再打一场、赢了再试一次。收服成功当场亮出它的等级、资质、属性和招式。"
+          },
+          "en": {
+            "title": "Evolving on the full screen; taming items and Fight again",
+            "text": "Evolving from the Companion book or the Game menu plays on the full screen, with the stats and power before and after. The base stats become the new form's, points added stay, moves learnt are kept, and wounds heal.\nThere is a new kind of item, the Taming item (+3, +6, or sure to work), picked on the end screen of a fight won before trying. If the try fails, you can Fight again from the start and try once more if you win. A creature tamed shows its level, talent, stats and moves on the spot."
+          }
+        },
+        {
+          "image": "2.8.0-vars.webp",
+          "zh": {
+            "title": "这轮变量没更新上：一键修好",
+            "text": "用 MVU 变量的卡，每轮写完程序查一遍这一轮的变量更新（不花额度）：读不出来的、没起作用的、变量名写错的、不合卡的变量规则的，在回复下面逐条写出来。\n点「修好」，模型照着卡的规则重写这一轮的变量更新，正文不动，修完写着哪几项变了，能「撤销」。程序看不出来的（剧情里给了钱、金钱没变），点最新回复的「⋯ → 核对这轮变量」。"
+          },
+          "en": {
+            "title": "Variables that didn't update, fixed in one click",
+            "text": "For cards with MVU variables, the app checks each round's variable update when it is written (no tokens spent): what could not be read, what changed nothing, names written wrong, and what breaks the card's variable rules are listed under the reply.\nFix has the model write the round's update again by the card's rules, the story untouched, and says what changed; Undo takes it back. For what the app cannot tell (money handed over in the story but not taken off), use ⋯, Check this round's variables on the latest reply."
+          }
+        },
+        {
+          "image": "2.8.0-wait.webp",
+          "zh": {
+            "title": "写到上限自动接着写，不出字时写明在等谁",
+            "text": "模型写到单次输出的上限、回复断在中间时，从断开的地方接着写进同一条回复，最多两次，写完再算变量和选项，回复下面标「自动续写 N 次」；「设置 → 世界书与状态」里可以关。创作角色卡的每一步也一样，最多三次，不再整份作废。\n不出字的时候，回复末尾写出模型正在写变量更新或选项（写了多少字）、上游多少秒没有发来内容、正在补写变量，还是应用自己在保存；视觉小说的等待框里同样有。"
+          },
+          "en": {
+            "title": "Written on past the output limit; who it's waiting for",
+            "text": "When a reply stops at the model's output limit, it is written on from where it stopped into the same reply, up to twice, before the variables and choices are worked out, and the reply says Auto-continued. Turn it off under Settings, Lorebooks & state. Every step of Create a card does the same, up to three times, instead of throwing it all away.\nWhile nothing new shows, the end of the reply says whether the model is writing the variable update or choices (and how much), how long upstream has sent nothing, whether variables are being filled in, or whether the app is saving; the visual novel's waiting box too."
+          }
+        },
+        {
+          "image": "2.8.0-files.webp",
+          "zh": {
+            "title": "文件工具（Beta）",
+            "text": "直连对话输入框左边多了文件夹图标，默认关。打开后给这段对话指定文件夹，助手就能看、搜、读里面的文字文件；改成「可以改」的还能新建、修改、移动和删除。\n改之前给你看改动，同意了才写，删除每次都问；旧版留 30 天，回复下面「撤销这一轮的文件改动」能改回去。只能用你加进来的文件夹，系统的、存密钥的和应用自己的加不了；不能运行命令。所有供应商的模型都能用；Windows、Mac 版有。"
+          },
+          "en": {
+            "title": "File tools (Beta)",
+            "text": "Direct chat has a folder icon left of the input box, off by default. Give the chat a folder and the assistant can look through, search and read the text files in it; set it to Can change and it can also create, edit, move and delete them.\nEvery change is shown before it is written and waits for Allow; deleting always asks. Old versions are kept for 30 days, and Undo this turn's file changes under the reply puts them back. Only folders you add can be used, never system folders, ones holding keys, or the app's own; no commands can be run. Works with any provider's models, on Windows and Mac."
+          }
+        },
+        {
+          "image": "2.8.0-plot.webp",
+          "zh": {
+            "title": "剧本的推进速度和主动推进",
+            "text": "剧本条 → 剧本设置里多了「推进速度」：七档滑块，从极慢到极快，每段对话各记各的，不用改剧本。它管每一幕演几轮，也管一轮演到几条要点；一幕超过「最多几轮」时也会让模型开始收尾。\n想往前推时：「推进一步」让下一轮演下一条要点，要点旁的「演这条」指定一条，「推到收尾」让下一轮演完这一幕（有岔路就走到岔路口等你选），「现在就走」不用想台词，直接发。"
+          },
+          "en": {
+            "title": "Script pace, and moving it on yourself",
+            "text": "Script settings on the script bar have a Pace slider with seven steps from very slow to very fast, kept for each chat without changing the script. It sets how many turns a scene takes and how many points a turn plays; a scene that runs past its most turns is now wrapped up by the model too.\nTo move on: One step on plays the next point next turn, Play this by a point picks it, Wrap it up finishes the scene next turn (stopping at a fork for you to choose), and Go now sends it without anything to type."
+          }
+        },
+        {
+          "image": "2.8.0-buttons.webp",
+          "zh": {
+            "title": "回复下面的按钮重新整理",
+            "text": "常用的留在一行图标里（重新生成、复制、修改、配图、朗读），其余按画面和故事分组收进「⋯」，每项写明会怎样。没写完、没写变量更新或选项、已隐藏这类要处理的单独一块，按钮就在旁边；状态更新、上下文精简等收成右边一句，点开看全部。\n旧回复的按钮平时不显示；手机上只留「⋯」，点开是从底部升起的面板。「换一组选项」挪到选项下面，配图的按钮放到图上；「复制」点一下复制正文，其余在「⋯ → 复制…」。"
+          },
+          "en": {
+            "title": "The buttons under a reply, sorted out",
+            "text": "The ones used most stay in a row of icons (Regenerate, Copy, Edit, Illustrate, Read aloud); the rest are grouped by pictures and story under ⋯, each saying what it does. Things to deal with, such as a reply not finished or without its variable update or choices, or hidden, get a block of their own with the button beside it; state updates and the like fold into one line on the right.\nOlder replies show their buttons only when needed; on a phone only ⋯ is left, opening a sheet from the bottom. New choices sits under the choices, a picture's buttons on the picture, and Copy copies the story at once, with the rest under ⋯, Copy…."
+          }
+        },
+        {
+          "image": "2.8.0-more.webp",
+          "zh": {
+            "title": "还有这些",
+            "text": "正则能调先后：按住一行最左边的「⋮⋮」拖动，或者展开后点「↑ 上移」「↓ 下移」。供应商的「高级 → 传输方式」能选「不用流式（写完一次返回）」，给流式会截断、出乱码或计费不对的中转站用。视觉小说下面一排多了「菜单」，有属性点或天赋可选时带小圆点。\n游戏菜单里连点只算一项，一轮最多 100 个操作；队伍页能让谁离队；视觉小说模式写的回复，普通对话里不再显示每句前面的名字（「主题 → 说话人名字」能打开）；条目能放进卡里自带的世界书，常驻条目也能设「不触发别的条目」。"
+          },
+          "en": {
+            "title": "And also",
+            "text": "Regex can be put in order: drag a row by the ⋮⋮ on its left, or open it and use ↑ Move up and ↓ Move down. A provider's Advanced, Transfer can be No streaming (the whole reply at once), for relays whose streams cut off, garble text or bill wrongly. The visual novel has a Menu button in its bottom row, with a dot when there are points or perks to pick.\nTaps in a row in the Game menu count as one change, with up to 100 a turn; the party page can let someone leave; replies written in visual novel mode no longer show a name before each line in the plain chat (Speaker names under Theme brings them back); lorebook entries can go into a card's own lorebook, and constant entries can be kept from triggering others."
+          }
+        },
+        {
+          "icon": "🔧",
+          "zh": {
+            "title": "修好的",
+            "text": "回复被上游断在半句却当成写完了（现在标成没写完，写明是哪个模型和停止原因，给「继续生成」）；预设的「最大回复长度」把回复截断（现在只告诉模型大约写多长）；回复和方案动不动就写到输出上限；没写完的回复被补写了变量；回复结尾偶尔冒出「（注：没有要求附加格式块……）」。\n开战的那一轮正文没了；普通对话里打仗没有头像；选了别的开局伙伴，游戏菜单里还是默认那一个；进化了状态栏里还是旧的阶位；手机上点回复下面的小标签看不到原因；写剧本没用你选的模型；收起的脚本小窗换对话后又展开。"
+          },
+          "en": {
+            "title": "Fixed",
+            "text": "A reply cut off upstream mid-sentence counted as finished (now it is marked unfinished, with the model and the reason, and Continue); a preset's reply length cut replies short (now it only tells the model about how long to write); replies and plans kept running into the output limit; unfinished replies got their variables filled in; replies sometimes ended with a note about format blocks nobody asked for.\nThe story vanished from the turn a fight began; fights in the plain chat had no faces; a different starting companion still showed the default one in the Game menu; the status bar kept an old rank after evolving; tapping the small labels under a reply did nothing on a phone; scripts were not written with the model you picked; folded script windows unfolded on changing chats."
+          }
+        },
+        {
+          "recap": "2.7",
+          "image": "2.7.0-plot.webp",
+          "zh": {
+            "title": "2.7 加了什么",
+            "text": "剧本模式：卡可以带一份分章分幕的剧本，有岔路、支线和结局，输入框上方的剧本条、路线图和结局收集；剧本可以自己写、让向导写、从对话整理，也能导入 Twine 和 Ink；剧情向导；状态栏的十二个新主题，选样式看大图，定制外观从主题起步；这一轮的状态、背景音乐歌单、每人音量和语气、世界书按深度插入。"
+          },
+          "en": {
+            "title": "What 2.7 added",
+            "text": "Scripts: a card can carry a script in chapters and scenes, with forks, side lines and endings, a script bar above the input box, a route map and an ending collection; scripts written by hand, by the guide or from a chat, or imported from Twine and Ink; the story guide; twelve new status bar themes, seen large before picking, and custom looks starting from a theme; State then, music playlists, volume and tone for each voice, and lorebook entries placed at a depth."
+          }
+        }
+      ]
     }
   ]
 }

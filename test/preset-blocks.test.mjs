@@ -73,6 +73,20 @@ test('the thinking of a preset, by its own name, is no story', () => {
   assert.equal(choiceChecks('<think_mist~>\nA. 翻过断崖【检定|灵巧|DC12】\n</think_mist~>\n正文。').size, 0, 'nor is a choice it plans')
 })
 
+test('写前自查 and 裁判表: a mark they name is not the story\'s', () => {
+  const check = '<self_check>\n1. 没问题。\n2. 玩家在动手，给出【战斗|白羽隼:普通|开局:先手】，金币另写【获得|金币×9】。\n</self_check>'
+  const story = '她扑了上来。\n【战斗|白羽隼:精英】'
+  const { text, gate } = cutAtGate(`${check}\n<time_box>夜｜斗场</time_box>\n${story}\n多写的话。`)
+  assert.equal(gate.foes[0].tier, 'elite', 'the stop is the story\'s own')
+  assert.equal(text, `${check}\n<time_box>夜｜斗场</time_box>\n${story}`)
+  assert.equal(gateOf(`${check}\n她退开了。`), null)
+  assert.deepEqual(replyMarks(`${check}\n你捡起它。【获得|绳】`), [{ kind: 'gain', name: '绳', count: 1 }])
+  assert.equal(gateOf('<self_check>\n1. 以【战斗|白羽隼】收尾'), null, 'still being written')
+  assert.equal(gateOf(`<self_check>\n1. 以【战斗|白羽隼】收尾\n\n${story}`).foes[0].tier, 'elite', 'one left open ends with its paragraph')
+  assert.equal(gateOf('<judge>\n比力量【检定|力量|DC12】\n</judge>\n她退开了。'), null)
+  assert.equal(choiceFights(`${check}\n她退开了。\n<choices>\nA. 追上去【战斗|白羽隼】\n</choices>`).size, 1)
+})
+
 test('without a wrapper: the blocks after the story are not story; with nothing outside them, the longest is', () => {
   assert.equal(gateOf(`她看着你。\n${OPTIONS}\n${TIP}`), null)
   assert.equal(gateOf(`她看着你。\n【检定|灵巧|DC12】\n${OPTIONS}`).stat, '灵巧')

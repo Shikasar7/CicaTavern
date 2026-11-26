@@ -1,12 +1,13 @@
 // 成长 on the page: the player's words for what shared/game/growth.js counts, and the pieces of the 游戏菜单 and of a
 // reply that show it. Loaded with game-play.js, for a chat whose card has rules.
 import { t } from '/i18n.js'
+import { worthChange } from '/game-raise.js'
 import { BIG_BUDGET, BOND_AT, EFFECT_IDS, GEAR_BUDGET, GEAR_SLOTS, LEVEL_GAINS, RARITIES, STAGE_USES, bigsOwed, bondOf, gearOf, nextBondAt } from '/shared/game/growth.js'
 import { MAX_STAGE, SIZES, SKIP_POINTS, EFFECTS, bonusOf, growsOn, nextStageAt, perkOf, perkOffer, perksOn, perksOwed, powerOf, practiceNeeds, stageOf } from '/shared/game/growth.js'
 import { MAX_FORMS, PLAYER_FORMS, SHIFT_COST, fightOnly, formAt, formBudget, formForFight, formNeeds, formOf, formReady, formsOf, nextForm, perkEveryOf, rankGives } from '/shared/game/growth.js'
 import { bondPointsOf, everyGives, levelPointsOf, rankRestores } from '/shared/game/growth.js'
 import { STEPS_PER_RANK, rankAt } from '/shared/game/rank.js'
-import { ATTRIBUTES, startSheet } from '/shared/game/sheet.js'
+import { skillKindIn, ATTRIBUTES, startSheet } from '/shared/game/sheet.js'
 
 export { BIG_BUDGET, bigsOwed, bonusOf, growsOn, perkOf, perksOn, perksOwed, powerOf, practiceNeeds, stageOf, gearOf, EFFECT_IDS, GEAR_SLOTS, RARITIES, GEAR_BUDGET, formOf, formsOf, formReady, perkEveryOf }
 
@@ -194,6 +195,10 @@ export function levelLine(who, book) {
 
 // 形态: what a form asks for, in the page's words.
 const needText = (need, book, marked = true) => (need.kind === 'level' ? t`${need.need} 级` : need.kind === 'item' ? t`有「${need.need}」` : t`羁绊${[t`一档`, t`二档`, t`三档`][need.need - 1]}`) + (need.met && marked ? ' ✓' : '')
+/** The same for a page that marks it itself. */
+export const needWord = (need, book) => needText(need, book, false)
+/** What a skill does, in a few words: by its kind on this card. */
+export const kindText = (book, name) => ({ strike: t`重击一个敌人`, sweep: t`打所有敌人`, flurry: t`连打两下`, poison: t`打一下，让敌人中毒`, stun: t`打一下，可能打晕`, heal: t`回复生命`, boost: t`自己变强`, finish: t`残血的敌人伤害加倍`, mend: t`全队回复`, ward: t`一层护盾`, rally: t`全队变强`, taunt: t`引敌人来打自己` })[skillKindIn(book, name)] ?? ''
 /** A form in a few words: 炎角兽（成熟期）. */
 export const formName = form => (form ? (form.stage ? t`${form.name}（${form.stage}）` : form.name) : '')
 /** What a form gives, in a line: 伤害 +10%，会「超级火焰」. */
@@ -220,6 +225,9 @@ function formPictures(el, chain, at, face) {
     return i ? [el('span', { class: `status-chain-arrow${i <= at ? ' done' : ''}`, 'aria-hidden': 'true', text: '›' }), tile] : [tile]
   }))
 }
+
+/** The form one can come to now, or null. */
+export const readyOf = (who, book, things) => formReady(who, book, things)
 
 export function formSection({ el, who, sheet, book, act, name = '', face = null }) {
   const chain = formsOf(who, book)
@@ -307,7 +315,7 @@ export function growthNotes(before, after, book) {
   const formed = (was, now, who) => {
     if (!was || !formsOf(now, book).length || formOf(was, book)?.name === formOf(now, book)?.name) return
     const back = formAt(now, book) < formAt(was, book)
-    notes.push({ kind: 'level', icon: '🧬', text: back ? t`${who || t`你`}变回了${formOf(now, book).name}` : t`${who || t`你`}${book.words?.evolve || t`进化`}成了${formOf(now, book).name}` })
+    notes.push({ kind: 'level', icon: '🧬', text: back ? t`${who || t`你`}变回了${formOf(now, book).name}` : t`${who || t`你`}${book.words?.evolve || t`进化`}成了${formOf(now, book).name}` + worthChange(was, now, book) })
   }
   formed(before, after, '')
   // 历练: a mark more on an attribute, or the point that enough of them came to.

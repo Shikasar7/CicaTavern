@@ -4,6 +4,7 @@
 // it keeps to what the phone app's Node has: no \p{…}, Intl or normalize().
 import { FOLD_TAG, timeBoxOf } from './basic.js'
 import { CG_KINDS, EFFECT_KINDS, faceOf, markEffects } from './stage.js'
+import { getPath } from './vars.js'
 
 // Reasoning in its own tag (<thinking>, <思考>…): FOLD_TAG is defined in basic.js and offered here as before.
 export { FOLD_TAG }
@@ -515,6 +516,7 @@ const withOptionsOnly = text => text
 //   【林青禾|微笑】「你来了。」   who says the line and how they look
 //   【效果|震屏】                 what the picture does (on its own line, before the line it is for)
 //   【CG|组名】                   one of the card's CG groups, full screen (the same way: on its own line)
+//   【换装|名字|套名】             who has changed into what (server/wear.mjs): in any chat whose cast has a wardrobe
 // The reader takes them out of the text; the chat shows the name instead
 // (markSpeakers). One way to read 【kind|value】 for the marks to come.
 
@@ -530,25 +532,108 @@ const EFFECT_MARK = /(?:\*\*)?【\s*([^【】|｜\n]{1,8}?)\s*[|｜]\s*([^【】
 const OPEN_MARK = /(?:\*\*)?【[^【】\n]{0,40}$|(?:\*\*)?【[^【】\n]{1,40}[|｜][^【】\n]{0,40}】(?:\*\*)?\s*[：:]?\s*$/
 
 const isCgKind = kind => CG_KINDS.includes(String(kind).trim().toLowerCase())
-const isEffectKind = kind => isCgKind(kind) || EFFECT_KINDS.includes(String(kind).trim().toLowerCase())
+const isWearKind = kind => /^(?:换装|换衣服|wear)$/i.test(String(kind).trim())
+const isEffectKind = kind => isWearKind(kind) || isCgKind(kind) || EFFECT_KINDS.includes(String(kind).trim().toLowerCase())
 
 /** Two lots of effects as one (the later wins where both ask), or null when neither asks. */
-const joinEffects = (a, b) => (a || b ? { screen: b?.screen ?? a?.screen ?? null, actor: b?.actor ?? a?.actor ?? null, ...((b?.cg ?? a?.cg) ? { cg: b?.cg ?? a.cg } : {}) } : null)
+const joinEffects = (a, b) => (a || b ? { screen: b?.screen ?? a?.screen ?? null, actor: b?.actor ?? a?.actor ?? null, ...((b?.cg ?? a?.cg) ? { cg: b?.cg ?? a.cg } : {}), ...(a?.wear || b?.wear ? { wear: [...(a?.wear ?? []), ...(b?.wear ?? [])] } : {}) } : null)
 
-/** The effect marks in a line taken out ({ screen, actor, cg? }, or null), and the line without them. */
+// 【换装|名字|套名】, two parts and no more.
+const WEAR_PARTS = /^\s*([^|｜]{1,24}?)\s*[|｜]\s*([^|｜]{1,24}?)\s*$/
+
+/** The changes of clothes a reply marks, in order: [{ at, name, outfit }]. */
+export function wearMarks(text) {
+  const found = []
+  for (const match of String(text ?? '').matchAll(EFFECT_MARK)) {
+    const parts = isWearKind(match[1]) ? WEAR_PARTS.exec(match[2]) : null
+    if (parts) found.push({ at: match.index, name: parts[1], outfit: parts[2] })
+  }
+  return found
+}
+
+/** What a card's own variable (a cast member's `wearPath`) says someone wears, as one line; '' when it says nothing. */
+export function wearValue(state, path) {
+  const key = String(path ?? '').trim().replace(/^\/?stat_data[./]/, '')
+  if (!key) return ''
+  let value = getPath(state, key)
+  // An old MVU value, [value, what it is].
+  if (Array.isArray(value) && value.length === 2) value = value[0]
+  if (value && typeof value === 'object') value = Object.values(value).filter(item => typeof item === 'string').join('，') // i18n-ignore: the card's own words
+  const text = typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : ''
+  return /^(?:无|没有|未知|暂无|none|null|undefined|n\/a|[-—.…]+)$/i.test(text) ? '' : text.slice(0, 60)
+}
+
+/** Which of the outfits (by name) a variable's words mean: that name, else the last of those said in it; null for none of them. */
+export function outfitSaid(outfits, words) {
+  const plain = text => String(text ?? '').replace(/\s+/g, '').toLowerCase()
+  const said = plain(words)
+  if (!said) return null
+  const same = outfits.find(item => plain(item.name) === said)
+  if (same) return same
+  const within = outfits.filter(item => plain(item.name).length > 1 && said.includes(plain(item.name)))
+  return within.sort((a, b) => said.lastIndexOf(plain(b.name)) - said.lastIndexOf(plain(a.name)) || plain(b.name).length - plain(a.name).length)[0] ?? null
+}
+
+/**
+ * Which of the 衣柜 each cast member has on, for the 立绘 on the stage: Map(entry id → outfit id), of those in something
+ * other than the usual one that the 衣柜 lists (server/wear.mjs wearOn says the same of the pictures).
+ * @param path - the chat's nodes up to and with the reply on screen.
+ * @param roster - the card's cast ({ id, wardrobe }).
+ * @param idOf - a name as written → the entry's id.
+ * @param seen - of the last reply, the marks read so far: [{ name, outfit }]; null for all of them.
+ * @param read - whether the last reply has been read to where its variables change (wearPath).
+ */
+export function wornOn(path, roster, idOf, seen = null, read = true) {
+  const on = new Map()
+  const people = (roster ?? []).filter(entry => entry?.wardrobe?.length)
+  if (!people.length) return on
+  const plain = text => String(text ?? '').replace(/\s+/g, '').toLowerCase()
+  // What each one's own variable said last: only a change of it changes their clothes.
+  const by = new Map()
+  const put = (id, outfit) => {
+    const entry = people.find(item => item.id === id)
+    if (!entry) return
+    const found = entry.wardrobe.find(item => (outfit.id ? item.id === outfit.id : plain(item.name) === plain(outfit.name)))
+    if (found) on.set(id, found.id)
+    else on.delete(id)
+  }
+  path.forEach((node, index) => {
+    if (node.role === 'assistant') {
+      const last = index === path.length - 1
+      for (const mark of last && seen ? seen : wearMarks(node.text)) put(idOf(mark.name), { name: mark.outfit })
+      if (!last || read) for (const entry of people) {
+        const words = entry.wearPath ? wearValue(node.state, entry.wearPath) : ''
+        if (!words || words === by.get(entry.id)) continue
+        by.set(entry.id, words)
+        const found = outfitSaid([{ id: '', name: '平时' }, ...entry.wardrobe], words) // i18n-ignore: the usual outfit's name
+        put(entry.id, found ? { id: found.id, name: found.name } : { name: words })
+      }
+    }
+    for (const [id, choice] of Object.entries(node.wear ?? {})) put(id, choice ?? {})
+  })
+  return on
+}
+
+/** The effect marks in a line taken out ({ screen, actor, cg?, wear? }, or null), and the line without them. */
 function takeEffects(text) {
   let effects = null
   const rest = text.replace(EFFECT_MARK, (mark, kind, words) => {
     if (!isEffectKind(kind)) return mark
+    if (isWearKind(kind)) {
+      const parts = WEAR_PARTS.exec(words)
+      if (!parts) return mark
+      effects = joinEffects(effects, { wear: [{ name: parts[1], outfit: parts[2] }] })
+      return ''
+    }
     // 【CG|组名】: the group's name as written (the page finds the group).
     if (isCgKind(kind)) {
-      effects = { screen: effects?.screen ?? null, actor: effects?.actor ?? null, cg: words.trim() }
+      effects = { screen: effects?.screen ?? null, actor: effects?.actor ?? null, cg: words.trim(), ...(effects?.wear ? { wear: effects.wear } : {}) }
       return ''
     }
     // 【效果|攻击力+5】 in a card's own text is not ours.
     const asked = markEffects(words.split(/[|｜,，、\s]+/))
     if (!asked) return mark
-    effects = { screen: asked.screen ?? effects?.screen ?? null, actor: asked.actor ?? effects?.actor ?? null, ...(effects?.cg ? { cg: effects.cg } : {}) }
+    effects = { screen: asked.screen ?? effects?.screen ?? null, actor: asked.actor ?? effects?.actor ?? null, ...(effects?.cg ? { cg: effects.cg } : {}), ...(effects?.wear ? { wear: effects.wear } : {}) }
     return ''
   })
   return { text: rest, effects }

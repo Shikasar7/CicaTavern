@@ -101,6 +101,14 @@ export function createGallery(store, { scenes, media, cgs = null }) {
       for (const [entryId, sprite] of Object.entries(cast.sprites ?? {})) {
         items.push({ id: `sprite:${card.id}:${sprite.file}`, kind: 'sprite', cardId: card.id, cardName: card.name, chatId: '', chatTitle: '', name: names.get(entryId) ?? '', entryId, who: names.get(entryId) ?? '', face: 'neutral', src: `/api/sprites/${card.id}/${sprite.file}`, prompt: String(sprite.prompt ?? ''), at: String(sprite.updatedAt ?? '') })
       }
+      // 衣柜's: one per outfit.
+      for (const [entryId, own] of Object.entries(cast.outfits ?? {})) {
+        const wardrobe = card.media?.roster?.find(entry => entry.id === entryId)?.wardrobe ?? []
+        for (const [outfitId, picture] of Object.entries(own)) {
+          const outfit = wardrobe.find(one => one.id === outfitId)?.name ?? ''
+          items.push({ id: `sprite:${card.id}:${picture.file}`, kind: 'sprite', cardId: card.id, cardName: card.name, chatId: '', chatTitle: '', name: `${names.get(entryId) ?? ''}·${outfit}`, entryId, who: names.get(entryId) ?? '', face: `outfit:${outfitId}`, outfitId, outfit, src: `/api/sprites/${card.id}/${picture.file}`, prompt: String(picture.prompt ?? ''), at: String(picture.updatedAt ?? '') })
+        }
+      }
       for (const [entryId, faces] of Object.entries(cast.expressions ?? {})) {
         for (const [face, picture] of Object.entries(faces)) {
           items.push({ id: `sprite:${card.id}:${picture.file}`, kind: 'sprite', cardId: card.id, cardName: card.name, chatId: '', chatTitle: '', name: `${names.get(entryId) ?? ''}·${face}`, entryId, who: names.get(entryId) ?? '', face, src: `/api/sprites/${card.id}/${picture.file}`, prompt: String(picture.prompt ?? ''), at: String(picture.updatedAt ?? '') })
@@ -190,6 +198,7 @@ export function createGallery(store, { scenes, media, cgs = null }) {
       try {
         if (item.kind === 'scene') await scenes.remove(item.cardId, item.sceneId)
         else if (item.kind === 'cg') await cgs.removePicture(item.cardId, item.groupId, file)
+        else if (item.outfitId) await scenes.removeOutfit(item.cardId, item.entryId, item.outfitId)
         else if (item.face === 'neutral') await scenes.removeSprite(item.cardId, item.entryId)
         else await scenes.removeExpression(item.cardId, item.entryId, item.face)
         removed++

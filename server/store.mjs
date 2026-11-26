@@ -244,6 +244,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   stateRefreshEvery: 5,
   statePresent: true, // 只发在场角色的变量: a long state goes without the groups of characters not around (present.mjs)
   autoFillUpdate: true, // 自动补写变量: a reply without a readable update block gets one right after the turn
+  autoContinue: true, // 自动续写: a reply cut at the output limit is written on from there, into the same reply
   replyToTop: true, // a reply written to its end is shown from its first line (not in the visual novel mode)
   dynamicStrip: 'rare', // when piled-up <动态设定> copies are stripped: 'often' | 'rare' | 'off' (dynamic.mjs)
   // 递归触发: 'off' | 'keyword' (entries found by keyword find more) | 'all' (always-on ones too) (worldbook.mjs triggeredEntries).
@@ -317,7 +318,11 @@ const LIST_FILES = { persona: 'personas.json', style: 'styles.json' }
  *   the subscription stays off and the default model must come from a provider.
  * @param lan - false where the server only listens on loopback (Android).
  */
-export function createStore(root = defaultDataRoot(), { subscription = true, lan = true } = {}) {
+/**
+ * @param localProviders - () → providers this install's own backends add (server/http.mjs): listed with the saved
+ *   ones for the model picker and turns, never saved, not on the providers page.
+ */
+export function createStore(root = defaultDataRoot(), { subscription = true, lan = true, localProviders = () => [] } = {}) {
   const lockSettings = settings => {
     let locked = settings
     if (!subscription) locked = { ...locked, subscription: 'off', model: String(locked.model ?? '').includes('/') ? locked.model : '' }
@@ -420,6 +425,7 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
         if (!['often', 'rare', 'off'].includes(next.dynamicStrip)) next.dynamicStrip = 'rare'
         if (!['off', 'keyword', 'all'].includes(next.worldRecursion)) next.worldRecursion = 'off'
         next.autoFillUpdate = next.autoFillUpdate !== false
+        next.autoContinue = next.autoContinue !== false
         next.statePresent = next.statePresent !== false
         next.replyToTop = next.replyToTop !== false
         next.compaction = cleanCompaction(next.compaction)
@@ -455,11 +461,15 @@ export function createStore(root = defaultDataRoot(), { subscription = true, lan
     /** Custom API providers, keys included (see providers.mjs publicProvider for what the UI gets). */
     async getProviders() {
       const value = await readData(path.join(root, 'providers.json'), {})
-      return Array.isArray(value.providers) ? value.providers : []
+      const saved = Array.isArray(value.providers) ? value.providers : []
+      // This install's own backends (`localProviders`): after the saved ones, marked `local`, never written.
+      const local = localProviders().filter(p => !saved.some(s => s.id === p.id)).map(p => ({ ...p, local: true }))
+      return [...saved, ...local]
     },
     async saveProviders(providers) {
-      await writeJson(path.join(root, 'providers.json'), { providers })
-      return providers
+      const saved = providers.filter(p => !p.local)
+      await writeJson(path.join(root, 'providers.json'), { providers: saved })
+      return saved
     },
     /**
      * 你的角色 or 文风 (`kind` persona | style): { defaultId, items, cards }. Until the list is first saved it is the one

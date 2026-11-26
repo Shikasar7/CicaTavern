@@ -5,7 +5,7 @@ import { t } from '/i18n.js'
 import { reachedWith } from '/shared/game/achievements.js'
 import { foeSheets } from '/shared/game/battle.js'
 import { changeWords, choiceChecks, choiceFights, choiceKey, cutAtGate, parseChoice, replyMarks, withoutGameMarks } from '/shared/game/marks.js'
-import { AID_BONUS, ATTRIBUTES, MAX_FIELDED, aidFor, applyOps, bestiaryName, chanceFor, checkExperience, checkLine, dcFor, effectOf, fieldedOf, gateKinds, levelNeeds, nothingToRestore, rankNow, rollCheck, sheetOf, sheetOnPath, startSheet, turnSheet, usableNow } from '/shared/game/sheet.js'
+import { AID_BONUS, ATTRIBUTES, MAX_FIELDED, aidFor, applyOps, bestiaryName, chanceFor, checkExperience, checkLine, dcFor, effectOf, fieldedOf, foldOps, gateKinds, knowsOf, leftOut, levelNeeds, nothingToRestore, rankNow, rollCheck, sheetOf, sheetOnPath, startSheet, turnSheet, usableNow } from '/shared/game/sheet.js'
 import { beneath, beyond, chanceToWin, encounterSetup, foesLine, playedOut } from '/shared/game/encounter.js'
 import { ailsOn, modifierOf, riskOf } from '/shared/game/dice.js'
 import { latestPlace, matchScene, normalizePlace, visitedPlaces } from '/shared/vn.js'
@@ -14,11 +14,12 @@ import { ailName, banner, countWord, currentLook, fitFigure, heroNow, letters } 
 import { noteChips } from '/vn-hud.js'
 import { growthNotes, levelUpCard, pendingOf } from '/game-growth.js'
 import * as growth from '/game-growth.js'
+import { birthWords, raisesOn, worthChange } from '/game-raise.js'
 
 export { createSound } from '/game-sound.js'
 export { growth, levelUpCard, pendingOf }
 export { ACHIEVEMENTS, tallyOf, reachedBy } from '/shared/game/achievements.js'
-export { bestiaryName, noteChips, latestPlace, matchScene, normalizePlace, visitedPlaces, applyOps, beneath, beyond, playedOut, changeWords, checkExperience, choiceChecks, choiceFights, choiceKey, checkLine, chanceToWin, cutAtGate, effectOf, encounterSetup, gateKinds, nothingToRestore, parseChoice, rankNow, rollCheck, turnSheet, usableNow, withoutGameMarks }
+export { bestiaryName, noteChips, latestPlace, matchScene, normalizePlace, visitedPlaces, applyOps, beneath, beyond, playedOut, changeWords, checkExperience, choiceChecks, choiceFights, choiceKey, checkLine, chanceToWin, cutAtGate, effectOf, encounterSetup, foldOps, gateKinds, nothingToRestore, parseChoice, rankNow, rollCheck, turnSheet, usableNow, withoutGameMarks, knowsOf, leftOut }
 
 const TIER_WORDS = () => ({ crit: t`大成功`, success: t`成功`, close: t`险胜`, fail: t`失败` })
 const TIER_HINTS = () => ({ crit: t`超出预期`, success: '', close: t`差一点，做到了但有代价`, fail: t`没做到` })
@@ -57,6 +58,20 @@ const attributeName = (sheet, id) => sheet?.named?.[id] || ATTRIBUTES.find(item 
 
 export const attributesOf = sheet => ATTRIBUTES.map(item => ({ id: item.id, name: attributeName(sheet, item.id), value: sheet.attributes[item.id], modifier: modifierOf(sheet.attributes[item.id]) }))
 
+/** 养成: what a fight's outcome makes of the party, for the fight's last screen: who rose, and who was caught. Null on a card that does not raise. */
+export function fightSettled(chat, book, ops, op) {
+  if (!raisesOn(book)) return null
+  const before = sheetFor(chat, book, ops)
+  const after = applyOps(before, book, [op]).sheet
+  const rows = (after.party ?? []).flatMap(member => {
+    const was = (before.party ?? []).find(other => other.name === member.name)
+    return was && member.level > was.level ? [t`${member.name} Lv.${was.level} → ${member.level}`] : []
+  })
+  const held = new Set([...(before.party ?? []), ...(before.box ?? [])].map(member => member.name))
+  const come = op.tamed ? [...(after.party ?? []), ...(after.box ?? [])].find(member => !held.has(member.name)) : null
+  return { rows, caught: come?.raised ? { member: come, book, boxed: !(after.party ?? []).includes(come) } : null }
+}
+
 /** A word the card has its own name for (book.words), else the app's: the caller gives that, in the page's language. */
 export const cardWord = (book, key, fallback) => book?.words?.[key] || fallback
 export { MAX_FIELDED, fieldedOf, levelNeeds }
@@ -76,7 +91,7 @@ export const strainOf = sheet => (sheet.strain ?? []).map(item => t`${ailName(it
 /** The same in a line, for the HUD. */
 export const ailLine = sheet => (sheet.conditions ?? []).map(item => ailName(item.name)).join(t`、`)
 
-const PARTY_LABELS = () => ({ join: name => t`${name}入队`, leave: name => t`${name}离队`, bench: name => t`${name}待命`, field: name => t`${name}出战`, up: name => t`${name}前移`, back: name => t`${name}归队` })
+const PARTY_LABELS = () => ({ join: name => t`${name}入队`, leave: name => t`${name}离队`, bench: name => t`${name}待命`, field: name => t`${name}出战`, up: name => t`${name}前移`, back: name => t`${name}归队`, store: name => t`${name}寄养`, fetch: name => t`接回${name}` })
 
 /** A turn's operation as its tag by the input box. */
 export function opLabel(op) {
@@ -88,6 +103,7 @@ export function opLabel(op) {
   if (op.op === 'sanity') return t`理智改为 ${op.value}`
   if (op.op === 'point' && op.who) return t`${op.who}加点 ${ATTRIBUTES.find(item => item.id === op.id)?.name ?? ''}`
   if (op.op === 'point') return t`加点 ${ATTRIBUTES.find(item => item.id === op.id)?.name ?? ''}`
+  if (op.op === 'party' && op.act === 'swap') return t`${op.label ?? op.name}和${op.other ?? op.with}换位`
   if (op.op === 'party') return PARTY_LABELS()[op.act]?.(op.name) ?? op.name
   if (op.op === 'mend') return t`解除 ${ailName(op.name)}`
   if (op.op === 'equip') return op.who ? t`${op.who}装上 ${op.name}` : t`装上 ${op.name}`
@@ -95,6 +111,32 @@ export function opLabel(op) {
   if (op.op === 'form') return op.who ? t`${op.who}：${op.label ?? t`进化`}` : op.label ?? t`进化`
   if (op.op === 'perk') return op.skip ? t`不选，换成属性点` : op.who ? t`${op.who}：${op.label ?? op.key}` : op.label ?? op.key
   return op.status === 'new' ? t`新任务 ${op.name}` : op.status === 'done' ? t`完成 ${op.name}` : t`失败 ${op.name}`
+}
+
+// Done more than once, these add up: one tag. The order of the others (待命, then 出战) says something.
+const ADDING_UP = ['use', 'gain', 'lose', 'point']
+// A number set again and again (a held +: 71, 72, 73…) is one tag, what it came to.
+const SET_WORDS = book => ({ life: cardWord(book, 'life', t`生命`), energy: t`气力`, sanity: t`理智` })
+/**
+ * The operations as their tags: [{ label, at: their places in `ops` }]. With `before` (the sheet they are done on),
+ * a number set says how far it moved: 「生命 +6 → 77」 (in the card's word for it, from `book`).
+ */
+export function opTags(ops, before = null, book = null) {
+  const words = SET_WORDS(book)
+  const tags = new Map()
+  ops.forEach((op, i) => {
+    const label = opLabel(op)
+    const key = words[op.op] ? op.op : ADDING_UP.includes(op.op) ? label : i
+    const tag = tags.get(key)
+    if (tag) Object.assign(tag, { op, label }).at.push(i)
+    else tags.set(key, { op, label, at: [i] })
+  })
+  return [...tags.values()].map(({ op, label, at }) => {
+    const from = Number(before?.[op.op])
+    if (words[op.op]) return { label: Number.isFinite(from) ? `${words[op.op]} ${signed(op.value - from)} → ${op.value}` : label, at }
+    if (at.length === 1) return { label, at }
+    return { label: op.op === 'point' ? `${label} +${at.length}` : t`${label}（${at.length} 次）`, at }
+  })
 }
 
 const counts = sheet => new Map((sheet?.things ?? []).map(thing => [thing.name, thing.count]))
@@ -174,15 +216,20 @@ export function sheetNotes(sheetBefore, after, book, replyText = '') {
     const old = was.get(name)
     if (!old) {
       notes.push({ kind: 'gain', icon: '🤝', text: book.words?.party ? t`${name}加入了${book.words.party}` : t`${name}加入了队伍` })
+      if (member.raised) notes.push({ kind: 'level', icon: '⭐', text: [`Lv.${member.level}`, birthWords(member)].filter(Boolean).join(' · ') })
       if (member.points) notes.push({ kind: 'level', icon: '⭐', text: t`${name}有 ${member.points} 点属性可以加` })
     } else {
       if (member.hurt && !old.hurt) notes.push({ kind: 'lose', icon: '🩹', text: t`${name}负伤，暂时不能上场` })
       if (!member.hurt && old.hurt) notes.push({ kind: 'gain', icon: '🌿', text: t`${name}伤好了` })
-      if (member.level > old.level) notes.push({ kind: 'level', icon: '⭐', text: t`${name}升到 ${member.level} 级` })
+      if (member.level > old.level) notes.push({ kind: 'level', icon: '⭐', text: t`${name}升到 ${member.level} 级` + (member.form === old.form ? worthChange(old, member, book) : '') })
       for (const skill of member.skills) if (!old.skills.includes(skill)) notes.push({ kind: 'gain', icon: '✨', text: t`${name}学会：${skill}` })
     }
   }
-  for (const name of was.keys()) if (!now.has(name)) notes.push({ kind: 'lose', icon: '👋', text: book.words?.party ? t`${name}离开了${book.words.party}` : t`${name}离开了队伍` })
+  // 寄养: one caught with no room for it, or left behind by choice, is not gone.
+  const kept = new Set((after.box ?? []).map(member => member.name))
+  const keptBefore = new Set((before.box ?? []).map(member => member.name))
+  for (const name of kept) if (!keptBefore.has(name)) notes.push({ kind: 'gain', icon: '🏡', text: t`${name}寄养起来了` })
+  for (const name of was.keys()) if (!now.has(name) && !kept.has(name)) notes.push({ kind: 'lose', icon: '👋', text: book.words?.party ? t`${name}离开了${book.words.party}` : t`${name}离开了队伍` })
   notes.push(...growthNotes(before, after, book))
   const named = (list, item) => (list ?? []).some(other => other.name === item.name)
   for (const item of after.conditions ?? []) if (!named(before.conditions, item)) notes.push({ kind: 'lose', icon: '🩹', text: t`状态：${ailName(item.name)}` })

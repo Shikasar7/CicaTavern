@@ -463,6 +463,8 @@ export function cardSummary(card) {
     archived: card.archived === true,
     pinned: card.pinned === true,
     favorite: card.favorite === true,
+    // 衣柜 (wear.mjs): somebody in the cast has more than the usual outfit.
+    wardrobe: Boolean(card.media?.roster?.some(entry => entry?.wardrobe?.length || entry?.wearPath)),
   }
 }
 

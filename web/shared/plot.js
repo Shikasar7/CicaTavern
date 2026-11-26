@@ -10,6 +10,21 @@ export const MAX_POINTS = 5
 /** 支线: small stories beside the main one, each with its own scene now (plans/22 十三·6). */
 export const MAX_SIDES = 3
 export const TIGHTNESS = Object.freeze(['loose', 'steady', 'tight'])
+/**
+ * 推进速度: a chat's own, −3 (slowest) to 3, over what the plot's scenes ask. `times`: the turns a scene takes; `rule` and
+ * `points`: what the turn tells the model (nothing for 0, the plot as written).
+ */
+const PACES = Object.freeze({
+  '-3': { times: 3, rule: '推进极慢：这一轮只写眼前这一会儿的事，不主动引出要点，玩家自己碰到了才写，晚些出现没关系；慢慢铺陈人、对话和细节。', points: '要点（不急，玩家碰到了再写）：' }, // i18n-ignore: the model reads it in Chinese
+  '-2': { times: 2, rule: '推进很慢：要点几轮演到一条就够了，多写眼前的人、对话和细节，给玩家来回的余地，不要催着往下走。', points: '要点（一轮最多演到一条，不必每轮都演）：' }, // i18n-ignore: the model reads it in Chinese
+  '-1': { times: 1.5, rule: '推进稍慢：一轮最多演到一条要点，演到之后多留些来回，不要催着往下走。', points: '要点（一轮最多演到一条）：' }, // i18n-ignore: the model reads it in Chinese
+  1: { times: 0.75, rule: '推进稍快：每一轮都要有实际进展，能演到一条要点就演到。' }, // i18n-ignore: the model reads it in Chinese
+  2: { times: 0.5, rule: '推进要快：每一轮至少演到一条要点，可以演到几条；该发生的发生了就自然收尾，不拖。', points: '要点（一轮可以演到几条）：' }, // i18n-ignore: the model reads it in Chinese
+  3: { times: 1 / 3, rule: '推进极快：过渡和枝节略写，可以跳过不要紧的时间；一两轮里把剩下的要点演完，这一幕马上收尾。', points: '要点（一轮可以全部演完）：' }, // i18n-ignore: the model reads it in Chinese
+})
+export const MAX_PACE = 3
+/** A 推进速度 as kept: a whole number from −3 to 3, 0 for anything else. */
+export const cleanPace = value => (typeof value === 'number' && Number.isFinite(value) ? Math.min(MAX_PACE, Math.max(-MAX_PACE, Math.round(value))) : 0)
 export const ENDINGS = Object.freeze(['good', 'normal', 'sad', 'hidden'])
 export const SPOILERS = Object.freeze(['blind', 'outline', 'all'])
 /** How an exit's 变量 condition compares (needs.vars). */
@@ -319,12 +334,19 @@ export function exitLacks(exit, progress, state = null) {
 /** Whether exit `exit` is open on `progress`: the scenes walked, the variables (`state`), the scene's roll and fight. */
 export const exitOpen = (exit, progress, state = null) => exitLacks(exit, progress, state).length === 0
 
+/** How many turns a scene takes at a 推进速度: { min (至少演几轮), max (最多几轮) or null }. */
+export function turnsOf(scene, pace = 0) {
+  const times = PACES[pace]?.times ?? 1
+  const min = Math.min(50, Math.ceil((scene?.minTurns ?? 0) * times))
+  return { min, max: scene?.maxTurns ? Math.min(99, Math.max(1, min, Math.ceil(scene.maxTurns * times))) : null }
+}
+
 /** 故事岔开了: 'astray' (the model said the player left the plot), 'long' (past the scene's 最多几轮), or null. */
-export function strayOf(plot, progress) {
+export function strayOf(plot, progress, pace = 0) {
   if (!progress || progress.ended || progress.quiet) return null
   if ((progress.astray ?? 0) > 0) return 'astray'
-  const scene = sceneOf(plot, progress.at)
-  return scene?.maxTurns && progress.turns >= scene.maxTurns ? 'long' : null
+  const { max } = turnsOf(sceneOf(plot, progress.at), pace)
+  return max && progress.turns >= max ? 'long' : null
 }
 
 /**
@@ -404,9 +426,11 @@ export function withoutOpenMark(text) {
 
 /**
  * The progress after a reply: `base` (before it, the player's own change in), what the model reported (`mark`, read
- * against `sent`, what this turn told it: { at, points: [ids], exits: [scene ids] }), and whether the reply was whole.
+ * against `sent`, what this turn told it: { at, points: [ids], exits: [scene ids], pace, push }), and whether the reply was whole.
  * `facts`: what the program knows after the reply ({ state: the variables, check: 'pass' | 'fail', battle: 'won' |
  * 'lost' }, this turn's roll and fight); an exit marked 满足就走 whose needs now hold is taken whatever the model wrote.
+ * A turn sent to play the scene out (推到收尾) ends it once the reply is whole, whatever the mark says; at a fork only the
+ * player's way does.
  */
 export function applyMark(plot, base, mark, sent, { whole = true, facts = null, judged = false } = {}) {
   let next = { ...base, turns: (base.turns ?? 0) + 1 }
@@ -428,11 +452,13 @@ export function applyMark(plot, base, mark, sent, { whole = true, facts = null, 
   const scene = sceneOf(plot, base.at)
   const auto = whole && scene && !scene.ending ? scene.exits.find(exit => exit.auto && sceneOf(plot, exit.to) && exitOpen(exit, next, facts?.state)) : null
   if (auto) return enter(next, auto.to)
-  if (!mark?.done || !whole || !scene || next.turns < scene.minTurns) return next
+  const pushed = sent.push === 'scene'
+  const over = mark?.done || (pushed && (scene?.ending || sent.exits.length === 1))
+  if (!over || !whole || !scene || (!pushed && next.turns < turnsOf(scene, sent.pace).min)) return next
   if (scene.ending) return { ...next, ended: true }
   const open = sent.exits.filter(to => sceneOf(plot, to))
   let to = ''
-  if (mark.exit) {
+  if (mark?.exit) {
     const n = Number(mark.exit)
     to = Number.isInteger(n) && n > 0 ? open[n - 1] ?? '' : open.find(id => id === mark.exit || sceneOf(plot, id)?.title === mark.exit) ?? ''
   } else if (open.length === 1) to = open[0]
@@ -459,7 +485,7 @@ function sideMarks(plot, progress, mark, sent, { whole, state }) {
     const walked = { ...next, seen: [...progress.seen, progress.at, ...next.seen] }
     const auto = whole && scene && !scene.ending ? scene.exits.find(exit => exit.auto && exitOpen(exit, walked, state)) : null
     if (auto) next = enterSide(next, auto.to)
-    else if (said?.done && whole && scene && next.turns >= scene.minTurns) {
+    else if (said?.done && whole && scene && next.turns >= turnsOf(scene, sent.pace).min) {
       if (scene.ending) next = { ...next, ended: true }
       else {
         const n = Number(said.exit)
@@ -483,14 +509,36 @@ const RULES = {
 const clip = (text, max) => (text.length > max ? `${text.slice(0, max)}…` : text)
 const firstLine = text => clip(String(text ?? '').split(/[。！？\n]/)[0] ?? '', 40)
 
+/** 主动推进: what this one turn plays. */
+function pushLine(scene, push, ticked, ways) {
+  const own = '玩家的行动照样写，顺着它引出来，不要替玩家做决定。' // i18n-ignore: the model reads it in Chinese
+  if (push.how === 'scene') {
+    const rest = scene.points.some(point => !ticked.has(point.id)) ? '还没演到的要点，要紧的带到，其余略过；' : '' // i18n-ignore: the model reads it in Chinese
+    return scene.ending
+      ? `玩家要这一轮把结局写完：${rest}写到收场。${own}` // i18n-ignore: the model reads it in Chinese
+      : ways > 1
+        ? `玩家要这一轮走到岔路口：${rest}把场面推到要选路的地方停住，等玩家选。${own}` // i18n-ignore: the model reads it in Chinese
+        : `玩家要这一轮演完这一幕：${rest}自然收住，下一轮就进下一幕。${own}` // i18n-ignore: the model reads it in Chinese
+  }
+  const point = scene.points.find(item => item.id === push.point) ?? scene.points.find(item => !ticked.has(item.id))
+  return point
+    ? `玩家要这一轮推进一步：让「${point.text}」在这一轮里发生，演出来，不要只提一句。${own}` // i18n-ignore: the model reads it in Chinese
+    : `玩家要这一轮推进一步：让局面有一个实实在在的变化，离${scene.done ? `「${scene.done}」` : '这一幕的结尾'}更近一步。${own}` // i18n-ignore: the model reads it in Chinese
+}
+
 /**
  * The turn's <剧本> block and what it told the model ({ at, points, exits }, kept on the player's message so the reply's
  * mark is read against it). `progress` is where the story is as the turn starts; `state` the story's variables (for
- * the exits that compare them); `pull`: 拉回来, this turn brings the story back to the scene.
+ * the exits that compare them); `pull`: 拉回来, this turn brings the story back to the scene; `pace`: 推进速度;
+ * `push`: 主动推进, this turn plays one step of the scene ({ how: 'step', point? }) or the rest of it ({ how: 'scene' }).
  */
-export function plotBlock(plot, progress, { tightness = plot.tightness, state = null, pull = false, mark = true } = {}) {
+export function plotBlock(plot, progress, { tightness = plot.tightness, state = null, pull = false, mark = true, pace = 0, push = null } = {}) {
   const scene = sceneOf(plot, progress.at)
   if (!scene) return { text: '', sent: null }
+  const turns = turnsOf(scene, pace)
+  // Past 最多几轮 the scene is brought to its end, whatever the pace.
+  const late = Boolean(turns.max) && progress.turns >= turns.max
+  const going = push || (late && pace < 0) ? 0 : pace
   const lines = ['这是这段故事要照着走的剧本，玩家看不到；只管这一轮，之前消息里的剧本都作废，以这里为准。'] // i18n-ignore: the model reads it in Chinese
   if (plot.summary) lines.push(`故事总览：${plot.summary}`) // i18n-ignore: the model reads it in Chinese
   const walked = progress.seen.map(id => sceneOf(plot, id)?.title).filter(Boolean)
@@ -500,12 +548,12 @@ export function plotBlock(plot, progress, { tightness = plot.tightness, state = 
   if (scene.what) lines.push(`要发生什么：${scene.what}`) // i18n-ignore: the model reads it in Chinese
   const ticked = new Set(progress.ticks)
   if (scene.points.length) {
-    lines.push('要点（陆续让它们在故事里出现，不必一轮写完）：') // i18n-ignore: the model reads it in Chinese
+    lines.push(PACES[going]?.points ?? '要点（陆续让它们在故事里出现，不必一轮写完）：') // i18n-ignore: the model reads it in Chinese
     scene.points.forEach((point, index) => lines.push(`${index + 1}. ${point.text}${ticked.has(point.id) ? '（已经演到）' : ''}`)) // i18n-ignore: the model reads it in Chinese
   }
   if (scene.done) lines.push(`演到什么算完：${scene.done}`) // i18n-ignore: the model reads it in Chinese
   if (scene.style) lines.push(`写法：${scene.style}`) // i18n-ignore: the model reads it in Chinese
-  lines.push(`这一幕已经演了 ${progress.turns} 轮${scene.minTurns > progress.turns ? `，至少要演 ${scene.minTurns} 轮才能结束` : ''}。`) // i18n-ignore: the model reads it in Chinese
+  lines.push(`这一幕已经演了 ${progress.turns} 轮${turns.min > progress.turns ? `，至少要演 ${turns.min} 轮才能结束` : ''}。`) // i18n-ignore: the model reads it in Chinese
   const exits = scene.ending ? [] : scene.exits.filter(exit => exitOpen(exit, progress, state))
   if (scene.ending) {
     // 真模型 (2026-11-22): a model left it at 完成="否" turn after turn once the ending was written.
@@ -543,6 +591,12 @@ export function plotBlock(plot, progress, { tightness = plot.tightness, state = 
     })
   }
   lines.push('', RULES[tightness] ?? RULES.steady)
+  if (PACES[going]) lines.push(PACES[going].rule)
+  // The way on at a fork is still the player's.
+  if (push) lines.push(pushLine(scene, push, ticked, exits.length))
+  else if (late && !pull) {
+    lines.push(`这一幕原定最多演 ${turns.max} 轮，已经超过了：从这一轮起收尾，${exits.length > 1 ? '把场面推到要选路的地方' : scene.ending ? '把收场写出来' : '让还没演到、又不能少的事发生，然后结束这一幕'}，不要再展开新的枝节。`) // i18n-ignore: the model reads it in Chinese
+  }
   if (pull) lines.push('故事已经离这一幕比较远了：这一轮用故事里自然发生的事（有人来了、出了变故、传来消息、时间到了）把场面带回这一幕，但不要替玩家做决定。') // i18n-ignore: the model reads it in Chinese
   lines.push('玩家的行动永远优先：不要替玩家做决定、说话或行动。不要在正文里说出剧本，也不要提前写后面的幕。') // i18n-ignore: the model reads it in Chinese
   // Both cases shown: a model given only 完成="否" wrote nothing else (真模型, 2026-11-22).
@@ -560,6 +614,8 @@ export function plotBlock(plot, progress, { tightness = plot.tightness, state = 
       points: scene.points.map(point => point.id),
       exits: exits.map(exit => exit.to),
       ...(mark ? {} : { mark: false }),
+      ...(PACES[pace] ? { pace } : {}),
+      ...(push?.how === 'scene' ? { push: 'scene' } : {}),
       ...(sideItems.length ? { sides: sideItems.map(({ side, scene: at, ways }) => ({ id: side.id, at: at.id, points: at.points.map(point => point.id), exits: ways.map(exit => exit.to) })) } : {}),
     },
   }

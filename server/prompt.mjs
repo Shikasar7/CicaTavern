@@ -209,7 +209,7 @@ export function buildSystemPrompt({ card, persona, style = '', settings, books, 
   const authorSystem = f(card.systemPrompt.replace(/\{\{original\}\}/gi, ''))
 
   // With a built-in preset, its narrator lines as the player left them (basic.mjs narratorText).
-  const narrator = options ? narratorText(settings.language, edits) : null
+  const narrator = options ? narratorText(settings.language, edits, options) : null
   return [
     narrator ? m(narrator.intro) : `你是一场互动小说的叙述者，同时扮演除玩家以外的所有角色。玩家扮演「${names.user}」。`,
     narrator
@@ -263,7 +263,13 @@ function lateText(books, m) {
  * late entries had their own section keep them elsewhere in the prefix, so the
  * entry titles alone must identify them.
  */
-export function everyTurnReminder(systemPrompt, books, { presetRules = false, mvu = false, choices = false, selfCheck = false, scripts = [], atDepth = true } = {}) {
+export function everyTurnReminder(systemPrompt, books, { noNotes = false, ...asked } = {}) {
+  const line = rulesReminder(systemPrompt, books, asked)
+  // With no blocks of the preset's own (basic.mjs asksNoNotes): the model looks for some, and reports there are none.
+  return line && noNotes ? `${line}回复里不要自己加备注，也不要说明格式。` : line
+}
+
+function rulesReminder(systemPrompt, books, { presetRules = false, mvu = false, choices = false, selfCheck = false, scripts = [], atDepth = true }) {
   const late = lateEntries(books, { atDepth })
   const titles = late.map(entry => `【${entryTitle(entry)}】`)
   const hasSection = systemPrompt.includes(`## ${EVERY_TURN}`)
@@ -402,6 +408,7 @@ export function webSearchNote() {
  * @param input - the player's input (already prompt-processed).
  * @param replyLength - target reply length in characters, 0 for none.
  * @param replyRange - the built-in preset's 正文字数 (shared/basic.js lengthRule): in place of replyLength when set.
+ * @param replyTokens - the preset's max response length in tokens, 0 for none: said, never enforced (engine.mjs replyCap).
  * @param presetText - the preset's per-turn paragraphs, rendered for this turn.
  * @param reminder - one line pointing at the prefix's every-turn rules.
  * @param marks - ask for the 视觉小说格式 (dialogueFormat): true; 'cg', only the card's CG (cgFormat).
@@ -480,7 +487,7 @@ export function placeDeep(messages, deep) {
   return { messages: out, moved }
 }
 
-export function buildTurnPrompt({ names, opening, recap = '', entries = [], nearEntries = [], deep = [], memory = '', dynamic = [], characterNote = '', stateText, input, replyLength = 0, replyRange = '', presetText = '', plot = '', guide = '', reminder = '', marks = false, cgs = [], game = '', injected = { before: [], after: [] } }) {
+export function buildTurnPrompt({ names, opening, recap = '', entries = [], nearEntries = [], deep = [], memory = '', dynamic = [], characterNote = '', stateText, input, replyLength = 0, replyRange = '', replyTokens = 0, presetText = '', plot = '', guide = '', wear = '', reminder = '', marks = false, cgs = [], game = '', injected = { before: [], after: [] } }) {
   const parts = [...deepBlocks(deep)]
   const block = (tag, items) => {
     const body = items.filter(item => item.text).map(item => titled(item.title, item.text)).join('\n\n')
@@ -496,8 +503,11 @@ export function buildTurnPrompt({ names, opening, recap = '', entries = [], near
   block('动态设定', dynamic)
   if (stateText) parts.push(`<当前状态>\n${stateText}\n</当前状态>`)
   if (characterNote) parts.push(`<角色备注>\n${characterNote}\n</角色备注>`)
-  if (replyRange) parts.push(`<回复要求>\n${replyRange}\n</回复要求>`)
-  else if (replyLength > 0) parts.push(`<回复要求>\n本轮正文约 ${replyLength} 字（上下浮动两成以内），只计叙事正文，不含状态栏、变量更新等标签块。\n</回复要求>`)
+  const asked = [
+    replyRange || (replyLength > 0 ? `本轮正文约 ${replyLength} 字（上下浮动两成以内），只计叙事正文，不含状态栏、变量更新等标签块。` : ''),
+    replyTokens > 0 ? `整条回复（连同标签块）最好不超过 ${replyTokens} token，不必写满。快到了就把正文收住，但一定写完整：不要停在半句，最后该有的块照常写完，多一点没关系。` : '',
+  ].filter(Boolean)
+  if (asked.length) parts.push(`<回复要求>\n${asked.join('\n')}\n</回复要求>`)
   // A card script's injected prompts (injections.mjs): deeper ones before the input, depth 0 after it.
   block('卡脚本提示', injected.before ?? [])
   parts.push(`<玩家输入>\n${replaceMacros(input, names)}\n</玩家输入>`)
@@ -509,6 +519,8 @@ export function buildTurnPrompt({ names, opening, recap = '', entries = [], near
   // 剧本 (web/shared/plot.js) and 剧情向导 (guide-text.mjs): this turn's message only (engine takes them out of the older ones).
   if (plot) parts.push(plot)
   if (guide) parts.push(guide)
+  // 衣柜 (wear.mjs): who wears what, taken out of the older messages the same way.
+  if (wear) parts.push(wear)
   if (marks === true) parts.push(dialogueFormat())
   if (marks && cgs.length) parts.push(cgFormat(cgs))
   if (game) parts.push(game)

@@ -580,14 +580,23 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
     toast(ticked ? t`「${card.name}」挂上了这本` : t`「${card.name}」不再挂这本`)
   }
 
+  /** The cards whose own book ticked entries can go into (one without a book gets one): the window's card first. */
+  function ownTargets(from) {
+    const here = state.card?.id
+    const cards = getCards().filter(c => `card-${c.id}` !== from && (!c.archived || c.id === here))
+    return [...cards.filter(c => c.id === here), ...cards.filter(c => c.id !== here)]
+  }
+
   /** The bar over the entries in 多选. */
   function bulkBar() {
     const d = state.detail
     const n = state.picked.size
     const others = state.books.filter(b => !b.own && b.id !== d.id)
+    const cards = ownTargets(d.id)
     const target = el('select', { 'aria-label': t`复制或移动到` }, [
       ...others.map(b => el('option', { value: b.id, text: b.name, selected: b.id === state.target })),
       el('option', { value: '', text: t`新建一本…`, selected: state.target === '' }),
+      cards.length ? el('optgroup', { label: t`卡里自带的世界书` }, cards.map(c => el('option', { value: `card-${c.id}`, text: t`${c.name}（卡里自带）`, selected: `card-${c.id}` === state.target }))) : null,
     ])
     target.addEventListener('change', () => (state.target = target.value))
     const none = !n
@@ -760,7 +769,7 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
     edit(kind, () => ({ constant: kind.value === 'constant' }), () => {
       fillPosition()
       showDepth()
-      recursionRow.hidden = e.constant
+      fillRecursion()
     })
     // 随这一轮 is where a keyword entry before or after the character data goes: 0, as SillyTavern's own default.
     edit(position, () => ({ position: position.value === 'turn' ? 0 : Number(position.value) }), () => {
@@ -803,13 +812,26 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
       return el('label', { class: 'check-row book-check', title: tip }, [box, el('span', { text: label })])
     }
 
-    // 递归: keyword entries only (shown again when the trigger changes).
-    const recursionRow = el('div', { class: 'prompt-field wide book-match book-recursion', hidden: e.constant }, [
-      el('span', { class: 'book-recursion-label', text: t`递归` }),
+    // 递归 (drawn for the trigger, again when it changes): a constant entry goes every turn whatever names it, so only
+    // whether it brings others along is its to say; a variables entry is not sent at all.
+    const keywordOnly = [
       recursion('excludeRecursion', t`不被别的条目触发`, t`只有对话里提到关键词才发；别的条目内容里提到不算`),
-      recursion('preventRecursion', t`不触发别的条目`, t`这一条的内容里提到别的条目的关键词，不会把它们带出来`),
       recursion('delayUntilRecursion', t`只能被别的条目触发`, t`对话里直接提到关键词不发；要先触发一条内容里提到它的条目，才一起发`),
+    ]
+    const prevent = recursion('preventRecursion', t`不触发别的条目`, '')
+    const recursionRow = el('div', { class: 'prompt-field wide book-match book-recursion', hidden: e.initvar }, [
+      el('span', { class: 'book-recursion-label', text: t`递归` }),
+      keywordOnly[0],
+      prevent,
+      keywordOnly[1],
     ])
+    const fillRecursion = () => {
+      for (const box of keywordOnly) box.hidden = e.constant
+      prevent.title = e.constant
+        ? t`这一条的内容里提到别的条目的关键词，不会每轮把它们带出来。设置里「世界书递归触发」选「开，常驻条目也算」时才用得上`
+        : t`这一条的内容里提到别的条目的关键词，不会把它们带出来`
+    }
+    fillRecursion()
     holder.append(el('div', { class: 'prompt-editor' }, [
       el('div', { class: 'prompt-fields' }, [
         field(t`名称`, name),
@@ -948,7 +970,7 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
     toast(t`已删除 ${uids.length} 条`)
   }
 
-  /** Copies (or moves) the ticked entries to another imported book, or to a new one (`to` empty). */
+  /** Copies (or moves) the ticked entries to another imported book, a card's own (card-<id>), or a new one (`to` empty). */
   async function transfer(to, move) {
     const uids = [...state.picked]
     let name = ''
@@ -965,13 +987,21 @@ export function initBooks({ api, el, toast, guard, saveFile, getChat, getCards, 
       if (result.from.prefix) state.stale.add(from)
     }
     if (result.to.prefix) state.stale.add(result.to.id)
+    const owner = result.to.card
+    if (owner) {
+      const nav = navOf(result.to.id)
+      if (nav) nav.counts = { entries: result.to.entries, enabled: result.to.enabled, constant: result.to.constant }
+      // The window's card may have had no book till now: it is listed from here on.
+      if (state.card?.id === owner.id) state.card = { ...state.card, bookEntries: owner.bookEntries, bookEnabled: owner.bookEnabled, bookConstant: owner.bookConstant }
+    }
+    const into = owner ? t`卡里自带（${owner.name}）` : result.to.name
     // A new book is where the next ones go too.
     state.target = result.to.id
     state.picked.clear()
     await refreshBooks()
     redraw()
     await onChanged?.()
-    const said = move ? t`已把 ${uids.length} 条移到「${result.to.name}」` : t`已把 ${uids.length} 条复制到「${result.to.name}」`
+    const said = move ? t`已把 ${uids.length} 条移到「${into}」` : t`已把 ${uids.length} 条复制到「${into}」`
     // Constant entries left or arrived in a book the open chat uses.
     const behind = (move && result.from.prefix && chatUses(getChat(), from)) || (result.to.prefix && chatUses(getChat(), result.to.id))
     toast(behind ? [said, t`当前对话的固定前缀还是改动前的版本，要「应用到当前对话」才会跟着变。`].join(t`。`) : said, behind ? 6000 : 3000)

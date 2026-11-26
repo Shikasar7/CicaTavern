@@ -6,7 +6,7 @@ import { autoAction, battleSetup, fieldFoes, playerOf, refusal, shiftCost, skill
 import { encounterSetup, fightResult } from '../web/shared/game/encounter.js'
 import { FORM_BUDGET, PLAYER_FORMS, bigsOwed, bonusOf, cleanForms, cleanGrowth, cleanPerks, fightOnly, formAt, formForFight, formNeeds, formOf, formReady, nextForm, formsAsk, formsTold, perkEveryOf, perksAsk, perksOwed, rankGives, stageOf, usualGrowth } from '../web/shared/game/growth.js'
 import { replyMarks } from '../web/shared/game/marks.js'
-import { DEFAULT_WORDS, alliesFor, applyOps, cleanKit, cleanOps, cleanRulebook, grownSheet, kitBook, levelNeeds, playerGrowth, settleReply, sheetOf } from '../web/shared/game/sheet.js'
+import { DEFAULT_WORDS, alliesFor, applyOps, cleanKit, cleanOps, cleanRulebook, formWrites, grownSheet, joinedByTable, keptSheet, kitBook, levelNeeds, playerGrowth, settleReply, sheetOf } from '../web/shared/game/sheet.js'
 import { gamePrompt, suggestRequest } from '../server/game.mjs'
 
 const RANKS = ['成长期', '成熟期', '完全体']
@@ -255,4 +255,109 @@ test('the models are told: who writes a card\'s rules is asked for 形态, who t
   assert.doesNotMatch(gamePrompt({ sheet, ranks: RANKS, pausing: true, fights: true }, []).text, /进化/)
   const again = gamePrompt({ sheet, ranks: RANKS, pausing: true, fights: true, forms: told, battle: { over: 'won', foes: '怪人', downed: '怪人', rounds: 3, life: 80, maxLife: 100, used: {}, skills: [], shifted: [{ form: '假面形态' }, { who: '火芽兽', form: '炎角兽' }] } }, []).text
   assert.match(again, /玩家临时变成了假面形态，火芽兽临时变成了炎角兽/)
+})
+
+// ── 形态进了卡的变量 ────────────────────────────────────────────────────
+const CHAIN = [{ name: '小焰', stage: '成长期' }, { name: '炎牙兽', stage: '成熟期', at: { level: 2 } }, { name: '炎王兽', stage: '完全体', at: { level: 3 } }]
+const PET = { forms: { 小焰: CHAIN }, companions: { 小焰: { attributes: { grace: 14 }, skills: { 火花: 'strike' } } }, start: { party: ['小焰'] } }
+const inForm = (rules, form) => { const sheet = at(rules, 5); return { ...sheet, party: sheet.party.map(member => ({ ...member, ...(form ? { form } : {}) })) } }
+
+test('a form come to is in the variables of the card: the words of that chain in the row by that name, and nothing else', () => {
+  const rules = book(PET)
+  const state = { 主角: { 出战: '小焰', 阶位: '成长期' }, 魔宠: { 小焰: { 阶位: '成长期', 形态: '小焰', 状态: '出战', 来历: '成长期就跟着你' }, 别的: { 阶位: '成长期' } } }
+  const writes = formWrites(rules, state, inForm(rules), inForm(rules, '炎牙兽'))
+  assert.deepEqual(writes, [{ op: 'replace', path: '/魔宠/小焰/阶位', value: '成熟期' }, { op: 'replace', path: '/魔宠/小焰/形态', value: '炎牙兽' }])
+  assert.deepEqual(formWrites(rules, state, inForm(rules, '炎牙兽'), inForm(rules, '炎牙兽')), [], 'nothing came of it this turn: what the card says stands')
+  assert.deepEqual(formWrites(rules, { 魔宠: { 小焰: { 阶位: '成熟期' } } }, inForm(rules), inForm(rules, '炎牙兽')), [], 'there already')
+  assert.deepEqual(formWrites(rules, state, inForm(rules, '炎牙兽'), inForm(rules)).length, 0, 'back to the first: it says so already')
+  assert.deepEqual(formWrites(rules, {}, inForm(rules), inForm(rules, '炎牙兽')), [])
+  assert.deepEqual(formWrites(rules, undefined, inForm(rules), inForm(rules, '炎牙兽')), [])
+  assert.deepEqual(formWrites(rules, { 魔宠: { 小焰: { 阶位: '青铜' } } }, inForm(rules), inForm(rules, '炎牙兽')), [], 'a word that is not of the chain is for the card alone')
+})
+
+test('a row the story renamed to a form is found, one by their own name comes first, and a list with names will do', () => {
+  const rules = book(PET)
+  assert.deepEqual(formWrites(rules, { 魔宠: { 炎牙兽: { 阶位: '成熟期' } } }, inForm(rules, '炎牙兽'), inForm(rules, '炎王兽')), [{ op: 'replace', path: '/魔宠/炎牙兽/阶位', value: '完全体' }])
+  assert.deepEqual(formWrites(rules, { 图鉴: { 炎牙兽: { 阶位: '成熟期' } }, 魔宠: { 小焰: { 阶位: '成长期' } } }, inForm(rules), inForm(rules, '炎牙兽')), [{ op: 'replace', path: '/魔宠/小焰/阶位', value: '成熟期' }])
+  assert.deepEqual(formWrites(rules, { 队伍: [{ 名称: '别的', 阶段: '成长期' }, { 名称: '小焰', 阶段: '成长期' }] }, inForm(rules), inForm(rules, '炎牙兽')), [{ op: 'replace', path: '/队伍/1/阶段', value: '成熟期' }])
+  const slashed = book({ ...PET, forms: { '小/焰': CHAIN }, companions: { '小/焰': PET.companions.小焰 }, start: { party: ['小/焰'] } })
+  assert.equal(formWrites(slashed, { 魔宠: { '小/焰': { 阶位: '成长期' } } }, inForm(slashed), inForm(slashed, '炎牙兽'))[0].path, '/魔宠/小~1焰/阶位')
+})
+
+// ── 队伍绑在变量的表上：开局伙伴换了 ──────────────────────────────────────
+const CHOSEN = { forms: { 小焰: CHAIN, 水灵: [{ name: '水滴', stage: '成长期' }, { name: '水灵王', stage: '成熟期', at: { level: 2 } }] }, companions: { 小焰: { attributes: { grace: 14 }, skills: { 火花: 'strike' } }, 水灵: { attributes: { mind: 14 }, skills: { 水箭: 'strike' } }, 铁鹰: { attributes: {}, skills: { 啄: 'strike' } } }, foes: { 野狼: {} }, start: { party: ['小焰'] }, bindings: { party: '魔宠' } }
+const whoIs = (rules, state, game = null) => sheetOf(rules, game, state).party.map(member => member.name)
+
+test('one picked in the opening takes the place of the one a story starts with, as the card has them in its table', () => {
+  const rules = book(CHOSEN)
+  assert.equal(rules.bindings.party, '魔宠')
+  assert.deepEqual(whoIs(rules, {}), ['小焰'], 'no table: as it starts')
+  assert.deepEqual(whoIs(rules, { 魔宠: {} }), ['小焰'])
+  assert.deepEqual(whoIs(rules, { 魔宠: { 小焰: { 阶位: '成长期' } } }), ['小焰'])
+  assert.deepEqual(whoIs(rules, { 魔宠: { $meta: {}, 水灵: { 阶位: '成长期' } } }), ['水灵'])
+  assert.deepEqual(whoIs(rules, { 魔宠: [{ 名称: '水灵' }] }), ['水灵'])
+  assert.deepEqual(whoIs(book({ ...CHOSEN, bindings: {} }), { 魔宠: { 水灵: {} } }), ['小焰'], 'not bound: the marks alone say')
+  const grown = sheetOf(rules, null, { 魔宠: { 水灵: { 阶位: '成熟期' } } }).party[0]
+  assert.equal(grown.form, '水灵王', 'in the form the row says')
+  assert.equal(sheetOf(rules, null, { 魔宠: { 水灵王: {} } }).party[0].form, '水灵王', 'or goes by')
+})
+
+test('what was won goes with the place, and it is done once', () => {
+  const rules = book(CHOSEN)
+  const played = keptSheet(sheetOf(rules, null, {}))
+  const game = { ...played, party: played.party.map(member => ({ ...member, level: 4, experience: 30 })) }
+  const state = { 魔宠: { 水灵: { 阶位: '成长期' }, 野狼: { 阶位: '成长期' } } }
+  const sheet = sheetOf(rules, game, state)
+  assert.deepEqual(sheet.party.map(member => [member.name, member.level, member.experience]), [['水灵', 4, 30]])
+  assert.deepEqual(sheetOf(rules, keptSheet(sheet), state).party.map(member => member.name), ['水灵'])
+})
+
+test('where it could be anything else the party is left as it is', () => {
+  const rules = book(CHOSEN)
+  assert.deepEqual(whoIs(rules, { 魔宠: { 小黑: {}, 铁鹰: {} } }), ['小焰'], 'a row by a name nobody has may be them')
+  assert.deepEqual(whoIs(rules, { 魔宠: { 炎牙兽: {}, 铁鹰: {} } }), ['小焰'], 'a row by the name of their form is them')
+  assert.deepEqual(whoIs(rules, { 魔宠: { 水灵: {}, 铁鹰: {} } }), ['小焰'], 'two who could be meant')
+  const evolved = { ...keptSheet(sheetOf(rules, null, {})) }
+  assert.deepEqual(whoIs(rules, { 魔宠: { 水灵: {} } }, { ...evolved, party: evolved.party.map(member => ({ ...member, form: '炎牙兽' })) }), ['小焰'], 'come to another form already')
+  assert.deepEqual(whoIs(rules, { 魔宠: { 小焰: {}, 铁鹰: {} } }, { ...evolved, party: [] }), [], 'let go of by the player: the table does not bring them back')
+  assert.deepEqual(whoIs(rules, { 魔宠: { 野狼: {} } }), ['小焰'], 'one tamed is not one of the card\u0027s companions')
+  assert.deepEqual(whoIs(rules, { 魔宠: 3 }), ['小焰'])
+})
+
+// ── 表里新添的一行：过户来的入队 ──────────────────────────────────────────
+const TAMER = { ...CHOSEN, tame: true, foes: { 野狼: { looks: 'wolf', moves: ['撕咬', '扑击', '嚎叫', '第四招'] }, 女骑士: { looks: 'knight', moves: ['突刺'] } } }
+const added = (rules, before, after, left, sheet = sheetOf(rules, null, before)) => joinedByTable(sheet, rules, before, after, left).party
+
+test('a row the reply has just put in the table joins, as the card knows them', () => {
+  const rules = book(TAMER)
+  const before = { 魔宠: { 小焰: { 阶位: '成长期' } } }
+  const party = added(rules, before, { 魔宠: { 小焰: {}, 铁鹰: {}, 野狼: {}, 没听过的: {} } })
+  assert.deepEqual(party.map(member => member.name), ['小焰', '铁鹰', '野狼'])
+  assert.deepEqual(party[2].skills, ['撕咬', '扑击', '嚎叫'])
+  assert.equal(party[2].tamed, true)
+  assert.equal(added(rules, before, { 魔宠: { 小焰: {}, 水灵王: { 阶位: '成熟期' } } })[1].form, '水灵王', 'in the form the row goes by')
+  assert.deepEqual(added(rules, before, { 魔宠: { 小焰: {}, 小焰二: {} } }).length, 1)
+})
+
+test('only what is new: nobody let go of comes back, a row renamed is not new, and with no table before nothing is', () => {
+  const rules = book(TAMER)
+  const alone = { ...keptSheet(sheetOf(rules, null, {})), party: [] }
+  assert.deepEqual(added(rules, { 魔宠: { 小焰: {}, 铁鹰: {} } }, { 魔宠: { 小焰: {}, 铁鹰: {} } }, [], alone), [])
+  assert.deepEqual(added(rules, { 魔宠: { 小焰: {} } }, { 魔宠: { 小焰: {}, 铁鹰: {} } }, ['铁鹰']).map(member => member.name), ['小焰'], 'sent away this very turn')
+  assert.deepEqual(added(rules, { 魔宠: { 小焰: {} } }, { 魔宠: { 炎牙兽: {} } }, [], alone), [], 'the same one by another name')
+  assert.deepEqual(added(rules, {}, { 魔宠: { 小焰: {}, 铁鹰: {} } }).map(member => member.name), ['小焰'])
+  assert.deepEqual(added(book({ ...TAMER, bindings: {} }), { 魔宠: {} }, { 魔宠: { 铁鹰: {} } }).map(member => member.name), ['小焰'], 'not bound')
+  const full = { ...keptSheet(sheetOf(rules, null, {})), party: Array.from({ length: 8 }, (_, i) => ({ ...alone, name: `客${i}`, level: 1, attributes: {}, skills: [], life: 1, maxLife: 1 })) }
+  assert.equal(added(rules, { 魔宠: {} }, { 魔宠: { 铁鹰: {} } }, [], full).length, 8, 'no room')
+})
+
+test('one of the bestiary who joins by a mark or the menu fights as they did; on a card with no 收服, as ever', () => {
+  const rules = book(TAMER)
+  const start = sheetOf(rules, null, {})
+  assert.deepEqual(settleReply(start, replyMarks('【同伴|加入|野狼】'), { book: rules }).party.at(-1).skills, ['撕咬', '扑击', '嚎叫'])
+  assert.deepEqual(applyOps(start, rules, cleanOps([{ op: 'party', act: 'join', name: '女骑士' }])).sheet.party.at(-1).skills, ['突刺'])
+  const plain = book({ ...TAMER, tame: false })
+  const other = settleReply(sheetOf(plain, null, {}), replyMarks('【同伴|加入|野狼】'), { book: plain }).party.at(-1)
+  assert.equal(other.skills.length, 1)
+  assert.equal(other.tamed, undefined)
 })

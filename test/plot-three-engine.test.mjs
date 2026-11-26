@@ -168,10 +168,48 @@ test('回到岔路口: a way picked at a fork passed goes with the reply back th
   assert.equal((await fresh()).nodes[left.id].plot.at, 'sea')
 })
 
+test('推进速度 set in a chat: told from the next turn, a scene takes its turns by it, the plot itself left alone', async t => {
+  const { turn, act, fresh, progress, requests } = await setup(t)
+  assert.equal(chatView(await fresh()).plot.pace, 0)
+  await act({ action: 'settings', pace: 'sideways' })
+  assert.equal(chatView(await fresh()).plot.pace, 0)
+  await act({ action: 'settings', pace: -2 })
+  const said = '她点点头。\n<剧本进度 要点="无" 完成="是" 出口="1"/>'
+  await turn('答应', said)
+  assert.match(lastUser(requests.at(-1)), /推进很慢/)
+  assert.match(lastUser(requests.at(-1)), /至少要演 2 轮才能结束/)
+  assert.equal((await progress()).at, 'a', 'one turn is not enough when slow')
+  await turn('再答应', said)
+  assert.equal((await progress()).at, 'b')
+  await act({ action: 'settings', pace: 0 })
+  await turn('走走', '雨很大。\n<剧本进度 要点="无" 完成="否"/>')
+  assert.doesNotMatch(lastUser(requests.at(-1)), /推进很慢/)
+  assert.equal((await fresh()).plot.copy.scenes[0].minTurns, 1)
+})
+
+test('主动推进 goes with one turn; going to a scene takes its place, and it can be taken back', async t => {
+  const { turn, act, fresh, progress, requests } = await setup(t)
+  const pending = async () => chatView(await fresh()).plot.pending
+  await act({ action: 'push', how: 'step', point: 'nope' })
+  assert.deepEqual(await pending(), { push: { how: 'step' } })
+  await act({ action: 'pull' })
+  assert.deepEqual(await pending(), { pull: true }, 'one of them at a time')
+  await act({ action: 'push', how: 'scene' })
+  await act({ action: 'jump', at: 'b' })
+  assert.deepEqual(await pending(), { at: 'b' })
+  await act({ action: 'undo' })
+  await act({ action: 'push', how: 'scene' })
+  await turn('往下走', '她看着你。')
+  assert.match(lastUser(requests.at(-1)), /玩家要这一轮演完这一幕/)
+  assert.equal((await progress()).at, 'b', 'the one way open, no mark needed')
+  await turn('再走', '雨停了。\n<剧本进度 要点="无" 完成="否"/>')
+  assert.doesNotMatch(lastUser(requests.at(-1)), /玩家要这一轮/, 'for that turn only')
+})
+
 test('a story archive carries its plot: the copy, its settings and where the story was', async t => {
   const { store, card, turn, act, fresh } = await setup(t)
   await turn('答应', '你答应了。\n<剧本进度 要点="无" 完成="是" 出口="1"/>')
-  await act({ action: 'settings', spoiler: 'blind' })
+  await act({ action: 'settings', spoiler: 'blind', pace: -2 })
   const chat = await fresh()
   activePath(chat).at(-1).compaction = { summary: '两人在邮局相遇，林雪答应同行。', turns: 1, model: null }
   await store.saveChat(chat)
@@ -182,6 +220,7 @@ test('a story archive carries its plot: the copy, its settings and where the sto
   const view = chatView(imported).plot
   assert.equal(view.copy.name, '看海')
   assert.equal(view.spoiler, 'blind')
+  assert.equal(view.pace, -2)
   assert.equal(view.progress.at, 'b')
   assert.deepEqual(view.progress.seen, ['a'])
 })

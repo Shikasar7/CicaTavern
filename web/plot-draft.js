@@ -15,9 +15,9 @@ const KIND_NAMES = () => ({ info: t`剧本信息`, add: t`新加`, change: t`修
  * @param options - { key: 'card-<id>' | 'chat-<id>', mode: 'write' | 'edit' | 'detour' | 'fromChat' (从对话整理: the chat
  *   as a plot, taken as 'write' takes one), plot (edit, detour: the plot as
  *   it is), locked (edit: scenes already played, not changed), progress (detour: where the story is), titleOf(id),
- *   onTake(result): 'write' and 'edit' a plot, 'detour' { scene, back } }
+ *   chatId (a card's plot written from a chat: that chat's model), onTake(result): 'write' and 'edit' a plot, 'detour' { scene, back } }
  */
-export async function openPlotDraft({ api, el, guard, toast, problemText = item => item.text }, { key, mode, plot = null, locked = [], progress = null, titleOf = id => id, onTake, openings = [] }) {
+export async function openPlotDraft({ api, el, guard, toast, problemText = item => item.text }, { key, mode, plot = null, locked = [], progress = null, titleOf = id => id, onTake, openings = [], chatId = '' }) {
   const url = `/api/plot-drafts/${key}`
   const state = {
     view: null, tab: 'idea', idea: '', paste: '', ask: '', more: '', scenes: 8, endings: 3, tightness: 'steady', picked: null, timer: null, fresh: false,
@@ -53,7 +53,7 @@ export async function openPlotDraft({ api, el, guard, toast, problemText = item 
 
   async function load(view = null) {
     clearTimeout(state.timer)
-    state.view = view ?? (await api(url))
+    state.view = view ?? (await api(chatId ? `${url}?chat=${encodeURIComponent(chatId)}` : url))
     if (!dialog.isConnected) return
     if (state.view.job) state.timer = setTimeout(() => load().catch(() => {}), POLL_MS)
     draw()
@@ -62,7 +62,7 @@ export async function openPlotDraft({ api, el, guard, toast, problemText = item 
   async function ask(kind, extra = {}) {
     state.fresh = true
     state.picked = null
-    await load(await api(url, { method: 'POST', body: { kind, ...extra } }))
+    await load(await api(url, { method: 'POST', body: { kind, ...(chatId ? { chat: chatId } : {}), ...extra } }))
   }
 
   const stop = guard(async () => load(await api(`${url}/stop`, { method: 'POST' })))
@@ -81,10 +81,18 @@ export async function openPlotDraft({ api, el, guard, toast, problemText = item 
   }
   const field = (label, input) => el('label', { class: 'plot-field' }, [el('span', { text: label }), input])
 
+  // Which model writes, and where it is picked.
+  function modelLine(view) {
+    if (!view.model) return null
+    const where = { forge: t`在创作页右上角换`, chat: t`在对话顶栏换`, helper: t`辅助模型，在「设置 → 配图与朗读」换`, default: t`默认模型，在「设置 → 模型」换` }[view.model.source]
+    return el('p', { class: 'plot-draft-model muted small', text: view.job ? t`用「${view.model.label}」写` : t`用「${view.model.label}」写（${where}）` })
+  }
+
   function writing(view) {
     const tail = view.job.partial.replace(/\s+/g, ' ').slice(-400)
     return el('div', { class: 'plot-draft-job' }, [
       el('p', { class: 'muted', text: t`向导在写……` }),
+      el('p', { class: 'muted small', text: t`可以关掉这个窗口，写好了再打开看。` }),
       tail ? el('p', { class: 'plot-draft-partial small', text: tail }) : null,
       el('div', { class: 'row end' }, [el('button', { type: 'button', class: 'btn small', text: t`停下`, onclick: stop })]),
     ])
@@ -93,8 +101,9 @@ export async function openPlotDraft({ api, el, guard, toast, problemText = item 
   function failed(view, retry) {
     return el('div', { class: 'plot-draft-error' }, [
       el('p', { class: 'bad small', text: view.error.message }),
+      view.error.model ? el('p', { class: 'muted small', text: t`这次用的是「${view.error.model}」` }) : null,
       retry ? el('button', { type: 'button', class: 'btn small', text: t`再试一次`, onclick: guard(retry) }) : null,
-    ])
+    ].filter(Boolean))
   }
 
   // An outline has no scene written yet: only what is wrong with its shape.
@@ -148,7 +157,7 @@ export async function openPlotDraft({ api, el, guard, toast, problemText = item 
           field(t`岔路`, select([['few', t`少`], ['some', t`适中`], ['many', t`多`]], state.forks, v => { state.forks = v })),
           field(t`支线`, select([0, 1, 2, 3].map(n => [n, n ? t`${n} 条` : t`不要`]), state.sides, v => { state.sides = Number(v) })),
           field(t`分几章`, select([0, 2, 3, 4, 5, 6].map(n => [n, n ? t`${n} 章` : t`不分章`]), state.chapters, v => { state.chapters = Number(v) })),
-          field(t`松紧`, select([['loose', t`松`], ['steady', t`适中`], ['tight', t`紧`]], state.tightness, v => { state.tightness = v })),
+          field(t`剧本约束`, select([['loose', t`宽松`], ['steady', t`适中`], ['tight', t`严格`]], state.tightness, v => { state.tightness = v })),
         ]),
         el('div', { class: 'plot-draft-kinds' }, [
           el('span', { class: 'muted small', text: t`结局要有哪几种（不选就交给向导）` }),
@@ -296,13 +305,16 @@ export async function openPlotDraft({ api, el, guard, toast, problemText = item 
     ]
   }
 
+  // Failed after its window was closed: said when it is opened again, too.
+  const failedHere = view => state.fresh || (mode === 'write' ? ['outline', 'full', 'split', 'whole'].includes(view.kind) : mode === 'fromChat' && view.kind === 'fromChat')
+
   async function draw() {
     const view = state.view
-    const parts = []
+    const parts = [modelLine(view)]
     if (view.job && fits(view)) parts.push(writing(view))
     else if (view.job) parts.push(el('p', { class: 'muted', text: t`向导还在写别的，等它写完或先停下。` }), el('div', { class: 'row end' }, [el('button', { type: 'button', class: 'btn small', text: t`停下`, onclick: stop })]))
     else {
-      if (view.error && state.fresh) parts.push(failed(view, mode === 'detour' ? () => ask('detour') : null))
+      if (view.error && failedHere(view)) parts.push(failed(view, mode === 'detour' ? () => ask('detour') : null))
       if (mode === 'write') parts.push(...(view.result && fits(view) ? await drawWriteResult(view) : drawWrite(view)))
       else if (mode === 'fromChat') parts.push(...(view.result && fits(view) ? await drawWriteResult(view) : drawFromChat()))
       else if (mode === 'edit') parts.push(...drawEdit(view))

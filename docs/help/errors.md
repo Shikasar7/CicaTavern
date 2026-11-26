@@ -109,16 +109,63 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 - 原因：供应商返回了 429，不是你的网络问题。2.3.2 起按供应商的原话分开说：「今天的额度用完了」是这个 Key 当天能用的次数到了上限（Gemini 免费层每个模型每天只有很少几十次），会写多久后恢复；「一分钟内用得太多」是每分钟的请求次数或输入 token 到了上限，上下文很大时（几万 token 一轮）连着重试两三次就会撞上；「额度或余额用完了」是账户没钱或额度用尽；「请求太频繁」是供应商没说是哪种。
 - 解决：今天的额度用完了就换一个 Key 或等它恢复，常用的话给 Key 所在的项目开通付费；一分钟的限流就等括号前写的时间再发，别连着点重试，上下文很大时先「压缩」；余额用完就去供应商网站充值。
 
+## 文件工具：这个文件夹加不了 {#err-tools-folder}
+
+- 也叫：加不了文件夹、文件夹不能用、不能加整个盘、系统文件夹、手机上加文件夹
+- 原文：CicaTavern 自己的文件夹不能用（里面有供应商的密钥）
+- 英文：CicaTavern's own folders can't be used (your provider keys are there)
+- 原文：系统的文件夹不能用
+- 英文：System folders can't be used
+- 原文：存密钥和登录信息的文件夹不能用
+- 英文：Folders of keys and sign-ins can't be used
+- 原文：不能加整个盘：选里面的一个文件夹
+- 英文：A whole drive can't be added: pick a folder in it
+- 原文：不能加整个用户文件夹：选里面的一个文件夹
+- 英文：A whole user folder can't be added: pick a folder in it
+- 原文：不能加网络上的文件夹（\\开头的）
+- 英文：Network folders (starting with \\) can't be added
+- 原文：没有这个文件夹
+- 英文：There is no such folder
+- 原文：打不开这个文件夹
+- 英文：This folder can't be opened
+- 原文：只能在运行 CicaTavern 的这台电脑上加文件夹
+- 英文：Folders can only be added from the computer CicaTavern runs on
+- 原文：只能在运行 CicaTavern 的这台电脑上打开
+- 英文：It can only be turned on from the computer CicaTavern runs on
+- 出现在：直连对话 → 文件工具 → 加文件夹、打开文件工具时
+- 原因：为了不让助手碰到密钥、系统和别的账号的东西，有些地方永远加不了；整个盘和整个用户文件夹范围太大，也加不了。新文件夹和总开关只能在运行 CicaTavern 的电脑上操作，手机连过来不行。
+- 解决：选具体的子文件夹，比如「文档」里放稿子的那一个。网络上的文件夹先拷到本机。手机上要用的，先在电脑上加一次。
+
+## 文件工具：改动撤不回去 {#err-tools-undo}
+
+- 也叫：撤销失败、文件没改回去、旧版没了
+- 原文：有的没能改回去（文件被占用、移走了，或者原来的位置变了）：{0}
+- 英文：Some couldn't be put back (in use, moved, or their place has changed): {0}
+- 原文：这一轮改动的旧版已经不在了（只留 30 天）
+- 英文：The old versions of this turn's changes are gone (they are kept for 30 days)
+- 出现在：直连对话 → 回复下面「撤销这一轮的文件改动」
+- 原因：文件正被别的程序打开、被移走了，或者原来的文件夹换成了指到别处的链接；或者超过 30 天（旧版合计超过 500 MB 时，旧的先清掉）。
+- 解决：关掉占用文件的程序再撤一次。移走了的，把文件放回原处再撤。旧版已经清掉的没有办法。
+
 ## 供应商服务出错或太忙 {#err-provider-server-error}
 
 - 也叫：500、502、503、504、529、Internal Server Error、Bad Gateway、overloaded、high demand、UNAVAILABLE、模型繁忙
-- 原文：{0} 那边的模型现在太忙了（{1}，对方服务器繁忙，不是你的网络或设置的问题）。过几分钟再试，或者先换个模型。（{2}）
+- 原文：{0} 那边的模型现在太忙了（{1}，是对方返回的，不是你的网络问题）。过几分钟再试；一直这样就换个模型，中转站没有这个模型时也可能这样报。（{2}）
 - 原文：{0} 的服务器出错了（{1}，是对方的问题，不是你的设置）。稍后重试，或者先换个模型。（{2}）
-- 英文：{0}'s model is too busy right now ({1}: their servers are overloaded; it isn't your network or settings). Try again in a few minutes, or switch to another model for now. ({2})
+- 英文：{0}'s model is too busy right now ({1}: that's their answer, not your network). Try again in a few minutes; if it keeps happening, switch models: a relay that doesn't have the model may answer this way too. ({2})
 - 英文：{0} had a server error ({1}: a problem on their side, not your settings). Try again in a moment, or switch to another model for now. ({2})
 - 出现在：发出一轮对话、配图、朗读时
 - 原因：供应商那边出了问题（返回 5xx）。「太忙了」是 503、529 或原话里写着 high demand、overloaded：这个模型这会儿用的人太多，Gemini 免费层高峰时经常这样。其余是服务出错、维护，或者中转站自己的上游出错。都不是你的网络或设置问题。
 - 解决：过几分钟重试，或者先换一个模型、换一家供应商。中转站经常这样的，可以问问中转站的群。
+
+## 中转站没有能跑这个模型的渠道 {#err-provider-no-channel}
+
+- 也叫：无可用渠道、no available channel、model_not_found、distributor、分组没有这个模型、503、聊天正常写剧本报 503、创作报 503
+- 原文：{0} 没有能跑这个模型的渠道（{1}）：多半是中转站的这个分组里没有它，或者渠道停了。换一个模型，或者到中转站看看这个 Key 的分组能用哪些模型。（{2}）
+- 英文：{0} has no channel that runs this model ({1}): most likely the relay's group for your key doesn't include it, or the channel is down. Switch to another model, or check on the relay which models your key's group can use. ({2})
+- 出现在：发出一轮对话、创作角色卡、写剧本、配图写提示词时
+- 原因：中转站说这个 Key 所在的分组里没有渠道能跑这个模型。等一会儿没有用。聊天正常、别处才报，多半是那里用的是另一个模型：聊天页顶栏的模型只管那一段对话，创作角色卡用创作页右上角的，配图写提示词等小活用辅助模型，没选过的用默认模型。
+- 解决：看看报错的地方用的是哪个模型，换成能用的：创作页右上角、「设置 → 模型 → 默认模型」，或「设置 → 配图与朗读」里的辅助模型。
 
 ## 中转站和 Responses 接口对不上 {#err-provider-responses}
 
@@ -243,7 +290,7 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 - 英文：The reply was cut off upstream partway: its server, a proxy or the network closed the connection, or the provider returned an error. What was written has been kept. You can regenerate. The cause is in Settings → More → Error log.
 - 出现在：回复已经开始输出之后
 - 原因：问题出在上游，不是你点了停止，也不是 Base URL 或 Key 配错了：请求已经成功，回复写到一半，连接被对方服务器或中间的代理、网络切断，或者对方在中途返回了错误。
-- 解决：已经写出的文字会留下来，回复下方标「⚠ 上游中断，没写完」，可以重新生成。这一轮写到一半的变量更新块、选项不算数，已经写完整的变量更新照常生效；这条回复不会自动配图、朗读或补写变量，也没有用量数字。总是断就换个代理节点、换个模型，或者调低最大回复长度。
+- 解决：已经写出的文字会留下来，回复下方标「⚠ 上游中断，没写完」，可以重新生成。这一轮写到一半的变量更新块、选项不算数，已经写完整的变量更新照常生效；这条回复不会自动配图、朗读或补写变量，也没有用量数字。总是断就换个代理节点或换个模型。
 
 还没写出文字就断开的，这一轮不保存，你写的话放回输入框，提示写的是同一句「连接被上游断开」。
 
@@ -571,7 +618,7 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 - 英文：This message is from before the last compaction: the model only reads the story archive now, so deleting it does nothing. To remove something, edit the archive
 - 英文：This message's words are gone and it can't come back: a new turn was written after it was deleted
 - 英文：This message was deleted, so nothing can be written from it again
-- 出现在：聊天页 → 消息下方 → 删除
+- 出现在：聊天页 → 消息下方 → ⋯ → 删除这一条
 - 原因：开场是对话的起点。压缩过的部分，模型现在只读剧情存档，删掉原文也改不了模型知道的内容。删除之后写了新的一轮，这条消息的文字就真的清掉了，撤销不回来，也不能从它重新生成。
 - 解决：要去掉压缩前的内容，在压缩点点「查看 / 修改」改存档；想整段重来，用「回滚到这里」。
 
@@ -693,6 +740,46 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 - 原因：一轮里助手最多查 6 次帮助资料和源码，查满了还在要查，没给出回答。多半是问题太宽，或者模型没照要求在查完后回答。
 - 解决：点「重新生成」再试；把问题问具体些（哪个界面、哪句报错）；或者换个更强的模型。
 
+## 上游没写完就停了 {#err-reply-upstream-end}
+
+- 也叫：突然结束、写到一半停了、停在半句、话没说完、回复断在半句、内容审查截断、安全过滤、SAFETY、PROHIBITED_CONTENT、content_filter、finish_reason、卡一下就结束了
+- 平台：Windows、Mac、安卓、手机浏览器
+- 原文：⚠ 上游审查，没写完
+- 原文：⚠ 上游停在半句
+- 原文：⚠ 上游停住，等到超时
+- 原文：上游问题：{0} 写到中途停住，一直没有发来新内容，应用等到「超时」才断开（供应商的「高级」里可以调）。写好的部分留下了，可以继续生成或重新生成。
+- 原文：上游 {0} 写到中途，连着 {1}没有发来任何内容，应用按供应商「高级」里的「超时」断开了。停住的是上游，断开的是应用：可以继续生成，想多等就把「超时」调长。
+- 原文：上游写到中途停住，应用等到超时断开了，写好的部分留下了
+- 原文：上游问题：{0} 的内容审查在这里截住了回复（停止原因 {1}），不是应用停的。可以改写最近的输入或换个模型重新生成；直接继续生成，常常会停在同一个地方。
+- 原文：上游问题：{0} 没写完就停了（停止原因 {1}），不是应用停的。可以继续生成或重新生成；总是这样就换个模型或供应商。
+- 原文：上游问题：{0} 没写完就结束了连接，也没说停止原因（模型、供应商或中转站那边断的），不是应用停的。可以继续生成或重新生成；总是这样就换个模型或供应商。
+- 原文：多半是上游问题：{0} 报的是正常写完（停止原因 {1}），但文字停在半句；应用收到的就这么多。有些供应商会把内容审查的截断也报成正常结束。可以继续生成或重新生成。
+- 原文：多半是上游问题：{0} 报的是正常写完，但文字停在半句；应用收到的就这么多。有些供应商会把内容审查的截断也报成正常结束。可以继续生成或重新生成。
+- 原文：上游模型的内容审查截住了回复，写好的部分留下了（停止原因：{0}）
+- 原文：上游没写完就结束了回复，写好的部分留下了（停止原因：{0}）
+- 原文：上游报的是正常结束，但回复停在半句（停止原因：{0}）
+- 原文：上游没写完就停了（停止原因：{0}）
+- 英文：⚠ Cut by upstream's content check
+- 英文：⚠ Upstream stopped mid-sentence
+- 英文：⚠ Upstream went silent, timed out
+- 英文：Upstream problem: {0} went silent partway, and the app hung up once the timeout ran out (set under the provider's Advanced). What was written has been kept. Continue or regenerate.
+- 英文：Upstream {0} went silent partway: nothing for {1}, so the app hung up, as the timeout under the provider's Advanced says. Upstream stopped sending; the app closed the connection. Continue, or raise the timeout to wait longer.
+- 英文：Upstream went silent partway and the app timed out; what was written has been kept
+- 英文：Upstream problem: {0}'s content check cut the reply off here (stop reason {1}). The app did not stop it. Reword your last message or switch models and regenerate; continuing often stops at the same place.
+- 英文：Upstream problem: {0} stopped before it was done (stop reason {1}). The app did not stop it. Continue or regenerate; if it keeps happening, switch model or provider.
+- 英文：Upstream problem: {0} ended the connection before it was done and gave no stop reason (cut at the model, provider or relay). The app did not stop it. Continue or regenerate; if it keeps happening, switch model or provider.
+- 英文：Most likely an upstream problem: {0} reported a normal end (stop reason {1}), but the text stops mid-sentence, and this is all the app received. Some providers report a content-check cut as a normal end. Continue or regenerate.
+- 英文：Most likely an upstream problem: {0} reported a normal end, but the text stops mid-sentence, and this is all the app received. Some providers report a content-check cut as a normal end. Continue or regenerate.
+- 英文：The upstream model's content check cut the reply off; what was written has been kept (stop reason: {0})
+- 英文：Upstream ended the reply before it was done; what was written has been kept (stop reason: {0})
+- 英文：Upstream reported a normal end, but the reply stops mid-sentence (stop reason: {0})
+- 英文：Upstream stopped before the reply was done (stop reason: {0})
+- 出现在：最新回复的末尾和下方的小标签；设置 → 更多 → 错误日志
+- 原因：问题在上游（模型、供应商或中转站），不是应用停的。分三种：模型自己的内容审查在半路截住；连接没给结束标记就关了；报的是正常写完，文字却停在半句（有些供应商把审查截断也报成正常结束，所以写「多半」）。另有一种是上游写到中途停住、一直不发内容，应用等满「超时」（默认 600 秒）才断开：停住的是上游，断开的是应用。
+- 解决：写好的部分会留下来，这时不会自动补写变量。点提示里的「继续生成」接着写，或者重新生成。被内容审查截住的，继续生成常常还停在同一个地方：改写最近的输入，或者换个模型。总是没说原因就断，换个供应商或中转站。
+
+报的是正常写完、句子也完整的回复不会标。只有变量更新块没写完的也不标，照常自动补写变量。
+
 ## 回复写到输出上限被截断 {#err-truncated}
 
 - 也叫：回复不完整、话没说完、截断、max_tokens、length、变量块没了、选项没了
@@ -703,8 +790,29 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 - 英文：The reply hit the output limit and was cut off (choices or variable blocks at the end may be missing)
 - 英文：⚠ Paused mid-search, unfinished
 - 出现在：回复下方的提示、错误日志里
-- 原因：模型写到了单次输出的上限，后半段没写出来。上限取预设的「最大回复长度」；供应商「高级」里填了「最大输出 token」时以那个为准。会思考的模型把一部分额度花在思考上，更容易碰到。联网搜索搜了太多次时也会中途停下。
-- 解决：点回复下方的「继续生成」让模型从断开的地方接着写（或在输入框里输入 /continue）；也可以重新生成，或者调大上限：在这个供应商的「高级」里填「最大输出 token」（比如 8000 以上），或者调大预设的最大回复长度。
+- 原因：模型写到了单次输出的上限，后半段没写出来。上限是供应商「高级」里填的「最大输出 token」，没填就看模型和接口自己的；预设的「最大回复长度」只告诉模型，不会截断。会思考的模型把一部分额度花在思考上，更容易碰到。联网搜索搜了太多次时也会中途停下。
+- 解决：平时会先自动接着写两次（设置 → 世界书与状态 → 回复写到输出上限时自动接着写）。还没写完就点回复下方的「继续生成」让模型从断开的地方接着写（或在输入框里输入 /continue）；常这样就调大上限：在这个供应商的「高级」里填「最大输出 token」（比如 32000）。标签的详细说明写着这次停在多少 token、上限从哪来。填大了还在同样的地方断，是模型或中转站自己压低了，换模型或把思考调低。
+
+## 光是思考就用完了输出上限 {#err-thinking-cap}
+
+- 也叫：只有思考没有正文、没有返回正文 max_tokens、思考太长
+- 原文：{0} 的模型光是思考就用完了输出上限{1}，还没写到正文。在「模型供应商」这个供应商的「高级」里把「最大输出 token」填大（比如 32000），或者把思考调低、关掉
+- 英文：{0}'s model used up the output limit{1} on thinking alone and never got to the reply.
+- 出现在：聊天页的报错
+- 原因：思考也算在输出上限里，这一轮的思考把上限占满了，正文一个字都没写。
+- 解决：在这个供应商的「高级」里把「最大输出 token」填大（比如 32000），或者在顶栏、设置里把思考调低，或在供应商的「高级」里把「思考」关掉。
+
+## 出方案写到输出上限 {#err-forge-plan-cut}
+
+- 也叫：写的方案读不出来、方案截断、出方案失败、创作角色卡到上限、方案写不完
+- 原文：{0} 写的方案读不出来{1}，再试一次，或者换个模型
+- 原文：（写到输出上限被截断了，自动接着写了 {0} 次还没写完）
+- 原文：（写到输出上限被截断了）
+- 原文：。还是写不完的话：换一个单次能写更多的模型；会思考的模型，在「模型供应商」这个供应商的「高级」里把「思考」关掉；或者把规模调低、玩法积木和开场白选少一些
+- 英文：{0} wrote a plan that can't be read{1}
+- 出现在：创作角色卡的「出方案」
+- 原因：整份方案一次写完，思考也算在输出上限里。写到上限时会从断开的地方自动接着写，最多三次，还是没写完，或者接起来读不通。模型没写到上限也读不出来的，是没按格式写。
+- 解决：点报错下面的「换个模型…」换一个单次能写更多的；会思考的模型，在「模型供应商」这个供应商的「高级」里把「思考」关掉；把规模调低一档，玩法积木、开场白少选一些，附的资料少放一些。
 
 ## 继续生成用不了 {#err-continue}
 
@@ -906,6 +1014,7 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 ## 表情和立绘不太像，或表情先不画 {#err-sprite-faces}
 
 - 原文：这种画图方式不能照着立绘改，表情是按长相重新画的，可能和立绘不太一样。
+- 原文：这种画图方式不能照着立绘改，这一套是按长相重新画的，可能和立绘不太一样。
 - 原文：选的画图方式不能照着立绘改表情（重画出来会像另一个人），表情先不画：可以换成能参考图片的画图方式，或者导入表情包。
 - 英文：This image backend can't edit the sprite, so the expression was drawn anew from the looks and may not quite match the sprite.
 - 英文：The way of drawing picked can't edit expressions from the sprite (drawn anew they look like someone else), so expressions are left out: pick a way of drawing that takes a reference picture, or import an expression pack.
@@ -1433,3 +1542,13 @@ CicaTavern 会弹出的报错：原文（中文和英文界面各一行）、什
 - 出现在：设置 → 更多 → 备份与换设备 → 从备份导入… 读取文件或导入的时候
 - 原因：读取时页面关了、网络断了（手机浏览器连电脑时 WiFi 断开、电脑睡眠），或者导入途中后台服务停了、磁盘满了。
 - 解决：确认磁盘还有空间（导入时要留出和备份差不多大的地方），再导入一次。已经导入的部分留在这边，再导入时这边已有的会按你选的保留或替换，不会重复。
+
+## 负伤的同伴不能上场 {#err-slab-hurt}
+
+- 原文：负伤的不能上场
+- 英文：Those who are hurt cannot fight
+- 原文：{0}负伤了，养好再上场
+- 英文：{0} is hurt and cannot fight yet
+- 出现在：随身册的「队伍」里把负伤的同伴拖到出战位置，或点它的「出战」时
+- 原因：故事里写了它负伤（回复里的「负伤」入队标记），它就暂时只能待命，出战的位置留给没受伤的。
+- 解决：等故事里伤好（模型写「归队」），或者在随身册里点开它，点「已经好了」，它就能上场。改动照旧下一轮生效。

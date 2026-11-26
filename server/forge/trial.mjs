@@ -2,6 +2,7 @@
 // the round is over. One model plays the card as a chat always does, another call stands in for the player, and every
 // round is looked over by the program: what a reply should carry, what reached the variables, what showed that should
 // not. One last call reads the story for what only a reader sees. The window says about how much before anything is sent.
+import { waitsForRest } from '../reply-end.mjs'
 import { createHash } from 'node:crypto'
 import YAML from 'yaml'
 import { estimateTokens } from '../context.mjs'
@@ -117,7 +118,8 @@ export function roundChecks({ text, shown, node }, needs) {
   const problems = []
   const add = (kind, what, extra = {}) => problems.push({ kind, what, ...extra })
   if (!text.trim()) add('empty', msg`回复是空的`)
-  if (node.api?.truncated) add('cut', msg`回复写到输出上限被截断了`)
+  if (waitsForRest(node.api?.truncated) && node.api.truncated !== 'paused') add('cut', msg`上游没写完就停了（停止原因：${node.api.stop ?? '—'}）`)
+  else if (node.api?.truncated) add('cut', msg`回复写到输出上限被截断了`)
   if (needs.update && !hasUpdateBlock(text)) add('update', msg`没写变量更新`)
   else if (needs.update && node.updateUnread) add('update', msg`变量更新块读不出来`)
   if (needs.choices && !/<choices>[\s\S]*<\/choices>/.test(text)) add('choices', msg`没写行动选项`)

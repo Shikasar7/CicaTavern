@@ -8,7 +8,7 @@ import { cleanPlot, ENDINGS, MAX_EXITS, MAX_POINTS, MAX_SCENES, MAX_SIDES, MAX_V
 
 const FILE_FORMAT = 'cicatavern-plot'
 const ENDING_NAMES = () => ({ good: t`圆满`, normal: t`普通`, sad: t`遗憾`, hidden: t`隐藏` })
-const TIGHT_NAMES = () => ({ loose: t`松`, steady: t`适中`, tight: t`紧` })
+const TIGHT_NAMES = () => ({ loose: t`宽松`, steady: t`适中`, tight: t`严格` })
 // The story's own endings (a side line's end only its part).
 const countEndings = plot => plot.scenes.filter(scene => scene.ending && !scene.side).length
 const draftUi = () => import('/plot-draft.js')
@@ -63,9 +63,10 @@ function blankPlot() {
  * The card's plots in a dialog. `deps`: { api, el, guard, toast, cardId, cardName, onSaved(plots) }; `open`: a plot id to
  * open in the editor straight away. `chat` (with `setChat`): the copy that chat plays, in the editor alone (改剧本 while
  * playing): saved to the chat; 存回卡里 and 另存为新剧本 put it in the card's. `forge`: the id of a card being made in
- * 创作角色卡 instead of `cardId` (its plots kept with the draft, saved with the card; no chats on it yet).
+ * 创作角色卡 instead of `cardId` (its plots kept with the draft, saved with the card; no chats on it yet). `fromChat`: the
+ * id of the card's chat open now, whose model the guide writes with.
  */
-export async function openPlots({ api, el, guard, toast, cardId, cardName, onSaved = () => {}, forge = '' }, { open = null, chat = null, setChat = () => {}, write = false } = {}) {
+export async function openPlots({ api, el, guard, toast, cardId, cardName, onSaved = () => {}, forge = '', fromChat = '' }, { open = null, chat = null, setChat = () => {}, write = false } = {}) {
   const plotsUrl = forge ? `/api/forge/${forge}/plots` : `/api/cards/${cardId}/plots`
   const draftKey = forge ? `forge-${forge}` : `card-${cardId}`
   const [loaded, detail, chats] = await Promise.all([
@@ -123,7 +124,7 @@ export async function openPlots({ api, el, guard, toast, cardId, cardName, onSav
   // 让向导写一份: the guide's window (its settings in full), the plot taken goes in and opens in the editor.
   async function writeOne() {
     const { openPlotDraft } = await draftUi()
-    await openPlotDraft({ api, el, guard, toast, problemText }, { key: draftKey, mode: 'write', openings: greetings, onTake: async plot => {
+    await openPlotDraft({ api, el, guard, toast, problemText }, { key: draftKey, mode: 'write', openings: greetings, chatId: fromChat, onTake: async plot => {
       const id = newPlotId('plot', new Set(state.plots.map(item => item.id)))
       await save([...state.plots, { ...plot, id, source: 'own' }], state.defaultPlot || (forge ? id : ''))
       toast(t`已放进剧本「${plot.name}」`)
@@ -367,7 +368,7 @@ export async function openPlots({ api, el, guard, toast, cardId, cardName, onSav
       field(t`名称`, text(plot.name, 40, v => { plot.name = v })),
       field(t`简介`, text(plot.intro, 200, v => { plot.intro = v }, { placeholder: t`给玩家看的一两句，不剧透` })),
       field(t`故事总览`, text(plot.summary, 300, v => { plot.summary = v }, { placeholder: t`给模型看的：整个故事讲什么` })),
-      field(t`松紧`, select(Object.entries(TIGHT_NAMES()), plot.tightness, v => { plot.tightness = v })),
+      field(t`剧本约束`, select(Object.entries(TIGHT_NAMES()), plot.tightness, v => { plot.tightness = v })),
       greetings.length > 1 ? field(t`配哪个开场白`, select([['', t`不指定`], ...greetings.map((text, index) => [String(index), `${index + 1}. ${text.replace(/\s+/g, ' ').slice(0, 24)}`])], plot.greeting === null || plot.greeting === undefined ? '' : String(plot.greeting), v => { plot.greeting = v === '' ? null : Number(v) })) : null,
     ].filter(Boolean))
     // Outline: the scenes in order, each with what it is.
@@ -556,7 +557,7 @@ export async function openPlots({ api, el, guard, toast, cardId, cardName, onSav
       field(helped(t`写法（可空）`, 'style'), text(scene.style, 200, v => { scene.style = v }, { placeholder: t`这一幕的气氛、节奏、禁忌` })),
       el('div', { class: 'plot-grid' }, [
         field(t`至少演几轮`, number(scene.minTurns, v => { scene.minTurns = v ?? 0 }, { max: 50 })),
-        field(t`最多几轮（超过提醒）`, number(scene.maxTurns, v => { scene.maxTurns = v }, { min: 1, blank: true })),
+        field(t`最多几轮（超过就催收尾）`, number(scene.maxTurns, v => { scene.maxTurns = v }, { min: 1, blank: true })),
       ]),
       el('label', { class: 'plot-check' }, [endingBox, el('span', { text: t`这一幕是结局` })]),
       scene.ending ? el('div', { class: 'plot-grid' }, [
@@ -589,7 +590,7 @@ export async function openPlots({ api, el, guard, toast, cardId, cardName, onSav
         el('button', { type: 'button', class: 'btn small', text: t`问问向导改`, title: t`说一句想怎么改，向导列出改动，逐条勾选`, onclick: guard(async () => {
           const { openPlotDraft } = await draftUi()
           const locked = chat ? [...new Set(chat.plot.progress.seen)] : []
-          await openPlotDraft({ api, el, guard, toast, problemText }, { key: chat ? `chat-${chat.id}` : draftKey, mode: 'edit', plot: cleanPlot(plot), locked, onTake: changed => {
+          await openPlotDraft({ api, el, guard, toast, problemText }, { key: chat ? `chat-${chat.id}` : draftKey, mode: 'edit', plot: cleanPlot(plot), locked, chatId: fromChat, onTake: changed => {
             state.editing = structuredClone({ ...changed, id: plot.id, source: plot.source })
             if (!sceneOf(state.editing, state.scene)) state.scene = state.editing.start
             touch()

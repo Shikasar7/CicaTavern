@@ -115,7 +115,7 @@ export function basicDetail(settings, id = BASIC_ID) {
   const added = place => edits.added.filter(entry => entry.place === place).map(entry => ({ id: entry.id, name: entry.name, kind: 'added', content: entry.content, enabled: entry.enabled, place }))
   const marker = slot => ({ id: `marker-${slot}`, slot, kind: 'marker', enabled: true })
   const prompts = [
-    ...own(narratorParts(settings?.language), 'top'),
+    ...own(narratorParts(settings?.language, options), 'top'),
     ...added('top'),
     marker('card'),
     marker('everyTurn'),
@@ -395,8 +395,24 @@ export function basicParts(options) {
 // prompt.mjs EVERY_TURN (that file imports this one).
 const EVERY_TURN_TITLE = '每轮回复都要遵守'
 
-/** The narrator's opening line and rules (prompt.mjs buildSystemPrompt), as the built-in presets have them. */
-export function narratorParts(language = '') {
+// The blocks a built-in preset's options ask for, in a chat's frozen prompt.
+const OPTION_BLOCKS = /<(choices|time_box|self_check)>/
+
+/**
+ * Whether a chat's turns ask for no note of the model's own: a built-in preset with every block of its options off,
+ * now and in the frozen prompt. Sent to look for blocks where there are none, models ended the story on a note saying
+ * that none were asked for.
+ */
+export const asksNoNotes = (preset, systemPrompt) =>
+  Boolean(preset?.builtin) && !hasBasicFormat(preset.options) && !OPTION_BLOCKS.test(String(systemPrompt ?? ''))
+
+/**
+ * The narrator's opening line and rules (prompt.mjs buildSystemPrompt), as the built-in presets have them. With none
+ * of the options' blocks (`options`), the rules name no section of blocks, but whatever the card, its lore, the
+ * player's entries or the turn ask for is still to be written: not every block can be told from the card's text.
+ */
+export function narratorParts(language = '', options = null) {
+  const plain = options && !hasBasicFormat(options)
   return [
     { key: 'intro', slot: 'intro', text: '你是一场互动小说的叙述者，同时扮演除玩家以外的所有角色。玩家扮演「{{user}}」。' },
     {
@@ -404,7 +420,9 @@ export function narratorParts(language = '') {
       slot: 'rules',
       text: [
         '## 基本规则',
-        `- 除了「${EVERY_TURN_TITLE}」一节要求的格式块，只写故事正文，不写解释、点评或任何元信息。`,
+        plain
+          ? '- 只写故事正文。角色卡、世界书、预设或本轮消息要求写的内容块照写，没有要求的不用写。不写解释、点评、备注或任何元信息，也不说明写没写哪些块。'
+          : `- 除了「${EVERY_TURN_TITLE}」一节要求的格式块，只写故事正文，不写解释、点评或任何元信息。`,
         '- 每条玩家消息里，<玩家输入> 是玩家本轮想做的事或希望看到的发展。用你自己的叙述把它演出来，不要照抄原句，然后顺着情节自然推进。',
         '- <世界书> 和 <动态设定> 是和当前情节相关的设定资料，<当前状态> 是游戏状态的最新值，<角色备注> 是作者给本轮的提醒，<本轮提醒> 指向系统提示里每轮都要执行的规则。它们不要原样复述。',
         '- 角色按各自的人设行动和说话，可以有自己的意志，不必顺着玩家。',
@@ -445,8 +463,8 @@ export function basicRules(options, edits = null) {
 }
 
 /** The narrator's opening line, rules and the player's entries after them (macros as written), as edited. */
-export function narratorText(language, edits = null) {
-  const parts = editedParts(narratorParts(language), edits).filter(part => part.enabled && part.text.trim())
+export function narratorText(language, edits = null, options = null) {
+  const parts = editedParts(narratorParts(language, options), edits).filter(part => part.enabled && part.text.trim())
   return { intro: parts.find(part => part.slot === 'intro')?.text ?? '', rules: [...parts.filter(part => part.slot === 'rules').map(part => part.text), ...addedText(edits, 'top')].join('\n\n') }
 }
 

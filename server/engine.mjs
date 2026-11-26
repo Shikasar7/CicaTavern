@@ -7,11 +7,13 @@
 import { readFile } from 'node:fs/promises'
 import { activePath, booksForCard, chatPicks, childrenOf, compactBlock, editMessage as editChatMessage, forgetDeleted, pathTo, playerOf, presetFor, scriptsOf, selectNode } from './chats.mjs'
 import { hasPrefixRules, renderPresetTailParts } from './presets.mjs'
-import { asksChoices, asksSelfCheck, choicesInstruction, choicesRequest, extractChoices, lengthRule, replyScripts, withChoices } from './basic.mjs'
+import { asksChoices, asksNoNotes, asksSelfCheck, choicesInstruction, choicesRequest, extractChoices, lengthRule, replyScripts, withChoices } from './basic.mjs'
 import { DIRECT_CARD, VN_ID, BASIC_ID, FOLD_TAG, builtinOptions, choicesOf, isBuiltinPreset } from '../web/shared/basic.js'
 import { cleanReferences, referenceBlock } from './forge/references.mjs'
-import { appHelp, helpSystem, lookupGate, lookupLabel, lookupLine, lookupOf, MAX_LOOKUPS, retrieve, runLookup } from './help.mjs'
+import { appHelp, helpSystem, lookupLabel, lookupLine, lookupMark, lookupOf, MAX_LOOKUPS, retrieve, runLookup } from './help.mjs'
+import { ASK_TOKENS, callGate, callId, callKey, callMarks, keptStep, MAX_STEPS, nativeCall, nativeResult, resultBlock, SAME_CALL, toolCall, withSteps } from './tools/calls.mjs'
 import { GUIDE_BLOCK, guideBlock } from './guide-text.mjs'
+import { WEAR_BLOCK, wearBlock } from './wear.mjs'
 import { applyMark, applySet, PLOT_BLOCK, plotBlock, progressOn, sceneOf, takePlotMark } from '../web/shared/plot.js'
 import { noteEnding } from './plot-endings.mjs'
 import { judgeRequest, readJudge } from './plot.mjs'
@@ -21,7 +23,7 @@ import { applyStateUpdates, applyWrites, displayText, keepReadOnly, stateWrites,
 import { choiceFights, cutAtGate, withoutGameMarks } from '../web/shared/game/marks.js'
 import { cgList, readCgs } from './card-cgs.mjs'
 import { formsTold, growsOn, perkOf, perksOn } from '../web/shared/game/growth.js'
-import { applyOps, checkExperience, checkLine, checkPractice, cleanCheck, cleanOps, fieldedOf, gateKinds, keptSheet, opWrites, pausesOn, rankNow, rollCheck, rulesOn, sheetOf, sheetOnPath } from '../web/shared/game/sheet.js'
+import { applyOps, checkExperience, checkLine, checkPractice, cleanCheck, cleanOps, fieldedOf, formWrites, gateKinds, keptSheet, opWrites, pausesOn, rankNow, rollCheck, rulesOn, sheetOf, sheetOnPath } from '../web/shared/game/sheet.js'
 import { cleanFight, encounterSetup, fightLine, fightResult } from '../web/shared/game/encounter.js'
 import { asksForFight, foesRequest, gamePrompt, mayAskForFight, parseFoes, parseSuggestion, parseThings, settledSheet, suggestRequest, thingsRequest } from './game.mjs'
 import { variablePaths } from '../web/shared/game/bindings.js'
@@ -33,15 +35,18 @@ import { replaceVariableMacros } from '../web/shared/vars.js'
 import { decoratorsOf, hasEjs, hasTemplate, stripTemplates, templateSession } from './template.mjs'
 import { accumulatedDynamic, compactThreshold, dynamicMemory, planDynamic, stripDynamicText } from './dynamic.mjs'
 import { backNote, castNames, leftNote, presentState, returnedState } from './present.mjs'
-import { chatReasoning, complete, CONTEXT_FULL, isProviderRef, providerError, resolveRef, unreadReply, webSearchKind } from './providers.mjs'
+import { chatReasoning, complete, CONTEXT_FULL, isProviderRef, nativeTools, providerError, refLabel, resolveRef, streams, unreadReply, webSearchKind } from './providers.mjs'
 import { canonicalModel } from './models.mjs'
+import { completeWhole, goesRound, joinContinued, joinedStream } from './whole.mjs'
 import { directSummaryInstruction, extractSummary, keptArchive, looksLikeArchive, MIN_TURNS, recapBlock, recentExchanges, storyPath, storyTurns, summaryInstruction, turnsSinceCompaction, withoutHidden } from './recap.mjs'
 import { contextUsed, limitFromError, thresholdFor, toolNote, windowOf, withToolNote } from './context.mjs'
 
 /** An instruction asked inside the story with the player's 附加提示词 after it ({{user}} / {{char}} named). */
 const withNote = (text, note, names) => (note ? `${text}\n\n${replaceMacros(note, names)}` : text)
 import { msg } from './i18n.mjs'
-import { extractUpdate, fillInstruction, fillRequest, hasUpdateBlock, usesMvu } from './mvu.mjs'
+import { FILTERED, PROHIBITED, RECITATION, surelyAtGate, upstreamCut } from './reply-end.mjs'
+import { extractUpdate, fillInstruction, fillRequest, fixInstruction, fixRequest, hasUpdateBlock, updateBlocks, usesMvu, withoutUpdateBlocks } from './mvu.mjs'
+import { issueLines, stateDiff, turnVarIssues } from './turn-vars.mjs'
 import { rawOfPicture } from './cards.mjs'
 import { keepToSchema, schemaScript } from './schema.mjs'
 import { rawRequest } from './frames.mjs'
@@ -60,11 +65,6 @@ const NEAR_LORE = /\n*<世界书·紧挨回复>\n[\s\S]*?\n<\/世界书·紧挨�
 // Output tokens a story turn may ask for at most (presets often say 65535): enough for any
 // reply with its thinking and status blocks, and within what current Claude models accept.
 const MAX_REPLY_TOKENS = 32000
-// Why a model answered with no text, as providers pass it on (Gemini's blockReason / finishReason, an
-// OpenAI-style content_filter): its own content check kept the reply back, not this app or the API.
-const PROHIBITED = /PROHIBITED_CONTENT|BLOCKLIST|SPII/i
-const RECITATION = /RECITATION/i
-const FILTERED = /SAFETY|content_filter|content_policy/i
 
 /** What to tell the player when the model's content check kept the reply back, or null when it was not that. */
 function filteredReply(name, reason) {
@@ -73,6 +73,15 @@ function filteredReply(name, reason) {
   if (FILTERED.test(reason)) return msg`${name} 的安全过滤拦下了这次回复（${reason}）。可以重试、改写最近的输入，或者换用别的模型。`
   return null
 }
+/** A preset's max response length, as the turn's message says it; 0 for none, or one so long that no reply comes near it. */
+const softLength = preset => {
+  const tokens = Math.floor(Number(preset?.params?.maxTokens) || 0)
+  return tokens > 0 && tokens < MAX_REPLY_TOKENS ? tokens : 0
+}
+// Upstream sends nothing for this long: the page is told so, and again this often. A gap this long is kept with the reply.
+const QUIET_MS = 5000
+const QUIET_EVERY_MS = 2000
+const GAP_KEPT_MS = 3000
 // 补写变量: a big card's update block (many fields, its analysis) fits in this.
 // A thinking model spends thousands of tokens before the block starts.
 const FILL_MAX_TOKENS = 16000
@@ -82,6 +91,51 @@ const CHOICES_MAX_TOKENS = 2000
 const IMPORTED_PART_CHARS = 120000
 // A story too long for its model even in halves is read again under this much of the chat's system prompt.
 const LEAN_SYSTEM_CHARS = 6000
+
+/**
+ * How long upstream has sent nothing while a turn waits for it: the page is told ({ type: 'quiet', seconds, begun }; 0 once
+ * something came), and the longest time of it after the reply began is kept (longest()).
+ */
+function quietWatch(emit) {
+  let last = 0
+  let begun = false
+  let told = 0
+  let longest = 0
+  let timer = null
+  const settle = () => {
+    if (begun) longest = Math.max(longest, Date.now() - last)
+    if (told) emit({ type: 'quiet', seconds: 0 })
+    told = 0
+  }
+  return {
+    start() {
+      last = Date.now()
+      timer ??= setInterval(() => {
+        const now = Date.now()
+        if (now - last < QUIET_MS || now - told < QUIET_EVERY_MS) return
+        told = now
+        emit({ type: 'quiet', seconds: Math.round((now - last) / 1000), begun })
+      }, 500)
+    },
+    came() {
+      settle()
+      last = Date.now()
+      begun = true
+    },
+    /** Asked again after a wait of this app's own. */
+    waits(ms) {
+      settle()
+      last = Date.now() + ms
+    },
+    stop() {
+      if (timer === null) return
+      clearInterval(timer)
+      timer = null
+      settle()
+    },
+    longest: () => longest,
+  }
+}
 
 /** Why a compaction is not done here, in words (chats.mjs compactBlock). */
 function compactRefusal(block, turns) {
@@ -111,22 +165,13 @@ function friendlyError(message, subscription) {
 const SEARCH_NOTE = () => `\n\n${webSearchNote()}`
 
 // 继续生成: after the reply as far as it went, what the model is asked (SillyTavern's /continue nudge, said for a story).
+export { joinContinued }
 const CONTINUE_NUDGE = '（上一条回复写到这里断了。从断开的地方直接接着写：第一个字紧接着上面最后一个字，不要重复已经写过的内容，不要加任何说明。写到一半的标签或块接着写完，这条回复本来该有、还没写到的部分（比如变量更新、行动选项）照常写上。）'
 
-/** The reply as it was and what the model wrote on: a start that repeats the reply's last words goes. */
-export function joinContinued(before, more) {
-  const start = String(before ?? '')
-  let tail = String(more ?? '')
-  if (/\s$/.test(start)) tail = tail.replace(/^\s+/, '')
-  const end = start.slice(-400)
-  for (let n = Math.min(end.length, tail.length); n >= 8; n--) {
-    if (end.endsWith(tail.slice(0, n))) {
-      tail = tail.slice(n)
-      break
-    }
-  }
-  return start + tail
-}
+// How often a reply cut at the output limit is written on by itself (自动续写), and the length past which it is left as it
+// is: a reply that long is one that does not stop.
+const AUTO_ROUNDS = 2
+const AUTO_MOST = 30000
 
 /** What a session from compaction point `node` opens with: its summary and the last turns of `story`, as the prompt sends them. */
 // How long an archive is at the least, or it was cut off. A summary of a short question and answer can be short.
@@ -247,8 +292,11 @@ const ownPreset = chat => !chat.presetId || isBuiltinPreset(chat.presetId)
 // 应用帮助 (直连对话): on unless the chat turned it off.
 const helpOn = chat => chat.cardId === DIRECT_CARD && chat.appHelp !== false
 
-/** @param app - { version, platform } of this install, for 应用帮助 (help.mjs helpSystem). */
-export function createEngine(store, isolation, ledger = null, { subscription = null, rulebooks = null, app = { version: '', platform: '' } } = {}) {
+/**
+ * @param app - { version, platform } of this install, for 应用帮助 (help.mjs helpSystem).
+ * @param tools - createTools() (tools/index.mjs): what a 直连对话 may use of files; null in tests without.
+ */
+export function createEngine(store, isolation, ledger = null, { subscription = null, rulebooks = null, app = { version: '', platform: '' }, tools = null } = {}) {
   const running = new Map()
   // The card's own scripts that follow its variables (card-scripts.mjs): around each reply's update. Those the player
   // has let call the model (Tavern Helper generate) get it here.
@@ -515,7 +563,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         base = applySet(playing.copy, base, plotSet)
       }
       if (!base.ended) {
-        const block = plotBlock(playing.copy, base, { tightness: playing.tightness, state, pull: Boolean(plotSet?.pull), mark: playing.judge?.by !== 'helper' })
+        const block = plotBlock(playing.copy, base, { tightness: playing.tightness, pace: playing.pace, state, pull: Boolean(plotSet?.pull), push: plotSet?.push ?? null, mark: playing.judge?.by !== 'helper' })
         plotText = block.text
         if (block.sent) plotSent = { of: playing.copy.id, ...block.sent }
       }
@@ -540,10 +588,12 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       input: resolve(promptInput),
       replyLength: Number(settings.replyLength) || 0,
       replyRange: await replyRange(chat, settings),
+      replyTokens: softLength(preset),
       presetText: resolve(presetText),
       plot: plotText,
       guide: playing ? '' : guideBlock(chat.guide?.active, path),
-      reminder: [everyTurnReminder(chat.systemPrompt, books, { presetRules: hasPrefixRules(preset), mvu: usesMvu(card, books, preset), choices: asksChoices(chat), selfCheck: asksSelfCheck(chat), scripts, atDepth }), game?.reminder].filter(Boolean).join(''),
+      wear: wearBlock(chat, path, card.media?.roster),
+      reminder: [everyTurnReminder(chat.systemPrompt, books, { presetRules: hasPrefixRules(preset), mvu: usesMvu(card, books, preset), choices: asksChoices(chat), selfCheck: asksSelfCheck(chat), noNotes: asksNoNotes(preset, chat.systemPrompt), scripts, atDepth }), game?.reminder].filter(Boolean).join(''),
       marks,
       cgs: marks ? cgList(await readCgs(store.dirs, chat.cardId)) : [],
       game: game?.text,
@@ -708,7 +758,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
    * apiMessages, and with `newest` (this turn's message as written) its 聊天中 @深度 blocks put at their depth
    * (prompt.mjs placeDeep): { messages, newest } (that message as it goes now).
    */
-  async function historyFor(chat, parent, { stripAll = false, newest = null } = {}) {
+  /** @param steps - 'keep': what each reply did with tools stays beside it (stepsOf), for withSteps to write out. */
+  async function historyFor(chat, parent, { stripAll = false, newest = null, steps: how = 'text' } = {}) {
     const [card, preset, globalScripts, regexSets] = await Promise.all([store.getCard(chat.cardId).catch(() => null), presetFor(store, chat.presetId), store.getRegex(), store.getRegexSets()])
     const scripts = scriptsOf(card, preset, globalScripts, regexSets, chat.regexChanges)
     const macros = text => replaceMacros(text, chat.names)
@@ -740,7 +791,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         return { role: 'user', content: index < stripBefore ? stripDynamicText(prompt) : prompt }
       }
       const reply = applyScripts(node.text, replyScripts(scripts, chat, node), { placement: PLACEMENT.AI_OUTPUT, target: 'prompt', depth: turns.length - index, macros })
-      return { role: 'assistant', content: reply.trim() || '……' }
+      // 直连对话: what it did with tools before this reply goes ahead of it (at the end, so nothing here counts them).
+      return { role: 'assistant', content: reply.trim() || '……', ...(node.steps?.length ? { stepsOf: { steps: node.steps, undone: node.fileUndone === true } } : {}), ...(node.thought ? { thought: node.thought } : {}) }
     })
     // A branch written before its parent was compacted (turns folded behind a rollback, then restored)
     // never had the archive in its first message: it goes there now, or nothing would carry what came before.
@@ -765,7 +817,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     let nearLore = false
     for (const message of messages) {
       if (message.role !== 'user') continue
-      const kept = message.content.replace(NEAR_LORE, '').replace(GUIDE_BLOCK, '').replace(PLOT_BLOCK, '')
+      const kept = message.content.replace(NEAR_LORE, '').replace(GUIDE_BLOCK, '').replace(PLOT_BLOCK, '').replace(WEAR_BLOCK, '')
       if (kept === message.content) continue
       message.content = kept
       nearLore = true
@@ -787,7 +839,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     // newest, two Claude relays (2026-10-29, three turns of 15k characters) bill exactly
     // what they do without it, so it stays: without it a depth window rewrites the history's cache every turn.
     if (Number.isFinite(settled) && settled >= 0) messages[settled].cache = true
-    return { messages: withLead(chat, messages), newest: newestText }
+    const whole = withLead(chat, messages)
+    return { messages: how === 'keep' ? whole : withSteps(whole), newest: newestText }
   }
 
   /**
@@ -840,7 +893,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
   async function generateApi(target, request, signal, onText) {
     const [{ thinking, effort, showReasoning }, words] = await Promise.all([store.getSettings(), store.getBlockWords()])
     // A story turn carries its chat's own 思考 (顶栏), over the provider's and the settings'.
-    const { chatThinking, ...asked } = request
+    // `whole`: a made answer (a plot) is asked on till it is whole when it runs into the output limit.
+    const { chatThinking, whole, ...asked } = request
     const { provider, reasoning: asks } = chatReasoning(target.provider, { thinking, effort }, chatThinking)
     // 显示思考过程: a story turn's native thinking (request.onReasoning) goes to the page and stays with the reply.
     const onReasoning = showReasoning ? request.onReasoning : undefined
@@ -852,9 +906,9 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       onText(delta)
     })
     try {
-      result = await complete(provider, target.modelId, { ...blockRequest(asked, words), reasoning: asks, signal, onDelta, onReasoning }, { proxy: isolation.proxy })
+      result = await (whole ? completeWhole : complete)(provider, target.modelId, { ...blockRequest(asked, words), reasoning: asks, signal, onDelta, onReasoning }, { proxy: isolation.proxy })
     } catch (error) {
-      if (signal.aborted || error.status) throw error
+      if (signal.aborted || error.status || error.toolsRefused) throw error
       // Too long for the model (413 is a request too big for the provider at all): marked for the page
       // (压缩后重试) and for compaction (in parts); the limit the provider names is kept for 自动压缩.
       const contextFull = error.providerStatus === 413 || CONTEXT_FULL.test(String(error.message ?? ''))
@@ -864,11 +918,11 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       const blocked = PROHIBITED.test(text) ? filteredReply(target.provider.name, text.match(PROHIBITED)[0]) : null
       // detail: the provider's answer whole, for the error log (the message quotes only its start).
       // The provider's own status kept beside ours: a 400 is what a refused 预填 or system message comes back as.
-      throw Object.assign(httpError(502, blocked ?? providerError(target.provider, error, { begun })), { detail: error.body || text, ...(error.providerStatus ? { providerStatus: error.providerStatus } : {}) }, contextFull ? { contextFull: true } : {})
+      throw Object.assign(httpError(502, blocked ?? providerError(target.provider, error, { begun })), { detail: error.body || text, ...(error.providerStatus ? { providerStatus: error.providerStatus } : {}) }, contextFull ? { contextFull: true } : {}, error.gaveUp ? { gaveUp: true } : {})
     }
-    if (!result.text.trim()) {
+    if (!result.text.trim() && !result.calls?.length) {
       const reason = String(result.stopReason ?? '')
-      const said = filteredReply(target.provider.name, reason) ?? unreadReply(target.provider, result) ?? msg`${target.provider.name} 没有返回正文${reason ? msg`（${reason}）` : ''}`
+      const said = filteredReply(target.provider.name, reason) ?? unreadReply(target.provider, result) ?? (result.truncated ? msg`${target.provider.name} 的模型光是思考就用完了输出上限${result.cap ? msg`（${result.cap} token）` : ''}，还没写到正文。在「模型供应商」这个供应商的「高级」里把「最大输出 token」填大（比如 32000），或者把思考调低、关掉` : null) ?? msg`${target.provider.name} 没有返回正文${reason ? msg`（${reason}）` : ''}`
       throw Object.assign(httpError(502, said), { detail: JSON.stringify({ stopReason: result.stopReason ?? null, model: result.model ?? target.modelId, usage: result.usage ?? null }) })
     }
     const u = result.usage ?? {}
@@ -876,20 +930,30 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     const tokens = { input: u.input ?? 0, cacheRead: u.cacheRead ?? 0, cacheWrite: u.cacheWrite ?? 0, cacheWrite1h: 0, cacheWrite5m: u.cacheWrite ?? 0, output: u.output ?? 0, ...(u.prompt != null ? { prompt: u.prompt } : {}), ...(u.thinking ? { thinking: u.thinking } : {}), costUsd: null }
     // Cut off: at the output limit, or (联网 on Anthropic) still paused mid-search after being carried on a few times.
     const cut = result.truncated ? true : result.stopReason === 'pause_turn' ? 'paused' : null
-    const api = { provider: target.provider.id, model: result.model ?? target.modelId, ...(cut ? { truncated: cut } : {}) }
+    const api = { provider: target.provider.id, model: result.model ?? target.modelId, ...(cut ? { truncated: cut } : {}), ...(cut === true && result.cap ? { cap: result.cap } : {}) }
     const reasoning = onReasoning ? String(result.reasoning ?? '').trim() : ''
-    return { reply: result.text, model: target.model, tokens, sdk: null, api, search: result.search ?? null, ...(reasoning ? { reasoning } : {}) }
+    return { reply: result.text, model: target.model, tokens, sdk: null, api, end: { stop: result.stopReason ?? null, ended: result.ended !== false }, search: result.search ?? null, ...(reasoning ? { reasoning } : {}), ...(result.calls ? { calls: result.calls } : {}), ...(result.thought ? { thought: result.thought } : {}), ...(request.tools && Array.isArray(result.content) ? { blocks: result.content } : {}) }
   }
 
   /**
-   * A story turn's output limit: the preset's max response length, as SillyTavern sends it,
-   * unless the provider sets its own. Capped, and dropped again if the model refuses it.
+   * A story turn's output limit, unless the provider sets its own. The preset's max response length is not it: that is
+   * only said to the model (softLength), and a reply that goes past it is not cut. With one set, the API is asked for
+   * room enough all the same, as a service's own default may be small; dropped again if the model refuses that much.
    */
   async function replyCap(chat, provider) {
     if (provider.maxTokens) return {}
     const preset = await presetFor(store, chat.presetId)
-    const wanted = Math.floor(Number(preset?.params?.maxTokens) || 0)
-    return wanted > 0 ? { maxTokens: Math.min(wanted, MAX_REPLY_TOKENS), softCap: true } : {}
+    return Number(preset?.params?.maxTokens) > 0 ? { maxTokens: MAX_REPLY_TOKENS, softCap: true } : {}
+  }
+
+  /**
+   * Where the cap a reply ran into came from, for the page to say what to change: 'provider' (最大输出 token), 'model'
+   * (less than was asked for: what the model takes), or 'default' (nothing set; a preset's length is no cap).
+   */
+  const capFrom = (cap, provider, api) => {
+    const asked = provider.maxTokens || cap.maxTokens || 0
+    if (asked && api.cap && api.cap < asked) return 'model'
+    return provider.maxTokens ? 'provider' : 'default'
   }
 
   /**
@@ -996,6 +1060,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         fork,
         newSession,
         api: target.api ? target.provider.name : null,
+        // Who writes it, as the page names it while it waits; `watch`: the page hears of every long silence (quietWatch).
+        ...(target.api ? { by: `${target.provider.name} · ${target.modelId}`, watch: streams(target.provider) } : {}),
         injected: prepared.injectedTitles,
         templateErrors: prepared.templateErrors ?? [],
         trimmed,
@@ -1023,6 +1089,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       const onRestart = () => {
         shown = ''
         thought = ''
+        lookedTo = 0
+        reached = null
         emit({ type: 'restart' })
       }
       // The model's own thinking as it comes (显示思考过程 on): shown above the reply, never sent back to the model.
@@ -1031,13 +1099,38 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         emit({ type: 'reasoning', text: delta })
       }
       // A busy provider (Vertex AI's 429) asked again after a wait: the page says so meanwhile.
-      const onRetry = info => emit({ type: 'retrying', provider: target.provider?.name, ...info })
+      const onRetry = info => {
+        quiet.waits(info.wait)
+        emit({ type: 'retrying', provider: target.provider?.name, ...info })
+      }
+      // While upstream is waited for (a streaming provider): how long it has sent nothing.
+      const quiet = quietWatch(emit)
+      const streamed = Boolean(target.api) && streams(target.provider)
+      // 游戏规则: the stops that end this turn's reply (looked at again as it is kept). Past one, the rest is not waited for.
+      const ahead = target.api ? await rulebooks?.read(chat.cardId).catch(() => null) : null
+      const turnOf = userNode ?? rules
+      const stopsAhead = rulesOn(ahead) && pausesOn(ahead, ownPreset(chat)) && !turnOf?.battle ? gateKinds(ahead).filter(kind => kind !== 'check' || !turnOf?.check) : []
+      let lookedTo = 0
+      let reached = null
+      const enough = () => {
+        // Looked at only when a mark has been closed since.
+        const end = shown.lastIndexOf('】') + 1
+        if (end <= lookedTo) return false
+        lookedTo = end
+        reached = surelyAtGate(continued ? joinContinued(continued.text, shown) : shown, stopsAhead)
+        return Boolean(reached)
+      }
       let outcome
       let cut = null
+      // 直连对话: what the model did with tools this turn, kept with the reply however the turn ends.
+      const toolSteps = []
+      let toolset = null
+      // The tokens of the calls before the answer.
+      let usage = null
       if (target.api) {
         const building = span('prompt.history')
         // 聊天中 @深度: this turn's blocks at their depth (historyFor), the message itself as it goes now (`sending`).
-        const { messages: history, newest: turnText } = await historyFor(chat, parent, { stripAll: Boolean(compacted || userNode?.dynamic?.compacted), newest: prepared.prompt })
+        const { messages: history, newest: turnText } = await historyFor(chat, parent, { stripAll: Boolean(compacted || userNode?.dynamic?.compacted), newest: prepared.prompt, steps: 'keep' })
         const sending = { ...prepared, prompt: turnText }
         building()
         const cap = await replyCap(chat, target.provider)
@@ -1051,20 +1144,38 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
           // things up before it answers (help.mjs). Its lookups and what they found go after the turn's message for this
           // turn only (`tail`); the newest result gets a cache mark, so each lookup reads the one before from the cache.
           const helping = helpOn(chat) && !continued
-          const system = helping ? `${chat.systemPrompt}\n\n${helpSystem(await appHelp(), app)}` : chat.systemPrompt
+          // 游戏规则: a reply that has come to its mark stops there; what comes after it is not wanted.
+          const stopsAtMark = async text => {
+            const book = await rulebooks?.read(chat.cardId).catch(() => null)
+            return rulesOn(book) && pausesOn(book, ownPreset(chat)) && !userNode?.battle && Boolean(cutAtGate(text, gateKinds(book)).gate)
+          }
+          // Files (tools/index.mjs), in a 直连对话 the player gave folders.
+          toolset = chat.cardId === DIRECT_CARD && !continued ? await tools?.forTurn(chatId) ?? null : null
+          // The API's own tool calling where it has it; else, or once a model refuses it, calls as text.
+          const pair = `${target.provider.id}/${target.modelId}`
+          let native = Boolean(toolset) && nativeTools(target.provider, target.modelId)
+          const helpText = helping ? helpSystem(await appHelp(), app) : ''
+          const system = () => [chat.systemPrompt, helpText, toolset?.system(native) ?? ''].filter(Boolean).join('\n\n')
+          // What a reply asks for before it can be an answer: { calls } of tools, { lookup } the help; null for an answer.
+          const requestOf = result => {
+            if (result.calls?.length) return { calls: result.calls.map(item => ({ ...nativeCall(item, toolset.names), native: item })) }
+            const call = toolset ? toolCall(result.reply, toolset.names) : null
+            if (call) return { calls: [call] }
+            const lookup = helping ? lookupOf(result.reply) : null
+            return lookup ? { lookup } : null
+          }
           const steps = []
           const lookups = []
           // 预填 (prepared.prefill): the reply's own start, where the model takes one; else as text after the turn's message,
           // as it went before. Not with 继续生成 (the reply so far is its start) or 应用帮助.
-          const pair = `${target.provider.id}/${target.modelId}`
-          const prefill = continued || helping ? '' : prepared.prefill ?? ''
+          const prefill = continued || helping || toolset ? '' : prepared.prefill ?? ''
           // By the provider's address too: two providers of one name (or a test's) are not one another.
           const prefillKey = `${target.provider.baseURL}|${target.modelId}`
           let asPrefill = Boolean(prefill) && !refusesPrefill.has(prefillKey)
           const prefillMessages = () => (prefill ? [{ role: asPrefill ? 'assistant' : 'user', content: prefill, tail: true }] : [])
           const ask = asSystem => {
-            // A lookup is held back from the page; an answer comes on as it is written.
-            const gate = helping ? lookupGate(onText, onRestart) : null
+            // A lookup or a tool call is held back from the page; an answer comes on as it is written.
+            const gate = helping || toolset ? callGate([...(toolset ? callMarks : []), ...(helping ? [lookupMark] : [])], onText, onRestart) : null
             // Taken as the reply's start inside a thinking tag: the reply is shown and kept with that tag in front.
             // The model may write the tag itself (DeepSeek did, 2026-11-16): the reply's first characters are held
             // till that is known, so it is not there twice.
@@ -1092,8 +1203,10 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
               head = ''
               onRestart?.()
             }
-            return generateApi(target, { system, messages: [...history, ...turnMessages(target, sending, asSystem), ...prefillMessages(), ...more, ...steps], ...cap, webSearch, onRestart: restarted, onRetry, onReasoning, chatThinking: chat.thinking }, abortController.signal, gate ? delta => gate.push(delta) : written).then(result => {
-              gate?.end(Boolean(lookupOf(result.reply)))
+            const asNative = native
+            if (streamed) quiet.start()
+            return generateApi(target, { system: system(), messages: [...withSteps(history, { native, pair }), ...turnMessages(target, sending, asSystem), ...prefillMessages(), ...more, ...steps.flatMap(step => (step.render ? step.render(asNative) : [step]))], ...cap, ...(native ? { tools: toolset.defs } : {}), webSearch, onRestart: restarted, onRetry, onReasoning, onData: () => quiet.came(), ...(stopsAhead.length ? { enough } : {}), chatThinking: chat.thinking }, abortController.signal, gate ? delta => gate.push(delta) : written).finally(() => quiet.stop()).then(result => {
+              gate?.end(Boolean(requestOf(result)))
               if (!front) return result
               // Shorter than the tag: what was held goes on as it is.
               if (lead && head) onText(head)
@@ -1108,6 +1221,11 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
           }
           let asSystem = true
           const asked = () => ask(asSystem).catch(error => {
+            // No tools of its own after all: the same again, the calls as text.
+            if (error.toolsRefused && native) {
+              native = false
+              return asked()
+            }
             // A model or relay that refuses a system message after the turn's: the entries go with the turn's message.
             if (!sendsSystemTail(target, prepared) || !asSystem || (error.status !== 400 && error.providerStatus !== 400) || !/system/i.test(error.message ?? '')) throw error
             refusesSystemTail.add(pair)
@@ -1121,9 +1239,83 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
             asPrefill = false
             return asked()
           })
-          let usage = null
-          for (let request = helping ? lookupOf(outcome.reply) : null; request; request = lookupOf(outcome.reply)) {
+          const times = new Map()
+          let askAt = ASK_TOKENS
+          for (let wanted = requestOf(outcome); wanted; wanted = requestOf(outcome)) {
             usage = addUsage(usage, outcome.tokens)
+            if (wanted.calls) {
+              const own = Boolean(wanted.calls[0].native)
+              // A reply's words before its calls: said with the first of them.
+              const said = own ? outcome.reply.trim() : wanted.calls[0].said
+              // No more: what it said before the call is its answer.
+              const stopHere = why => {
+                outcome = { ...outcome, reply: [said, why].filter(Boolean).join('\n\n'), stopped: true }
+              }
+              if (toolSteps.length >= MAX_STEPS) {
+                stopHere(msg`（这一轮用了 ${MAX_STEPS} 次工具还没做完，先停在这里。要接着做就说一声。）`)
+                break
+              }
+              const spent = (usage?.input ?? 0) + (usage?.cacheRead ?? 0) + (usage?.cacheWrite ?? 0)
+              if (spent > askAt) {
+                emit({ type: 'tool_wait' })
+                if (!(await toolset.goOn(spent, { signal: abortController.signal }))) {
+                  if (abortController.signal.aborted) throw httpError(499, msg`已停止生成`)
+                  stopHere(msg`（用量比较大，按你的意思先停在这里。）`)
+                  break
+                }
+                askAt = spent + ASK_TOKENS
+              }
+              const reply = callId()
+              const entries = []
+              for (const [index, call] of wanted.calls.entries()) {
+                const item = call.native ?? null
+                const number = toolSteps.length + 1
+                if (index === 0) call.said = said
+                const key = callKey(call)
+                times.set(key, (times.get(key) ?? 0) + 1)
+                const begun = Date.now()
+                let done
+                if (toolSteps.length >= MAX_STEPS) done = { text: '工具次数用完了，没有执行', ok: false, past: true }
+                else {
+                  emit({ type: 'tool', step: number, name: call.name, args: call.args, said: call.said })
+                  done = times.get(key) > SAME_CALL
+                    ? { text: `出错：同样的调用已经做过 ${SAME_CALL} 次了，没有再做。换个办法，或者告诉用户做不到`, ok: false }
+                    : await toolset.step(call, { signal: abortController.signal, onWait: () => emit({ type: 'tool_wait' }) })
+                }
+                const kept = keptStep({ call, result: done.text, ok: done.ok, summary: done.summary, ms: Date.now() - begun, native: item ? { id: item.id, extra: item.extra, thought: index === 0 ? outcome.thought : null, by: pair, reply } : null })
+                if (!done.past) {
+                  toolSteps.push(kept)
+                  emit({ type: 'tool_done', step: number, ok: done.ok, summary: done.summary ?? null })
+                }
+                const left = Math.max(0, MAX_STEPS - toolSteps.length)
+                entries.push({ call, id: kept.id, item, ok: done.ok, text: nativeResult(done.text, { left }), block: resultBlock(call.name, done.text, { left, note: call.more ? '你在调用后面写的没有用上。' : '' }) })
+                if (abortController.signal.aborted) throw httpError(499, msg`已停止生成`)
+              }
+              // Both ways of writing this step out: a model that refuses tools halfway is asked again with it as text.
+              const { thought, blocks } = outcome
+              // The ids as kept: the model's own, unless the API's would not be taken back.
+              const asWritten = blocks?.map(block => (block?.type === 'tool_use' ? { ...block, id: entries.find(entry => entry.item?.id === block.id)?.id ?? block.id } : block))
+              const step = {
+                cache: true,
+                render(asNative) {
+                  if (asNative && own) {
+                    return [
+                      { role: 'assistant', content: said, tail: true, by: pair, calls: entries.map(({ id, item }) => ({ id, name: item.name, input: item.input, ...(item.extra ? { extra: item.extra } : {}) })), ...(thought ? { thought: { ...thought, by: pair } } : {}), ...(asWritten ? { blocks: asWritten } : {}) },
+                      { role: 'tool', tail: true, results: entries.map(({ id, text, ok }) => ({ id, text, ok })), ...(step.cache ? { cache: true } : {}) },
+                    ]
+                  }
+                  return entries.flatMap(({ call, block }, index) => [
+                    { role: 'assistant', content: [call.said, call.raw].filter(Boolean).join('\n\n') || '……', tail: true },
+                    { role: 'user', content: block, tail: true, ...(step.cache && index === entries.length - 1 ? { cache: true } : {}) },
+                  ])
+                },
+              }
+              for (const earlier of steps) delete earlier.cache
+              steps.push(step)
+              outcome = await asked()
+              continue
+            }
+            const request = wanted.lookup
             if (lookups.length >= MAX_LOOKUPS) throw httpError(502, msg`助手查了 ${MAX_LOOKUPS} 次资料还没有回答：可以重新生成，或者换个问法`)
             const label = lookupLabel(request)
             lookups.push(label)
@@ -1135,18 +1327,70 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
               { role: 'assistant', content: lookupLine(outcome.reply), tail: true },
               { role: 'user', content: `<lookup_result>\n${found}\n</lookup_result>\n${left ? `（还能查 ${left} 次）` : '（查询次数用完了，现在直接回答，不能再查）'}`, tail: true, cache: true },
             )
-            outcome = await ask(asSystem)
+            outcome = await asked()
           }
-          if (usage) outcome = { ...outcome, tokens: addUsage(usage, outcome.tokens) }
+          // Steps with tools are kept in the history: what the context holds is the last call's. One stopped at a call has been counted.
+          // 自动续写: a reply cut at the output limit is asked on from where it stopped, as 继续生成 does it, into the same
+          // reply. Not one with tools in it (a call may be what was cut), nor one that goes round in circles.
+          const autoContinue = (await store.getSettings()).autoContinue !== false
+          for (let round = 1; autoContinue && round <= AUTO_ROUNDS && outcome.api?.truncated === true && !outcome.calls && !toolset; round++) {
+            const sofar = continued && !outcome.joined ? joinContinued(continued.text, outcome.reply) : outcome.reply
+            if (sofar.length > AUTO_MOST || goesRound(sofar) || (await stopsAtMark(sofar))) break
+            emit({ type: 'continuing', round })
+            let joined = joinedStream(sofar)
+            const onMore = delta => {
+              const text = joined.push(delta)
+              if (text) onText(text)
+            }
+            const before = shown
+            // Written afresh: the page starts over, with what was there.
+            const restarted = () => {
+              onRestart()
+              onText(before)
+              joined = joinedStream(sofar)
+            }
+            const rest = [...turnMessages(target, sending, asSystem), ...steps.flatMap(step => (step.render ? step.render(false) : [step])), { role: 'assistant', content: sofar.trimEnd(), tail: true }, { role: 'user', content: CONTINUE_NUDGE, tail: true }]
+            let next
+            if (streamed) quiet.start()
+            try {
+              next = await generateApi(target, { system: system(), messages: [...withSteps(history, { native, pair }), ...rest], ...cap, onRestart: restarted, onRetry, onReasoning, onData: () => quiet.came(), ...(stopsAhead.length ? { enough } : {}), chatThinking: chat.thinking }, abortController.signal, onMore).finally(() => quiet.stop())
+            } catch (error) {
+              if (abortController.signal.aborted) {
+                // Stopped: the part before is kept with what came since, and paid for.
+                usage = addUsage(usage, outcome.tokens)
+                throw error
+              }
+              // What was written stays, marked as cut: the player can go on from it.
+              break
+            }
+            const tail = joined.end()
+            if (tail) onText(tail)
+            outcome = {
+              ...outcome,
+              reply: joinContinued(sofar, next.reply),
+              // With 继续生成: the reply before it is in front already.
+              joined: Boolean(continued),
+              // What the context held is what the first call was sent.
+              tokens: addUsage(addUsage(null, outcome.tokens), next.tokens),
+              api: { ...next.api, more: round },
+              // How the whole ended is how its last part did.
+              end: next.end,
+              ...(outcome.reasoning || next.reasoning ? { reasoning: [outcome.reasoning, next.reasoning].filter(Boolean).join('\n\n') } : {}),
+            }
+          }
+          if (outcome.api?.truncated === true) outcome = { ...outcome, api: { ...outcome.api, capFrom: capFrom(cap, target.provider, outcome.api) } }
+          if (usage) outcome = { ...outcome, tokens: { ...(outcome.stopped ? usage : addUsage(usage, outcome.tokens)), ...(toolSteps.length && outcome.tokens ? { prompt: outcome.tokens.prompt ?? (outcome.tokens.input ?? 0) + (outcome.tokens.cacheRead ?? 0) + (outcome.tokens.cacheWrite ?? 0) } : {}) } }
           if (lookups.length) outcome = { ...outcome, lookups }
         } catch (error) {
           // The provider tells the tokens at the end of an answer, so this one has none. An update block it finished still counts.
           // 继续生成: what came on after the reply, kept with it; nothing new, and the turn fails (the reply stays as it was).
-          if (!keepCut || !displayText(withoutOpenEnd(shown))) throw error
-          const kept = withoutOpenEnd(continued ? joinContinued(continued.text, shown) : shown)
+          // What was done with tools is kept too, though no word of the answer came: the files are changed.
+          const partial = displayText(withoutOpenEnd(shown)) ? shown : toolSteps.length ? msg`（这一轮没有写完，上面是已经做了的事。）` : ''
+          if (!keepCut || !partial) throw error
+          const kept = withoutOpenEnd(continued ? joinContinued(continued.text, partial) : partial)
           const stopped = abortController.signal.aborted
           cut = stopped ? { stopped } : { stopped, status: error.status ?? 500, message: error.message, detail: error.detail }
-          outcome = { reply: kept, model: target.model, tokens: null, sdk: null, api: { provider: target.provider.id, model: target.modelId, truncated: stopped ? 'stopped' : 'broken' }, search: null, joined: Boolean(continued), ...(thought.trim() ? { reasoning: thought.trim() } : {}) }
+          outcome = { reply: kept, model: target.model, tokens: usage, sdk: null, api: { provider: target.provider.id, model: target.modelId, truncated: stopped ? 'stopped' : error.gaveUp ? 'timeout' : 'broken' }, search: null, joined: Boolean(continued), ...(thought.trim() ? { reasoning: thought.trim() } : {}) }
         }
       } else {
         // The turn's message as the session will hold it: the 屏蔽词 applied (the system prompt in beforeTurn).
@@ -1156,6 +1400,10 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         if (!outcome.sdk) throw httpError(502, msg`模型没有返回正文`)
       }
       writing()
+      // Not read past its stop: the story's wrapper is closed for it.
+      if (reached?.wrapper && !cut) outcome = { ...outcome, reply: `${outcome.reply.trimEnd()}\n</${reached.wrapper}>` }
+      // What is left is this app's own work: the reply kept, its variables worked out.
+      emit({ type: 'written' })
       if (!outcome.reply.trim()) throw httpError(502, msg`模型没有返回正文`)
       const written = continued && !outcome.joined ? joinContinued(continued.text, outcome.reply) : outcome.reply
 
@@ -1218,6 +1466,12 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         // 剧本: the 剧本进度 mark comes out of the reply as it is kept (so out of everything that reads it later), and the
         // progress it made goes on the reply, read against what the turn told the model.
         const { text: reply, mark: plotMark, raw: plotRaw } = takePlotMark(gated)
+        // A reply that upstream did not end as it should is marked: the page says whose doing it was, and offers 继续生成.
+        if (!cut && !gate && outcome.end && outcome.api && !outcome.api.truncated && !outcome.stopped) {
+          const more = fresh.cardId !== DIRECT_CARD && !hasUpdateBlock(reply) && (await asksUpdate(fresh, prepared.settings).catch(() => false))
+          const kind = upstreamCut(reply, outcome.end, { more })
+          outcome.api = { ...outcome.api, ...(kind ? { truncated: kind } : {}), ...(outcome.end.stop ? { stop: String(outcome.end.stop).slice(0, 60) } : {}) }
+        }
         const plotCopy = fresh.plot?.copy
         const plotBase = plotCopy && userNode.plotSent?.of === plotCopy.id
           ? applySet(plotCopy, progressOn(plotCopy, withoutHidden(pathTo(fresh, userNode.parent)), fresh.plot.start), userNode.plotSet?.of === plotCopy.id ? userNode.plotSet : null)
@@ -1241,9 +1495,19 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         // reply's own writes, so 补写变量 keeps them too. A bag is not among them: what the reply put in it stays.
         const replyWrites = [...(evaluated?.writes.message ?? []), ...gameWrites.filter(write => typeof write.value === 'number')]
         // The card's variable rules have the last word on the state, so the sheet reads what they kept.
-        const kept = await keptToSchema(fresh, applyWrites(updated.state, replyWrites), turnCard, { before: parent.state })
+        const ruleInput = applyWrites(updated.state, replyWrites)
+        let kept = await keptToSchema(fresh, ruleInput, turnCard, { before: parent.state })
+        // 这轮变量没更新上: what of the reply's update did not take, as the rules first saw it.
+        const varIssues = await varIssuesOf(fresh, turnCard, { before: replyFrom, text: reply, written: ruleInput, kept, scripted: Boolean(scripted), keepFrom: parent.state })
+        const sheet = ruled ? settledSheet(book, pathTo(fresh, parent.id), userNode, replyText, kept.state) : null
+        // 形态 come to this turn (from the menu, or by the reply's own mark) are in the card's variables too, whether
+        // or not the reply remembered to put them there.
+        const formed = sheet ? formWrites(book, kept.state, sheetOf(book, sheetOnPath(pathTo(fresh, parent.id)), parent.state), sheet) : []
+        if (formed.length) {
+          replyWrites.push(...formed)
+          kept = await keptToSchema(fresh, applyWrites(kept.state, formed), turnCard, { before: parent.state })
+        }
         const finalState = kept.state
-        const sheet = ruled ? settledSheet(book, pathTo(fresh, parent.id), userNode, replyText, finalState) : null
         // 剧本: the progress the reply made, with what the program knows after it (the variables, this turn's roll and
         // fight, for the exits that need them); an ending reached the first time goes in the card's 结局收集.
         const plotProgress = plotBase
@@ -1276,9 +1540,10 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
           ...(plotProgress ? { plot: plotProgress } : {}),
           // The 剧本进度 mark as the model wrote it (at most 200 characters), to look into; the page never gets it.
           ...(plotRaw ? { plotMark: plotRaw } : {}),
-          stateChanges: [...new Set([...writeLabels(turnWrites), ...updated.changes, ...writeLabels(evaluated?.writes.message)])],
+          stateChanges: [...new Set([...writeLabels(turnWrites), ...updated.changes, ...writeLabels(evaluated?.writes.message), ...writeLabels(formed)])],
           ...(updated.unread ? { updateUnread: true } : {}),
           ...(kept.problem ? { schemaProblem: kept.problem } : {}),
+          ...(varIssues.length ? { varIssues } : {}),
           ...(startNotes.length || scripted?.notes.length ? { scriptNotes: [...startNotes, ...(scripted?.notes ?? [])] } : {}),
           ...(replyWrites.length ? { templateWrites: replyWrites } : {}),
           ...(evaluated?.errors.length ? { templateErrors: evaluated.errors } : {}),
@@ -1287,10 +1552,15 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
           ...(outcome.search ? { search: outcome.search } : {}),
           // 应用帮助: what the assistant looked up before it answered ({ op, target }), shown under the reply.
           ...(outcome.lookups ? { lookups: outcome.lookups } : {}),
+          // 直连对话's tools: what it did before it answered, and the turn's file changes (tools/history.mjs), to take back.
+          ...(toolSteps.length ? { steps: toolSteps } : {}),
+          ...(toolset?.changed() ? { fileRun: toolset.run } : {}),
+          // The thinking a service wants back with every reply while there are tools (DeepSeek); not shown, unlike `reasoning`.
+          ...(toolset && outcome.thought ? { thought: { ...outcome.thought, by: `${target.provider.id}/${target.modelId}` } } : {}),
           ...(outcome.reasoning ? { reasoning: outcome.reasoning } : {}),
           model: outcome.model,
           usage: outcome.tokens,
-          timing: { totalMs: Date.now() - started, firstTokenMs: firstToken || null, forked: fork, ...(target.api ? { api: true } : {}) },
+          timing: { totalMs: Date.now() - started, firstTokenMs: firstToken || null, forked: fork, ...(target.api ? { api: true } : {}), ...(quiet.longest() >= GAP_KEPT_MS ? { gapMs: quiet.longest() } : {}) },
           sel: null,
           createdAt: now,
         }
@@ -1301,6 +1571,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
         // A chat from before replies kept their choices: this one and those after it do, the older ones stay as sent.
         fresh.choicesKept ??= now
         fresh.nodes[node.id] = node
+        // 撤销修复 is for the latest reply: the one this turn follows keeps that it was put right, not what it was before.
+        if (fresh.nodes[parent.id]?.varFix?.before) delete fresh.nodes[parent.id].varFix.before
         // A card script's injection for the next turn only has been sent.
         if (!userNodeId) afterTurn(fresh)
         // Also lifts a rollback on the parent: the new turn is now the visible branch.
@@ -1778,8 +2050,32 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
    */
   async function missesUpdate(chat, node) {
     if (!node || node.role !== 'assistant' || node.gate || (hasUpdateBlock(node.text) && !node.updateUnread)) return false
-    const [settings, card, preset] = await Promise.all([store.getSettings(), store.getCard(chat.cardId), presetFor(store, chat.presetId)])
+    return asksUpdate(chat, await store.getSettings())
+  }
+
+  /** Whether the card's replies end in a variable update block. */
+  async function asksUpdate(chat, settings) {
+    const [card, preset] = await Promise.all([store.getCard(chat.cardId), presetFor(store, chat.presetId)])
     return usesMvu(card, await booksForCard(store, card, settings, chat), preset)
+  }
+
+  /**
+   * 这轮变量没更新上 (turn-vars.mjs): what went wrong with the variables of a reply's update block, [] when nothing
+   * did or it has none (补写变量 is for that). Never fails the turn: what cannot be worked out is not told.
+   * @param keepFrom - the variables the chat had before the turn (keptToSchema's `before`)
+   */
+  async function varIssuesOf(chat, read, { before, text, written, kept, scripted, keepFrom }) {
+    if (!hasUpdateBlock(text)) return []
+    try {
+      const card = await cardWithSchema(chat.cardId, read)
+      const books = card ? await booksForCard(store, card, await store.getSettings(), chat).catch(() => []) : []
+      const initial = initialState(books)
+      const keep = [...new Set([...Object.keys(keepFrom ?? {}), ...Object.keys(initial)])]
+      const check = card?.mvuSchema ? async state => keepToSchema(card.mvuSchema, state, keep).problem : null
+      return await turnVarIssues({ before, text, written, kept, check, scripted, initial })
+    } catch {
+      return []
+    }
   }
 
   /**
@@ -1791,7 +2087,22 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
    * reply's state is worked out again.
    * @returns the chat.
    */
-  async function fillUpdate(chatId, nodeId) {
+  function fillUpdate(chatId, nodeId) {
+    return rewriteUpdate(chatId, nodeId, 'fill')
+  }
+
+  /**
+   * 修好这轮变量: the latest reply's update block written again by the model, whole, told what the program found wrong
+   * with it (its varIssues; with none it checks the block against the story: 核对这轮变量). The new block takes the
+   * old one's place and the reply's state is worked out again; what it was before is kept for 撤销修复.
+   * @returns the chat.
+   */
+  function fixUpdate(chatId, nodeId) {
+    return rewriteUpdate(chatId, nodeId, 'fix')
+  }
+
+  async function rewriteUpdate(chatId, nodeId, mode) {
+    const fixing = mode === 'fix'
     if (running.has(chatId)) throw httpError(409, msg`正在生成，先停止`)
     const abortController = new AbortController()
     running.set(chatId, abortController)
@@ -1799,10 +2110,12 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       const chat = await store.getChat(chatId)
       const path = activePath(chat)
       const node = path.at(-1)
-      if (!node || node.id !== nodeId || node.role !== 'assistant' || node.id === 'root') throw httpError(400, msg`只能给最新一条回复补写变量`)
+      if (!node || node.id !== nodeId || node.role !== 'assistant' || node.id === 'root') throw httpError(400, fixing ? msg`只能修最新一条回复的变量` : msg`只能给最新一条回复补写变量`)
       // Its text is in the summary now, and a compaction point is not edited (editMessage).
-      if (node.compaction) throw httpError(400, msg`这条回复已经压缩进剧情存档，不能再补写变量`)
-      if (hasUpdateBlock(node.text) && !node.updateUnread) throw httpError(400, msg`这条回复已经有变量更新了`)
+      if (node.compaction) throw httpError(400, fixing ? msg`这条回复已经压缩进剧情存档，不能再改变量` : msg`这条回复已经压缩进剧情存档，不能再补写变量`)
+      const readable = hasUpdateBlock(node.text) && !node.updateUnread
+      if (!fixing && readable) throw httpError(400, msg`这条回复已经有变量更新了`)
+      if (fixing && !readable) throw httpError(400, msg`这条回复没有能读的变量更新，用「补写变量」`)
       const [settings, card, preset] = await Promise.all([store.getSettings(), store.getCard(chat.cardId), presetFor(store, chat.presetId)])
       const books = await booksForCard(store, card, settings, chat)
       if (!usesMvu(card, books, preset)) throw httpError(400, msg`这张卡不用 MVU 变量`)
@@ -1810,17 +2123,19 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       // with what that turn's templates wrote.
       const turn = chat.nodes[node.parent]
       const before = applyWrites(chat.nodes[turn?.parent]?.state ?? {}, [...(turn?.templateWrites ?? []), ...(turn?.gameWrites ?? [])])
+      const lines = fixing ? issueLines(node.varIssues) : []
       const started = Date.now()
-      let answer = await askInContext(chatId, nodeId, fillInstruction(), { maxTokens: FILL_MAX_TOKENS, signal: abortController.signal })
+      let answer = await askInContext(chatId, nodeId, fixing ? fixInstruction({ lines, state: before }) : fillInstruction(), { maxTokens: FILL_MAX_TOKENS, signal: abortController.signal })
       if (!answer) {
         // A subscription session cannot be borrowed: the helper model gets what it needs to work it out.
         const ref = [settings.media?.helperModel, settings.model].find(r => isProviderRef(r))
-        if (!ref) throw httpError(400, msg`补写变量要用供应商的模型（这条回复不是供应商模型写的，借不了它的上下文）：在顶栏选一个供应商的模型，或在「配图与朗读」里选一个辅助模型`)
+        if (!ref) throw httpError(400, fixing ? msg`修好变量要用供应商的模型（这条回复不是供应商模型写的，借不了它的上下文）：在顶栏选一个供应商的模型，或在「配图与朗读」里选一个辅助模型` : msg`补写变量要用供应商的模型（这条回复不是供应商模型写的，借不了它的上下文）：在顶栏选一个供应商的模型，或在「配图与朗读」里选一个辅助模型`)
         const target = await targetFor(ref, settings)
         const session = templateSession({ state: before, names: chat.names, books, messages: activePath(chat).filter(item => !item.deleted).map(item => ({ role: item.role, text: item.text ?? '' })) })
         let request
         try {
-          request = fillRequest({ books, render: entry => renderEntry(entry, { state: before, names: chat.names, session }).text, state: before, reply: node.display ?? node.text, maxTokens: FILL_MAX_TOKENS })
+          const asked = { books, render: entry => renderEntry(entry, { state: before, names: chat.names, session }).text, state: before, reply: node.display ?? node.text, maxTokens: FILL_MAX_TOKENS }
+          request = fixing ? fixRequest({ ...asked, blocks: updateBlocks(node.text), lines }) : fillRequest(asked)
         } finally {
           session.dispose()
         }
@@ -1832,27 +2147,66 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       if (!block) throw httpError(502, msg`模型没有写出变量更新块，可以再试一次`)
       return await store.withChat(chatId, async () => {
         const fresh = await store.getChat(chatId)
-        const edit = editChatMessage(fresh, nodeId, `${fresh.nodes[nodeId].text.trimEnd()}\n\n${block}`)
-        const scripted = await cardScripts.update(card, fresh, { before, text: edit.node.text, path: pathTo(fresh, turn?.id ?? 'root') })
-        const { state, changes, unread } = keepReadOnly(before, scripted ?? applyStateUpdates(before, edit.node.text), card?.readOnly)
-        if (unread) edit.node.updateUnread = true
-        else delete edit.node.updateUnread
-        // The reply's own template writes land after its update blocks again.
-        const kept = await keptToSchema(fresh, applyWrites(state, edit.node.templateWrites), null, { before })
-        edit.node.state = kept.state
-        if (kept.problem) edit.node.schemaProblem = kept.problem
-        else delete edit.node.schemaProblem
-        edit.node.stateChanges = [...new Set([...writeLabels(turn?.templateWrites), ...changes, ...writeLabels(edit.node.templateWrites)])]
-        edit.node.filledUpdate = { at: new Date().toISOString(), model: answer.model ?? null }
+        const was = fresh.nodes[nodeId]
+        // An earlier fix goes in with it: each 撤销 steps back one.
+        const kept = fixing ? structuredClone({ text: was.text, state: was.state, stateChanges: was.stateChanges, varIssues: was.varIssues, schemaProblem: was.schemaProblem, updateUnread: was.updateUnread, varFix: was.varFix }) : null
+        const edit = editChatMessage(fresh, nodeId, fixing ? `${withoutUpdateBlocks(was.text)}\n\n${block}` : `${was.text.trimEnd()}\n\n${block}`)
+        await settleUpdate(fresh, edit.node, card, before, turn)
+        if (fixing) {
+          const changed = stateDiff(kept.state, edit.node.state)
+          edit.node.varFix = { at: new Date().toISOString(), model: answer.model ?? null, text: edit.node.text, changed: changed.slice(0, 6), count: changed.length, before: kept }
+        } else {
+          edit.node.filledUpdate = { at: new Date().toISOString(), model: answer.model ?? null }
+        }
         if (subscription) await subscription.editTranscripts({ chat: fresh, node: edit.node, edit, path: activePath(fresh) })
         return store.saveChat(fresh)
       })
     } catch (error) {
-      if (abortController.signal.aborted) throw httpError(499, msg`已停止补写`)
+      if (abortController.signal.aborted) throw httpError(499, fixing ? msg`已停止修复` : msg`已停止补写`)
       throw error
     } finally {
       running.delete(chatId)
     }
+  }
+
+  /** A reply's state worked out again from its text, as its turn did (after 补写变量 or 修好), on `node` itself. */
+  async function settleUpdate(chat, node, card, before, turn) {
+    const scripted = await cardScripts.update(card, chat, { before, text: node.text, path: pathTo(chat, turn?.id ?? 'root') })
+    const { state, changes, unread } = keepReadOnly(before, scripted ?? applyStateUpdates(before, node.text), card?.readOnly)
+    if (unread) node.updateUnread = true
+    else delete node.updateUnread
+    // The reply's own template writes land after its update blocks again.
+    const written = applyWrites(state, node.templateWrites)
+    const kept = await keptToSchema(chat, written, null, { before })
+    node.state = kept.state
+    if (kept.problem) node.schemaProblem = kept.problem
+    else delete node.schemaProblem
+    const issues = await varIssuesOf(chat, card, { before, text: node.text, written, kept, scripted: Boolean(scripted), keepFrom: before })
+    if (issues.length) node.varIssues = issues
+    else delete node.varIssues
+    node.stateChanges = [...new Set([...writeLabels(turn?.templateWrites), ...changes, ...writeLabels(node.templateWrites)])]
+  }
+
+  /**
+   * 撤销修复: the latest reply put back as it was before 修好这轮变量, while it is still as that left it.
+   * @returns the chat.
+   */
+  function undoFix(chatId, nodeId) {
+    return store.withChat(chatId, async () => {
+      if (running.has(chatId)) throw httpError(409, msg`正在生成，先停止`)
+      const chat = await store.getChat(chatId)
+      const node = activePath(chat).at(-1)
+      if (!node || node.id !== nodeId || !node.varFix?.before) throw httpError(400, msg`只能撤销最新一条回复的修复`)
+      if (node.text !== node.varFix.text) throw httpError(400, msg`这条回复修好以后又改过，不能撤销了`)
+      const { before } = node.varFix
+      const edit = editChatMessage(chat, nodeId, before.text)
+      for (const key of ['state', 'stateChanges', 'varIssues', 'schemaProblem', 'updateUnread', 'varFix']) {
+        if (before[key] === undefined) delete edit.node[key]
+        else edit.node[key] = before[key]
+      }
+      if (subscription) await subscription.editTranscripts({ chat, node: edit.node, edit, path: activePath(chat) })
+      return store.saveChat(chat)
+    })
   }
 
   /**
@@ -1945,7 +2299,7 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
       battle: fight?.battle ?? null,
       ops: done,
       lines: [...queued.lines, ...lines],
-      writes: opWrites(book, parent.state, before, sheet, done),
+      writes: [...opWrites(book, parent.state, before, sheet, done), ...formWrites(book, parent.state, before, sheet)],
       bound: Object.keys(book.bindings),
       auto: settling && !chosen,
       input: chosen ? null : fight ? fightLine(fight.battle) : settling ? checkLine(check) : null,
@@ -1981,15 +2335,28 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     }
   }
 
+  /** Which model sideCall would use: its ref (undefined: none of them is a provider's). */
+  async function sideRef(chat, preferred) {
+    const [settings, providers] = await Promise.all([store.getSettings(), store.getProviders()])
+    const usable = ref => isProviderRef(ref) && providers.some(p => p.id === ref.slice(0, ref.indexOf('/')))
+    const ref = [preferred, settings.media?.helperModel, chat && modelFor(chat, settings), settings.model].find(usable)
+    return { ref, settings, providers }
+  }
+
+  /** The same for the page: { ref, label, from: 'preferred' | 'helper' | 'other' }, or null. */
+  async function sideModel(chat, preferred) {
+    const { ref, settings, providers } = await sideRef(chat, preferred)
+    if (!ref) return null
+    return { ref, label: refLabel(ref, providers) ?? ref, from: ref === preferred ? 'preferred' : ref === settings.media?.helperModel ? 'helper' : 'other' }
+  }
+
   /**
    * A model call beside the story on a provider's model: `preferred` when it is one still there, else the helper
    * (配图与朗读), the chat's own, the default. Its usage goes on the chat's. → { text, model, usage }
    * @param missing - what to say when none of them is a provider's.
    */
   async function sideCall(chat, preferred, request, { signal, onText = () => {}, group = 'helper', missing = null } = {}) {
-    const [settings, providers] = await Promise.all([store.getSettings(), store.getProviders()])
-    const usable = ref => isProviderRef(ref) && providers.some(p => p.id === ref.slice(0, ref.indexOf('/')))
-    const ref = [preferred, settings.media?.helperModel, chat && modelFor(chat, settings), settings.model].find(usable)
+    const { ref, settings } = await sideRef(chat, preferred)
     if (!ref) throw httpError(400, missing ?? msg`这里要用供应商的模型：在顶栏选一个，或在「配图与朗读」里选一个辅助模型`)
     const begun = Date.now()
     const result = await generateApi(await targetFor(ref, settings), withToolNote(request, toolNote(settings, group)), signal ?? new AbortController().signal, onText)
@@ -2051,8 +2418,8 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
   }
 
   /** What things do, for a card's rule book: one small request for all of them. */
-  async function sortThings(chatId, things) {
-    return parseThings(await askAboutRules(await store.getChat(chatId), thingsRequest(things)), things)
+  async function sortThings(chatId, things, options = {}) {
+    return parseThings(await askAboutRules(await store.getChat(chatId), thingsRequest(things, options)), things)
   }
 
   /** What foes look like and do, for the 敌人图鉴: one small request, with the reply that brought them on. */
@@ -2108,8 +2475,11 @@ export function createEngine(store, isolation, ledger = null, { subscription = n
     compactChat,
     askInContext,
     sideCall,
+    sideModel,
     frameGenerate,
     fillUpdate,
+    fixUpdate,
+    undoFix,
     missesUpdate,
     keptToSchema,
     cardScripts,

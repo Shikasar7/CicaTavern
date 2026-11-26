@@ -720,7 +720,8 @@ const PLAN_SCHEMA = `{
     "stage_by": "她的性格随哪个数值分阶段（tracking 里数值变量的 path），不分阶段留空",
     "stages": [{"name": "阶段名，两三个字", "until": "30", "main": ["这个阶段的主色调"], "accent": ["这个阶段的点缀"], "shift": "到了这个阶段她对 <user> 有什么不同，一句"}],
     "looks_tags": "English booru tags for the unchanging look: apparent age, hair, eyes, build, marks",
-    "outfit_tags": "English booru tags for the usual outfit"
+    "outfit_tags": "English booru tags for the usual outfit",
+    "wardrobe": [{"name": "平时之外故事里明确会换上的一套，中文短名，如 校服、睡衣、礼服；没有就 []，最多 3 套", "tags": "English booru tags, garments, shoes and jewellery only, no hair or body, no Chinese", "when": "什么时候穿，几个字"}]
   }],
   "style": {"perspective": "第三人称 或 第二人称", "tone": "语言基调", "mood": "情绪氛围", "reference": "参照的作品或文风，可为空", "special": ["特别要求"]},
   "play_rules": ["扮演时的互动规则，可执行的指令，例如不替 <user> 说话做决定"],
@@ -1030,6 +1031,10 @@ const cleanCharacter = c => ({
   role: clip(c.role, 200),
   looks_tags: clip(c.looks_tags, 400),
   outfit_tags: clip(c.outfit_tags, 300),
+  wardrobe: (Array.isArray(c.wardrobe) ? c.wardrobe : [])
+    .map(one => ({ name: clip(one?.name, 20), tags: clip(one?.tags, 300), when: clip(one?.when, 40) }))
+    .filter(one => one.name && one.tags)
+    .slice(0, 3),
   stage_by: cleanPath(clip(c.stage_by, 60).replace(/[{}\s]+/g, '')),
   stages: (Array.isArray(c.stages) ? c.stages : [])
     .filter(s => s && typeof s === 'object' && clip(s.name, 12))

@@ -222,6 +222,9 @@ html[data-look="ink"] .battle-thing b { font: 400 24px/1.15 var(--look-brush); }
 html[data-look="ink"] .battle-thing i { font: 19px/1 var(--look-kai); color: var(--cinnabar); }
 html[data-look="ink"] .battle-end-actions { grid-column: 2; justify-content: flex-end; margin-top: 6px; }
 /* 收服: under the ledger, each on paper like a tally slip: the head ringed in ink, the rank a red seal, the odds a brush line. */
+html[data-look="ink"] .tame-lures { grid-column: 2; }
+html[data-look="ink"] .tame-lure { border-radius: 3px; border-color: rgb(90 84 74 / .35); font: 17px/1.3 var(--look-kai); }
+html[data-look="ink"] .tame-lure[aria-pressed="true"] { border-color: var(--cinnabar); background: none; }
 html[data-look="ink"] .battle-tame { grid-column: 2; gap: 10px 18px; margin: 4px 0 0; }
 html[data-look="ink"] .tame-card { gap: 14px; padding: 8px 16px 10px 10px; border: 0; border-radius: 3px; background: var(--ink-stroke, none) 70% 100% / 90% 9px no-repeat, rgb(255 250 238 / .5); box-shadow: 1px 2px 3px rgb(40 30 10 / .28); color: var(--ink); font-family: var(--look-kai); }
 html[data-look="ink"] .tame-card:is(:hover:not(:disabled), :focus-visible) { box-shadow: 2px 5px 10px rgb(40 30 10 / .35); }
@@ -288,7 +291,7 @@ html[data-look="ink"] .roll-hint { color: var(--bone-soft); }
   html[data-look="ink"] .battle-end-seal { width: 40px; height: 40px; right: -36px; font-size: 26px; }
   html[data-look="ink"] .battle-tally { min-height: 54px; }
   html[data-look="ink"] .battle-tally.gain b { font-size: 42px; }
-  html[data-look="ink"] :is(.battle-end-actions, .battle-tame) { grid-column: 1; }
+  html[data-look="ink"] :is(.battle-end-actions, .battle-tame, .tame-lures) { grid-column: 1; }
   html[data-look="ink"] .tame-name { font-size: 22px; }
   html[data-look="ink"] .roll-stage { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; }
   html[data-look="ink"] .roll-dial-box { grid-column: 1 / -1; grid-row: 1; justify-self: center; width: min(86vw, 46vh); }
@@ -508,6 +511,8 @@ html[data-look="console"] .battle-thing b { font-size: 16px; }
 html[data-look="console"] .battle-thing i { color: var(--hit); }
 html[data-look="console"] .battle-end-actions { justify-content: flex-end; margin-top: 10px; }
 /* 收服: a small window to each, the head in a square frame, the odds a meter of blocks, the word to press a tab. */
+html[data-look="console"] .tame-lure { border: 2px solid var(--edge); border-radius: 2px; color: #fff; }
+html[data-look="console"] .tame-lure[aria-pressed="true"] { border-color: var(--hit); background: var(--tab); }
 html[data-look="console"] .battle-tame { gap: 10px; margin-top: 10px; }
 html[data-look="console"] .tame-card { gap: 12px; padding: 8px 12px 8px 8px; border: 3px solid #fff; border-radius: 6px; background: var(--win); box-shadow: var(--frame); color: #fff; font: 700 15px/1.4 var(--ui); animation: console-rise .2s steps(3) both; animation-delay: calc(var(--i, 0) * 90ms + .4s); transition: none; }
 html[data-look="console"] .tame-card:is(:hover:not(:disabled), :focus-visible) { transform: none; border-color: var(--hit); box-shadow: var(--frame); }
@@ -926,6 +931,7 @@ html[data-look="bold"] .roll-hint { position: absolute; left: 44px; bottom: 30px
   html[data-look="bold"] .vn-name { left: 12px; font-size: 16px; }
   html[data-look="bold"] .vn-quickbar { gap: 4px; padding-right: 14px; }
   html[data-look="bold"] .vn-quickbar .vn-btn { padding: 0 7px; font-size: 12px; }
+  html[data-look="bold"] :is(.vn-quickbar .vn-bag, .vn-quickbar .vn-bag:not([hidden]) ~ .vn-btn) { padding: 0 2px; }
   html[data-look="bold"] .vn-controls .vn-btn { padding: 0 7px; font-size: 12px; }
   html[data-look="bold"] .vn-menu { left: 14px; right: 14px; width: auto; padding-right: 8px; }
   html[data-look="bold"] .vn-menu-head b { font-size: 36px; }

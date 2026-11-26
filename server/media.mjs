@@ -21,7 +21,7 @@ import { copyFile, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promi
 import { inflateRawSync } from 'node:zlib'
 import path from 'node:path'
 import { complete, fetchBytes, googleRequest, isProviderRef, postJson, providerError, providerRequest, refLabel, resolveRef, unreadReply, withCode } from './providers.mjs'
-import { chatMaterial, cleanFrame, cleanLora, cleanRoster, cleanStrength, countTags, draftMaterial, flattenFrame, frameFormat, isFramePrompt, isRosterId, leadOf, naiCharacters, parseFrame, parseRosterChat, parseRosterDraft, rosterBrief, rosterChatRequest, rosterDraftRequest, withSomeone } from './roster.mjs'
+import { chatMaterial, cleanFrame, cleanLora, cleanRoster, cleanStrength, countTags, draftMaterial, flattenFrame, frameFormat, isFramePrompt, isRosterId, leadOf, naiCharacters, parseFrame, parseRosterChat, parseRosterDraft, parseWardrobeDraft, rosterBrief, rosterChatRequest, rosterDraftRequest, withSomeone, wardrobeDraftRequest } from './roster.mjs'
 import { httpError, newId } from './store.mjs'
 import { imageKind } from './appearance.mjs'
 import { blockRequest } from './blockwords.mjs'
@@ -32,7 +32,8 @@ import { DEFAULT_LISTEN, cleanListen, createListen, readAudio } from './voice/li
 import { msg } from './i18n.mjs'
 import { HISTORY_DEFAULT, cleanKeep, madeAt } from './draw-history.mjs'
 import { EXPRESSION_LOOK, expressionRequest, parseExpressionLabels } from '../web/shared/stage.js'
-import { IMAGE_PRESET_KEYS, imagePresetOf } from '../web/shared/draw.js'
+import { IMAGE_PRESET_KEYS, MAX_ANCHOR, imagePresetOf } from '../web/shared/draw.js'
+import { dress, keepClothes, pathToNode, takeClothes, wearOn } from './wear.mjs'
 import { DECOR_SLOTS } from '../web/shared/status.js'
 
 // 画装饰图: what each slot asks for around the look's own words. The clear ones on plain white, which the page cuts away.
@@ -59,7 +60,8 @@ export const DEFAULT_MEDIA = Object.freeze({
   imageReference: false, // send the card avatar through /images/edits
   imageEditModel: '', // model for /images/edits; empty = imageModel (some gateways split generate and edit models)
   promptStyle: 'natural', // 'natural' sentences or comma-separated 'tags' (SD-style workflows)
-  promptDetail: 'standard', // 提示词详细程度: how long the helper writes it, 'brief' | 'standard' | 'detailed' (PROMPT_LENGTH)
+  imageCount: 1, // 一次画几张: how many pictures a reply gets at once, 1-4 (IMAGE_COUNT_MAX), each of its own moment
+  promptDetail: 'standard', // 提示词详细程度: how long the helper writes it, 'brief' | 'standard' | 'detailed' | 'full' (PROMPT_LENGTH)
   promptRules: '', // 写提示词的额外要求, every card's (a card adds its own, DEFAULT_CARD_MEDIA): told to whoever writes a picture's prompt
   comfyUrl: 'http://127.0.0.1:8188',
   // ComfyUI's 简单模式: no workflow imported, one built from the model picked (simpleWorkflow).
@@ -114,6 +116,7 @@ export const DEFAULT_MEDIA = Object.freeze({
   ...DEFAULT_LISTEN, // 语音输入: where a recording is turned into text (voice/listen.mjs)
   autoRead: false,
   autoImage: false,
+  picturePlace: 'inline', // 配图放在: under the sentence it pictures, or ('end') under the reply
   drawHistory: HISTORY_DEFAULT, // 抽图历史: old pictures each place keeps when drawn again (draw-history.mjs), 0 = none
   imagePresets: Object.freeze([]), // 生图方案: [{ id, name, settings }], how pictures are drawn saved under a name (IMAGE_PRESET_KEYS)
   // 我的画风: [{ id, name, style, negative }], 画师串 and the like kept once for every card (a card's 画风 picks one);
@@ -157,7 +160,8 @@ export { IMAGE_PRESET_KEYS, imagePresetOf }
 export const DEFAULT_CARD_MEDIA = Object.freeze({ voice: '', narratorVoice: '', style: '', styleNegative: '', promptRules: '', lora: '', loraTrigger: '', loraStrength: 0.8, loras: [], roster: [] })
 // 画风 LoRA a card may stack. More bleed into each other: each needs a lower strength.
 export const MAX_STYLE_LORAS = 4
-export const PROMPT_DETAILS = ['brief', 'standard', 'detailed']
+export const IMAGE_COUNT_MAX = 4
+export const PROMPT_DETAILS = ['brief', 'standard', 'detailed', 'full']
 const RULES_MAX = { media: 4000, card: 2000 }
 
 const SIZE = /^(\d{3,4})x(\d{3,4})$/
@@ -310,6 +314,7 @@ export function cleanMedia(input, previous = DEFAULT_MEDIA, defaults = DEFAULT_M
   if (SHAPES.includes(source.imageShape)) value.imageShape = source.imageShape
   else if (shapeOf(source.imageSize)) value.imageShape = shapeOf(source.imageSize)
   if (source.promptStyle === 'natural' || source.promptStyle === 'tags') value.promptStyle = source.promptStyle
+  if (Number.isInteger(Number(source.imageCount)) && source.imageCount >= 1 && source.imageCount <= IMAGE_COUNT_MAX) value.imageCount = Number(source.imageCount)
   if (PROMPT_DETAILS.includes(source.promptDetail)) value.promptDetail = source.promptDetail
   if (typeof source.promptRules === 'string') value.promptRules = cleanRules(source.promptRules, RULES_MAX.media)
   if (source.promptSource === 'helper' || source.promptSource === 'chat') value.promptSource = source.promptSource
@@ -357,6 +362,7 @@ export function cleanMedia(input, previous = DEFAULT_MEDIA, defaults = DEFAULT_M
     if (!/^moss-tts-[\w.-]{1,40}$/.test(source.mossModel)) throw httpError(400, msg`MOSS 朗读模型名不对（例如 moss-tts-1.5-flash）`)
     value.mossModel = source.mossModel
   }
+  if (source.picturePlace === 'inline' || source.picturePlace === 'end') value.picturePlace = source.picturePlace
   value.drawHistory = cleanKeep(source.drawHistory, cleanKeep(value.drawHistory))
   text('defaultVoice', 250)
   if (Array.isArray(source.defaultVoiceAsked)) value.defaultVoiceAsked = [...new Set(source.defaultVoiceAsked.filter(id => typeof id === 'string').map(id => id.slice(0, 20)))].slice(0, 12)
@@ -531,7 +537,35 @@ const clip = (text, max) => {
 export const PROMPT_MAX_TOKENS = 400
 // A cast-format prompt has a line per person.
 const CAST_MAX_TOKENS = 700
-const MAX_TOKENS = { brief: 1, standard: 1, detailed: 1.6 }
+// 锚点: one more line after the prompt.
+const ANCHOR_TOKENS = 60
+// How much of the reply the one who writes the prompt reads: most replies whole, so a moment late in one is seen too.
+const PASSAGE_MAX = 4000
+
+/**
+ * What the prompt's writer adds after it, for the page to put the picture under (web/shared/draw.js findAnchor): words
+ * copied from the passage. → { text: the answer without that line, anchor: '' when it has none }.
+ */
+export function takeAnchor(answer) {
+  let anchor = ''
+  const text = String(answer ?? '')
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .split(/\r?\n/)
+    .filter(line => {
+      const match = ANCHOR_LINE.exec(line)
+      if (!match) return true
+      anchor = cleanAnchor(match[1]) || anchor
+      return false
+    })
+    .join('\n')
+    .trim()
+  return { text, anchor }
+}
+const ANCHOR_LINE = /^\s*(?:[-*•>#]+\s*)?\**\s*(?:锚点|anchor)\s*\**\s*[:：]\s*(.*)$/i
+
+/** An anchor as kept on a picture: one line, without the quotes or bold it was written in. */
+export const cleanAnchor = text => String(text ?? '').replace(/\s+/g, ' ').replace(/^[\s*"'“”‘’「」『』《》【】[\]]+|[\s*"'“”‘’「」『』《》【】[\]]+$/g, '').trim().slice(0, MAX_ANCHOR)
+const MAX_TOKENS = { brief: 1, standard: 1, detailed: 1.6, full: 3 }
 const promptDetailOf = detail => (PROMPT_DETAILS.includes(detail) ? detail : 'standard')
 
 // What the helper is asked for at each 提示词详细程度, and where cleanPrompt cuts a rambling answer.
@@ -539,11 +573,14 @@ const PROMPT_LENGTH = {
   brief: { tags: '15-30', words: '25-45', maxTags: 40, maxWords: 60 },
   standard: { tags: '30-50', words: '60-100', maxTags: 70, maxWords: 120 },
   detailed: { tags: '50-80', words: '120-180', maxTags: 100, maxWords: 220 },
+  // 详细（不截断）: kept whole, for models that read sentences: what is cut off is where the hands and the places are.
+  full: { tags: '60-100', words: '180-280', maxTags: Infinity, maxWords: Infinity },
 }
 const DETAIL_HINT = {
   brief: 'Keep it short: only who, what they do, where, and the framing.',
   standard: '',
   detailed: 'Be thorough: clothing details and accessories, hands and what they hold, background objects, the direction and colour of the light, atmosphere, depth of field.',
+  full: 'Be thorough: clothing details and accessories, hands and what they hold, background objects, the direction and colour of the light, atmosphere, depth of field. Finish every sentence. Clothes: the main garment first, then its colour, its cut, then how it is worn at this moment (buttoned, open, off one shoulder). Contact between people as a noun phrase ("both hands flat on his chest"), not a string of verbs. Say where each hand is and on which side everyone stands.',
 }
 
 /** The format line for a plain (no cast) prompt. */
@@ -593,15 +630,15 @@ export function cleanRules(text, max) {
  * story passage tends to continue it.
  * @param detail - 提示词详细程度 (PROMPT_DETAILS). @param rules - the user's own rules (promptRulesOf).
  */
-export function imagePromptRequest({ card, names, reply, input, state, style, promptStyle, roster = [], detail = 'standard', rules = '' }) {
+export function imagePromptRequest({ card, names, reply, input, state, style, promptStyle, roster = [], detail = 'standard', rules = '', anchored = true, worn = null, count = 1 }) {
   detail = promptDetailOf(detail)
   const cast = roster.length > 0
-  const format = cast ? frameFormat(promptStyle, detail) : plainFormat(promptStyle, detail)
+  const format = cast ? frameFormat(promptStyle, detail, { dressed: Boolean(worn?.size) }) : plainFormat(promptStyle, detail)
   const task = [
-    `TASK: write an image-generation prompt for ONE frame of the scene above. Do not continue or summarise the story, no dialogue, no narration, ${cast ? 'in English except the names in [ ]' : 'no Chinese'}.`,
+    `TASK: write ${count > 1 ? `${count} image-generation prompts, each for ONE frame` : 'an image-generation prompt for ONE frame'} of the scene above. Do not continue or summarise the story, no dialogue, no narration, ${cast ? 'in English except the names in [ ]' : 'no Chinese'}.`,
     cast
-      ? 'Pick the most vivid moment of <latest_passage>. No text, captions or speech bubbles in the picture.'
-      : 'Pick the most vivid moment of <latest_passage>. Keep the character\'s looks consistent with <character> and with what the story changed (clothes, wounds, where they are). No text, captions or speech bubbles in the picture.',
+      ? `Pick the most vivid ${count > 1 ? 'moments' : 'moment'} of <latest_passage>. No text, captions or speech bubbles in the picture.`
+      : `Pick the most vivid ${count > 1 ? 'moments' : 'moment'} of <latest_passage>. Keep the character's looks consistent with <character> and with what the story changed (clothes, wounds, where they are). No text, captions or speech bubbles in the picture.`,
     cast
       ? `Somebody is always in the picture: the people <latest_passage> shows at that moment, rather than the player alone where the moment allows. A cast member who is not there stays out, even ${names.char}. If only people off the cast list are there, they go in the 场景 line and there is no [Name] line. Never an empty room or a close-up of objects only.`
       : `Somebody is always in the picture, normally ${names.char}. Never an empty room or a close-up of objects only.`,
@@ -609,7 +646,9 @@ export function imagePromptRequest({ card, names, reply, input, state, style, pr
     DETAIL_HINT[detail],
     format,
     rules ? `The user's own rules for these prompts (they win where they differ from the above, but the reply is still the prompt only):\n<user_rules>\n${rules}\n</user_rules>` : '',
-    'Reply with the prompt only.',
+    count > 1 ? shotsRule(count) : '',
+    count > 1 ? 'Reply with the prompts only.' : 'Reply with the prompt only.',
+    anchored ? `${count > 1 ? 'After each prompt, as its last line' : 'After it, as the last line'}, write 锚点: followed by 8 to 24 characters copied exactly from <latest_passage>, the words this frame shows, in their own language.` : '',
   ]
     .filter(Boolean)
     .join('\n')
@@ -617,11 +656,11 @@ export function imagePromptRequest({ card, names, reply, input, state, style, pr
   const content = [
     `<character name="${names.char}">\n${clip(card.description, 1500)}\n</character>`,
     `The player character is called ${names.user}.`,
-    cast ? `<cast>\n${rosterBrief(roster, names.user)}\n</cast>` : '',
+    cast ? `<cast>\n${rosterBrief(roster, names.user, worn)}\n</cast>` : '',
     scene ? `<variables>\n${scene}\n</variables>` : '',
     style ? `<art_style>${style}</art_style>` : '',
     input ? `<player_action>\n${clip(input, 300)}\n</player_action>` : '',
-    `<latest_passage>\n${clip(reply, 1800)}\n</latest_passage>`,
+    `<latest_passage>\n${clip(reply, PASSAGE_MAX)}\n</latest_passage>`,
     task,
   ]
     .filter(Boolean)
@@ -629,11 +668,33 @@ export function imagePromptRequest({ card, names, reply, input, state, style, pr
   return {
     system: `You write prompts for an image generator. You never write story text.\n${format}`,
     messages: [{ role: 'user', content }],
-    maxTokens: promptMaxTokens(cast, detail),
+    maxTokens: promptMaxTokens(cast, detail, count),
   }
 }
 
-export const promptMaxTokens = (cast, detail) => Math.round((cast ? CAST_MAX_TOKENS : PROMPT_MAX_TOKENS) * MAX_TOKENS[promptDetailOf(detail)])
+export const promptMaxTokens = (cast, detail, count = 1) => count * (Math.round((cast ? CAST_MAX_TOKENS : PROMPT_MAX_TOKENS) * MAX_TOKENS[promptDetailOf(detail)]) + ANCHOR_TOKENS)
+
+/** 一次画几张: how several prompts are asked for at once. */
+const shotsRule = count => [
+  `${count} frames, in the order they happen in <latest_passage>. Put a line of just === between two prompts; each is complete on its own, in the format above.`,
+  'They are the same scene: the same place, time, weather, light and clothes, unless the passage itself moves on. No two alike: each differs from every other in at least two of the moment, the framing, the camera angle and who is shown.',
+  `Fewer than ${count} when the passage has not that much to show.`,
+].join(' ')
+
+/** The prompts of one answer: split at the === lines, or after each 锚点 where a model left those out. */
+export function splitShots(answer, count) {
+  const text = String(answer ?? '').replace(/<think>[\s\S]*?<\/think>/gi, '')
+  const label = part => part.replace(/^\s*(?:\**\s*)?(?:(?:image|picture|frame|shot|prompt|图|第)\s*)*#?\d+\s*(?:张)?\s*\**\s*(?:[:：.、)]|\n)\s*\**/i, '').trim()
+  let parts = text.split(/^[ \t]*[=\-*_]{3,}[ \t]*$/m)
+  if (parts.filter(part => part.trim()).length < 2) {
+    parts = ['']
+    for (const line of text.split(/\r?\n/)) {
+      parts[parts.length - 1] += `${line}\n`
+      if (ANCHOR_LINE.test(line)) parts.push('')
+    }
+  }
+  return parts.map(label).filter(Boolean).slice(0, count)
+}
 
 /** A prompt without the card's style written into it. */
 export function unstyled(prompt, style) {
@@ -764,7 +825,8 @@ export function cleanPrompt(text, promptStyle = 'natural', detail = 'standard') 
     .trim()
     .replace(/^\s*(?:here is|here's)[^:\n]*:\s*/i, '')
     .replace(/^\s*(?:image prompt|positive prompt|prompt|tags)\s*[:：]\s*/i, '')
-  value = value.split(/\n\s*\n/)[0].replace(/\s*\n\s*/g, ' ').replace(/^["“'\s]+|["”'\s]+$/g, '').trim()
+  if (detail !== 'full') value = value.split(/\n\s*\n/)[0]
+  value = value.replace(/\s*\n\s*/g, ' ').replace(/^["“'\s]+|["”'\s]+$/g, '').trim()
   const length = PROMPT_LENGTH[promptDetailOf(detail)]
   const limit = promptStyle === 'tags' ? length.maxTags : length.maxWords
   if (promptStyle === 'tags') {
@@ -783,13 +845,13 @@ export function cleanPrompt(text, promptStyle = 'natural', detail = 'standard') 
  * card, the world and the whole story, so this only says what to write.
  * `passage` is given when the reply is not in the history (the opening).
  */
-export function contextImageInstruction({ promptStyle, style, passage, roster = [], userName = '', detail = 'standard', rules = '' }) {
+export function contextImageInstruction({ promptStyle, style, passage, roster = [], userName = '', detail = 'standard', rules = '', anchored = true, worn = null, count = 1 }) {
   detail = promptDetailOf(detail)
   const cast = roster.length > 0
   const tags = promptStyle === 'tags'
   const length = PROMPT_LENGTH[detail]
   const format = cast
-    ? `出场人物（只用这些名字，方括号原样写）：\n${rosterBrief(roster, userName)}\n${frameFormat(promptStyle, detail)}`
+    ? `出场人物（只用这些名字，方括号原样写）：\n${rosterBrief(roster, userName, worn)}\n${frameFormat(promptStyle, detail, { dressed: Boolean(worn?.size) })}`
     : tags
       ? `格式：${length.tags} 个英文标签，用逗号分隔，不写句子。用动漫模型认得的 Danbooru 标签，小写，一个标签一件事（如 1girl, solo, long hair, school uniform, looking at viewer, cowboy shot, from below, sunset）。顺序：人数（1girl、2girls、1boy…），每个人的发型发色、眼睛、服装、表情、姿势动作，然后地点和物件、时间、光线、景别和镜头角度。`
       : `格式：一段 ${length.words} 个英文单词的描述，按镜头看到的写，重要的在前：景别（特写、半身、全身、远景）和镜头角度，每个人的大致年龄、发型发色、眼睛、现在穿的衣服，姿势、动作、手上拿着什么、表情，然后场景和物件、时间、光线、氛围。用具体的词，不写声音、心理、来历和比喻。`
@@ -797,19 +859,21 @@ export function contextImageInstruction({ promptStyle, style, passage, roster = 
     '景别跟着瞬间选：情绪用近景，动作和场面用远一点的镜头。',
     cast ? '' : '不要写角色的名字（生图模型不认识他们），写出长相来代替。',
     style ? (tags ? `画风会自动加上，不要写进去：${style}` : `${cast ? '场景行' : '提示词'}以这段画风开头，原样照抄：${style}`) : '',
-    { brief: '写短一点：只写谁、在做什么、在哪、景别。', standard: '', detailed: '写细一点：衣服的细节和饰品、手和手里的东西、背景里的物件、光从哪来是什么颜色、氛围、景深。' }[detail],
+    { brief: '写短一点：只写谁、在做什么、在哪、景别。', standard: '', detailed: '写细一点：衣服的细节和饰品、手和手里的东西、背景里的物件、光从哪来是什么颜色、氛围、景深。', full: '写细：衣服的细节和饰品、手和手里的东西、背景里的物件、光从哪来是什么颜色、氛围、景深。每一句都写完。衣服先写主件，再写颜色、剪裁，最后写这一刻是怎么穿着的（扣好、敞开、滑下一边肩膀）。人和人的接触写成名词短语（both hands flat on his chest），不要写成一串动词。写清每只手在哪、每个人站在哪一边。' }[detail],
   ]
   return [
     '（暂停扮演。这一条不是剧情，不要回应剧情，也不要续写。）',
-    passage ? `<latest_passage>\n${clip(passage, 1800)}\n</latest_passage>\n` : '',
+    passage ? `<latest_passage>\n${clip(passage, PASSAGE_MAX)}\n</latest_passage>\n` : '',
     cast
-      ? `为${passage ? '上面这段' : '你上一条回复里'}最有画面感的一个瞬间，写给生图模型用的英文提示词。人物长相会自动补上，你只写谁在画面里、现在穿什么（换过的衣服、受的伤都要对）、在做什么、什么表情、站在哪。画面里不要出现文字、字幕或对话气泡。`
-      : `为${passage ? '上面这段' : '你上一条回复里'}最有画面感的一个瞬间，写一段给生图模型用的英文提示词。人物外貌以角色设定和剧情里的最新状态为准（换过的衣服、受的伤、所在的地方都要对）。画面里不要出现文字、字幕或对话气泡。`,
+      ? `为${passage ? '上面这段' : '你上一条回复里'}最有画面感的${count > 1 ? '几个瞬间' : '一个瞬间'}，写给生图模型用的英文提示词。人物长相会自动补上，你只写谁在画面里、现在穿什么（换过的衣服、受的伤都要对）、在做什么、什么表情、站在哪。画面里不要出现文字、字幕或对话气泡。`
+      : `为${passage ? '上面这段' : '你上一条回复里'}最有画面感的${count > 1 ? '几个瞬间' : '一个瞬间'}，写一段给生图模型用的英文提示词。人物外貌以角色设定和剧情里的最新状态为准（换过的衣服、受的伤、所在的地方都要对）。画面里不要出现文字、字幕或对话气泡。`,
     cast ? '画面里一定要有人：画这一刻真的在场的人，能选的话不要只有玩家。这一刻不在场的出场人物不要加，角色本人也一样。在场的只有名单外的人时，写进场景行，不写方括号行。不要画空场景，也不要只画物品特写。' : '画面里一定要有人，通常是角色本人。不要画空场景，也不要只画物品特写。',
     ...craft,
     format,
     rules ? `用户自己定的写法（和上面不一样的地方以这里为准，但仍然只输出提示词）：\n<user_rules>\n${rules}\n</user_rules>` : '',
-    '只输出提示词本身，不要标题、解释或思考过程。',
+    count > 1 ? `一共写 ${count} 张，按剧情先后。两张之间单独一行写 ===，每一张都按上面的格式写完整。它们是同一场戏：地点、时间、天气、光线、衣服都一样，剧情自己换了才换。互相不能雷同：任意两张，在「哪个瞬间、景别、机位、画谁」里至少有两样不同。这段没那么多可画的，就少写几张。` : '',
+    count > 1 ? '只输出这几段提示词，不要标题、编号、解释或思考过程。' : '只输出提示词本身，不要标题、解释或思考过程。',
+    anchored ? `${count > 1 ? '每一张' : ''}提示词写完，最后另起一行写「锚点: 」，后面照抄${passage ? '上面这段' : '你上一条回复'}里 8 到 24 个字的原文，就是这张图画的那一句，一个字都不改。` : '',
   ]
     .filter(Boolean)
     .join('\n')
@@ -975,10 +1039,23 @@ export function fitSize(workflow, width, height) {
   return out
 }
 
-/** A picture's [width, height] from its PNG or JPEG header, or null. */
+/** A WebP's [width, height]: lossy (VP8), lossless (VP8L) or with extras (VP8X); null when it says none. */
+function webpSize(buffer) {
+  const kind = buffer.subarray(12, 16).toString('latin1')
+  if (kind === 'VP8X' && buffer.length >= 30) return [buffer.readUIntLE(24, 3) + 1, buffer.readUIntLE(27, 3) + 1]
+  if (kind === 'VP8 ' && buffer.length >= 30) return [buffer.readUInt16LE(26) & 0x3fff, buffer.readUInt16LE(28) & 0x3fff]
+  if (kind === 'VP8L' && buffer.length >= 25) {
+    const bits = buffer.readUInt32LE(21)
+    return [(bits & 0x3fff) + 1, ((bits >>> 14) & 0x3fff) + 1]
+  }
+  return null
+}
+
+/** A picture's [width, height] from its PNG, JPEG or WebP header, or null. */
 export function pictureSize(buffer) {
   if (!Buffer.isBuffer(buffer) || buffer.length < 24) return null
   if (buffer.readUInt32BE(0) === 0x89504e47) return [buffer.readUInt32BE(16), buffer.readUInt32BE(20)]
+  if (buffer.subarray(0, 4).toString('latin1') === 'RIFF' && buffer.subarray(8, 12).toString('latin1') === 'WEBP') return webpSize(buffer)
   if (buffer[0] !== 0xff || buffer[1] !== 0xd8) return null
   for (let at = 2; at + 9 < buffer.length;) {
     if (buffer[at] !== 0xff) return null
@@ -1535,34 +1612,47 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     const roster = cardMedia.roster
     const detail = media.promptDetail
     const rules = promptRulesOf(media, cardMedia)
+    const worn = wearOn(chat, pathToNode(chat, node.id), roster)
+    const count = moment ? 1 : media.imageCount ?? 1
     // A cast answers in its own format; an answer that ignored it is still usable as a plain prompt.
     // Either way somebody from the cast is in it when the answer left everyone out.
-    const clean = text => {
+    const clean = answer => {
+      const { text: told, anchor } = takeAnchor(answer)
+      const { text, clothes } = worn.size ? takeClothes(told) : { text: told, clothes: [] }
       const prompt = (roster.length && cleanFrame(text, detail, { roster, userName: chat.names.user, passage: reply })) || cleanPrompt(text, media.promptStyle, detail)
-      return withSomeone(prompt, roster, chat.names.user, card.name, media.promptStyle, reply)
+      return { prompt: withSomeone(prompt, roster, chat.names.user, card.name, reply), anchor: moment ? '' : anchor, clothes }
+    }
+    // 一次画几张: the same, one by one; `shots` only where more than one came.
+    const cleanAll = answer => {
+      const all = (count > 1 ? splitShots(answer, count) : [answer]).map(clean).filter(shot => shot.prompt)
+      const shots = all.map(shot => ({ prompt: withStyle(shot.prompt, cardMedia.style, media.promptStyle), anchor: shot.anchor }))
+      return { prompt: shots[0]?.prompt ?? '', anchor: shots[0]?.anchor ?? '', clothes: all.flatMap(shot => shot.clothes), ...(shots.length > 1 ? { shots } : {}) }
     }
     let note = ''
     if (media.promptSource === 'chat' && askInContext) {
       const providers = await store.getProviders()
-      const instruction = contextImageInstruction({ promptStyle: media.promptStyle, style: cardMedia.style, passage: node.parent && !moment ? '' : reply, roster, userName: chat.names.user, detail, rules })
-      const answer = await askInContext(chat.id, node.id, instruction, { maxTokens: promptMaxTokens(roster.length > 0, detail), signal })
+      const instruction = contextImageInstruction({ promptStyle: media.promptStyle, style: cardMedia.style, passage: node.parent && !moment ? '' : reply, roster, userName: chat.names.user, detail, rules, anchored: !moment, worn, count })
+      const answer = await askInContext(chat.id, node.id, instruction, { maxTokens: promptMaxTokens(roster.length > 0, detail, count), signal })
       if (answer) {
-        const prompt = clean(answer.text)
+        const { prompt, anchor, clothes, shots } = cleanAll(answer.text)
         if (!prompt) throw httpError(502, msg`对话模型没有写出提示词，可以「重写」，或改用辅助模型`)
+        await saveClothes(chat.id, roster, worn, clothes)
         const u = answer.usage
         const total = u.input + u.cacheRead + u.cacheWrite
         return {
-          prompt: withStyle(prompt, cardMedia.style, media.promptStyle),
+          prompt,
+          ...(shots ? { shots } : {}),
           model: refLabel(answer.model, providers) ?? answer.model,
           cache: total ? Math.round((u.cacheRead / total) * 100) : null,
           inContext: true,
+          anchor,
         }
       }
       note = msg`这段剧情是 Claude 订阅写的，借不了它的上下文，这次用辅助模型写。`
     }
     const { provider, modelId } = await helperTarget(chat, media)
     // The card and the story go to a model here too: with the 屏蔽词, as a turn sends them.
-    const request = blockRequest(imagePromptRequest({ card, names: chat.names, reply, input, state: node.state, style: cardMedia.style, promptStyle: media.promptStyle, roster, detail, rules }), await store.getBlockWords())
+    const request = blockRequest(imagePromptRequest({ card, names: chat.names, reply, input, state: node.state, style: cardMedia.style, promptStyle: media.promptStyle, roster, detail, rules, anchored: !moment, worn, count }), await store.getBlockWords())
     let result
     try {
       result = await complete(provider, modelId, { ...request, signal }, { proxy: proxyNow() })
@@ -1570,9 +1660,19 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
       if (error.status) throw error
       throw httpError(502, providerError(provider, error))
     }
-    const prompt = clean(result.text)
+    const { prompt, anchor, clothes, shots } = cleanAll(result.text)
     if (!prompt) throw httpError(502, unreadReply(provider, result) ?? msg`${provider.name} · ${modelId} 没有写出提示词${result.stopReason ? msg`（${result.stopReason}）` : ''}：推理型模型可能把输出额度花在了思考上，辅助模型换个不带推理的快模型`)
-    return { prompt: withStyle(prompt, cardMedia.style, media.promptStyle), model: `${provider.name} · ${modelId}`, note }
+    await saveClothes(chat.id, roster, worn, clothes)
+    return { prompt, ...(shots ? { shots } : {}), model: `${provider.name} · ${modelId}`, note, anchor }
+  }
+
+  /** The tags of an outfit the story put someone in and nobody had described: the chat's from here on. */
+  async function saveClothes(chatId, roster, worn, clothes) {
+    if (!clothes.length) return
+    await store.withChat(chatId, async () => {
+      const fresh = await store.getChat(chatId)
+      if (keepClothes(fresh, roster, worn, clothes)) await store.saveChat(fresh)
+    })
   }
 
   async function avatarOf(cardId) {
@@ -2242,8 +2342,9 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     // Their old pictures, 立绘 and expressions too.
     const ids = new Set(card.media.roster.map(entry => entry.id))
     await history?.drop(cardId, slot => {
-      const member = /^(?:roster|sprite|face):([\w-]+)/.exec(slot)?.[1]
-      return Boolean(member) && !ids.has(member)
+      const [, member, outfit] = /^(?:roster|sprite|face|outfit):([\w-]+)(?::([\w-]+))?/.exec(slot) ?? []
+      if (!member) return false
+      return !ids.has(member) || (slot.startsWith('outfit:') && !card.media.roster.find(entry => entry.id === member)?.wardrobe?.some(item => item.id === outfit))
     })
     return cardMediaView(cardId)
   }
@@ -2286,6 +2387,24 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
       if (owner) Object.assign(owner, { lora: current.lora, loraTrigger: current.loraTrigger, loraStrength: current.loraStrength })
     }
     return { roster, model: `${provider.name} · ${modelId}` }
+  }
+
+  /** 从卡里找衣服: outfits for the cast as listed (on the page, saved or not), by the helper model; not saved. */
+  async function draftWardrobe(cardId, cast, signal) {
+    const media = await settings()
+    const card = await store.getCard(cardId)
+    const roster = cleanRoster(Array.isArray(cast) ? cast : cleanCardMedia(card.media).roster)
+    if (!roster.length) throw httpError(400, msg`名册还是空的，先列出角色`)
+    const books = await Promise.all((card.worldbookIds ?? []).map(id => store.getBook(id).catch(() => null)))
+    const { provider, modelId } = await helperTarget({ model: '' }, media)
+    let result
+    try {
+      result = await complete(provider, modelId, withToolNote({ ...wardrobeDraftRequest(draftMaterial(card, books.filter(Boolean)), roster), signal }, await helperNote()), { proxy: proxyNow() })
+    } catch (error) {
+      if (error.status) throw error
+      throw httpError(502, providerError(provider, error))
+    }
+    return { found: parseWardrobeDraft(result.text, roster), model: `${provider.name} · ${modelId}` }
   }
 
   /**
@@ -2332,19 +2451,28 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     return withDrawChoice(await settings(), choice, backends)
   }
 
+  /** A picture's size as the reply records it, for the page to give it room before it loads. */
+  const sizeFields = buffer => {
+    const [width, height] = pictureSize(buffer) ?? []
+    return width > 0 && height > 0 ? { width, height } : {}
+  }
+
   /** Generate one image for a reply and record it on the node; `backend` and `model` for this one only. */
-  async function generateImage(chat, nodeId, prompt, signal, { model = '', backend: method = '' } = {}) {
+  async function generateImage(chat, nodeId, prompt, signal, { model = '', backend: method = '', anchor = '' } = {}) {
     const text = String(prompt ?? '').trim()
     if (!text) throw httpError(400, msg`提示词是空的`)
     const media = await settingsFor({ backend: method, model })
     const { roster } = cleanCardMedia((await store.getCard(chat.cardId)).media)
     const frame = roster.length && isFramePrompt(text) ? parseFrame(text, roster, chat.names?.user) : null
-    const cast = frame?.characters.length ? { ...frame, solo: frame.characters.length === 1 ? frame.characters[0].entry : null, lead: leadOf(frame.characters) } : null
+    const worn = frame ? wearOn(chat, pathToNode(chat, nodeId), roster, { anchor: cleanAnchor(anchor) }) : null
+    const dressed = frame ? dress(frame, worn) : null
+    const cast = dressed?.characters.length ? { ...dressed, solo: dressed.characters.length === 1 ? dressed.characters[0].entry : null, lead: leadOf(dressed.characters) } : null
     const { buffer, note, backend } = await render(media, chat.cardId, frame, cast, text, signal)
     const file = `${newId()}.${extOf('', buffer)}`
     await mkdir(mediaDir(chat.id), { recursive: true })
     await writeFile(path.join(mediaDir(chat.id), file), buffer)
-    return { file, prompt: text, backend, at: new Date().toISOString(), ...(note ? { note } : {}) }
+    const words = cleanAnchor(anchor)
+    return { file, prompt: text, backend, at: new Date().toISOString(), ...sizeFields(buffer), ...(words ? { anchor: words } : {}), ...(note ? { note } : {}) }
   }
 
   /**
@@ -2358,7 +2486,7 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     const file = `${newId()}.${kind}`
     await mkdir(mediaDir(chat.id), { recursive: true })
     await writeFile(path.join(mediaDir(chat.id), file), buffer)
-    return { file, prompt: String(prompt ?? '').slice(0, 4000), backend: source === 'gallery' ? msg`从图库选` : msg`本地上传`, source, at: new Date().toISOString() }
+    return { file, prompt: String(prompt ?? '').slice(0, 4000), backend: source === 'gallery' ? msg`从图库选` : msg`本地上传`, source, at: new Date().toISOString(), ...sizeFields(buffer) }
   }
 
   /**
@@ -2514,6 +2642,35 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     const plain = { ...media, imageShape: 'landscape', ...(ref ? {} : { imageReference: false, naiReference: false, geminiReference: false }), naiNegative: [media.naiNegative, SKILL_NEGATIVE].filter(Boolean).join(', '), sdNegative: [media.sdNegative, SKILL_NEGATIVE].filter(Boolean).join(', ') }
     const drawn = await render(plain, cardId, cast, cast, scene, signal, { references: ref ? 'cast' : 'none', negative: SKILL_NEGATIVE })
     return { ...drawn, prompt: scene }
+  }
+
+  /**
+   * A 立绘 in another outfit of the 衣柜: the 立绘 itself, else the reference picture, as the picture to keep, only the
+   * clothes to change. A way of drawing that cannot edit draws it anew from the looks, as the 立绘 was.
+   * → { buffer, backend, note }
+   */
+  async function drawOutfit(cardId, entryId, outfit, base, signal, choice = {}) {
+    const { roster, style } = await looksOf(cleanCardMedia((await store.getCard(cardId)).media))
+    const entry = roster.find(item => item.id === entryId)
+    if (!entry) throw httpError(404, msg`名单里没有这个角色`)
+    const picture = base ?? (await rosterRef(cardId, entryId))
+    const media = await settingsFor(choice)
+    const tags = media.promptStyle === 'tags'
+    const fresh = !picture || !(await drawsFromPicture(media))
+    if (fresh && !entry.looks) throw httpError(400, msg`先给${entry.name}画或上传立绘，或者写上长相`)
+    const clothes = spriteOutfit(outfit.tags)
+    const edit = tags
+      ? `${SPRITE_SCENE}, same character, same face, same pose`
+      : fresh
+        ? SPRITE_SCENE_NATURAL
+        : `Edit the reference picture of ${entry.name}: keep the same character, face, hair, pose, framing, art style and the plain white background; change only the clothes, to: ${clothes}`
+    const scene = [style, edit].filter(Boolean).join(', ')
+    const lead = { ...entry, ...(picture ? { picture } : {}) }
+    const cast = { scene, characters: [{ entry: lead, action: tags || fresh ? clothes : `wearing ${clothes}`, position: '' }], solo: lead, lead }
+    const plain = { ...media, comfyPurpose: 'sprite', imageShape: 'portrait', imageReference: Boolean(picture), geminiReference: Boolean(picture), naiReference: Boolean(picture), naiNegative: [media.naiNegative, SPRITE_NEGATIVE].filter(Boolean).join(', '), sdNegative: [media.sdNegative, SPRITE_NEGATIVE].filter(Boolean).join(', ') }
+    const result = await render(plain, cardId, cast, cast, '', signal, { references: picture ? 'cast' : 'none', negative: SPRITE_NEGATIVE })
+    const note = fresh && picture ? msg`这种画图方式不能照着立绘改，这一套是按长相重新画的，可能和立绘不太一样。` : ''
+    return { ...result, note: [result.note, note].filter(Boolean).join(' ') }
   }
 
   /**
@@ -2805,5 +2962,5 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     return listen.transcribe({ media, audio: readAudio(audio, type), names: Array.isArray(names) ? names : [] }, signal)
   }
 
-  return { drawDecor, drawOptionPicture, drawFoe, drawSkill, defaults, settings, cleanSettings, ownBackends: ownBackendViews, naiStatus, setNaiToken, setNaiUrl, naiCheck, cardMediaView, saveCardMedia, inheritCardMedia, draftRoster, draftRosterFromChat, drawPortrait, drawCardArt, drawAvatar, drawScenery, drawBackdrop, drawSprite, drawExpression, drawsFromPicture, settingsFor, labelExpressions, readRosterRef, saveRosterRef, removeRosterRef, writeImagePrompt, generateImage, putImage, readImage, removeImage, removeChatMedia, copyChatMedia, loras, voices: voices.list, personaList: voices.personaList, ttsKeyStatus: voices.ttsKeyStatus, setTtsKey: voices.setTtsKey, voiceKeys: voices.keyStatus, setVoiceKey: voices.setKey, speak, previewVoice, accountVoices, transcribe, loadWorkflow, saveWorkflow, describeWorkflow, purposeWorkflows, comfyModels }
+  return { drawOutfit, draftWardrobe, cardMediaOf: card => cleanCardMedia(card?.media), drawDecor, drawOptionPicture, drawFoe, drawSkill, defaults, settings, cleanSettings, ownBackends: ownBackendViews, naiStatus, setNaiToken, setNaiUrl, naiCheck, cardMediaView, saveCardMedia, inheritCardMedia, draftRoster, draftRosterFromChat, drawPortrait, drawCardArt, drawAvatar, drawScenery, drawBackdrop, drawSprite, drawExpression, drawsFromPicture, settingsFor, labelExpressions, readRosterRef, saveRosterRef, removeRosterRef, writeImagePrompt, generateImage, putImage, readImage, removeImage, removeChatMedia, copyChatMedia, loras, voices: voices.list, personaList: voices.personaList, ttsKeyStatus: voices.ttsKeyStatus, setTtsKey: voices.setTtsKey, voiceKeys: voices.keyStatus, setVoiceKey: voices.setKey, speak, previewVoice, accountVoices, transcribe, loadWorkflow, saveWorkflow, describeWorkflow, purposeWorkflows, comfyModels }
 }

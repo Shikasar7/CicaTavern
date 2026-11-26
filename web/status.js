@@ -427,7 +427,7 @@ function typesBlock(el, row, art) {
     const beaten = names.filter(other => beats[other].includes(name))
     note.replaceChildren(
       el('div', { class: 'status-types-head' }, [el('b', { text: name, style: `color:${nodes.find(one => one.name === name).color}` }), name === mine && fielded !== name ? el('span', { class: 'status-chip here', text: fielded }) : null]),
-      el('p', {}, [el('span', { class: 'status-types-win', text: t`克制` }), el('span', { text: beats[name].join(t`、`) || t`没有` })]),
+      el('p', {}, [el('span', { class: 'status-types-win', text: t`克制${''}` }) /* its own entry: 克制 alone is the intimacy level */, el('span', { text: beats[name].join(t`、`) || t`没有` })]),
       el('p', {}, [el('span', { class: 'status-types-lose', text: t`被克` }), el('span', { text: beaten.join(t`、`) || t`没有` })]),
     )
   }

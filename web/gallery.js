@@ -147,7 +147,7 @@ export async function openGallery({ api, el, toast, guard, download, viewPicture
           el('span', { class: 'muted small', text: t`${group.items.length} 张` }),
           el('span', { class: 'gallery-sprite-tools' }, [pickAll, save]),
         ]),
-        el('div', { class: 'gallery-grid' }, group.items.map(item => tile(item, list, faces[item.face] ?? item.name))),
+        el('div', { class: 'gallery-grid' }, group.items.map(item => tile(item, list, faces[item.face] ?? item.outfit ?? item.name))),
       ])
       details.addEventListener('toggle', () => {
         if (details.open) opened.add(group.key)

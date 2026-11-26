@@ -156,7 +156,7 @@ test('画这一轮的场景 and 立绘: a new scene named by the helper, the pla
 
   // 立绘: only for someone on the cast list, with looks.
   await call(`/api/cards/${id}/media`, { method: 'PUT', body: { roster: [{ id: 'qinghe', name: '林青禾', looks: 'long black hair' }, { id: 'nolooks', name: '周管事' }] } })
-  assert.deepEqual((await call(`/api/cards/${id}/sprites`)).body, { sprites: {}, expressions: {}, drawing: null })
+  assert.deepEqual((await call(`/api/cards/${id}/sprites`)).body, { sprites: {}, expressions: {}, outfits: {}, drawing: null })
   assert.equal((await call(`/api/cards/${id}/sprites/nobody/draw`, { method: 'POST', body: {} })).status, 404)
   assert.equal((await call(`/api/cards/${id}/sprites/nolooks/draw`, { method: 'POST', body: {} })).status, 400)
   const drawn = (await call(`/api/cards/${id}/sprites/qinghe/draw`, { method: 'POST', body: {} })).body

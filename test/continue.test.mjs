@@ -42,7 +42,7 @@ async function app(t, answers) {
   const fake = await provider(t, answers)
   const made = normalizeProvider({ name: 'Fake', api: 'openai-completions', baseURL: fake.url, apiKey: 'sk-test-1234567890abcd', models: [{ id: 'm1' }] })
   await store.saveProviders([made])
-  await store.saveSettings({ model: `${made.id}/m1`, subscription: 'off', autoFillUpdate: false })
+  await store.saveSettings({ model: `${made.id}/m1`, subscription: 'off', autoFillUpdate: false, autoContinue: false })
   const card = normalizeCard({ spec: 'chara_card_v2', data: { name: '小雨', first_mes: '雨下了一整夜。' } })
   await store.saveCard(card)
   const server = await createApp({ dataRoot, proxy: 'off', edition: 'release' })

@@ -172,13 +172,13 @@ export function initPresets({ api, el, toast, guard, saveFile, getChat, isGenera
     const turnChars = sumChars(detail, 'turn')
     const ignored = [
       detail.params?.temperature != null ? t`温度 ${detail.params.temperature}` : '',
-      detail.params?.maxTokens ? t`最大输出 ${detail.params.maxTokens}` : '',
     ].filter(Boolean)
     const meta = [
       t`启用 ${detail.enabled}/${detail.prompts.filter(p => !p.marker).length} 条：前缀约 ${prefixChars.toLocaleString()} 字，每轮约 ${turnChars.toLocaleString()} 字`,
       detail.regexScripts ? t`${detail.regexScripts} 条正则随预设生效` : '',
       detail.helperScripts ? helperMeta(detail) : '',
-      ignored.length ? t`${ignored.join(t`、`)} 不使用（用模型自己的默认值；供应商的最大输出在供应商设置里填）` : '',
+      detail.params?.maxTokens ? t`最大回复长度 ${detail.params.maxTokens} token：只告诉模型，超过也不截断` : '',
+      ignored.length ? t`${ignored.join(t`、`)} 不使用（用模型自己的默认值）` : '',
     ].filter(Boolean)
     return [
       el('header', { class: 'preset-head' }, [

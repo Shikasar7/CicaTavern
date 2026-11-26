@@ -30,6 +30,10 @@ test('a form keeps how it looks, and the cast gets each form that has a look, on
   assert.deepEqual(cast.map(entry => entry.whole === true), [false, true, true, true])
   assert.equal(cast[1].looks, 'a small black panther cub')
   assert.deepEqual(rosterOf({ characters: [], game: null }), [])
+  // 衣柜: the outfits the story changes into.
+  const wardrobe = [{ name: '睡衣', tags: 'pajamas', when: '睡前' }]
+  assert.deepEqual(rosterOf({ characters: [{ name: '莉瑟', aliases: [], gender: '女', looks_tags: 'blonde', outfit_tags: 'uniform', wardrobe }] })[0].wardrobe, wardrobe)
+  assert.equal('wardrobe' in cast[0], false)
 })
 
 const CREATION = cleanCreation({

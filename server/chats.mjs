@@ -4,7 +4,7 @@
 import { greetingsOf } from './cards.mjs'
 import { guideView } from './guide-text.mjs'
 import { chatPlot, plotView } from './plot.mjs'
-import { cleanPlot, fitProgress, progressOn, sceneOf, SPOILERS, TIGHTNESS } from '../web/shared/plot.js'
+import { cleanPlot, fitProgress, progressOn, sceneOf, SPOILERS, cleanPace, TIGHTNESS } from '../web/shared/plot.js'
 import { buildChatPrompt, chatTemplates, fixedWorldBooks, replaceMacros, templateText } from './prompt.mjs'
 import YAML from 'yaml'
 import { constantEntries, entryText, initialState, lateEntries } from './worldbook.mjs'
@@ -512,7 +512,7 @@ export function exportStory(chat, nodeId) {
     // 长期记忆: the 记忆簿 in force there (its turns numbered as this story's are).
     ...(memoryOf(path)?.entries.length ? { memory: memoryOf(path).entries } : {}),
     // 剧本: the chat's copy, its settings, and where the story was on it.
-    ...(chat.plot?.copy ? { plot: { copy: chat.plot.copy, start: chat.plot.start, tightness: chat.plot.tightness, spoiler: chat.plot.spoiler, askAtFork: Boolean(chat.plot.askAtFork), paused: Boolean(chat.plot.paused), progress: progressOn(chat.plot.copy, withoutHidden(path), chat.plot.start) } } : {}),
+    ...(chat.plot?.copy ? { plot: { copy: chat.plot.copy, start: chat.plot.start, tightness: chat.plot.tightness, ...(chat.plot.pace ? { pace: chat.plot.pace } : {}), spoiler: chat.plot.spoiler, askAtFork: Boolean(chat.plot.askAtFork), paused: Boolean(chat.plot.paused), progress: progressOn(chat.plot.copy, withoutHidden(path), chat.plot.start) } } : {}),
   }
 }
 
@@ -525,6 +525,7 @@ function storyPlot(raw) {
       copy,
       start: sceneOf(copy, raw.start) ? raw.start : copy.start,
       tightness: TIGHTNESS.includes(raw.tightness) ? raw.tightness : copy.tightness,
+      ...(cleanPace(raw.pace) ? { pace: cleanPace(raw.pace) } : {}),
       spoiler: SPOILERS.includes(raw.spoiler) ? raw.spoiler : 'all',
       askAtFork: raw.askAtFork === true,
       paused: raw.paused === true,
@@ -980,10 +981,19 @@ export function chatView(chat) {
       // The model name a provider answered with: relays that switch upstream show it here.
       served: node.api?.model ?? undefined,
       truncated: node.api?.truncated || undefined,
+      // Why the model says it stopped, as its API puts it.
+      stop: node.api?.stop || undefined,
+      // The output cap it ran into and where that came from; how many times it was written on by itself.
+      cap: node.api?.truncated === true && node.api.capFrom ? { tokens: node.api.cap ?? 0, from: node.api.capFrom } : undefined,
+      more: node.api?.more || undefined,
       // 联网: what the reply searched for and the pages it drew on.
       search: node.search ?? undefined,
       // 应用帮助: what the assistant looked up before this reply ({ op, target }).
       lookups: node.lookups?.length ? node.lookups : undefined,
+      // 直连对话's tools: what the assistant did before this reply, and whether it changed files (to take back).
+      steps: node.steps?.length ? node.steps.map(({ name, said, args, kept, ok, summary }) => ({ name, said, args, kept, ok, summary })) : undefined,
+      fileRun: node.fileRun ?? undefined,
+      fileUndone: node.fileUndone || undefined,
       // 剧本: the progress a reply made, a player message's own change to it (plot.mjs).
       plot: node.plot ?? undefined,
       plotSet: node.plotSet ?? undefined,
@@ -992,10 +1002,15 @@ export function chatView(chat) {
       stateChanges: node.stateChanges ?? undefined,
       updateUnread: node.updateUnread || undefined,
       schemaProblem: node.schemaProblem || undefined,
+      // 这轮变量没更新上 (turn-vars.mjs), and 修好 with whether it can still be taken back (the reply is as it left it).
+      varIssues: node.varIssues?.length ? node.varIssues : undefined,
+      varFix: node.varFix ? { at: node.varFix.at, changed: node.varFix.changed ?? [], count: node.varFix.count ?? 0, undo: Boolean(node.varFix.before) && node.varFix.text === node.text } : undefined,
       // What the card's own scripts said with this reply (their toastr, card-scripts.mjs).
       scriptNotes: node.scriptNotes?.length ? node.scriptNotes : undefined,
       compaction: node.compaction ? compactionView(chat, node) : undefined,
       media: node.media?.images?.length ? node.media : undefined,
+      // 换衣服: the player's own change here (wear.mjs), for the 立绘 on the stage.
+      wear: node.wear ?? undefined,
       // Brought in from SillyTavern (importSillyTavern): no model of ours wrote it.
       imported: node.imported || undefined,
       rewroteChoices: node.rewroteChoices ?? undefined,

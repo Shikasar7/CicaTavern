@@ -229,8 +229,16 @@ export function initGuide({ api, el, guard, toast, getChat, setChat, getModels, 
       state.mapKey = ''
       setChat(getChat())
     } : null
+    let map
+    try {
+      map = plotMap(view, { el, guard, path: chat.path, onBranch, forks: state.forks, onShowBar, onJump: at => act({ action: 'jump', at }), onSpoiler: spoiler => act({ action: 'settings', spoiler }) })
+    } catch (error) {
+      // Not drawn: the old map stays, so the next change of the chat tries again rather than counting it done.
+      state.mapKey = ''
+      throw error
+    }
     mapBox.replaceChildren(
-      plotMap(view, { el, guard, path: chat.path, onBranch, forks: state.forks, onShowBar, onJump: at => act({ action: 'jump', at }), onSpoiler: spoiler => act({ action: 'settings', spoiler }) }),
+      map,
       plotActions ? el('div', { class: 'guide-plot-tools' }, [
         el('button', { type: 'button', class: 'btn small ghost', text: t`改剧本`, title: t`改这段对话用的剧本，卡里的原稿不变`, onclick: guard(() => plotActions.edit()) }),
         el('button', { type: 'button', class: 'btn small ghost', text: t`整理成剧本`, title: t`把这段对话走过的路整理成一份新剧本，放进卡里，能重玩`, onclick: guard(() => plotActions.fromChat()) }),

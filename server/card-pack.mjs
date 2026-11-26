@@ -94,6 +94,7 @@ export function createCardPacks(store, { rulebooks, regex, look = null, cgs = nu
     const kept = await readJsonFile(at(cardId, 'sprites.json'), null)
     const sprites = {}
     const expressions = {}
+    const outfits = {}
     const spriteFiles = []
     const take = async value => {
       if (!FILE.test(value?.file ?? '')) return null
@@ -112,7 +113,16 @@ export function createCardPacks(store, { rulebooks, regex, look = null, cgs = nu
       }
       if (Object.keys(own).length) expressions[id] = own
     }
-    if (spriteFiles.length) found.sprites = { count: spriteFiles.length, files: spriteFiles, sprites, expressions }
+    // 衣柜: a 立绘 per outfit still in it.
+    for (const entry of media.roster) {
+      const own = {}
+      for (const item of entry.wardrobe ?? []) {
+        const drawn = record(record(kept?.outfits)[entry.id])[item.id]
+        if (await take(drawn)) own[item.id] = drawn
+      }
+      if (Object.keys(own).length) outfits[entry.id] = own
+    }
+    if (spriteFiles.length) found.sprites = { count: spriteFiles.length, files: spriteFiles, sprites, expressions, outfits }
 
     const listed = (await readJsonFile(at(cardId, 'scenes.json'), null))?.scenes
     const scenes = []
@@ -222,7 +232,7 @@ export function createCardPacks(store, { rulebooks, regex, look = null, cgs = nu
       card: cardFile.name,
       parts: picked,
       ...(cast ? { roster: cast, refs: found.roster.refs } : {}),
-      ...(has('sprites') ? { sprites: found.sprites.sprites, expressions: found.sprites.expressions } : {}),
+      ...(has('sprites') ? { sprites: found.sprites.sprites, expressions: found.sprites.expressions, ...(Object.keys(found.sprites.outfits).length ? { outfits: found.sprites.outfits } : {}) } : {}),
       ...(has('scenes') ? { scenes: found.scenes.scenes } : {}),
       ...(has('cgs') ? { cgs: found.cgs.groups } : {}),
       ...(has('cover') ? { cover: true } : {}),
@@ -337,6 +347,7 @@ export function createCardPacks(store, { rulebooks, regex, look = null, cgs = nu
       const kept = record(await readJsonFile(at(cardId, 'sprites.json'), null))
       const sprites = { ...record(kept.sprites) }
       const expressions = { ...record(kept.expressions) }
+      const outfits = { ...record(kept.outfits) }
       const take = async value => {
         if (!FILE.test(value?.file ?? '')) return null
         const data = await image(`sprites/${value.file}`, MAX_PICTURE)
@@ -360,7 +371,15 @@ export function createCardPacks(store, { rulebooks, regex, look = null, cgs = nu
         }
         if (Object.keys(own).length) expressions[id] = own
       }
-      if (arrived.sprites) await writeJson(at(cardId, 'sprites.json'), { sprites, expressions })
+      for (const entry of cleanCardMedia(card.media).roster) {
+        const own = { ...record(outfits[entry.id]) }
+        for (const item of entry.wardrobe ?? []) {
+          const saved = await take(record(record(manifest.outfits)[entry.id])[item.id])
+          if (saved) own[item.id] = saved
+        }
+        if (Object.keys(own).length) outfits[entry.id] = own
+      }
+      if (arrived.sprites) await writeJson(at(cardId, 'sprites.json'), { sprites, expressions, ...(Object.keys(outfits).length ? { outfits } : {}) })
     }
 
     if (parts.has('scenes') && Array.isArray(manifest.scenes)) {

@@ -30,6 +30,9 @@ const GAPS = {
 }
 const gapOf = foe => GAPS[foe.gap ?? 0] ?? GAPS[0]
 
+/** The level of a foe said only to stand so to the player: what the panel in front of a fight shows. */
+export const levelBeside = (foe, level) => Math.max(1, level + LEVEL_OFFSET[foe.tier] + gapOf(foe).level)
+
 /** What beating a foe is worth, for how it stands to the player: there is nothing to be had from those far below. */
 export const rewardOf = foe => gapOf(foe).reward
 
@@ -235,6 +238,8 @@ const EDGE_TAKEN = { strong: 1.1, weak: 0.9 }
 const CHEER = 1.2
 // 收服: what a roll on 魅力 has to come to, by the foe's tier; a 首领 is nobody's to tame.
 export const TAME_DC = { minion: 8, normal: 11, elite: 14 }
+// 收服道具: what one adds to the roll; a large one needs none.
+export const LURES = { small: 3, medium: 6, large: Infinity }
 // 成长 (growth.js): from here down, one who fights harder when cornered is cornered.
 const CORNERED = 0.3
 const SKILL_WORDS = [[/[扫群旋]|全弹|新星/, 'sweep'], [/连/, 'flurry'], [/毒/, 'poison'], [/[晕震定]|脉冲|麻痹|冰封/, 'stun'], [/[疗愈回]|修复|急救/, 'heal'], [/[护势气]|祝福|强化|增幅|过载/, 'boost']]
@@ -256,7 +261,7 @@ export function fieldFoes(groups, { members = 1 } = {}) {
   const budget = BUDGET + BUDGET_PER_MEMBER * (Math.min(MAX_PARTY, Math.max(1, members)) - 1)
   const foes = []
   for (const group of groups) {
-    for (let i = 0; i < group.count && foes.length < MAX_FOES; i++) foes.push({ name: group.name, tier: group.tier, ...(group.gap ? { gap: group.gap } : {}), ...(group.rank ? { rank: group.rank } : {}), ...(group.up ? { up: group.up } : {}), ...(group.since ? { since: group.since } : {}), ...(group.adds?.length ? { adds: group.adds } : {}), ...(group.type ? { type: group.type } : {}) })
+    for (let i = 0; i < group.count && foes.length < MAX_FOES; i++) foes.push({ name: group.name, tier: group.tier, ...(group.gap ? { gap: group.gap } : {}), ...(group.rank ? { rank: group.rank } : {}), ...(group.up ? { up: group.up } : {}), ...(group.since ? { since: group.since } : {}), ...(group.adds?.length ? { adds: group.adds } : {}), ...(group.type ? { type: group.type } : {}), ...(group.kind ? { kind: group.kind } : {}) })
   }
   const points = () => foes.reduce((sum, foe) => sum + TIERS[foe.tier].points, 0)
   for (let at = foes.length - 1; at >= 0 && points() > budget; at--) {
@@ -303,6 +308,8 @@ export function battleSetup(sheet, { foes, seed, difficulty = 'normal', effects 
     // 形态: what they go by in the form they are in; who they are stays their name.
     ...(member.shown ? { shown: String(member.shown) } : {}),
     ...(member.bonus ? { bonus: member.bonus } : {}),
+    // 养成: how far their level stands from the player's, in what they deal and take (raise.js liftOf).
+    ...(member.lift ? { lift: member.lift } : {}),
     ...(member.shift ? { shift: shiftOf(member.shift, { ...kinds, ...(member.kinds ?? {}) }) } : {}),
   }))
   return {
@@ -328,7 +335,7 @@ export function battleSetup(sheet, { foes, seed, difficulty = 'normal', effects 
       ...(types?.player ? { type: String(types.player) } : {}),
       ...(bonus ? { bonus } : {}),
       ...(shift ? { shift: shiftOf(shift, kinds) } : {}),
-      things: sheet.things.map(thing => ({ name: thing.name, count: thing.count, effect: effects(thing.name) })).filter(thing => thing.effect && thing.effect.type !== 'none' && thing.effect.type !== 'calm' && thing.effect.type !== 'gear'),
+      things: sheet.things.map(thing => ({ name: thing.name, count: thing.count, effect: effects(thing.name) })).filter(thing => thing.effect && thing.effect.type !== 'none' && thing.effect.type !== 'calm' && thing.effect.type !== 'gear' && thing.effect.type !== 'tame'),
     },
     ...(others.length ? { allies: others } : {}),
   }
@@ -388,7 +395,7 @@ export function startBattle(setup) {
   }
   const opened = unit => (unit.commander || !opening ? unit : { ...unit, ...(opening.boost ? { boost: BOOST_ROUNDS } : {}), ...(opening.caught ? { stun: 1, late: true, guarding: true } : {}) })
   const { player } = setup
-  const allies = (setup.allies ?? []).slice(0, MAX_PARTY - 1).map((ally, i) => ({ id: `ally-${i}`, side: 'player', ally: true, name: ally.name, life: ally.life, maxLife: ally.maxLife, energy: ally.energy, maxEnergy: ally.maxEnergy, modifiers: ally.modifiers, skills: ally.skills, guarding: false, boost: 0, ...(ally.type ? { type: ally.type } : {}), ...(ally.shown ? { shown: ally.shown } : {}), ...(ally.bonus ? { bonus: ally.bonus } : {}), ...(ally.shift ? { shift: ally.shift } : {}) }))
+  const allies = (setup.allies ?? []).slice(0, MAX_PARTY - 1).map((ally, i) => ({ id: `ally-${i}`, side: 'player', ally: true, name: ally.name, life: ally.life, maxLife: ally.maxLife, energy: ally.energy, maxEnergy: ally.maxEnergy, modifiers: ally.modifiers, skills: ally.skills, guarding: false, boost: 0, ...(ally.type ? { type: ally.type } : {}), ...(ally.shown ? { shown: ally.shown } : {}), ...(ally.bonus ? { bonus: ally.bonus } : {}), ...(ally.lift ? { lift: ally.lift } : {}), ...(ally.shift ? { shift: ally.shift } : {}) }))
   return {
     round: 1,
     rng: seedOf('battle', String(setup.seed)),
@@ -416,7 +423,7 @@ export function foeSheets(setup) {
     gap: foe.gap,
     rank: setup.foes[i].rank ?? '',
     since: setup.foes[i].since ?? 0,
-    level: Math.max(1, level + LEVEL_OFFSET[foe.tier] + gapOf(foe).level),
+    level: setup.foes[i].level ?? Math.max(1, level + LEVEL_OFFSET[foe.tier] + gapOf(foe).level),
     life: foe.maxLife,
     attack: Math.round(lifeBefore(setup.player) * foe.damage * DIFFICULTY[setup.difficulty] * (1 - (setup.player.bonus?.guard ?? 0))),
     charges: Boolean(TIERS[foe.tier].charges),
@@ -430,16 +437,19 @@ export function foeSheets(setup) {
 export const edgeOf = (state, from, to) => (!state.types || !from || !to ? '' : state.types[from]?.includes(to) ? 'strong' : state.types[to]?.includes(from) ? 'weak' : '')
 
 /**
- * 收服: the roll for a foe brought down in a fight that was won, the same however often it is asked for.
- * → { dc, modifier, roll, total, tier, ok, chance (percent) }, or null for one that cannot be tamed.
+ * 收服: the roll for a foe brought down in a fight that was won, the same however often it is asked for. `lure`: the
+ * 收服道具 used on it (setup.tame.lures), `attempt`: which go at the fight it was, each with a roll of its own.
+ * → { dc, modifier, roll, total, tier, ok, chance (percent), sure? }, or null for one that cannot be tamed.
  */
-export function tameTry(setup, foe) {
+export function tameTry(setup, foe, { lure = '', attempt = 0 } = {}) {
   if (!setup.tame || !Object.hasOwn(TAME_DC, foe?.tier) || (setup.tame.have ?? []).includes(foe.name)) return null
   const dc = TAME_DC[foe.tier] + 2 * (foe.gap ?? 0)
-  const modifier = setup.tame.charm ?? 0
-  const roll = 1 + Math.floor(randomFrom(seedOf('tame', String(setup.seed), String(foe.name)))() * 20)
+  const size = lure ? setup.tame.lures?.find(thing => thing.name === lure)?.size : ''
+  const sure = LURES[size] === Infinity
+  const modifier = (setup.tame.charm ?? 0) + (sure ? 0 : LURES[size] ?? 0)
+  const roll = sure ? 20 : 1 + Math.floor(randomFrom(seedOf('tame', String(attemptSetup(setup, attempt).seed), String(foe.name)))() * 20)
   const result = judge(roll, modifier, dc)
-  return { dc, modifier, ...result, ok: result.tier !== 'fail', chance: chanceOf(modifier, dc) }
+  return { dc, modifier, ...result, ok: result.tier !== 'fail', chance: sure ? 100 : chanceOf(modifier, dc), ...(sure ? { sure } : {}) }
 }
 
 /**
@@ -583,7 +593,7 @@ function blow(state, unit, foe, power, events, stat = 'body') {
   const cornered = unit.bonus?.fury && unit.life < unit.maxLife * CORNERED ? 1 + unit.bonus.fury : 1
   // 类型克制: the skill's own type, or that of whoever strikes. No dice are rolled for it.
   const edge = edgeOf(state, unit.hitsAs ?? unit.type, foe.type)
-  const amount = Math.max(1, Math.round(BLOW * (1 + 0.1 * unit.modifiers[stat]) * (1 + (unit.bonus?.attack ?? 0)) * cornered * (unit.boost > 0 ? unit.boostBy ?? BOOST : 1) * power * swing * (crit ? CRIT : 1) * (1 + (foe.open > 0 ? foe.openBy : 0)) * (unit.weak > 0 ? 1 - unit.weakBy : 1) * (edge ? EDGE[edge] : 1)))
+  const amount = Math.max(1, Math.round(BLOW * (1 + 0.1 * unit.modifiers[stat]) * (1 + (unit.bonus?.attack ?? 0)) * (unit.lift?.deal ?? 1) * cornered * (unit.boost > 0 ? unit.boostBy ?? BOOST : 1) * power * swing * (crit ? CRIT : 1) * (1 + (foe.open > 0 ? foe.openBy : 0)) * (unit.weak > 0 ? 1 - unit.weakBy : 1) * (edge ? EDGE[edge] : 1)))
   foe.life = Math.max(0, foe.life - amount)
   events.push({ type: 'hit', ...byOf(state, unit), target: foe.id, amount, crit, life: foe.life, ...(edge ? { edge } : {}) })
   if (crit) state.moments.push({ round: state.round, kind: 'crit', foe: foe.name, ...(unit.id === 'player' ? {} : { who: unit.name }) })
@@ -789,7 +799,7 @@ function foeActs(state, foe, events) {
   const crit = random(state) < CRIT_CHANCE
   const swing = 0.75 + random(state) * 0.5
   const rage = tier.rages && !charged && foe.life < foe.maxLife / 2 ? RAGE : 1
-  const armour = (1 - ARMOUR * victim.modifiers.body) * (1 - (victim.bonus?.guard ?? 0)) * (victim.taunt > 0 ? 1 - TAUNT_GUARD : 1)
+  const armour = Math.max(0.2, 1 - ARMOUR * victim.modifiers.body) * (1 - (victim.bonus?.guard ?? 0)) * (victim.lift?.take ?? 1) * (victim.taunt > 0 ? 1 - TAUNT_GUARD : 1)
   // 类型克制: the foe's type against that of whom it strikes.
   const edge = edgeOf(state, foe.type, victim.type)
   let amount = Math.max(1, Math.round(lifeBefore(victim) * foe.damage * DIFFICULTY[state.difficulty] * armour * swing * rage * (charged ? 2 : 1) * (crit ? CRIT : 1) * (victim.guarding ? GUARD : 1) * (foe.weak > 0 ? 1 - foe.weakBy : 1) * (victim.open > 0 ? 1 + victim.openBy : 1) * (edge ? EDGE_TAKEN[edge] : 1)))

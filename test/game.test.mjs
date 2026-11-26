@@ -376,6 +376,16 @@ test('a roll on the page and on the server is the same roll, with the difficulty
   assert.equal(turn.check.dc, 14)
 })
 
+test('写前自查 that names a stop does not end the reply there: the story and its own mark are kept', async t => {
+  const reply = '<self_check>\n1. 按规则给出【检定|力量|DC20】。\n</self_check>\n她伸手。\n【检定|灵巧|DC12】'
+  const { call, card, newChat, take } = await tavern(t, [`${reply}\n你成功了！`])
+  await call(`/api/cards/${card.id}/game`, { level: 'light' }, 'PUT')
+  const stop = (await take(await newChat(), '伸手')).path.at(-1)
+  assert.equal(stop.raw, reply)
+  assert.equal(stop.text, '她伸手。')
+  assert.deepEqual(stop.gate, { kind: 'check', stat: '灵巧', dc: 12 })
+})
+
 test('a stop written out of the reply is gone; one that is not there cannot be settled', async t => {
   const { call, card, newChat, take } = await tavern(t, ['她伸手。【检定|灵巧|DC12】', '她点头。'])
   await call(`/api/cards/${card.id}/game`, { level: 'light' }, 'PUT')
@@ -1157,4 +1167,69 @@ test('a genre goes on the book: what energy is called, shown in a fight of the c
   assert.equal(book.theme, 'wuxia')
   assert.equal(book.energyName, '内力真气太长')
   assert.equal(cleanRulebook({ energyName: 3 }).energyName, '')
+})
+
+// 形态 in the card's variables: from the menu or by the reply's own mark, whether or not the reply put it there.
+const PETS = { level: 'full', growth: { level: 'rich' }, ranks: ['成长期', '成熟期', '完全体'], start: { party: ['小焰'], rank: '完全体' }, companions: { 小焰: { attributes: { grace: 14 }, skills: { 火花: 'strike' } } }, forms: { 小焰: [{ name: '小焰', stage: '成长期' }, { name: '炎牙兽', stage: '成熟期', at: { level: 2 } }, { name: '炎王兽', stage: '完全体', at: { level: 3 } }] } }
+const stageIn = view => view.path.at(-1).state.魔宠.小焰.阶位
+
+test('a form come to in the menu is in the variables of the card though the reply forgot it, and though it wrote the old one', async t => {
+  const { call, card, newChat, sent } = await tavern(t, ['它变了。', '它又变了。<UpdateVariable><JSONPatch>[{"op":"replace","path":"/魔宠/小焰/阶位","value":"成长期"}]</JSONPatch></UpdateVariable>', '另一种写法。'])
+  await call(`/api/cards/${card.id}/game`, PETS, 'PUT')
+  const chat = await newChat()
+  await opening(call, chat, { 魔宠: { 小焰: { 阶位: '成长期', 状态: '出战' } } })
+  await call(`/api/chats/${chat.id}/turn`, { parentId: 'root', input: '进化吧', game: { ops: [{ op: 'form', who: '小焰' }] } })
+  const one = (await call(`/api/chats/${chat.id}`)).body
+  assert.equal(one.path.at(-1).game.party[0].form, '炎牙兽')
+  assert.equal(stageIn(one), '成熟期')
+  assert.equal(one.path.at(-1).state.魔宠.小焰.状态, '出战')
+  assert.match(lastPrompt(sent[0]), /小焰进化成了「炎牙兽」/)
+  await call(`/api/chats/${chat.id}/turn`, { parentId: one.path.at(-1).id, input: '再来', game: { ops: [{ op: 'form', who: '小焰' }] } })
+  const two = (await call(`/api/chats/${chat.id}`)).body
+  assert.equal(stageIn(two), '完全体')
+  await call(`/api/chats/${chat.id}/regenerate`, { userNodeId: two.path.at(-2).id })
+  assert.equal(stageIn((await call(`/api/chats/${chat.id}`)).body), '完全体', 'a new version has it too')
+  await call(`/api/chats/${chat.id}/rollback`, { nodeId: one.path.at(-1).id })
+  assert.equal(stageIn((await call(`/api/chats/${chat.id}`)).body), '成熟期', 'rolled back, it is as it was')
+})
+
+test('a form the reply gives by its mark is in the variables of the card too; a turn with none leaves them to the card', async t => {
+  const { call, card, newChat } = await tavern(t, ['光里，它变了。【进化|小焰|炎牙兽】', '它累了，缩了回去。<UpdateVariable><JSONPatch>[{"op":"replace","path":"/魔宠/小焰/阶位","value":"成长期"}]</JSONPatch></UpdateVariable>'])
+  await call(`/api/cards/${card.id}/game`, PETS, 'PUT')
+  const chat = await newChat()
+  await opening(call, chat, { 魔宠: { 小焰: { 阶位: '成长期' } } })
+  await call(`/api/chats/${chat.id}/turn`, { parentId: 'root', input: '一' })
+  const one = (await call(`/api/chats/${chat.id}`)).body
+  assert.equal(stageIn(one), '成熟期')
+  await call(`/api/chats/${chat.id}/turn`, { parentId: one.path.at(-1).id, input: '二' })
+  assert.equal(stageIn((await call(`/api/chats/${chat.id}`)).body), '成长期', 'no form was come to this turn')
+})
+
+test('a reply that puts another companion in the card table, its marks forgotten, has them in the party too', async t => {
+  const { call, card, newChat } = await tavern(t, ['它跟着你。<UpdateVariable><JSONPatch>[{"op":"remove","path":"/魔宠/小焰"},{"op":"add","path":"/魔宠/水灵","value":{"阶位":"成长期"}}]</JSONPatch></UpdateVariable>', '往前走。'])
+  await call(`/api/cards/${card.id}/game`, { ...PETS, companions: { ...PETS.companions, 水灵: { attributes: {}, skills: { 水箭: 'strike' } } }, bindings: { party: '魔宠' } }, 'PUT')
+  const chat = await newChat()
+  await opening(call, chat, { 魔宠: { 小焰: { 阶位: '成长期' } } })
+  await call(`/api/chats/${chat.id}/turn`, { parentId: 'root', input: '选水灵' })
+  const one = (await call(`/api/chats/${chat.id}`)).body
+  assert.deepEqual(one.path.at(-1).game.party.map(member => member.name), ['水灵'])
+  await call(`/api/chats/${chat.id}/turn`, { parentId: one.path.at(-1).id, input: '走' })
+  assert.deepEqual((await call(`/api/chats/${chat.id}`)).body.path.at(-1).game.party.map(member => member.name), ['水灵'])
+})
+
+test('one the reply puts in the card table joins with no mark, and let go of in the menu stays away', async t => {
+  const add = '<UpdateVariable><JSONPatch>[{"op":"add","path":"/魔宠/铁鹰","value":{"阶位":"成长期"}}]</JSONPatch></UpdateVariable>'
+  const { call, card, newChat } = await tavern(t, ['鹰归你了。' + add, '它飞走了。', '往前走。'])
+  await call(`/api/cards/${card.id}/game`, { ...PETS, companions: { ...PETS.companions, 铁鹰: { attributes: {}, skills: { 啄: 'strike' } } }, bindings: { party: '魔宠' } }, 'PUT')
+  const chat = await newChat()
+  await opening(call, chat, { 魔宠: { 小焰: { 阶位: '成长期' } } })
+  const who = view => view.path.at(-1).game.party.map(member => member.name)
+  await call(`/api/chats/${chat.id}/turn`, { parentId: 'root', input: '收下' })
+  const one = (await call(`/api/chats/${chat.id}`)).body
+  assert.deepEqual(who(one), ['小焰', '铁鹰'])
+  await call(`/api/chats/${chat.id}/turn`, { parentId: one.path.at(-1).id, input: '放了它', game: { ops: [{ op: 'party', act: 'leave', name: '铁鹰' }] } })
+  const two = (await call(`/api/chats/${chat.id}`)).body
+  assert.deepEqual(who(two), ['小焰'], 'its row is still there')
+  await call(`/api/chats/${chat.id}/turn`, { parentId: two.path.at(-1).id, input: '走' })
+  assert.deepEqual(who((await call(`/api/chats/${chat.id}`)).body), ['小焰'])
 })

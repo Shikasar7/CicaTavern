@@ -90,15 +90,16 @@ async function setup(t, answer) {
   await store.saveCard(card)
   const asked = []
   const engine = {
+    sideModel: async (chat, preferred) => (preferred ? { ref: preferred, label: preferred, from: 'preferred' } : { ref: 'cheap/h', label: 'cheap/h', from: 'helper' }),
     async sideCall(chat, preferred, request, { onText }) {
-      asked.push({ chat, request })
+      asked.push({ chat, preferred, request })
       onText('写')
       const text = typeof answer === 'function' ? answer(request) : answer
       if (text instanceof Error) throw text
       return { text, model: 'fake/m' }
     },
   }
-  const drafts = createPlotDraft(store, { engine })
+  const drafts = createPlotDraft(store, { engine, forgeCard: async () => card, forgeModel: async id => (id === 'picked' ? 'main/forge' : '') })
   const until = async key => {
     for (let i = 0; i < 100; i++) {
       const view = await drafts.view(key)
@@ -125,6 +126,46 @@ test('a card’s draft is written in the background and read back; the card and 
   assert.equal((await drafts.view(key)).result.plot.name, '看海')
   await drafts.clear(key)
   assert.equal((await drafts.view(key)).result, null)
+})
+
+test('written on the model picked where it is asked for: the chat’s, the card being made’s; else the helper', async t => {
+  const { store, card, drafts, asked, until } = await setup(t, ANSWER)
+  const chat = await createChat(store, card.id, 0, { plotId: 'p1' })
+  chat.model = 'main/chat'
+  await store.saveChat(chat)
+  await store.saveSettings({ ...(await store.getSettings()), model: 'main/default' })
+  const run = async (key, body, options) => {
+    await drafts.ask(key, body, options)
+    const done = await until(key)
+    assert.equal(done.error, null)
+    return asked.at(-1).preferred
+  }
+  const write = { kind: 'outline', text: '一个夏天' }
+  // The card's plots, no chat: the helper (nothing asked for). From a chat of it: that chat's.
+  assert.equal(await run(`card-${card.id}`, write), null)
+  assert.deepEqual((await drafts.view(`card-${card.id}`)).model, { label: 'cheap/h', source: 'helper' })
+  assert.equal(await run(`card-${card.id}`, { ...write, chat: chat.id }), 'main/chat')
+  assert.deepEqual((await drafts.view(`card-${card.id}`, { chatId: chat.id })).model, { label: 'main/chat', source: 'chat' })
+  // A chat of another card, or an id that is none, does not count.
+  assert.equal(await run(`card-${card.id}`, { ...write, chat: '../x' }), null)
+  assert.equal(await run(`chat-${chat.id}`, { kind: 'fromChat' }), 'main/chat')
+  // A small look stays with the helper.
+  assert.equal((await drafts.ask(`chat-${chat.id}`, { kind: 'where', plot: card.plots[0] })).kind, 'where')
+  await until(`chat-${chat.id}`)
+  assert.equal(asked.at(-1).preferred, null)
+  // 创作角色卡: its own pick, none picked is the default model as it shows there; the server's own (saved with 剧本 on).
+  assert.equal(await run('forge-picked', write), 'main/forge')
+  assert.equal(await run('forge-plain', write), 'main/default')
+  assert.deepEqual((await drafts.view('forge-picked')).model, { label: 'main/forge', source: 'forge' })
+  assert.equal(await run(`card-${card.id}`, { kind: 'whole', text: 'x' }, { model: 'main/forge' }), 'main/forge')
+})
+
+test('a failure says which model it was, and is there when the window is opened again', async t => {
+  const { card, drafts, until } = await setup(t, new Error('503'))
+  await drafts.ask(`card-${card.id}`, { kind: 'outline' })
+  assert.equal(drafts.busy(), true, 'the server does not quit under it')
+  assert.deepEqual((await until(`card-${card.id}`)).error, { message: '503', model: 'cheap/h' })
+  assert.equal(drafts.busy(), false)
 })
 
 test('an answer with no plot in it, or a model that fails, is an error to try again; another key is refused', async t => {

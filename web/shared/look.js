@@ -31,7 +31,7 @@ export function cleanLook(saved) {
   const chosen = Number.isFinite(saved?.strength) && (saved.chose === true || saved.strength !== OLD_STRENGTH)
   const strength = chosen ? clamp(Math.round(saved.strength), 0, 100) : STRENGTH
   // 技能特写: on unless turned off, and said only when it is.
-  return { look, palette, strength, ...(saved?.cutIns === false ? { cutIns: false } : {}) }
+  return { look, palette, strength, ...(saved?.cutIns === false ? { cutIns: false } : {}), ...(saved?.speakers === true ? { speakers: true } : {}) }
 }
 
 /** How much the wash covers for a strength in percent: squared, so the low half of the slider stays light and 100% is all of it. */

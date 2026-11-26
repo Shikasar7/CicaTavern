@@ -8,8 +8,9 @@
 // the page cuts the plain background out. Its expressions (表情差分) sit beside
 // it in sprites.json under expressions: { entryId: { smile: {…} } }, pictures
 // sprites/<entryId>-<expression>-<6 hex>.<ext>; they may exist for someone
-// shown from their reference picture, with no 立绘 of their own. One picture is
-// drawn at a time per card, scene, sprite or expression.
+// shown from their reference picture, with no 立绘 of their own. The other clothes
+// of a 衣柜 too, under outfits: { entryId: { outfitId: {…} } }. One picture is
+// drawn at a time per card, scene, sprite, expression or outfit.
 import { randomBytes } from 'node:crypto'
 import { copyFile, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
@@ -259,12 +260,18 @@ export function createScenes(store, { media, history = null }) {
       const kept = Object.fromEntries(Object.entries(faces).filter(([name, face]) => EXPRESSIONS.includes(name) && name !== 'neutral' && picture(face)))
       if (Object.keys(kept).length) expressions[id] = kept
     }
-    return { sprites, expressions }
+    // One per outfit of the 衣柜 (roster.mjs wardrobe), as long as it is in there.
+    const outfits = {}
+    for (const entry of card.media?.roster ?? []) {
+      const own = Object.fromEntries((entry.wardrobe ?? []).map(item => [item.id, value?.outfits?.[entry.id]?.[item.id]]).filter(([, drawn]) => picture(drawn)))
+      if (Object.keys(own).length) outfits[entry.id] = own
+    }
+    return { sprites, expressions, outfits }
   }
 
   const readSprites = async cardId => (await readSpriteFile(cardId)).sprites
 
-  /** fn({ sprites, expressions }) changes them in place, alone for this card; the file is saved after. */
+  /** fn({ sprites, expressions, outfits }) changes them in place, alone for this card; the file is saved after. */
   function changeSprites(cardId, fn) {
     const key = `${cardId}:sprites`
     const run = (locks.get(key) ?? Promise.resolve()).then(async () => {
@@ -275,6 +282,18 @@ export function createScenes(store, { media, history = null }) {
     })
     locks.set(key, run.catch(() => {}))
     return run
+  }
+
+  /** The pictures of outfits taken out of the 衣柜 (or whose wearer left the 名册) go with them, once the card's cast is saved. */
+  function dropGoneOutfits(cardId) {
+    return changeSprites(cardId, async ({ outfits }) => {
+      const had = (await readJsonFile(spriteFile(cardId), null))?.outfits ?? {}
+      for (const [entryId, own] of Object.entries(had)) {
+        for (const [outfitId, picture] of Object.entries(own ?? {})) {
+          if (!outfits[entryId]?.[outfitId] && FILE.test(picture?.file ?? '')) await dropFile(cardId, picture.file, spriteDir(cardId))
+        }
+      }
+    })
   }
 
   const spriteView = async cardId => ({ ...(await readSpriteFile(cardId)), drawing: drawing.get(cardId) ?? null })
@@ -365,6 +384,49 @@ export function createScenes(store, { media, history = null }) {
     return spriteView(cardId)
   }
 
+  // ─── 衣柜: the same 立绘 in other clothes ───────────────────────────────
+
+  async function outfitOf(cardId, entryId, outfitId) {
+    const entry = await memberOf(cardId, entryId)
+    const outfit = (entry.wardrobe ?? []).find(item => item.id === outfitId)
+    if (!outfit) throw httpError(404, msg`没有这套衣服`)
+    return { entry, outfit }
+  }
+
+  async function putOutfit(cardId, entryId, outfitId, buffer, extra) {
+    const file = await writeImage(cardId, `${entryId}-${outfitId}`, buffer, spriteDir(cardId))
+    await changeSprites(cardId, async ({ outfits }) => {
+      await keepOld(cardId, `outfit:${entryId}:${outfitId}`, outfits[entryId]?.[outfitId], spriteDir(cardId))
+      outfits[entryId] = { ...outfits[entryId], [outfitId]: { file, updatedAt: new Date().toISOString(), ...extra } }
+    })
+    return spriteView(cardId)
+  }
+
+  /** The 立绘 (else the reference picture) with only the clothes changed (media.drawOutfit). */
+  async function drawOutfit(cardId, entryId, outfitId, signal, choice = {}) {
+    const { entry, outfit } = await outfitOf(cardId, entryId, outfitId)
+    if (!outfit.tags) throw httpError(400, msg`先给「${outfit.name}」写上衣服的英文 tag`)
+    return alone(cardId, msg`${entry.name}的${outfit.name}`, async () => {
+      const base = (await readSprites(cardId))[entryId]
+      const buffer = base ? await readFile(path.join(spriteDir(cardId), base.file)).catch(() => null) : null
+      const picture = await media.drawOutfit(cardId, entryId, outfit, buffer, signal, choice)
+      return { ...(await putOutfit(cardId, entryId, outfitId, picture.buffer, { backend: picture.backend, source: 'drawn' })), ...(picture.note ? { note: picture.note } : {}) }
+    })
+  }
+
+  async function setOutfit(cardId, entryId, outfitId, image) {
+    await outfitOf(cardId, entryId, outfitId)
+    return putOutfit(cardId, entryId, outfitId, decode(image), { backend: '', source: 'upload' })
+  }
+
+  async function removeOutfit(cardId, entryId, outfitId) {
+    await changeSprites(cardId, async ({ outfits }) => {
+      await dropFile(cardId, outfits[entryId]?.[outfitId]?.file, spriteDir(cardId))
+      if (outfits[entryId]) delete outfits[entryId][outfitId]
+    })
+    return spriteView(cardId)
+  }
+
   /**
    * 抽图历史: a kept picture (history.take: `entry` says what it was drawn with)
    * back in its place, the one there now kept instead. → the sprites view for a
@@ -380,6 +442,10 @@ export function createScenes(store, { media, history = null }) {
     if (kind === 'face') {
       await memberOf(cardId, id)
       return putExpression(cardId, id, expressionName(expression), buffer, extra)
+    }
+    if (kind === 'outfit') {
+      await outfitOf(cardId, id, expression)
+      return putOutfit(cardId, id, expression, buffer, extra)
     }
     if (kind !== 'scene') throw httpError(400, msg`这张旧图不能在这里换回来`)
     return change(cardId, async list => {
@@ -415,14 +481,15 @@ export function createScenes(store, { media, history = null }) {
     if (scenes.length) await copy(dir(fromId), dir(toId), scenes, list => writeJson(listFile(toId), { scenes: list }))
     // Roster entries keep their ids in the new version (inheritCardMedia), so the sprites still belong.
     const sprites = (await readJsonFile(spriteFile(fromId), null).catch(() => null)) ?? {}
-    if (Object.keys(sprites.sprites ?? {}).length || Object.keys(sprites.expressions ?? {}).length) {
-      await copy(spriteDir(fromId), spriteDir(toId), sprites, all => writeJson(spriteFile(toId), { sprites: all.sprites ?? {}, expressions: all.expressions ?? {} }))
+    if (Object.keys(sprites.sprites ?? {}).length || Object.keys(sprites.expressions ?? {}).length || Object.keys(sprites.outfits ?? {}).length) {
+      await copy(spriteDir(fromId), spriteDir(toId), sprites, all => writeJson(spriteFile(toId), { sprites: all.sprites ?? {}, expressions: all.expressions ?? {}, outfits: all.outfits ?? {} }))
     }
   }
 
   return {
     list: view, draw, add, update, setImage, remove, readPicture, inherit,
     sprites: spriteView, drawSprite, setSprite, removeSprite, readSprite, drawExpression, setExpression, removeExpression,
+    drawOutfit, setOutfit, removeOutfit, dropGoneOutfits,
     restore,
   }
 }
