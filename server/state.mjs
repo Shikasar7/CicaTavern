@@ -60,6 +60,8 @@ export function applyStateUpdates(state, text) {
 
 // MVU's names for what a JSON Patch operation does (its commands, as card scripts see them at COMMAND_PARSED).
 const COMMAND_OF = { replace: 'set', delta: 'add', add: 'insert', insert: 'insert', remove: 'delete', move: 'move', copy: 'copy' }
+// The calls an update block may write, as MVU's classic syntax has them.
+const CALLS = /_\.(set|add|insert|assign|remove|unset|delete)\s*\(([\s\S]*?)\)\s*;/g
 // MVU's names for the calls a reply writes other than _.set and _.add.
 const CALL_OF = { insert: 'insert', assign: 'insert', remove: 'delete', unset: 'delete', delete: 'delete' }
 
@@ -99,7 +101,7 @@ export function readUpdates(state, text) {
         commands.push(command(COMMAND_OF[op.op] ?? String(op.op), args, JSON.stringify(op), { op }))
       }
     }
-    for (const call of body.matchAll(/_\.(set|add|insert|assign|remove|unset|delete)\s*\(([\s\S]*?)\)\s*;/g)) {
+    for (const call of body.matchAll(CALLS)) {
       let args
       try {
         args = parseArgs(call[2])
@@ -127,6 +129,72 @@ export function readUpdates(state, text) {
 export function applyCommands(state, commands) {
   const next = structuredClone(state ?? {})
   return { state: next, changes: [...new Set(runCommands(next, commands))] }
+}
+
+/**
+ * 这轮变量没更新上 (turn-vars.mjs): a reply's update read as the turn reads it, then run one command at a time from
+ * `state`, to tell which of them did nothing and which wrote a variable the state did not have.
+ * @returns { lost, steps }: `lost` the text of each piece that could not be read ('' for an operation of a broken
+ *   patch, which cannot be cut out of it); `steps` one per command, in order: { command, text, path, did, why, added,
+ *   group }. `did` is 'set', 'idle' (it changed nothing; `why` says what stopped it: 'missing', 'notNumber', 'noFrom',
+ *   'nothing') or 'new' (`added` the first key of its path the state did not have; `group` whether that key went into
+ *   a list, or a set of like objects such as one per character, where new keys come and go).
+ */
+export function updateSteps(state, text) {
+  const lost = []
+  for (const match of [...String(text ?? '').matchAll(UPDATE_BLOCK)]) {
+    if (match[1].toLowerCase() === 'state') continue
+    const body = match[2]
+    for (const source of patchSources(body)) {
+      if (Array.isArray(parseLoose(source))) continue
+      const written = source.match(OP_START)?.length ?? 0
+      for (let left = written - salvagePatch(source).length; left > 0; left--) lost.push('')
+    }
+    for (const call of body.matchAll(CALLS)) {
+      try {
+        parseArgs(call[2])
+      } catch {
+        lost.push(call[0])
+      }
+    }
+  }
+  const read = readUpdates(state, text)
+  const next = read.state
+  const steps = read.commands.map(command => {
+    const keys = commandKeys(command)
+    const kind = command.exact?.op?.op ?? command.exact?.call ?? command.type
+    const base = { command, text: String(command.full_match ?? ''), path: keys.join('.') }
+    if (!keys.length) return { ...base, did: 'idle', why: 'nothing' }
+    const known = keys.findIndex((_, at) => readRaw(next, keys.slice(0, at + 1)) === undefined)
+    const was = readValue(next, keys)
+    const holder = known > 0 ? readRaw(next, keys.slice(0, known)) : known === 0 ? next : null
+    const changed = runCommands(next, [command]).length > 0
+    if (!changed) {
+      const why = /^(remove|delete|unset)$/.test(kind) ? 'missing' : /^(delta|add)$/.test(kind) && was !== undefined ? 'notNumber' : /^(move|copy)$/.test(kind) ? 'noFrom' : 'nothing'
+      return { ...base, did: 'idle', why }
+    }
+    // An item put at the end of a list, or a key taken out, writes no new name.
+    if (known < 0 || keys[known] === '-' || /^(remove|delete|unset)$/.test(kind)) return { ...base, did: 'set' }
+    return { ...base, did: 'new', added: keys.slice(0, known + 1).join('.'), group: isGroup(holder) }
+  })
+  return { lost, steps }
+}
+
+/** The keys a command (readUpdates) writes to: a move's or copy's the place it puts the value. */
+function commandKeys(command) {
+  if (command?.exact?.op) return statKeys(command.exact.op.path)
+  if (command?.exact?.call) return command.exact.keys
+  if (!Array.isArray(command?.args)) return []
+  const at = argValue(command.type === 'move' || command.type === 'copy' ? command.args[1] : command.args[0])
+  return typeof at === 'string' ? statKeys(at) : []
+}
+
+/** A list, or an object of two or more objects (one per character, item, place…): new keys there are new entries. */
+function isGroup(holder) {
+  if (Array.isArray(holder)) return true
+  if (!holder || typeof holder !== 'object') return false
+  const values = Object.values(holder)
+  return values.length >= 2 && values.every(value => value && typeof value === 'object' && !Array.isArray(value) && !isDescribed(value))
 }
 
 /** Runs `commands` on `next` itself. → the paths they set. */
@@ -386,11 +454,15 @@ function salvagePatch(source) {
   return ops
 }
 
+/** The text of each JSON Patch array inside an update block: <JSONPatch> tags (a cut-off reply may not close them), else a bare top-level array. */
+function patchSources(body) {
+  const tagged = [...body.matchAll(/<JSONPatch>([\s\S]*?)(?:<\/JSONPatch>|$)/gi)].map(m => m[1])
+  return tagged.length ? tagged : (/^\s*\[[\s\S]*\]\s*$/m.test(body) ? [body.slice(body.indexOf('['), body.lastIndexOf(']') + 1)] : [])
+}
+
 /** Every JSON Patch array inside an update block: <JSONPatch> tags (a cut-off reply may not close them), else a bare top-level array. */
 function jsonPatches(body) {
-  const tagged = [...body.matchAll(/<JSONPatch>([\s\S]*?)(?:<\/JSONPatch>|$)/gi)].map(m => m[1])
-  const sources = tagged.length ? tagged : (/^\s*\[[\s\S]*\]\s*$/m.test(body) ? [body.slice(body.indexOf('['), body.lastIndexOf(']') + 1)] : [])
-  return sources.flatMap(source => {
+  return patchSources(body).flatMap(source => {
     const whole = parseLoose(source)
     if (Array.isArray(whole)) return [whole]
     const ops = salvagePatch(source)

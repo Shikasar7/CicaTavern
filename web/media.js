@@ -3,12 +3,13 @@
 // Nothing here changes what the model sees.
 import { applyGain, levelGain, loudnessDb, readyVoiceSources, sourcesToAsk, speechChunks, wavBytes } from '/shared/speech.js'
 import { hasMarks, speakerNames, splitLines } from '/shared/vn.js'
-import { comboBox, createMenu, MENU_ICONS, whoLine } from '/menu.js'
+import { ACTION_ICONS, comboBox, createMenu, MENU_ICONS, whoLine } from '/menu.js'
 import { locale, t, zh } from '/i18n.js'
 import { NAI_MODELS, historyStrip, keptItems } from '/draw-choice.js'
-import { GEMINI_IMAGE_MODELS, IMAGE_MODEL, STYLE_PRESETS, currentImagePreset, imagePresetOf, stylePresetOf } from '/shared/draw.js'
+import { GEMINI_IMAGE_MODELS, IMAGE_MODEL, STYLE_PRESETS, findAnchor, currentImagePreset, imagePresetOf, stylePresetOf } from '/shared/draw.js'
 import { matchesTerms, searchBox, searchTerms } from '/books.js'
 import { blackBars } from '/shared/cutout.js'
+import { zoomedQuery } from '/theme.js'
 
 // How loud reading aloud is on this device (声音 in the visual novel mode).
 const VOICE_VOLUME_KEY = 'cicatavern.voiceVolume'
@@ -218,7 +219,42 @@ function browserVoice(ref) {
  * @param deps - { api, el, toast, guard, getChat, getModels, openProviders, saveFile,
  *   pickDraw(options) (web/draw-choice.js: the 画图方式 and model for one picture) }
  */
-export function initMedia({ api, el, toast, guard, getChat, getModels, openProviders, saveFile, pickDraw, pickPicture = null, openGallery = null, onPictures = () => {} }) {
+// 常用服装 for a 衣柜: a name to call it by and the tags it is drawn with, to pick and change.
+const OUTFITS = [
+  [t`校服`, 'white sailor shirt, navy pleated skirt, red neckerchief, black knee socks, loafers'],
+  [t`西式校服`, 'navy blazer, white dress shirt, striped necktie, grey pleated skirt, black thighhighs'],
+  [t`男生制服`, 'black gakuran, stand collar, black trousers'],
+  [t`运动服`, 'white gym shirt, navy track jacket, navy track pants, sneakers'],
+  [t`睡衣`, 'light blue pajamas, button-up pajama shirt, long pajama pants'],
+  [t`睡裙`, 'white nightgown, lace trim, bare feet'],
+  [t`浴衣`, 'floral yukata, obi, geta'],
+  [t`和服`, 'kimono, wide sleeves, embroidered obi, zori'],
+  [t`旗袍`, 'china dress, high collar, side slit, floral embroidery'],
+  [t`汉服`, 'hanfu, wide sleeves, flowing long skirt, sash'],
+  [t`礼服`, 'evening gown, long dress, bare shoulders, earrings, high heels'],
+  [t`婚纱`, 'white wedding dress, bridal veil, white gloves, bouquet'],
+  [t`西装`, 'black suit, white dress shirt, black necktie, dress shoes'],
+  [t`职业装`, 'white blouse, black pencil skirt, black jacket, pantyhose, high heels'],
+  [t`白大褂`, 'white lab coat, shirt, trousers'],
+  [t`护士服`, 'white nurse uniform, nurse cap'],
+  [t`警服`, 'police uniform, police hat, necktie, belt'],
+  [t`军装`, 'military uniform, epaulettes, belt, boots'],
+  [t`女仆装`, 'black maid dress, white frilled apron, maid headdress'],
+  [t`围裙`, 'casual shirt, apron, rolled up sleeves'],
+  [t`便装`, 'hoodie, jeans, sneakers'],
+  [t`毛衣`, 'oversized knit sweater, long skirt'],
+  [t`大衣`, 'long wool coat, scarf, turtleneck sweater, boots'],
+  [t`羽绒服`, 'puffer jacket, scarf, beanie, mittens'],
+  [t`雨衣`, 'yellow raincoat, hood up, rubber boots'],
+  [t`夏装`, 'white sundress, straw hat, sandals'],
+  [t`泳装`, 'one-piece swimsuit'],
+  [t`斗篷`, 'hooded cloak, travel clothes, leather boots'],
+  [t`铠甲`, 'plate armor, gauntlets, cape'],
+  [t`法袍`, 'wizard robe, long sleeves, ornate trim, pendant'],
+]
+const WARDROBE_MAX = 7 // besides the usual outfit (server/roster.mjs)
+
+export function initMedia({ popMenu, api, el, toast, guard, getChat, getModels, openProviders, saveFile, pickDraw, pickPicture = null, openGallery = null, onPictures = () => {}, onCgs = () => {}, getCards = null, onWear = () => {} }) {
   const $ = id => document.getElementById(id)
   // The settings window (配图与朗读) as a menu of parts (web/menu.js).
   const settingsMenu = createMenu({ dialog: $('media-dialog'), form: $('media-form'), el, title: t`配图与朗读`, onPage: (_, left) => left === 'voice' && settleVoiceKeys() })
@@ -285,7 +321,8 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     }) : []
     try {
       // Folded reasoning is not part of the story.
-      const storyText = s => [...s.children].filter(c => !c.matches('details.fold')).map(c => c.innerText.trim()).filter(Boolean).join('\n\n')
+      // Nor is a picture standing in it (its buttons have words).
+      const storyText = s => [...s.children].filter(c => !c.matches('details.fold, .reply-images')).map(c => c.innerText.trim()).filter(Boolean).join('\n\n')
       const stories = box ? [...box.querySelectorAll('.msg-body .story')].map(storyText).filter(Boolean) : []
       return stories.length ? stories.join('\n\n') : node.text ?? ''
     } finally {
@@ -297,22 +334,172 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
 
   // ─── Reply tools ──────────────────────────────────────────────────────
 
+  const jobLabel = job => (job?.stage === 'prompt' ? t`写提示词…` : job ? t`配图中…` : '')
+  const actIcon = name => el('span', { class: 'act-icon', html: ACTION_ICONS[name] })
+  const DRAW_HINT = t`辅助模型在后台描述这一幕，写好了弹出来让你确认，再交给生图模型`
+
+  /** 配图 (its other ways behind the small arrow) and 朗读, for a message's bar. */
   function toolsFor(node) {
     const reading = player.nodeId === node.id
-    const job = state.jobs.get(node.id)
-    const label = job?.stage === 'prompt' ? t`写提示词…` : job ? t`配图中…` : t`配图`
+    const busy = jobLabel(state.jobs.get(node.id))
     return [
-      el('button', { text: label, disabled: Boolean(job), title: t`辅助模型在后台描述这一幕，写好了弹出来让你确认，再交给生图模型`, onclick: () => writePrompt(node) }),
-      el('button', { text: t`提示词库`, disabled: Boolean(job), title: t`用以前画过或存下的提示词给这段配图，可以先改再画`, onclick: () => openLibrary({ node, chatId: getChat()?.id }) }),
-      el('button', { text: t`选图`, disabled: Boolean(job), title: t`从图库（画过的配图、背景、立绘、卡的 CG）选一张，或上传本地图片，当这段的配图`, onclick: () => choosePicture(node) }),
-      el('button', { class: reading ? 'on' : '', text: reading ? t`停止朗读` : t`朗读`, title: t`对白用角色音色，旁白用旁白音色。只想听某一句：直接点那句对白`, onclick: () => (reading ? player.stop() : readNode(node)) }),
+      el('span', { class: 'act-split' }, [
+        el('button', { type: 'button', class: 'act', disabled: Boolean(busy), title: busy || t`配图：${DRAW_HINT}`, 'aria-label': t`配图`, onclick: () => writePrompt(node) }, [actIcon('picture'), busy ? el('span', { class: 'act-text', text: busy }) : null]),
+        busy ? null : el('button', { type: 'button', class: 'act act-caret', title: t`配图的其他办法`, 'aria-label': t`配图的其他办法`, 'aria-haspopup': 'menu', 'aria-expanded': 'false', onclick: event => popMenu(event.currentTarget, menuFor(node).filter(entry => entry.id !== 'read'), { left: true }) }, [actIcon('down')]),
+      ]),
+      el('button', { type: 'button', class: `act${reading ? ' on' : ''}`, title: reading ? t`停止朗读` : t`朗读：对白用角色音色，旁白用旁白音色。只想听某一句：直接点那句对白`, 'aria-label': reading ? t`停止朗读` : t`朗读`, onclick: () => (reading ? player.stop() : readNode(node)) }, [actIcon(reading ? 'stop' : 'voice')]),
     ]
+  }
+
+  /** The same as menu entries (app.js popMenu), each with its id: draw, library, pick, read. Those of a picture wait for the one in the works. */
+  function menuFor(node) {
+    const job = state.jobs.get(node.id)
+    const reading = player.nodeId === node.id
+    const wait = run => () => (state.jobs.has(node.id) ? toast(jobLabel(state.jobs.get(node.id))) : run())
+    return [
+      { id: 'draw', icon: 'picture', label: job ? jobLabel(job) : t`配图`, sub: t`先写提示词，给你看过再画`, hint: DRAW_HINT, onClick: wait(() => writePrompt(node)) },
+      { id: 'library', icon: 'library', label: t`提示词库`, sub: t`用以前画过或存下的提示词`, hint: t`用以前画过或存下的提示词给这段配图，可以先改再画`, onClick: wait(() => openLibrary({ node, chatId: getChat()?.id })) },
+      { id: 'pick', icon: 'upload', label: t`选图`, sub: t`从图库选一张，或上传本地图片`, hint: t`从图库（画过的配图、背景、立绘、卡的 CG）选一张，或上传本地图片，当这段的配图`, onClick: wait(() => choosePicture(node)) },
+      hasWardrobe() ? { id: 'wear', icon: 'wear', label: t`换衣服…`, sub: t`谁现在穿哪一套，从这里起生效`, onClick: () => openWear() } : null,
+      { id: 'read', icon: reading ? 'stop' : 'voice', label: reading ? t`停止朗读` : t`朗读`, onClick: () => (reading ? player.stop() : readNode(node)) },
+    ].filter(Boolean)
   }
 
   // ─── Pictures ─────────────────────────────────────────────────────────
   // Both steps run in the background: the prompt is written while you keep
   // reading or typing, a dialog asks once it is ready, the picture is drawn
   // under the reply. Jobs remember their chat, so switching chats is fine.
+
+  // A picture's place by its shape: a wide one takes the column, a square one less, a tall one the width it always had.
+  const shapes = new Map() // file → shape, for pictures recorded without their size, as they were when loaded
+  const shapeClass = (width, height) => (width / height >= 1.2 ? ' wide' : width / height > 0.85 ? ' square' : '')
+  const pendingShape = () => ({ landscape: ' wide', square: ' square' })[state.settings?.imageShape ?? 'square'] ?? ''
+
+  // 图片大小: the width in % of the column, kept on this device. A picture's own (the slider on it) comes before the one
+  // for all (the slider in its ⋯); without either its shape decides. A picture drawn over another keeps that one's.
+  const SIZE_KEY = 'cicatavern.pictureSize'
+  const SIZE_RANGE = [25, 100]
+  const OWN_SIZES = 500
+  const sizes = { all: 0, own: {} }
+  try {
+    const kept = JSON.parse(localStorage.getItem(SIZE_KEY)) ?? {}
+    Object.assign(sizes, { all: Number(kept.all) || 0, own: kept.own && typeof kept.own === 'object' ? kept.own : {} })
+  } catch {
+    // Private mode, or nothing kept.
+  }
+  function keepSizes() {
+    const own = Object.entries(sizes.own)
+    if (own.length > OWN_SIZES) sizes.own = Object.fromEntries(own.slice(-OWN_SIZES))
+    try {
+      localStorage.setItem(SIZE_KEY, JSON.stringify(sizes))
+    } catch {
+      // Gone with the page.
+    }
+  }
+  const filesOf = image => [image?.file, ...(image?.history ?? []).map(old => old.file)].filter(Boolean)
+  const ownSize = image => filesOf(image).map(file => sizes.own[file]).find(Boolean) ?? 0
+  function sized(figure, image) {
+    const size = ownSize(image) || sizes.all
+    figure.classList.toggle('sized', size > 0)
+    if (size) figure.style.setProperty('--pic-size', size)
+    else figure.style.removeProperty('--pic-size')
+    return figure
+  }
+  /** Every picture of the chat on the page, as the sizes are now. */
+  function resizeAll(chat) {
+    for (const node of chat.path) {
+      const images = new Map((node.media?.images ?? []).map(image => [image.file, image]))
+      for (const figure of document.querySelectorAll(`[data-node-pictures="${CSS.escape(node.id)}"]`)) sized(figure, images.get(figure.dataset.file))
+    }
+  }
+
+  const ownSet = (image, size) => {
+    for (const file of filesOf(image)) delete sizes.own[file]
+    if (size) sizes.own[image.file] = size
+  }
+  const sizeNow = figure => Math.min(SIZE_RANGE[1], Math.max(SIZE_RANGE[0], Math.round((figure.offsetWidth / (figure.parentElement?.clientWidth || 1)) * 100)))
+
+  const sizeRange = label => el('input', { type: 'range', min: SIZE_RANGE[0], max: SIZE_RANGE[1], step: 1, 'aria-label': label })
+
+  /**
+   * A picture's own slider, at its top left corner, the one that stays where it is as the picture grows and shrinks: the
+   * picture follows as it is dragged. Not on a phone, where they all take the column (style.css).
+   */
+  function sizeBar(image) {
+    const value = el('span', { class: 'pic-size-value' })
+    const range = sizeRange(t`这张图的大小`)
+    const reset = el('button', { type: 'button', class: 'pic-size-reset', title: t`跟着所有图的大小`, 'aria-label': t`跟着所有图的大小` }, [actIcon('back')])
+    const bar = el('div', { class: 'pic-size', title: t`只改这张图的大小；所有图的大小在「⋯」里` }, [range, value, reset])
+    // As wide as the picture is now: not known till it is on the page.
+    bar.read = () => {
+      const figure = bar.closest('.reply-image')
+      if (!figure?.offsetWidth || bar.classList.contains('held')) return
+      range.value = ownSize(image) || sizes.all || sizeNow(figure)
+      value.textContent = `${range.value}%`
+      reset.hidden = !ownSize(image)
+    }
+    bar.addEventListener('focusin', bar.read)
+    range.addEventListener('input', () => {
+      ownSet(image, Number(range.value))
+      sized(bar.closest('.reply-image'), image)
+      value.textContent = `${range.value}%`
+      reset.hidden = false
+    })
+    range.addEventListener('change', keepSizes)
+    range.addEventListener('pointerdown', () => bar.classList.add('held'))
+    for (const type of ['pointerup', 'pointercancel', 'lostpointercapture', 'change', 'blur']) range.addEventListener(type, () => bar.classList.remove('held'))
+    reset.addEventListener('click', () => {
+      ownSet(image, 0)
+      keepSizes()
+      sized(bar.closest('.reply-image'), image)
+      bar.read()
+    })
+    return bar
+  }
+
+  /** The slider in ⋯, for every picture without a size of its own. → menu entries, none on a phone. */
+  function sizeEntries(chat, image) {
+    const figure = document.querySelector(`.reply-image[data-file="${CSS.escape(image.file)}"]`)
+    if (!figure || matchMedia(zoomedQuery('(max-width: 560px)')).matches) return []
+    const value = el('span', { class: 'pic-size-value' })
+    const range = sizeRange(t`所有图的大小`)
+    const reset = el('button', { type: 'button', class: 'pic-size-default', text: t`恢复默认`, title: t`按图的横竖来` })
+    const show = () => {
+      range.value = sizes.all || sizeNow(figure)
+      value.textContent = sizes.all ? `${sizes.all}%` : t`按横竖`
+      reset.disabled = !sizes.all
+    }
+    // The pictures above change too: this one stays where it is.
+    const resized = () => {
+      const top = figure.getBoundingClientRect().top
+      resizeAll(chat)
+      const moved = figure.getBoundingClientRect().top - top
+      const page = figure.closest('#transcript')
+      if (moved && page) page.scrollTop += moved
+    }
+    range.addEventListener('input', () => {
+      sizes.all = Number(range.value)
+      resized()
+      value.textContent = `${sizes.all}%`
+      reset.disabled = false
+    })
+    range.addEventListener('change', keepSizes)
+    reset.addEventListener('click', () => {
+      sizes.all = 0
+      keepSizes()
+      resized()
+      show()
+    })
+    show()
+    return [
+      { node: el('div', { class: 'pic-sizes' }, [
+        el('div', { class: 'pic-sizes-head' }, [el('span', { text: t`所有图的大小` }), value, reset]),
+        range,
+        el('small', { text: t`单独调过的图不变；只记在这台设备上` }),
+      ]) },
+      '-',
+    ]
+  }
 
   function gallery(chat, node) {
     const images = node.media?.images ?? []
@@ -324,9 +511,9 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     const inPlace = job?.replace && images.some(image => image.file === job.replace)
     return el('div', { class: 'reply-images', 'data-gallery': node.id }, [
       ...images.map(image => {
-        if (inPlace && image.file === job.replace) return pendingFigure(job)
+        if (inPlace && image.file === job.replace) return sized(pendingFigure(job, image.anchor), image)
         const fresh = state.fresh.delete(image.file)
-        const img = el('img', { src: `/api/media/${chat.id}/${image.file}`, alt: image.prompt, loading: fresh ? 'eager' : 'lazy', class: fresh ? 'fresh' : null, style: fresh ? `--ratio: ${ratioOf()}` : null, onclick: () => viewImage(chat, node, image) })
+        const img = el('img', { src: `/api/media/${chat.id}/${image.file}`, alt: image.prompt, loading: fresh ? 'eager' : 'lazy', width: image.width, height: image.height, class: fresh ? 'fresh' : null, style: fresh ? `--ratio: ${ratioOf()}` : null, onclick: () => viewImage(chat, node, image) })
         // A new picture develops out of the blurred frame it replaced.
         if (fresh) {
           // Timers, not animation frames: those pause while the window is in the background.
@@ -337,20 +524,180 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         }
         const old = image.history?.length ?? 0
         const open = old > 0 && state.openOld.has(image.file)
-        return el('figure', { class: 'reply-image' }, [
-          img,
-          el('figcaption', {}, [
-            el('button', { type: 'button', text: t`重画`, title: image.prompt ? t`同一段提示词再画一张换掉这张，可以先选画图方式和模型；这张留在旧图里` : t`这张没有提示词（选来或上传的图）：先「改提示词」写一段再画`, disabled: Boolean(job) || !image.prompt, onclick: () => redraw(node, image, chat.id) }),
-            el('button', { type: 'button', text: t`改提示词`, disabled: Boolean(job), onclick: () => editPrompt(chat.id, node, image) }),
-            el('button', { type: 'button', text: t`换一张`, title: t`从图库选一张或上传本地图片换掉这张；这张留在旧图里`, disabled: Boolean(job), onclick: () => choosePicture(node, image.file) }),
-            el('button', { type: 'button', text: t`删除`, onclick: () => removeImage(node, image) }),
-            old ? el('button', { type: 'button', text: t`旧图 ${old}`, title: t`这张重画之前的几张：点一张换回来`, 'aria-expanded': String(open), onclick: () => toggleOld(node, image) }) : null,
+        const figure = el('figure', { 'data-anchor': image.anchor, 'data-file': image.file, 'data-node-pictures': node.id, class: `reply-image${image.width > 0 && image.height > 0 ? shapeClass(image.width, image.height) : shapes.get(image.file) ?? ''}` }, [
+          el('div', { class: 'reply-art', onpointerenter: event => event.currentTarget.querySelector('.pic-size')?.read() }, [
+            img,
+            sizeBar(image),
+            // Its buttons lie on it: 重画, and the rest behind ⋯.
+            el('div', { class: 'reply-acts' }, [
+              image.prompt ? el('button', { type: 'button', class: 'reply-act', title: t`同一段提示词再画一张换掉这张，可以先选画图方式和模型；这张留在旧图里`, disabled: Boolean(job), onclick: () => redraw(node, image, chat.id) }, [actIcon('redo'), el('span', { text: t`重画` })]) : null,
+              el('button', { type: 'button', class: 'reply-act', title: t`更多`, 'aria-label': t`这张图：更多`, 'aria-haspopup': 'menu', 'aria-expanded': 'false', onclick: event => popMenu(event.currentTarget, pictureMenu(chat, node, image), { sheet: true }) }, [actIcon('more')]),
+            ]),
           ]),
           open ? oldPictures(chat, node, image) : null,
         ])
+        if (!(image.width > 0) && !shapes.has(image.file)) {
+          img.addEventListener('load', () => {
+            shapes.set(image.file, shapeClass(img.naturalWidth, img.naturalHeight))
+            figure.className = `reply-image${shapes.get(image.file)}`
+            sized(figure, image)
+          }, { once: true })
+        }
+        return sized(figure, image)
       }),
-      job && !inPlace ? pendingFigure(job) : failed ? failedFigure(node, failed) : null,
+      job && !inPlace ? sized(pendingFigure(job, job.anchor)) : failed ? failedFigure(node, failed) : null,
     ].filter(Boolean))
+  }
+
+  // ─── 衣柜: who wears what in this chat (server/wear.mjs) ─────────────────
+
+  /** Whether the open chat's card has somebody with more than the usual outfit. */
+  const hasWardrobe = () => Boolean(getCards?.().find(card => card.id === getChat()?.cardId)?.wardrobe)
+
+  /** 换衣服: a choice per person, from the newest message on; an outfit of this chat's alone can go into the card's 衣柜. */
+  const openWear = guard(async () => {
+    const chat = getChat()
+    if (!chat) return
+    let { people } = await api(`/api/chats/${chat.id}/wear`)
+    const usualOr = outfit => (outfit.id === 'usual' ? t`平时` : outfit.name)
+    const picks = new Map()
+    const rows = el('div', { class: 'wear-rows' })
+    const drawRows = () => rows.replaceChildren(...people.map(person => {
+      const key = outfit => outfit.id || `:${outfit.name}`
+      const select = el('select', { 'aria-label': t`${person.name} 穿` }, person.outfits.map(outfit => el('option', { value: key(outfit), text: outfit.when ? t`${usualOr(outfit)}（${outfit.when}）` : usualOr(outfit), selected: key(outfit) === key(person.now) })))
+      const now = person.outfits.find(outfit => key(outfit) === key(person.now))
+      const note = el('div', { class: 'wear-note hint' })
+      const say = () => {
+        const outfit = person.outfits.find(item => key(item) === select.value)
+        note.replaceChildren(...[
+          el('span', { text: outfit.tags || (outfit.temp ? t`剧情里提到的，第一次画图时写出样子` : t`还没写衣着`) }),
+          outfit.temp && outfit.tags ? el('button', { type: 'button', class: 'btn small ghost', text: t`收进衣柜`, onclick: guard(async () => {
+            people = (await api(`/api/chats/${chat.id}/wear/keep`, { method: 'POST', body: { id: person.id, name: outfit.name } })).people
+            drawRows()
+            toast(t`「${outfit.name}」收进了 ${person.name} 的衣柜`)
+          }) }) : null,
+        ].filter(Boolean))
+      }
+      select.addEventListener('change', () => {
+        const outfit = person.outfits.find(item => key(item) === select.value)
+        if (key(outfit) === key(now)) picks.delete(person.id)
+        else picks.set(person.id, outfit.id ? { id: outfit.id } : { name: outfit.name })
+        say()
+      })
+      say()
+      return el('div', { class: 'wear-row' }, [el('b', { text: person.name }), select, note])
+    }))
+    drawRows()
+    const dialog = el('dialog', { class: 'dialog wear', 'aria-label': t`换衣服` }, [
+      el('form', { method: 'dialog' }, [
+        el('h3', { text: t`换衣服` }),
+        rows,
+        el('p', { class: 'hint', text: t`从最新这一条起生效：之后的配图和剧情都按这一套。剧情里写到换衣服时会自己改。衣柜在「配图与朗读 → 角色名册」里加。` }),
+        el('div', { class: 'row end' }, [
+          el('button', { type: 'button', class: 'btn', text: t`取消`, onclick: () => shut() }),
+          el('button', { type: 'button', class: 'btn primary', text: t`换上`, onclick: guard(async () => {
+            if (!picks.size) return shut()
+            await api(`/api/chats/${chat.id}/wear`, { method: 'PUT', body: { wear: Object.fromEntries(picks) } })
+            shut()
+            onWear(chat.id)
+            toast(t`换好了`)
+          }) }),
+        ]),
+      ]),
+    ])
+    const shut = () => {
+      dialog.close()
+      dialog.remove()
+    }
+    dialog.addEventListener('close', () => dialog.remove())
+    document.body.append(dialog)
+    dialog.showModal()
+  })
+
+  const canKeepCg = chat => Boolean(chat?.cardId) && chat.cardId !== 'direct'
+
+  /** 存为 CG: the picture copied into the card's CG (server/card-cgs.mjs), into a group it has or a new one. */
+  const keepCg = guard(async (chat, node, image) => {
+    const { groups } = await api(`/api/cards/${chat.cardId}/cgs`)
+    const pick = el('select', {}, [el('option', { value: '', text: t`新建一组…` }), ...groups.map(group => el('option', { value: group.id, text: t`${group.name}（${group.pictures?.length ?? 0} 张）` }))])
+    const name = el('input', { maxlength: '40', value: String(image.anchor ?? '').replace(/[\s「」“”"'，。！？…—【】|｜]/g, '').slice(0, 12), placeholder: t`谁、哪一幕，比如：林青禾-雨夜告白` })
+    const note = el('input', { maxlength: '80', placeholder: t`可以不写，比如：两人第一次说开的那晚` })
+    const fresh = el('div', { class: 'stack' }, [
+      el('label', {}, [t`组名`, name]),
+      el('label', {}, [t`什么时候放`, note, el('span', { class: 'hint', text: t`模型只看得到组名和说明：写到这一幕时会标上这一组，画面换成它。` })]),
+    ])
+    pick.addEventListener('change', () => (fresh.hidden = Boolean(pick.value)))
+    const dialog = el('dialog', { class: 'dialog cg-keep', 'aria-label': t`存为 CG` }, [
+      el('form', { method: 'dialog' }, [
+        el('h3', { text: t`存为 CG` }),
+        el('img', { src: `/api/media/${chat.id}/${image.file}`, alt: '' }),
+        el('label', {}, [t`放进哪一组`, pick]),
+        fresh,
+        el('div', { class: 'row end' }, [
+          el('button', { type: 'button', class: 'btn', text: t`取消`, onclick: () => shut() }),
+          el('button', { type: 'button', class: 'btn primary', text: t`存下来`, onclick: guard(async () => {
+            if (!pick.value && !name.value.trim()) {
+              name.focus()
+              throw new Error(t`CG 组要有名字`)
+            }
+            const view = await api(`/api/chats/${chat.id}/nodes/${node.id}/image/cg`, { method: 'POST', body: { file: image.file, ...(pick.value ? { groupId: pick.value } : { name: name.value, note: note.value }) } })
+            shut()
+            onCgs(chat.cardId, view.groups)
+            toast(t`已存进 CG「${view.group.name}」，视觉小说的素材库里能改`)
+          }) }),
+        ]),
+      ]),
+    ])
+    // Taken out on the click: the close event does not come while the page is hidden.
+    const shut = () => {
+      dialog.close()
+      dialog.remove()
+    }
+    dialog.addEventListener('close', () => dialog.remove())
+    document.body.append(dialog)
+    dialog.showModal()
+    if (!groups.length) name.focus()
+  })
+
+  /**
+   * 配图放在画的那一句下面: a reply's pictures with an anchor taken from under it (gallery) to under the paragraph they are of.
+   * One whose words are not found (copied wrong, changed by a regex, the reply edited or a card's page) stays at the end.
+   * What reads the story off the page leaves .reply-images out (shownText here and in app.js, history.js).
+   */
+  function placePictures(box, node) {
+    for (const old of box.querySelectorAll('.reply-images.inline')) old.remove()
+    const end = box.querySelector(`[data-gallery="${CSS.escape(node.id)}"]`)
+    if (!end || (state.settings?.picturePlace ?? 'inline') !== 'inline') return
+    const figures = [...end.querySelectorAll('figure[data-anchor]')]
+    if (!figures.length) return
+    const paragraphs = [...box.querySelectorAll('.msg-body > .story > p')]
+    const texts = paragraphs.map(p => p.textContent)
+    const after = new Map() // paragraph → its box of pictures
+    for (const figure of figures) {
+      const p = paragraphs[findAnchor(texts, figure.dataset.anchor)]
+      if (!p) continue
+      if (!after.has(p)) {
+        after.set(p, el('div', { class: 'reply-images inline' }))
+        p.after(after.get(p))
+      }
+      after.get(p).append(figure)
+    }
+    if (!end.children.length) end.hidden = true
+  }
+
+  /** ⋯ on a picture. */
+  function pictureMenu(chat, node, image) {
+    const old = image.history?.length ?? 0
+    const wait = run => () => (state.jobs.has(node.id) ? toast(jobLabel(state.jobs.get(node.id))) : run())
+    return [
+      ...sizeEntries(chat, image),
+      { icon: 'edit', label: t`改提示词`, sub: image.prompt ? t`改完再画，换掉这张` : t`这张没有提示词：写一段再画，换掉这张`, onClick: wait(() => editPrompt(chat.id, node, image)) },
+      { icon: 'swap', label: t`换一张`, sub: t`从图库选或上传，这张留在旧图里`, hint: t`从图库选一张或上传本地图片换掉这张；这张留在旧图里`, onClick: wait(() => choosePicture(node, image.file)) },
+      canKeepCg(chat) ? { icon: 'star', label: t`存为 CG…`, sub: t`视觉小说里剧情再写到这一幕时全屏放`, onClick: () => keepCg(chat, node, image) } : null,
+      old ? { icon: 'old', label: t`旧图 ${old}`, sub: t`重画之前的几张，点一张换回来`, onClick: () => toggleOld(node, image) } : null,
+      '-',
+      { icon: 'remove', label: t`删除这张图`, danger: true, onClick: () => removeImage(node, image) },
+    ].filter(Boolean)
   }
 
   // ─── 抽图历史: the pictures one was drawn over (server/draw-history.mjs) ──
@@ -394,15 +741,16 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
   const elapsed = started => t`${Math.max(0, Math.round((Date.now() - started) / 1000))} 秒`
 
   /** A blurred frame the size of the picture to come, with what is happening and for how long. */
-  function pendingFigure(job) {
+  function pendingFigure(job, anchor = '') {
     const drawing = job.stage === 'draw'
-    return el('figure', { class: `reply-image pending${drawing ? ' drawing' : ''}`, style: `--ratio: ${ratioOf()}`, 'aria-busy': 'true' }, [
+    return el('figure', { 'data-anchor': anchor || null, class: `reply-image pending${pendingShape()}${drawing ? ' drawing' : ''}`, style: `--ratio: ${ratioOf()}`, 'aria-busy': 'true' }, [
       el('div', { class: 'pending-art' }, [
         el('div', { class: 'pending-mist' }),
         el('div', { class: 'pending-label', role: 'status' }, [
           el('span', { class: 'pending-dot' }),
           el('strong', { text: drawing ? t`正在画` : t`正在构思画面` }),
           el('span', { class: 'pending-meta' }, [
+            job.part ? `${job.part} · ` : '',
             drawing ? (job.backend ? `${job.backend} · ` : '') : t`写提示词 · `,
             el('span', { class: 'pending-time', 'data-started': String(job.started), text: elapsed(job.started) }),
           ]),
@@ -425,14 +773,14 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         el('p', { text: failure.message }),
         el('div', { class: 'failed-actions' }, [
           el('button', { type: 'button', class: 'btn small', text: t`重试`, onclick: () => retry(node, failure) }),
-          drawing ? el('button', { type: 'button', class: 'btn small ghost', text: t`改提示词`, onclick: () => openImageDialog(node, failure.prompt, { chatId: failure.chatId, note: t`没画出来：${failure.message}`, error: true, replace: failure.replace }) }) : null,
+          drawing ? el('button', { type: 'button', class: 'btn small ghost', text: t`改提示词`, onclick: () => openImageDialog(node, failure.prompt, { chatId: failure.chatId, shots: failure.shots?.length > 1 ? failure.shots : null, note: t`没画出来：${failure.message}`, error: true, replace: failure.replace, anchor: failure.anchor }) }) : null,
           el('button', { type: 'button', class: 'btn small ghost', text: t`关掉`, onclick: dismiss }),
         ]),
       ]),
     ])
   }
 
-  const retry = (node, failure) => (failure.stage === 'draw' ? draw(node, failure.prompt, failure.chatId, null, failure.replace) : writePrompt(node, failure.again ?? {}))
+  const retry = (node, failure) => (failure.shots ? drawShots(node, failure.shots, failure.chatId) : failure.stage === 'draw' ? draw(node, failure.prompt, failure.chatId, null, failure.replace, failure.anchor) : writePrompt(node, failure.again ?? {}))
 
   /**
    * The chat's pictures in the works and the ones that did not come, for where the replies are out of sight
@@ -469,6 +817,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     const box = article(nodeId)
     if (!node || !box) return
     box.querySelector(`[data-gallery="${CSS.escape(nodeId)}"]`)?.replaceWith(gallery(chat, node))
+    placePictures(box, node)
     box.querySelector('.msg-tools [data-media]')?.replaceWith(mediaTools(node))
   }
 
@@ -502,9 +851,9 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
    * failure stays where the picture would have been, with its reason
    * (`prompt` is what a retry draws; `replace`, the picture it draws over).
    */
-  async function runJob(node, chatId, stage, work, { prompt = '', reveal = false, backend = '', replace = '', again = null } = {}) {
+  async function runJob(node, chatId, stage, work, { prompt = '', reveal = false, backend = '', replace = '', anchor = '', again = null, part = '' } = {}) {
     if (state.jobs.has(node.id)) return null
-    const job = { stage, chatId, controller: new AbortController(), started: Date.now(), backend: backend || backendName(), replace }
+    const job = { stage, chatId, controller: new AbortController(), started: Date.now(), backend: backend || backendName(), replace, anchor, part }
     state.jobs.set(node.id, job)
     state.failures.delete(node.id)
     refreshNode(node.id)
@@ -513,7 +862,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     try {
       return await work(job.controller.signal)
     } catch (error) {
-      if (error.name !== 'AbortError') state.failures.set(node.id, { stage, chatId, prompt, replace, again, message: error.message })
+      if (error.name !== 'AbortError') state.failures.set(node.id, { stage, chatId, prompt, replace, anchor, again, message: error.message })
       return null
     } finally {
       state.jobs.delete(node.id)
@@ -526,35 +875,59 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
    * dialog opens (after any dialog already open closes). `auto` draws at once.
    * `moment`: the lines to picture, in place of the whole reply.
    */
-  async function writePrompt(node, { auto = false, moment = '' } = {}) {
+  async function writePrompt(node, { auto = false, moment = '', at = '' } = {}) {
     const chat = getChat()
     if (!chat) return
     const chatId = chat.id
     const body = moment ? { reply: moment, moment: true } : { reply: shownText(node) }
-    const data = await runJob(node, chatId, 'prompt', signal => postJson(`/api/chats/${chatId}/nodes/${node.id}/image-prompt`, body, signal), { reveal: !auto, again: moment ? { auto, moment } : null })
+    const data = await runJob(node, chatId, 'prompt', signal => postJson(`/api/chats/${chatId}/nodes/${node.id}/image-prompt`, body, signal), { reveal: !auto, again: moment ? { auto, moment, at } : null })
     if (!data) return
-    if (auto) return draw(node, data.prompt, chatId)
+    // `at`: the line 画 CG was asked at. Else what the one who wrote the prompt copied.
+    const anchor = at || data.anchor || ''
+    if (auto) return data.shots ? drawShots(node, data.shots, chatId) : draw(node, data.prompt, chatId, null, '', anchor)
     const how = data.inContext ? t`${data.model} 接着对话写的${data.cache !== null ? t`（缓存命中 ${data.cache}%）` : ''}` : t`${data.model} 写的`
-    whenNoDialog(() => openImageDialog(node, data.prompt, { chatId, note: t`${data.note ? `${data.note}` : ''}${how}，可以改，也可以「重写」。` }))
+    whenNoDialog(() => openImageDialog(node, data.prompt, { chatId, anchor, shots: data.shots ?? null, note: t`${data.note ? `${data.note}` : ''}${how}，可以改，也可以「重写」。` }))
   }
 
   /**
    * @param picked - { body, label } from pickDraw: the 画图方式 and model for this one; none = the settings'.
    * @param replace - the picture this one is drawn over (重画): it takes that one's place, which becomes an old one.
    */
-  async function draw(node, prompt, chatId = getChat()?.id, picked = null, replace = '') {
-    if (!chatId) return
+  async function draw(node, prompt, chatId = getChat()?.id, picked = null, replace = '', anchor = '', part = '') {
+    if (!chatId) return null
     // The picture joins the reply before the frame is taken down, so it takes the frame's place.
     const work = async signal => {
-      const data = await postJson(`/api/chats/${chatId}/nodes/${node.id}/image`, { prompt, ...(replace ? { replace } : {}), ...(picked?.body ?? {}) }, signal)
+      const data = await postJson(`/api/chats/${chatId}/nodes/${node.id}/image`, { prompt, ...(replace ? { replace } : {}), ...(anchor ? { anchor } : {}), ...(picked?.body ?? {}) }, signal)
       if (data.image?.file) state.fresh.add(data.image.file)
       // The one drawn over is right there to take back.
       if (replace && data.image?.file) state.openOld.add(data.image.file)
       adopt(data.chat, node.id)
       return data
     }
-    const data = await runJob(node, chatId, 'draw', work, { prompt, reveal: true, backend: picked?.label, replace })
+    const data = await runJob(node, chatId, 'draw', work, { prompt, reveal: !part || part.startsWith('1/'), backend: picked?.label, replace, anchor, part })
     if (data?.image?.note) toast(data.image.note, 12000)
+    return data
+  }
+
+  /**
+   * 一次画几张: one after another, each under its own line. One that fails is left out and told of at the end, to try
+   * again; 取消 stops them all.
+   * @param shots - [{ prompt, anchor }]
+   */
+  async function drawShots(node, shots, chatId = getChat()?.id, picked = null) {
+    const failed = []
+    let why = null
+    for (const [i, shot] of shots.entries()) {
+      const data = await draw(node, shot.prompt, chatId, picked, '', shot.anchor, shots.length > 1 ? `${i + 1}/${shots.length}` : '')
+      if (data) continue
+      why = state.failures.get(node.id)
+      if (!why) break
+      failed.push(shot)
+    }
+    if (!failed.length || state.jobs.has(node.id)) return
+    const last = state.failures.get(node.id) ?? why
+    state.failures.set(node.id, { stage: 'draw', chatId, prompt: failed[0].prompt, anchor: failed[0].anchor, replace: '', shots: failed, message: failed.length > 1 ? t`${failed.length} 张没画成：${last.message}` : last.message })
+    refreshNode(node.id)
   }
 
   /**
@@ -584,9 +957,9 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
   const editPrompt = (chatId, node, image) => openImageDialog(node, image.prompt, { chatId, note: t`这张图的提示词，改完点「画」：新画的换掉这张，这张留在旧图里。`, replace: image.file })
 
   /** 画 CG (the visual novel): the moment drawn at once, its picture joining the reply. False while that reply has one in the works. */
-  function drawMoment(node, moment) {
+  function drawMoment(node, moment, at = '') {
     if (state.jobs.has(node.id)) return false
-    writePrompt(node, { auto: true, moment })
+    writePrompt(node, { auto: true, moment, at })
     return true
   }
 
@@ -623,7 +996,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
    * The prompt is ready: draw it as is, edit it, or have it rewritten (in the background again).
    * @param options.replace - the picture it is drawn over (改提示词 under a picture).
    */
-  function openImageDialog(node, prompt, { chatId, note, error = false, replace = '' }) {
+  function openImageDialog(node, prompt, { chatId, note, error = false, replace = '', anchor = '', shots = null }) {
     const dialog = $('image-dialog')
     const box = $('image-prompt')
     const drawButton = $('image-draw')
@@ -632,22 +1005,36 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     box.value = prompt
     box.scrollTop = 0
     const pickButton = $('image-pick')
-    drawButton.disabled = pickButton.disabled = !prompt.trim()
-    box.oninput = () => { drawButton.disabled = pickButton.disabled = !box.value.trim() }
-    drawButton.onclick = () => {
-      const text = box.value.trim()
-      if (!text) return
+    // 一次画几张: a block for each, with its own box to leave it out; the library is for one at a time.
+    const blocks = (shots ?? []).map((shot, i) => {
+      const text = el('textarea', { rows: 5, spellcheck: false, 'aria-label': t`第 ${i + 1} 张的提示词` })
+      text.value = shot.prompt
+      const on = el('input', { type: 'checkbox', checked: true })
+      const where = shot.anchor ? el('span', { class: 'shot-line', text: shot.anchor, title: shot.anchor }) : null
+      return { on, text, anchor: shot.anchor, view: el('details', { class: 'image-shot', open: i === 0 }, [el('summary', {}, [el('label', { class: 'check' }, [on, el('b', { text: t`第 ${i + 1} 张` })]), where].filter(Boolean)), text]) }
+    })
+    const wanted = () => (blocks.length ? blocks.filter(block => block.on.checked).map(block => ({ prompt: block.text.value.trim(), anchor: block.anchor })).filter(shot => shot.prompt) : [box.value.trim()].filter(Boolean).map(text => ({ prompt: text, anchor })))
+    const ready = () => { drawButton.disabled = pickButton.disabled = !wanted().length }
+    const list = $('image-shots')
+    list.replaceChildren(...blocks.map(block => block.view))
+    list.oninput = ready
+    list.hidden = !blocks.length
+    for (const id of ['image-prompt', 'image-library', 'image-keep']) $(id).hidden = blocks.length > 0
+    const go = picked => {
+      const all = wanted()
+      if (!all.length) return
       dialog.close()
-      draw(node, text, chatId, null, replace)
+      if (blocks.length) drawShots(node, all, chatId, picked)
+      else draw(node, all[0].prompt, chatId, picked, replace, anchor)
     }
+    ready()
+    box.oninput = ready
+    drawButton.onclick = () => go(null)
     // This one with another 画图方式 or model; the picker opens over this window.
     pickButton.onclick = guard(async () => {
-      const text = box.value.trim()
-      if (!text) return
+      if (!wanted().length) return
       const picked = await pickDraw({ title: t`这张图用什么画` })
-      if (!picked) return
-      dialog.close()
-      draw(node, text, chatId, picked, replace)
+      if (picked) go(picked)
     })
     // The library and the settings open on top of this window: closing them comes back here.
     $('image-library').onclick = () => openLibrary({ node, chatId })
@@ -1258,9 +1645,11 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       option('chat', t`接着对话写（同一个模型，命中缓存，更贴合剧情）`, media.promptSource),
     ])
     const promptStyle = el('select', { name: 'promptStyle' }, [option('natural', t`自然语言（grok、gpt-image、Flux、NovelAI V5）`, media.promptStyle), option('tags', t`标签（SD / SDXL 工作流、NovelAI）`, media.promptStyle)])
-    const promptDetail = el('select', { name: 'promptDetail' }, [option('brief', t`简洁`, media.promptDetail), option('standard', t`标准`, media.promptDetail), option('detailed', t`详细`, media.promptDetail)])
+    const imageCount = el('select', { name: 'imageCount' }, [1, 2, 3, 4].map(n => option(String(n), n === 1 ? t`1 张` : t`${n} 张`, String(media.imageCount ?? 1))))
+    const promptDetail = el('select', { name: 'promptDetail' }, [option('brief', t`简洁`, media.promptDetail), option('standard', t`标准`, media.promptDetail), option('detailed', t`详细`, media.promptDetail), option('full', t`详细（不截断）`, media.promptDetail)])
     const promptRules = rulesField('promptRules', media.promptRules ?? '', RULES_MAX.media, t`例如：\n- 开头加上 masterpiece, best quality\n- 多写光影和镜头，少写表情\n- 不要出现血和伤口`)
     const autoImage = el('input', { type: 'checkbox', name: 'autoImage', checked: media.autoImage })
+    const picturePlace = el('select', { name: 'picturePlace' }, [option('inline', t`画的那一句下面`, media.picturePlace ?? 'inline'), option('end', t`回复末尾`, media.picturePlace ?? 'inline')])
     // 抽图历史: how many old pictures each place keeps (server/draw-history.mjs).
     const keepNow = String(media.drawHistory ?? 5)
     const drawHistory = el('select', { name: 'drawHistory' }, [...new Set(['0', '1', '2', '3', '5', '8', '10', '20', keepNow])].sort((a, b) => a - b).map(n => option(n, n === '0' ? t`不留旧图` : t`留 ${n} 张旧图`, keepNow)))
@@ -1872,6 +2261,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
           sdBox,
           naiBox,
           ...ownBoxes,
+          field(t`配图放在`, picturePlace, t`画的那一句下面：写提示词的模型照抄一句原文，图就插在那一段后面；找不到那句话的（照抄错了、卡的界面里）和以前画的仍放在末尾。`),
           field(t`重画后留几张旧图`, drawHistory, t`配图、人设图、立绘和表情、场景、头像重画或换图后，每处留最近这么多张旧图，点一张就能换回来；再多的从最旧的删。调小了，每处下次重画时删到这个数。旧图不随对话包和角色卡导出。`),
         ],
       }),
@@ -1883,6 +2273,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
             promptSource.value === 'chat' ? t`接着对话写` : helper.selectedOptions[0]?.text.split(' · ').at(-1),
             promptStyle.selectedOptions[0]?.text.split(t`（`)[0],
             promptDetail.selectedOptions[0]?.text,
+            Number(imageCount.value) > 1 ? t`一次 ${imageCount.value} 张` : '',
             promptRules.box.value.trim() ? t`有额外要求` : '',
           ]
             .filter(Boolean)
@@ -1893,8 +2284,10 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
             field(t`辅助模型`, helper, helperChoices.length ? '' : t`还没有供应商的模型`),
             field(t`提示词写法`, promptStyle),
             field(t`详细程度`, promptDetail),
+            field(t`一次画几张`, imageCount),
           ]),
-          el('p', { class: 'hint', text: t`详细程度：简洁几十个词，只写人、动作、地点和景别；标准六十到一百词；详细一百多词，写满衣服细节、手、背景物件和光线，适合 Flux、Krea 2、gpt-image 这类读句子的模型。标签太多 SD 系反而容易乱，一般用标准。` }),
+          el('p', { class: 'hint', text: t`详细程度：简洁几十个词，只写人、动作、地点和景别；标准六十到一百词；详细一百多词，写满衣服细节、手、背景物件和光线；「不截断」更长，模型写多少用多少，这两档适合 Flux、Krea 2、gpt-image 这类读句子的模型。标签太多 SD 系反而容易乱，一般用标准。` }),
+          el('p', { class: 'hint', text: t`一次画几张：一条回复一次写几段提示词，画不同的瞬间或机位，一张一张地画，每张放在自己那一句下面；自动配图也按这个数。每张都算一次生图，视觉小说里的「画 CG」始终一张。` }),
           field(t`写提示词的额外要求（所有卡通用）`, promptRules.box, t`写给写提示词的模型看：用什么词、先写什么、什么不要写，和默认写法不一样的地方以这里为准。也可以从 .md / .txt 读入，比如别人分享的生图提示词 skill。只用于对话配图；每张卡还能在「画风与 LoRA」里再加。`),
           promptRules.tools,
         ],
@@ -2346,6 +2739,8 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       player: get('player').checked,
       looks: get('looks').value,
       outfit: get('outfit').value,
+      wearPath: get('wearPath').value.trim(),
+      wardrobe: [...box.querySelectorAll('.outfit-row')].map(row => ({ id: row.dataset.id, name: row.querySelector('[data-outfit="name"]').value, tags: row.querySelector('[data-outfit="tags"]').value, when: row.querySelector('[data-outfit="when"]').value })).filter(item => item.name.trim()),
       lora: get('lora').value,
       loraTrigger: get('loraTrigger').value,
       loraStrength: Number(get('loraStrength').value || 0.8),
@@ -2370,6 +2765,8 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     const option = (value, text, selected) => el('option', { value, text, selected: value === selected })
     // How an entry takes a change the helper found in the chat (fromChat).
     const fixers = new WeakMap()
+    // Adds an outfit to an entry's 衣柜 (从卡里找衣服).
+    const outfitAdders = new WeakMap()
     const boxes = () => [...list.querySelectorAll('.roster-entry')]
     // Every name someone on the page goes by, lower-cased.
     const takenNames = () => new Set(collectRoster($('media-form')).flatMap(e => [e.name, ...splitNames(e.aliases)]).map(name => name.trim().toLowerCase()).filter(Boolean))
@@ -2412,6 +2809,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
           node.dataset.flag === 'changed' ? tag(t`名字有更新`, 'new') : null,
           now.player ? tag(t`主角`, 'player') : null,
           tag(KIND_TEXT.find(([value]) => value === now.kind)?.[1] ?? ''),
+          now.wardrobe.length ? tag(t`${now.wardrobe.length + 1} 套衣服`) : null,
           now.lora ? tag('LoRA') : null,
         ].filter(Boolean))
       }
@@ -2570,6 +2968,39 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         syncLine()
         return true
       })
+      // 衣柜: what they can wear besides the usual outfit (server/wear.mjs).
+      const outfitList = el('div', { class: 'outfit-list' })
+      const addOutfit = (item = {}, { fresh = false } = {}) => {
+        const names = [...outfitList.querySelectorAll('[data-outfit="name"]')].map(input => input.value.trim())
+        if (names.length >= WARDROBE_MAX) return toast(t`除平时外最多 ${WARDROBE_MAX} 套`)
+        if (item.name && (names.includes(item.name) || item.name === t`平时`)) return false
+        const row = el('div', { class: `outfit-row${fresh ? ' fresh' : ''}`, 'data-id': item.id ?? newEntryId() }, [
+          el('input', { 'data-outfit': 'name', value: item.name ?? '', maxlength: '20', placeholder: t`叫什么（校服）`, 'aria-label': t`这套的名字` }),
+          el('input', { 'data-outfit': 'when', value: item.when ?? '', maxlength: '40', placeholder: t`什么时候穿（可空）`, 'aria-label': t`什么时候穿` }),
+          el('button', { type: 'button', class: 'btn small ghost danger', text: '×', title: t`去掉这套`, 'aria-label': t`去掉这套`, onclick: () => { row.remove(); syncLine() } }),
+          el('input', { 'data-outfit': 'tags', class: 'outfit-tags', value: item.tags ?? '', maxlength: '400', spellcheck: 'false', placeholder: 'white sailor shirt, navy pleated skirt, red neckerchief', 'aria-label': t`衣服的英文 tag` }),
+        ])
+        outfitList.append(row)
+        syncLine()
+        return row
+      }
+      const common = el('select', { 'aria-label': t`从常用服装里挑` }, [el('option', { value: '', text: t`从常用服装里挑…` }), ...OUTFITS.map(([label], i) => el('option', { value: String(i), text: label }))])
+      common.addEventListener('change', () => {
+        const pick = OUTFITS[Number(common.value)]
+        if (common.value && pick && addOutfit({ name: pick[0], tags: pick[1] }) === false) toast(t`已经有「${pick[0]}」了`)
+        common.value = ''
+      })
+      const wardrobe = el('div', { class: 'outfits' }, [
+        el('div', { class: 'outfits-head' }, [
+          el('span', { text: t`衣柜（平时之外的衣服）` }),
+          common,
+          el('button', { type: 'button', class: 'btn small ghost', text: t`＋ 新增一套`, onclick: () => addOutfit()?.querySelector?.('input').focus() }),
+        ]),
+        outfitList,
+        el('label', { class: 'outfit-path' }, [t`衣服跟着变量走（可空）`, el('input', { 'data-field': 'wearPath', value: entry.wearPath ?? '', maxlength: '120', spellcheck: 'false', placeholder: t`卡里记衣着的变量，例如 沈岚.衣着`, title: t`卡自己有记衣着的变量（状态栏里的「服装」）时填它的路径：变量一改，衣服就跟着换。写的是衣柜里的名字就用那一套，写别的就当一套临时的。自己换的保持到变量再改。` })]),
+        el('p', { class: 'hint', text: t`有了别的衣服，画图时这一套的 tag 由程序原样拼进去，每张都一样；剧情里换了衣服，图跟着换，也可以在对话里自己换。一套都没有就照旧由模型写。` }),
+      ])
+      outfitAdders.set(node, addOutfit)
       const loras = loraInfo.loras ?? []
       node.append(
         line,
@@ -2598,6 +3029,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
           ]),
           el('label', {}, [t`长相（固定不变的：发型发色、眼睛、身形、记号）`, el('textarea', { 'data-field': 'looks', rows: 2, spellcheck: 'false', placeholder: 'black hair, hair bun, white ribbon, dark eyes, dimples, petite', text: entry.looks })]),
           el('label', {}, [t`平时的衣着（辅助模型据此写当下穿什么）`, el('input', { 'data-field': 'outfit', value: entry.outfit, spellcheck: 'false', placeholder: 'white and pale blue wudang robe, wide sleeves' })]),
+          wardrobe,
           el('div', { class: 'grid three' }, [
             el('label', {}, [
               t`LoRA（ComfyUI，单人画面用）`,
@@ -2615,6 +3047,7 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       // The line follows the sheet as it is typed in.
       node.addEventListener('input', syncLine)
       node.addEventListener('change', syncLine)
+      for (const item of entry.wardrobe ?? []) addOutfit(item)
       syncLine()
       return node
     }
@@ -2735,12 +3168,37 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
       type: 'button', class: 'btn small', text: t`从对话里补充`, disabled: !ownChat, onclick: fromChat,
       title: ownChat ? t`读正在打开的对话最近几轮：列出后来出场、名册里还没有的角色，给已有的角色补上剧情里的外号、改正写错的名字` : t`先打开这张卡的一个对话`,
     })
+    const findClothes = guard(async () => {
+      clothesButton.disabled = true
+      status.textContent = t`辅助模型在读卡和世界书，可能要一两分钟…`
+      try {
+        const cast = collectRoster($('media-form'))
+        const { found, model } = await api(`/api/cards/${cardId}/wardrobe/draft`, { method: 'POST', body: { cast } })
+        let added = 0
+        for (const item of found) {
+          const node = boxes().find(one => one.dataset.id === item.id)
+          if (!node) continue
+          for (const outfit of item.wardrobe) if (outfitAdders.get(node)?.(outfit, { fresh: true })) added++
+          node.open = true
+        }
+        box.open = true
+        status.textContent = added ? t`${model} 找到 ${added} 套衣服，加进各人的衣柜了（标了颜色），看过、改好再保存。` : t`${model} 没在卡里找到别的衣服。`
+        list.querySelector('.outfit-row.fresh')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+      } catch (error) {
+        status.textContent = ''
+        throw error
+      } finally {
+        clothesButton.disabled = false
+      }
+    })
+    const clothesButton = el('button', { type: 'button', class: 'btn small', text: t`从卡里找衣服`, title: t`读这张卡的描述和世界书，列出每个人除平时之外穿的衣服`, onclick: findClothes })
     box.append(
       el('div', { class: 'roster-actions' }, [
         el('button', { type: 'button', class: 'btn small', text: t`添加角色`, onclick: () => addBlank() }),
         el('button', { type: 'button', class: 'btn small', text: t`添加主角`, onclick: () => addBlank({ player: !collectRoster($('media-form')).some(e => e.player), name: t`主角`, kind: 'boy' }) }),
         draftButton,
         chatButton,
+        clothesButton,
       ]),
       status,
       el('p', { class: 'hint', text: t`名册里的人，长相按这里写的固定 tag 画，辅助模型只写谁在画面里、穿什么、在做什么。多人同框时每人单独成段，不会串。外貌和衣着用英文 tag。点一个人展开编辑。` }),
@@ -3494,9 +3952,11 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
         helperModel: value('helperModel'),
         promptStyle: value('promptStyle'),
         promptDetail: value('promptDetail'),
+        imageCount: Number(value('imageCount')) || 1,
         promptRules: value('promptRules'),
         promptSource: value('promptSource'),
         autoImage: checked('autoImage'),
+        ...(form.elements.picturePlace ? { picturePlace: value('picturePlace') } : {}),
         ...(form.elements.drawHistory ? { drawHistory: Number(value('drawHistory')) } : {}),
         ttsUrl: value('ttsUrl'),
         ...draftVoices,
@@ -3559,5 +4019,5 @@ export function initMedia({ api, el, toast, guard, getChat, getModels, openProvi
     if (player.audio) player.audio.volume = value
   }
 
-  return { voiceVolume, setVoiceVolume, settings: () => state.settings, pictureWork, drawMoment, redraw, editPrompt, openLibrary, toolsFor: mediaTools, gallery, openSettings, viewPicture, setCard, afterTurn, flags, readBeat, fillQuick, stopReading: () => player.stop(), toggleReading: () => player.toggle() }
+  return { voiceVolume, setVoiceVolume, settings: () => state.settings, pictureWork, drawMoment, redraw, editPrompt, keepCg, openLibrary, toolsFor: mediaTools, menuFor, hasWardrobe, openWear, gallery, placePictures, openSettings, viewPicture, setCard, afterTurn, flags, readBeat, fillQuick, stopReading: () => player.stop(), toggleReading: () => player.toggle() }
 }

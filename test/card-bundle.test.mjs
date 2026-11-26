@@ -249,6 +249,30 @@ test('选图: a reply\'s picture from 图库 or the player\'s own file, added or
   assert.equal((await put({ image: 'data:text/plain;base64,aGk=' })).status, 400)
 })
 
+test('存为 CG: a reply\'s picture copied into a new group or one the card has; its size is on record', async t => {
+  const { call, newCard } = await setup(t)
+  const card = await newCard('雨宿')
+  const chat = (await call('/api/chats', { method: 'POST', body: { cardId: card.id } })).body
+  const node = chat.path.find(item => item.role === 'assistant')
+  const { image } = (await call(`/api/chats/${chat.id}/nodes/${node.id}/image/put`, { method: 'POST', body: { image: url(PNG) } })).body
+  assert.deepEqual([image.width, image.height], [PNG.readUInt32BE(16), PNG.readUInt32BE(20)])
+  const keep = body => call(`/api/chats/${chat.id}/nodes/${node.id}/image/cg`, { method: 'POST', body })
+  const made = await keep({ file: image.file, name: '雨宿-雨夜', note: '告白' })
+  assert.deepEqual([made.status, made.body.group.name, made.body.group.note, made.body.group.pictures.length, made.body.groups.length], [200, '雨宿-雨夜', '告白', 1, 1])
+  const more = await keep({ file: image.file, groupId: made.body.group.id })
+  assert.equal(more.body.group.pictures.length, 2)
+  // The CG is a copy: the picture of the reply can go.
+  await call(`/api/chats/${chat.id}/nodes/${node.id}/image?file=${image.file}`, { method: 'DELETE' })
+  assert.equal((await keep({ file: image.file, groupId: made.body.group.id })).status, 404)
+  assert.equal((await call(`/api/cards/${card.id}/cgs`)).body.groups[0].pictures.length, 2)
+  // No name, a group that is gone, a file of elsewhere: nothing is made.
+  const other = (await call(`/api/chats/${chat.id}/nodes/${node.id}/image/put`, { method: 'POST', body: { image: url(PNG) } })).body.image
+  assert.equal((await keep({ file: other.file, name: ' ' })).status, 400)
+  assert.equal((await keep({ file: other.file, groupId: 'nope' })).status, 404)
+  assert.equal((await keep({ file: '../../settings.json', name: 'x' })).status, 404)
+  assert.equal((await call(`/api/cards/${card.id}/cgs`)).body.groups.length, 1)
+})
+
 test('卡的 CG: groups by hand, a picture at a time, kept in a card pack and read back from it', async t => {
   const { call, upload, download, newCard } = await setup(t)
   const card = await newCard('雨宿')

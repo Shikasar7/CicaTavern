@@ -2,7 +2,7 @@
 // kept so the player can take one back or delete it. A card's places keep
 // theirs in cards/<id>/history.json (by place, newest first), the pictures in
 // cards/<id>/history/. Places: roster:<entryId> (人设图), sprite:<entryId>
-// (立绘), face:<entryId>:<expression> (表情差分), scene:<sceneId> (场景), look:decor-<slot> (外观的装饰图),
+// (立绘), face:<entryId>:<expression> (表情差分), outfit:<entryId>:<outfitId> (衣柜), scene:<sceneId> (场景), look:decor-<slot> (外观的装饰图),
 // avatar (the card's picture, and avatars drawn but not taken). A chat's
 // pictures keep theirs on the reply (node.media.images[].history, the helpers
 // at the end). Each place keeps media.drawHistory old ones (配图 settings,
@@ -18,7 +18,7 @@ import { msg } from './i18n.mjs'
 
 export const HISTORY_DEFAULT = 5
 export const HISTORY_MAX = 20
-const SLOT = /^(?:avatar|(?:roster|sprite):[\w-]{1,40}|face:[\w-]{1,40}:[a-z]{1,20}|scene:[\w-]{1,64}|look:decor-(?:texture|corner|divider|emblem))$/
+const SLOT = /^(?:avatar|(?:roster|sprite):[\w-]{1,40}|face:[\w-]{1,40}:[a-z]{1,20}|outfit:[\w-]{1,40}:[\w-]{1,40}|scene:[\w-]{1,64}|look:decor-(?:texture|corner|divider|emblem))$/
 const FILE = /^[\w-]{1,100}\.(png|jpg|webp)$/
 const TYPES = { jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp' }
 const clip = (value, max) => (typeof value === 'string' ? value.trim().slice(0, max) : '')
@@ -206,12 +206,14 @@ export function createDrawHistory(store, { keep }) {
 // chat's media folder; what a change leaves out is returned as `dropped`, for
 // the caller to delete.
 
-const kept = ({ file, prompt = '', backend = '', at = '' }) => ({ file, prompt, backend, at })
+const kept = ({ file, prompt = '', backend = '', at = '', width, height }) => ({ file, prompt, backend, at, ...(width > 0 && height > 0 ? { width, height } : {}) })
+
+const placeOf = image => (image.anchor ? { anchor: image.anchor } : {})
 
 /**
  * `image` drawn again over the picture whose file is `replace`: that one leads
- * its history, which keeps `keep`. → { images, dropped }, or null when there
- * is no such picture.
+ * its history, which keeps `keep`. Where it stands in the reply (anchor) is the place's, not the picture's: kept.
+ * → { images, dropped }, or null when there is no such picture.
  */
 export function redrawImage(images, replace, image, keep) {
   const index = (images ?? []).findIndex(item => item.file === replace)
@@ -220,7 +222,7 @@ export function redrawImage(images, replace, image, keep) {
   const all = [kept(before), ...(before.history ?? [])]
   const n = Math.max(0, keep)
   const next = [...images]
-  next[index] = { ...image, ...(n && all.length ? { history: all.slice(0, n) } : {}) }
+  next[index] = { ...placeOf(before), ...image, ...(n && all.length ? { history: all.slice(0, n) } : {}) }
   return { images: next, dropped: all.slice(n) }
 }
 
@@ -231,7 +233,7 @@ export function pickImage(images, file, old) {
   const chosen = before?.history?.find(item => item.file === old)
   if (!chosen) return null
   const next = [...images]
-  next[index] = { ...kept(chosen), history: [kept(before), ...before.history.filter(item => item.file !== old)] }
+  next[index] = { ...kept(chosen), ...placeOf(before), history: [kept(before), ...before.history.filter(item => item.file !== old)] }
   return next
 }
 

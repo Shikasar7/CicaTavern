@@ -5,7 +5,7 @@ import { bagChanged, bagItems, cleanBindings, guessBindings, numberAt, numberWri
 import { replyMarks } from '../web/shared/game/marks.js'
 import { visitedPlaces } from '../web/shared/vn.js'
 import { ambienceFor, cleanSound, layerLevel, nextTrack, trackFor, tracksFor } from '../web/shared/game/sound.js'
-import { applyOps, cleanOps, cleanRulebook, effectOf, keptSheet, nothingToRestore, opWrites, settleReply, sheetOf, startSheet, usableNow } from '../web/shared/game/sheet.js'
+import { applyOps, cleanOps, cleanRulebook, effectOf, foldOps, keptSheet, nothingToRestore, opWrites, settleReply, sheetOf, startSheet, usableNow } from '../web/shared/game/sheet.js'
 import { reachedBy, reachedWith, tallyOf } from '../web/shared/game/achievements.js'
 
 const names = things => things.map(thing => `${thing.name}×${thing.count}`)
@@ -277,4 +277,17 @@ test('what restores nothing is not worth using now', () => {
   assert.equal(nothingToRestore({ type: 'energy' }, sheet), false)
   assert.equal(nothingToRestore({ type: 'heal' }, { ...sheet, life: 50 }), false)
   assert.equal(nothingToRestore({ type: 'none' }, sheet), false)
+})
+
+test('a number set again and again is its last one, and none is lost past the first twenty', () => {
+  const life = value => ({ op: 'life', value })
+  const energy = value => ({ op: 'energy', value })
+  const clicks = [...Array.from({ length: 7 }, (_, i) => life(71 + i)), ...Array.from({ length: 21 }, (_, i) => energy(25 + i))]
+  assert.deepEqual(foldOps(clicks), [life(77), energy(45)])
+  assert.deepEqual(cleanOps(clicks), [life(77), energy(45)], 'a queue kept from before is folded as it is sent')
+  const use = { op: 'use', name: '回春丹' }
+  assert.deepEqual(foldOps([life(50), use, life(60), life(61)]), [life(50), use, life(61)], 'a thing used in between stays where it was')
+  const points = Array.from({ length: 30 }, () => ({ op: 'point', id: 'grace' }))
+  assert.equal(cleanOps(points).length, 30)
+  assert.deepEqual(cleanOps([null, 3, life(5)]), [life(5)])
 })

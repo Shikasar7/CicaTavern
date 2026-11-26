@@ -15,6 +15,19 @@ export const perksOn = book => growthOf(book) === 'rich'
 
 export const SIZES = ['small', 'medium', 'large']
 const ATTRIBUTE_IDS = ['body', 'grace', 'mind', 'charm']
+/** How far an attribute of one who is raised (raise.js) may come, past a person's 20, and the least it may be. */
+export const RAISED_MOST = 40
+export const RAISED_LEAST = 6
+/** 种族值 as a card gives them, all four, or null for none. */
+export function cleanSpecies(value) {
+  if (!isRecord(value)) return null
+  const out = {}
+  for (const id of ATTRIBUTE_IDS) {
+    if (typeof value[id] !== 'number' || !Number.isFinite(value[id])) return null
+    out[id] = Math.max(RAISED_LEAST, Math.min(RAISED_MOST, Math.round(value[id])))
+  }
+  return out
+}
 const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value)
 
 /**
@@ -183,7 +196,7 @@ export function cleanGrowth(value) {
   const none = value.points === false || value.levelPoints === 0
   const each = !none && Number.isInteger(value.levelPoints) && value.levelPoints > 0 && value.levelPoints !== USUAL_POINTS ? { levelPoints: Math.min(LEVEL_POINTS_MOST, value.levelPoints) } : {}
   const more = { ...each, ...whole('everyPoints', LEVEL_POINTS_MOST), ...(value.everyRestore === true ? { everyRestore: true } : {}), ...(value.rankRestore === false ? { rankRestore: false } : {}), ...whole('bondPoints', BOND_POINTS_MOST) }
-  return { level: value.level, ...(value.companions === 'manual' ? { companions: 'manual' } : {}), ...(none ? { points: false } : {}), ...(value.power === true ? { power: true } : {}), ...every, ...(value.rankBig === false ? { rankBig: false } : {}), ...points, ...(value.rankSkills === true ? { rankSkills: true } : {}), ...more }
+  return { level: value.level, ...(value.companions === 'manual' ? { companions: 'manual' } : {}), ...(none ? { points: false } : {}), ...(value.power === true ? { power: true } : {}), ...(value.raise === true ? { raise: true } : {}), ...(typeof value.slabName === 'string' && value.slabName.trim() ? { slabName: value.slabName.trim().slice(0, 8) } : {}), ...every, ...(value.rankBig === false ? { rankBig: false } : {}), ...points, ...(value.rankSkills === true ? { rankSkills: true } : {}), ...more }
 }
 
 /** The skills a card's 天赋 and 形态 teach, with the kind of each that says one: { name: kind }. */
@@ -205,7 +218,7 @@ export const MAX_FORM_OWNERS = 64
 export const FORM_BUDGET = [2, 4, 6, 8]
 const MAX_FORM_SKILLS = 3
 export { SHIFT_COST, SHIFT_UPKEEP }
-export const formBudget = at => FORM_BUDGET[Math.min(at, FORM_BUDGET.length - 1)]
+export const formBudget = at => FORM_BUDGET[Math.max(0, Math.min(at, FORM_BUDGET.length - 1))]
 
 /**
  * A card's 形态 as kept: { owner: [{ name, stage?, effects, skills?: { name: kind or '' }, at?: { level?, item?, bond? }, temp?, drain? }] }.
@@ -213,7 +226,7 @@ export const formBudget = at => FORM_BUDGET[Math.min(at, FORM_BUDGET.length - 1)
  * The first of a chain is how its owner starts. `at`: what it takes to come to it for good (all of what is said; with
  * none, only the story can say so). `temp`: it can be taken for one fight by one in the form before it.
  */
-export function cleanForms(value) {
+export function cleanForms(value, ranks = []) {
   const out = {}
   if (!isRecord(value)) return out
   const text = (item, max) => (typeof item === 'string' ? item.trim().slice(0, max) : '')
@@ -236,7 +249,9 @@ export function cleanForms(value) {
       chain.push({
         name,
         ...(text(item.stage, 12) ? { stage: text(item.stage, 12) } : {}),
-        effects: cleanEffects(item.effects, formBudget(at)),
+        effects: cleanEffects(item.effects, Math.max(formBudget(at), formBudget(ranks.indexOf(text(item.stage, 12))))),
+        // 种族值 (raise.js): what one is made of in this form, on a card that raises.
+        ...(cleanSpecies(item.attributes) ? { attributes: cleanSpecies(item.attributes) } : {}),
         ...(Object.keys(skills).length ? { skills } : {}),
         ...(Object.keys(needs).length ? { at: needs } : {}),
         ...(at > 0 && item.temp === true ? { temp: true } : {}),
@@ -299,7 +314,8 @@ export const formForFight = (who, book) => {
 /** The skills of one of the party when they are in another form: those of the form left go, those of the new one come. */
 export function skillsInForm(who, book, to) {
   const now = formOf(who, book)
-  const gone = Object.keys(now?.skills ?? {})
+  // 养成: what one has learnt it keeps.
+  const gone = book?.growth?.raise === true && !fightOnly(to) ? [] : Object.keys(now?.skills ?? {})
   const kept = (who.skills ?? []).filter(name => !gone.includes(name))
   return [...kept, ...Object.keys(to?.skills ?? {}).filter(name => !kept.includes(name))]
 }

@@ -2,13 +2,13 @@
 import { t } from '/i18n.js'
 import { ATTRIBUTES, ATTRIBUTE_POINTS, AVERAGE, MAX_FIELDED, MIN_ATTRIBUTE, WORD_KEYS, effectOf, skillsNamed, startSheet } from '/shared/game/sheet.js'
 import { ADD_SIZES, FOE_ADD_IDS, FOE_ADD_ROOM, MAX_ADDS, SKILL_ADDS, SKILL_ADD_IDS, addFits, cleanFoeAdds, skillKindOf } from '/shared/game/battle.js'
-import { BIG_BUDGET, BOND_AT, BOND_POINTS_MOST, EFFECTS, EFFECT_IDS, LEVEL_POINTS_MOST, MAX_PERKS, PERK_BUDGET, PERK_EVERY_RANGE, PERK_SKILL_COST, RANK_POINTS_MOST, SHIFT_COST, SHIFT_UPKEEP, SIZES, bondPointsOf, cleanPerks, everyGives, levelPointsOf, perkEveryOf, rankRestores, slotByName } from '/shared/game/growth.js'
+import { RAISED_LEAST, RAISED_MOST, BIG_BUDGET, BOND_AT, BOND_POINTS_MOST, EFFECTS, EFFECT_IDS, LEVEL_POINTS_MOST, MAX_PERKS, PERK_BUDGET, PERK_EVERY_RANGE, PERK_SKILL_COST, RANK_POINTS_MOST, SHIFT_COST, SHIFT_UPKEEP, SIZES, bondPointsOf, cleanPerks, everyGives, levelPointsOf, perkEveryOf, rankRestores, slotByName } from '/shared/game/growth.js'
 import { ADD_NAMES, EFFECT_NAMES, FOE_ADD_NAMES, MAX_FORMS, PLAYER_FORMS, SIZE_WORDS, addsText, effectPickers, foeAddsLine, foeAddsText, formBudget, formName, gearPickers, gearText, perkShown, wordsOf } from '/game-growth.js'
 import { fitsField, guessBindings, variablePaths } from '/shared/game/bindings.js'
 
 const ATTRIBUTES_HINT = () => ({ body: t`力量、耐力、硬抗`, grace: t`敏捷、潜行、手上功夫`, mind: t`智力、感知、意志`, charm: t`说服、欺骗、威慑` })
 
-const BINDING_WORDS = (energy = '') => [['life', t`生命`], ['maxLife', t`生命上限`], ['energy', energy || t`气力`], ['maxEnergy', energy ? t`${energy}上限` : t`气力上限`], ['sanity', t`理智`], ['level', t`等级`], ['rank', t`等级（文字）`], ['money', t`金钱`], ['things', t`背包`], ['quests', t`任务`]]
+const BINDING_WORDS = (energy = '') => [['life', t`生命`], ['maxLife', t`生命上限`], ['energy', energy || t`气力`], ['maxEnergy', energy ? t`${energy}上限` : t`气力上限`], ['sanity', t`理智`], ['level', t`等级`], ['rank', t`等级（文字）`], ['money', t`金钱`], ['things', t`背包`], ['quests', t`任务`], ['party', t`队伍`]]
 
 const SKILL_KINDS = () => ({ strike: t`重击`, sweep: t`群攻`, flurry: t`连击`, poison: t`中毒`, stun: t`眩晕`, heal: t`治疗`, boost: t`增益`, finish: t`斩杀`, mend: t`群体治疗`, ward: t`护盾`, rally: t`鼓舞全队`, taunt: t`挑衅` })
 // 叫法: what each word is, in the page's language, and what it is called unless the card says otherwise.
@@ -138,6 +138,18 @@ export async function openGameRules(card, deps) {
       onChange?.()
     }, failed)
   }
+  /** Where a kind is met, for the 图鉴. */
+  function whereInput(name, foe) {
+    const input = el('input', { type: 'text', maxlength: 24, value: foe.where ?? '', 'aria-label': t`${name}的出没地`, placeholder: t`地名，可不填` })
+    input.addEventListener('change', () => save({ foes: { ...book.foes, [name]: { ...foe, where: input.value.trim() } } }).then(showBestiary, failed))
+    return input
+  }
+  /** 养成: the rank a kind is met at. */
+  function rankPick(name, foe) {
+    const pick = el('select', { 'aria-label': t`${name}的阶位` }, ['', ...book.ranks].map(rank => el('option', { value: rank, text: rank || t`没写`, selected: rank === (foe.rank ?? '') })))
+    pick.addEventListener('change', () => save({ foes: { ...book.foes, [name]: { ...foe, rank: pick.value } } }).then(showBestiary, failed))
+    return pick
+  }
   function showBestiary() {
     const names = Object.keys(book.foes)
     // One being worked on stays open while each change to it is kept.
@@ -176,6 +188,11 @@ export async function openGameRules(card, deps) {
           foe.file ? el('button', { type: 'button', class: 'btn small', text: t`删除立绘`, 'aria-label': t`删除${name}的立绘`, onclick: () => setPicture(name, null) }) : null,
         ])),
         row(t`${name}的招式效果`, foeAddsText(held) || t`没有：当精英、首领出场时只是打得重`, el('span', { class: 'game-adds' }, Array.from({ length: Math.min(FOE_ADD_ROOM.boss.count, held.length + 1) }, (_, at) => addPicker(at)).flat())),
+        ...(book.growth?.raise ? [
+          row(t`${name}的阶位`, t`野外遇到时大概在哪一阶：故事没说强弱、直接入队的，照它算等级。`, rankPick(name, foe)),
+          row(t`${name}的出没地`, t`图鉴按它分组，不填就按属性分。`, whereInput(name, foe)),
+          row(t`${name}的种族值`, t`天生的底子，10 是常人。不填就按阶位给一份普通的。`, speciesInputs(name, foe.attributes, attributes => save({ foes: { ...book.foes, [name]: { ...foe, attributes } } }).then(showBestiary, failed))),
+        ] : []),
         el('div', { class: 'row end' }, [el('button', { type: 'button', class: 'btn small danger', text: t`从图鉴删掉`, 'aria-label': t`把${name}从图鉴删掉`, onclick: () => removeFoe(name) })]),
       ])
     }) : [el('p', { class: 'hint', text: t`还没遇到过敌人。遭遇时辅助模型会写下外貌和招式。` })]), ...(names.length ? [el('p', { class: 'hint', text: t`招式效果只在这种敌人当精英或首领出场时起作用：精英用第一条（最多中幅），首领两条都用（小幅、中幅、大幅各算 1、2、3 点，最多 ${FOE_ADD_ROOM.boss.points} 点）。带了效果的敌人，出手本身会轻一点。` })] : []))
@@ -620,6 +637,23 @@ export async function openGameRules(card, deps) {
   const formsBox = el('div')
   const saveForms = forms => save({ forms }).then(showForms, failed)
   const ownerLabel = owner => (owner === PLAYER_FORMS ? t`玩家自己` : !book.companions[owner] && book.foes[owner] ? t`${owner}（收服以后）` : owner)
+  function slabNameInput() {
+    const input = el('input', { type: 'text', maxlength: 8, value: book.growth?.slabName ?? '', 'aria-label': t`随身册的名字`, placeholder: t`随身册` })
+    input.addEventListener('change', () => save({ growth: { ...book.growth, slabName: input.value.trim() } }).catch(failed))
+    return input
+  }
+  /** 养成: 种族值 to fill in, all four or none. */
+  function speciesInputs(label, value, put) {
+    const inputs = ATTRIBUTES.map(({ id, name }) => el('input', { type: 'number', min: RAISED_LEAST, max: RAISED_MOST, value: value?.[id] ?? '', placeholder: book.words?.[id] || name, 'aria-label': t`${label}的${book.words?.[id] || name}`, title: book.words?.[id] || name, class: 'game-attribute' }))
+    for (const input of inputs) {
+      input.addEventListener('change', () => {
+        const filled = inputs.filter(other => other.value !== '')
+        if (filled.length === 0) put(undefined)
+        else if (filled.length === inputs.length) put(Object.fromEntries(ATTRIBUTES.map(({ id }, i) => [id, Number(inputs[i].value)])))
+      })
+    }
+    return el('span', { class: 'game-adds' }, inputs)
+  }
   function formBox(owner, chain, at) {
     const form = chain[at]
     const forms = book.forms ?? {}
@@ -656,8 +690,9 @@ export async function openGameRules(card, deps) {
     return el('div', { class: 'game-form' }, [
       stacked(row(at ? t`第 ${at + 1} 个` : t`最初的样子`, '', el('span', { class: 'game-adds' }, [name, stage, chain.length > 2 ? el('button', { type: 'button', class: 'btn small', text: t`删除`, 'aria-label': t`删除${whose}`, onclick: () => saveForms({ ...forms, [owner]: chain.filter((_, i) => i !== at) }) }) : null]))),
       at ? stacked(row(t`变成它的条件`, t`填了几样就都要满足，到了以后在游戏菜单里点。都不填就只能由剧情给。`, el('span', { class: 'game-adds' }, [level, item, owner === PLAYER_FORMS ? null : bond]))) : null,
-      stacked(row(t`加成`, t`处在这个形态时才有，最多 ${formBudget(at)} 点。`, el('span', { class: 'game-adds' }, effectPickers({ el, name: whose, effects: form.effects, words: wordsOf(book), put: effects => put({ effects }) })))),
+      stacked(row(t`加成`, t`处在这个形态时才有，最多 ${Math.max(formBudget(at), formBudget(book.ranks.indexOf(form.stage ?? "")))} 点。`, el('span', { class: 'game-adds' }, effectPickers({ el, name: whose, effects: form.effects, words: wordsOf(book), put: effects => put({ effects }) })))),
       stacked(row(t`这个形态才会的技能`, '', el('div', { class: 'game-form-skills' }, [...skillRows, Object.keys(skills).length < 3 ? newSkill : null]))),
+      book.growth?.raise && owner !== PLAYER_FORMS ? stacked(row(t`种族值`, t`这个形态天生的底子，10 是常人。不填就在前一个形态上加一些。`, speciesInputs(whose, form.attributes, attributes => put({ attributes })))) : null,
       at ? row(t`战斗里临时变`, t`勾上后，处在前一个形态的人可以在战斗里花 ${Math.round(SHIFT_COST * 100)}% ${energy}变成它，打完变回去。`, temp) : null,
       at && form.temp ? row(t`${energy}耗尽就变回去`, t`勾上后，变了以后从下一回合起每回合耗 ${Math.round(SHIFT_UPKEEP * 100)}% ${energy}，不够了就在这场战斗里变回原样。适合「变身撑不了多久」的设定。`, drain) : null,
     ])
@@ -717,6 +752,8 @@ export async function openGameRules(card, deps) {
     row(t`成长节奏`, t`升一级要多少经验。快：平时的六成。慢：平时的一倍半。只管升级快慢，不改敌人强弱；正在玩的对话从下一次得到经验起按新的算。`, choice(t`成长节奏`, book.pace ?? 'normal', [['fast', t`快`], ['normal', t`适中`], ['slow', t`慢`]], pace => ({ pace }))),
     row(t`成长`, t`升级带来什么。关：只有属性点，和以前一样。标准：${book.words?.life || t`生命`}和${book.energyName || t`气力`}上限随等级涨，技能越用越强。丰富：再加每 ${perkEveryOf(book)} 级三选一的${book.words?.perk || t`天赋`}。正在玩的对话下一轮就按新的算。`, growthChoice),
     growthLevel !== 'off' ? row(t`战力`, t`在游戏菜单的角色页显示一个战力数字：把属性和成长折成一个数，常人 1 级是 100。只是参考。`, choice(t`战力`, book.growth?.power ? 'on' : 'off', [['off', t`不显示`], ['on', t`显示`]], value => ({ growth: { ...book.growth, power: value === 'on' } }))) : null,
+    growthLevel !== 'off' ? row(t`养成`, t`把同伴当成一只只各自养大的来算，适合收服、御兽、养宠物的卡。开：每种有自己的种族值，收服的带着遇到时的等级、性格和资质；各自得经验、各自升级，属性照它擅长的长；进化时种族值跟着变，学过的招不会忘；比你高几级、低几级，打起来都算数；队伍满了可以寄养；升级要的经验也少一些。正在玩的对话下一轮按新的补上。`, choice(t`养成`, book.growth?.raise ? 'on' : 'off', [['off', t`关`], ['on', t`开`]], value => ({ growth: { ...book.growth, raise: value === 'on' } }))) : null,
+    growthLevel !== 'off' && book.growth?.raise ? row(t`随身册的名字`, t`管出战、寄养、图鉴的那个小面板在这张卡里叫什么。`, slabNameInput()) : null,
     growthLevel === 'rich' ? row(t`同伴的${book.words?.perk || t`天赋`}`, t`自动：到了级数由程序按同伴擅长的属性选。手动：在游戏菜单的「队伍」里你来选。`, choice(t`同伴的天赋`, book.growth?.companions === 'manual' ? 'manual' : 'auto', [['auto', t`自动`], ['manual', t`手动`]], value => ({ growth: { ...book.growth, ...(value === 'manual' ? { companions: 'manual' } : { companions: undefined }) } }))) : null,
     ...(growthLevel !== 'off' ? milesRows() : []),
     growthLevel === 'rich' ? el('p', { class: 'hint', text: t`这张卡自己的${book.words?.perk || t`天赋`}：选的时候优先出现，另外还有通用的 24 个。可以让「辅助模型配置」按这张卡的世界观来写。` }) : null,
@@ -807,7 +844,7 @@ export async function openGameRules(card, deps) {
     { key: 'modules', full: true, title: t`玩法模块`, about: t`谁上场、收服、类型克制`, children: [
       el('p', { class: 'hint', text: t`按题材开的几样玩法，不开就和以前一样。可以让「读卡配置」按这张卡来定。` }),
       row(t`谁上场`, t`亲自上场：你和同伴一起打。只指挥：你不动手也不挨打，给同伴鼓劲、递道具、喊撤退，同伴都倒下才算输；身边没有同伴时还是你自己打。适合驯兽师、召唤师、指挥官。`, choice(t`谁上场`, book.lead === 'command' ? 'command' : 'self', [['self', t`亲自上场`], ['command', t`只指挥`]], lead => ({ lead }))),
-      row(t`收服`, t`打赢以后可以试着把一个打倒的敌人收为同伴，首领除外。成不成看你的${book.words?.charm || t`魅力`}，只有一次机会。`, choice(t`收服`, book.tame ? 'on' : 'off', [['off', t`关`], ['on', t`开`]], value => ({ tame: value === 'on' }))),
+      row(t`收服`, t`打赢以后可以试着把一个打倒的敌人收为同伴，首领除外。成不成看你的${book.words?.charm || t`魅力`}；背包里有收服道具可以用上，没成还能再战一次。`, choice(t`收服`, book.tame ? 'on' : 'off', [['off', t`关`], ['on', t`开`]], value => ({ tame: value === 'on' }))),
       typesBox,
     ] },
     { key: 'party', full: true, title: t`队伍名册`, about: t`一起打架的同伴`, children: [

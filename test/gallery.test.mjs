@@ -57,6 +57,17 @@ test('图库: 配图 of every chat, a card\'s 背景 and 立绘, newest first; a
   assert.equal(items.find(item => item.kind === 'scene').name, '雨巷')
   assert.ok(items[0].at >= items.at(-1).at, 'newest first')
 
+  // 衣柜: an outfit's 立绘 is listed under the same person, and deleted on its own.
+  const dressed = await store.getCard(card.id)
+  dressed.media = { ...dressed.media, roster: [{ ...dressed.media.roster[0], wardrobe: [{ id: 'sleep1', name: '睡衣', tags: 'pajamas' }] }] }
+  await store.saveCard(dressed)
+  await scenes.setOutfit(card.id, 'lx', 'sleep1', dataUrl)
+  const worn = (await gallery.list()).items.find(item => item.outfitId)
+  assert.deepEqual([worn.kind, worn.name, worn.outfit, worn.entryId], ['sprite', '林雪·睡衣', '睡衣', 'lx'])
+  assert.deepEqual(await gallery.remove([worn.id]), { removed: 1, missing: 0 })
+  const left = (await gallery.list()).items
+  assert.deepEqual([left.filter(item => item.kind === 'sprite').length, left.some(item => item.outfitId)], [2, false])
+
   const { parts, size, count, missing } = await gallery.exportZip([...items.map(item => item.id), 'reply:nochat:x.png'])
   const buffer = Buffer.concat(parts)
   assert.equal(size, buffer.length)

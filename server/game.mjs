@@ -8,8 +8,9 @@ import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { imageKind } from './appearance.mjs'
 import { replyMarks } from '../web/shared/game/marks.js'
-import { AID_BONUS, ATTRIBUTES, ATTRIBUTE_POINTS, AVERAGE, DEFAULT_WORDS, EFFECTS, STRENGTHS, WORD_KEYS, applyOps, attributeNames, cleanKit, cleanRulebook, fieldedOf, keptSheet, kitBook, rulesOn, sanityWord, settleReply, sheetOf, sheetOnPath, wordFor } from '../web/shared/game/sheet.js'
+import { AID_BONUS, ATTRIBUTES, ATTRIBUTE_POINTS, AVERAGE, DEFAULT_WORDS, EFFECTS, STRENGTHS, WORD_KEYS, applyOps, attributeNames, cleanKit, cleanRulebook, fieldedOf, joinedByTable, keptSheet, kitBook, rulesOn, sanityWord, settleReply, sheetOf, sheetOnPath, wordFor } from '../web/shared/game/sheet.js'
 import { cleanGear, foeAddsAsk, formsAsk, gearAsk, gearSortAsk, modulesAsk, perksAsk, skillsAsk } from '../web/shared/game/growth.js'
+import { natureOf, talentOf } from '../web/shared/game/raise.js'
 import { cleanFoeAdds } from '../web/shared/game/battle.js'
 import { BINDABLE, fitsField } from '../web/shared/game/bindings.js'
 import { randomFrom, seedOf } from '../web/shared/game/dice.js'
@@ -18,6 +19,8 @@ import { httpError, readJsonFile, writeJson } from './store.mjs'
 import { msg } from './i18n.mjs'
 
 const RULES_EVERY = 8
+// What the helper may bind when it sets a card up: whose the party's table is, is the author's to say (a table of people is easily taken for one).
+const SUGGESTED = BINDABLE.filter(field => field !== 'party')
 // Turns without a fight before the next set of choices must offer one, by the card's 战斗频率.
 const FIGHT_EVERY = { rare: 8, normal: 4, often: 2 }
 const FIGHT_REMINDER = {
@@ -152,11 +155,14 @@ function ailsLine(sheet, words = {}) {
 /** The party, for the model: who fights beside the player, and who is with them but not in it. */
 function partyLine(sheet, words) {
   const fielded = fieldedOf(sheet)
-  return (sheet.party ?? []).map(member => {
-    if (member.hurt) return `${member.name}（负伤）`
-    if (!fielded.includes(member)) return `${member.name}（待命）`
-    return `${member.name}（${wordFor({ words }, 'life')} ${member.life}/${member.maxLife}）`
-  }).join('、')
+  // 养成: each has a level of its own, and some may be kept apart from the party.
+  const level = member => (member.raised ? `${member.level} 级，` : '')
+  const box = (sheet.box ?? []).map(member => member.name)
+  return [...(sheet.party ?? []).map(member => {
+    if (member.hurt) return `${member.name}（${level(member)}负伤）`
+    if (!fielded.includes(member)) return `${member.name}（${level(member)}待命）`
+    return `${member.name}（${level(member)}${wordFor({ words }, 'life')} ${member.life}/${member.maxLife}）`
+  }), ...(box.length ? [`寄养着、不在身边的：${box.join('、')}`] : [])].join('、')
 }
 
 function sheetLine(sheet, rank, words = {}, perks = [], gear = [], forms = null) {
@@ -203,6 +209,13 @@ const BATTLE_ENDS = {
   lost: '战败，玩家没有死，生命只剩一点',
 }
 
+/** 养成: how one caught stands, in words the story can use. Its rank is said first: that is what a card's own table asks for. */
+function caughtWords({ rank, type, level, nature, talent }) {
+  if (!level) return ''
+  const own = natureOf(nature)?.name
+  return `它是${rank ? `${rank}，` : ''}${type ? `${type}系，` : ''}${level} 级${own ? `，性格${own}` : ''}${talentOf(talent) ? `，资质${talentOf(talent).name}` : ''}${rank ? `；变量里记它的阶位和属性照这里写` : ''}。`
+}
+
 function battleBlock(battle, words = {}) {
   const life = wordFor({ words }, 'life')
   // One the player could not have won: how they come out of it is the story's, but not as the winner.
@@ -215,7 +228,7 @@ function battleBlock(battle, words = {}) {
     battle.party?.length ? `同伴：${battle.party.map(member => `${member.name} ${life} ${member.life}/${member.maxLife}${member.skills.length ? `，用过 ${member.skills.join('、')}` : ''}${member.fell ? '，被打倒过' : ''}`).join('；')}。` : '',
     battle.party?.some(member => member.fell) ? '被打倒过的同伴受了伤，后文要写到。' : '',
     battle.rallied ? '玩家被打倒后硬撑着站了起来，透支了身体，接下来几天都虚弱。' : '',
-    battle.tame ? (battle.tame.ok ? `玩家收服了${battle.tame.name}：它从此跟着玩家，已经入队，不用再写 【同伴】 标记。写出它服气、认主或被说动的那一刻。` : `玩家想收服${battle.tame.name}，没有成：它挣脱跑了，或者宁死不从，你来写。不要写成收服成功。`) : '',
+    battle.tame ? (battle.tame.ok ? `玩家${battle.tame.lure ? `用${battle.tame.lure}` : ''}收服了${battle.tame.name}：它从此跟着玩家，已经入队，不用再写 【同伴】 标记。${caughtWords(battle.tame)}写出它服气、认主或被说动的那一刻。` : `玩家${battle.tame.lure ? `用了${battle.tame.lure}，` : ''}想收服${battle.tame.name}，没有成：它挣脱跑了，或者宁死不从，你来写。不要写成收服成功。`) : '',
     // 形态: a fight worth the name that was won is where the story may give a form that nothing else can bring.
     battle.over === 'won' && battle.worth && battle.worth !== 'small' && battle.story?.length ? `这一仗是个转折点：${battle.story.join('、')}只能由剧情给，如果这一仗里它拼了命、或者和玩家的心意通了，就在这一轮让它成真，并写上 【进化】 标记；觉得还不到时候就不写。` : '',
     battle.shifted?.length ? `这一战里${battle.shifted.map(item => `${item.who ?? '玩家'}临时变成了${item.form}`).join('，')}，打完就变回原样了：写出这一下的变化，但不要写成从此就是那个${wordFor({ words }, 'form')}。` : '',
@@ -297,7 +310,11 @@ export function settledSheet(book, path, userNode, replyText, state) {
   const before = storyDay(told)
   const newDay = storyDay([{ text: replyText, time: stateTime(state) }], before).day > before.day
   const fought = Boolean(userNode.battle) && userNode.battle.over !== 'story'
-  return keptSheet(sheetOf(book, settleReply(sheet, replyMarks(replyText), { bound: Object.keys(book.bindings), spent, newDay, fought, ranks: book.ranks, book }), state))
+  const marks = replyMarks(replyText)
+  const settled = sheetOf(book, settleReply(sheet, marks, { bound: Object.keys(book.bindings), spent, newDay, fought, ranks: book.ranks, book, seed: userNode.id }), state)
+  // Whom the player or the story sent away this turn stays away, whatever the table came to say.
+  const left = [...marks.filter(mark => mark.kind === 'party' && mark.act === 'leave'), ...(userNode.gameOps ?? []).filter(op => op.op === 'party' && op.act === 'leave')].map(one => one.name)
+  return keptSheet(joinedByTable(settled, book, path.at(-1).state, state, left, userNode.id))
 }
 
 /** Whether the player's own words start a fight. */
@@ -307,10 +324,10 @@ export const asksForFight = input => FIGHT_WORDS.test(String(input ?? ''))
 export const mayAskForFight = input => BLOW_WORDS.test(String(input ?? ''))
 
 /** The helper's question: what each of these things does. */
-export function thingsRequest(things) {
+export function thingsRequest(things, { tame = false } = {}) {
   const list = things.map(thing => `- ${thing.name}${thing.note ? `（${thing.note}）` : ''}`).join('\n')
   const content = `给这些物品归类，只输出一个 JSON 数组，不要别的文字。每项 {"name":名字,"type":类型,"size":强度}。
-类型：heal 回复生命，energy 回复气力或法力，calm 安定心神、恢复理智，damage 战斗中用来打敌人，cure 解除中毒之类的异常，boost 暂时变强，none 只有剧情用途（钥匙、信件、材料），${gearSortAsk()}
+类型：heal 回复生命，energy 回复气力或法力，calm 安定心神、恢复理智，damage 战斗中用来打敌人，cure 解除中毒之类的异常，boost 暂时变强，${tame ? 'tame 用来收服打倒的敌人（small 帮一点忙，medium 帮大忙，large 必定成功，极少见），' : ''}none 只有剧情用途（钥匙、信件、材料），${gearSortAsk()}
 强度：small、medium、large，看物品听起来有多珍贵；none、cure、boost、gear 不用写。
 
 ${list}`
@@ -330,13 +347,13 @@ theme 从 ${THEMES.join('、')} 选最接近的一个（${THEME_WORDS}），不�
 words 是这个世界对这些东西的叫法，和默认一样就不写，每个最多 ${8} 个字：${WORD_KEYS.map(key => `${key}（默认${DEFAULT_WORDS[key]}）`).join('、')}。四个属性只改名字，意思不变：body 管力气、耐力、硬抗，grace 管速度、身手、潜行，mind 管智力、感知、意志，charm 管交涉、说服、羁绊。minion、normal、elite、boss 是四档敌人。比如怪兽养成的卡可以是 {"body":"力量","grace":"速度","mind":"智力","charm":"羁绊","life":"HP","skill":"必杀技","party":"伙伴","minion":"野生"}。
 attributes 是${ATTRIBUTES.map(item => `${item.id}（${item.name}）`).join('、')}，常人 ${AVERAGE}，比 ${AVERAGE} 多出来的加起来不超过 ${ATTRIBUTE_POINTS} 点，贴合玩家的身份。
 ${skillsAsk()}
-things 是开局带的 0 到 5 样东西，type 从 ${EFFECTS.join('、')} 选，size 是 ${STRENGTHS.join('、')}。${gearAsk()}foes 写这个世界常见的 2 到 6 种敌人。${foeAddsAsk()}
+things 是开局带的 0 到 5 样东西，type 从 ${EFFECTS.join('、')} 选（tame 是收服道具，只在这个世界能收服敌人时写，size 是 large 的必定成功，开局不给），size 是 ${STRENGTHS.join('、')}。${gearAsk()}foes 写这个世界常见的 2 到 6 种敌人。${foeAddsAsk()}
 companions 是会和玩家一起打架的固定同伴（宠物、伙伴怪兽也算），从卡里的主要角色选 0 到 3 个，属性同样按常人 ${AVERAGE}、多出来的不超过 ${ATTRIBUTE_POINTS} 点，按人设分（身手快的灵巧高，会治疗的带 heal 技能），技能 1 到 3 个；start 写开局是否已经同行。玩家独自行动的卡写 []。
 ranks 是这个世界明确的等级，从低到高，比如炼气、筑基、金丹，铜牌、银牌、金牌，或者成长期、成熟期、完全体，只写大的等级，不写初期中期后期；没有明确等级就写 []。rankSpan：差一级就打不过的写 wide（境界），差几级才打不过的写 narrow（段位、军衔）。
 ${perksAsk()}
 ${formsAsk()}
 ${modulesAsk()}
-bindings 把这张卡已有的变量对到规则字段，字段有 ${BINDABLE.join('、')}（things 背包，quests 任务，rank 是写成文字的等级，其余是数字）。只对玩家自己的变量，没把握就不写。${variables ? `\n\n这张卡的变量：\n${variables}` : '这张卡没有变量，bindings 写 {}。'}
+bindings 把这张卡已有的变量对到规则字段，字段有 ${SUGGESTED.join('、')}（things 背包，quests 任务，rank 是写成文字的等级，其余是数字）。只对玩家自己的变量，没把握就不写。${variables ? `\n\n这张卡的变量：\n${variables}` : '这张卡没有变量，bindings 写 {}。'}
 
 角色卡：
 ${story}`
@@ -357,7 +374,7 @@ export function parseSuggestion(text, paths) {
   }
   const kindOf = new Map(paths.map(item => [item.path, item.kind]))
   const fits = (field, path) => kindOf.has(path) && fitsField(field, kindOf.get(path))
-  const bindings = Object.fromEntries(Object.entries(found?.bindings ?? {}).filter(([field, path]) => BINDABLE.includes(field) && fits(field, path)))
+  const bindings = Object.fromEntries(Object.entries(found?.bindings ?? {}).filter(([field, path]) => SUGGESTED.includes(field) && fits(field, path)))
   const { ranks } = cleanRulebook({ ranks: found?.ranks })
   return {
     ...kitBook(cleanKit(found)),

@@ -11,7 +11,7 @@ import { initPresets } from '/presets.js'
 import { initProviders } from '/providers.js'
 import { initMedia } from '/media.js'
 import { initHistory } from '/history.js'
-import { createMenu, MENU_ICONS, whoLine } from '/menu.js'
+import { ACTION_ICONS, createMenu, MENU_ICONS, whoLine } from '/menu.js'
 import { initForge } from '/forge.js'
 import { initUpdate } from '/update.js'
 import { initWhatsNew } from '/whatsnew.js'
@@ -27,6 +27,7 @@ import { REFERENCE_FILES, referenceBody, referenceChips } from '/talk.js'
 import { initDrawChoice } from '/draw-choice.js'
 import { initCardPermissions } from '/card-permissions.js'
 import { cleanEntry, createFramePermissions, decideEntry, entryDecision } from '/shared/frame-permissions.js'
+import { currentLook } from '/game-look.js'
 import { initVn } from '/vn.js'
 import { initCardArt } from '/card-art.js'
 import { coverPage } from '/cover.js'
@@ -512,6 +513,12 @@ function loadPlot() {
       api, el, guard, toast, getChat: () => ui.chat, setChat, getFrom: () => ui.branchFrom?.parentId ?? null,
       openMap: options => openPlotMap(options), newChat: () => newChat(), editCopy: () => editPlotCopy(), askGuide: kind => askPlotGuide(kind),
       cardPlot: chat => ui.cardDetails.get(chat?.cardId)?.plots?.find(plot => plot.id === chat?.plot?.copy.id) ?? null,
+      canGo: () => Boolean(ui.chat) && !ui.generating && !ui.chat.path.at(-1)?.gate,
+      go: () => {
+        const input = $('input')
+        if (!input.value.trim()) input.value = t`（顺着剧情往下走）`
+        send()
+      },
     })).catch(() => {
       plotUi = null
       throw Object.assign(new Error(t`剧本要重启后台服务后才能用：关掉所有窗口等一分钟，再从桌面图标打开。`), { status: 404 })
@@ -546,7 +553,7 @@ async function plotDraftToCard(mode) {
     throw Object.assign(new Error(t`剧本要重启后台服务后才能用：关掉所有窗口等一分钟，再从桌面图标打开。`), { status: 404 })
   })
   await openPlotDraft({ api, el, guard, toast, problemText }, {
-    key: mode === 'fromChat' ? `chat-${chat.id}` : `card-${chat.cardId}`, mode,
+    key: mode === 'fromChat' ? `chat-${chat.id}` : `card-${chat.cardId}`, mode, chatId: chat.id,
     onTake: async plot => {
       const { plots, defaultPlot } = await api(`/api/cards/${chat.cardId}/plots`)
       const taken = new Set(plots.map(item => item.id))
@@ -593,7 +600,7 @@ const askPlotGuide = guard(async kind => {
 const managePlots = guard(async (cardId = ui.chat?.cardId ?? ui.cardId, options = {}) => {
   const card = ui.cards.find(item => item.id === cardId)
   const { openPlots } = await plotEdit()
-  await openPlots({ api, el, guard, toast, cardId, cardName: card?.name ?? '', onSaved: () => {
+  await openPlots({ api, el, guard, toast, cardId, cardName: card?.name ?? '', fromChat: ui.chat?.cardId === cardId ? ui.chat.id : '', onSaved: () => {
     ui.cardDetails.delete(cardId)
     loadCardDetail(cardId).then(renderPlot)
   } }, options)
@@ -1170,34 +1177,66 @@ function showCardInfo(card) {
 }
 
 // ─── A small menu next to a button ─────────────────────────────────────
-// entries: { label, onClick, danger, current, hint } | { header } | '-'
+// entries: { label, onClick, danger, current, checked, hint, icon, sub, busy } | { header } | { line } | '-'. `icon`: one of
+// ACTION_ICONS before the label, `sub` a line under it; `busy`: not while a turn is being written; `line`: words, to read;
+// `node`: something of the caller's own, which leaves the menu open.
 let openMenu = null
+let menuAnchor = null
 function closeMenu() {
   openMenu?.remove()
   openMenu = null
+  menuAnchor?.setAttribute('aria-expanded', 'false')
+  menuAnchor?.closest('.msg-tools, .reply-acts')?.classList.remove('held')
+  menuAnchor = null
 }
-function popMenu(anchor, entries) {
-  closeMenu()
-  const menu = el(
-    'div',
-    { class: 'pop-menu', role: 'menu' },
-    entries.map(entry => {
-      if (entry === '-') return el('hr')
-      if (entry.header) return el('div', { class: 'pop-head', text: entry.header })
-      // `checked` (true or false): an option the entry turns on and off.
-      const box = typeof entry.checked === 'boolean'
-      return el('button', { type: 'button', role: box ? 'menuitemcheckbox' : 'menuitem', 'aria-checked': box ? String(entry.checked) : null, class: [entry.danger ? 'danger' : '', entry.current ? 'current' : ''].filter(Boolean).join(' '), disabled: entry.current, title: entry.hint, onclick: () => { closeMenu(); entry.onClick() } }, [entry.current ? '✓ ' : box ? (entry.checked ? '☑ ' : '☐ ') : '', entry.label])
-    }),
+/** One entry drawn; `pick(entry)` when it is chosen. */
+function menuEntry(entry, pick) {
+  if (entry === '-') return el('hr')
+  if (entry.header) return el('div', { class: 'pop-head', text: entry.header })
+  if (entry.line) return el('p', { class: 'pop-line', text: entry.line })
+  if (entry.node) return entry.node
+  // `checked` (true or false): an option the entry turns on and off.
+  const box = typeof entry.checked === 'boolean'
+  const off = entry.current || (entry.busy && ui.generating)
+  return el(
+    'button',
+    { type: 'button', role: box ? 'menuitemcheckbox' : 'menuitem', 'aria-checked': box ? String(entry.checked) : null, class: [entry.danger ? 'danger' : '', entry.current ? 'current' : ''].filter(Boolean).join(' '), disabled: off, title: entry.hint, onclick: () => pick(entry) },
+    entry.icon
+      ? [el('span', { class: 'pop-icon', html: ACTION_ICONS[entry.icon] }), el('span', { class: 'pop-words' }, [el('span', { text: entry.label }), entry.sub ? el('small', { text: entry.sub }) : null])]
+      : [entry.current ? '✓ ' : box ? (entry.checked ? '☑ ' : '☐ ') : '', entry.label],
   )
+}
+function runEntry(entry) {
+  if (entry.busy && ui.generating) return toast(t`正在生成，稍后再试`)
+  entry.onClick()
+}
+const FINGER = matchMedia('(hover: none) and (pointer: coarse)')
+/**
+ * @param options.sheet - on a touch screen, a sheet from the bottom instead (actionSheet), with `tiles` over its list.
+ * @param options.left - the menu starts at the button's left edge, rather than ending at its right one.
+ */
+function popMenu(anchor, entries, { sheet = false, tiles = [], title = '', left: fromLeft = false } = {}) {
+  const again = menuAnchor === anchor
+  closeMenu()
+  if (again) return
+  if (sheet && FINGER.matches) return actionSheet(anchor, entries, { tiles, title })
+  const menu = el('div', { class: `pop-menu${entries.some(entry => entry.icon) ? ' iconed' : ''}`, role: 'menu' }, entries.map(entry => menuEntry(entry, picked => {
+    closeMenu()
+    runEntry(picked)
+  })))
   document.body.append(menu)
   const zoom = pageZoom()
   const at = anchor.getBoundingClientRect()
-  const [right, top, bottom] = [at.right / zoom, at.top / zoom, at.bottom / zoom]
-  const left = Math.max(8, Math.min(right - menu.offsetWidth, innerWidth / zoom - menu.offsetWidth - 8))
+  const [start, right, top, bottom] = [at.left / zoom, at.right / zoom, at.top / zoom, at.bottom / zoom]
+  const left = Math.max(8, Math.min(fromLeft ? start : right - menu.offsetWidth, innerWidth / zoom - menu.offsetWidth - 8))
   const below = bottom + 4 + menu.offsetHeight <= innerHeight / zoom - 8
   menu.style.left = `${left}px`
   menu.style.top = `${below ? bottom + 4 : Math.max(8, top - menu.offsetHeight - 4)}px`
   openMenu = menu
+  menuAnchor = anchor
+  anchor.setAttribute('aria-expanded', 'true')
+  // The bar of an older message stays while its menu is open, wherever the pointer goes.
+  anchor.closest('.msg-tools, .reply-acts')?.classList.add('held')
   menu.querySelector('button:not(:disabled)')?.focus()
   menu.addEventListener('keydown', event => {
     const items = [...menu.querySelectorAll('button:not(:disabled)')]
@@ -1205,14 +1244,59 @@ function popMenu(anchor, entries) {
     if (event.key === 'Escape') {
       closeMenu()
       anchor.focus()
-    } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    } else if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && event.target.type !== 'range') {
       event.preventDefault()
       items[(index + (event.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length]?.focus()
     }
   })
 }
+/** A menu as a phone has it: a sheet from the bottom (select-sheet.js's), the usual entries as tiles on top. */
+function actionSheet(anchor, entries, { tiles = [], title = '' } = {}) {
+  let chosen = null
+  let closing = false
+  const pick = entry => {
+    chosen = entry
+    close()
+  }
+  const sheet = el('dialog', { class: 'select-sheet action-sheet', 'aria-label': title || t`更多` }, [
+    el('div', { class: 'select-sheet-head' }, [el('span', { class: 'select-sheet-grip' }), title ? el('p', { class: 'select-sheet-title', text: title }) : null]),
+    el('div', { class: 'select-sheet-list pop-menu iconed', role: 'menu' }, [
+      tiles.length ? el('div', { class: 'action-tiles' }, tiles.map(entry => menuEntry(entry, pick))) : null,
+      ...entries.map(entry => menuEntry(entry, pick)),
+    ]),
+  ])
+  function close() {
+    if (closing) return
+    closing = true
+    sheet.classList.add('leaving')
+    let finished = false
+    const done = () => {
+      if (finished) return
+      finished = true
+      if (sheet.open) sheet.close()
+      sheet.remove()
+      if (anchor.isConnected) anchor.focus({ preventScroll: true })
+      if (chosen) runEntry(chosen)
+    }
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) return done()
+    sheet.addEventListener('animationend', done, { once: true })
+    // In case the animation never runs (a page in the background).
+    setTimeout(done, 400)
+  }
+  // A tap on the dimmed page, the phone's Back or Esc: nothing picked.
+  sheet.addEventListener('click', event => {
+    if (event.target === sheet) close()
+  })
+  sheet.addEventListener('cancel', event => {
+    event.preventDefault()
+    close()
+  })
+  document.body.append(sheet)
+  sheet.showModal()
+}
 document.addEventListener('pointerdown', event => {
-  if (openMenu && !openMenu.contains(event.target)) closeMenu()
+  // The button that opened it closes it on its click (popMenu).
+  if (openMenu && !openMenu.contains(event.target) && !menuAnchor?.contains(event.target)) closeMenu()
 }, true)
 addEventListener('resize', closeMenu)
 
@@ -2181,7 +2265,7 @@ const queueOf = chat => {
 
 function setQueue(chat, ops) {
   const all = queues()
-  if (ops.length) all[chat.id] = { tip: chat.path.at(-1)?.id, ops }
+  if (ops.length) all[chat.id] = { tip: chat.path.at(-1)?.id, ops: rules.play ? rules.play.foldOps(ops) : ops }
   else delete all[chat.id]
   keepQueues(all)
   renderQueue()
@@ -2218,7 +2302,24 @@ function markQueueSent(chat) {
 function queueChips(chat = ui.chat) {
   if (!rulesRunning() || !chat) return []
   const ops = queueOf(chat)
-  return ops.map((op, i) => el('button', { type: 'button', class: 'game-chip', title: t`取消这个操作`, text: `${rules.play.opLabel(op)} ×`, onclick: event => { event.stopPropagation(); setQueue(chat, ops.filter((_, at) => at !== i)) } }))
+  const tags = rules.play.opTags(ops, rules.play.sheetFor(chat, rules.book), rules.book)
+  const chips = tags.map(tag => el('button', { type: 'button', class: 'game-chip queued', hidden: ui.queueFolded && tags.length > 1, title: t`取消这个操作`, text: `${tag.label} ×`, onclick: event => { event.stopPropagation(); setQueue(chat, ops.filter((_, i) => !tag.at.includes(i))) } }))
+  if (tags.length < 2) return chips
+  // Two or more: one button folds them away (open to start with); the folding lasts while the page does.
+  const fold = el('button', { type: 'button', class: 'game-chip game-fold' })
+  const show = () => {
+    fold.setAttribute('aria-expanded', String(!ui.queueFolded))
+    fold.title = ui.queueFolded ? t`展开` : t`收起`
+    fold.replaceChildren(el('span', { text: t`待生效 ${tags.length} 项` }), el('span', { class: 'game-fold-mark', text: ui.queueFolded ? '▸' : '▾' }))
+  }
+  fold.onclick = event => {
+    event.stopPropagation()
+    ui.queueFolded = !ui.queueFolded
+    show()
+    for (const chip of chips) chip.hidden = ui.queueFolded
+  }
+  show()
+  return [fold, ...chips]
 }
 
 /** By the input box: the turn's operations, and the way to the 游戏菜单. */
@@ -2233,11 +2334,38 @@ function renderQueue() {
   }
   row.replaceChildren(...queueChips())
   row.hidden = !row.childNodes.length
+  refreshSlab()
   $('open-bag').hidden = !rulesRunning()
   // Points to spend or a 天赋 to choose: the button says there is something waiting.
   const waiting = rulesRunning() && ui.chat ? rules.play.pendingOf(rules.play.sheetFor(ui.chat, rules.book, queueOf(ui.chat)), rules.book) : 0
-  $('open-bag').classList.toggle('waiting', waiting > 0)
+  for (const button of [$('open-bag'), document.querySelector('.vn-bag')]) button?.classList.toggle('waiting', waiting > 0)
   $('open-bag').title = waiting > 0 ? t`有属性点或天赋可以选` : ''
+}
+
+// 随身册 (养成): loaded with the first chat whose card raises its creatures.
+let slab = null
+let slabAsked = false
+function slabContext() {
+  const chat = ui.chat
+  if (!rulesRunning() || !chat || rules.cardId !== chat.cardId || rules.book?.growth?.raise !== true || rules.book.level !== 'full') return null
+  const ops = queueOf(chat)
+  const sheet = rules.play.sheetFor(chat, rules.book, ops)
+  if (!(sheet.party ?? []).length && !(sheet.box ?? []).length) return null
+  return { chat, book: rules.book, play: rules.play, sheet, ops, face: name => cardArt.faces(ui.cardDetails.get(chat.cardId), chat, rules.book)?.(name, [name])?.src ?? '' }
+}
+function refreshSlab() {
+  if (slab) return slab.refresh()
+  if (slabAsked || !slabContext()) return
+  slabAsked = true
+  return import('/game-slab.js').then(({ createSlab }) => {
+    if (!slab) slab = createSlab({
+      el, toast, sound: () => rules.sound, context: slabContext, hidden: () => Boolean(fightOn),
+      addOp: op => setQueue(ui.chat, [...queueOf(ui.chat), op]),
+      undo: () => setQueue(ui.chat, queueOf(ui.chat).slice(0, -1)),
+      openBag,
+    })
+    slab.refresh()
+  }).catch(() => { slabAsked = false })
 }
 
 const openBag = guard(async tab => {
@@ -2254,6 +2382,7 @@ const openBag = guard(async tab => {
     fill: text => { fillInput(text); vnUi.compose() },
     onBook: book => { rules.book = book },
     onClose: () => renderChat(),
+    slab: () => slab,
   })
 })
 
@@ -2585,7 +2714,10 @@ const startFight = guard(async () => {
   await Promise.all(gate.foes.map(foe => castFoe(chat, foe.name).then(src => { if (src) castFoesShown.set(`${chat.cardId}:${foe.name}`, src) })))
   // The companions' pictures, those who have not stood on the stage yet too: a figure each in the party band.
   const companions = rules.book.companions ?? {}
+  // With the visual novel off, the cast read first, and the player's figure found as it would find it.
+  const hero = await vnUi.fightFigures?.(chat) ?? ''
   await vnUi.loadPictures?.(Object.entries(companions).flatMap(([name, companion]) => [name, ...(companion?.keys ?? [])]))
+  const cardFaces = cardArt.faces(ui.cardDetails.get(chat.cardId), chat, rules.book)
   rules.sound?.setFighting(true)
   fightOn = openBattle({
     el,
@@ -2595,22 +2727,26 @@ const startFight = guard(async () => {
     energyName: rules.book.energyName,
     words: rules.book.words ?? {},
     // A companion's face from the visual novel's cast: their name, or one the card's rules say they go by; else (a pet
-    // tamed from the bestiary, a 形态 the roster has no one for) its picture in the 敌人图鉴.
+    // tamed from the bestiary, a 形态 the roster has no one for) its picture in the 敌人图鉴; else what the 随身册 shows.
+    hero,
     faceFor: name => [name, ...(rules.book.companions?.[name]?.keys ?? [])].map(one => vnUi.pictureFor(one)).find(Boolean)
-      ?? (rules.book.foes?.[name]?.file ? `/api/foes/${chat.cardId}/${rules.book.foes[name].file}` : ''),
+      ?? (rules.book.foes?.[name]?.file ? `/api/foes/${chat.cardId}/${rules.book.foes[name].file}` : cardFaces?.(name, [name])?.src ?? ''),
     skillPicture: skillShown(chat.cardId),
     setup: encounterOf(chat, ops),
+    settled: op => rules.play.fightSettled(chat, rules.book, ops, op),
     forced: !canLeaveFight(chat, gate),
     resume: fightsKept()[spot] ?? null,
     onProgress: fight => keepFight(spot, fight),
-    onEnd: ({ over, attempt, actions, tame }) => {
+    onEnd: ({ over, attempt, actions, tame, lure, spent }) => {
       fightOn = null
+      refreshSlab()
       rules.sound?.setFighting(false)
       keepFight(spot, { attempt, actions })
       // 收服: which of those brought down the player tried for; the rules roll for it again.
-      settleFight(chat, tip, gate, ops, { over, attempt, actions, ...(tame ? { tame } : {}) })
+      settleFight(chat, tip, gate, ops, { over, attempt, actions, ...(tame ? { tame, ...(lure ? { lure } : {}) } : {}), ...(spent ? { spent } : {}) })
     },
   })
+  refreshSlab()
 })
 
 /** Whether the fight the story is waiting at is one to settle without the screen: every foe far below the player. */
@@ -2723,6 +2859,15 @@ function showLiveReasoning(article, job) {
   if (following) box.scrollTop = box.scrollHeight
   // The answer has begun: it is the thinking that came before it now.
   if (job.text) fold.querySelector('summary').textContent = t`思考过程`
+}
+
+/** 直连对话's tools while the reply is under way: what has been done so far, above it. */
+function showLiveSteps(article, job) {
+  if (!article || !job.toolSteps?.length) return
+  const list = stepList(job.toolSteps, { live: true })
+  const old = article.querySelector('.tool-steps')
+  if (old) old.replaceWith(list)
+  else article.querySelector('.msg-body')?.before(list)
 }
 
 /** Message body: story text as markdown-lite, HTML in sandboxed frames, code as <pre>. */
@@ -3022,7 +3167,7 @@ const NEAR_SCREEN = '3000px 0px'
   const near = new IntersectionObserver(entries => {
     for (const { target, isIntersecting } of entries) {
       target.classList.toggle('near', isIntersecting)
-      if (isIntersecting) fillFrameSlots(target)
+      if (isIntersecting) fillFrameSlots(target), fillBar(target)
     }
   }, { root: box, rootMargin: NEAR_SCREEN })
   const heights = new WeakMap()
@@ -3116,9 +3261,86 @@ function waitText(job) {
   return job.firstAt ? t`已写 ${span}` : t`已等 ${span}`
 }
 
+// The server tells of an upstream gone quiet every 2 seconds: with nothing from it either for this long, it is the way
+// between this page and the app that is cut.
+const LINK_QUIET_MS = 9000
+// Writing out of sight, and the app's own work after the reply, are said once they have gone on this long.
+const TAIL_AFTER_MS = 1500
+const OPEN_HIDDEN_TAG = /<(state|update(?:variable)?|choices)>(?![\s\S]*<\/\1>)/i
+
+/**
+ * What a turn waits for while nothing new shows, and on whose side: said at the end of the reply, where the reader is.
+ * '' for nothing to say. job.tailWaits: something is held up (not just going on out of sight), so it is said plainly.
+ */
+function tailText(job) {
+  const now = Date.now()
+  job.tailWaits = false
+  const model = job.by || ''
+  const since = at => Math.max(0, Math.round((now - at) / 1000))
+  if (job.phase === 'filling') return t`${model} 这轮没写变量更新，正在让它补写……（${since(job.phaseAt)} 秒）`
+  if (job.phase === 'written') return now - job.phaseAt >= TAIL_AFTER_MS ? t`模型已经写完，应用正在保存和更新状态……` : ''
+  if (job.phase === 'continuing' && !job.quiet) return t`写到了输出上限，正在接着写……`
+  // A note of its own says what is going on (a retry, a lookup, a tool).
+  if (!job.sent || (job.noteBefore != null && job.phase !== 'continuing')) return ''
+  job.tailWaits = Boolean((job.watch && now - job.heardAt > LINK_QUIET_MS) || job.quiet)
+  if (job.watch && now - job.heardAt > LINK_QUIET_MS) return t`${since(job.heardAt)} 秒没有收到应用后台的消息：断在这台设备和应用之间，不是模型的问题`
+  if (job.quiet) {
+    const seconds = job.quiet.seconds + since(job.quiet.at)
+    return job.quiet.begun ? t`上游 ${model} 已经 ${seconds} 秒没有发来新内容，在等它（不是应用卡住）` : t`上游 ${model} 还没有开始回复，已经等了 ${seconds} 秒（不是应用卡住）`
+  }
+  // What comes is not shown: how much of it there is.
+  const shown = streamingText(job.text).length
+  if (shown !== job.shownLength) Object.assign(job, { shownLength: shown, shownAt: now, shownFrom: job.text.length })
+  const hidden = job.text.length - job.shownFrom
+  if (hidden <= 0 || now - job.shownAt < TAIL_AFTER_MS) return ''
+  const tag = OPEN_HIDDEN_TAG.exec(job.text)
+  if (!tag) return t`${model} 正在写不显示的内容……（${fmt(hidden)} 字）`
+  return /^choices$/i.test(tag[1]) ? t`正文写完了，${model} 正在写行动选项……（${fmt(hidden)} 字）` : t`正文写完了，${model} 正在写变量更新……（${fmt(hidden)} 字）`
+}
+
+/** The tail kept up with: on the reply being written (`article`), and on the job for the visual novel's wait. */
+function showTail(article, job) {
+  job.tail = tailText(job)
+  if (!article) return
+  let tail = article.querySelector('.live-tail')
+  if (!job.tail) return tail?.remove()
+  if (!tail) {
+    tail = el('div', { class: 'live-tail', role: 'status' })
+    article.append(tail)
+  }
+  if (tail.textContent !== job.tail) tail.textContent = job.tail
+  tail.classList.toggle('waiting', Boolean(job.tailWaits))
+  job.reveal?.nudge()
+}
+
+// How a reply that upstream did not end as it should is told: whose doing it was, and why (server/reply-end.mjs).
+function upstreamEnd(node) {
+  const known = ui.models.find(m => m.id === node.model)
+  const model = known?.group ? `${known.group} · ${known.label}` : labelOf(node.model)
+  if (node.truncated === 'timeout') return { chip: t`⚠ 上游停住，等到超时`, why: t`上游问题：${model} 写到中途停住，一直没有发来新内容，应用等到「超时」才断开（供应商的「高级」里可以调）。写好的部分留下了，可以继续生成或重新生成。` }
+  if (node.truncated === 'filtered') return { chip: t`⚠ 上游审查，没写完`, why: t`上游问题：${model} 的内容审查在这里截住了回复（停止原因 ${node.stop}），不是应用停的。可以改写最近的输入或换个模型重新生成；直接继续生成，常常会停在同一个地方。` }
+  if (node.truncated === 'dropped') {
+    return {
+      chip: t`⚠ 上游中断，没写完`,
+      why: node.stop
+        ? t`上游问题：${model} 没写完就停了（停止原因 ${node.stop}），不是应用停的。可以继续生成或重新生成；总是这样就换个模型或供应商。`
+        : t`上游问题：${model} 没写完就结束了连接，也没说停止原因（模型、供应商或中转站那边断的），不是应用停的。可以继续生成或重新生成；总是这样就换个模型或供应商。`,
+    }
+  }
+  if (node.truncated === 'halfway') {
+    return {
+      chip: t`⚠ 上游停在半句`,
+      why: node.stop
+        ? t`多半是上游问题：${model} 报的是正常写完（停止原因 ${node.stop}），但文字停在半句；应用收到的就这么多。有些供应商会把内容审查的截断也报成正常结束。可以继续生成或重新生成。`
+        : t`多半是上游问题：${model} 报的是正常写完，但文字停在半句；应用收到的就这么多。有些供应商会把内容审查的截断也报成正常结束。可以继续生成或重新生成。`,
+    }
+  }
+  return null
+}
+
 function liveNodes(chat, { animate = false } = {}) {
   const job = ui.busy.get(chat.id)
-  if (!job || job.kind === 'compact' || job.kind === 'fill' || job.kind === 'choices') return []
+  if (!job || job.kind === 'compact' || job.kind === 'fill' || job.kind === 'fixVars' || job.kind === 'choices') return []
   const nodes = []
   if (job.echo) {
     const echo = renderNode(chat, { id: 'pending-user', role: 'user', text: job.echo, siblingCount: 1 }, false)
@@ -3130,9 +3352,11 @@ function liveNodes(chat, { animate = false } = {}) {
     // What the player's action came to stays in sight while the story is written on from it.
     job.outcome ? el('div', { class: `roll-record ${job.outcome.tier}`, text: job.outcome.text }) : null,
     job.reasoning ? reasoningFold(job.reasoning, { thinking: !job.text }) : null,
+    job.toolSteps?.length ? stepList(job.toolSteps, { live: true }) : null,
     // As far as 出字效果 has shown it: drawn again (switching back), the reply does not jump ahead.
     el('div', { class: 'msg-body', html: job.text ? liveHtml(chat, job.reveal ? job.reveal.text() : job.text) : '' }),
   ])
+  if (job.kind === 'turn') showTail(live, job)
   nodes.push(live)
   return nodes
 }
@@ -3158,6 +3382,11 @@ function followServerTurn(view) {
 const changes = { cards: false, chats: false, chat: false, timer: 0 }
 
 function noteChange(change) {
+  // 直连对话's tools: something waits for a yes, or no longer does.
+  if (change.kind === 'tools') {
+    if (change.id === ui.chat?.id) toolsUi?.then(tools => tools.load()).catch(() => {})
+    return
+  }
   if (change.kind === 'card') changes.cards = true
   if (change.kind === 'chat' && (!change.cardId || change.cardId === ui.cardId)) changes.chats = true
   if (change.kind === 'chat' && change.id === ui.chat?.id) changes.chat = true
@@ -3230,7 +3459,14 @@ async function copyText(text) {
   toast(copied ? t`已复制` : t`复制失败，请长按文字选择`)
 }
 
-const shownText = element => element.innerText.trim()
+// Without the pictures standing in it (media.js placePictures): their buttons have words.
+function shownText(element) {
+  const pictures = [...element.querySelectorAll('.reply-images:not([hidden])')]
+  for (const box of pictures) box.hidden = true
+  const text = element.innerText.trim()
+  for (const box of pictures) box.hidden = false
+  return text
+}
 
 /** A reply's parts as it shows them, in order: the time box, the story, the card's frames, the status bar, the options. */
 function replyParts(article, choices) {
@@ -3257,31 +3493,92 @@ function messageParts(article, node, choices) {
   return node.role !== 'user' ? replyParts(article, choices) : [{ kind: 'story', text: async () => shownText(article.querySelector('.msg-body')) }]
 }
 
+/** A message's text by kind of part (messageParts), `kind` null for all of it. */
+async function partsText(parts, kind) {
+  const texts = await Promise.all(parts.filter(part => !kind || part.kind === kind).map(part => part.text()))
+  return texts.filter(Boolean).join('\n\n')
+}
+
+/** 复制 under a message: the whole of the player's, the story of a reply (all of it where there is no story apart). The icon ticks. */
+async function copyMessage(button, node, choices) {
+  const parts = messageParts(button.closest('.msg'), node, choices)
+  await copyText((await partsText(parts, node.role !== 'user' && parts.some(part => part.kind === 'story') ? 'story' : null)) || node.text)
+  const icon = button.querySelector('.act-icon')
+  if (!icon) return
+  icon.innerHTML = ACTION_ICONS.done
+  button.classList.add('on')
+  setTimeout(() => {
+    icon.innerHTML = ACTION_ICONS.copy
+    button.classList.remove('on')
+  }, 1300)
+}
+
 /**
- * 复制 under a message: a user's message straight away; a reply all of it, or only its story, status or options.
- * Status is what the page can tell apart (the time box, the status bar, a card's panels, ``` blocks); one a card writes
- * as plain story lines stays in the story, and the menu says so.
+ * 复制… under a reply: all of it, or only its story, status or options. Status is what the page can tell apart (the time
+ * box, the status bar, a card's panels, ``` blocks); one a card writes as plain story lines stays in the story, and the
+ * menu says so.
  */
-function copyMenu(anchor, node, choices) {
-  const article = anchor.closest('.msg')
-  const reply = node.role !== 'user'
+function copyMenu(anchor, article, node, choices) {
   const parts = messageParts(article, node, choices)
-  const copy = kind => async () => {
-    const texts = await Promise.all(parts.filter(part => !kind || part.kind === kind).map(part => part.text()))
-    copyText(texts.filter(Boolean).join('\n\n') || node.text)
-  }
+  const copy = kind => async () => copyText((await partsText(parts, kind)) || node.text)
   const kinds = new Set(parts.map(part => part.kind))
   const entries = [{ label: t`全部`, onClick: copy(null) }]
-  if (reply) {
-    if (kinds.has('story') && kinds.size > 1) entries.push({ label: t`仅正文`, onClick: copy('story') })
-    if (kinds.has('status')) entries.push({ label: t`仅状态`, hint: t`时间地点、状态栏、角色卡画的面板和代码块`, onClick: copy('status') })
-    if (kinds.has('choices')) entries.push({ label: t`仅选项`, onClick: copy('choices') })
-  }
+  if (kinds.has('story') && kinds.size > 1) entries.push({ label: t`仅正文`, onClick: copy('story') })
+  if (kinds.has('status')) entries.push({ label: t`仅状态`, hint: t`时间地点、状态栏、角色卡画的面板和代码块`, onClick: copy('status') })
+  if (kinds.has('choices')) entries.push({ label: t`仅选项`, onClick: copy('choices') })
   const input = $('input').value.trim()
   if (input) entries.push('-', { label: t`输入框里的内容`, onClick: () => copyText(input) })
-  if (!reply && !input) return copy(null)()
-  const note = reply && !kinds.has('status') ? ['-', { header: t`没认出状态栏：写在正文里的状态分不出来，要的话复制「全部」` }] : []
-  popMenu(anchor, [{ header: t`复制` }, ...entries, ...note])
+  const note = kinds.has('status') ? [] : ['-', { header: t`没认出状态栏：写在正文里的状态分不出来，要的话复制「全部」` }]
+  popMenu(anchor, [{ header: t`复制` }, ...entries, ...note], { sheet: true, left: true })
+}
+
+/** An icon button of a message's bar. `label` names it (and shows, with `text`); the title says more where there is more to say. */
+function actButton(icon, label, onclick, { text = false, cls = '', title = label, ...attrs } = {}) {
+  return el('button', { type: 'button', class: `act${cls ? ` ${cls}` : ''}`, title, 'aria-label': label, onclick, ...attrs }, [
+    el('span', { class: 'act-icon', html: ACTION_ICONS[icon] }),
+    text ? el('span', { class: 'act-text', text: label }) : null,
+  ])
+}
+
+// Bars not made yet: a message out of view (hundreds of them in a long chat) gets its buttons as it comes near the screen,
+// with its frames. Nothing moves: a bar has its height, or stands out of the flow, without them.
+const barsToMake = new WeakMap() // .msg-tools → () => its children
+
+function messageBar(build, later) {
+  const bar = el('div', { class: 'msg-tools' })
+  if (later) barsToMake.set(bar, build)
+  else bar.append(...build())
+  return bar
+}
+
+function fillBar(article) {
+  const bar = article.querySelector(':scope > .msg-tools')
+  const build = bar && barsToMake.get(bar)
+  if (!build) return
+  barsToMake.delete(bar)
+  bar.append(...build())
+}
+
+/** What there is to know of a message, put away behind one word at the end of its bar: [{ text, detail, warn }]. */
+function factsButton(facts) {
+  if (!facts.length) return null
+  const first = facts.find(fact => fact.warn) ?? facts[0]
+  const entries = facts.flatMap(fact => [{ header: fact.text }, ...String(fact.detail ?? '').split('\n').filter(Boolean).map(line => ({ line }))])
+  const text = facts.length > 1 ? `${first.text} +${facts.length - 1}` : first.text
+  return el('button', { type: 'button', class: `msg-facts${first.warn ? ' warn' : ''}`, title: facts.map(fact => [fact.text, fact.detail].filter(Boolean).join('\n')).join('\n\n'), 'aria-haspopup': 'menu', onclick: event => popMenu(event.currentTarget, entries, { sheet: true }) }, [el('span', { class: 'act-icon', html: ACTION_ICONS.facts }), el('span', { class: 'msg-facts-text', text })])
+}
+
+/** What the latest reply needs a hand with, each with the button that does it: [{ text, detail, quiet, icon, act: { label, onClick, attrs } }]. */
+function fixRows(rows) {
+  if (!rows.length) return null
+  return el('div', { class: `msg-fixes${rows.every(row => row.quiet) ? ' calm' : ''}`, role: 'group' }, rows.map(row => {
+    const detail = row.detail ? el('small', { text: row.detail, title: t`点一下看全文`, onclick: event => event.currentTarget.classList.toggle('open') }) : null
+    return el('div', { class: `fix-row${row.quiet ? ' quiet' : ''}` }, [
+      el('span', { class: 'act-icon', html: ACTION_ICONS[row.icon ?? (row.quiet ? 'facts' : 'warn')] }),
+      el('span', { class: 'fix-text' }, [el('span', { text: row.text.replace(/^⚠\s*/, '') }), detail]),
+      row.act ? el('button', { type: 'button', class: 'btn small', text: row.act.label, ...(row.act.attrs ?? {}), onclick: row.act.onClick }) : null,
+    ])
+  }))
 }
 
 /** Who says a message: the player's persona or the card. The default persona name is the Chinese 你 (for the model); an English page says You. */
@@ -3289,105 +3586,172 @@ function speakerName(chat, node) {
   return node.role === 'user' ? (chat.names.user === zh`你` ? t`你` : chat.names.user) : chat.names.char
 }
 
+/** What 「⚠ 写到输出上限，被截断」 says: where the reply stopped, whose limit that was, and what to do. */
+function capTitle(node) {
+  const { tokens = 0, from = '' } = node.cap ?? {}
+  const told = [
+    tokens ? t`模型写到了单次输出的上限（${fmt(tokens)} token，思考也算在里面），回复后半段没写出来，常见的是变量更新、行动选项这些放在最后的块。` : t`模型写到了单次输出的上限（思考也算在里面），回复后半段没写出来，常见的是变量更新、行动选项这些放在最后的块。`,
+    node.more ? t`程序已经自动接着写了 ${node.more} 次，还是没写完。` : '',
+    from === 'provider' ? t`这个上限是供应商「高级」里填的「最大输出 token」，可以填大一点。`
+      : from === 'model' ? t`这是模型或中转站自己的上限，调大没有用：换一个单次能写更多的模型，或者把思考调低、正文写短些。`
+        : from === 'default' ? t`没有填过上限，用的是默认值。在「模型供应商」这个供应商的「高级」里可以填「最大输出 token」（比如 32000）。`
+          : t`上限取预设的「最大回复长度」；供应商「高级」里填了「最大输出 token」时以那个为准。`,
+    t`先点「继续生成」让它从断开的地方接着写完；调大上限还在同样的地方断，就是模型或中转站自己压低了。`,
+  ]
+  return told.filter(Boolean).join('\n')
+}
+
 function renderNode(chat, node, isLastAssistant, depth = 0) {
   const isUser = node.role === 'user'
   const name = speakerName(chat, node)
-  const tools = []
   const { shown, raw, time, choices, checks, fights, cardStatus } = replyDisplay(chat, node, isLastAssistant, depth)
-  if (node.siblingCount > 1) {
-    tools.push(
-      el('button', { title: t`上一个版本`, text: '‹', ...busyOff(node.siblingIndex === 0), onclick: () => selectNode(node.siblingIds[node.siblingIndex - 1]) }),
-      el('span', { class: 'swipe', text: `${node.siblingIndex + 1}/${node.siblingCount}` }),
-      el('button', { title: t`下一个版本`, text: '›', ...busyOff(node.siblingIndex === node.siblingCount - 1), onclick: () => selectNode(node.siblingIds[node.siblingIndex + 1]) }),
-    )
-  }
-  if (node.id !== 'root' && node.id !== 'pending-user' && !node.compaction && !node.auto) {
-    tools.push(el('button', { text: t`修改`, title: t`直接改这条消息的原文，模型之后看到的也是改过的；不重新生成`, ...busyOff(), onclick: event => openEditor(chat, node, event.currentTarget.closest('.msg')) }))
-  }
-  if (node.id !== 'pending-user') tools.push(el('button', { text: t`复制`, title: isUser ? t`复制这条消息的文字` : t`复制这条回复：全部，或只要正文、状态、选项`, onclick: event => copyMenu(event.currentTarget, node, choices) }))
+  const latest = !isUser && isLastAssistant
+  const pending = node.id === 'pending-user'
+  const whole = node.id !== 'root' && !pending && !node.compaction // a round's own message, not the opening or a compaction
+  const own = whole && !node.auto
   // With the player's message deleted there is nothing to write it from again.
-  if (!isUser && node.id !== 'root' && isLastAssistant && chat.path.some(other => other.id === node.parent)) {
-    tools.push(el('button', { text: t`重新生成`, ...busyOff(), onclick: () => regenerate(node.parent) }))
-    tools.push(el('button', { text: t`继续生成`, title: t`从这条回复停下的地方接着写（写到上限被截断、你停止了、或中途断开时用）。写完是这条回复的新版本，原来那版在 ‹ › 里还能翻到`, ...busyOff(), onclick: () => continueReply(node.id) }))
-  }
-  if (!isUser && isLastAssistant && (node.id !== 'root' || node.compaction)) {
-    tools.push(el('button', { text: t`导出存档`, title: t`把剧情存档、最近几轮原文和变量存成文件，可以在新对话或新版本的角色卡里接着写`, ...busyOff(), onclick: () => exportStory(node) }))
-  }
-  if (!isUser && (node.id !== 'root' || node.compaction)) {
-    tools.push(el('button', { text: t`分支到新对话`, title: t`开一个新对话，只带上到这一条为止的剧情（之后的对话和其他版本都不带），原对话不变`, ...busyOff(), onclick: () => forkChat(node.id) }))
-  }
-  // 隐藏这一轮: replies after the last compaction (the model reads the ones before only as its archive).
+  const again = latest && node.id !== 'root' && chat.path.some(other => other.id === node.parent)
   const at = chat.path.findIndex(n => n.id === node.id)
-  if (!isUser && node.id !== 'root' && node.id !== 'pending-user' && !node.compaction && at > chat.path.findLastIndex(n => n.compaction)) {
-    tools.push(
-      el('button', {
-        text: node.hidden ? t`取消隐藏` : t`隐藏这一轮`,
-        title: node.hidden
-          ? t`这一轮重新发给模型`
-          : t`这一轮（你的输入和这条回复）留在对话里，但之后不再发给模型，比如一直触发模型内容审查的一轮。变量不会回退；隐藏中间的回合，下一轮会重新写一次缓存。重新生成这条回复后，新版本照常发送`,
-        ...busyOff(),
-        onclick: () => hideRound(node.id, !node.hidden),
-      }),
-    )
-  }
-  if (!isUser && node.hidden) tools.push(el('span', { class: 'chip', title: t`这一轮（你的输入和这条回复）不发给模型，只留在对话里`, text: t`已隐藏：不发给模型` }))
-  // 长期记忆: the 记忆簿 entries this round's message brought back (a line of their own, below); the tidy after the latest reply.
-  const recalled = !isUser ? chat.path[at - 1]?.recalled : null
-  if (!isUser && isLastAssistant && chat.tidying) {
-    tools.push(el('span', { class: 'chip quiet', text: t`整理记忆中…` }), el('button', { text: t`停止整理`, onclick: () => cancelTidy() }))
-  } else if (!isUser && isLastAssistant && chat.memoryError) {
-    tools.push(el('button', { type: 'button', class: 'chip warn', title: chat.memoryError, text: t`⚠ 整理记忆没成功`, onclick: () => openMemory() }))
-  }
-  if (!isUser && !isLastAssistant && node.id !== 'pending-user' && Object.keys(node.state ?? {}).length) {
-    tools.push(el('button', { text: t`这一轮的状态`, title: t`看这条回复写完时的变量，只看不改`, onclick: () => showFloorState(chat, node) }))
-  }
-  if (!isUser && !isLastAssistant) {
-    tools.push(el('button', { text: t`回滚到这里`, title: t`收起之后的对话，状态也回到这一轮；随时可以恢复`, ...busyOff(), onclick: () => rollbackTo(node.id) }))
-    tools.push(el('button', { text: t`从这里分支`, ...busyOff(), onclick: () => branchFrom(node.id, t`从「${node.text.slice(0, 16)}…」之后分支`) }))
-  }
-  if (isUser && !node.auto) {
-    tools.push(el('button', { text: t`编辑重发`, ...busyOff(), onclick: guard(async () => {
-      $('input').value = node.text
-      branchFrom(node.parent, t`编辑重发：将作为这一轮的新版本`)
-      // 直连对话: the message's files come back with it, to send again or take off.
-      if (node.files) {
-        ui.directFiles = (await api(`/api/chats/${chat.id}/messages/${node.id}/files`)).files
-        renderDirectFiles()
-      }
-    }) }))
-    if (node.injected?.length) tools.push(el('span', { class: 'chips' }, node.injected.map(name => el('span', { class: 'chip', title: t`本轮注入的世界书`, text: `📖 ${name}` }))))
-  }
-  if (node.id !== 'root' && node.id !== 'pending-user' && !node.compaction && !node.auto) {
-    tools.push(el('button', { text: t`删除`, title: t`删掉这一条，你说的或模型写的都行。模型之后不再看到它，变量不回退`, ...busyOff(), onclick: () => deleteMessage(node.id) }))
-  }
-  if (!isUser && node.id !== 'pending-user') tools.push(mediaUi.toolsFor(node))
+  const articleOf = event => event.currentTarget.closest('.msg')
+  const article = () => document.querySelector(`#transcript .msg[data-id="${CSS.escape(node.id)}"]`)
+
+  // ── What there is to say of it: what needs a hand, on the latest reply, with its button; the rest behind 「状态 4 项」.
+  const facts = []
+  const fixes = []
+  const onward = again ? { label: t`继续生成`, attrs: busyOff(), onClick: () => continueReply(node.id) } : null
+  const say = (text, detail = '', { act = null, warn = false, quiet = !warn, icon } = {}) =>
+    (latest && (act || warn) ? fixes.push({ text, detail, quiet, icon, act }) : facts.push({ text, detail, warn }))
   if (!isUser && node.stateChanges?.length) {
     const changes = node.stateChanges
-    const text = changes.length <= 3 ? t`状态：${changes.join(t`、`)}` : t`状态更新 ${changes.length} 项`
-    tools.push(el('span', { class: 'chip', title: changes.join('\n'), text }))
+    const inline = changes.join(t`、`)
+    facts.push({ text: changes.length <= 3 && inline.length <= 24 ? t`状态：${inline}` : t`状态更新 ${changes.length} 项`, detail: changes.join('\n') })
   }
-  if (!isUser && node.historyTrim?.removedChars > 0) {
-    tools.push(el('span', { class: 'chip', title: t`按角色卡的「仅发送」正则，这条回复在之后的上下文里去掉了这些内容（比如变量更新块），显示不受影响`, text: t`上下文精简 ${fmt(node.historyTrim.removedChars)} 字` }))
-  }
-  if (!isUser && node.truncated === 'stopped') {
-    tools.push(el('span', { class: 'chip', title: t`你在这里停止了生成，写好的部分留下了。想要完整的一版可以重新生成。`, text: t`已停止，没写完` }))
-  } else if (!isUser && node.truncated === 'broken') {
-    tools.push(el('span', { class: 'chip warn', title: t`回复写到中途被上游断开了（连接被对方服务器、代理或网络切断，或者对方返回了错误），写好的部分留下了。可以重新生成。具体原因在 设置 → 更多 → 错误日志。`, text: t`⚠ 上游中断，没写完` }))
-  } else if (!isUser && node.truncated === 'paused') {
-    tools.push(el('span', { class: 'chip warn', title: t`联网搜索时模型中途暂停了（搜了很多次的时候会这样），这条回复没写完。可以重新生成。`, text: t`⚠ 联网搜索中途停了，没写完` }))
-  } else if (!isUser && node.truncated) {
-    tools.push(el('span', { class: 'chip warn', title: t`模型写到了单次输出的上限，回复后半段（常见的是变量更新、行动选项这些放在最后的块）没写出来。上限取预设的「最大回复长度」；供应商设置里填了「最大输出」时以那个为准。可以重新生成，或调大上限。`, text: t`⚠ 写到输出上限，被截断` }))
-  }
+  if (isUser && node.injected?.length) facts.push({ text: t`世界书 ${node.injected.length} 条`, detail: [t`本轮注入的世界书`, ...node.injected].join('\n') })
+  const endedBy = isUser ? null : upstreamEnd(node)
+  if (endedBy) say(endedBy.chip, endedBy.why, { act: onward, warn: true })
+  else if (!isUser && node.truncated === 'stopped') say(t`已停止，没写完`, t`你在这里停止了生成，写好的部分留下了。想要完整的一版可以重新生成。`, { act: onward })
+  else if (!isUser && node.truncated === 'broken') say(t`⚠ 上游中断，没写完`, t`回复写到中途被上游断开了（连接被对方服务器、代理或网络切断，或者对方返回了错误），写好的部分留下了。可以重新生成。具体原因在 设置 → 更多 → 错误日志。`, { act: onward, warn: true })
+  else if (!isUser && node.truncated === 'paused') say(t`⚠ 联网搜索中途停了，没写完`, t`联网搜索时模型中途暂停了（搜了很多次的时候会这样），这条回复没写完。可以重新生成。`, { act: onward, warn: true })
+  else if (!isUser && node.truncated) say(t`⚠ 写到输出上限，被截断`, capTitle(node), { act: onward, warn: true })
+  else if (!isUser && node.more) facts.push({ text: t`自动续写 ${node.more} 次`, detail: t`模型写到了单次输出的上限，程序从断开的地方自动接着写了 ${node.more} 次，拼成了这一条。常这样的话，在「模型供应商」这个供应商的「高级」里把「最大输出 token」填大，一次写完更省。不想自动接着写，在「设置 → 世界书与状态」里关。` })
   // A reply stopped at a roll has its update and choices still to come, in the turn that settles it.
-  if (!isUser && isLastAssistant && node.id !== 'root' && !node.compaction && !node.gate && missingUpdate(chat, node)) {
+  const closed = latest && node.id !== 'root' && !node.compaction && !node.gate
+  if (closed && missingUpdate(chat, node)) {
     const filling = ui.busy.get(chat.id)?.kind === 'fill'
-    tools.push(el('span', { class: 'chip warn', title: node.updateUnread ? t`这一轮模型写了变量更新块，但格式坏得一条也读不出来，状态没跟着剧情变。「补写变量」让模型重写这一块，正文不动。` : t`这张卡每轮结尾要写 <UpdateVariable> 变量更新块，这一轮模型没写，状态不会跟着剧情变。「补写变量」让模型只补这一块，正文不动。`, text: node.updateUnread ? t`⚠ 变量更新读不出来` : t`⚠ 这轮没写变量更新` }))
-    tools.push(el('button', { text: filling ? t`补写中…` : t`补写变量`, title: t`按这张卡的变量规则，让模型为这一轮补写变量更新，补完状态立即更新`, ...busyOff(), onclick: () => fillUpdate(node.id) }))
+    say(node.updateUnread ? t`⚠ 变量更新读不出来` : t`⚠ 这轮没写变量更新`, node.updateUnread ? t`这一轮模型写了变量更新块，但格式坏得一条也读不出来，状态没跟着剧情变。「补写变量」让模型重写这一块，正文不动。` : t`这张卡每轮结尾要写 <UpdateVariable> 变量更新块，这一轮模型没写，状态不会跟着剧情变。「补写变量」让模型只补这一块，正文不动。`, {
+      warn: true,
+      act: { label: filling ? t`补写中…` : t`补写变量`, attrs: busyOff(), onClick: () => fillUpdate(node.id) },
+    })
   }
-  if (!isUser && isLastAssistant && node.schemaProblem) tools.push(el('span', { class: 'chip warn', title: `${t`这一轮的变量不符合卡的变量规则，所以规则这轮整个没生效：数值范围、默认值和清理都没做，变量先按模型写的留着。不改掉的话下一轮还会这样。可以重新生成这一轮，或者在状态面板里改掉下面这些字段。`}\n\n${node.schemaProblem}`, text: t`⚠ 变量规则这轮没生效` }))
-  if (node.edited) tools.push(el('span', { class: 'chip', title: t`${new Date(node.edited.at).toLocaleString(locale)} 改过${node.edited.count > 1 ? t` ${node.edited.count} 次` : ''}`, text: t`已修改` }))
-  if (node.templateErrors?.length) tools.push(el('span', { class: 'chip warn', title: node.templateErrors.join('\n'), text: t`⚠ ${node.templateErrors.length} 条 EJS 模板出错` }))
-  if (!isUser && isLastAssistant && chat.asksChoices && node.id !== 'root' && !node.compaction && !node.gate) tools.push(...choicesTools(chat, node, raw, choices))
+  // 这轮变量没更新上 (server/turn-vars.mjs): each thing wrong, one line; 修好 has the model write the update again.
+  const issues = isUser ? [] : node.varIssues ?? []
+  const fixingVars = ui.busy.get(chat.id)?.kind === 'fixVars'
+  if (issues.length) {
+    say(t`⚠ 这轮有 ${issues.length} 处变量没更新上`, issues.map(varIssueLine).join('\n'), {
+      warn: true,
+      act: { label: fixingVars ? t`修复中…` : t`修好`, attrs: { ...busyOff(fixingVars), title: t`让模型照着卡的规则重写这一轮的变量更新，正文不动。修完能撤销` }, onClick: () => fixVars(node.id) },
+    })
+  } else if (latest && node.schemaProblem) say(t`⚠ 变量规则这轮没生效`, `${t`这一轮的变量不符合卡的变量规则，所以规则这轮整个没生效：数值范围、默认值和清理都没做，变量先按模型写的留着。不改掉的话下一轮还会这样。可以重新生成这一轮，或者在状态面板里改掉下面这些字段。`}\n\n${node.schemaProblem}`, { warn: true })
+  if (latest && node.varFix?.undo) {
+    const { count, changed } = node.varFix
+    const lines = changed.map(item => t`${item.path}：${item.from || t`（没有）`} → ${item.to || t`（去掉了）`}`)
+    if (count > changed.length) lines.push(t`还有 ${count - changed.length} 项`)
+    // 已修好 only when nothing is left wrong; else what the rewrite did.
+    const said = !count ? t`已重写这轮的变量更新，变量没有变化` : issues.length ? t`已重写这轮的变量更新，${count} 项变了` : t`已修好这轮变量，${count} 项变了`
+    say(said, lines.join('\n'), {
+      icon: 'facts',
+      act: { label: t`撤销`, attrs: { ...busyOff(fixingVars), title: t`换回修之前的变量更新和变量` }, onClick: () => undoFix(node.id) },
+    })
+  }
+  const rewrite = closed && chat.asksChoices ? choicesRewrite(chat, node, raw, choices) : null
+  if (rewrite?.missing) say(t`⚠ 这轮没写选项`, t`模型这一轮没有在结尾写行动选项。「补写选项」让模型只写这四项，正文不动。`, { warn: true, act: rewrite })
+  if (node.templateErrors?.length) say(t`⚠ ${node.templateErrors.length} 条 EJS 模板出错`, node.templateErrors.join('\n'), { warn: true })
+  // 长期记忆: the 记忆簿 entries this round's message brought back (a line of their own, below); the tidy after the latest reply.
+  const recalled = !isUser ? chat.path[at - 1]?.recalled : null
+  if (latest && chat.tidying) say(t`整理记忆中…`, '', { act: { label: t`停止整理`, onClick: () => cancelTidy() } })
+  else if (latest && chat.memoryError) say(t`⚠ 整理记忆没成功`, chat.memoryError, { warn: true, act: { label: t`查看`, onClick: () => openMemory() } })
+  // 隐藏这一轮: replies after the last compaction (the model reads the ones before only as its archive).
+  const hideable = !isUser && whole && at > chat.path.findLastIndex(n => n.compaction)
+  if (!isUser && node.hidden) {
+    say(t`已隐藏：不发给模型`, t`这一轮（你的输入和这条回复）不发给模型，只留在对话里`, {
+      icon: 'hide',
+      act: hideable ? { label: t`取消隐藏`, attrs: busyOff(), onClick: () => hideRound(node.id, false) } : null,
+    })
+  }
+  if (!isUser && node.historyTrim?.removedChars > 0) facts.push({ text: t`上下文精简 ${fmt(node.historyTrim.removedChars)} 字`, detail: t`按角色卡的「仅发送」正则，这条回复在之后的上下文里去掉了这些内容（比如变量更新块），显示不受影响` })
+  if (node.edited) facts.push({ text: t`已修改`, detail: t`${new Date(node.edited.at).toLocaleString(locale)} 改过${node.edited.count > 1 ? t` ${node.edited.count} 次` : ''}` })
+
+  // ── What can be done with it: the usual on a row of icons, the rest behind ⋯ (a phone's sheet has the usual as tiles).
+  const editThis = box => openEditor(chat, node, box)
+  const resendThis = guard(async () => {
+    $('input').value = node.text
+    branchFrom(node.parent, t`编辑重发：将作为这一轮的新版本`)
+    // 直连对话: the message's files come back with it, to send again or take off.
+    if (node.files) {
+      ui.directFiles = (await api(`/api/chats/${chat.id}/messages/${node.id}/files`)).files
+      renderDirectFiles()
+    }
+  })
+  const branchHere = () => branchFrom(node.id, t`从「${node.text.slice(0, 16)}…」之后分支`)
+  const entries = {
+    resend: isUser && !node.auto && !pending && { icon: 'resend', label: t`编辑重发`, sub: t`改了再发一次，作为这一轮的新版本`, busy: true, onClick: resendThis },
+    edit: own && { icon: 'edit', label: t`修改`, sub: t`直接改原文，不重新生成`, busy: true, onClick: () => editThis(article()) },
+    copy: !pending && { icon: 'copy', label: t`复制`, onClick: () => { const button = article()?.querySelector('.act.copy'); if (button) copyMessage(button, node, choices) } },
+    copyPart: !isUser && { icon: 'copy', label: t`复制…`, sub: t`全部，或只要正文、状态、选项`, onClick: () => { const box = article(); if (box) copyMenu(box.querySelector('.msg-more') ?? box, box, node, choices) } },
+    onward: again && { icon: 'onward', label: t`继续生成`, sub: t`从停下的地方接着写，成为新的一版`, hint: t`从这条回复停下的地方接着写（写到上限被截断、你停止了、或中途断开时用）。写完是这条回复的新版本，原来那版在 ‹ › 里还能翻到`, busy: true, onClick: () => continueReply(node.id) },
+    branch: !isUser && !isLastAssistant && !pending && { icon: 'branch', label: t`从这里分支`, sub: t`就在这段对话里另写一条线`, busy: true, onClick: branchHere },
+    fork: !isUser && (node.id !== 'root' || node.compaction) && { icon: 'fork', label: t`分支到新对话`, sub: t`带上到这里的剧情开一个新对话`, hint: t`开一个新对话，只带上到这一条为止的剧情（之后的对话和其他版本都不带），原对话不变`, busy: true, onClick: () => forkChat(node.id) },
+    back: !isUser && !isLastAssistant && !pending && { icon: 'back', label: t`回滚到这里`, sub: t`收起之后的对话，随时能恢复`, hint: t`收起之后的对话，状态也回到这一轮；随时可以恢复`, busy: true, onClick: () => rollbackTo(node.id) },
+    checkVars: latest && closed && !issues.length && hasUpdate(chat, node) && { icon: 'facts', label: t`核对这轮变量`, sub: t`变量和剧情对不上时，让模型重写这一轮的变量更新`, hint: t`让模型对照这条回复的剧情，重写这一轮的变量更新：漏了的补上，写错的改掉。正文不动，修完能撤销`, busy: true, onClick: () => fixVars(node.id) },
+    floor: !isUser && !isLastAssistant && !pending && Object.keys(node.state ?? {}).length > 0 && { icon: 'facts', label: t`这一轮的状态`, sub: t`看这条回复写完时的变量，只看不改`, onClick: () => showFloorState(chat, node) },
+    hide: hideable && {
+      icon: node.hidden ? 'show' : 'hide',
+      label: node.hidden ? t`取消隐藏` : t`隐藏这一轮`,
+      sub: node.hidden ? t`这一轮重新发给模型` : t`留在对话里，不再发给模型`,
+      hint: node.hidden ? '' : t`这一轮（你的输入和这条回复）留在对话里，但之后不再发给模型，比如一直触发模型内容审查的一轮。变量不会回退；隐藏中间的回合，下一轮会重新写一次缓存。重新生成这条回复后，新版本照常发送`,
+      busy: true,
+      onClick: () => hideRound(node.id, !node.hidden),
+    },
+    export: latest && (node.id !== 'root' || node.compaction) && { icon: 'save', label: t`导出存档`, sub: t`存成文件，以后或换新版卡接着写`, hint: t`把剧情存档、最近几轮原文和变量存成文件，可以在新对话或新版本的角色卡里接着写`, busy: true, onClick: () => exportStory(node) },
+    remove: own && { icon: 'remove', label: t`删除这一条`, sub: t`模型之后不再看到它，变量不回退`, danger: true, busy: true, onClick: () => deleteMessage(node.id) },
+  }
+  const groups = (...lists) => lists.map(list => list.filter(Boolean)).filter(list => list.some(entry => !entry.header)).flat()
+  const openMore = event => {
+    const button = event.currentTarget
+    const touch = FINGER.matches
+    const pictures = isUser || pending ? [] : mediaUi.menuFor(node)
+    const { draw, library, pick, wear, read } = Object.fromEntries(pictures.map(entry => [entry.id, entry]))
+    const factLines = touch && facts.length ? [{ icon: 'facts', label: t`这一轮的情况`, sub: facts.map(fact => fact.text).join(t`、`), onClick: () => popMenu(button, facts.flatMap(fact => [{ header: fact.text }, ...String(fact.detail ?? '').split('\n').filter(Boolean).map(line => ({ line }))]), { sheet: true }) }] : []
+    const tiles = (isUser ? [entries.resend, entries.copy, entries.edit] : latest ? [entries.edit, entries.copyPart, draw, entries.onward] : [entries.copy, entries.edit, draw, read]).filter(Boolean).map(entry => ({ ...entry, sub: '' }))
+    const shownAs = touch ? tiles.map(tile => tile.icon + tile.label) : []
+    const left = entry => entry && !shownAs.includes(entry.icon + entry.label)
+    const list = groups(
+      [!isUser && left(entries.copyPart) && entries.copyPart, isUser && entries.edit && left(entries.edit) && entries.edit],
+      // Beside 配图 its arrow has them, but not for a finger.
+      touch ? [{ header: t`画面` }, left(library) && library, left(pick) && pick, latest && wear] : [],
+      [{ header: t`故事` }, left(entries.onward) && entries.onward, touch && left(entries.branch) && entries.branch, entries.fork, entries.back, entries.checkVars, entries.floor, entries.hide, entries.export, ...factLines],
+    )
+    popMenu(button, entries.remove ? [...list, ...(list.length ? ['-'] : []), entries.remove] : list, { sheet: true, tiles, left: !isUser || !touch })
+  }
+  const hasMore = !pending && (Object.entries(entries).some(([key, entry]) => entry && !(key === 'copy' || key === 'branch' || (isUser && key === 'resend'))) || !isUser)
+  const buildTools = () => [
+    node.siblingCount > 1
+      ? el('span', { class: 'pager' }, [
+          actButton('left', t`上一个版本`, () => selectNode(node.siblingIds[node.siblingIndex - 1]), busyOff(node.siblingIndex === 0)),
+          el('span', { class: 'swipe', text: `${node.siblingIndex + 1} / ${node.siblingCount}` }),
+          actButton('right', t`下一个版本`, () => selectNode(node.siblingIds[node.siblingIndex + 1]), busyOff(node.siblingIndex === node.siblingCount - 1)),
+        ])
+      : null,
+    again ? actButton('redo', t`重新生成`, () => regenerate(node.parent), { text: true, cls: 'lead', ...busyOff() }) : null,
+    entries.branch ? actButton('branch', t`从这里分支`, branchHere, { title: t`从这里分支：就在这段对话里另写一条线`, ...busyOff() }) : null,
+    entries.resend ? actButton('resend', t`编辑重发`, resendThis, { ...busyOff() }) : null,
+    actButton('copy', t`复制`, event => copyMessage(event.currentTarget, node, choices), { cls: 'copy', title: isUser ? t`复制这条消息的文字` : t`复制这条回复的正文；全部、状态或选项在「⋯」里` }),
+    own && !isUser ? actButton('edit', t`修改`, event => editThis(articleOf(event)), { cls: 'edit', title: t`直接改这条消息的原文，模型之后看到的也是改过的；不重新生成`, ...busyOff() }) : null,
+    isUser ? null : mediaUi.toolsFor(node),
+    hasMore ? actButton('more', t`更多`, openMore, { cls: 'msg-more', 'aria-haspopup': 'menu', 'aria-expanded': 'false' }) : null,
+    el('span', { class: 'msg-gap' }),
+    factsButton(facts),
+  ].filter(Boolean)
   const bar = !isUser && isLastAssistant && !cardStatus ? statusFor(chat, node) : null
   const imported = node.compaction?.imported
   const recap = !isUser && node.compaction
@@ -3402,7 +3766,7 @@ function renderNode(chat, node, isLastAssistant, depth = 0) {
         el('button', { type: 'button', class: 'btn small', text: node.compaction.editable ? t`查看 / 修改` : t`查看`, onclick: () => openRecap(node) }),
       ])
     : null
-  return el('article', { class: `msg ${isUser ? 'user' : 'assistant'}${isLastAssistant ? ' latest' : ''}${node.hidden ? ' hidden-round' : ''}`, 'data-id': node.id }, [
+  const drawn = el('article', { class: `msg ${isUser ? 'user' : 'assistant'}${isLastAssistant ? ' latest' : ''}${node.hidden ? ' hidden-round' : ''}`, 'data-id': node.id }, [
     el('div', { class: 'msg-head' }, [
       speakerFace(chat, node.role),
       el('span', { class: 'name', text: name }),
@@ -3412,6 +3776,7 @@ function renderNode(chat, node, isLastAssistant, depth = 0) {
     ]),
     time ? timeBox(el, time) : null,
     !isUser && node.reasoning && ui.settings?.showReasoning ? reasoningFold(node.reasoning) : null,
+    !isUser && node.steps?.length ? stepList(node.steps, { run: node.fileRun, undone: node.fileUndone }) : null,
     node.files ? el('div', { class: 'msg-files', text: t`附文件：${node.files.map(file => file.name).join(t`、`)}` }) : null,
     node.auto ? null : withChoiceNotes(messageBody(shown, () => frameContextNow(chat, node), { answer: !isUser && chat.cardId === DIRECT_CARD, lazy: drawing.lazy && depth > EAGER_FRAMES }), choiceNoteOf(chat, { checks, fights })),
     node.check ? el('div', { class: `roll-record ${node.check.tier}`, text: rules.play?.rollLine(node.check) ?? node.text }) : null,
@@ -3419,14 +3784,17 @@ function renderNode(chat, node, isLastAssistant, depth = 0) {
     isLastAssistant && !isUser ? sheetChanges(chat, node) : null,
     isUser ? null : mediaUi.gallery(chat, node),
     bar,
-    choices.length ? choiceList(el, choices, { onFill: pickChoice, onSend: sendChoice, disabled: ui.generating, noteOf: choiceNoteOf(chat, { checks, fights }) }) : null,
+    choices.length ? withRewrite(choiceList(el, choices, { onFill: pickChoice, onSend: sendChoice, disabled: ui.generating, noteOf: choiceNoteOf(chat, { checks, fights }) }), rewrite) : null,
     isLastAssistant && !isUser && pendingGate(chat) ? gateCard(chat) : null,
-    tools.length ? el('div', { class: 'msg-tools' }, tools) : null,
+    fixRows(fixes),
+    pending ? null : messageBar(buildTools, drawing.lazy && depth > EAGER_FRAMES),
     recalled?.length ? recallLine(node.id, recalled) : null,
     !isUser && node.search ? searchSources(node.search) : null,
     !isUser && node.lookups?.length ? lookupList(node.lookups) : null,
     recap,
   ])
+  if (!isUser) mediaUi.placePictures(drawn, node)
+  return drawn
 }
 
 // When each reply's 想起 line first showed on this page: its entrance plays once. The transcript is drawn
@@ -3675,6 +4043,7 @@ function tagBlocks(text) {
 }
 
 function openEditor(chat, node, article) {
+  if (article) fillBar(article)
   if (!article || article.classList.contains('editing')) return
   const original = node.raw ?? node.text
   const body = article.querySelector('.msg-body')
@@ -4422,6 +4791,14 @@ const frameHandlers = {
     if (answer.chat && stillOpen(chatId)) setChat(answer.chat)
     return answer.value
   },
+  // A card's own button for the 随身册: it opens where there is one, and says so where there is none.
+  async openSlab(args, context = {}) {
+    if (context.clicked !== true) return false
+    if (!slabContext() || fightOn) { toast(t`现在打不开：要开着游戏规则，而且不在战斗里`); return false }
+    if (!slab) { slabAsked = false; await refreshSlab() }
+    slab?.open()
+    return Boolean(slab)
+  },
   // Tavern Helper's audio calls from a frame: the page's player for card scripts.
   audio: args => cardAudio(args),
   // injectPrompts / uninjectPrompts in a frame: kept on the chat for its next turns (server/injections.mjs).
@@ -4944,23 +5321,93 @@ function missingUpdate(chat, node) {
   return Boolean(card?.mvu) && (Boolean(node.updateUnread) || !/<UpdateVariable>/i.test(node.raw ?? node.text ?? ''))
 }
 
+/** Whether a reply of an MVU card has an update block that could be read (what 核对这轮变量 rewrites). */
+function hasUpdate(chat, node) {
+  const card = ui.cards.find(c => c.id === chat.cardId)
+  return Boolean(card?.mvu) && !node.updateUnread && /<UpdateVariable>/i.test(node.raw ?? node.text ?? '')
+}
+
+// The type names of the card's variable rules (server/schema-z.mjs 「要是 number」), as a player reads them.
+const RULE_TYPES = () => ({ number: t`数字`, string: t`文字`, boolean: t`是或否`, object: t`一组变量`, array: t`列表` })
+const ruleWords = why => String(why ?? '').replace(/要是 (number|string|boolean|object|array)\b/g, (_, type) => t`要是${RULE_TYPES()[type]}`)
+
+/** One thing wrong with a reply's variables (server/turn-vars.mjs), as a line under it. */
+function varIssueLine(item) {
+  const path = item.path ?? ''
+  if (item.kind === 'unread') return item.text ? t`有一条更新格式写错了，读不出来：${item.text}` : t`有一条更新格式写错了，读不出来`
+  if (item.kind === 'idle') {
+    if (item.why === 'missing') return t`「${path}」本来就没有，删不了`
+    if (item.why === 'notNumber') return t`「${path}」原来不是数字，加减不了`
+    if (item.why === 'noFrom') return t`「${path}」要搬的那一项不存在`
+    return t`「${path}」这条没改动任何变量`
+  }
+  if (item.kind === 'unknown') return item.near ? t`卡里没有「${path}」，应该是「${item.near}」` : t`卡里没有「${path}」这个变量，这条没记上`
+  // The rules name the variable before their reason (「金钱: 要是 number」): said once is enough.
+  if (item.kind === 'rule') return path ? t`「${path}」不符合卡的规则：${ruleWords(String(item.why ?? '').replace(`${path}: `, ''))}` : item.earlier ? t`这一轮之前的变量就不符合卡的规则，规则整轮没生效：${ruleWords(item.why)}` : t`这轮的变量不符合卡的规则，规则整轮没生效：${ruleWords(item.why)}`
+  return ''
+}
+
+/** 修好这轮变量 / 核对这轮变量: the model writes the latest reply's update block again; it takes the old one's place. */
+async function fixVars(nodeId) {
+  const chatId = ui.chat?.id
+  if (!chatId || ui.generating || ui.busy.has(chatId)) return
+  ui.busy.set(chatId, { kind: 'fixVars' })
+  renderChat()
+  renderChats()
+  toast(t`正在重写这一轮的变量更新……`, 120000)
+  try {
+    const view = await api(`/api/chats/${chatId}/nodes/${nodeId}/fix-update`, { method: 'POST', body: {} })
+    ui.busy.delete(chatId)
+    if (ui.chat?.id === chatId) setChat(view)
+    const node = view.path.at(-1)
+    const left = node.varIssues?.length ?? 0
+    const count = node.varFix?.count ?? 0
+    toast(left ? t`改过了，还有 ${left} 处没更新上，可以再点一次「修好」或「撤销」` : count ? t`已修好这轮变量，${count} 项变了` : t`已重写这轮的变量更新，变量没有变化`, 6000)
+  } catch (error) {
+    toast(error.status === 499 ? t`已停止修复，什么都没改` : error.message, 8000)
+  } finally {
+    ui.busy.delete(chatId)
+    if (ui.chat?.id === chatId) renderChat()
+    renderChats()
+  }
+}
+
+/** 撤销修复: the latest reply's update block and variables as they were before 修好. */
+async function undoFix(nodeId) {
+  const chatId = ui.chat?.id
+  if (!chatId || ui.generating || ui.busy.has(chatId)) return
+  try {
+    const view = await api(`/api/chats/${chatId}/nodes/${nodeId}/undo-fix`, { method: 'POST', body: {} })
+    if (ui.chat?.id === chatId) setChat(view)
+    toast(t`已撤销修复，变量换回了修之前的样子`, 4000)
+  } catch (error) {
+    toast(error.message, 8000)
+  }
+}
+
 /**
  * 重写选项 on the latest reply of a chat whose preset asks for <choices>: 换一组 when it has them, 补写 (with a
  * warning) when it has none; a card's own options (🩶探索选项🩶…) are its format, left alone.
  */
-function choicesTools(chat, node, raw, choices) {
+function choicesRewrite(chat, node, raw, choices) {
   const own = choicesOf(raw).length > 0
-  if (!own && choices.length) return []
+  if (!own && choices.length) return null
   const rewriting = ui.busy.get(chat.id)?.kind === 'choices'
-  return [
-    own ? null : el('span', { class: 'chip warn', title: t`模型这一轮没有在结尾写行动选项。「补写选项」让模型只写这四项，正文不动。`, text: t`⚠ 这轮没写选项` }),
-    el('button', {
-      text: rewriting ? t`重写中…` : own ? t`换一组选项` : t`补写选项`,
-      title: t`只重写这一轮结尾的四个行动选项，正文不动。用写这条回复的模型，读的是和下一轮一样的上下文（命中缓存）`,
-      disabled: ui.generating,
-      onclick: () => rewriteChoices(node.id),
-    }),
-  ].filter(Boolean)
+  return {
+    missing: !own,
+    label: rewriting ? t`重写中…` : own ? t`换一组选项` : t`补写选项`,
+    hint: t`只重写这一轮结尾的四个行动选项，正文不动。用写这条回复的模型，读的是和下一轮一样的上下文（命中缓存）`,
+    attrs: busyOff(),
+    onClick: () => rewriteChoices(node.id),
+  }
+}
+
+/** The options with 换一组选项 at their foot. */
+function withRewrite(list, rewrite) {
+  if (rewrite && !rewrite.missing) {
+    list.append(el('button', { type: 'button', class: 'choices-again', title: rewrite.hint, ...rewrite.attrs, onclick: rewrite.onClick }, [el('span', { class: 'act-icon', html: ACTION_ICONS.redo }), el('span', { text: rewrite.label })]))
+  }
+  return list
 }
 
 /** 重写选项: the model writes the latest reply's four choices again; they replace its own (or are added). */
@@ -5476,7 +5923,7 @@ async function exportParts(chat) {
       })
       sheet.replaceChildren(...batch.map(item => item.article))
       // 视觉小说格式: the speaker before a line is drawn by CSS, out of the text: here it is written in.
-      for (const speaker of sheet.querySelectorAll('.speaker[data-name]')) speaker.textContent = t`${speaker.dataset.name}：`
+      if (currentLook().speakers) for (const speaker of sheet.querySelectorAll('.speaker[data-name]')) speaker.textContent = t`${speaker.dataset.name}：`
       for (const { node, display, article } of batch) {
         // 直连对话: the reply's own Markdown, not what it draws.
         const own = node.auto ? [] : chat.cardId === DIRECT_CARD ? [{ kind: 'story', text: async () => display.shown }] : messageParts(article, node, display.choices)
@@ -5713,12 +6160,17 @@ async function writeTurn(endpoint, body, echoUserText, outcome, { prefix = '', h
   const ticking = setInterval(() => {
     const time = live()?.querySelector('.live-time')
     if (time) time.textContent = waitText(job)
+    showTail(live(), job)
   }, 1000)
   try {
     await stream(`/api/chats/${chatId}/${endpoint}`, body, event => {
       if ((event.type === 'delta' || event.type === 'reasoning') && !job.firstAt) job.firstAt = Date.now()
+      job.heardAt = Date.now()
       if (event.type === 'start') {
         job.sheet = event.sheet ?? null
+        job.sent = true
+        job.by = event.by ?? ''
+        job.watch = Boolean(event.watch)
         if (viewing()) {
           const sent = ui.chat?.path.length ?? 1
           broadcastEvent(TAVERN_EVENTS.MESSAGE_SENT, sent)
@@ -5735,6 +6187,16 @@ async function writeTurn(endpoint, body, echoUserText, outcome, { prefix = '', h
         job.note = `${lookupText(event)}……`
         const note = live()?.querySelector('.live-note')
         if (note) note.textContent = job.note
+      } else if (event.type === 'tool' || event.type === 'tool_done' || event.type === 'tool_wait') {
+        // 直连对话's tools: a step begun, or done; one that waits for a yes shows its card above the input box (tools.js).
+        job.noteBefore = job.noteBefore ?? (job.note)
+        if (event.type === 'tool') (job.toolSteps = job.toolSteps ?? []).push({ name: event.name, args: event.args, said: event.said, running: true })
+        else if (event.type === 'tool_done') Object.assign(job.toolSteps?.[event.step - 1] ?? {}, { running: false, ok: event.ok, summary: event.summary ?? undefined })
+        const now = job.toolSteps?.at(-1)
+        job.note = event.type === 'tool_wait' ? t`等你确认……` : now?.running ? `${stepText(now)}……` : t`在想下一步……`
+        const note = live()?.querySelector('.live-note')
+        if (note) note.textContent = job.note
+        showLiveSteps(live(), job)
       } else if (event.type === 'retrying') {
         // A busy provider (Vertex AI's 429), asked again after a wait; the note goes back when the answer comes.
         job.noteBefore = job.noteBefore ?? (job.note)
@@ -5745,6 +6207,7 @@ async function writeTurn(endpoint, body, echoUserText, outcome, { prefix = '', h
         if (job.noteBefore != null && event.type === 'delta') {
           job.note = job.noteBefore
           job.noteBefore = null
+          job.phase = null
           const note = live()?.querySelector('.live-note')
           if (note) note.textContent = job.note
         }
@@ -5772,7 +6235,23 @@ async function writeTurn(endpoint, body, echoUserText, outcome, { prefix = '', h
         job.note = t`上下文快满了，先压缩成剧情存档……`
         const note = live()?.querySelector('.live-note')
         if (note) note.textContent = job.note
+      } else if (event.type === 'quiet') {
+        job.quiet = event.seconds ? { seconds: event.seconds, at: Date.now(), begun: event.begun } : null
+        showTail(live(), job)
+      } else if (event.type === 'written') {
+        Object.assign(job, { phase: 'written', phaseAt: Date.now(), quiet: null })
+        showTail(live(), job)
+      } else if (event.type === 'continuing') {
+        // 自动续写: the reply ran into the output limit, and what comes is written on from there.
+        job.noteBefore = job.noteBefore ?? (job.note)
+        job.note = t`写到了输出上限，正在接着写……`
+        const note = live()?.querySelector('.live-note')
+        if (note) note.textContent = job.note
+        job.phase = 'continuing'
+        showTail(live(), job)
       } else if (event.type === 'filling') {
+        Object.assign(job, { phase: 'filling', phaseAt: Date.now() })
+        showTail(live(), job)
         job.note = t`这轮没写变量更新，正在补写……`
         const note = live()?.querySelector('.live-note')
         if (note) note.textContent = job.note
@@ -5814,7 +6293,9 @@ async function writeTurn(endpoint, body, echoUserText, outcome, { prefix = '', h
     }
   }
   if (finished) {
-    const brokeOff = cutShort?.message ? t`这一轮没写完，写好的部分留下了。${cutShort.message}` : ''
+    const kept = finished.path.find(node => node.id === finishedNode)
+    const upstream = kept ? upstreamEnd(kept) : null
+    const brokeOff = cutShort?.message ? t`这一轮没写完，写好的部分留下了。${cutShort.message}` : upstream ? (viewing() && !vnUi.isOn(finished.cardId) ? t`上游没写完这条回复，原因写在它的末尾` : upstream.why) : ''
     if (viewing()) {
       // Written to its end, the reply is read from its start (the visual novel goes a line at a time anyway).
       // Someone who scrolled away stays where they are; 回复写完后回到它的开头 is for those who followed it down.
@@ -5825,7 +6306,7 @@ async function writeTurn(endpoint, body, echoUserText, outcome, { prefix = '', h
       broadcastEvent(TAVERN_EVENTS.MESSAGE_RECEIVED, received, 'normal')
       broadcastEvent(TAVERN_EVENTS.CHARACTER_MESSAGE_RENDERED, received)
       // Drawing and reading aloud wait for a whole reply.
-      if (!cutShort) mediaUi.afterTurn(finishedNode, vnUi.turnFlags(finished.cardId))
+      if (!cutShort && !upstream) mediaUi.afterTurn(finishedNode, vnUi.turnFlags(finished.cardId))
       remindCompaction(finished)
       if (brokeOff) toast(brokeOff, 12000, { log: true })
       // What the card's own scripts said this turn (their toastr), as a frame's toasts show.
@@ -5935,6 +6416,8 @@ function outcomeOf(node) {
 }
 
 const regenerate = guard(async userNodeId => {
+  const before = ui.chat.path.find(node => node.parent === userNodeId && node.role === 'assistant')
+  if (before?.fileRun && !before.fileUndone && !confirm(t`这条回复改过文件。重新生成不会把文件改回去，要改回去先点「撤销这一轮的文件改动」。还是重新生成？`)) return
   if (ui.generating) return
   await generate('regenerate', { userNodeId }, null, outcomeOf(ui.chat.path.find(node => node.id === userNodeId)))
 })
@@ -6218,6 +6701,7 @@ const openSettings = guard(async () => {
   fillProxy(form, ui.settings.proxy, await api('/api/network').catch(() => null))
   form.showReasoning.checked = ui.settings.showReasoning === true
   form.autoFillUpdate.checked = ui.settings.autoFillUpdate !== false
+  form.autoContinue.checked = ui.settings.autoContinue !== false
   form.statePresent.checked = ui.settings.statePresent !== false
   form.replyToTop.checked = ui.settings.replyToTop !== false
   form.webFonts.checked = ui.settings.webFonts !== false
@@ -6787,6 +7271,7 @@ const saveSettings = guard(async () => {
         dynamicStrip: form.dynamicStrip.value,
         worldRecursion: form.worldRecursion.value,
         autoFillUpdate: form.autoFillUpdate.checked,
+        autoContinue: form.autoContinue.checked,
         statePresent: form.statePresent.checked,
         replyToTop: form.replyToTop.checked,
         compaction: compactionOf(form, num),
@@ -7030,6 +7515,7 @@ const cardPermissions = initCardPermissions({ el, permissions: scriptPermissions
 // Filled in once the visual novel is set up (below); the media code may call it before.
 const vnHooks = { picturesChanged: () => {} }
 const mediaUi = initMedia({
+  popMenu,
   api,
   el,
   toast,
@@ -7049,6 +7535,15 @@ const mediaUi = initMedia({
   openGallery: () => openGallery(),
   // A reply's picture in the works shows in the visual novel's corner, where the reply itself is out of sight.
   onPictures: () => vnHooks.picturesChanged(),
+  getCards: () => ui.cards,
+  // 换衣服: the stage may show another 立绘.
+  onWear: guard(async chatId => {
+    const view = await api(`/api/chats/${chatId}`)
+    if (ui.chat?.id === chatId) ui.chat.path = view.path
+    vnHooks.wearChanged?.(chatId)
+  }),
+  // 存为 CG: the visual novel's list of the card's CG follows.
+  onCgs: (cardId, groups) => vnHooks.cgsChanged?.(cardId, groups),
 })
 
 const historyUi = initHistory({ el, getChat: () => ui.chat, settleScroll })
@@ -7107,7 +7602,9 @@ const vnUi = initVn({
   // 回看: what a turn did and came to, beside the player's words.
   turnResults: node => {
     if (!rules.play || !node) return []
-    const used = (node.gameOps ?? []).filter(op => op.op !== 'battle' && op.op !== 'grow').map(op => ({ tier: '', text: rules.play.opLabel(op) }))
+    const at = ui.chat?.path.findIndex(item => item.id === node.id) ?? -1
+    const before = at >= 0 ? rules.play.sheetFor({ path: ui.chat.path.slice(0, at) }, rules.book) : null
+    const used = rules.play.opTags((node.gameOps ?? []).filter(op => op.op !== 'battle' && op.op !== 'grow'), before, rules.book).map(tag => ({ tier: '', text: tag.label }))
     if (node.check) return [...used, rules.play.rollOutcome(node.check, rules.book ?? {})]
     return node.battle ? [...used, { tier: rules.play.fightOutcome(node.battle.over).tier, text: rules.play.battleLine(node.battle, rules.book) }] : used
   },
@@ -7170,8 +7667,11 @@ const vnUi = initVn({
   mediaFlags: () => mediaUi.flags(),
   openMedia: section => mediaUi.openSettings(section),
   pictureWork: chatId => mediaUi.pictureWork(chatId),
-  drawMoment: (node, moment) => mediaUi.drawMoment(node, moment),
+  drawMoment: (node, moment, at) => mediaUi.drawMoment(node, moment, at),
   redrawPicture: (node, image, chatId) => mediaUi.redraw(node, image, chatId),
+  keepCg: (chat, node, image) => mediaUi.keepCg(chat, node, image),
+  hasWardrobe: () => mediaUi.hasWardrobe(),
+  openWear: () => mediaUi.openWear(),
   editPicturePrompt: (node, image, chatId) => mediaUi.editPrompt(chatId, node, image),
   setScreenFull: on => android?.setFullscreen?.(on),
   memoryOn: () => Boolean(ui.settings?.memory?.enabled),
@@ -7179,6 +7679,8 @@ const vnUi = initVn({
   viewPicture: (src, caption, meta, options) => mediaUi.viewPicture(src, caption, meta, options),
 })
 vnHooks.picturesChanged = vnUi.picturesChanged
+vnHooks.cgsChanged = vnUi.cgsChanged
+vnHooks.wearChanged = vnUi.wearChanged
 
 /**
  * What the regex window shows besides the global scripts: the open chat's card
@@ -7435,6 +7937,9 @@ const toggleSearch = guard(async () => {
   const kind = searchKindOf(chat)
   if (!chat || ui.generating) return
   if (!kind) return toast(t`这个模型用不了联网搜索：Anthropic 接口的 Claude、OpenAI Responses 接口和 OpenRouter 的模型可以。`)
+  // A search goes out from the provider: what a file says may go along with it.
+  if (!chat.webSearch && chat.cardId === DIRECT_CARD && (await toolsUi?.catch(() => null))?.folders().length
+    && !confirm(t`这段对话能用文件。联网搜索的词由供应商直接发出去，文件里的内容可能跟着出去，这一步拦不住。还是要打开联网搜索？`)) return
   const view = await api(`/api/chats/${chat.id}`, { method: 'PUT', body: { webSearch: !chat.webSearch } })
   if (ui.chat?.id !== chat.id) return
   ui.chat = { ...ui.chat, webSearch: view.webSearch }
@@ -7445,6 +7950,7 @@ const toggleSearch = guard(async () => {
 // 应用帮助 (直连对话): the assistant answers questions about CicaTavern from its help docs and, when they do not say,
 // its source (server/help.mjs). On unless the chat turns it off.
 function renderHelpButton() {
+  renderToolsButton()
   const button = $('help-toggle')
   const chat = ui.chat
   button.hidden = chat?.cardId !== DIRECT_CARD
@@ -7466,6 +7972,91 @@ const toggleHelp = guard(async () => {
   renderHelpButton()
   toast(view.appHelp ? t`这个对话打开了应用帮助。开关之后的第一轮会重新写一次缓存。` : t`这个对话关掉了应用帮助，助手不再查 CicaTavern 的资料和源码。`)
 })
+
+// 直连对话's file tools (web/tools.js, loaded the first time a 直连对话 is open): the panel and what waits for a yes.
+let toolsUi = null
+function loadTools() {
+  if (!ui.features?.files) return null
+  toolsUi = toolsUi ?? import('/tools.js').then(module => module.initTools({
+    api, el, guard, toast,
+    getChat: () => (ui.chat?.cardId === DIRECT_CARD ? ui.chat : null),
+    canUse: chat => String(chat?.model || ui.settings?.model || '').includes('/'),
+    undo: undoFiles,
+    onChange: () => renderToolsButton(),
+    setSearchOff: () => {
+      if (ui.chat) ui.chat = { ...ui.chat, webSearch: false }
+      renderSearchButton()
+    },
+  })).catch(() => {
+    toolsUi = null
+    throw new Error(t`文件工具要重启后台服务后才能用：关掉所有窗口等一分钟，再从桌面图标打开。`)
+  })
+  return toolsUi
+}
+
+function renderToolsButton() {
+  const button = $('tools-open')
+  const chat = ui.chat?.cardId === DIRECT_CARD ? ui.chat : null
+  button.hidden = !chat || !ui.features?.files
+  if (button.hidden) return void toolsUi?.then(tools => tools.sync(null)).catch(() => {})
+  loadTools().then(tools => {
+    tools.sync(chat)
+    const folders = tools.folders()
+    button.setAttribute('aria-pressed', String(folders.length > 0))
+    button.title = folders.length
+      ? t`文件工具：这段对话能用 ${folders.map(folder => (folder.id === 'workspace' ? t`工作文件夹` : folder.label)).join(t`、`)}`
+      : t`文件工具：让助手读写你指定的文件夹（Beta）`
+  }).catch(() => {})
+}
+const openTools = guard(async () => (await loadTools())?.open())
+
+/** 撤销 what a turn changed on disk; files changed since are named first. */
+const undoFiles = guard(async run => {
+  const chat = ui.chat
+  if (!chat) return
+  const ask = force => api(`/api/chats/${chat.id}/tools/undo`, { method: 'POST', body: { run, force } })
+  let done = await ask(false)
+  if (done.changed.length) {
+    if (!confirm(t`这些文件后来又被改过：\n${done.changed.join('\n')}\n\n还是改回这一轮之前的样子？现在的内容会在应用里留一份。`)) return
+    done = await ask(true)
+  }
+  if (done.chat && ui.chat?.id === chat.id) setChat(done.chat)
+  if (done.failed.length) toast(t`有的没能改回去（文件被占用、移走了，或者原来的位置变了）：${done.failed.join(t`、`)}`, 9000)
+  else toast(done.undone.length ? t`已改回：${done.undone.join(t`、`)}` : t`文件已经是之前的样子`)
+})
+
+/** One thing the assistant did with a tool, as the page says it. */
+function stepText({ name, args = {}, summary }) {
+  const path = summary?.path ?? args.path ?? ''
+  const lines = args.from || args.to ? t`（${args.from || 1}–${args.to || '…'} 行）` : ''
+  if (name === 'list_files') return args.find ? t`找文件「${args.find}」` : path ? t`看文件夹 ${path}` : t`看有哪些文件夹`
+  if (name === 'search_files') return path ? t`在 ${path} 里搜「${args.query ?? ''}」` : t`搜「${args.query ?? ''}」`
+  if (name === 'read_file') return t`读 ${path}${lines}`
+  if (name === 'write_file') return summary?.op === 'create' ? t`新建 ${path}` : t`写 ${path}`
+  if (name === 'edit_file') return t`改 ${path}`
+  if (name === 'move_file') return t`移动 ${path} → ${summary?.to ?? args.to ?? ''}`
+  if (name === 'delete_file') return t`删除 ${path}`
+  return name
+}
+
+/** What the assistant did with tools before a reply; `run`: the turn changed files, which can be taken back. */
+function stepList(steps, { live = false, run = null, undone = false } = {}) {
+  const changed = new Set(steps.filter(step => step.ok && step.summary && step.summary.op !== 'read').map(step => step.summary.path)).size
+  const row = step => {
+    const counts = step.ok && step.summary?.added !== undefined ? ` +${step.summary.added} −${step.summary.removed}` : ''
+    const end = step.running ? '' : step.summary?.refused ? t`你没同意` : step.ok ? '' : t`没做成`
+    const line = [el('span', { text: `${stepText(step)}${counts}` }), end ? el('span', { class: 'tool-end', text: end }) : null].filter(Boolean)
+    const more = [step.said ? el('p', { text: step.said }) : null, step.kept ? el('pre', { text: step.kept }) : null].filter(Boolean)
+    return el('li', { class: step.running ? 'running' : step.ok ? '' : 'failed' }, more.length ? [el('details', {}, [el('summary', {}, line), ...more])] : line)
+  }
+  return el('div', { class: 'tool-steps' }, [
+    live ? el('ol', {}, steps.map(row)) : el('details', { class: 'tool-all' }, [
+      el('summary', { text: changed ? t`用了 ${steps.length} 次工具 · 改了 ${changed} 个文件` : t`用了 ${steps.length} 次工具` }),
+      el('ol', {}, steps.map(row)),
+    ]),
+    run && !live ? (undone ? el('span', { class: 'muted small', text: t`文件改动已撤销` }) : el('button', { type: 'button', class: 'btn small ghost tool-undo', text: t`撤销这一轮的文件改动`, title: t`把这一轮改过的文件改回去，删掉的放回来；后来又改过的会先问你`, ...busyOff(), onclick: () => undoFiles(run) })) : null,
+  ].filter(Boolean))
+}
 
 /** 应用帮助: one lookup the assistant made, as the page says it. */
 function lookupText({ op, target }) {
@@ -7836,6 +8427,15 @@ function bind() {
     if (files.length) importFiles(files)
   })
   // Options a preset writes after a reply (1️⃣ …): a click puts the option in the input box to edit or send.
+  // ← → along a message's bar.
+  $('transcript').addEventListener('keydown', event => {
+    const step = { ArrowRight: 1, ArrowLeft: -1 }[event.key]
+    const bar = step && event.target.closest?.('.msg-tools')
+    if (!bar) return
+    const items = [...bar.querySelectorAll('button:not(:disabled)')].filter(button => button.getClientRects().length)
+    event.preventDefault()
+    items[(items.indexOf(event.target) + step + items.length) % items.length]?.focus()
+  })
   $('transcript').addEventListener('click', event => {
     const choice = event.target.closest('.choice')
     if (!choice) return
@@ -7986,6 +8586,7 @@ function bind() {
   $('quick-open').addEventListener('click', openQuick)
   $('search-toggle').addEventListener('click', toggleSearch)
   $('help-toggle').addEventListener('click', toggleHelp)
+  $('tools-open').addEventListener('click', openTools)
   $('guide-open').addEventListener('click', openGuide)
   $('chat-plot').addEventListener('click', usePlot)
   $('dictate').addEventListener('click', pressDictate)

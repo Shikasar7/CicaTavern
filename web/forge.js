@@ -850,7 +850,9 @@ export function initForge({ api, el, toast, guard, saveDownload = null, exportPa
     if (clock) clock.textContent = elapsed(job.startedAt)
     if (fill && job.kind === 'plan') fill.style.width = `${Math.round(Math.min(95, 4 + (job.chars ?? 0) / 80))}%`
     if (job.kind === 'plan') {
-      const text = t`正在把聊过的内容写成创作方案${job.chars ? t`（已写 ${job.chars} 字）` : ''}，通常要一两分钟。可以关掉窗口，回来再看。`
+      const text = job.more
+        ? t`写到了模型单次输出的上限，正在从断开的地方接着写（第 ${job.more} 次${job.chars ? t`，已写 ${job.chars} 字` : ''}）。可以关掉窗口，回来再看。`
+        : t`正在把聊过的内容写成创作方案${job.chars ? t`（已写 ${job.chars} 字）` : ''}，通常要一两分钟。可以关掉窗口，回来再看。`
       if (label.data !== text) label.data = text
       return
     }
@@ -2095,6 +2097,7 @@ export function initForge({ api, el, toast, guard, saveDownload = null, exportPa
         [t`和你`, c.relationship],
         [t`外貌`, c.appearance],
         [t`穿着`, c.outfit],
+        [t`衣柜`, (c.wardrobe ?? []).map(one => (one.when ? t`${one.name}（${one.when}）` : one.name)).join(t`、`)],
         [t`性格`, [p.base && t`底色「${p.base}」`, p.main.length && t`主色调${p.main.map(m => t`「${m}」`).join('')}`, p.accent.length && t`点缀${p.accent.map(m => t`「${m}」`).join('')}`].filter(Boolean).join(t`，`)],
         [t`说话`, c.voice],
         [t`作用`, c.role],
@@ -2125,7 +2128,7 @@ export function initForge({ api, el, toast, guard, saveDownload = null, exportPa
     const job = draft.job
     const steps = draft.writing.map(step => {
       const mark = { done: '✓', running: '', failed: '!', waiting: '' }[step.state]
-      const extra = step.state === 'running' && job?.chars ? t`已写 ${job.chars} 字` : step.state === 'failed' ? t`没写成` : step.by ? t`由 ${step.by} 重写` : ''
+      const extra = step.state === 'running' && job?.more ? t`写到上限，正在接着写（第 ${job.more} 次）` : step.state === 'running' && job?.chars ? t`已写 ${job.chars} 字` : step.state === 'failed' ? t`没写成` : step.by ? t`由 ${step.by} 重写` : ''
       return el('li', { class: step.state }, [el('span', { class: 'mark', text: mark }), el('span', { class: 'label', text: step.label }), extra ? el('span', { class: 'extra', text: extra }) : null])
     })
     const written = draft.card.entries.filter(e => e.content && e.type !== zh`状态`)
@@ -2359,7 +2362,7 @@ export function initForge({ api, el, toast, guard, saveDownload = null, exportPa
     return el('section', { class: 'plan-card' }, [
       el('header', {}, [el('h4', { text: t`角色名册` })]),
       el('p', { class: 'hint', text: t`保存时写进「配图与朗读 → 角色名册」：配图和视觉小说的立绘按这里的长相画。再次保存时，新角色会加进去，名册里已有的人，你在配图里改过的地方不会被覆盖。` }),
-      el('dl', { class: 'plan-fields' }, cast.flatMap(c => [el('dt', { text: c.name }), el('dd', { text: [c.looks_tags, c.outfit_tags].filter(Boolean).join(' · ') })])),
+      el('dl', { class: 'plan-fields' }, cast.flatMap(c => [el('dt', { text: c.name }), el('dd', { text: [c.looks_tags, c.outfit_tags, ...(c.wardrobe ?? []).map(one => `${one.name}${one.when ? t`（${one.when}）` : ''} ${one.tags}`)].filter(Boolean).join(' · ') })])),
     ])
   }
 

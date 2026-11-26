@@ -48,6 +48,7 @@ function applyLook() {
   document.fonts?.load(current.look === 'bold' ? '16px "Look Display"' : current.look === 'ink' ? '16px "Look Brush"' : '16px serif').catch(() => {})
   root.dataset.look = current.look
   root.dataset.lookPalette = current.palette
+  root.classList.toggle('speakers-shown', current.speakers === true)
   root.style.setProperty('--look-strength', String(washStrength(current.strength)))
   applyTone()
 }

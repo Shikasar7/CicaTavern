@@ -96,12 +96,14 @@ test('cast-format answers cleaned; style goes first in the scene line', () => {
 
 test('an illustration always has somebody in it: the card\'s own character joins an empty scene', () => {
   // The helper wrote only the setting (or an empty room as plain tags): 沈念念, the card's character, stands in it.
-  assert.equal(withSomeone('场景: dark bedroom, messy bed, night', ROSTER, '大师兄', '沈念念 - 武当', 'tags'), '场景: dark bedroom, messy bed, night\n[沈念念] white and pale blue wudang robe, standing, looking at viewer | center')
-  assert.equal(withSomeone('scenery, no humans, bedroom', ROSTER, '大师兄', '武当', 'tags'), '场景: scenery, bedroom\n[沈念念] white and pale blue wudang robe, standing, looking at viewer | center', 'no card name match: the first one who is not the player')
-  assert.match(withSomeone('A quiet bedroom at night. No people.', ROSTER, '大师兄', '沈念念', 'natural'), /^场景: A quiet bedroom at night\.?\n\[沈念念\] white and pale blue wudang robe, standing in the scene, looking at the viewer \| center$/)
+  assert.equal(withSomeone('场景: dark bedroom, messy bed, night', ROSTER, '大师兄', '沈念念 - 武当'), '场景: dark bedroom, messy bed, night\n[沈念念] white and pale blue wudang robe | center')
+  assert.equal(withSomeone('scenery, no humans, bedroom', ROSTER, '大师兄', '武当'), '场景: scenery, bedroom\n[沈念念] white and pale blue wudang robe | center', 'no card name match: the first one who is not the player')
+  assert.match(withSomeone('A quiet bedroom at night. No people.', ROSTER, '大师兄', '沈念念'), /^场景: A quiet bedroom at night\.?\n\[沈念念\] white and pale blue wudang robe \| center$/)
+  // Posed by the scene alone: "bending over" is not drawn as someone standing and looking out.
+  assert.equal(withSomeone('场景: bending over, looking down at the palm', ROSTER.map(entry => ({ ...entry, outfit: '' })), '大师兄', '沈念念'), '场景: bending over, looking down at the palm\n[沈念念] | center')
   // Somebody is already there: a [Name] line (the player counts), a head count, a person in the words.
   for (const prompt of ['场景: forest\n[主角] walking', '1girl, forest', 'A girl waits under the tree.', '场景: market\n[掌柜] counting coins']) {
-    assert.equal(withSomeone(prompt, ROSTER, '大师兄', '沈念念', 'tags'), prompt)
+    assert.equal(withSomeone(prompt, ROSTER, '大师兄', '沈念念'), prompt)
   }
   assert.equal(withSomeone('', ROSTER, '大师兄', '沈念念'), '', 'no prompt stays no prompt')
   assert.equal(withSomeone('bedroom', [], '大师兄', '沈念念'), 'bedroom', 'no cast: left to the instructions')
@@ -219,19 +221,19 @@ test('a name nobody uses is the person the passage talks about, and one the stor
 })
 
 test('nobody in the prompt: the person the passage is about, before the card\'s own character', () => {
-  assert.match(withSomeone('场景: hall, night', ROSTER, '大师兄', '沈念念', 'tags', '慕寒漪收了剑，慕寒漪转过身。'), /^场景: hall, night\n\[慕寒漪\] /)
-  assert.match(withSomeone('场景: hall, night', ROSTER, '大师兄', '沈念念', 'tags', '窗外下着雨。'), /\n\[沈念念\] /, 'nobody named: the card\'s own')
+  assert.match(withSomeone('场景: hall, night', ROSTER, '大师兄', '沈念念', '慕寒漪收了剑，慕寒漪转过身。'), /^场景: hall, night\n\[慕寒漪\] /)
+  assert.match(withSomeone('场景: hall, night', ROSTER, '大师兄', '沈念念', '窗外下着雨。'), /\n\[沈念念\] /, 'nobody named: the card\'s own')
 })
 
 test('a prompt that left the format keeps its words and gets the looks of those the passage is about', () => {
-  const tags = withSomeone('1girl, solo, crying, hall', ROSTER, '大师兄', '武当', 'tags', PASSAGE)
+  const tags = withSomeone('1girl, solo, crying, hall', ROSTER, '大师兄', '武当', PASSAGE)
   assert.equal(tags, '场景: 1girl, solo, crying, hall\n[沈念念]')
   const frame = parseFrame(tags, ROSTER, '大师兄')
   assert.match(flattenFrame(frame, 'tags'), /^1girl, 1girl, solo, crying, hall, black hair, hair bun/)
-  const words = withSomeone('Two women stand in a dark hall, one holding a sword.', ROSTER, '大师兄', '武当', 'natural', PASSAGE)
+  const words = withSomeone('Two women stand in a dark hall, one holding a sword.', ROSTER, '大师兄', '武当', PASSAGE)
   assert.equal(words, '场景: Two women stand in a dark hall, one holding a sword.\n[沈念念]\n[慕寒漪]')
   assert.match(flattenFrame(parseFrame(words, ROSTER, '大师兄'), 'natural'), /^Two women stand in a dark hall, one holding a sword\. The girl has black hair.* The girl has long silver hair/)
-  assert.equal(withSomeone('1girl, crying', ROSTER, '大师兄', '武当', 'tags', '窗外下着雨。'), '1girl, crying', 'nobody on the list in the passage')
+  assert.equal(withSomeone('1girl, crying', ROSTER, '大师兄', '武当', '窗外下着雨。'), '1girl, crying', 'nobody on the list in the passage')
 })
 
 test('the cast\'s names may stay Chinese in an English prompt; without a cast nothing Chinese is asked for', () => {

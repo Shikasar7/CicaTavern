@@ -305,6 +305,9 @@
           <button type="button" class="quick-btn search-btn" id="help-toggle" title="应用帮助" aria-label="应用帮助" aria-pressed="false" hidden>
             <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7" /><path d="M7.7 7.9a2.4 2.4 0 1 1 3.4 2.2c-.7.3-1.1.9-1.1 1.6v.3M10 14.3v.2" /></svg>
           </button>
+          <button type="button" class="quick-btn search-btn" id="tools-open" title="文件工具" aria-label="文件工具" aria-pressed="false" hidden>
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5.5h5l1.6 2H17v8H3z" /><path d="M6.5 11.5h7" /></svg>
+          </button>
           <textarea id="input" rows="1" placeholder="写下你的行动、对白，或希望看到的发展" disabled></textarea>
           <button type="button" class="quick-btn mic-btn" id="dictate" title="语音输入：说话转成文字，填进输入框（不会自动发送）" aria-label="语音输入" aria-pressed="false" hidden>
             <svg class="mic-icon" viewBox="0 0 20 20" aria-hidden="true"><rect x="7.4" y="2.8" width="5.2" height="9.2" rx="2.6" /><path d="M4.6 9.6a5.4 5.4 0 0 0 10.8 0M10 15v2.4" /></svg>
@@ -447,6 +450,8 @@
         <label class="check-row"><input type="checkbox" name="statePresent"> 变量很多时，只发在场角色的变量</label>
         <p class="hint">角色很多、每人一组变量的卡，重发完整状态时把这几轮没出场的角色那几组省掉，只列出名字；谁出场了，下一轮补发他那一组。状态不长的卡不受影响。</p>
         <label class="check-row"><input type="checkbox" name="autoFillUpdate"> 模型漏写变量更新时自动补写</label>
+        <label class="check-row"><input type="checkbox" name="autoContinue"> 回复写到输出上限时自动接着写</label>
+        <p class="hint">模型写到单次输出的上限，回复断在中间时，从断开的地方接着写进同一条回复，最多两次，写完再算变量。每次多发一次请求。用供应商的模型时才有。</p>
       </div>
       <div data-section="compaction">
         <label class="check-row"><input type="checkbox" name="compactAuto"> 上下文快满时自动压缩</label>
@@ -686,6 +691,7 @@
       <h2>配图</h2>
       <p class="muted small" id="image-status"></p>
       <textarea id="image-prompt" rows="7" spellcheck="false" placeholder="画面提示词"></textarea>
+      <div id="image-shots" hidden></div>
       <div class="row between">
         <div class="row">
           <button type="button" class="btn ghost" id="image-settings">配图设置</button>

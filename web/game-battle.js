@@ -6,7 +6,8 @@ import { CUT_IN_MS, ailName, banner, countWord, currentLook, cutIn, cutInsOn, en
 import { fightResult } from '/shared/game/encounter.js'
 import { addsText, foeAddsLine } from '/game-growth.js'
 import { showRoll } from '/game-play.js'
-import { aliveFoes, alivePartyOf, attemptSetup, autoCommands, canRally, foesOf, needsFriend, needsTarget, partyOf, playerOf, refusal, replay as replayFight, roundRefusal, shiftCost, skillCost, skillsOf, startBattle, step, tameTry } from '/shared/game/battle.js'
+import { caughtPanel } from '/game-raise.js'
+import { LURES, aliveFoes, alivePartyOf, attemptSetup, autoCommands, canRally, foesOf, needsFriend, needsTarget, partyOf, playerOf, refusal, replay as replayFight, roundRefusal, shiftCost, skillCost, skillsOf, startBattle, step, tameTry } from '/shared/game/battle.js'
 import { cutOut, spriteFrame } from '/shared/cutout.js'
 
 const SPEED_KEY = 'cicatavern.battleSpeed'
@@ -95,16 +96,21 @@ export function cutPicture(url) {
  *   foeShown (name → { moves, picture }), background (the scene's picture), forced (the story left no way round it),
  *   faceFor (name → a companion's picture, or ''), skillPicture (a skill's name → its 技能特写 picture, or '') }
  */
-export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound = null, foeShown = () => ({ moves: [], picture: '' }), background = '', energyName = '', forced = false, hero = heroNow(), faceFor = () => '', skillPicture = () => '', words = {} }) {
+export function openBattle({ el, settled = null, setup, resume = null, onProgress, onEnd, sound = null, foeShown = () => ({ moves: [], picture: '' }), background = '', energyName = '', forced = false, hero = heroNow(), faceFor = () => '', skillPicture = () => '', words = {} }) {
   const energyWord = energyName || t`气力`
   const still = matchMedia('(prefers-reduced-motion: reduce)').matches
   let attempt = resume?.attempt ?? 0
   let actions = resume?.actions ? [...resume.actions] : []
+  const tell = () => onProgress?.({ attempt, actions, ...(again ? { again } : {}), ...(spent ? { spent } : {}) })
   let state = replayFight(attemptSetup(setup, attempt), actions)
   let speed = remembered()
   let auto = false
   // 收服: whom the player tried for when the fight was won, if anyone.
   let tamed = ''
+  // 收服道具 the next try is made with; the one a go before this came to nothing with; whether there was one.
+  let lure = ''
+  let spent = resume?.spent ?? ''
+  let again = resume?.again === true
   let busy = false
   let mode = 'choose'
   let pending = null
@@ -203,6 +209,8 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
           RANKS(words)[foe.tier] ? el('b', { class: 'foe-rank', text: RANKS(words)[foe.tier] }) : null,
           el('span', { class: 'foe-name', text: foe.name }),
           foe.type ? el('i', { class: 'foe-type', text: foe.type }) : null,
+          // 养成: each has a level of its own.
+          setup.foes[i]?.level ? el('i', { class: 'foe-type foe-level', text: `Lv.${setup.foes[i].level}` }) : null,
         ]),
         el('span', { class: 'battle-bar foe' }, [el('i', { class: 'lag' }), el('i')]),
         el('span', { class: 'foe-tag' }),
@@ -797,7 +805,7 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
     drawPanel()
     const { state: next, events } = step(state, commands)
     actions.push(commands)
-    onProgress?.({ attempt, actions })
+    tell()
     let dashed = false
     let turn = -1
     for (const event of events) {
@@ -856,7 +864,7 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
   function getUp() {
     const { state: next } = step(state, { kind: 'rally' })
     actions.push({ kind: 'rally' })
-    onProgress?.({ attempt, actions })
+    tell()
     state = next
     endBox.hidden = true
     dialog.classList.remove('ended')
@@ -878,7 +886,9 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
     storyButton.hidden = state.over === 'won'
     line.textContent = ''
     const { op } = fightResult(setup, { over: state.over, attempt, actions })
-    const again = el('button', { type: 'button', class: 'battle-action', text: t`重打这场`, onclick: () => retry() })
+    // 养成: what each of them came to by it, worked out as the turn will.
+    const after = settled?.(op) ?? null
+    const redo = el('button', { type: 'button', class: 'battle-action', text: t`重打这场`, onclick: () => retry() })
     const row = (kind, label, value) => el('div', { class: `battle-tally ${kind}` }, [el('span', { class: 'battle-tally-name', text: label }), value])
     const things = Object.entries(op.used).map(([name, count]) => el('span', { class: 'battle-thing' }, [el('b', { text: name }), count > 1 ? el('i', { text: `×${count}` }) : null]))
     const price = [state.over === 'lost' && !player.commander ? t`重伤：所有属性 −2，3 天` : '', op.rallied ? t`透支：所有属性 −3，7 天` : '', op.shock ? t`理智 −${op.shock}` : ''].filter(Boolean)
@@ -886,11 +896,12 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
     // 收服: one of those brought down may be tried for, once, a card to each: its face, how strong, the odds. The die
     // is thrown like any check's, landing on the rules' own roll; then the card says how it went.
     tamed = ''
+    lure = ''
     const tameable = state.over === 'won' ? foesOf(state).filter((foe, i, all) => all.findIndex(other => other.name === foe.name) === i && tameTry(setup, foe)) : []
     const charm = words.charm || t`魅力`
     const tameBox = el('div', { class: 'battle-tame' })
     const tameCard = (foe, tried = null, i = 0) => {
-      const { chance } = tameTry(setup, foe)
+      const { chance } = tameTry(setup, foe, { lure, attempt })
       const face = el('span', { class: 'tame-face', 'aria-hidden': 'true', text: foe.name.slice(0, 1) })
       paintHead(face, foe.name)
       const attrs = tried ? { class: `tame-card tried ${tried.ok ? 'ok' : 'fail'}`, role: 'status' } : { type: 'button', class: 'tame-card', onclick: () => tryTame(foe) }
@@ -911,16 +922,36 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
       ])
     }
     const tryTame = async foe => {
-      const tried = tameTry(setup, foe)
+      const tried = tameTry(setup, foe, { lure, attempt })
       tamed = foe.name
+      lureBox.hidden = true
       tameBox.querySelectorAll('button').forEach(button => { button.disabled = true })
       await showRoll(el, { ...tried, stat: charm }, sound, null, { into: dialog, hint: tried.ok ? t`${foe.name}愿意跟你走了` : t`没能收服${foe.name}` })
       tameNote.hidden = true
-      tameBox.replaceChildren(tameCard(foe, tried))
+      // 养成: what it turned out to be.
+      const joined = tried.ok ? settled?.(fightResult(setup, { over: 'won', attempt, actions, tame: foe.name, ...(lure ? { lure } : {}), ...(spent ? { spent } : {}) }).op) : null
+      tameBox.replaceChildren(tameCard(foe, tried), ...(joined?.caught ? [caughtPanel(el, joined.caught)] : []))
+      // Not caught: the fight once more, and another try at the end of it. Once.
+      if (!tried.ok && !again) {
+        tameNote.hidden = false
+        tameNote.textContent = t`没能收服${foe.name}。可以从头再打一场，赢了再试一次；这一场不算数，用掉的收服道具不退。只有这一次机会。`
+        rematch.hidden = false
+      }
+      tameBox.lastElementChild?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
       endBox.querySelector('.primary')?.focus()
     }
-    tameBox.replaceChildren(...tameable.map((foe, i) => tameCard(foe, null, i)))
-    const tameNote = el('p', { class: 'battle-end-note', text: t`可以试着收服一个，只有一次机会，看你的${charm}。` })
+    const tameCards = () => tameBox.replaceChildren(...tameable.map((foe, i) => tameCard(foe, null, i)))
+    tameCards()
+    const tameNote = el('p', { class: 'battle-end-note', text: again ? t`再试着收服一个，看你的${charm}。` : t`可以试着收服一个，看你的${charm}。` })
+    // 收服道具: one may be used on the try, spent whether it comes off or not.
+    const lures = tameable.length ? (setup.tame.lures ?? []).map(thing => ({ ...thing, count: thing.count - (thing.name === spent ? 1 : 0) })).filter(thing => thing.count > 0) : []
+    const lureBox = el('div', { class: 'tame-lures', role: 'group', 'aria-label': t`收服道具`, hidden: !lures.length })
+    const drawLures = () => lureBox.replaceChildren(...[null, ...lures].map(thing => el('button', {
+      type: 'button', class: 'tame-lure', 'aria-pressed': String(lure === (thing?.name ?? '')),
+      onclick: () => { lure = thing?.name ?? ''; drawLures(); tameCards() },
+    }, thing ? [el('b', { text: thing.name }), el('i', { text: `×${thing.count}` }), el('span', { text: LURES[thing.size] === Infinity ? t`必定成功` : `+${LURES[thing.size]}` })] : [el('b', { text: t`不用道具` })])))
+    drawLures()
+    const rematch = el('button', { type: 'button', class: 'battle-action', hidden: true, text: t`再战一次`, onclick: () => { again = true; spent = lure; retry() } })
     endBox.replaceChildren(el('div', { class: `battle-end-card ${state.over}` }, [
       el('div', { class: 'battle-end-word' }, [el('h2', {}, letters(el, RESULT_WORDS()[state.over])), el('i', { class: 'battle-end-seal', text: RESULT_SEALS()[state.over] })]),
       // The names' column is as wide as the longest name here, so a companion's name stays on one line.
@@ -931,6 +962,7 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
           el('b', {}, [String(player.life), el('small', { text: `/${player.maxLife}` })]),
         ])),
         op.experience ? row('gain', words.experience || t`经验`, el('b', { text: `+${op.experience}` })) : null,
+        after?.rows?.length ? row('things', t`升级`, el('span', { class: 'battle-things' }, after.rows.map(text => el('span', { class: 'battle-thing' }, el('b', { text }))))) : null,
         things.length ? row('things', t`用掉`, el('span', { class: 'battle-things' }, things)) : null,
         price.length ? row('cost', t`代价`, el('span', { class: 'battle-things' }, price.map(text => el('b', { text })))) : null,
         ...(op.party ?? []).map(member => {
@@ -943,10 +975,12 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
         }),
       ]),
       tameable.length ? tameNote : null,
+      lures.length ? lureBox : null,
       tameable.length ? tameBox : null,
       rally ? el('p', { class: 'battle-end-note', text: t`拼命再战：${words.life || t`生命`}回到四成、${energyWord}回满，再打一次。之后 7 天所有属性 −3。` }) : null,
       el('div', { class: 'battle-end-actions' }, [
-        state.over === 'lost' ? again : null,
+        state.over === 'lost' ? redo : null,
+        rematch,
         rally ? el('button', { type: 'button', class: 'battle-action', text: t`拼命再战`, onclick: () => getUp() }) : null,
         el('button', { type: 'button', class: 'battle-action primary', text: state.over === 'lost' ? t`接受战败` : t`继续`, onclick: () => finish(state.over) }),
       ]),
@@ -969,7 +1003,7 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
     state = startBattle(attemptSetup(setup, attempt))
     actions = []
     queue = []
-    onProgress?.({ attempt, actions })
+    tell()
     auto = false
     autoButton.classList.remove('on')
     endBox.hidden = true
@@ -985,7 +1019,7 @@ export function openBattle({ el, setup, resume = null, onProgress, onEnd, sound 
   function finish(over) {
     auto = false
     close()
-    onEnd?.({ over, attempt, actions, ...(over === 'won' && tamed ? { tame: tamed } : {}) })
+    onEnd?.({ over, attempt, actions, ...(over === 'won' && tamed ? { tame: tamed, ...(lure ? { lure } : {}) } : {}), ...(spent ? { spent } : {}) })
   }
 
   // ─── Keys ────────────────────────────────────────────────────────

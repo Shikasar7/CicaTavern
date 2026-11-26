@@ -20,6 +20,8 @@ const SAMPLE = t`她把伞收起来，抖了抖水。「进来坐吧。」` + '\
 
 /** Whether the script changes what the model reads again (so the cache is written once more). */
 const touchesPrompt = script => Boolean(script) && effectOf(script) !== 'display' && script.placement.some(p => p === PLACEMENT.AI_OUTPUT || p === PLACEMENT.USER_INPUT || p === PLACEMENT.WORLD_INFO)
+/** The scripts that change what the model reads, in the order they run: the same before and after a drag, the cache holds. */
+const sentOrder = scripts => scripts.filter(s => !s.disabled && touchesPrompt(s)).map(s => s.id).join('\n')
 const newId = () => (crypto.randomUUID ? crypto.randomUUID() : `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`)
 const titleOf = script => script.scriptName || script.findRegex
 // What a place's search looks through.
@@ -178,7 +180,7 @@ export function initRegex({ api, el, toast, guard, saveFile, context, getCards, 
         el('span', { text: t`挂到哪些卡，就只对那几张卡生效` }),
         sets.length ? el('button', { type: 'button', class: `btn small${picking ? ' primary' : ''} regex-set-pick-toggle`, text: picking ? t`完成` : t`多选`, title: t`勾选几个正则集，一起挂到卡上或从卡上摘下`, onclick: toggleSetPicking }) : null,
       ]),
-      picking ? el('div', { class: 'regex-set-bulk' }, [
+      ...(picking ? [el('div', { class: 'regex-set-bulk' }, [
         el('span', { class: 'book-bulk-count', text: t`已选 ${n} 个` }),
         el('button', { type: 'button', class: 'btn small ghost', text: n === sets.length ? t`全不选` : t`全选`, onclick: () => {
           if (n === sets.length) state.pickedSets.clear()
@@ -187,7 +189,7 @@ export function initRegex({ api, el, toast, guard, saveFile, context, getCards, 
         } }),
         el('button', { type: 'button', class: 'btn small', text: t`挂到卡上…`, disabled: !n, onclick: guard(() => setsOnCards(true)) }),
         el('button', { type: 'button', class: 'btn small', text: t`从卡上摘下…`, disabled: !n, onclick: guard(() => setsOnCards(false)) }),
-      ]) : null,
+      ])] : []),
       sets.length
         ? el('ul', { class: `preset-list${picking ? ' regex-sets-picking' : ''}` }, sets.map(setItem))
         : el('p', { class: 'regex-empty', text: t`还没有。点「新建」建一个，或者在一组正则里多选后「复制」到新的正则集。` }),
@@ -366,10 +368,10 @@ export function initRegex({ api, el, toast, guard, saveFile, context, getCards, 
             el('p', { class: 'small', text: place.kind === 'global' ? t`点「＋ 新建正则」写一条，或者左上角「导入」SillyTavern 导出的正则。` : t`点「＋ 新建正则」写一条，「导入」的正则会放进这里，也可以从别的地方多选后复制过来。` }),
             el('button', { type: 'button', class: 'btn small primary', text: t`用对话来写`, onclick: () => talkAbout(place) }),
           ] : [el('p', { text: t`没有正则。` })])
-        : el('ul', { class: `prompt-list book-entries regex-scripts${state.picking ? ' picking' : ''}`, id: 'regex-scripts' }, [
+        : sortable(place, el('ul', { class: `prompt-list book-entries regex-scripts${state.picking ? ' picking' : ''}`, id: 'regex-scripts' }, [
             ...place.scripts.map(script => rowFor(place, script)),
             state.draft ? rowFor(place, state.draft, true) : null,
-          ].filter(Boolean)),
+          ].filter(Boolean))),
     ].filter(Boolean))
     filterRows()
   }
@@ -380,6 +382,53 @@ export function initRegex({ api, el, toast, guard, saveFile, context, getCards, 
     const scroll = main.scrollTop
     renderMain()
     main.scrollTop = scroll
+  }
+
+  // 拖动调整顺序 (web/sort-rows.js): the order the place's scripts run in. ↑ 上移 / ↓ 下移 in the editor do the same.
+  function sortable(place, list) {
+    if (!place.editable) return list
+    import('/sort-rows.js')
+      .then(({ sortRows }) => sortRows(list, {
+        rows: '.prow:not([data-id="draft"])',
+        handle: '.drag-handle',
+        key: 'id',
+        // Not saved: drawn again from what is.
+        onMove: guard(async ids => {
+          try {
+            await arrange(ids)
+          } catch (error) {
+            renderMain()
+            throw error
+          }
+        }),
+      }))
+      .catch(() => {})
+    return list
+  }
+
+  /** The place's scripts saved in this order (those not named, last). */
+  async function arrange(ids) {
+    const place = shown()
+    const at = new Map(ids.map((id, index) => [id, index]))
+    const rank = script => (at.has(script.id) ? at.get(script.id) : at.size)
+    const scripts = place.scripts.map((script, index) => [script, index]).sort(([a, i], [b, j]) => rank(a) - rank(b) || i - j).map(([script]) => script)
+    const changed = sentOrder(scripts) === sentOrder(place.scripts) ? [] : scripts.filter(s => !s.disabled)
+    await save(place, scripts, changed, t`已调整顺序`)
+    for (const row of rows.values()) row.refresh()
+  }
+
+  async function moveOne(id, step) {
+    const ids = shown().scripts.map(s => s.id)
+    const from = ids.indexOf(id)
+    const to = from + step
+    if (from < 0 || to < 0 || to >= ids.length) return
+    ids.splice(to, 0, ...ids.splice(from, 1))
+    await arrange(ids)
+    redraw()
+    const row = document.querySelector(`#regex-scripts .prow[data-id="${CSS.escape(id)}"]`)
+    row?.scrollIntoView({ block: 'nearest' })
+    const button = row?.querySelector(`[data-step="${step}"]`)
+    if (button && !button.disabled) button.focus()
   }
 
   function filterRows() {
@@ -690,6 +739,7 @@ export function initRegex({ api, el, toast, guard, saveFile, context, getCards, 
         if (state.picking && !draft && !event.target.closest('input, button')) setPicked(!state.picked.has(id))
       }
       return el('div', { class: 'prow-line', onclick: tick }, [
+        draft || !place.editable ? null : el('span', { class: 'drag-handle', title: t`拖动调整运行的先后`, 'aria-hidden': 'true', text: '⋮⋮' }),
         pick,
         toggle,
         name,
@@ -738,6 +788,9 @@ export function initRegex({ api, el, toast, guard, saveFile, context, getCards, 
         fillEditor()
         row.classList.add('open')
       }
+      const scripts = shown().scripts
+      const index = scripts.findIndex(s => s.id === id)
+      for (const button of row.querySelectorAll('[data-step]')) button.disabled = draft || !scripts[index + Number(button.dataset.step)]
     }
     return row
   }
@@ -854,6 +907,8 @@ export function initRegex({ api, el, toast, guard, saveFile, context, getCards, 
     }))
     const cancel = draft ? el('button', { type: 'button', class: 'btn ghost small', text: t`取消`, onclick: () => { state.draft = null; rows.delete('draft'); redraw() } }) : null
     const actions = draft ? [] : [
+      editable ? el('button', { type: 'button', class: 'btn ghost small', 'data-step': '-1', text: t`↑ 上移`, title: t`先运行`, onclick: guard(() => moveOne(id, -1)) }) : null,
+      editable ? el('button', { type: 'button', class: 'btn ghost small', 'data-step': '1', text: t`↓ 下移`, title: t`后运行`, onclick: guard(() => moveOne(id, 1)) }) : null,
       editable ? el('button', { type: 'button', class: 'btn ghost small', text: t`按意见改`, title: t`在「对话修改」里说说这一条想怎么改，或者问它为什么不生效`, onclick: () => talkAbout(place, { id: `regex:${id}`, label: titleOf(stored()) }) }) : null,
       editable ? el('button', { type: 'button', class: 'btn ghost small', text: t`复制一条`, title: t`在这一组里复制出一条一样的，放在它后面`, onclick: guard(() => duplicate(id)) }) : null,
       el('button', { type: 'button', class: 'btn ghost small', text: t`导出`, title: t`这一条存成 SillyTavern 的正则文件`, onclick: () => exportScripts(place, [stored()]) }),

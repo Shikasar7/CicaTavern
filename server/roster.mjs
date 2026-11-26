@@ -46,6 +46,27 @@ export function cleanVolume(value) {
   return Number.isFinite(volume) ? Math.min(VOLUME_MAX, Math.max(VOLUME_MIN, Math.round(volume))) : 100
 }
 
+// 衣柜 (wear.mjs): what they can wear besides the usual outfit.
+export const WARDROBE_MAX = 7
+
+/** A cast member's other outfits: { id, name, tags, when }, each with a name of its own (平时 is the usual one's). */
+function cleanWardrobe(input) {
+  const out = []
+  const ids = new Set(['usual'])
+  const names = new Set(['平时'])
+  for (const raw of Array.isArray(input) ? input : []) {
+    if (out.length >= WARDROBE_MAX) break
+    const name = text(raw?.name, 20).replace(/[【】|｜；;、，,（）()\n]/g, '').trim()
+    if (!name || names.has(name)) continue
+    let id = typeof raw.id === 'string' && ID.test(raw.id) ? raw.id : ''
+    if (!id || ids.has(id)) id = randomBytes(5).toString('hex')
+    ids.add(id)
+    names.add(name)
+    out.push({ id, name, tags: text(raw.tags, 400), when: text(raw.when, 40).replace(/[（）()\n]/g, ' ').trim() })
+  }
+  return out
+}
+
 /** Entries from the form or a draft. Whether one has a reference picture is the file's business, not stored here. */
 export function cleanRoster(input) {
   if (!Array.isArray(input)) return []
@@ -70,6 +91,9 @@ export function cleanRoster(input) {
       player: isPlayer,
       looks: text(raw.looks, 600),
       outfit: text(raw.outfit, 400),
+      ...(cleanWardrobe(raw.wardrobe).length ? { wardrobe: cleanWardrobe(raw.wardrobe) } : {}),
+      // A variable of the card's own that says what they wear (wear.mjs).
+      ...(text(raw.wearPath, 120) ? { wearPath: text(raw.wearPath, 120).replace(/[<>\n「」]/g, '') } : {}),
       lora: cleanLora(raw.lora),
       loraTrigger: text(raw.loraTrigger, 80),
       loraStrength: cleanStrength(raw.loraStrength),
@@ -91,7 +115,7 @@ export function isRosterId(id) {
 
 /** Every name an entry answers to; the player entry also to the chat's player name. */
 function namesOf(entry, userName) {
-  const names = [entry.name, ...entry.aliases.split(/[,，、/|]+/)]
+  const names = [String(entry.name ?? ''), ...String(entry.aliases ?? '').split(/[,，、/|]+/)]
   if (entry.player && userName) names.push(userName)
   return names.map(n => n.trim().toLowerCase()).filter(Boolean)
 }
@@ -208,12 +232,19 @@ export function naiCharacters(frame) {
 
 // ─── What the helper is told ────────────────────────────────────────────
 
-/** The cast as the helper sees it: names to use and what each usually wears. */
-export function rosterBrief(roster, userName) {
+/**
+ * The cast as the helper sees it: names to use and what each usually wears; of someone with a wardrobe what they wear now,
+ * which the program adds (wear.mjs dress).
+ * @param worn - wear.mjs wearOn.
+ */
+export function rosterBrief(roster, userName, worn = null) {
   return roster
     .map(entry => {
       const name = nameFor(entry, userName)
       const who = entry.player ? `the player character, ${entry.kind}` : entry.kind
+      const outfit = worn?.get(entry.id)
+      if (outfit?.tags) return `- [${name}] ${who}; wears now: ${outfit.name} (clothes filled in automatically, do not write them)`
+      if (outfit) return `- [${name}] ${who}; wears now: ${outfit.name} (clothes filled in automatically; nobody has described this outfit yet, so also write one line of its own: 衣服[${name}]: 5-15 English booru tags for it, garments and shoes only, nothing held, no hair)`
       return `- [${name}] ${who}${entry.outfit ? `; usual outfit: ${entry.outfit}` : ''}`
     })
     .join('\n')
@@ -224,11 +255,12 @@ const FRAME_LENGTH = {
   brief: { sceneTags: '8-15', personTags: '6-12', sceneWords: 'one short English sentence', personWords: 'one short English sentence', scene: 40, person: 30 },
   standard: { sceneTags: '15-30', personTags: '10-25', sceneWords: 'one or two English sentences', personWords: 'one English sentence', scene: 70, person: 50 },
   detailed: { sceneTags: '25-45', personTags: '20-35', sceneWords: 'two or three English sentences', personWords: 'one or two English sentences', scene: 110, person: 80 },
+  full: { sceneTags: '30-60', personTags: '25-45', sceneWords: 'three to five English sentences', personWords: 'two to four English sentences', scene: Infinity, person: Infinity },
 }
 const frameLength = detail => FRAME_LENGTH[detail] ?? FRAME_LENGTH.standard
 
 /** Format rules for a cast-format prompt (English for the image model, labels as given). */
-export function frameFormat(promptStyle, detail = 'standard') {
+export function frameFormat(promptStyle, detail = 'standard', { dressed = false } = {}) {
   const tags = promptStyle === 'tags'
   const length = frameLength(detail)
   return [
@@ -237,8 +269,9 @@ export function frameFormat(promptStyle, detail = 'standard') {
     `[Name] ${tags ? `${length.personTags} comma-separated English tags` : length.personWords}: what they are wearing right now (the usual outfit unless the story changed it), pose, action, hands and what they hold, expression, where they look | left, center or right`,
     'One [Name] line for each cast member visible in the frame, at most 4, with the brackets, names exactly as in the cast list, in the same script, never romanized or translated; leave out the rest.',
     'Never describe their hair, eyes, face or body: that is filled in automatically. Refer to other people as him, her or the girl, never by name.',
+    dressed ? 'For those whose clothes are filled in automatically, write no clothes either: only what is different about them at this moment (jacket off, soaked through, sleeves rolled up), then pose, action and the rest.' : '',
     'Anyone visible who is not in the cast goes into the 场景 line, briefly.',
-  ].join('\n')
+  ].filter(Boolean).join('\n')
 }
 
 /** The cast the passage talks about, the most named first. Not the player, who is mostly half in frame. */
@@ -308,13 +341,13 @@ const ONE_PERSON = /\b(?:solo|1\s*(?:girl|boy|other))\b/i
 /**
  * An illustration always has somebody in it. A prompt with nobody in it (only a
  * 场景 line, or an empty room written as a plain prompt) gets the person the passage
- * talks about most, else the card's own character, in the usual outfit, standing in
- * the scene; "no humans" goes. A prompt that describes people without naming them (a
+ * talks about most, else the card's own character, in the usual outfit; how they hold
+ * themselves and where they look is the scene's to say. "no humans" goes. A prompt that describes people without naming them (a
  * model that left the format) keeps its words, and the ones the passage talks about
  * are named under it, for their looks: one where it says so, else two at most.
  * @param passage - the reply the picture is for.
  */
-export function withSomeone(prompt, roster, userName, cardName = '', promptStyle = 'tags', passage = '') {
+export function withSomeone(prompt, roster, userName, cardName = '', passage = '') {
   const value = String(prompt ?? '').trim()
   if (!value || !roster.length) return value
   const lines = value.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
@@ -328,9 +361,8 @@ export function withSomeone(prompt, roster, userName, cardName = '', promptStyle
     return [`场景: ${scene}`, ...shown].join('\n')
   }
   const lead = people[0] ?? roster.find(entry => !entry.player && cardName.includes(entry.name)) ?? roster.find(entry => !entry.player) ?? roster[0]
-  const pose = promptStyle === 'tags' ? 'standing, looking at viewer' : 'standing in the scene, looking at the viewer'
   const empty = scene.replace(NOBODY, '').replace(/\s*,\s*(?:,\s*)+/g, ', ').replace(/^[\s,.]+|[\s,]+$/g, '')
-  return [empty ? `场景: ${empty}` : '', `[${nameFor(lead, userName)}] ${[lead.outfit, pose].filter(Boolean).join(', ')} | center`].filter(Boolean).join('\n')
+  return [empty ? `场景: ${empty}` : '', `[${nameFor(lead, userName)}]${lead.outfit && !lead.wardrobe?.length && !lead.wearPath ? ` ${lead.outfit}` : ''} | center`].filter(Boolean).join('\n')
 }
 
 // ─── Drafting a roster from the card ────────────────────────────────────
@@ -366,7 +398,9 @@ export function rosterDraftRequest(material) {
     'Reply with a JSON array only, no other text:',
     '[{"name": "Chinese name as in the story", "aliases": "other names, comma-separated", "kind": "girl" | "boy" | "other", "player": false,',
     '  "looks": "8-20 English booru tags for what never changes: apparent age, hair colour and style, eye colour, build, skin, distinctive marks",',
-    '  "outfit": "5-15 English booru tags for what they usually wear"}]',
+    '  "outfit": "5-15 English booru tags for what they usually wear",',
+    '  "wardrobe": [{"name": "short Chinese name of another outfit the story gives them (校服, 睡衣, 礼服…)", "tags": "5-15 English booru tags", "when": "when they wear it, a few Chinese words"}]}]',
+    'wardrobe: only outfits the material names or clearly calls for, at most 3, [] when there are none.',
   ].join('\n')
   return {
     system: 'You extract character appearance sheets for an image generator. You reply with JSON only.',
@@ -513,6 +547,45 @@ export function parseRosterChat(answer, cast = [], userName = '') {
     if (rename || kept.length) fixes.push({ id: entry.id, name: entry.name, rename, aliases: kept })
   }
   return { roster, fixes }
+}
+
+/** 从卡里找衣服: the outfits the card and its lore name for the cast as it is. */
+export function wardrobeDraftRequest(material, roster) {
+  const task = [
+    'TASK: for each person listed, the outfits this story gives them besides the usual one, for an anime image generator.',
+    `People (usual outfit in brackets): ${roster.map(entry => `${entry.name} (${entry.outfit || 'not given'})${entry.wardrobe?.length ? `, already has: ${entry.wardrobe.map(item => item.name).join('、')}` : ''}`).join('; ')}`,
+    'Only outfits the material names or clearly calls for (a school uniform for a student, nightwear at home); at most 4 each, none they already have. Leave out people with nothing to add.',
+    'Reply with a JSON array only, no other text:',
+    '[{"name": "as listed", "wardrobe": [{"name": "short Chinese name, e.g. 校服", "tags": "5-15 English booru tags, garments and colours", "when": "when they wear it, a few Chinese words"}]}]',
+  ].join('\n')
+  return {
+    system: 'You extract clothing sheets for an image generator. You reply with JSON only.',
+    messages: [{ role: 'user', content: `${material}\n\n${task}` }],
+    maxTokens: 3000,
+  }
+}
+
+/** Its answer: [{ id, name, wardrobe }] for those on the list, without outfits they have. */
+export function parseWardrobeDraft(answer, roster) {
+  const value = String(answer ?? '').replace(/<think>[\s\S]*?<\/think>/gi, '')
+  const start = value.indexOf('[')
+  const end = value.lastIndexOf(']')
+  if (start < 0 || end <= start) return []
+  let list
+  try {
+    list = JSON.parse(value.slice(start, end + 1))
+  } catch {
+    return []
+  }
+  const found = []
+  for (const item of Array.isArray(list) ? list : []) {
+    const entry = findEntry(roster, item?.name)
+    if (!entry || found.some(one => one.id === entry.id)) continue
+    const have = new Set((entry.wardrobe ?? []).map(one => one.name))
+    const wardrobe = cleanWardrobe(item.wardrobe).filter(one => one.tags && !have.has(one.name)).slice(0, Math.max(0, WARDROBE_MAX - have.size))
+    if (wardrobe.length) found.push({ id: entry.id, name: entry.name, wardrobe })
+  }
+  return found
 }
 
 /** The helper's JSON (possibly fenced or with chatter around it) → roster entries. */

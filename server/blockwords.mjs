@@ -46,9 +46,19 @@ export function blockRequest(request, words) {
   return {
     ...request,
     ...(request.system !== undefined ? { system: blockContent(request.system, words) } : {}),
-    messages: (request.messages ?? []).map(message => ({ ...message, content: blockContent(message.content, words) })),
+    messages: (request.messages ?? []).map(message => ({
+      ...message,
+      ...(message.content !== undefined ? { content: blockContent(message.content, words) } : {}),
+      // A model's own tool calls and what they found (providers.mjs complete).
+      ...(message.calls ? { calls: message.calls.map(call => ({ ...call, input: blockValues(call.input, words) })) } : {}),
+      ...(message.results ? { results: message.results.map(result => ({ ...result, text: blockSent(result.text, words) })) } : {}),
+    })),
   }
 }
+
+const blockValues = (value, words) => (typeof value === 'string' ? blockSent(value, words)
+  : Array.isArray(value) ? value.map(item => blockValues(item, words))
+    : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key, blockValues(item, words)])) : value)
 
 export function createBlockWords(store) {
   return {

@@ -28,6 +28,7 @@ import { DIRECT_CARD, builtinKey, editsKey } from '../web/shared/basic.js'
 import { appVersion, featuresOf } from './edition.mjs'
 import { createProxy, proxyOverride } from './proxy.mjs'
 import { createEngine } from './engine.mjs'
+import { waitsForRest } from './reply-end.mjs'
 import { createRulebooks } from './game.mjs'
 import { createMusic } from './music.mjs'
 import { APIS, CHAT_THINKING, draftProvider, exportProviders, importProviders, isProviderRef, listRemoteModelDetails, mergeDshProviders, normalizeProvider, providersFromDsh, providerChoices, providerError, publicProvider, refLabel } from './providers.mjs'
@@ -57,6 +58,7 @@ import { creationOf, withOptionPicture } from './forge/creation.mjs'
 import { createForge } from './forge/index.mjs'
 import { createGuide } from './guide.mjs'
 import { createPlotDraft } from './plot-draft.mjs'
+import { createTools } from './tools/index.mjs'
 import { anchorOf, changeGuide } from './guide-text.mjs'
 import { changePlot, chatPlot, refreshPlot } from './plot.mjs'
 import { readEndings } from './plot-endings.mjs'
@@ -64,6 +66,8 @@ import { cleanPlots } from '../web/shared/plot.js'
 import { qrSvg } from './qr.mjs'
 import { lostPaths, setStatePath } from './state.mjs'
 import { ensureBook } from './forge/edit.mjs'
+import { changeWear, wearView } from './wear.mjs'
+import { WARDROBE_MAX } from './roster.mjs'
 import { forSillyTavern } from './forge/st-export.mjs'
 import { editCard, greetingList } from '../web/shared/card-edit.js'
 import { patchVars } from '../web/shared/vars.js'
@@ -175,7 +179,10 @@ const STATIC = {
   '/shared/game/rank.js': ['shared/game/rank.js', 'text/javascript; charset=utf-8'],
   '/shared/game/achievements.js': ['shared/game/achievements.js', 'text/javascript; charset=utf-8'],
   '/shared/game/growth.js': ['shared/game/growth.js', 'text/javascript; charset=utf-8'],
+  '/shared/game/raise.js': ['shared/game/raise.js', 'text/javascript; charset=utf-8'],
   '/game-growth.js': ['game-growth.js', 'text/javascript; charset=utf-8'],
+  '/game-raise.js': ['game-raise.js', 'text/javascript; charset=utf-8'],
+  '/game-slab.js': ['game-slab.js', 'text/javascript; charset=utf-8'],
   '/game-rules.js': ['game-rules.js', 'text/javascript; charset=utf-8'],
   '/settings-search.js': ['settings-search.js', 'text/javascript; charset=utf-8'],
   '/game-play.js': ['game-play.js', 'text/javascript; charset=utf-8'],
@@ -194,6 +201,7 @@ const STATIC = {
   '/plot.js': ['plot.js', 'text/javascript; charset=utf-8'],
   '/plot-map.js': ['plot-map.js', 'text/javascript; charset=utf-8'],
   '/plot-edit.js': ['plot-edit.js', 'text/javascript; charset=utf-8'],
+  '/tools.js': ['tools.js', 'text/javascript; charset=utf-8'],
   '/plot-draft.js': ['plot-draft.js', 'text/javascript; charset=utf-8'],
   '/shared/plot.js': ['shared/plot.js', 'text/javascript; charset=utf-8'],
   '/shared/plot-map.js': ['shared/plot-map.js', 'text/javascript; charset=utf-8'],
@@ -386,14 +394,18 @@ function readCardUpload(body, packed = null) {
  *   WebView's cookie before loading the page.
  * @param update - tests replace parts of the updater (server/update/index.mjs:
  *   root, feed, check, spawnSwitch...).
+ * @param toolGuard - tests: where the file tools may go (tools/paths.mjs createGuard), instead of this computer's.
  */
-export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition = 'personal', accessToken = null, update = {} } = {}) {
+export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition = 'personal', accessToken = null, update = {}, toolGuard = null } = {}) {
   const features = { ...featuresOf(edition), direct: true }
   // Which server process answers: a page waiting out a restart (设置 → 更多 → 更新) reloads when it changes.
   const instance = randomBytes(6).toString('hex')
   // A tree without the subscription backend (CicaTavern, the phone) has no subscription whatever the edition says.
   if (!subscriptionBackend) features.subscription = false
-  const store = createStore(dataRoot ?? defaultDataRoot(features.dataDir), { subscription: features.subscription, lan: features.lan })
+  // This install's own model backends (beside the subscription, in its folder): their providers join the saved ones.
+  let localBackends = []
+  const store = createStore(dataRoot ?? defaultDataRoot(features.dataDir), { subscription: features.subscription, lan: features.lan, localProviders: () => localBackends.flatMap(backend => backend.providers()) })
+  if (features.subscription && subscriptionBackend?.createLocalBackends) localBackends = subscriptionBackend.createLocalBackends({ store })
   // 设置 → 更多 → 错误日志.
   const diagnostics = createDiagnostics(store.dirs.root, store, { version: VERSION, edition: features.edition, appName: features.appName })
   // A card's regex left out for running too long (regex-guard.mjs): said in the error log, so the card's author can be told.
@@ -437,7 +449,9 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
   const music = createMusic(store)
   // 应用帮助 tells the assistant which version and platform the user is on.
   const platform = features.edition === 'android' ? '安卓' : process.platform === 'darwin' ? 'Mac' : process.platform === 'win32' ? 'Windows' : process.platform
-  const engine = createEngine(store, isolation, ledger, { subscription, rulebooks, app: { version: VERSION, platform } })
+  // 直连对话's tools (files): what waits for the player's yes is told to the open pages.
+  const tools = createTools(store, { features, onPending: id => tellPages({ kind: 'tools', id }), guard: toolGuard })
+  const engine = createEngine(store, isolation, ledger, { subscription, rulebooks, app: { version: VERSION, platform }, tools })
   // Image backends of this computer's own, offered beside the usual ones: Codex where the user has it (codex-drawing.mjs).
   const ownBackends = features.codexDrawing ? [createCodexDrawing({ store, proxy: () => isolation.proxy })] : []
   // 抽图历史: the pictures a card's places had before they were drawn again (draw-history.mjs).
@@ -498,6 +512,9 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     const kept = await engine.keptToSchema(chat, state, null, { keepAll: true })
     if (kept.problem) last.schemaProblem = kept.problem
     else delete last.schemaProblem
+    // What 这轮变量没更新上 said was of the reply's update, which this takes the place of; 撤销修复 would undo this too.
+    delete last.varIssues
+    delete last.varFix
     // The model has not seen this edit; the next turn re-sends the full state.
     chat.stateDirty = true
     return kept.problem ? [] : lostPaths(state, kept.state)
@@ -558,13 +575,15 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
   })
   // 剧情向导 (plans/21): the guide's own talk beside each chat.
   const guide = createGuide(store, { engine })
-  const plotDraft = createPlotDraft(store, { engine, forgeCard: id => forge.plotCard(id) })
+  const plotDraft = createPlotDraft(store, { engine, forgeCard: id => forge.plotCard(id), forgeModel: id => forge.cardModel(id) })
+  // Something a model is writing for the player: the server does not quit or restart under it.
+  const writing = () => engine.busy() || forge.busy() || guide.busy() || plotDraft.busy()
   // 设置 → 更多 → 更新. A restart after an update starts the server the way this one was started.
   let listenArg
   const updater = createUpdater({
     features,
     proxy: () => isolation.proxy,
-    busy: () => engine.busy() || forge.busy(),
+    busy: writing,
     onShutdown,
     dataRoot: store.dirs.root,
     // A server started from a console (no idle exit) comes back hidden, so it should still quit on its own.
@@ -598,7 +617,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     if (!idleExitMs || !onShutdown || presence.size || access.mode === 'lan') return
     idleTimer = setTimeout(() => {
       if (presence.size) return
-      if (engine.busy() || forge.busy() || updater.working()) return armIdle()
+      if (writing() || updater.working()) return armIdle()
       onShutdown()
     }, idleExitMs)
     idleTimer.unref?.()
@@ -687,7 +706,9 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
   async function autoFill(chatId, chat, nodeId, send, what) {
     const node = chat.nodes[nodeId]
     const settings = await store.getSettings()
-    if (settings.autoFillUpdate === false || node?.api?.truncated === 'paused' || !(await engine.missesUpdate(chat, node))) return chat
+    // A story that stops midway is written on first (the block comes with the rest of it); so is one still cut at the
+    // output limit with no update block in it, which may not have got to its end.
+    if (settings.autoFillUpdate === false || waitsForRest(node?.api?.truncated) || (node?.api?.truncated === true && !node.updateUnread) || !(await engine.missesUpdate(chat, node))) return chat
     send({ type: 'filling' })
     try {
       return await engine.fillUpdate(chatId, nodeId)
@@ -704,11 +725,17 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     const seconds = node.timing?.totalMs ? `${(node.timing.totalMs / 1000).toFixed(1)} s` : ''
     const tokens = msg`输入 ${(usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0)}（缓存 ${usage.cacheRead ?? 0}） · 输出 ${usage.output ?? 0}`
     await diagnostics.note({ what, detail: [node.model, seconds, tokens].filter(Boolean).join(' · ') })
+    if (node.api?.more) await diagnostics.note({ what, detail: msg`回复写到了输出上限，自动接着写了 ${node.api.more} 次` })
     if (node.api?.truncated === 'stopped') await diagnostics.note({ what, detail: msg`已停止，写好的部分留下了` })
     else if (node.api?.truncated === 'broken') await diagnostics.note({ level: 'warn', what, detail: msg`回复写到中途断了，写好的部分留下了` })
+    else if (node.api?.truncated === 'timeout') await diagnostics.note({ level: 'warn', what, detail: msg`上游写到中途停住，应用等到超时断开了，写好的部分留下了` })
+    else if (node.api?.truncated === 'filtered') await diagnostics.note({ level: 'warn', what, detail: msg`上游模型的内容审查截住了回复，写好的部分留下了（停止原因：${node.api.stop}）` })
+    else if (node.api?.truncated === 'dropped') await diagnostics.note({ level: 'warn', what, detail: msg`上游没写完就结束了回复，写好的部分留下了（停止原因：${node.api.stop ?? '—'}）` })
+    else if (node.api?.truncated === 'halfway') await diagnostics.note({ level: 'warn', what, detail: msg`上游报的是正常结束，但回复停在半句（停止原因：${node.api.stop ?? '—'}）` })
     else if (node.api?.truncated) await diagnostics.note({ level: 'warn', what, detail: node.api.truncated === 'paused' ? msg`联网搜索还没结束，回复停在了中途` : msg`回复写到了输出上限，后面被截断（末尾的选项、变量块可能缺了）` })
     // A cut-off reply already says its update block may be missing.
     else if (await engine.missesUpdate(chat, node)) await diagnostics.note({ level: 'warn', what, detail: node.updateUnread ? msg`这张 MVU 卡的回复写了变量更新块，但一条也读不出来，状态没跟着这一轮变（回复下方有「补写变量」）` : msg`这张 MVU 卡的回复没写变量更新块（<UpdateVariable>），状态没跟着这一轮变（回复下方有「补写变量」）` })
+    if (node.timing?.gapMs >= 8000) await diagnostics.note({ what, detail: msg`写的中途，上游最长有 ${Math.round(node.timing.gapMs / 1000)} 秒没有发来内容` })
     if (node.templateErrors?.length) await diagnostics.note({ level: 'warn', what, detail: msg`回复里的 EJS 模板出错：${node.templateErrors.map(String).join(' / ').slice(0, 400)}` })
   }
 
@@ -963,7 +990,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     // Custom API providers. Keys go in, never out (publicProvider).
     ['GET', /^\/api\/providers$/, async () => {
       const [providers, settings] = await Promise.all([store.getProviders(), store.getSettings()])
-      return { providers: providers.map(p => publicProvider(p)), apis: APIS, subscription: settings.subscription, subscriptionLocked: !features.subscription }
+      // This install's own (`local`) ones are not set up here: only the saved ones are listed.
+      return { providers: providers.filter(p => !p.local).map(p => publicProvider(p)), apis: APIS, subscription: settings.subscription, subscriptionLocked: !features.subscription }
     }],
     ['POST', /^\/api\/providers$/, async (_, body) => {
       const providers = await store.getProviders()
@@ -973,7 +1001,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     }],
     ['PUT', /^\/api\/providers\/([\w-]+)$/, async ([id], body) => {
       const providers = await store.getProviders()
-      const index = providers.findIndex(p => p.id === id)
+      const index = providers.findIndex(p => p.id === id && !p.local)
       if (index < 0) throw httpError(404, msg`供应商不存在`)
       const provider = normalizeProvider(body, providers[index])
       providers[index] = provider
@@ -991,7 +1019,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     // POST, so it needs the X-Agent-Tavern header like every other write.
     ['POST', /^\/api\/providers\/export$/, async () => {
       const [providers, settings] = await Promise.all([store.getProviders(), store.getSettings()])
-      return exportProviders(providers, settings.model)
+      return exportProviders(providers.filter(p => !p.local), settings.model)
     }],
     ['POST', /^\/api\/providers\/import$/, async (_, body) => {
       const { list, added, updated, failed, keyless, defaultModel } = importProviders(await store.getProviders(), body.archive)
@@ -1066,6 +1094,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['DELETE', /^\/api\/cards\/([\w-]+)\/sprites\/([\w-]+)$/, ([id, entryId]) => scenes.removeSprite(id, entryId)],
     // 表情差分: the 立绘 with another face, uploaded or (a slow call below) drawn.
     ['PUT', /^\/api\/cards\/([\w-]+)\/sprites\/([\w-]+)\/expressions\/(\w+)$/, ([id, entryId, expression], body) => scenes.setExpression(id, entryId, expression, body?.image)],
+    ['PUT', /^\/api\/cards\/([\w-]+)\/sprites\/([\w-]+)\/outfits\/([\w-]+)$/, async ([id, entryId, outfitId], body) => scenes.setOutfit(id, entryId, outfitId, body?.image)],
+    ['DELETE', /^\/api\/cards\/([\w-]+)\/sprites\/([\w-]+)\/outfits\/([\w-]+)$/, ([id, entryId, outfitId]) => scenes.removeOutfit(id, entryId, outfitId)],
     ['DELETE', /^\/api\/cards\/([\w-]+)\/sprites\/([\w-]+)\/expressions\/(\w+)$/, ([id, entryId, expression]) => scenes.removeExpression(id, entryId, expression)],
     // 抽图历史 (draw-history.mjs): a card's old pictures by place (the pictures are
     // GET …/history/:file). One taken back takes the place of the one there now,
@@ -1149,7 +1179,8 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
         .filter(thing => typeof thing?.name === 'string' && thing.name.trim())
         .map(thing => ({ name: thing.name.trim().slice(0, 40), note: String(thing.note ?? '').slice(0, 120) }))
       const { cardId } = await store.getChat(id)
-      const sorted = things.length ? await engine.sortThings(id, things) : {}
+      const { tame } = await rulebooks.read(cardId)
+      const sorted = things.length ? await engine.sortThings(id, things, { tame: tame === true }) : {}
       return rulebooks.change(cardId, { items: { ...sorted, ...(await rulebooks.read(cardId)).items } })
     }],
     // 存档 (saves.mjs): a card's save slots for the visual novel mode.
@@ -1264,7 +1295,38 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     // The card's own event names its scripts on the server listen for (card-scripts.mjs): a frame's are sent on.
     // ?presetId: the chat's preset's scripts too.
     ['GET', /^\/api\/cards\/([\w-]+)\/script-events$/, async ([id], _, url) => ({ events: await engine.cardScripts.ownEvents(await store.getCard(id), { presetId: url.searchParams.get('presetId') ?? '' }) })],
-    ['PUT', /^\/api\/cards\/([\w-]+)\/media$/, ([id], body) => media.saveCardMedia(id, body)],
+    ['PUT', /^\/api\/cards\/([\w-]+)\/media$/, async ([id], body) => {
+      const view = await media.saveCardMedia(id, body)
+      await scenes.dropGoneOutfits(id)
+      return view
+    }],
+    ['POST', /^\/api\/cards\/([\w-]+)\/wardrobe\/draft$/, ([id], body) => media.draftWardrobe(id, body?.cast, AbortSignal.timeout(180000))],
+    // 换衣服: who wears what at the newest message, and the player's own change there (wear.mjs).
+    ['GET', /^\/api\/chats\/([\w-]+)\/wear$/, async ([id]) => {
+      const chat = await store.getChat(id)
+      const card = await store.getCard(chat.cardId)
+      return { people: wearView(chat, activePath(chat), media.cardMediaOf(card).roster) }
+    }],
+    ['PUT', /^\/api\/chats\/([\w-]+)\/wear$/, ([id], body) => store.withChat(id, async () => {
+      const chat = await store.getChat(id)
+      const { roster } = media.cardMediaOf(await store.getCard(chat.cardId))
+      const path = activePath(chat)
+      if (!changeWear(chat, path.at(-1), roster, body?.wear)) throw httpError(400, msg`没选要换的衣服`)
+      const saved = await store.saveChat(chat)
+      return { people: wearView(saved, activePath(saved), roster), chat: { ...chatView(saved), running: engine.isRunning(id) } }
+    })],
+    // 收进衣柜: an outfit of this chat's alone kept in the card's 名册.
+    ['POST', /^\/api\/chats\/([\w-]+)\/wear\/keep$/, async ([id], body) => {
+      const chat = await store.getChat(id)
+      const card = await store.getCard(chat.cardId)
+      const { roster } = media.cardMediaOf(card)
+      const entry = roster.find(item => item.id === body?.id)
+      const temp = entry && chat.wardrobe?.[entry.id]?.find(item => item.name === body?.name)
+      if (!temp) throw httpError(404, msg`没有这套衣服`)
+      if ((entry.wardrobe?.length ?? 0) >= WARDROBE_MAX) throw httpError(400, msg`${entry.name} 的衣柜满了（除平时外最多 ${WARDROBE_MAX} 套）`)
+      await media.saveCardMedia(chat.cardId, { ...card.media, roster: roster.map(item => (item.id === entry.id ? { ...item, wardrobe: [...(item.wardrobe ?? []), { name: temp.name, tags: temp.tags }] } : item)) })
+      return { people: wearView(chat, activePath(chat), media.cardMediaOf(await store.getCard(chat.cardId)).roster) }
+    }],
     ['POST', /^\/api\/cards\/([\w-]+)\/roster\/draft$/, ([id]) => media.draftRoster(id, AbortSignal.timeout(180000))],
     // 从对话里补充: the characters in an open chat's recent turns that the list (`cast`, as the page
     // has it) does not have yet, and the names the story calls those it has by now.
@@ -1329,6 +1391,16 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       }
       return { image, chat: { ...chatView(saved), running: engine.isRunning(id) } }
     }],
+    // 存为 CG: a reply's picture copied into the card's CG, a group it has or a new one (card-cgs.mjs keep).
+    ['POST', /^\/api\/chats\/([\w-]+)\/nodes\/([\w-]+)\/image\/cg$/, async ([id, nodeId], body) => {
+      const chat = await store.getChat(id)
+      if (chat.cardId === DIRECT_CARD) throw httpError(400, msg`直连对话没有角色卡，存不了 CG`)
+      const file = String(body?.file ?? '')
+      if (!chat.nodes[nodeId]?.media?.images?.some(image => image.file === file)) throw httpError(404, msg`没有这张图`)
+      const buffer = await media.readImage(id, file).catch(() => null)
+      if (!buffer) throw httpError(404, msg`没有这张图`)
+      return cardCgs.keep(chat.cardId, buffer, { groupId: String(body?.groupId ?? ''), name: body?.name, note: body?.note })
+    }],
     // 抽图历史: one of a picture's old ones shown again in its place; the one shown now becomes an old one.
     ['POST', /^\/api\/chats\/([\w-]+)\/nodes\/([\w-]+)\/image\/use$/, ([id, nodeId], body) => store.withChat(id, async () => {
       const chat = await store.getChat(id)
@@ -1380,7 +1452,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
         const card = await store.getCard(result.card.id).catch(() => null)
         if (card && !card.plots?.length) {
           const idea = result.draft.rounds?.[0]?.user?.text ?? ''
-          result.plotWriting = await plotDraft.ask(`card-${card.id}`, { kind: 'whole', auto: true, text: idea }).then(() => true, () => false)
+          result.plotWriting = await plotDraft.ask(`card-${card.id}`, { kind: 'whole', auto: true, text: idea }, { model: result.draft.model || (await store.getSettings()).model || '' }).then(() => true, () => false)
         }
       }
       return result
@@ -1822,9 +1894,10 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       return { changed }
     }],
     /**
-     * Entries copied or moved (`move`) out of a book, a card's own one
-     * (card-<id>) included, into an imported one or a new one (`to` empty,
-     * named `name`). The copy is saved before anything leaves the source.
+     * Entries copied or moved (`move`) out of a book into another, a card's
+     * own one (card-<id>; made if it has none) or an imported one on either
+     * side, or into a new one (`to` empty, named `name`). The copy is saved
+     * before anything leaves the source.
      */
     ['POST', /^\/api\/worldbooks\/transfer$/, async (_, body) => {
       const from = String(body?.from ?? '')
@@ -1836,9 +1909,12 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       if (!picked.length) throw httpError(400, msg`没选条目`)
       const to = String(body?.to ?? '')
       if (to === from) throw httpError(400, msg`已经在这本里了`)
-      const target = to ? await store.getBook(to) : emptyBook(body?.name)
+      const toCard = to.startsWith('card-') ? await store.getCard(to.slice(5)) : null
+      if (toCard?.direct) throw httpError(404, msg`这张卡没有自带世界书`)
+      const target = toCard ? ensureBook(toCard) : to ? await store.getBook(to) : emptyBook(body?.name)
       const { added, prefix: targetPrefix } = addEntries(target, picked)
-      await store.saveBook(target)
+      if (toCard) await store.saveCard(toCard)
+      else await store.saveBook(target)
       let sourcePrefix = false
       if (body?.move === true) {
         sourcePrefix = editBook(source, { remove: picked.map(e => e.uid) }).prefix
@@ -1847,7 +1923,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       }
       return {
         from: { ...bookView(source, from), prefix: sourcePrefix, ...(ownCard ? { card: cardSummary(ownCard) } : {}) },
-        to: { ...bookSummary(target), prefix: targetPrefix, added },
+        to: { ...bookSummary(target), ...(toCard ? { id: to, card: cardSummary(toCard) } : {}), prefix: targetPrefix, added },
       }
     }],
     ['POST', /^\/api\/worldbooks\/import$/, async (_, body) => {
@@ -1989,6 +2065,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       await store.deleteChat(id)
       await guide.drop(id).catch(() => {})
       await plotDraft.clear(`chat-${id}`).catch(() => {})
+      await tools.dropChat(id).catch(() => {})
       await prompts.adoptChat(id).catch(() => {})
       await media.removeChatMedia(id)
       return { ok: true }
@@ -2049,7 +2126,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     })],
     // 让向导写剧本、改剧本 (plot-draft.mjs): `key` is card-<id> (the card's plots) or chat-<id> (a chat's copy); the page
     // reads it again while `job` is there, and takes what it wants of the result itself.
-    ['GET', /^\/api\/plot-drafts\/((?:card|chat|forge)-[\w-]+)$/, ([key]) => plotDraft.view(key)],
+    ['GET', /^\/api\/plot-drafts\/((?:card|chat|forge)-[\w-]+)$/, ([key], _, url) => plotDraft.view(key, { chatId: String(url.searchParams.get('chat') ?? '') })],
     ['POST', /^\/api\/plot-drafts\/((?:card|chat|forge)-[\w-]+)$/, ([key], body) => plotDraft.ask(key, body ?? {})],
     ['POST', /^\/api\/plot-drafts\/((?:card|chat|forge)-[\w-]+)\/stop$/, ([key]) => plotDraft.stop(key)],
     ['DELETE', /^\/api\/plot-drafts\/((?:card|chat|forge)-[\w-]+)$/, ([key]) => plotDraft.clear(key)],
@@ -2157,6 +2234,9 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['GET', /^\/api\/chats\/([\w-]+)\/compact$/, async ([id]) => ({ parts: engine.compactProgress(id) })],
     // 补写变量: the latest reply of an MVU card came without its update block.
     ['POST', /^\/api\/chats\/([\w-]+)\/nodes\/([\w-]+)\/fill-update$/, async ([id, nodeId]) => ({ ...chatView(await engine.fillUpdate(id, nodeId)), running: false })],
+    // 修好这轮变量 / 核对这轮变量, and taking it back.
+    ['POST', /^\/api\/chats\/([\w-]+)\/nodes\/([\w-]+)\/fix-update$/, async ([id, nodeId]) => ({ ...chatView(await engine.fixUpdate(id, nodeId)), running: false })],
+    ['POST', /^\/api\/chats\/([\w-]+)\/nodes\/([\w-]+)\/undo-fix$/, async ([id, nodeId]) => ({ ...chatView(await engine.undoFix(id, nodeId)), running: false })],
     ['POST', /^\/api\/chats\/([\w-]+)\/nodes\/([\w-]+)\/rewrite-choices$/, async ([id, nodeId]) => ({ ...chatView(await engine.rewriteChoices(id, nodeId)), running: false })],
     ['PUT', /^\/api\/chats\/([\w-]+)\/compaction$/, ([id], body) => store.withChat(id, async () => {
       if (engine.isRunning(id)) throw httpError(409, msg`正在生成，先停止`)
@@ -2921,6 +3001,11 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       const body = await readBody(req)
       return sendJson(res, 200, await media.labelExpressions(body.lines, cancelOnClose()))
     }
+    const outfitDraw = /^\/api\/cards\/([\w-]+)\/sprites\/([\w-]+)\/outfits\/([\w-]+)\/draw$/.exec(url.pathname)
+    if (req.method === 'POST' && outfitDraw) {
+      const body = await readBody(req)
+      return sendJson(res, 200, await scenes.drawOutfit(outfitDraw[1], outfitDraw[2], outfitDraw[3], cancelOnClose(), drawChoiceOf(body)))
+    }
     const expressionDraw = /^\/api\/cards\/([\w-]+)\/sprites\/([\w-]+)\/expressions\/(\w+)\/draw$/.exec(url.pathname)
     if (req.method === 'POST' && expressionDraw) {
       const body = await readBody(req)
@@ -2939,7 +3024,7 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
         const input = node.parent ? chat.nodes[node.parent]?.text ?? '' : ''
         return sendJson(res, 200, await media.writeImagePrompt(chat, node, { reply, input, moment: body.moment === true }, signal))
       }
-      const image = await media.generateImage(chat, nodeId, body.prompt, signal, drawChoiceOf(body))
+      const image = await media.generateImage(chat, nodeId, body.prompt, signal, { ...drawChoiceOf(body), anchor: typeof body.anchor === 'string' ? body.anchor : node.media?.images?.find(image => image.file === body.replace)?.anchor ?? '' })
       // 重画 (`replace`): in that picture's place, which becomes one of its old ones (抽图历史);
       // past what is kept, the oldest go.
       const replace = typeof body.replace === 'string' ? body.replace : ''
@@ -2961,6 +3046,75 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
         await prompts.forgetPicture(chatId, gone.file).catch(() => {})
       }
       return sendJson(res, 200, { image, chat: { ...chatView(saved), running: engine.isRunning(chatId) } })
+    }
+
+    // 直连对话's tools (tools/index.mjs). Folders are added, and the switch turned on, only from this computer: a phone
+    // with the access token must not be able to open this computer's disk.
+    const toolRoute = /^\/api\/(?:tools(?:\/(browse|known\/[\w-]+))?|chats\/([\w-]+)\/tools(?:\/(answer|undo))?)$/.exec(url.pathname)
+    if (toolRoute) {
+      const local = isLoopback(req.socket.remoteAddress)
+      const [, part, chatId, action] = toolRoute
+      const body = req.method === 'GET' ? {} : await readBody(req)
+      const directChat = async () => {
+        const chat = await store.getChat(chatId)
+        if (chat.cardId !== DIRECT_CARD) throw httpError(400, msg`只有直连对话能用文件工具`)
+        return chat
+      }
+      const view = async () => sendJson(res, 200, await tools.view(chatId ?? '', { local }))
+      if (chatId) {
+        await directChat()
+        if (req.method === 'GET' && !action) return view()
+        if (req.method === 'PUT' && !action) {
+          const had = (await tools.foldersOf(chatId)).length > 0
+          await tools.setFolders(chatId, body.folders, { local })
+          // A search goes to the provider, past anything asked here: off when the chat gets its first folder (turned on again by hand).
+          let chat = null
+          if (!had && (await tools.foldersOf(chatId)).length) {
+            chat = await store.withChat(chatId, async () => {
+              const fresh = await store.getChat(chatId)
+              if (!fresh.webSearch) return null
+              fresh.webSearch = false
+              return store.saveChat(fresh)
+            })
+          }
+          return sendJson(res, 200, { ...(await tools.view(chatId, { local })), ...(chat ? { searchOff: true } : {}) })
+        }
+        if (req.method === 'POST' && action === 'answer') {
+          await tools.answer(chatId, body.id, body)
+          return view()
+        }
+        if (req.method === 'POST' && action === 'undo') {
+          if (engine.isRunning(chatId)) throw httpError(409, msg`正在生成，先停止`)
+          const run = String(body.run ?? '')
+          // A chat copied or brought in names runs that are not its own.
+          const found = await tools.runView(run)
+          if (!found || found.chatId !== chatId) throw httpError(404, msg`这一轮改动的旧版已经不在了（只留 30 天）`)
+          const result = await tools.undo(run, { force: body.force === true })
+          let chat = null
+          if (!result.changed.length && !result.failed.length) {
+            chat = await store.withChat(chatId, async () => {
+              const fresh = await store.getChat(chatId)
+              const node = Object.values(fresh.nodes).find(item => item.fileRun === run)
+              if (!node) return null
+              node.fileUndone = true
+              return store.saveChat(fresh)
+            })
+          }
+          return sendJson(res, 200, { ...result, tools: await tools.view(chatId, { local }), ...(chat ? { chat: { ...chatView(chat), running: false } } : {}) })
+        }
+      } else {
+        if (req.method === 'GET' && !part) return view()
+        if (req.method === 'PUT' && !part) {
+          await tools.setOn(body.on === true, { local })
+          return view()
+        }
+        if (req.method === 'GET' && part === 'browse') return sendJson(res, 200, await tools.browse(url.searchParams.get('path'), { local }))
+        if (req.method === 'DELETE' && part?.startsWith('known/')) {
+          await tools.forget(part.slice('known/'.length))
+          return view()
+        }
+      }
+      return sendJson(res, 404, { error: msg`没有这个接口` })
     }
 
     // 设置 → 更多 → 更新: any page may check; downloading, switching versions and

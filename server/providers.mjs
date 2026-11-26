@@ -32,7 +32,10 @@ const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/
 const HEADER_NAME = /^[A-Za-z0-9-]{1,64}$/
 const NO_PROXY = 'localhost,127.0.0.1,::1'
 const ANTHROPIC_VERSION = '2023-06-01'
-const ANTHROPIC_DEFAULT_MAX = 8192
+// The Messages API needs a number: what goes when nothing was set (the thinking counts against it, so a model that thinks
+// needs the room), and what goes when the model turns that down without saying how much it takes.
+const ANTHROPIC_DEFAULT_MAX = 32000
+const ANTHROPIC_SMALL_MAX = 8192
 const TIMEOUT_MS = 10 * 60 * 1000
 // 超时 in a provider's 高级: how long a request may go without a byte, in seconds (0 = TIMEOUT_MS).
 export const TIMEOUT_RANGE = Object.freeze({ min: 10, max: 3600 })
@@ -178,6 +181,9 @@ export function normalizeProvider(input, previous = null, taken = new Set()) {
     // Anthropic prompt cache lifetime: '5m' (default) or '1h' (writes cost 2x instead of 1.25x,
     // but a turn read more than five minutes after the last one still hits).
     cacheTtl: input.cacheTtl === '1h' ? '1h' : '5m',
+    // 传输方式: false asks for the whole answer at once (a relay whose streaming cuts off, garbles or miscounts);
+    // the readers take a whole answer as well as a stream. Kept only when off, as most never touch it.
+    ...(input.stream === false ? { stream: false } : {}),
     createdAt: previous?.createdAt ?? new Date().toISOString(),
   }
 }
@@ -606,13 +612,21 @@ function sendPayload(lib, url, { method, headers, payload, signal, proxy, timeou
       else socket.once(url.protocol === 'https:' ? 'secureConnect' : 'connect', () => { reached = true })
     })
     const onAbort = () => req.destroy(Object.assign(abortError(signal), { reached }))
+    let response = null
     signal?.addEventListener('abort', onAbort, { once: true })
     req.on('response', res => {
       reached = true
+      response = res
       res.on('close', () => signal?.removeEventListener('abort', onAbort))
       resolve(res)
     })
-    req.on('timeout', () => req.destroy(Object.assign(new Error(msg`请求超时`), { code: 'ETIMEDOUT', reached })))
+    req.on('timeout', () => {
+      // `gaveUp`: this app ended it, after its 超时 of silence. An answer under way ends with that, not with the "aborted"
+      // Node makes of any connection gone.
+      const error = Object.assign(new Error(msg`请求超时`), { code: 'ETIMEDOUT', reached, gaveUp: timeout })
+      response?.destroy(error)
+      req.destroy(error)
+    })
     req.on('error', error => {
       signal?.removeEventListener('abort', onAbort)
       reject(error)
@@ -665,8 +679,11 @@ async function failIfBad(res) {
   throw error
 }
 
-/** Server-sent events → { event, data } (data joined, not parsed). */
-async function* sse(res) {
+/**
+ * Server-sent events → { event, data } (data joined, not parsed). `onData`: called at each, but for a keep-alive
+ * (a ping, a comment), which is no sign that the model writes.
+ */
+async function* sse(res, onData) {
   res.setEncoding('utf8')
   let buffer = ''
   for await (const chunk of res) {
@@ -681,7 +698,9 @@ async function* sse(res) {
         if (line.startsWith('event:')) event = line.slice(6).trim()
         else if (line.startsWith('data:')) data.push(line.slice(5).replace(/^ /, ''))
       }
-      if (data.length) yield { event, data: data.join('\n') }
+      if (!data.length) continue
+      if (event !== 'ping') onData?.()
+      yield { event, data: data.join('\n') }
     }
   }
 }
@@ -696,6 +715,9 @@ function parseJson(text) {
 
 // ─── Protocols ──────────────────────────────────────────────────────────
 // Each returns { text, usage: { input, cacheRead, cacheWrite, output, thinking? }, model, stopReason, reasoned, reasoning }.
+// A stream's also has `ended`: whether it said it was over (reply-end.mjs). request.onData is called as anything of it
+// comes; request.enough() says the answer may end here: the rest is not read (where its tokens are known by then).
+const ENOUGH = 'stop'
 // `input` counts uncached prompt tokens only, as in the SDK usage. `thinking`: the part of `output` the model
 // spent thinking (not sent back next turn, so not context): given by OpenAI-style APIs, worked out for Anthropic.
 
@@ -729,7 +751,44 @@ function urlCitations(search, annotations) {
   }
 }
 
+/**
+ * A model's own tool calls (request.tools) as they come, in pieces or whole: { id, name, input, extra?, bad? } each. `extra`:
+ * what a service sends with one and wants back with it (Gemini's thought signature); `bad`: its arguments are not whole.
+ */
+function callLog() {
+  const list = []
+  return {
+    take(pieces) {
+      for (const piece of Array.isArray(pieces) ? pieces : []) {
+        if (!piece || typeof piece !== 'object') continue
+        // By its index; some services leave that out: a new id is then a new call.
+        let at = Number.isInteger(piece.index) ? list.findIndex(item => item.index === piece.index) : list.findIndex(item => piece.id && item.id === piece.id)
+        if (at < 0 && !Number.isInteger(piece.index) && !piece.id && list.length) at = list.length - 1
+        if (at < 0) at = list.push({ index: piece.index, id: '', name: '', args: '', extra: {} }) - 1
+        const item = list[at]
+        const { index: _, id, type: __, function: fn, ...extra } = piece
+        if (id) item.id = String(id)
+        if (fn?.name && !item.name) item.name = String(fn.name)
+        if (typeof fn?.arguments === 'string') item.args += fn.arguments
+        else if (fn?.arguments && typeof fn.arguments === 'object') item.args = JSON.stringify(fn.arguments)
+        Object.assign(item.extra, extra)
+      }
+    },
+    result() {
+      return list.filter(item => item.name).map(({ id, name, args, extra }) => {
+        const input = args.trim() ? parseJson(args) : {}
+        const whole = input && typeof input === 'object' && !Array.isArray(input)
+        return { id, name, input: whole ? input : {}, ...(Object.keys(extra).length ? { extra } : {}), ...(whole ? {} : { bad: true }) }
+      })
+    },
+  }
+}
+
 async function openaiCompletions(provider, request, res) {
+  const calls = callLog()
+  // The field its thinking came in: the one it wants it back in (DeepSeek).
+  let thoughtKey = null
+  let ended = false
   let text = ''
   let usage = null
   let model = null
@@ -742,14 +801,19 @@ async function openaiCompletions(provider, request, res) {
     const message = json.choices?.[0]?.message
     text = message?.content ?? ''
     reasoning = thoughtText(message)
+    thoughtKey = thoughtField(message)
+    calls.take(message?.tool_calls)
     if (reasoning) request.onReasoning?.(reasoning)
     if (text) request.onDelta?.(text)
     reasoned = Boolean(reasoning) || thoughtTokens(json.usage)
     urlCitations(search, message?.annotations)
-    return { text, usage: openaiUsage(json.usage), model: json.model ?? null, stopReason: json.choices?.[0]?.finish_reason ?? null, reasoned, reasoning, search: search.result() }
+    return { text, usage: openaiUsage(json.usage), model: json.model ?? null, stopReason: json.choices?.[0]?.finish_reason ?? null, reasoned, reasoning, search: search.result(), ...ownCalls(request, calls, thoughtKey, reasoning) }
   }
-  for await (const { data } of sse(res)) {
-    if (data === '[DONE]') break
+  for await (const { data } of sse(res, request.onData)) {
+    if (data === '[DONE]') {
+      ended = true
+      break
+    }
     const json = parseJson(data)
     if (!json) continue
     if (json.error) throw new Error(errorMessage(JSON.stringify(json)))
@@ -757,8 +821,10 @@ async function openaiCompletions(provider, request, res) {
     if (json.usage) usage = openaiUsage(json.usage)
     if (thoughtTokens(json.usage)) reasoned = true
     const choice = json.choices?.[0]
+    calls.take(choice?.delta?.tool_calls)
     const thought = thoughtText(choice?.delta)
     if (thought) {
+      thoughtKey ??= thoughtField(choice.delta)
       reasoned = true
       reasoning += thought
       request.onReasoning?.(thought)
@@ -770,8 +836,21 @@ async function openaiCompletions(provider, request, res) {
       request.onDelta?.(delta)
     }
     if (choice?.finish_reason) stopReason = choice.finish_reason
+    if (usage && request.enough?.()) {
+      stopReason = ENOUGH
+      break
+    }
   }
-  return { text, usage, model, stopReason, reasoned, reasoning, search: search.result() }
+  return { text, usage, model, stopReason, ended: ended || Boolean(stopReason), reasoned, reasoning, search: search.result(), ...ownCalls(request, calls, thoughtKey, reasoning) }
+}
+
+const thoughtField = part => (isThought(part) ? null : typeof part?.reasoning_content === 'string' && part.reasoning_content ? 'reasoning_content' : typeof part?.reasoning === 'string' && part.reasoning ? 'reasoning' : null)
+
+/** What a request with tools gets besides the text: the calls, and the thinking to be sent back with them. */
+function ownCalls(request, calls, key, reasoning) {
+  if (!request.tools) return {}
+  const list = calls.result()
+  return { ...(list.length ? { calls: list } : {}), ...(key && reasoning ? { thought: { key, text: reasoning } } : {}) }
 }
 
 /** Gemini's usageMetadata: its thinking (thoughtsTokenCount) is counted apart from the answer, so added in as output. */
@@ -788,6 +867,7 @@ function geminiUsage(meta) {
  * promptFeedback.blockReason; MAX_TOKENS is called max_tokens here, as a cut-off answer is elsewhere.
  */
 async function geminiGenerate(provider, request, res) {
+  let ended = true
   let text = ''
   let usage = null
   let model = null
@@ -819,13 +899,20 @@ async function geminiGenerate(provider, request, res) {
     if (usage?.thinking) reasoned = true
   }
   if (/event-stream/.test(res.headers['content-type'] ?? '')) {
-    for await (const { data } of sse(res)) take(parseJson(data))
+    for await (const { data } of sse(res, request.onData)) {
+      take(parseJson(data))
+      if (usage && request.enough?.()) {
+        stopReason = ENOUGH
+        break
+      }
+    }
+    ended = Boolean(stopReason)
   } else {
     // Without alt=sse (a relay that drops it) the whole answer comes as an array of the same pieces.
     const json = parseJson(await readText(res, 8 * 1024 * 1024))
     for (const piece of Array.isArray(json) ? json : [json ?? {}]) take(piece)
   }
-  return { text, usage, model, stopReason, reasoned, reasoning, search: search.result() }
+  return { text, usage, model, stopReason, ended, reasoned, reasoning, search: search.result() }
 }
 
 /**
@@ -881,7 +968,7 @@ async function openaiResponses(provider, request, res) {
     reasoned = (json.output ?? []).some(item => item.type === 'reasoning') || thoughtTokens(json.usage)
     return { text, usage: openaiUsage(json.usage), model: json.model ?? null, stopReason: json.status ?? null, reasoned, reasoning, search: search.result() }
   }
-  for await (const { data } of sse(res)) {
+  for await (const { data } of sse(res, request.onData)) {
     const json = parseJson(data)
     if (!json) continue
     if (json.type === 'response.output_text.delta' && typeof json.delta === 'string') {
@@ -914,7 +1001,7 @@ async function openaiResponses(provider, request, res) {
       }
     }
   }
-  return { text: afterSearch(text, cut), usage, model, stopReason, reasoned, reasoning, search: search.result() }
+  return { text: afterSearch(text, cut), usage, model, stopReason, ended: Boolean(stopReason), reasoned, reasoning, search: search.result() }
 }
 
 /** A web_search_tool_result block's pages (an error result has none). */
@@ -967,7 +1054,7 @@ async function anthropicMessages(provider, request, res) {
     reasoned = (json.content ?? []).some(b => /thinking/.test(b.type ?? ''))
     const reasoning = thinkingText(json.content)
     if (reasoning) request.onReasoning?.(reasoning)
-    return { text, raw, cut, content: Array.isArray(json.content) ? json.content : [], usage: seenUsage ? withThinking(usage, reasoning.length, raw.length) : null, model: json.model ?? null, stopReason: json.stop_reason ?? null, reasoned, reasoning, search: counted() }
+    return { text, raw, cut, content: Array.isArray(json.content) ? json.content : [], ...toolUses(request, json.content), usage: seenUsage ? withThinking(usage, reasoning.length, raw.length) : null, model: json.model ?? null, stopReason: json.stop_reason ?? null, reasoned, reasoning, search: counted() }
   }
   const toolInput = new Map() // block index → the search's input JSON as it streams
   // The reply's content blocks rebuilt from the stream (a paused one is sent back as it came: pause_turn).
@@ -976,9 +1063,11 @@ async function anthropicMessages(provider, request, res) {
   const into = (index, change) => {
     if (blocks[index]) change(blocks[index])
   }
-  for await (const { data } of sse(res)) {
+  let ended = false
+  for await (const { data } of sse(res, request.onData)) {
     const json = parseJson(data)
     if (!json) continue
+    if (json.type === 'message_stop') ended = true
     if (json.type === 'content_block_start' && json.content_block) {
       blocks[json.index] = structuredClone(json.content_block)
       if (/tool_use$/.test(json.content_block.type ?? '')) inputs.set(json.index, '')
@@ -997,7 +1086,8 @@ async function anthropicMessages(provider, request, res) {
     } else if (json.type === 'content_block_stop' && inputs.has(json.index)) {
       const typed = inputs.get(json.index)
       if (typed) into(json.index, b => { b.input = parseJson(typed) ?? b.input ?? {} })
-      inputs.delete(json.index)
+      // Ended in the middle (the output limit): not whole.
+      if (!typed || parseJson(typed)) inputs.delete(json.index)
     }
     if (json.type === 'message_start') {
       model = json.message?.model ?? null
@@ -1029,11 +1119,29 @@ async function anthropicMessages(provider, request, res) {
     } else if (json.type === 'error') {
       throw new Error(json.error?.message ?? msg`生成失败`)
     }
+    if (usage.input + usage.cacheRead + usage.cacheWrite > 0 && request.enough?.()) {
+      stopReason = ENOUGH
+      // The tokens written are told at the end, which is not waited for.
+      usage.output = Math.max(usage.output, estimateTokens(text))
+      break
+    }
   }
   const reasoning = thinkingText(blocks)
   // A relay that counts nothing until the end (message_start all zeros) shows the lost system prompt only now, the text out.
   const systemDropped = Boolean(request.expectPrompt) && checkSystemArrived(request, usage, { late: true })
-  return { text: afterSearch(text, cut), raw: text, cut, content: blocks.filter(Boolean), usage: seenUsage ? withThinking(usage, reasoning.length, text.length) : null, model, stopReason, reasoned, reasoning, search: counted(), ...(systemDropped ? { systemDropped } : {}) }
+  return { text: afterSearch(text, cut), raw: text, cut, content: blocks.filter(Boolean), ...toolUses(request, blocks, inputs), usage: seenUsage ? withThinking(usage, reasoning.length, text.length) : null, model, stopReason, ended: ended || Boolean(stopReason), reasoned, reasoning, search: counted(), ...(systemDropped ? { systemDropped } : {}) }
+}
+
+/** The tool calls in Anthropic content; `open`: the blocks (by index) whose input never came whole. */
+function toolUses(request, content, open = new Map()) {
+  if (!request.tools) return {}
+  const list = []
+  for (const [index, block] of (Array.isArray(content) ? content : []).entries()) {
+    if (block?.type !== 'tool_use') continue
+    const whole = !open.has(index) && block.input && typeof block.input === 'object' && !Array.isArray(block.input)
+    list.push({ id: String(block.id ?? ''), name: String(block.name ?? ''), input: whole ? block.input : {}, ...(whole ? {} : { bad: true }) })
+  }
+  return list.length ? { calls: list } : {}
 }
 
 /** The thinking blocks' text in Anthropic content, a paragraph each (a redacted one has none). */
@@ -1217,12 +1325,45 @@ function geminiBody(provider, modelId, { system, messages, maxTokens, effort, of
 // Models that are not Claude, as relays name them behind the Anthropic API.
 const OTHER_MODELS = /deepseek|kimi|moonshot|qwen|qwq|glm|zhipu|gemini|gemma|gpt|o[134]-|grok|minimax|doubao|seed|step|mimo|hunyuan|ernie|baichuan|yi-|llama|mistral|mixtral|command/i
 
-function requestBody(provider, modelId, { system, messages, maxTokens: cap, reasoning, webSearch }, { ttl = provider.cacheTtl, withReasoning = true, thoughts = null } = {}) {
+// The API types a model's own tool calling goes through here (直连对话's tools); elsewhere the calls are text (tools/calls.mjs).
+const TOOL_APIS = new Set(['openai-completions', 'anthropic-messages'])
+// Provider + model pairs that refused tools: asked without from then on.
+const NO_TOOLS = new Set()
+const TOOLS_REFUSED = /\btools?\b|tool[_ -]?(?:use|call|choice)|function[_ -]?call/i
+// Pairs that want their thinking back with every reply once there are tools (DeepSeek), an empty one where there is none.
+const THOUGHT_BACK = new Set()
+
+/** Whether tools can be asked for the model's own way. */
+export const nativeTools = (provider, modelId) => TOOL_APIS.has(provider?.api) && !NO_TOOLS.has(`${provider.id}/${modelId}`)
+
+/** An assistant message for Chat Completions, with its calls and the thinking this pair gave with it. */
+function openaiAssistant(message, pair, tools) {
+  const thought = message.thought?.by === pair ? message.thought : null
+  return {
+    role: 'assistant',
+    content: message.content || (message.calls?.length ? null : message.content),
+    ...(tools && thought ? { [thought.key]: thought.text } : tools && THOUGHT_BACK.has(pair) ? { reasoning_content: '' } : {}),
+    ...(message.calls?.length ? { tool_calls: message.calls.map(({ id, name, input, extra }) => ({ ...(message.thought?.by === pair || message.by === pair ? extra : {}), id, type: 'function', function: { name, arguments: JSON.stringify(input) } })) } : {}),
+  }
+}
+const openaiMessages = (messages, pair, tools) => messages.flatMap(m => (m.role === 'tool'
+  ? m.results.map(({ id, text }) => ({ role: 'tool', tool_call_id: id, content: text }))
+  : [m.role === 'assistant' && (tools || m.calls) ? openaiAssistant(m, pair, tools) : { role: m.role, content: m.content }]))
+
+/** The content of an assistant message with calls, for the Messages API: as the model wrote it this turn, thinking and all, or made anew. */
+function anthropicCalls(message) {
+  if (message.blocks) return message.blocks.filter(block => block?.type !== 'text' || block.text)
+  return [...(message.content ? [{ type: 'text', text: message.content }] : []), ...message.calls.map(({ id, name, input }) => ({ type: 'tool_use', id, name, input }))]
+}
+
+function requestBody(provider, modelId, { system, messages, maxTokens: cap, reasoning, webSearch, tools }, { ttl = provider.cacheTtl, withReasoning = true, thoughts = null } = {}) {
   // A request may cap its own output (short helper calls); otherwise the provider's setting.
   const maxTokens = cap || provider.maxTokens
   // 联网: OpenRouter searches for the `:online` variant; Anthropic and Responses get the search tool.
   const search = webSearch ? webSearchKind(provider, modelId) : null
   if (search === 'openrouter' && !/:online$/.test(modelId)) modelId = `${modelId}:online`
+  // 传输方式 off: the whole answer in one piece (Gemini's native type asks by address instead, PROTOCOL).
+  const stream = streams(provider)
   if (provider.api === 'google-generative') {
     // 思考: 关闭 (the provider's, or a chat's own 关) in Gemini's words, and no effort beside it.
     const off = withReasoning && provider.thinking === 'off'
@@ -1246,7 +1387,7 @@ function requestBody(provider, modelId, { system, messages, maxTokens: cap, reas
     // The newest message of the conversation itself: a paused reply sent back after it (its blocks) has none, nor do
     // the preset's after-history entries sent after it for this turn only (`tail`, engine.mjs turnMessages): the next
     // turn has them no more, so it reads the cache up to the turn's message.
-    const last = messages.findLastIndex(m => !Array.isArray(m.content) && !m.tail)
+    const last = messages.findLastIndex(m => !Array.isArray(m.content) && !m.tail && m.role !== 'tool' && !m.calls)
     const cache = ttl === '1h' ? { type: 'ephemeral', ttl: '1h' } : { type: 'ephemeral' }
     // Only Claude takes the breakpoints. Relays that put other models (DeepSeek, Kimi…) behind this
     // API cache by themselves, and some drop the system prompt when a message comes as marked blocks.
@@ -1257,15 +1398,17 @@ function requestBody(provider, modelId, { system, messages, maxTokens: cap, reas
     }
     return {
       model: modelId,
-      max_tokens: maxTokens || ANTHROPIC_DEFAULT_MAX,
+      max_tokens: maxTokens || ANTHROPIC_SMALL_MAX,
       // An empty text block is refused, so a request without a system prompt has no system field.
       ...(String(system ?? '').trim() ? { system: marked ? [{ type: 'text', text: system, cache_control: cache }] : system } : {}),
       messages: messages.map((m, i) => {
         const mark = i === last || m.cache
+        if (m.calls) return { role: 'assistant', content: anthropicCalls(m) }
+        if (m.role === 'tool') return { role: 'user', content: m.results.map(({ id, text, ok }, at) => ({ type: 'tool_result', tool_use_id: id, content: text, ...(ok === false ? { is_error: true } : {}), ...(marked && m.cache && at === m.results.length - 1 ? { cache_control: cache } : {}) })) }
         return marked && !Array.isArray(m.content) && (mark || m.cacheHead) ? { role: m.role, content: blocks(m, mark) } : { role: m.role, content: m.content }
       }),
-      stream: true,
-      ...(search === 'anthropic' ? { tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: SEARCHES_PER_REPLY }] } : {}),
+      stream,
+      ...(search === 'anthropic' || tools ? { tools: [...(tools ?? []).map(({ name, description, parameters }) => ({ name, description, input_schema: parameters })), ...(search === 'anthropic' ? [{ type: 'web_search_20250305', name: 'web_search', max_uses: SEARCHES_PER_REPLY }] : [])] } : {}),
       ...common,
       ...(provider.extraBody ?? {}),
     }
@@ -1275,7 +1418,7 @@ function requestBody(provider, modelId, { system, messages, maxTokens: cap, reas
       model: modelId,
       ...(String(system ?? '').trim() ? { instructions: system } : {}),
       input: messages.map(m => ({ role: m.role, content: m.content })),
-      stream: true,
+      stream,
       store: false,
       ...(search === 'openai' ? { tools: [{ type: 'web_search' }] } : {}),
       ...(maxTokens ? { max_output_tokens: maxTokens } : {}),
@@ -1286,9 +1429,11 @@ function requestBody(provider, modelId, { system, messages, maxTokens: cap, reas
   return {
     // Vertex AI's OpenAI-compatible address wants google/<model>: a provider switched back from the native type keeps bare IDs.
     model: isVertex(provider) && !modelId.includes('/') ? `google/${modelId}` : modelId,
-    messages: [...(String(system ?? '').trim() ? [{ role: 'system', content: system }] : []), ...messages.map(m => ({ role: m.role, content: m.content }))],
-    stream: true,
-    stream_options: { include_usage: true },
+    messages: [...(String(system ?? '').trim() ? [{ role: 'system', content: system }] : []), ...openaiMessages(messages, `${provider.id}/${modelId}`, tools)],
+    ...(tools ? { tools: tools.map(({ name, description, parameters }) => ({ type: 'function', function: { name, description, parameters } })) } : {}),
+    stream,
+    // Only beside a stream: some services refuse stream_options in a request that asks for none.
+    ...(stream ? { stream_options: { include_usage: true } } : {}),
     ...(maxTokens ? { max_tokens: maxTokens } : {}),
     ...common,
     ...(provider.extraBody ?? {}),
@@ -1300,15 +1445,41 @@ const PROTOCOL = {
   'openai-responses': { path: provider => joinUrl(provider.baseURL, '/responses'), read: openaiResponses },
   'anthropic-messages': { path: provider => anthropicUrl(provider.baseURL, '/messages'), read: anthropicMessages },
   // The model is in the address; a Base URL written for the OpenAI-compatible address (…/v1beta/openai) works as well.
-  'google-generative': { path: (provider, modelId) => `${joinUrl(googleBase(provider), `/models/${encodeURIComponent(geminiModel(modelId))}:streamGenerateContent`)}?alt=sse`, read: geminiGenerate },
+  // 传输方式 off: generateContent, the whole answer as one object (geminiGenerate reads that too).
+  'google-generative': {
+    path: (provider, modelId) => {
+      const model = `/models/${encodeURIComponent(geminiModel(modelId))}`
+      return streams(provider) ? `${joinUrl(googleBase(provider), `${model}:streamGenerateContent`)}?alt=sse` : joinUrl(googleBase(provider), `${model}:generateContent`)
+    },
+    read: geminiGenerate,
+  },
 }
+
+// Model backends this install adds beside the API types above, by their `api` (none in public trees):
+// fn(provider, modelId, request, { proxy }) → the same result complete() gives.
+const ADDED_APIS = new Map()
+export function addApi(api, fn) {
+  ADDED_APIS.set(api, fn)
+}
+
+/** Whether replies come as a stream (传输方式, the provider's `stream`; on unless turned off). */
+export const streams = provider => provider?.stream !== false
 
 /**
  * Stream one completion.
- * @param request - { system, messages: [{ role: 'user'|'assistant', content, cache?, cacheHead? }], maxTokens?, signal, onDelta }
+ * @param request - { system, messages: [{ role: 'user'|'assistant', content, cache?, cacheHead? }], maxTokens?, signal, onDelta,
+ *   tools? (nativeTools only): [{ name, description, parameters }] }. With tools, a message may be { role: 'assistant',
+ *   content, calls: [{ id, name, input, extra? }], thought? ({ key, text, by }), by?, blocks? }, and one after it { role:
+ *   'tool', results: [{ id, text, ok }] }; the result has `calls` when the model made any, and `thought`. A model that takes
+ *   no tools fails with error.toolsRefused, and nativeTools says so from then on.
  * @param proxy - the app's proxy URL, or null; ignored when the provider is set to direct.
  */
 export async function complete(provider, modelId, original, { proxy = null } = {}) {
+  const added = ADDED_APIS.get(provider.api)
+  if (added) {
+    const result = withPrompt(await added(provider, modelId, original, { proxy }))
+    return { ...result, truncated: TRUNCATED.test(String(result.stopReason ?? '')) }
+  }
   const protocol = PROTOCOL[provider.api]
   if (!protocol) throw new Error(msg`不支持的接口类型：${provider.api}`)
   const dropped = SYSTEM_DROPPED.has(`${provider.id}/${modelId}`)
@@ -1321,6 +1492,8 @@ export async function complete(provider, modelId, original, { proxy = null } = {
     if (!local) throw httpError(400, msg`供应商「${provider.name}」还没有填 API Key`)
   }
   const pair = `${provider.id}/${modelId}`
+  // What is learned of how much a model writes, by its address: a provider given another one starts over.
+  const spot = `${provider.baseURL}|${modelId}`
   // Kept apart with 联网 on: a relay may refuse thinking only alongside the search tool.
   const refusedKey = request.webSearch ? `${pair} 联网` : pair
   const offFields = thinkingOff(provider, modelId)
@@ -1328,16 +1501,25 @@ export async function complete(provider, modelId, original, { proxy = null } = {
   const reasonKey = `${refusedKey} ${JSON.stringify(asked)}${provider.api === 'google-generative' && provider.thinking === 'off' ? ' off' : ''}`
   const reasoning = !NO_REASONING.has(reasonKey) && (Object.keys(asked).length > 0 || (provider.api === 'google-generative' && provider.thinking === 'off'))
   const short = request.maxTokens > 0 && request.maxTokens < THINKING_ROOM
+  // Nothing set anywhere on an Anthropic address: the default, as soft as a preset's length (`unset`). And never more
+  // than the model has said it writes in one go.
+  const capped = req => {
+    const unset = provider.api === 'anthropic-messages' && !req.maxTokens && !provider.maxTokens && !SMALL_DEFAULT.has(spot)
+    const asked = req.maxTokens || provider.maxTokens || (unset ? ANTHROPIC_DEFAULT_MAX : 0)
+    const limit = OUTPUT_LIMITS.get(spot) ?? Infinity
+    if (asked > limit) return { ...req, maxTokens: limit }
+    return unset ? { ...req, maxTokens: ANTHROPIC_DEFAULT_MAX, softCap: true, unset } : req
+  }
   const attempt = async () => {
     // 显示思考过程 on (the caller takes the thinking): asked for where it must be, as far as this pair allows.
     const thoughts = request.onReasoning && THOUGHTS.get(refusedKey) !== 'off' ? THOUGHTS.get(refusedKey) ?? 'full' : null
     // Room to think on top of a short cap, given up like a preset's length if the model refuses it.
-    const req = short && THINKERS.has(pair) ? { ...request, maxTokens: request.maxTokens + THINKING_ROOM, softCap: true } : request
+    const req = capped(short && THINKERS.has(spot) ? { ...request, maxTokens: request.maxTokens + THINKING_ROOM, softCap: true } : request)
     const post = async (options, body = req) => {
       for (let retry = 0; ; retry++) {
         const res = await send(protocol.path(provider, modelId), {
           method: 'POST',
-          headers: await headersFor(provider, { accept: 'text/event-stream' }, { proxy, signal: request.signal }),
+          headers: await headersFor(provider, { accept: streams(provider) ? 'text/event-stream' : 'application/json' }, { proxy, signal: request.signal }),
           body: requestBody(provider, modelId, body, { withReasoning: reasoning, thoughts, ...options }),
           signal: request.signal,
           proxy: provider.proxy === 'direct' ? null : proxy,
@@ -1363,7 +1545,21 @@ export async function complete(provider, modelId, original, { proxy = null } = {
       await failIfBad(res)
     } catch (error) {
       if (request.signal?.aborted) throw error
-      if (error.providerStatus !== 400) throw searchHint(error, request)
+      // 404: a router with no upstream that takes tools; 422, 501: servers that do not know them.
+      if (request.tools && [400, 404, 422, 501].includes(error.providerStatus)) {
+        if (/reasoning_content/i.test(error.message) && !THOUGHT_BACK.has(pair)) {
+          THOUGHT_BACK.add(pair)
+          return attempt()
+        }
+        if (TOOLS_REFUSED.test(`${error.message} ${error.body ?? ''}`) || /reasoning_content/i.test(error.message)) {
+          NO_TOOLS.add(pair)
+          throw Object.assign(error, { toolsRefused: true })
+        }
+      }
+      // A relay that holds back the price of the whole cap before it answers, and the balance is short of that: asked
+      // again without the cap. A balance really used up fails the same way again.
+      const heldBack = Boolean(req.softCap) && [402, 403].includes(error.providerStatus) && QUOTA_SHORT.test(`${error.message} ${error.body ?? ''}`)
+      if (error.providerStatus !== 400 && !heldBack) throw searchHint(error, request)
       // The thinking asked for is refused (a Gemini without thinking_level, an OpenAI organization not verified
       // for summaries): asked again with less (a Gemini without the level first), and so from then on.
       if (thoughts && THOUGHTS_REFUSED.test(error.message)) {
@@ -1376,12 +1572,16 @@ export async function complete(provider, modelId, original, { proxy = null } = {
       // The output limit counts against the context window too: a long history plus a big cap
       // can overflow where the provider's own smaller default fits.
       const full = CONTEXT_FULL.test(error.message)
-      const capRejected = req.softCap && (full || /max_?(output_|completion_)?tokens|maximum.*tokens|output.*limit/i.test(error.message))
+      // One that says how much it writes in one go is asked for that much, now and later, whoever set the number.
+      const limit = full || heldBack ? 0 : outputLimit(`${error.message} ${error.body ?? ''}`, req.maxTokens || provider.maxTokens)
+      const capRejected = heldBack || limit > 0 || (req.softCap && (full || /max_?(output_?|completion_?)?tokens|maximum.*tokens|output.*limit/i.test(error.message)))
+      if (limit) OUTPUT_LIMITS.set(spot, limit)
+      else if (capRejected && req.unset && !full && !heldBack) SMALL_DEFAULT.add(spot)
       // A model or relay that takes no thinking / effort fields: leave them out, now and later.
       const reasoningRejected = reasoning && REASONING_REFUSED.test(error.message)
       if (!ttlRejected && !capRejected && !reasoningRejected) throw searchHint(contextHint(error), request)
       const fixed = { ...(ttlRejected ? { ttl: '5m' } : {}) }
-      const body = capRejected ? { ...req, maxTokens: undefined } : req
+      const body = capRejected ? { ...req, maxTokens: limit || undefined } : req
       // The 1-hour cache or the output cap explains it on its own ("ttl: Extra inputs are not permitted" reads like a
       // refused thinking field too): tried first with thinking kept, and thinking left out only if still refused for it.
       let dropReasoning = reasoningRejected && !ttlRejected && !capRejected
@@ -1413,7 +1613,9 @@ export async function complete(provider, modelId, original, { proxy = null } = {
       })
       result = joinPaused(result, withPrompt(await protocol.read(provider, request, next)))
     }
-    return { ...result, truncated: TRUNCATED.test(String(result.stopReason ?? '')) }
+    // `cap`: the output cap it went out with in the end (0: the service's own).
+    const cap = used.body.maxTokens || provider.maxTokens || (provider.api === 'anthropic-messages' ? ANTHROPIC_SMALL_MAX : 0)
+    return { ...result, truncated: TRUNCATED.test(String(result.stopReason ?? '')), cap }
   }
   let first
   try {
@@ -1435,10 +1637,11 @@ export async function complete(provider, modelId, original, { proxy = null } = {
       return { ...again, usage: addUsage(first.usage, again.usage) }
     }
   }
-  if (!short || THINKERS.has(pair) || !first.truncated || !first.reasoned) return first
-  // Its thinking used up a short cap: room for it from now on, and once more
-  // now when nothing of the answer came (a started one is already on screen).
-  THINKERS.add(pair)
+  // A model that thinks has room for it on top of a short cap from now on. Its thinking used that cap up: once more
+  // now, when nothing of the answer came (a started one is already on screen).
+  const known = THINKERS.has(spot)
+  if (first.reasoned) THINKERS.add(spot)
+  if (!short || known || !first.truncated || !first.reasoned) return first
   if (first.text.trim() || request.signal?.aborted) return first
   // The thinking the page showed goes with it: the second answer brings its own.
   if (first.reasoning) original.onRestart?.()
@@ -1511,9 +1714,39 @@ function checkSystemArrived(request, usage, { late = false } = {}) {
 
 // Models that think before answering count the thinking against the output cap
 // (DeepSeek's flash thinks by default), so a short cap can run out before the
-// answer starts. A pair seen doing that gets this much more on short caps.
+// answer starts. A model seen thinking gets this much more on short caps.
 const THINKERS = new Set()
 const THINKING_ROOM = 16000
+
+// The most a model writes in one go, as it said when it turned down more; and the models on an Anthropic address that
+// turned the default down without saying. Both by address and model.
+const OUTPUT_LIMITS = new Map()
+const SMALL_DEFAULT = new Set()
+
+// How services say the output cap they take: Anthropic, OpenAI, DeepSeek and Qwen ("[1, 8192]"), Gemini ("from 1 (inclusive) to
+// 65537 (exclusive)"), and the plain "at most", "<=", "less than or equal to", 不能大于.
+const LIMIT_WORDS = [
+  />\s*(\d[\d,]*?),?\s*which is the maximum allowed/i,
+  /supports? at most\s*(\d[\d,]*)/i,
+  /max_?(?:output_?|completion_?)?tokens[^[\]]{0,120}[[(]\s*\d+\s*[,，~]\s*(\d+)\s*[\])]/i,
+  /max_?(?:output_?|completion_?)?tokens.{0,160}?\bto\s*(\d[\d,]*)\s*\((inclusive|exclusive)\)/i,
+  /max_?(?:output_?|completion_?)?tokens.{0,120}?(?:<=|≤|less than or equal to|no more than|at most|cannot exceed|must not exceed|maximum(?: value| allowed)?(?: is| of|:)?|不能大于|不能超过|不得超过|最大为?)\s*(\d[\d,]*)/i,
+]
+
+/** The output cap a refusal of `asked` tokens names, or 0. */
+export function outputLimit(message, asked) {
+  const text = String(message ?? '')
+  for (const pattern of LIMIT_WORDS) {
+    const found = pattern.exec(text)
+    if (!found) continue
+    const n = Number(found[1].replace(/,/g, '')) - (found[2] === 'exclusive' ? 1 : 0)
+    if (n >= 256 && n < (Number(asked) || 0)) return n
+  }
+  return 0
+}
+
+// A balance too small for what the request may cost at its most (OpenRouter, one-api and its relatives).
+const QUOTA_SHORT = /can only afford|fewer max_tokens|预扣|pre-?consume/i
 
 /**
  * Two calls' tokens as one, for billing. `prompt` stays the last call's: what the context held is what
@@ -1810,6 +2043,8 @@ function rateLimited(name, text, full = text) {
 // Written for /chat/completions, it finds nothing to change in what the Responses API sends.
 const OVERRIDE_FAILED = /param_override_invalid|operation \w+ failed: operation not supported/i
 
+const NO_CHANNEL = /无可用(?:的)?渠道|没有可用(?:的)?渠道|no (?:available|enabled|active) channels?\b|model_not_found/i
+
 /** Words for a Responses provider whose answer had nothing in it this API has, not even an end: a relay answering some other way. */
 export function unreadReply(provider, result) {
   if (provider?.api !== 'openai-responses' || String(result?.text ?? '').trim() || result?.stopReason || result?.usage) return null
@@ -1827,8 +2062,16 @@ function plainError(provider, error, begun = false) {
   if (status === 404) return msg`${name} 返回 404：检查 Base URL 和接口类型，或者模型 ID 是否写对。（${text.slice(0, 160)}）`
   // What kind of limit, and the wait, may be past the part of the answer the message keeps.
   if (status === 429) return rateLimited(name, text, `${text} ${error?.body ?? ''}`)
-  if (status === 503 || status === 529 || (status >= 500 && /overloaded|high demand|UNAVAILABLE|capacity/i.test(text))) return msg`${name} 那边的模型现在太忙了（${status}，对方服务器繁忙，不是你的网络或设置的问题）。过几分钟再试，或者先换个模型。（${text.slice(0, 160)}）`
+  // A relay (new-api and its like) with no channel for the model in the key's group answers 503 too: waiting does not help.
+  if (status >= 500 && NO_CHANNEL.test(`${text} ${error?.body ?? ''}`)) return msg`${name} 没有能跑这个模型的渠道（${status}）：多半是中转站的这个分组里没有它，或者渠道停了。换一个模型，或者到中转站看看这个 Key 的分组能用哪些模型。（${text.slice(0, 160)}）`
+  if (status === 503 || status === 529 || (status >= 500 && /overloaded|high demand|UNAVAILABLE|capacity/i.test(text))) return msg`${name} 那边的模型现在太忙了（${status}，是对方返回的，不是你的网络问题）。过几分钟再试；一直这样就换个模型，中转站没有这个模型时也可能这样报。（${text.slice(0, 160)}）`
   if (status >= 500) return msg`${name} 的服务器出错了（${status}，是对方的问题，不是你的设置）。稍后重试，或者先换个模型。（${text.slice(0, 160)}）`
+  // Silent partway for as long as 超时 allows: upstream went quiet, and it was this app that then hung up.
+  if (begun && error?.gaveUp) {
+    const seconds = Math.round(error.gaveUp / 1000)
+    const wait = seconds >= 120 ? msg`${Math.round(seconds / 60)} 分钟` : msg`${seconds} 秒`
+    return withCode(msg`上游 ${name} 写到中途，连着 ${wait}没有发来任何内容，应用按供应商「高级」里的「超时」断开了。停住的是上游，断开的是应用：可以继续生成，想多等就把「超时」调长。`, error)
+  }
   const network = /ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNRESET|EHOSTUNREACH|ENETUNREACH|socket hang up|secure TLS connection|请求超时|Request timed out/i.test(`${errorCode(error)} ${text}`)
   // An answer under way when its connection went: the address and the key worked. Node calls that 'aborted', even before any text.
   if (network && (begun || (text === 'aborted' && errorCode(error) === 'ECONNRESET'))) {

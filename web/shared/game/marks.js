@@ -18,14 +18,15 @@
 // the model's: it writes sizes and names, and the rules work out the rest.
 import { clampDc } from './dice.js'
 import { cleanOpening } from './battle.js'
-import { REASONING, asideBlocks, optionWords, otherChoices, outsideReasoning, replyBlocks } from '../basic.js'
+import { REASONING, SELF_CHECK_BLOCK, asideBlocks, optionWords, otherChoices, outsideReasoning, replyBlocks } from '../basic.js'
 
 // Models do write them in the wrong brackets (<检定|灵巧|DC12>): the page would swallow that as a tag, and the story would
 // stop with nothing to do. The kind and the bar are what tell it from anything else.
 const MARK = /(?:\*\*)?[【<\[［〖〔]\s*(检定|战斗|获得|失去|任务|受伤|恢复|学会|异常|晋升|理智|同伴|进化)\s*[|｜]\s*([^【】<>\[\]［］〖〗〔〕\n]{0,80}?)\s*[】>\]］〗〕](?:\*\*)?/g
 // Where a mark is not the story's: the model's thinking (by any of its names, <think_mist~> too: REASONING), the
-// update blocks, the action choices, and a preset's own blocks that are not the story (asideBlocks).
-const SEALED = /<(think|thinking|reasoning|choices|UpdateVariable|state)\b[^>]*>[\s\S]*?(?:<\/\1\s*>|$)/gi
+// update blocks, the action choices, 写前自查 and 裁判表's judgment (they name the mark they are about to write), and a
+// preset's own blocks that are not the story (asideBlocks).
+const SEALED = /<(think|thinking|reasoning|choices|judge|UpdateVariable|state)\b[^>]*>[\s\S]*?(?:<\/\1\s*>|$)/gi
 const KEYCAP_LINE = /^[ \t]*[1-9]️?⃣.*$/gm
 const DC = /^(?:DC|难度)?\s*[:：=]?\s*(\d{1,3})$/i
 const COUNTED = /^(.+?)\s*[×xX*＊]\s*(\d{1,4})$/
@@ -147,7 +148,7 @@ const blank = text => text.replace(/[^\n]/g, ' ')
 
 /** The text with everything that is not the story blanked out, so places in it are places in the text. */
 function storyOnly(source, blocks) {
-  let open = source.replace(REASONING, blank).replace(SEALED, blank).replace(KEYCAP_LINE, blank)
+  let open = source.replace(REASONING, blank).replace(SELF_CHECK_BLOCK, blank).replace(SEALED, blank).replace(KEYCAP_LINE, blank)
   for (const block of asideBlocks(source, blocks)) open = open.slice(0, block.start) + blank(open.slice(block.start, block.end)) + open.slice(block.end)
   const { choices } = otherChoices(open)
   if (!choices.length) return open
@@ -245,7 +246,7 @@ class ChoiceMap extends Map {
 /** What a reply's action choices ask for, by the choice's text as shown. Thinking that names one is no choice. */
 function choiceMarks(text, kind) {
   const found = new ChoiceMap()
-  for (const line of outsideReasoning(text).split('\n')) {
+  for (const line of outsideReasoning(text).replace(SELF_CHECK_BLOCK, '').split('\n')) {
     const choice = parseChoice(line)
     if (choice[kind]) found.set(optionWords(choice.text.replace(OPTION_LABEL, '')), choice[kind])
   }

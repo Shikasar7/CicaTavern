@@ -336,13 +336,18 @@ export function initProviders({ api, el, toast, guard, saveFile, onChanged }) {
     models.value = formatModels(p.models)
     const remoteBox = el('div', { class: 'remote-models' })
     const fetchButton = el('button', { type: 'button', class: 'btn small', text: t`从接口获取模型列表` })
-    const maxTokens = el('input', { name: 'maxTokens', type: 'number', min: 0, max: 1000000, step: 256, value: p.maxTokens || '', placeholder: t`用预设的` })
+    const maxTokens = el('input', { name: 'maxTokens', type: 'number', min: 0, max: 1000000, step: 256, value: p.maxTokens || '', placeholder: t`自动` })
     const temperature = el('input', { name: 'temperature', type: 'number', min: 0, max: 2, step: 0.05, value: p.temperature ?? '', placeholder: t`服务默认` })
     // 超时: seconds a request may go without a byte (server/providers.mjs TIMEOUT_RANGE); empty is ten minutes.
     const timeout = el('input', { name: 'timeout', type: 'number', min: 10, max: 3600, step: 10, value: p.timeout || '', placeholder: t`600（十分钟）` })
     const thinking = el('select', { name: 'thinking' }, [
       el('option', { value: '', text: t`模型默认`, selected: p.thinking !== 'off' }),
       el('option', { value: 'off', text: t`关闭`, selected: p.thinking === 'off' }),
+    ])
+    // 传输方式: the whole answer at once for a relay whose streaming breaks (server/providers.mjs `streams`).
+    const stream = el('select', { name: 'stream' }, [
+      el('option', { value: 'on', text: t`流式（默认）`, selected: p.stream !== false }),
+      el('option', { value: 'off', text: t`不用流式（写完一次返回）`, selected: p.stream === false }),
     ])
     const extraBody = el('textarea', { name: 'extraBody', rows: 3, spellcheck: 'false', placeholder: '{"thinking": {"type": "disabled"}}' })
     extraBody.value = p.extraBody ? JSON.stringify(p.extraBody, null, 2) : ''
@@ -364,6 +369,7 @@ export function initProviders({ api, el, toast, guard, saveFile, onChanged }) {
       temperature: temperature.value === '' ? null : Number(temperature.value),
       cacheTtl: cacheTtl.value,
       thinking: thinking.value,
+      stream: stream.value !== 'off',
       extraBody: parseJsonField(extraBody.value, t`额外请求参数`),
       headers: parseJsonField(headers.value, t`额外请求头`) ?? {},
     })
@@ -487,11 +493,12 @@ export function initProviders({ api, el, toast, guard, saveFile, onChanged }) {
       el('div', { class: 'models-head' }, [el('span', { text: t`模型（每行一个 ID，要换显示名写成「ID = 显示名」）` }), fetchButton]),
       models,
       remoteBox,
-      el('details', { class: 'provider-advanced', open: Boolean(p.maxTokens || p.timeout || p.temperature !== null || p.extraBody || p.thinking || Object.keys(p.headers ?? {}).length) }, [
+      el('details', { class: 'provider-advanced', open: Boolean(p.maxTokens || p.timeout || p.temperature !== null || p.extraBody || p.thinking || p.stream === false || Object.keys(p.headers ?? {}).length) }, [
         el('summary', { text: t`高级` }),
         el('div', { class: 'grid' }, [field(t`最大输出 token`, maxTokens), field(t`温度`, temperature)]),
         field(t`超时（秒）`, timeout, t`连上以后这么久一个字都没收到，就算这次请求失败。空着是 600 秒（十分钟）；本机模型、慢的中转可以调长，最多 3600 秒；不想干等、想早点看到报错可以调短，最少 10 秒。模型还在一个字一个字地输出就不会断；但有的服务在模型思考时什么都不发，调得太短会把还在思考的请求掐掉。`),
         field(t`思考`, thinking, t`DeepSeek、GLM、Qwen 和本地模型默认先思考。选关闭后这个供应商的模型都不思考，回复更快；个别服务不认时不起作用，模型还会照常思考。Claude 看「设置 → 模型」里的思考。对话顶栏给某个对话单独选的思考优先于这里。`),
+        field(t`传输方式`, stream, t`有的中转站流式传输会把回复截断、出乱码或计费不对，选「不用流式」后，模型写完整段一次发回来。写的过程中只有加载动效，「停止」会放弃这一整段；超时按整段算，模型思考加写完要很久时把上面的超时调长。只想页面上不逐字出现，用「主题 → 出字效果 → 写完再显示」就行，不用改这里。`),
         field(t`额外请求参数（JSON，合并进请求体）`, extraBody, t`例如关掉思考、指定 reasoning_effort，写法看服务商文档`),
         field(t`额外请求头（JSON）`, headers),
       ]),

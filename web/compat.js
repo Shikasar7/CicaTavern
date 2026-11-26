@@ -1127,7 +1127,8 @@ function shimMain(ctx, makeFetch, olderLorebooks, indexedDb) {
     resetFeatures: () => { ejsFeatures = { ...EJS_FEATURES } },
   }
   // Which app this is, for cards that want to know; no Tavern Helper version is claimed (it would promise all of it).
-  const CicaTavern = { compat: { app: ctx.app || '', target: 'Tavern Helper 4.x, in part', functions: Object.keys(helper).sort() } }
+  // `openSlab`: the card's own button for the 随身册 (养成) → whether it was opened; only right after a click in the frame.
+  const CicaTavern = { compat: { app: ctx.app || '', target: 'Tavern Helper 4.x, in part', functions: Object.keys(helper).sort() }, openSlab: () => call('openSlab', {}) }
   Object.assign(window, helper, { TavernHelper, SillyTavern, Mvu, EjsTemplate, toastr, tavern_events, iframe_events, CicaTavern })
 
   // A card script with buttons of its own, in a frame of its own (web/card-scripts.js): a press is its button's event,
@@ -1339,7 +1340,7 @@ function shimMain(ctx, makeFetch, olderLorebooks, indexedDb) {
  */
 export function installFrameBridge(handlers) {
   // What the frames may ask the page for, each answered with its result (handlers in web/app.js).
-  const ANSWERED = ['state', 'chatVars', 'mvuParse', 'editMessage', 'createMessages', 'deleteMessages', 'worldbook', 'generate', 'stopGenerate', 'ejs', 'fetch', 'fetchCancel', 'fetchAllow', 'inject', 'regex', 'audio', 'preset']
+  const ANSWERED = ['state', 'chatVars', 'mvuParse', 'editMessage', 'createMessages', 'deleteMessages', 'worldbook', 'generate', 'stopGenerate', 'ejs', 'fetch', 'fetchCancel', 'fetchAllow', 'inject', 'regex', 'audio', 'preset', 'openSlab']
   window.addEventListener('message', async event => {
     const data = event.data
     const id = data?.agentTavernCall

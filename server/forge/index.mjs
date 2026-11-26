@@ -31,6 +31,7 @@ import { madeAt } from '../draw-history.mjs'
 import { helperSummary } from '../helper-scripts.mjs'
 import { cleanCardMedia, drawChoiceOf } from '../media.mjs'
 import { complete, isProviderRef, providerError, refLabel, resolveRef } from '../providers.mjs'
+import { completeWhole } from '../whole.mjs'
 import { estimateTokens, toolNote, withToolNote } from '../context.mjs'
 import { estimateCost } from '../models.mjs'
 import { httpError, newId } from '../store.mjs'
@@ -104,7 +105,7 @@ function imageType(buffer) {
 export function rosterOf(plan) {
   const people = plan.characters
     .filter(c => c.looks_tags)
-    .map(c => ({ name: c.name, aliases: c.aliases.join('，'), kind: /女|female|woman|girl/i.test(c.gender) ? 'girl' : /男|male|man|boy/i.test(c.gender) ? 'boy' : 'other', looks: c.looks_tags, outfit: c.outfit_tags }))
+    .map(c => ({ name: c.name, aliases: c.aliases.join('，'), kind: /女|female|woman|girl/i.test(c.gender) ? 'girl' : /男|male|man|boy/i.test(c.gender) ? 'boy' : 'other', looks: c.looks_tags, outfit: c.outfit_tags, ...(c.wardrobe?.length ? { wardrobe: c.wardrobe } : {}) }))
   const named = new Set(people.flatMap(entry => [entry.name, ...entry.aliases.split('，')]).filter(Boolean))
   const forms = Object.values(plan.game?.forms ?? {}).flat().filter(form => form.looks && !named.has(form.name) && named.add(form.name))
   return [...people, ...forms.map(form => ({ name: form.name, aliases: '', kind: 'other', looks: form.looks, outfit: '', whole: true }))]
@@ -359,7 +360,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
           }
         : null,
       writing: stepsView(draft, job),
-      job: job ? { kind: job.kind, step: job.step, startedAt: job.startedAt, partial: job.kind === 'discuss' ? partialReply(job.partial) : '', chars: job.partial.length } : null,
+      job: job ? { kind: job.kind, step: job.step, startedAt: job.startedAt, partial: job.kind === 'discuss' ? partialReply(job.partial) : '', chars: job.partial.length, ...(job.more ? { more: job.more } : {}) } : null,
       error: draft.error ?? null,
     }
   }
@@ -443,12 +444,15 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
         chosen ??= await target(draft)
         const used = chosen
         job.partial = ''
+        job.more = 0
         // What this call comes to: the provider's count once it answers, the request and its output cap till then.
         const size = { input: requestTokens(request), output: request.maxTokens ?? 0, measured: false }
         job.sizes.push(size)
         let result
         try {
-          result = await complete(used.provider, used.modelId, { ...request, signal: job.controller.signal, onDelta: delta => (job.partial += delta), onRestart: () => (job.partial = '') }, { proxy: proxyNow() })
+          // A soft cap gives way to a bigger one the player set. Cut off at the limit, the answer is asked on till it is whole.
+          const room = request.softCap && used.provider.maxTokens > request.maxTokens ? { maxTokens: used.provider.maxTokens } : {}
+          result = await completeWhole(used.provider, used.modelId, { ...request, ...room, signal: job.controller.signal, onDelta: delta => (job.partial += delta), onRestart: () => (job.partial = '') }, { proxy: proxyNow() }, { onMore: n => (job.more = n) })
         } catch (error) {
           if (job.controller.signal.aborted || error.status) throw error
           throw httpError(502, providerError(used.provider, error))
@@ -564,7 +568,11 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
     }
   }
 
-  const cutNote = result => (result.truncated ? msg`（写到输出上限被截断了）` : result.stopReason && !/stop|end/i.test(result.stopReason) ? msg`（${result.stopReason}）` : '')
+  const cutNote = result => (result.truncated ? (result.more ? msg`（写到输出上限被截断了，自动接着写了 ${result.more} 次还没写完）` : msg`（写到输出上限被截断了）`) : result.stopReason && !/stop|end/i.test(result.stopReason) ? msg`（${result.stopReason}）` : '')
+
+  /** A plan that cannot be read, and what to do about one that kept running into the output limit. */
+  const planUnread = (ctx, result) => new Error(msg`${ctx.label} 写的方案读不出来${cutNote(result)}，再试一次，或者换个模型`
+    + (result.truncated ? msg`。还是写不完的话：换一个单次能写更多的模型；会思考的模型，在「模型供应商」这个供应商的「高级」里把「思考」关掉；或者把规模调低、玩法积木和开场白选少一些` : ''))
 
   // ─── Talk and plan ──────────────────────────────────────────────────────
 
@@ -597,7 +605,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
     const result = await ctx.call(request)
     await ctx.update(fresh => {
       const plan = withCardOptions(readPlan(result.text, { language, ...names, scale: optionsOf(fresh).scale }), optionsOf(fresh))
-      if (!plan) throw new Error(msg`${ctx.label} 写的方案读不出来${cutNote(result)}，再试一次，或者换个模型`)
+      if (!plan) throw planUnread(ctx, result)
       fresh.plan = plan
       fresh.planModel = ctx.label
       fresh.planPending = null
@@ -632,7 +640,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
       const option = fresh.planOptions?.[index]
       if (!option) throw new Error(msg`没有这一版方案`)
       const plan = withCardOptions(readPlan(result.text, { language, ...names, scale: optionsOf(fresh).scale }), optionsOf(fresh))
-      if (!plan) throw new Error(msg`${ctx.label} 写的方案读不出来${cutNote(result)}，再试一次，或者换个模型`)
+      if (!plan) throw planUnread(ctx, result)
       option.plan = plan
       fresh.planPick = index
       fresh.plan = plan
@@ -812,6 +820,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
       if (!known) out.push(fresh)
       else {
         for (const key of ['aliases', 'looks', 'outfit']) if (!String(known[key] ?? '').trim()) known[key] = fresh[key]
+        if (fresh.wardrobe && !known.wardrobe?.length) known.wardrobe = fresh.wardrobe
         // A 形态 already in the cast learns it is drawn whole.
         if (fresh.whole) known.whole = true
       }
@@ -1370,6 +1379,11 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
         draft.defaultPlot = draft.plots.some(plot => plot.id === body.defaultPlot) ? body.defaultPlot : ''
       })
       return { plots: saved.plots, defaultPlot: saved.defaultPlot, greetings: (saved.card.greetings ?? []).map(greeting => greeting.text ?? '') }
+    },
+
+    /** The model picked for a card being made ('': the default one). */
+    async cardModel(id) {
+      return (await requireCard(id)).model ?? ''
     },
 
     /** The card being made, as a card (for the guide writing its 剧本: what it reads of it). */

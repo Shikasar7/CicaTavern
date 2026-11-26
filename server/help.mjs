@@ -15,6 +15,7 @@
 import { readdir, readFile, realpath, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { callGate } from './tools/calls.mjs'
 
 const APP_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -359,46 +360,11 @@ export function lookupLine(reply) {
   return close > text.lastIndexOf(OPEN) ? text.slice(0, close + CLOSE.length) : text
 }
 
-/**
- * Keeps a lookup off the page. The reply comes on as it is written, all but what may be the start of the tag;
- * once the tag shows, nothing more is shown and what was shown before it is taken back (onRestart: the page
- * drops the reply so far). end(isLookup) at the reply's end: an answer after all gets what was held.
- */
-export function lookupGate(onText, onRestart = () => {}) {
-  let all = ''
-  let sent = 0
-  let hidden = false
-  return {
-    push(delta) {
-      all += delta
-      if (hidden) return
-      if (all.includes(OPEN, Math.max(0, sent - OPEN.length))) {
-        hidden = true
-        if (all.slice(0, sent).trim()) onRestart()
-        sent = 0
-        return
-      }
-      // Held back: blank space at the start (a lookup may follow), and a tail that may be the tag beginning.
-      if (!all.slice(sent).trim() && !sent) return
-      let keep = 0
-      for (let k = Math.min(OPEN.length - 1, all.length - sent); k > 0; k--) {
-        if (OPEN.startsWith(all.slice(-k))) {
-          keep = k
-          break
-        }
-      }
-      const upTo = all.length - keep
-      if (upTo > sent && (sent || all.slice(0, upTo).trim())) {
-        onText(all.slice(sent, upTo))
-        sent = upTo
-      }
-    },
-    end(isLookup = false) {
-      if (!isLookup && all.length > sent) onText(all.slice(sent))
-      sent = all.length
-    },
-  }
-}
+/** A lookup, as tools/calls.mjs callGate needs to know of it. */
+export const lookupMark = { open: OPEN, at: text => text.indexOf(OPEN) }
+
+/** Keeps a lookup off the page while a reply is written (tools/calls.mjs callGate). */
+export const lookupGate = (onText, onRestart) => callGate([lookupMark], onText, onRestart)
 
 /** What a lookup does, for the page: { op, target } (op among search_help, read_help, list, search, read). */
 export function lookupLabel(request) {

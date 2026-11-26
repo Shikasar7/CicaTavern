@@ -8,7 +8,7 @@ import { BASIC_DEFAULTS, BASIC_OPTIONS, VN_DEFAULTS, VN_ID, choicesOf, cleanBasi
 import { autoStatusSpec, cleanStatusSpec, compactText, statusGroups } from '../web/shared/status.js'
 import { applyScripts, PLACEMENT } from '../web/shared/regex.js'
 import { streamingText, withoutOwnStatus } from '../web/render.js'
-import { basicDetail, basicPreset, basicRules, lengthRule } from '../server/basic.mjs'
+import { asksNoNotes, basicDetail, basicPreset, basicRules, lengthRule, vnPreset } from '../server/basic.mjs'
 import { buildChatPrompt, buildTurnPrompt, everyTurnReminder } from '../server/prompt.mjs'
 import { hasPrefixRules } from '../server/presets.mjs'
 import { displayText } from '../server/state.mjs'
@@ -107,6 +107,46 @@ test('the turn reminder names the output format only while the options ask for o
   const detail = basicDetail({ basic: { choices: 'off' } })
   assert.equal(detail.builtin, true)
   assert.doesNotMatch(detail.rules, /<choices>/)
+})
+
+test('no block of the options on: the rules and the reminder send the model after none; else word for word as before', () => {
+  const OLD = '- 除了「每轮回复都要遵守」一节要求的格式块，只写故事正文，不写解释、点评或任何元信息。\n- 每条玩家消息里'
+  const NEW = /- 只写故事正文。角色卡、世界书、预设或本轮消息要求写的内容块照写，没有要求的不用写。/
+  const REMINDER = '本轮回复同样要遵守系统提示末尾「每轮回复都要遵守」一节的全部要求'
+  const of = (make, key, options, edits = {}) => {
+    const preset = make({ [key]: options, [`${key}Edits`]: edits })
+    const prompt = buildChatPrompt({ card: CARD, persona: PERSONA, settings: { language: '简体中文' }, books: [], hasState: false, preset }).systemPrompt
+    const asked = { presetRules: hasPrefixRules(preset), choices: prompt.includes('<choices>'), selfCheck: prompt.includes('<self_check>') }
+    return { preset, prompt, before: everyTurnReminder(prompt, [], asked), now: everyTurnReminder(prompt, [], { ...asked, noNotes: asksNoNotes(preset, prompt) }) }
+  }
+  for (const [make, key] of [[basicPreset, 'basic'], [vnPreset, 'vn']]) {
+    for (const choices of ['off', 'four']) for (const timeBox of ['off', 'on']) for (const selfCheck of ['off', 'on']) {
+      const { prompt, before, now } = of(make, key, { choices, timeBox, selfCheck })
+      if (choices !== 'off' || timeBox !== 'off' || selfCheck !== 'off') {
+        assert.ok(prompt.includes(OLD))
+        assert.doesNotMatch(prompt, NEW)
+        assert.equal(now, before)
+      } else {
+        assert.match(prompt, NEW)
+        assert.doesNotMatch(prompt, /格式块/)
+        assert.equal(now, `${REMINDER}。回复里不要自己加备注，也不要说明格式。`)
+      }
+    }
+  }
+  const off = { choices: 'off', timeBox: 'off', selfCheck: 'off' }
+  // A chat whose frozen prompt still asks for blocks goes on as it was until the change is applied to it.
+  assert.equal(asksNoNotes(of(basicPreset, 'basic', off).preset, build({ choices: 'four' })), false)
+  // A card's own blocks: still named in the reminder, the new words after them.
+  const { preset, prompt } = of(basicPreset, 'basic', off)
+  assert.match(everyTurnReminder(prompt, [], { mvu: true, noNotes: asksNoNotes(preset, prompt) }), /结尾完整闭合的 <UpdateVariable> 变量更新块.*。回复里不要自己加备注/)
+  assert.equal(everyTurnReminder('', [], { noNotes: true }), '', 'no reminder, nothing after it')
+  // The player's own rules stay theirs, and the preset window shows the text as it comes for these options.
+  assert.match(of(basicPreset, 'basic', off, { texts: { rules: '我的规则' } }).prompt, /我的规则/)
+  const shown = options => basicDetail({ basic: options }).prompts.find(p => p.id === 'rules').original
+  assert.match(shown(off), NEW)
+  assert.ok(shown({}).includes(OLD))
+  // Imported presets and chats without one: never.
+  for (const other of [null, { builtin: false, options: off, postMode: 'prefix', prompts: [] }]) assert.equal(asksNoNotes(other, ''), false)
 })
 
 test('old choices leave what the model reads again; the time box stays', () => {

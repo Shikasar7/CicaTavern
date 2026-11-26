@@ -171,7 +171,7 @@ test('media helpers: settings validation, prompt request, prompt cleanup, workfl
   const request = imagePromptRequest({ card: { description: '短黑发', personality: '' }, names: { char: '林雪', user: '我' }, reply: '她敬了个礼。', input: '我看着她', state: { 场景: '客厅' }, style: '日系动画', promptStyle: 'tags' })
   assert.match(request.system, /comma-separated/)
   assert.match(request.messages[0].content, /<character name="林雪">[\s\S]*短黑发[\s\S]*<variables>[\s\S]*客厅[\s\S]*<art_style>日系动画[\s\S]*<latest_passage>\n她敬了个礼。[\s\S]*TASK: write an image-generation prompt/, 'the task comes last, after the story')
-  assert.equal(request.maxTokens, 400)
+  assert.equal(request.maxTokens, 460)
   assert.equal(cleanPrompt('Prompt: "a cat"'), 'a cat')
   assert.equal(cleanPrompt('<think>hmm</think>Here is the prompt:\n\na girl saluting\n\nThis captures the moment when…'), 'a girl saluting', 'thinking, preamble and commentary go')
   const rambling = cleanPrompt(`${'word '.repeat(60)}end. ${'more '.repeat(60)}`)
@@ -1214,6 +1214,18 @@ test('ComfyUI: sizes from linked Int nodes, nodes that set a size the tavern lea
   const jpeg = Buffer.from('ffd8ffe000104a46494600010100000100010000ffc0001108043004c003012200021101031101', 'hex')
   assert.deepEqual(pictureSize(jpeg), [1216, 1072])
   assert.equal(pictureSize(Buffer.from('not a picture at all, no')), null)
+  const webp = (kind, write) => {
+    const buffer = Buffer.alloc(40)
+    buffer.write('RIFF', 0, 'latin1')
+    buffer.write('WEBP', 8, 'latin1')
+    buffer.write(kind, 12, 'latin1')
+    write(buffer)
+    return buffer
+  }
+  assert.deepEqual(pictureSize(webp('VP8X', b => { b.writeUIntLE(1215, 24, 3); b.writeUIntLE(831, 27, 3) })), [1216, 832])
+  assert.deepEqual(pictureSize(webp('VP8 ', b => { b.writeUInt16LE(1216, 26); b.writeUInt16LE(832, 28) })), [1216, 832])
+  assert.deepEqual(pictureSize(webp('VP8L', b => b.writeUInt32LE((1215 | (831 << 14)) >>> 0, 21))), [1216, 832])
+  assert.equal(pictureSize(webp('XXXX', () => {})), null)
 
   const { store, chat, card, media } = await setup(t)
   const json = (res, body) => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(body))

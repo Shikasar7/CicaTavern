@@ -2,13 +2,15 @@
 // changes the story at once. What is done goes into the turn's operations, shown by the input box, and is settled
 // with the next turn (app.js), so a rollback or a branch takes it back like everything else.
 import { t } from '/i18n.js'
+import { raisedPower, raisesOn, showEvolved, shownName } from '/game-raise.js'
 
 const TABS = () => [['self', t`角色`], ['party', t`队伍`], ['growth', t`成长`], ['bag', t`背包`], ['quests', t`任务`], ['map', t`地图`], ['deeds', t`成就`], ['sound', t`声音`]]
 const LAYER_WORDS = () => [['effects', t`音效`], ['ambience', t`环境音`], ['music', t`音乐`]]
 const MODE_WORDS = () => [['all', t`列表循环`], ['shuffle', t`随机播放`], ['one', t`单曲循环`]]
 const MAX_TRACK = 28 * 1024 * 1024
-const EFFECT_WORDS = (energy = '') => ({ heal: t`回血`, energy: energy ? t`回${energy}` : t`回气力`, calm: t`回复理智`, damage: t`攻击`, cure: t`解除异常`, boost: t`增益`, gear: t`装备`, none: t`只有剧情用途` })
+const EFFECT_WORDS = (energy = '') => ({ heal: t`回血`, energy: energy ? t`回${energy}` : t`回气力`, calm: t`回复理智`, damage: t`攻击`, cure: t`解除异常`, boost: t`增益`, tame: t`收服道具`, gear: t`装备`, none: t`只有剧情用途` })
 const SIZE_WORDS = () => ({ small: t`小`, medium: t`中等`, large: t`大` })
+const LURE_WORDS = () => ({ small: '+3', medium: '+6', large: t`必定成功` })
 // Things the helper has been asked about on this page: once each.
 const asked = new Set()
 
@@ -16,7 +18,7 @@ const asked = new Set()
  * @param deps - { el, api, toast, chat, tab (the page to open on), book, play (web/game-play.js), sound (web/game-sound.js), queue () → the turn's
  *   operations, addOp (op), fill (text), onBook (book), onMusic () (the tracks changed), onClose () }
  */
-export function openBag({ el, api, toast, chat, tab: firstTab = 'self', book: firstBook, play, sound, queue, addOp, fill, onBook, onMusic, onClose, faceFor = null }) {
+export function openBag({ el, api, toast, chat, tab: firstTab = 'self', book: firstBook, play, sound, queue, addOp, fill, onBook, onMusic, onClose, faceFor = null, slab = null }) {
   let book = firstBook
   let tab = firstTab
   const body = el('div', { class: 'bag-body' })
@@ -32,8 +34,12 @@ export function openBag({ el, api, toast, chat, tab: firstTab = 'self', book: fi
   const bound = field => Boolean(book.bindings[field])
   const brokenNote = field => (sheet().broken.includes(field) ? el('p', { class: 'hint warn', text: t`绑定的变量读不出来，显示的是上次的值。` }) : null)
   const act = op => {
+    // 进化: what one was, for the page to show beside what it has become.
+    const was = op.op === 'form' && op.who && raisesOn(book) ? sheet().party?.find(member => member.name === op.who) : null
     addOp(op)
     render()
+    const now = was ? sheet().party?.find(member => member.name === op.who) : null
+    if (now && now.form !== was.form) showEvolved(el, { before: was, after: now, book, face: faceFor, word: said('evolve', t`进化`), sound })
   }
   const { growth } = play
   const grows = () => growth.growsOn(book)
@@ -90,7 +96,7 @@ export function openBag({ el, api, toast, chat, tab: firstTab = 'self', book: fi
         now.points ? el('button', { type: 'button', class: 'btn small', text: '+', 'aria-label': t`加到${item.name}`, onclick: () => act({ op: 'point', id: item.id }) }) : null,
       ]))),
       ...(grows() ? growth.practiceRows(now, book).map(item => el('p', { class: 'hint', text: t`${item.name}历练 ${item.held}/${item.needs}：检定成功会涨，攒满 +1` })) : []),
-      grows() && book.growth?.power ? el('div', { class: 'bag-row' }, [el('span', { class: 'bag-name', text: t`战力` }), el('b', { text: String(growth.powerOf(now, book)) })]) : null,
+      grows() && book.growth?.power ? el('div', { class: 'bag-row' }, [el('span', { class: 'bag-name', text: t`战力` }), el('b', { text: String(raisesOn(book) ? raisedPower(now, book) : growth.powerOf(now, book)) })]) : null,
       now.skills.length ? el('h3', { text: said('skill', t`技能`) }) : null,
       ...(now.skills.length && grows() ? growth.skillRows(el, now, book) : [now.skills.length ? el('p', { text: now.skills.join(t`、`) }) : null]),
       ...growth.perkSection({ el, who: now, book, seed: chat.id, word: said('perk', t`天赋`), act: take }),
@@ -108,7 +114,10 @@ export function openBag({ el, api, toast, chat, tab: firstTab = 'self', book: fi
     const party = now.party ?? []
     const fielded = play.fieldedOf(now)
     const resting = party.filter(member => !fielded.includes(member))
-    const known = Object.keys(book.companions ?? {}).filter(name => !party.some(member => member.name === name))
+    // Where the card keeps a table of the party, who has not joined is who is in it and not here; a companion the story
+    // never came to (the starters not picked) is nobody to bring in.
+    const missing = play.leftOut(now, book, chat.path.findLast(node => node.role === 'assistant')?.state)
+    const known = missing ?? Object.keys(book.companions ?? {}).filter(name => ![...party, ...(now.box ?? [])].some(member => member.name === name))
     const full = fielded.length >= play.MAX_FIELDED
     const memberCard = (member, fighting) => {
       const stats = play.attributesOf({ ...member, named: now.named })
@@ -139,6 +148,27 @@ export function openBag({ el, api, toast, chat, tab: firstTab = 'self', book: fi
         ...(growth.perksOn(book) && ((member.perks ?? []).length || growth.perksOwed(member, book) || growth.bigsOwed(member, book)) ? growth.perkSection({ el, who: member, book, seed: chat.id, word: said('perk', t`天赋`), act: take, name: member.name }) : []),
       ])
     }
+    const joining = [
+      known.length ? el('h3', { text: t`还没入队` }) : null,
+      ...known.map(name => el('div', { class: 'bag-row' }, [
+        el('span', { class: 'bag-name', text: name }),
+        el('span', { class: 'hint', text: missing ? t`卡的变量里有，队伍里没有：多半是回复漏写了` : t`故事里加入时会自动入队，也可以现在就加` }),
+        el('button', { type: 'button', class: 'btn small', text: t`入队`, onclick: () => act({ op: 'party', act: 'join', name }) }),
+      ])),
+    ]
+    // 养成: they are looked after in the 随身册, which has room for them all.
+    if (raisesOn(book) && book.level === 'full') {
+      const name = book.growth.slabName || t`随身册`
+      return [
+        el('p', { class: 'hint', text: t`每一只都有自己的等级和经验：出战的得全部，待命的得一半，被打倒的减半；等级比你低的学得快。` }),
+        el('div', { class: 'raise-row' }, party.map(member => el('div', { class: 'raise-chip', title: `${shownName(member, book)} Lv.${member.level}` }, [faceFor?.(shownName(member, book)) || faceFor?.(member.name) ? el('img', { src: faceFor(shownName(member, book)) || faceFor(member.name), alt: '' }) : null, el('b', { text: shownName(member, book) }), el('small', { text: `Lv.${member.level}` }), el('button', { type: 'button', class: 'btn small', text: t`离队`, 'aria-label': t`让${shownName(member, book)}离队`, onclick: () => { dialog.close(); slab?.()?.release(member.name) } })]))),
+        el('p', {}, el('button', { type: 'button', class: 'btn primary', text: t`打开${name}`, onclick: () => { dialog.close(); slab?.()?.open() } })),
+        el('p', { class: 'hint', text: t`${name}管出战、寄养、${said('evolve', t`进化`)}和图鉴。正文边上的圆印也能打开它；右键圆印收起来，点这里会再放出来。` }),
+        ...joining,
+        // Only those the card knows: one it does not would be a name with nothing to it.
+        missing ? el('p', { class: 'hint', text: t`故事里收服、过户的会自动入队。` }) : adder(t`名字`, t`让谁入队`, who => (play.knowsOf(book, who) ? act({ op: 'party', act: 'join', name: who }) : toast(t`同伴和敌人图鉴里没有「${who}」`))),
+      ]
+    }
     return [
       el('p', { class: 'hint', text: t`出战的人和你一起上场，最多 ${play.MAX_FIELDED} 人，按这里的顺序排。待命的人跟着走，但不上场。` }),
       book.level === 'full' ? null : el('p', { class: 'hint warn', text: t`这张卡的规则没开「完整」，没有战斗，这一页暂时用不上。` }),
@@ -146,12 +176,7 @@ export function openBag({ el, api, toast, chat, tab: firstTab = 'self', book: fi
       ...(fielded.length ? fielded.map(member => memberCard(member, true)) : [el('p', { class: 'hint', text: t`现在只有你一个人上场。` })]),
       resting.length ? el('h3', { text: t`待命` }) : null,
       ...resting.map(member => memberCard(member, false)),
-      known.length ? el('h3', { text: t`还没入队` }) : null,
-      ...known.map(name => el('div', { class: 'bag-row' }, [
-        el('span', { class: 'bag-name', text: name }),
-        el('span', { class: 'hint', text: t`故事里加入时会自动入队，也可以现在就加` }),
-        el('button', { type: 'button', class: 'btn small', text: t`入队`, onclick: () => act({ op: 'party', act: 'join', name }) }),
-      ])),
+      ...joining,
       party.length || known.length ? null : el('p', { class: 'hint', text: t`这张卡还没有同伴。可以在角色卡的「游戏规则」里加；故事里有人入队时，也会自动加进来。` }),
       adder(t`名字`, t`让谁入队`, name => act({ op: 'party', act: 'join', name })),
     ]
@@ -169,12 +194,13 @@ export function openBag({ el, api, toast, chat, tab: firstTab = 'self', book: fi
   function effectPicker(thing) {
     const set = book.items[thing.name] ?? null
     const guessed = play.effectOf(book, thing.name)
-    const words = EFFECT_WORDS(book.energyName)
+    const { tame, ...plain } = EFFECT_WORDS(book.energyName)
+    const words = book.tame || set?.type === 'tame' ? { ...plain, tame } : plain
     const kind = el('select', { 'aria-label': t`${thing.name}的效果` }, [
       el('option', { value: '', text: guessed && !set ? t`按名字猜：${words[guessed.type]}` : t`未设定效果`, selected: !set }),
       ...Object.entries(words).map(([value, text]) => el('option', { value, text, selected: value === set?.type })),
     ])
-    const size = el('select', { 'aria-label': t`${thing.name}的强度`, hidden: !set?.size }, Object.entries(SIZE_WORDS()).map(([value, text]) => el('option', { value, text, selected: value === (set?.size ?? 'medium') })))
+    const size = el('select', { 'aria-label': t`${thing.name}的强度`, hidden: !set?.size }, Object.entries(set?.type === 'tame' ? LURE_WORDS() : SIZE_WORDS()).map(([value, text]) => el('option', { value, text, selected: value === (set?.size ?? 'medium') })))
     const change = () => saveEffect(thing.name, kind.value === 'gear' ? { type: 'gear', ...(set?.type === 'gear' ? set : {}) } : kind.value ? { type: kind.value, size: size.value } : null).catch(error => toast(error.message))
     kind.addEventListener('change', change)
     size.addEventListener('change', change)
@@ -197,6 +223,7 @@ export function openBag({ el, api, toast, chat, tab: firstTab = 'self', book: fi
         el('span', { class: 'bag-name', text: thing.count > 1 ? `${thing.name} ×${thing.count}` : thing.name }),
         thing.note ? el('span', { class: 'hint', text: thing.note }) : null,
         effectPicker(thing),
+        effect?.type === 'tame' ? el('span', { class: 'hint', text: t`打赢以后收服时用，成不成都会用掉` }) : null,
         effect?.type === 'gear' ? gearPicker(thing) : null,
         effect?.type === 'gear' ? el('span', { class: 'hint', text: grows() ? t`${growth.gearText(book, thing.name)}。在「角色」或「队伍」页装上。` : t`${growth.gearText(book, thing.name)}。这张卡的「成长」关着，装备不起作用。` }) : null,
       ]),

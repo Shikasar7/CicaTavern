@@ -2,12 +2,13 @@
 // how far the rules go and how the player starts. The sheet belongs to the story: each reply keeps a whole
 // one in `node.game`, as it keeps `state`, so branches, rollbacks and saves need nothing of their own.
 // Only the rules write it, and only when a reply is made; the model and a card's scripts cannot reach it.
-import { bagChanged, bagItems, cleanBindings, numberAt, numberWrite, questsAt } from './bindings.js'
+import { bagChanged, bagItems, cleanBindings, numberAt, numberWrite, partyRows, questsAt } from './bindings.js'
 import { DEFAULT_SKILLS, SKILLS, cleanAdds, cleanFoeAdds, skillKindOf } from './battle.js'
 import { ailsOn, chanceOf, clampDc, judge, modifierOf, rollD20, seedOf, worstAil } from './dice.js'
 import { GEAR_SLOTS, PLAYER_FORMS, PRACTICE_DC, cleanGear, gearOf, practiceNeeds } from './growth.js'
 import { SKIP_POINTS, bigsOwed, bonusOf, canTake, checkBonus, cleanGrowth, cleanPerks, fightBonus, grownMost, growsOn, perkFor, perkOf, perksOn, perksOwed, skillGrowth } from './growth.js'
-import { cleanForms, fightOnly, formAt, formForFight, formOf, formReady, formsOf, nextStageAt, rankGives, skillsInForm, taughtSkills } from './growth.js'
+import { BENCH_SHARE, born, bornAttributes, catchUp, grownBy, liftOf, raisedNeeds, raisesOn, reshaped, wildLevel } from './raise.js'
+import { RAISED_MOST, cleanForms, cleanSpecies, fightOnly, formAt, formForFight, formOf, formReady, formsOf, nextStageAt, rankGives, skillsInForm, taughtSkills } from './growth.js'
 import { bondOf, bondPointsOf, everyGives, levelPointsOf, perkEveryOf, rankRestores } from './growth.js'
 import { STEPS_PER_RANK, levelOfRank, rankAt, rankPower } from './rank.js'
 import { getPath, unwrap } from '../vars.js'
@@ -74,10 +75,14 @@ const MAX_CONDITIONS = 8
 // 队伍: who the card has to stand with the player, who is with them now, and how many of those go into a fight.
 const MAX_COMPANIONS = 8
 const MAX_PARTY = 8
+/** 寄养: how many more are kept apart from the party, on a card that raises. */
+export const MAX_BOX = 40
 /** How many stand with the player in a fight: four in all. */
 export const MAX_FIELDED = 3
 // A skill a companion brings when the card says nothing of what they can do.
 const COMPANION_SKILL = '强击'
+// 养成: the 资质 of those the card itself has for companions: out of the ordinary, as a story's partner is.
+const PARTNER_TALENT = 'rare'
 // How many of the story's days a condition lasts when nobody cures it: a model forgets, and nothing should stay for good.
 const AIL_DAYS = { light: 1, medium: 3, heavy: 7 }
 // And how many replies at most: a story that writes no dates never sees a day go by.
@@ -103,11 +108,11 @@ const FOE_PICTURE = /^[\w-]{1,64}\.(png|jpg|webp)$/
 export const MAX_SKILL_PICTURES = 240
 // A skill's 属性: as many as a card with a large bestiary has skills.
 const MAX_SKILL_TYPES = 240
-const MAX_OPS = 20
+const MAX_OPS = 100
 // What a day's rest gives back, of the most there is.
 const REST = 0.5
 /** What a thing does: a kind, and for three of them how strongly. */
-export const EFFECTS = ['heal', 'energy', 'calm', 'damage', 'cure', 'boost', 'none']
+export const EFFECTS = ['heal', 'energy', 'calm', 'damage', 'cure', 'boost', 'tame', 'none']
 export const STRENGTHS = ['small', 'medium', 'large']
 const HEAL = { small: 0.25, medium: 0.5, large: 1 }
 const ENERGY = { small: 0.33, medium: 0.66, large: 1 }
@@ -121,6 +126,8 @@ const KEYWORDS = [
   [/魔力|法力|灵力|内力|回气|回蓝|灵泉|灵液|灵石|能量|电池|精力/, 'energy'],
   [/[药丹膏]|急救|绷带|医疗|修复|止血|吗啡|治疗/, 'heal'],
 ]
+// 收服道具, on a card that has 收服.
+const TAME_THING = /收服|捕获|捕捉|捕兽|驯服|缚兽/
 const FIELD_WORDS = { life: '生命', energy: '气力', sanity: '理智' }
 // What is left to a player beaten in a fight: the story goes on from there.
 const AFTER_DEFEAT = 0.3
@@ -131,7 +138,7 @@ export const PACES = ['fast', 'normal', 'slow']
 const PACE_NEEDS = { fast: 0.6, normal: 1, slow: 1.5 }
 
 /** The experience a level takes to leave, at the pace the card keeps (`book`; the usual one without). */
-export const levelNeeds = (level, book) => Math.round(level * 100 * (PACE_NEEDS[book?.pace] ?? 1))
+export const levelNeeds = (level, book) => Math.round((raisesOn(book) ? raisedNeeds(level) : level * 100) * (PACE_NEEDS[book?.pace] ?? 1))
 // What 【受伤】 and 【恢复】 are worth, of the most life there is.
 const SIZES = { light: 0.1, medium: 0.25, heavy: 0.5 }
 
@@ -151,7 +158,7 @@ export function cleanRulebook(value) {
   const book = isRecord(value) ? value : {}
   const start = isRecord(book.start) ? book.start : {}
   // 形态 and the skills a 天赋 or a form teaches: a skill that comes with its kind is one the card knows from then on.
-  const forms = cleanForms(book.forms)
+  const forms = cleanForms(book.forms, words(book.ranks, MAX_RANKS))
   const taught = taughtSkills({ perks: cleanPerks(book.perks), forms })
   const attributes = {}
   for (const { id } of ATTRIBUTES) {
@@ -343,6 +350,11 @@ function cleanFoes(value) {
       ...(FOE_PICTURE.test(foe.file ?? '') ? { file: foe.file } : {}),
       ...(cleanFoeAdds(foe.adds).length ? { adds: cleanFoeAdds(foe.adds) } : {}),
       ...(typeName(foe.type) ? { type: typeName(foe.type) } : {}),
+      // 养成: the rank its kind stands at in the wild, and its 种族值.
+      ...(typeof foe.rank === 'string' && foe.rank.trim() ? { rank: foe.rank.trim().slice(0, 12) } : {}),
+      // Where it is met, for the 图鉴.
+      ...(typeof foe.where === 'string' && foe.where.trim() ? { where: foe.where.trim().slice(0, 24) } : {}),
+      ...(cleanSpecies(foe.attributes) ? { attributes: cleanSpecies(foe.attributes) } : {}),
     }
   }
   return out
@@ -421,15 +433,22 @@ export function companionOf(book, name) {
  * The points one joining at a level brings: those a player who started the story would have had by then, two a
  * level above the one the story starts at. No more than their attributes have room for.
  */
-export function joiningPoints(book, level, attributes) {
+export function joiningPoints(book, level, attributes, most = MAX_ATTRIBUTE) {
   const above = Math.max(0, level - levelOfRank(Array.isArray(book?.ranks) ? book.ranks : [], book?.start?.rank))
-  const room = ATTRIBUTES.reduce((sum, { id }) => sum + MAX_ATTRIBUTE - attributes[id], 0)
+  const room = ATTRIBUTES.reduce((sum, { id }) => sum + most - attributes[id], 0)
   return Math.min(above * LEVEL_POINTS, room)
 }
 
-/** One who has just joined: as the card has them, or, one it does not know, average with one plain skill. */
-export function memberOf(book, name, level = 1) {
+/**
+ * One who has just joined: as the card has them; on a card that has 收服, one of its bestiary as they fought (their
+ * moves for skills, their type their own); or, one it does not know, average with one plain skill.
+ * @param caught - 养成: how it stood when it was caught: { level, nature, talent }.
+ */
+export function memberOf(book, name, level = 1, caught = null) {
   const known = companionOf(book, name)
+  const beast = !known && book.tame ? book.foes?.[String(name).trim()] : null
+  const moves = (beast?.moves ?? []).slice(0, 3)
+  if (raisesOn(book) && (known || book.foes?.[String(name).trim()])) return raisedMember(book, known?.name ?? String(name).trim(), known?.level ?? level, caught)
   const joins = known?.level ?? level
   const attributes = known ? { ...known.attributes } : Object.fromEntries(ATTRIBUTES.map(({ id }) => [id, AVERAGE]))
   return {
@@ -442,9 +461,67 @@ export function memberOf(book, name, level = 1) {
     maxLife: MAX_LIFE,
     energy: MAX_ENERGY,
     maxEnergy: MAX_ENERGY,
-    skills: known && Object.keys(known.skills).length ? Object.keys(known.skills) : [COMPANION_SKILL],
+    skills: known && Object.keys(known.skills).length ? Object.keys(known.skills) : moves.length ? moves : [COMPANION_SKILL],
+    ...(beast ? { tamed: true, ...(beast.type ? { type: beast.type } : {}) } : {}),
     bench: false,
     hurt: false,
+  }
+}
+
+/**
+ * 养成: one the card knows, as one of its kind: of its own 种族值 and level, with a 性格 and a 资质 (a companion of the
+ * card's is who the card says). What its level brought is grown already.
+ */
+function raisedMember(book, name, level, caught = null, at = 0) {
+  const own = Boolean(book.companions?.[name])
+  const foe = book.foes?.[name] ?? {}
+  const birth = own ? { talent: PARTNER_TALENT } : { nature: caught?.nature, talent: caught?.talent, ...(caught?.nature ? {} : born(name, level)) }
+  const joins = Math.max(1, caught?.level ?? level)
+  const first = bornAttributes(book, name, at, birth)
+  const grown = own && book.growth?.companions === 'manual' ? { attributes: first, left: joiningPoints(book, joins, first, RAISED_MOST) } : grownBy(first, joiningPoints(book, joins, first, RAISED_MOST), book, name, at)
+  const skills = own ? Object.keys(book.companions[name].skills ?? {}) : (foe.moves ?? []).slice(0, 4)
+  const taught = (book.forms?.[name] ?? []).slice(0, at + 1).filter(form => !fightOnly(form)).flatMap(form => Object.keys(form.skills ?? {}))
+  const form = at > 0 ? book.forms[name][at] : null
+  return {
+    name,
+    level: joins,
+    experience: 0,
+    points: grown.left,
+    attributes: grown.attributes,
+    life: MAX_LIFE,
+    maxLife: MAX_LIFE,
+    energy: MAX_ENERGY,
+    maxEnergy: MAX_ENERGY,
+    skills: [...new Set([...(skills.length ? skills : [COMPANION_SKILL]), ...taught])],
+    ...(own ? birth : { tamed: true, ...birth, ...(foe.type ? { type: foe.type } : {}) }),
+    ...(form ? { form: form.name } : {}),
+    raised: true,
+    bench: false,
+    hurt: false,
+  }
+}
+
+/** 养成, for one who joined before the card raised its creatures, or before it said what they are made of: the difference, once. */
+function raisedFrom(who, book) {
+  if (who.raised || !raisesOn(book)) return who
+  const own = Boolean(book.companions?.[who.name])
+  if (!own && !book.foes?.[who.name]) return { ...who, raised: true }
+  const at = formAt(who, book)
+  const level = Math.max(who.level ?? 1, own ? 1 : wildLevel(book, who.name, at) ?? 1)
+  const fresh = raisedMember(book, who.name, level, own ? null : { level, ...born(who.name, who.level ?? 1, who.experience ?? 0, who.bond ?? 0, who.life ?? 0) }, at)
+  // What it was made of was plain, or the card's word for the first form; what was added to that by hand is kept.
+  const was = own ? book.companions[who.name].attributes : null
+  const now = bornAttributes(book, who.name, at, fresh)
+  const attributes = Object.fromEntries(ATTRIBUTES.map(({ id }) => [id, Math.max(MIN_ATTRIBUTE, Math.min(RAISED_MOST, now[id] + (who.attributes?.[id] ?? AVERAGE) - (was ? was[id] : AVERAGE)))]))
+  const skills = (who.skills ?? []).length === 1 && who.skills[0] === COMPANION_SKILL ? [] : who.skills ?? []
+  return {
+    ...who,
+    level,
+    attributes,
+    points: (who.points ?? 0) + Math.max(0, level - (who.level ?? 1)) * levelPointsOf(book),
+    skills: [...new Set([...skills, ...fresh.skills])],
+    ...(own ? { talent: fresh.talent } : { tamed: true, nature: fresh.nature, talent: fresh.talent, ...(who.type ?? fresh.type ? { type: who.type ?? fresh.type } : {}) }),
+    raised: true,
   }
 }
 
@@ -467,18 +544,52 @@ export function companionKinds(book, name) {
  * A change to the party: join, leave, hurt, back (from being hurt), bench, field, up (one place nearer the front).
  * → the sheet, or null when it changes nothing.
  */
-export function partyChanged(sheet, book, act, name) {
+export function partyChanged(sheet, book, act, name, more = {}) {
   const party = sheet.party ?? []
   const at = memberAt(party, book, name)
   const set = (index, change) => ({ ...sheet, party: party.map((member, i) => (i === index ? { ...member, ...change } : member)) })
   if (act === 'join') {
-    if (at >= 0 || party.length >= MAX_PARTY || !String(name ?? '').trim()) return null
-    const member = { ...memberOf(book, name, sheet.level ?? 1), bench: fieldedOf(sheet).length >= MAX_FIELDED }
-    return { ...sheet, party: [...party, member] }
+    if (at >= 0 || !String(name ?? '').trim()) return null
+    if (!raisesOn(book)) {
+      if (party.length >= MAX_PARTY) return null
+      return { ...sheet, party: [...party, { ...memberOf(book, name, sheet.level ?? 1), bench: fieldedOf(sheet).length >= MAX_FIELDED }] }
+    }
+    return joinedRaised(sheet, book, name, more)
   }
+  // 寄养: kept apart from the party, and back into it; one there can be let go of too.
+  const boxed = (sheet.box ?? []).findIndex(member => member.name === (companionOf(book, name)?.name ?? String(name ?? '').trim()))
+  // 换位: the two change places, whatever those are: in the fight, standing by, boarded out.
+  if (act === 'swap') {
+    const other = companionOf(book, more.with)?.name ?? String(more.with ?? '').trim()
+    const there = party.findIndex(member => member.name === other)
+    const thereBox = (sheet.box ?? []).findIndex(member => member.name === other)
+    if ((at < 0 && boxed < 0) || (there < 0 && thereBox < 0) || at === there && boxed === thereBox) return null
+    const one = at >= 0 ? party[at] : sheet.box[boxed]
+    const two = there >= 0 ? party[there] : sheet.box[thereBox]
+    // One who is hurt takes no place in the fight.
+    if ((at >= 0 && !one.bench && !one.hurt && two.hurt) || (there >= 0 && !two.bench && !two.hurt && one.hurt)) return null
+    const put = (list, i, who, like) => list.map((member, k) => (k === i ? (like ? { ...who, bench: like.bench } : who) : member))
+    let nextParty = party
+    let nextBox = sheet.box ?? []
+    if (at >= 0) nextParty = put(nextParty, at, two, one)
+    else nextBox = put(nextBox, boxed, two)
+    if (there >= 0) nextParty = put(nextParty, there, one, two)
+    else nextBox = put(nextBox, thereBox, one)
+    return { ...sheet, party: nextParty, ...(nextBox.length ? { box: nextBox } : {}) }
+  }
+  if (act === 'fetch') {
+    if (boxed < 0 || party.length >= MAX_PARTY) return null
+    const back = { ...sheet.box[boxed], bench: fieldedOf(sheet).length >= MAX_FIELDED }
+    return { ...sheet, party: [...party, back], box: sheet.box.filter((_, i) => i !== boxed) }
+  }
+  if (at < 0 && boxed >= 0 && act === 'leave') return { ...sheet, box: sheet.box.filter((_, i) => i !== boxed) }
   if (at < 0) return null
   const member = party[at]
   if (act === 'leave') return { ...sheet, party: party.filter((_, i) => i !== at) }
+  if (act === 'store') {
+    if (!raisesOn(book) || (sheet.box ?? []).length >= MAX_BOX) return null
+    return { ...sheet, party: party.filter((_, i) => i !== at), box: [...(sheet.box ?? []), member] }
+  }
   if (act === 'hurt') return member.hurt ? null : set(at, { hurt: true })
   if (act === 'back') return member.hurt ? set(at, { hurt: false }) : null
   if (act === 'bench') return member.bench ? null : set(at, { bench: true })
@@ -495,12 +606,35 @@ export function partyChanged(sheet, book, act, name) {
 /** One of the party with the skills they fight with said: one with none has those everybody has. */
 const skilled = (who, own) => ((who.skills ?? []).length ? who : { ...who, skills: own ? DEFAULT_SKILLS : [COMPANION_SKILL] })
 
+/**
+ * 养成: one joins as the kind the name is (a later form's name is one of that kind, come to it already), at the level it
+ * was caught at or the one its kind is met at; the player's where nothing says. With no room in the party it is kept apart.
+ */
+function joinedRaised(sheet, book, name, { caught = null, form = '', level = null, seed = '' } = {}) {
+  const said = String(name).trim()
+  const who = whoseRow(book, said) ?? said
+  const party = sheet.party ?? []
+  if ([...party, ...(sheet.box ?? [])].some(member => member.name === who)) return null
+  const chain = book.forms?.[who] ?? []
+  const at = Math.max(0, chain.findIndex(item => item.name === (form || said)))
+  const known = book.companions?.[who] || book.foes?.[who]
+  const joins = caught?.level ?? level ?? book.companions?.[who]?.level ?? wildLevel(book, who, at) ?? sheet.level ?? 1
+  // One nobody caught is born of the turn it came in; of how the player stood then, where that is not known.
+  const birth = caught ?? { level: joins, ...born(seed || [sheet.level, sheet.experience, sheet.life, (sheet.things ?? []).length].join('.'), who) }
+  const member = known ? raisedMember(book, who, joins, birth, at) : { ...memberOf(book, who, sheet.level ?? 1), raised: true }
+  if (party.length < MAX_PARTY) return { ...sheet, party: [...party, { ...member, bench: fieldedOf(sheet).length >= MAX_FIELDED }] }
+  return (sheet.box ?? []).length < MAX_BOX ? { ...sheet, box: [...(sheet.box ?? []), member] } : null
+}
+
 /** One of the party in another form of their chain: its name kept, the skills of the form left gone and the new one's come. */
 function inForm(who, book, to, own) {
   const first = formsOf(who, book)[0]
   const { form: _was, ...rest } = who
   const skills = skillsInForm(Object.keys(to.skills ?? {}).length || Object.keys(formOf(who, book)?.skills ?? {}).length ? skilled(who, own) : who, book, to)
-  return { ...rest, ...(to === first ? {} : { form: to.name }), skills }
+  // 养成: what it is made of is the new form's, and it comes to it whole.
+  const chain = formsOf(who, book)
+  const shape = !own && raisesOn(book) && who.raised ? { attributes: reshaped(who.attributes, book, who.name, Math.max(0, chain.indexOf(formOf(who, book))), chain.indexOf(to)), life: who.maxLife, energy: who.maxEnergy } : {}
+  return { ...rest, ...shape, ...(to === first ? {} : { form: to.name }), skills }
 }
 
 /** 临时进化: what one of the party becomes if they take their next form in a fight (battle.js battleSetup), or null. */
@@ -520,10 +654,11 @@ export function alliesFor(sheet, book) {
     const kinds = companionKinds(book, member.name)
     // 类型克制: that of the form they have come to, their own (one tamed keeps what it was), or what the card says of them.
     const type = (formAt(member, book) > 0 ? formOf(member, book)?.type : undefined) ?? member.type ?? companionOf(book, member.name)?.type
+    const lift = raisesOn(book) ? liftOf(member.level ?? 1, sheet.level ?? 1, bondOf(member)) : null
     if (!growsOn(book)) return { ...member, kinds, ...(type ? { type } : {}) }
     const shift = shiftFor(member, book, { ...book.skills, ...kinds }, false)
     const form = formAt(member, book) > 0 ? formOf(member, book) : null
-    return { ...member, kinds, ...(type ? { type } : {}), ...(form ? { shown: form.name } : {}), bonus: fightBonus(bonusOf(member, book)), grown: skillGrowth(member, book, member.skills ?? [], { ...book.skills, ...kinds }), ...(shift ? { shift } : {}) }
+    return { ...member, kinds, ...(type ? { type } : {}), ...(form ? { shown: form.name } : {}), ...(lift ? { lift } : {}), bonus: fightBonus(bonusOf(member, book)), grown: skillGrowth(member, book, member.skills ?? [], { ...book.skills, ...kinds }), ...(shift ? { shift } : {}) }
   })
 }
 
@@ -573,7 +708,12 @@ export function grownSheet(sheet, book, bound = sheet.bound ?? []) {
   }
   sheet = fitGear(sheet, book)
   const one = (who, own) => {
-    let grown = { ...who, grew: baseOf(who) }
+    let grown = { ...(own ? who : raisedFrom(who, book)), grew: baseOf(who) }
+    // 养成: what a level brings a creature it grows into by itself, as its kind does.
+    if (!own && grown.raised && raisesOn(book) && book.growth?.companions !== 'manual' && grown.points > 0) {
+      const { attributes, left } = grownBy(grown.attributes, grown.points, book, grown.name, formAt(grown, book))
+      grown = { ...grown, attributes, points: left }
+    }
     if (!own && book.growth?.companions !== 'manual') {
       for (let key = perkFor(grown, book); perksOwed(grown, book) > 0 && key; key = perkFor(grown, book)) grown = { ...grown, perks: [...(grown.perks ?? []), key] }
       // 大天赋: a companion who has crossed a rank has one too, chosen the same way.
@@ -632,9 +772,12 @@ function cleanItems(value) {
 export function effectOf(book, name) {
   const set = book.items?.[name]
   if (set) return set
-  const type = KEYWORDS.find(([word]) => word.test(name))?.[1]
+  const type = book.tame && TAME_THING.test(name) ? 'tame' : KEYWORDS.find(([word]) => word.test(name))?.[1]
   return type ? { type, size: 'medium' } : null
 }
+
+/** 收服道具 the player has: { name, count, size }. */
+export const luresOf = (sheet, book) => (sheet.things ?? []).map(thing => ({ name: thing.name, count: thing.count, effect: effectOf(book, thing.name) })).filter(thing => thing.count > 0 && thing.effect?.type === 'tame').map(({ name, count, effect }) => ({ name, count, size: effect.size ?? 'medium' }))
 
 /** Whether a thing does anything outside a fight. */
 export const usableNow = effect => ['heal', 'energy', 'cure', 'calm'].includes(effect?.type)
@@ -691,8 +834,87 @@ export function startSheet(book) {
 /** Who is with the player from the start: as many as fight beside them, the rest standing by. */
 function startParty(book, level) {
   const clean = cleanRulebook(book)
-  return (clean.start.party ?? []).reduce((sheet, name) => partyChanged(sheet, clean, 'join', name) ?? sheet, { level, party: [] }).party
+  return (clean.start.party ?? []).reduce((sheet, name) => partyChanged(sheet, clean, 'join', name, { level: companionOf(clean, name)?.level ?? level }) ?? sheet, { level, party: [] }).party
 }
+
+/**
+ * 开局的伙伴换了: one who starts with the player is not in the card's own table of the party, and one the card has as a
+ * companion is there instead (picked in the opening, a story brought in from elsewhere, rules turned on late). They
+ * take the other's place, in the form their row says. Nothing is done where it could be anything else: a row that
+ * goes by a name nobody has, more than one who could be meant, one who has come to another form already.
+ */
+function tableParty(party, book, level, state) {
+  const starters = book.start?.party ?? []
+  const path = book.bindings?.party
+  const rows = path ? partyRows(getPath(state ?? {}, path)) : null
+  if (!rows?.length || !starters.length) return party
+  const held = rows.map(row => ({ ...row, who: whoseRow(book, row.name) ?? (party.some(member => member.name === row.name) ? row.name : null) }))
+  if (held.some(row => !row.who)) return party
+  const gone = party.filter(member => starters.includes(member.name) && !held.some(row => row.who === member.name))
+  const come = held.filter(row => book.companions?.[row.who] && !starters.includes(row.who) && !party.some(member => member.name === row.who))
+  if (gone.length !== 1 || come.length !== 1 || formAt(gone[0], book) > 0) return party
+  const [{ who, ...row }] = come
+  const joined = { ...memberOf(book, who, gone[0].level ?? level), level: gone[0].level ?? level, experience: gone[0].experience ?? 0, bench: gone[0].bench === true, hurt: gone[0].hurt === true }
+  return party.map(member => (member === gone[0] ? asRow(joined, book, row) : member))
+}
+
+/** Who a row of the party's table is: one of the card's companions or its bestiary, by their name or a form's. Null for nobody it knows. */
+const whoseRow = (book, name) => companionOf(book, name)?.name ?? Object.entries(book.forms ?? {}).find(([owner, chain]) => owner !== PLAYER_FORMS && chain.some(form => form.name === name))?.[0] ?? (book.foes?.[name] ? name : null)
+
+/** One who joins by their row: in the form it goes by or says. */
+function asRow(member, book, { name, words }) {
+  const to = rowForm(formsOf(member, book), member.name, name, words)
+  return to ? inForm(member, book, to, false) : member
+}
+
+/** The form a row says: the one it goes by (the first of a chain often has its owner's own name, which says nothing), one it names, or the one at the stage it says. */
+const rowForm = (chain, owner, name, words) => chain.find(form => form.name === name && name !== owner) ?? chain.find(form => words.includes(form.name)) ?? chain.find(form => form.stage && words.includes(form.stage)) ?? chain.find(form => form.name === name)
+
+/**
+ * Those the reply has just put in the card's own table of the party (过户、契约), whether or not it wrote their marks:
+ * they join. Only rows that were not there before, of those the card knows, so nobody let go of comes back and a name
+ * the story made up is nobody's. `left`: whom this very turn sent away.
+ */
+export function joinedByTable(sheet, book, before, after, left = [], seed = '') {
+  const path = book.bindings?.party
+  const was = path ? partyRows(getPath(before ?? {}, path)) : null
+  const now = path ? partyRows(getPath(after ?? {}, path)) : null
+  if (!was || !now) return sheet
+  const there = new Set(was.map(row => whoseRow(book, row.name) ?? row.name))
+  const gone = new Set(left.map(name => whoseRow(book, name) ?? name))
+  return now.reduce((held, row) => {
+    const who = whoseRow(book, row.name)
+    if (!who || there.has(who) || gone.has(who)) return held
+    if (raisesOn(book)) {
+      // In the form its row says: that is what it is, not what it has come to since.
+      const to = rowForm(book.forms?.[who] ?? [], who, row.name, row.words)
+      return partyChanged(held, book, 'join', who, { form: to?.name ?? '', seed }) ?? held
+    }
+    const joined = partyChanged(held, book, 'join', who)
+    return joined ? { ...joined, party: joined.party.map((member, i) => (i === joined.party.length - 1 ? asRow(member, book, row) : member)) } : held
+  }, sheet)
+}
+
+/**
+ * Those the card's own table of the party has and the party does not, of those the card knows: what a reply left out of
+ * its marks, for the player to put right. → names to join by, a later form's where the row says one.
+ */
+export function leftOut(sheet, book, state) {
+  const path = book.bindings?.party
+  const rows = path ? partyRows(getPath(state ?? {}, path)) : null
+  if (!rows) return null
+  const held = new Set([...(sheet.party ?? []), ...(sheet.box ?? [])].map(member => member.name))
+  return rows.flatMap(row => {
+    const who = whoseRow(book, row.name)
+    if (!who || held.has(who)) return []
+    held.add(who)
+    const to = rowForm(book.forms?.[who] ?? [], who, row.name, row.words)
+    return [to && raisesOn(book) && to !== book.forms[who][0] ? to.name : who]
+  })
+}
+
+/** Whether the card knows somebody by a name: a companion of its, one of its bestiary, or a form of either. */
+export const knowsOf = (book, name) => Boolean(whoseRow(book, String(name ?? '').trim()))
 
 /**
  * The sheet as it stands: the story's, with what lives in the card's variables read from them. A variable that
@@ -703,6 +925,7 @@ export function sheetOf(book, game, state) {
   const sheet = { conditions: [], ...(game ?? startSheet(book)) }
   // A story from before there were parties starts with the one the card has now.
   if (!Array.isArray(sheet.party)) sheet.party = startParty(book, sheet.level ?? 1)
+  sheet.party = tableParty(sheet.party, book, sheet.level ?? 1, state)
   const bindings = book.bindings ?? {}
   const broken = []
   // Turned on in a story under way, it starts now; turned off, it is gone.
@@ -874,24 +1097,49 @@ function quest(quests, { status, title, note }) {
   return quests.length < MAX_QUESTS ? [...quests, { title, note, status }] : quests
 }
 
+/** Where one who was swapped stands now, for the model. */
+function swapWords(sheet, book, said) {
+  const name = companionOf(book, said)?.name ?? said
+  const member = (sheet.party ?? []).find(one => one.name === name)
+  if (!member) return `${name}现在寄养着，不在身边`
+  return fieldedOf(sheet).includes(member) ? `${name}现在出战` : `${name}现在待命，跟在身边`
+}
+
 // What the 队伍 window may do, and what the model is told of it.
-const PARTY_ACTS = ['join', 'leave', 'bench', 'field', 'up', 'back']
-const PARTY_WORDS = { join: '加入了队伍', leave: '离开了队伍', bench: '这次不上场，在队伍里待命', field: '回到出战的队伍里', up: '在队伍里往前站了一位', back: '伤好了，能上场了', hurt: '负伤，暂时不能上场' }
+const PARTY_ACTS = ['join', 'leave', 'bench', 'field', 'up', 'back', 'store', 'fetch', 'swap']
+const PARTY_WORDS = { join: '加入了队伍', leave: '离开了队伍', bench: '这次不上场，在队伍里待命', field: '回到出战的队伍里', up: '在队伍里往前站了一位', back: '伤好了，能上场了', store: '寄养了，不在身边', fetch: '接回了身边', hurt: '负伤，暂时不能上场' }
+
+const SET_OPS = ['life', 'energy', 'sanity']
+/**
+ * The operations with a number set again and again (a held arrow: 71, 72, 73…) as its last one. A thing used in
+ * between keeps the two apart: what it did depends on the first.
+ */
+export function foldOps(ops) {
+  const out = []
+  for (const op of ops) {
+    if (SET_OPS.includes(op.op)) {
+      const used = out.map(item => item.op === 'use').lastIndexOf(true)
+      const before = out.map(item => item.op).lastIndexOf(op.op)
+      if (before > used) out.splice(before, 1)
+    }
+    out.push(op)
+  }
+  return out
+}
 
 /** Turn operations as sent by the page: only what is known. */
 export function cleanOps(value) {
   if (!Array.isArray(value)) return []
   const out = []
-  for (const op of value.slice(0, MAX_OPS)) {
-    if (!isRecord(op)) continue
+  for (const op of foldOps(value.filter(isRecord)).slice(0, MAX_OPS)) {
     const name = typeof op.name === 'string' ? op.name.trim().slice(0, 40) : ''
     const count = Number.isInteger(op.count) && op.count > 0 ? op.count : 1
     if (op.op === 'use' && name) out.push({ op: 'use', name })
     else if ((op.op === 'gain' || op.op === 'lose') && name) out.push({ op: op.op, name, count })
-    else if (['life', 'energy', 'sanity'].includes(op.op) && Number.isFinite(Number(op.value))) out.push({ op: op.op, value: Math.round(Number(op.value)) })
+    else if (SET_OPS.includes(op.op) && Number.isFinite(Number(op.value))) out.push({ op: op.op, value: Math.round(Number(op.value)) })
     else if (op.op === 'quest' && name && ['new', 'done', 'failed'].includes(op.status)) out.push({ op: 'quest', name, status: op.status })
     else if (op.op === 'point' && ATTRIBUTES.some(item => item.id === op.id)) out.push({ op: 'point', id: op.id, ...(typeof op.who === 'string' && op.who.trim() ? { who: op.who.trim().slice(0, 40) } : {}) })
-    else if (op.op === 'party' && name && PARTY_ACTS.includes(op.act)) out.push({ op: 'party', act: op.act, name })
+    else if (op.op === 'party' && name && PARTY_ACTS.includes(op.act)) out.push({ op: 'party', act: op.act, name, ...(op.act === 'swap' && typeof op.with === 'string' ? { with: op.with.trim().slice(0, 40) } : {}) })
     else if (op.op === 'mend' && name) out.push({ op: 'mend', name })
     else if (op.op === 'equip' && name) out.push({ op: 'equip', name, ...(typeof op.who === 'string' && op.who.trim() ? { who: op.who.trim().slice(0, 40) } : {}) })
     else if (op.op === 'unequip' && GEAR_SLOTS.includes(op.slot)) out.push({ op: 'unequip', slot: op.slot, ...(typeof op.who === 'string' && op.who.trim() ? { who: op.who.trim().slice(0, 40) } : {}) })
@@ -990,13 +1238,9 @@ function remembered(held = {}, met) {
   return Object.fromEntries(Object.entries(out).slice(-MAX_MET))
 }
 
-/** 收服: a foe brought down joins the party as what it was: its moves for skills, its type its own. Nothing when there is no room, or one by its name is there already. */
-function tamed(sheet, book, name) {
-  const joined = partyChanged(sheet, book, 'join', name)
-  if (!joined || companionOf(book, name)) return joined ?? sheet
-  const known = book.foes?.[name]
-  const moves = (known?.moves ?? []).slice(0, 3)
-  return { ...joined, party: joined.party.map(member => (member.name === name ? { ...member, tamed: true, ...(moves.length ? { skills: moves } : {}), ...(known?.type ? { type: known.type } : {}) } : member)) }
+/** 收服: a foe brought down joins the party as what it was (memberOf). Nothing when there is no room, or one by its name is there already. */
+function tamed(sheet, book, name, caught = null) {
+  return partyChanged(sheet, book, 'join', name, caught ? { caught } : {}) ?? sheet
 }
 
 /** A fight's outcome on the sheet: nothing changed until now, whatever it took. */
@@ -1014,16 +1258,19 @@ function afterFight(sheet, op, book = {}) {
   const conditions = [...(beaten ? [DEFEATED] : []), ...(op.rallied ? [RALLIED] : [])].reduce(ailed, left)
   const party = (sheet.party ?? []).map(member => {
     const fought = op.party?.find(item => item.name === member.name)
-    if (!fought) return member
+    // 养成: those who stood by learn from it too, and what it is worth to each goes by how far along they are.
+    const raises = raisesOn(book) && member.raised
+    const worth = raises ? op.experience * catchUp(member.level ?? 1, sheet.level ?? 1) : op.experience
+    if (!fought) return raises && op.over !== 'lost' && !member.hurt ? grow(member, earned(member, Math.round(worth * BENCH_SHARE)), book) : member
     const life = op.over === 'lost' ? Math.max(1, Math.round(member.maxLife * AFTER_DEFEAT)) : mended(member, Math.max(1, Math.min(member.maxLife, fought.life)))
     // Those who fell get half of what the fight was worth. 羁绊: a fight won beside the player is one more between them,
     // and a step of it may bring attribute points on a card that says so.
     const bond = grows && op.over === 'won' ? Math.min(MAX_USES, (member.bond ?? 0) + 1) : null
     const stepped = bond !== null && bondOf({ bond }) > bondOf(member) ? bondPointsOf(book) : 0
-    return grow(practised({ ...member, life, ...(bond !== null ? { bond } : {}), ...(stepped ? { points: (member.points ?? 0) + stepped } : {}) }, grows ? fought.uses : null), earned(member, op.over === 'lost' ? 0 : fought.fell ? Math.floor(op.experience / 2) : op.experience), book)
+    return grow(practised({ ...member, life, ...(bond !== null ? { bond } : {}), ...(stepped ? { points: (member.points ?? 0) + stepped } : {}) }, grows ? fought.uses : null), earned(member, op.over === 'lost' ? 0 : fought.fell ? Math.floor(worth / 2) : Math.round(worth)), book)
   })
   const settled = practised({ ...sheet, things, life, energy, conditions, ...(sheet.party ? { party } : {}), ...(grows && op.met ? { met: remembered(sheet.met, op.met) } : {}) }, grows ? op.uses : null)
-  const after = op.tamed ? tamed(settled, book, op.tamed) : settled
+  const after = op.tamed ? tamed(settled, book, op.tamed, op.caught) : settled
   return grow(op.shock && sheet.sanity !== undefined ? shaken(after, op.shock) : after, earned(sheet, op.experience), book)
 }
 
@@ -1125,12 +1372,14 @@ function applyOp(sheet, book, op) {
     const item = ATTRIBUTES.find(attribute => attribute.id === op.id)
     const at = (sheet.party ?? []).findIndex(member => member.name === op.who)
     const member = sheet.party?.[at]
-    if (!member?.points || member.attributes[op.id] >= MAX_ATTRIBUTE) return null
+    if (!member?.points || member.attributes[op.id] >= (member.raised && raisesOn(book) ? RAISED_MOST : MAX_ATTRIBUTE)) return null
     const party = sheet.party.map((one, i) => (i === at ? { ...one, points: one.points - 1, attributes: { ...one.attributes, [op.id]: one.attributes[op.id] + 1 } } : one))
     return { sheet: { ...sheet, party }, line: `玩家给${member.name}的${item.name}加了 1 点` }
   }
   if (op.op === 'party') {
-    const after = partyChanged(sheet, book, op.act, op.name)
+    const after = partyChanged(sheet, book, op.act, op.name, op.with ? { with: op.with } : {})
+    // Who comes and who goes, each said: told only that two changed places, a model takes them the other way round.
+    if (after && op.act === 'swap') return { sheet: after, line: [op.name, op.with].map(name => swapWords(after, book, name)).join('，') }
     return after ? { sheet: after, line: `${companionOf(book, op.name)?.name ?? op.name}${PARTY_WORDS[op.act]}` } : null
   }
   if (op.op === 'point') {
@@ -1192,6 +1441,76 @@ export function applyOps(sheet, book, ops) {
   return done
 }
 
+// What a row of the party's table says of one who is in the fight, and of one who is not.
+const FIELDED_WORD = '出战'
+const BENCHED_WORD = '待命'
+// The words a row may hold it in: the last is a model's own, for one boarded out.
+const PLACE_WORDS = [FIELDED_WORD, BENCHED_WORD, '寄养']
+// How deep in a card's variables one of the party's own row is looked for (魔宠.火芽兽, 主角.队伍.火芽兽).
+const ROW_DEPTH = 3
+const ROW_NAMES = ['name', '名称', '名字', '姓名']
+const isRow = value => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+const pointer = keys => `/${keys.map(key => String(key).replace(/~/g, '~0').replace(/\//g, '~1')).join('/')}`
+
+/** The rows of a card's variables that go by one of these names, as { name, keys, row }: a table's, or a list's with a name in each. */
+function rowsNamed(state, names) {
+  const out = []
+  const look = (value, keys) => {
+    const list = Array.isArray(value)
+    for (const [key, item] of list ? value.map((one, i) => [i, one]) : Object.entries(value)) {
+      if (item === null || typeof item !== 'object' || String(key).startsWith('$')) continue
+      const name = list ? ROW_NAMES.map(field => item[field]).find(one => typeof one === 'string')?.trim() : key
+      if (isRow(item) && names.includes(name)) out.push({ name, keys: [...keys, key], row: item })
+      else if (keys.length + 1 < ROW_DEPTH) look(item, [...keys, key])
+    }
+  }
+  if (isRow(state)) look(state, [])
+  return out
+}
+
+/**
+ * 形态 come to for good, in the card's own variables: where one of the party has a row by their name there, what it
+ * holds of their chain (its 阶位 or its form's name) follows. Told of by its words alone, so a card needs no binding
+ * for it, and nothing that is not a word of that very chain is touched. The row may go by a form's name where the
+ * story renamed it; one by their own name comes first.
+ */
+export function formWrites(book, state, before, after) {
+  const writes = []
+  for (const member of after?.party ?? []) {
+    const chain = formsOf(member, book)
+    const was = (before?.party ?? []).find(one => one.name === member.name)
+    if (!chain.length || formAt(member, book) === (was ? formAt(was, book) : 0)) continue
+    const to = formOf(member, book)
+    const stages = chain.map(form => form.stage).filter(Boolean)
+    const names = chain.map(form => form.name)
+    const found = rowsNamed(state, [member.name, ...names])
+    const own = found.filter(one => one.name === member.name)
+    for (const { keys, row } of own.length ? own : found) {
+      for (const [key, value] of Object.entries(row)) {
+        if (typeof value !== 'string' || ROW_NAMES.includes(key)) continue
+        const said = value.trim()
+        const now = stages.includes(said) ? to.stage : names.includes(said) ? to.name : null
+        if (now && now !== said) writes.push({ op: 'replace', path: pointer([...keys, key]), value: now })
+      }
+    }
+  }
+  // 出战、待命: one who was moved, in or out of the fight or boarded out, in a row that says one of the two words.
+  const where = (sheet, name) => { const party = sheet?.party ?? []; return party.some(one => one.name === name) ? (fieldedOf(sheet).some(one => one.name === name) ? FIELDED_WORD : BENCHED_WORD) : (sheet?.box ?? []).some(one => one.name === name) ? BENCHED_WORD : '' }
+  for (const member of [...(after?.party ?? []), ...(after?.box ?? [])]) {
+    if (!raisesOn(book) || member.hurt) continue
+    const was = where(before, member.name)
+    const now = where(after, member.name)
+    if (!was || was === now) continue
+    const names = formsOf(member, book).map(form => form.name)
+    const found = rowsNamed(state, [member.name, ...names])
+    const own = found.filter(one => one.name === member.name)
+    for (const { keys, row } of own.length ? own : found) {
+      for (const [key, value] of Object.entries(row)) if (PLACE_WORDS.includes(value) && value !== now && !ROW_NAMES.includes(key)) writes.push({ op: 'replace', path: pointer([...keys, key]), value: now })
+    }
+  }
+  return writes
+}
+
 /**
  * What the operations change in the card's own variables. A number as what it comes to, so whatever the
  * model does to it this turn it ends up there; a bag in its own shape.
@@ -1230,8 +1549,8 @@ function promoted(sheet, power, book) {
   return level > sheet.level ? restored({ ...sheet, level, experience: 0, points: (sheet.points ?? 0) + levelPointsOf(book) }, sheet.level, book) : sheet
 }
 
-function applyMark(sheet, mark, ranks, book) {
-  if (mark.kind === 'party') return partyChanged(sheet, book, mark.act, mark.name) ?? sheet
+function applyMark(sheet, mark, ranks, book, seed = '') {
+  if (mark.kind === 'party') return partyChanged(sheet, book, mark.act, mark.name, { seed }) ?? sheet
   if (mark.kind === 'form') return formed(sheet, book, mark)
   if (mark.kind === 'learn' && mark.who) {
     const at = (sheet.party ?? []).findIndex(member => member.name === (companionOf(book, mark.who)?.name ?? mark.who))
@@ -1266,8 +1585,9 @@ const wornOff = (conditions, newDay) => (conditions ?? []).map(item => ({ ...ite
  * @param options.fought - this turn settled a fight: life is as it left it, a 【受伤】 would count the same blows twice.
  * @param options.ranks - the card's ladder: a 【晋升】 with none, or on a card that keeps the level itself, says nothing.
  * @param options.book - the rule book, for who on the card one who joins is.
+ * @param options.seed - 养成: what one who joins in this reply is born of.
  */
-export function settleReply(sheet, marks, { bound = [], spent = [], newDay = false, fought = false, ranks = [], book = {} } = {}) {
+export function settleReply(sheet, marks, { bound = [], spent = [], newDay = false, fought = false, ranks = [], book = {}, seed = '' } = {}) {
   const left = [...spent]
   const taken = marks.filter(mark => {
     if (bound.includes(MARK_FIELD[mark.kind])) return false
@@ -1280,7 +1600,7 @@ export function settleReply(sheet, marks, { bound = [], spent = [], newDay = fal
   })
   // What this reply brought on is counted from this day.
   // A rank the story gave is felt at once, as a level won is.
-  const settled = grownSheet(taken.reduce((held, mark) => applyMark(held, mark, ranks, book), { ...sheet, conditions: wornOff(sheet.conditions, newDay) }), book, bound)
+  const settled = grownSheet(taken.reduce((held, mark) => applyMark(held, mark, ranks, book, seed), { ...sheet, conditions: wornOff(sheet.conditions, newDay) }), book, bound)
   if (!newDay) return settled
   // A night's rest is the party's as well, and a hurt companion is fit again by morning.
   const party = (settled.party ?? []).map(member => ({ ...member, hurt: false, life: Math.min(member.maxLife, member.life + Math.round(member.maxLife * REST)), energy: Math.min(member.maxEnergy, member.energy + Math.round(member.maxEnergy * REST)) }))
@@ -1291,4 +1611,26 @@ export function settleReply(sheet, marks, { bound = [], spent = [], newDay = fal
     energy: bound.includes('energy') ? settled.energy : Math.min(settled.maxEnergy, settled.energy + Math.round(settled.maxEnergy * REST)),
     ...(settled.sanity === undefined || bound.includes('sanity') ? {} : { sanity: Math.min(settled.maxSanity, settled.sanity + SANITY_REST) }),
   }
+}
+
+/** The kinds this card's creatures are of, for the 图鉴: each kind once, not its later forms, and no people. */
+export function dexOf(book) {
+  const later = new Set(Object.values(book.forms ?? {}).flatMap(chain => chain.slice(1).map(form => form.name)))
+  const names = [...Object.keys(book.companions ?? {}), ...Object.keys(book.foes ?? {}).filter(name => book.foes[name].rank || book.foes[name].attributes || book.forms?.[name])]
+  return [...new Set(names)].filter(name => !later.has(name))
+}
+
+/** What the story has come across of them: { seen, caught } as sets of kinds, read from the turns gone by. */
+export function dexKnown(book, path, sheet) {
+  const caught = new Set()
+  const seen = new Set()
+  const owner = name => Object.entries(book.forms ?? {}).find(([, chain]) => chain.some(form => form.name === name))?.[0] ?? bestiaryName(book.foes, name) ?? name
+  const mine = held => { for (const member of [...(held?.party ?? []), ...(held?.box ?? [])]) caught.add(member.name) }
+  for (const node of path ?? []) {
+    mine(node.game)
+    for (const foe of node.gate?.foes ?? []) seen.add(owner(foe.name))
+    for (const name of String(node.battle?.foes ?? '').split('、')) if (name.trim()) seen.add(owner(name.replace(/ ×\d+$/, '').trim())) // i18n-ignore: how a fight's foes are kept
+  }
+  mine(sheet)
+  return { caught, seen: new Set([...seen, ...caught]) }
 }

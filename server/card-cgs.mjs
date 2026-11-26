@@ -122,9 +122,9 @@ export function createCardCgs(store) {
     }).then(async group => ({ group, ...(await view(cardId)) }))
   }
 
-  /** One more picture at the end of a group (a data URL from the page). */
+  /** One more picture at the end of a group (a data URL from the page, or its bytes). */
   function addPicture(cardId, groupId, image) {
-    const buffer = decode(image)
+    const buffer = Buffer.isBuffer(image) ? image : decode(image)
     return change(cardId, async groups => {
       const before = found(groups, groupId)
       if (before.pictures.length >= MAX_GROUP_PICTURES) throw httpError(400, msg`一组 CG 最多 ${MAX_GROUP_PICTURES} 张`)
@@ -132,6 +132,15 @@ export function createCardCgs(store) {
       const group = { ...before, pictures: [...before.pictures, { file, at: new Date().toISOString() }] }
       return { groups: groups.map(item => (item.id === groupId ? group : item)), result: group }
     }).then(async group => ({ group, ...(await view(cardId)) }))
+  }
+
+  /** 存为 CG: a picture of a chat into one of the card's groups (`groupId`), or into a new one ({ name, note }). */
+  async function keep(cardId, buffer, { groupId = '', name = '', note = '' } = {}) {
+    // Looked at first: a new group is not left empty by a picture that cannot go in.
+    if (!['png', 'jpg', 'webp'].includes(imageKind(buffer))) throw httpError(400, msg`CG 要是 PNG、JPG 或 WebP`)
+    if (buffer.length > MAX_CG_BYTES) throw httpError(400, msg`CG 太大（最多 12MB）`)
+    const id = groupId || (await add(cardId, { name, note })).group.id
+    return addPicture(cardId, id, buffer)
   }
 
   function removePicture(cardId, groupId, file) {
@@ -214,7 +223,7 @@ export function createCardCgs(store) {
     await writeJson(listFile(toId), { groups })
   }
 
-  return { list: view, read, add, update, addPicture, removePicture, remove, bring, readPicture, inherit, dir, FILE }
+  return { list: view, read, add, update, addPicture, keep, removePicture, remove, bring, readPicture, inherit, dir, FILE }
 }
 
 /** A picture from the page: a data URL. */

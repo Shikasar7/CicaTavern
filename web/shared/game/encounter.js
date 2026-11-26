@@ -1,10 +1,11 @@
 // 遭遇: a fight in the story. Where it comes from (the mark a reply stopped on) and what it comes to (the numbers the
 // turn after it settles). The page and the server both work these out from what was done: what the page reports is
 // played through again, so what the model is told is what the rules say happened.
-import { MAX_PARTY, alliesOf, attemptSetup, autoCommands, battleSetup, cleanOpening, fieldFoes, foesOf, playerOf, replay, rewardOf, shockOf, simulate, startBattle, step, tameTry } from './battle.js'
+import { MAX_PARTY, alliesOf, attemptSetup, autoCommands, battleSetup, cleanOpening, fieldFoes, foesOf, levelBeside, playerOf, replay, rewardOf, shockOf, simulate, startBattle, step, tameTry } from './battle.js'
 import { modifierOf } from './dice.js'
-import { alliesFor, bestiaryName, effectOf, fieldedOf, playerGrowth, typesFor } from './sheet.js'
+import { MAX_BOX, alliesFor, bestiaryName, effectOf, fieldedOf, luresOf, playerGrowth, typesFor } from './sheet.js'
 import { foesFollow, growsOn, wornWorth } from './growth.js'
+import { born, foeGrown, foeLevel, raisesOn } from './raise.js'
 import { gapBetween, standingAt, standingOf, strengthOf } from './rank.js'
 
 const EXPERIENCE = { minion: 10, normal: 20, elite: 50, boss: 150 }
@@ -26,17 +27,31 @@ function facing(group, sheet, book, difficulty) {
   const adds = kind?.adds
   // 类型克制: its type, on a card that has types.
   const type = book.types ? kind?.type : ''
-  const known = adds?.length || type ? { ...group, ...(adds?.length ? { adds } : {}), ...(type ? { type } : {}) } : group
+  const known = { ...group, ...(adds?.length ? { adds } : {}), ...(type ? { type } : {}) }
   const strength = strengthOf(group.power, sheet, book.ranks, book.rankSpan)
+  // 养成: which of the bestiary it is, for one caught under a name of its own (裂地血狼A).
+  if (raisesOn(book) && kind && bestiaryName(book.foes, group.name) !== group.name) known.kind = bestiaryName(book.foes, group.name)
   if (!growsOn(book) || strength.rank) return { foe: { ...known, ...strength } }
   const level = sheet.level ?? 1
   const ours = standingOf(sheet, book.ranks)
   const before = sheet.met?.[group.name]
   // 装备: what those who fight have on is followed too, as it was when the foe was first met.
   const worn = wornWorth([sheet, ...fieldedOf(sheet)], book)
-  if (!before || strength.gap > before.gap) return { foe: { ...known, ...strength, up: foesFollow(level, book, difficulty, undefined, worn) }, met: { at: standingAt(strength.gap, ours, book.rankSpan), gap: strength.gap, level, ...(worn ? { worn } : {}) } }
+  // 养成: what growing is worth there is another matter, and so is what a foe has of it.
+  const follow = (since, had) => (raisesOn(book) ? foeGrown(since, difficulty) : foesFollow(since, book, difficulty, undefined, had))
+  if (!before || strength.gap > before.gap) return { foe: { ...known, ...strength, up: follow(level, worn) }, met: { at: standingAt(strength.gap, ours, book.rankSpan), gap: strength.gap, level, ...(worn ? { worn } : {}) } }
   const gap = Math.min(strength.gap, gapBetween(before.at, ours, book.rankSpan))
-  return { foe: { ...known, gap, up: foesFollow(before.level, book, difficulty, undefined, before.worn ?? null), ...(before.level < level ? { since: before.level } : {}) } }
+  return { foe: { ...known, gap, up: follow(before.level, before.worn ?? null), ...(before.level < level ? { since: before.level } : {}) } }
+}
+
+/** 养成: a foe has a level of its own, and with it what a level is worth to one who is raised. */
+function raised(foe, sheet, book, difficulty) {
+  const level = foeLevel(book, foe)
+  // One the story gave a word for follows the player's growing as ever; it only has a level to be caught at.
+  if (level === null) return { ...foe, level: levelBeside(foe, sheet.level ?? 1) }
+  // What stands above the player is so by its gap already: only as much as the player's own level is worth is added.
+  const up = foeGrown(Math.min(level, sheet.level ?? 1), difficulty)
+  return { ...foe, level, ...(up ? { up } : {}) }
 }
 
 /** The fight a reply stopped on, for the sheet as it stands. */
@@ -47,10 +62,11 @@ export function encounterSetup(sheet, book, gate, chatId, nodeId) {
   const met = Object.fromEntries(faced.filter(one => one.met).map(one => [one.foe.name, one.met]))
   // 指挥: the player leads from behind where someone stands with them; alone, they fight as ever.
   const lead = book.lead === 'command' && allies.length ? 'command' : ''
-  const foes = fieldFoes(faced.map(one => one.foe), { members: (lead ? 0 : 1) + allies.length })
+  const foes = fieldFoes(faced.map(one => one.foe), { members: (lead ? 0 : 1) + allies.length }).map(foe => (raisesOn(book) ? raised(foe, sheet, book, difficulty) : foe))
   const types = typesFor(book, sheet)
   // 收服: a roll on the player's 魅力, where there is room for one more.
-  const tame = book.tame && (sheet.party ?? []).length < 8 ? { charm: modifierOf(sheet.attributes?.charm ?? 10), have: [...new Set([...(sheet.party ?? []).map(member => member.name), ...Object.keys(book.companions ?? {})])] } : null
+  const room = (sheet.party ?? []).length < 8 || (raisesOn(book) && (sheet.box ?? []).length < MAX_BOX)
+  const tame = book.tame && room ? { charm: modifierOf(sheet.attributes?.charm ?? 10), have: [...new Set([...(sheet.party ?? []), ...(sheet.box ?? [])].map(member => member.name).concat(Object.keys(book.companions ?? {})).flatMap(name => (raisesOn(book) ? [name, ...(book.forms?.[name] ?? []).map(form => form.name)] : [name])))], ...(raisesOn(book) ? { raise: true } : {}), ...(luresOf(sheet, book).length ? { lures: luresOf(sheet, book) } : {}) } : null
   return { ...battleSetup(sheet, { foes, seed: `${chatId}:${nodeId}`, difficulty, effects: name => effectOf(book, name), kinds: book.skills, allies, ...(book.skillAdds ? { adds: book.skillAdds } : {}), ...playerGrowth(sheet, book), ...(types ? { types } : {}), ...(lead ? { lead } : {}), ...(tame ? { tame } : {}) }), ...(cleanOpening(gate.opening) ? { opening: cleanOpening(gate.opening) } : {}), ...(Object.keys(met).length ? { met } : {}) }
 }
 
@@ -98,7 +114,9 @@ export function cleanFight(value) {
   const one = action => ({ ...(action?.who ? { who: String(action.who) } : {}), kind: String(action?.kind ?? ''), ...(action?.name ? { name: String(action.name) } : {}), ...(action?.target ? { target: String(action.target) } : {}) })
   // A party's round is a command for each of them.
   const actions = Array.isArray(value.actions) ? value.actions.slice(0, MAX_ACTIONS).map(action => (Array.isArray(action) ? action.slice(0, MAX_PARTY).map(one) : one(action))) : []
-  return { over: value.over, attempt: Number.isInteger(value.attempt) && value.attempt >= 0 ? value.attempt : 0, actions, ...(typeof value.tame === 'string' && value.tame.trim() ? { tame: value.tame.trim().slice(0, 40) } : {}) }
+  const name = word => (typeof word === 'string' && word.trim() ? word.trim().slice(0, 40) : '')
+  // 收服: whom the player tried for, with which thing, and the thing a go before this one came to nothing with.
+  return { over: value.over, attempt: Number.isInteger(value.attempt) && value.attempt >= 0 ? value.attempt : 0, actions, ...(name(value.tame) ? { tame: name(value.tame), ...(name(value.lure) ? { lure: name(value.lure) } : {}) } : {}), ...(name(value.spent) ? { spent: name(value.spent) } : {}) }
 }
 
 /**
@@ -119,8 +137,24 @@ export function fightResult(setup, fight) {
   const shifted = [player, ...alliesOf(state)].filter(unit => unit.shifted ?? unit.reverted).map(unit => ({ ...(unit.id === 'player' ? {} : { who: unit.name }), form: unit.shifted ?? unit.reverted }))
   // 收服: one of those brought down, tried for once the fight was won. The roll is the rules', not the page's.
   const wanted = fight.over === 'won' && fight.tame ? downed.find(foe => foe.name === fight.tame && !(setup.allies ?? []).some(ally => ally.name === foe.name)) : null
-  const tried = wanted ? tameTry(setup, wanted) : null
-  const tame = tried ? { name: wanted.name, ok: tried.ok, roll: tried.roll, total: tried.total, dc: tried.dc } : null
+  // 收服道具: gone whether or not it came off, the one of a go before too; only what there is.
+  const lures = new Map((setup.tame?.lures ?? []).map(thing => [thing.name, thing.count]))
+  const lost = {}
+  const spend = name => {
+    if (!name || !lures.get(name)) return ''
+    lures.set(name, lures.get(name) - 1)
+    lost[name] = (lost[name] ?? 0) + 1
+    return name
+  }
+  spend(fight.spent)
+  const lure = wanted && fight.lure ? spend(fight.lure) : ''
+  const tried = wanted ? tameTry(setup, wanted, { lure, attempt: fight.attempt }) : null
+  const tame = tried ? { name: wanted.name, ok: tried.ok, roll: tried.roll, total: tried.total, dc: tried.dc, ...(lure ? { lure } : {}) } : null
+  // 养成: what was caught, as it stood: its level, and what it was born with.
+  const met = tame?.ok && setup.tame.raise ? setup.foes[foesOf(state).indexOf(wanted)] : null
+  const caught = met ? { level: met.level ?? setup.player.level, ...born(setup.seed, wanted.name) } : null
+  // Told to the story too: a rank it does not hear of it makes up.
+  if (caught) Object.assign(tame, caught, met.rank ? { rank: met.rank } : {}, met.type ? { type: met.type } : {})
   const used = {}
   const skills = []
   // How often each skill was used: what 熟练 grows from, on a card that counts growth.
@@ -131,9 +165,10 @@ export function fightResult(setup, fight) {
       uses[name.slice(6)] = count
     } else used[name] = count
   }
+  for (const [name, count] of Object.entries(lost)) used[name] = (used[name] ?? 0) + count
   return {
     battle: { over: fight.over, foes: foesAll, downed: foesLine(downed), rounds: state.round, before: setup.player.life, life: player.life, maxLife: player.maxLife, used, skills, moments: state.moments.slice(0, 3), experience, ...(shifted.length ? { shifted } : {}), ...(tame ? { tame } : {}), ...(player.commander ? { commanded: true } : {}), ...(fight.over === 'won' ? { worth: worthOf(downed) } : {}), ...(state.cured.length ? { cured: state.cured.slice() } : {}), ...(state.rallied ? { rallied: true } : {}), ...(shock ? { shock } : {}), ...(party.length ? { party: party.map(({ uses: counted, ...member }) => member) } : {}) },
-    op: { op: 'battle', over: fight.over, life: player.life, energy: player.energy, used, experience, ...(tame?.ok ? { tamed: tame.name } : {}), ...(player.commander ? { commanded: true } : {}), ...(state.rallied ? { rallied: true } : {}), ...(state.cured.length ? { cured: state.cured } : {}), ...(shock ? { shock } : {}), ...(setup.grows && Object.keys(uses).length ? { uses } : {}), ...(setup.met ? { met: setup.met } : {}), ...(party.length ? { party: party.map(({ name, life, fell, uses: used }) => ({ name, life, ...(fell ? { fell } : {}), ...(used ? { uses: used } : {}) })) } : {}) },
+    op: { op: 'battle', over: fight.over, life: player.life, energy: player.energy, used, experience, ...(tame?.ok ? { tamed: met?.kind && !(setup.tame.have ?? []).includes(met.kind) ? met.kind : tame.name } : {}), ...(caught ? { caught } : {}), ...(player.commander ? { commanded: true } : {}), ...(state.rallied ? { rallied: true } : {}), ...(state.cured.length ? { cured: state.cured } : {}), ...(shock ? { shock } : {}), ...(setup.grows && Object.keys(uses).length ? { uses } : {}), ...(setup.met ? { met: setup.met } : {}), ...(party.length ? { party: party.map(({ name, life, fell, uses: used }) => ({ name, life, ...(fell ? { fell } : {}), ...(used ? { uses: used } : {}) })) } : {}) },
   }
 }
 

@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { normalizeCard } from '../server/cards.mjs'
 import { createChat } from '../server/chats.mjs'
-import { cleanCardMedia, cleanMedia, cleanPrompt, contextImageInstruction, createMedia, imagePromptRequest, promptRulesOf } from '../server/media.mjs'
+import { cleanCardMedia, cleanMedia, cleanPrompt, contextImageInstruction, createMedia, imagePromptRequest, promptRulesOf, splitShots } from '../server/media.mjs'
 import { normalizeProvider } from '../server/providers.mjs'
 import { cleanFrame, frameFormat } from '../server/roster.mjs'
 import { createStore } from '../server/store.mjs'
@@ -49,15 +49,25 @@ test('提示词详细程度 changes the length asked for, the hint, the token ro
   assert.match(taskOf(detailed), /Be thorough: clothing details/)
   assert.doesNotMatch(taskOf(standard), /Keep it short|Be thorough/)
   assert.match(brief.system, /25-45 words/, 'the system part says the same format')
-  assert.deepEqual([brief.maxTokens, standard.maxTokens, detailed.maxTokens], [400, 400, 640])
-  assert.equal(ask({ detail: 'bogus' }).maxTokens, 400, 'an unknown level is the standard one')
+  assert.deepEqual([brief.maxTokens, standard.maxTokens, detailed.maxTokens], [460, 460, 700])
+  assert.equal(ask({ detail: 'bogus' }).maxTokens, 460, 'an unknown level is the standard one')
   assert.match(taskOf(ask({ detail: 'detailed', promptStyle: 'tags' })), /50-80 comma-separated English tags/)
   assert.match(taskOf(ask({ detail: 'brief', promptStyle: 'tags' })), /15-30 comma-separated English tags/)
   // A cast's lines grow too.
   assert.match(frameFormat('tags', 'detailed'), /场景: 25-45 comma-separated English tags[\s\S]*\[Name\] 20-35 comma-separated/)
   assert.match(frameFormat('tags', 'brief'), /场景: 8-15 comma-separated English tags[\s\S]*\[Name\] 6-12 comma-separated/)
   assert.match(taskOf(ask({ roster: ROSTER, detail: 'detailed' })), /two or three English sentences/)
-  assert.equal(ask({ roster: ROSTER, detail: 'detailed' }).maxTokens, 1120)
+  assert.equal(ask({ roster: ROSTER, detail: 'detailed' }).maxTokens, 1180)
+  // 详细（不截断）: more asked for, and nothing cut off.
+  const full = ask({ detail: 'full' })
+  assert.match(taskOf(full), /one English paragraph of 180-280 words/)
+  assert.match(taskOf(full), /Finish every sentence\. Clothes: the main garment first/)
+  assert.equal(full.maxTokens, 1260)
+  assert.match(frameFormat('natural', 'full'), /\[Name\] two to four English sentences/)
+  assert.match(contextImageInstruction({ promptStyle: 'natural', style: '', passage: '', detail: 'full' }), /每一句都写完/)
+  const whole = Array.from({ length: 400 }, (_, i) => `w${i}`).join(' ')
+  assert.equal(cleanPrompt(`${whole}\n\nlast words`, 'natural', 'full'), `${whole} last words`)
+  assert.equal(cleanFrame(`场景: ${whole}\n[林雪] ${whole} | left`, 'full', { roster: ROSTER }), `场景: ${whole}\n[林雪] ${whole} | left`)
 
   // The answer is cut where its level ends, not at the standard length.
   const long = Array.from({ length: 200 }, (_, i) => `w${i}`).join(' ')
@@ -78,7 +88,7 @@ test("写提示词的额外要求: every card's, then the card's own, last befor
   assert.equal(promptRulesOf({ promptRules: '' }, { promptRules: 'Only hers.' }), 'Only hers.')
   assert.equal(promptRulesOf({}, {}), '')
   const task = taskOf(ask({ rules: 'Start with masterpiece.\n\nShe wears a red ribbon.' }))
-  assert.match(task, /Format: [^\n]+\nThe user's own rules for these prompts \(they win where they differ from the above[^\n]*\n<user_rules>\nStart with masterpiece\.\n\nShe wears a red ribbon\.\n<\/user_rules>\nReply with the prompt only\.$/)
+  assert.match(task, /Format: [^\n]+\nThe user's own rules for these prompts \(they win where they differ from the above[^\n]*\n<user_rules>\nStart with masterpiece\.\n\nShe wears a red ribbon\.\n<\/user_rules>\nReply with the prompt only\.\nAfter it, as the last line, write 锚点:[^\n]*$/)
   assert.doesNotMatch(taskOf(ask({})), /user_rules/)
 
   // Asked inside the conversation: the same options, in Chinese.
@@ -93,7 +103,27 @@ test("写提示词的额外要求: every card's, then the card's own, last befor
   assert.doesNotMatch(short, /user_rules|画风/)
 })
 
-test('settings: 详细程度 one of three, 额外要求 kept with their line breaks and capped', () => {
+test('一次画几张: what is asked for, and the answer taken apart', () => {
+  const one = ask({})
+  const three = ask({ count: 3 })
+  assert.doesNotMatch(taskOf(one), /===|frames/)
+  assert.match(taskOf(three), /write 3 image-generation prompts, each for ONE frame/)
+  assert.match(taskOf(three), /most vivid moments of/)
+  assert.match(taskOf(three), /3 frames, in the order they happen[\s\S]*a line of just ===[\s\S]*No two alike/)
+  assert.match(taskOf(three), /After each prompt, as its last line, write 锚点:/)
+  assert.equal(three.maxTokens, 3 * one.maxTokens)
+  const inChat = { promptStyle: 'tags', style: '', passage: '' }
+  assert.match(contextImageInstruction({ ...inChat, count: 2 }), /一共写 2 张[\s\S]*每一张提示词写完/)
+  assert.doesNotMatch(contextImageInstruction(inChat), /一共写|===/)
+  assert.deepEqual(splitShots('a girl\n锚点: 她\n===\nImage 2:\na boy\n锚点: 他\n===\n\n', 3), ['a girl\n锚点: 她', 'a boy\n锚点: 他'])
+  assert.deepEqual(splitShots('<think>===</think>1girl, solo\n---\n2girls, rain\n---\nx', 2), ['1girl, solo', '2girls, rain'])
+  // The === left out: after each 锚点.
+  assert.deepEqual(splitShots('场景: rain\n[林雪] runs\n锚点: 甲\n\n场景: room\n[林雪] sits\n锚点: 乙', 4), ['场景: rain\n[林雪] runs\n锚点: 甲', '场景: room\n[林雪] sits\n锚点: 乙'])
+  assert.deepEqual(splitShots('a single one', 3), ['a single one'])
+  assert.deepEqual([cleanMedia({}).imageCount, cleanMedia({ imageCount: 3 }).imageCount, cleanMedia({ imageCount: 9 }, { imageCount: 2 }).imageCount], [1, 3, 2])
+})
+
+test('settings: 详细程度 one of four, 额外要求 kept with their line breaks and capped', () => {
   assert.equal(cleanMedia({}).promptDetail, 'standard')
   assert.equal(cleanMedia({}).promptRules, '')
   assert.equal(cleanMedia({ promptDetail: 'detailed' }).promptDetail, 'detailed')
@@ -155,7 +185,7 @@ test('writing a prompt: the saved 详细程度 and both sets of 额外要求 rea
   const content = sent.messages.at(-1).content
   assert.match(content, /120-180 words/)
   assert.match(content, /<user_rules>\nStart with masterpiece\.\n\nShe wears a red ribbon\.\n<\/user_rules>/)
-  assert.equal(sent.max_tokens, 640)
+  assert.equal(sent.max_tokens, 700)
 
   await store.saveSettings({ media: cleanMedia({ promptDetail: 'brief', promptRules: '' }, (await store.getSettings()).media) })
   await media.saveCardMedia(card.id, { ...(await media.cardMediaView(card.id)), promptRules: '' })
@@ -163,5 +193,5 @@ test('writing a prompt: the saved 详细程度 and both sets of 额外要求 rea
   const plain = seen.at(-1).messages.at(-1).content
   assert.match(plain, /25-45 words/)
   assert.doesNotMatch(plain, /user_rules/)
-  assert.equal(seen.at(-1).max_tokens, 400)
+  assert.equal(seen.at(-1).max_tokens, 460)
 })

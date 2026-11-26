@@ -22,6 +22,12 @@ const READY_MS = 8000
 const START_AFTER_MS = 800
 // What a script shows this soon after a press of its button is that button's window.
 const PRESS_SHOWS_MS = 5000
+// What a script shows this soon after its frame is made is it coming back with the chat, not news of its own.
+const COMING_BACK_MS = 15000
+// The scripts whose window the player put away, by key (its owner's and its name), on this device: another chat, or
+// the page loaded again, makes their frames anew, and they stay put away.
+const AWAY_KEY = 'agentTavernScriptsAway'
+const AWAY_KEPT = 200
 // A script that uses Tavern Helper's preset or regex functions gets the chat's presets and regex in its frame (GET
 // /api/chats/:id/th-preset): Tavern Helper answers those at once, not later.
 const USES_PRESETS = /\b(?:getPreset|getLoadedPresetName|getPresetNames|replacePreset|updatePresetWith|setPreset|getTavernRegexes)\s*\(/
@@ -187,21 +193,45 @@ export function initCardScripts({ api, el, toast, getChat, frameContext, ownerCo
   const stage = document.querySelector('.stage')
   if (stage) new MutationObserver(() => requestAnimationFrame(placeIfShown)).observe(stage, { attributes: true, attributeFilter: ['class'] })
 
+  const away = new Set((() => {
+    try {
+      const kept = JSON.parse(localStorage.getItem(AWAY_KEY) || '[]')
+      return Array.isArray(kept) ? kept.filter(key => typeof key === 'string') : []
+    } catch {
+      return []
+    }
+  })())
+  /** The player put a script's window away (on), or brought it back. */
+  function setDismissed(entry, on) {
+    entry.dismissed = on
+    const key = entry.frame.dataset.script
+    if (away.has(key) === on) return
+    if (on) away.add(key)
+    else away.delete(key)
+    try {
+      localStorage.setItem(AWAY_KEY, JSON.stringify([...away].slice(-AWAY_KEPT)))
+    } catch {}
+  }
+  // Which script's window was in front when its chat was left, the latest the highest: it is in front again when
+  // several come back.
+  const fronts = new Map()
+  let frontCount = 0
+
   /** A chip for each script the player put away while it still has something on it; pressed, it comes back docked. */
   function drawChips() {
-    const away = [...frames.values()].filter(entry => entry.visible && entry.dismissed && entry.frame.dataset.script !== showing)
-    chips.replaceChildren(...away.map(entry => el('button', {
+    const put = [...frames.values()].filter(entry => entry.visible && entry.dismissed && entry.frame.dataset.script !== showing)
+    chips.replaceChildren(...put.map(entry => el('button', {
       type: 'button',
       class: 'btn small script-chip',
       text: entry.label,
       title: t`打开「${entry.label}」`,
       onclick: () => {
-        entry.dismissed = false
+        setDismissed(entry, false)
         showFrame(entry, true)
       },
     })))
     // Not over the window while it is open: they come back when it is put away.
-    chips.hidden = !away.length || isOpen()
+    chips.hidden = !put.length || isOpen()
     if (!chips.hidden) placeDock()
   }
   /** Shown as the big window, or docked (the small panel bottom right). */
@@ -232,7 +262,7 @@ export function initCardScripts({ api, el, toast, getChat, frameContext, ownerCo
   /** The player puts the window away: what it shows stays away until its button is pressed, though it changes. */
   function close() {
     const entry = showing ? frames.get(showing) : null
-    if (entry) entry.dismissed = true
+    if (entry) setDismissed(entry, true)
     putAway()
   }
   document.addEventListener('keydown', event => {
@@ -247,6 +277,7 @@ export function initCardScripts({ api, el, toast, getChat, frameContext, ownerCo
   let starting = 0 // which start of the chat's scripts is current (a later chat drops an earlier one)
 
   function dropFrames() {
+    if (showing) fronts.set(showing, ++frontCount)
     putAway({ next: false })
     body.replaceChildren()
     frames.clear()
@@ -353,7 +384,7 @@ export function initCardScripts({ api, el, toast, getChat, frameContext, ownerCo
     })
     body.append(frame)
     const label = script.owner === 'preset' ? t`${script.name}（预设）` : script.name
-    const entry = { frame, ready, visible: false, pressedAt: 0, dismissed: false, label }
+    const entry = { frame, ready, visible: false, pressedAt: 0, madeAt: Date.now(), dismissed: away.has(script.key), label }
     frames.set(script.key, entry)
     return entry
   }
@@ -362,7 +393,7 @@ export function initCardScripts({ api, el, toast, getChat, frameContext, ownerCo
     if (script.remote && !librariesOn()) throw new Error(t`「${script.name}」要从网上加载，先在 设置 → 更多 → 隐私与网络 里打开「加载酒馆助手脚本库」`)
     const entry = frameOf(script)
     entry.pressedAt = Date.now()
-    entry.dismissed = false
+    setDismissed(entry, false)
     await entry.ready
     entry.frame.contentWindow?.postMessage({ agentTavernButton: name, args }, '*')
     // Its window put away with something still on it: a press brings it back (the frame says nothing new then).
@@ -408,6 +439,9 @@ export function initCardScripts({ api, el, toast, getChat, frameContext, ownerCo
     if (entry.dismissed) return drawChips()
     // The big window open on another script stays; this one waits for its button or that window to close.
     if (isOpen() && !isDocked() && showing !== name) return
+    // Come back with the chat behind the one that was in front: it waits for that one to be put away.
+    const front = key => fronts.get(key) ?? 0
+    if (showing && showing !== name && Date.now() - entry.madeAt < COMING_BACK_MS && front(showing) > front(name)) return
     showFrame(entry, isOpen() && showing === name ? isDocked() : true)
   }
 

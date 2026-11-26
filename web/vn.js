@@ -9,14 +9,15 @@
 import { t } from '/i18n.js'
 import { htmlFrame, segments, streamingText } from '/render.js'
 import { timeBox } from '/status.js'
-import { advanceDay, isCreationPage, latestPlace, matchScene, normalizePlace, opensNextDay, placeIn, sameLine, speakerNames, splitLines, stateTime, storyDay, timeOfDay, timesIn, weatherOf } from '/shared/vn.js'
+import { advanceDay, isCreationPage, latestPlace, matchScene, normalizePlace, opensNextDay, placeIn, sameLine, speakerNames, splitLines, stateTime, storyDay, timeOfDay, timesIn, weatherOf, wornOn } from '/shared/vn.js'
 import { cutOut, spriteFrame } from '/shared/cutout.js'
+import { picturesOnLines } from '/shared/draw.js'
 import { EXPRESSIONS, PACK_PICTURE, heroOf, lineEffects, packFaces, stageAt } from '/shared/stage.js'
 import { initVnSaves } from '/vn-saves.js'
 import { initVnHud, noteChips } from '/vn-hud.js'
 import { changeNotes } from '/shared/hud.js'
 import { shrink, zoomedQuery } from '/theme.js'
-import { currentLook, headIn, letters, lookFields, lookHints, lookNames, paletteNames, palettesOf, setHero, setLook, slideSlab } from '/game-look.js'
+import { currentLook, headIn, heroNow, letters, lookFields, lookHints, lookNames, paletteNames, palettesOf, setHero, setLook, slideSlab } from '/game-look.js'
 import { VN_ID, isBuiltinPreset } from '/shared/basic.js'
 import { historyStrip, keptItems } from '/draw-choice.js'
 import { smaller } from '/look-pictures.js'
@@ -169,6 +170,8 @@ export function initVn(deps) {
   const bg = el('div', { class: 'vn-bg' })
   const tint = el('div', { class: 'vn-tint' })
   const actors = el('div', { class: 'vn-actors' })
+  // 配图在剧情里出现: the line's picture over the background, the people stepping aside (drawStepPicture).
+  const stepPicture = el('div', { class: 'vn-step-picture', 'aria-hidden': 'true' })
   // 回忆滤镜: over the picture and the people while a memory's lines are read.
   const memoryLayer = el('div', { class: 'vn-memory', 'aria-hidden': 'true' })
   const flash = el('div', { class: 'vn-flash', 'aria-hidden': 'true' })
@@ -252,7 +255,8 @@ export function initVn(deps) {
   const fullButton = control(t`全屏`, t`全屏（F），Esc 退出`, () => toggleFullscreen())
   const cgControl = control('CG', t`CG 回廊：这条故事线上所有的配图（G）`, () => openGallery())
   const drawCgControl = control(t`画 CG`, t`给眼前这一幕画一张 CG，画好后在左上角点开`, () => drawMoment())
-  cgRow.append(drawCgControl)
+  const wearControl = control(t`换衣服`, t`谁现在穿哪一套`, () => deps.openWear?.())
+  cgRow.append(drawCgControl, wearControl)
   const hideControl = control(t`隐藏`, t`隐藏界面（H），点一下恢复`, () => root.classList.add('bare'))
   const actControl = control(t`✎ 行动`, t`写下你的行动（回车），再点一下收起`, () => compose(!stage.classList.contains('vn-compose')))
   const exitControl = control(t`退出`, t`退出视觉小说模式`, () => exitMode())
@@ -272,7 +276,10 @@ export function initVn(deps) {
   const rulesControl = control(t`规则`, t`游戏规则：开关检定和战斗，调属性、技能和敌人`, () => deps.openRules())
   const logControl = control(t`回看`, t`回看（L）`, () => openLog())
   const skipControl = control(t`跳过`, t`跳到最新一句`, () => skip())
-  quickBar.append(logControl, autoButton, skipControl, fastButton, saveControl, loadControl)
+  // 游戏规则 on: the 游戏菜单, where the hand already is.
+  const bagQuick = control(t`菜单`, t`游戏菜单（I）`, () => deps.openBag())
+  bagQuick.classList.add('vn-bag')
+  quickBar.append(bagQuick, logControl, autoButton, skipControl, fastButton, saveControl, loadControl)
   // Clicked, they let go of the keyboard: Space goes on reading, not pressing the same button again.
   quickBar.addEventListener('click', event => {
     if (event.detail) document.activeElement?.blur()
@@ -294,7 +301,7 @@ export function initVn(deps) {
     viewMenu,
     exitQuick,
   ])
-  root.append(bg, tint, lookFields(el), actors, memoryLayer, flash, pulse, corner, title, chapter, panel, menu, plotEnd, waitBox, hud.notes, box, controls, scrim, pop, logBox, cgView)
+  root.append(bg, tint, lookFields(el), actors, stepPicture, memoryLayer, flash, pulse, corner, title, chapter, panel, menu, plotEnd, waitBox, hud.notes, box, controls, scrim, pop, logBox, cgView)
 
   // Where the layers in between may go: under the controls (however they wrapped), above the text box and the input.
   function placeLayers() {
@@ -709,6 +716,11 @@ export function initVn(deps) {
         ]
       : [
           switchRow(t`新回复自动配图`, prefs.image, on => setQuick('image', on), t`画好后在左上角点开看`),
+          switchRow(t`配图在剧情里出现`, prefs.pictures, on => {
+            prefs.pictures = on
+            remember(PREFS_KEY, prefs)
+            drawStepPicture()
+          }, t`念到画的那一句，图占满画面，念完退回`),
           artMode('newScene', t`到了新地点：`, renderPopOwn),
           artMode('newSprite', t`没有立绘的角色说话时：`, renderPopOwn),
           ...stageRows(switchRow),
@@ -1080,7 +1092,7 @@ export function initVn(deps) {
   function render(chat) {
     const on = Boolean(chat) && isOn(chat.cardId)
     memoryControl.hidden = !deps.memoryOn()
-    for (const b of bagControls) b.hidden = !deps.rulesRunning()
+    for (const b of [...bagControls, bagQuick]) b.hidden = !deps.rulesRunning()
     rulesControl.classList.toggle('on', deps.rulesRunning())
     toggle?.setAttribute('aria-pressed', String(on))
     if (toggle) {
@@ -1203,9 +1215,9 @@ export function initVn(deps) {
     const tick = () => {
       const seconds = Math.floor((Date.now() - (job.startedAt ?? Date.now())) / 1000)
       waitClock.textContent = seconds ? t`${seconds} 秒` : ''
+      const busy = job.noteBefore != null || /…$/.test(job.note ?? '') && job.note !== '…'
+      waitWords.textContent = job.tail || (busy ? job.note : job.text ? t`模型正在写` : job.reasoning ? t`模型在思考` : t`等模型回复`)
     }
-    const busy = job.noteBefore != null || /…$/.test(job.note ?? '') && job.note !== '…'
-    waitWords.textContent = busy ? job.note : job.text ? t`模型正在写` : job.reasoning ? t`模型在思考` : t`等模型回复`
     waitBox.classList.toggle('small', state.index >= 0)
     waitResult.hidden = !job.outcome
     if (job.outcome) {
@@ -1327,12 +1339,14 @@ export function initVn(deps) {
       plate.hidden = true
       box.dataset.kind = 'narration'
       clearStage()
+      drawStepPicture()
       lineBox.replaceChildren(el('p', { class: 'vn-waiting', text: isCreationPage(step) ? t`（填好上面的表，故事就开始）` : t`（卡片画面）` }))
       showPanel(step.kind === 'html' ? frameOf(step.body, getChat()) : el('pre', { class: 'code', text: step.body }))
       return lineShown()
     }
     closePanel()
     drawSpeaker(step, animate)
+    drawStepPicture()
     lineBox.innerHTML = renderStory(step.text)
     markSpeech(lineBox)
     spoken.textContent = `${step.speaker ? t`${shownName(step.speaker)}：` : ''}${step.plain}`
@@ -1833,11 +1847,53 @@ export function initVn(deps) {
     statusButton.hidden = !(state.trailing.length || (state.node && statusFor(chat, state.node)))
   }
 
+  /**
+   * 配图在剧情里出现 (off unless turned on): a picture that has its line (image.anchor) fills the stage while that line is
+   * on screen, and goes as the player reads on. The others stay in the corner.
+   */
+  function drawStepPicture() {
+    const chat = getChat()
+    const step = state.steps[state.index]
+    const on = prefs.pictures && state.on && !state.streaming && !state.skipping && state.node && step?.type === 'line'
+    const images = on ? (chat?.path.find(node => node.id === state.node.id) ?? state.node)?.media?.images ?? [] : []
+    const image = images.some(item => item.anchor) ? picturesOnLines(images, state.steps.map(item => (item.type === 'line' ? item.plain ?? '' : ''))).get(state.index) : null
+    const src = image ? `/api/media/${chat.id}/${image.file}` : ''
+    if ((stepPicture.dataset.src ?? '') === src) return
+    stepPicture.dataset.src = src
+    const show = () => {
+      for (const old of [...stepPicture.children]) if (old.dataset.src !== src) {
+        old.classList.remove('show')
+        setTimeout(() => old.remove(), 700)
+      }
+      root.classList.toggle('picturing', Boolean(src))
+    }
+    if (!src) return show()
+    const img = el('img', { src, alt: '' })
+    const layer = el('div', { class: 'vn-step-layer', 'data-src': src, style: `--picture: url("${src}")` }, [img])
+    img.addEventListener('load', () => {
+      if (stepPicture.dataset.src !== src) return
+      // Near the screen's own shape it fills it; else it is shown whole, over a blur of itself.
+      const shape = (img.naturalWidth / img.naturalHeight) / (root.clientWidth / Math.max(1, root.clientHeight))
+      layer.classList.toggle('whole', shape > 1.45 || shape < 0.69)
+      stepPicture.append(layer)
+      void layer.offsetWidth
+      layer.classList.add('show')
+      show()
+    })
+    img.addEventListener('error', () => {
+      if (stepPicture.dataset.src !== src) return
+      show()
+      root.classList.remove('picturing')
+    })
+  }
+
   /** The turn's illustrations (配图) as a CG: a small picture in the corner, opened full size. */
   function drawCg(chat) {
+    wearControl.hidden = !deps.hasWardrobe?.()
     // From the chat as it is now: a picture just drawn joined that copy of the reply.
     const images = (chat?.path.find(node => node.id === state.node?.id) ?? state.node)?.media?.images ?? []
     const last = images.at(-1)
+    if (state.index >= 0) drawStepPicture()
     cgButton.hidden = !last
     // Only the corner picture goes: a CG or the 回廊 open from an earlier turn stays until it is closed.
     if (!last) return void delete cgButton.dataset.src
@@ -1880,7 +1936,7 @@ export function initVn(deps) {
     const lines = state.steps.slice(0, state.index + 1).filter(step => step.type === 'line' && step.plain)
     const moment = lines.slice(-MOMENT_LINES).map(step => (step.speaker && !step.plain.includes(step.speaker) ? `${shownName(step.speaker)}: ${step.plain}` : step.plain)).join('\n')
     if (!moment.trim()) return toast(t`这一轮没有能读的正文`)
-    if (!deps.drawMoment(node, moment)) toast(t`这一轮的图还在画`)
+    if (!deps.drawMoment(node, moment, lines.at(-1).plain)) toast(t`这一轮的图还在画`)
   }
 
   /**
@@ -1912,6 +1968,10 @@ export function initVn(deps) {
       const here = onScreen()
       if (here) deps.editPicturePrompt(here.node, here.image, here.chatId)
     })
+    const keep = control(t`存为 CG`, t`放进卡的 CG：剧情再写到这一幕时全屏放`, () => {
+      const here = onScreen()
+      if (here) deps.keepCg?.(getChat(), here.node, here.image)
+    })
     const show = () => {
       state.cgAt = at
       if (picture.getAttribute('src') !== all[at].src) picture.src = all[at].src
@@ -1922,6 +1982,7 @@ export function initVn(deps) {
       const failure = work.failures.find(item => item.nodeId === all[at].nodeId)
       // The card's own CG is not drawn here: nothing to draw again.
       redraw.disabled = edit.disabled = Boolean(job) || Boolean(all[at].card)
+      keep.hidden = Boolean(all[at].card) || chat.cardId === 'direct'
       note.textContent = job ? t`这一轮的新图正在画…` : failure ? t`配图没画出来：${failure.message}` : ''
       note.classList.toggle('bad', !job && Boolean(failure))
       note.hidden = !note.textContent
@@ -1946,6 +2007,7 @@ export function initVn(deps) {
       fromGallery ? null : control(t`回廊`, t`这条故事线上所有的 CG（G）`, () => openGallery(state.cgAt)),
       redraw,
       edit,
+      keep,
       control(t`导出`, t`把这张存下来`, () => exportCg(all[at])),
       control(t`关闭`, t`Esc`, () => leaveCg()),
       note,
@@ -2339,6 +2401,15 @@ export function initVn(deps) {
   /** The groups with pictures, as far as they are known now (null: not read yet). */
   const shownCgs = cardId => cardCgs.lists.get(cardId)?.filter(group => group.pictures?.length) ?? null
   const cgSrc = (cardId, picture) => `/api/cgs/${cardId}/${picture.file}`
+  /** A card's CG changed outside this window (存为 CG under a picture). */
+  /** 换衣服 in this chat: whoever stands there may look different. */
+  function wearChanged(chatId) {
+    if (state.on && getChat()?.id === chatId) drawStage()
+  }
+  function cgsChanged(cardId, groups) {
+    cardCgs.lists.set(cardId, groups)
+    if (library?.open) renderLibrary()
+  }
 
   /** A reply's 【CG|组名】 reached: its group full screen (a name the card has no group for: nothing). */
   async function showCardCg(cardId, name) {
@@ -2483,12 +2554,13 @@ export function initVn(deps) {
   // pictures: `${cardId}:${name}` → the picture last shown of them (and the player's), for 撞色's figure; hero: who it was.
   // pendingActor: the speaker's 演出效果 for the line just come ({ step, actor }), played by the drawing of the stage that
   // reaches that line (one drawn while pictures load may be overtaken by the next).
-  const cast = { lists: new Map(), faces: new Map(), loading: new Map(), cuts: new Map(), why: new Map(), token: 0, missing: null, none: new Map(), pictures: new Map(), hero: null, pendingActor: null }
+  const cast = { lists: new Map(), faces: new Map(), outfits: new Map(), loading: new Map(), cuts: new Map(), why: new Map(), token: 0, missing: null, none: new Map(), pictures: new Map(), hero: null, pendingActor: null }
 
   /** A sprites view from the server (GET, a drawing, an upload) becomes the lists. */
   function takeSprites(cardId, view) {
     cast.lists.set(cardId, view?.sprites ?? {})
     cast.faces.set(cardId, view?.expressions ?? {})
+    cast.outfits.set(cardId, view?.outfits ?? {})
   }
 
   async function spritesOf(cardId) {
@@ -2575,9 +2647,27 @@ export function initVn(deps) {
     return null
   }
 
+  /** Who is in what of their 衣柜 at the line on screen (web/shared/vn.js wornOn). */
+  function wornNow(cardId) {
+    const roster = state.roster.get(cardId) ?? []
+    if (!roster.some(entry => entry.wardrobe?.length)) return new Map()
+    const chat = getChat()
+    const path = chat?.cardId === cardId ? chat.path : []
+    const at = path.findIndex(node => node.id === state.node?.id)
+    const here = at < 0 ? path : path.slice(0, at + 1)
+    const seen = at < 0 ? null : state.steps.slice(0, state.index + 1).flatMap(step => step.effects?.wear ?? [])
+    return wornOn(here, roster, name => state.names.find(item => item.name === name || item.keys?.includes(name) || item.marks?.includes(name))?.id, seen, at < 0 || state.index >= Math.min(state.changeAt, state.steps.length - 1))
+  }
+
   /** Someone's picture with an expression: that 表情 when it has been drawn, else their 立绘. → object URL or null. */
   async function actorPicture(cardId, entry, expression) {
     await spritesOf(cardId)
+    // In other clothes: that outfit's 立绘 when there is one (it has no faces of its own), else the usual one.
+    const outfit = entry.id ? cast.outfits.get(cardId)?.[entry.id]?.[wornNow(cardId).get(entry.id)] : null
+    if (outfit) {
+      const src = await cutPicture(`/api/sprites/${cardId}/${outfit.file}`)
+      if (src) return src
+    }
     const face = expression !== 'neutral' && entry.id ? cast.faces.get(cardId)?.[entry.id]?.[expression] : null
     if (face) {
       const src = await cutPicture(`/api/sprites/${cardId}/${face.file}`)
@@ -2686,6 +2776,39 @@ export function initVn(deps) {
     const pictureOf = name => cast.pictures.get(`${cardId}:${name}`) || ''
     const before = cast.hero?.cardId === cardId ? cast.hero.name : null
     const name = heroOf(state.steps, state.index, { names: state.names, foes: deps.foeNames?.() ?? [], pictured: name => Boolean(pictureOf(name)), before })
+    if (name) cast.hero = { cardId, name }
+    return name ? pictureOf(name) : ''
+  }
+
+  /**
+   * A fight's pictures with the mode off (it was never on since the page loaded, or it was left): the card's cast read,
+   * so pictureFor finds the party's faces, and the player's figure worked out as heroPicture does, from the latest
+   * reply's lines. With the mode on, what it shows already. → the player's figure: URL or ''.
+   */
+  async function fightFigures(chat) {
+    const cardId = chat?.cardId
+    if (state.on || !cardId) return heroNow()
+    // Taken over as rendering would: switching the mode on later finds this card's cast here.
+    if (state.cardId !== cardId) {
+      if (state.cardId) closePop()
+      state.cardId = cardId
+    }
+    await loadRoster(cardId)
+    if (state.cardId !== cardId) return ''
+    state.names = speakerNames({ char: chat.names?.char, user: chat.names?.user, roster: state.roster.get(cardId) ?? [] })
+    const node = latestReply(chat)
+    const steps = node ? stepsOf(display(chat, node, true).shown, false).steps : []
+    const speakers = steps.filter(step => step.type === 'line' && step.kind === 'dialogue').map(step => step.speaker)
+    await loadPictures(speakers)
+    const player = state.names.find(entry => entry.player)
+    const key = player ? `${cardId}:${player.name}` : ''
+    if (player && !cast.pictures.get(key)) {
+      const src = await actorPicture(cardId, player, 'neutral').catch(() => null)
+      if (src) cast.pictures.set(key, src)
+    }
+    const pictureOf = name => cast.pictures.get(`${cardId}:${name}`) || ''
+    const before = cast.hero?.cardId === cardId ? cast.hero.name : null
+    const name = heroOf(steps, steps.length - 1, { names: state.names, foes: deps.foeNames?.() ?? [], pictured: name => Boolean(pictureOf(name)), before })
     if (name) cast.hero = { cardId, name }
     return name ? pictureOf(name) : ''
   }
@@ -2857,12 +2980,23 @@ export function initVn(deps) {
     })
   }
 
+  /** Someone's 立绘 in another outfit of their 衣柜, drawn from the usual one. */
+  function drawOutfit(cardId, entry, outfit, choice = {}) {
+    enqueue(cardId, {
+      key: `outfit:${entry.id}:${outfit.id}`,
+      label: t`${entry.name}·${outfit.name}`,
+      url: `/api/cards/${cardId}/sprites/${entry.id}/outfits/${outfit.id}/draw`,
+      body: choice,
+      done: data => takeSprites(cardId, data),
+    })
+  }
+
   /**
    * 一键备齐 / 做成视觉小说, step by step:
    *   1. how to draw (deps.pickDraw: any 画图方式 set up, or set one up; for these pictures only);
    *   2. the 角色名册: with nobody in it with looks, the helper drafts it from the card and it is saved;
    *   3. a 立绘 for each cast member with looks and none drawn or uploaded;
-   *   4. each one's missing 表情, queued once their 立绘 is there (left out when the method picked
+   *   4. each one's missing 表情 and 衣柜 outfits, queued once their 立绘 is there (left out when the method picked
    *      cannot draw from a picture: they would come out as someone else);
    *   5. a background for each of `places` with none yet.
    * Asks before drawing, with the count: every picture costs a drawing.
@@ -2925,17 +3059,21 @@ export function initVn(deps) {
     const had = creation.length ? (await api(`/api/cards/${cardId}/creation/pictures`).catch(() => null))?.pictures ?? {} : {}
     creation = creation.filter(item => !had[item.label]?.includes(item.option))
     const mapWanted = Boolean(map?.prompt) && !sceneList.some(scene => scene.file && /^(?:地图|世界地图|全图|大地图|map|world ?map)$/i.test(String(scene.name ?? '').trim()))
-    const total = sprites.length + faceCount + backgrounds.length + (mapWanted ? 1 : 0) + creation.length
+    // 衣柜 outfits not drawn yet, each after the person's own 立绘 (asked for with 表情: 差分 either way).
+    const missingOutfits = member => (withFaces ? (member.wardrobe ?? []).filter(outfit => outfit.tags && !cast.outfits.get(cardId)?.[member.id]?.[outfit.id]) : [])
+    const outfitCount = roster.reduce((n, member) => n + missingOutfits(member).length, 0)
+    const total = sprites.length + faceCount + outfitCount + backgrounds.length + (mapWanted ? 1 : 0) + creation.length
     const noFaces = fromPicture || !wanted ? '' : t`选的画图方式不能照着立绘改表情（重画出来会像另一个人），表情先不画：可以换成能参考图片的画图方式，或者导入表情包。`
     if (!total) {
       toast(noFaces || t`立绘、表情和场景都已经齐了`, noFaces ? 8000 : undefined)
       return 0
     }
-    const counts = [sprites.length ? t`${sprites.length} 张立绘` : '', faceCount ? t`${faceCount} 个表情` : '', backgrounds.length ? t`${backgrounds.length} 张场景` : '', mapWanted ? t`1 张地图` : '', creation.length ? t`${creation.length} 张建角页的图` : ''].filter(Boolean).join(t`、`)
+    const counts = [sprites.length ? t`${sprites.length} 张立绘` : '', faceCount ? t`${faceCount} 个表情` : '', outfitCount ? t`${outfitCount} 套衣服` : '', backgrounds.length ? t`${backgrounds.length} 张场景` : '', mapWanted ? t`1 张地图` : '', creation.length ? t`${creation.length} 张建角页的图` : ''].filter(Boolean).join(t`、`)
     const how = picked.label ? t`用「${picked.label}」` : t`用设置里的画图方式`
-    if (!confirm([t`${how}画 ${counts}：先画立绘，某个人的立绘画好了才画他的表情；一张一张来，进度显示在「立绘」窗口顶部，可以随时取消。用付费接口时每张都会计费。开始？`, noFaces].filter(Boolean).join('\n\n'))) return 0
+    if (!confirm([t`${how}画 ${counts}：先画立绘，某个人的立绘画好了才画他的表情和别的衣服；一张一张来，进度显示在「立绘」窗口顶部，可以随时取消。用付费接口时每张都会计费。开始？`, noFaces].filter(Boolean).join('\n\n'))) return 0
     const queueFaces = member => {
       if (withFaces) for (const name of missingFaces(member)) drawFace(cardId, entryOf(member), name, choice)
+      for (const outfit of missingOutfits(member)) drawOutfit(cardId, entryOf(member), outfit, choice)
     }
     for (const member of roster) {
       if (list[member.id]) queueFaces(member)
@@ -3349,7 +3487,7 @@ export function initVn(deps) {
         ? t`表情：按模型在每句对白前标的【名字|表情】换；没标的按引号前后的叙述换（笑了笑→微笑、红了脸→害羞……），认不出就保持上一个。下面每个人可以画一套表情，在立绘上只改脸。`
         : t`表情：每句按引号前后的叙述换（笑了笑→微笑、红了脸→害羞、皱眉→生气……），认不出就保持上一个。下面每个人可以画一套表情，在立绘上只改脸。` }),
       artMode('newSprite', t`没有立绘的角色说话时：`),
-      el('div', { class: 'row' }, [act(t`一键备齐`, () => prepare(cardId, { places: scenes.current?.cardId === cardId && scenes.current.place ? [scenes.current.place] : [] }), { title: t`名单里还没有立绘的人画立绘，再给每个人画齐表情；现在的地点没有背景的话也画一张` }),
+      el('div', { class: 'row' }, [act(t`一键备齐`, () => prepare(cardId, { places: scenes.current?.cardId === cardId && scenes.current.place ? [scenes.current.place] : [] }), { title: t`名单里还没有立绘的人画立绘，再给每个人画齐表情和衣柜里的衣服；现在的地点没有背景的话也画一张` }),
         roster.some(member => !member.player) ? pickButton(pick, t`勾选几个人，一起重画或删除立绘`) : null,
       ]),
       // Speakers are told apart by the 名册's names and aliases: one the story calls otherwise has no 立绘.
@@ -3468,6 +3606,7 @@ export function initVn(deps) {
         el('div', { class: 'row' }, tools),
         oldRow(cardId, keptItems(cardId, kept[`sprite:${member.id}`]), t`旧立绘`, view => spriteTaken(cardId, view)),
         member.player ? null : pack?.cardId === cardId && pack.memberId === member.id ? packView(cardId, entry, member) : faceRow(cardId, entry, member, Boolean(drawn || member.ref), kept),
+        member.wardrobe?.length ? outfitRow(cardId, entry, member, Boolean(drawn || member.ref || member.looks), kept) : null,
       ])
     }))
     return [head, ticking?.bar(), grid].filter(Boolean)
@@ -3522,6 +3661,44 @@ export function initVn(deps) {
       el('div', { class: 'vn-face-grid' }, cells),
       // Each expression's old pictures, named, in one row.
       oldRow(cardId, names.flatMap(name => keptItems(cardId, kept[`face:${member.id}:${name}`], FACE_LABEL[name])), t`旧表情`, view => spriteTaken(cardId, view)),
+    ])
+  }
+
+  /** Someone's other clothes (衣柜): a 立绘 of each, drawn from the usual one or uploaded. */
+  function outfitRow(cardId, entry, member, canDraw, kept = {}) {
+    const drawn = cast.outfits.get(cardId)?.[member.id] ?? {}
+    const queued = id => art.jobs.get(cardId)?.key === `outfit:${member.id}:${id}` || (art.queue.get(cardId) ?? []).some(job => job.key === `outfit:${member.id}:${id}`)
+    const at = outfit => `/api/cards/${cardId}/sprites/${member.id}/outfits/${outfit.id}`
+    const cells = member.wardrobe.map(outfit => {
+      const has = drawn[outfit.id]
+      const picture = el('div', { class: 'vn-face-pic' }, [el('span', { class: 'muted small', text: queued(outfit.id) ? '…' : '—' })])
+      if (has) cutPicture(`/api/sprites/${cardId}/${has.file}`).then(src => src && picture.replaceChildren(zoomable(el('img', { src, alt: '' }), t`${entry.name} · ${outfit.name}`)))
+      const ready = canDraw && Boolean(outfit.tags)
+      return el('div', { class: 'vn-face' }, [picture, el('span', { class: 'small', text: outfit.name }), el('div', { class: 'vn-face-tools' }, [
+        act(has ? t`重画` : t`画`, () => drawOutfit(cardId, entry, outfit), { disabled: !ready || queued(outfit.id), title: !outfit.tags ? t`先在「角色名册」的衣柜里写上这套的英文 tag` : canDraw ? t`在平时的立绘上只换衣服` : t`先画或上传立绘（或在名单里放人设图）` }),
+        act(t`传`, async () => {
+          const file = await pickPicture()
+          if (!file) return
+          takeSprites(cardId, await api(at(outfit), { method: 'PUT', body: { image: await asPng(file) } }))
+          renderLibrary()
+        }, { title: t`上传这一套的立绘` }),
+        has ? act('×', async () => {
+          takeSprites(cardId, await api(at(outfit), { method: 'DELETE' }))
+          renderLibrary()
+        }, { title: t`删除这一套的立绘`, danger: true }) : null,
+      ])])
+    })
+    const missing = member.wardrobe.filter(outfit => outfit.tags && !drawn[outfit.id] && !queued(outfit.id))
+    return el('div', { class: 'vn-faces' }, [
+      el('div', { class: 'row vn-faces-head' }, [
+        el('span', { class: 'muted small', text: t`衣柜 ${member.wardrobe.filter(outfit => drawn[outfit.id]).length}/${member.wardrobe.length}` }),
+        act(t`画齐衣柜`, () => {
+          for (const outfit of missing) drawOutfit(cardId, entry, outfit)
+          renderLibrary()
+        }, { disabled: !canDraw || !missing.length, title: t`在平时的立绘上只换衣服，缺的 ${missing.length} 套一套一套画` }),
+      ]),
+      el('div', { class: 'vn-face-grid' }, cells),
+      oldRow(cardId, member.wardrobe.flatMap(outfit => keptItems(cardId, kept[`outfit:${member.id}:${outfit.id}`], outfit.name)), t`旧衣服`, view => spriteTaken(cardId, view)),
     ])
   }
 
@@ -3958,7 +4135,9 @@ export function initVn(deps) {
     if (state.reading) deps.stopReading?.()
     setReading(false)
     deps.quietSound()
-    root.classList.remove('bare', 'memory')
+    root.classList.remove('bare', 'memory', 'picturing')
+    stepPicture.dataset.src = ''
+    stepPicture.replaceChildren()
     chapter.classList.remove('show')
     hud.clear()
     state.key = null
@@ -4045,5 +4224,5 @@ export function initVn(deps) {
 
   // 创作角色卡's 备齐门面图: the same pictures 做成视觉小说 gets ready, without entering the mode.
   const prepareArt = (cardId, places = [], { faces = true, skipForms = false, map = null, creation = [] } = {}) => prepare(cardId, { places, faces, skipForms, map, creation })
-  return { render, streamed, isOn, turnFlags, marks, makeReady, prepareArt, picturesChanged, refreshEnd, compose: openCompose, drawFoe, drawSkill, pictureFor, loadPictures, castPicture }
+  return { render, streamed, isOn, turnFlags, marks, makeReady, prepareArt, picturesChanged, refreshEnd, compose: openCompose, drawFoe, drawSkill, pictureFor, loadPictures, fightFigures, castPicture, cgsChanged, wearChanged }
 }

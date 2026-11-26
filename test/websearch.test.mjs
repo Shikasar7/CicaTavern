@@ -200,7 +200,7 @@ test('a relay that refuses thinking itself: left out from then on once the call 
   const long = asked({ maxTokens: 32000, softCap: true })
   await assert.rejects(complete(capped.provider, 'claude-opus-5-5', long), /maximum allowed/)
   assert.equal((await complete(capped.provider, 'claude-opus-5-5', long)).text, STORY)
-  assert.deepEqual(capped.requests.map(r => [Boolean(r.thinking), r.max_tokens]), [[true, 32000], [false, 32000], [false, 32000], [false, 8192]])
+  assert.deepEqual(capped.requests.map(r => [Boolean(r.thinking), r.max_tokens]), [[true, 32000], [false, 32000], [false, 32000], [false, 16000]])
 })
 
 test('a chat with 联网 on: its turns carry the tool and say when to search; the reply keeps its sources; off again, neither', async t => {

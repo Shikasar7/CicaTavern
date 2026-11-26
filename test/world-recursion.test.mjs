@@ -1,7 +1,7 @@
 // 递归触发 (worldbook.mjs triggeredEntries): what keyword entries find finds more, by SillyTavern's switches.
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { depthOf, normalizeBook, recursionFlags, triggeredEntries, worldFile } from '../server/worldbook.mjs'
+import { depthOf, editBook, normalizeBook, recursionFlags, triggeredEntries, worldFile } from '../server/worldbook.mjs'
 import { normalizeCard } from '../server/cards.mjs'
 
 const book = entries => normalizeBook({ name: '书', entries: Object.fromEntries(entries.map((entry, uid) => [uid, { uid, ...entry }])) }, 'x', { standalone: true })
@@ -89,6 +89,11 @@ test('the always-on entries\' text finds more only when asked for (as SillyTaver
   ])
   assert.deepEqual(found([world], '你好'), [])
   assert.deepEqual(found([world], '你好', { recursion: 'all' }), ['城'])
+  // 不触发别的条目, on an always-on entry: set on the page, it brings nothing along, and the prefix stays as it was.
+  const set = editBook(world, { entries: [{ uid: world.entries[0].uid, preventRecursion: true }] })
+  assert.equal(set.prefix, false)
+  assert.deepEqual(found([world], '你好', { recursion: 'all' }), [])
+  assert.deepEqual(found([world], '进了青石城', { recursion: 'all' }), ['城'])
 })
 
 test('the switches come from a card\'s book too, and go back out with it', () => {

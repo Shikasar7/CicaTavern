@@ -2,7 +2,7 @@
 // makes, and the <剧本> block a turn sends (web/shared/plot.js).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { applyMark, applySet, cleanPlot, cleanPlots, enter, exitOpen, fitProgress, MAX_EXITS, MAX_POINTS, plotBlock, plotProblems, progressOn, shown, startProgress, takePlotMark, withoutOpenMark } from '../web/shared/plot.js'
+import { applyMark, applySet, cleanPace, strayOf, turnsOf, cleanPlot, cleanPlots, enter, exitOpen, fitProgress, MAX_EXITS, MAX_POINTS, plotBlock, plotProblems, progressOn, shown, startProgress, takePlotMark, withoutOpenMark } from '../web/shared/plot.js'
 
 const PLOT = cleanPlot({
   id: 'p1', name: '看海', summary: '从相识到看海的一个夏天',
@@ -163,4 +163,74 @@ test('what a reader sees of a scene: all of it where they have been, its title i
   assert.equal(shown(sea, 'blind', progress), 'none')
   assert.equal(shown(sea, 'outline', progress), 'title')
   assert.equal(shown(sea, 'all', progress), 'full')
+})
+
+const PACED = cleanPlot({ scenes: [
+  { id: 'a', title: '初遇', what: '遇见林雪。', points: [{ id: 'p1', text: '名牌' }, { id: 'p2', text: '车票' }], done: '两人说上话', minTurns: 4, maxTurns: 6, exits: [{ to: 'b' }] },
+  { id: 'b', title: '雨夜', minTurns: 0, exits: [{ to: 'c', when: '同行' }, { to: 'd', when: '留下' }], maxTurns: 2 },
+  { id: 'c', title: '看海', minTurns: 5, ending: { kind: 'good' } }, { id: 'd', ending: { kind: 'sad' } },
+] })
+const DONE = { points: [], done: true, exit: '', astray: false }
+
+test('推进速度: the turns a scene takes, what the turn tells the model, and when the scene may end', () => {
+  const [a, b] = PACED.scenes
+  assert.deepEqual([-3, -2, -1, 0, 1, 2, 3].map(pace => Object.values(turnsOf(a, pace))), [[12, 18], [8, 12], [6, 9], [4, 6], [3, 5], [2, 3], [2, 2]])
+  assert.deepEqual([turnsOf(b, -2), turnsOf(b, 2), turnsOf(null, -2), turnsOf(a, 'nope')], [{ min: 0, max: 4 }, { min: 0, max: 1 }, { min: 0, max: null }, { min: 4, max: 6 }])
+  assert.deepEqual([cleanPace(9), cleanPace(-2.2), cleanPace('slow'), cleanPace(NaN), cleanPace(undefined)], [3, -2, 0, 0, 0])
+
+  const start = startProgress(PACED, 'a')
+  const at = turns => ({ ...start, turns })
+  const usual = plotBlock(PACED, start)
+  assert.equal(usual.text, plotBlock(PACED, start, { pace: 0 }).text)
+  assert.doesNotMatch(usual.text, /推进/)
+  assert.equal(usual.sent.pace, undefined)
+  const rules = [-3, -2, -1, 1, 2, 3].map(pace => plotBlock(PACED, start, { pace }).text.match(/^推进.*$/m)?.[0])
+  assert.equal(new Set(rules).size, 6, 'each its own words')
+  const slow = plotBlock(PACED, start, { pace: -2 })
+  assert.match(slow.text, /至少要演 8 轮才能结束/)
+  assert.equal(slow.sent.pace, -2)
+  const fast = plotBlock(PACED, start, { pace: 2 })
+
+  assert.equal(applyMark(PACED, at(1), DONE, fast.sent).at, 'b', 'two turns are enough when fast')
+  assert.equal(applyMark(PACED, at(2), DONE, usual.sent).at, 'a')
+  assert.equal(applyMark(PACED, at(3), DONE, usual.sent).at, 'b')
+  assert.equal(applyMark(PACED, at(6), DONE, slow.sent).at, 'a', 'the mark is read against what the turn was told')
+  assert.equal(applyMark(PACED, at(7), DONE, slow.sent).at, 'b')
+  assert.deepEqual([strayOf(PACED, at(6)), strayOf(PACED, at(6), -1), strayOf(PACED, at(5), 1)], ['long', null, 'long'])
+
+  assert.doesNotMatch(plotBlock(PACED, at(5)).text, /已经超过了/)
+  assert.match(plotBlock(PACED, at(6)).text, /原定最多演 6 轮，已经超过了：从这一轮起收尾，让还没演到/)
+  assert.doesNotMatch(plotBlock(PACED, at(6), { pace: -1 }).text, /已经超过了/)
+  const over = plotBlock(PACED, at(9), { pace: -1 }).text
+  assert.match(over, /已经超过了/)
+  assert.doesNotMatch(over, /推进稍慢|一轮最多演到一条/, 'not asked to go slow and to wrap up at once')
+  assert.match(plotBlock(PACED, { ...start, at: 'b', turns: 2 }).text, /把场面推到要选路的地方/)
+  assert.doesNotMatch(plotBlock(PACED, at(6), { pull: true }).text, /已经超过了/)
+})
+
+test('主动推进: one turn plays a point or the rest of the scene; a scene played out ends whatever the mark says, a fork waits', () => {
+  const start = startProgress(PACED, 'a')
+  const push = (progress, how, options = {}) => plotBlock(PACED, progress, { push: { how, ...options } })
+  assert.match(push(start, 'step').text, /这一轮推进一步：让「名牌」在这一轮里发生/)
+  assert.match(push({ ...start, ticks: ['p1'] }, 'step').text, /让「车票」在这一轮里发生/)
+  assert.match(push(start, 'step', { point: 'p2' }).text, /让「车票」在这一轮里发生/)
+  assert.match(push({ ...start, ticks: ['p1', 'p2'] }, 'step').text, /离「两人说上话」更近一步/)
+  assert.equal(push(start, 'step').sent.push, undefined)
+  assert.doesNotMatch(plotBlock(PACED, start, { pace: -3, push: { how: 'step' } }).text, /推进极慢/, 'the turn is told one thing')
+
+  const scene = push(start, 'scene')
+  assert.match(scene.text, /这一轮演完这一幕：还没演到的要点，要紧的带到/)
+  assert.equal(applyMark(PACED, start, null, scene.sent).at, 'b', 'no mark, not enough turns: it ends all the same')
+  assert.equal(applyMark(PACED, start, { ...DONE, done: false }, scene.sent).at, 'b')
+  assert.equal(applyMark(PACED, start, null, scene.sent, { whole: false }).at, 'a', 'a reply cut off is not the scene played out')
+  assert.equal(applyMark(PACED, start, { ...DONE, done: false }, push(start, 'step').sent).at, 'a')
+
+  const forkAt = { ...start, at: 'b', turns: 0 }
+  const fork = push(forkAt, 'scene')
+  assert.match(fork.text, /这一轮走到岔路口/)
+  assert.equal(applyMark(PACED, forkAt, null, fork.sent).at, 'b', 'the way is the player\'s')
+  assert.equal(applyMark(PACED, forkAt, { ...DONE, exit: '2' }, fork.sent).at, 'd')
+  const ending = { ...start, at: 'c', turns: 0 }
+  assert.match(push(ending, 'scene').text, /这一轮把结局写完/)
+  assert.equal(applyMark(PACED, ending, null, push(ending, 'scene').sent).ended, true)
 })

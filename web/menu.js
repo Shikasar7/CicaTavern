@@ -18,6 +18,38 @@ export const MENU_ICONS = {
   link: '<svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="6.5"/><path d="M3.5 10h13M10 3.5c1.8 1.8 2.7 4 2.7 6.5s-.9 4.7-2.7 6.5c-1.8-1.8-2.7-4-2.7-6.5s.9-4.7 2.7-6.5"/></svg>',
   tools: '<svg viewBox="0 0 20 20"><path d="M4 6h7M15 6h1M4 14h1M9 14h7"/><circle cx="13" cy="6" r="2"/><circle cx="7" cy="14" r="2"/></svg>',
 }
+// What can be done with a message (app.js renderNode) and with a picture under it (media.js), in the same stroke.
+const line = paths => `<svg viewBox="0 0 20 20" aria-hidden="true">${paths}</svg>`
+export const ACTION_ICONS = {
+  redo: line('<path d="M15.6 8.2A6 6 0 1 0 16 11"/><path d="M16.2 4.4v4h-4"/>'),
+  more: line('<path d="M4.6 10h.01M10 10h.01M15.4 10h.01" stroke-width="2.4"/>'),
+  copy: line('<rect x="7" y="7" width="9.5" height="9.5" rx="2.2"/><path d="M13 7V5.2A1.7 1.7 0 0 0 11.3 3.5H5.2a1.7 1.7 0 0 0-1.7 1.7v6.1A1.7 1.7 0 0 0 5.2 13H7"/>'),
+  done: line('<path d="m4.5 10.5 3.5 3.5 7.5-8"/>'),
+  edit: MENU_ICONS.write,
+  picture: MENU_ICONS.picture,
+  voice: MENU_ICONS.voice,
+  stop: line('<rect x="6" y="6" width="8" height="8" rx="1.8"/>'),
+  library: line('<path d="M5 3.8h8.2A1.8 1.8 0 0 1 15 5.6v10.6l-5-2.6-5 2.6z"/><path d="M8 7.4h4"/>'),
+  upload: line('<path d="M4 13.5v1.3a1.7 1.7 0 0 0 1.7 1.7h8.6a1.7 1.7 0 0 0 1.7-1.7v-1.3"/><path d="M10 12.6V3.8M6.8 6.8 10 3.6l3.2 3.2"/>'),
+  save: line('<path d="M4 13.5v1.3a1.7 1.7 0 0 0 1.7 1.7h8.6a1.7 1.7 0 0 0 1.7-1.7v-1.3"/><path d="M10 3.6v8.8M6.8 9.4l3.2 3.2 3.2-3.2"/>'),
+  onward: line('<path d="M3.5 6h9M3.5 10h6M3.5 14h4"/><path d="m12.5 10.5 4 3.2-4 3.2z"/>'),
+  branch: line('<circle cx="5.5" cy="4.8" r="1.8"/><circle cx="5.5" cy="15.2" r="1.8"/><circle cx="14.5" cy="6.8" r="1.8"/><path d="M5.5 6.6v6.8M14.5 8.6c0 3.4-9 1.6-9 4.6"/>'),
+  fork: line('<path d="M4 5.6a1.8 1.8 0 0 1 1.8-1.8h8.4A1.8 1.8 0 0 1 16 5.6v6a1.8 1.8 0 0 1-1.8 1.8H9.2l-3.4 3v-3A1.8 1.8 0 0 1 4 11.6z"/><path d="M10 6.6v4M8 8.6h4"/>'),
+  back: line('<path d="M7.4 4.6 3.6 8.4l3.8 3.8"/><path d="M4 8.4h7.4a4.4 4.4 0 0 1 0 8.8H8.6"/>'),
+  hide: line('<path d="M3 10s2.6-4.6 7-4.6S17 10 17 10s-2.6 4.6-7 4.6S3 10 3 10z"/><path d="m4.4 16 11.2-12"/>'),
+  show: line('<path d="M3 10s2.6-4.6 7-4.6S17 10 17 10s-2.6 4.6-7 4.6S3 10 3 10z"/><circle cx="10" cy="10" r="1.9"/>'),
+  facts: line('<path d="M4 5.5h12M4 10h12M4 14.5h7"/>'),
+  remove: line('<path d="M4.5 6h11M8 6V4.3h4V6M6 6l.7 9.6a1.4 1.4 0 0 0 1.4 1.3h3.8a1.4 1.4 0 0 0 1.4-1.3L14 6"/>'),
+  warn: line('<path d="M10 3.8 17 16H3z"/><path d="M10 8.4v3.4M10 14v.1"/>'),
+  resend: line('<path d="M16.5 3.5 9 11M16.5 3.5l-4.6 13L9 11 3.5 8.1z"/>'),
+  swap: line('<path d="M4 7h10.5M11.6 4l3 3-3 3M16 13H5.5M8.4 10l-3 3 3 3"/>'),
+  wear: line('<path d="M7.2 3.6 3.4 5.8l1.4 3.4 1.7-.7v7.9h7V8.5l1.7.7 1.4-3.4-3.8-2.2a2.9 2.9 0 0 1-5.6 0z"/>'),
+  star: line('<rect x="3.5" y="4.5" width="13" height="11" rx="1.7"/><path d="M6.4 4.5v11M13.6 4.5v11M3.5 10h13"/>'),
+  old: line('<circle cx="10" cy="10" r="6.5"/><path d="M10 6.4V10l2.6 1.6"/>'),
+  left: line('<path d="m12 5-5 5 5 5"/>'),
+  right: line('<path d="m8 5 5 5-5 5"/>'),
+  down: line('<path d="m5 8 5 5 5-5"/>'),
+}
 const ICON_NEXT = '<svg viewBox="0 0 20 20"><path d="m8 5 5 5-5 5"/></svg>'
 const ICON_OPEN = '<svg viewBox="0 0 20 20"><path d="M9 4.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h8a1.5 1.5 0 0 0 1.5-1.5v-3"/><path d="M11.5 4.5h4v4M15.5 4.5 9.5 10.5"/></svg>'
 const ICON_BACK = '<svg viewBox="0 0 20 20"><path d="m12 5-5 5 5 5"/></svg>'

@@ -202,7 +202,7 @@ test('OpenAI-compatible provider: history rebuilt from the tree, regex-trimmed r
   const tip = activePath(second.chat).at(-1)
   assert.equal(tip.text, '第 2 次回复<hide>变量2</hide>', 'the stored reply keeps everything')
   assert.equal(tip.sdk, null)
-  assert.deepEqual(tip.api, { provider: provider.id, model: 'm1' })
+  assert.deepEqual(tip.api, { provider: provider.id, model: 'm1', stop: 'stop' })
   assert.equal(tip.model, `${provider.id}/m1`)
   assert.equal(tip.usage.input, 40)
   assert.equal(tip.usage.cacheRead, 60)
@@ -238,7 +238,10 @@ test('global regex (正则): a prompt-side script changes what the model reads a
 })
 
 test('provider compaction too long for the context: the older half first, then the newer half on top of it', async t => {
-  const { fake, turn, engine, chat } = await setup(t, 'anthropic-messages', '')
+  const { fake, turn, engine, chat, store } = await setup(t, 'anthropic-messages', '')
+  // A cap of the player's own: no smaller one to fall back to.
+  const [made] = await store.getProviders()
+  await store.saveProviders([normalizeProvider({ ...made, maxTokens: 8192 }, made)])
   for (const input of ['一', '二', '三', '四']) await turn(`${input}${'长'.repeat(3000)}`)
   const last = fake.requests.at(-1).body
   // The last turn's whole history no longer fits with the output cap; half of it does.
@@ -512,7 +515,7 @@ test('Anthropic Messages provider: /v1 added, x-api-key, cache breakpoints, usag
   assert.equal(request.url, '/v1/messages')
   assert.equal(request.headers['x-api-key'], KEY)
   assert.equal(request.headers['anthropic-version'], '2023-06-01')
-  assert.equal(request.body.max_tokens, 8192)
+  assert.equal(request.body.max_tokens, 32000, 'nothing set: room for a model that thinks')
   assert.deepEqual(request.body.system[0].cache_control, { type: 'ephemeral' })
   const messages = request.body.messages
   assert.equal(messages.length, 3)
@@ -621,22 +624,56 @@ test('an empty system prompt is left out in every protocol (Anthropic refuses an
   assert.deepEqual((await sent('openai-completions', '/v1')).messages.map(m => m.role), ['user'])
 })
 
-test('output limit: the preset max response length, capped, dropped when refused; cut-off replies are marked', async t => {
+test('the preset max response length is said to the model, and never cuts a reply', async t => {
+  const { fake, turn, store, chat } = await setup(t, 'anthropic-messages', '')
+  const said = () => [...JSON.stringify(fake.requests.at(-1).body.messages.at(-1)).matchAll(/不超过 (\d+) token/g)].map(m => Number(m[1]))
+  const withLength = async tokens => {
+    const preset = normalizePreset({ name: 'P', openai_max_tokens: tokens, prompts: [{ identifier: 'main', content: '写', enabled: true }] })
+    await store.savePreset(preset)
+    await store.saveChat({ ...(await store.getChat(chat.id)), presetId: preset.id })
+  }
+  await turn('你好')
+  assert.deepEqual(said(), [], 'none set')
+  await withLength(800)
+  await turn('走吧')
+  assert.deepEqual(said(), [800])
+  assert.equal(fake.requests.at(-1).body.max_tokens, 32000, 'room for a longer one')
+  assert.match(JSON.stringify(fake.requests.at(-1).body.messages.at(-1)), /一定写完整/)
+  // With 每轮回复字数: one block, both asked.
+  await store.saveSettings({ ...(await store.getSettings()), replyLength: 600 })
+  await turn('再走')
+  assert.match(JSON.stringify(fake.requests.at(-1).body.messages.at(-1)), /<回复要求>\\n本轮正文约 600 字[^<]*不超过 800 token[^<]*<\/回复要求>/)
+  // So long that no reply comes near it: nothing is said.
+  await withLength(65535)
+  await turn('又走')
+  assert.deepEqual(said(), [])
+  // The provider's own is a limit, as before; the preset's is still said.
+  await withLength(900)
+  const [provider] = await store.getProviders()
+  await store.saveProviders([normalizeProvider({ ...provider, maxTokens: 4000 }, provider)])
+  await turn('停')
+  assert.deepEqual([said(), fake.requests.at(-1).body.max_tokens], [[900], 4000])
+})
+
+test('output limit: room for a preset with a max response length, dropped when refused; cut-off replies are marked', async t => {
   const { fake, turn, store, chat } = await setup(t, 'anthropic-messages', '')
   const preset = normalizePreset({ name: 'P', openai_max_tokens: 65535, prompts: [{ identifier: 'main', content: '写', enabled: true }] })
   await store.savePreset(preset)
   await store.saveChat({ ...(await store.getChat(chat.id)), presetId: preset.id })
   await turn('你好')
-  assert.equal(fake.requests.at(-1).body.max_tokens, 32000, 'the preset asks for 65535; capped')
+  assert.equal(fake.requests.at(-1).body.max_tokens, 32000)
 
   fake.flags.maxOutput = 16000
   fake.flags.stopReason = 'max_tokens'
+  await store.saveSettings({ autoContinue: false })
   const { chat: after } = await turn('再见')
   const [refused, retried] = fake.requests.slice(-2)
   assert.equal(refused.body.max_tokens, 32000)
-  assert.equal(retried.body.max_tokens, 8192, 'the model refused it: the provider default instead')
+  assert.equal(retried.body.max_tokens, 16000, 'the model refused it: what it said it takes')
   const tip = activePath(after).at(-1)
   assert.equal(tip.api.truncated, true)
+  assert.equal(tip.api.cap, 16000, 'the cap it ran into, for the page to say')
+  assert.deepEqual(chatView(after).path.at(-1).cap, { tokens: 16000, from: 'model' })
   assert.equal(chatView(after).path.at(-1).truncated, true)
 
   const [provider] = await store.getProviders()
@@ -654,12 +691,15 @@ test('context window full: retried with the smaller default output cap, then a h
   await store.saveChat({ ...(await store.getChat(chat.id)), presetId: preset.id })
   await turn('你好')
   const size = JSON.stringify(fake.requests.at(-1).body).length
-  // Fits with 8192 more, not with 32000.
+  // Fits with 8192 more, not with 32000 (and no output limit is learned from it).
   fake.flags.contextLimit = size + 20000
   await turn('再见')
   const [full, retried] = fake.requests.slice(-2)
   assert.equal(full.body.max_tokens, 32000)
   assert.equal(retried.body.max_tokens, 8192)
+  fake.flags.contextLimit = 0
+  await turn('又能发了')
+  assert.equal(fake.requests.at(-1).body.max_tokens, 32000)
 
   fake.flags.contextLimit = 100
   await assert.rejects(turn('还在吗'), /Context window is full[\s\S]*压缩上下文/)
@@ -1145,7 +1185,7 @@ test('image prompt inside the conversation: same prefix as the next turn, so the
   assert.equal(result.inContext, true)
   assert.equal(result.cache, 60, 'cached share from the provider usage')
   const side = fake.requests.at(-1).body
-  assert.equal(side.max_tokens, 400)
+  assert.equal(side.max_tokens, 16460, 'a model that was seen thinking has room for it')
   assert.match(side.messages.at(-1).content, /暂停扮演[\s\S]*英文提示词/)
   assert.doesNotMatch(side.messages.at(-1).content, /latest_passage/, 'the reply is already in the history')
 
@@ -1573,7 +1613,10 @@ test('busy and rate-limited providers say which: too busy (503), a limit for the
   }
   assert.match(await said(quota('Generate content requests per day limit exceeded on Free Tier.', '17h56m59.495020099s')), /^Gemini4 这个 Key 今天的额度用完了（429），约 17 小时 57 分钟后恢复。换一个 Key/)
   assert.match(await said(quota('Generate content input tokens per minute limit exceeded on Free Tier.', '33.491647751s')), /^Gemini4 一分钟内用得太多，被限流了（429），约 34 秒后可以再发。别连着重试/)
-  assert.match(await said([503, [{ error: { code: 503, message: 'This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.', status: 'UNAVAILABLE' } }]]), /^Gemini4 那边的模型现在太忙了（503，对方服务器繁忙，不是你的网络或设置的问题）/)
+  assert.match(await said([503, [{ error: { code: 503, message: 'This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.', status: 'UNAVAILABLE' } }]]), /^Gemini4 那边的模型现在太忙了（503，是对方返回的，不是你的网络问题）/)
+  // A relay without the model in the key's group: not busy, so waiting is not what to do.
+  assert.match(await said([503, { error: { message: '当前分组 default 下对于模型 gemini-4 无可用渠道', type: 'new_api_error' } }]), /^Gemini4 没有能跑这个模型的渠道（503）/)
+  assert.match(await said([503, { error: { message: 'No available channel for model gemini-4 under group default (distributor)', code: 'model_not_found' } }]), /^Gemini4 没有能跑这个模型的渠道（503）/)
   assert.match(await said([429, { error: { message: 'You exceeded your current quota, please check your plan and billing details.', type: 'insufficient_quota' } }]), /^Gemini4 的额度或余额用完了（429）/)
   assert.match(await said([429, { error: { message: 'Too Many Requests' } }]), /^Gemini4 现在请求太频繁，被限流了（429）/)
   assert.match(await said([500, { error: { message: 'Internal error' } }]), /^Gemini4 的服务器出错了（500，是对方的问题，不是你的设置）/)
@@ -1686,4 +1729,53 @@ test("Gemini's own API: system instruction, turns taking turns, thinking level a
 
   const wrong = await complete({ ...provider, apiKey: 'wrong' }, 'gemini-3.8-flash', { messages: [{ role: 'user', content: '你好' }] }).catch(error => error)
   assert.match(providerError(provider, wrong), /^Gemini 原生：400 API key not valid/)
+})
+
+test('传输方式 不用流式: each protocol asks for the whole answer and reads it; streaming stays the default', async t => {
+  const asked = []
+  const server = createServer(async (req, res) => {
+    const chunks = []
+    for await (const chunk of req) chunks.push(chunk)
+    const body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+    asked.push({ url: req.url, accept: req.headers.accept, body })
+    res.writeHead(200, { 'content-type': 'application/json' })
+    if (req.url.includes('/chat/completions')) res.end(JSON.stringify({ model: body.model, choices: [{ message: { content: '整段一' }, finish_reason: 'stop' }], usage: { prompt_tokens: 9, completion_tokens: 3 } }))
+    else if (req.url.includes('/responses')) res.end(JSON.stringify({ model: body.model, status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: '整段二' }] }], usage: { input_tokens: 9, output_tokens: 3 } }))
+    else if (req.url.includes('/messages')) res.end(JSON.stringify({ model: body.model, content: [{ type: 'text', text: '整段三' }], stop_reason: 'end_turn', usage: { input_tokens: 9, output_tokens: 3 } }))
+    else res.end(JSON.stringify({ modelVersion: 'gemini-x', candidates: [{ content: { parts: [{ text: '整段四' }] }, finishReason: 'STOP' }], usageMetadata: { promptTokenCount: 9, candidatesTokenCount: 3 } }))
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => server.close())
+  const base = `http://127.0.0.1:${server.address().port}`
+  const make = (api, extra = {}) => normalizeProvider({ name: api, api, baseURL: `${base}/v1`, apiKey: KEY, models: [{ id: 'm' }], ...extra })
+
+  assert.equal(make('openai-completions').stream, undefined, 'streaming is not written down')
+  assert.equal(make('openai-completions', { stream: true }).stream, undefined)
+  assert.equal(make('openai-completions', { stream: 'no' }).stream, undefined, 'only false turns it off')
+  assert.equal(publicProvider(make('openai-completions', { stream: false })).stream, false, 'the page sees it')
+
+  for (const [api, said] of [['openai-completions', '整段一'], ['openai-responses', '整段二'], ['anthropic-messages', '整段三'], ['google-generative', '整段四']]) {
+    const seen = []
+    const result = await complete(make(api, { stream: false }), 'm', { system: '规则', messages: [{ role: 'user', content: '你好' }], onDelta: text => seen.push(text) })
+    const sent = asked.at(-1)
+    assert.equal(result.text, said, api)
+    assert.deepEqual(seen, [said], `${api}: the whole text once`)
+    assert.equal(result.usage.output, 3, api)
+    assert.equal(sent.accept, 'application/json', api)
+    if (api === 'google-generative') {
+      assert.match(sent.url, /\/models\/m:generateContent$/, 'Gemini: the address that answers at once')
+      assert.equal(sent.body.stream, undefined)
+    } else {
+      assert.equal(sent.body.stream, false, api)
+      assert.equal(sent.body.stream_options, undefined, `${api}: no stream_options without a stream`)
+    }
+  }
+
+  // The default, unchanged: a stream asked for (the fake answers in one piece, which is read all the same).
+  await complete(make('openai-completions'), 'm', { messages: [{ role: 'user', content: '你好' }] })
+  assert.equal(asked.at(-1).body.stream, true)
+  assert.deepEqual(asked.at(-1).body.stream_options, { include_usage: true })
+  assert.equal(asked.at(-1).accept, 'text/event-stream')
+  await complete(make('google-generative'), 'm', { messages: [{ role: 'user', content: '你好' }] })
+  assert.match(asked.at(-1).url, /:streamGenerateContent\?alt=sse$/)
 })

@@ -88,6 +88,15 @@ test('sets: made, renamed, noted, copied apart, ticked for cards that exist, and
   assert.deepEqual([made.cardIds, made.scripts], [[], []])
   const set = (await call(`/api/regex/sets/${made.id}`, { method: 'PUT', body: { name: '  美化\n状态栏 ', description: '只给自己看', scripts: [script('a'), script('b')] } })).body
   assert.deepEqual([set.name, set.description, set.scripts.map(s => s.scriptName)], ['美化 状态栏', '只给自己看', ['a', 'b']])
+  // 拖动调整顺序: the list saved in another order stays in it, each script as it was.
+  const turned = (await call(`/api/regex/sets/${made.id}`, { method: 'PUT', body: { scripts: [...set.scripts].reverse() } })).body
+  assert.deepEqual(turned.scripts, [...set.scripts].reverse())
+  assert.equal((await call(`/api/regex/sets/${made.id}`, { method: 'PUT', body: { scripts: set.scripts } })).status, 200)
+  for (const url of ['/api/regex', '/api/cards/c1/regex']) {
+    const saved = (await call(url, { method: 'PUT', body: { scripts: [script('x'), script('y')] } })).body.scripts
+    assert.deepEqual((await call(url, { method: 'PUT', body: { scripts: [...saved].reverse() } })).body.scripts, [...saved].reverse(), url)
+    await call(url, { method: 'PUT', body: { scripts: [] } })
+  }
   assert.equal((await call(`/api/regex/sets/${made.id}`, { method: 'PUT', body: { name: ' ' } })).status, 400)
   assert.equal((await call('/api/regex/sets/nope', { method: 'PUT', body: { name: 'x' } })).status, 404)
 

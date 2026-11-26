@@ -3,6 +3,45 @@
 // providers (/api/providers). A choice holds for one drawing; the server puts it
 // over the saved settings without saving it (server/media.mjs withDrawChoice).
 
+// 配图放在画的那一句下面: a picture's anchor is a few words of the reply, copied by whoever wrote its prompt (server/media.mjs
+// takeAnchor); the page puts the picture under the paragraph that has them (web/media.js placePictures). Compared without
+// the spaces and marks a copy gets wrong, then by ever shorter beginnings and ends of it, down to this much.
+const ANCHOR_LEAST = 6
+export const MAX_ANCHOR = 120
+
+/** The letters, digits and characters of a text: what a copied sentence keeps. (By ranges: the Android build has no Unicode classes.) */
+export const anchorKey = text => String(text ?? '').toLowerCase().replace(/[\s\u0000-\u002f\u003a-\u0040\u005b-\u0060\u007b-\u00bf\u2000-\u206f\u2500-\u25ff\u2e00-\u2e7f\u3000-\u303f\ufe30-\ufe4f\uff00-\uff0f\uff1a-\uff20\uff3b-\uff40\uff5b-\uff65]/g, '')
+
+/** Which of `texts` (a reply's paragraphs) an anchor is from: its index, or -1. */
+export function findAnchor(texts, anchor) {
+  const key = anchorKey(anchor)
+  if (key.length < ANCHOR_LEAST) return -1
+  const keys = texts.map(anchorKey)
+  for (let length = key.length; length >= ANCHOR_LEAST; length--) {
+    for (const part of length === key.length ? [key] : [key.slice(0, length), key.slice(-length)]) {
+      const at = keys.findIndex(text => text.includes(part))
+      if (at >= 0) return at
+    }
+  }
+  return -1
+}
+
+/**
+ * Where pictures with an anchor are shown as a reply is read line by line (视觉小说): Map(index in `texts` → picture).
+ * A second one on the same line waits for the next. Those whose words are not found, and those left over at the end, are in none.
+ * @param texts - the lines; '' for what is no line.
+ */
+export function picturesOnLines(images, texts) {
+  const at = new Map()
+  for (const image of images ?? []) {
+    let index = image?.anchor ? findAnchor(texts, image.anchor) : -1
+    if (index < 0) continue
+    while (index < texts.length && (at.has(index) || !texts[index])) index++
+    if (index < texts.length) at.set(index, image)
+  }
+  return at
+}
+
 // As offered, the usual first.
 export const DRAW_BACKENDS = Object.freeze(['openai', 'gemini', 'novelai', 'comfy', 'sdwebui'])
 export const NAI_MODEL_IDS = Object.freeze(['nai-diffusion-5-full', 'nai-diffusion-5-curated', 'nai-diffusion-4-5-full', 'nai-diffusion-4-5-curated'])

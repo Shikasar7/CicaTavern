@@ -132,7 +132,7 @@ export function normalizePreset(json, fallbackName = '预设') {
     },
     regexScripts: withUniqueIds(normalizeScripts(json.extensions?.regex_scripts)),
     helperScripts: countHelperScripts(json.extensions?.tavern_helper),
-    // Sampling knobs: only maxTokens is used (for provider models, see engine replyCap).
+    // Sampling knobs: only maxTokens is used, said to the model (engine softLength).
     params: { temperature: num(json.temperature), topP: num(json.top_p), maxTokens: num(json.openai_max_tokens), maxContext: num(json.openai_max_context) },
     // As SillyTavern sends them: the after-history entries with the newest message (同酒馆). Presets imported
     // before keep what they had (a missing one reads as 'prefix').

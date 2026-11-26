@@ -53,7 +53,7 @@ export function initHistory({ el, getChat, settleScroll }) {
   /** What the message reads as: folded blocks (thinking and the like) left out. */
   const readable = body => {
     const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, {
-      acceptNode: node => (node.parentElement?.closest('details, script, style') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+      acceptNode: node => (node.parentElement?.closest('details, script, style, .reply-images') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
     })
     return walker
   }

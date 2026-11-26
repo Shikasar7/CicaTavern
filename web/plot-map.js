@@ -40,14 +40,17 @@ export function plotMap(view, { el, guard, onJump, onSpoiler, path = null, onBra
   // A preview (the editor, a draft): no story on it, so no 剧透 to switch.
   const head = el('div', { class: 'pm-head' }, [
     el('b', { text: copy.name }),
-    preview ? null : el('div', { class: 'plot-seg', role: 'group', 'aria-label': t`剧透` }, [['blind', t`盲玩`], ['outline', t`看大纲`], ['all', t`全看`]].map(([id, name]) => el('button', {
-      type: 'button', class: 'btn small', text: name, 'aria-pressed': String(id === spoiler),
-      onclick: guard(async () => {
-        if (id === spoiler) return
-        if ((spoiler === 'blind' || (spoiler === 'outline' && id === 'all')) && !confirm(t`切到「${name}」会看到还没走到的内容，确定吗？`)) return
-        await onSpoiler(id)
-      }),
-    }))),
+    preview ? null : el('div', { class: 'pm-spoiler' }, [
+      el('span', { class: 'muted small', text: t`路线图显示` }),
+      el('div', { class: 'plot-seg', role: 'group', 'aria-label': t`路线图显示` }, [['blind', t`只显示走过的`], ['outline', t`显示幕名`], ['all', t`全部显示`]].map(([id, name]) => el('button', {
+        type: 'button', class: 'btn small', text: name, 'aria-pressed': String(id === spoiler),
+        onclick: guard(async () => {
+          if (id === spoiler) return
+          if ((spoiler === 'blind' || (spoiler === 'outline' && id === 'all')) && !confirm(t`切到「${name}」会看到还没走到的内容，确定吗？`)) return
+          await onSpoiler(id)
+        }),
+      }))),
+    ]),
   ])
 
   // 按章折叠: never the chapter the story is in; played blind, nothing to fold.
@@ -89,7 +92,8 @@ export function plotMap(view, { el, guard, onJump, onSpoiler, path = null, onBra
     const seen = blind ? (node.kind === 'unknown' ? 'none' : 'full') : scene?.folded ? 'full' : shown(scene, spoiler, progress)
     const now = blind ? node.kind === 'now' : node.id === progress.at
     const kind = blind ? (node.kind === 'unknown' ? 'ahead' : now ? 'now' : 'walked') : now ? 'now' : isWalked(node.id) ? 'walked' : 'ahead'
-    const label = scene?.folded ? t`${scene.chapter}（${scene.members.length} 幕）` : node.kind === 'unknown' || seen === 'none' ? t`？` : scene.title
+    // No scene (a blind map's way not found yet, or the bare call for isWalked below): a question mark.
+    const label = scene?.folded ? t`${scene.chapter}（${scene.members.length} 幕）` : !scene || node.kind === 'unknown' || seen === 'none' ? t`？` : scene.title
     return { scene, seen, now, kind, label, isWalked }
   }
 
@@ -195,7 +199,7 @@ export function plotMap(view, { el, guard, onJump, onSpoiler, path = null, onBra
     card.replaceChildren(...[
       el('h4', { text: seen === 'none' ? t`还没走到的一幕` : scene.title }),
       ending && seen !== 'none' ? el('span', { class: `pm-kind ${scene.ending.kind}`, text: ending }) : null,
-      seen === 'full' && scene.what ? el('p', { text: scene.what }) : seen === 'title' ? el('p', { class: 'muted small', text: t`看大纲：只显示标题` }) : null,
+      seen === 'full' && scene.what ? el('p', { text: scene.what }) : seen === 'title' ? el('p', { class: 'muted small', text: t`还没走到，只显示幕名` }) : null,
       here ? el('p', { class: 'muted small', text: t`故事现在在这一幕` }) : scene.side ? el('button', {
         // A side line's scene: that line goes there (opened if it was not), the main story stays.
         type: 'button', class: 'btn small', text: progress.sides?.[scene.side]?.at === id ? t`支线现在在这一段` : t`让支线走到这一段`, disabled: progress.sides?.[scene.side]?.at === id,
@@ -230,5 +234,5 @@ export function plotMap(view, { el, guard, onJump, onSpoiler, path = null, onBra
   draw()
   // 剧本条 hidden on this device: shown again from here.
   const barNote = onShowBar ? el('p', { class: 'pm-hint small' }, [el('span', { text: t`剧本条藏起来了。` }), el('button', { type: 'button', class: 'btn small ghost', text: t`显示剧本条`, onclick: () => onShowBar() })]) : null
-  return el('div', { class: 'pm' }, [head, barNote, forks ? el('p', { class: 'pm-hint small', text: t`点一个走过的岔路口，从那里换一条路` }) : null, chips, holder, card, el('p', { class: 'pm-legend muted small', text: blind ? t`盲玩：只显示走过的路，问号是这一幕还能去的地方` : t`实心是走过的，带圈的是现在，空心是还没到的，菱形是结局` })].filter(Boolean))
+  return el('div', { class: 'pm' }, [head, barNote, forks ? el('p', { class: 'pm-hint small', text: t`点一个走过的岔路口，从那里换一条路` }) : null, chips, holder, card, el('p', { class: 'pm-legend muted small', text: blind ? t`只显示走过的路，问号是这一幕还能去的地方` : t`实心是走过的，带圈的是现在，空心是还没到的，菱形是结局` })].filter(Boolean))
 }

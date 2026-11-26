@@ -4,7 +4,7 @@
 import { getPath, isDescribed, unwrap } from '../vars.js'
 
 /** The fields a variable can stand for. */
-export const BINDABLE = ['life', 'maxLife', 'energy', 'maxEnergy', 'sanity', 'level', 'rank', 'money', 'things', 'quests']
+export const BINDABLE = ['life', 'maxLife', 'energy', 'maxEnergy', 'sanity', 'level', 'rank', 'money', 'things', 'quests', 'party']
 
 const NAME_KEYS = ['name', '名称', '名字', '物品', '道具', 'title', '标题']
 const COUNT_KEYS = ['count', '数量', '个数', 'num']
@@ -21,6 +21,17 @@ export function cleanBindings(value) {
   if (!isRecord(value)) return out
   for (const field of BINDABLE) if (typeof value[field] === 'string' && value[field].trim()) out[field] = value[field].trim().slice(0, 120)
   return out
+}
+
+/** Whom a table of the party's holds, as { name, words (what its row says) }: a row to each, or a list with a name in each. Null for a shape that is no table. */
+export function partyRows(value) {
+  const v = unwrap(value)
+  if (v === null || v === undefined || typeof v !== 'object') return null
+  const words = item => (isRecord(item) ? Object.values(item).filter(one => typeof one === 'string').map(one => one.trim()) : [])
+  const rows = Array.isArray(v)
+    ? v.map(item => (isRecord(item) ? { name: item[firstKey(item, NAME_KEYS)], words: words(item) } : { name: item, words: [] }))
+    : Object.entries(v).filter(([key]) => !key.startsWith('$')).map(([name, item]) => ({ name, words: words(item) }))
+  return rows.filter(row => typeof row.name === 'string' && row.name.trim()).map(row => ({ ...row, name: row.name.trim() }))
 }
 
 /** The number at a path, or null for anything else. */
@@ -196,7 +207,7 @@ const GUESSES = {
   quests: /^(任务|主线|支线|目标)$/,
 }
 const PLAYER_ROOT = /^(主角|玩家|user|player|你)(\.|$)/i
-const LIST_ONES = new Set(['things', 'quests'])
+const LIST_ONES = new Set(['things', 'quests', 'party'])
 
 /** Whether a variable of this kind can stand for a field. */
 export const fitsField = (field, kind) => (LIST_ONES.has(field) ? kind !== 'number' : kind === (field === 'rank' ? 'words' : 'number'))

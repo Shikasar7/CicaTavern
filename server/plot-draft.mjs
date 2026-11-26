@@ -254,12 +254,17 @@ export function cleanDraftInput(kind, body = {}) {
   }
 }
 
+// Small looks, done by the helper as before; the rest is writing, on the model picked where it is asked for.
+const SMALL_KINDS = new Set(['where', 'field'])
+
 // ─── The background job ──────────────────────────────────────────────────────
 
 /**
- * @param engine - createEngine(): sideCall (the helper model, else the one the chat or the app uses).
+ * @param engine - createEngine(): sideCall (the model asked for, else the helper, else the one the chat or the app
+ *   uses), sideModel (which that is, for the page).
+ * @param forgeModel - (id) → the model of a card being made ('' : the default one).
  */
-export function createPlotDraft(store, { engine, forgeCard = null } = {}) {
+export function createPlotDraft(store, { engine, forgeCard = null, forgeModel = null } = {}) {
   const dir = path.join(store.dirs.root, 'plot-drafts')
   const fileOf = key => {
     if (!KEY.test(String(key))) throw httpError(400, msg`无效的 ID`)
@@ -277,9 +282,37 @@ export function createPlotDraft(store, { engine, forgeCard = null } = {}) {
   }
   const save = session => writeJson(fileOf(session.key), { ...session, updatedAt: new Date().toISOString() })
 
-  function view(session) {
+  /**
+   * The model a writing is asked on: where the player asks for it has one picked (创作角色卡's own, a chat's top bar;
+   * none picked is the default model, as those show it), and it counts before the helper. A card's plots managed with
+   * no chat of it open: none, so the helper, then the default. → { preferred, source: 'forge' | 'chat' | '' }
+   * @param chatId - the chat a card's plot is written from, if any
+   */
+  async function pickedFor(key, kind, chatId = '', model = '') {
+    if (SMALL_KINDS.has(kind)) return { preferred: null, source: '' }
+    const scope = key.slice(0, key.indexOf('-'))
+    const id = key.slice(key.indexOf('-') + 1)
+    const fallback = async picked => picked || (await store.getSettings()).model || null
+    if (model) return { preferred: model, source: 'forge' }
+    if (scope === 'forge') return { preferred: forgeModel ? await fallback(await forgeModel(id)) : null, source: 'forge' }
+    const from = scope === 'chat' ? id : chatId
+    const chat = from ? await store.getChat(from).catch(() => null) : null
+    // Not a chat of another card.
+    if (!chat || (scope === 'card' && chat.cardId !== id)) return { preferred: null, source: '' }
+    return { preferred: await fallback(chat.model), source: 'chat' }
+  }
+
+  /** The same for the page: { label, source: 'forge' | 'chat' | 'helper' | 'default' }, or null (no provider's model). */
+  async function modelShown(key, kind, chatId) {
+    const { preferred, source } = await pickedFor(key, kind, chatId)
+    const found = await engine.sideModel?.(null, preferred)
+    return found ? { label: found.label, source: found.from === 'preferred' ? source : found.from === 'helper' ? 'helper' : 'default' } : null
+  }
+
+  async function view(session, chatId = '') {
     const job = jobs.get(session.key)
-    return { kind: session.kind, input: session.input, result: session.result, error: session.error ?? null, job: job ? { startedAt: job.startedAt, partial: job.partial } : null }
+    const model = job?.model ?? (await modelShown(session.key, 'outline', chatId).catch(() => null))
+    return { kind: session.kind, input: session.input, result: session.result, error: session.error ?? null, model, job: job ? { startedAt: job.startedAt, partial: job.partial } : null }
   }
 
   // The card and its lore, the chat (for a chat's draft), and the scenes already played (locked while playing).
@@ -325,9 +358,9 @@ export function createPlotDraft(store, { engine, forgeCard = null } = {}) {
     return id
   }
 
-  function start(session) {
+  function start(session, { chatId = '', model = '' } = {}) {
     const key = session.key
-    const job = { controller: new AbortController(), partial: '', startedAt: new Date().toISOString() }
+    const job = { controller: new AbortController(), partial: '', startedAt: new Date().toISOString(), model: null }
     jobs.set(key, job)
     session.job = { startedAt: job.startedAt }
     session.error = null
@@ -337,7 +370,10 @@ export function createPlotDraft(store, { engine, forgeCard = null } = {}) {
         const context = await contextOf(key, session.kind, session.input)
         const input = { ...session.input, ...context.extra }
         const request = draftRequest(session.kind, input, { material: context.material, story: context.story, locked: context.locked })
-        const answer = await engine.sideCall(context.chat, null, request, {
+        const { preferred, source } = await pickedFor(key, session.kind, chatId, model)
+        const found = await engine.sideModel?.(context.chat, preferred)
+        if (found) job.model = { label: found.label, source: found.from === 'preferred' ? source : found.from === 'helper' ? 'helper' : 'default' }
+        const answer = await engine.sideCall(context.chat, preferred, { ...request, whole: true }, {
           signal: job.controller.signal,
           onText: delta => {
             job.partial += delta
@@ -354,7 +390,7 @@ export function createPlotDraft(store, { engine, forgeCard = null } = {}) {
         await save(session)
       } catch (error) {
         session.job = null
-        session.error = job.controller.signal.aborted ? null : { message: String(error.message ?? error) }
+        session.error = job.controller.signal.aborted ? null : { message: String(error.message ?? error), ...(job.model ? { model: job.model.label } : {}) }
         await save(session).catch(() => {})
       } finally {
         jobs.delete(key)
@@ -363,18 +399,23 @@ export function createPlotDraft(store, { engine, forgeCard = null } = {}) {
   }
 
   return {
-    async view(key) {
-      return view(await load(key))
+    /** @param chatId - the chat whose page asks, for which model it would be. */
+    async view(key, { chatId = '' } = {}) {
+      return view(await load(key), chatId)
     },
-    /** A draft of `kind` started from what the page asked; the one before it is replaced. */
-    async ask(key, body = {}) {
+    /**
+     * A draft of `kind` started from what the page asked (`body.chat`: the chat its card's plot is written from); the
+     * one before it is replaced. `model`: the model for it, from the server's own callers.
+     */
+    async ask(key, body = {}, { model = '' } = {}) {
       const kind = String(body.kind ?? '')
       if (jobs.has(key)) throw httpError(409, msg`向导还在写，等它写完或先停下`)
       const input = cleanDraftInput(kind, body)
+      const chatId = typeof body.chat === 'string' && /^[\w-]+$/.test(body.chat) ? body.chat : ''
       const session = { ...(await load(key)), kind, input }
-      start(session)
+      start(session, { chatId, model })
       await save(session)
-      return view(session)
+      return view(session, chatId)
     },
     async stop(key) {
       jobs.get(key)?.controller.abort()

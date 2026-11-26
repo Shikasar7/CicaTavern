@@ -484,6 +484,20 @@ export function initTheme({ api, el, toast, guard, getSettings, setSettings, onR
     ])
   }
 
+  /** 说话人名字: in the 视觉小说格式 the model says who speaks each line. The visual novel shows it anyway; the plain chat only if asked. */
+  function speakersRow() {
+    const box = el('input', { type: 'checkbox', 'aria-label': t`说话人名字` })
+    box.checked = currentLook().speakers === true
+    box.addEventListener('change', () => setLook({ speakers: box.checked }))
+    return el('div', { class: 'theme-row top' }, [
+      el('span', { class: 'theme-label', text: t`说话人名字` }),
+      el('div', { class: 'theme-reading' }, [
+        el('label', { class: 'front-check' }, [box, el('span', { text: t`普通对话里也显示` })]),
+        el('p', { class: 'hint', text: t`视觉小说模式写的回复，每句对白前标着谁在说。关着时普通对话里不显示，视觉小说不受影响。只记在这台设备上。` }),
+      ]),
+    ])
+  }
+
   /** 正文宽度: the same as dragging the column's edges, for a phone-sized hand or a keyboard; not on a phone, where the column is the screen. */
   function widthRow(reading) {
     if (matchMedia(zoomedQuery('(max-width: 560px)')).matches) return null
@@ -837,6 +851,7 @@ export function initTheme({ api, el, toast, guard, getSettings, setSettings, onR
       revealRow(currentReading()),
       widthRow(currentReading()),
       motionRow(),
+      speakersRow(),
       interfaceRow(currentReading()),
       el('div', { class: 'theme-row' }, [
         el('span', { class: 'theme-label', text: t`游戏界面` }),
