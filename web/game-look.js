@@ -332,3 +332,105 @@ export function letters(el, text) {
 applyLook()
 new MutationObserver(applyTone).observe(root, { attributes: true, attributeFilter: ['data-theme'] })
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTone)
+
+// ─── 卡的 CG 全屏放 ───
+// 卡的 CG 全屏放一组：普通对话里点开回复下面的 CG、战斗结束时的战败/胜利立绘（视觉小说里有自己的一份：vn.js showCardCg，
+// 动起来的样子同样用 cgMotion）。点画面、Enter、空格或 → 看下一张，← 往回，Esc 关，放完自己关。
+/**
+ * 假动态: the classes a picture moves by. calm, a slow push and breathing (the direction turns with each picture);
+ * climax, the same, and the group's last picture lands with a shake and a white flash. '' (or the viewer asking for
+ * less motion): still.
+ */
+export function cgMotion(motion, at, count) {
+  if (motion !== 'calm' && motion !== 'climax') return ''
+  const classes = ['cg-moving', at % 2 ? 'cg-push-left' : 'cg-push-right']
+  if (motion === 'climax' && at === count - 1) classes.push('cg-climax')
+  return classes.join(' ')
+}
+
+/**
+ * @param group - { name, motion?, urls: [address] }.
+ * @param options.into - where the dialog goes (a dialog already open on the top layer: the fight's), else the body.
+ * @param options.auto - each picture a while, then on (ms); 0 waits for the player.
+ * @param options.start - the picture it opens on.
+ * → a promise settled once it is closed.
+ */
+export function playCg(group, { into = document.body, auto = 0, start = 0 } = {}) {
+  const urls = (group?.urls ?? []).filter(Boolean)
+  if (!urls.length) return Promise.resolve()
+  return new Promise(resolve => {
+    let at = Math.min(Math.max(0, start), urls.length - 1)
+    let timer = null
+    const dialog = document.createElement('dialog')
+    dialog.className = 'cg-player'
+    const frame = document.createElement('div')
+    frame.className = 'cg-frame'
+    const picture = document.createElement('img')
+    picture.alt = group.name ?? ''
+    frame.append(picture)
+    const flash = document.createElement('div')
+    flash.className = 'cg-flash'
+    const bar = document.createElement('div')
+    bar.className = 'cg-bar'
+    const count = document.createElement('span')
+    count.className = 'cg-count'
+    const button = (text, title, onclick) => {
+      const b = document.createElement('button')
+      b.type = 'button'
+      b.textContent = text
+      b.title = title
+      b.addEventListener('click', event => { event.stopPropagation(); onclick() })
+      return b
+    }
+    const prev = button('‹', t`上一张（←）`, () => go(-1))
+    const next = button('›', t`下一张（→）`, () => go(1))
+    const close = button('✕', t`关掉（Esc）`, () => done())
+    bar.append(count, ...(urls.length > 1 ? [prev, next] : []), close)
+    dialog.append(frame, flash, bar)
+    const show = () => {
+      // A new element each time, so its motion starts over.
+      const fresh = picture.cloneNode()
+      fresh.src = urls[at]
+      fresh.className = cgMotion(group.motion, at, urls.length)
+      frame.replaceChildren(fresh)
+      flash.classList.remove('on')
+      if (fresh.classList.contains('cg-climax')) {
+        void flash.offsetWidth
+        flash.classList.add('on')
+      }
+      count.textContent = urls.length > 1 ? `${group.name ?? ''} · ${at + 1} / ${urls.length}` : group.name ?? ''
+      prev.disabled = at === 0
+      clearTimeout(timer)
+      if (auto) timer = setTimeout(() => go(1), auto)
+    }
+    const go = by => {
+      if (at + by >= urls.length) return done()
+      at = Math.max(0, at + by)
+      show()
+    }
+    let finished = false
+    const done = () => {
+      if (finished) return
+      finished = true
+      clearTimeout(timer)
+      if (dialog.open) dialog.close()
+      dialog.remove()
+      resolve()
+    }
+    dialog.addEventListener('click', event => { event.stopPropagation(); go(1) })
+    dialog.addEventListener('cancel', event => { event.preventDefault(); done() })
+    // Its keys are its own: the fight under it (or the chat) never gets them, and Esc closes it even where the page
+    // under it holds Esc for itself.
+    dialog.addEventListener('keydown', event => {
+      event.stopPropagation()
+      if (event.key === 'ArrowLeft') go(-1)
+      else if (event.key === 'ArrowRight' || event.key === 'Enter' || event.key === ' ') go(1)
+      else if (event.key === 'Escape') done()
+      else return
+      event.preventDefault()
+    })
+    into.append(dialog)
+    show()
+    dialog.showModal()
+  })
+}

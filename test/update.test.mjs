@@ -15,7 +15,7 @@ import zlib from 'node:zlib'
 import { featuresOf } from '../server/edition.mjs'
 import { createApp } from '../server/http.mjs'
 import { createUpdater } from '../server/update/index.mjs'
-import { checkRuntime, createShortcut, freeFolder, isInstall, listShortcuts, otherInstalls, packageFolder, removeInstall, retargetShortcuts, stageInstall, supersededBy } from '../server/update/install.mjs'
+import { checkRuntime, createShortcut, ensureFixed, fixedFor, fixedTarget, followFixed, freeFolder, isInstall, listShortcuts, otherInstalls, packageFolder, removeInstall, retargetShortcuts, stageInstall, supersededBy } from '../server/update/install.mjs'
 import { compareVersions, digestHash, expectedHash, LATEST_KEY, latestFile, latestFileUrl, MIRROR, mirrorDownload, notesHash, releaseInfo, signLatest, trustedDownload, verifyLatest } from '../server/update/release.mjs'
 import { extractZip, listZip, safeEntryPath, zipFolder } from '../server/update/zip.mjs'
 import { buildLauncher, findVcvars } from '../scripts/build-launcher.mjs'
@@ -487,6 +487,58 @@ test('old folders: listed beside the running one; never the running one or one h
   assert.ok(existsSync(holdsData))
 })
 
+test('the fixed CicaTavern folder: a link beside the versions that follows the one in use, never listed or deleted as one', async t => {
+  const base = await scratch(t)
+  const v1 = await makeInstall(path.join(base, packageFolder('1.0.0')), '1.0.0')
+  const v2 = await makeInstall(path.join(base, packageFolder('1.1.0')), '1.1.0')
+  const fixed = path.join(base, 'CicaTavern')
+  const points = () => fixedTarget(fixed) && realpathSync.native(fixed)
+
+  assert.equal(await ensureFixed(v1), fixed, 'made where there was none')
+  assert.equal(points(), v1)
+  assert.equal(await ensureFixed(v1), fixed, 'already here: left alone')
+  assert.equal(await ensureFixed(v2), fixed, 'a newer package unpacked by hand takes it')
+  assert.equal(points(), v2)
+  assert.equal(await ensureFixed(v1), null, 'an older one started by hand does not take it back')
+  assert.equal(points(), v2)
+  assert.equal(fixedFor(v1), null)
+  assert.equal(fixedFor(v2), fixed)
+
+  // A switch (update-apply.mjs): to the new one, and back on a rollback.
+  assert.equal(await followFixed(v2, v1), fixed)
+  assert.equal(points(), v1)
+  // The one it replaced, by its superseded.json: taken over on start even when older.
+  await mkdir(path.join(v1, 'update'), { recursive: true })
+  await writeFile(path.join(v1, 'update', 'superseded.json'), JSON.stringify({ path: v2, version: '1.1.0' }))
+  assert.equal(await ensureFixed(v2), fixed)
+  assert.equal(points(), v2)
+
+  // Never an old version of its own; deleting the old one leaves the link and what it points at.
+  assert.deepEqual(otherInstalls(v2, [base]).map(item => item.version), ['1.0.0'])
+  await removeInstall(v1, { root: v2 })
+  assert.ok(existsSync(path.join(v2, 'package.json')))
+  assert.equal(points(), v2)
+  // Pointing at a folder deleted since: taken over.
+  await rm(v2, { recursive: true, force: true })
+  const v3 = await makeInstall(path.join(base, packageFolder('1.2.0')), '1.2.0')
+  assert.equal(fixedTarget(fixed), null, 'broken')
+  assert.equal(await ensureFixed(v3), fixed)
+  assert.equal(points(), v3)
+
+  // A folder the user named themselves gets nothing beside it, and a real folder named CicaTavern stays as it is.
+  const own = await scratch(t)
+  const renamed = await makeInstall(path.join(own, 'My Tavern'), '1.2.0')
+  assert.equal(await ensureFixed(renamed), null)
+  assert.equal(existsSync(path.join(own, 'CicaTavern')), false)
+  const taken = await scratch(t)
+  await mkdir(path.join(taken, 'CicaTavern'))
+  await writeFile(path.join(taken, 'CicaTavern', 'mine.txt'), 'keep')
+  const beside = await makeInstall(path.join(taken, packageFolder('1.2.0')), '1.2.0')
+  assert.equal(await ensureFixed(beside), null)
+  assert.equal(await followFixed(beside, beside), null)
+  assert.equal(readFileSync(path.join(taken, 'CicaTavern', 'mine.txt'), 'utf8'), 'keep')
+})
+
 test('清理旧版本: the older folders go, a newer one stays; after an update it runs by itself when asked, a while later, once', async t => {
   let clock = Date.parse('2026-10-28T08:00:00Z')
   const elsewhere = await scratch(t)
@@ -609,7 +661,9 @@ test('update: a download whose SHA-256 is off is thrown away, and nothing is unp
   const status = await settle()
   assert.equal(status.job.step, 'error')
   assert.match(status.job.error, /SHA-256 对不上/)
-  assert.deepEqual(readdirSync(base).filter(n => n !== 'data').sort(), [path.basename(root)], 'nothing new beside the install')
+  // CicaTavern beside it is the fixed folder made on start (a link to this install), not a download.
+  assert.equal(realpathSync.native(path.join(base, 'CicaTavern')), realpathSync.native(root))
+  assert.deepEqual(readdirSync(base).filter(n => n !== 'data' && n !== 'CicaTavern').sort(), [path.basename(root)], 'nothing new beside the install')
   assert.deepEqual(readdirSync(path.join(root, 'update')), ['state.json'], 'the download is deleted')
   assert.equal((await call('/api/update/apply', { method: 'POST', body: {} })).status, 400)
 })
@@ -1019,8 +1073,11 @@ test('switch-over: the new version starts, then the shortcuts and the old folder
   assert.equal(result.shortcuts, 1)
   const carried = JSON.parse(readFileSync(path.join(b, 'update', 'state.json'), 'utf8'))
   assert.equal(carried.autoCheck, false, '自动检查更新 carries over')
+  const fixed = path.join(path.dirname(b), 'CicaTavern')
+  assert.equal(realpathSync.native(fixed).toLowerCase(), realpathSync.native(b).toLowerCase(), 'the fixed folder points at the new one')
+  assert.equal(result.fixed, fixed)
   const [link] = await listShortcuts({ exe: await launcherExe(), folders: [links] })
-  assert.equal(link.target.toLowerCase(), path.join(b, 'CicaTavern.exe').toLowerCase())
+  assert.equal(link.target.toLowerCase(), path.join(fixed, 'CicaTavern.exe').toLowerCase(), 'the shortcut goes through the fixed folder')
 })
 
 test('switch-over: when the new version does not start, the old one runs again and nothing moved', { skip: !canBuild }, async t => {
@@ -1036,6 +1093,7 @@ test('switch-over: when the new version does not start, the old one runs again a
   assert.equal(JSON.parse(readFileSync(path.join(a, 'update', 'state.json'), 'utf8')).staged, null, 'the failed version is no longer offered')
   const [link] = await listShortcuts({ exe: await launcherExe(), folders: [links] })
   assert.equal(link.target.toLowerCase(), path.join(a, 'CicaTavern.exe').toLowerCase())
+  assert.equal(existsSync(path.join(path.dirname(a), 'CicaTavern')), false, 'no fixed folder made for a switch that did not happen')
 })
 
 test('switch-over back to an older folder: it stops forwarding, and its daily check skips the newer one', { skip: !canBuild }, async t => {
@@ -1045,6 +1103,7 @@ test('switch-over back to an older folder: it stops forwarding, and its daily ch
   assert.equal(supersededBy(a)?.path, b)
   assert.equal(JSON.parse(readFileSync(path.join(b, 'update', 'state.json'), 'utf8')).skipped, '1.0.0')
   assert.equal(JSON.parse(readFileSync(path.join(b, 'update', 'result.json'), 'utf8')).mode, 'rollback')
+  assert.equal(realpathSync.native(path.join(path.dirname(b), 'CicaTavern')).toLowerCase(), realpathSync.native(b).toLowerCase(), 'the fixed folder follows a rollback too')
 })
 
 // ─── Launchers ──────────────────────────────────────────────────────────

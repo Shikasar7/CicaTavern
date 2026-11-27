@@ -902,6 +902,54 @@ export function sameLine(before, index, after) {
  */
 export const isCreationPage = part => part?.kind === 'html' && part.body.includes('.cr-go{') && part.body.includes('var SPEC=')
 
+// ─── 战斗立绘: the card's CG groups named 「战败·名字」 and 「胜利·名字」 (server/card-cgs.mjs) ──
+
+// The fight shows them itself (web/game-battle.js fightCg), so the model is never offered them.
+export const FIGHT_GROUP = /^\s*(战败|胜利)\s*[·・.:：\-]\s*/ // i18n-ignore: the card's own group names
+/** A group's kind: 'down', 'up', or '' for an ordinary one. */
+export const fightGroupKind = group => ({ 战败: 'down', 胜利: 'up' })[FIGHT_GROUP.exec(group?.name ?? '')?.[1]] ?? '' // i18n-ignore: the card's own group names
+// One of a few of the same in a fight is 山贼甲, 维拉 2: the picture is the person's.
+const unitName = name => normalizePlace(String(name ?? '').replace(/\s*(?:[甲乙丙丁戊己庚辛]|[A-Za-z]|\d+|[（(][^）)]*[）)])$/, '')) // i18n-ignore: the fight's own numbering
+
+/**
+ * The fight's pictures as it ends: of each one knocked down, her 「战败·…」 group; when the player's side lost, of
+ * each foe still standing, her 「胜利·…」. Each group once, the order of the names given.
+ * @param down - names of those down at the end (foes when it was won, the party's too).
+ * @param standing - names of the foes still up when it was lost.
+ */
+export function fightCgsFor(groups, { down = [], standing = [] } = {}) {
+  const list = (Array.isArray(groups) ? groups : []).filter(group => group.pictures?.length)
+  const out = []
+  const find = (kind, name) => {
+    const want = unitName(name)
+    if (!want) return
+    const group = list.find(item => fightGroupKind(item) === kind && [item.name.replace(FIGHT_GROUP, ''), ...(item.aliases ?? [])].some(key => normalizePlace(key) === want))
+    if (group && !out.includes(group)) out.push(group)
+  }
+  for (const name of down) find('down', name)
+  for (const name of standing) find('up', name)
+  return out
+}
+
+// 卡的 CG offered to the model (server/prompt.mjs and the SillyTavern build): its words stay Chinese.
+const cgRule = cgs => [
+  '这张卡带着几组 CG（全屏的剧情插图）。动笔前先对一下：这一轮会不会写到下面某一幕（人物、地点和事件对得上就算）？会的话，那一幕第一行的前面单独写一行【CG|组名】，组名照抄，画面会换成这组 CG。写到了就一定要标，不要漏；这一轮没写到就不加，前面回复里用过的组不再用。CG：', // i18n-ignore: words the model reads
+  ...cgs.map(item => `- ${item}`),
+].join('\n')
+
+/**
+ * The card's CG offered (in the visual novel, with the 视觉小说格式 or without it): a block of its own, so the rule
+ * is not lost among the format's. A model reading it as one more sentence of the format let the moments go by.
+ */
+export const cgFormat = cgs => ['<CG>', cgRule(cgs), '</CG>'].join('\n')
+
+// In the turn's message, at most this many groups are listed (the first ones, as the card orders them).
+export const LISTED_GROUPS = 80
+/** The lines the turn's message lists the groups with: 名字（说明）, those with pictures, not the fight's own. */
+export function cgList(groups) {
+  return (groups ?? []).filter(group => group.pictures?.length && !FIGHT_GROUP.test(group.name)).slice(0, LISTED_GROUPS).map(group => (group.note ? `${group.name}（${group.note}）` : group.name)) // i18n-ignore: words the model reads
+}
+
 // ─── Scenes ──────────────────────────────────────────────────────────────
 
 /** A place name as compared: full-width letters half-width, no spaces or punctuation, ASCII lower-case. */

@@ -40,6 +40,7 @@ import { chosenUserGender, chosenUserName, cleanCardOptions, cleanGreetingCount,
 import { brickCost } from './bricks.mjs'
 import { alignCard, applyIssues, cardJson, entriesRequest, greetingsRequest, initialState, lintCard, matchWritten, newCard, previewDynamics, readIssues, readTagged, redescribe, retrack, reviewRequest, rewriteRequest, stepDone, userTagged, writeSteps } from './write.mjs'
 import { STATUS_TARGET, applyChanges, editRequest, ensureBook, readEdit } from './edit.mjs'
+import { cleanAccess } from '../../web/shared/card-edit.js'
 import { claimsChanges, missingNote } from './blocks.mjs'
 import { applyBookChanges, bookEditRequest, bookTooLong, pickRequest, readBookEdit, readPicked } from './book-edit.mjs'
 import { applyPresetChanges, presetEditRequest, presetPickRequest, presetTooLong, readPickedPrompts, readPresetEdit } from './preset-edit.mjs'
@@ -933,7 +934,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
       restore: (loaded, snapshot) => snapshot,
       // A card's own book too long to send whole: a look at its contents first, as 世界书 → 对话修改 does (a request
       // naming no entry got only the first ones that fitted in full, the rest by name and not to be changed).
-      tooLong: card => bookTooLong(card.book ?? { entries: [] }),
+      tooLong: (card, asked) => cleanAccess(asked?.context?.access).book !== 'off' && bookTooLong(card.book ?? { entries: [] }),
       pick: (card, asked) => pickRequest(card.book, { ...asked, card: true }),
       readPick: (text, card) => readPicked(text, card.book),
       // The variables as they start go along, for a status bar layout to pick its paths from: not for a request kept to
@@ -943,6 +944,13 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
         return editRequest(card, { ...asked, state: layout ? startingState(card, { helpers: asked.helpers?.scripts ?? null }) : {} })
       },
       read: readEdit,
+      // What the user lets the talk read and change, and the open chat's latest reply to try a changed regex on.
+      context: value => {
+        const sample = typeof value?.sample === 'string' && value.sample.trim() ? value.sample.slice(-20000) : ''
+        const names = sample && value.names && typeof value.names === 'object' ? { char: clip(value.names.char, 100), user: clip(value.names.user, 100) } : null
+        return { access: cleanAccess(value?.access), ...(sample ? { sample } : {}), ...(names ? { names } : {}) }
+      },
+      finish: (changes, context, signal, card) => tryChanges(changes, context, signal, { scripts: card.regexScripts ?? [] }),
       // A variable for the chat that was read goes there; the layout and the rest into the card.
       async apply(card, changes, chosen) {
         const done = applyChanges(card, changes, chosen)
@@ -1143,7 +1151,7 @@ export function createForge(store, { proxyNow = () => null, ledger = null, engin
     const references = session.references ?? []
     const asked = { text: turn.user.text, target: turn.user.target, turns: session.turns.slice(0, -1), reply: ctx.languages.reply, own: loaded.own === true, name: loaded.name, context: turn.user.context ?? null, references }
     // A subject too long to send whole: a look at its contents first, for what to read.
-    if (spec.pick && !turn.user.target && spec.tooLong(loaded.subject)) {
+    if (spec.pick && !turn.user.target && spec.tooLong(loaded.subject, asked)) {
       ctx.step('pick')
       const looked = await ctx.call(spec.pick(loaded.subject, asked))
       asked.picked = spec.readPick(looked.text, loaded.subject)

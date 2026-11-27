@@ -7,7 +7,9 @@ import YAML from 'yaml'
 import { helperBlock } from '../helper-scripts.mjs'
 import { editBook } from '../worldbook.mjs'
 import { newId } from '../store.mjs'
-import { CARD_FIELDS, cleanTags, editCard, greetingList } from '../../web/shared/card-edit.js'
+import { cleanScripts } from '../regex.mjs'
+import { CARD_FIELDS, cleanAccess, cleanTags, editCard, greetingList } from '../../web/shared/card-edit.js'
+import { REGEX_ABOUT, REGEX_CRAFT, REGEX_FORMAT, REGEX_FORMAT_RULES, applyRegexChanges, readRegexEdit, scriptBlock, shownScripts } from './regex-edit.mjs'
 import { LONG_TOKENS, WRITING_RULES } from './prompts.mjs'
 import { attr, bodyFor, historyLines, readBlocks, splitKeys } from './blocks.mjs'
 import { CHAT_STATE_RULES, REFERENCE_RULES, referenceBlock } from './references.mjs'
@@ -133,7 +135,50 @@ function targetTag(target) {
   return ''
 }
 
-const editSystem = reply => `你是角色卡编辑。用户在 SillyTavern 一类的角色扮演应用里有一张写好的角色卡，想按自己的意思改它。你读懂整张卡，照这次的要求改，只动需要动的地方。
+// The parts a talk may only read, and those it is not shown, as the request names them.
+const PART_NAMES = { card: '角色设定、开场白和状态栏', book: '世界书', regex: '正则', scripts: '脚本' }
+// A request about the regex: its scripts are sent in full as far as the whole budget goes, else a smaller share.
+const REGEX_WORDS = /正则|regex|替换|美化|显示|隐藏|藏起|折叠|样式|HTML|<\w/i
+const REGEX_BUDGET = 24000
+
+/** How the status bar's look is changed, by what the talk may change. */
+function barRule(access) {
+  const own = access.regex === 'edit' ? '卡用自己的正则画状态栏时，要改样子就改那条正则；用脚本画的不能改，在 <reply> 里说明。' : '卡用自己的正则或脚本画状态栏时不能改，在 <reply> 里说明。'
+  return `- 状态栏的样子（显示哪些变量、名字、显示方式、分页、主题、配色）只写 <status_bar>，不写 HTML、CSS 或正则。路径用 <variables> 里的，或这次新加的变量的。${own}`
+}
+
+/** What the user let the talk see and change this time, said plainly (nothing when it is everything). */
+function accessRules(access) {
+  const parts = state => Object.keys(PART_NAMES).filter(part => access[part] === state && !(part === 'scripts' && state === 'read')).map(part => PART_NAMES[part])
+  const readOnly = parts('read')
+  const hidden = parts('off')
+  return [
+    readOnly.length ? `- 用户设定这次只让你看、不让你改：${readOnly.join('、')}。不要为它们写改动；要改才能做到的，在 <reply> 里告诉用户该怎么改。` : '',
+    hidden.length ? `- 用户这次没有给你看：${hidden.join('、')}。不要猜它们的内容，也不要为它们写改动；要看了才能判断的，在 <reply> 里说明。` : '',
+  ].filter(Boolean)
+}
+
+const editSystem = (reply, access) => {
+  const card = access.card === 'edit'
+  const book = access.book === 'edit'
+  const regex = access.regex === 'edit'
+  const regexRules = access.regex === 'off' ? [] : [
+    `- <regexes> 里是这张卡自带的正则脚本，和世界书、开场白一起决定回复怎么写、怎么显示：改设定之前先读懂它们在做什么（匹配什么、换成什么），改动要和它们对得上。${REGEX_ABOUT.replace(/\n/g, ' ')}`,
+    ...(regex ? ['- 改正则照回复里真实的写法写表达式（标签名、括号、换行、全角半角），不凭空猜格式；只动需要动的那几条。替换内容这次没有附上的，不能改它的替换。', REGEX_CRAFT] : []),
+  ]
+  const format = [
+    card ? '<field name="description">改好之后的完整正文</field>\n<greeting index="2">改好之后的完整开场白</greeting>' : '',
+    book ? '<entry uid="3">改好之后的完整条目正文</entry>\n<new_entry name="条目名" keys="关键词一, 关键词二" mode="keyword">新条目的正文</new_entry>\n<remove_entry uid="5"></remove_entry>' : '',
+    card ? STATUS_FORMAT() : '',
+    regex ? REGEX_FORMAT : '',
+  ].filter(Boolean).join('\n')
+  const formatRules = [
+    card ? `- field 的 name 用这些：${Object.values(FIELD_TAGS).join('、')}。tags 写成逗号分开的一行。\n- greeting 的 index 和卡里一致；写一个比现有开场白多一的序号，就是新加一条。` : '',
+    book ? '- entry 改已有条目：标签里写 uid；要改条目名或关键词，再加 name="…" 或 keys="…"。' : '',
+    regex ? REGEX_FORMAT_RULES : '',
+    '- 每一块都写改好之后的完整内容，不是片段，不写省略号，不写「其余不变」。没改的不要输出。',
+  ].filter(Boolean).join('\n')
+  return `你是角色卡编辑。用户在 SillyTavern 一类的角色扮演应用里有一张写好的角色卡，想按自己的意思改它。你读懂整张卡，照这次的要求改，只动需要动的地方。
 
 做法：
 - 先想清楚要的效果落在哪里：说话方式和性格多半在 description、personality、mes_example 和相关的世界书条目里；新的人物、地点、设定写成新的世界书条目；开场的样子在开场白里。
@@ -145,7 +190,7 @@ const editSystem = reply => `你是角色卡编辑。用户在 SillyTavern 一�
   1. 初始变量：<new_entry name="[initvar]初始变量" mode="initvar">，正文用 YAML 写出每个变量和初始值；卡里已经有 initvar 条目就改那一条。
   2. 更新规则：一条 mode="constant" 的条目，写每个变量的含义、范围、什么时候怎么变，并要求每次回复末尾写一个 <UpdateVariable> 块，没有变化就不写。卡里已经有写变量更新格式的条目（里面有 <UpdateVariable>、<JSONPatch> 或 _.set）时，沿用它原来的写法，把新变量加进去，不要换成别的写法；JSONPatch 和 _.set、_.add 这个应用都认。卡里还没有时，用 _.set('变量路径', 旧值, 新值);//原因 一行一个（数字增减也可以写 _.add('变量路径', 增量);）。
   不用另写状态栏界面、正则或脚本，也不用 {{getvar}}、{{get_message_variable}} 这类宏。卡还没有状态栏布局时，新变量会自动显示在状态栏里；卡已经有自己的状态栏布局（<status_bar> 里）时，新变量要显示就写一个 <status_bar>，原来的项和新的项都写上。
-- 状态栏的样子（显示哪些变量、名字、显示方式、分页、主题、配色）只写 <status_bar>，不写 HTML、CSS 或正则。路径用 <variables> 里的，或这次新加的变量的。卡用自己的正则或脚本画状态栏时不能改，在 <reply> 里说明。
+${barRule(access)}${[...regexRules, ...accessRules(access)].map(rule => `\n${rule}`).join('')}
 - 要求含糊时，按最可能的意思改，在 <reply> 里说你是怎么理解的。不需要改或者做不到的，在 <reply> 里说明，不输出改动。
 ${WRITING_RULES.filter(rule => !rule.includes('<user>')).map(rule => `- ${rule}`).join('\n')}
 
@@ -153,17 +198,10 @@ ${WRITING_RULES.filter(rule => !rule.includes('<user>')).map(rule => `- ${rule}`
 <reply>
 对用户说的话，用${reply}，两到四句：改了哪里、为什么这样改。
 </reply>
-<field name="description">改好之后的完整正文</field>
-<greeting index="2">改好之后的完整开场白</greeting>
-<entry uid="3">改好之后的完整条目正文</entry>
-<new_entry name="条目名" keys="关键词一, 关键词二" mode="keyword">新条目的正文</new_entry>
-<remove_entry uid="5"></remove_entry>
-${STATUS_FORMAT()}
+${format}
 
-- field 的 name 用这些：${Object.values(FIELD_TAGS).join('、')}。tags 写成逗号分开的一行。
-- greeting 的 index 和卡里一致；写一个比现有开场白多一的序号，就是新加一条。
-- entry 改已有条目：标签里写 uid；要改条目名或关键词，再加 name="…" 或 keys="…"。
-- 每一块都写改好之后的完整内容，不是片段，不写省略号，不写「其余不变」。没改的不要输出。`
+${formatRules}`
+}
 
 /**
  * The request for one edit. `turns`: the session's earlier ones, for what was
@@ -172,24 +210,30 @@ ${STATUS_FORMAT()}
  * entries sent in full: only those can be changed by the answer.
  * `helpers`: the card's scripts (helperBlock), told about when the request is about them.
  * `picked`: the entries a first look at a long book asked to read (book-edit.mjs pickRequest), sent in full first.
+ * `context.access`: what the user lets the talk read and change (cleanAccess); the card's own regex scripts go
+ * along unless it is off, those sent in full in `shown` as regex:<id>.
  */
-export function editRequest(card, { text, target = '', turns = [], reply = '简体中文', references = [], helpers = null, state = {}, picked = [] } = {}) {
+export function editRequest(card, { text, target = '', turns = [], reply = '简体中文', references = [], helpers = null, state = {}, picked = [], context = null } = {}) {
+  const access = cleanAccess(context?.access)
   const entries = card.book?.entries ?? []
-  const shown = shownEntries(entries, `${text}\n${target}`, target, { picked })
+  const shown = access.book === 'off' ? new Set() : shownEntries(entries, `${text}\n${target}`, target, { picked })
+  const scripts = access.regex === 'off' ? [] : card.regexScripts ?? []
+  const shownRegex = shownScripts(scripts, text, '', REGEX_WORDS.test(text) ? ENTRY_BUDGET : REGEX_BUDGET)
   const history = historyLines(turns)
   const material = referenceBlock(references)
   const rules = !material ? '' : REFERENCE_RULES + (chatOf(references) && !target ? CHAT_STATE_RULES : '')
   const content = [
     material,
     `<card>\n${cardBlock(card)}\n</card>`,
-    `<worldbook>\n${bookBlock(entries, shown)}\n</worldbook>`,
+    access.book === 'off' ? '' : `<worldbook>\n${bookBlock(entries, shown)}\n</worldbook>`,
+    access.regex === 'off' ? '' : `<regexes>\n${scripts.length ? scriptBlock(scripts, shownRegex) : '（这张卡还没有自带的正则）'}\n</regexes>`,
     statusBlock(card, state),
-    helperBlock(helpers, text),
+    access.scripts === 'off' ? '' : helperBlock(helpers, text),
     history.length ? `之前的几次修改（上面的卡已经是处理之后的样子）：\n${history.join('\n')}` : '',
     `这次的要求：\n${text}`,
     target ? `只改 ${targetTag(target)} 这一处，别的不动。` : '',
   ].filter(Boolean).join('\n\n')
-  return { request: { system: editSystem(reply) + rules, messages: [{ role: 'user', content }], maxTokens: LONG_TOKENS, softCap: true }, shown: [...shown] }
+  return { request: { system: editSystem(reply, access) + rules, messages: [{ role: 'user', content }], maxTokens: LONG_TOKENS, softCap: true }, shown: [...shown, ...[...shownRegex].map(id => `regex:${id}`)] }
 }
 
 /** The card's status bar layout and the variables it can show (`state`: as they start). */
@@ -229,13 +273,46 @@ const TAGS = ['field', 'greeting', 'entry', 'new_entry', 'remove_entry', 'chat_s
  *   { id, kind: 'removeEntry', uid, title, constant, before }
  *   { id, kind: 'chatState', chatId, chat, path, value, before, after }  (a variable for the chat that was read)
  *   { id: 'statusBar', kind: 'statusBar', spec, before, after, scripts? } (the layout; before and after as lines, status.mjs)
+ *   the card's own regex scripts as regex-edit.mjs reads them (kinds regex, newRegex, removeRegex; ids regex:<id>,
+ *   regex-new:<n>, regex-remove:<id>), when the talk is shown them and the request was kept to nothing
  * Pieces the same as before, entries not sent in full (`shown`), and with a
- * `target` anything else, are left out; `dropped` (only when there are any)
- * says which blocks could not be taken and why: [{ reason, name }], reason
- * 'unshown' (an entry not sent in full) or 'unknown' (a field this card has no
- * such name for).
+ * `target` anything else, are left out; so is a part the user let the talk
+ * only read (`context.access`). `dropped` (only when there are any) says which
+ * blocks could not be taken and why: [{ reason, name }], reason 'unshown' (an
+ * entry not sent in full), 'unknown' (a field this card has no such name for)
+ * or 'locked' (a part it may only read).
  */
-export function readEdit(text, card, { shown = null, target = '', references = [] } = {}) {
+export function readEdit(text, card, { shown = null, target = '', references = [], context = null } = {}) {
+  const read = readCardEdit(text, card, { shown, target, references })
+  const access = cleanAccess(context?.access)
+  const scripts = card.regexScripts ?? []
+  if (access.regex !== 'off' && !target) {
+    const regexShown = shown ? shown.filter(id => id.startsWith('regex:')).map(id => id.slice(6)) : null
+    for (const change of readRegexEdit(text, { scripts }, { shown: regexShown }).changes) {
+      // new:0 and remove:<id> are what a new entry and a removed one are called here.
+      read.changes.push(change.kind === 'regex' ? change : { ...change, id: `regex-${change.id}` })
+    }
+  }
+  const partOf = change => (change.kind === 'entry' || change.kind === 'newEntry' || change.kind === 'removeEntry' ? 'book' : REGEX_KINDS.has(change.kind) ? 'regex' : change.kind === 'chatState' ? null : 'card')
+  const locked = read.changes.filter(change => partOf(change) && access[partOf(change)] !== 'edit')
+  if (!locked.length) return read
+  read.changes = read.changes.filter(change => !locked.includes(change))
+  read.dropped = [...(read.dropped ?? []), ...locked.map(change => ({ reason: 'locked', name: lockedName(change) }))]
+  return read
+}
+
+const REGEX_KINDS = new Set(['regex', 'newRegex', 'removeRegex'])
+
+/** What a change the talk could not make is called, in the note asking it again. */
+function lockedName(change) {
+  if (REGEX_KINDS.has(change.kind)) return `正则 ${change.title || change.name || change.find}`
+  if (change.kind === 'field') return FIELD_TAGS[change.key] ?? change.key
+  if (change.kind === 'greeting') return `开场白 ${change.index + 1}`
+  if (change.kind === 'statusBar') return '状态栏'
+  return change.title || change.name || change.uid
+}
+
+function readCardEdit(text, card, { shown, target, references }) {
   const { reply, blocks } = readBlocks(text, TAGS)
   const greetings = greetingList(card)
   const entries = card.book?.entries ?? []
@@ -356,6 +433,14 @@ export function applyChanges(card, changes, ids) {
     patch.greetings = greetings
   }
   if (Object.keys(patch).length) prefix = editCard(card, patch).prefix
+  // The card's own regex scripts, as 正则 → 对话修改 keeps them (one deleted since is skipped there too).
+  if (chosen.some(c => c.kind === 'regex' || c.kind === 'newRegex' || c.kind === 'removeRegex')) {
+    const scripts = { scripts: card.regexScripts ?? [] }
+    const done = applyRegexChanges(scripts, changes.filter(c => c.kind === 'regex' || c.kind === 'newRegex' || c.kind === 'removeRegex'), ids)
+    card.regexScripts = cleanScripts(scripts.scripts)
+    applied += done.applied
+    prefix ||= done.prefix
+  }
   const added = chosen.filter(c => c.kind === 'newEntry')
   const book = added.length ? ensureBook(card) : card.book
   if (!book) return { applied, prefix }

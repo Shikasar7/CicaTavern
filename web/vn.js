@@ -9,7 +9,7 @@
 import { t } from '/i18n.js'
 import { htmlFrame, segments, streamingText } from '/render.js'
 import { timeBox } from '/status.js'
-import { advanceDay, isCreationPage, latestPlace, matchScene, normalizePlace, opensNextDay, placeIn, sameLine, speakerNames, splitLines, stateTime, storyDay, timeOfDay, timesIn, weatherOf, wornOn } from '/shared/vn.js'
+import { advanceDay, fightGroupKind, isCreationPage, latestPlace, matchScene, normalizePlace, opensNextDay, placeIn, sameLine, speakerNames, splitLines, stateTime, storyDay, timeOfDay, timesIn, weatherOf, wornOn } from '/shared/vn.js'
 import { cutOut, spriteFrame } from '/shared/cutout.js'
 import { picturesOnLines } from '/shared/draw.js'
 import { EXPRESSIONS, PACK_PICTURE, heroOf, lineEffects, packFaces, stageAt } from '/shared/stage.js'
@@ -17,7 +17,7 @@ import { initVnSaves } from '/vn-saves.js'
 import { initVnHud, noteChips } from '/vn-hud.js'
 import { changeNotes } from '/shared/hud.js'
 import { shrink, zoomedQuery } from '/theme.js'
-import { currentLook, headIn, heroNow, letters, lookFields, lookHints, lookNames, paletteNames, palettesOf, setHero, setLook, slideSlab } from '/game-look.js'
+import { cgMotion, currentLook, headIn, heroNow, letters, lookFields, lookHints, lookNames, paletteNames, palettesOf, setHero, setLook, slideSlab } from '/game-look.js'
 import { VN_ID, isBuiltinPreset } from '/shared/basic.js'
 import { historyStrip, keptItems } from '/draw-choice.js'
 import { smaller } from '/look-pictures.js'
@@ -2421,9 +2421,16 @@ export function initVn(deps) {
     let timer = null
     const pictures = group.pictures
     const picture = el('img', { alt: group.name })
+    const flash = el('div', { class: 'cg-flash' })
     const count = el('span', { class: 'vn-cg-count' })
     const show = () => {
       picture.src = cgSrc(cardId, pictures[at])
+      // 假动态 (game-look.js cgMotion): started over for each picture.
+      picture.className = ''
+      flash.classList.remove('on')
+      void picture.offsetWidth
+      picture.className = cgMotion(group.motion, at, pictures.length)
+      if (picture.classList.contains('cg-climax')) flash.classList.add('on')
       count.textContent = pictures.length > 1 ? `${group.name} · ${at + 1} / ${pictures.length}` : group.name
       // 自动: each picture a while, then on.
       clearTimeout(timer)
@@ -2440,7 +2447,7 @@ export function initVn(deps) {
         show()
       } else done()
     }
-    cgView.replaceChildren(picture, el('div', { class: 'vn-cg-tools' }, [
+    cgView.replaceChildren(picture, flash, el('div', { class: 'vn-cg-tools' }, [
       count,
       ...(pictures.length > 1 ? [control('‹', t`上一张（←）`, () => state.cgStep(-1)), control('›', t`下一张（→）`, () => state.cgStep(1))] : []),
       control(t`继续`, t`点画面、Enter 或空格：下一张，最后一张之后回到故事`, () => next()),
@@ -3454,6 +3461,15 @@ export function initVn(deps) {
           if (aliases === null) return
           await cgCall(cardId, `/api/cards/${cardId}/cgs/${group.id}`, 'PUT', { name, note, aliases: aliases.split(/[,，、]/).map(a => a.trim()).filter(Boolean) })
         }),
+        // 假动态 (game-look.js cgMotion): how the pictures move while shown.
+        el('label', { class: 'vn-cg-motion', title: t`放这组时画面怎么动：推镜是缓慢推近加轻微起伏；高潮是同样的，最后一张落下时震屏、闪白` }, [
+          el('span', { text: t`动态` }),
+          (() => {
+            const pick = el('select', { onchange: guard(() => cgCall(cardId, `/api/cards/${cardId}/cgs/${group.id}`, 'PUT', { motion: pick.value })) },
+              [['', t`静止`], ['calm', t`推镜`], ['climax', t`高潮`]].map(([value, label]) => el('option', { value, text: label, selected: (group.motion ?? '') === value })))
+            return pick
+          })(),
+        ]),
         act(t`删除`, async () => {
           if (confirm(t`删除「${group.name}」这组 CG（${group.pictures.length} 张）？`)) await cgCall(cardId, `/api/cards/${cardId}/cgs/${group.id}`, 'DELETE')
         }, { danger: true }),
@@ -4177,7 +4193,14 @@ export function initVn(deps) {
 
   /** For a turn about to be sent: ask for the format (true), only offer the card's CG ('cg'), or neither? (Said once, the first time either way.) */
   function marks(chat) {
-    if (!chat || !isOn(chat.cardId)) return false
+    if (!chat) return false
+    // Outside the visual novel the chat shows the card's CG under the line that marks them (app.js storyHtml):
+    // only those are asked for. The list is read the first time; the turn after that offers it.
+    if (!isOn(chat.cardId)) {
+      const known = shownCgs(chat.cardId)
+      if (known === null) cgsOf(chat.cardId)
+      return known?.some(group => !fightGroupKind(group)) ? 'cg' : false
+    }
     const on = formatOn(chat)
     if (!on && shownCgs(chat.cardId)?.length) return 'cg'
     if (typeof formatSaved(chat.cardId) !== 'boolean') {
@@ -4224,5 +4247,5 @@ export function initVn(deps) {
 
   // 创作角色卡's 备齐门面图: the same pictures 做成视觉小说 gets ready, without entering the mode.
   const prepareArt = (cardId, places = [], { faces = true, skipForms = false, map = null, creation = [] } = {}) => prepare(cardId, { places, faces, skipForms, map, creation })
-  return { render, streamed, isOn, turnFlags, marks, makeReady, prepareArt, picturesChanged, refreshEnd, compose: openCompose, drawFoe, drawSkill, pictureFor, loadPictures, fightFigures, castPicture, cgsChanged, wearChanged }
+  return { cgsOf, cgSrc, render, streamed, isOn, turnFlags, marks, makeReady, prepareArt, picturesChanged, refreshEnd, compose: openCompose, drawFoe, drawSkill, pictureFor, loadPictures, fightFigures, castPicture, cgsChanged, wearChanged }
 }

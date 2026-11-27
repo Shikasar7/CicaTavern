@@ -30,6 +30,70 @@ const scriptText = s => `${s.scriptName}\n${s.findRegex}\n${s.replaceString}`
 const ON_LABEL = { ai: t`AI 回复`, user: t`用户输入`, both: t`AI 回复和用户输入`, none: t`不作用` }
 
 /**
+ * A proposed change to a regex script as 对话修改 shows it (正则's own talk, and 修改角色卡's on the card's scripts):
+ * its title, the tag beside it, and what changes in it with how it did on the latest reply.
+ * @param untried - what a change says that had no reply to be tried on.
+ */
+export function regexChangeParts(el, { untried = t`这个对话还没有回复，没法试跑。` } = {}) {
+  const title = change => {
+    if (change.kind === 'newRegex') return t`新正则 · ${change.name || change.find}`
+    if (change.kind === 'removeRegex') return t`删除 · ${change.title}`
+    return change.title
+  }
+  const where = change => {
+    if (change.kind === 'removeRegex') return ['', '', '']
+    if (change.enabled === false) return [t`停用`, 'off', '']
+    const effect = change.newEffect ?? change.effect
+    return [EFFECT_LABEL[effect], effect === 'display' ? 'off' : 'key', effect === 'display' ? t`发给模型的不变，不影响缓存` : t`会改发给模型的内容，下一轮会重新写入一次缓存`]
+  }
+
+  /** A proposed script: what changes in it, and how it did on the latest reply. */
+  function regexBody(change, diffBox) {
+    const notes = []
+    if (change.kind === 'regex' && change.name) notes.push(t`名称：${change.title} → ${change.name}`)
+    if (change.kind === 'newRegex' || change.newOn) notes.push(t`作用于：${ON_LABEL[change.newOn ?? change.on]}`)
+    if (change.newEffect) notes.push(t`效果：${EFFECT_LABEL[change.newEffect]}`)
+    if (change.enabled !== undefined) notes.push(change.enabled ? t`改为启用` : t`改为停用`)
+    const [findBefore, findAfter] = change.kind === 'newRegex' ? ['', change.find] : change.kind === 'removeRegex' ? [change.find, ''] : [change.findBefore, change.findAfter]
+    const [replaceBefore, replaceAfter] = change.kind === 'newRegex' ? ['', change.replace] : change.kind === 'removeRegex' ? [change.replace, ''] : [change.replaceBefore, change.replaceAfter]
+    if (change.kind === 'newRegex' && !change.replace) notes.push(t`替换为空：删掉匹配到的部分`)
+    return [
+      notes.length ? el('p', { class: 'ce-change-note', text: notes.join(t`；`) }) : null,
+      findBefore !== findAfter ? el('div', { class: 'talk-label', text: t`查找` }) : null,
+      findBefore !== findAfter ? diffBox(findBefore, findAfter) : null,
+      replaceBefore !== replaceAfter ? el('div', { class: 'talk-label', text: t`替换为` }) : null,
+      replaceBefore !== replaceAfter ? diffBox(replaceBefore, replaceAfter) : null,
+      change.kind === 'removeRegex' ? null : trialBox(change),
+    ]
+  }
+
+  function trialBox(change) {
+    if (change.invalid) return el('p', { class: 'talk-trial bad', text: t`这个表达式写得不对，读不出来，不能采用。` })
+    const trial = change.trial
+    if (!trial) return el('p', { class: 'talk-trial', text: untried })
+    if (trial.error === 'timeout') return el('p', { class: 'talk-trial bad', text: t`试跑超时：这个表达式在最新回复上卡住了，不建议采用。` })
+    if (trial.error) return el('p', { class: 'talk-trial', text: t`没能试跑。` })
+    if (!trial.matches) return el('p', { class: 'talk-trial warn', text: t`在最新回复里没有匹配到。` })
+    return el('div', { class: 'talk-trial' }, [
+      el('p', { text: t`在最新回复里匹配到 ${trial.matches} 处，前几处变成：` }),
+      ...trial.samples.map(sample => el('div', { class: 'talk-trial-sample' }, [
+        el('pre', { class: 'from', text: sample.match }),
+        HTML_LIKE.test(sample.shown) ? htmlSample(sample.shown) : el('pre', { class: 'to', text: sample.shown || t`（删掉）` }),
+      ])),
+    ])
+  }
+
+  /** Block HTML a script puts in, as the chat shows it (render.js): in a sandboxed frame, where nothing it holds can run. */
+  function htmlSample(html) {
+    const style = getComputedStyle(document.documentElement)
+    const head = `<!doctype html><meta charset="utf-8"><style>body{margin:4px 8px;font:14px/1.7 ${style.getPropertyValue('--serif')};color:${style.getPropertyValue('--ink')}}</style>`
+    return el('iframe', { class: 'talk-trial-html', sandbox: '', srcdoc: head + html, title: t`显示出来的样子` })
+  }
+
+  return { title, where, body: regexBody }
+}
+
+/**
  * @param context - async () → { card: { id, name, scripts } | null, preset: { id, name, builtin, scripts } | null, sample, macros, names }
  * @param getCards - the card list (each { id, name, group, archived }), for the cards a set is for.
  * @param onChanged - ({ global?, sets?, card?: { id, scripts }, preset?: { id, scripts } }) after scripts were saved.
@@ -967,6 +1031,7 @@ export function initRegex({ api, el, toast, guard, saveFile, context, getCards, 
   }
 
   // ─── 对话修改 (talk-dialog.js) ─────────────────────────────────────────
+  const changeParts = regexChangeParts(el)
   /** The talk on a place's scripts; `aim` keeps the first request to one script. */
   function talkAbout(place, aim = null) {
     const key = place.key
@@ -979,19 +1044,10 @@ export function initRegex({ api, el, toast, guard, saveFile, context, getCards, 
       ideas: () => [t`把【】里的内容变成彩色小框`, t`藏起回复里的思维链`, t`这些正则分别在做什么？`],
       placeholder: target => (target ? t`「${target.label}」想怎么改，或者问它为什么不生效` : t`说说想让回复怎么变，比如：把状态栏那段藏起来`),
       busy: job => (job.step === 'check' ? t`拿最新回复试跑…` : job.chars ? t`正在写，已经写了 ${job.chars.toLocaleString()} 字…` : t`正在读这些正则…`),
-      changeTitle: change => {
-        if (change.kind === 'newRegex') return t`新正则 · ${change.name || change.find}`
-        if (change.kind === 'removeRegex') return t`删除 · ${change.title}`
-        return change.title
-      },
-      changeWhere: change => {
-        if (change.kind === 'removeRegex') return ['', '', '']
-        if (change.enabled === false) return [t`停用`, 'off', '']
-        const effect = change.newEffect ?? change.effect
-        return [EFFECT_LABEL[effect], effect === 'display' ? 'off' : 'key', effect === 'display' ? t`发给模型的不变，不影响缓存` : t`会改发给模型的内容，下一轮会重新写入一次缓存`]
-      },
+      changeTitle: change => changeParts.title(change),
+      changeWhere: change => changeParts.where(change),
       changeNotes: () => [],
-      changeBody: (change, { diffBox }) => regexBody(change, diffBox),
+      changeBody: (change, { diffBox }) => changeParts.body(change, diffBox),
       canTake: change => !change.invalid,
       context: () => ({ sample: state.sample, names: state.names }),
       targetLabel: target => {
@@ -1001,49 +1057,6 @@ export function initRegex({ api, el, toast, guard, saveFile, context, getCards, 
       onApplied: result => talked(key, result, t`已存进正则：${result.applied} 处`),
       onUndone: result => talked(key, result, t`已撤销这次修改`),
     })
-  }
-
-  /** A proposed script: what changes in it, and how it did on the latest reply. */
-  function regexBody(change, diffBox) {
-    const notes = []
-    if (change.kind === 'regex' && change.name) notes.push(t`名称：${change.title} → ${change.name}`)
-    if (change.kind === 'newRegex' || change.newOn) notes.push(t`作用于：${ON_LABEL[change.newOn ?? change.on]}`)
-    if (change.newEffect) notes.push(t`效果：${EFFECT_LABEL[change.newEffect]}`)
-    if (change.enabled !== undefined) notes.push(change.enabled ? t`改为启用` : t`改为停用`)
-    const [findBefore, findAfter] = change.kind === 'newRegex' ? ['', change.find] : change.kind === 'removeRegex' ? [change.find, ''] : [change.findBefore, change.findAfter]
-    const [replaceBefore, replaceAfter] = change.kind === 'newRegex' ? ['', change.replace] : change.kind === 'removeRegex' ? [change.replace, ''] : [change.replaceBefore, change.replaceAfter]
-    if (change.kind === 'newRegex' && !change.replace) notes.push(t`替换为空：删掉匹配到的部分`)
-    return [
-      notes.length ? el('p', { class: 'ce-change-note', text: notes.join(t`；`) }) : null,
-      findBefore !== findAfter ? el('div', { class: 'talk-label', text: t`查找` }) : null,
-      findBefore !== findAfter ? diffBox(findBefore, findAfter) : null,
-      replaceBefore !== replaceAfter ? el('div', { class: 'talk-label', text: t`替换为` }) : null,
-      replaceBefore !== replaceAfter ? diffBox(replaceBefore, replaceAfter) : null,
-      change.kind === 'removeRegex' ? null : trialBox(change),
-    ]
-  }
-
-  function trialBox(change) {
-    if (change.invalid) return el('p', { class: 'talk-trial bad', text: t`这个表达式写得不对，读不出来，不能采用。` })
-    const trial = change.trial
-    if (!trial) return el('p', { class: 'talk-trial', text: t`这个对话还没有回复，没法试跑。` })
-    if (trial.error === 'timeout') return el('p', { class: 'talk-trial bad', text: t`试跑超时：这个表达式在最新回复上卡住了，不建议采用。` })
-    if (trial.error) return el('p', { class: 'talk-trial', text: t`没能试跑。` })
-    if (!trial.matches) return el('p', { class: 'talk-trial warn', text: t`在最新回复里没有匹配到。` })
-    return el('div', { class: 'talk-trial' }, [
-      el('p', { text: t`在最新回复里匹配到 ${trial.matches} 处，前几处变成：` }),
-      ...trial.samples.map(sample => el('div', { class: 'talk-trial-sample' }, [
-        el('pre', { class: 'from', text: sample.match }),
-        HTML_LIKE.test(sample.shown) ? htmlSample(sample.shown) : el('pre', { class: 'to', text: sample.shown || t`（删掉）` }),
-      ])),
-    ])
-  }
-
-  /** Block HTML a script puts in, as the chat shows it (render.js): in a sandboxed frame, where nothing it holds can run. */
-  function htmlSample(html) {
-    const style = getComputedStyle(document.documentElement)
-    const head = `<!doctype html><meta charset="utf-8"><style>body{margin:4px 8px;font:14px/1.7 ${style.getPropertyValue('--serif')};color:${style.getPropertyValue('--ink')}}</style>`
-    return el('iframe', { class: 'talk-trial-html', sandbox: '', srcdoc: head + html, title: t`显示出来的样子` })
   }
 
   /** What the talk saved or undid: the place's scripts drawn again, the chat following them. */

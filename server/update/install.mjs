@@ -6,11 +6,13 @@
 //                                     bin/launch.mjs here forwards there
 //   <install>/update/previous.json    the folder this one replaced (回到上一版)
 //   <install>/update/result.json      how the last switch went (bin/update-apply.mjs)
+// Beside them, CicaTavern (FIXED_NAME) is a junction to the version in use: a
+// shortcut to CicaTavern\CicaTavern.exe keeps working through every update.
 // Nothing here reads or writes the data folder (%USERPROFILE%\.cicatavern).
 import { execFile } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs'
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs'
+import { mkdir, readFile, rename, rm, rmdir, symlink, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { extractZip } from './zip.mjs'
 
@@ -203,7 +205,8 @@ export function otherInstalls(root, bases) {
     for (const name of names) {
       const dir = path.join(base, name)
       const key = path.resolve(dir).toLowerCase()
-      if (seen.has(key) || name.startsWith('.') || !isInstall(dir)) continue
+      // The fixed folder is a link to one of them, not a version of its own (and deleting it would delete that one).
+      if (seen.has(key) || name.startsWith('.') || isLink(dir) || !isInstall(dir)) continue
       seen.add(key)
       found.push({ path: dir, version: installVersion(dir), bytes: folderSize(dir), superseded: existsSync(path.join(dir, UPDATE_DIR, 'superseded.json')) })
     }
@@ -225,6 +228,111 @@ export async function removeInstall(dir, { root, dataRoot }) {
   } catch (error) {
     throw Object.assign(new Error(`删不掉（${error.code ?? error.message}）：可能还开着这个版本，或者有文件被占用`), { status: 409 })
   }
+}
+
+// ─── The fixed folder ───────────────────────────────────────────────────
+// Each version unpacks into a folder named after it, and the old updater (2.8.0
+// and before) expects that of the package, so the folders stay as they are.
+// Beside them a junction named CicaTavern points at the version in use: the
+// updater moves it at each switch, and a shortcut made through it never needs
+// changing. A junction needs no administrator; a drive without them (FAT, a
+// network share) simply has none, and a real folder by that name is left alone.
+
+export const FIXED_NAME = 'CicaTavern'
+/** Where the fixed folder for an install goes: beside it. */
+export const fixedPath = dir => path.join(path.dirname(dir), FIXED_NAME)
+// What a package folder is called as it comes out of the zip.
+const PACKAGE_NAME = /^CicaTavern-\d+\.\d+\.\d+[\w.-]*-win-x64(?:-\d+)?$/i
+// Release versions only (x.y.z): what the folders beside it hold. bin/update-apply.mjs runs this file from a
+// package by itself, so it keeps to what it needs rather than import release.mjs.
+const versionParts = text => (/^(\d+)\.(\d+)\.(\d+)/.exec(String(text ?? '')) ?? []).slice(1).map(Number)
+function olderThan(a, b) {
+  const [x, y] = [versionParts(a), versionParts(b)]
+  if (x.length !== 3 || y.length !== 3) return false
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] < y[i]
+  return false
+}
+
+function isLink(file) {
+  try {
+    return lstatSync(file).isSymbolicLink()
+  } catch {
+    return false
+  }
+}
+
+/** Where a link points (its target, resolved), or null for none, a broken one or something else there. */
+export function fixedTarget(link) {
+  if (!isLink(link)) return null
+  try {
+    return realpathSync.native(link)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Point the fixed folder at `target`: made where nothing is, moved where it is
+ * already a link; a real file or folder there stays. → the link, or null.
+ */
+export async function pointFixed(target, link = fixedPath(target)) {
+  target = canonical(target)
+  let there = true
+  try {
+    lstatSync(link)
+  } catch (error) {
+    if (error.code !== 'ENOENT') return null
+    there = false
+  }
+  if (there && !isLink(link)) return null
+  if (there && fixedTarget(link) && canonical(fixedTarget(link)) === target) return link
+  try {
+    // rmdir takes a Windows junction away and never what it points at; elsewhere the link is a symlink, unlinked.
+    if (there) await (process.platform === 'win32' ? rmdir(link) : unlink(link))
+    await symlink(target, link, 'junction')
+    return link
+  } catch {
+    return null
+  }
+}
+
+/**
+ * On start: the fixed folder beside this install, made when it is missing and
+ * moved here when it points at nothing, at a folder this one replaced, or at an
+ * older version (a newer package unpacked by hand). A rollback leaves it where
+ * the updater put it. Only beside a folder still named as the package names it,
+ * so one the user renamed (CicaTavern itself, say) gets nothing beside it.
+ * → the link when it points here, else null.
+ */
+export async function ensureFixed(root, version = installVersion(root)) {
+  root = canonical(root)
+  if (!PACKAGE_NAME.test(path.basename(root))) return null
+  const link = fixedPath(root)
+  const now = fixedTarget(link)
+  if (now && canonical(now) === root) return link
+  const stale = !now || !isInstall(now) || canonical(supersededBy(now)?.path ?? '') === root || olderThan(installVersion(now), version)
+  if (now && !stale) return null
+  if (!now && existsSync(link)) return null
+  return pointFixed(root, link)
+}
+
+/** The fixed folder beside `dir` when it points there, else null. */
+export function fixedFor(dir) {
+  const link = fixedPath(dir)
+  const now = fixedTarget(link)
+  return now && canonical(now) === canonical(dir) ? link : null
+}
+
+/**
+ * At a switch (bin/update-apply.mjs): the fixed folder beside `to` points there
+ * (made when missing beside a package folder), and one beside `from` that
+ * pointed at it follows too. → the one beside `to` when it points there, else null.
+ */
+export async function followFixed(from, to) {
+  const beside = fixedPath(to)
+  if (fixedPath(from) !== beside && canonical(fixedTarget(fixedPath(from)) ?? '') === canonical(from)) await pointFixed(to, fixedPath(from))
+  if (isLink(beside) || (!existsSync(beside) && PACKAGE_NAME.test(path.basename(canonical(to))))) await pointFixed(to, beside)
+  return fixedFor(to)
 }
 
 // ─── Shortcuts ──────────────────────────────────────────────────────────

@@ -78,7 +78,7 @@ import { createStore, defaultDataRoot, httpError, newId, PRIVACY_NOTICE } from '
 import { contextInfo } from './context.mjs'
 import { currentLanguage, localize, msg, pageIn, requestLanguage, withLanguage } from './i18n.mjs'
 import { createUpdater } from './update/index.mjs'
-import { createShortcut } from './update/install.mjs'
+import { createShortcut, fixedFor } from './update/install.mjs'
 import { addEntries, AT_DEPTH, bookCounts, depthOf, editBook, editBookInfo, emptyBook, inPrefix, isDynamic, isInitvar, normalizeBook, standaloneBook, worldFile } from './worldbook.mjs'
 import { replaceMacros } from './prompt.mjs'
 import { accessCookie, hostAllowed, isLoopback, lanAddresses, loginPage, signedIn, tokensEqual } from './access.mjs'
@@ -1249,9 +1249,9 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
     ['POST', /^\/api\/network\/refresh$/, async () => network.apply((await store.getSettings()).proxy)],
 
     // Pictures and voice (media.mjs).
-    ['GET', /^\/api\/media\/settings$/, async () => mediaSettingsView(await media.settings())],
+    ['GET', /^\/api\/media\/settings$/, async () => mediaSettingsView(await media.tagWorkflow(await media.settings()))],
     ['PUT', /^\/api\/media\/settings$/, async (_, body) => {
-      const previous = await media.settings()
+      const previous = await media.tagWorkflow(await media.settings())
       // Another tavern's LAN link carries its access key after #k=: the key goes to its own file.
       let voiceKey = null
       if (typeof body.ttsUrl === 'string' && body.ttsUrl.includes('#')) {
@@ -1273,12 +1273,18 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
         if (typeof body[`${id}Key`] === 'string' && body[`${id}Key`].trim()) await media.setVoiceKey(id, body[`${id}Key`])
         else if (body[`${id}ClearKey`] === true) await media.setVoiceKey(id, '')
       }
+      // 生图方案: a plan saved now names the workflow imported now; one switched to brings its workflow back
+      // (none kept under that tag, or a plan that draws otherwise: the imported one stays).
+      if (Array.isArray(body.imagePresets)) next.imagePresets = media.stampPresets(next.imagePresets, previous)
+      if (next.comfyWorkflowTag !== previous.comfyWorkflowTag && !(await media.useWorkflowTag(next.comfyWorkflowTag))) next.comfyWorkflowTag = previous.comfyWorkflowTag
       await store.saveSettings({ media: next })
+      await media.pruneWorkflows(next)
       return mediaSettingsView(next)
     }],
     ['POST', /^\/api\/media\/novelai\/check$/, (_, body) => media.naiCheck(typeof body?.token === 'string' ? body.token.trim() : '', typeof body?.url === 'string' ? body.url : undefined)],
     // body.purpose: 'scene' / 'sprite' for the one 背景 or 立绘 are drawn with; with workflow null, that one goes.
-    ['PUT', /^\/api\/media\/workflow$/, async (_, body) => ({ workflow: await media.saveWorkflow(body.workflow, typeof body.purpose === 'string' ? body.purpose : '') })],
+    // media: the settings after it (an imported one for everything gets a new comfyWorkflowTag).
+    ['PUT', /^\/api\/media\/workflow$/, async (_, body) => ({ workflow: await media.saveWorkflow(body.workflow, typeof body.purpose === 'string' ? body.purpose : ''), media: await media.settings() })],
     ['GET', /^\/api\/media\/voices$/, () => media.voices()],
     // The bridge's own path, so a tavern elsewhere (the phone) can use this one as its voice service.
     ['GET', /^\/api\/persona\/list$/, () => media.personaList()],
@@ -3146,7 +3152,10 @@ export function createApp({ dataRoot, proxy, onShutdown, idleExitMs = 0, edition
       if (!hasLauncher()) return sendJson(res, 404, { error: msg`没有 CicaTavern.exe` })
       const body = await readBody(req)
       try {
-        return sendJson(res, 200, { file: await createShortcut(LAUNCHER, { startMenu: body.startMenu === true }) })
+        // Through the fixed CicaTavern folder when there is one (update/install.mjs): an update never leaves it behind.
+        const fixed = fixedFor(path.dirname(LAUNCHER))
+        const exe = fixed && existsSync(path.join(fixed, 'CicaTavern.exe')) ? path.join(fixed, 'CicaTavern.exe') : LAUNCHER
+        return sendJson(res, 200, { file: await createShortcut(exe, { startMenu: body.startMenu === true }) })
       } catch (error) {
         return sendJson(res, 500, { error: msg`快捷方式没建成：${error.message}` })
       }

@@ -8,7 +8,7 @@ import { normalizePlan } from '../server/forge/prompts.mjs'
 
 const SPEC = {
   title: '星纹录',
-  map: { places: [{ name: '白塔神殿', zone: '上城区', x: 13, y: 12 }, { name: '深谷遗迹第二层·水晶溶洞', short: '水晶溶洞', zone: '深谷遗迹', x: 181, y: -4 }, { name: '断剑酒馆' }, { name: '白塔神殿' }, { name: '' }], here: 'stat_data.世界.当前地点' },
+  map: { places: [{ name: '白塔神殿', zone: '上城区', x: 13, y: 12 }, { name: '深谷遗迹第二层·水晶溶洞', short: '水晶溶洞', zone: '深谷遗迹', x: 181, y: -4 }, { name: '旧桥酒馆' }, { name: '白塔神殿' }, { name: '' }], here: 'stat_data.世界.当前地点' },
   fields: [
     { path: '世界.当前地点', show: 'text' },
     { path: '地图', show: 'map', page: '地图' },
@@ -27,7 +27,7 @@ const STATE = {
 
 test('a bar keeps its map only with a field that shows one, places cleaned', () => {
   const spec = cleanStatusSpec(SPEC)
-  assert.deepEqual(spec.map, { places: [{ name: '白塔神殿', zone: '上城区', x: 13, y: 12 }, { name: '深谷遗迹第二层·水晶溶洞', short: '水晶溶洞', zone: '深谷遗迹', x: 100, y: 0 }, { name: '断剑酒馆' }], here: '世界.当前地点' })
+  assert.deepEqual(spec.map, { places: [{ name: '白塔神殿', zone: '上城区', x: 13, y: 12 }, { name: '深谷遗迹第二层·水晶溶洞', short: '水晶溶洞', zone: '深谷遗迹', x: 100, y: 0 }, { name: '旧桥酒馆' }], here: '世界.当前地点' })
   assert.equal(cleanStatusSpec({ ...SPEC, fields: SPEC.fields.filter(field => field.show !== 'map') }).map, undefined)
   assert.equal(cleanMap({ places: [] }), null)
   assert.ok(sameName('深谷遗迹第二层·水晶溶洞', '水晶溶洞') && !sameName('', '水晶溶洞') && !sameName('白', '黑'))

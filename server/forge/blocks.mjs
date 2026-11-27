@@ -72,6 +72,7 @@ export function missingNote(read) {
   const why = [
     named('unshown') ? `条目${named('unshown')}这次没有附上全文，不能改，不要再输出它们（要补的内容可以写成新条目）` : '',
     named('unknown') ? `字段名${named('unknown')}不在可用的名字里` : '',
+    named('locked') ? `${named('locked')}用户这次只让你看、不让你改，不要再输出它们（要改的话在 <reply> 里告诉用户怎么改）` : '',
   ].filter(Boolean)
   return `【格式提醒】上面的回答说做了修改，但里面没有能采用的改动${why.length ? `：${why.join('；')}` : '：改动没有写在规定的标签里'}，所以什么都没有改。
 请重新回答：先写 <reply>，再按要求的格式把每一处改动的完整内容写在对应的标签里，标签外不写别的。确实不需要改的话，只写 <reply> 说明原因。`

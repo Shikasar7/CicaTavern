@@ -6,7 +6,7 @@
 import { randomBytes } from 'node:crypto'
 import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { normalizePlace, placeKeys } from '../web/shared/vn.js'
+import { cgList, LISTED_GROUPS, normalizePlace, placeKeys } from '../web/shared/vn.js'
 import { imageKind } from './appearance.mjs'
 import { httpError, newId, readJsonFile, writeJson } from './store.mjs'
 import { msg } from './i18n.mjs'
@@ -14,11 +14,15 @@ import { msg } from './i18n.mjs'
 export const MAX_GROUPS = 200
 export const MAX_GROUP_PICTURES = 24
 export const MAX_CG_BYTES = 12 * 1024 * 1024
-// In the turn's message, at most this many groups are listed (the first ones, as the card orders them).
-export const LISTED_GROUPS = 80
+// The groups offered each turn (shared/vn.js: the SillyTavern build lists them the same way).
+export { cgList, LISTED_GROUPS }
 const FILE = /^[\w-]{1,64}\.(png|jpg|webp)$/
 const ID = /^[\w-]{1,40}$/
 const TYPES = { jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp' }
+// 假动态 (web/game-look.js cgMotion): how a group's pictures move while shown. '' is still; calm, a slow push and breathing;
+// climax, the same with a shake and a white flash on its last picture.
+export const MOTIONS = ['calm', 'climax']
+export const cleanMotion = value => (MOTIONS.includes(value) ? value : '')
 const clip = (value, max) => (typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, max) : '')
 
 /** A group's name and aliases as kept: trimmed, no repeats, no alias equal to the name, no 【】| that would break the mark. */
@@ -41,10 +45,6 @@ function cleanNames(name, aliases) {
 // Every name a group answers to, as compared (as a scene's: the page finds the group a mark names with matchScene).
 const groupKeys = placeKeys
 
-/** The lines the turn's message lists the groups with: 名字（说明）, those with pictures. */
-export function cgList(groups) {
-  return (groups ?? []).filter(group => group.pictures?.length).slice(0, LISTED_GROUPS).map(group => (group.note ? `${group.name}（${group.note}）` : group.name))
-}
 
 /** cgs.json read as it is in the folder, without the card. */
 export async function readCgs(dirs, cardId) {
@@ -95,18 +95,18 @@ export function createCardCgs(store) {
   const taken = (groups, names, except = '') => groups.some(group => group.id !== except && groupKeys(group).some(key => groupKeys(names).includes(key)))
 
   /** A group added by hand: { name, aliases, note }, no pictures yet. */
-  function add(cardId, { name, aliases, note } = {}) {
+  function add(cardId, { name, aliases, note, motion } = {}) {
     const names = cleanNames(name, aliases)
     return change(cardId, async groups => {
       if (groups.length >= MAX_GROUPS) throw httpError(400, msg`CG 组太多了（最多 ${MAX_GROUPS} 组），先删掉一些`)
       if (taken(groups, names)) throw httpError(400, msg`已经有叫「${names.name}」的 CG 组了`)
-      const group = { id: newId(), ...names, note: clip(note, 80), pictures: [], at: new Date().toISOString() }
+      const group = { id: newId(), ...names, note: clip(note, 80), ...(cleanMotion(motion) ? { motion: cleanMotion(motion) } : {}), pictures: [], at: new Date().toISOString() }
       return { groups: [...groups, group], result: group }
     }).then(async group => ({ group, ...(await view(cardId)) }))
   }
 
   /** Its name, aliases, note, and the order of its pictures (`files`: the same files, reordered). */
-  function update(cardId, groupId, { name, aliases, note, files } = {}) {
+  function update(cardId, groupId, { name, aliases, note, files, motion } = {}) {
     return change(cardId, async groups => {
       const before = found(groups, groupId)
       const names = cleanNames(name ?? before.name, aliases ?? before.aliases)
@@ -118,6 +118,10 @@ export function createCardCgs(store) {
         if (ordered.length === before.pictures.length && new Set(files).size === files.length) pictures = ordered
       }
       const group = { ...before, ...names, note: note === undefined ? before.note : clip(note, 80), pictures }
+      if (motion !== undefined) {
+        if (cleanMotion(motion)) group.motion = cleanMotion(motion)
+        else delete group.motion
+      }
       return { groups: groups.map(item => (item.id === groupId ? group : item)), result: group }
     }).then(async group => ({ group, ...(await view(cardId)) }))
   }
@@ -162,7 +166,7 @@ export function createCardCgs(store) {
   }
 
   /**
-   * Groups brought in whole (a picture pack, a card pack): [{ name, aliases?, note?, pictures: Buffer[] }]. One of a
+   * Groups brought in whole (a picture pack, a card pack): [{ name, aliases?, note?, motion?, pictures: Buffer[] }]. One of a
    * name the card already has takes its place (its pictures replaced); pictures that are no PNG, JPG or WebP, or are
    * too big, are left out, and a group left with none is not added. → how many groups and pictures came in, and
    * the names of groups left out for the most.
@@ -191,7 +195,8 @@ export function createCardCgs(store) {
         }
         if (!pictures.length) continue
         for (const picture of same?.pictures ?? []) await dropFile(cardId, picture.file)
-        const group = { id, ...names, note: clip(item.note, 80) || same?.note || '', pictures, at: same?.at ?? new Date().toISOString() }
+        const motion = cleanMotion(item.motion) || (item.motion === undefined ? same?.motion ?? '' : '')
+        const group = { id, ...names, note: clip(item.note, 80) || same?.note || '', ...(motion ? { motion } : {}), pictures, at: same?.at ?? new Date().toISOString() }
         list = same ? list.map(old => (old.id === id ? group : old)) : [...list, group]
         result.groups++
         result.pictures += pictures.length

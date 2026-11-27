@@ -27,12 +27,12 @@ import { REFERENCE_FILES, referenceBody, referenceChips } from '/talk.js'
 import { initDrawChoice } from '/draw-choice.js'
 import { initCardPermissions } from '/card-permissions.js'
 import { cleanEntry, createFramePermissions, decideEntry, entryDecision } from '/shared/frame-permissions.js'
-import { currentLook } from '/game-look.js'
+import { currentLook, playCg } from '/game-look.js'
 import { initVn } from '/vn.js'
 import { initCardArt } from '/card-art.js'
 import { coverPage } from '/cover.js'
 import { pickedOpening } from '/shared/cover.js'
-import { FOLD_TAG, markSpeakers } from '/shared/vn.js'
+import { FIGHT_GROUP, FOLD_TAG, fightCgsFor, fightGroupKind, markSpeakers, matchScene } from '/shared/vn.js'
 import { PLACEMENT, chatScriptList, depthWindow, isRegexFile, scriptsInFile } from '/shared/regex.js'
 import { lang, locale, t, zh } from '/i18n.js'
 import { pickLanguage } from '/shared/i18n.js'
@@ -804,8 +804,12 @@ function storyHtml(text, { partial = false } = {}) {
   const fold = (label, body) => (body.trim() ? `\n\n\uE020${folds.push({ label, body: body.trim() }) - 1}\uE020\n\n` : '')
   // A picture by its address (an opening's ![](https://…), <img>): held the same way, shown where it was.
   const pictures = []
+  // 卡的 CG (【CG|组名】): a row of its pictures where the line was, filled in once the page has the card's list
+  // (showStoryCgs). Held the same way, as a paragraph of its own.
+  const cgs = []
+  const marked = String(text ?? '').replace(/[\uE020\uE022\uE023]/g, '').replace(STORY_CG, (_, name) => `\n\n\uE023${cgs.push(name.trim()) - 1}\uE023\n\n`)
   // 视觉小说格式: 【名字|表情】 before a line shows as the name (drawn by CSS, so reading aloud skips it); 【效果|…】 goes.
-  const source = markSpeakers(takePictures(String(text ?? '').replace(/[\uE020\uE022]/g, ''), (src, alt) => `\uE022${pictures.push([src, alt]) - 1}\uE022`), name => `${name}`, { partial })
+  const source = markSpeakers(takePictures(marked, (src, alt) => `\uE022${pictures.push([src, alt]) - 1}\uE022`), name => `${name}`, { partial })
     // A voice tag right after a line keeps its emotion for reading aloud (marked, then put on the line's span).
     .replace(QUOTE_VOICE, (_, quote, emotion) => (emotion.trim() ? `${quote}${emotion.trim()}` : quote))
     .replace(VOICE_TAG, '')
@@ -857,6 +861,30 @@ function storyHtml(text, { partial = false } = {}) {
     })
     .join('')
     .replace(/\uE022(\d+)\uE022/g, (_, i) => (pictures[i] ? pictureHtml(...pictures[i]) : ''))
+    .replace(/(?:<p>)?\uE023(\d+)\uE023(?:<\/p>)?/g, (_, i) => (cgs[i] ? `<div class="story-cg" data-cg="${escapeHtml(cgs[i])}"></div>` : ''))
+}
+
+// \u3010CG|\u7EC4\u540D\u3011 as web/vn.js reads it.
+const STORY_CG = /\u3010\s*(?:CG|cg|\u63D2\u56FE|\u4E8B\u4EF6\u56FE)\s*[|\uFF5C]\s*([^\u3010\u3011\n]{1,40}?)\s*\u3011/g // i18n-ignore: the marks' own words
+
+/**
+ * The rows a reply's \u3010CG|\u7EC4\u540D\u3011 left (storyHtml), filled with the card's pictures of that group; a name the card has
+ * no group for leaves nothing. A picture opens the group full screen from it (game-look.js playCg).
+ */
+async function showStoryCgs(root, cardId) {
+  const rows = [...root.querySelectorAll('.story-cg[data-cg]:empty')]
+  if (!rows.length || !cardId) return
+  const groups = (await vnUi.cgsOf(cardId)).filter(group => group.pictures?.length && !fightGroupKind(group))
+  for (const row of rows) {
+    const group = matchScene(row.dataset.cg, groups)
+    if (!group) continue
+    const urls = group.pictures.map(picture => vnUi.cgSrc(cardId, picture))
+    row.replaceChildren(...urls.map((url, i) => {
+      const image = el('img', { src: url, alt: '', loading: 'lazy' })
+      image.addEventListener('load', () => image.parentElement?.classList.toggle('tall', image.naturalHeight > image.naturalWidth), { once: true })
+      return el('button', { type: 'button', title: t`${group.name}\uFF08\u70B9\u5F00\u5168\u5C4F\uFF09`, onclick: () => playCg({ name: group.name, motion: group.motion, urls }, { start: i }) }, [image, i === 0 ? el('b', { text: group.name }) : null])
+    }))
+  }
 }
 
 function el(tag, attrs = {}, children = []) {
@@ -2732,6 +2760,8 @@ const startFight = guard(async () => {
     faceFor: name => [name, ...(rules.book.companions?.[name]?.keys ?? [])].map(one => vnUi.pictureFor(one)).find(Boolean)
       ?? (rules.book.foes?.[name]?.file ? `/api/foes/${chat.cardId}/${rules.book.foes[name].file}` : cardFaces?.(name, [name])?.src ?? ''),
     skillPicture: skillShown(chat.cardId),
+    // 战斗立绘: the card's 「战败·名字」/「胜利·名字」 CG as the fight ends.
+    fightCg: async names => fightCgsFor(await vnUi.cgsOf(chat.cardId), names).map(group => ({ name: group.name.replace(FIGHT_GROUP, ''), motion: group.motion, urls: group.pictures.map(picture => vnUi.cgSrc(chat.cardId, picture)) })),
     setup: encounterOf(chat, ops),
     settled: op => rules.play.fightSettled(chat, rules.book, ops, op),
     forced: !canLeaveFight(chat, gate),
@@ -2890,6 +2920,7 @@ function messageBody(text, frameContext = null, { answer = false, lazy = false }
     else body.append(el('div', { class: 'story', html: renderStory(part.body.trim()) }))
   }
   if (!body.childNodes.length) body.append(el('div', { class: 'story muted', text: t`（空）` }))
+  if (!answer) showStoryCgs(body, ui.chat?.cardId).catch(() => {})
   return body
 }
 
@@ -7695,7 +7726,9 @@ async function regexContext() {
   await Promise.all([loadCardDetail(cardId), presetKey ? loadPresetDetail(presetKey) : null])
   const card = cardId ? ui.cardDetails.get(cardId) : null
   const preset = presetKey ? ui.presetDetails.get(presetKey) : null
-  const reply = ui.chat?.path?.findLast(node => node.role === 'assistant')?.text ?? ''
+  // The reply as the regex runs on it when shown: with its variable update block (raw).
+  const last = ui.chat?.path?.findLast(node => node.role === 'assistant')
+  const reply = last ? last.raw ?? last.text ?? '' : ''
   const names = ui.chat?.names ?? { char: card?.name ?? '', user: ui.persona?.name ?? '' }
   return {
     card: card?.name ? { id: cardId, name: card.name, scripts: card.regexScriptList ?? [] } : null,

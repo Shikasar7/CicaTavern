@@ -8,7 +8,7 @@
 // The running server starts this from its own install (server/update/index.mjs), so
 // it is code known to work. It waits for that server to exit, starts the one in
 // --to, and once that answers /api/health with the new version it points the
-// shortcuts and the old folder's launcher at it: the commit point. If the new
+// shortcuts, the fixed CicaTavern folder and the old folder's launcher at it: the commit point. If the new
 // one does not answer in time, it is stopped and --from starts again with
 // everything as it was. How it went is written to result.json in the updater
 // folder of whichever install runs at the end; the page shows it.
@@ -17,7 +17,7 @@ import { spawn } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, openSync, readFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import path from 'node:path'
-import { canonical, readJson, retargetShortcuts, stateDir, UPDATE_DIR, writeJsonFile } from '../server/update/install.mjs'
+import { canonical, followFixed, readJson, retargetShortcuts, stateDir, UPDATE_DIR, writeJsonFile } from '../server/update/install.mjs'
 
 const args = process.argv.slice(2)
 const option = name => {
@@ -160,10 +160,16 @@ async function olderInstalls(start) {
 
 /** The new install runs: point everything at it. */
 async function commit() {
+  // The fixed CicaTavern folder beside the versions follows (install.mjs), and the shortcuts go through it from now
+  // on, so the next switch has none to change.
+  const fixed = await followFixed(from, to).catch(error => {
+    log(`fixed folder: ${error.message}`)
+    return null
+  })
   let shortcuts = []
   let shortcutError = null
   try {
-    shortcuts = await retargetShortcuts(from, to, { folders: shortcutFolders })
+    shortcuts = await retargetShortcuts(from, fixed ?? to, { folders: shortcutFolders })
   } catch (error) {
     shortcutError = error.message
     log(`shortcuts: ${error.message}`)
@@ -178,7 +184,7 @@ async function commit() {
     for (const older of await olderInstalls(from)) await writeJsonFile(path.join(older, UPDATE_DIR, 'superseded.json'), mark).catch(error => log(`superseded.json (${older}): ${error.message}`))
   }
   else await rm(path.join(to, UPDATE_DIR, 'superseded.json'), { force: true }).catch(() => {})
-  await result(to, { ok: true, shortcuts: shortcuts.length, shortcutError })
+  await result(to, { ok: true, shortcuts: shortcuts.length, shortcutError, ...(fixed ? { fixed } : {}) })
   log(`switched to ${to} (${toVersion}); ${shortcuts.length} shortcut(s)`)
 }
 

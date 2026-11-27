@@ -29,6 +29,13 @@ const AGENT_PLATFORM_CHECK = t`获取模型列表：用 API Key 时会把常见�
 // up, keys = where the key is made (the console's front page when its key page
 // has no stable address).
 const TEMPLATES = [
+  // First, anything else (a relay, a service of one's own): a blank form, with how to fill it in.
+  {
+    name: t`自定义`, custom: true, api: 'openai-completions', baseURL: '', apiKeyEnv: '', proxy: 'global',
+    models: [],
+    note: t`模板里没有的服务（中转站、自己部署的接口等）：名称自己起；接口类型照对方的说明选，大多是已经选好的「OpenAI 兼容（Chat Completions）」；Base URL 填对方给的地址，通常以 /v1 结尾；填好 Key 后点「从接口获取模型列表」挑模型，没有列表就照对方写的模型 ID 填，一行一个。国内的服务把「网络」改成「直连」。`,
+    check: '',
+  },
   {
     name: 'Anthropic', api: 'anthropic-messages', baseURL: 'https://api.anthropic.com', apiKeyEnv: 'ANTHROPIC_API_KEY', proxy: 'global', cacheTtl: '1h',
     site: 'https://www.anthropic.com/api', keys: 'https://console.anthropic.com/settings/keys',
@@ -426,7 +433,8 @@ export function initProviders({ api, el, toast, guard, saveFile, onChanged }) {
     const templateNote = el('p', { class: 'hint template-note', hidden: true })
     const templateChips = el('div', { class: 'remote-chips provider-templates' })
     const useTemplate = (template, chip) => {
-      if (!name.value.trim() || TEMPLATES.some(tpl => tpl.name === name.value.trim())) name.value = template.name
+      // 自定义 leaves the name to be written (a template's name taken over from another chip goes).
+      if (!name.value.trim() || TEMPLATES.some(tpl => tpl.name === name.value.trim())) name.value = template.custom ? '' : template.name
       apiSelect.value = template.api
       apiSelect.dispatchEvent(new Event('change'))
       baseURL.value = template.baseURL
@@ -444,9 +452,10 @@ export function initProviders({ api, el, toast, guard, saveFile, onChanged }) {
         other.classList.toggle('on', other === chip)
         other.setAttribute('aria-pressed', String(other === chip))
       }
-      templateNote.textContent = `${template.note}\n${template.check ?? (template.listModels === false ? TEMPLATE_NO_LIST : TEMPLATE_CHECK)}`
+      templateNote.textContent = [template.note, template.check ?? (template.listModels === false ? TEMPLATE_NO_LIST : TEMPLATE_CHECK)].filter(Boolean).join('\n')
       templateNote.hidden = false
-      apiKey.focus()
+      if (template.custom) name.focus()
+      else apiKey.focus()
     }
     templateChips.append(...TEMPLATES.map(template => {
       const chip = el('button', { type: 'button', class: 'chip', 'aria-pressed': 'false', text: template.name })

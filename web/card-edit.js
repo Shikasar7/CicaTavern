@@ -22,7 +22,8 @@
 // the model writes the layout, it shows as a preview and before and after.
 import { t } from '/i18n.js'
 import { pngOf } from '/forge.js'
-import { CARD_FIELDS } from '/shared/card-edit.js'
+import { CARD_FIELDS, EDIT_ACCESS, cleanAccess } from '/shared/card-edit.js'
+import { regexChangeParts } from '/regex.js'
 import { EFFECTS, cleanStatusSpec } from '/shared/status.js'
 import { coverWords } from '/shared/cover.js'
 import { coverPage } from '/cover.js'
@@ -50,6 +51,11 @@ const inPrefix = key => CARD_FIELDS.find(f => f.key === key)?.prefix === true
 const IDEAS = [t`让她说话更冷淡一点`, t`加一个青梅竹马的 NPC 条目`, t`开场白短一点，结尾留个悬念`, t`把对话里后来出场的角色加进设定和变量`, t`状态栏换成暗色的配色，好感度用进度条`]
 // 对话修改 kept to the status bar: the id its change has (server/forge/edit.mjs STATUS_TARGET).
 const STATUS = 'statusBar'
+// 向导能看、能改的: what each part is called, and each way it can be (EDIT_ACCESS), remembered on this device.
+const ACCESS_KEY = 'cicatavern.cardEditAccess'
+const ACCESS_PARTS = { card: t`设定、开场白、状态栏`, book: t`世界书`, regex: t`正则`, scripts: t`脚本` }
+const ACCESS_WAYS = { edit: t`能改`, read: t`只看`, off: t`不给看` }
+const REGEX_KINDS = new Set(['regex', 'newRegex', 'removeRegex'])
 
 /**
  * @param deps - { api, el, toast, guard, saveFile, getChat, isGenerating, openProviders, openCheck(cardId) (检查这张卡),
@@ -71,8 +77,46 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
     withRegex: false, // the exports take the 正则集 attached to the card along (?regex=sets)
     status: null, // 状态栏: GET /api/cards/:id/check/status; null while it is read, or from a server without it
     tuning: null, // 调整样式 open: what statusEditor keeps, { spec, paged }
+    access: readAccess(), // 向导能看、能改的
   }
   const view = {}
+  const regexParts = regexChangeParts(el, { untried: t`没有打开这张卡的对话，没有回复可以试跑。` })
+
+  function readAccess() {
+    try {
+      return cleanAccess(JSON.parse(localStorage.getItem(ACCESS_KEY) || '{}'))
+    } catch {
+      return cleanAccess({})
+    }
+  }
+
+  /** 向导能看、能改的: a line saying what is held back, opening to a choice per part. */
+  function accessBox() {
+    const summary = el('summary', { class: 'ce-access-sum' })
+    const sumText = () => {
+      const held = Object.keys(ACCESS_PARTS).filter(part => state.access[part] !== EDIT_ACCESS[part][0])
+      summary.textContent = held.length ? t`向导能看、能改的：${held.map(part => `${ACCESS_PARTS[part]}${ACCESS_WAYS[state.access[part]]}`).join(t`，`)}` : t`向导能看、能改的：全部（脚本只看）`
+    }
+    const rows = Object.entries(ACCESS_PARTS).map(([part, label]) => {
+      const select = el('select', { 'aria-label': label }, EDIT_ACCESS[part].map(way => el('option', { value: way, text: ACCESS_WAYS[way], selected: state.access[part] === way })))
+      select.addEventListener('change', () => {
+        state.access = cleanAccess({ ...state.access, [part]: select.value })
+        try {
+          localStorage.setItem(ACCESS_KEY, JSON.stringify(state.access))
+        } catch {}
+        sumText()
+      })
+      return el('label', { class: 'ce-access-row' }, [el('span', { text: label }), select])
+    })
+    sumText()
+    return el('details', { class: 'ce-access' }, [
+      summary,
+      el('div', { class: 'ce-access-body' }, [
+        ...rows,
+        el('p', { class: 'ce-access-note', text: t`「只看」的部分向导会读、会照着它写，但不会提出改动；「不给看」的不发给模型。改动都要你勾选才会改进卡里。脚本（酒馆助手）这里只能看，不能改。` }),
+      ]),
+    ])
+  }
 
   // ─── Skeleton ─────────────────────────────────────────────────────────
   function layout() {
@@ -86,6 +130,7 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
     view.main = el('div', { class: 'forge-main ce-main' })
     view.assist = el('aside', { class: 'ce-assist' }, [
       el('header', { class: 'ce-assist-head' }, [el('h3', { text: t`对话修改` }), talk.clear]),
+      accessBox(),
       talk.thread,
       talk.compose,
     ])
@@ -780,6 +825,7 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
   const KIND_TEXT = { field: '', greeting: '', entry: t`世界书`, newEntry: t`新条目`, removeEntry: t`删除条目`, chatState: t`对话变量` }
 
   function changeTitle(change) {
+    if (REGEX_KINDS.has(change.kind)) return `${t`正则`} · ${regexParts.title(change)}`
     if (change.kind === 'field') return FIELD_TEXT[change.key]?.[0] ?? change.key
     if (change.kind === 'greeting') return change.index < state.card.greetings.length || change.before ? t`开场白 ${change.index + 1}` : t`开场白 ${change.index + 1}（新加）`
     if (change.kind === 'chatState') return `${KIND_TEXT.chatState} · ${change.path}`
@@ -790,6 +836,7 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
 
   /** Where a change goes: the tag beside its title. */
   function changeWhere(change) {
+    if (REGEX_KINDS.has(change.kind)) return regexParts.where(change)
     if (change.kind === 'field') {
       if (inPrefix(change.key)) return [t`固定前缀`, 'on', t`写进对话开局时的固定前缀`]
       if (change.key === 'depthPrompt') return [t`每轮`, 'key', t`每轮随消息发送`]
@@ -804,6 +851,7 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
 
   function changeNotes(change) {
     const notes = []
+    if (REGEX_KINDS.has(change.kind)) return notes
     if (change.kind === 'chatState') notes.push(t`写进对话：${change.chat}`)
     if (change.kind === 'entry' && change.name) notes.push(t`名称：${change.title || t`未命名条目`} → ${change.name}`)
     if ((change.kind === 'newEntry' && !change.initvar) || change.keys) notes.push(t`关键词：${(change.keys ?? []).join(t`、`) || t`（无）`}`)
@@ -813,6 +861,7 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
 
   /** A status bar change: how it will look, then its settings before and after. */
   function changeBody(change, { diffBox }) {
+    if (REGEX_KINDS.has(change.kind)) return regexParts.body(change, diffBox)
     if (change.kind !== 'statusBar') return null
     return [barPreview(change.spec, state.status?.state ?? {}, t`预览 · 初始值（采用后的样子）`), change.before === change.after ? null : diffBox(change.before ?? '', change.after ?? '')].filter(Boolean)
   }
@@ -831,11 +880,20 @@ export function initCardEdit({ api, el, toast, guard, saveFile, saveDownload = n
     intro: () => t`说说想怎么改：向导会把要改的地方整段写出来，改前改后对照着给你看，勾上的才会改进卡里。`,
     ideas: () => IDEAS,
     placeholder: target => (target?.id === STATUS ? t`状态栏想怎么改，比如：换成暗色的配色，好感度用进度条，分成两页` : target ? t`「${target.label}」想怎么改，比如：再短一点，语气冷一些` : t`说说想怎么改，比如：让她说话更冷淡一点`),
-    busy: job => (job.step === 'pick' ? t`卡的世界书比较长，先看目录挑要读的条目…` : job.chars ? t`正在改，已经写了 ${job.chars.toLocaleString()} 字…` : t`正在读这张卡…`),
+    busy: job => (job.step === 'pick' ? t`卡的世界书比较长，先看目录挑要读的条目…` : job.step === 'check' ? t`拿最新回复试跑改过的正则…` : job.chars ? t`正在改，已经写了 ${job.chars.toLocaleString()} 字…` : t`正在读这张卡…`),
     changeTitle,
     changeWhere,
     changeNotes,
     changeBody,
+    canTake: change => !change.invalid,
+    // What the talk may read and change, and the open chat's latest reply when it is on this card (to try a regex on).
+    context: () => {
+      const chat = getChat()
+      // As the regex runs on it when the reply is shown: with the variable update block (raw).
+      const last = chat?.cardId === state.card?.id ? chat.path?.findLast(node => node.role === 'assistant') : null
+      const reply = last ? last.raw ?? last.text ?? '' : ''
+      return { access: state.access, ...(reply ? { sample: reply.slice(-4000), names: chat.names ?? null } : {}) }
+    },
     targetLabel,
     // A request waits for the fields still saving.
     beforeAsk: () => state.saving,
