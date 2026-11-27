@@ -16,10 +16,29 @@ const regex = patternOf(script, macros)
 const global = new RegExp(regex.source, regex.flags.includes('g') ? regex.flags : `${regex.flags}g`)
 const found = [...text.matchAll(global)]
 const one = { ...script, disabled: false, placement: [placement], minDepth: null, maxDepth: null }
-// What one match becomes on its own: the script run on the matched text.
-const samples = found.slice(0, SAMPLES).map(match => ({
-  match: match[0].slice(0, CLIP),
-  shown: applyScripts(match[0], [one], { placement, target: 'display', macros }).slice(0, CLIP),
-  sent: applyScripts(match[0], [one], { placement, target: 'prompt', macros }).slice(0, CLIP),
+// What each match becomes where it stands in the reply: the script run on the whole text, keeping what each
+// replacement was (so lookbehinds and anchors see what is around the match) and leaving the text as it is.
+// A target the script does not run on (markdownOnly, promptOnly) leaves the match as it was.
+const replacements = target => {
+  const made = []
+  applyScripts(text, [one], {
+    placement,
+    target,
+    macros,
+    replace: (from, regex, replacer) =>
+      from.replace(regex, (...args) => {
+        made.push({ match: args[0], to: replacer(...args) })
+        return args[0]
+      }),
+  })
+  return made
+}
+const shown = replacements('display')
+const sent = replacements('prompt')
+const runs = shown.length ? shown : sent
+const samples = (runs.length ? runs : found.map(match => ({ match: match[0] }))).slice(0, SAMPLES).map((run, i) => ({
+  match: run.match.slice(0, CLIP),
+  shown: (shown.length ? shown[i]?.to ?? run.match : run.match).slice(0, CLIP),
+  sent: (sent.length ? sent[i]?.to ?? run.match : run.match).slice(0, CLIP),
 }))
 parentPort.postMessage({ matches: found.length, samples })

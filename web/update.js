@@ -465,7 +465,7 @@ export function initUpdate({ api, el, toast, guard, android = null, onChange = (
     if (!result) return null
     const done = result.mode === 'rollback' ? t`已回到 ${result.to}` : t`已从 ${result.from} 更新到 ${result.to}`
     const text = result.ok
-      ? `${done}${result.shortcuts ? t`，改了 ${result.shortcuts} 个快捷方式` : ''}${t`。`}${result.shortcutError ? t`快捷方式没改成：${result.shortcutError}` : ''}`
+      ? `${done}${result.shortcuts ? t`，改了 ${result.shortcuts} 个快捷方式` : ''}${t`。`}${result.shortcuts && result.fixed ? t`它们现在经过固定入口，以后更新不用再改。` : ''}${result.shortcutError ? t`快捷方式没改成：${result.shortcutError}` : ''}`
       : result.error
     return el('div', { class: `upd-result${result.ok ? '' : ' failed'}` }, [
       el('p', { text }),
@@ -483,6 +483,8 @@ export function initUpdate({ api, el, toast, guard, android = null, onChange = (
         el('div', {}, [
           el('div', { class: 'upd-current', text: t`现在的版本 ${info.version}` }),
           info.root ? el('div', { class: 'muted small upd-path', text: info.root }) : null,
+          // The fixed folder (server/update/install.mjs): a link to this version that every update moves along.
+          info.fixed ? el('div', { class: 'muted small upd-path', title: t`更新后自动指向新版本。自己建的快捷方式、固定到别处的图标指向这里的 CicaTavern.exe，更新以后就不用再改`, text: t`固定入口：${`${info.fixed}\\CicaTavern.exe`}` }) : null,
           openNotes ? el('button', { type: 'button', class: 'btn ghost small upd-notes', text: t`这一版更新了什么`, onclick: openNotes }) : null,
         ]),
         el('button', { type: 'button', class: 'btn small upd-check', text: checking ? t`正在检查…` : t`检查更新`, disabled: checking, onclick: check }),

@@ -1795,6 +1795,68 @@
           }
         }
       ]
+    },
+    {
+      "version": "2.8.1",
+      "date": "2026-11",
+      "after": true,
+      "items": [
+        {
+          "image": "2.8.1-cg.webp",
+          "zh": {
+            "title": "卡的 CG：普通对话里也出，还会动",
+            "text": "不开视觉小说也行：卡带着 CG 时，这些组会列给模型，回复写到那一幕的【CG|组名】在聊天里变成那一段下面的一排图。点任意一张全屏看，点画面、Enter、空格或 → 看下一张，← 往回，Esc 关掉。\n每组 CG 可以选「动态」（视觉小说 → 配图 ▾ → CG，每组下面）：「静止」不动；「推镜」慢慢推近、轻轻起伏；「高潮」一样推近，放到这组最后一张时震一下屏、闪一下白。图本身不变，不用另画；系统里关了动画效果时都不动。"
+          },
+          "en": {
+            "title": "Card CGs: in the plain chat too, and moving",
+            "text": "No visual novel needed: when a card has CGs, its groups are offered to the model, and a reply's [CG|group] mark at that moment becomes a row of the group's pictures under that paragraph. Click any of them for full screen; click, Enter, Space or → for the next, ← to go back, Esc to close.\nEach CG group can now have a Motion (visual novel, picture menu, CG, under each group): Still does not move; Push slowly zooms in with a gentle sway; Climax does the same, and the group's last picture lands with a shake and a white flash. The pictures stay as they are, nothing is redrawn, and nothing moves when the system asks for reduced motion."
+          }
+        },
+        {
+          "image": "2.8.1-fight.webp",
+          "zh": {
+            "title": "战斗立绘：打完放战败和胜利的图",
+            "text": "卡的 CG 里叫「战败·名字」「胜利·名字」的组是战斗立绘，不列给模型，战斗结束时自己放：打赢了，被打倒的敌人里有谁有「战败·名字」就放她的；打输了，还站着的敌人里有谁有「胜利·名字」就放她的；同伴被打倒了也放她的「战败·名字」。\n敌人名字后面带的「甲」「乙」、数字不影响对上。放完回到结算卡，想再看点「战斗 CG」；这一组的「动态」照样有效。"
+          },
+          "en": {
+            "title": "Battle CGs: pictures for a defeat or a victory",
+            "text": "CG groups named Defeat·name or Victory·name (with the two words written in Chinese, as in the help) are battle CGs: they are not offered to the model, and the fight shows them itself as it ends. Win, and the defeat group of each foe knocked down plays; lose, and the victory group of each foe still standing plays; a companion knocked down gets their defeat group too.\nSuffixes on a foe's name, such as a letter or a number, still match. Afterwards the fight's end screen comes back, with Battle CG to see them again, and the group's Motion works here too."
+          }
+        },
+        {
+          "image": "2.8.1-edit.webp",
+          "zh": {
+            "title": "修改角色卡能看、能改卡自带的正则",
+            "text": "对话修改时，向导先读卡自带的正则，改设定时和它们对得上，也能改、加、删、开关正则；改过的正则拿这张卡开着的对话的最新回复试跑一遍，写出匹配到几处、变成什么，再给你勾选。以前向导看不到正则，只能猜。\n「对话修改」标题下点开「向导能看、能改的」：设定和开场白、世界书、正则、脚本各选能改、只看或不给看。只看的部分向导照着写但不提改动，不给看的不发给模型；记在这台设备上。"
+          },
+          "en": {
+            "title": "Edit card reads and changes the card's own regex",
+            "text": "In Edit by chat, the guide now reads the card's own regex first, so its changes fit them, and it can change, add, remove and switch regex scripts too. A changed script is tried on the latest reply of an open chat with this card, showing how many places it matches and what they become, before you tick it. Until now the guide could not see the regex and had to guess.\nUnder the Edit by chat title, open What the guide can see and change: fields and openings, the lorebook, regex and scripts can each be Can change, Read only or Not shown. The guide writes to fit Read only parts without changing them, and Not shown parts are not sent to the model. The choice is kept on this device."
+          }
+        },
+        {
+          "image": "2.8.1-more.webp",
+          "zh": {
+            "title": "供应商「自定义」模板，生图方案连工作流一起记",
+            "text": "添加供应商时，模板第一个是「自定义」，给中转站、自己部署的接口这类不在列表里的服务用：点了清空成一张空表（接口类型默认 OpenAI 兼容），下面写着每一项怎么填。\n用导入的 ComfyUI 工作流画的生图方案，存的时候把当时导入的工作流一起记下，换方案时工作流跟着换：各有一套工作流的模型，导入一个存一个方案，以后一点就换。「生图方案」挪到「画图方式」下面，先设好怎么画、再存成方案；点「换成这个」后马上标出「正在用」，不再像是没换成。"
+          },
+          "en": {
+            "title": "A Custom provider template; image setups keep their workflow",
+            "text": "When adding a provider, the first template is now Custom, for services not on the list, such as relays or an API you host yourself: it clears the form to a blank one (the API type set to OpenAI-compatible) and says how to fill in each field.\nAn image setup that draws with an imported ComfyUI workflow now keeps that workflow when saved, and switching to it brings the workflow back: import each model's workflow once, save a setup for it, and switch with one click. Image setups now sit under Image backend, to set up the drawing first and then save it; Use this marks it In use at once instead of seeming not to switch."
+          }
+        },
+        {
+          "icon": "🪟",
+          "zh": {
+            "title": "Windows：快捷方式更新后不再失效",
+            "text": "程序文件夹旁边多一个「CicaTavern」文件夹，是指向正在用的版本的链接，更新、回到上一版时跟着换。自己建的快捷方式、固定到别处的图标指向「CicaTavern\\CicaTavern.exe」，更新以后不用再改；应用内更新也把桌面、开始菜单、任务栏的快捷方式改成经过它。\n「设置 → 更多 → 更新」里写着它的完整路径。程序文件夹改过名字的不建；删掉它只是删了这个链接，不会删到程序，下次打开会再建。"
+          },
+          "en": {
+            "title": "Windows: shortcuts keep working after an update",
+            "text": "Next to the app's folder there is now a \"CicaTavern\" folder, a link to the version in use that moves along with updates and Go back to previous version. Point your own shortcuts and pinned icons at \"CicaTavern\\CicaTavern.exe\" and they won't need changing after an update; updating in the app also points the desktop, Start menu and taskbar shortcuts through it.\nSettings → More → Updates shows its full path (Fixed entry). It is not made when the app's folder has been renamed; deleting it only removes the link, never the app, and it comes back on the next start."
+          }
+        }
+      ]
     }
   ]
 }

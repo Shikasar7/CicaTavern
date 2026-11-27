@@ -264,7 +264,7 @@ export function createMenu({ dialog, form, el, title: menuTitle, edits = countsA
     const status = el('span', { class: 'menu-pill', hidden: true })
     const button = el('button', {
       type: 'button',
-      class: `menu-entry ${section.look ?? 'own'}${section.action ? ' action' : ''}`,
+      class: `menu-entry ${section.look ?? 'own'}${section.lead ? ' lead' : ''}${section.action ? ' action' : ''}`,
       hidden: section.hidden,
       onclick: () => (section.action ? section.action() : show(section.id, 'forward')),
     }, [
@@ -281,7 +281,7 @@ export function createMenu({ dialog, form, el, title: menuTitle, edits = countsA
   /**
    * Lay the window out (again). Keeps the page shown if it is still there.
    * @param panels - [{ id, title, icon, aside, rows: (section id | Node)[] }]
-   * @param sections - [{ id, title, crumb, tag, look: 'own' | 'shared', summary(), status() → [kind, text] | null,
+   * @param sections - [{ id, title, crumb, tag, look: 'own' | 'shared', lead (the row the next ones hang on: it stands out), summary(), status() → [kind, text] | null,
    *   body: Node[] | pane: Element (a page), or action() (another window), hidden }]
    * @param footStart / footEnd - buttons at the start / before 保存 in the save row.
    * @param save - { text, onClick } for the primary button.

@@ -290,7 +290,7 @@ function mapEditor(el, spec, { drawPreview, paths, src }) {
       return pin
     })].filter(Boolean))
   }
-  const lines = el('textarea', { class: 'cc-map-places', rows: 5, 'aria-label': t`地图上的地点`, placeholder: t`一行一个地点，可以在前面写它属于哪一片，比如：\n上城区：白塔神殿\n下城区：断剑酒馆`, onchange: () => {
+  const lines = el('textarea', { class: 'cc-map-places', rows: 5, 'aria-label': t`地图上的地点`, placeholder: t`一行一个地点，可以在前面写它属于哪一片，比如：\n上城区：白塔神殿\n下城区：旧桥酒馆`, onchange: () => {
     const next = []
     for (const line of lines.value.split('\n')) {
       const [, zone = '', name = ''] = PLACE_LINE.exec(line.trim()) ?? []

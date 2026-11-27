@@ -32,7 +32,7 @@ import { DEFAULT_LISTEN, cleanListen, createListen, readAudio } from './voice/li
 import { msg } from './i18n.mjs'
 import { HISTORY_DEFAULT, cleanKeep, madeAt } from './draw-history.mjs'
 import { EXPRESSION_LOOK, expressionRequest, parseExpressionLabels } from '../web/shared/stage.js'
-import { IMAGE_PRESET_KEYS, MAX_ANCHOR, imagePresetOf } from '../web/shared/draw.js'
+import { IMAGE_PRESET_KEYS, MAX_ANCHOR, drawsWithWorkflow, imagePresetOf } from '../web/shared/draw.js'
 import { dress, keepClothes, pathToNode, takeClothes, wearOn } from './wear.mjs'
 import { DECOR_SLOTS } from '../web/shared/status.js'
 
@@ -78,6 +78,9 @@ export const DEFAULT_MEDIA = Object.freeze({
   comfyNegative: '',
   comfySampler: 'euler',
   comfyScheduler: 'normal',
+  // The imported workflow's tag (workflowTag): set by the server when one is imported. A 生图方案 keeps it, and
+  // switching to the plan brings that workflow back from comfy-workflows/ (http.mjs PUT /api/media/settings).
+  comfyWorkflowTag: '',
   geminiImageProvider: '', // a provider with Google's key: Gemini's own image models (generateContent)
   geminiImageModel: 'gemini-2.5-flash-image',
   geminiReference: true, // cast members in the frame with a reference picture: sent along, so the faces stay
@@ -343,6 +346,7 @@ export function cleanMedia(input, previous = DEFAULT_MEDIA, defaults = DEFAULT_M
   if (source.comfySteps !== undefined && Number.isFinite(Number(source.comfySteps))) value.comfySteps = Math.min(150, Math.max(1, Math.round(Number(source.comfySteps))))
   if (source.comfyCfg !== undefined && Number.isFinite(Number(source.comfyCfg))) value.comfyCfg = Math.min(30, Math.max(0, Math.round(Number(source.comfyCfg) * 10) / 10))
   if (typeof source.comfyNegative === 'string') value.comfyNegative = source.comfyNegative.trim().slice(0, 1500)
+  if (typeof source.comfyWorkflowTag === 'string' && /^(?:[0-9a-f]{12})?$/.test(source.comfyWorkflowTag)) value.comfyWorkflowTag = source.comfyWorkflowTag
   text('ttsProvider', 40)
   if (typeof source.ttsModel === 'string') {
     const model = source.ttsModel.trim()
@@ -1571,7 +1575,78 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     }
     const workflow = checkWorkflow(json)
     await writeFile(workflowFile(purpose), JSON.stringify(workflow, null, 1), 'utf8')
+    // The one for everything is kept by its tag too, for the 生图方案 saved with it.
+    if (!purpose) {
+      const media = await settings()
+      await store.saveSettings({ media: { ...media, comfyWorkflowTag: await keepWorkflow(workflow) } })
+      await pruneWorkflows(await settings())
+    }
     return describeWorkflow(workflow)
+  }
+
+  // 生图方案 with their own workflow: every imported one is kept in comfy-workflows/ under its tag (a short hash of
+  // it), as long as the settings or a plan name it; switching to a plan copies its one back over comfy-workflow.json.
+  const workflowStore = path.join(store.dirs.root, 'comfy-workflows')
+  const workflowTag = workflow => createHash('sha1').update(JSON.stringify(workflow)).digest('hex').slice(0, 12)
+
+  async function keepWorkflow(workflow) {
+    const tag = workflowTag(workflow)
+    await mkdir(workflowStore, { recursive: true })
+    await writeFile(path.join(workflowStore, `${tag}.json`), JSON.stringify(workflow, null, 1), 'utf8')
+    return tag
+  }
+
+  /**
+   * `media` with the imported workflow's tag, kept: one imported before plans kept workflows gets it here, once,
+   * and so do the plans saved then that draw with the workflow (they drew with whichever was imported: this one).
+   */
+  async function tagWorkflow(media) {
+    if (media.comfyWorkflowTag) return media
+    const workflow = await loadWorkflow()
+    if (!workflow) return media
+    const tag = await keepWorkflow(workflow)
+    const imagePresets = (media.imagePresets ?? []).map(p => (drawsWithWorkflow(p.settings) && !p.settings.comfyWorkflowTag ? { ...p, settings: { ...p.settings, comfyWorkflowTag: tag } } : p))
+    const tagged = { ...media, comfyWorkflowTag: tag, imagePresets }
+    await store.saveSettings({ media: tagged })
+    return tagged
+  }
+
+  /** Makes the workflow kept under `tag` the imported one. False when there is none ('' or gone): nothing changes. */
+  async function useWorkflowTag(tag) {
+    if (!tag) return false
+    let workflow
+    try {
+      workflow = JSON.parse(await readFile(path.join(workflowStore, `${tag}.json`), 'utf8'))
+    } catch {
+      return false
+    }
+    await writeFile(workflowFile(''), JSON.stringify(workflow, null, 1), 'utf8')
+    return true
+  }
+
+  /**
+   * Plans as saved over `previous`: one new, or whose settings changed (用现在的覆盖), and drawing with the workflow,
+   * names the workflow imported now. The page may hold an older tag (imported in another window); the server knows.
+   */
+  function stampPresets(list, previous) {
+    const before = new Map((previous.imagePresets ?? []).map(p => [p.id, JSON.stringify(p.settings)]))
+    return list.map(preset => {
+      const changed = before.get(preset.id) !== JSON.stringify(preset.settings)
+      if (!changed || !drawsWithWorkflow(preset.settings) || preset.settings.comfyWorkflowTag === previous.comfyWorkflowTag) return preset
+      return { ...preset, settings: { ...preset.settings, comfyWorkflowTag: previous.comfyWorkflowTag } }
+    })
+  }
+
+  /** Drops the kept workflows neither `media` nor any of its plans names. */
+  async function pruneWorkflows(media) {
+    const named = new Set([media.comfyWorkflowTag, ...(media.imagePresets ?? []).map(p => p.settings.comfyWorkflowTag)].filter(Boolean))
+    let files
+    try {
+      files = await readdir(workflowStore)
+    } catch {
+      return
+    }
+    await Promise.all(files.filter(file => /^[0-9a-f]{12}\.json$/.test(file) && !named.has(file.slice(0, 12))).map(file => rm(path.join(workflowStore, file), { force: true })))
   }
 
   function describeWorkflow(json) {
@@ -2962,5 +3037,5 @@ export function createMedia(store, { proxy = null, askInContext = null, novelai 
     return listen.transcribe({ media, audio: readAudio(audio, type), names: Array.isArray(names) ? names : [] }, signal)
   }
 
-  return { drawOutfit, draftWardrobe, cardMediaOf: card => cleanCardMedia(card?.media), drawDecor, drawOptionPicture, drawFoe, drawSkill, defaults, settings, cleanSettings, ownBackends: ownBackendViews, naiStatus, setNaiToken, setNaiUrl, naiCheck, cardMediaView, saveCardMedia, inheritCardMedia, draftRoster, draftRosterFromChat, drawPortrait, drawCardArt, drawAvatar, drawScenery, drawBackdrop, drawSprite, drawExpression, drawsFromPicture, settingsFor, labelExpressions, readRosterRef, saveRosterRef, removeRosterRef, writeImagePrompt, generateImage, putImage, readImage, removeImage, removeChatMedia, copyChatMedia, loras, voices: voices.list, personaList: voices.personaList, ttsKeyStatus: voices.ttsKeyStatus, setTtsKey: voices.setTtsKey, voiceKeys: voices.keyStatus, setVoiceKey: voices.setKey, speak, previewVoice, accountVoices, transcribe, loadWorkflow, saveWorkflow, describeWorkflow, purposeWorkflows, comfyModels }
+  return { drawOutfit, draftWardrobe, cardMediaOf: card => cleanCardMedia(card?.media), drawDecor, drawOptionPicture, drawFoe, drawSkill, defaults, settings, cleanSettings, ownBackends: ownBackendViews, naiStatus, setNaiToken, setNaiUrl, naiCheck, cardMediaView, saveCardMedia, inheritCardMedia, draftRoster, draftRosterFromChat, drawPortrait, drawCardArt, drawAvatar, drawScenery, drawBackdrop, drawSprite, drawExpression, drawsFromPicture, settingsFor, labelExpressions, readRosterRef, saveRosterRef, removeRosterRef, writeImagePrompt, generateImage, putImage, readImage, removeImage, removeChatMedia, copyChatMedia, loras, voices: voices.list, personaList: voices.personaList, ttsKeyStatus: voices.ttsKeyStatus, setTtsKey: voices.setTtsKey, voiceKeys: voices.keyStatus, setVoiceKey: voices.setKey, speak, previewVoice, accountVoices, transcribe, loadWorkflow, saveWorkflow, describeWorkflow, purposeWorkflows, comfyModels, tagWorkflow, useWorkflowTag, stampPresets, pruneWorkflows }
 }

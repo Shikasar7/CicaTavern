@@ -22,6 +22,7 @@ import { PLACEMENT, worldScripts } from '../web/shared/regex.js'
 import { applyScripts } from './regex-guard.mjs'
 import { usesMvu } from './mvu.mjs'
 import { EFFECT_WORDS, FACE_WORDS } from '../web/shared/stage.js'
+import { cgFormat } from '../web/shared/vn.js'
 
 export function replaceMacros(text, names) {
   return String(text ?? '')
@@ -362,16 +363,8 @@ export function buildChatPrompt({ card, persona, style = '', settings, books, ha
 }
 
 // 卡的 CG (card-cgs.mjs): the groups the card brings, offered by name; the reply marks one 【CG|组名】.
-const cgRule = cgs => [
-  '这张卡带着几组 CG（全屏的剧情插图）。动笔前先对一下：这一轮会不会写到下面某一幕（人物、地点和事件对得上就算）？会的话，那一幕第一行的前面单独写一行【CG|组名】，组名照抄，画面会换成这组 CG。写到了就一定要标，不要漏；这一轮没写到就不加，前面回复里用过的组不再用。CG：',
-  ...cgs.map(item => `- ${item}`),
-].join('\n')
-
-/**
- * The card's CG offered (in the visual novel, with the 视觉小说格式 or without it): a block of its own, so the rule
- * is not lost among the format's. A model reading it as one more sentence of the format let the moments go by.
- */
-export const cgFormat = cgs => ['<CG>', cgRule(cgs), '</CG>'].join('\n')
+// The card's CG offered: shared/vn.js cgFormat (the SillyTavern build of the game asks with the same words).
+export { cgFormat }
 
 /**
  * 视觉小说格式: while the player reads in the visual novel mode with it on

@@ -26,7 +26,7 @@ export { effectOf }
 export const touchesPrompt = script => Boolean(script) && !script.disabled && effectOf(script) !== 'display' && (onOf(script) !== 'none' || script.placement.includes(PLACEMENT.WORLD_INFO))
 
 /** The ids sent in full: the one asked about, those the request names, then in order within the budget. */
-function shownScripts(scripts, words, target) {
+export function shownScripts(scripts, words, target, budget = ENTRY_BUDGET) {
   const first = target.startsWith('regex:') ? target.slice(6) : null
   const rank = s => (s.id === first ? 2 : s.scriptName.length >= 2 && words.includes(s.scriptName) ? 1 : 0)
   const ranked = scripts.map((s, index) => ({ s, index })).sort((a, b) => rank(b.s) - rank(a.s) || a.index - b.index)
@@ -34,14 +34,14 @@ function shownScripts(scripts, words, target) {
   let used = 0
   for (const { s } of ranked) {
     const size = s.findRegex.length + s.replaceString.length
-    if (shown.size && used + size > ENTRY_BUDGET) continue
+    if (shown.size && used + size > budget) continue
     used += size
     shown.add(s.id)
   }
   return shown
 }
 
-function scriptBlock(scripts, shown) {
+export function scriptBlock(scripts, shown) {
   if (!scripts.length) return '（这里还没有正则）'
   return scripts
     .map(s => {
@@ -53,23 +53,17 @@ function scriptBlock(scripts, shown) {
     .join('\n\n')
 }
 
-const regexSystem = reply => `你是 SillyTavern 正则编辑。正则脚本在回复显示之前、或者发给模型之前改写文字。查找是 JavaScript 正则，写成 /表达式/标志；替换里 $1、$<名字> 是捕获组，{{match}} 是整段匹配，替换留空就是删掉匹配到的部分。
+// What a regex script is and its attributes: for this talk and for 修改角色卡's, which reads the card's own.
+export const REGEX_ABOUT = `正则脚本在回复显示之前、或者发给模型之前改写文字。查找是 JavaScript 正则，写成 /表达式/标志；替换里 $1、$<名字> 是捕获组，{{match}} 是整段匹配，替换留空就是删掉匹配到的部分。
 - on：作用于 AI 回复（ai）、用户输入（user），或者两者（both）。
-- effect：display 只改显示（发给模型的不变，不影响缓存）；prompt 只改发给模型的；both 两边都改。美化、藏起变量块这类只改显示；只有用户想省 token、不让模型再看到某些内容时才改发给模型的。
+- effect：display 只改显示（发给模型的不变，不影响缓存）；prompt 只改发给模型的；both 两边都改。美化、藏起变量块这类只改显示；只有用户想省 token、不让模型再看到某些内容时才改发给模型的。`
 
-做法：
-- 先看 <latest_reply>：照回复里真实的写法写表达式（标签名、括号、换行、全角半角），不凭空猜格式。
-- 表达式要稳：跨行的内容用 [\\s\\S]*? 非贪婪匹配；不要嵌套的量词（像 (a+)+、(.*)*），会卡住；一般加 g 标志。
-- 替换成要有样式的 HTML 时，用 <div style="…">…</div> 这样的块级元素：这个应用把含 div、table、details、style 的段落放进单独的框里显示，样式都留着；夹在一行文字中间的 <span style="…"> 会被去掉样式，只剩文字。不写 <script>；颜色选在浅色和深色背景上都看得清的。
-- 只动需要动的脚本；用户没提到、也不冲突的一字不动。
-- 用户只是问问题、要你解释某条在做什么、或者问为什么不生效，就在 <reply> 里回答；能修好就给出改好的脚本。要求含糊时，按最可能的意思做，在 <reply> 里说你是怎么理解的。
-- 要改的脚本这次没有附上替换内容，就不能改它的替换：在 <reply> 里说。新脚本一次最多 ${NEW_MAX} 条。
+// How to write one that works here.
+export const REGEX_CRAFT = `- 表达式要稳：跨行的内容用 [\\s\\S]*? 非贪婪匹配；不要嵌套的量词（像 (a+)+、(.*)*），会卡住；一般加 g 标志。
+- 替换成要有样式的 HTML 时，用 <div style="…">…</div> 这样的块级元素：这个应用把含 div、table、details、style 的段落放进单独的框里显示，样式都留着；夹在一行文字中间的 <span style="…"> 会被去掉样式，只剩文字。不写 <script>；颜色选在浅色和深色背景上都看得清的。`
 
-回答先写一段 <reply>，再写每一处改动；标签外不写别的：
-<reply>
-对用户说的话，用${reply}，两到四句：改了哪里、为什么这样改；回答问题可以写长一些。
-</reply>
-<regex id="已有脚本的 id">
+// The blocks a change to the scripts is written in.
+export const REGEX_FORMAT = `<regex id="已有脚本的 id">
 <find>/改好的表达式/g</find>
 <replace>改好的替换内容</replace>
 </regex>
@@ -78,10 +72,27 @@ const regexSystem = reply => `你是 SillyTavern 正则编辑。正则脚本在�
 <find>/表达式/g</find>
 <replace>替换内容</replace>
 </new_regex>
-<remove_regex id="不要了的那条的 id"></remove_regex>
+<remove_regex id="不要了的那条的 id"></remove_regex>`
 
-- regex 改已有脚本：写 id；要改名字、作用于、效果或开关，再加 name="…"、on="…"、effect="…"、enabled="true" 或 "false"。查找和替换哪个没改就不写哪个。
-- 替换内容写完整，不写省略号，不写「其余不变」。没改的脚本不要输出。`
+export const REGEX_FORMAT_RULES = `- regex 改已有脚本：写 id；要改名字、作用于、效果或开关，再加 name="…"、on="…"、effect="…"、enabled="true" 或 "false"。查找和替换哪个没改就不写哪个。
+- 替换内容写完整，不写省略号，不写「其余不变」。没改的脚本不要输出。新脚本一次最多 ${NEW_MAX} 条。`
+
+const regexSystem = reply => `你是 SillyTavern 正则编辑。${REGEX_ABOUT}
+
+做法：
+- 先看 <latest_reply>：照回复里真实的写法写表达式（标签名、括号、换行、全角半角），不凭空猜格式。
+${REGEX_CRAFT}
+- 只动需要动的脚本；用户没提到、也不冲突的一字不动。
+- 用户只是问问题、要你解释某条在做什么、或者问为什么不生效，就在 <reply> 里回答；能修好就给出改好的脚本。要求含糊时，按最可能的意思做，在 <reply> 里说你是怎么理解的。
+- 要改的脚本这次没有附上替换内容，就不能改它的替换：在 <reply> 里说。
+
+回答先写一段 <reply>，再写每一处改动；标签外不写别的：
+<reply>
+对用户说的话，用${reply}，两到四句：改了哪里、为什么这样改；回答问题可以写长一些。
+</reply>
+${REGEX_FORMAT}
+
+${REGEX_FORMAT_RULES}`
 
 /**
  * The request for one edit of a scope's scripts. `context.sample`: the chat's

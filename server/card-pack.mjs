@@ -145,7 +145,7 @@ export function createCardPacks(store, { rulebooks, regex, look = null, cgs = nu
         cgFiles.push(file)
         pictures.push(item.file)
       }
-      if (pictures.length) groups.push({ name: group.name, aliases: group.aliases ?? [], note: group.note ?? '', pictures })
+      if (pictures.length) groups.push({ name: group.name, aliases: group.aliases ?? [], note: group.note ?? '', ...(group.motion ? { motion: group.motion } : {}), pictures })
     }
     if (cgFiles.length) found.cgs = { count: cgFiles.length, files: cgFiles, groups }
 
@@ -408,7 +408,7 @@ export function createCardPacks(store, { rulebooks, regex, look = null, cgs = nu
           const data = FILE.test(file ?? '') ? await image(`cgs/${file}`, MAX_PICTURE) : null
           if (data) pictures.push(data)
         }
-        arrived.cgs += (await cgs.bring(cardId, [{ name: clip(group?.name, 40), aliases: Array.isArray(group?.aliases) ? group.aliases : [], note: clip(group?.note, 80), pictures }])).pictures
+        arrived.cgs += (await cgs.bring(cardId, [{ name: clip(group?.name, 40), aliases: Array.isArray(group?.aliases) ? group.aliases : [], note: clip(group?.note, 80), motion: typeof group?.motion === 'string' ? group.motion : undefined, pictures }])).pictures
       }
     }
 

@@ -1630,9 +1630,15 @@ export function initMedia({ popMenu, api, el, toast, guard, getChat, getModels, 
       } catch {
         throw new Error(t`工作流文件不是 JSON`)
       }
-      const { workflow: info } = await api('/api/media/workflow', { method: 'PUT', body: { workflow: json } })
+      const { workflow: info, media: after } = await api('/api/media/workflow', { method: 'PUT', body: { workflow: json } })
       workflowInfo.textContent = workflowText(info)
       workflowInfo.dataset.imported = info ? '1' : ''
+      // A new workflow: the plan saved with the old one is no longer the one in use (生图方案 keep their workflow).
+      if (after) {
+        state.settings = { ...state.settings, comfyWorkflowTag: after.comfyWorkflowTag, imagePresets: after.imagePresets }
+        renderPresets()
+        settingsMenu.refresh()
+      }
       toast(t`工作流已导入`)
     })
     const helperChoices = getModels().filter(m => m.id.includes('/'))
@@ -2111,6 +2117,10 @@ export function initMedia({ popMenu, api, el, toast, guard, getChat, getModels, 
       announceSettings()
       toast(t`已换成「${preset.name}」`, 2000)
       settingsMenu.markClean()
+      // 正在用 moves at once: the whole form is drawn again only once its lists are read (the LoRA list asks
+      // ComfyUI, which can take seconds to give up on an address that is off; a phone waits for its voices).
+      renderPresets()
+      settingsMenu.refresh()
       await openSettings()
     })
     const saveCurrent = guard(async () => {
@@ -2158,7 +2168,7 @@ export function initMedia({ popMenu, api, el, toast, guard, getChat, getModels, 
             ]))
           : [el('p', { class: 'hint', text: t`还没有方案。在「画图方式」里设好一种（供应商、模型、画幅这些），回来点「把现在的设置存成方案」；设好另一种再存一个，以后一点就换过去，不用重新填。` })]),
         el('div', { class: 'row' }, [el('button', { type: 'button', class: 'btn small', text: t`把现在的设置存成方案`, onclick: saveCurrent })]),
-        el('p', { class: 'hint', text: t`方案记的是画图方式、供应商、模型、画幅和各家的选项。NovelAI 的令牌、导入的 ComfyUI 工作流和供应商的密钥只有一份，各方案共用。视觉小说里的「配图 ▾」也能换。` }),
+        el('p', { class: 'hint', text: t`方案记的是画图方式、供应商、模型、画幅和各家的选项；用导入的 ComfyUI 工作流画的方案连工作流一起记，换方案时工作流跟着换。NovelAI 的令牌和供应商的密钥只有一份，各方案共用。视觉小说里的「配图 ▾」也能换。` }),
       )
     }
     renderPresets()
@@ -2233,7 +2243,7 @@ export function initMedia({ popMenu, api, el, toast, guard, getChat, getModels, 
         title: t`生图方案`,
         summary: () => {
           const list = state.settings?.imagePresets ?? []
-          if (!list.length) return t`把常用的几种画图设置存下来，一点就换`
+          if (!list.length) return t`先在上面设好画图方式，再把它存成方案，几种之间一点就换`
           const now = currentImagePreset(state.settings)
           return now ? t`正在用「${now.name}」 · 共 ${list.length} 个` : t`现在的设置没存成方案 · 共 ${list.length} 个`
         },
@@ -2242,6 +2252,8 @@ export function initMedia({ popMenu, api, el, toast, guard, getChat, getModels, 
       shared(t`配图`, {
         id: 'image',
         title: t`画图方式`,
+        // First set up, then saved as 生图方案 (the row under it): this is the one to open first.
+        lead: true,
         summary: () => {
           if (imageNeed()) return t`还没设好，现在画不了图：点这里选画图方式，填好供应商或令牌`
           const ownModel = form.elements[`localModel:${backend.value}`]?.selectedOptions[0]?.text
@@ -2411,7 +2423,7 @@ export function initMedia({ popMenu, api, el, toast, guard, getChat, getModels, 
     }
     settingsMenu.mount({
       panels: [
-        { id: 'image', title: t`配图`, icon: MENU_ICONS.picture, aside: switchRow(autoImage, t`新回复自动配图`, t`每轮多一次辅助模型调用和一次生图`), rows: ['image-presets', 'image', 'prompt', 'style-library', openGallery ? 'gallery' : null, who(), 'card-style', 'roster'].filter(Boolean) },
+        { id: 'image', title: t`配图`, icon: MENU_ICONS.picture, aside: switchRow(autoImage, t`新回复自动配图`, t`每轮多一次辅助模型调用和一次生图`), rows: ['image', 'image-presets', 'prompt', 'style-library', openGallery ? 'gallery' : null, who(), 'card-style', 'roster'].filter(Boolean) },
         { id: 'voice', title: t`朗读`, icon: MENU_ICONS.voice, aside: switchRow(autoRead, t`新回复自动朗读`), rows: ['voice', 'default-voice', who(), 'card-voice'] },
         { id: 'stt', title: t`语音输入`, icon: MENU_ICONS.mic, rows: ['stt'] },
       ],

@@ -2,7 +2,7 @@
 // this only asks what the player does and shows what comes of it, one event at a time. Timers, not animation frames: a
 // page out of sight still has to finish a round.
 import { t } from '/i18n.js'
-import { CUT_IN_MS, ailName, banner, countWord, currentLook, cutIn, cutInsOn, enterFight, fitFigure, headIn, heroNow, letters, loadCutIn, lookFields, slideSlab, sweep } from '/game-look.js'
+import { CUT_IN_MS, ailName, banner, countWord, currentLook, cutIn, cutInsOn, enterFight, fitFigure, headIn, heroNow, letters, loadCutIn, lookFields, playCg, slideSlab, sweep } from '/game-look.js'
 import { fightResult } from '/shared/game/encounter.js'
 import { addsText, foeAddsLine } from '/game-growth.js'
 import { showRoll } from '/game-play.js'
@@ -93,10 +93,12 @@ export function cutPicture(url) {
 /**
  * @param deps - { el, setup (battle.js battleSetup), resume ({ attempt, actions }: a fight to pick up), onProgress ({ attempt, actions }),
  *   onEnd ({ over: 'won'|'lost'|'fled'|'story', attempt, actions }), sound (web/game-sound.js),
+ *   fightCg ({ over, down, standing }) → the card's 战斗立绘 to show as it ends: [{ name, motion, urls }] (shared/vn.js
+ *   fightCgsFor; down: the names knocked down, standing: the foes still up when it was lost),
  *   foeShown (name → { moves, picture }), background (the scene's picture), forced (the story left no way round it),
  *   faceFor (name → a companion's picture, or ''), skillPicture (a skill's name → its 技能特写 picture, or '') }
  */
-export function openBattle({ el, settled = null, setup, resume = null, onProgress, onEnd, sound = null, foeShown = () => ({ moves: [], picture: '' }), background = '', energyName = '', forced = false, hero = heroNow(), faceFor = () => '', skillPicture = () => '', words = {} }) {
+export function openBattle({ el, settled = null, setup, resume = null, onProgress, onEnd, sound = null, foeShown = () => ({ moves: [], picture: '' }), background = '', energyName = '', forced = false, hero = heroNow(), faceFor = () => '', skillPicture = () => '', words = {}, fightCg = null }) {
   const energyWord = energyName || t`气力`
   const still = matchMedia('(prefers-reduced-motion: reduce)').matches
   let attempt = resume?.attempt ?? 0
@@ -952,6 +954,15 @@ export function openBattle({ el, settled = null, setup, resume = null, onProgres
     }, thing ? [el('b', { text: thing.name }), el('i', { text: `×${thing.count}` }), el('span', { text: LURES[thing.size] === Infinity ? t`必定成功` : `+${LURES[thing.size]}` })] : [el('b', { text: t`不用道具` })])))
     drawLures()
     const rematch = el('button', { type: 'button', class: 'battle-action', hidden: true, text: t`再战一次`, onclick: () => { again = true; spent = lure; retry() } })
+    // 战斗立绘: whoever was knocked down, her 「战败·…」; lost, the foes still standing, their 「胜利·…」 (game-look.js playCg).
+    const down = [...(state.over === 'won' ? foesOf(state) : []), ...partyOf(state).filter(unit => unit.id !== 'player' && unit.life <= 0)].map(unit => unit.name)
+    const standing = state.over === 'lost' ? aliveFoes(state).map(unit => unit.name) : []
+    const fightPictures = fightCg && (down.length || standing.length) ? Promise.resolve(fightCg({ over: state.over, down, standing })).catch(() => []) : Promise.resolve([])
+    const playPictures = async () => {
+      for (const group of await fightPictures) await playCg(group, { into: dialog })
+      endBox.querySelector('.primary')?.focus()
+    }
+    const cgButton = el('button', { type: 'button', class: 'battle-action', hidden: true, text: t`战斗 CG`, title: t`再看一遍这场战斗的 CG`, onclick: () => playPictures() })
     endBox.replaceChildren(el('div', { class: `battle-end-card ${state.over}` }, [
       el('div', { class: 'battle-end-word' }, [el('h2', {}, letters(el, RESULT_WORDS()[state.over])), el('i', { class: 'battle-end-seal', text: RESULT_SEALS()[state.over] })]),
       // The names' column is as wide as the longest name here, so a companion's name stays on one line.
@@ -980,6 +991,7 @@ export function openBattle({ el, settled = null, setup, resume = null, onProgres
       rally ? el('p', { class: 'battle-end-note', text: t`拼命再战：${words.life || t`生命`}回到四成、${energyWord}回满，再打一次。之后 7 天所有属性 −3。` }) : null,
       el('div', { class: 'battle-end-actions' }, [
         state.over === 'lost' ? redo : null,
+        cgButton,
         rematch,
         rally ? el('button', { type: 'button', class: 'battle-action', text: t`拼命再战`, onclick: () => getUp() }) : null,
         el('button', { type: 'button', class: 'battle-action primary', text: state.over === 'lost' ? t`接受战败` : t`继续`, onclick: () => finish(state.over) }),
@@ -992,6 +1004,12 @@ export function openBattle({ el, settled = null, setup, resume = null, onProgres
       dialog.classList.add('ended')
       endBox.hidden = false
       endBox.querySelector('.primary').focus()
+      // Shown once by themselves as the end comes on; the button for another look.
+      fightPictures.then(list => {
+        if (!list?.length || endBox.hidden) return
+        cgButton.hidden = false
+        playPictures()
+      })
     }
     if (bold && !still) sweep(dialog, shown)
     else shown()
@@ -1027,6 +1045,8 @@ export function openBattle({ el, settled = null, setup, resume = null, onProgres
   // and F5 does not reload the page in the middle of a fight.
   function onKey(event) {
     const { key } = event
+    // 战斗立绘 shown over the fight (game-look.js playCg): its keys are its own.
+    if (event.target?.closest?.('.cg-player')) return
     const pressed = /^[1-5]$/.test(key) || key === 'Escape' || key === 'Enter' || key === ' ' || key === 'ArrowLeft' || key === 'ArrowRight'
     event.stopImmediatePropagation()
     if (pressed || key === 'F5' || key === 'F9' || (key.toLowerCase() === 'k' && (event.ctrlKey || event.metaKey))) event.preventDefault()

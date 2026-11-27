@@ -32,7 +32,7 @@ import { fileURLToPath } from 'node:url'
 import { appVersion } from '../edition.mjs'
 import { agentFor } from '../providers.mjs'
 import { compareVersions, FEED, LATEST_FILE, LATEST_KEY, latestFileUrl, MIRROR, mirrorLatestUrl, releaseInfo, REPO, SIGNATURE_FILE, trustedDownload, verifyLatest } from './release.mjs'
-import { canonical, checkRuntime, inAppBundle, installBase, isInstall, otherInstalls, previousInstall, readJson, removeInstall, stageInstall, stageMacInstall, stateDir, writeJsonFile } from './install.mjs'
+import { canonical, checkRuntime, ensureFixed, fixedFor, inAppBundle, installBase, isInstall, otherInstalls, previousInstall, readJson, removeInstall, stageInstall, stageMacInstall, stateDir, writeJsonFile } from './install.mjs'
 import { localize, msg } from '../i18n.mjs'
 
 const APP_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -187,6 +187,8 @@ export function createUpdater({
   // stamps, or the Mac package with its runtime/node) keeps its state on disk; a
   // source checkout keeps it in memory rather than write into the tree.
   const persist = kind === 'apk' ? existsSync(path.join(root, 'stamp.txt')) : kind === 'mac' ? existsSync(path.join(root, 'runtime', 'node')) : kind === 'zip' && isInstall(root)
+  // The fixed CicaTavern folder beside the versions, a link to this one (install.mjs): made or moved here on start.
+  const fixedReady = persist && kind === 'zip' && platform === 'win32' ? ensureFixed(root, version).catch(() => null) : Promise.resolve(null)
   async function load() {
     if (saved) return saved
     saved = { autoCheck: true, checkedAt: 0, latest: null, error: null, skipped: null, staged: null, ...(persist ? await readJson(path.join(await stateFolder(), 'state.json'), {}) : {}) }
@@ -219,6 +221,7 @@ export function createUpdater({
       kind,
       version,
       root: kind === 'zip' ? root : null,
+      fixed: persist && kind === 'zip' && platform === 'win32' ? ((await fixedReady), fixedFor(root)) : null,
       installable: !notInstallable(),
       reason: notInstallable(),
       autoCheck: state.autoCheck !== false,

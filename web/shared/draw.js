@@ -48,19 +48,27 @@ export const NAI_MODEL_IDS = Object.freeze(['nai-diffusion-5-full', 'nai-diffusi
 export const GEMINI_IMAGE_MODELS = Object.freeze(['gemini-2.5-flash-image', 'gemini-3-pro-image-preview'])
 
 // 生图方案 (设置 → 配图与朗读 → 配图 → 生图方案, server/media.mjs cleanImagePresets): what one saved way of drawing
-// holds. The NovelAI token, the imported ComfyUI workflow and the providers' keys stay where they are (one of each):
-// a plan names a provider, a model and the options, not a key.
+// holds. The NovelAI token and the providers' keys stay where they are (one of each): a plan names a provider, a model
+// and the options, not a key. A plan drawing with an imported ComfyUI workflow names it by comfyWorkflowTag (the server
+// keeps each such workflow by it, media.mjs keepWorkflow), so switching plans switches the workflow too.
 export const IMAGE_PRESET_KEYS = Object.freeze([
   'imageBackend', 'imageProvider', 'imageModel', 'imageEditModel', 'imageShape', 'imageReference', 'promptStyle', 'promptDetail',
   'comfyUrl', 'comfyMode', 'comfyTemplate', 'comfyModel', 'comfyClip', 'comfyClip2', 'comfyClipType', 'comfyVae', 'comfySteps', 'comfyCfg', 'comfyNegative', 'comfySampler', 'comfyScheduler',
+  'comfyWorkflowTag',
   'geminiImageProvider', 'geminiImageModel', 'geminiReference',
   'sdUrl', 'sdSteps', 'sdCfg', 'sdSampler', 'sdNegative',
   'naiModel', 'naiQuality', 'naiReference', 'naiRefFidelity', 'naiRefStyle', 'naiV5Empty', 'naiNegative',
   'localModels',
 ])
 
-/** The image settings of `media` that a 生图方案 keeps. */
-export const imagePresetOf = media => Object.fromEntries(IMAGE_PRESET_KEYS.map(key => [key, media[key]]))
+/** Whether `media` draws with the imported ComfyUI workflow (not 简单模式, not another backend). */
+export const drawsWithWorkflow = media => media.imageBackend === 'comfy' && media.comfyMode === 'workflow'
+
+/**
+ * The image settings of `media` that a 生图方案 keeps. The workflow's tag only where the workflow draws: a plan for
+ * NovelAI does not stop matching when another workflow is imported, nor take the workflow back when switched to.
+ */
+export const imagePresetOf = media => Object.fromEntries(IMAGE_PRESET_KEYS.map(key => [key, key === 'comfyWorkflowTag' && !drawsWithWorkflow(media) ? '' : media[key]]))
 
 /** The saved 生图方案 that the settings `media` draw with now, or null (changed since, or none saved). */
 export function currentImagePreset(media) {

@@ -26,6 +26,21 @@ const MAX_TEXT = 200000
 const MAX_GREETINGS = 60
 const MAX_TAGS = 20
 
+// What 修改角色卡's talk may read and change, part by part (the page's 向导能看、能改的): 'edit' it reads and may
+// change, 'read' it reads and leaves alone, 'off' it is not sent. The first of each is the default.
+export const EDIT_ACCESS = Object.freeze({
+  card: ['edit', 'read'], // the fields, the openings and the status bar's layout
+  book: ['edit', 'read', 'off'], // the card's own worldbook
+  regex: ['edit', 'read', 'off'], // the card's own regex scripts
+  scripts: ['read', 'off'], // its Tavern Helper scripts: read, never written here
+})
+
+/** An access as asked for, each part one it can be (else its default). */
+export function cleanAccess(value) {
+  const asked = value && typeof value === 'object' ? value : {}
+  return Object.fromEntries(Object.entries(EDIT_ACCESS).map(([part, ways]) => [part, ways.includes(asked[part]) ? asked[part] : ways[0]]))
+}
+
 /** The card's openings in order: the first message, then the alternates. */
 export const greetingList = card => [card.firstMes ?? '', ...(Array.isArray(card.alternateGreetings) ? card.alternateGreetings : [])]
 

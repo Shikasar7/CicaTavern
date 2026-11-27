@@ -534,3 +534,112 @@ test('tags a model wrote escaped in a piece come out as tags, unless the piece h
   card.description = '写成 &lt;b&gt; 的样子。'
   assert.equal(readEdit('<field name="description">写成 &lt;i&gt; 的样子。</field>', card).changes[0].after, '写成 &lt;i&gt; 的样子。')
 })
+
+// A card with regex scripts of its own, as SillyTavern exports them.
+const withRegex = () => {
+  const card = stored()
+  card.regexScripts = [
+    { id: 'r1', scriptName: '藏起状态', findRegex: '/<state>[\\s\\S]*?<\\/state>/g', replaceString: '', placement: [2], markdownOnly: true, promptOnly: false, disabled: false, trimStrings: [], substituteRegex: 0, minDepth: null, maxDepth: null },
+    { id: 'r2', scriptName: '心声', findRegex: '/（(.+?)）/g', replaceString: '<div class="inner">$1</div>', placement: [2], markdownOnly: true, promptOnly: false, disabled: false, trimStrings: [], substituteRegex: 0, minDepth: null, maxDepth: null },
+  ]
+  return card
+}
+
+test('修改角色卡 reads the card\'s own regex; what the user holds back is read only, or not sent', () => {
+  const card = withRegex()
+  const { request, shown } = editRequest(card, { text: '心声换个颜色' })
+  const content = request.messages[0].content
+  assert.match(content, /<regexes>[\s\S]*<regex id="r1" name="藏起状态"[\s\S]*<replace><div class="inner">\$1<\/div><\/replace>[\s\S]*<\/regexes>/)
+  assert.ok(shown.includes('regex:r1') && shown.includes('regex:r2'))
+  assert.match(request.system, /<new_regex name=/, 'the regex blocks are in the format')
+  assert.doesNotMatch(request.system, /只让你看/)
+
+  const held = editRequest(card, { text: '改改', context: { access: { card: 'read', book: 'off', regex: 'read', scripts: 'off' } } })
+  const heldContent = held.request.messages[0].content
+  assert.match(heldContent, /<regexes>/, 'read only is still sent')
+  assert.doesNotMatch(heldContent, /<worldbook>/, 'off is not sent')
+  assert.match(held.request.system, /只让你看、不让你改：角色设定、开场白和状态栏、正则/)
+  assert.match(held.request.system, /没有给你看：世界书、脚本/)
+  assert.doesNotMatch(held.request.system, /<new_regex|<field name="description">|<new_entry name="条目名"/, 'nothing it may not change is in the format')
+
+  const off = editRequest(card, { text: '改改', context: { access: { regex: 'off' } } }).request.messages[0].content
+  assert.doesNotMatch(off, /<regexes>/)
+  assert.match(editRequest(stored(), { text: '加一条正则' }).request.messages[0].content, /<regexes>\n（这张卡还没有自带的正则）/)
+})
+
+const REGEX_ANSWER = `<reply>心声改成灰色，另加一条藏起思维链。</reply>
+<field name="personality">冷淡。</field>
+<regex id="r2">
+<replace><div style="color:#888">$1</div></replace>
+</regex>
+<new_regex name="藏思维链" on="ai" effect="display">
+<find>/<think>[\\s\\S]*?<\\/think>/g</find>
+<replace></replace>
+</new_regex>
+<remove_regex id="r1"></remove_regex>
+<new_entry name="新地点" keys="码头" mode="keyword">码头在城东。</new_entry>`
+
+test('a proposal on the card\'s regex is read beside the rest, and goes in with new scripts given ids', () => {
+  const card = withRegex()
+  const { changes } = readEdit(REGEX_ANSWER, card)
+  assert.deepEqual(changes.map(change => change.id), ['field:personality', 'new:0', 'regex:r2', 'regex-new:0', 'regex-remove:r1'])
+  assert.equal(changes.find(change => change.id === 'regex:r2').replaceAfter, '<div style="color:#888">$1</div>')
+
+  const done = applyChanges(card, changes, ['regex:r2', 'regex-new:0', 'regex-remove:r1', 'new:0'])
+  assert.equal(done.applied, 4)
+  assert.deepEqual(card.regexScripts.map(script => script.scriptName), ['心声', '藏思维链'])
+  assert.ok(card.regexScripts[1].id, 'a new script gets an id')
+  assert.equal(card.regexScripts[0].replaceString, '<div style="color:#888">$1</div>')
+  assert.ok(card.book.entries.some(entry => entry.comment === '新地点'))
+
+  // Kept to one piece: the regex blocks are not read.
+  assert.deepEqual(readEdit(REGEX_ANSWER, withRegex(), { target: 'field:personality' }).changes.map(change => change.id), ['field:personality'])
+})
+
+test('parts the user lets it only read: their changes are dropped and said so, the rest kept', () => {
+  const card = withRegex()
+  const access = { card: 'read', book: 'edit', regex: 'read' }
+  const read = readEdit(REGEX_ANSWER, card, { context: { access } })
+  assert.deepEqual(read.changes.map(change => change.id), ['new:0'])
+  assert.deepEqual(read.dropped, ['personality', '正则 心声', '正则 藏思维链', '正则 藏起状态'].map(name => ({ reason: 'locked', name })), 'the regex too, though only read')
+  const none = readEdit('<reply>改好了性格。</reply><field name="personality">冷淡。</field>', card, { context: { access } })
+  assert.equal(claimsChanges(none), true)
+  assert.match(missingNote(none), /「personality」用户这次只让你看、不让你改/)
+  assert.deepEqual(readEdit(REGEX_ANSWER, card, { context: { access: { book: 'read' } } }).changes.map(change => change.id), ['field:personality', 'regex:r2', 'regex-new:0', 'regex-remove:r1'])
+})
+
+test('over HTTP: the card\'s regex changed by talking, tried on the reply sent along, applied and undone; held-back parts stay out', async t => {
+  const { app, call, model } = await tavern(t, [REGEX_ANSWER, '<reply>只能说说。</reply>'])
+  const card = (await call('/api/cards/import', { method: 'POST', body: { filename: 'c.json', data: Buffer.from(JSON.stringify(RAW)).toString('base64') } })).body
+  const saved = await app.store.getCard(card.id)
+  saved.regexScripts = withRegex().regexScripts
+  await app.store.saveCard(saved)
+  const wait = async () => {
+    let session = (await call(`/api/cards/${card.id}/assistant`)).body
+    for (let i = 0; i < 300 && session.job; i++) {
+      await new Promise(resolve => setTimeout(resolve, 10))
+      session = (await call(`/api/cards/${card.id}/assistant`)).body
+    }
+    return session
+  }
+  await call(`/api/cards/${card.id}/assistant`, { method: 'POST', body: { text: '心声换个颜色', context: { access: { regex: 'edit' }, sample: '她看着窗外（想回家）。', names: { char: '林青禾', user: '你' } } } })
+  const session = await wait()
+  assert.equal(session.error, null)
+  const changed = session.turns[0].assistant.changes.find(change => change.id === 'regex:r2')
+  assert.equal(changed.trial.matches, 1, 'tried on the reply sent along')
+  assert.match(model.seen[0].messages.at(-1).content, /<regexes>/)
+
+  const done = (await call(`/api/cards/${card.id}/assistant/apply`, { method: 'POST', body: { ids: ['regex:r2', 'regex-new:0'] } })).body
+  assert.equal(done.applied, 2)
+  const after = await app.store.getCard(card.id)
+  assert.deepEqual(after.regexScripts.map(script => script.scriptName), ['藏起状态', '心声', '藏思维链'])
+  assert.ok(after.regexScripts.every(script => script.id))
+  await call(`/api/cards/${card.id}/assistant/undo`, { method: 'POST' })
+  assert.deepEqual((await app.store.getCard(card.id)).regexScripts.map(script => script.id), ['r1', 'r2'], 'undone as a whole')
+
+  await call(`/api/cards/${card.id}/assistant`, { method: 'POST', body: { text: '说说这张卡', context: { access: { book: 'off', regex: 'off', scripts: 'off' } } } })
+  await wait()
+  const sent = model.seen[1].messages.at(-1).content
+  assert.doesNotMatch(sent, /<worldbook>|<regexes>/)
+  assert.match(model.seen[1].system ?? model.seen[1].messages[0].content, /没有给你看：世界书、正则、脚本/)
+})

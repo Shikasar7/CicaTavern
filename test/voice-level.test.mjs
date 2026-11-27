@@ -42,8 +42,8 @@ test('voice levelling: the WAV it plays is 16-bit PCM of the samples', () => {
 
 test('roster: a cast member\'s 音量 is kept in percent within 25–200, and 100 is left unsaid', () => {
   const [quiet, loud, plain, odd] = cleanRoster([
-    { name: '莉莉丝', volume: 160 },
-    { name: '伊芙琳', volume: 999 },
+    { name: '小满', volume: 160 },
+    { name: '阿柚', volume: 999 },
     { name: '莉瑟', volume: 100 },
     { name: '维拉', volume: 'loud' },
   ])
@@ -51,14 +51,14 @@ test('roster: a cast member\'s 音量 is kept in percent within 25–200, and 10
   assert.equal(loud.volume, 200)
   assert.equal('volume' in plain, false)
   assert.equal('volume' in odd, false)
-  assert.equal(cleanRoster([{ name: '卡蜜拉', volume: 3 }])[0].volume, 25)
+  assert.equal(cleanRoster([{ name: '赤练', volume: 3 }])[0].volume, 25)
 })
 
 test('默认语气: a cast member\'s tone is said when the reply gives the line none; the reply\'s own tag wins; narration has none', async () => {
   const { speechChunks } = await import('../web/shared/speech.js')
   const { cleanTone } = await import('../server/roster.mjs')
-  const tone = speaker => ({ 卡蜜拉: '拖长尾音，像在逗弄猎物', 莉娅: '' })[speaker] ?? ''
-  const speakerOf = said => (said.startsWith('小少爷') ? '卡蜜拉' : said.startsWith('少爷') ? '莉娅' : '卡蜜拉')
+  const tone = speaker => ({ 赤练: '拖长尾音，像在逗弄猎物', 小桃: '' })[speaker] ?? ''
+  const speakerOf = said => (said.startsWith('小少爷') ? '赤练' : said.startsWith('少爷') ? '小桃' : '赤练')
   const text = '她笑了。“小少爷还真讲究。”又说：“先付茶钱。”[voice:压低声音:]“少爷，您回来了。”'
   const chunks = speechChunks(text, { narration: true, tags: true, speakerOf, tone })
   // Narration has no tone; the reply's own tag wins for its line; a speaker with no tone gets no tag.
@@ -73,7 +73,7 @@ test('默认语气: a cast member\'s tone is said when the reply gives the line 
   // Stored without brackets or colons (they would break a tag), at most 40 characters, dropped when empty.
   assert.equal(cleanTone('[拖长尾音：像在逗弄猎物]\n'), '拖长尾音 像在逗弄猎物')
   assert.equal(cleanTone('长'.repeat(60)).length, 40)
-  const [kept, empty] = cleanRoster([{ name: '卡蜜拉', tone: ' 软软地 ' }, { name: '莉娅', tone: '  ' }])
+  const [kept, empty] = cleanRoster([{ name: '赤练', tone: ' 软软地 ' }, { name: '小桃', tone: '  ' }])
   assert.equal(kept.tone, '软软地')
   assert.equal('tone' in empty, false)
 })

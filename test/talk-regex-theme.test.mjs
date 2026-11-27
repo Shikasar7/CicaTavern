@@ -65,6 +65,9 @@ test('regex: the scripts and the latest reply shown, the answer read script by s
 test('a proposed pattern is tried on the latest reply; one that backtracks for ever is stopped', async () => {
   const tried = await tryScript({ ...scriptOf({ kind: 'newRegex', on: 'ai', effect: 'display', find: '/【([^】]+)】/g', replace: '[$1]' }), disabled: false }, SAMPLE)
   assert.deepEqual(tried, { matches: 1, samples: [{ match: '【今晚别走了】', shown: '[今晚别走了]', sent: '【今晚别走了】' }] })
+  // What a match becomes is worked out where it stands: a lookbehind sees the text before it.
+  const behind = await tryScript({ ...scriptOf({ kind: 'newRegex', on: 'ai', effect: 'both', find: '/(?<=了)\\.\\.\\./g', replace: '……' }), disabled: false }, '他笑了...又停了...')
+  assert.deepEqual(behind, { matches: 2, samples: [{ match: '...', shown: '……', sent: '……' }, { match: '...', shown: '……', sent: '……' }] })
   // Case-insensitive, so not one V8's linear engine runs (server/regex-guard.mjs turns that engine on).
   const stuck = await tryScript({ ...scriptOf({ kind: 'newRegex', on: 'ai', effect: 'display', find: '/^(a+)+$/i', replace: '' }), disabled: false }, `${'a'.repeat(40)}b`, { timeout: 300 })
   assert.deepEqual(stuck, { error: 'timeout' })

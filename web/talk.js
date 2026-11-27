@@ -319,10 +319,14 @@ export function createTalk({ api, el, guard, openProviders }, spec) {
   function missedNote(turn, last) {
     const missed = turn.assistant.missed
     if (!missed) return el('p', { class: 'ce-outcome', text: t`这次没有提出改动。` })
-    const unshown = missed.dropped.filter(item => item.reason === 'unshown').map(item => t`「${item.name}」`)
+    const named = reason => missed.dropped.filter(item => item.reason === reason).map(item => t`「${item.name}」`)
+    const unshown = named('unshown')
+    const locked = named('locked')
     const text = unshown.length
       ? t`没有改动可以采用：模型想改的${unshown.join('')}这次没有附上全文，改不了。可以只改那一处（点它旁边的「按意见改」），或者换个说法。`
-      : t`没有改动可以采用：模型说改了，但没有按格式写出改动的内容（追问过一次），所以什么都没有变。可以再问一次，或者换个模型。`
+      : locked.length
+        ? t`没有改动可以采用：模型想改的${locked.join('')}在「向导能看、能改的」里设成了只看。要让它改，先把那一项换成「能改」再问一次。`
+        : t`没有改动可以采用：模型说改了，但没有按格式写出改动的内容（追问过一次），所以什么都没有变。可以再问一次，或者换个模型。`
     return el('div', { class: 'ce-outcome-row' }, [
       el('p', { class: 'ce-outcome warn', text }),
       last && !unshown.length ? el('button', { type: 'button', class: 'btn ghost small', text: t`再问一次`, disabled: Boolean(state.session.job), onclick: () => askAgain(turn) }) : null,
